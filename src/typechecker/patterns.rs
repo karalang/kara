@@ -1117,6 +1117,13 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return;
                 }
+                // v2 core: a dotted unit variant (`Slot.Empty`) over its own
+                // enum binds nothing, so it moves nothing (§4.6). Legacy
+                // still records it as a binding below, which its backends
+                // read; only the strict commands stop here.
+                if self.cli_lint_overrides.strict_core && name.contains('.') && is_variant_pattern {
+                    return;
+                }
                 // Cannot-double-consume rule: a by-move non-Copy leaf
                 // binding inside a consuming `@` outer claims heap content
                 // the outer already owns (design.md § @ Bindings).
@@ -1127,6 +1134,24 @@ impl<'a> super::TypeChecker<'a> {
                     self.report_at_binding_double_consume(name, &pattern.span);
                 }
                 self.reject_core_move_out_binding(name, &pattern.span, expected, mode);
+                // The legacy backends bind a `mut ref name` as a copy, so a
+                // write through it would be lost: only the v2 core takes it.
+                if !self.cli_lint_overrides.strict_core
+                    && self
+                        .program
+                        .mut_ref_binding_spans
+                        .contains(&SpanKey::from_span(&pattern.span))
+                {
+                    self.type_error(
+                        format!(
+                            "`mut ref {name}` pattern bindings are not supported by the legacy \
+                             `build` / `run` backends, which would bind a copy; `karac check` \
+                             accepts them for the v2 backend (core-semantics.md §4.6)"
+                        ),
+                        pattern.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
                 let binding_ty = mode.wrap_binding_ty(expected.clone());
                 self.local_scope.insert(name.clone(), binding_ty);
                 // v2 core §4.6: a `ref name` binding, or any binding over a

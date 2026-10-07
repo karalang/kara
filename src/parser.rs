@@ -236,6 +236,12 @@ pub struct Parser {
     /// `ref name` binding spans, moved onto
     /// [`crate::ast::Program::ref_binding_spans`] at the end.
     pub(crate) ref_binding_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// `mut ref name` binding spans, moved onto
+    /// [`crate::ast::Program::mut_ref_binding_spans`] at the end.
+    pub(crate) mut_ref_binding_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// `ref` keyword offsets of those bindings, moved onto
+    /// [`crate::ast::Program::ref_binding_keywords`] at the end.
+    pub(crate) ref_binding_keywords: rustc_hash::FxHashMap<crate::resolver::SpanKey, usize>,
     /// Statement-position lint-level overrides, moved onto
     /// [`crate::ast::Program::stmt_lint_overrides`] at the end.
     pub(crate) stmt_lint_overrides:
@@ -379,6 +385,8 @@ impl Parser {
             frozen_self_consumed: false,
             freeze_spans: rustc_hash::FxHashSet::default(),
             ref_binding_spans: rustc_hash::FxHashSet::default(),
+            mut_ref_binding_spans: rustc_hash::FxHashSet::default(),
+            ref_binding_keywords: rustc_hash::FxHashMap::default(),
             stmt_lint_overrides: rustc_hash::FxHashMap::default(),
             container_hashers: rustc_hash::FxHashMap::default(),
             allow_script_mode: true,
@@ -685,6 +693,8 @@ impl Parser {
             inner_attrs,
             freeze_spans: std::mem::take(&mut self.freeze_spans),
             ref_binding_spans: std::mem::take(&mut self.ref_binding_spans),
+            mut_ref_binding_spans: std::mem::take(&mut self.mut_ref_binding_spans),
+            ref_binding_keywords: std::mem::take(&mut self.ref_binding_keywords),
             escaping_fn_types: std::mem::take(&mut self.escaping_fn_types),
             stmt_lint_overrides: std::mem::take(&mut self.stmt_lint_overrides),
             container_hashers: std::mem::take(&mut self.container_hashers),

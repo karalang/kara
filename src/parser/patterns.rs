@@ -71,17 +71,27 @@ impl super::Parser {
             // borrows the part instead of moving it out
             // (`docs/core-semantics.md` §4.6). The plain form stays an
             // ordinary binding in the tree; the mark lives in
-            // `Program::ref_binding_spans`.
-            Token::Ref => {
+            // `Program::ref_binding_spans`. `mut ref name` borrows it
+            // mutably (`Program::mut_ref_binding_spans`); it has no `@` form.
+            Token::Ref | Token::Mut
+                if !matches!(self.peek_token_ref(), Token::Mut)
+                    || matches!(self.peek_token_ref_at(1), Token::Ref) =>
+            {
+                let is_mut = self.eat(&Token::Mut);
+                let ref_offset = self.current_span().offset;
                 self.advance();
                 let name_start = self.current_span();
                 let name = self.expect_identifier()?;
                 let name_span = self.span_from(&start);
-                if !self.eat(&Token::At) {
+                if is_mut || !self.eat(&Token::At) {
                     self.check_ident_class(&name, IdentClass::Value, "binding", name_span);
                     let span = self.span_from(&name_start);
-                    self.ref_binding_spans
-                        .insert(crate::resolver::SpanKey::from_span(&span));
+                    let key = crate::resolver::SpanKey::from_span(&span);
+                    if is_mut {
+                        self.mut_ref_binding_spans.insert(key);
+                    }
+                    self.ref_binding_keywords.insert(key, ref_offset);
+                    self.ref_binding_spans.insert(key);
                     return Some(Pattern {
                         id: crate::ids::NodeId::DUMMY,
                         kind: PatternKind::Binding(name),

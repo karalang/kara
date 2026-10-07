@@ -18,6 +18,7 @@ pub fn format_program(program: &Program) -> String {
     let mut f = Formatter::new();
     f.freeze_spans = program.freeze_spans.clone();
     f.ref_binding_spans = program.ref_binding_spans.clone();
+    f.mut_ref_binding_spans = program.mut_ref_binding_spans.clone();
     f.escaping_fn_types = program.escaping_fn_types.clone();
     f.format_program(program);
     f.output
@@ -97,6 +98,8 @@ pub(super) struct Formatter {
     /// `ref name` pattern bindings, copied from `Program::ref_binding_spans`
     /// for the same reason: the `ref` is not in the tree.
     pub(super) ref_binding_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// The `mut ref name` bindings among them.
+    pub(super) mut_ref_binding_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
     /// `escaping Fn(...)` parameter types, copied from
     /// `Program::escaping_fn_types`: the keyword is not in the tree either.
     pub(super) escaping_fn_types: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
@@ -109,6 +112,7 @@ impl Formatter {
             indent: 0,
             freeze_spans: rustc_hash::FxHashSet::default(),
             ref_binding_spans: rustc_hash::FxHashSet::default(),
+            mut_ref_binding_spans: rustc_hash::FxHashSet::default(),
             escaping_fn_types: rustc_hash::FxHashSet::default(),
         }
     }

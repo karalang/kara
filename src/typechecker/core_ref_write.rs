@@ -79,6 +79,9 @@ enum Origin {
     ForElem,
     /// A `ref name` pattern binding.
     RefPattern,
+    /// A `mut ref name` pattern binding: writable, and the write through
+    /// its scrutinee is checked where it is bound.
+    MutRefPattern,
 }
 
 /// What a step of a place's projection chain says about writing through it.
@@ -131,7 +134,7 @@ impl<'a> TypeChecker<'a> {
             w.self_read_only = matches!(f.self_param, Some(SelfParam::Ref));
             w.self_fix = match &f.self_span {
                 Some(sp) if w.self_read_only && !f.self_is_frozen => Some(FixIt {
-                    span: sp.clone(),
+                    span: *sp,
                     replacement: "mut ref self".to_string(),
                 }),
                 _ => None,
@@ -144,7 +147,7 @@ impl<'a> TypeChecker<'a> {
                         // `ref T` → `mut ref T`: insert before the `ref`.
                         let span = Span {
                             length: 0,
-                            ..p.ty.span.clone()
+                            ..p.ty.span
                         };
                         let fix = (!p.is_frozen).then(|| FixIt {
                             span,
@@ -194,13 +197,25 @@ impl Walk<'_, '_> {
     /// Bring `pattern`'s bindings into the innermost scope with `origin`;
     /// a `ref name` binding is read-only whatever `origin` says.
     fn bind(&mut self, pattern: &Pattern, origin: Origin, fix: Option<FixIt>) {
-        let ref_spans = &self.tc.program.ref_binding_spans;
+        let program = self.tc.program;
         let names: Vec<Binding> = pattern
             .binding_name_spans()
             .into_iter()
             .map(|(n, sp)| {
-                if ref_spans.contains(&SpanKey::from_span(&sp)) {
-                    (n, Origin::RefPattern, None)
+                let key = SpanKey::from_span(&sp);
+                if program.mut_ref_binding_spans.contains(&key) {
+                    (n, Origin::MutRefPattern, None)
+                } else if program.ref_binding_spans.contains(&key) {
+                    // `ref name` → `mut ref name`: insert before the `ref`.
+                    let fix = program.ref_binding_keywords.get(&key).map(|&offset| FixIt {
+                        span: Span {
+                            offset,
+                            length: 0,
+                            ..sp
+                        },
+                        replacement: "mut ".to_string(),
+                    });
+                    (n, Origin::RefPattern, fix)
                 } else {
                     (n, origin, fix.clone())
                 }
@@ -208,6 +223,22 @@ impl Walk<'_, '_> {
             .collect();
         if let Some(scope) = self.scopes.last_mut() {
             scope.extend(names);
+        }
+    }
+
+    /// A `mut ref name` binding writes through the scrutinee it borrows
+    /// from, so the scrutinee must not be reached through a shared `ref`.
+    fn check_mut_ref_bindings(&mut self, pattern: &Pattern, scrutinee: &Expr) {
+        for (name, sp) in pattern.binding_name_spans() {
+            if self
+                .tc
+                .program
+                .mut_ref_binding_spans
+                .contains(&SpanKey::from_span(&sp))
+            {
+                let action = format!("the `mut ref {name}` binding");
+                self.check_through(scrutinee, sp, &action);
+            }
         }
     }
 
@@ -226,6 +257,7 @@ impl Walk<'_, '_> {
         match &s.kind {
             StmtKind::Let { pattern, value, .. } => {
                 self.expr(value);
+                self.check_mut_ref_bindings(pattern, value);
                 // A local bound to a read-only borrow is one too (§5.9),
                 // and the same edit to the borrow's declaration fixes it.
                 let (origin, fix) = match &value.kind {
@@ -243,6 +275,7 @@ impl Walk<'_, '_> {
                 ..
             } => {
                 self.expr(value);
+                self.check_mut_ref_bindings(pattern, value);
                 self.block(else_block);
                 self.bind(pattern, Origin::Owned, None);
             }
@@ -311,6 +344,7 @@ impl Walk<'_, '_> {
             ExprKind::Match { scrutinee, arms } => {
                 self.expr(scrutinee);
                 for arm in arms {
+                    self.check_mut_ref_bindings(&arm.pattern, scrutinee);
                     self.scopes.push(Vec::new());
                     self.bind(&arm.pattern, Origin::Owned, None);
                     if let Some(g) = &arm.guard {
@@ -319,6 +353,37 @@ impl Walk<'_, '_> {
                     self.expr(&arm.body);
                     self.scopes.pop();
                 }
+                return;
+            }
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then_block,
+                else_branch,
+            } => {
+                self.expr(value);
+                self.check_mut_ref_bindings(pattern, value);
+                self.scopes.push(Vec::new());
+                self.bind(pattern, Origin::Owned, None);
+                self.block(then_block);
+                self.scopes.pop();
+                if let Some(e) = else_branch {
+                    self.expr(e);
+                }
+                return;
+            }
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            } => {
+                self.expr(value);
+                self.check_mut_ref_bindings(pattern, value);
+                self.scopes.push(Vec::new());
+                self.bind(pattern, Origin::Owned, None);
+                self.block(body);
+                self.scopes.pop();
                 return;
             }
             ExprKind::Closure { params, body, .. } => {
@@ -364,9 +429,7 @@ impl Walk<'_, '_> {
     /// elements as `mut ref`: append `.iter_mut()` to the iterated place.
     /// Other iterables (a map, a set, an iterator chain) have no one edit.
     fn iter_mut_fix(&self, iterable: &Expr) -> Option<FixIt> {
-        if place_root(iterable).is_none() {
-            return None;
-        }
+        place_root(iterable)?;
         let mut t = &self.node_types.get(&iterable.id)?.0;
         while let Type::Ref(inner) | Type::MutRef(inner) = t {
             t = inner;
@@ -380,7 +443,7 @@ impl Walk<'_, '_> {
             span: Span {
                 offset: iterable.span.offset + iterable.span.length,
                 length: 0,
-                ..iterable.span.clone()
+                ..iterable.span
             },
             replacement: ".iter_mut()".to_string(),
         })
@@ -510,7 +573,7 @@ impl Walk<'_, '_> {
                  (core-semantics.md §5.9). Bind it as `mut ref {name}` from a mutable \
                  owned scrutinee"
             ),
-            Origin::Owned => format!(
+            Origin::Owned | Origin::MutRefPattern => format!(
                 "`{name}` is a shared `ref`, so {action} cannot modify it \
                  (core-semantics.md §5.9). Borrow it as `mut ref` to write through it"
             ),
@@ -521,7 +584,11 @@ impl Walk<'_, '_> {
         let named_read_only = match &e.kind {
             ExprKind::SelfValue => self.self_read_only,
             ExprKind::Identifier(n) if n == "self" => self.self_read_only,
-            ExprKind::Identifier(n) => self.origin_of(n) != Origin::Owned,
+            ExprKind::Identifier(n) => match self.origin_of(n) {
+                Origin::Owned => false,
+                Origin::MutRefPattern => return Step::Writable,
+                _ => true,
+            },
             _ => false,
         };
         let Some((ty, _)) = self.node_types.get(&e.id) else {

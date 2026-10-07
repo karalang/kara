@@ -48,7 +48,7 @@ use crate::ownership::{
 };
 use crate::resolver::SpanKey;
 use crate::typechecker::{Type, TypeCheckResult};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 
 /// Whole-program inputs the use-classifier consults but never mutates:
@@ -66,6 +66,9 @@ pub struct ClassifierPrelude {
     callee_param_modes: FxHashMap<String, Vec<OwnershipMode>>,
     method_param_modes: FxHashMap<String, Vec<OwnershipMode>>,
     unit_variant_names: HashSet<String>,
+    /// `ref name` / `mut ref name` pattern bindings, which move nothing
+    /// under the v2 core (§4.6).
+    ref_bindings: FxHashSet<SpanKey>,
     /// Bare names bound by this unit's `import` declarations
     /// (B-2026-07-29-16). See the call-arg gate in `walk_expr`.
     imported_names: HashSet<String>,
@@ -93,6 +96,7 @@ impl ClassifierPrelude {
             callee_param_modes: collect_callee_param_modes(program),
             method_param_modes: collect_method_param_modes(program),
             unit_variant_names: collect_unit_variant_names(tc),
+            ref_bindings: program.ref_binding_spans.iter().copied().collect(),
             imported_names: collect_imported_names(program),
             copy_bounded_type_params: collect_copy_bounded_type_params_by_body(program),
         }
@@ -213,6 +217,7 @@ pub fn classify_function_body_with(
         callee_param_modes: &prelude.callee_param_modes,
         method_param_modes: &prelude.method_param_modes,
         unit_variant_names: &prelude.unit_variant_names,
+        ref_bindings: &prelude.ref_bindings,
         imported_names: &prelude.imported_names,
         copy_bounded_type_params: prelude
             .copy_bounded_type_params
@@ -248,6 +253,7 @@ struct UseClassifier<'a> {
     callee_param_modes: &'a FxHashMap<String, Vec<OwnershipMode>>,
     method_param_modes: &'a FxHashMap<String, Vec<OwnershipMode>>,
     unit_variant_names: &'a HashSet<String>,
+    ref_bindings: &'a FxHashSet<SpanKey>,
     imported_names: &'a HashSet<String>,
     param_types: HashMap<String, Type>,
     /// The enclosing function's `Copy`-bounded generic type parameters — see
@@ -492,12 +498,7 @@ impl<'a> UseClassifier<'a> {
                 // `let ref name @ PATTERN = rhs` borrows the RHS
                 // (design.md § @ Bindings) — read, not consume. Mirrors
                 // the `block_stmt` Let-arm gate in the legacy walker.
-                let rhs_mode =
-                    if matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. }) {
-                        Mode::Reading
-                    } else {
-                        Mode::Consuming
-                    };
+                let rhs_mode = self.let_rhs_mode(pattern);
                 let rhs_is_closure = matches!(value.kind, ExprKind::Closure { .. });
                 let pre_capture_count = if rhs_is_closure {
                     self.classification
@@ -549,12 +550,7 @@ impl<'a> UseClassifier<'a> {
                 ..
             } => {
                 // Same `ref name @` borrow gate as the Let arm above.
-                let rhs_mode =
-                    if matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. }) {
-                        Mode::Reading
-                    } else {
-                        Mode::Consuming
-                    };
+                let rhs_mode = self.let_rhs_mode(pattern);
                 self.walk_expr(value, rhs_mode);
                 self.walk_block(else_block, Mode::Reading);
             }
@@ -1776,12 +1772,33 @@ impl<'a> UseClassifier<'a> {
         is_copy_type_in_scope(ty, self.tc, &self.copy_bounded_type_params)
     }
 
+    /// A `let` reads its initializer when its pattern only borrows: a
+    /// `ref name @ PATTERN`, or (v2 core, §4.6) bindings that are all
+    /// `ref` / `mut ref`.
+    fn let_rhs_mode(&self, pattern: &Pattern) -> Mode {
+        if matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. })
+            || (crate::ownership::core_rules()
+                && !pattern.binding_names().is_empty()
+                && !self.pattern_binds_anything(pattern))
+        {
+            Mode::Reading
+        } else {
+            Mode::Consuming
+        }
+    }
+
     fn pattern_binds_anything(&self, pattern: &Pattern) -> bool {
         match &pattern.kind {
             PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {
                 false
             }
-            PatternKind::Binding(name) => !self.unit_variant_names.contains(name),
+            PatternKind::Binding(name) => {
+                let borrows = crate::ownership::core_rules()
+                    && self
+                        .ref_bindings
+                        .contains(&SpanKey::from_span(&pattern.span));
+                !self.unit_variant_names.contains(name) && !borrows
+            }
             // `ref name @ PATTERN` flips the whole subtree to borrow mode
             // (design.md § @ Bindings) — nothing under it binds by-move.
             // Mirrors `ownership::expr_check::pattern_binds_anything`.

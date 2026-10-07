@@ -10,10 +10,10 @@ impl super::Formatter {
         match &pat.kind {
             PatternKind::Wildcard => self.write_str("_"),
             PatternKind::Binding(name) => {
-                if self
-                    .ref_binding_spans
-                    .contains(&crate::resolver::SpanKey::from_span(&pat.span))
-                {
+                let key = crate::resolver::SpanKey::from_span(&pat.span);
+                if self.mut_ref_binding_spans.contains(&key) {
+                    self.write_str("mut ref ");
+                } else if self.ref_binding_spans.contains(&key) {
                     self.write_str("ref ");
                 }
                 self.write_ident(name)

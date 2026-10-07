@@ -67,12 +67,19 @@ impl<'a> super::OwnershipChecker<'a> {
                 value,
                 ..
             } => {
+                self.report_mut_ref_pattern_write(pattern, value);
                 // If the RHS is a closure, detect once-callability before
                 // processing so we can check which outer bindings it consumed.
                 // Value is consumed by the let binding — unless the pattern
                 // is `ref name @ PATTERN` (design.md § @ Bindings): the
-                // whole subtree borrows, so the RHS is read, not moved.
-                if matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. }) {
+                // whole subtree borrows, so the RHS is read, not moved. So is
+                // a pattern that binds only `ref` / `mut ref` names under the
+                // v2 core (§4.6).
+                if matches!(&pattern.kind, PatternKind::AtBinding { by_ref: true, .. })
+                    || (crate::ownership::core_rules()
+                        && !pattern.binding_names().is_empty()
+                        && !self.pattern_binds_anything(pattern))
+                {
                     self.check_expr_reading(value, states, param_types, param_usage);
                 } else {
                     // v2 core §4.6: `_` never binds and never moves, so `let _ =

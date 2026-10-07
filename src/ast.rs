@@ -829,6 +829,16 @@ pub struct Program {
     /// read the mark: such a binding borrows its part and never moves it
     /// (`docs/core-semantics.md` §4.6).
     pub ref_binding_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// The `mut ref name` bindings among [`Self::ref_binding_spans`]: a
+    /// mutable borrow of the part, which requires a mutable scrutinee
+    /// (`docs/core-semantics.md` §4.6, §5.9). Every span here is in
+    /// `ref_binding_spans` too, so a check that asks only "does this binding
+    /// borrow" needs no change.
+    pub mut_ref_binding_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// The byte offset of the `ref` keyword of each binding in
+    /// [`Self::ref_binding_spans`], keyed the same way. Lets `karac fix`
+    /// turn a `ref name` into `mut ref name` (§5.9).
+    pub ref_binding_keywords: rustc_hash::FxHashMap<crate::resolver::SpanKey, usize>,
     /// `escaping Fn(...)` parameter types (`docs/core-semantics.md` §9.3),
     /// keyed by the function type's span. Set by the PARSER beside the tree,
     /// like [`Self::ref_binding_spans`], so the type stays an ordinary

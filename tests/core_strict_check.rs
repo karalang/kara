@@ -1071,6 +1071,18 @@ fn the_formatter_keeps_escaping_and_a_called_field_in_parentheses() {
 }
 
 #[test]
+fn the_formatter_keeps_ref_and_mut_ref_patterns() {
+    // Both live beside the tree (`Program::ref_binding_spans`,
+    // `Program::mut_ref_binding_spans`).
+    let src = "fn main() {\n    let mut t = (1, 2);\n    \
+               let (mut ref a, ref b) = t;\n    a += b;\n    println(t.0);\n}\n";
+    let parsed = karac::parse(src);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let formatted = karac::formatter::format_program(&parsed.program);
+    assert_eq!(formatted, src, "round-trip mismatch:\n{formatted}");
+}
+
+#[test]
 fn storing_a_borrow_into_a_set_or_map_is_an_error() {
     // §3.7: a bare `for` element borrows, and `insert` moves its argument.
     rejected(
@@ -1240,5 +1252,72 @@ fn a_shared_ref_place_is_read_only() {
              let a: Arena[i64] = Arena.new();\n\
              println(f\"{c.hits} {v.len()} {grid[0].len()} {grow(a)}\");\n\
          }\n",
+    );
+}
+
+/// §4.6: `mut ref name` borrows a part of a mutable owned scrutinee mutably,
+/// and moves nothing; neither does a dotted unit variant (`Slot.Empty`).
+#[test]
+fn a_mut_ref_pattern_writes_through_its_scrutinee() {
+    let src = "enum Slot { Full(Vec[i64]), Empty }\n\
+               struct Pair { a: Vec[i64], b: i64 }\n\
+               fn main() {\n\
+                   let mut s = Slot.Full([1]);\n\
+                   match s {\n\
+                       Slot.Full(mut ref v) => v.push(2),\n\
+                       Slot.Empty => {}\n\
+                   }\n\
+                   if let Slot.Full(mut ref v) = s { v.push(3); }\n\
+                   let mut p = Pair { a: [], b: 1 };\n\
+                   let Pair { a: mut ref xs, .. } = p;\n\
+                   xs.push(7);\n\
+                   match s {\n\
+                       Slot.Full(ref v) => println(f\"{v.len()} {p.a.len()} {p.b}\"),\n\
+                       Slot.Empty => println(\"empty\"),\n\
+                   }\n\
+               }\n";
+    accepted("mut-ref-pattern", src);
+    // The legacy backends would bind a copy, so they refuse it.
+    let (dir, path) = fixture("mut-ref-pattern-run", src);
+    let out = karac()
+        .args(["run", "--interp"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "legacy run must refuse: {err}");
+    assert!(err.contains("not supported by the legacy"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+    rejected_then_fixed_by(
+        "mut-ref-pattern-immutable",
+        "enum Slot { Full(Vec[i64]), Empty }\n\
+         fn main() {\n\
+             let s = Slot.Full([1]);\n\
+             match s { Slot.Full(mut ref v) => v.push(2), Slot.Empty => {} }\n\
+         }\n",
+        "cannot bind `mut ref v` into `s`",
+        "let mut s",
+    );
+    rejected_then_fixed_in(
+        "mut-ref-pattern-through-ref",
+        "enum Slot { Full(Vec[i64]), Empty }\n\
+         fn grow(s: ref Slot) {\n\
+             match s { Slot.Full(mut ref v) => v.push(2), Slot.Empty => {} }\n\
+         }\n\
+         fn main() { let mut s = Slot.Full([1]); grow(s); }\n",
+        "`s` is a `ref` parameter, so the `mut ref v` binding cannot modify it",
+        "s: mut ref Slot",
+        2,
+    );
+    rejected_then_fixed_by(
+        "ref-pattern-written",
+        "enum Slot { Full(Vec[i64]), Empty }\n\
+         fn main() {\n\
+             let mut s = Slot.Full([1]);\n\
+             match s { Slot.Full(ref v) => v.push(2), Slot.Empty => {} }\n\
+             match s { Slot.Full(ref v) => println(v.len()), Slot.Empty => {} }\n\
+         }\n",
+        "`v` is bound by `ref`",
+        "Slot.Full(mut ref v)",
     );
 }

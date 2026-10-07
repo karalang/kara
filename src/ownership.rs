@@ -1739,14 +1739,54 @@ impl<'a> OwnershipChecker<'a> {
         );
     }
 
+    /// A `mut ref name` pattern binding (`docs/core-semantics.md` §4.6)
+    /// borrows a part of its scrutinee mutably, which is a write to the
+    /// scrutinee's root binding: it needs `let mut`, like `bump(mut x)`.
+    pub(crate) fn report_mut_ref_pattern_write(
+        &mut self,
+        pattern: &crate::ast::Pattern,
+        scrutinee: &Expr,
+    ) {
+        if self.program.mut_ref_binding_spans.is_empty()
+            || self.place_writes_through_shared(scrutinee)
+        {
+            return;
+        }
+        let Some(root) = Self::root_identifier(scrutinee) else {
+            return;
+        };
+        for (name, span) in pattern.binding_name_spans() {
+            if self
+                .program
+                .mut_ref_binding_spans
+                .contains(&crate::resolver::SpanKey::from_span(&span))
+            {
+                self.report_write_to_immutable_binding(
+                    &root,
+                    &span,
+                    OwnershipErrorKind::MutateImmutableBinding,
+                    format!("cannot bind `mut ref {name}` into `{root}`"),
+                );
+                return;
+            }
+        }
+    }
+
     /// Record (or clear) the non-`mut` status of every binding a `let`
     /// pattern introduces. A `let mut` **removes** the names, so shadowing an
     /// immutable binding with a mutable one (`let x = 1; let mut x = x;` —
     /// the idiom design.md § Variable Binding Rules prescribes for making one
     /// field of a destructure mutable) correctly unlocks writes.
     pub(crate) fn record_let_mutability(&mut self, pattern: &Pattern, is_mut: bool, span: &Span) {
-        for name in pattern.binding_names() {
-            if is_mut {
+        for (name, at) in pattern.binding_name_spans() {
+            // A `mut ref name` binding is a mutable borrow whatever the `let`
+            // says; the write it allows lands in the scrutinee, whose own
+            // `let mut` [`Self::report_mut_ref_pattern_write`] checks.
+            let mut_ref = self
+                .program
+                .mut_ref_binding_spans
+                .contains(&crate::resolver::SpanKey::from_span(&at));
+            if is_mut || mut_ref {
                 self.immutable_lets.remove(&name);
             } else {
                 self.immutable_lets.insert(name, *span);

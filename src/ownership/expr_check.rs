@@ -146,12 +146,22 @@ impl<'a> super::OwnershipChecker<'a> {
     /// don't bind. Used by step 4 of the consume predicate (match scrutinee
     /// classification): if any arm pattern binds anything, the scrutinee
     /// is consumed (subject to Copy).
-    fn pattern_binds_anything(&self, pattern: &Pattern) -> bool {
+    pub(super) fn pattern_binds_anything(&self, pattern: &Pattern) -> bool {
         match &pattern.kind {
             PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {
                 false
             }
-            PatternKind::Binding(name) => !self.is_unit_variant_name(name),
+            // v2 core §4.6: a `ref name` / `mut ref name` binding borrows its
+            // part and moves nothing (the strict commands only; legacy's
+            // backends still move the scrutinee there).
+            PatternKind::Binding(name) => {
+                let borrows = crate::ownership::core_rules()
+                    && self
+                        .program
+                        .ref_binding_spans
+                        .contains(&SpanKey::from_span(&pattern.span));
+                !self.is_unit_variant_name(name) && !borrows
+            }
             // `ref name @ PATTERN` flips the whole subtree to borrow mode
             // (design.md § @ Bindings) — nothing under it binds by-move,
             // so it never consumes the scrutinee. A plain `name @` binds
@@ -813,6 +823,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 else_branch,
             } => {
                 self.check_expr_reading(value, states, param_types, param_usage);
+                self.report_mut_ref_pattern_write(pattern, value);
                 let mut then_states = states.clone();
                 self.define_pattern_states(pattern, &mut then_states);
                 self.check_block(then_block, &mut then_states, param_types, param_usage);
@@ -863,6 +874,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 }
                 let mut all_arm_states: Vec<HashMap<String, ValueState>> = Vec::new();
                 for arm in arms {
+                    self.report_mut_ref_pattern_write(&arm.pattern, scrutinee);
                     let mut arm_states = states.clone();
                     self.define_pattern_states(&arm.pattern, &mut arm_states);
                     if let Some(guard) = &arm.guard {
@@ -946,6 +958,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 ..
             } => {
                 self.check_expr_reading(value, states, param_types, param_usage);
+                self.report_mut_ref_pattern_write(pattern, value);
                 let pre_uninit = snapshot_uninit(states);
                 self.define_pattern_states(pattern, states);
                 self.loop_da_stack
