@@ -348,26 +348,20 @@ impl<'a> Interp<'a> {
             ("format", "") => {
                 // An f-string used as a value: print's convention, into a
                 // new String.
-                let mut text = String::new();
-                for v in &args {
-                    text.push_str(&self.display(v)?);
-                }
+                let text = self.show(&args, arg_tys)?;
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
             (_, "to_string") => {
-                let [v] = args.as_slice() else {
+                if args.len() != 1 {
                     return err(format!("{name} takes one argument"));
-                };
-                let text = self.display(v)?;
+                }
+                let text = self.show(&args, arg_tys)?;
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
             ("println" | "print", "") => {
                 // The arguments print one after another (an f-string's
                 // parts); a reference prints what it points to.
-                let mut text = String::new();
-                for v in &args {
-                    text.push_str(&self.display(v)?);
-                }
+                let text = self.show(&args, arg_tys)?;
                 self.output.push_str(&text);
                 if name == "println" {
                     self.output.push('\n');
@@ -922,6 +916,75 @@ impl<'a> Interp<'a> {
     }
 
     /// How `print` shows a value.
+    /// The arguments of a print or an f-string, shown one after another,
+    /// by type when the call site's types are known.
+    fn show(&mut self, args: &[Value], tys: &[Ty]) -> R<String> {
+        let mut text = String::new();
+        for (i, v) in args.iter().enumerate() {
+            let shown = match tys.get(i) {
+                Some(&t) if tys.len() == args.len() => self.display_typed(v, t)?,
+                _ => self.display(v)?,
+            };
+            text.push_str(&shown);
+        }
+        Ok(text)
+    }
+
+    /// `v` shown as legacy prints it: sequences as `[a, b]` with their
+    /// elements shown the same way, tuples as `(a, b)`, an enum value as
+    /// its variant's name with its fields in parentheses. A struct needs
+    /// its `Display` body, which is a call in MIR.
+    fn display_typed(&mut self, v: &Value, ty: Ty) -> R<String> {
+        let list = |me: &mut Self, items: &[Value], tys: &[Ty]| -> R<Vec<String>> {
+            items
+                .iter()
+                .zip(tys)
+                .map(|(x, &t)| me.display_typed(x, t))
+                .collect()
+        };
+        Ok(match (self.tys.kind(ty), v) {
+            (TyKind::Ref(t) | TyKind::MutRef(t), Value::Ref(addr)) => {
+                let inner = self.slot(addr)?;
+                if !inner.fully_init() {
+                    return err("print through a reference to an uninitialized value");
+                }
+                self.display_typed(&inner, t)?
+            }
+            (TyKind::Array(e, _), Value::Agg(fs)) => {
+                let tys = vec![e; fs.len()];
+                format!("[{}]", list(self, fs, &tys)?.join(", "))
+            }
+            (TyKind::Intrinsic(IntrinsicTy::Vec(e)), Value::Box(id)) => {
+                let fs = self.vec_elems(*id)?.clone();
+                let tys = vec![e; fs.len()];
+                format!("[{}]", list(self, &fs, &tys)?.join(", "))
+            }
+            (TyKind::Tuple(ts), Value::Agg(fs)) => {
+                format!("({})", list(self, fs, &ts)?.join(", "))
+            }
+            (TyKind::Adt(a), Value::Variant(k, fs)) => {
+                let adt = self.tys.adt(a);
+                let Some(var) = adt.variants.get(*k as usize) else {
+                    return err(format!("{} has no variant {k}", adt.name));
+                };
+                let vname = var.name.clone();
+                if fs.is_empty() {
+                    vname
+                } else {
+                    let mut tys = Vec::with_capacity(fs.len());
+                    for i in 0..fs.len() {
+                        let Some(t) = self.tys.field_ty(ty, Some(*k), i as u32) else {
+                            return err(format!("{}.{vname} has no field {i}", adt.name));
+                        };
+                        tys.push(t);
+                    }
+                    format!("{vname}({})", list(self, fs, &tys)?.join(", "))
+                }
+            }
+            _ => self.display(v)?,
+        })
+    }
+
     fn display(&mut self, v: &Value) -> R<String> {
         Ok(match v {
             Value::Str(s) => s.clone(),
@@ -1690,7 +1753,30 @@ impl<'a> Interp<'a> {
                 return err(format!("no Drop body registered for {}", adt.name));
             };
             self.events.push(Event::DropBody(adt.name.clone()));
-            self.call(f, vec![Value::Ref(addr.clone())])?;
+            let f = f.clone();
+            match (self.tys.kind(ty), &addr.root) {
+                // `fn T.drop(mut ref self)` on a `shared` type takes a
+                // reference to a handle, as every field read through a
+                // handle does. The object stays live, at count 0, until
+                // the body returns.
+                (TyKind::Shared(_), Root::Heap(id)) if addr.path.is_empty() => {
+                    let scratch = self.heap.len();
+                    self.heap.push(Some(HeapObj {
+                        count: 0,
+                        value: Value::Shared(*id),
+                    }));
+                    let handle = Addr {
+                        root: Root::Heap(AllocId(scratch as u32)),
+                        path: Vec::new(),
+                    };
+                    let r = self.call(&f, vec![Value::Ref(handle)]);
+                    self.heap[scratch] = None;
+                    r?;
+                }
+                _ => {
+                    self.call(&f, vec![Value::Ref(addr.clone())])?;
+                }
+            }
         }
         let (variant, n) = match self.slot(addr)? {
             Value::Variant(k, fs) => (Some(k), fs.len()),
@@ -2382,7 +2468,7 @@ exit main
             (std::fs::read_to_string(out).unwrap(), 0)
         };
         let ran = run_pin_files("tests/mir/interp", MirPhase::DropsElaborated, &want);
-        assert_eq!(ran, 1);
+        assert_eq!(ran, 2);
     }
 
     #[test]
