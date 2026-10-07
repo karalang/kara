@@ -7,6 +7,7 @@
 //! build on it. `ty` is a placeholder interner until the typed HIR's
 //! interned types land; MIR only needs the queries it exposes.
 
+pub mod borrowck;
 pub mod build;
 pub mod elaborate;
 pub mod interp;
@@ -18,6 +19,7 @@ pub mod syntax;
 pub mod ty;
 pub mod validate;
 
+pub use borrowck::check_borrows;
 pub use build::BodyBuilder;
 pub use elaborate::elaborate_drops;
 pub use movecheck::check_moves;
