@@ -436,6 +436,9 @@ impl<'a> Interp<'a> {
             ("String", _) if STRING_TEXT_METHODS.contains(&method) => {
                 self.string_text_method(name, method, args, ret)
             }
+            ("Vec", _) if VEC_MORE_METHODS.contains(&method) => {
+                self.vec_more_method(ty_name, method, args, arg_tys)
+            }
             ("Vec" | "String", _) => self.collection_method(ty_name, method, args, arg_tys, ret),
             ("Map" | "Set", "clone") => {
                 let [v] = args.as_slice() else {
@@ -673,6 +676,355 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// `Vec` methods that order, combine or filter the elements, some
+    /// through a closure argument (`design.md` § Collection Core Methods).
+    fn vec_more_method(
+        &mut self,
+        ty_name: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+    ) -> R<Value> {
+        let name = format!("{ty_name}.{method}");
+        let Some(recv) = args.first() else {
+            return err(format!("{name} needs a receiver"));
+        };
+        let id = self.box_behind(recv)?;
+        let e = self.vec_elem_ty(arg_tys, &name)?;
+        let elem = |i: usize| Addr {
+            root: Root::Heap(id),
+            path: vec![i as u64],
+        };
+        let closure_ty = || {
+            arg_tys
+                .get(1)
+                .copied()
+                .ok_or_else(|| Stop::Error(format!("{name} needs its closure's type")))
+        };
+        match (method, &args[1..]) {
+            ("sort" | "sort_unstable", []) => {
+                let elems = self.vec_elems(id)?.clone();
+                let mut keys = Vec::with_capacity(elems.len());
+                for x in &elems {
+                    keys.push(self.key_form(x)?);
+                }
+                let order =
+                    self.merge_order(elems.len(), &mut |_, a, b| Ok(cmp_key(&keys[a], &keys[b])))?;
+                self.permute(id, &order)?;
+                Ok(Value::Unit)
+            }
+            ("is_sorted", []) => {
+                let elems = self.vec_elems(id)?.clone();
+                let mut prev: Option<Value> = None;
+                for x in &elems {
+                    let k = self.key_form(x)?;
+                    if prev.as_ref().is_some_and(|p| cmp_key(p, &k).is_gt()) {
+                        return Ok(Value::Bool(false));
+                    }
+                    prev = Some(k);
+                }
+                Ok(Value::Bool(true))
+            }
+            ("sort_by" | "sort_unstable_by", [f]) => {
+                // The comparator sees two elements in place, by reference.
+                let fty = closure_ty()?;
+                let n = self.vec_elems(id)?.len();
+                let mut f = self.hold_callee(f.clone(), fty, &name)?;
+                let ord_ty = f.body.return_ty();
+                let order = self.merge_order(n, &mut |me, a, b| {
+                    let args = vec![Value::Ref(elem(a)), Value::Ref(elem(b))];
+                    let o = me.call_callee(&mut f, args)?;
+                    me.ordering(&o, ord_ty)
+                });
+                let order = order?;
+                self.release_callee(f, fty)?;
+                self.permute(id, &order)?;
+                Ok(Value::Unit)
+            }
+            ("sort_by_key" | "sort_unstable_by_key" | "sort_by_cached_key", [f]) => {
+                // One key per element, in order; the keys drop after the sort.
+                let fty = closure_ty()?;
+                let n = self.vec_elems(id)?.len();
+                let mut f = self.hold_callee(f.clone(), fty, &name)?;
+                let key_ty = f.body.return_ty();
+                let mut owned = Vec::with_capacity(n);
+                let mut keys = Vec::with_capacity(n);
+                for i in 0..n {
+                    let k = self.call_callee(&mut f, vec![Value::Ref(elem(i))])?;
+                    keys.push(self.key_form(&k)?);
+                    owned.push(k);
+                }
+                self.release_callee(f, fty)?;
+                let order = self.merge_order(n, &mut |_, a, b| Ok(cmp_key(&keys[a], &keys[b])))?;
+                self.permute(id, &order)?;
+                for k in owned {
+                    self.drop_value(k, key_ty)?;
+                }
+                Ok(Value::Unit)
+            }
+            ("retain", [f]) => {
+                // Each element the predicate rejects drops right away, in
+                // order, as Rust's `retain` does.
+                let fty = closure_ty()?;
+                let n = self.vec_elems(id)?.len();
+                let mut f = self.hold_callee(f.clone(), fty, &name)?;
+                let mut keep = Vec::with_capacity(n);
+                for i in 0..n {
+                    let k = self.call_callee(&mut f, vec![Value::Ref(elem(i))])?;
+                    let Value::Bool(k) = k else {
+                        return err(format!("{name}: the predicate returned {k:?}"));
+                    };
+                    if !k {
+                        self.drop_at(&elem(i), e)?;
+                    }
+                    keep.push(k);
+                }
+                self.release_callee(f, fty)?;
+                let elems = std::mem::take(self.vec_elems(id)?);
+                *self.vec_elems(id)? = elems
+                    .into_iter()
+                    .zip(keep)
+                    .filter_map(|(x, k)| k.then_some(x))
+                    .collect();
+                Ok(Value::Unit)
+            }
+            ("dedup", []) => {
+                // A run of equal elements keeps its first; the rest drop in
+                // order.
+                let elems = std::mem::take(self.vec_elems(id)?);
+                let mut kept: Vec<Value> = Vec::with_capacity(elems.len());
+                let mut last: Option<Value> = None;
+                for x in elems {
+                    let k = self.key_form(&x)?;
+                    if last.as_ref() == Some(&k) {
+                        self.drop_value(x, e)?;
+                    } else {
+                        kept.push(x);
+                        last = Some(k);
+                    }
+                }
+                *self.vec_elems(id)? = kept;
+                Ok(Value::Unit)
+            }
+            ("join", [sep]) => {
+                let sep = self.string_at(sep)?;
+                let elems = self.vec_elems(id)?.clone();
+                let mut parts = Vec::with_capacity(elems.len());
+                for x in &elems {
+                    parts.push(self.string_at(x)?);
+                }
+                Ok(self.alloc_box("String", Value::Str(parts.join(&sep))))
+            }
+            ("extend_from_slice", [other]) => {
+                let (base, lo, len) = self.view_of(other)?;
+                let mut copies = Vec::with_capacity(len as usize);
+                for i in 0..len {
+                    let x = self.slot(&base.child(lo + i))?;
+                    copies.push(self.clone_value(&x, e)?);
+                }
+                self.vec_elems(id)?.extend(copies);
+                Ok(Value::Unit)
+            }
+            ("extend" | "append", [other]) => {
+                // `extend` consumes the other `Vec`, which is freed;
+                // `append` empties one it borrows.
+                let from = self.box_behind(other)?;
+                let moved = std::mem::take(self.vec_elems(from)?);
+                self.vec_elems(id)?.extend(moved);
+                if method == "extend" {
+                    if !matches!(other, Value::Box(_)) {
+                        return err(format!("{name} takes the other Vec by value"));
+                    }
+                    self.heap[from.0 as usize] = None;
+                    self.events.push(Event::Free(from));
+                }
+                Ok(Value::Unit)
+            }
+            ("swap_remove", [Value::Int(i)]) => {
+                let i = self.bounds(id, *i, false)?;
+                Ok(self.vec_elems(id)?.swap_remove(i))
+            }
+            ("resize" | "fill", rest) => {
+                // The value is cloned into every new (or, for `fill`,
+                // every) slot but the last, which takes it; an unused value
+                // drops. Overwritten and cut-off elements drop in order.
+                let (want, val) = match (method, rest) {
+                    ("resize", [Value::Int(n), val]) => ((*n).max(0) as usize, val),
+                    ("fill", [val]) => (self.vec_elems(id)?.len(), val),
+                    _ => return err(format!("{name}: wrong arguments")),
+                };
+                let len = self.vec_elems(id)?.len();
+                let from = if method == "fill" { 0 } else { len.min(want) };
+                for i in from..len {
+                    self.drop_at(&elem(i), e)?;
+                }
+                self.vec_elems(id)?.truncate(from);
+                if from == want {
+                    self.drop_value(val.clone(), e)?;
+                }
+                for i in from..want {
+                    let v = if i + 1 == want {
+                        val.clone()
+                    } else {
+                        self.clone_value(val, e)?
+                    };
+                    self.vec_elems(id)?.push(v);
+                }
+                Ok(Value::Unit)
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// A stable merge sort of `0..n` under `cmp`, which may call into the
+    /// program; the result lists the old index of each new position.
+    fn merge_order(
+        &mut self,
+        n: usize,
+        cmp: &mut dyn FnMut(&mut Self, usize, usize) -> R<std::cmp::Ordering>,
+    ) -> R<Vec<usize>> {
+        let mut order: Vec<usize> = (0..n).collect();
+        let mut width = 1;
+        while width < n {
+            let mut out = Vec::with_capacity(n);
+            for lo in (0..n).step_by(2 * width) {
+                let mid = (lo + width).min(n);
+                let hi = (lo + 2 * width).min(n);
+                let (mut i, mut j) = (lo, mid);
+                while i < mid && j < hi {
+                    // The right element goes first only when strictly less.
+                    if cmp(self, order[j], order[i])?.is_lt() {
+                        out.push(order[j]);
+                        j += 1;
+                    } else {
+                        out.push(order[i]);
+                        i += 1;
+                    }
+                }
+                out.extend_from_slice(&order[i..mid]);
+                out.extend_from_slice(&order[j..hi]);
+            }
+            order = out;
+            width *= 2;
+        }
+        Ok(order)
+    }
+
+    /// Reorders the elements of `id`: new position `k` takes old `order[k]`.
+    fn permute(&mut self, id: AllocId, order: &[usize]) -> R<()> {
+        let elems = std::mem::take(self.vec_elems(id)?);
+        let mut slots: Vec<Option<Value>> = elems.into_iter().map(Some).collect();
+        let sorted = order
+            .iter()
+            .map(|&i| slots[i].take().expect("a permutation"))
+            .collect();
+        *self.vec_elems(id)? = sorted;
+        Ok(())
+    }
+
+    /// The `std::cmp::Ordering` an `Ordering` value of type `ty` names.
+    fn ordering(&self, v: &Value, ty: Ty) -> R<std::cmp::Ordering> {
+        let (Value::Variant(k, _), TyKind::Adt(a)) = (v, self.tys.kind(ty)) else {
+            return err(format!("expected an Ordering, found {v:?}"));
+        };
+        match self
+            .tys
+            .adt(a)
+            .variants
+            .get(*k as usize)
+            .map(|v| v.name.as_str())
+        {
+            Some("Less") => Ok(std::cmp::Ordering::Less),
+            Some("Equal") => Ok(std::cmp::Ordering::Equal),
+            Some("Greater") => Ok(std::cmp::Ordering::Greater),
+            _ => err(format!("expected an Ordering, found {v:?}")),
+        }
+    }
+
+    /// Takes a closure (or function item) a library method will call. A
+    /// closure's environment moves into a scratch heap slot, so each call
+    /// can pass it the way its body takes it.
+    fn hold_callee(&mut self, f: Value, fty: Ty, name: &str) -> R<Callee<'a>> {
+        let program: &'a Program = self.program;
+        match (f, self.tys.kind(fty)) {
+            (Value::Fn(inst), _) => {
+                let body = program
+                    .bodies
+                    .get(&inst.name)
+                    .ok_or_else(|| Stop::Error(format!("{name}: no body for {}", inst.name)))?;
+                Ok(Callee {
+                    body,
+                    env: None,
+                    by_value: false,
+                    taken: false,
+                })
+            }
+            (v, TyKind::Closure(def, _)) => {
+                let body = program
+                    .bodies
+                    .values()
+                    .find(|b| b.instance.def == def)
+                    .ok_or_else(|| Stop::Error(format!("{name}: no body for closure {def:?}")))?;
+                let env_ty = body
+                    .args()
+                    .next()
+                    .map(|l| body.local(l).ty)
+                    .ok_or_else(|| Stop::Error(format!("{name}: a closure body with no env")))?;
+                let by_value = !matches!(self.tys.kind(env_ty), TyKind::Ref(_) | TyKind::MutRef(_));
+                let slot = AllocId(self.heap.len() as u32);
+                self.heap.push(Some(HeapObj { count: 1, value: v }));
+                Ok(Callee {
+                    body,
+                    env: Some(slot),
+                    by_value,
+                    taken: false,
+                })
+            }
+            (v, _) => err(format!("{name}: cannot call {v:?}")),
+        }
+    }
+
+    fn call_callee(&mut self, f: &mut Callee<'a>, args: Vec<Value>) -> R<Value> {
+        let mut all = Vec::with_capacity(args.len() + 1);
+        if let Some(slot) = f.env {
+            if f.by_value {
+                if f.taken {
+                    return err(format!(
+                        "{} takes its environment by value and was already called",
+                        f.body.instance.name
+                    ));
+                }
+                f.taken = true;
+                all.push(std::mem::replace(
+                    &mut self.live(slot)?.value,
+                    Value::Uninit,
+                ));
+            } else {
+                all.push(Value::Ref(Addr {
+                    root: Root::Heap(slot),
+                    path: Vec::new(),
+                }));
+            }
+        }
+        all.extend(args);
+        self.call(&f.body.instance.name, all)
+    }
+
+    /// Drops what is left of a held closure's environment.
+    fn release_callee(&mut self, f: Callee<'a>, fty: Ty) -> R<()> {
+        if let Some(slot) = f.env {
+            if !f.taken {
+                let at = Addr {
+                    root: Root::Heap(slot),
+                    path: Vec::new(),
+                };
+                self.drop_at(&at, fty)?;
+            }
+            self.heap[slot.0 as usize] = None;
+        }
+        Ok(())
+    }
+
     /// Slice views over a `Vec`, an array or another slice: `as_slice`,
     /// `as_mut_slice`, `slice(lo, hi)` and `slice_mut(lo, hi)`, plus
     /// `len`, `index` and `index_mut` on a slice (or an array). A view
@@ -829,6 +1181,93 @@ impl<'a> Interp<'a> {
                 let k = entry.pop().expect("an entry is a pair");
                 self.drop_value(k, key_ty)?;
                 self.option(ret, Some(val))
+            }
+            ("get_or", [key, default]) if is_map => {
+                // A copy of the stored value, or the default (cloned when
+                // it came by reference).
+                let found = self.find_key(id, key, true)?;
+                let owned_default = !matches!(default, Value::Ref(_));
+                match found {
+                    Some(i) => {
+                        let v = self.slot(&Addr {
+                            root: Root::Heap(id),
+                            path: vec![i as u64, 1],
+                        })?;
+                        if owned_default {
+                            self.drop_value(default.clone(), val_ty)?;
+                        }
+                        self.clone_value(&v, val_ty)
+                    }
+                    None if owned_default => Ok(default.clone()),
+                    None => {
+                        let Value::Ref(a) = default else {
+                            unreachable!("checked above")
+                        };
+                        let v = self.slot(a)?;
+                        self.clone_value(&v, val_ty)
+                    }
+                }
+            }
+            ("keys" | "values", []) if is_map => {
+                // A `Vec` of the keys (or values) in iteration order:
+                // references when the result holds references, else copies.
+                let e = match self.tys.kind(ret) {
+                    TyKind::Intrinsic(IntrinsicTy::Vec(e)) => e,
+                    _ => return err(format!("{name} into {}", self.tys.display(ret))),
+                };
+                let part = u64::from(method == "values");
+                let part_ty = if method == "values" { val_ty } else { key_ty };
+                let by_ref = matches!(self.tys.kind(e), TyKind::Ref(_));
+                let n = self.vec_elems(id)?.len();
+                let mut out = Vec::with_capacity(n);
+                for i in 0..n as u64 {
+                    let at = Addr {
+                        root: Root::Heap(id),
+                        path: vec![i, part],
+                    };
+                    if by_ref {
+                        out.push(Value::Ref(at));
+                    } else {
+                        let v = self.slot(&at)?;
+                        out.push(self.clone_value(&v, part_ty)?);
+                    }
+                }
+                let vname = self.tys.display(ret);
+                Ok(self.alloc_box(&vname, Value::Agg(out)))
+            }
+            ("entry_or_insert" | "entry_or_insert_with", [key, val]) if is_map => {
+                // `m.entry(k).or_insert(v)`, fused: a reference to the
+                // stored value, inserting `v` (or `f()`) when `k` is new.
+                // A found key drops the new key and the unused value.
+                let found = self.find_key(id, key, true)?;
+                let i = match found {
+                    Some(i) => {
+                        self.drop_value(key.clone(), key_ty)?;
+                        let unused_ty = *arg_tys.get(2).unwrap_or(&val_ty);
+                        self.drop_value(val.clone(), unused_ty)?;
+                        i
+                    }
+                    None => {
+                        let v = if method == "entry_or_insert_with" {
+                            let fty = *arg_tys.get(2).ok_or_else(|| {
+                                Stop::Error(format!("{name} needs its closure's type"))
+                            })?;
+                            let mut f = self.hold_callee(val.clone(), fty, &name)?;
+                            let v = self.call_callee(&mut f, Vec::new())?;
+                            self.release_callee(f, fty)?;
+                            v
+                        } else {
+                            val.clone()
+                        };
+                        let entries = self.vec_elems(id)?;
+                        entries.push(Value::Agg(vec![key.clone(), v]));
+                        entries.len() - 1
+                    }
+                };
+                Ok(Value::Ref(Addr {
+                    root: Root::Heap(id),
+                    path: vec![i as u64, 1],
+                }))
             }
             ("clear", []) => {
                 let n = self.vec_elems(id)?.len();
@@ -2238,6 +2677,64 @@ const STRING_TEXT_METHODS: &[&str] = &[
 ];
 
 /// `Vec[R].len` -> (`Vec[R]`, `len`); a plain `println` -> (`println`, ``).
+/// `Vec` methods [`Interp::vec_more_method`] implements.
+const VEC_MORE_METHODS: &[&str] = &[
+    "sort",
+    "sort_unstable",
+    "is_sorted",
+    "sort_by",
+    "sort_unstable_by",
+    "sort_by_key",
+    "sort_unstable_by_key",
+    "sort_by_cached_key",
+    "retain",
+    "dedup",
+    "join",
+    "extend_from_slice",
+    "extend",
+    "append",
+    "swap_remove",
+    "resize",
+    "fill",
+];
+
+/// A closure or function item held by a library method that calls it.
+struct Callee<'a> {
+    body: &'a Body,
+    /// The heap slot holding a closure's environment.
+    env: Option<AllocId>,
+    /// The body takes its environment by value: it can be called once.
+    by_value: bool,
+    taken: bool,
+}
+
+/// The natural order of two key forms ([`Interp::key_form`]): numbers,
+/// text and chars by value, `false < true`, aggregates field by field,
+/// variants by declaration order and then payload.
+fn cmp_key(a: &Value, b: &Value) -> std::cmp::Ordering {
+    use std::cmp::Ordering::Equal;
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x.cmp(y),
+        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or(Equal),
+        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        (Value::Char(x), Value::Char(y)) => x.cmp(y),
+        (Value::Str(x), Value::Str(y)) => x.cmp(y),
+        (Value::Agg(xs), Value::Agg(ys)) => cmp_keys(xs, ys),
+        (Value::Variant(i, xs), Value::Variant(j, ys)) => i.cmp(j).then_with(|| cmp_keys(xs, ys)),
+        _ => Equal,
+    }
+}
+
+fn cmp_keys(xs: &[Value], ys: &[Value]) -> std::cmp::Ordering {
+    for (x, y) in xs.iter().zip(ys) {
+        let o = cmp_key(x, y);
+        if o.is_ne() {
+            return o;
+        }
+    }
+    xs.len().cmp(&ys.len())
+}
+
 fn split_method(name: &str) -> (&str, &str) {
     let mut depth = 0;
     let mut dot = None;
@@ -2974,7 +3471,7 @@ fn main() -> () {
             (std::fs::read_to_string(out).unwrap(), 0)
         };
         let ran = run_pin_files("tests/mir/lib", MirPhase::DropsElaborated, &want);
-        assert_eq!(ran, 4);
+        assert_eq!(ran, 5);
     }
 
     /// A strict drop of a fieldless variant, a fieldless variant left in

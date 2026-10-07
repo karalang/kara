@@ -1,0 +1,229 @@
+enum Ordering { Less, Equal, Greater }
+
+struct R: Drop { id: i64 }
+
+fn R.drop(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const "d", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn main.c0(_1: ref closure#3(), _2: ref i64, _3: ref i64) -> Ordering {
+    let mut _0: Ordering;
+    let _4: bool;
+    bb0: {
+        _4 = Lt(copy (*_3), copy (*_2));
+        switchInt(copy _4) -> [0: bb2, otherwise: bb1];
+    }
+    bb1: {
+        _0 = Ordering.Less {  };
+        return;
+    }
+    bb2: {
+        _4 = Gt(copy (*_3), copy (*_2));
+        switchInt(copy _4) -> [0: bb4, otherwise: bb3];
+    }
+    bb3: {
+        _0 = Ordering.Greater {  };
+        return;
+    }
+    bb4: {
+        _0 = Ordering.Equal {  };
+        return;
+    }
+}
+
+fn main.c1(_1: ref closure#4(), _2: ref R) -> i64 {
+    let mut _0: i64;
+    bb0: {
+        _0 = Neg(copy (*_2).0);
+        return;
+    }
+}
+
+fn main.c2(_1: ref closure#5(i64), _2: ref R) -> bool {
+    let mut _0: bool;
+    bb0: {
+        _0 = Ne(copy (*_2).0, copy (*_1).0);
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: Vec[i64]; // v
+    let _2: Array[i64, 7];
+    let _3: mut ref Vec[i64];
+    let _4: ();
+    let _5: ref Vec[i64];
+    let _6: closure#3(); // c0
+    let _7: Vec[R]; // rs
+    let _8: mut ref Vec[R];
+    let _9: R;
+    let _10: closure#4(); // c1
+    let _11: closure#5(i64); // c2
+    let _12: Vec[String]; // parts
+    let _13: ref Vec[String];
+    let _14: String; // joined
+    let _15: ref String;
+    let _16: Vec[i64]; // w
+    let _17: i64;
+    let _18: Map[i64, i64]; // m
+    let _19: mut ref Map[i64, i64];
+    let _20: mut ref i64;
+    let _21: ref Map[i64, i64];
+    let _22: i64;
+    let _23: i64;
+    let _24: Vec[i64]; // ks
+    bb0: {
+        _2 = [const 3_i64, const 1_i64, const 2_i64, const 2_i64, const 5_i64, const 1_i64, const 4_i64];
+        _1 = Vec[i64].from_array(move _2) -> bb1;
+    }
+    bb1: {
+        _3 = &mut _1;
+        _4 = Vec[i64].sort(move _3) -> bb2;
+    }
+    bb2: {
+        _5 = &_1;
+        _4 = println(move _5) -> bb3;
+    }
+    bb3: {
+        _6 = closure#3() [];
+        _3 = &mut _1;
+        _4 = Vec[i64].sort_by(move _3, move _6) -> bb4;
+    }
+    bb4: {
+        _5 = &_1;
+        _4 = println(move _5) -> bb5;
+    }
+    bb5: {
+        _3 = &mut _1;
+        _4 = Vec[i64].dedup(move _3) -> bb6;
+    }
+    bb6: {
+        _5 = &_1;
+        _4 = println(move _5) -> bb7;
+    }
+    bb7: {
+        _7 = Vec[R].new() -> bb8;
+    }
+    bb8: {
+        _9 = R { const 1_i64 };
+        _8 = &mut _7;
+        _4 = Vec[R].push(move _8, move _9) -> bb9;
+    }
+    bb9: {
+        _9 = R { const 3_i64 };
+        _8 = &mut _7;
+        _4 = Vec[R].push(move _8, move _9) -> bb10;
+    }
+    bb10: {
+        _9 = R { const 2_i64 };
+        _8 = &mut _7;
+        _4 = Vec[R].push(move _8, move _9) -> bb11;
+    }
+    bb11: {
+        _10 = closure#4() [];
+        _8 = &mut _7;
+        _4 = Vec[R].sort_by_key(move _8, move _10) -> bb12;
+    }
+    bb12: {
+        _11 = closure#5(i64) [const 2_i64];
+        _8 = &mut _7;
+        _4 = Vec[R].retain(move _8, move _11) -> bb13;
+    }
+    bb13: {
+        _4 = println(const "retained") -> bb14;
+    }
+    bb14: {
+        _12 = String.split(const "a-b-c", const "-") -> bb15;
+    }
+    bb15: {
+        _13 = &_12;
+        _14 = Vec[String].join(move _13, const "+") -> bb16;
+    }
+    bb16: {
+        _15 = &_14;
+        _4 = println(move _15) -> bb17;
+    }
+    bb17: {
+        _16 = Vec[i64].new() -> bb18;
+    }
+    bb18: {
+        _3 = &mut _16;
+        _5 = &_1;
+        _4 = Vec[i64].extend_from_slice(move _3, move _5) -> bb19;
+    }
+    bb19: {
+        _3 = &mut _16;
+        _17 = Vec[i64].swap_remove(move _3, const 0_i64) -> bb20;
+    }
+    bb20: {
+        _3 = &mut _16;
+        _4 = Vec[i64].resize(move _3, const 6_i64, const 9_i64) -> bb21;
+    }
+    bb21: {
+        _5 = &_16;
+        _4 = println(copy _17, const " ", move _5) -> bb22;
+    }
+    bb22: {
+        _18 = Map[i64, i64].new() -> bb23;
+    }
+    bb23: {
+        _19 = &mut _18;
+        _20 = Map[i64, i64].entry_or_insert(move _19, const 1_i64, const 10_i64) -> bb24;
+    }
+    bb24: {
+        (*_20) = Add(copy (*_20), const 1_i64);
+        _19 = &mut _18;
+        _20 = Map[i64, i64].entry_or_insert(move _19, const 1_i64, const 99_i64) -> bb25;
+    }
+    bb25: {
+        _17 = copy (*_20);
+        _21 = &_18;
+        _22 = Map[i64, i64].get_or(move _21, const 1_i64, const 0_i64) -> bb26;
+    }
+    bb26: {
+        _21 = &_18;
+        _23 = Map[i64, i64].get_or(move _21, const 7_i64, const 0_i64) -> bb27;
+    }
+    bb27: {
+        _21 = &_18;
+        _24 = Map[i64, i64].keys(move _21) -> bb28;
+    }
+    bb28: {
+        _5 = &_24;
+        _4 = println(copy _17, const " ", copy _22, const " ", copy _23, const " ", move _5) -> bb29;
+    }
+    bb29: {
+        drop(_24) -> bb30;
+    }
+    bb30: {
+        drop(_18) -> bb31;
+    }
+    bb31: {
+        drop(_16) -> bb32;
+    }
+    bb32: {
+        drop(_14) -> bb33;
+    }
+    bb33: {
+        drop(_12) -> bb34;
+    }
+    bb34: {
+        drop(_7) -> bb35;
+    }
+    bb35: {
+        drop(_1) -> bb36;
+    }
+    bb36: {
+        _0 = const ();
+        return;
+    }
+}
