@@ -1,0 +1,97 @@
+fn p(_1: i64) -> i64 {
+    let mut _0: i64;
+    let _2: ();
+    bb0: {
+        _2 = println(const "p", copy _1) -> bb1;
+    }
+    bb1: {
+        _0 = copy _1;
+        return;
+    }
+}
+
+fn add(_1: i64, _2: i64) -> i64 {
+    let mut _0: i64;
+    bb0: {
+        _0 = Add(copy _1, copy _2);
+        return;
+    }
+}
+
+struct S { a: i64, b: i64 }
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: i64; // s
+    let _2: S; // t
+    let _3: i64; // u
+    let mut _4: Vec[i64]; // v
+    let _5: i64;
+    let _6: i64;
+    let _7: i64;
+    let _8: i64;
+    let _9: ();
+    let _10: Array[i64, 2];
+    let _11: mut ref Vec[i64];
+    let _12: usize;
+    let _13: mut ref i64;
+    let _14: ref Vec[i64];
+    let _15: ref i64;
+    bb0: {
+        _5 = p(const 1_i64) -> bb1;
+    }
+    bb1: {
+        _6 = p(const 2_i64) -> bb2;
+    }
+    bb2: {
+        _1 = add(copy _5, copy _6) -> bb3;
+    }
+    bb3: {
+        _6 = p(const 4_i64) -> bb4;
+    }
+    bb4: {
+        _5 = p(const 3_i64) -> bb5;
+    }
+    bb5: {
+        _2 = S { copy _5, copy _6 };
+        _5 = p(const 5_i64) -> bb6;
+    }
+    bb6: {
+        _6 = p(const 6_i64) -> bb7;
+    }
+    bb7: {
+        _7 = p(const 7_i64) -> bb8;
+    }
+    bb8: {
+        _8 = Mul(copy _6, copy _7);
+        _3 = Add(copy _5, copy _8);
+        _10 = [const 0_i64, const 0_i64];
+        _4 = Vec[i64].from_array(move _10) -> bb9;
+    }
+    bb9: {
+        _5 = p(const 1_i64) -> bb10;
+    }
+    bb10: {
+        _6 = p(const 8_i64) -> bb11;
+    }
+    bb11: {
+        _11 = &mut _4;
+        _12 = copy _5 as usize (IntToInt);
+        _13 = Vec[i64].index_mut(move _11, copy _12) -> bb12;
+    }
+    bb12: {
+        (*_13) = copy _6;
+        _14 = &_4;
+        _15 = Vec[i64].index(copy _14, const 1_usize) -> bb13;
+    }
+    bb13: {
+        _9 = println(copy _1, const " ", copy _2.0, const " ", copy _2.1, const " ", copy _3, const " ", copy (*_15)) -> bb14;
+    }
+    bb14: {
+        drop(_4) -> bb15;
+    }
+    bb15: {
+        _0 = const ();
+        return;
+    }
+}

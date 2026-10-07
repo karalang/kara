@@ -1736,10 +1736,23 @@ exit main
     /// the drop reference model is checked against.
     #[test]
     fn mir_interp_runs_the_hand_lowered_core_pins() {
+        run_core_pins("tests/mir/core", MirPhase::DropsElaborated);
+    }
+
+    /// The same pins as the builder emits them, before drop elaboration:
+    /// no drop flags, and a scope-end `drop` of every owning local even
+    /// where it was moved, which the `Built` phase runs dynamically. These
+    /// are drop elaboration's input.
+    #[test]
+    fn mir_interp_runs_the_built_core_pins() {
+        run_core_pins("tests/mir/core-built", MirPhase::Built);
+    }
+
+    fn run_core_pins(dir: &str, phase: MirPhase) {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut ran = 0;
         let mut bad = Vec::new();
-        let mut files: Vec<_> = std::fs::read_dir(root.join("tests/mir/core"))
+        let mut files: Vec<_> = std::fs::read_dir(root.join(dir))
             .unwrap()
             .map(|e| e.unwrap().path())
             .collect();
@@ -1759,7 +1772,7 @@ exit main
             let src = std::fs::read_to_string(&path).unwrap();
             let mut m = crate::mir::parse_module(&src).unwrap_or_else(|e| panic!("{pin}: {e}"));
             for b in &mut m.bodies {
-                b.phase = MirPhase::DropsElaborated;
+                b.phase = phase;
             }
             let prog = Program::from_module(&m);
             let r = run(&prog, &m.tys, "main", vec![]);

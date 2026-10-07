@@ -1,0 +1,57 @@
+struct R: Drop { id: i64 }
+
+fn R.drop(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const "d", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: R; // a
+    let _2: Vec[i64]; // v
+    let _3: Array[i64, 2];
+    let _4: ref Vec[i64];
+    let _5: usize;
+    let _6: bool;
+    let _7: ref i64;
+    let _8: ();
+    bb0: {
+        _1 = R { const 1_i64 };
+        _3 = [const 1_i64, const 2_i64];
+        _2 = Vec[i64].from_array(move _3) -> bb1;
+    }
+    bb1: {
+        _4 = &_2;
+        _5 = Vec[i64].len(copy _4) -> bb2;
+    }
+    bb2: {
+        _6 = Lt(const 5_usize, copy _5);
+        switchInt(copy _6) -> [0: bb3, otherwise: bb4];
+    }
+    bb3: {
+        abort(BoundsCheck);
+    }
+    bb4: {
+        _7 = Vec[i64].index(copy _4, const 5_usize) -> bb5;
+    }
+    bb5: {
+        _8 = println(copy (*_7)) -> bb6;
+    }
+    bb6: {
+        drop(_2) -> bb7;
+    }
+    bb7: {
+        drop(_1) -> bb8;
+    }
+    bb8: {
+        _0 = const ();
+        return;
+    }
+}

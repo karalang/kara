@@ -1,0 +1,127 @@
+struct R: Drop { id: i64 }
+
+fn R.drop(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const "d", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+enum Option[R] { None, Some(R) }
+
+fn show(_1: ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const "show", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn eat(_1: R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const "eat", copy _1.0) -> bb1;
+    }
+    bb1: {
+        drop(_1) -> bb2;
+    }
+    bb2: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: Option[R]; // a
+    let _2: Option[R]; // b
+    let _3: Option[R]; // c
+    let _4: R; // r
+    let _5: ref R; // r
+    let _6: R; // r
+    let _7: R;
+    let _8: usize;
+    let _9: ();
+    let _10: ref R;
+    bb0: {
+        _7 = R { const 1_i64 };
+        _1 = Option[R].Some { move _7 };
+        _8 = discriminant(_1);
+        switchInt(copy _8) -> [1: bb1, otherwise: bb3];
+    }
+    bb1: {
+        _4 = move (_1 as Some).0;
+        _10 = &_4;
+        _9 = show(copy _10) -> bb2;
+    }
+    bb2: {
+        drop(_4) -> bb4;
+    }
+    bb3: {
+        _9 = println(const "none") -> bb4;
+    }
+    bb4: {
+        _9 = println(const "after move-mode match") -> bb5;
+    }
+    bb5: {
+        _7 = R { const 2_i64 };
+        _2 = Option[R].Some { move _7 };
+        _8 = discriminant(_2);
+        switchInt(copy _8) -> [1: bb6, otherwise: bb7];
+    }
+    bb6: {
+        _5 = &(_2 as Some).0;
+        _9 = show(copy _5) -> bb8;
+    }
+    bb7: {
+        _9 = println(const "none") -> bb8;
+    }
+    bb8: {
+        _9 = println(const "after ref-mode match") -> bb9;
+    }
+    bb9: {
+        _7 = R { const 3_i64 };
+        _3 = Option[R].Some { move _7 };
+        _8 = discriminant(_3);
+        switchInt(copy _8) -> [1: bb10, otherwise: bb12];
+    }
+    bb10: {
+        _6 = move (_3 as Some).0;
+        _9 = eat(move _6) -> bb11;
+    }
+    bb11: {
+        drop(_6) -> bb13;
+    }
+    bb12: {
+        _9 = println(const "none") -> bb13;
+    }
+    bb13: {
+        _9 = println(const "end") -> bb14;
+    }
+    bb14: {
+        drop(_7) -> bb15;
+    }
+    bb15: {
+        drop(_3) -> bb16;
+    }
+    bb16: {
+        drop(_2) -> bb17;
+    }
+    bb17: {
+        drop(_1) -> bb18;
+    }
+    bb18: {
+        _0 = const ();
+        return;
+    }
+}

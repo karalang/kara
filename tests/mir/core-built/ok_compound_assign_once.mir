@@ -1,0 +1,55 @@
+fn p(_1: i64) -> i64 {
+    let mut _0: i64;
+    let _2: ();
+    bb0: {
+        _2 = println(const "p", copy _1) -> bb1;
+    }
+    bb1: {
+        _0 = copy _1;
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let mut _1: Vec[i64]; // v
+    let _2: i64;
+    let _3: usize;
+    let _4: mut ref Vec[i64];
+    let _5: mut ref i64;
+    let _6: i64;
+    let _7: ref Vec[i64];
+    let _8: ref i64;
+    let _9: ();
+    let _10: Array[i64, 2];
+    bb0: {
+        _10 = [const 0_i64, const 0_i64];
+        _1 = Vec[i64].from_array(move _10) -> bb1;
+    }
+    bb1: {
+        _2 = p(const 1_i64) -> bb2;
+    }
+    bb2: {
+        _3 = copy _2 as usize (IntToInt);
+        _4 = &mut _1;
+        _5 = Vec[i64].index_mut(move _4, copy _3) -> bb3;
+    }
+    bb3: {
+        _6 = p(const 8_i64) -> bb4;
+    }
+    bb4: {
+        (*_5) = Add(copy (*_5), copy _6);
+        _7 = &_1;
+        _8 = Vec[i64].index(copy _7, const 1_usize) -> bb5;
+    }
+    bb5: {
+        _9 = println(copy (*_8)) -> bb6;
+    }
+    bb6: {
+        drop(_1) -> bb7;
+    }
+    bb7: {
+        _0 = const ();
+        return;
+    }
+}
