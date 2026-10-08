@@ -4027,6 +4027,13 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// Branch to `fail` unless `place` (of type `t`) matches `pat`;
     /// continue in the current block when it does.
     fn test_pattern(&mut self, pat: &'a Pattern, place: &Place, t: Ty, fail: BasicBlock) -> R<()> {
+        // A part that is a reference (`match (region, cat)` over two
+        // `ref`s) is tested through it.
+        if let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(t) {
+            if self.destructures(pat) {
+                return self.test_pattern(pat, &place.project(ProjElem::Deref), inner, fail);
+            }
+        }
         match &pat.kind {
             PatternKind::Wildcard | PatternKind::Binding(_) => {
                 // A bare name may be a unit variant (`None`).
@@ -4230,6 +4237,16 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// Does `pat` bind a name (a unit variant written bare does not)?
+    /// Whether `pat` looks inside the value it matches, rather than naming
+    /// all of it (a binding or `_`) or comparing a string with it.
+    fn destructures(&self, pat: &Pattern) -> bool {
+        match &pat.kind {
+            PatternKind::Wildcard | PatternKind::Literal(LiteralPattern::String(_)) => false,
+            PatternKind::Binding(_) => matches!(self.lcx.res.get(&pat.id), Some(Res::Def(_))),
+            _ => true,
+        }
+    }
+
     fn pattern_binds(&self, pat: &Pattern) -> bool {
         !pat.binding_names().is_empty()
     }
@@ -4245,6 +4262,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         by_ref: bool,
         out: &mut Vec<(Local, Ty)>,
     ) -> R<()> {
+        // A part that is a reference binds through it, by reference.
+        if let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(t) {
+            if self.destructures(pat) {
+                let p = place.project(ProjElem::Deref);
+                return self.bind_pattern(pat, &p, inner, true, out);
+            }
+        }
+        // The parts of a `shared` value are only reached through a handle,
+        // so a plain binding of one is a `ref` (core semantics §4.6).
+        let by_ref = by_ref || matches!(self.tys().tcx().kind(t), HK::Shared { .. });
         match &pat.kind {
             PatternKind::Wildcard | PatternKind::Literal(_) => Ok(()),
             PatternKind::Binding(name) => {
