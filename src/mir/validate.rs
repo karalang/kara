@@ -57,9 +57,6 @@ impl Validator<'_> {
         }
         for (i, r) in body.par_regions.iter().enumerate() {
             self.loc = format!("par#{i}");
-            if r.branches.is_empty() {
-                self.err("a par region needs at least one branch");
-            }
             for b in r.branches.iter().flatten() {
                 if b.index() >= body.blocks.len() {
                     self.err(format!("{b} does not exist"));

@@ -8564,6 +8564,8 @@ fn main() {
         for r in rs {
             assert!(r.branches.iter().all(|bs| !bs.is_empty()));
         }
+        let empty = "fn main() {\n    par {}\n    println(\"ok\");\n}\n";
+        assert_eq!(run_source(empty), Ok(("ok\n".to_string(), Some(0))));
         let printed = crate::mir::pretty::pretty_body(main, &lowered.tys);
         assert!(printed.contains("    par#0 block ["), "{printed}");
         assert!(printed.contains("    par#1 for ["), "{printed}");

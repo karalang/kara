@@ -456,11 +456,9 @@ fn main() -> () {{
         let bad = parse_module(&src("    par#0 block [bb9]\n    par#1 for\n"))
             .unwrap_or_else(|e| panic!("{e}"));
         let errs = validate(&bad.bodies[0], &bad.tys);
+        // An empty `par {}` has a region with no branches, which is valid.
+        assert_eq!(errs.len(), 1, "{errs:?}");
         assert!(errors_mention(&errs, "bb9 does not exist"), "{errs:?}");
-        assert!(
-            errors_mention(&errs, "a par region needs at least one branch"),
-            "{errs:?}"
-        );
         let skipped = parse_module(&src("    par#1 block [bb1]\n"));
         assert!(skipped.is_err());
     }
