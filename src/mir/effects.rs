@@ -413,14 +413,75 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("File", "read" | "read_line" | "read_to_string") => {
             vec![(Reads, "File", Some(0)), (Blocks, "", None)]
         }
+        // Starting, waiting on or killing a child sends to the process
+        // table (`sends(ProcessTable)` in the library); a call on one child
+        // is keyed by it, so two children's waits do not conflict. Its pipes
+        // are keyed by the pipe value, like a connection.
+        ("Command", "spawn" | "output" | "status") => {
+            vec![(Sends, "ProcessTable", None), (Blocks, "", None), HEAP]
+        }
+        ("Command", _) => vec![HEAP],
+        ("Child", "wait" | "try_wait" | "kill" | "wait_with_output") => {
+            vec![(Sends, "ProcessTable", Some(0)), (Blocks, "", None), HEAP]
+        }
+        ("ChildStdin", "write" | "write_all" | "flush" | "close") => {
+            vec![(Sends, "Pipe", Some(0)), (Blocks, "", None)]
+        }
+        ("ChildStdout" | "ChildStderr", "read" | "read_line" | "read_to_string") => {
+            vec![(Receives, "Pipe", Some(0)), (Blocks, "", None), HEAP]
+        }
+        // Taking a child's pipe hands out a handle; the I/O is on the pipe.
+        ("Child", "stdin" | "stdout" | "stderr" | "id") => vec![HEAP],
+        // An HTTP request or response is a plain value once received: its
+        // accessors and builders only allocate.
+        ("Request" | "Response" | "HttpError", _) => vec![HEAP],
+        ("Client", "new" | "request") | ("RequestBuilder", "header" | "body" | "timeout") => {
+            vec![HEAP]
+        }
+        // A client call opens its own connection, so there is no value to
+        // key it by: it sends and receives on the network as a whole.
+        ("Client", "get" | "post") | ("RequestBuilder", "send") => vec![
+            (Sends, "Network", None),
+            (Receives, "Network", None),
+            (Blocks, "", None),
+            HEAP,
+        ],
         // Paths name files by string value, which a key cannot follow: the
         // whole file system is the resource.
-        ("fs", "write" | "append" | "remove" | "create_dir") => {
-            vec![(Writes, "FileSystem", None), (Blocks, "", None)]
+        ("fs" | "FileSystem", "write" | "append" | "remove" | "create_dir") => {
+            vec![(Writes, "FileSystem", None), (Blocks, "", None), HEAP]
         }
-        ("fs", "read_to_string" | "read" | "exists") => {
-            vec![(Reads, "FileSystem", None), (Blocks, "", None)]
+        ("fs" | "FileSystem", "read_to_string" | "read" | "read_lines" | "exists") => {
+            vec![(Reads, "FileSystem", None), (Blocks, "", None), HEAP]
         }
+        ("File", "open") => vec![(Reads, "FileSystem", None), (Blocks, "", None), HEAP],
+        ("File", "create") => vec![(Writes, "FileSystem", None), (Blocks, "", None), HEAP],
+        // Seeking moves the open file's position, which every later read
+        // or write on it observes.
+        ("File", "seek") => vec![(Writes, "File", Some(0)), (Blocks, "", None)],
+        ("Stdin", "read_line" | "read_to_string" | "lines") => {
+            vec![(Reads, "Stdin", None), (Blocks, "", None), HEAP]
+        }
+        // Pure libraries over values: they allocate, and a bad index or
+        // argument panics. Parsing command-line arguments reads them.
+        ("Regex" | "Match" | "Json" | "Arg" | "Stats", _) => vec![HEAP, PANICS],
+        ("Parser", "parse") => vec![(Reads, "Env", None), HEAP, PANICS],
+        ("Parser", _) => vec![HEAP, PANICS],
+        ("format_spec", "") => vec![HEAP],
+        // A tracing value is built without emitting it; the stdout exporter
+        // prints. `Log.*` is left out: it calls whichever exporter is
+        // registered, which can be the program's own.
+        ("Span" | "LogEvent", _) => vec![HEAP],
+        ("StdoutExporter", "export_event" | "export_span") => {
+            vec![(Writes, "Stdout", None), HEAP]
+        }
+        ("NoOpExporter", "export_event" | "export_span") => vec![],
+        ("usleep", "") => vec![(Blocks, "", None)],
+        // A fence orders the atomics around it, so it conflicts with every
+        // atomic; the scheduler queries read the scheduler's state.
+        ("fence" | "compiler_fence", "") => vec![(Writes, "Atomic", None)],
+        ("list_par_blocks" | "list_tasks", "") => vec![(Reads, "Scheduler", None), HEAP],
+        ("has_debug_metadata", "") => vec![],
         _ => return None,
     })
 }
@@ -1345,6 +1406,47 @@ fn main() -> () {
             [
                 "sends(Channel)".to_string(),
                 "receives(Channel)".to_string()
+            ],
+        );
+    }
+
+    /// Child processes, the HTTP client and files have entries, so a
+    /// program that uses them is not left with every effect.
+    #[test]
+    fn effects_process_http_and_files_are_known() {
+        let (p, tys) = from_mir(
+            "
+fn io(_1: ref Vec[i64], _2: ref Vec[i64], _3: ref Vec[i64]) -> () {
+    let mut _0: ();
+    let _4: ();
+    let _5: ();
+    bb0: {
+        _4 = Child.wait(copy _1) -> bb1;
+    }
+    bb1: {
+        _5 = Client.get(copy _2, const 1_i64) -> bb2;
+    }
+    bb2: {
+        _0 = File.seek(copy _3, const 0_i64) -> bb3;
+    }
+    bb3: {
+        return;
+    }
+}
+",
+            &[],
+        );
+        let r = analyze(&p, &tys);
+        assert!(!r.summaries["io"].unknown, "{:?}", r.summaries["io"].why);
+        assert_eq!(
+            effects(&r, "io"),
+            [
+                "writes(File @ p3)",
+                "sends(Network)",
+                "sends(ProcessTable @ p1)",
+                "receives(Network)",
+                "allocates(Heap)",
+                "blocks",
             ],
         );
     }
