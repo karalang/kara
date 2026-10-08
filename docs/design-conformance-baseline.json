@@ -104,7 +104,7 @@
       "heading": "7. Functions and closures > `*` and `ref` in expressions",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `get_unchecked` returns a `ref T`, and reads through a `ref` to a `Copy` value (core-semantics §5.10)",
-      "first_diagnostic": "unary '*' requires 'ref T', 'mut ref T', or a raw pointer ('*const T' / '*mut T'), found 'T'"
+      "first_diagnostic": "cannot move a non-`Copy` value out of a borrow with `*`: the binding already reads the value in place, so drop the `*` (or write `.clone()` for a copy)"
     },
     "015615ccef36": {
       "line": 2614,
@@ -133,13 +133,6 @@
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
-    },
-    "e7caff91e2a3": {
-      "line": 2769,
-      "heading": "7. Functions and closures > Escaping function values",
-      "outcome": "REJECTED",
-      "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): closure kinds as types (`MutFn() -> i64`) and `escaping`",
-      "first_diagnostic": "Expected LeftBrace, found LeftParen"
     },
     "bb54f449488e": {
       "line": 2864,
@@ -238,13 +231,6 @@
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `alias` is no longer reserved",
       "first_diagnostic": "'alias' is a reserved keyword and cannot be used as an identifier; write `r#alias` to use it as an ordinary identifier"
-    },
-    "9b5832f53b32": {
-      "line": 4663,
-      "heading": "11. Ownership and sharing > Shared types",
-      "outcome": "MISSING-REJECTION",
-      "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): a borrow conflict through a `shared` handle is a compile error (core-semantics §6.2)",
-      "first_diagnostic": null
     },
     "24642faa9a80": {
       "line": 4732,
