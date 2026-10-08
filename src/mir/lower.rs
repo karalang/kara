@@ -237,6 +237,13 @@ fn retype_const(o: Operand, t: Ty) -> Operand {
     }
 }
 
+/// D5's bare-parameter borrow, on while `KARAC_D5=1` (until the corpus is
+/// migrated to `own T` where a parameter is moved).
+fn d5_params() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("KARAC_D5").is_ok_and(|v| v == "1"))
+}
+
 fn at(span: Span) -> String {
     format!("{}:{}", span.line, span.column)
 }
@@ -1053,7 +1060,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             };
             let t = match fn_params.get(i).copied().flatten() {
                 Some(t) => t,
-                None => self.node_ty(p.pattern.id, p.span)?,
+                None => {
+                    let t = self.node_ty(p.pattern.id, p.span)?;
+                    self.param_mode_ty(p, t)
+                }
             };
             let l = self.b.arg(name, t);
             if let Some(&sym) = self.lcx.binding_syms.get(&(p.pattern.id, name.clone())) {
@@ -5058,8 +5068,28 @@ impl<'l, 'a> Bx<'l, 'a> {
             return self.unsupported(p.span, "a parameter with no recorded type");
         };
         match self.lcx.mir_ty(t, inst_args) {
-            Ok(t) => Ok(t),
+            Ok(t) => Ok(self.param_mode_ty(p, t)),
             Err(e) => self.unsupported(p.span, &e),
+        }
+    }
+
+    /// A parameter's type as its body takes it. Under D5 (behind
+    /// `KARAC_D5=1` until the corpus is migrated) a bare parameter of a
+    /// non-`Copy` type borrows; `own T`, the written borrow forms and
+    /// function values keep their type.
+    fn param_mode_ty(&self, p: &ast::Param, t: Ty) -> Ty {
+        if !d5_params() || p.is_own || self.is_copy(t) {
+            return t;
+        }
+        let tcx = self.tys().tcx();
+        match tcx.kind(t) {
+            HK::Ref(_)
+            | HK::MutRef(_)
+            | HK::Slice { .. }
+            | HK::Fn { .. }
+            | HK::FnDef { .. }
+            | HK::Closure { .. } => t,
+            _ => tcx.reference(t, false),
         }
     }
 
@@ -6789,6 +6819,29 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let at = self.expr_ty(&a.value)?;
                     let callable = matches!(self.tys().tcx().kind(at), HK::Closure { .. });
                     let by_ref = !stores && !callable && !self.is_copy(at);
+                    // A borrowed value stored into a container of owned
+                    // elements is a move out of the borrow, which the move
+                    // check refuses (a container of references stores it).
+                    if stores && self.is_place(&a.value) {
+                        if let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(at) {
+                            let holds_refs = match self.tys().tcx().kind(base) {
+                                HK::Intrinsic { args, .. } => {
+                                    self.tys().tcx().list(args).into_iter().any(|t| {
+                                        matches!(
+                                            self.tys().tcx().kind(t),
+                                            HK::Ref(_) | HK::MutRef(_)
+                                        )
+                                    })
+                                }
+                                _ => true,
+                            };
+                            if !holds_refs && !self.is_copy(inner) {
+                                let p = self.expr_place(&a.value, false)?;
+                                rest.push(Operand::Move(p.project(ProjElem::Deref)));
+                                continue;
+                            }
+                        }
+                    }
                     rest.push(self.lib_arg(&a.value, by_ref)?);
                 }
                 let mut ops = vec![self.recv_borrow_after(recv, &mut rest)];
