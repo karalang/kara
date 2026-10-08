@@ -1958,3 +1958,25 @@ fn main() { println(take(|s| s.len(), "ab")); }
         "moved here",
     );
 }
+
+/// A closure's tail or `return` moves its value out as a fn's does, so
+/// `|q: S| q.t` over a `shared struct S` moves a field out of a shared
+/// value (core semantics §4.6), and `fix` clones it.
+#[test]
+fn a_closure_moving_a_field_out_of_a_shared_value_is_an_error() {
+    rejected_then_fixed_in(
+        "closure-shared-field",
+        r#"
+shared struct S { t: String }
+fn main() {
+    let j = |q: S| q.t;
+    let k = |q: S| { return q.t; };
+    println(j(S { t: "a" }));
+    println(k(S { t: "b" }));
+}
+"#,
+        "cannot move a non-`Copy` value out of a borrowed place",
+        ".clone()",
+        2,
+    );
+}

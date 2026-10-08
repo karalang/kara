@@ -1650,6 +1650,12 @@ impl<'a> super::TypeChecker<'a> {
                 self.closure_return_types
                     .push(super::ClosureReturnFrame::default());
                 let mut body_ty = self.check_expr(body, expected_ret);
+                // An expression body is the closure's tail: `|p: S| p.t` moves
+                // out of `p` as a fn's tail does. A block body's tail is
+                // checked where blocks are.
+                if !matches!(body.kind, ExprKind::Block(_)) {
+                    self.warn_borrow_projection_copy(body, &body_ty);
+                }
                 // B-2026-08-26-19 — the scalar `ref` peel that `check_assignable`
                 // performs (B-2026-07-15-3) has ALREADY accepted this body
                 // against `expected_ret` by the line above; record that it
@@ -6595,6 +6601,9 @@ impl<'a> super::TypeChecker<'a> {
                 self.closure_return_types
                     .push(super::ClosureReturnFrame::default());
                 let body_ty = self.infer_expr(body);
+                if !matches!(body.kind, ExprKind::Block(_)) {
+                    self.warn_borrow_projection_copy(body, &body_ty);
+                }
                 let collected = self
                     .closure_return_types
                     .pop()
@@ -6686,7 +6695,13 @@ impl<'a> super::TypeChecker<'a> {
                 // its closure-scoped typing is B-2026-07-31-19's scope.)
                 if !self.closure_return_types.is_empty() {
                     let t = match inner {
-                        Some(ref expr) => self.infer_expr(expr),
+                        Some(ref expr) => {
+                            let t = self.infer_expr(expr);
+                            // A closure's `return p.t` moves out of `p` as a
+                            // fn's does (the fn-level twin is below).
+                            self.warn_borrow_projection_copy(expr, &t);
+                            t
+                        }
                         None => Type::Unit,
                     };
                     let span = inner.as_ref().map(|e| e.span).unwrap_or_else(|| expr.span);
