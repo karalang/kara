@@ -4,7 +4,7 @@ fn main() {
     words.push("loopelem-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
     let mut sink: Vec[String] = Vec.new();
     for w in words {
-        sink.push(w);
+        sink.push(w.clone());
     }
     let mut w = String.new();
     w.push_str("rebound-owned-bbbbbbbbbbbbbbbbbbbbbbbb");

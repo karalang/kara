@@ -21,7 +21,7 @@ fn build() -> Vec[Span] {
 }
 fn main() {
     let toks = build();
-    for t in toks {
+    for t in toks.into_iter() {
         println(render(t));
     }
 }

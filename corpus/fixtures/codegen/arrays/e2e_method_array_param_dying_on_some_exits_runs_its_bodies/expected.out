@@ -1,0 +1,49 @@
+ret-t
+  y1
+  d1
+  d2
+ret-f
+  dies
+  d1
+  d2
+  y8
+  d8
+  d9
+temp-f
+  dies
+  d1
+  d2
+  y8
+  d8
+  d9
+tail-f
+  d1
+  d2
+  y9
+  d8
+  d9
+byval-f
+  dies
+  d1
+  d2
+  y8
+  d8
+  d9
+pass-f
+  c1
+  d1
+  d2
+  dies
+  y8
+  d8
+  d9
+twice
+  dies
+  d3
+  d4
+  y18
+  d8
+  d9
+  d1
+  d2
+end

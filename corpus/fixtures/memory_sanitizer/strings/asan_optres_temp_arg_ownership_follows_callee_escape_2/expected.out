@@ -1,0 +1,25 @@
+Some([payloadpayload0])
+Some([payloadpayload0])
+1
+Some([payloadpayload0])
+Some([payloadpayload0])
+Err([payloadpayload0])
+7 Some(payloadpayload0)
+Some([payloadpayload0])
+Some([payloadpayload1])
+Some([payloadpayload1])
+1
+Some([payloadpayload1])
+Some([payloadpayload1])
+Err([payloadpayload1])
+7 Some(payloadpayload1)
+Some([payloadpayload1])
+Some([payloadpayload2])
+Some([payloadpayload2])
+1
+Some([payloadpayload2])
+Some([payloadpayload2])
+Err([payloadpayload2])
+7 Some(payloadpayload2)
+Some([payloadpayload2])
+done

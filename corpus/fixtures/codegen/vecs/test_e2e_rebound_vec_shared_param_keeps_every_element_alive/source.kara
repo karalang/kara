@@ -12,7 +12,7 @@ fn main() {
     let mut v: Vec[Node] = Vec.new();
     v.push(a);
     v.push(b);
-    println(probe(v));
-    println(probe(v));
+    println(probe(v.clone()));
+    println(probe(v.clone()));
     println(v[0].val);
 }

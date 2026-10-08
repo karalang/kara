@@ -7,10 +7,10 @@ fn mkp() -> Vec[P] { return [P { word: f"a{1}", n: 1 }, P { word: f"b{2}", n: 2 
 fn main() {
     let p = mkp();
     // the unbound literal: it owns what it moved in
-    println(Box2 { w: p[0].word, k: 1 }.w);
-    println(Box2 { w: p[1].word, k: 2 }.k);
+    println(Box2 { w: p[0].word.clone(), k: 1 }.w);
+    println(Box2 { w: p[1].word.clone(), k: 2 }.k);
     // the bound control
-    let b = Box2 { w: p[0].word, k: 3 };
+    let b = Box2 { w: p[0].word.clone(), k: 3 };
     println(b.w);
     // the container is untouched
     println(p[0].word);

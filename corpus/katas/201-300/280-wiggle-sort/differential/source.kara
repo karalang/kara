@@ -198,8 +198,8 @@ fn main() {
             if dup { with_duplicates = with_duplicates + 1; }
 
             let mut g = base.clone();
-            let mut s = base;
-            let mut b = base;
+            let mut s = base.clone();
+            let mut b = base.clone();
             greedy(mut g);
             sorted_pairs(mut s);
             brute(mut b);

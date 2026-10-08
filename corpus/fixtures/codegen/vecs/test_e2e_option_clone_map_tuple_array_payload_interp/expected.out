@@ -1,0 +1,12 @@
+c 2
+o 1
+cs 1
+os 1
+ct 2 9 alpha-5-long-enough-to-heap
+ot 2 9
+ca alpha-6-long-enough-to-heap
+oa alpha-7-long-enough-to-heap
+none true
+cw alpha-8-long-enough-to-heap 1
+ow 27 1
+str true true

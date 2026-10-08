@@ -1,0 +1,17 @@
+
+struct A { s: String }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { s: "forloop_element_field_move_payload_iota_xx".to_string() }); i = i + 1; }
+    v
+}
+fn main() {
+    let items = build();
+    let mut n: i64 = 0;
+    for a in items {
+        let w = A { s: a.s };
+        n = n + w.s.len();
+    }
+    println(n);
+}

@@ -9,6 +9,6 @@ fn mixed(v: Vec[f64]) -> f64 {
 }
 fn main() {
     let v: Vec[f64] = [1.0, 2.0, 3.0];
-    println(pair_sum(v, 1));
+    println(pair_sum(v.clone(), 1));
     println(mixed(v));
 }

@@ -1,22 +1,22 @@
 
 struct H { name: String }
 fn main() {
-    let mut i: i64 = 0i64;
-    while i < 4i64 {
+    let mut i: i64 = 0;
+    while i < 4 {
         // 1. String: move into a binding whose scope ends, then read the source.
         let s: String = f"al{i}";
-        { let keep: String = s; println(keep); }
+        { let keep: String = s.clone(); println(keep); }
         println(s);
         // 2. Vec[String]: element-deep — an outer-only copy would share these.
         let mut w: Vec[String] = Vec.new();
         w.push(f"bb{i}");
-        { let keep: Vec[String] = w; println(keep[0]); }
+        { let keep: Vec[String] = w.clone(); println(keep[0]); }
         println(w[0]);
         // 3. The STRUCT-LITERAL consume site. This one is ASAN-only in
         // practice: it prints the right thing at -O0 and only valgrind/ASAN
         // sees the two invalid reads.
         let t: String = f"cc{i}";
-        { let h = H { name: t }; println(h.name); }
+        { let h = H { name: t.clone() }; println(h.name); }
         println(t);
         // 4. CONTROL — no reuse, so no copy may be made. A copy here without
         // the source disarm would leak the original every pass.

@@ -1,0 +1,95 @@
+// LeetCode 290 — Word Pattern.
+//
+// Given a `pattern` of letters and a space-separated `s`, decide whether the
+// letters map to the words following a BIJECTION: each letter maps to exactly one
+// word and each word to exactly one letter, position by position ("abba" +
+// "dog cat cat dog" → true; "abba" + "dog dog dog dog" → false because 'a' and
+// 'b' would both map to "dog").
+//
+// Split `s` into words, reject a length mismatch, then walk both in lockstep with
+// two maps — letter→word and word→letter. A conflict in EITHER direction (a
+// letter already bound to a different word, or a word already bound to a different
+// letter) breaks the bijection. Exercises `Map[i64, String]`, `Map[String, i64]`,
+// `Vec[String]`, and String equality.
+
+fn split_words(s: Slice[u8]) -> Vec[String] {
+    let mut words: Vec[String] = Vec.new();
+    let mut cur: String = String.new();
+    let mut have = false;
+    let mut i = 0;
+    while i < s.len() {
+        let b = s[i];
+        if b == 32u8 {                          // space
+            if have {
+                words.push(cur);
+                cur = String.new();
+                have = false;
+            }
+        } else {
+            cur.push(b as char);
+            have = true;
+        }
+        i = i + 1;
+    }
+    if have {
+        words.push(cur);
+    }
+    return words;
+}
+
+fn word_pattern(pattern: ref String, s: ref String) -> bool {
+    let words = split_words(s.bytes());
+    let pb = pattern.bytes();
+    if pb.len() != words.len() {
+        return false;
+    }
+
+    let mut p2w: Map[i64, String] = Map.new();  // letter code → word
+    let mut w2p: Map[String, i64] = Map.new();  // word → letter code
+
+    let mut i = 0;
+    while i < pb.len() {
+        let c = pb[i] as i64;
+        let w = words[i].clone();
+
+        match p2w.get(c) {
+            Some(prev) => {
+                if prev != w {
+                    return false;
+                }
+            }
+            None => {
+                let _ = p2w.insert(c, w);
+            }
+        }
+        match w2p.get(w) {
+            Some(pc) => {
+                if pc != c {
+                    return false;
+                }
+            }
+            None => {
+                let _ = w2p.insert(w, c);
+            }
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn report(pattern: ref String, s: ref String) {
+    if word_pattern(pattern, s) {
+        println("true");
+    } else {
+        println("false");
+    }
+}
+
+fn main() {
+    report("abba", "dog cat cat dog");              // true
+    report("abba", "dog cat cat fish");             // false
+    report("aaaa", "dog cat cat dog");              // false
+    report("abba", "dog dog dog dog");              // false
+    report("abc", "b c a");                         // true
+    report("ab", "dog dog");                        // false
+}

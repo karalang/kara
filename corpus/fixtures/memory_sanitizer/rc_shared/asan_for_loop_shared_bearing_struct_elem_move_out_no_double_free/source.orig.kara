@@ -1,0 +1,24 @@
+
+shared enum T2 { Num(i64) }
+struct Slf { name: String, value: T2 }
+fn main() {
+    let mut fs: Vec[Slf] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        fs.push(Slf { name: "shared-bearing-elem-move-out-guard-xxxx".to_string(), value: T2.Num(3) });
+        i = i + 1;
+    }
+    let mut lit_names: Vec[String] = Vec.new();
+    let mut n = 0;
+    for lf in fs {
+        let Slf { name: fname, value } = lf;
+        match value { T2.Num(k) => { n = n + k; } _ => {} }
+        lit_names.push(fname);
+    }
+    for lf2 in fs {
+        let x = lf2;
+        n = n + x.name.len();
+    }
+    println(lit_names.len());
+    println(n);
+}

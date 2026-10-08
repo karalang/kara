@@ -63,7 +63,9 @@ def judge(entry: Path, corpus: Path, args) -> dict:
     if BACKENDS.get(backend) is None:
         return {**base, "verdict": "SKIP", "why": f"backend {backend} not available yet", "ran": False}
     env = {"KARAC_HASH_SEED": str(args.seed), **meta.get("env", {})}
-    res = run_program(entry, backend, args.karac, args.timeout, env)
+    orig = not mir and bool(meta.get("fixed_by_classify"))
+    res = run_program(entry, backend, args.karac, args.timeout, env,
+                      source="source.orig.kara" if orig else "source.kara")
     why = ""
     if res["status"] == "timeout":
         why = f"timeout after {args.timeout:.0f}s"
@@ -75,7 +77,10 @@ def judge(entry: Path, corpus: Path, args) -> dict:
             why = f"refused, but without {code}"
     else:
         want_exit = int(expect.split(":", 1)[1]) if expect.startswith("panic:") else int(meta.get("exit", 0))
-        exp_file = entry / "expected.out"
+        # The legacy backends are held to their own record: a classified
+        # entry's expected.out states v2 behaviour, and a class-b entry's
+        # source.kara is the fixed text legacy never ran.
+        exp_file = entry / "expected.out" if mir or not (entry / "legacy.out").exists() else entry / "legacy.out"
         as_set = False
         if not exp_file.exists() and mir and (entry / "model.out").exists():
             exp_file = entry / "model.out"

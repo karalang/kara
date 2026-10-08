@@ -1,0 +1,26 @@
+
+shared struct Inner { mut label: String }
+shared struct Outer { mut inner: Inner }
+shared struct P { mut label: String }
+fn main() {
+    let o = Outer { inner: Inner { label: "start" } };
+    let mut n = 0i64;
+    while n < 20i64 {
+        let deep: String = f"kappakappakappakappa-{n}-lambdalambda";
+        o.inner.label = deep;
+        println(o.inner.label);
+        n = n + 1i64;
+    }
+    let p = P { label: "seedseedseedseedseed" + "tail" };
+    p.label = p.label;
+    println(f"{p.label.len()}");
+    let q = p;
+    p.label = q.label;
+    println(f"{p.label.len()}");
+    let mut k = 0;
+    while k < 5 {
+        p.label = p.label + "x";
+        k = k + 1;
+    }
+    println(p.label);
+}

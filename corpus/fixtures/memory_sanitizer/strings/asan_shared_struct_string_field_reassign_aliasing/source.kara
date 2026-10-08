@@ -4,18 +4,18 @@ shared struct Outer { mut inner: Inner }
 shared struct P { mut label: String }
 fn main() {
     let o = Outer { inner: Inner { label: "start" } };
-    let mut n = 0i64;
-    while n < 20i64 {
+    let mut n = 0;
+    while n < 20 {
         let deep: String = f"kappakappakappakappa-{n}-lambdalambda";
         o.inner.label = deep;
         println(o.inner.label);
-        n = n + 1i64;
+        n = n + 1;
     }
     let p = P { label: "seedseedseedseedseed" + "tail" };
-    p.label = p.label;
+    p.label = p.label.clone();
     println(f"{p.label.len()}");
     let q = p;
-    p.label = q.label;
+    p.label = q.label.clone();
     println(f"{p.label.len()}");
     let mut k = 0;
     while k < 5 {

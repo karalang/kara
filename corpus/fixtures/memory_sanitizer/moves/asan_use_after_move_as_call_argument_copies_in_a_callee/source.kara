@@ -10,7 +10,7 @@ fn agg(entries: Vec[Entry]) -> Vec[Stat] {
     let mut i = 0;
     while i < entries.len() {
         let e = entries[i].clone();
-        let _ = index.insert(e.service, 0 as usize);
+        let _ = index.insert(e.service.clone(), 0 as usize);
         stats.push(Stat { service: e.service });
         i = i + 1;
     }
@@ -19,7 +19,7 @@ fn agg(entries: Vec[Entry]) -> Vec[Stat] {
 
 fn tag_once(b: Bag) -> Vec[String] {
     let mut seen: Set[Vec[String]] = Set.new();
-    let _ = seen.insert(b.tags);
+    let _ = seen.insert(b.tags.clone());
     return b.tags;
 }
 

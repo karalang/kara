@@ -12,7 +12,7 @@ fn build() -> Vec[A] {
 fn main() {
     let xs = build();
     let mut t = 0;
-    for a in xs { t = t + use_a(a); }            // Vec-sourced: always was clean
+    for a in xs.into_iter() { t = t + use_a(a); }            // Vec-sourced: always was clean
     let mut i = 0;                               // fresh-temp source: the broken path
     while i < 6 { t = t + use_a(mk()); i = i + 1; }
     println(t);

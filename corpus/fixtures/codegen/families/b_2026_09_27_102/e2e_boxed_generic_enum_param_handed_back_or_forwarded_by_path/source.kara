@@ -27,8 +27,8 @@ fn main() {
     let mut v: Vec[Ho[String]] = Vec.new();
     v.push(mk("x"));
     v.push(Ho.Empty);
-    for x in v { let r = pk(x, false); showt(r) }
-    for x in v { let r = pkc(x, true); showt(r) }
+    for x in v.into_iter() { let r = pk(x, false); showt(r) }
+    for x in v.into_iter() { let r = pkc(x, true); showt(r) }
     println(f"n{v.len()}");
     println("end")
 }

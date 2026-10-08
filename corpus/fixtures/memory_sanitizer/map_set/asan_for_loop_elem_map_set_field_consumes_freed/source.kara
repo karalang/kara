@@ -7,14 +7,14 @@ fn main() {
     hs.push(Header { name: f"n{1}", value: f"v{1}" });
     let mut m: Map[i64, Header] = Map.new();
     let mut i = 0;
-    for h in hs {
+    for h in hs.into_iter() {
         let _ = m.insert(i, h);
         i = i + 1;
     }
     let mut ps: Vec[P] = Vec.new();
     ps.push(P { a: 1, s: f"x{1}" });
     let mut set: Set[P] = Set.new();
-    for p in ps {
+    for p in ps.into_iter() {
         set.insert(p);
     }
     println(set.len());
@@ -22,7 +22,7 @@ fn main() {
     src.push(Header { name: f"a{7}", value: f"b{7}" });
     let mut names: Vec[String] = Vec.new();
     for h in src {
-        names.push(h.name);
+        names.push(h.name.clone());
     }
     for n in names { println(n); }
     println("end");

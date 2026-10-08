@@ -13,8 +13,8 @@ fn main() {
     let mut cur = String.new();
     let mut j: i64 = 0;
     while j < box_.len() {
-        cur = box_[j].s;
-        cur = box_[j].s;
+        cur = box_[j].s.clone();
+        cur = box_[j].s.clone();
         j = j + 1;
     }
     println(f"{cur.len()}");

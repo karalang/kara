@@ -1,4 +1,5 @@
 
+#[derive(Copy)]
 struct Src { x: i64, y: i64 }
 struct Acc { total: i64 }
 fn consume_src(s: Src) { }

@@ -1,0 +1,69 @@
+struct R { id: i64, v: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct H { xs: Vec[E] }
+
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+enum Q { A(P), B }
+impl Drop for Q { fn drop(mut ref self) { println("dQ") } }
+
+fn mk(n: i64) -> E { let mut v: Vec[i64] = Vec.new(); v.push(n); return E.A(R { id: n, v: v }) }
+fn mkq(n: i64) -> Q { return Q.A(P { id: n }) }
+
+fn leg_bare() {
+    println("bare");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(1));
+    match v[0] { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    println("bare end");
+}
+
+fn leg_field_rooted() {
+    println("field");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(2));
+    let h = H { xs: v };
+    match h.xs[0] { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    println("field end");
+}
+
+fn leg_scalar_payload() {
+    println("scalar");
+    let mut v: Vec[Q] = Vec.new();
+    v.push(mkq(3));
+    match v[0] { Q.A(p) => { println(f"got {p.id}"); } Q.B => { } }
+    println("scalar end");
+}
+
+fn leg_unbound() {
+    println("wild");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(4));
+    match v[0] { E.A(_) => { println("got"); } E.B => { } }
+    println("wild end");
+}
+
+fn leg_fresh() {
+    println("fresh");
+    match mk(5) { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    println("fresh end");
+}
+
+fn leg_local() {
+    println("local");
+    let e = mk(6);
+    match e { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    println("local end");
+}
+
+fn main() {
+    leg_bare();
+    leg_field_rooted();
+    leg_scalar_payload();
+    leg_unbound();
+    leg_fresh();
+    leg_local();
+    println("end");
+}

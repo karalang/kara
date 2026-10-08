@@ -10,7 +10,7 @@ fn main() {
     let ssrc: Vec[String] = Vec.filled(3, "abc");
     let mut sdst: Vec[String] = Vec.with_capacity(1);
     sdst.push("z");
-    match sdst.try_extend(ssrc) {
+    match sdst.try_extend(ssrc.clone()) {
         Ok(_) => println(sdst.len()),
         Err(_) => println("err"),
     }

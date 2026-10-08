@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let mut r0: Vec[i64] = Vec.new();
+    r0.push(7);
+    r0.push(8);
+    r0.push(9);
+    rows.push(r0);
+    let copy: Vec[i64] = Vec.from_slice(rows[0]);
+    println(copy.len());
+    println(copy[0]);
+    println(copy[2]);
+}

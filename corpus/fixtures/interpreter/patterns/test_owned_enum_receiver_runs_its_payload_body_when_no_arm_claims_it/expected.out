@@ -1,0 +1,35 @@
+none
+  dE
+  dR1
+  x5
+temp
+  dE
+  dR2
+  x5
+nodrop
+  dR3
+  x5
+generic
+  dR4
+  x5
+matches
+  dE
+  dR5
+  x5
+ret_self
+  got
+  dE
+  dR6
+wrap
+  got
+  dE
+  dR7
+refm
+  x3
+  dE
+  dR8
+plain
+  x9
+  dE
+  dR9
+end

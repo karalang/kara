@@ -274,7 +274,7 @@ fn main() {
             let mut target = 0 - 4;
             while target <= 8 {
                 let mut a = solve_backtrack(num.clone(), target);
-                let mut b = solve_enumerate(num, target);
+                let mut b = solve_enumerate(num.clone(), target);
                 sort_strings(mut a);
                 sort_strings(mut b);
 

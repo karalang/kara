@@ -22,7 +22,7 @@ fn solve(s: ref String, start: i64, n: i64, dict: ref Set[String]) -> Vec[String
             while k < rn {
                 let tail: String = rest[k].clone();
                 if tail.len() == 0 {
-                    out.push(word);
+                    out.push(word.clone());
                 } else {
                     out.push(word + " " + tail);
                 }

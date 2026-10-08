@@ -1,0 +1,16 @@
+[197,130,1] -> true
+[235,140,4] -> false
+empty -> true
+[65] -> true
+[0xC5,0x82] -> true
+[0xEB,0x8C,0x95] -> true
+[0xF0,0x9F,0x98,0x81] -> true
+[0x80] -> false
+[0xC0] -> false
+[0xE0,0x80] -> false
+[0xFF] -> false
+[0xC5,0x00] -> false
+bytes("Ascii123") -> true
+bytes("héllo") -> true
+bytes("café ☕") -> true
+bytes("日本語") -> true

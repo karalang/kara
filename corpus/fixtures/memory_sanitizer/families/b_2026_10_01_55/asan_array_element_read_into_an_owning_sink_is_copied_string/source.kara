@@ -2,30 +2,30 @@
 fn mk(i: i64) -> String { return f"pppppppppppppppppppppp{i}"; }
 fn show(x: ref String) -> String { return x.clone(); }
 struct W { a: String }
-fn local_ret0(i: i64) -> String { let a: Array[String, 2] = [mk(1), mk(2)]; return a[0]; }
-fn local_reti(i: i64) -> String { let a: Array[String, 2] = [mk(1), mk(2)]; return a[i]; }
-fn local_tail(i: i64) -> String { let a: Array[String, 2] = [mk(1), mk(2)]; a[1] }
-fn local_tup(i: i64) -> (String, i64) { let a: Array[String, 2] = [mk(1), mk(2)]; return (a[0], 3); }
-fn local_some(i: i64) -> Option[String] { let a: Array[String, 2] = [mk(1), mk(2)]; return Some(a[i]); }
-fn local_push(i: i64) -> Vec[String] { let a: Array[String, 2] = [mk(1), mk(2)]; let mut v: Vec[String] = Vec.new(); v.push(a[0]); v.push(a[i]); return v; }
-fn local_fld(i: i64) -> W { let a: Array[String, 2] = [mk(1), mk(2)]; return W { a: a[0] }; }
-fn local_fldi(i: i64) -> W { let a: Array[String, 2] = [mk(1), mk(2)]; return W { a: a[i] }; }
-fn own_ret0(p: Array[String, 2], i: i64) -> String { return p[0]; }
-fn own_reti(p: Array[String, 2], i: i64) -> String { return p[i]; }
-fn own_tail(p: Array[String, 2], i: i64) -> String { p[1] }
-fn own_tup(p: Array[String, 2], i: i64) -> (String, i64) { return (p[0], 3); }
-fn own_some(p: Array[String, 2], i: i64) -> Option[String] { return Some(p[i]); }
-fn own_push(p: Array[String, 2], i: i64) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(p[0]); v.push(p[i]); return v; }
-fn own_fld(p: Array[String, 2], i: i64) -> W { return W { a: p[0] }; }
-fn own_fldi(p: Array[String, 2], i: i64) -> W { return W { a: p[i] }; }
-fn ref_ret0(p: ref Array[String, 2], i: i64) -> String { return p[0]; }
-fn ref_reti(p: ref Array[String, 2], i: i64) -> String { return p[i]; }
-fn ref_tail(p: ref Array[String, 2], i: i64) -> String { p[1] }
-fn ref_tup(p: ref Array[String, 2], i: i64) -> (String, i64) { return (p[0], 3); }
-fn ref_some(p: ref Array[String, 2], i: i64) -> Option[String] { return Some(p[i]); }
-fn ref_push(p: ref Array[String, 2], i: i64) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(p[0]); v.push(p[i]); return v; }
-fn ref_fld(p: ref Array[String, 2], i: i64) -> W { return W { a: p[0] }; }
-fn ref_fldi(p: ref Array[String, 2], i: i64) -> W { return W { a: p[i] }; }
+fn local_ret0(i: i64) -> String { let a: Array[String, 2] = [mk(1), mk(2)]; return a[0].clone(); }
+fn local_reti(i: i64) -> String { let a: Array[String, 2] = [mk(1), mk(2)]; return a[i].clone(); }
+fn local_tail(i: i64) -> String { let a: Array[String, 2] = [mk(1), mk(2)]; a[1].clone() }
+fn local_tup(i: i64) -> (String, i64) { let a: Array[String, 2] = [mk(1), mk(2)]; return (a[0].clone(), 3); }
+fn local_some(i: i64) -> Option[String] { let a: Array[String, 2] = [mk(1), mk(2)]; return Some(a[i].clone()); }
+fn local_push(i: i64) -> Vec[String] { let a: Array[String, 2] = [mk(1), mk(2)]; let mut v: Vec[String] = Vec.new(); v.push(a[0].clone()); v.push(a[i].clone()); return v; }
+fn local_fld(i: i64) -> W { let a: Array[String, 2] = [mk(1), mk(2)]; return W { a: a[0].clone() }; }
+fn local_fldi(i: i64) -> W { let a: Array[String, 2] = [mk(1), mk(2)]; return W { a: a[i].clone() }; }
+fn own_ret0(p: Array[String, 2], i: i64) -> String { return p[0].clone(); }
+fn own_reti(p: Array[String, 2], i: i64) -> String { return p[i].clone(); }
+fn own_tail(p: Array[String, 2], i: i64) -> String { p[1].clone() }
+fn own_tup(p: Array[String, 2], i: i64) -> (String, i64) { return (p[0].clone(), 3); }
+fn own_some(p: Array[String, 2], i: i64) -> Option[String] { return Some(p[i].clone()); }
+fn own_push(p: Array[String, 2], i: i64) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(p[0].clone()); v.push(p[i].clone()); return v; }
+fn own_fld(p: Array[String, 2], i: i64) -> W { return W { a: p[0].clone() }; }
+fn own_fldi(p: Array[String, 2], i: i64) -> W { return W { a: p[i].clone() }; }
+fn ref_ret0(p: ref Array[String, 2], i: i64) -> String { return p[0].clone(); }
+fn ref_reti(p: ref Array[String, 2], i: i64) -> String { return p[i].clone(); }
+fn ref_tail(p: ref Array[String, 2], i: i64) -> String { p[1].clone() }
+fn ref_tup(p: ref Array[String, 2], i: i64) -> (String, i64) { return (p[0].clone(), 3); }
+fn ref_some(p: ref Array[String, 2], i: i64) -> Option[String] { return Some(p[i].clone()); }
+fn ref_push(p: ref Array[String, 2], i: i64) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(p[0].clone()); v.push(p[i].clone()); return v; }
+fn ref_fld(p: ref Array[String, 2], i: i64) -> W { return W { a: p[0].clone() }; }
+fn ref_fldi(p: ref Array[String, 2], i: i64) -> W { return W { a: p[i].clone() }; }
 fn main() {
     { let r = local_ret0(1); let s = show(r); println(f"local_ret0 {s}"); }
     { let r = local_reti(1); let s = show(r); println(f"local_reti {s}"); }

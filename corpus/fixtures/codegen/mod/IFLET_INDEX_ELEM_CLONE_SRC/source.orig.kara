@@ -1,0 +1,71 @@
+struct R { id: i64, v: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct H { xs: Vec[E] }
+
+struct N { id: i64, v: Vec[i64] }
+enum F { A(N), B }
+
+fn mk(n: i64) -> E { let mut v: Vec[i64] = Vec.new(); v.push(n); return E.A(R { id: n, v: v }) }
+fn mkf(n: i64) -> F { let mut v: Vec[i64] = Vec.new(); v.push(n); return F.A(N { id: n, v: v }) }
+
+fn leg_iflet() {
+    println("iflet");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(1));
+    if let E.A(r) = v[0] { println(f"got {r.id + r.v.len()}"); }
+    println("iflet end");
+}
+
+fn leg_field() {
+    println("field");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(2));
+    let h = H { xs: v };
+    if let E.A(r) = h.xs[0] { println(f"got {r.id + r.v.len()}"); }
+    println("field end");
+}
+
+fn leg_whilelet() {
+    println("whilelet");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(3));
+    while let E.A(r) = v[0] {
+        println(f"got {r.id + r.v.len()}");
+        break
+    }
+    println("whilelet end");
+}
+
+fn leg_unbound() {
+    println("unbound");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(4));
+    if let E.A(_) = v[0] { println("got"); }
+    println("unbound end");
+}
+
+fn leg_nodrop() {
+    println("nodrop");
+    let mut v: Vec[F] = Vec.new();
+    v.push(mkf(5));
+    if let F.A(n) = v[0] { println(f"got {n.id + n.v.len()}"); }
+    println("nodrop end");
+}
+
+fn leg_fresh() {
+    println("fresh");
+    if let E.A(r) = mk(6) { println(f"got {r.id + r.v.len()}"); }
+    println("fresh end");
+}
+
+fn main() {
+    leg_iflet();
+    leg_field();
+    leg_whilelet();
+    leg_unbound();
+    leg_nodrop();
+    leg_fresh();
+    println("end");
+}

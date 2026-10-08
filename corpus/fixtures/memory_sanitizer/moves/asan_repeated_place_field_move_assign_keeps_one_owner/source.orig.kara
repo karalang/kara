@@ -1,0 +1,21 @@
+
+struct S { s: String }
+fn main() {
+    let mut box_: Vec[S] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 150 {
+        let mut nm = String.new();
+        nm.push_str("region-");
+        nm.push_str("payload");
+        box_.push(S { s: nm });
+        i = i + 1;
+    }
+    let mut cur = String.new();
+    let mut j: i64 = 0;
+    while j < box_.len() {
+        cur = box_[j].s;
+        cur = box_[j].s;
+        j = j + 1;
+    }
+    println(f"{cur.len()}");
+}

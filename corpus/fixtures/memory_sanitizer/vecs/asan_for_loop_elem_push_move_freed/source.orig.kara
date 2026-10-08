@@ -1,0 +1,34 @@
+
+struct Header { name: String, value: String }
+enum Item {
+    Named(String),
+    Plain(i64),
+}
+fn move_all(headers: Vec[Header]) -> Vec[Header] {
+    let mut out: Vec[Header] = Vec.new();
+    for h in headers {
+        out.push(h);
+    }
+    out
+}
+fn main() {
+    let stamp = "20150830T123600Z";
+    let mut hs: Vec[Header] = Vec.new();
+    hs.push(Header { name: "X-Amz-Date", value: stamp.clone() });
+    let moved = move_all(hs);
+    for h in moved { println(h.value); }
+    let mut src: Vec[Item] = Vec.new();
+    src.push(Item.Named(f"x{1}"));
+    src.push(Item.Plain(7));
+    let mut out2: Vec[Item] = Vec.new();
+    for it in src {
+        out2.push(it);
+    }
+    for it in out2 {
+        match it {
+            Item.Named(s) => println(s),
+            Item.Plain(n) => println(f"{n}"),
+        }
+    }
+    println("end");
+}

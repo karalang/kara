@@ -1,0 +1,29 @@
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"tag-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa{n}", xs: [n, n] } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+enum N { A(R), B }
+impl E {
+    fn cond(self, c: bool) -> i64 { if c { match self { E.A(r) => { return r.id; } E.B => { return 0; } } } return 0; }
+    fn loopy(self, n: i64) -> i64 { let mut i = 0; while i < n { match self { E.A(r) => { return r.id; } E.B => { return 0; } } } return 0; }
+    fn cond_mut(self, c: bool) -> i64 { if c { let mut e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } } else { return 5; } }
+    fn cond_bare(self, c: bool) -> i64 { if c { let e = self; return 7; } return 0; }
+}
+impl N {
+    fn cond_bare(self, c: bool) -> i64 { if c { let e = self; return 7; } return 0; }
+    fn cond_loop(self, n: i64) -> i64 { let mut i = 0; while i < n { let e = self; return 9; } return 0; }
+}
+fn main() {
+    println(f"k1 {E.A(mk(1)).cond(true)}");
+    let a = E.A(mk(2)); println(f"k2 {a.cond(false)}");
+    let b = E.A(mk(3)); println(f"k3 {b.loopy(0)}");
+    let c = E.A(mk(4)); println(f"k4 {c.cond_mut(false)}");
+    let d = E.A(mk(5)); println(f"k5 {d.cond_bare(false)}");
+    println(f"k6 {E.A(mk(6)).cond_bare(false)}");
+    let e = N.A(mk(7)); println(f"k7 {e.cond_bare(true)}");
+    let f = N.A(mk(8)); println(f"k8 {f.cond_bare(false)}");
+    let g = N.A(mk(9)); println(f"k9 {g.cond_loop(0)}");
+    let h = N.A(mk(10)); println(f"k10 {h.cond_loop(1)}");
+    println("done");
+}

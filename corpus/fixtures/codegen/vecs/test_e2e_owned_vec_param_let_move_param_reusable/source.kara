@@ -1,6 +1,6 @@
 
 fn twice(v: Vec[i64]) -> i64 {
-    let a = v;
+    let a = v.clone();
     let b = v;
     a[0] + b[1]
 }

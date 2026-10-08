@@ -1,0 +1,7 @@
+sequences 840, operations executed 4253
+underlying pulls: eager 2105, lazy 1919, materialized 2520
+digest 651902548
+has_next disagreements 0
+peek disagreements 0
+next disagreements 0
+peek that advanced 0

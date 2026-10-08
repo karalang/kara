@@ -1,5 +1,5 @@
 enum G[T] { Y(T), N }
-fn mka(s: String) -> Array[String, 2] { return [s, f"{s}{s}"] }
+fn mka(s: String) -> Array[String, 2] { return [s.clone(), f"{s}{s}"] }
 fn wrap(g: G[Array[String, 2]]) -> Option[Array[String, 2]] { match g { G.Y(x) => { return Some(x) } G.N => { return None } } }
 fn wrapy(g: G[Array[String, 2]]) -> Option[Array[String, 2]] { match g { G.Y(x) => { let y = x; return Some(y) } G.N => { return None } } }
 fn main() {

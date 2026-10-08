@@ -1,15 +1,15 @@
 
 struct Score { v: i64 }
-impl PartialEq for Score { fn eq(self, other: Score) -> bool { self.v == other.v } }
+impl PartialEq for Score { fn eq(ref self, other: ref Score) -> bool { self.v == other.v } }
 impl Eq for Score {}
-impl PartialOrd for Score { fn partial_cmp(self, other: Score) -> Option[Ordering] { Some(other.v.cmp(self.v)) } }
-impl Ord for Score { fn cmp(self, other: Score) -> Ordering { other.v.cmp(self.v) } }
+impl PartialOrd for Score { fn partial_cmp(ref self, other: ref Score) -> Option[Ordering] { Some(other.v.cmp(self.v)) } }
+impl Ord for Score { fn cmp(ref self, other: ref Score) -> Ordering { other.v.cmp(self.v) } }
 
 fn main() {
     let mut v: Vec[Score] = Vec.new();
-    v.push(Score { v: 10i64 });
-    v.push(Score { v: 30i64 });
-    v.push(Score { v: 20i64 });
+    v.push(Score { v: 10 });
+    v.push(Score { v: 30 });
+    v.push(Score { v: 20 });
     v.sort_by_key(|s| s);
     for s in v.iter() { println(s.v); }
 }

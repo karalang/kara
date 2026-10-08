@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut iter: i64 = 0i64;
+    while iter < 3i64 {
+        let v: Vec[String] = [f"a{iter}", f"b{iter}", f"c{iter}"];
+        let mut d: Vec[String] = Vec.new();
+        for i in (0..3).rev() {
+            d.push(v[i]);
+        }
+        println(d.get(0));
+        // Source still owns its buffers.
+        println(v.get(0));
+        let r: Vec[String] = (0..2).rev().map(|x: i64| f"r{x}").collect();
+        println(r.get(0));
+        iter = iter + 1i64;
+    }
+}

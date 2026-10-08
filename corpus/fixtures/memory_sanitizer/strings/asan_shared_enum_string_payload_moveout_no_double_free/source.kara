@@ -2,7 +2,7 @@
 shared enum E { S(String), Other }
 fn get(e: E) -> String {
     match e {
-        S(s) => s,
+        S(s) => s.clone(),
         Other => "other".to_string(),
     }
 }

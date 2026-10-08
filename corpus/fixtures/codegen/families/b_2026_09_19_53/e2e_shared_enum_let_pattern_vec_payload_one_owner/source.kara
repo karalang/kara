@@ -2,9 +2,9 @@ shared enum M { Y(Vec[String]), N }
 fn eatv(v: Vec[String]) -> i64 { return v.len() }
 fn mkv(s: String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(s); return v }
 fn main() {
-    { let g: M = M.Y(mkv(f"q1")); if let M.Y(x) = g { println(f"v{eatv(x)}") }; println("c1") }
+    { let g: M = M.Y(mkv(f"q1")); if let M.Y(x) = g { println(f"v{eatv(x.clone())}") }; println("c1") }
     { let g: M = M.Y(mkv(f"q2")); if let M.Y(x) = g { println(f"r{x.len()}") }; println("c2") }
     { let mut n = 0; let g: M = M.Y(mkv(f"q3")); while let M.Y(x) = g { n = n + x.len(); if n > 0 { break } }; println(f"w{n}") }
-    { let g: M = M.Y(mkv(f"q4")); let M.Y(x) = g else { return }; println(f"e{eatv(x)}"); println("c4") }
+    { let g: M = M.Y(mkv(f"q4")); let M.Y(x) = g else { return }; println(f"e{eatv(x.clone())}"); println("c4") }
     println("end")
 }

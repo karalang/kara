@@ -1,0 +1,13 @@
+option-field:
+10
+drop 1 a1
+vec-field:
+20
+drop 2 bb2
+struct-field:
+30
+drop 3 ccc3
+sibling-survives:
+40
+drop 4 dddd4
+end

@@ -1,0 +1,10 @@
+cross       -> 6
+single      -> 0
+pair-row    -> 3
+pair-col    -> 3
+all-ones    -> 12
+diagonal    -> 4
+corners     -> 8
+empty       -> 0
+column      -> 6
+sparse-wide -> 9

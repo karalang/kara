@@ -14,10 +14,10 @@ fn visit(
     // Walk out along unused edges as far as we can; the airport is emitted
     // only once it is a dead end, so `route` ends up as the reverse itinerary.
     while true {
-        let dests: Vec[String] = match adj.get(airport) { Some(d) => d, None => Vec.new() };
+        let dests: Vec[String] = match adj.get(airport) { Some(d) => d.clone(), None => Vec.new() };
         let used = match cursor.get(airport) { Some(u) => u, None => 0 };
         if used >= dests.len() { break; }
-        let _ = cursor.insert(airport, used + 1);
+        let _ = cursor.insert(airport.clone(), used + 1);
         visit(adj, cursor, dests[used].clone(), route);
     }
     route.push(airport);
@@ -29,9 +29,9 @@ fn find_itinerary(froms: ref Vec[String], tos: ref Vec[String]) -> Vec[String] {
     while i < froms.len() {
         if not adj.contains_key(froms[i]) {
             let empty: Vec[String] = Vec.new();
-            let _ = adj.insert(froms[i], empty);
+            let _ = adj.insert(froms[i].clone(), empty);
         }
-        adj[froms[i]].push(tos[i]);
+        adj[froms[i]].push(tos[i].clone());
         i = i + 1;
     }
 
@@ -51,7 +51,7 @@ fn find_itinerary(froms: ref Vec[String], tos: ref Vec[String]) -> Vec[String] {
     let mut out: Vec[String] = Vec.new();
     let mut j = route.len() - 1;
     while j >= 0 {
-        out.push(route[j]);
+        out.push(route[j].clone());
         j = j - 1;
     }
     out

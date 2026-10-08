@@ -16,7 +16,7 @@ fn main() {
     while j < stats.len() {
         if stats[j].revenue > best {
             best = stats[j].revenue;
-            best_region = stats[j].region;
+            best_region = stats[j].region.clone();
         }
         j = j + 1;
     }
@@ -25,12 +25,12 @@ fn main() {
     let mut cat: Vec[S] = Vec.new();
     cat.push(S { region: a + b, revenue: 1 });
     let mut out = String.new();
-    out = cat[0].region;
+    out = cat[0].region.clone();
     let mut vs: Vec[V] = Vec.new();
     let mut inner: Vec[i64] = Vec.new();
     inner.push(9);
     vs.push(V { xs: inner });
     let mut got: Vec[i64] = Vec.new();
-    got = vs[0].xs;
+    got = vs[0].xs.clone();
     println(f"{best} {best_region.len()} {out} {got.len()}");
 }

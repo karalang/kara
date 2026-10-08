@@ -1,0 +1,29 @@
+
+#[derive(Hash, Eq, Ord)]
+struct P { a: i64, s: String }
+struct Header { name: String, value: String }
+fn main() {
+    let mut hs: Vec[Header] = Vec.new();
+    hs.push(Header { name: f"n{1}", value: f"v{1}" });
+    let mut m: Map[i64, Header] = Map.new();
+    let mut i = 0;
+    for h in hs {
+        let _ = m.insert(i, h);
+        i = i + 1;
+    }
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { a: 1, s: f"x{1}" });
+    let mut set: Set[P] = Set.new();
+    for p in ps {
+        set.insert(p);
+    }
+    println(set.len());
+    let mut src: Vec[Header] = Vec.new();
+    src.push(Header { name: f"a{7}", value: f"b{7}" });
+    let mut names: Vec[String] = Vec.new();
+    for h in src {
+        names.push(h.name);
+    }
+    for n in names { println(n); }
+    println("end");
+}

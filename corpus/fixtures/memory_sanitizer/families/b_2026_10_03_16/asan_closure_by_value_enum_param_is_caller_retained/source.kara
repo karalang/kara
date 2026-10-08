@@ -20,7 +20,7 @@ fn k6() { let f = |q: Hc| { match q { Hc.Full(s) => s.len(), Hc.Empty => 0 } }; 
 fn k7() { let f = |q: Ho[String]| keep(q); println(f"k7 {f(mkh("g"))} {f(mkh("gg"))}"); }
 fn k8() { let f = |q: Ho[String]| { if let Ho.Full(s) = q { s.len() } else { 0 } }; println(f"k8 {f(mkh("h"))}"); }
 fn k9() { let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; println(f"k9 {f(Ho.Empty)}"); }
-fn k10() { let v: Vec[Ho[String]] = [mkh("i"), Ho.Empty]; let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; for h in v { println(f"k10 {f(h)}") } }
+fn k10() { let v: Vec[Ho[String]] = [mkh("i"), Ho.Empty]; let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; for h in v.into_iter() { println(f"k10 {f(h)}") } }
 fn k11() { let f = |q: Ho[String]| { let r = match q { Ho.Full(s) => s, Ho.Empty => "e".to_string() }; r.len() }; println(f"k11 {f(mkh("j"))}"); }
 fn k12() { let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; println(f"k12 {f(Ho.Full("k".to_string() + "-heap-string-long-enough"))}"); }
 fn k13() { mkh("l"); println("k13"); }
@@ -34,7 +34,7 @@ fn k20() { let o = mko("ss"); let f = |o: Option[String]| { match o { Some(s) =>
 fn k21() { let f = |r: Result[String, String]| { match r { Ok(s) => s.len(), Err(e) => e.len() } }; println(f"k21 {f(mkr("t"))}"); }
 fn k22() { let f = |h: Hp| { match h { Hp.Full(p) => p.a.len() + p.b, Hp.Empty => 0 } }; println(f"k22 {f(Hp.Full(P { a: "u".to_string() + "-heap-string-long-enough", b: 1 }))}"); }
 fn k23() { let f = |h: Hp| { match h { Hp.Full(P { a, b }) => takes(a) + b, Hp.Empty => 0 } }; let h = Hp.Full(P { a: "v".to_string() + "-heap-string-long-enough", b: 2 }); println(f"k23 {f(h)}"); }
-fn k24() { let v: Vec[W] = [mkw("w"), mkw("ww")]; let f = |w: W| w.s.len(); for w in v { println(f"k24 {f(w)}") } }
+fn k24() { let v: Vec[W] = [mkw("w"), mkw("ww")]; let f = |w: W| w.s.len(); for w in v.into_iter() { println(f"k24 {f(w)}") } }
 fn k25() { let f = |q: Ho[String]| { match q { Ho.Full(s) => s, Ho.Empty => "e".to_string() } }; let a = f(mkh("x")); let b = f(mkh("xx")); println(f"k25 {a.len()} {b.len()}"); }
 fn main() {
     k1();

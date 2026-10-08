@@ -134,7 +134,7 @@ fn find_ladders(begin: String, end: String, words: Vec[String]) -> LadderResult 
     let mut word_set: Map[String, i64] = Map.new();
     let mut wi = 0;
     while wi < words.len() {
-        word_set.insert(words[wi], 1);
+        word_set.insert(words[wi].clone(), 1);
         wi = wi + 1;
     }
     // `end` must be in the set for any ladder to exist.
@@ -169,7 +169,7 @@ fn find_ladders(begin: String, end: String, words: Vec[String]) -> LadderResult 
                     None => {
                         // Record `word` as a predecessor of `nb`.
                         let mut plist: Vec[String] = match preds.get(nb) {
-                            Some(v) => v,
+                            Some(v) => v.clone(),
                             None => Vec.new(),
                         };
                         plist.push(word.clone());
@@ -194,7 +194,7 @@ fn find_ladders(begin: String, end: String, words: Vec[String]) -> LadderResult 
         // Commit this level to visited.
         let mut k = 0;
         while k < nxt.len() {
-            visited.insert(nxt[k], 1);
+            visited.insert(nxt[k].clone(), 1);
             k = k + 1;
         }
         cur = nxt;

@@ -11,7 +11,7 @@ fn main() {
     let mut collected: Vec[String] = Vec.new();
     for a in items {
         let A { s } = a;
-        collected.push(s);
+        collected.push(s.clone());
     }
     let mut n: i64 = 0;
     for c in collected {

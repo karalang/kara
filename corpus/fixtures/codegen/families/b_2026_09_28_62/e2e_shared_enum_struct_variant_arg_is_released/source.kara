@@ -7,9 +7,9 @@ impl Drop for Hd { fn drop(mut ref self) { println("dHd") } }
 fn mkv(n: i64) -> Vec[String] { [f"aaaaaaaa{n}", f"bbbbbbbb{n}"] }
 fn eatv(v: Vec[String]) -> i64 { v.len() }
 fn rd(h: H) -> i64 { match h { H.Y { v } => { v.len() } H.N => { 0 } } }
-fn ho(h: H) -> i64 { match h { H.Y { v } => { eatv(v) } H.N => { 0 } } }
+fn ho(h: H) -> i64 { match h { H.Y { v } => { eatv(v.clone()) } H.N => { 0 } } }
 fn rdg(h: Hg[Vec[String]]) -> i64 { match h { Hg.Y { v } => { v.len() } Hg.N => { 0 } } }
-fn hog(h: Hg[Vec[String]]) -> i64 { match h { Hg.Y { v } => { eatv(v) } Hg.N => { 0 } } }
+fn hog(h: Hg[Vec[String]]) -> i64 { match h { Hg.Y { v } => { eatv(v.clone()) } Hg.N => { 0 } } }
 fn tk(h: Hd) -> i64 { 1 }
 fn rf(h: ref Hd) -> i64 { match h { Hd.Y { r } => { r.id } Hd.N => { 0 } } }
 fn main() {

@@ -1,0 +1,26 @@
+
+struct A { path: Vec[String], sv: Option[String] }
+fn f(a: A) -> i64 {
+    let A { path, sv } = a;
+    let mut t = 0;
+    for s in path { if s.len() >= 0 { t = t + 1; } }
+    match sv { Some(x) => { if x.len() >= 0 { t = t + 1; } } None => {} }
+    t
+}
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut p: Vec[String] = Vec.new();
+        p.push("facet_a_destructure_vec_payload_alpha_aaaa".to_string());
+        v.push(A { path: p, sv: Some("facet_a_destructure_option_payload_beta_bb".to_string()) });
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let xs = build();
+    let mut t = 0;
+    for a in xs { t = t + f(a); }
+    println(t);
+}

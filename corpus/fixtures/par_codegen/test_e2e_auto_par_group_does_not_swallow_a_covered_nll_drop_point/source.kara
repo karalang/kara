@@ -12,7 +12,7 @@ fn mkv() -> Vec[String] {
 #[allow(partial_move_of_drop_enum)]
 fn ret_str(s: ref S) -> String {
     match s.e {
-        E.A(v) => { let m = v; return m[0] }
+        E.A(v) => { let m = v; return m[0].clone() }
         E.B => { return "n" }
     }
 }

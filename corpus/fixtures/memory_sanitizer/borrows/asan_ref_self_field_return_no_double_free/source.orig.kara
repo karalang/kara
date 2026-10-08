@@ -1,0 +1,19 @@
+
+struct Person { n: String, tags: Vec[i64] }
+impl Person {
+    fn name(ref self) -> String { self.n }
+    fn steal_tags(mut ref self) -> Vec[i64] { self.tags }
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 3i64 {
+        let mut p = Person { n: f"name-{i}-padded-padded", tags: [i, i + 1i64, i + 2i64] };
+        let nm = p.name();
+        println(nm);
+        println(p.n);
+        let tg = p.steal_tags();
+        println(f"{tg.len()}");
+        println(f"{p.tags.len()}");
+        i = i + 1;
+    }
+}

@@ -11,7 +11,7 @@ fn ilen(w: Wi) -> i64 { match w { Wi.Full(x) => { return x[0]; } Wi.Empty => { r
 fn plen(w: Wp) -> i64 { match w { Wp.Full(x) => { return x[0].s.len(); } Wp.Empty => { return 0; } } }
 fn takeo(o: Option[Array[String, 2]]) -> i64 { match o { Some(x) => { return x[0].len(); } None => { return 0; } } }
 fn viaparam(a: Array[String, 2]) -> i64 {
-    { let w = Wrp.Full(a); println(f"param-in:{wlen(w)}"); }
+    { let w = Wrp.Full(a.clone()); println(f"param-in:{wlen(w)}"); }
     return a[0].len();
 }
 fn mka(t: String) -> Array[String, 2] {
@@ -23,35 +23,35 @@ fn main() {
     while i < 2 {
 
         let a1 = mka(f"n{i}");
-        { let w = Wrp.Full(a1); match w { Wrp.Full(x) => { println(f"nocallee-in:{x[0].len()}"); } Wrp.Empty => { println("e"); } } }
+        { let w = Wrp.Full(a1.clone()); match w { Wrp.Full(x) => { println(f"nocallee-in:{x[0].len()}"); } Wrp.Empty => { println("e"); } } }
         println(f"nocallee:{a1[0].len()}");
 
         let a2 = mka(f"c{i}");
-        { let w = Wrp.Full(a2); println(f"callee-in:{wlen(w)}"); }
+        { let w = Wrp.Full(a2.clone()); println(f"callee-in:{wlen(w)}"); }
         println(f"callee:{a2[1].len()}");
 
         let a3 = mka(f"f{i}");
-        let w3 = Wrp.Full(a3);
+        let w3 = Wrp.Full(a3.clone());
         println(f"fnscope-in:{wlen(w3)}");
         println(f"fnscope:{a3[0].len()}");
 
         let a4 = mka(f"g{i}");
-        println(f"argpos-in:{wlen(Wrp.Full(a4))}");
+        println(f"argpos-in:{wlen(Wrp.Full(a4.clone()))}");
         println(f"argpos:{a4[0].len()}");
 
         let a5 = mka(f"h{i}");
-        { let g = G.Y(a5); println(f"generic-in:{glen(g)}"); }
+        { let g = G.Y(a5.clone()); println(f"generic-in:{glen(g)}"); }
         println(f"generic:{a5[0].len()}");
 
         let a6 = mka(f"p{i}");
         println(f"param:{viaparam(a6)}");
 
         let a7: Array[P, 2] = [P { s: f"b153-s{i}-aaaaaaaaaaaaaaaaaaaa" }, P { s: f"b153-s{i}-bbbbbbbbbbbbbbbbbbbb" }];
-        { let w = Wp.Full(a7); println(f"structelem-in:{plen(w)}"); }
+        { let w = Wp.Full(a7.clone()); println(f"structelem-in:{plen(w)}"); }
         println(f"structelem:{a7[1].s.len()}");
 
         let d1 = mka(f"o{i}");
-        { println(f"seeded-in:{takeo(Option.Some(d1))}"); }
+        { println(f"seeded-in:{takeo(Option.Some(d1.clone()))}"); }
         println(f"seeded:{d1[0].len()}");
 
         let d3: Array[i64, 2] = [i + 7, i + 8];

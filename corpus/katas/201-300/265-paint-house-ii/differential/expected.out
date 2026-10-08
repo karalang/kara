@@ -1,0 +1,6 @@
+cases 4000
+rows generated 23974
+rows with a tied minimum 7679
+impossible (k=1, n>=2) 838
+digest 419563247
+mismatches 0

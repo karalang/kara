@@ -5,7 +5,7 @@ struct P { toks: Vec[Sp], pos: i64 }
 impl P {
     fn name_now(ref self) -> String {
         match self.toks[self.pos].tok {
-            Id(s) => s,
+            Id(s) => s.clone(),
             Num(n) => n.to_string(),
         }
     }

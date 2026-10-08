@@ -49,7 +49,7 @@ fn group_shifted(words: Vec[String]) -> Vec[Vec[String]] {
             // fallback (`karac check` flags it as perf[rc-fallback]).
             order.push(key.clone());
         }
-        table.entry(key).or_insert(Vec.new()).push(words[i]);
+        table.entry(key).or_insert(Vec.new()).push(words[i].clone());
         i = i + 1;
     }
     let mut out: Vec[Vec[String]] = Vec.new();

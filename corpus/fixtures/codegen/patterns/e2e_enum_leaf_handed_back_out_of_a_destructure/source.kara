@@ -5,7 +5,7 @@ enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 struct H2 { e: E, n: i64 }
 struct Hr { r: R, n: i64 }
-fn consume_e(x: E) -> i64 { match x { E.A(r) => { return r.id; } E.B => { return 0; } } }
+fn consume_e(x: E) -> i64 { match x { E.A(ref r) => { return r.id; } E.B => { return 0; } } }
 
 fn p_let(h: H2) -> E { let H2 { e, n } = h; return e; }
 fn p_let_unused(h: H2) -> i64 { let H2 { e, n } = h; return n; }

@@ -1,0 +1,43 @@
+
+enum Cmd { Insert(i64, String), Delete(i64, String) }
+struct Doc { lines: Vec[String] }
+struct Nums { xs: Vec[i64] }
+enum Got { N(i64) }
+impl Doc { fn first(ref self) -> String { let g = self.lines[0].clone(); g } }
+fn apply(d: mut ref Doc, c: Cmd) -> Cmd {
+    match c {
+        Insert(at, text) => { d.lines.insert(at as usize, text); Cmd.Delete(at, d.lines[at as usize].clone()) }
+        Delete(at, _text) => { let gone = d.lines[at as usize].clone(); d.lines.remove(at as usize); Cmd.Insert(at, gone) }
+    }
+}
+fn one(d: mut ref Doc, at: i64) -> Cmd { Cmd.Delete(at, d.lines[at as usize].clone()) }
+fn scalar(n: ref Nums) -> Got { Got.N(n.xs[0]) }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut l: Vec[String] = Vec.new();
+    let mut a = String.new(); a.push_str("alpha"); a.push_str(k.to_string());
+    let mut b = String.new(); b.push_str("beta"); b.push_str(k.to_string());
+    l.push(a); l.push(b);
+    let mut d = Doc { lines: l };
+    let inv = apply(mut d, Cmd.Delete(1, "beta"));
+    let i2 = apply(mut d, inv);
+    let mut acc = d.lines.len() as i64;
+    match i2 { Insert(i, t) => { acc = acc + t.len(); } Delete(i, t) => { acc = acc + t.len(); } }
+    let c = one(mut d, 0);
+    match c { Insert(i, t) => { acc = acc + t.len(); } Delete(i, t) => { acc = acc + t.len(); } }
+    let mut out: Vec[String] = Vec.new();
+    out.push(d.lines[0]);
+    acc = acc + out[0].len();
+    acc = acc + d.first().len();
+    let mut i = 0i64;
+    while i < 200 {
+        let cc = one(mut d, 0);
+        match cc { Insert(x, t) => { acc = acc + t.len(); } Delete(x, t) => { acc = acc + t.len(); } }
+        i = i + 1;
+    }
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7);
+    let n = Nums { xs: v };
+    match scalar(n) { N(x) => { acc = acc + x; } }
+    println(acc > 0);
+}

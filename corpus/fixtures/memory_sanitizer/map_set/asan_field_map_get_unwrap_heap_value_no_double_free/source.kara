@@ -14,7 +14,7 @@ fn main() {
     let mut acc: i64 = 0;
     while i < 100 {
         acc = acc + h.ms.get(1).unwrap().len();
-        acc = acc + takes(h.ms.get(2).unwrap());
+        acc = acc + takes(h.ms.get(2).unwrap().clone());
         let v = h.ms.get(1).unwrap();
         acc = acc + v.len();
         acc = acc + h.mv.get(1).unwrap()[1];

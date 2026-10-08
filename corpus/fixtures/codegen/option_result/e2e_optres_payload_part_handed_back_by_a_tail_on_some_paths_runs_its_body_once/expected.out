@@ -1,0 +1,46 @@
+named-true
+  got:5
+dR5
+named-false
+dR5
+  got:1
+dR1
+temp-true
+  got:6
+dR6
+temp-false
+dR6
+  got:1
+dR1
+bare-true
+  got:5
+dR5
+bare-false
+dR5
+  got:1
+dR1
+result-true
+  got:5
+dR5
+result-false
+dR5
+  got:1
+dR1
+mixed-0
+  got:5
+dR5
+mixed-1
+  got:5
+dR5
+mixed-2
+dR5
+  got:1
+dR1
+method-true
+  got:5
+dR5
+method-false
+dR5
+  got:1
+dR1
+end

@@ -1,0 +1,24 @@
+fn id2[T](d: T) -> T { d }
+fn first[T](d: Vec[T]) -> Vec[T] { d }
+fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
+fn mkd[T](d: T) -> VecDeque[T] { let mut q = VecDeque[T].new(); q.push_back(d); q }
+fn two[T](a: T, b: T) -> Array[T, 2] { [a, b] }
+fn head[U: Copy](y: Vec[U]) -> U { id2(y)[0] }
+fn mkv(i: i64) -> Vec[String] { let mut v = Vec[String].new(); v.push(f"heap-string-longer-than-sso-{i}"); v.push(f"b{i}"); v }
+fn main() {
+    let x = [1, 2, 3];
+    println(id2(x)[1] + id2(x)[2]);
+    println(id2(mkv(1))[0]);
+    let n = mkv(2);
+    println(id2(n)[1]);
+    println(first(mkv(3))[0]);
+    let a = Some(mkv(4));
+    println(pick(a, mkv(5))[0]);
+    println(mkd(f"heap-string-longer-than-sso-6")[0]);
+    println(two(f"heap-string-longer-than-sso-7", f"x")[0]);
+    println(head([8, 9]));
+    let mut t = 0;
+    for i in 0..10 { t = t + id2(mkv(i))[0].len(); }
+    println(t);
+    println("end")
+}

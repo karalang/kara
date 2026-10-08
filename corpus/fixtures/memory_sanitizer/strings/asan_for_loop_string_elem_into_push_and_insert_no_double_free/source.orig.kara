@@ -1,0 +1,17 @@
+
+fn main() {
+    let mut words: Vec[String] = Vec.new();
+    words.push("one-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    words.push("two-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string());
+    let mut out: Vec[String] = Vec.new();
+    let mut m: Map[String, i64] = Map.new();
+    for w in words {
+        out.push(w);
+    }
+    for w in out {
+        m.insert(w, 1_i64);
+    }
+    println(out.len());
+    println(m.len());
+    println(words.len());
+}

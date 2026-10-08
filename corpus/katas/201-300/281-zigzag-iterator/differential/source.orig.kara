@@ -1,0 +1,230 @@
+// LeetCode 281 — differential harness.
+//
+// Three solvers: a cursor-per-list with a skipping turn pointer, a queue of live
+// cursors, and the definition materialized round by round.
+//
+// THE TWO ITERATORS SHARE A FAILURE MODE. Both carry state between calls, and
+// every bug in this problem is a state bug — a turn that fails to wrap, a cursor
+// bumped twice, a queue entry pushed back when it should not be. They arrive at
+// the answer by different bookkeeping, but they are the same KIND of thing, and
+// a misreading of what "alternate" means would be shared.
+//
+// THE EAGER SOLVER HAS NO STATE BETWEEN ELEMENTS. It computes the answer as a
+// function of the input:
+//
+//     for r = 0, 1, 2, ...:  for each list i in order:
+//         if list i has an element at index r, emit it
+//
+// That is the specification, transcribed. A state bug and a transcription of the
+// definition have no way to agree, which is what makes it the oracle here rather
+// than a third opinion.
+//
+// THE GENERATOR LEANS ON THE SHAPES THAT BREAK ITERATORS, not on size. Empty
+// lists anywhere (leading, trailing, interior, all of them), wildly unequal
+// lengths so that lists drop out at different rounds, and k from 1 to 5 so the
+// two-list special case is one row among many. A generator that drew equal-
+// length non-empty lists would exercise none of the skipping logic — which is
+// the entire difficulty — and every solver would pass.
+//
+// THE SINK IS THE FULL SEQUENCE, position-weighted. Interleaving is an ORDERING
+// problem, so a multiset check would accept any permutation and a length check
+// would accept any reordering at all; both would be blind to the only thing this
+// problem asks for.
+
+struct Zigzag {
+    lists: Vec[Vec[i64]],
+    mut cursor: Vec[i64],
+    mut turn: i64,
+    mut remaining: i64,
+}
+
+fn make_zigzag(lists: Vec[Vec[i64]]) -> Zigzag {
+    let mut cursor: Vec[i64] = Vec.new();
+    let mut remaining = 0;
+    let mut i = 0;
+    while i < lists.len() {
+        cursor.push(0);
+        remaining = remaining + lists[i].len();
+        i = i + 1;
+    }
+    let mut z = Zigzag { lists: lists, cursor: cursor, turn: 0, remaining: remaining };
+    // the first turn must already be a live list, or next() would start on an
+    // empty one — the same skip the advance does, applied to the seed
+    settle(mut z);
+    return z;
+}
+
+// Move `turn` forward until it points at a list with elements left. Bounded by
+// the number of lists, so it terminates whether or not anything is live.
+fn settle(z: mut ref Zigzag) {
+    let k = z.lists.len();
+    let mut tried = 0;
+    while tried < k {
+        if z.cursor[z.turn] < z.lists[z.turn].len() {
+            return;
+        }
+        z.turn = (z.turn + 1) % k;
+        tried = tried + 1;
+    }
+}
+
+fn has_next(z: ref Zigzag) -> bool {
+    return z.remaining > 0;
+}
+
+fn next(z: mut ref Zigzag) -> i64 {
+    let t = z.turn;
+    let v = z.lists[t][z.cursor[t]];
+    z.cursor[t] = z.cursor[t] + 1;
+    z.remaining = z.remaining - 1;
+    z.turn = (t + 1) % z.lists.len();
+    settle(z);
+    return v;
+}
+
+fn drain_cursor(lists: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut z = make_zigzag(lists);
+    let mut out: Vec[i64] = Vec.new();
+    while has_next(z) {
+        out.push(next(mut z));
+    }
+    return out;
+}
+
+struct QZigzag {
+    lists: Vec[Vec[i64]],
+    mut cursor: Vec[i64],
+    mut queue: Vec[i64],      // list indices with elements left, in turn order
+    mut head: i64,            // read cursor into `queue`
+}
+
+fn make_qzigzag(lists: Vec[Vec[i64]]) -> QZigzag {
+    let mut cursor: Vec[i64] = Vec.new();
+    let mut queue: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < lists.len() {
+        cursor.push(0);
+        if lists[i].len() > 0 { queue.push(i); }
+        i = i + 1;
+    }
+    return QZigzag { lists: lists, cursor: cursor, queue: queue, head: 0 };
+}
+
+fn q_has_next(z: ref QZigzag) -> bool {
+    return z.head < z.queue.len();
+}
+
+fn q_next(z: mut ref QZigzag) -> i64 {
+    let t = z.queue[z.head];
+    z.head = z.head + 1;
+    let v = z.lists[t][z.cursor[t]];
+    z.cursor[t] = z.cursor[t] + 1;
+    if z.cursor[t] < z.lists[t].len() {
+        z.queue.push(t);
+    }
+    return v;
+}
+
+fn drain_queue(lists: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut z = make_qzigzag(lists);
+    let mut out: Vec[i64] = Vec.new();
+    while q_has_next(z) {
+        out.push(q_next(mut z));
+    }
+    return out;
+}
+
+fn drain_eager(lists: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut longest = 0;
+    let mut i = 0;
+    while i < lists.len() {
+        if lists[i].len() > longest { longest = lists[i].len(); }
+        i = i + 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut r = 0;
+    while r < longest {
+        let mut j = 0;
+        while j < lists.len() {
+            if r < lists[j].len() { out.push(lists[j][r]); }
+            j = j + 1;
+        }
+        r = r + 1;
+    }
+    return out;
+}
+
+
+fn seq_equal(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn main() {
+    let mut cases = 0;
+    let mut cursor_vs_def = 0;
+    let mut queue_vs_def = 0;
+    let mut total_elements = 0;
+    let mut with_empty_list = 0;
+    let mut all_empty = 0;
+    let mut digest = 0;
+
+    let mut seed = 20260819;
+    let mut k = 1;
+    while k <= 5 {
+        let mut t = 0;
+        while t < 300 {
+            let mut lists: Vec[Vec[i64]] = Vec.new();
+            let mut any_empty = false;
+            let mut every_empty = true;
+            let mut i = 0;
+            while i < k {
+                seed = (seed * 1103515245 + 12345) % 2147483648;
+                // deliberately skewed: a third of lists come out empty, and
+                // lengths differ enough that lists drop out at different rounds
+                let len = (seed / 17) % 7;
+                let mut v: Vec[i64] = Vec.new();
+                let mut j = 0;
+                while j < len {
+                    seed = (seed * 1103515245 + 12345) % 2147483648;
+                    v.push(seed % 1000);
+                    j = j + 1;
+                }
+                if len == 0 { any_empty = true; } else { every_empty = false; }
+                lists.push(v);
+                i = i + 1;
+            }
+            if any_empty { with_empty_list = with_empty_list + 1; }
+            if every_empty { all_empty = all_empty + 1; }
+
+            let a = drain_cursor(lists.clone());
+            let b = drain_queue(lists);
+            let d = drain_eager(lists);
+
+            if not seq_equal(a, d) { cursor_vs_def = cursor_vs_def + 1; }
+            if not seq_equal(b, d) { queue_vs_def = queue_vs_def + 1; }
+            total_elements = total_elements + d.len();
+
+            let mut z = 0;
+            while z < d.len() {
+                digest = (digest * 131 + d[z] * (z + 1)) % 1000000007;
+                z = z + 1;
+            }
+            cases = cases + 1;
+            t = t + 1;
+        }
+        k = k + 1;
+    }
+
+    println(f"cases {cases}, elements interleaved {total_elements}");
+    println(f"cases containing at least one EMPTY list {with_empty_list}");
+    println(f"cases where every list is empty {all_empty}");
+    println(f"digest {digest}");
+    println(f"cursor vs the definition {cursor_vs_def}");
+    println(f"queue  vs the definition {queue_vs_def}");
+}

@@ -22,7 +22,7 @@ fn main() {
     let ne = match e { H6.W(H2.Z(M2.P { v, k })) => v.len() + k, _ => 0 };
     println(f"e {ne}");
     let f = Hs.Z(Ms.S { t: hs(6) });
-    let sf = match f { Hs.Z(Ms.S { t }) => t, _ => "none".to_string() };
+    let sf = match f { Hs.Z(Ms.S { t }) => t.clone(), _ => "none".to_string() };
     println(f"f {sf}");
     let g = H5.Z { m: M2.P { v: mkv(hs(7)), k: 2 }, j: 3 };
     let ng = match g { H5.Z { m: M2.P { v, k }, j } => v.len() + k + j, _ => 0 };

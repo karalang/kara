@@ -19,9 +19,9 @@ fn c08() { let v: Vec[Ho[String]] = vec![Ho.Full("mn".to_string() + "op"), Ho.Em
 fn c09() { let mut v: Vec[Ho[P1]] = Vec.new(); v.push(Ho.Full(P1 { t: "q".to_string() + "r", id: 2 })); for h in v { match h { Ho.Full(p) => println(p.t), Ho.Empty => println("e"), } } }
 fn c10() { let mut v: Vec[Ho[String]] = Vec.new(); v.push(Ho.Full("st".to_string() + "uv")); v[0] = Ho.Full("wx".to_string() + "yz"); println(f"n{v.len()}"); }
 fn c11() { let mut i = 0; while i < 3 { let mut v: Vec[Ho[S2]] = Vec.new(); v.push(Ho.Full(mk2(20 + i))); v.push(Ho.Empty); println(f"n{v.len()}"); i = i + 1; } }
-fn c12() { let v: Vec[Ho[String]] = vec![Ho.Full("gg".to_string() + "hh"), Ho.Empty]; for h in v { show(h) } println(f"n{v.len()}"); }
-fn c13() { let v: Vec[Ho[String]] = vec![Ho.Full("ii".to_string() + "jj"), Ho.Empty]; let mut w: Vec[Ho[String]] = Vec.new(); for h in v { w.push(h) } println(f"w{w.len()}"); }
-fn c14() { let v: Vec[Ho[String]] = vec![Ho.Full("kk".to_string() + "ll")]; let mut w: Vec[Ho[String]] = Vec.new(); w.push(Ho.Empty); for h in v { w[0] = h; } println(f"w{w.len()}"); }
+fn c12() { let v: Vec[Ho[String]] = vec![Ho.Full("gg".to_string() + "hh"), Ho.Empty]; for h in v.into_iter() { show(h) } println(f"n{v.len()}"); }
+fn c13() { let v: Vec[Ho[String]] = vec![Ho.Full("ii".to_string() + "jj"), Ho.Empty]; let mut w: Vec[Ho[String]] = Vec.new(); for h in v.into_iter() { w.push(h) } println(f"w{w.len()}"); }
+fn c14() { let v: Vec[Ho[String]] = vec![Ho.Full("kk".to_string() + "ll")]; let mut w: Vec[Ho[String]] = Vec.new(); w.push(Ho.Empty); for h in v.into_iter() { w[0] = h; } println(f"w{w.len()}"); }
 fn c16() { let mut w: Vec[Ho[String]] = Vec.new(); w.push(Ho.Empty); let h: Ho[String] = Ho.Full("oo".to_string() + "pp"); w[0] = h; println(f"w{w.len()}"); }
 fn main() {
     c00();

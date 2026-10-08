@@ -1,0 +1,95 @@
+// LeetCode 347 — String-keyed sibling (the "top k frequent words" shape).
+//
+// Identical algorithm to top_k_frequent.kara: tally, walk `keys()`, order by
+// count descending with ties broken by key ascending, take k. Only the map's
+// halves differ — `Map[String, i64]` instead of `Map[i64, i64]`.
+//
+// That difference is the whole point. The scalar-halved map lowers its
+// `keys()` walk to an inline bucket walk; the String-halved one does not, and
+// still materializes an intermediate keys Vec (kara ledger B-2026-07-25-4,
+// open). This file is the live coverage for that path: same answer shape, so
+// any divergence between the two is a compiler bug, not an algorithm
+// difference.
+
+fn top_k_frequent_words(words: ref Vec[String], k: i64) -> Vec[String] {
+    let mut counts: Map[String, i64] = Map.new();
+    let mut i = 0;
+    while i < words.len() {
+        let w = words[i].clone();
+        let n = match counts.get(w.clone()) { Some(c) => c, None => 0 };
+        let _ = counts.insert(w, n + 1);
+        i = i + 1;
+    }
+
+    let mut keys: Vec[String] = Vec.new();
+    for w in counts.keys() {
+        keys.push(w);
+    }
+
+    // Insertion sort by (count desc, word asc).
+    let mut a = 1;
+    while a < keys.len() {
+        let cur = keys[a].clone();
+        let cur_c = match counts.get(cur.clone()) { Some(c) => c, None => 0 };
+        let mut b = a - 1;
+        while b >= 0 {
+            let prev = keys[b].clone();
+            let prev_c = match counts.get(prev.clone()) { Some(c) => c, None => 0 };
+            let mut shift = false;
+            if prev_c < cur_c { shift = true; }
+            if prev_c == cur_c {
+                if prev > cur { shift = true; }
+            }
+            if not shift { break; }
+            keys[b + 1] = prev;
+            b = b - 1;
+        }
+        keys[b + 1] = cur;
+        a = a + 1;
+    }
+
+    let mut limit = k;
+    if keys.len() < limit { limit = keys.len(); }
+    let mut out: Vec[String] = Vec.new();
+    let mut t = 0;
+    while t < limit {
+        out.push(keys[t].clone());
+        t = t + 1;
+    }
+    out
+}
+
+fn show(words: ref Vec[String], k: i64) {
+    let got = top_k_frequent_words(words, k);
+    let mut s = String.new();
+    let mut i = 0;
+    while i < got.len() {
+        if i > 0 { s = s + ","; }
+        s = s + got[i].clone();
+        i = i + 1;
+    }
+    println(f"k={k} -> [{s}]");
+}
+
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    a.push("i"); a.push("love"); a.push("leetcode");
+    a.push("i"); a.push("love"); a.push("coding");
+    show(a, 2);
+
+    let mut b: Vec[String] = Vec.new();
+    b.push("the"); b.push("day"); b.push("is"); b.push("sunny");
+    b.push("the"); b.push("the"); b.push("the"); b.push("sunny");
+    b.push("is"); b.push("is");
+    show(b, 4);
+
+    // All counts equal — pure word-ascending tie-break.
+    let mut c: Vec[String] = Vec.new();
+    c.push("pear"); c.push("apple"); c.push("fig");
+    show(c, 3);
+
+    // k larger than the number of distinct words.
+    let mut d: Vec[String] = Vec.new();
+    d.push("solo"); d.push("solo"); d.push("duo");
+    show(d, 5);
+}

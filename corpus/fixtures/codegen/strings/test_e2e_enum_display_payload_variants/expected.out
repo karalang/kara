@@ -1,0 +1,6 @@
+Circle(5)
+Rect { w: 3, h: 4 }
+Dot
+x=Circle(5) y=Rect { w: 3, h: 4 } z=Dot
+Text(hi)
+m=Text(hi)

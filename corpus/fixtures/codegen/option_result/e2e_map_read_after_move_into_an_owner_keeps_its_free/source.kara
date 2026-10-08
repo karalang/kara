@@ -1,12 +1,12 @@
-fn item_c0(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let b = m.len(); match doc { Some(x) => x.len() + b, None => b } }
-fn item_c1(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let mut v: Vec[Map[i64, String]] = Vec.new(); v.push(m); let b = m.len(); v.len() + b }
+fn item_c0(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m.clone()); let b = m.len(); match doc { Some(x) => x.len() + b, None => b } }
+fn item_c1(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let mut v: Vec[Map[i64, String]] = Vec.new(); v.push(m.clone()); let b = m.len(); v.len() + b }
 struct H { m: Map[i64, String] }
-fn item_c2(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let h = H { m: m }; let b = m.len(); h.m.len() + b }
+fn item_c2(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let h = H { m: m.clone() }; let b = m.len(); h.m.len() + b }
 enum E { A(Map[i64, String]), B }
-fn item_c3(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let e = E.A(m); let b = m.len(); match e { E.A(x) => x.len() + b, E.B => b } }
-fn item_c4(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let r: Result[Map[i64, String], i64] = Ok(m); let b = m.len(); match r { Ok(x) => x.len() + b, Err(_) => b } }
-fn item_c5(t: i64) -> i64 { let mut m: Set[String] = Set.new(); m.insert(f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let b = m.len(); match doc { Some(x) => x.len() + b, None => b } }
-fn item_c6(t: i64) -> i64 { let mut m: Set[String] = Set.new(); m.insert(f"heap-string-longer-than-sso-{t}"); let mut v: Vec[Set[String]] = Vec.new(); v.push(m); let b = m.len(); v.len() + b }
+fn item_c3(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let e = E.A(m.clone()); let b = m.len(); match e { E.A(x) => x.len() + b, E.B => b } }
+fn item_c4(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let r: Result[Map[i64, String], i64] = Ok(m.clone()); let b = m.len(); match r { Ok(x) => x.len() + b, Err(_) => b } }
+fn item_c5(t: i64) -> i64 { let mut m: Set[String] = Set.new(); m.insert(f"heap-string-longer-than-sso-{t}"); let doc = Some(m.clone()); let b = m.len(); match doc { Some(x) => x.len() + b, None => b } }
+fn item_c6(t: i64) -> i64 { let mut m: Set[String] = Set.new(); m.insert(f"heap-string-longer-than-sso-{t}"); let mut v: Vec[Set[String]] = Vec.new(); v.push(m.clone()); let b = m.len(); v.len() + b }
 fn main() {
     println(f"{item_c0(0)} {item_c0(1)}");
     println(f"{item_c1(0)} {item_c1(1)}");

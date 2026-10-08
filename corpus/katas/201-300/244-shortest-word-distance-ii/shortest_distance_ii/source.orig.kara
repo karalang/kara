@@ -1,0 +1,124 @@
+// LeetCode 244 — Shortest Word Distance II. (Premium.)
+//
+// The sequel to #243, and the whole point of it is the change in shape. There
+// the question was asked ONCE against a list, so the winning answer keeps two
+// integers and never allocates. Here the same list is queried repeatedly, so
+// the per-query scan is the wrong unit of work: it re-reads all n words to
+// answer a question about the handful of slots that actually hold word1 or
+// word2.
+//
+// So pay once. Build `word -> ascending positions` at construction time, and
+// the query collapses to a two-pointer merge over exactly the two lists it
+// cares about. Construction is O(n); a query is O(|p1| + |p2|), which for a
+// realistic vocabulary is a small fraction of n.
+//
+// The merge is #243's `shortest_distance_lists.kara` verbatim — advance
+// whichever cursor is behind, because the one that is ahead can only get
+// farther from its partner, so the pair it would form next is never better.
+// What moved is not the merge but where the lists come from.
+//
+// The corpus idiom is a struct + free functions (no impl blocks).
+
+struct WordDistance {
+    index: Map[String, Vec[i64]],
+    size: i64,
+}
+
+// One pass over the list, appending each slot to its word's position vector.
+// Positions therefore arrive in ascending order for free, which is exactly the
+// precondition the merge relies on — nothing is ever sorted here.
+// Extending a word's position list appends IN PLACE. `entry(w)` returns a view
+// of that key's slot and `or_insert` yields a `mut ref Vec[i64]` — the map's own
+// list when the key is present, a freshly-inserted empty one when it is not — so
+// the `push` lands through the borrow and nothing is copied. Construction is
+// O(n), matching the Python mirror's `setdefault(w, []).append(i)`.
+fn new_word_distance(words: ref Slice[String]) -> WordDistance {
+    let mut index: Map[String, Vec[i64]] = Map.new();
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        index.entry(words[i]).or_insert(Vec.new()).push(i);
+        i = i + 1;
+    }
+    return WordDistance { index: index, size: n };
+}
+
+// Both lookups are borrows and the merge reads straight through them — nothing
+// is cloned here. That matters beyond tidiness: returning `Vec[i64]` from a
+// `positions()` helper would copy both lists on every query, making the Kāra
+// query O(|p1| + |p2|) ALLOCATION where the C mirror does none, and the
+// benchmark would then be comparing two different algorithms.
+//
+// A word that never appeared has no entry at all, so the `None` arms return the
+// `size` upper bound directly. That is a genuine bound — the list has that many
+// slots, so no two distinct positions can be that far apart — and it doubles as
+// the "word absent" answer without a separate found flag, the same convention
+// as #243.
+fn shortest(wd: ref WordDistance, word1: ref String, word2: ref String) -> i64 {
+    match wd.index.get(word1) {
+        None => { return wd.size; }
+        Some(p1) => {
+            match wd.index.get(word2) {
+                None => { return wd.size; }
+                Some(p2) => {
+                    let mut best = wd.size;
+                    let mut a = 0;
+                    let mut b = 0;
+                    while a < p1.len() and b < p2.len() {
+                        best = min(best, (p1[a] - p2[b]).abs());
+                        // Whichever position is smaller has nothing left to
+                        // gain from the current partner; step it forward.
+                        if p1[a] < p2[b] {
+                            a = a + 1;
+                        } else {
+                            b = b + 1;
+                        }
+                    }
+                    return best;
+                }
+            }
+        }
+    }
+}
+
+fn report(wd: ref WordDistance, word1: ref String, word2: ref String) {
+    println(f"{word1} <-> {word2} : {shortest(wd, word1, word2)}");
+}
+
+fn main() {
+    // LeetCode's own example: one construction, several queries against it.
+    let d1: Array[String, 5] = ["practice", "makes", "perfect", "coding", "makes"];
+    let wd1 = new_word_distance(d1);
+    report(wd1, "coding", "practice");   // 3
+    report(wd1, "makes", "coding");      // 1
+    report(wd1, "makes", "perfect");     // 1
+    report(wd1, "practice", "perfect");  // 2
+
+    // Repeated queries are the whole point — the same object answers all four
+    // above without rebuilding anything.
+
+    let d2: Array[String, 7] = ["a", "b", "x", "x", "x", "a", "b"];
+    let wd2 = new_word_distance(d2);
+    report(wd2, "a", "b");               // 1
+    report(wd2, "b", "a");               // 1
+    report(wd2, "a", "x");               // 1
+
+    let d3: Array[String, 2] = ["a", "b"];
+    let wd3 = new_word_distance(d3);
+    report(wd3, "a", "b");               // 1
+
+    let d4: Array[String, 6] = ["p", "q", "p", "q", "p", "q"];
+    let wd4 = new_word_distance(d4);
+    report(wd4, "p", "q");               // 1
+
+    let d5: Array[String, 6] = ["m", "z", "z", "z", "n", "m"];
+    let wd5 = new_word_distance(d5);
+    report(wd5, "m", "n");               // 1
+    report(wd5, "z", "n");               // 1
+
+    // One list comes back empty, so the merge never runs and `best` stays at
+    // the size upper bound.
+    let d6: Array[String, 3] = ["one", "two", "three"];
+    let wd6 = new_word_distance(d6);
+    report(wd6, "two", "four");          // 3
+}

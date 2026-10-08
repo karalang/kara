@@ -1,7 +1,7 @@
 
 fn acc(n: i64) -> Option[String] {
     let mut buf: Option[String] = None;
-    let mut i: i64 = 0i64;
+    let mut i: i64 = 0;
     while i < n {
         let line = f"L{i}";
         match buf {
@@ -14,20 +14,20 @@ fn acc(n: i64) -> Option[String] {
 }
 fn plain(k: i64) -> Option[String] {
     let mut buf: Option[String] = Some(f"a{k}");
-    match buf { Some(prev) => { println(prev); } None => {} }
+    match buf { Some(ref prev) => { println(prev); } None => {} }
     buf
 }
 fn chain(k: i64) -> i64 {
     let o: Option[String] = Some(f"hi{k}");
-    match o { Some(s) => { println(s); } None => {} }
-    o.map(|x| x.len()).unwrap_or(0i64)
+    match o { Some(ref s) => { println(s); } None => {} }
+    o.map(|x| x.len()).unwrap_or(0)
 }
 fn main() {
-    let mut i: i64 = 0i64;
-    while i < 4i64 {
-        match acc(3i64) { Some(s) => { println(s); } None => { println("-"); } }
+    let mut i: i64 = 0;
+    while i < 4 {
+        match acc(3) { Some(s) => { println(s); } None => { println("-"); } }
         match plain(i) { Some(s) => { println(s); } None => { println("-"); } }
-        let _ = plain(100i64 + i);
+        let _ = plain(100 + i);
         println(f"{chain(i)}");
         i = i + 1;
     }

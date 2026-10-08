@@ -1,0 +1,29 @@
+
+enum E { A(String), B }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        // 1. LEG 2, consuming — `Result.map`, source re-read afterwards.
+        let r: Result[String, i64] = Ok(f"hi{i}");
+        match r.map(|s| s) { Ok(v) => { println(v); } Err(_) => { println("-"); } }
+        match r { Ok(v) => { println(v); } Err(_) => { println("-"); } }
+        // 2. LEG 2, read-only — the SCALAR `Err` co-arm that broke the gate.
+        let q: Result[String, i64] = Ok(f"ro{i}");
+        match q { Ok(v) => { println(v); } Err(e) => { println("-"); } }
+        match q { Ok(v) => { println(v); } Err(e) => { println("-"); } }
+        // 3. LEG 3, read-only — the user-enum channel.
+        let e: E = E.A(f"en{i}");
+        match e { E.A(v) => { println(v); } E.B => { println("-"); } }
+        match e { E.A(v) => { println(v); } E.B => { println("-"); } }
+        // 4. LEG 3, consuming — the arm MOVES the payload out.
+        let m: E = E.A(f"mv{i}");
+        match m { E.A(v) => { let k: String = v; println(k); } E.B => { println("-"); } }
+        match m { E.A(v) => { println(v); } E.B => { println("-"); } }
+        // 5. CONTROL — source DEAD, so no clone may be made. A clone here
+        // without disarming the source would leak the original every pass.
+        let d: E = E.A(f"dead{i}");
+        match d { E.A(v) => { let k: String = v; println(k); } E.B => { println("-"); } }
+        i = i + 1;
+    }
+    println("end");
+}

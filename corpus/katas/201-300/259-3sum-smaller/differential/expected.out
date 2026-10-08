@@ -1,0 +1,6 @@
+cases 4000
+triples counted 112190
+answer==0 1182
+answer==C(n,3) 249
+digest 602466052
+mismatches 0

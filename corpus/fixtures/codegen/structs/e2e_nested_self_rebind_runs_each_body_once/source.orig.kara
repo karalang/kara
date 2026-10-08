@@ -1,0 +1,47 @@
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct S { r: R, n: i64 }
+impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.n}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+
+impl E {
+    fn cond_match(self, c: bool) -> i64 {
+        if c { let e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+        else { match self { E.A(r) => { return r.id + 100; } E.B => { return 100; } } }
+    }
+    fn cond_bare(self, c: bool) -> i64 { if c { let e = self; return 7; } return 0; }
+    fn cond_mut(self, c: bool) -> i64 { if c { let mut e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } } else { return 5; } }
+    fn cond_loop(self, n: i64) -> i64 { let mut i = 0; while i < n { let e = self; return 9; } return 0; }
+    fn cond_arm(self, k: i64) -> i64 { match k { 1 => { let e = self; return 1; } _ => { return 2; } } }
+    fn top_let(self) -> i64 { let e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn plain(self, c: bool) -> i64 { if c { return 1; } return 2; }
+    fn borrowed(ref self, c: bool) -> i64 { if c { return 1; } return 2; }
+}
+
+impl S {
+    fn cond_struct(self, c: bool) -> i64 { if c { let s2 = self; return s2.n; } return self.n + 100; }
+    fn both_arms(self, c: bool) -> i64 { if c { let s1 = self; return s1.n; } else { let s2 = self; return s2.n + 50; } }
+}
+
+fn main() {
+    println("enum_true"); let a = E.A(mk(1)); let v1 = a.cond_match(true); println(f"  v={v1}");
+    println("enum_false"); let b = E.A(mk(2)); let v2 = b.cond_match(false); println(f"  v={v2}");
+    println("bare_true"); let c = E.A(mk(3)); let v3 = c.cond_bare(true); println(f"  v={v3}");
+    println("bare_false"); let d = E.A(mk(4)); let v4 = d.cond_bare(false); println(f"  v={v4}");
+    println("mut_true"); let e = E.A(mk(5)); let v5 = e.cond_mut(true); println(f"  v={v5}");
+    println("loop_once"); let f = E.A(mk(6)); let v6 = f.cond_loop(1); println(f"  v={v6}");
+    println("loop_zero"); let g = E.A(mk(7)); let v7 = g.cond_loop(0); println(f"  v={v7}");
+    println("arm_taken"); let h = E.A(mk(8)); let v8 = h.cond_arm(1); println(f"  v={v8}");
+    println("arm_other"); let i = E.A(mk(9)); let v9 = i.cond_arm(3); println(f"  v={v9}");
+    println("temp_true"); let v10 = E.A(mk(10)).cond_match(true); println(f"  v={v10}");
+    println("temp_false"); let v11 = E.A(mk(11)).cond_match(false); println(f"  v={v11}");
+    println("struct_true"); let j = S { r: mk(12), n: 1 }; let v12 = j.cond_struct(true); println(f"  v={v12}");
+    println("struct_false"); let k = S { r: mk(13), n: 2 }; let v13 = k.cond_struct(false); println(f"  v={v13}");
+    println("both_arms"); let l = S { r: mk(14), n: 3 }; let v14 = l.both_arms(false); println(f"  v={v14}");
+    println("top_let"); let m = E.A(mk(15)); let v15 = m.top_let(); println(f"  v={v15}");
+    println("plain"); let n = E.A(mk(16)); let v16 = n.plain(true); println(f"  v={v16}");
+    println("borrowed"); let o = E.A(mk(17)); let v17 = o.borrowed(true); println(f"  v={v17}");
+    println("end");
+}

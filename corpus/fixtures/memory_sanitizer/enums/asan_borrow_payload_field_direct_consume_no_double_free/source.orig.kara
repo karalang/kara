@@ -1,0 +1,39 @@
+
+struct Pv { name: String, value: String }
+struct Holder { values: Vec[Pv] }
+impl Holder {
+    fn direct(ref self) -> String {
+        match self.values.get(0) {
+            Some(pv) => { return pv.value; }
+            None => { return "none"; }
+        }
+    }
+    fn collect(ref self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < self.values.len() {
+            match self.values.get(i) {
+                Some(pv) => { out.push(pv.value); }
+                None => {}
+            }
+            i = i + 1;
+        }
+        return out;
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 300 {
+        let mut v: Vec[Pv] = Vec.new();
+        v.push(Pv { name: f"k-{i}", value: f"a-{i}" });
+        v.push(Pv { name: f"m-{i}", value: f"bb-{i}" });
+        let h = Holder { values: v };
+        total = total + h.direct().len();
+        let got = h.collect();
+        for g in got { total = total + g.len(); }
+        total = total + h.direct().len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

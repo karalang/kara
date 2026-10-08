@@ -16,12 +16,12 @@ fn main() {
     match g[0].q { Some(K.A(s)) => { n = n + s.len(); } _ => {} }
     if let Some(K.A(s)) = g[0].q { n = n + s.len(); }
     match g[0].q { Some(k) => { match k { K.A(s) => { n = n + s.len(); } K.B => {} } } None => {} }
-    match g[0].q { Some(K.A(s)) if s.len() > 100 => { n = n + 1000; } Some(K.A(s)) => { keep.push(s); } _ => {} }
+    match g[0].q { Some(K.A(s)) if s.len() > 100 => { n = n + 1000; } Some(K.A(s)) => { keep.push(s.clone()); } _ => {} }
     println(f"q {n} {keep.len()}");
     n = 0;
     match g[0].w { Some(K2.A(_, k)) => { n = n + k; } _ => {} }
     match g[0].w { Some(K2.A(s, k)) => { n = n + s.len() + k; } _ => {} }
-    match g[0].t { Some((s, k)) => { keep.push(s); n = n + k; } _ => {} }
+    match g[0].t.clone() { Some((s, k)) => { keep.push(s.clone()); n = n + k; } _ => {} }
     match g[0].t { Some((s, _)) => { n = n + s.len(); } _ => {} }
     match g[1].r { Ok(K.A(s)) => { n = n + s.len(); } _ => {} }
     match g[1].r { Ok(K.A(s)) => { n = n + s.len(); } _ => {} }

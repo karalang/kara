@@ -20,7 +20,7 @@ fn v02() { let mut v: Vec[Ho[W]] = Vec.new(); v.push(Ho.Full(W { id: 7, n2: 1 })
 fn v03() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); v.push(Ho.Empty); println(f"n{v.len()}"); }
 fn v04() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); v.push(Ho.Empty); for h in v { match h { Ho.Full(r) => println(f"r{r.id}"), Ho.Empty => println("e") } } println("after"); }
 fn v05() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); v.push(Ho.Empty); for h in v { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } } println("after"); }
-fn v06() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println("after"); }
+fn v06() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v.into_iter() { show(h) } println("after"); }
 fn v09() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); match v[0] { Ho.Full(x) => println(f"x{x.id}"), Ho.Empty => println("e") } println("after"); }
 fn v10() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); v[0] = Ho.Full(R { id: 9 }); println("set"); }
 fn v11() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); v[0] = Ho.Full(mks(9)); println("set"); }
@@ -34,8 +34,8 @@ fn s08() { let h = H { g: Ho.Full(R { id: 5 }) }; eat(h); println("after"); }
 fn s09() { let h = H { g: Ho.Full(R { id: 5 }) }; let k = h; println("k"); }
 fn s10() { let h = H { g: Ho.Empty }; println("h"); }
 fn s12() { let mut v: Vec[H] = Vec.new(); v.push(H { g: Ho.Full(R { id: 5 }) }); println("v"); }
-fn w9() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println(f"n{v.len()}"); }
-fn m15() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v { show(h) } println(f"n{v.len()}"); }
+fn w9() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v.into_iter() { show(h) } println(f"n{v.len()}"); }
+fn m15() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v.into_iter() { show(h) } println(f"n{v.len()}"); }
 fn main() {
     v01();
     v02();

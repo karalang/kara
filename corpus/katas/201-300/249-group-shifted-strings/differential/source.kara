@@ -52,7 +52,7 @@ fn group_by_canonical(words: Vec[String]) -> Vec[Vec[String]] {
         if not table.contains_key(key) {
             order.push(key.clone());
         }
-        table.entry(key).or_insert(Vec.new()).push(words[i]);
+        table.entry(key).or_insert(Vec.new()).push(words[i].clone());
         i = i + 1;
     }
     let mut out: Vec[Vec[String]] = Vec.new();
@@ -74,11 +74,11 @@ fn group_by_gaps(words: Vec[String]) -> Vec[Vec[String]] {
     while i < words.len() {
         let key = gap_key(words[i]);
         match index.get(key) {
-            Some(g) => { out[g].push(words[i]); }
+            Some(g) => { out[g].push(words[i].clone()); }
             None => {
                 let slot = out.len();
                 let mut fresh: Vec[String] = Vec.new();
-                fresh.push(words[i]);
+                fresh.push(words[i].clone());
                 out.push(fresh);
                 let _ = index.insert(key, slot);
             }

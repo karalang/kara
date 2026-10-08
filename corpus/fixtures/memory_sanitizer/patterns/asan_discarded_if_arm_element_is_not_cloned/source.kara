@@ -6,22 +6,22 @@ fn main() {
     v.push("deltadeltadeltad");
     for j in 0..20 { if j % 2 == 0 { v[0] } else { v[1] } }
     let mut i = 0;
-    while i < 20 { i = i + 1; { if i % 2 == 0 { v[0] } else { v[1] } }; }
+    while i < 20 { i = i + 1; { if i % 2 == 0 { v[0].clone() } else { v[1].clone() } }; }
     let mut e = 0;
     while e < 20 {
-        if e % 3 == 0 { v[0] } else if e % 3 == 1 { v[1] } else { v[2] };
-        match e % 2 == 0 { true => if e > 5 { v[0] } else { v[1] }, false => v[2] };
+        if e % 3 == 0 { v[0].clone() } else if e % 3 == 1 { v[1].clone() } else { v[2].clone() };
+        match e % 2 == 0 { true => if e > 5 { v[0].clone() } else { v[1].clone() }, false => v[2].clone() };
         e = e + 1;
     }
     let mut k = 0;
     while k < 20 {
-        if k % 2 == 0 { v[0] } else { v[1] };
-        match k % 2 == 0 { true => v[1], false => v[2] };
+        if k % 2 == 0 { v[0].clone() } else { v[1].clone() };
+        match k % 2 == 0 { true => v[1].clone(), false => v[2].clone() };
         if v.len() > 0 {
-            let w = if k % 2 == 0 { v[1] } else { "zetazetazetazeta" };
+            let w = if k % 2 == 0 { v[1].clone() } else { "zetazetazetazeta" };
             println(f"{w}");
-            v[0]
-        } else { v[2] };
+            v[0].clone()
+        } else { v[2].clone() };
         k = k + 1;
         if k > 0 { v[2] } else { v[0] }
     }

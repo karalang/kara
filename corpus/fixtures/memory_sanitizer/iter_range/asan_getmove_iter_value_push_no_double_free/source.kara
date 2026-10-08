@@ -8,7 +8,7 @@ fn main() {
         i = i + 1;
     };
     for (k, v) in m {
-        out.push(v);
+        out.push(v.clone());
     }
     println(out.len());
 }

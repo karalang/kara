@@ -11,3 +11,5 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'karac_runtime_gpu_free_soa'"
+bucket = "d"
+classified_with = "8f557bac5+local"

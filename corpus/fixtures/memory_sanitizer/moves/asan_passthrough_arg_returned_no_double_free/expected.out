@@ -1,0 +1,7 @@
+bare:
+1
+drop 1 pp1
+literal:
+9
+drop 2 qq2
+end

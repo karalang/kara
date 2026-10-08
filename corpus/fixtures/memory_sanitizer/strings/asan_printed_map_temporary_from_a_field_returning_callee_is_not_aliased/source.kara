@@ -1,7 +1,7 @@
 
 struct B { m: Map[String, i64] }
 impl B {
-    pub fn get_m(ref self) -> Map[String, i64] { return self.m; }
+    pub fn get_m(ref self) -> Map[String, i64] { return self.m.clone(); }
 }
 fn take_field(b: B) -> Map[String, i64] { return b.m; }
 fn mk() -> Map[String, i64] {

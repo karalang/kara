@@ -5,7 +5,7 @@ fn mka(t: String) -> Array[String, 2] {
 
 fn main() {
     let a = mka("arr");
-    let n: Array[Array[String, 2], 1] = [a];
+    let n: Array[Array[String, 2], 1] = [a.clone()];
     println(a[0]);
     println(n[0][1]);
 }

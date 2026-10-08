@@ -23,7 +23,7 @@ impl Named for Colour {
 shared struct Node { name: String }
 impl Named for Node {
     type Label = String;
-    fn label(ref self) -> String { self.name }
+    fn label(ref self) -> String { self.name.clone() }
 }
 
 struct Emitter { n: i64 }

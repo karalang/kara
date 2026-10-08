@@ -1,0 +1,15 @@
+"word" -> 16
+word wor1 wo1d wo2 w1rd w1r1 w2d w3 1ord 1or1 1o1d 1o2 2rd 2r1 3d 4
+"" -> 1
+
+"a" -> 2
+a 1
+"ab" -> 4
+ab a1 1b 2
+"abc" -> 8
+abc ab1 a1c a2 1bc 1b1 2c 3
+"aaaa" -> 16
+aaaa aaa1 aa1a aa2 a1aa a1a1 a2a a3 1aaa 1aa1 1a1a 1a2 2aa 2a1 3a 4
+"leet" -> 16
+leet lee1 le1t le2 l1et l1e1 l2t l3 1eet 1ee1 1e1t 1e2 2et 2e1 3t 4
+"abcdefghijk" -> 2048 abbreviations, 3 with a two-digit run

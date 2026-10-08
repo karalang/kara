@@ -1,0 +1,21 @@
+binding:
+10
+drop 1 a1
+returned:
+20
+drop 2 bb2
+byvalue:
+drop 3 ccc3
+30
+moveout:
+40
+drop 4 dddd4
+local-match:
+drop 5 eeeee5
+5
+param-match:
+drop 6 ffffff6
+6
+mixed-halves:
+70
+end

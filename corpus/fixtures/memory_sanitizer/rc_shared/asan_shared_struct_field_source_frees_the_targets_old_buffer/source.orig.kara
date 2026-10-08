@@ -1,0 +1,14 @@
+
+shared struct Box { mut name: String }
+fn free_app(s: mut ref String) { s = s + "!"; }
+fn main() {
+    let mut i = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let mut b = Box { name: "n" };
+        free_app(mut b.name);
+        last = b.name;
+        i = i + 1;
+    }
+    println(last);
+}

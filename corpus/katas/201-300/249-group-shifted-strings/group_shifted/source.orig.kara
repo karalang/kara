@@ -1,0 +1,101 @@
+// LeetCode #249: Group Shifted Strings — CANONICAL-FORM key.
+//
+// Two strings belong to the same shifting sequence if one becomes the other by
+// adding a constant to every character with wraparound (`z` -> `a`). The
+// canonical representative of a sequence is the member whose first character is
+// `a`: shift every character DOWN by `s[0] - 'a'`, mod 26. `"bcd"` and `"xyz"`
+// both normalise to `"abc"`, so the normalised string IS the group key.
+//
+// Grouping uses `entry(key).or_insert(Vec.new())`, which hands back a `mut ref`
+// into the map's own slot — the group is appended IN PLACE, with no read-clone-
+// reinsert. That matters: #49's `map_of_lists.kara` keeps the clone form
+// deliberately as an ownership probe, and its own comment warns it is O(k²) per
+// key and must not be copied into new code (kara `B-2026-08-03-9`).
+//
+// Output is DETERMINISTIC by construction, which the oracle depends on: the map
+// fixes no iteration order, so groups are emitted in first-seen key order via a
+// side `Vec[String]`, and each group holds its words in input order. LeetCode
+// accepts any order; a cross-language differential does not.
+
+fn canonical(word: ref String) -> String {
+    let bytes = word.bytes();
+    let n = bytes.len();
+    if n == 0 {
+        return "";
+    }
+    let shift = (bytes[0] as i64) - (b'a' as i64);
+    let mut out: String = "";
+    let mut i = 0;
+    while i < n {
+        // + 26 before the mod: the shift is subtracted, so the intermediate can
+        // be negative and Kāra's `%` keeps the sign of the dividend.
+        let c = (((bytes[i] as i64) - (b'a' as i64) - shift) + 26) % 26;
+        out.push_str(f"{c},");
+        i = i + 1;
+    }
+    out
+}
+
+fn group_shifted(words: Vec[String]) -> Vec[Vec[String]] {
+    let mut table: Map[String, Vec[String]] = Map.new();
+    let mut order: Vec[String] = Vec.new();
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        let key = canonical(words[i]);
+        if not table.contains_key(key) {
+            // `order` owns its own copy: `key` is consumed again by `entry`
+            // below, and a single binding feeding both paths takes the RC
+            // fallback (`karac check` flags it as perf[rc-fallback]).
+            order.push(key.clone());
+        }
+        table.entry(key).or_insert(Vec.new()).push(words[i]);
+        i = i + 1;
+    }
+    let mut out: Vec[Vec[String]] = Vec.new();
+    let mut k = 0;
+    while k < order.len() {
+        match table.get(order[k]) {
+            Some(bucket) => out.push(bucket.clone()),
+            None => {}
+        }
+        k = k + 1;
+    }
+    out
+}
+
+fn show(groups: Vec[Vec[String]]) {
+    let mut i = 0;
+    while i < groups.len() {
+        let g = ref groups[i];
+        let mut line: String = "[";
+        let mut j = 0;
+        while j < g.len() {
+            if j > 0 { line.push_str(","); }
+            line.push_str(g[j]);
+            j = j + 1;
+        }
+        line.push_str("]");
+        println(line);
+        i = i + 1;
+    }
+}
+
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    a.push("abc"); a.push("bcd"); a.push("acef");
+    a.push("xyz"); a.push("az"); a.push("ba");
+    a.push("a"); a.push("z");
+    show(group_shifted(a));
+
+    println("--");
+    let mut b: Vec[String] = Vec.new();
+    b.push("a");
+    show(group_shifted(b));
+
+    println("--");
+    // Wraparound is the whole trap: "az" -> "ba" shifts a->b and z->a.
+    let mut c: Vec[String] = Vec.new();
+    c.push("az"); c.push("ba"); c.push("bc"); c.push("cd"); c.push("zy");
+    show(group_shifted(c));
+}

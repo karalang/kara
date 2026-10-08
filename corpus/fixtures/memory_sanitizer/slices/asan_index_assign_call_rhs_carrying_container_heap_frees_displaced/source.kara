@@ -9,16 +9,16 @@ fn join(a: String, b: String) -> Pair { Pair { word: a + b, n: 2 } }
 fn grow(b: Bag) -> Bag { Bag { tags: b.tags, n: b.n + 1 } }
 fn main() {
     let k = env.args().len() as i64;
-    let mut i = 0i64;
-    let mut acc = 0i64;
+    let mut i = 0;
+    let mut acc = 0;
     while i < 40 {
         let mut ps: Vec[Pair] = Vec.new();
         ps.push(Pair { word: f"alpha{k + i}", n: 1 });
         ps.push(Pair { word: f"beta{k + i}", n: 2 });
         let p0 = ps[0].clone();
         ps[0] = passthru(p0);
-        ps[0] = takes(ps[0].word);
-        ps[0] = join(ps[0].word, ps[1].word);
+        ps[0] = takes(ps[0].word.clone());
+        ps[0] = join(ps[0].word.clone(), ps[1].word.clone());
         acc = acc + ps[0].word.len() + ps[0].n;
         let mut bs: Vec[Bag] = Vec.new();
         let mut t: Vec[String] = Vec.new();

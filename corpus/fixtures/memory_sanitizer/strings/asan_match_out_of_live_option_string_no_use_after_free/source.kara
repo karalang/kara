@@ -3,7 +3,7 @@ fn main() {
     let mut i: i64 = 0;
     while i < 8 {
         let o: Option[String] = Some(f"hi{i}");
-        match o { Some(v) => { println(v); } None => { println("-"); } }
+        match o { Some(ref v) => { println(v); } None => { println("-"); } }
         // The read that was a use-after-free: `o` is still in scope and owns
         // the buffer the arm above only borrowed.
         match o { Some(v) => { println(v); } None => { println("-"); } }

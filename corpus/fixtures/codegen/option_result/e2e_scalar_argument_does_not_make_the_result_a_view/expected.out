@@ -1,0 +1,46 @@
+scalar_arg
+  v=1
+  dR1
+scalar_rebound
+  v=2
+  dR2
+scalar_chained
+  v=3
+  dR3
+scalar_unused
+  v=0
+  dR0
+scalar_interpolated
+  v=7
+  dR7
+scalar_constant
+  v=9
+  dR9
+scalar_arith
+  v=8
+  dR8
+scalar_option
+  v=10
+  dR10
+scalar_float
+  v=20
+  dR20
+scalar_char
+  v=21
+  dR21
+scalar_assoc
+  v=11
+  dR11
+owned_handback
+  v=12
+  dR12
+owned_wrapped
+  v=13
+  dR13
+mixed_args
+  v=15
+  dR15
+local_scalar
+  v=31
+  dR31
+end

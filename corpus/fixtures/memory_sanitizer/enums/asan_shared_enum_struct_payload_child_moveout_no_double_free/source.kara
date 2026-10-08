@@ -4,8 +4,8 @@ struct Row { first: String, cells: Vec[i64] }
 shared enum Node { Ident(Id), Rowed(Row) }
 fn render_ident(e: Node) -> String {
     match e {
-        Ident(n) => { let Id { name, span } = n; name }
-        Rowed(r) => { let Row { first, cells } = r; first }
+        Ident(n) => { let Id { name, span } = n; name.clone() }
+        Rowed(r) => { let Row { first, cells } = r; first.clone() }
     }
 }
 fn sum_row(e: Node) -> i64 {

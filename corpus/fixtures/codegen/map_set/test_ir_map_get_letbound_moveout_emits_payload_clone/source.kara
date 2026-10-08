@@ -4,7 +4,7 @@ fn main() {
     m.insert(7, "a heap string padded out beyond thirty-six bytes!");
     let g = m.get(7);
     let s = match g {
-        Some(x) => x,
+        Some(x) => x.clone(),
         None => "n".to_string(),
     };
     println(s.len());

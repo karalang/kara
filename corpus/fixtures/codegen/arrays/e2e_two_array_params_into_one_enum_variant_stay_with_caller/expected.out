@@ -1,0 +1,27 @@
+t/two
+  r
+  dN1
+  dN2
+  dSaaaaaaaa0
+  dSaaaaaaaa1
+t/twos
+  r
+  dScccccccc0
+  dScccccccc1
+  dSbbbbbbbb0
+  dSbbbbbbbb1
+t/str
+  r:kk:dddddddd1:3
+  dN3
+  dN4
+  dSdddddddd0
+  dSdddddddd1
+t/let
+  r
+  dN5
+  dN6
+  dSeeeeeeee0
+  dSeeeeeeee1
+t/callee
+  r:ffffffff0:gggggggg1
+end

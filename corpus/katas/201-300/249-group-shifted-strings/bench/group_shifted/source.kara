@@ -92,7 +92,7 @@ fn main() {
             if not table.contains_key(key) {
                 groups = groups + 1;
             }
-            table.entry(key).or_insert(Vec.new()).push(words[i]);
+            table.entry(key).or_insert(Vec.new()).push(words[i].clone());
             i = i + 1;
         }
         sink = (sink * 131 + groups) % 1000000007;

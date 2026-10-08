@@ -10,7 +10,7 @@ fn field_reads() {
     let v: Vec[(i64, (H, i64))] = [(1, (H { s: mk(1), n: 9 }, 2))];
     let mut i = 0;
     while i < 2 { println(f"{v[0].1.0.n} {v[0].1.0.s} {v[0].1.0.s.len()}"); i = i + 1; }
-    let a = v[0].1.0.s;
+    let a = v[0].1.0.s.clone();
     println(f"a {a} {by_ref(v)}");
     let w: Vec[(i64, (i64, (H, i64)))] = [(1, (2, (H { s: mk(2), n: 8 }, 3)))];
     println(f"w {w[0].1.1.0.s} {w[0].1.1.0.n}");
@@ -23,9 +23,9 @@ fn enum_fields() {
     match g1[0].1.k { K.A(s) => println(f"k1 {s.len()} {s}"), K.B => println("k1 b") }
     match g2[0].1.0.k { K.A(_) => println("k2 a"), K.B => println("k2 b") }
     let mut out: Vec[String] = [];
-    match g1[0].1.k { K.A(s) => out.push(s), K.B => {} }
-    match g2[0].1.0.k { K.A(s) => out.push(s), K.B => {} }
-    if let K.A(s) = g2[0].1.0.k { out.push(s); }
+    match g1[0].1.k { K.A(s) => out.push(s.clone()), K.B => {} }
+    match g2[0].1.0.k { K.A(s) => out.push(s.clone()), K.B => {} }
+    if let K.A(s) = g2[0].1.0.k { out.push(s.clone()); }
     println(f"m {out.len()} {out[0]} {out[1]} {out[2]}");
     println(f"n {g1[0].1.n} {g2[0].1.0.n}");
 }

@@ -6,7 +6,7 @@ enum Item {
 }
 fn move_all(headers: Vec[Header]) -> Vec[Header] {
     let mut out: Vec[Header] = Vec.new();
-    for h in headers {
+    for h in headers.into_iter() {
         out.push(h);
     }
     out
@@ -21,7 +21,7 @@ fn main() {
     src.push(Item.Named(f"x{1}"));
     src.push(Item.Plain(7));
     let mut out2: Vec[Item] = Vec.new();
-    for it in src {
+    for it in src.into_iter() {
         out2.push(it);
     }
     for it in out2 {

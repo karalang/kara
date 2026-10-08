@@ -1,0 +1,16 @@
+e1 25
+e2 26
+e2 0
+e3 27
+e4 d-heap-string-long-enough
+e5 25
+e5 25
+e6 25
+e6 25
+e7 g-heap-string-long-enough 1
+e8 h-heap-string-long-enough 2
+e9 25
+e9 25
+e10 25
+e11 25
+end

@@ -3,7 +3,7 @@ struct Pair { a: String, b: String, x: i64 }
 struct Holder { pair: Pair, n: i64 }
 fn take_a(h: ref Holder) -> String {
     match h.pair {
-        Pair { a, b: _, x: _ } => { return a; }
+        Pair { a, b: _, x: _ } => { return a.clone(); }
     }
     return "?".to_string();
 }

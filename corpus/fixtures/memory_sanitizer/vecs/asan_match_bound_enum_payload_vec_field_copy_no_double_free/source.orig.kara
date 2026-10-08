@@ -1,0 +1,36 @@
+
+struct P { n: i64 }
+struct F { name: String, params: Vec[P], tags: Vec[String] }
+enum It { Fu(F), Other }
+fn collect(items: ref Vec[It]) -> i64 {
+    let mut total = 0;
+    for it in items {
+        match it {
+            It.Fu(f) => {
+                let ps = f.params;
+                for p in ps { total = total + p.n; }
+                let ts = f.tags;
+                for t in ts { total = total + t.len(); }
+            }
+            It.Other => {}
+        }
+    }
+    total
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 300 {
+        let mut items: Vec[It] = Vec.new();
+        let mut ps: Vec[P] = Vec.new();
+        ps.push(P { n: 1 });
+        ps.push(P { n: 2 });
+        let mut tg: Vec[String] = Vec.new();
+        tg.push("tag");
+        items.push(It.Fu(F { name: f"n-{i}", params: ps, tags: tg }));
+        items.push(It.Other);
+        total = total + collect(items);
+        i = i + 1;
+    }
+    println(total.to_string());
+}

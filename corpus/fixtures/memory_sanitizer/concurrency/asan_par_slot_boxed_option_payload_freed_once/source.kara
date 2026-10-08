@@ -1,25 +1,26 @@
 
+#[derive(Copy)]
 struct W { f0: i64, f1: i64, f2: i64, f3: i64 }
 
 fn get(v: ref Vec[W], k: i64) -> Option[W] {
-    let mut i = 0i64;
-    while i < v.len() { if v[i].f0 == k { return Some(v[i]); } i = i + 1i64; }
+    let mut i = 0;
+    while i < v.len() { if v[i].f0 == k { return Some(v[i]); } i = i + 1; }
     return None;
 }
 
 fn build(seed: i64) -> i64 {
     let mut ns: Vec[W] = Vec.new();
-    ns.push(W { f0: seed, f1: seed + 1i64, f2: seed + 2i64, f3: seed + 3i64 });
+    ns.push(W { f0: seed, f1: seed + 1, f2: seed + 2, f3: seed + 3 });
     // Two independent Option-returning calls: the group the analyzer forks,
     // and the shape whose slots carry box pointers.
     let hit = get(ns, seed);
-    let miss = get(ns, seed + 99i64);
+    let miss = get(ns, seed + 99);
     // A READING consumer — `?.` projects out of the box without moving the
     // binding, so the parent stays the owner and its adopted drop is what has
     // to fire. See the doc comment on why a moving consumer is excluded.
     let a = hit?.f3;
     let b = miss?.f3;
-    return match a { Some(x) => x, None => -1i64 } + match b { Some(x) => x, None => -1i64 };
+    return match a { Some(x) => x, None => -1 } + match b { Some(x) => x, None => -1 };
 }
 
 // Overwrites the dead frame the published box pointers lived in, so LSan

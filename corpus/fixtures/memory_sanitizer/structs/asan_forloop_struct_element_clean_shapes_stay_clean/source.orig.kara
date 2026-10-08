@@ -1,0 +1,22 @@
+
+struct A { s: String }
+fn take(a: A) -> i64 { a.s.len() }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 4 { v.push(A { s: "clean_shape_regression_guard_payload_mu_zz".to_string() }); i = i + 1; }
+    v
+}
+fn main() {
+    let items = build();
+    let mut n: i64 = 0;
+    for a in items {
+        let A { s } = a;
+        n = n + s.len();
+    }
+    let more = build();
+    for a in more {
+        n = n + take(a);
+    }
+    println(n);
+}

@@ -1,0 +1,19 @@
+
+fn can_permute_palindrome(s: String) -> bool {
+    let mut odd: Set[i64] = Set.new();
+    for b in s.bytes() {
+        if odd.contains(b) {
+            odd.remove(b);
+        } else {
+            odd.insert(b);
+        }
+    }
+    odd.len() <= 1
+}
+
+fn main() {
+    let cases = vec!["aab", "aabb", "carerac", "aaabbb", "abc"];
+    for c in cases {
+        println(f"{c} {can_permute_palindrome(c)}");
+    }
+}

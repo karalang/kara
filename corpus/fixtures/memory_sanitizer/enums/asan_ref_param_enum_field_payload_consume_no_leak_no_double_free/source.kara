@@ -10,7 +10,7 @@ fn render(st: ref SpTok) -> String {
 }
 fn take_name(st: ref SpTok) -> String {
     match st.tok {
-        Ident(name) => { return name; }
+        Ident(name) => { return name.clone(); }
         Plus => { return "+".to_string(); }
     }
     return "?".to_string();

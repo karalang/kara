@@ -1,0 +1,53 @@
+local1hop
+  b21/t21/1
+dR21/t21/1
+local1hop end
+norebind
+  b22/t22
+dR22/t22/1
+norebind end
+baretuple
+  b23/t23
+dR23/t23/1
+baretuple end
+sibling
+  b24/t24
+dR24/t24/1
+dR94/t94/1
+sibling end
+bothelems
+  b25/95
+dR95/t95/1
+dR25/t25/1
+bothelems end
+noDestr
+  b26/t26
+dR26/t26/1
+noDestr end
+paramroot
+  b27/t27
+dR27/t27/1
+paramroot end
+twohop
+  b31/t31/1
+dR31/t31/1
+twohop end
+outersib
+  b32/t32
+dR32/t32/1
+dR82/t82/1
+outersib end
+midsib
+  b33/t33
+dR33/t33/1
+dR83/t83/1
+midsib end
+threehop
+  b34/t34
+dR34/t34/1
+threehop end
+deepNoDestr
+  b35/t35
+dR35/t35/1
+deepNoDestr end
+done

@@ -1,0 +1,15 @@
+search(3) = true
+search(13) = false
+search(1) = true
+search(60) = true
+search(0) = false
+search(100) = false
+search(16) = true
+search(22) = false
+search(5) = true
+search(4) = false
+search(4) = true
+search(6) = false
+search(5) = true
+search(6) = false
+res: 1 0 1 1 0 0 1 0 1 0 1 0 1 0

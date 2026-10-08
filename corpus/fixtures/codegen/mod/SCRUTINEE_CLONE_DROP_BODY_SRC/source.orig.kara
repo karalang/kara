@@ -1,0 +1,57 @@
+struct R { id: i64, v: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct S { e: E }
+
+fn mk(n: i64) -> E {
+    let mut v = Vec.new();
+    v.push(n);
+    return E.A(R { id: n, v: v })
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn via_ref(s: ref S) -> i64 {
+    match s.e { E.A(r) => { let m = r; return m.id + m.v.len() } E.B => { return 0 } }
+}
+
+fn leg_refchain() {
+    println("refchain");
+    let s = S { e: mk(1) };
+    println(f"got {via_ref(s)}");
+    println("refchain end");
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn leg_loop_elem() {
+    println("loop");
+    let mut v = Vec.new();
+    v.push(mk(2));
+    for p in v {
+        match p { E.A(r) => { let m = r; println(f"got {m.id + m.v.len()}"); } E.B => { } }
+    }
+    println("loop end");
+}
+
+fn leg_vec_index() {
+    println("index");
+    let mut v = Vec.new();
+    v.push(mk(3));
+    match v[0] { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    println("index end");
+}
+
+#[allow(partial_move_of_drop_enum)]
+fn leg_fresh_temp() {
+    println("fresh");
+    match mk(4) { E.A(r) => { let m = r; println(f"got {m.id + m.v.len()}"); } E.B => { } }
+    println("fresh end");
+}
+
+fn main() {
+    leg_refchain();
+    leg_loop_elem();
+    leg_vec_index();
+    leg_fresh_temp();
+    println("end");
+}

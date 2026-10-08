@@ -1,0 +1,20 @@
+
+struct Sp { line: i64, column: i64, offset: i64, length: i64 }
+struct SLit { value: String, span: Sp }
+enum Tok { Str(String, Sp), Int(i64) }
+shared enum Expr { Int(i64), Boolish(i64), Str(SLit) }
+fn text_of(e: Expr) -> String {
+    match e {
+        Int(v) => v.to_string(),
+        Boolish(v) => v.to_string(),
+        Str(n) => n.value,
+    }
+}
+fn tok_kind(t: Tok) -> i64 {
+    match t { Str(s, sp) => 1, Int(v) => 2 }
+}
+fn main() {
+    let t = Tok.Str("tok".to_string(), Sp { line: 1, column: 1, offset: 0, length: 3 });
+    let n = SLit { value: "hello world".to_string(), span: Sp { line: 1, column: 1, offset: 7, length: 11 } };
+    println(tok_kind(t) + text_of(Expr.Str(n)).len());
+}

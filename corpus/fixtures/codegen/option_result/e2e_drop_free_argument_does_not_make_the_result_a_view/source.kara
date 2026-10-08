@@ -7,7 +7,7 @@ struct W { r: R, n: i64 }
 struct N { r: R, n: i64 }
 
 fn from_string(i: i64, s: String) -> R { return R { id: i, name: s }; }
-fn from_vec(i: i64, v: Vec[String]) -> R { return R { id: i, name: v[0] }; }
+fn from_vec(i: i64, v: Vec[String]) -> R { return R { id: i, name: v[0].clone() }; }
 fn from_struct(q: Q) -> R { return R { id: q.n, name: q.s }; }
 fn from_two(a: String, b: String) -> R { return R { id: 30, name: a }; }
 fn into_option(s: String) -> Option[R] { return Option.Some(R { id: 40, name: s }); }

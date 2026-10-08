@@ -1,17 +1,17 @@
 
 struct Bag[=T] { xs: Vec[T] }
 impl[T] Bag[T] {
-    fn n(ref self) -> i64 { let v = self.xs; return v.len(); }
+    fn n(ref self) -> i64 { let v = self.xs.clone(); return v.len(); }
 }
 struct Plain { xs: Vec[i64] }
 impl Plain {
-    fn n(ref self) -> i64 { let v = self.xs; return v.len(); }
+    fn n(ref self) -> i64 { let v = self.xs.clone(); return v.len(); }
 }
 struct Named[=T] { name: String, xs: Vec[T] }
 impl[T] Named[T] {
-    fn nm(ref self) -> i64 { let s = self.name; return s.len(); }
+    fn nm(ref self) -> i64 { let s = self.name.clone(); return s.len(); }
 }
-fn free_n[T](b: ref Bag[T]) -> i64 { let v = b.xs; return v.len(); }
+fn free_n[T](b: ref Bag[T]) -> i64 { let v = b.xs.clone(); return v.len(); }
 fn main() {
     let base: i64 = env.args().len();
     // (a) the filed shape: scalar element, generic `ref self` receiver.

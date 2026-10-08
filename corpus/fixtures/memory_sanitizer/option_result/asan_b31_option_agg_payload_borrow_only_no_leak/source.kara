@@ -21,8 +21,8 @@ fn build() -> Vec[A] {
 }
 fn main() {
     let mut t = 0;
-    for a in build() { t = t + via_match(a); }
-    for a in build() { t = t + via_iflet(a); }
-    for a in build() { t = t + via_whilelet(a); }
+    for a in build().into_iter() { t = t + via_match(a); }
+    for a in build().into_iter() { t = t + via_iflet(a); }
+    for a in build().into_iter() { t = t + via_whilelet(a); }
     println(t);
 }

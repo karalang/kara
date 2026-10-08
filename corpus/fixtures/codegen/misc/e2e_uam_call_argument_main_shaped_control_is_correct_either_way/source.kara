@@ -10,8 +10,8 @@ fn main() {
     let mut i = 0;
     while i < es.len() {
         let e = ref es[i];
-        let _ = index.insert(e.service, 0 as usize);
-        stats.push(Stat { service: e.service });
+        let _ = index.insert(e.service.clone(), 0 as usize);
+        stats.push(Stat { service: e.service.clone() });
         i = i + 1;
     }
     println(stats[0].service);

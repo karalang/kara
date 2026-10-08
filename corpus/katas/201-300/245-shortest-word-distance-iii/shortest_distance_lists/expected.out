@@ -1,0 +1,15 @@
+makes <-> coding : 1
+makes <-> makes : 3
+coding <-> practice : 3
+a <-> b : 1
+a <-> a : 5
+x <-> x : 1
+b <-> b : 5
+a <-> b : 1
+p <-> q : 1
+p <-> p : 2
+m <-> m : 5
+z <-> z : 1
+m <-> n : 1
+two <-> two : 3
+two <-> four : 3

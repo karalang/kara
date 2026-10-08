@@ -4,13 +4,13 @@ shared struct Node { name: String, mut size: i64, mut children: Vec[Node], mut p
 fn main() {
     let b = B { v: Vec.new() };
     b.v.push("alphabetalphabetalphabet");
-    b.v = b.v;
+    b.v = b.v.clone();
     println(f"{b.v.len()} {b.v[0].len()}");
     let x = B { v: Vec.new() };
     let y = B { v: Vec.new() };
     x.v.push("gammagammagammagammagam");
     y.v.push("deltadeltadeltadeltadel");
-    x.v = y.v;
+    x.v = y.v.clone();
     println(f"{x.v.len()} {x.v[0].len()}");
     let root = Node { name: "rootrootrootroot", size: 10, children: Vec.new(), parent: None };
     let a = Node { name: "aaaaaaaaaaaaaaaaaaa", size: 20, children: Vec.new(), parent: None };

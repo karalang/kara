@@ -1,0 +1,10 @@
+n=1 count=3 valid=3
+  0 1 8
+n=2 count=4 valid=4
+  11 69 88 96
+n=3 count=12 valid=12
+  101 609 808 906 111 619 818 916 181 689 888 986
+n=4 count=20 valid=20
+n=5 count=60 valid=60
+n=6 count=100 valid=100
+n=7 count=300 valid=300

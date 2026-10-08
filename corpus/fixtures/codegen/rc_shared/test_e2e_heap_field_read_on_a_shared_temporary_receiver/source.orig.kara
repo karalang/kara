@@ -1,0 +1,29 @@
+
+shared struct Node { v: i64, tag: String, xs: Vec[i64] }
+
+fn make(k: i64) -> Node {
+    return Node { v: k, tag: f"t{k}", xs: [k, k + 1] };
+}
+
+shared struct Outer { id: i64, inner: Node }
+
+fn make_outer(k: i64) -> Outer {
+    return Outer { id: k, inner: make(k) };
+}
+
+fn main() {
+    println(make(1).tag);
+    println({ let n = make(2); n }.tag);
+    let c = true;
+    println(if c { make(3) } else { make(4) }.tag);
+    println(if not c { make(5) } else { make(6) }.tag);
+    println(make(7).xs.len());
+    println(make(8).v);
+    let kept = make(9).tag;
+    println(kept);
+    let b = make(10);
+    println(b.tag);
+    println(make(11).tag.len());
+    println(make_outer(12).inner.tag);
+    println(make(13).tag + "!");
+}

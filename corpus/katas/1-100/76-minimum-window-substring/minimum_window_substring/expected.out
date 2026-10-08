@@ -1,0 +1,13 @@
+min_window("ADOBECODEBANC","ABC") = 9 4 [149499756]
+min_window("a","a") = 0 1 [97]
+min_window("a","aa") = -1 0 [0]
+min_window("a","b") = -1 0 [0]
+min_window("ab","b") = 1 1 [98]
+min_window("ab","a") = 0 1 [97]
+min_window("aa","aa") = 0 2 [12804]
+min_window("cabwefgewcwaefgcf","cae") = 9 4 [224615976]
+min_window("abcabdebac","cda") = 2 4 [224238564]
+min_window("bba","ab") = 1 2 [12935]
+min_window("aaaaaaaaaab","b") = 10 1 [98]
+min_window("ADOBECODEBANC","ABCC") = 5 8 [367722423]
+sums: 9:4:149499756 0:1:97 -1:0:0 -1:0:0 1:1:98 0:1:97 0:2:12804 9:4:224615976 2:4:224238564 1:2:12935 10:1:98 5:8:367722423

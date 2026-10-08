@@ -1,0 +1,64 @@
+
+struct P { s: String }
+enum Wrp { Full(Array[String, 2]), Empty }
+enum G[T] { Y(T), N }
+enum Wi { Full(Array[i64, 2]), Empty }
+enum Wp { Full(Array[P, 2]), Empty }
+
+fn wlen(w: Wrp) -> i64 { match w { Wrp.Full(x) => { return x[0].len(); } Wrp.Empty => { return 0; } } }
+fn glen(g: G[Array[String, 2]]) -> i64 { match g { G.Y(x) => { return x[0].len(); } G.N => { return 0; } } }
+fn ilen(w: Wi) -> i64 { match w { Wi.Full(x) => { return x[0]; } Wi.Empty => { return 0; } } }
+fn plen(w: Wp) -> i64 { match w { Wp.Full(x) => { return x[0].s.len(); } Wp.Empty => { return 0; } } }
+fn takeo(o: Option[Array[String, 2]]) -> i64 { match o { Some(x) => { return x[0].len(); } None => { return 0; } } }
+fn viaparam(a: Array[String, 2]) -> i64 {
+    { let w = Wrp.Full(a); println(f"param-in:{wlen(w)}"); }
+    return a[0].len();
+}
+fn mka(t: String) -> Array[String, 2] {
+    return [f"b153-{t}-aaaaaaaaaaaaaaaaaaaa", f"b153-{t}-bbbbbbbbbbbbbbbbbbbb"];
+}
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 2 {
+
+        let a1 = mka(f"n{i}");
+        { let w = Wrp.Full(a1); match w { Wrp.Full(x) => { println(f"nocallee-in:{x[0].len()}"); } Wrp.Empty => { println("e"); } } }
+        println(f"nocallee:{a1[0].len()}");
+
+        let a2 = mka(f"c{i}");
+        { let w = Wrp.Full(a2); println(f"callee-in:{wlen(w)}"); }
+        println(f"callee:{a2[1].len()}");
+
+        let a3 = mka(f"f{i}");
+        let w3 = Wrp.Full(a3);
+        println(f"fnscope-in:{wlen(w3)}");
+        println(f"fnscope:{a3[0].len()}");
+
+        let a4 = mka(f"g{i}");
+        println(f"argpos-in:{wlen(Wrp.Full(a4))}");
+        println(f"argpos:{a4[0].len()}");
+
+        let a5 = mka(f"h{i}");
+        { let g = G.Y(a5); println(f"generic-in:{glen(g)}"); }
+        println(f"generic:{a5[0].len()}");
+
+        let a6 = mka(f"p{i}");
+        println(f"param:{viaparam(a6)}");
+
+        let a7: Array[P, 2] = [P { s: f"b153-s{i}-aaaaaaaaaaaaaaaaaaaa" }, P { s: f"b153-s{i}-bbbbbbbbbbbbbbbbbbbb" }];
+        { let w = Wp.Full(a7); println(f"structelem-in:{plen(w)}"); }
+        println(f"structelem:{a7[1].s.len()}");
+
+        let d1 = mka(f"o{i}");
+        { println(f"seeded-in:{takeo(Option.Some(d1))}"); }
+        println(f"seeded:{d1[0].len()}");
+
+        let d3: Array[i64, 2] = [i + 7, i + 8];
+        { let w = Wi.Full(d3); println(f"scalar-in:{ilen(w)}"); }
+        println(f"scalar:{d3[1]}");
+
+        { let w = Wrp.Full(mka(f"v{i}")); println(f"fresh:{wlen(w)}"); }
+        i = i + 1;
+    }
+}

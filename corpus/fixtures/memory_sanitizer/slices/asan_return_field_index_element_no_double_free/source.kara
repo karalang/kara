@@ -1,9 +1,9 @@
 
 struct H { xs: Vec[String] }
 impl H {
-    fn get(ref self, i: i64) -> String { self.xs[i] }
+    fn get(ref self, i: i64) -> String { self.xs[i].clone() }
 }
-fn getf(h: ref H, i: i64) -> String { h.xs[i] }
+fn getf(h: ref H, i: i64) -> String { h.xs[i].clone() }
 fn main() {
     let mut r: i64 = 0;
     while r < 3 {

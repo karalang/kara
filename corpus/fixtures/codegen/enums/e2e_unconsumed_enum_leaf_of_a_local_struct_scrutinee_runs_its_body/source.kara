@@ -6,7 +6,7 @@ struct H1 { e: E }
 struct H2 { r: R }
 struct H3 { e: E, k: i64 }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
-fn eat(e: E) -> i64 { match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+fn eat(e: E) -> i64 { match e { E.A(ref r) => { return r.id; } E.B => { return 0; } } }
 
 fn unread() { let c: H1 = H1 { e: E.A(mk(1)) }; match c { H1 { e } => { println("  m"); } } }
 fn bound_result() -> i64 { let c: H1 = H1 { e: E.A(mk(2)) }; let k: i64 = match c { H1 { e } => { 9 } }; return k; }

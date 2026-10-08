@@ -37,7 +37,7 @@ fn new_word_distance(words: ref Slice[String]) -> WordDistance {
     let n = words.len();
     let mut i = 0;
     while i < n {
-        index.entry(words[i]).or_insert(Vec.new()).push(i);
+        index.entry(words[i].clone()).or_insert(Vec.new()).push(i);
         i = i + 1;
     }
     return WordDistance { index: index, size: n };

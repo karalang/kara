@@ -1,0 +1,22 @@
+s2 3
+s3 3
+3
+s8 4
+s8b None
+r1 5
+o1 Some(3)
+o2 x
+o4 Ok(4)
+o5 6
+o5b Some(6)
+o6 7
+o6b Some(7)
+o9 1
+o9b Err(e)
+o10 11
+11
+n1 Some(4)
+n1 None
+sh3
+dS1
+end

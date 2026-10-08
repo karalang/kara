@@ -1,0 +1,10 @@
+case 1: [abcw baz foo bar xtfn abcdef] -> 16
+case 2: [a ab abc d cd bcd abcd] -> 4
+case 3: [a aa aaa aaaa] -> 0
+case 4: [] -> 0
+case 5: [solo] -> 0
+case 6: [abc def] -> 9
+case 7: [abcdefghijklmnopqrstuvwxyz abcdefghijklmnopqrstuvwxyz] -> 0
+case 8: [aaaaaaaaaa bb cc bbcc] -> 40
+case 9: [eat tea tan ate nat bat] -> 0
+case 10: [qwer tyui opas dfgh] -> 16

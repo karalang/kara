@@ -9,7 +9,7 @@ impl P {
     }
     fn take(mut ref self) -> String {
         match self.toks[self.pos].tok {
-            Id(s) => { self.pos = self.pos + 1; s }
+            Id(s) => { self.pos = self.pos + 1; s.clone() }
             Num(n) => { self.pos = self.pos + 1; n.to_string() }
             A => { self.pos = self.pos + 1; "a".to_string() }
         }

@@ -1,0 +1,36 @@
+
+struct S { region: String, revenue: i64 }
+struct V { xs: Vec[i64] }
+fn main() {
+    let mut stats: Vec[S] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 40 {
+        let mut nm = String.new();
+        nm.push_str("region");
+        stats.push(S { region: nm, revenue: (i * 7) % 11 });
+        i = i + 1;
+    }
+    let mut best: i64 = 0;
+    let mut best_region = String.new();
+    let mut j: i64 = 0;
+    while j < stats.len() {
+        if stats[j].revenue > best {
+            best = stats[j].revenue;
+            best_region = stats[j].region;
+        }
+        j = j + 1;
+    }
+    let a = "no".to_string();
+    let b = "rth".to_string();
+    let mut cat: Vec[S] = Vec.new();
+    cat.push(S { region: a + b, revenue: 1 });
+    let mut out = String.new();
+    out = cat[0].region;
+    let mut vs: Vec[V] = Vec.new();
+    let mut inner: Vec[i64] = Vec.new();
+    inner.push(9);
+    vs.push(V { xs: inner });
+    let mut got: Vec[i64] = Vec.new();
+    got = vs[0].xs;
+    println(f"{best} {best_region.len()} {out} {got.len()}");
+}

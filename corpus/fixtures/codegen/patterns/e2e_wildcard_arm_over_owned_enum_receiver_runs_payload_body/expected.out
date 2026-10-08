@@ -1,0 +1,49 @@
+wild/local
+  dE
+  dR1
+  x1
+wild/temp
+  dE
+  dR2
+  x1
+bound/local
+  dE
+  dR3
+  y3
+ifwild/local
+  dE
+  dR4
+  z1
+ifwild/temp
+  dE
+  dR5
+  z1
+noshell/local
+  dR6
+  w1
+noshell/temp
+  dR7
+  w1
+half/local
+  dT
+  dR108
+  dR8
+  v108
+both/local
+  dT
+  dR109
+  dR9
+  v2
+free/local
+  dE
+  dR10
+  u1
+free/temp
+  dE
+  dR11
+  u1
+localmatch
+  arm
+end
+  dE
+  dR12

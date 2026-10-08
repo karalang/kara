@@ -5,7 +5,7 @@ fn main() {
         let mut m: Map[i64, (String, i64)] = Map.new();
         m.insert(i, (f"tuple payload padded beyond thirty-six bytes {i}", i));
         let s = match m.get(i) {
-            Some((a, b)) => a,
+            Some((a, b)) => a.clone(),
             None => f"none-{i}",
         };
         println(s.len());

@@ -58,7 +58,7 @@ fn word_pattern(pattern: ref String, s: ref String) -> bool {
                 }
             }
             None => {
-                let _ = p2w.insert(c, w);
+                let _ = p2w.insert(c, w.clone());
             }
         }
         match w2p.get(w) {

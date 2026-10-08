@@ -6,8 +6,8 @@ struct E5 { inner: Sh, n: i64 }
 struct E6 { inner: Sh, n: i64 }
 impl Drop for E6 { fn drop(mut ref self) { println(f"dE6{self.n}") } }
 fn mk3(k: i64) -> Result[i64, E3] { Result.Err(E3 { inner: Sh { k: k, s: hs(k) } }) }
-fn c1() { let r = mk3(4); match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.k) }; match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.s) } }
-fn c2() { let r = mk3(9); if let Result.Err(e) = r { println(e.inner.k) }; if let Result.Err(e) = r { println(e.inner.s) } }
+fn c1() { let r = mk3(4); match r { Result.Ok(v) => println(v), Result.Err(ref e) => println(e.inner.k) }; match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.s) } }
+fn c2() { let r = mk3(9); if let Result.Err(ref e) = r { println(e.inner.k) }; if let Result.Err(e) = r { println(e.inner.s) } }
 fn c3(r: Result[i64, E3]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.k) } }
 fn c4() { let r: Result[E5, i64] = Result.Ok(E5 { inner: Sh { k: 5, s: hs(5) }, n: 3 }); match r { Result.Ok(e) => println(e.n + e.inner.k), Result.Err(v) => println(v) } }
 fn c5() { let r: Result[i64, E6] = Result.Err(E6 { inner: Sh { k: 6, s: hs(6) }, n: 6 }); match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.k) } }

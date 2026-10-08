@@ -1,22 +1,22 @@
 
 enum E { A(String), B }
 fn main() {
-    let mut i: i64 = 0i64;
-    while i < 4i64 {
+    let mut i: i64 = 0;
+    while i < 4 {
         // 1. The row's own shape — consuming arm, source dead, reassigned.
         let mut a: E = E.A(f"re{i}");
         while let E.A(v) = a { let k: String = v; println(k); a = E.B; }
         // 2. Same, terminating via `break` with no reassignment at all.
         let mut b: E = E.A(f"br{i}");
-        let mut n: i64 = 0i64;
-        while let E.A(v) = b { let k: String = v; println(k); n = n + 1i64; if n > 0i64 { break } }
+        let mut n: i64 = 0;
+        while let E.A(ref v) = b { let k: String = v.clone(); println(k); n = n + 1; if n > 0 { break } }
         // 3. MULTI-ITERATION — a fresh payload each pass, so the suppression
         //    must re-arm rather than disarm the slot once.
         let mut c: E = E.A(f"m{i}-1");
-        let mut j: i64 = 0i64;
+        let mut j: i64 = 0;
         while let E.A(v) = c {
-            let k: String = v; println(k); j = j + 1i64;
-            if j < 3i64 { c = E.A(f"m{i}-{j + 1i64}"); } else { c = E.B; }
+            let k: String = v; println(k); j = j + 1;
+            if j < 3 { c = E.A(f"m{i}-{j + 1}"); } else { c = E.B; }
         }
         // 4. CONTROL — never matches, so the miss edge frees the source whole.
         let d: E = E.A(f"miss{i}");

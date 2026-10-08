@@ -7,7 +7,7 @@ fn collect(items: ref Vec[It]) -> i64 {
     for it in items {
         match it {
             It.Fu(f) => {
-                let ps = f.params;
+                let ps = ref f.params;
                 for p in ps { total = total + p.n; }
             }
             It.Other => {}

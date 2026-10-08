@@ -5,16 +5,16 @@ enum G[T] { X(T), Y }
 impl[T] Drop for G[T] { fn drop(mut ref self) { println("dG") } }
 enum P[T] { A(T), B(T) }
 impl[T] Drop for P[T] { fn drop(mut ref self) { println("dP") } }
-fn unused() { let g: G[R] = G.X(mk(1)); match g { G.X(t) => { println("a1") } G.Y => { println("a0") } } }
-fn read_it() { let g: G[R] = G.X(mk(2)); match g { G.X(t) => { println(f"b{t.id}{t.tag}"); println("b-after") } G.Y => { println("b0") } } }
-fn iflet() { let g: G[R] = G.X(mk(3)); if let G.X(t) = g { println(f"c{t.id}") } }
-fn twice() { let g: G[R] = G.X(mk(4)); match g { G.X(t) => { println("d1") } G.Y => { println("d0") } }; println("d-mid"); match g { G.X(t) => { println(f"d{t.id}") } G.Y => { println("d0") } } }
-fn value() -> i64 { let g: G[R] = G.X(mk(5)); let n = match g { G.X(t) => t.id, G.Y => 0 }; println(f"e{n}"); return n }
-fn guarded() { let g: G[R] = G.X(mk(6)); match g { G.X(t) if t.id > 5 => { println(f"f-big{t.id}") } G.X(t) => { println(f"f{t.id}") } G.Y => { println("f0") } } }
-fn vecs() { let g: G[Vec[R]] = G.X([mk(7), mk(8)]); match g { G.X(v) => { println(f"g{v.len()}") } G.Y => { println("g0") } } }
-fn two_variants() { let g: P[R] = P.B(mk(9)); match g { P.A(t) => { println(f"h{t.id}") } P.B(t) => { println(f"hb{t.id}") } }; match g { P.A(t) => { println(f"h{t.tag}") } P.B(t) => { println(f"hb{t.tag}") } } }
-fn fstr() { let g: G[R] = G.X(mk(10)); let s = match g { G.X(t) => f"{t.tag}!", G.Y => "none" }; println(f"i{s}") }
-fn looped() { let g: G[R] = G.X(mk(11)); for i in 0..2 { match g { G.X(t) => { println(f"j{t.id}") } G.Y => { println("j0") } } } }
+fn unused() { let g: G[R] = G.X(mk(1)); match g { G.X(ref t) => { println("a1") } G.Y => { println("a0") } } }
+fn read_it() { let g: G[R] = G.X(mk(2)); match g { G.X(ref t) => { println(f"b{t.id}{t.tag}"); println("b-after") } G.Y => { println("b0") } } }
+fn iflet() { let g: G[R] = G.X(mk(3)); if let G.X(ref t) = g { println(f"c{t.id}") } }
+fn twice() { let g: G[R] = G.X(mk(4)); match g { G.X(ref t) => { println("d1") } G.Y => { println("d0") } }; println("d-mid"); match g { G.X(ref t) => { println(f"d{t.id}") } G.Y => { println("d0") } } }
+fn value() -> i64 { let g: G[R] = G.X(mk(5)); let n = match g { G.X(ref t) => t.id, G.Y => 0 }; println(f"e{n}"); return n }
+fn guarded() { let g: G[R] = G.X(mk(6)); match g { G.X(ref t) if t.id > 5 => { println(f"f-big{t.id}") } G.X(ref t) => { println(f"f{t.id}") } G.Y => { println("f0") } } }
+fn vecs() { let g: G[Vec[R]] = G.X([mk(7), mk(8)]); match g { G.X(ref v) => { println(f"g{v.len()}") } G.Y => { println("g0") } } }
+fn two_variants() { let g: P[R] = P.B(mk(9)); match g { P.A(ref t) => { println(f"h{t.id}") } P.B(ref t) => { println(f"hb{t.id}") } }; match g { P.A(ref t) => { println(f"h{t.tag}") } P.B(ref t) => { println(f"hb{t.tag}") } } }
+fn fstr() { let g: G[R] = G.X(mk(10)); let s = match g { G.X(ref t) => f"{t.tag}!", G.Y => "none" }; println(f"i{s}") }
+fn looped() { let g: G[R] = G.X(mk(11)); for i in 0..2 { match g { G.X(ref t) => { println(f"j{t.id}") } G.Y => { println("j0") } } } }
 fn main() {
     unused(); println("--");
     read_it(); println("--");

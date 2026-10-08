@@ -1,0 +1,21 @@
+
+shared struct Node { v: i64, tag: String, xs: Vec[i64] }
+
+fn make(k: i64) -> Node {
+    return Node { v: k, tag: "hello".to_string(), xs: [k, k + 1] };
+}
+
+fn main() {
+    println(make(1).tag);
+    println({ let n = make(2); n }.tag);
+    let c = true;
+    println(if c { make(3) } else { make(4) }.tag);
+    println(make(5).xs.len());
+    // The copy has to OUTLIVE the temporary it was read from, which is the
+    // half a clone emitted after the release cannot deliver.
+    let kept = make(6).tag;
+    println(kept);
+    // The bound receiver was never broken and must not become a double free.
+    let b = make(7);
+    println(b.tag);
+}

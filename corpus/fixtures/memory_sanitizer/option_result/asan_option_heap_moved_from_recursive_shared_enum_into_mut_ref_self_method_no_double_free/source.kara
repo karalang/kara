@@ -20,7 +20,7 @@ impl R {
   }
   fn walk(mut ref self, e: Expr) {
     match e {
-      Cont(n) => { let ContNode { label } = n; self.label_ref(label); }
+      Cont(n) => { let ContNode { label } = n; self.label_ref(label.clone()); }
       Wrap(n) => { let WrapNode { inner } = n; self.walk(inner); }
     }
   }

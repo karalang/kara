@@ -15,7 +15,7 @@ struct R { id: i64, name: String }
         println("iflet");   { let o: Option[(R, R)] = Some((mk(5), mk(6))); println("  x"); if let Some(t) = o { println("  hit") } }
         println("whilet");  { let mut o: Option[(R, R)] = Some((mk(7), mk(8))); println("  x"); while let Some(t) = o { println("  hit"); o = None; } println("  end") }
         println("result");  { let o: Result[(R, R), i64] = Ok((mk(9), mk(10))); println("  x"); match o { Ok(t) => { println("  hit") } Err(e) => { println("  n") } } }
-        println("twice");   { let o: Option[(R, R)] = Some((mk(11), mk(12))); println("  x"); match o { Some(t) => { println("  a") } None => { println("  n") } } match o { Some(t) => { println("  b") } None => { println("  n") } } }
+        println("twice");   { let o: Option[(R, R)] = Some((mk(11), mk(12))); println("  x"); match o { Some(ref t) => { println("  a") } None => { println("  n") } } match o { Some(t) => { println("  b") } None => { println("  n") } } }
         println("after");   { let o: Option[(R, R)] = Some((mk(13), mk(14))); println("  x"); match o { Some(t) => { println("  hit") } None => { println("  n") } } println("  end") }
         println("wild");    { let o: Option[(R, R)] = Some((mk(15), mk(16))); println("  x"); match o { Some(_) => { println("  hit") } None => { println("  n") } } }
         println("struct");  { let o: Option[W] = Some(W { r: mk(17), n: 18 }); println("  x"); match o { Some(t) => { println("  hit") } None => { println("  n") } } }

@@ -1,0 +1,41 @@
+fn mkv(s: String) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(s.clone() + "-a");
+    v.push(s + "-b");
+    v
+}
+shared enum M { My(Vec[String]), N }
+shared enum G[T] { Y(T), N }
+shared enum G2[T] { Y { v: T }, N }
+shared enum P2[A, B] { Two(A, B), Z }
+shared struct S { s: String }
+fn rd(h: G[M]) -> i64 { match h { G.Y(M.My(x)) => x.len(), _ => 0 } }
+fn mkg(k: i64) -> G[M] { G.Y(M.My(mkv(f"g{k}"))) }
+fn c1() -> i64 { let h: G[M] = G.Y(M.My(mkv("c1"))); 1 }
+fn c2() -> i64 { let h: G[M] = G.Y(M.N); 2 }
+fn c3() -> i64 { let a = M.My(mkv("c3")); let h: G[M] = G.Y(a); match a { M.My(x) => x.len(), _ => 0 } }
+fn c4() -> String { let h: G[S] = G.Y(S { s: "c4".to_string() + "x" }); match h { G.Y(s) => s.s, G.N => "n" } }
+fn c5() -> i64 { let h: G[M] = G.Y(M.My(mkv("c5"))); match h { G.Y(m) => match m { M.My(x) => x.len(), M.N => 0 }, G.N => 0 } }
+fn c6() -> i64 { let h: G[M] = G.Y(M.My(mkv("c6"))); match h { G.Y(M.My(_)) => 1, _ => 0 } }
+fn c7() -> i64 { let h: G[M] = G.Y(M.My(mkv("c7"))); if let G.Y(M.My(x)) = h { x.len() } else { 0 } }
+fn c8() -> String { let h: G[M] = G.Y(M.My(mkv("c8"))); let m = match h { G.Y(m) => m, G.N => M.N }; match m { M.My(x) => x[0], _ => "n" } }
+fn c9() -> i64 { let h: G[M] = G.Y(M.My(mkv("c9"))); let h2 = h; rd(h2) + rd(h) }
+fn c10() -> i64 { let h: G2[M] = G2.Y { v: M.My(mkv("c10")) }; match h { G2.Y { v } => match v { M.My(x) => x.len(), M.N => 0 }, G2.N => 0 } }
+fn c11() -> String { let s = S { s: "c11".to_string() + "x" }; let h: G2[S] = G2.Y { v: s }; s.s }
+fn c12() -> i64 { let h: G[G[M]] = G.Y(G.Y(M.My(mkv("c12")))); match h { G.Y(G.Y(M.My(x))) => x.len(), _ => 0 } }
+fn c13() -> String { let h: P2[M, S] = P2.Two(M.My(mkv("c13")), S { s: "c13".to_string() + "t" }); match h { P2.Two(a, b) => b.s, P2.Z => "z" } }
+fn c14() -> String { let h: P2[M, String] = P2.Two(M.My(mkv("c14")), "c14".to_string() + "t"); match h { P2.Two(a, b) => b, P2.Z => "z" } }
+fn c15() -> i64 { let v: Vec[G[M]] = [G.Y(M.My(mkv("c15"))), G.N, G.Y(M.N)]; v.len() }
+fn c16() -> i64 { let h: G[i64] = G.Y(16); match h { G.Y(n) => n, G.N => 0 } }
+fn c17() -> String { let h: G[String] = G.Y("c17".to_string() + "x"); match h { G.Y(s) => s, G.N => "n" } }
+fn main() {
+    println(c1()); println(c2()); println(c3()); println(c4()); println(c5());
+    println(c6()); println(c7()); println(c8()); println(c9()); println(c10());
+    println(c11()); println(c12()); println(c13()); println(c14()); println(c15());
+    println(c16()); println(c17());
+    let mut k = 0;
+    while k < 3 {
+        println(rd(mkg(k)));
+        k = k + 1;
+    }
+}

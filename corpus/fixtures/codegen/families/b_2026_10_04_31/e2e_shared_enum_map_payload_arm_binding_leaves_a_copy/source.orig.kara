@@ -1,0 +1,26 @@
+shared struct Node { v: i64 }
+shared enum Mm { K(Map[i64, String]), L }
+shared enum Ms { K(Set[String]), L }
+shared enum Mk { K(Map[String, Vec[String]]), L }
+shared enum Mn { K(Map[i64, Node]), L }
+shared enum Mv { K { m: Map[i64, i64], n: i64 }, L }
+shared enum Mt { K(Map[i64, String], String), L }
+fn hs(s: String) -> String { s + "-heap-string-long-enough" }
+fn mk() -> Map[i64, String] { let mut m: Map[i64, String] = Map.new(); m.insert(1, hs("a")); m }
+fn take(g: Mm) -> Map[i64, String] { match g { Mm.K(x) => x, Mm.L => Map.new() } }
+fn main() {
+    { let g = Mm.K(mk()); match g { Mm.K(x) => { println(f"d1a {x.len()}") } Mm.L => {} }; match g { Mm.K(x) => { println(f"d1b {x.len()}") } Mm.L => {} }; }
+    { let g = Mm.K(mk()); let h = g; match g { Mm.K(x) => { println(f"d2a {x.len()}") } Mm.L => {} }; match h { Mm.K(x) => { println(f"d2b {x.len()}") } Mm.L => {} }; }
+    { let mut s: Set[String] = Set.new(); s.insert(hs("s")); let g = Ms.K(s); match g { Ms.K(x) => { println(f"d3a {x.len()}") } Ms.L => {} }; match g { Ms.K(x) => { println(f"d3b {x.len()}") } Ms.L => {} }; }
+    { let mut m: Map[String, Vec[String]] = Map.new(); m.insert(hs("k"), [hs("v")]); let g = Mk.K(m); match g { Mk.K(x) => { println(f"d4a {x.len()}") } Mk.L => {} }; match g { Mk.K(x) => { println(f"d4b {x.len()}") } Mk.L => {} }; }
+    { let mut m: Map[i64, Node] = Map.new(); m.insert(1, Node { v: 9 }); let g = Mn.K(m); match g { Mn.K(x) => { println(f"d5a {x.len()}") } Mn.L => {} }; match g { Mn.K(x) => { println(f"d5b {x.len()}") } Mn.L => {} }; }
+    { let mut m: Map[i64, i64] = Map.new(); m.insert(1, 2); let g = Mv.K { m: m, n: 3 }; match g { Mv.K { m, n } => { println(f"d6a {m.len()} {n}") } Mv.L => {} }; match g { Mv.K { m, n } => { println(f"d6b {m.len()} {n}") } Mv.L => {} }; }
+    { let g = Mt.K(mk(), hs("t")); match g { Mt.K(x, s) => { println(f"d7a {x.len()} {s.len()}") } Mt.L => {} }; match g { Mt.K(x, s) => { println(f"d7b {x.len()} {s.len()}") } Mt.L => {} }; }
+    { let g = Mm.K(mk()); if let Mm.K(x) = g { println(f"d8a {x.len()}") }; if let Mm.K(x) = g { println(f"d8b {x.len()}") }; }
+    { let g = Mm.K(mk()); let h = g; let m = take(g); println(f"d9 {m.len()}"); match h { Mm.K(x) => { println(f"d9b {x.len()}") } Mm.L => {} }; }
+    { let g = Mm.K(mk()); let mut t = 0; for i in 0..3 { match g { Mm.K(x) => { t = t + x.len(); } Mm.L => {} } }; println(f"d10 {t}"); }
+    { let g = Mm.K(mk()); match g { Mm.K(_) => { println("d11a") } Mm.L => {} }; match g { Mm.K(x) => { println(f"d11b {x.len()}") } Mm.L => {} }; }
+    { let g = Mm.K(mk()); let v: Vec[Map[i64, String]] = match g { Mm.K(x) => [x], Mm.L => [] }; match g { Mm.K(x) => { println(f"d12 {v.len()} {x.len()}") } Mm.L => {} }; }
+    { let mut m: Map[String, Vec[String]] = Map.new(); m.insert(hs("k"), [hs("v")]); let g = Mk.K(m); println("d13"); }
+    println("end")
+}

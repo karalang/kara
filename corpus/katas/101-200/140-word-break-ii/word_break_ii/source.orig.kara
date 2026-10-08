@@ -1,0 +1,81 @@
+// LeetCode 140 — Word Break II.
+//
+// Return EVERY segmentation of `s` into dictionary words, as space-joined
+// sentences. Backtracking: `solve(start)` returns all sentences for the suffix
+// `s[start..]`. At `start == n` the only sentence is the empty one; otherwise,
+// for each dictionary word matching `s[start..end]`, prepend it to every
+// sentence of the remaining suffix. Output is sorted for a deterministic mirror.
+
+fn solve(s: ref String, start: i64, n: i64, dict: ref Set[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if start == n {
+        out.push("");
+        return out;
+    }
+    let mut end: i64 = start + 1;
+    while end <= n {
+        let word: String = s.substring(start, end);
+        if dict.contains(word) {
+            let rest: Vec[String] = solve(s, end, n, dict);
+            let rn: i64 = rest.len();
+            let mut k: i64 = 0;
+            while k < rn {
+                let tail: String = rest[k].clone();
+                if tail.len() == 0 {
+                    out.push(word);
+                } else {
+                    out.push(word + " " + tail);
+                }
+                k = k + 1;
+            }
+        }
+        end = end + 1;
+    }
+    return out;
+}
+
+fn word_break(s: String, dict: Set[String]) -> Vec[String] {
+    let n: i64 = s.len();
+    // `Vec.sorted()` (immutable form) is codegen-unimplemented (kara
+    // B-2026-07-19-15); sort in place then return — the supported idiom.
+    let mut sentences: Vec[String] = solve(s, 0, n, dict);
+    sentences.sort();
+    return sentences;
+}
+
+fn emit(s: String, dict: Set[String]) {
+    let res: Vec[String] = word_break(s, dict);
+    let n: i64 = res.len();
+    println(n.to_string());
+    let mut i: i64 = 0;
+    while i < n {
+        println(res[i]);
+        i = i + 1;
+    }
+}
+
+fn main() {
+    let mut d1: Set[String] = Set.new();
+    d1.insert("cat");
+    d1.insert("cats");
+    d1.insert("and");
+    d1.insert("sand");
+    d1.insert("dog");
+    emit("catsanddog", d1);
+
+    let mut d2: Set[String] = Set.new();
+    d2.insert("apple");
+    d2.insert("pen");
+    d2.insert("applepen");
+    d2.insert("pine");
+    d2.insert("pineapple");
+    emit("pineapplepenapple", d2);
+
+    let mut d3: Set[String] = Set.new();
+    d3.insert("cats");
+    d3.insert("dog");
+    d3.insert("sand");
+    d3.insert("and");
+    d3.insert("cat");
+    emit("catsandog", d3);
+}

@@ -1,5 +1,6 @@
 
 #[derive(Eq)]
+#[derive(Copy)]
 enum Shape { Circle { r: i64 }, Square { side: i64 }, Unknown }
 
 fn area(s: Shape) -> i64 {

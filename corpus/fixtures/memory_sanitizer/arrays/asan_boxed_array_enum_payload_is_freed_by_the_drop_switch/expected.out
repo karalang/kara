@@ -1,0 +1,18 @@
+field:0
+let:0
+named:1
+temp:1
+read:ba-left-aaaaaaaaaaaaaaaa-0
+widearea:ba-wide-eeeeeeeeeeeeeeee-0
+inline:0
+structclone:0
+field:1
+let:1
+named:1
+temp:1
+read:ba-left-aaaaaaaaaaaaaaaa-1
+widearea:ba-wide-eeeeeeeeeeeeeeee-1
+inline:1
+structclone:1
+vec:2 vecclone:2 nested:2 scalar:2 map:2
+end

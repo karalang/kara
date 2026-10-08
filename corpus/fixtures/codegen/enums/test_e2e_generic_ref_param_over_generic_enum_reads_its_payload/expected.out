@@ -1,0 +1,19 @@
+a
+  rx pa
+  rx pa
+b
+  mx pb
+c
+  vx pc
+d
+  rx 77
+  rx 77
+e
+  sx pe
+  r=1
+f
+  wx 5
+  wx 5
+g
+  rx NONE
+end

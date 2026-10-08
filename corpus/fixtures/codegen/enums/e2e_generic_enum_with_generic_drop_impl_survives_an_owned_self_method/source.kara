@@ -26,7 +26,7 @@ struct R { id: i64, tag: String, xs: Vec[i64] }
     enum E { A(R), B }
     impl Drop for E { fn drop(mut ref self) { println("  dE") } }
     impl E {
-        fn eread(self) -> i64 { match self { E.A(t) => { return 1; } E.B => { return 0; } } }
+        fn eread(self) -> i64 { match self { E.A(ref t) => { return 1; } E.B => { return 0; } } }
         fn enone(self) -> i64 { return 5 }
     }
 

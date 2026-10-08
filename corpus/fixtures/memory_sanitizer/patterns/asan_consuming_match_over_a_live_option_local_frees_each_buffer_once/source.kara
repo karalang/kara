@@ -1,14 +1,14 @@
 
 fn main() {
-    let mut i: i64 = 0i64;
-    while i < 4i64 {
+    let mut i: i64 = 0;
+    while i < 4 {
         // 1. The consuming mapper, with the source re-read afterwards.
         let o: Option[String] = Some(f"hi{i}");
-        match o.map(|s| s) { Some(v) => { println(v); } None => { println("-"); } }
+        match o.clone().map(|s| s) { Some(v) => { println(v); } None => { println("-"); } }
         match o { Some(v) => { println(v); } None => { println("-"); } }
         // 2. Element depth: a shallow clone would alias both element buffers.
         let w: Option[Vec[String]] = Some([f"aa{i}", f"bb{i}"]);
-        match w.map(|s| s) { Some(v) => { println(v[0]); } None => { println("-"); } }
+        match w.clone().map(|s| s) { Some(v) => { println(v[0]); } None => { println("-"); } }
         match w { Some(v) => { println(v[1]); } None => { println("-"); } }
         // 3. CONTROL — source DEAD, so no clone may be made. A clone here
         // without disarming the source would leak the original every pass.

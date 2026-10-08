@@ -8,8 +8,8 @@ fn agg(entries: Vec[Entry]) -> Vec[Stat] {
     let mut i = 0;
     while i < entries.len() {
         let e = ref entries[i];
-        let _ = index.insert(e.service, 0 as usize);
-        stats.push(Stat { service: e.service });
+        let _ = index.insert(e.service.clone(), 0 as usize);
+        stats.push(Stat { service: e.service.clone() });
         i = i + 1;
     }
     return stats;

@@ -12,6 +12,6 @@ fn main() {
     let base: i64 = env.args().len();
     let xs = build(base);
     let mut t = 0;
-    for a in xs { t = t + use_a(a); }
+    for a in xs.into_iter() { t = t + use_a(a); }
     println(t);
 }

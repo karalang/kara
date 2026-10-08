@@ -4,13 +4,13 @@ fn main() {
     while i < 8 {
         let o: Option[String] = Some(f"hi{i}");
         let p: Option[String] = o;
-        match p { Some(v) => { println(v); } None => { println("-"); } }
-        match p { Some(v) => { println(v); } None => { println("-"); } }
+        match p { Some(ref v) => { println(v); } None => { println("-"); } }
+        match p { Some(ref v) => { println(v); } None => { println("-"); } }
         // Chained rebind: the transfer has to keep moving, not stop at `p`.
         let q: Option[String] = p;
         match q { Some(v) => { println(v); } None => { println("-"); } }
         // Vec payload, element read (touches the buffer).
-        let vo: Option[Vec[i64]] = Some(vec![i, i + 1i64]);
+        let vo: Option[Vec[i64]] = Some(vec![i, i + 1]);
         let vp: Option[Vec[i64]] = vo;
         match vp { Some(x) => { println(x[1].to_string()); } None => { println("-"); } }
         // Result sibling registry.

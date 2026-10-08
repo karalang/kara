@@ -1,14 +1,15 @@
 
+#[derive(Copy)]
 struct W { f0: i64, f1: i64, f2: i64, f3: i64 }
 fn get(v: ref Vec[W], k: i64) -> Option[W] {
-    let mut i = 0i64;
-    while i < v.len() { if v[i].f0 == k { return Some(v[i]); } i = i + 1i64; }
+    let mut i = 0;
+    while i < v.len() { if v[i].f0 == k { return Some(v[i]); } i = i + 1; }
     return None;
 }
 fn main() {
     let mut ns: Vec[W] = Vec.new();
-    ns.push(W { f0: 5i64, f1: 1111i64, f2: 2222i64, f3: 3333i64 });
-    let hit = get(ns, 5i64);
-    let miss = get(ns, 9i64);
+    ns.push(W { f0: 5, f1: 1111, f2: 2222, f3: 3333 });
+    let hit = get(ns, 5);
+    let miss = get(ns, 9);
     println(f"{hit?.f0} {hit?.f1} {hit?.f2} {hit?.f3} {miss?.f0}");
 }

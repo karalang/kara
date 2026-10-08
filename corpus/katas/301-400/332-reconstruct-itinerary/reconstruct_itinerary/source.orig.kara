@@ -1,0 +1,109 @@
+// LeetCode 332 — Reconstruct Itinerary.
+//
+// Hierholzer's algorithm for an Eulerian path. Every ticket is an edge that
+// must be used exactly once; among the valid itineraries we want the
+// lexicographically smallest, which falls out of visiting each airport's
+// destinations in sorted order and emitting the post-order walk in reverse.
+
+fn visit(
+    adj: mut ref Map[String, Vec[String]],
+    cursor: mut ref Map[String, i64],
+    airport: String,
+    route: mut ref Vec[String],
+) {
+    // Walk out along unused edges as far as we can; the airport is emitted
+    // only once it is a dead end, so `route` ends up as the reverse itinerary.
+    while true {
+        let dests: Vec[String] = match adj.get(airport) { Some(d) => d, None => Vec.new() };
+        let used = match cursor.get(airport) { Some(u) => u, None => 0 };
+        if used >= dests.len() { break; }
+        let _ = cursor.insert(airport, used + 1);
+        visit(adj, cursor, dests[used].clone(), route);
+    }
+    route.push(airport);
+}
+
+fn find_itinerary(froms: ref Vec[String], tos: ref Vec[String]) -> Vec[String] {
+    let mut adj: Map[String, Vec[String]] = Map.new();
+    let mut i = 0;
+    while i < froms.len() {
+        if not adj.contains_key(froms[i]) {
+            let empty: Vec[String] = Vec.new();
+            let _ = adj.insert(froms[i], empty);
+        }
+        adj[froms[i]].push(tos[i]);
+        i = i + 1;
+    }
+
+    // Sorted destinations ⇒ the greedy walk yields the lexicographically
+    // smallest itinerary.
+    let keys: Vec[String] = adj.keys();
+    let mut k = 0;
+    while k < keys.len() {
+        adj[keys[k]].sort();
+        k = k + 1;
+    }
+
+    let mut cursor: Map[String, i64] = Map.new();
+    let mut route: Vec[String] = Vec.new();
+    visit(mut adj, mut cursor, "JFK", mut route);
+
+    let mut out: Vec[String] = Vec.new();
+    let mut j = route.len() - 1;
+    while j >= 0 {
+        out.push(route[j]);
+        j = j - 1;
+    }
+    out
+}
+
+fn show(froms: ref Vec[String], tos: ref Vec[String]) {
+    let path: Vec[String] = find_itinerary(froms, tos);
+    let mut line = "";
+    let mut i = 0;
+    while i < path.len() {
+        if i > 0 { line = line + " -> "; }
+        line = line + path[i];
+        i = i + 1;
+    }
+    println(line);
+}
+
+fn main() {
+    // Example 1 — a single chain.
+    let mut f1: Vec[String] = Vec.new();
+    let mut t1: Vec[String] = Vec.new();
+    f1.push("MUC"); t1.push("LHR");
+    f1.push("JFK"); t1.push("MUC");
+    f1.push("SFO"); t1.push("SJC");
+    f1.push("LHR"); t1.push("SFO");
+    show(f1, t1);
+
+    // Example 2 — two ways out of JFK; the lexicographically smaller one
+    // (ATL) must be taken first even though it revisits JFK.
+    let mut f2: Vec[String] = Vec.new();
+    let mut t2: Vec[String] = Vec.new();
+    f2.push("JFK"); t2.push("SFO");
+    f2.push("JFK"); t2.push("ATL");
+    f2.push("SFO"); t2.push("ATL");
+    f2.push("ATL"); t2.push("JFK");
+    f2.push("ATL"); t2.push("SFO");
+    show(f2, t2);
+
+    // A cycle that strands the walk at SFO — exercises the dead-end
+    // backtracking that makes the post-order emission necessary.
+    let mut f3: Vec[String] = Vec.new();
+    let mut t3: Vec[String] = Vec.new();
+    f3.push("JFK"); t3.push("ATL");
+    f3.push("JFK"); t3.push("SFO");
+    f3.push("ATL"); t3.push("JFK");
+    f3.push("ATL"); t3.push("SFO");
+    f3.push("SFO"); t3.push("ATL");
+    show(f3, t3);
+
+    // Single ticket.
+    let mut f4: Vec[String] = Vec.new();
+    let mut t4: Vec[String] = Vec.new();
+    f4.push("JFK"); t4.push("AAA");
+    show(f4, t4);
+}

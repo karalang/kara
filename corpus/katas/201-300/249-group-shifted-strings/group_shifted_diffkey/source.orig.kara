@@ -1,0 +1,93 @@
+// LeetCode #249: Group Shifted Strings — DIFFERENCE-SEQUENCE key, index map.
+//
+// The other canonical phrasing. Instead of normalising each word to the member
+// of its sequence that starts at `a`, key on the GAPS between consecutive
+// characters: `"abc"` and `"xyz"` both have gaps `(1,1)`, and `"az"`/`"ba"`
+// both have `(25)` once the wraparound is taken mod 26. The two keys carry the
+// same information — a word is determined by its first character plus its gaps
+// — so the grouping is identical; only the invariant differs.
+//
+// The CONTAINER differs too, and that is the point of keeping both files. This
+// one maps `key -> group INDEX` (`Map[String, i64]`) and keeps the words in a
+// side `Vec[Vec[String]]`, where `group_shifted.kara` maps `key -> the group
+// itself` (`Map[String, Vec[String]]`). A primitive-valued map and a
+// heap-valued map are different ownership surfaces — the value here is a
+// scalar the map can overwrite freely, while there every insert displaces a
+// `Vec[String]` whose inner Strings must be reclaimed.
+//
+// A single-character word has NO gaps, so its key is the empty sequence and all
+// one-character words land in one group — the same answer the canonical form
+// gives, reached from the opposite direction.
+
+fn gap_key(word: ref String) -> String {
+    let bytes = word.bytes();
+    let n = bytes.len();
+    let mut key: String = "";
+    let mut i = 1;
+    while i < n {
+        // Wraparound: `z` -> `a` is a gap of 1, not -25.
+        let d = (((bytes[i] as i64) - (bytes[i - 1] as i64)) + 26) % 26;
+        key.push_str(f"{d},");
+        i = i + 1;
+    }
+    key
+}
+
+fn group_shifted(words: Vec[String]) -> Vec[Vec[String]] {
+    let mut index: Map[String, i64] = Map.new();
+    let mut out: Vec[Vec[String]] = Vec.new();
+    let n = words.len();
+    let mut i = 0;
+    while i < n {
+        let key = gap_key(words[i]);
+        match index.get(key) {
+            Some(g) => {
+                out[g].push(words[i]);
+            }
+            None => {
+                let slot = out.len();
+                let mut fresh: Vec[String] = Vec.new();
+                fresh.push(words[i]);
+                out.push(fresh);
+                let _ = index.insert(key, slot);
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn show(groups: Vec[Vec[String]]) {
+    let mut i = 0;
+    while i < groups.len() {
+        let g = ref groups[i];
+        let mut line: String = "[";
+        let mut j = 0;
+        while j < g.len() {
+            if j > 0 { line.push_str(","); }
+            line.push_str(g[j]);
+            j = j + 1;
+        }
+        line.push_str("]");
+        println(line);
+        i = i + 1;
+    }
+}
+
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    a.push("abc"); a.push("bcd"); a.push("acef");
+    a.push("xyz"); a.push("az"); a.push("ba");
+    a.push("a"); a.push("z");
+    show(group_shifted(a));
+
+    println("--");
+    let mut b: Vec[String] = Vec.new();
+    b.push("a");
+    show(group_shifted(b));
+
+    println("--");
+    let mut c: Vec[String] = Vec.new();
+    c.push("az"); c.push("ba"); c.push("bc"); c.push("cd"); c.push("zy");
+    show(group_shifted(c));
+}

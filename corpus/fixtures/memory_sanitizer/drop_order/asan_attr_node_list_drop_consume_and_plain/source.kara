@@ -18,7 +18,7 @@ fn render_attr(a: AttrN) -> i64 {
     let AttrN { path, args, string_value } = a;
     let mut touched = 0;
     for seg in path { if seg.len() >= 0 { touched = touched + 1; } }
-    for arg in args { touched = touched + render_arg(arg); }
+    for arg in args.into_iter() { touched = touched + render_arg(arg); }
     match string_value { Some(s) => { if s.len() >= 0 { touched = touched + 1; } } None => {} }
     touched
 }
@@ -49,7 +49,7 @@ fn build() -> Vec[AttrN] {
 fn main() {
     let attrs = build();
     let mut total = 0;
-    for a in attrs { total = total + render_attr(a); }
+    for a in attrs.into_iter() { total = total + render_attr(a); }
     let more = build();
     total = total + more.len();
     println(total);

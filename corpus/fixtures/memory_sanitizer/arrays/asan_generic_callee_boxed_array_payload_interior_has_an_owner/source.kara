@@ -32,10 +32,10 @@ fn main() {
         let c7: G[Array[String, 2]] = G.Y(a7);
         println(f"named_local:{gshow(c7)}");
         let a8: Array[String, 2] = [f"qqqqqqqqqqq-8-{k}", f"rrrrrrrrrrr-8-{k}"];
-        let c8: G[Array[String, 2]] = G.Y(a8);
+        let c8: G[Array[String, 2]] = G.Y(a8.clone());
         println(f"read_after_move:{gnomatch(c8)} {a8[0]}");
         let a9: Array[String, 2] = [f"sssssssssss-9-{k}", f"ttttttttttt-9-{k}"];
-        let c9: G[Array[String, 2]] = G.Y(a9);
+        let c9: G[Array[String, 2]] = G.Y(a9.clone());
         println(f"call_then_read:{gnomatch(c9)}");
         println(f"still_live:{a9[1]}");
         let e10: String = f"uuuuuuuuuuu-10-{k}";

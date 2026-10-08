@@ -333,7 +333,7 @@ fn uri_encode(s: String, keep_slash: bool) -> String {
 // encoded key.
 fn sort_headers(headers: Vec[Header]) -> Vec[Header] {
     let mut out: Vec[Header] = Vec.new();
-    for h in headers {
+    for h in headers.into_iter() {
         let key = lower(h.name.clone());
         let mut at = out.len();
         let mut i = 0;
@@ -352,7 +352,7 @@ fn sort_headers(headers: Vec[Header]) -> Vec[Header] {
 
 fn sort_params(params: Vec[QueryParam]) -> Vec[QueryParam] {
     let mut out: Vec[QueryParam] = Vec.new();
-    for p in params {
+    for p in params.into_iter() {
         let key = uri_encode(p.key.clone(), false);
         let mut at = out.len();
         let mut i = 0;
@@ -377,7 +377,7 @@ fn canonical_query(params: Vec[QueryParam]) -> String {
         if not first {
             out = out + "&";
         }
-        out = out + uri_encode(p.key, false) + "=" + uri_encode(p.value, false);
+        out = out + uri_encode(p.key.clone(), false) + "=" + uri_encode(p.value.clone(), false);
         first = false;
     }
     out
@@ -396,8 +396,8 @@ fn canonical_request(
     let mut signed = String.new();
     let mut first = true;
     for h in sorted {
-        let name = lower(h.name);
-        canon_headers = canon_headers + name.clone() + ":" + trimall(h.value) + "\n";
+        let name = lower(h.name.clone());
+        canon_headers = canon_headers + name.clone() + ":" + trimall(h.value.clone()) + "\n";
         if not first {
             signed = signed + ";";
         }

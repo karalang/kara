@@ -73,7 +73,7 @@ fn ladder_length(begin: String, end: String, words: ref Vec[String]) -> i64 {
     let mut word_set: Map[String, i64] = Map.new();
     let mut wi = 0;
     while wi < words.len() {
-        word_set.insert(words[wi], 1);
+        word_set.insert(words[wi].clone(), 1);
         wi = wi + 1;
     }
     match word_set.get(end) {

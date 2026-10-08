@@ -1,0 +1,69 @@
+dup-a
+  dR6
+  got5
+  dR5
+  out
+dup-c
+  dR6
+  got5
+  dR5
+  out
+peer
+  dR5
+  got6
+  dR6
+  out
+dup-tuple
+  dR6
+  got5
+  dR5
+  out
+dup-result
+  dR6
+  got5
+  dR5
+  out
+discard
+  dR6
+  dR5
+  after
+  out
+field
+  dR6
+  in5
+  dR5
+  out
+to-callee
+  dR6
+  sank5
+  dR5
+  out
+loop
+  dR6
+  it5
+  dR5
+  dR6
+  it5
+  dR5
+  out
+method
+  dR6
+  got5
+  dR5
+  out
+ctl-uniq
+  dR6
+  got5
+  dR5
+  out
+ctl-free
+  dR6
+  got5
+  dR5
+  out
+ctl-whole
+  kept
+  dR6
+  dR5
+  out
+end

@@ -49,14 +49,14 @@ fn build_groups() -> Vec[String] {
 
     let mut i = 0;
     while i < 20 {
-        g.push(u[i]);
+        g.push(u[i].clone());
         i = i + 1;
     }
     let mut d = 2;
     while d < 10 {
         let mut r = 0;
         while r < 10 {
-            if r == 0 { g.push(t[d]); } else { g.push(t[d] + " " + u[r]); }
+            if r == 0 { g.push(t[d].clone()); } else { g.push(t[d] + " " + u[r]); }
             r = r + 1;
         }
         d = d + 1;

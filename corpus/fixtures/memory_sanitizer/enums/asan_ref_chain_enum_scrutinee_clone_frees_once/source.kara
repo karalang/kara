@@ -11,7 +11,7 @@ fn mkv(n: i64) -> Vec[String] {
 
 #[allow(partial_move_of_drop_enum)]
 fn take(s: ref S) -> String {
-    match s.e { E.A(v) => { let m = v; return m[1] } E.B => { return "none" } }
+    match s.e { E.A(v) => { let m = v; return m[1].clone() } E.B => { return "none" } }
 }
 
 fn main() {

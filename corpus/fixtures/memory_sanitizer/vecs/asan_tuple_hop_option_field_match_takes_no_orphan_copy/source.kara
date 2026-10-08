@@ -6,8 +6,8 @@ fn main() {
     match g1[0].1.o { Some(s) => println(s), None => {} }
     let g2: Vec[(i64, G)] = [(1, G { o: Some(mk(7)), n: 4 })];
     let mut out: Vec[String] = [];
-    match g2[0].1.o { Some(s) => out.push(s), None => {} }
+    match g2[0].1.o.clone() { Some(s) => out.push(s.clone()), None => {} }
     let g3: Vec[(i64, (G, i64))] = [(1, (G { o: Some(mk(8)), n: 3 }, 2))];
-    match g3[0].1.0.o { Some(s) => out.push(s), None => {} }
+    match g3[0].1.0.o.clone() { Some(s) => out.push(s.clone()), None => {} }
     println(f"{out.len()} {out[0]} {out[1]} {g1[0].1.n}");
 }

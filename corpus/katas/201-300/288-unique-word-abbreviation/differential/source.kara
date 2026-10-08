@@ -253,7 +253,7 @@ fn main() {
                 let mut q = 0;
                 while q < 10 {
                     let word = if (q % 2) == 0 and dict.len() > 0 {
-                        dict[q % dict.len()]
+                        dict[q % dict.len()].clone()
                     } else {
                         seed = next_rand(seed);
                         word_of(seed, alphabet, lo, hi)

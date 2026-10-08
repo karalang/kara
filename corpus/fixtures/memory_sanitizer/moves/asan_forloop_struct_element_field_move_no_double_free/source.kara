@@ -10,7 +10,7 @@ fn main() {
     let items = build();
     let mut n: i64 = 0;
     for a in items {
-        let w = A { s: a.s };
+        let w = A { s: a.s.clone() };
         n = n + w.s.len();
     }
     println(n);

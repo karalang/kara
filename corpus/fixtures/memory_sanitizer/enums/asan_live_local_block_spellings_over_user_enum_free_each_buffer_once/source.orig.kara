@@ -1,0 +1,21 @@
+
+enum E { A(String), B }
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        // 1. `if let`, consuming, source LIVE — the row's own shape.
+        let a: E = E.A(f"if{i}");
+        if let E.A(v) = a { let k: String = v; println(k); }
+        if let E.A(v) = a { println(v); }
+        // 2. `while let`, consuming, source LIVE — clone per evaluation,
+        //    freed on the miss edge at loop exit.
+        let mut c: E = E.A(f"wl{i}");
+        while let E.A(v) = c { let k: String = v; println(k); c = E.B; }
+        if let E.A(w) = c { println(w); } else { println("wl-empty"); }
+        // 3. CONTROL — `if let` with the source DEAD, so no clone may be made.
+        let d: E = E.A(f"dif{i}");
+        if let E.A(v) = d { let k: String = v; println(k); }
+        i = i + 1;
+    }
+    println("end");
+}

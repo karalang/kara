@@ -1,2 +1,2 @@
 
-fn main() { let s: String = "hi"; let a = s; let b = s; println("x"); }
+fn main() { let s: String = "hi"; let a = s.clone(); let b = s; println("x"); }

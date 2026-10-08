@@ -1,0 +1,19 @@
+struct
+  mx 10
+structF
+  mx 0
+allpaths
+  mx 10
+tuple
+  mx 10
+tupleF
+  mx 0
+nested
+  mx 10
+bare
+  mx 10
+bareF
+  mx 0
+discard
+  x
+end

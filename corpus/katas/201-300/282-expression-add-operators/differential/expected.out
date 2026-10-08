@@ -1,0 +1,7 @@
+cases 1092, of which have at least one solution 371
+expressions returned 618
+digest 507046168
+expressions whose value is wrong 0
+expressions with an illegal leading zero 0
+expressions not preserving the input digits 0
+set mismatches between the two solvers 0

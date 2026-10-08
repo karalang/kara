@@ -21,6 +21,6 @@ fn build() -> Vec[A] {
 fn main() {
     let xs = build();
     let mut t = 0;
-    for a in xs { t = t + f(a); }
+    for a in xs.into_iter() { t = t + f(a); }
     println(t);
 }

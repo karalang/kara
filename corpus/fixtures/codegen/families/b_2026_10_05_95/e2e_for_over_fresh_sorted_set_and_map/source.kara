@@ -14,10 +14,10 @@ fn main() {
     let sa = ss(a);
     let sb = ss(b);
     let mut t = 0;
-    for v in sa.intersection(sb) { t = t * 10 + v; }
+    for v in sa.intersection(sb.clone()) { t = t * 10 + v; }
     println(t);
     t = 0;
-    for v in sa.union(sb) { t = t * 10 + v; }
+    for v in sa.union(sb.clone()) { t = t * 10 + v; }
     println(t);
     t = 0;
     for v in ss(b) { t = t * 10 + v; }

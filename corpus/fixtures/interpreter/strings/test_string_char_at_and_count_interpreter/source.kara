@@ -7,8 +7,8 @@ fn nth(s: String, i: i64) -> String {
         fn main() {
             let s: String = "héllo";
             println(f"{s.len()} {s.char_count()}");
-            println(f"{nth(s, 0)} {nth(s, 1)} {nth(s, 4)}");
-            println(f"{nth(s, 5)} {nth(s, 99)} {nth(s, -1)}");
+            println(f"{nth(s.clone(), 0)} {nth(s.clone(), 1)} {nth(s.clone(), 4)}");
+            println(f"{nth(s.clone(), 5)} {nth(s.clone(), 99)} {nth(s, -1)}");
             let cjk: String = "日本語";
             println(f"{cjk.len()} {cjk.char_count()} {nth(cjk, 1)}");
         }

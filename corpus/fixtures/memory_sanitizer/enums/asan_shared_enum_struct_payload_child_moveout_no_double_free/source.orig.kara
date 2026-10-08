@@ -1,0 +1,44 @@
+
+struct Id { name: String, span: i64 }
+struct Row { first: String, cells: Vec[i64] }
+shared enum Node { Ident(Id), Rowed(Row) }
+fn render_ident(e: Node) -> String {
+    match e {
+        Ident(n) => { let Id { name, span } = n; name }
+        Rowed(r) => { let Row { first, cells } = r; first }
+    }
+}
+fn sum_row(e: Node) -> i64 {
+    match e {
+        Ident(_) => 0,
+        Rowed(r) => {
+            let Row { first, cells } = r;
+            let mut acc: i64 = 0;
+            for c in cells { acc = acc + c; }
+            acc
+        }
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut last = "".to_string();
+    let mut k: i64 = 0;
+    while k < 20 {
+        let mut out = "".to_string();
+        let mut v: Vec[Node] = Vec.new();
+        v.push(Node.Ident(Id { name: "hi".to_string(), span: 1 }));
+        let mut cs: Vec[i64] = Vec.new();
+        cs.push(3); cs.push(4);
+        v.push(Node.Rowed(Row { first: "row".to_string(), cells: cs }));
+        for e in v { out.push_str(render_ident(e)); }
+        let mut v2: Vec[Node] = Vec.new();
+        let mut cs2: Vec[i64] = Vec.new();
+        cs2.push(5); cs2.push(6); cs2.push(7);
+        v2.push(Node.Rowed(Row { first: "r2".to_string(), cells: cs2 }));
+        for e in v2 { total = total + sum_row(e); }
+        last = out;
+        k = k + 1;
+    }
+    println(last);
+    println(total);
+}

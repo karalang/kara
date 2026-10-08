@@ -23,7 +23,7 @@ fn mkR(t: String) -> (String, i64) { return (f"R-{t}-aaaaaaaaaaaaaaaa", 7); }
 struct HolderR { h: Sh }
 
 fn mkD2() -> Sh { let a = mkD("n"); return Sh.S(a); }
-fn takeout(s: Sh) -> (String, i64) { match s { Sh.S(x) => { return x; } Sh.N => { return mkI("z"); } } }
+fn takeout(s: Sh) -> (String, i64) { match s { Sh.S(x) => { return x.clone(); } Sh.N => { return mkI("z"); } } }
 fn takef(t: (String, i64)) { println(f"K:{t.0}"); }
 fn peek(s: Sh) -> i64 { match s { Sh.S(y) => { return y.1; } Sh.N => { return -1; } } }
 
@@ -45,7 +45,7 @@ fn main() {
     { let s = Sh.S(mkH("t")); match s { Sh.S(x) => { let u = x; println(f"H:{u.0}"); } Sh.N => { println("e"); } } }
     { let t = takeout(Sh.S(mkI("t"))); println(f"I:{t.0}"); }
     { let s = Sc.S((3, 4)); match s { Sc.S(x) => { println(f"J:{x.0}/{x.1}"); } Sc.N => { println("e"); } } }
-    { let s = Sh.S(mkK("t")); match s { Sh.S(x) => { takef(x); } Sh.N => { println("e"); } } }
+    { let s = Sh.S(mkK("t")); match s { Sh.S(x) => { takef(x.clone()); } Sh.N => { println("e"); } } }
     { let l1 = Sh.S(mkL("t")); match l1 { Sh.S(x) => { let u = x; println(f"L:{u.0}"); } Sh.N => { println("e"); } } }
     { let q = Sh.S(mkQ("t")); println(f"Q:{peek(q)}"); }
     { let s = St.S { a: mkM("t") }; match s { St.S { a } => { println(f"M:{a.0}"); } St.N => { println("e"); } } }

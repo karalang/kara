@@ -419,9 +419,9 @@ fn main() {
                 // move the prefix to sit right after the full word
                 let mut fixed: Vec[Vec[i64]] = Vec.new();
                 fixed.push(src);
-                fixed.push(raw[raw.len() - 1]);
+                fixed.push(raw[raw.len() - 1].clone());
                 let mut rest = 1;
-                while rest < raw.len() - 1 { fixed.push(raw[rest]); rest = rest + 1; }
+                while rest < raw.len() - 1 { fixed.push(raw[rest].clone()); rest = rest + 1; }
                 raw = fixed;
             }
         }

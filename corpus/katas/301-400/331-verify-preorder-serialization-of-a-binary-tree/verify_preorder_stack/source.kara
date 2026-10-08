@@ -11,7 +11,7 @@
 fn is_valid_serialization(preorder: ref String) -> bool {
     let mut stack: Vec[String] = Vec.new();
     for tok in preorder.split(",") {
-        stack.push(tok);
+        stack.push(tok.clone());
         while stack.len() >= 3 {
             let n = stack.len();
             if stack[n - 1] == "#" and stack[n - 2] == "#" and stack[n - 3] != "#" {

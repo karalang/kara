@@ -1,0 +1,99 @@
+
+shared struct Sh { s: String }
+shared enum Se { V(String), N }
+struct Ws { h: Sh }
+struct Wo { h: Option[Sh] }
+struct Wm { id: i64, h: Sh, n: i64 }
+struct Ps { a: String, n: i64 }
+struct Wse { h: Se }
+
+enum Es { A(Ws), B }
+enum Eo { A(Wo), B }
+enum Ese { A(Wse), B }
+
+fn outs(n: i64) -> String { return f"out-{n}-oooooooooooooooooooooooo"; }
+fn pays(n: i64) -> String { return f"pay-{n}-pppppppppppppppppppppppppppppppppp"; }
+
+fn mkw(t: String) -> Ws { return Ws { h: Sh { s: t } }; }
+fn mkm(i: i64, t: String) -> Wm { return Wm { id: i, h: Sh { s: t }, n: i }; }
+fn mkp(n: i64, t: String) -> Ps { return Ps { a: t, n: n }; }
+
+fn hit(s: String) -> i64 { if s.contains(f"pppp") { return 1; } return 0; }
+
+fn c_call(n: i64) -> i64 {
+  let mut out: Ws = Ws { h: Sh { s: outs(n) } };
+  out = mkw(pays(n));
+  let t = out.h;
+  return hit(t.s);
+}
+fn c_arm(b: Es, n: i64) -> i64 {
+  let mut out: Ws = Ws { h: Sh { s: outs(n) } };
+  match b { Es.A(w) => { out = w; } Es.B => { } }
+  let t = out.h;
+  return hit(t.s);
+}
+fn c_local(n: i64) -> i64 {
+  let mut out: Ws = Ws { h: Sh { s: outs(n) } };
+  let w: Ws = Ws { h: Sh { s: pays(n) } };
+  out = w;
+  let t = out.h;
+  return hit(t.s);
+}
+fn c_iflet(b: Es, n: i64) -> i64 {
+  let mut out: Ws = Ws { h: Sh { s: outs(n) } };
+  if let Es.A(w) = b { out = w; }
+  let t = out.h;
+  return hit(t.s);
+}
+fn c_opt(b: Eo, n: i64) -> i64 {
+  let mut out: Wo = Wo { h: Option.Some(Sh { s: outs(n) }) };
+  match b { Eo.A(w) => { out = w; } Eo.B => { } }
+  match out.h { Option.Some(x) => { return hit(x.s); } Option.None => { return 0; } }
+}
+fn c_twice(n: i64) -> i64 {
+  let mut r: Wm = mkm(1, outs(n));
+  r = mkm(7, outs(n));
+  r = mkm(9, pays(n));
+  let t = r.h;
+  return hit(t.s);
+}
+fn c_plain(n: i64) -> i64 {
+  let mut r: Ps = mkp(1, outs(n));
+  r = mkp(7, outs(n));
+  r = mkp(9, pays(n));
+  let t = r.a;
+  return hit(t);
+}
+
+fn c_senum_arm(b: Ese, n: i64) -> i64 {
+  let mut out: Wse = Wse { h: Se.V(outs(n)) };
+  match b { Ese.A(w) => { out = w; } Ese.B => { } }
+  match out.h { Se.V(s) => { return hit(s); } Se.N => { return 0; } }
+}
+fn c_senum_inline(n: i64) -> i64 {
+  let mut out: Wse = Wse { h: Se.V(outs(n)) };
+  out = Wse { h: Se.V(pays(n)) };
+  match out.h { Se.V(s) => { return hit(s); } Se.N => { return 0; } }
+}
+fn c_shadow(b: Es, n: i64) -> i64 {
+  // NOT a displacement: a shadowing `let` leaves the first binding intact, so
+  // it must still release through its own scope exit. Deliberately unread --
+  // any read would move the field out and remove the action under test.
+  let out: Ws = Ws { h: Sh { s: outs(n) } };
+  match b { Es.A(w) => { let out2: Ws = w; let t = out2.h; return hit(t.s); } Es.B => { return 0; } }
+}
+
+fn main() {
+  let n: i64 = env.args().len();
+  println(f"a{c_call(n)}");
+  println(f"b{c_arm(Es.A(Ws { h: Sh { s: pays(n) } }), n)}");
+  println(f"c{c_local(n)}");
+  println(f"d{c_iflet(Es.A(Ws { h: Sh { s: pays(n) } }), n)}");
+  println(f"e{c_opt(Eo.A(Wo { h: Option.Some(Sh { s: pays(n) }) }), n)}");
+  println(f"f{c_twice(n)}");
+  println(f"h{c_plain(n)}");
+  println(f"i{c_senum_arm(Ese.A(Wse { h: Se.V(pays(n)) }), n)}");
+  println(f"j{c_senum_inline(n)}");
+  println(f"k{c_shadow(Es.A(Ws { h: Sh { s: pays(n) } }), n)}");
+  println("end")
+}

@@ -10,7 +10,7 @@ fn a3(s: E) -> i64 { let mut v: Vec[Array[String, 2]] = Vec.new(); match s { E.S
 fn a4(s: E) -> Option[Array[String, 2]] { match s { E.S(x) => { let u = x; return Some(u); } E.N => { return None; } } }
 fn a5(s: E) -> Array[String, 2] { match s { E.S(x) => { let u = x; u } E.N => mka("z") } }
 fn a6(s: E) -> Array[String, 2] { match s { E.S(x) => { let u = x; let w = u; return w; } E.N => { return mka("z"); } } }
-fn a7(s: E) -> String { match s { E.S(x) => { let u = x; return u[0]; } E.N => { return "n"; } } }
+fn a7(s: E) -> String { match s { E.S(x) => { let u = x; return u[0].clone(); } E.N => { return "n"; } } }
 fn a8(s: E, b: bool) -> Array[String, 2] { match s { E.S(x) => { let u = x; if b { return u; } return mka("q"); } E.N => { return mka("z"); } } }
 fn a9(s: E) -> Array[String, 2] { if let E.S(x) = s { let u = x; return u; } return mka("z"); }
 fn t1(s: T) -> (Array[String, 2], i64) { match s { T.S(x) => { let u = x; return u; } T.N => { return mkt("z"); } } }

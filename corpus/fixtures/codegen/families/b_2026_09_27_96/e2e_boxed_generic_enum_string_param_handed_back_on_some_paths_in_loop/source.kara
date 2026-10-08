@@ -12,6 +12,6 @@ fn main() {
         let c: Hs[String] = Hs.Full(f"q{i}" + "x"); let t = pm(c, i == 1); sh(t);
         i = i + 1;
     }
-    for x in w { sh(x) }
+    for x in w.into_iter() { sh(x) }
     println("end")
 }

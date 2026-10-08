@@ -1,0 +1,16 @@
+null
+true
+false
+42
+-3.14
+1.5e10
+"hello"
+"a\"b\nc"
+[1,2,3]
+[]
+{}
+{"name":"kara","nums":[1,2,3],"nested":{"ok":true}}
+[null,[1,[2,[3,[]]]],{"deep":{"deeper":[true,false]}}]
+ERROR: expected string key
+ERROR: expected ',' or ']' in array
+ERROR: unterminated string

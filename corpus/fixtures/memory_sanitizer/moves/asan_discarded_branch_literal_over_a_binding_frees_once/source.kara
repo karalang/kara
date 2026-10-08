@@ -13,9 +13,9 @@ fn go() -> i64 {
     let _ = match seed() { 1 => { P { a: s4, b: 1 } } _ => { P { a: payload(), b: 2 } } };
     let mut v: Vec[String] = Vec.new();
     v.push(payload());
-    if seed() > 0 { P { a: v[0], b: 1 } } else { P { a: payload(), b: 2 } };
-    let mut i = 0i64;
-    while i < 20i64 {
+    if seed() > 0 { P { a: v[0].clone(), b: 1 } } else { P { a: payload(), b: 2 } };
+    let mut i = 0;
+    while i < 20 {
         let s = payload();
         if seed() > 0 { P { a: s, b: 1 } } else { P { a: payload(), b: 2 } };
         i = i + 1;

@@ -1,0 +1,36 @@
+loc
+  rd1
+dR101/t101
+dR1/t1
+lit
+  rd2
+dR102/t102
+dR2/t2
+call
+  rd3
+dR103/t103
+dR3/t3
+ctl
+  rd4
+dR104/t104
+dR4/t4
+param
+  rd5
+dR105/t105
+dR5/t5
+used
+  got106
+dR106/t106
+  rd6
+dR6/t6
+none
+  rd7
+dR7/t7
+ostr
+  rd8/s8
+dR8/t8
+ren
+  rd10
+dR110/t110
+dR10/t10
+done

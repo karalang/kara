@@ -63,7 +63,7 @@ fn search(num: ref String, target: i64, pos: i64, expr: String, cur: i64, last: 
             em.push_str("-");
             em.push_str(piece);
             search(num, target, end, em, cur - n, 0 - n, found, hash);
-            let mut et = expr;
+            let mut et = expr.clone();
             et.push_str("*");
             et.push_str(piece);
             search(num, target, end, et, cur - last + last * n, last * n, found, hash);

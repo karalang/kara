@@ -1,0 +1,15 @@
+"112358" -> true
+"199100199" -> true
+"1023" -> false
+"000" -> true
+"011" -> true
+"123" -> true
+"122" -> false
+"" -> false
+"1" -> false
+"12" -> false
+"1023456" -> false
+"0235" -> false
+"0000" -> true
+"00000" -> true
+"199100" -> true

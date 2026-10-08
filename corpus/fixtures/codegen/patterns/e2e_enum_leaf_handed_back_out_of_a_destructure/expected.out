@@ -1,0 +1,55 @@
+let/local
+  got
+let/temp
+  got
+let_unused/local
+  dE
+  dR3
+  got10
+let_rebind/local
+  got
+let_call/local
+  dE
+  dR5
+  got15
+let_r/local
+  got6
+match/local
+  got
+tuple/local
+  got
+tuple/temp
+  got
+tuple_unused/local
+  dE
+  dR13
+  got10
+tuple_call/local
+  dE
+  dR14
+  got24
+tuple_r/local
+  got15
+tuple_iflet/local
+  got
+tuple_let/local
+  got
+end
+  dE
+  dR17
+  dE
+  dR16
+  dR15
+  dE
+  dR12
+  dE
+  dR11
+  dE
+  dR7
+  dR6
+  dE
+  dR4
+  dE
+  dR2
+  dE
+  dR1

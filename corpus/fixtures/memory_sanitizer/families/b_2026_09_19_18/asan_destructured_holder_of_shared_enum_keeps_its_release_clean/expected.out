@@ -1,0 +1,13 @@
+tuple
+  n=3
+  p10
+  mid
+  d2:10
+  out
+struct
+  n=2
+  p10
+  mid
+  d2:10
+  out
+end

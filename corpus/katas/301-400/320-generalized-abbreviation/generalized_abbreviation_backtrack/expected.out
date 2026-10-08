@@ -1,0 +1,14 @@
+"word" -> 16
+4 3d 2r1 2rd 1o2 1o1d 1or1 1ord w3 w2d w1r1 w1rd wo2 wo1d wor1 word
+"" -> 1
+
+"a" -> 2
+1 a
+"ab" -> 4
+2 1b a1 ab
+"abc" -> 8
+3 2c 1b1 1bc a2 a1c ab1 abc
+"aaaa" -> 16
+4 3a 2a1 2aa 1a2 1a1a 1aa1 1aaa a3 a2a a1a1 a1aa aa2 aa1a aaa1 aaaa
+"leet" -> 16
+4 3t 2e1 2et 1e2 1e1t 1ee1 1eet l3 l2t l1e1 l1et le2 le1t lee1 leet

@@ -1,0 +1,8 @@
+
+struct Owned { x: i64 }
+fn take(o: Owned) { }
+fn main() {
+    let o = Owned { x: 1 };
+    let _f = || take(o);
+    let _u = o;
+}

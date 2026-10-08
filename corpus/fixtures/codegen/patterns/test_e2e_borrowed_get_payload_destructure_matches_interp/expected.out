@@ -1,0 +1,9 @@
+payload-1-long-enough-to-heap
+mg 29
+mg n
+il payload-2-long-enough-to-heap 29 5
+il payload-2-long-enough-to-heap
+st payload-3-long-enough-to-heap 29 9
+tu payload-4-long-enough-to-heap 29 6
+lp 58
+done

@@ -3,20 +3,20 @@ struct R { id: i64, name: String }
 struct Box2 { w: String }
 
 fn sink(s: String) -> i64 { return s.len(); }
-fn take(v: Vec[(R, i64)]) -> String { return v[0].0.name; }
+fn take(v: Vec[(R, i64)]) -> String { return v[0].0.name.clone(); }
 
 fn main() {
     let v: Vec[(R, i64)] = [(R { id: 41, name: f"n{41}" }, 1)];
     // consuming positions
-    let s = v[0].0.name;
+    let s = v[0].0.name.clone();
     println(s);
-    let b = Box2 { w: v[0].0.name };
+    let b = Box2 { w: v[0].0.name.clone() };
     println(b.w);
     let mut o: Vec[String] = Vec.new();
-    o.push(v[0].0.name);
+    o.push(v[0].0.name.clone());
     println(o[0]);
-    println(sink(v[0].0.name));
-    println(take(v));
+    println(sink(v[0].0.name.clone()));
+    println(take(v.clone()));
     // non-consuming reads: the clone must free itself
     println(v[0].0.name + "!");
     println(v[0].0.name.len());

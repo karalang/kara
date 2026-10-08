@@ -42,7 +42,7 @@ fn main() {
     { let h = mk(14); let o = outo(h); println(f"n{o.is_some()}") }
     { let h = mk(15); match h { Hs.P(Some(s)) => { let t = s; println(f"o{t}") }, _ => println("q") } }
     { let h = mk(16); let g = h; println(f"p{peek(g)}") }
-    { let v: Vec[Hs] = [mk(1), mk(2), Hs.Q]; let mut n = 0; for h in v { n = n + take(h); }; println(f"q{n}") }
+    { let v: Vec[Hs] = [mk(1), mk(2), Hs.Q]; let mut n = 0; for h in v.into_iter() { n = n + take(h); }; println(f"q{n}") }
     { let mut h = mk(18); h = mk(19); println(f"r{peek(h)}") }
     { let h = mk(20); let g = h; println(f"s{peek(g)}") }
     { let h = mk(21); if let Hs.P(Some(s)) = h { println(f"t{s}") } }

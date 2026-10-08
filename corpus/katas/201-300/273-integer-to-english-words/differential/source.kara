@@ -183,12 +183,12 @@ fn build_groups() -> Vec[String] {
     let t = tens_table();
     let mut g: Vec[String] = Vec.new();
     let mut i = 0;
-    while i < 20 { g.push(u[i]); i = i + 1; }
+    while i < 20 { g.push(u[i].clone()); i = i + 1; }
     let mut d = 2;
     while d < 10 {
         let mut r = 0;
         while r < 10 {
-            if r == 0 { g.push(t[d]); } else { g.push(t[d] + " " + u[r]); }
+            if r == 0 { g.push(t[d].clone()); } else { g.push(t[d] + " " + u[r]); }
             r = r + 1;
         }
         d = d + 1;
@@ -232,10 +232,10 @@ fn vocabulary() -> Set[String] {
     let mut v: Set[String] = Set.new();
     let u = units_table();
     let mut i = 1;
-    while i < u.len() { v.insert(u[i]); i = i + 1; }
+    while i < u.len() { v.insert(u[i].clone()); i = i + 1; }
     let t = tens_table();
     i = 2;
-    while i < t.len() { v.insert(t[i]); i = i + 1; }
+    while i < t.len() { v.insert(t[i].clone()); i = i + 1; }
     v.insert("Hundred");
     v.insert("Thousand");
     v.insert("Million");

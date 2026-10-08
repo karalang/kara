@@ -19,7 +19,7 @@ impl H3 { fn put(mut ref self, s: Sh) { self.e = s; } }
 
 fn bind_plain() { let s = Pl.P(f"aaaaaaaa{1}"); let mut k = Pl.Q; k = s; if let Pl.P(r) = k { println(f"  k{r.len()}") } }
 fn bind_drop() { let s = Pd.P(mkr(1)); let mut k = Pd.Q; k = s; if let Pd.P(r) = k { println(f"  k{r.s.len()}") } }
-fn bind_own() { let s = Own.P(f"aaaaaaaa{1}"); let mut k = Own.Q; k = s; if let Own.P(r) = k { println(f"  k{r.len()}") } }
+fn bind_own() { let s = Own.P(f"aaaaaaaa{1}"); let mut k = Own.Q; k = s; if let Own.P(ref r) = k { println(f"  k{r.len()}") } }
 fn bind_inner() { let mut k = Pl.Q; { let s = Pl.P(f"aaaaaaaa{1}"); k = s; } if let Pl.P(r) = k { println(f"  k{r.len()}") } }
 fn bind_taken() { let s = Pl.P(f"aaaaaaaa{1}"); let mut k = Pl.Q; if true { k = s; } if let Pl.P(r) = k { println(f"  k{r.len()}") } }
 fn bind_untaken() { let s = Own.P(f"aaaaaaaa{1}"); let mut k = Own.Q; if false { k = s; } println("  mid") }
@@ -32,7 +32,7 @@ fn fld_shared_disp() { let s = Sh.P(mkr(1)); let mut h = H3 { e: Sh.P(mkr(22)) }
 fn fld_shared_loop() { let mut h = H3 { e: Sh.Q }; let mut i = 0; while i < 3 { let s = Sh.P(mkr(i)); h.e = s; i = i + 1; } println("  mid") }
 fn fld_shared_untaken() { let s = Sh.P(mkr(1)); let mut h = H3 { e: Sh.Q }; if false { h.e = s; } println("  mid") }
 fn fld_shared_method() { let s = Sh.P(mkr(1)); let mut h = H3 { e: Sh.Q }; h.put(s); if let Sh.P(r) = h.e { println(f"  k{r.s.len()}") } }
-fn fld_own() { let s = Own.P(f"aaaaaaaa{1}"); let mut h = H4 { e: Own.Q }; h.e = s; if let Own.P(r) = h.e { println(f"  k{r.len()}") } }
+fn fld_own() { let s = Own.P(f"aaaaaaaa{1}"); let mut h = H4 { e: Own.Q }; h.e = s; if let Own.P(ref r) = h.e { println(f"  k{r.len()}") } }
 fn fld_own_untaken() { let s = Own.P(f"aaaaaaaa{1}"); let mut h = H4 { e: Own.Q }; if false { h.e = s; } println("  mid") }
 fn fld_taken() { let s = Pd.P(mkr(1)); let mut h = H2 { e: Pd.Q }; if true { h.e = s; } println("  mid") }
 fn fld_loop() { let mut h = H1 { e: Pl.Q }; let mut i = 0; while i < 3 { let s = Pl.P(f"aaaaaaaa{i}"); h.e = s; i = i + 1; } if let Pl.P(r) = h.e { println(f"  k{r.len()}") } }

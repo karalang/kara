@@ -1,0 +1,122 @@
+// Benchmark workload for LeetCode #288 — Unique Word Abbreviation.
+//
+// BUILD-ONCE + PUNCH, per BENCHMARKS.md: the dictionary index is built a single
+// time, then a fixed pool of query words is punched through `is_unique` a
+// million times. The query pool is pre-generated so the measured loop is
+// abbreviation-construction plus a hash lookup — not the word generator.
+//
+// Half the pool is drawn from the dictionary and half is fresh, so both halves
+// of the predicate are exercised: the identity test inside `Sole`, and the
+// absent-abbreviation fast path.
+
+enum Bucket {
+    Sole(String),
+    Conflicted,
+}
+
+fn abbrev(w: ref String) -> String {
+    let cs: Vec[char] = w.chars().collect();
+    let n = cs.len();
+    if n <= 2 {
+        return w.clone();
+    }
+    let mut out = String.new();
+    out.push(cs[0]);
+    out.push_str(f"{n - 2}");
+    out.push(cs[n - 1]);
+    return out;
+}
+
+// The corpus's 31-bit LCG, mirrored bit-for-bit in the C/Rust/Go/Python twins.
+// The mask keeps it in range: Kara traps integer overflow by default.
+fn next_rand(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 2147483647;
+}
+
+fn main() {
+    let letters: Vec[char] = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j',
+                              'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't',
+                              'u', 'v', 'w', 'x', 'y', 'z'];
+    let dict_n = 3000;
+    let pool_n = 20000;
+    let punches = 1000000;
+
+    let mut seed = 12345;
+
+    // --- dictionary -----------------------------------------------------
+    let mut dict: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < dict_n {
+        seed = next_rand(seed);
+        let n = 3 + ((seed / 65536) % 8);
+        let mut w = String.new();
+        let mut j = 0;
+        while j < n {
+            seed = next_rand(seed);
+            w.push(letters[(seed / 65536) % 26]);
+            j = j + 1;
+        }
+        dict.push(w);
+        i = i + 1;
+    }
+
+    // --- index (built once) ---------------------------------------------
+    let mut idx: Map[String, Bucket] = Map.new();
+    i = 0;
+    while i < dict_n {
+        let w = ref dict[i];
+        let a = abbrev(w);
+        match idx.get(a) {
+            None => {
+                let _ = idx.insert(a, Bucket.Sole(w.clone()));
+            }
+            Some(Bucket.Sole(prev)) => {
+                if prev != w {
+                    let _ = idx.insert(a, Bucket.Conflicted);
+                }
+            }
+            Some(Bucket.Conflicted) => {}
+        }
+        i = i + 1;
+    }
+
+    // --- query pool: half from the dictionary, half fresh ----------------
+    let mut pool: Vec[String] = Vec.new();
+    i = 0;
+    while i < pool_n {
+        if (i % 2) == 0 {
+            pool.push(dict[(i * 7) % dict_n]);
+        } else {
+            seed = next_rand(seed);
+            let n = 3 + ((seed / 65536) % 8);
+            let mut w = String.new();
+            let mut j = 0;
+            while j < n {
+                seed = next_rand(seed);
+                w.push(letters[(seed / 65536) % 26]);
+                j = j + 1;
+            }
+            pool.push(w);
+        }
+        i = i + 1;
+    }
+
+    // --- punch ----------------------------------------------------------
+    let mut unique_count = 0;
+    i = 0;
+    while i < punches {
+        let word = ref pool[i % pool_n];
+        let a = abbrev(word);
+        let u = match idx.get(a) {
+            None => true,
+            Some(Bucket.Sole(w)) => w == word,
+            Some(Bucket.Conflicted) => false,
+        };
+        if u {
+            unique_count = unique_count + 1;
+        }
+        i = i + 1;
+    }
+
+    println(f"unique {unique_count}");
+}

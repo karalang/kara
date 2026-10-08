@@ -12,7 +12,7 @@ struct Holder { a: Array[String, 2] }
 struct Nums { ns: Array[i64, 2] }
 struct VHold { vs: Array[Vec[i64], 2] }
 
-fn take(h: Holder) -> String { return h.a[0]; }
+fn take(h: Holder) -> String { return h.a[0].clone(); }
 
 fn main() {
     let h = Holder { a: mk(7) };

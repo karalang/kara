@@ -46,7 +46,7 @@ fn main() {
     let mut i = 0;
     while i < toks.len() {
         let e = match toks[i].token {
-            Integer(v, sfx) => Ex.Int(Lit { value: v, suffix: sfx, span: Sp { offset: i as i64, length: 1 } }),
+            Integer(v, sfx) => Ex.Int(Lit { value: v, suffix: sfx.clone(), span: Sp { offset: i as i64, length: 1 } }),
             Word(w) => Ex.Leaf,
         };
         exprs.push(e);

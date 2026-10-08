@@ -1,0 +1,8 @@
+start floor=1  queued=[2, 3, 5, 7, 9]
+
+  floor 1 · → 2
+  floor 2 ↑ → 3
+  floor 3 ↑ → 5
+  floor 5 ↑ → 7
+  floor 7 ↑ → 9
+done.

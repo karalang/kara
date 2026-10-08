@@ -1,0 +1,12 @@
+
+struct Score { v: i64 }
+impl PartialEq for Score { fn eq(self, other: Score) -> bool { self.v == other.v } }
+impl Eq for Score {}
+impl PartialOrd for Score { fn partial_cmp(self, other: Score) -> Option[Ordering] { Some(self.v.cmp(other.v)) } }
+impl Ord for Score { fn cmp(self, other: Score) -> Ordering { self.v.cmp(other.v) } }
+fn main() {
+    let s1 = Score { v: 1i64 };
+    let s2 = Score { v: 2i64 };
+    let _ = s1.cmp(s2);
+    println(10i64);
+}

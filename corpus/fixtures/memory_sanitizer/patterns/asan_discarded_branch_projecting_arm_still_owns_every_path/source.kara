@@ -6,9 +6,9 @@ fn payload2() -> String { f"payload2-{seed()}-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
 fn go() -> i64 {
     let t = mkp(9);
-    let mut i = 0i64;
-    while i < 5i64 {
-        if seed() > 99i64 { P { a: t.a, b: 1 } } else { P { a: payload2(), b: 2 } };
+    let mut i = 0;
+    while i < 5 {
+        if seed() > 99 { P { a: t.a.clone(), b: 1 } } else { P { a: payload2(), b: 2 } };
         i = i + 1;
     }
     return t.b;

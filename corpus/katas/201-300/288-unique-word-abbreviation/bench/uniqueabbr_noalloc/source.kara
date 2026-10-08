@@ -117,7 +117,7 @@ fn main() {
     i = 0;
     while i < pool_n {
         if (i % 2) == 0 {
-            pool.push(dict[(i * 7) % dict_n]);
+            pool.push(dict[(i * 7) % dict_n].clone());
         } else {
             seed = next_rand(seed);
             let n = 3 + ((seed / 65536) % 8);

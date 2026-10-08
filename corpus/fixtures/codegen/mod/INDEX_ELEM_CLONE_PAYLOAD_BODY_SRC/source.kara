@@ -47,14 +47,14 @@ fn leg_unbound() {
 
 fn leg_fresh() {
     println("fresh");
-    match mk(5) { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    match mk(5) { E.A(ref r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
     println("fresh end");
 }
 
 fn leg_local() {
     println("local");
     let e = mk(6);
-    match e { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    match e { E.A(ref r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
     println("local end");
 }
 

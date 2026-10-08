@@ -163,7 +163,7 @@ fn words_of(items: Slice[String]) -> Vec[String] {
     let mut v: Vec[String] = Vec.new();
     let mut i = 0;
     while i < items.len() {
-        v.push(items[i]);
+        v.push(items[i].clone());
         i = i + 1;
     }
     return v;

@@ -1,0 +1,29 @@
+hop_handback
+  v=1
+hop_dies_inside
+  dR2
+  v=90
+hop_handback_fresh
+  v=3
+hop_dies_fresh
+  dR4
+  v=90
+nohop_handback
+  v=5
+nohop_dies_inside
+  dR6
+  v=91
+copyable_hop_handback
+  v=7
+copyable_hop_dies
+  dP8
+  v=92
+end
+  dP92
+  dP7
+  dR91
+  dR5
+  dR90
+  dR3
+  dR90
+  dR1

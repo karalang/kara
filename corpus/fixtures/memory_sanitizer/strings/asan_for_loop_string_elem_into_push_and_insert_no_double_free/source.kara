@@ -6,10 +6,10 @@ fn main() {
     let mut out: Vec[String] = Vec.new();
     let mut m: Map[String, i64] = Map.new();
     for w in words {
-        out.push(w);
+        out.push(w.clone());
     }
     for w in out {
-        m.insert(w, 1_i64);
+        m.insert(w.clone(), 1);
     }
     println(out.len());
     println(m.len());

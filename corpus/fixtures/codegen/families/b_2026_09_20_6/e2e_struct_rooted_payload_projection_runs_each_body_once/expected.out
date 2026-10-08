@@ -1,0 +1,55 @@
+one
+  dR1
+  got:2
+  dR2
+v3 temp
+  dR31
+  got:32
+  dR32
+v3 named
+  dR33
+  got:34
+  dR34
+v4 temp
+  dR41
+  got:42
+  dR42
+v4 named
+  dR43
+  got:44
+  dR44
+v9 temp
+  dR91
+  got:92
+  dR92
+v9 named
+  dR93
+  got:94
+  dR94
+v10 temp
+  dR101
+  got:102
+  dR102
+v10 named
+  dR103
+  got:104
+  dR104
+r3 temp
+  dR61
+  got:62
+  dR62
+r3 named
+  dR63
+  got:64
+  dR64
+r3 err
+  got:7
+  dR7
+peek
+  dR72
+  dR71
+  got:72
+none
+  got:0
+  dR0
+end

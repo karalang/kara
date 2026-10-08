@@ -39,7 +39,7 @@ impl FreqStack {
             Some(bucket) => {
                 let mut b = bucket;
                 b.push(x);
-                self.buckets.insert(f, b);
+                self.buckets.insert(f, b.clone());
             }
             None => {
                 let mut b: Vec[i64] = Vec.new();

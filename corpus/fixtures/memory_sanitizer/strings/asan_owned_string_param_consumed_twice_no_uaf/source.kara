@@ -6,10 +6,10 @@ fn visit(
     route: mut ref Vec[String],
 ) {
     while true {
-        let dests: Vec[String] = match adj.get(airport) { Some(d) => d, None => Vec.new() };
-        let used = match cursor.get(airport) { Some(u) => u, None => 0i64 };
+        let dests: Vec[String] = match adj.get(airport) { Some(d) => d.clone(), None => Vec.new() };
+        let used = match cursor.get(airport) { Some(u) => u, None => 0 };
         if used >= dests.len() { break; }
-        let _ = cursor.insert(airport, used + 1i64);
+        let _ = cursor.insert(airport.clone(), used + 1);
         visit(adj, cursor, dests[used].clone(), route);
     }
     route.push(airport);
@@ -30,6 +30,6 @@ fn main() {
     let mut cursor: Map[String, i64] = Map.new();
     let mut route: Vec[String] = Vec.new();
     visit(mut adj, mut cursor, "JFK", mut route);
-    let mut i = 0i64;
-    while i < route.len() { println(route[i]); i = i + 1i64; }
+    let mut i = 0;
+    while i < route.len() { println(route[i]); i = i + 1; }
 }

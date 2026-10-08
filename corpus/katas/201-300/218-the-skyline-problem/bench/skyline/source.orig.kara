@@ -1,0 +1,115 @@
+// Benchmark workload for LeetCode #218 — The Skyline Problem.
+//
+// The kata computes a skyline by divide & conquer, mirroring merge sort: split
+// the buildings, recurse, then merge the two contours with a max-height sweep and
+// a "emit only on change" dedup. The bench builds ONE big PRNG building set, then
+// PASSES times punches a single building's height and re-runs the full skyline,
+// accumulating the contour's key points. It is deliberately allocation-heavy —
+// every merge node allocates a fresh contour — so it measures allocator + memory
+// throughput as much as compute. Sink = sum of (x + h) over every key point of
+// every pass.
+
+struct Building {
+    left: i64,
+    right: i64,
+    height: i64,
+}
+
+struct Point {
+    x: i64,
+    h: i64,
+}
+
+fn merge(left: ref Vec[Point], right: ref Vec[Point]) -> Vec[Point] {
+    let mut result: Vec[Point] = Vec.new();
+    let nl = left.len();
+    let nr = right.len();
+    let mut i = 0;
+    let mut j = 0;
+    let mut h1 = 0;
+    let mut h2 = 0;
+    while i < nl and j < nr {
+        let mut x = 0;
+        if left[i].x < right[j].x {
+            x = left[i].x;
+            h1 = left[i].h;
+            i = i + 1;
+        } else if left[i].x > right[j].x {
+            x = right[j].x;
+            h2 = right[j].h;
+            j = j + 1;
+        } else {
+            x = left[i].x;
+            h1 = left[i].h;
+            h2 = right[j].h;
+            i = i + 1;
+            j = j + 1;
+        }
+        let maxh = if h1 > h2 { h1 } else { h2 };
+        if result.len() == 0 or result[result.len() - 1].h != maxh {
+            result.push(Point { x: x, h: maxh });
+        }
+    }
+    while i < nl {
+        result.push(left[i]);
+        i = i + 1;
+    }
+    while j < nr {
+        result.push(right[j]);
+        j = j + 1;
+    }
+    return result;
+}
+
+fn skyline(bs: ref Vec[Building], lo: i64, hi: i64) -> Vec[Point] {
+    if hi - lo == 1 {
+        let b = ref bs[lo];
+        let mut r: Vec[Point] = Vec.new();
+        r.push(Point { x: b.left, h: b.height });
+        r.push(Point { x: b.right, h: 0 });
+        return r;
+    }
+    let mid = lo + (hi - lo) / 2;
+    let left = skyline(bs, lo, mid);
+    let right = skyline(bs, mid, hi);
+    return merge(left, right);
+}
+
+fn main() {
+    let n = 24000;
+    let passes = 100;
+    let xr = 200000;
+    let wr = 120;
+    let hr = 1000;
+
+    let mut bs: Vec[Building] = Vec.new();
+    let mut state = 12345;
+    let mut i = 0;
+    while i < n {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let left = state % xr;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let width = 1 + state % wr;
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let height = 1 + state % hr;
+        bs.push(Building { left: left, right: left + width, height: height });
+        i = i + 1;
+    }
+
+    let mut sink = 0;
+    let mut p = 0;
+    while p < passes {
+        state = (state * 1103515245 + 12345) & 2147483647;
+        let idx = p % n;
+        let b = ref bs[idx];
+        bs[idx] = Building { left: b.left, right: b.right, height: 1 + state % hr };
+        let sky = skyline(bs, 0, n);
+        let mut k = 0;
+        while k < sky.len() {
+            sink = sink + sky[k].x + sky[k].h;
+            k = k + 1;
+        }
+        p = p + 1;
+    }
+    println(sink);
+}

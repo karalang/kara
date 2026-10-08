@@ -1,0 +1,10 @@
+
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(7, "a heap string padded out beyond thirty-six bytes!");
+    let s = match m.get(7) {
+        Some(x) => x,
+        None => "n".to_string(),
+    };
+    println(s.len());
+}

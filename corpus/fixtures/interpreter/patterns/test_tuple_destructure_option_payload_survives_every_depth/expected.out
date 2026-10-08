@@ -1,0 +1,16 @@
+named
+  rd1
+dR101/t101
+dR1/t1
+named end
+one
+  rd2
+dR102/t102
+dR2/t2
+one end
+two
+  rd3
+dR103/t103
+dR3/t3
+two end
+done

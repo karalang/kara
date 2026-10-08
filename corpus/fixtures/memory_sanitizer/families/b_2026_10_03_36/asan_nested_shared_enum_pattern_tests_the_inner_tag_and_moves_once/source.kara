@@ -24,7 +24,7 @@ fn main() {
     let nf = match f { H3.W(H.Z(M.My(x))) => x.len(), H3.W(H.Z(M.N)) => 9, _ => 0 };
     println(f"f {nf}");
     let g = Hs.Z(Ms.S(hs(7)));
-    let sg = match g { Hs.Z(Ms.S(t)) => t, _ => "none".to_string() };
+    let sg = match g { Hs.Z(Ms.S(t)) => t.clone(), _ => "none".to_string() };
     println(f"g {sg}");
     let h = Hs.Z(Ms.T);
     if let Hs.Z(Ms.S(t)) = h { println(f"h {t}") } else { println("h else") }

@@ -3,11 +3,11 @@ struct Pair { x: String, y: String }
 fn main() {
     let v: Vec[String] = Vec["aa".to_string(), "bb".to_string(), "cc".to_string()];
     // tuple literal
-    let t: (String, String) = (v[0i64], v[2i64]);
+    let t: (String, String) = (v[0].clone(), v[2].clone());
     // push into another Vec
     let mut d: Vec[String] = Vec.new();
-    d.push(v[1i64]);
+    d.push(v[1].clone());
     // struct field
-    let p: Pair = Pair { x: v[0i64], y: v[1i64] };
-    println(f"{t.0} {t.1} {d[0i64]} {p.x} {p.y} {v.len()}");
+    let p: Pair = Pair { x: v[0].clone(), y: v[1].clone() };
+    println(f"{t.0} {t.1} {d[0]} {p.x} {p.y} {v.len()}");
 }

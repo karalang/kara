@@ -2,52 +2,52 @@
 fn main() {
     let mut froms: Vec[String] = Vec.new();
     let mut tos: Vec[String] = Vec.new();
-    let mut i = 0i64;
-    while i < 200i64 {
-        froms.push(f"K{i % 7i64}");
+    let mut i = 0;
+    while i < 200 {
+        froms.push(f"K{i % 7}");
         tos.push(f"V{i}");
         i = i + 1;
     }
 
     let mut adj: Map[String, Vec[String]] = Map.new();
-    let mut j = 0i64;
+    let mut j = 0;
     while j < froms.len() {
         let k = froms[j].clone();
         let present = match adj.get(k) { Some(_) => true, None => false };
         if not present {
             let empty: Vec[String] = Vec.new();
-            let _ = adj.insert(k, empty);
+            let _ = adj.insert(k.clone(), empty);
         }
-        adj[k].push(tos[j]);
-        j = j + 1i64;
+        adj[k].push(tos[j].clone());
+        j = j + 1;
     }
 
-    let mut total = 0i64;
+    let mut total = 0;
     for key in adj.keys() {
-        let d: Vec[String] = match adj.get(key) { Some(v) => v, None => Vec.new() };
+        let d: Vec[String] = match adj.get(key) { Some(v) => v.clone(), None => Vec.new() };
         total = total + d.len();
     }
     println(f"keys={adj.len()} total={total}");
 
     // Scalar-keyed sibling: same lowering, no heap key half.
     let mut mi: Map[i64, Vec[i64]] = Map.new();
-    let mut s = 0i64;
-    while s < 5i64 {
+    let mut s = 0;
+    while s < 5 {
         let empty: Vec[i64] = Vec.new();
         let _ = mi.insert(s, empty);
-        s = s + 1i64;
+        s = s + 1;
     }
-    let mut t = 0i64;
-    while t < 100i64 {
-        mi[t % 5i64].push(t);
-        t = t + 1i64;
+    let mut t = 0;
+    while t < 100 {
+        mi[t % 5].push(t);
+        t = t + 1;
     }
-    let mut sum = 0i64;
-    let mut u = 0i64;
-    while u < 5i64 {
-        let d: Vec[i64] = match mi.get(u) { Some(v) => v, None => Vec.new() };
+    let mut sum = 0;
+    let mut u = 0;
+    while u < 5 {
+        let d: Vec[i64] = match mi.get(u) { Some(v) => v.clone(), None => Vec.new() };
         sum = sum + d.len();
-        u = u + 1i64;
+        u = u + 1;
     }
     println(f"scalar={sum}");
 }

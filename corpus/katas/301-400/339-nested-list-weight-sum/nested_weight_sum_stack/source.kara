@@ -20,7 +20,7 @@ enum Nested {
 
 fn weight_sum(items: Vec[Nested]) -> i64 {
     let mut stack: Vec[(Nested, i64)] = Vec.new();
-    for item in items {
+    for item in items.into_iter() {
         stack.push((item, 1));
     }
     let mut total = 0;
@@ -28,7 +28,7 @@ fn weight_sum(items: Vec[Nested]) -> i64 {
         match item {
             Int(v) => { total += v * depth; }
             List(inner) => {
-                for x in inner {
+                for x in inner.into_iter() {
                     stack.push((x, depth + 1));
                 }
             }

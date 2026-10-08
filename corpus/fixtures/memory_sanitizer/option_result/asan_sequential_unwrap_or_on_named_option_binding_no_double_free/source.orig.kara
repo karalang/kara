@@ -1,0 +1,10 @@
+
+fn first_word(s: String) -> Option[String] {
+    let words = s.split(" ");
+    if words.len() > 0 { Some(words[0]) } else { None }
+}
+fn main() {
+    let r = first_word("hello world");
+    let a = r.unwrap_or("x").len();
+    println(a);
+}

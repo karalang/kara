@@ -1,0 +1,17 @@
+enum Hs[T] { Full(T), Empty }
+fn sh(h: Hs[String]) { match h { Hs.Full(r) => println(r), Hs.Empty => println("e") } }
+fn pf(h: Hs[String], k: bool) -> Hs[String] { if k { return h } sh(h); return Hs.Empty }
+fn pv(h: Hs[String], k: bool, w: mut ref Vec[Hs[String]]) -> Hs[String] { if k { return h } w.push(h); return Hs.Empty }
+fn pm(h: Hs[String], k: bool) -> Hs[String] { if k { return h } match h { Hs.Full(s) => println(f"m{s}"), Hs.Empty => println("me") } return Hs.Empty }
+fn main() {
+    let mut w: Vec[Hs[String]] = Vec.new();
+    let mut i = 0;
+    while i < 3 {
+        let a: Hs[String] = Hs.Full(f"p{i}" + "x"); let r = pf(a, i == 1); sh(r);
+        let b: Hs[String] = Hs.Full(f"v{i}" + "x"); let q = pv(b, i == 1, mut w); sh(q);
+        let c: Hs[String] = Hs.Full(f"q{i}" + "x"); let t = pm(c, i == 1); sh(t);
+        i = i + 1;
+    }
+    for x in w { sh(x) }
+    println("end")
+}

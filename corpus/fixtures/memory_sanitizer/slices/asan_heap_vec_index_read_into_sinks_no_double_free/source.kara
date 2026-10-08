@@ -1,18 +1,18 @@
 
 struct Pair { x: String, y: String }
 fn main() {
-    let mut round: i64 = 0i64;
-    while round < 40i64 {
+    let mut round: i64 = 0;
+    while round < 40 {
         let mut v: Vec[String] = Vec[
             "index-sink-element-alpha-aaaaaaaaaaaaaaaaaaaa".to_string(),
             "index-sink-element-bravo-bbbbbbbbbbbbbbbbbbbb".to_string(),
             "index-sink-element-charlie-cccccccccccccccccc".to_string()
         ];
-        let t: (String, String) = (v[0i64], v[2i64]);
+        let t: (String, String) = (v[0].clone(), v[2].clone());
         let mut d: Vec[String] = Vec.new();
-        d.push(v[1i64]);
-        let p: Pair = Pair { x: v[0i64], y: v[1i64] };
-        println(f"{t.0} {t.1} {d[0i64]} {p.x} {p.y} {v.len()}");
-        round = round + 1i64;
+        d.push(v[1].clone());
+        let p: Pair = Pair { x: v[0].clone(), y: v[1].clone() };
+        println(f"{t.0} {t.1} {d[0]} {p.x} {p.y} {v.len()}");
+        round = round + 1;
     }
 }

@@ -44,7 +44,7 @@ fn leg_vec_index() {
 #[allow(partial_move_of_drop_enum)]
 fn leg_fresh_temp() {
     println("fresh");
-    match mk(4) { E.A(r) => { let m = r; println(f"got {m.id + m.v.len()}"); } E.B => { } }
+    match mk(4) { E.A(ref r) => { let m = r; println(f"got {m.id + m.v.len()}"); } E.B => { } }
     println("fresh end");
 }
 

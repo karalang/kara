@@ -1,0 +1,13 @@
+"eceba" k=2 -> 3
+"aa" k=1 -> 2
+"" k=3 -> 0
+"abc" k=0 -> 0
+"a" k=5 -> 1
+"abaccc" k=2 -> 4
+"aabbcc" k=1 -> 2
+"abcadcacacaca" k=3 -> 11
+seed 1, 20 letters from 3, k=2: 6
+seed 7, 1000 letters from 5, k=3: 17
+seed 42, 50000 letters from 26, k=10: 26
+seed 2026, 50000 letters from 4, k=3: 20
+seed 99, 50000 letters from 52, k=40: 137

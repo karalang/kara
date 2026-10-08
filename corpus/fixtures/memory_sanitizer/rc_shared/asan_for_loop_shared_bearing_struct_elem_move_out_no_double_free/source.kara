@@ -13,7 +13,7 @@ fn main() {
     for lf in fs {
         let Slf { name: fname, value } = lf;
         match value { T2.Num(k) => { n = n + k; } _ => {} }
-        lit_names.push(fname);
+        lit_names.push(fname.clone());
     }
     for lf2 in fs {
         let x = lf2;

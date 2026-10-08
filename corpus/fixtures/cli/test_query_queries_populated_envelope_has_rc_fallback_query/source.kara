@@ -1,4 +1,5 @@
 
+#[derive(Copy)]
 struct Owned { x: i64 }
 fn take(o: Owned) { }
 fn main() {

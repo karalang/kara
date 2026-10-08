@@ -1,0 +1,22 @@
+
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
+fn lit() -> i64 { let t = mkp(9); let mut i = 0i64; let mut n = 0i64;
+  while i < 3i64 { let p = P { a: t.a, b: 1 }; n = p.a.len(); i = i + p.b; }
+  return n + t.b; }
+fn bare() -> i64 { let t = mkp(9); let mut i = 0i64; let mut n = 0i64;
+  while i < 3i64 { let s = t.a; n = n + s.len(); i = i + 1; }
+  return n; }
+fn mutated() -> i64 { let t = mkp(9); let mut i = 0i64; let mut n = 0i64;
+  while i < 3i64 { let mut s = t.a; s.push_str("XY"); n = s.len(); i = i + 1; }
+  return n; }
+fn nopromo() -> i64 { let t = mkp(9); let p = P { a: t.a, b: 1 };
+  return p.a.len() + p.b; }
+fn main() {
+  println(lit());
+  println(bare());
+  println(mutated());
+  println(nopromo());
+}

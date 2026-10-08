@@ -1,0 +1,12 @@
+
+shared enum E { S(String), Other }
+fn get(e: E) -> String {
+    match e {
+        S(s) => s,
+        Other => "other".to_string(),
+    }
+}
+fn main() {
+    let e = E.S("shared-enum-moveout-payload-long-enough-string".to_string());
+    println(get(e));
+}

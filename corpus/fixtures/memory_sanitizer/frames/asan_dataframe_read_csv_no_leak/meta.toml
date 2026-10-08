@@ -11,3 +11,5 @@ rules = []
 backends = []
 env = {}
 note = "a format! template; the test fills in its holes"
+bucket = "d"
+classified_with = "8f557bac5+local"

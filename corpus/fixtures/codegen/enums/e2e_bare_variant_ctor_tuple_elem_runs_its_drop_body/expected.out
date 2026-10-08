@@ -1,0 +1,49 @@
+baretemp
+  in7
+dR11/t11
+baretemp end
+qualtemp
+  in7
+dR12/t12
+qualtemp end
+twobare
+  in2
+dR14/t14
+dR13/t13
+twobare end
+secondpos
+  in7
+dR15/t15
+secondpos end
+bareuv
+  in7
+dR16/t16
+bareuv end
+qualuv
+  in7
+dR17/t17
+qualuv end
+mixed
+  in19
+dR19/t19
+dR18/t18
+mixed end
+nested
+  in9
+dR20/t20
+nested end
+bareok
+  in7
+dR21/t21
+bareok end
+barenone
+  in7
+barenone end
+discard
+dR22/t22
+discard end
+movedplace
+  in7
+dR23/t23
+movedplace end
+done

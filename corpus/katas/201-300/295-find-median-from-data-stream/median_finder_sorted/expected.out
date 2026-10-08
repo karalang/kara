@@ -1,0 +1,7 @@
+add 1 -> median 1
+add 3 -> median 2
+add 2 -> median 2
+add 4 -> median 2.5
+add 0 -> median 2
+add 9 -> median 2.5
+add 7 -> median 3

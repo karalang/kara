@@ -1,0 +1,23 @@
+
+struct S { id: i64, name: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+fn mks(i: i64) -> S { return S { id: i, name: f"s{i}" }; }
+
+struct Bs { mut one: S, mut two: S }
+struct Ps { mut a: String, mut b: i64 }
+
+fn c_str() {
+    let mut p = Ps { a: "payload", b: 1 };
+    let mut j = 0;
+    while j < 2 { let s = p.a; println(f"L{s.len()}"); j = j + 1; }
+}
+fn c_flat() {
+    let mut h = Bs { one: mks(9), two: mks(10) };
+    let straight = h.one;
+    println(f"x{straight.id}");
+}
+
+fn main() {
+    c_str(); c_flat();
+    println("end");
+}

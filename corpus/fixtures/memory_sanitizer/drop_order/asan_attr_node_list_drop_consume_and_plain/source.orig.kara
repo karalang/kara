@@ -1,0 +1,56 @@
+
+shared enum Val { Nothing, Ident(String), Num(i64) }
+struct ArgN { name: Option[String], value: Option[Val] }
+struct AttrN { path: Vec[String], args: Vec[ArgN], string_value: Option[String] }
+
+fn render_arg(a: ArgN) -> i64 {
+    let ArgN { name, value } = a;
+    let mut touched = 0;
+    match name { Some(s) => { if s.len() >= 0 { touched = touched + 1; } } None => {} }
+    // Flat `Some(_)` — the `Option[Val]` value field still drops wholesale
+    // (recursing into the `Val::Ident` String), which is the drop path under
+    // test; the exact variant is irrelevant to the count.
+    match value { Some(_) => { touched = touched + 1; } None => {} }
+    touched
+}
+
+fn render_attr(a: AttrN) -> i64 {
+    let AttrN { path, args, string_value } = a;
+    let mut touched = 0;
+    for seg in path { if seg.len() >= 0 { touched = touched + 1; } }
+    for arg in args { touched = touched + render_arg(arg); }
+    match string_value { Some(s) => { if s.len() >= 0 { touched = touched + 1; } } None => {} }
+    touched
+}
+
+fn build() -> Vec[AttrN] {
+    let mut v: Vec[AttrN] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut path: Vec[String] = Vec.new();
+        path.push("diagnostic_namespace_segment_alpha_aaaaa".to_string());
+        path.push("on_unimplemented_attribute_segment_betaa".to_string());
+        let mut args: Vec[ArgN] = Vec.new();
+        args.push(ArgN {
+            name: Some("note_argument_name_key_gamma_ccccccccccc".to_string()),
+            value: Some(Val.Ident("clone_derive_identifier_value_ddddddddd".to_string())),
+        });
+        args.push(ArgN { name: None, value: Some(Val.Num(42)) });
+        v.push(AttrN {
+            path: path,
+            args: args,
+            string_value: Some("string_value_payload_epsilon_eeeeeeeeee".to_string()),
+        });
+        i = i + 1;
+    }
+    v
+}
+
+fn main() {
+    let attrs = build();
+    let mut total = 0;
+    for a in attrs { total = total + render_attr(a); }
+    let more = build();
+    total = total + more.len();
+    println(total);
+}

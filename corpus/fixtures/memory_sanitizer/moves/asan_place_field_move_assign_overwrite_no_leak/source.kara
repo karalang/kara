@@ -13,7 +13,7 @@ fn main() {
     let mut cur = String.new();
     let mut j: i64 = 0;
     while j < stats.len() {
-        cur = stats[j].region;
+        cur = stats[j].region.clone();
         j = j + 1;
     }
     println(f"{cur.len()}");

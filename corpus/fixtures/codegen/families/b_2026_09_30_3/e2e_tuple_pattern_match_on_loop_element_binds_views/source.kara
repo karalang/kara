@@ -10,9 +10,9 @@ fn main() {
     for pair in v.iter() { if let (a, 1) = pair { println(f"d {a.len()}") } }
     for pair in v.iter() { while let (a, 2) = pair { println(f"e {a.len()}"); break } }
     for pair in v.iter() { match pair { (a, j) => { let b = a; println(f"f {j} {b.len()}") } } }
-    for pair in v.iter() { match pair { (a, j) => println(f"g {take(a)}") } }
+    for pair in v.iter() { match pair { (a, j) => println(f"g {take(a.clone())}") } }
     let mut out: Vec[Vec[i64]] = Vec.new();
-    for pair in v.iter() { match pair { (a, j) => out.push(a) } }
+    for pair in v.iter() { match pair { (a, j) => out.push(a.clone()) } }
     println(f"h {v.len()} {out.len()} {out[1].len()}");
     let w: Vec[(String, i64)] = [(f"a-heap-string-longer-than-sso-{1}", 1)];
     for (i, pair) in w.iter().enumerate() { match pair { (a, j) => println(f"i {i} {a.len()}") } }

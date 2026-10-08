@@ -1,7 +1,7 @@
 
         fn first_word(s: String) -> Option[String] {
             let words = s.split(" ");
-            if words.len() > 0 { Some(words[0]) } else { None }
+            if words.len() > 0 { Some(words[0].clone()) } else { None }
         }
         fn work(n: i64) -> i64 {
             let mut t = 0;

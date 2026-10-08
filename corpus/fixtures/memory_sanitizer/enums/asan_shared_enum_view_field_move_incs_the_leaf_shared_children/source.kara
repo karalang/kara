@@ -12,7 +12,7 @@ fn main() {
     let ife = E.Iff(IfNode { cond: E.Lit(7), then_block: mk_block(20, 2), span: Span { a: 5, b: 0, c: 0, d: 0 } });
     match ife {
         Lit(n) => println(n),
-        Iff(nd) => { println(nd.span.a); let tb = nd.then_block; println(tb.span.a); println(tb.stmts[0]); }
+        Iff(nd) => { println(nd.span.a); let tb = ref nd.then_block; println(tb.span.a); println(tb.stmts[0]); }
         Blk(_) => println(-9)
     }
 }

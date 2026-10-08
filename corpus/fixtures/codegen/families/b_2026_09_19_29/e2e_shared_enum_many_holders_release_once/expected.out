@@ -1,0 +1,51 @@
+field
+  A
+  ok
+  d2:9
+three
+  ok
+  d2:9
+tuple
+  ok12
+  d2:9
+vec
+  ok2
+  d2:9
+option
+  ok
+  d2:9
+enum
+  ok
+  d2:9
+staggered
+  ok
+  ax
+  mid
+  bx
+  end
+  d2:9
+rebind
+  ok
+  d2:9
+returned
+  k
+  after
+  end
+  d2:9
+callee
+  in
+  in2
+  after
+  gin
+  end
+  d2:9
+calleeuse
+  rx
+  in2
+  after
+  d2:9
+inner
+  inner
+  after
+  d2:9
+done

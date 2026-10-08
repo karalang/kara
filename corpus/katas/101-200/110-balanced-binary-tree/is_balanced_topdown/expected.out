@@ -1,0 +1,9 @@
+tree 0: balanced=true
+tree 1: balanced=false
+tree 2: balanced=true
+tree 3: balanced=false
+tree 4: balanced=true
+tree 5: balanced=false
+tree 6: balanced=true
+tree 7: balanced=false
+sink: 605633940

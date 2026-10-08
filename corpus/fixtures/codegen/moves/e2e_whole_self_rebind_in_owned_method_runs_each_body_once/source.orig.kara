@@ -1,0 +1,34 @@
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+enum F { A(R), B }
+struct S { r: R }
+struct Sd { r: R }
+impl Drop for Sd { fn drop(mut ref self) { println("  dS") } }
+impl E {
+    fn m_let(self) -> i64 { let e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn m_cond(self, c: bool) -> i64 { if c { let e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } } else { match self { E.A(r) => { return r.id + 100; } E.B => { return 100; } } } }
+    fn m_mut(self) -> i64 { let mut e = self; e = E.B; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+}
+impl F { fn m_let(self) -> i64 { let e = self; match e { F.A(r) => { return r.id; } F.B => { return 0; } } } }
+impl S { fn m_let(self) -> i64 { let e = self; return e.r.id; } }
+impl Sd { fn m_let(self) -> i64 { let e = self; return e.r.id; } }
+fn f_let(x: E) -> i64 { let e = x; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+fn main() {
+    println("enum/local"); let a = E.A(mk(1)); let x1 = a.m_let(); println(f"  x{x1}");
+    println("enum/temp"); let x2 = E.A(mk(2)).m_let(); println(f"  x{x2}");
+    println("noshell/local"); let b = F.A(mk(3)); let x3 = b.m_let(); println(f"  x{x3}");
+    println("noshell/temp"); let x4 = F.A(mk(4)).m_let(); println(f"  x{x4}");
+    println("struct/local"); let c = S { r: mk(5) }; let x5 = c.m_let(); println(f"  x{x5}");
+    println("struct/temp"); let x6 = S { r: mk(6) }.m_let(); println(f"  x{x6}");
+    println("structdrop/local"); let d = Sd { r: mk(7) }; let x7 = d.m_let(); println(f"  x{x7}");
+    println("structdrop/temp"); let x8 = Sd { r: mk(8) }.m_let(); println(f"  x{x8}");
+    println("free/local"); let g = E.A(mk(9)); let x9 = f_let(g); println(f"  x{x9}");
+    println("free/temp"); let x10 = f_let(E.A(mk(10))); println(f"  x{x10}");
+    println("cond-true/local"); let h = E.A(mk(11)); let x11 = h.m_cond(true); println(f"  x{x11}");
+    println("cond-false/local"); let i = E.A(mk(12)); let x12 = i.m_cond(false); println(f"  x{x12}");
+    println("mut/local"); let j = E.A(mk(13)); let x13 = j.m_mut(); println(f"  x{x13}");
+    println("end");
+}

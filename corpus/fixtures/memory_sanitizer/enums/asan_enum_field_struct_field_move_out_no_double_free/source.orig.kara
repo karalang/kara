@@ -1,0 +1,31 @@
+
+enum Tok { Id(String), Eof }
+struct Span2 { offset: i64, length: i64 }
+struct Span { token: Tok, span: Span2 }
+fn render(t: Span) -> String {
+    let off = t.span.offset;
+    let mut line = f"{off}:";
+    let tk = t.token;
+    match tk {
+        Id(s) => line.push_str(s),
+        Eof => line.push_str("eof"),
+    }
+    line
+}
+fn build(n: i64) -> Vec[Span] {
+    let mut out: Vec[Span] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        out.push(Span { token: Tok.Id(f"t{i}"), span: Span2 { offset: i, length: 1 } });
+        i = i + 1;
+    }
+    out.push(Span { token: Tok.Eof, span: Span2 { offset: n, length: 0 } });
+    out
+}
+fn main() {
+    let toks = build(3_i64);
+    for t in toks {
+        println(render(t));
+    }
+    println("done");
+}

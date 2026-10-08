@@ -22,6 +22,6 @@ fn main() {
     println(show_let(It.S(N { doc: Some(f"heap-string-longer-than-sso-4"), k: 4 })));
     let v: Vec[N] = [N { doc: Some(f"heap-string-longer-than-sso-5"), k: 5 }];
     let mut t = 0;
-    for n in v { let d = n.doc; match d { Some(s) => { t = t + s.len(); } None => {} } }
+    for n in v { let d = n.doc.clone(); match d { Some(s) => { t = t + s.len(); } None => {} } }
     println(f"loop {t}");
 }

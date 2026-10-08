@@ -1,0 +1,18 @@
+fn touch(adj: mut ref Map[String, Vec[String]]) {
+    // Pull the value into a local that DIES at the end of this function.
+    let d: Vec[String] = match adj.get("k") { Some(x) => x, None => Vec.new() };
+    println(f"inside len={d.len()} [0]={d[0]}");
+}
+
+fn main() {
+    let mut adj: Map[String, Vec[String]] = Map.new();
+    let mut v: Vec[String] = Vec.new();
+    v.push("AAAAAAAA"); v.push("BBBBBBBB");
+    let _ = adj.insert("k", v);
+
+    touch(mut adj);            // map-derived Vec created and dropped
+    touch(mut adj);            // read again — still intact?
+
+    let after: Vec[String] = match adj.get("k") { Some(x) => x, None => Vec.new() };
+    println(f"after len={after.len()} [0]={after[0]} [1]={after[1]}");
+}

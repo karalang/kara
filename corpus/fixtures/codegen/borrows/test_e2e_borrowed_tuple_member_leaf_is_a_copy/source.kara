@@ -1,8 +1,8 @@
 
 struct Wt { pair: (String, i64), k: i64 }
 
-fn ret(t: ref Wt) -> String { return t.pair.0; }
-fn bound(t: ref Wt) -> String { let s = t.pair.0; return s; }
+fn ret(t: ref Wt) -> String { return t.pair.0.clone(); }
+fn bound(t: ref Wt) -> String { let s = t.pair.0.clone(); return s; }
 
 fn main() {
     let v = Wt { pair: (f"n{41}", 7), k: 2 };

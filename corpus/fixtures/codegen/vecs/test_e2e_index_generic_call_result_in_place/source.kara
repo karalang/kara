@@ -7,7 +7,7 @@ fn head[U: Copy](y: Vec[U]) -> U { id2(y)[0] }
 fn mkv(i: i64) -> Vec[String] { let mut v = Vec[String].new(); v.push(f"heap-string-longer-than-sso-{i}"); v.push(f"b{i}"); v }
 fn main() {
     let x = [1, 2, 3];
-    println(id2(x)[1] + id2(x)[2]);
+    println(id2(x.clone())[1] + id2(x)[2]);
     println(id2(mkv(1))[0]);
     let n = mkv(2);
     println(id2(n)[1]);

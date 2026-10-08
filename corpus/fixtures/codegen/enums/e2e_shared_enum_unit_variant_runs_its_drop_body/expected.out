@@ -1,0 +1,39 @@
+qual
+  mid
+  dU
+  out
+bare
+  mid
+  dU
+  out
+two
+  mid
+  dU
+  dU
+  out
+alias
+  mid
+  dU
+  out
+uselater
+  mid
+  t1
+  dU
+  out
+reassign
+  dU
+  mid
+  dU
+  out
+nodrop
+  mid
+  out
+par
+  mid
+  dW
+  out
+plain
+  mid
+  dP
+  out
+end

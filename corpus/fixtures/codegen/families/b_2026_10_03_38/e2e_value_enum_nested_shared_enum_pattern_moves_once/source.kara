@@ -23,7 +23,7 @@ fn main() {
     let d = V.Z(M.My(mkv(hs(4))));
     if let V.Z(M.My(x)) = d { println(f"d {x.len()} {x[0]}") }
     let g = Vs.Z(Ms.S(hs(7)));
-    let sg = match g { Vs.Z(Ms.S(t)) => t, _ => "none".to_string() };
+    let sg = match g { Vs.Z(Ms.S(t)) => t.clone(), _ => "none".to_string() };
     println(f"g {sg}");
     let h = Vs.Z(Ms.T);
     if let Vs.Z(Ms.S(t)) = h { println(f"h {t}") } else { println("h else") }

@@ -24,38 +24,38 @@ fn c_call(n: i64) -> i64 {
   let mut out: Ws = Ws { h: Sh { s: outs(n) } };
   out = mkw(pays(n));
   let t = out.h;
-  return hit(t.s);
+  return hit(t.s.clone());
 }
 fn c_arm(b: Es, n: i64) -> i64 {
   let mut out: Ws = Ws { h: Sh { s: outs(n) } };
   match b { Es.A(w) => { out = w; } Es.B => { } }
   let t = out.h;
-  return hit(t.s);
+  return hit(t.s.clone());
 }
 fn c_local(n: i64) -> i64 {
   let mut out: Ws = Ws { h: Sh { s: outs(n) } };
   let w: Ws = Ws { h: Sh { s: pays(n) } };
   out = w;
   let t = out.h;
-  return hit(t.s);
+  return hit(t.s.clone());
 }
 fn c_iflet(b: Es, n: i64) -> i64 {
   let mut out: Ws = Ws { h: Sh { s: outs(n) } };
   if let Es.A(w) = b { out = w; }
   let t = out.h;
-  return hit(t.s);
+  return hit(t.s.clone());
 }
 fn c_opt(b: Eo, n: i64) -> i64 {
   let mut out: Wo = Wo { h: Option.Some(Sh { s: outs(n) }) };
   match b { Eo.A(w) => { out = w; } Eo.B => { } }
-  match out.h { Option.Some(x) => { return hit(x.s); } Option.None => { return 0; } }
+  match out.h { Option.Some(x) => { return hit(x.s.clone()); } Option.None => { return 0; } }
 }
 fn c_twice(n: i64) -> i64 {
   let mut r: Wm = mkm(1, outs(n));
   r = mkm(7, outs(n));
   r = mkm(9, pays(n));
   let t = r.h;
-  return hit(t.s);
+  return hit(t.s.clone());
 }
 fn c_plain(n: i64) -> i64 {
   let mut r: Ps = mkp(1, outs(n));
@@ -68,19 +68,19 @@ fn c_plain(n: i64) -> i64 {
 fn c_senum_arm(b: Ese, n: i64) -> i64 {
   let mut out: Wse = Wse { h: Se.V(outs(n)) };
   match b { Ese.A(w) => { out = w; } Ese.B => { } }
-  match out.h { Se.V(s) => { return hit(s); } Se.N => { return 0; } }
+  match out.h { Se.V(s) => { return hit(s.clone()); } Se.N => { return 0; } }
 }
 fn c_senum_inline(n: i64) -> i64 {
   let mut out: Wse = Wse { h: Se.V(outs(n)) };
   out = Wse { h: Se.V(pays(n)) };
-  match out.h { Se.V(s) => { return hit(s); } Se.N => { return 0; } }
+  match out.h { Se.V(s) => { return hit(s.clone()); } Se.N => { return 0; } }
 }
 fn c_shadow(b: Es, n: i64) -> i64 {
   // NOT a displacement: a shadowing `let` leaves the first binding intact, so
   // it must still release through its own scope exit. Deliberately unread --
   // any read would move the field out and remove the action under test.
   let out: Ws = Ws { h: Sh { s: outs(n) } };
-  match b { Es.A(w) => { let out2: Ws = w; let t = out2.h; return hit(t.s); } Es.B => { return 0; } }
+  match b { Es.A(w) => { let out2: Ws = w; let t = out2.h; return hit(t.s.clone()); } Es.B => { return 0; } }
 }
 
 fn main() {

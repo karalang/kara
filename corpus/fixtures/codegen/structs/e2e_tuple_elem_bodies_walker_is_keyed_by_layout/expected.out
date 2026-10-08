@@ -1,0 +1,18 @@
+scalar-first
+  e1
+dR1/t1/1
+scalar-first end
+heap-first
+  e2
+dR2/t2/1
+heap-first end
+masked
+  e3 3
+dR3/t3/1
+dR33/t33/1
+masked end
+unmasked-peer
+  e4
+dR4/t4/1
+unmasked-peer end
+done

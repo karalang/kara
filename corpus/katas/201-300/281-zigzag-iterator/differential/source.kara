@@ -203,7 +203,7 @@ fn main() {
             if every_empty { all_empty = all_empty + 1; }
 
             let a = drain_cursor(lists.clone());
-            let b = drain_queue(lists);
+            let b = drain_queue(lists.clone());
             let d = drain_eager(lists);
 
             if not seq_equal(a, d) { cursor_vs_def = cursor_vs_def + 1; }

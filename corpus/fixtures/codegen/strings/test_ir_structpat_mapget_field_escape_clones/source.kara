@@ -4,7 +4,7 @@ fn main() {
     let mut m: Map[i64, Holder] = Map.new();
     m.insert(1, Holder { name: "a heap string padded out beyond thirty-six bytes!", id: 1 });
     let s = match m.get(1) {
-        Some(Holder { name, .. }) => name,
+        Some(Holder { name, .. }) => name.clone(),
         None => "n".to_string(),
     };
     println(s.len());

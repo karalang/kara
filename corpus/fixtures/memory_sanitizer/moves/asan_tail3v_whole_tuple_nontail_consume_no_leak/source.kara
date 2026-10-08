@@ -8,7 +8,7 @@ fn main() {
         let mut m: Map[i64, (String, i64)] = Map.new();
         m.insert(i, (f"tuple payload padded beyond thirty-six bytes {i}", i));
         match m.get(i) {
-            Some(x) => { println(take(x)); },
+            Some(x) => { println(take(x.clone())); },
             None => { println(0 - 1); },
         }
         i = i + 1;

@@ -1,0 +1,46 @@
+param
+  b1
+dR1
+param end
+chained
+  b2
+dR2
+chained end
+two
+  b3_4
+dR3
+dR4
+two end
+letelse
+  b5
+dR5
+letelse end
+norebind
+  b6
+dR6
+norebind end
+arm
+  b8
+dR8
+arm end
+local
+  b7
+dR7
+local end
+structpat
+  b9
+dR9
+structpat end
+nested
+  b10
+dR10
+nested end
+viewsrc
+  b11
+dR11
+viewsrc end
+proj
+  b12
+dR12
+proj end
+done

@@ -1,0 +1,33 @@
+example after 1 step:
+...
+#.#
+.##
+.#.
+
+blinker after 1 step:
+.#.
+.#.
+.#.
+
+blinker after 2 steps (back to start):
+...
+###
+...
+
+block after 3 steps (still life):
+##
+##
+
+glider after 4 steps (shifted 1,1):
+......
+..#...
+...#..
+.###..
+......
+......
+
+lone cell dies:
+...
+...
+...
+

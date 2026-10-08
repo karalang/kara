@@ -1,7 +1,7 @@
 fn take_c0(doc: Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
 fn item_c0(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let b = if let Some(m) = doc { m.len() } else { 0 }; b }
 fn take_c1(doc: Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
-fn item_c1(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let a = match t { 0 => take_c1(doc), _ => 5 }; let b = if let Some(m) = doc { m.len() } else { 0 }; a + b }
+fn item_c1(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let a = match t { 0 => take_c1(doc.clone()), _ => 5 }; let b = if let Some(m) = doc { m.len() } else { 0 }; a + b }
 fn item_c2(t: i64) -> i64 { let mut v: Vec[String] = Vec.new(); let s = f"heap-string-longer-than-sso-{t}"; v.push(s); let mut n = 0; while let Some(s) = v.pop() { n = n + s.len(); }; n }
 fn item_c3(t: i64) -> i64 { let s = f"heap-string-longer-than-sso-{t}"; let o = Some(s); let b = if let Some(s) = o { s.len() } else { 0 }; b }
 fn main() {

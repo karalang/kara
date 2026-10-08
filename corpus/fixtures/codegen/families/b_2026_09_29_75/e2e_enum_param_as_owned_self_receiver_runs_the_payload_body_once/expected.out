@@ -1,0 +1,41 @@
+dS1
+p2 1
+r 1
+dS2
+p2 2
+r 2
+dS3
+r 3
+dS4
+p7 0
+r 0
+dS5
+p7 5
+r 5
+dS6
+p2 6
+r 6
+dS7
+r 107
+dS8
+r 108
+dS9
+pa 10
+r 10
+dS10
+pi 10
+r 0
+dS11
+pb 11
+r 11
+got 12
+dS13
+p2 13
+r 13
+dS14
+p2 14
+r 14
+p2 15
+r 15
+end
+dS12

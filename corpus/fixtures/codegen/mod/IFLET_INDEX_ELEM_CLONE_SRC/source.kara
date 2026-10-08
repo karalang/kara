@@ -56,7 +56,7 @@ fn leg_nodrop() {
 
 fn leg_fresh() {
     println("fresh");
-    if let E.A(r) = mk(6) { println(f"got {r.id + r.v.len()}"); }
+    if let E.A(ref r) = mk(6) { println(f"got {r.id + r.v.len()}"); }
     println("fresh end");
 }
 

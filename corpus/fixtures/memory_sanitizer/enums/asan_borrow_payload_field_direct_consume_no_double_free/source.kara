@@ -4,7 +4,7 @@ struct Holder { values: Vec[Pv] }
 impl Holder {
     fn direct(ref self) -> String {
         match self.values.get(0) {
-            Some(pv) => { return pv.value; }
+            Some(pv) => { return pv.value.clone(); }
             None => { return "none"; }
         }
     }
@@ -13,7 +13,7 @@ impl Holder {
         let mut i = 0;
         while i < self.values.len() {
             match self.values.get(i) {
-                Some(pv) => { out.push(pv.value); }
+                Some(pv) => { out.push(pv.value.clone()); }
                 None => {}
             }
             i = i + 1;

@@ -11,3 +11,5 @@ rules = []
 backends = []
 env = {}
 note = "legacy run timed out after 60s"
+bucket = "skip:legacy run timed out after 60s"
+classified_with = "8f557bac5+local"

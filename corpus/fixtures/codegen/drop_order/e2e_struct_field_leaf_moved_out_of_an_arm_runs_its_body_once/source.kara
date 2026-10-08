@@ -11,7 +11,7 @@ fn s1() -> i64 { let c = H2 { r: mk(1) }; match c { H2 { r } => { let m = r; pri
 fn s2() -> R { let c = H2 { r: mk(2) }; match c { H2 { r } => r } }
 fn s3() -> i64 { let c = H2 { r: mk(3) }; if let H2 { r } = c { let m = r; println("s3in"); return m.id; } return 0; }
 fn s4() -> i64 { let c = H3 { r: mk(4), n: 9 }; match c { H3 { r, n } => { let m = keep(r); println(f"s4in {n}"); return m.id; } } }
-fn s5() -> i64 { let c = H1 { e: E.A(mk(5)) }; match c { H1 { e } => { let m = e; println("s5in"); match m { E.A(r) => r.id, E.B => 0 } } } }
+fn s5() -> i64 { let c = H1 { e: E.A(mk(5)) }; match c { H1 { e } => { let m = e; println("s5in"); match m { E.A(ref r) => r.id, E.B => 0 } } } }
 fn s6() -> E { let c = H1 { e: E.A(mk(6)) }; match c { H1 { e } => e } }
 fn main() {
     println(f"a {s1()}");

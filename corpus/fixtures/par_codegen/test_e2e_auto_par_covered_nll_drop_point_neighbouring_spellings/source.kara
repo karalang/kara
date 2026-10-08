@@ -8,7 +8,7 @@ fn mk(id: i64) -> R {
     return R { id: id, v: v }
 }
 
-fn use_r(r: ref R) -> String { return r.v[0] }
+fn use_r(r: ref R) -> String { return r.v[0].clone() }
 
 fn before_group() {
     println("B");

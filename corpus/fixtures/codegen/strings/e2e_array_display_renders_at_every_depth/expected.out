@@ -1,0 +1,15 @@
+fstr   [1, 2, 3]
+[1, 2, 3]
+str    [x1, y1]
+flt    [1.5, 2.5]
+one    [1]
+nested [[1, 2], [3, 4]]
+struct [P { x: 1, s: p1 }, P { x: 2, s: p2 }]
+vecarr [[1, 2, 3]]
+field  WithArr { a: [1, 2, 3], n: 1 }
+tuple  ([1, 2, 3], 1)
+enum   A([1, 2, 3])
+marm   [1, 2, 3]
+opt    Some([1, 2, 3])
+res    Ok([1, 2, 3])
+mapval {k: [1, 2, 3]}

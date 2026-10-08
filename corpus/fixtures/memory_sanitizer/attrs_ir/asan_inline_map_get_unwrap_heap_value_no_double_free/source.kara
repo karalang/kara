@@ -13,7 +13,7 @@ fn main() {
     let mut acc: i64 = 0;
     while i < 60 {
         acc = acc + ms.get(1).unwrap().len();
-        acc = acc + takes(ms.get(2).unwrap());
+        acc = acc + takes(ms.get(2).unwrap().clone());
         acc = acc + mv.get(1).unwrap().len();
         acc = acc + mv.get(2).unwrap().len();
         i = i + 1;

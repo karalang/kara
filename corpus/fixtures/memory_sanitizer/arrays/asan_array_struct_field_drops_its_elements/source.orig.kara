@@ -1,0 +1,39 @@
+
+fn mk(n: i64) -> Array[String, 2] { return Array[f"item{n}", f"item{n + 1}"]; }
+fn mkv(n: i64) -> Array[Vec[i64], 2] {
+    let mut x: Vec[i64] = Vec.new();
+    x.push(n);
+    let mut y: Vec[i64] = Vec.new();
+    y.push(n + 1);
+    return Array[x, y];
+}
+
+struct Holder { a: Array[String, 2] }
+struct Nums { ns: Array[i64, 2] }
+struct VHold { vs: Array[Vec[i64], 2] }
+
+fn take(h: Holder) -> String { return h.a[0]; }
+
+fn main() {
+    let h = Holder { a: mk(7) };
+    println(h.a[0]);
+    println(h.a[1]);
+    println(h.a[0]);
+
+    println(take(Holder { a: mk(3) }));
+
+    let moved = Holder { a: mk(5) };
+    let taken = moved.a;
+    println(taken[0]);
+
+    let n = Nums { ns: Array[10, 20] };
+    println(n.ns[1]);
+
+    let vh = VHold { vs: mkv(2) };
+    println(vh.vs[0].len());
+
+    let mut v: Vec[Holder] = Vec.new();
+    v.push(Holder { a: mk(1) });
+    v.push(Holder { a: mk(3) });
+    println(v.len());
+}

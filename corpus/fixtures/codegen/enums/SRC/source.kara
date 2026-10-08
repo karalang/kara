@@ -7,7 +7,7 @@ fn text_of(e: Expr) -> String {
     match e {
         Int(v) => v.to_string(),
         Boolish(v) => v.to_string(),
-        Str(n) => n.value,
+        Str(n) => n.value.clone(),
     }
 }
 fn tok_kind(t: Tok) -> i64 {

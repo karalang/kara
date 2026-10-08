@@ -1,0 +1,29 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct W { r: R, n: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"  dW{self.n}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" } }
+fn eat(t: (R, R)) -> i64 { println("  eat"); return 7 }
+fn giveback() -> (R, R) {
+    let o: Option[(R, R)] = Some((mk(30), mk(31)));
+    match o { Some(t) => { return t } None => { return (mk(90), mk(91)) } }
+}
+
+fn main() {
+    println("bind");    { let o: Option[(R, R)] = Some((mk(1), mk(2))); println("  x"); match o { Some(t) => { println("  hit") } None => { println("  n") } } }
+    println("read");    { let o: Option[(R, R)] = Some((mk(3), mk(4))); println("  x"); match o { Some(t) => { println(f"  hit{t.0.id}") } None => { println("  n") } } }
+    println("iflet");   { let o: Option[(R, R)] = Some((mk(5), mk(6))); println("  x"); if let Some(t) = o { println("  hit") } }
+    println("whilet");  { let mut o: Option[(R, R)] = Some((mk(7), mk(8))); println("  x"); while let Some(t) = o { println("  hit"); o = None; } println("  end") }
+    println("result");  { let o: Result[(R, R), i64] = Ok((mk(9), mk(10))); println("  x"); match o { Ok(t) => { println("  hit") } Err(e) => { println("  n") } } }
+    println("twice");   { let o: Option[(R, R)] = Some((mk(11), mk(12))); println("  x"); match o { Some(t) => { println("  a") } None => { println("  n") } } match o { Some(t) => { println("  b") } None => { println("  n") } } }
+    println("after");   { let o: Option[(R, R)] = Some((mk(13), mk(14))); println("  x"); match o { Some(t) => { println("  hit") } None => { println("  n") } } println("  end") }
+    println("wild");    { let o: Option[(R, R)] = Some((mk(15), mk(16))); println("  x"); match o { Some(_) => { println("  hit") } None => { println("  n") } } }
+    println("struct");  { let o: Option[W] = Some(W { r: mk(17), n: 18 }); println("  x"); match o { Some(t) => { println("  hit") } None => { println("  n") } } }
+    println("single");  { let o: Option[R] = Some(mk(19)); println("  x"); match o { Some(t) => { println("  hit") } None => { println("  n") } } }
+    println("ret");     { println("  x"); let v = giveback(); println("  hit") }
+    println("eat");     { let o: Option[(R, R)] = Some((mk(20), mk(21))); println("  x"); match o { Some(t) => { println(f"  hit{eat(t)}") } None => { println("  n") } } }
+    println("nomatch"); { let o: Option[(R, R)] = Some((mk(22), mk(23))); println("  x") }
+    println("none");    { let o: Option[(R, R)] = None; println("  x"); match o { Some(t) => { println("  hit") } None => { println("  n") } } }
+    println("tlocal");  { let t: (R, R) = (mk(24), mk(25)); println("  x") }
+    println("end")
+}

@@ -1,0 +1,150 @@
+// LeetCode 218 — The Skyline Problem.
+//
+// Each building is a triple [left, right, height]. The skyline is the outer
+// contour formed by all buildings, returned as the ordered list of "key points"
+// [x, h] where the visible height CHANGES; the final key point drops to height 0.
+//
+// Divide and conquer, mirroring merge sort. The skyline of a single building
+// [L, R, H] is trivially [[L, H], [R, 0]]. Split the buildings into two halves,
+// compute each half's skyline recursively, then MERGE the two contours: sweep
+// both left to right, and at every x where either contour changes, the combined
+// height is the max of the two current heights. Emit a key point only when that
+// combined height differs from the last one emitted — that single dedup rule
+// collapses touching-equal-height segments and interior transitions. O(n log n).
+
+struct Building {
+    left: i64,
+    right: i64,
+    height: i64,
+}
+
+struct Point {
+    x: i64,
+    h: i64,
+}
+
+// Merge two skyline contours into one (both are sorted by x, ending at h = 0).
+fn merge(left: ref Vec[Point], right: ref Vec[Point]) -> Vec[Point] {
+    let mut result: Vec[Point] = Vec.new();
+    let nl = left.len();
+    let nr = right.len();
+    let mut i = 0;
+    let mut j = 0;
+    let mut h1 = 0;      // current height of the left contour
+    let mut h2 = 0;      // current height of the right contour
+    while i < nl and j < nr {
+        let mut x = 0;
+        if left[i].x < right[j].x {
+            x = left[i].x;
+            h1 = left[i].h;
+            i = i + 1;
+        } else if left[i].x > right[j].x {
+            x = right[j].x;
+            h2 = right[j].h;
+            j = j + 1;
+        } else {
+            x = left[i].x;
+            h1 = left[i].h;
+            h2 = right[j].h;
+            i = i + 1;
+            j = j + 1;
+        }
+        let maxh = if h1 > h2 { h1 } else { h2 };
+        if result.len() == 0 or result[result.len() - 1].h != maxh {
+            result.push(Point { x: x, h: maxh });
+        }
+    }
+    // One contour is exhausted (its trailing height is 0); the other's remaining
+    // points pass through unchanged.
+    while i < nl {
+        result.push(left[i]);
+        i = i + 1;
+    }
+    while j < nr {
+        result.push(right[j]);
+        j = j + 1;
+    }
+    return result;
+}
+
+// Skyline of buildings over the half-open index range [lo, hi).
+fn skyline(bs: ref Vec[Building], lo: i64, hi: i64) -> Vec[Point] {
+    if hi - lo == 1 {
+        let b = ref bs[lo];
+        let mut r: Vec[Point] = Vec.new();
+        r.push(Point { x: b.left, h: b.height });
+        r.push(Point { x: b.right, h: 0 });
+        return r;
+    }
+    let mid = lo + (hi - lo) / 2;
+    let left = skyline(bs, lo, mid);
+    let right = skyline(bs, mid, hi);
+    return merge(left, right);
+}
+
+fn report(bs: ref Vec[Building]) {
+    let n = bs.len();
+    if n == 0 {
+        println("[]");
+        return;
+    }
+    let sky = skyline(bs, 0, n);
+    let mut line: String = "";
+    let mut k = 0;
+    let mut first = true;
+    while k < sky.len() {
+        if first { first = false; } else { line.push_str(" "); }
+        line.push_str(f"[{sky[k].x},{sky[k].h}]");
+        k = k + 1;
+    }
+    println(line);
+}
+
+fn add(bs: mut ref Vec[Building], l: i64, r: i64, h: i64) {
+    bs.push(Building { left: l, right: r, height: h });
+}
+
+fn main() {
+    // The canonical LeetCode example.
+    let mut a: Vec[Building] = Vec.new();
+    add(mut a, 2, 9, 10);
+    add(mut a, 3, 7, 15);
+    add(mut a, 5, 12, 12);
+    add(mut a, 15, 20, 10);
+    add(mut a, 19, 24, 8);
+    report(a);       // [2,10] [3,15] [7,12] [12,0] [15,10] [20,8] [24,0]
+
+    // Two buildings of equal height meeting edge-to-edge — one flat span.
+    let mut b: Vec[Building] = Vec.new();
+    add(mut b, 0, 2, 3);
+    add(mut b, 2, 5, 3);
+    report(b);       // [0,3] [5,0]
+
+    // Single building.
+    let mut c: Vec[Building] = Vec.new();
+    add(mut c, 1, 5, 11);
+    report(c);       // [1,11] [5,0]
+
+    // Three nested over the same span, increasing height.
+    let mut d: Vec[Building] = Vec.new();
+    add(mut d, 1, 2, 1);
+    add(mut d, 1, 2, 2);
+    add(mut d, 1, 2, 3);
+    report(d);       // [1,3] [2,0]
+
+    // Two disjoint buildings.
+    let mut e: Vec[Building] = Vec.new();
+    add(mut e, 1, 3, 4);
+    add(mut e, 5, 7, 6);
+    report(e);       // [1,4] [3,0] [5,6] [7,0]
+
+    // Fully overlapping, one contained in the other's shadow.
+    let mut f: Vec[Building] = Vec.new();
+    add(mut f, 0, 10, 5);
+    add(mut f, 3, 6, 3);
+    report(f);       // [0,5] [10,0]
+
+    // Empty.
+    let g: Vec[Building] = Vec.new();
+    report(g);       // []
+}

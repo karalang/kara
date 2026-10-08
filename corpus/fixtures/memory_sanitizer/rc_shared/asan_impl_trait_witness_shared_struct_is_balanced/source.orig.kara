@@ -1,0 +1,22 @@
+trait Named { fn label(ref self) -> String; }
+
+shared struct Node { name: String }
+impl Named for Node {
+    fn label(ref self) -> String { self.name }
+}
+
+fn a_node(i: i64) -> impl Named { Node { name: f"n{i}" } }
+
+fn main() {
+    let mut i = 0i64;
+    let mut total = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let held = a_node(i);
+        total = total + held.label().len();
+        last = a_node(i).label();
+        i = i + 1;
+    }
+    println(last);
+    println(total);
+}

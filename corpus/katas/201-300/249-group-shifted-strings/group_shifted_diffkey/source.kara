@@ -42,12 +42,12 @@ fn group_shifted(words: Vec[String]) -> Vec[Vec[String]] {
         let key = gap_key(words[i]);
         match index.get(key) {
             Some(g) => {
-                out[g].push(words[i]);
+                out[g].push(words[i].clone());
             }
             None => {
                 let slot = out.len();
                 let mut fresh: Vec[String] = Vec.new();
-                fresh.push(words[i]);
+                fresh.push(words[i].clone());
                 out.push(fresh);
                 let _ = index.insert(key, slot);
             }

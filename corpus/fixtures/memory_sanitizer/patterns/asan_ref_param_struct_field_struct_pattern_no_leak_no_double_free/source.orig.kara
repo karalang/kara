@@ -1,0 +1,27 @@
+
+struct Pair { a: String, b: String, x: i64 }
+struct Holder { pair: Pair, n: i64 }
+fn take_a(h: ref Holder) -> String {
+    match h.pair {
+        Pair { a, b: _, x: _ } => { return a; }
+    }
+    return "?".to_string();
+}
+fn tag(h: ref Holder) -> String {
+    match h.pair {
+        Pair { a, b, x } => { return a + "/" + b + ":" + x.to_string(); }
+    }
+    return "?".to_string();
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let h = Holder { pair: Pair { a: "alpha".to_string(), b: "bravo".to_string(), x: 3 }, n: 1 };
+        acc = acc + take_a(h).len();
+        acc = acc + take_a(h).len();
+        acc = acc + tag(h).len();
+        i = i + 1;
+    }
+    println(acc);
+}

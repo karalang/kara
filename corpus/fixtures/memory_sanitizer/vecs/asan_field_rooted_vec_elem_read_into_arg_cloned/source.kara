@@ -26,10 +26,10 @@ fn main() {
     let c = one(mut d, 0);
     match c { Insert(i, t) => { acc = acc + t.len(); } Delete(i, t) => { acc = acc + t.len(); } }
     let mut out: Vec[String] = Vec.new();
-    out.push(d.lines[0]);
+    out.push(d.lines[0].clone());
     acc = acc + out[0].len();
     acc = acc + d.first().len();
-    let mut i = 0i64;
+    let mut i = 0;
     while i < 200 {
         let cc = one(mut d, 0);
         match cc { Insert(x, t) => { acc = acc + t.len(); } Delete(x, t) => { acc = acc + t.len(); } }

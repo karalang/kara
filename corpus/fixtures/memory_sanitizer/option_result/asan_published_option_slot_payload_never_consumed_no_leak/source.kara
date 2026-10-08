@@ -1,7 +1,7 @@
 
 fn first_word(s: String) -> Option[String] {
     let words = s.split(" ");
-    if words.len() > 0 { Some(words[0]) } else { None }
+    if words.len() > 0 { Some(words[0].clone()) } else { None }
 }
 fn main() {
     let a = first_word("aaaaaaaaaaaaaaaaaaaaaaaaaaaaa bb");

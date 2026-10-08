@@ -12,7 +12,7 @@ fn build() -> Vec[A] {
 fn main() {
     let mut t = 0;
     let xs = build();                            // moved-in owned param source
-    for a in xs { t = t + use_wild(a); }
+    for a in xs.into_iter() { t = t + use_wild(a); }
     let mut i = 0;                               // fresh-temp source
     while i < 6 { t = t + use_wild(mk()); i = i + 1; }
     println(t);

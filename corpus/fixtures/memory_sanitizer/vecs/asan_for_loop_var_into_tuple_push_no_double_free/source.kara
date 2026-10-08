@@ -5,30 +5,30 @@ fn wrap_param(s: String, k: i64) -> Vec[(i64, String)] {
     return v;
 }
 fn main() {
-    let mut round: i64 = 0i64;
-    while round < 40i64 {
+    let mut round: i64 = 0;
+    while round < 40 {
         let w: Vec[String] = Vec[
             "alpha-loop-element-payload-aaaaaaaaaaaaaaaaaaaa".to_string(),
             "bravo-loop-element-payload-bbbbbbbbbbbbbbbbbbbb".to_string(),
             "charlie-loop-element-payload-cccccccccccccccccc".to_string()
         ];
         let mut a: Vec[(i64, String)] = Vec.new();
-        let mut i: i64 = 0i64;
-        for x in w.iter() { a.push((i, x)); i = i + 1i64; }
+        let mut i: i64 = 0;
+        for x in w.iter() { a.push((i, x.clone())); i = i + 1; }
         let pa = a[2].clone();
         let mut b: Vec[(String, i64)] = Vec.new();
-        for y in w.iter() { b.push((y, 9i64)); }
+        for y in w.iter() { b.push((y.clone(), 9)); }
         let pb = b[0].clone();
         let owned: Vec[String] = Vec[
             "delta-owned-element-payload-dddddddddddddddddddd".to_string(),
             "echo-owned-element-payload-eeeeeeeeeeeeeeeeeeeee".to_string()
         ];
         let mut c: Vec[(i64, String)] = Vec.new();
-        for z in owned { c.push((0i64, z)); }
+        for z in owned { c.push((0, z.clone())); }
         let pc = c[1].clone();
-        let d: Vec[(i64, String)] = wrap_param("param-element-payload-ffffffffffffffffffff".to_string(), 5i64);
+        let d: Vec[(i64, String)] = wrap_param("param-element-payload-ffffffffffffffffffff".to_string(), 5);
         let pd = d[0].clone();
         println(f"{pa.0} {pa.1} {pb.0} {pb.1} {pc.0} {pc.1} {pd.0} {pd.1}");
-        round = round + 1i64;
+        round = round + 1;
     }
 }

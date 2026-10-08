@@ -15,7 +15,7 @@ fn main() {
         n = n + s.len();
     }
     let more = build();
-    for a in more {
+    for a in more.into_iter() {
         n = n + take(a);
     }
     println(n);

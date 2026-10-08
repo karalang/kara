@@ -1,0 +1,166 @@
+// ALLOCATION-FREE PUNCH LOOP variant of the #288 benchmark workload — the
+// Kara side of B-2026-08-28-76's comparison, and the mirror of
+// uniqueabbr_par_nofmt.c on the C side.
+//
+// The original's punch loop allocates THREE times per punch: `chars().collect()`
+// builds a Vec[char], the f-string builds a String, and `abbrev` returns a
+// third. The C mirror allocates nothing. This hoists all of it out by
+// precomputing the abbreviations once, leaving the measured loop doing a map
+// lookup and nothing else. Same dictionary, same pool, same index, same
+// predicate, same sink (`unique 573650`).
+//
+// MEASURED on an M5 Pro, dual binaries (KARAC_AUTO_PAR is a BUILD-time switch;
+// setting it at run time measures one parallel binary twice), hyperfine 15 runs:
+//
+//     lane                         seq        par      speedup
+//     original                  90.29 ms   24.14 ms     3.74x
+//     this file                 36.33 ms    9.18 ms     3.96x
+//     C mirror, no formatting   18.99 ms    3.87 ms     4.91x
+//
+// So removing the allocation cuts absolute time 2.5x and moves the SPEEDUP by
+// 0.22x. Allocation is most of Kara's work on this kata and almost none of its
+// under-return — B-2026-09-05-22's libmalloc ceiling does not explain kata:288.
+//
+// RETRACTED 2026-09-12, and by this file's own successor. The last sentence is
+// wrong: the libmalloc ceiling explains ALL of it. This file removes the three
+// allocations that are visible in the source (`chars().collect()`, the f-string,
+// `abbrev`'s return) and leaves a fourth that is not — `idx.get(a)` returns
+// `Bucket`, an enum with a String payload, and codegen heap-boxes that 32-byte
+// value and frees it on every hit even though the match only reads it
+// (B-2026-09-12-28). Disassemble `___karac_reduce_worker_0` and the loop body
+// still holds a `_malloc`/`_free` pair.
+//
+// Changing `Sole(String)` to `Sole(i64)` — an index into `dict`, nothing to drop
+// — takes the callsite count to zero and settles B-2026-08-28-76. 10M punches:
+//
+//     lane                     seq       par    speedup   user CPU par/seq  vs C
+//     String payload        319.29    54.81      5.83x        2.37x         0.56
+//     i64-index payload     193.30    19.96      9.68x        1.32x         0.93
+//     C mirror              150.32    14.37     10.46x        1.34x          --
+//
+// One allocation per lookup is the difference between 56% and 93% of the C
+// mirror's speedup, and the CPU amplification does not shrink but disappears.
+
+enum Bucket {
+    Sole(String),
+    Conflicted,
+}
+
+fn abbrev(w: ref String) -> String {
+    let cs: Vec[char] = w.chars().collect();
+    let n = cs.len();
+    if n <= 2 {
+        return w.clone();
+    }
+    let mut out = String.new();
+    out.push(cs[0]);
+    out.push_str(f"{n - 2}");
+    out.push(cs[n - 1]);
+    return out;
+}
+
+// The corpus's 31-bit LCG, mirrored bit-for-bit in the C/Rust/Go/Python twins.
+// The mask keeps it in range: Kara traps integer overflow by default.
+fn next_rand(state: i64) -> i64 {
+    return (state * 1103515245 + 12345) & 2147483647;
+}
+
+fn main() {
+    let letters: Vec[char] = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j',
+                              'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't',
+                              'u', 'v', 'w', 'x', 'y', 'z'];
+    let dict_n = 3000;
+    let pool_n = 20000;
+    let punches = 1000000;
+
+    let mut seed = 12345;
+
+    // --- dictionary -----------------------------------------------------
+    let mut dict: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < dict_n {
+        seed = next_rand(seed);
+        let n = 3 + ((seed / 65536) % 8);
+        let mut w = String.new();
+        let mut j = 0;
+        while j < n {
+            seed = next_rand(seed);
+            w.push(letters[(seed / 65536) % 26]);
+            j = j + 1;
+        }
+        dict.push(w);
+        i = i + 1;
+    }
+
+    // --- index (built once) ---------------------------------------------
+    let mut idx: Map[String, Bucket] = Map.new();
+    i = 0;
+    while i < dict_n {
+        let w = ref dict[i];
+        let a = abbrev(w);
+        match idx.get(a) {
+            None => {
+                let _ = idx.insert(a, Bucket.Sole(w.clone()));
+            }
+            Some(Bucket.Sole(prev)) => {
+                if prev != w {
+                    let _ = idx.insert(a, Bucket.Conflicted);
+                }
+            }
+            Some(Bucket.Conflicted) => {}
+        }
+        i = i + 1;
+    }
+
+    // --- query pool: half from the dictionary, half fresh ----------------
+    let mut pool: Vec[String] = Vec.new();
+    i = 0;
+    while i < pool_n {
+        if (i % 2) == 0 {
+            pool.push(dict[(i * 7) % dict_n]);
+        } else {
+            seed = next_rand(seed);
+            let n = 3 + ((seed / 65536) % 8);
+            let mut w = String.new();
+            let mut j = 0;
+            while j < n {
+                seed = next_rand(seed);
+                w.push(letters[(seed / 65536) % 26]);
+                j = j + 1;
+            }
+            pool.push(w);
+        }
+        i = i + 1;
+    }
+
+    // --- precompute the abbreviations, OUTSIDE the measured loop --------
+    // The control for B-2026-08-28-76: C's mirror formats into a stack buffer
+    // and allocates nothing per punch, while this kata's `abbrev` builds a
+    // Vec[char], an f-string and a String. Hoisting it leaves the punch loop
+    // doing the lookup and nothing else, which is the C shape.
+    let mut abbrs: Vec[String] = Vec.new();
+    i = 0;
+    while i < pool_n {
+        abbrs.push(abbrev(pool[i]));
+        i = i + 1;
+    }
+
+    // --- punch ----------------------------------------------------------
+    let mut unique_count = 0;
+    i = 0;
+    while i < punches {
+        let word = ref pool[i % pool_n];
+        let a = ref abbrs[i % pool_n];
+        let u = match idx.get(a) {
+            None => true,
+            Some(Bucket.Sole(w)) => w == word,
+            Some(Bucket.Conflicted) => false,
+        };
+        if u {
+            unique_count = unique_count + 1;
+        }
+        i = i + 1;
+    }
+
+    println(f"unique {unique_count}");
+}

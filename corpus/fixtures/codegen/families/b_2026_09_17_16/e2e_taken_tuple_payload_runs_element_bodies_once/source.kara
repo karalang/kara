@@ -14,7 +14,7 @@ fn letelse_param(o: Option[(R, R)]) -> i64 { let Some(t) = o else { return 0 }; 
 fn res() -> i64 { let r: Result[i64, (R, R)] = Err((mk(13), mk(14))); let Err(t) = r else { return 0 }; println(f"e{t.0.id}"); return 1 }
 fn res_match() { let r: Result[(R, R), i64] = Ok((mk(15), mk(16))); match r { Ok(t) => { let u = t; println(f"o{u.1.id}") } Err(e) => {} } }
 fn looped() { for i in 0..2 { let o = mko(20 + i * 2); match o { Some(t) => { let u = t; println(f"l{u.1.id}") } None => {} } } }
-fn twice() { let o = mko(30); match o { Some(t) => { println(f"a{t.0.id}") } None => {} } println("mid"); match o { Some(t) => { let u = t; println(f"b{u.1.id}") } None => {} } }
+fn twice() { let o = mko(30); match o { Some(ref t) => { println(f"a{t.0.id}") } None => {} } println("mid"); match o { Some(t) => { let u = t; println(f"b{u.1.id}") } None => {} } }
 fn wlet() { let mut o = mko(32); while let Some(t) = o { let u = t; println(f"w{u.0.id}"); o = None; } }
 fn guarded() { let o = mko(34); match o { Some(t) if t.0.id > 0 => { let u = t; println(f"g{u.0.id}") } Some(t) => { println("other") } None => {} } }
 fn handback() -> (R, R) { let o = mko(36); let Some(t) = o else { return (mk(0), mk(0)) }; println("got"); return t }

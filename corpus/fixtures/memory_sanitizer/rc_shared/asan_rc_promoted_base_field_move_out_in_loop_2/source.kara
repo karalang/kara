@@ -9,7 +9,7 @@ struct Ps { mut a: String, mut b: i64 }
 fn c_str() {
     let mut p = Ps { a: "payload", b: 1 };
     let mut j = 0;
-    while j < 2 { let s = p.a; println(f"L{s.len()}"); j = j + 1; }
+    while j < 2 { let s = p.a.clone(); println(f"L{s.len()}"); j = j + 1; }
 }
 fn c_flat() {
     let mut h = Bs { one: mks(9), two: mks(10) };

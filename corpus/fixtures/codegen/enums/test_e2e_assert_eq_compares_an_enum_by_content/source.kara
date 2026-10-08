@@ -23,7 +23,7 @@ fn main() {
     let a: Option[String] = Some(mk(5));
     let b: Option[String] = Some(mk(5));
     let c: Option[String] = Some(mk(6));
-    assert_eq(a, b);
+    assert_eq(a.clone(), b);
     println(f"eq-generic ok");
     assert_ne(a, c);
     println(f"ne-generic ok");

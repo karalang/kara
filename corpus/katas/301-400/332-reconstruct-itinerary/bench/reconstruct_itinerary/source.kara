@@ -19,10 +19,10 @@ fn visit(
     route: mut ref Vec[String],
 ) {
     while true {
-        let dests: Vec[String] = match adj.get(airport) { Some(d) => d, None => Vec.new() };
+        let dests: Vec[String] = match adj.get(airport) { Some(d) => d.clone(), None => Vec.new() };
         let used = match cursor.get(airport) { Some(u) => u, None => 0 };
         if used >= dests.len() { break; }
-        let _ = cursor.insert(airport, used + 1);
+        let _ = cursor.insert(airport.clone(), used + 1);
         visit(adj, cursor, dests[used].clone(), route);
     }
     route.push(airport);
@@ -36,9 +36,9 @@ fn find_itinerary(froms: ref Vec[String], tos: ref Vec[String], rot: i64) -> Vec
         let idx = (i + rot) % e;
         if not adj.contains_key(froms[idx]) {
             let empty: Vec[String] = Vec.new();
-            let _ = adj.insert(froms[idx], empty);
+            let _ = adj.insert(froms[idx].clone(), empty);
         }
-        adj[froms[idx]].push(tos[idx]);
+        adj[froms[idx]].push(tos[idx].clone());
         i = i + 1;
     }
 
@@ -56,7 +56,7 @@ fn find_itinerary(froms: ref Vec[String], tos: ref Vec[String], rot: i64) -> Vec
     let mut out: Vec[String] = Vec.new();
     let mut j = route.len() - 1;
     while j >= 0 {
-        out.push(route[j]);
+        out.push(route[j].clone());
         j = j - 1;
     }
     out

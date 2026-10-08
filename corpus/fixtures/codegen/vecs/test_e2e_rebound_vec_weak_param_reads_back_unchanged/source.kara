@@ -10,8 +10,8 @@ fn main() {
     let a: N = N { v: 7 };
     let mut w: Vec[weak N] = Vec.new();
     w.push(a);
-    println(probe(w));
-    println(probe(w));
+    println(probe(w.clone()));
+    println(probe(w.clone()));
     match w[0] { Some(x) => { println(x.v) } None => { println(0 - 1) } }
     println(a.v);
 }

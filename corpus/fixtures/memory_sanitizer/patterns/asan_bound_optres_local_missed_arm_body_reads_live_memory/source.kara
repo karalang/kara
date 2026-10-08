@@ -17,7 +17,7 @@ fn main() {
         let b: Result[W, W] = mkok();
         if let Ok(w) = b { println(f"h{w.s.len()}"); }
         let c: Result[W, W] = mkerr();
-        if let Ok(w) = c { println(f"h{w.s.len()}"); }
+        if let Ok(ref w) = c { println(f"h{w.s.len()}"); }
         println("mid");
         match c { Ok(x) => { println(f"x{x.s.len()}"); } Err(e) => { println(f"e{e.s.len()}"); } }
         let d: Result[W, W] = mkerr();

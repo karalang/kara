@@ -3,10 +3,10 @@ fn total(v: Vec[String]) -> i64 { let mut n = 0; for s in v { n = n + s.len(); }
 fn main() {
     let base = f"x{7}";
     let mut r: Vec[String] = Vec.new();
-    for s in Vec.filled(2, base.clone()) { r.push(s); }
+    for s in Vec.filled(2, base.clone()) { r.push(s.clone()); }
     for s in Vec.filled(2, base.clone()).into_iter() { r.push(s); }
-    for s in Vec.filled(2, base.clone() + "y") { r.push(s); }
-    for s in [base.clone(); 2] { r.push(s); }
+    for s in Vec.filled(2, base.clone() + "y") { r.push(s.clone()); }
+    for s in [base.clone(); 2] { r.push(s.clone()); }
     println(f"a:{r}");
     for s in Vec.filled(2, base.clone()) { println(f"b:{s}"); }
     println(f"c:{total(Vec.filled(3, f"zz{1}"))}");

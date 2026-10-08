@@ -33,8 +33,8 @@ fn main() {
     println("ntt"); { let x = fnest(mr(11), true, true); show(x); }
     println("ntf"); { let x = fnest(mr(12), true, false); show(x); }
     println("nff"); { let x = fnest(mr(13), false, false); show(x); }
-    println("tgt"); { let x = ftag(mr(14), true); match x { Tagged.Held(v) => println(f"C{v.id}"), Tagged.Empty => println("CE") } }
-    println("tgf"); { let x = ftag(mr(15), false); match x { Tagged.Held(v) => println(f"C{v.id}"), Tagged.Empty => println("CE") } }
+    println("tgt"); { let x = ftag(mr(14), true); match x { Tagged.Held(ref v) => println(f"C{v.id}"), Tagged.Empty => println("CE") } }
+    println("tgf"); { let x = ftag(mr(15), false); match x { Tagged.Held(ref v) => println(f"C{v.id}"), Tagged.Empty => println("CE") } }
     println("at"); { let x = H.aslot(mr(16), true); show(x); }
     println("af"); { let x = H.aslot(mr(17), false); show(x); }
     println("mt"); { let x = h.mslot(mr(18), true); show(x); }

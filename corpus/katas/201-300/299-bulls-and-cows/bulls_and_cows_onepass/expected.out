@@ -1,0 +1,12 @@
+secret 1807  guess 7810  ->  1A3B
+secret 1123  guess 0111  ->  1A1B
+secret 1  guess 0  ->  0A0B
+secret 1  guess 1  ->  1A0B
+secret 11  guess 10  ->  1A0B
+secret 11  guess 01  ->  1A0B
+secret 1122  guess 2211  ->  0A4B
+secret 1122  guess 1222  ->  3A0B
+secret 0000  guess 0000  ->  4A0B
+secret 0000  guess 1111  ->  0A0B
+secret   guess   ->  0A0B
+secret 1234567890  guess 0987654321  ->  0A10B

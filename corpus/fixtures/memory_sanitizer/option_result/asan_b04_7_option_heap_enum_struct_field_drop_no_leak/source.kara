@@ -16,10 +16,10 @@ fn build() -> Vec[A] {
 fn main() {
     let z: Vec[A] = build();
     let mut t = z.len();
-    for a in build() { t = t + count(a); }
-    for a in build() { t = t + get_len(a); }
-    for a in build() { t = t + use_wild(a); }
-    for a in build() { t = t + via_match(a); }
+    for a in build() { t = t + count(a.clone()); }
+    for a in build() { t = t + get_len(a.clone()); }
+    for a in build() { t = t + use_wild(a.clone()); }
+    for a in build() { t = t + via_match(a.clone()); }
     let xs: Vec[A] = build();
     let c0 = xs[0].clone();
     t = t + get_len(c0);

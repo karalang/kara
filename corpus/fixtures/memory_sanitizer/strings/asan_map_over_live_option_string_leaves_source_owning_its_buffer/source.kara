@@ -3,13 +3,13 @@ fn main() {
     let mut i: i64 = 0;
     while i < 8 {
         let o: Option[String] = Some(f"hi{i}");
-        match o.map(|x| x.to_uppercase()) { Some(v) => { println(v); } None => { println("-"); } }
+        match o.clone().map(|x| x.to_uppercase()) { Some(v) => { println(v); } None => { println("-"); } }
         // The source must still own its buffer after the mapper ran.
-        match o { Some(v) => { println(v); } None => { println("-"); } }
+        match o { Some(ref v) => { println(v); } None => { println("-"); } }
         // Same classifier, reached without a combinator: the `None` arm body
         // mentions `None`, which used to read as an escaping binding.
         let n: Option[i64] = match o { Some(v) => { Some(v.len()) } None => { None } };
-        println(n.unwrap_or(0i64));
+        println(n.unwrap_or(0));
         i = i + 1;
     }
     println("end");

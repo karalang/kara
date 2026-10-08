@@ -6,7 +6,7 @@ fn main() {
     ps.push(P { a: 1, s: f"x{1}" });
     ps.push(P { a: 1, s: f"x{1}" });
     let mut set: Set[P] = Set.new();
-    for p in ps {
+    for p in ps.into_iter() {
         set.insert(p);
     }
     println(set.len());
@@ -15,7 +15,7 @@ fn main() {
     qs.push(P { a: 1, s: f"x{1}" });
     let mut m: Map[P, i64] = Map.new();
     let mut i = 0;
-    for p in qs {
+    for p in qs.into_iter() {
         let _ = m.insert(p, i);
         i = i + 1;
     }

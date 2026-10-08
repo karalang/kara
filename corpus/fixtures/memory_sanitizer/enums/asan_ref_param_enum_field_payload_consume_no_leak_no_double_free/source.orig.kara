@@ -1,0 +1,31 @@
+
+enum Tok { Plus, Ident(String) }
+struct SpTok { tok: Tok, n: i64 }
+fn render(st: ref SpTok) -> String {
+    match st.tok {
+        Ident(name) => { return "id:".to_string() + name; }
+        Plus => { return "+".to_string(); }
+    }
+    return "?".to_string();
+}
+fn take_name(st: ref SpTok) -> String {
+    match st.tok {
+        Ident(name) => { return name; }
+        Plus => { return "+".to_string(); }
+    }
+    return "?".to_string();
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a = SpTok { tok: Tok.Ident("payload".to_string()), n: 1 };
+        acc = acc + render(a).len();
+        acc = acc + render(a).len();
+        acc = acc + take_name(a).len();
+        let p = SpTok { tok: Tok.Plus, n: 2 };
+        acc = acc + render(p).len();
+        i = i + 1;
+    }
+    println(acc);
+}

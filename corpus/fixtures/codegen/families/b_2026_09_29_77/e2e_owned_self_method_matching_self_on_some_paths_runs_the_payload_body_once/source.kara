@@ -15,7 +15,7 @@ impl E {
   fn h2(self, c: bool) -> i64 { if c { return self.m() }; match self { E.A(s) => s.id, E.B(n) => n } }
 }
 impl F {
-  fn f1(self, c: bool) -> i64 { if c { match self { F.A(s) => s.id, F.B(n) => n } } else { 0 } }
+  fn f1(self, c: bool) -> i64 { if c { match self { F.A(ref s) => s.id, F.B(n) => n } } else { 0 } }
 }
 fn main() {
   let a = E.A(mks(1)); println(f"t1 {a.t1(false)}"); let b = E.A(mks(2)); println(f"t1 {b.t1(true)}");

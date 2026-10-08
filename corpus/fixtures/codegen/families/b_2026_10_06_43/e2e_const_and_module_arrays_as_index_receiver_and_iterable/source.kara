@@ -13,7 +13,7 @@ fn main() {
     let mut k = 0;
     for nm in NAMES { k += nm.len(); }
     for w in WORDS { k += w.len(); }
-    let v = NUMS;
+    let v = NUMS.clone();
     println(f"{NUMS[1]} {NUMS.len()} {ARR[2]} {ARR.len()} {LINES[1].2} {LINES.len()}");
     println(f"{s} {k} {total()} {NAMES[1]} {NAMES.len()} {MODA.len()} {MODA.is_empty()}");
     println(f"{v[2]} {v.len()} {NUMS[0] + NUMS[2]} {WORDS.len()} {WORDS[1]}");

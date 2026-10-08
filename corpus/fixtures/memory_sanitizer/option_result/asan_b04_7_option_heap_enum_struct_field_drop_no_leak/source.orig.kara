@@ -1,0 +1,27 @@
+
+enum Val { Nothing, Ident(String), Num(i64) }
+#[derive(Clone)]
+struct A { value: Option[Val] }
+fn ident_len(v: Val) -> i64 { match v { Val.Ident(s) => s.len(), Val.Num(n) => n, Val.Nothing => 0 } }
+fn count(a: A) -> i64 { match a.value { Some(_) => 1, None => 0 } }
+fn get_len(a: A) -> i64 { match a.value { Some(v) => ident_len(v), None => 0 } }
+fn use_wild(a: A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
+fn via_match(a: A) -> i64 { let A { value } = a; match value { Some(v) => ident_len(v), None => 0 } }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { value: Some(Val.Ident("payload_b047_aaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())) }); i = i + 1; }
+    v
+}
+fn main() {
+    let z: Vec[A] = build();
+    let mut t = z.len();
+    for a in build() { t = t + count(a); }
+    for a in build() { t = t + get_len(a); }
+    for a in build() { t = t + use_wild(a); }
+    for a in build() { t = t + via_match(a); }
+    let xs: Vec[A] = build();
+    let c0 = xs[0].clone();
+    t = t + get_len(c0);
+    println(t);
+}

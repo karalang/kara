@@ -1,0 +1,3 @@
+--after-insert--
+len=1
+dropK kk

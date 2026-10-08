@@ -1,0 +1,18 @@
+
+struct Wt { pair: (String, i64), k: i64 }
+
+fn ret(t: ref Wt) -> String { return t.pair.0; }
+fn bound(t: ref Wt) -> String { let s = t.pair.0; return s; }
+
+fn main() {
+    let v = Wt { pair: (f"n{41}", 7), k: 2 };
+    let mut a = ret(v);
+    a = a + "X";
+    println(a);
+    println(v.pair.0);
+    let mut b = bound(v);
+    b = b + "Y";
+    println(b);
+    println(v.pair.0);
+    println(v.pair.1);
+}

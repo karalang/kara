@@ -1,11 +1,11 @@
 
 shared struct Box { mut name: String }
 fn main() {
-    let mut i = 0i64;
+    let mut i = 0;
     let mut last: String = "";
-    while i < 50i64 {
+    while i < 50 {
         let b = Box { name: "n" + "!" };
-        last = b.name;
+        last = b.name.clone();
         i = i + 1;
     }
     println(last);

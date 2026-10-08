@@ -130,7 +130,7 @@ fn serialize_level(t: Option[TreeNode]) -> String {
     let mut trimmed: Vec[String] = Vec.new();
     let mut k = 0;
     while k < last {
-        trimmed.push(parts[k]);
+        trimmed.push(parts[k].clone());
         k = k + 1;
     }
     return trimmed.join(",");

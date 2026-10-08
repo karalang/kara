@@ -2,41 +2,41 @@
 struct Pair { word: String, n: i64 }
 struct Box3 { word: String }
 enum Wrap { Has(String), Non }
-fn ret(ps: Vec[Pair]) -> String { return ps[0].word; }
+fn ret(ps: Vec[Pair]) -> String { return ps[0].word.clone(); }
 fn main() {
     let k = env.args().len() as i64;
-    let mut i = 0i64;
-    let mut acc = 0i64;
+    let mut i = 0;
+    let mut acc = 0;
     while i < 20 {
         let mut ps: Vec[Pair] = Vec.new();
         ps.push(Pair { word: f"src{k + i}", n: 1 });
         // 1. struct-literal field
-        let lit = Pair { word: ps[0].word, n: 9 };
+        let lit = Pair { word: ps[0].word.clone(), n: 9 };
         acc = acc + lit.word.len();
         // 2. Vec.push
         let mut ws: Vec[String] = Vec.new();
-        ws.push(ps[0].word);
+        ws.push(ps[0].word.clone());
         acc = acc + ws[0].len();
         // 3. field assign
         let mut o = Box3 { word: f"old{k + i}" };
-        o.word = ps[0].word;
+        o.word = ps[0].word.clone();
         acc = acc + o.word.len();
         // 4. index assign
         let mut zs: Vec[String] = Vec.new();
         zs.push(f"pad{k + i}");
-        zs[0] = ps[0].word;
+        zs[0] = ps[0].word.clone();
         acc = acc + zs[0].len();
         // 5. map insert
         let mut m: Map[String, i64] = Map.new();
-        m.insert(ps[0].word, 5);
+        m.insert(ps[0].word.clone(), 5);
         acc = acc + 1;
         // 6. return out of a callee
-        acc = acc + ret(ps).len();
+        acc = acc + ret(ps.clone()).len();
         // 7. tuple construction
-        let t = (ps[0].word, 1);
+        let t = (ps[0].word.clone(), 1);
         acc = acc + t.0.len();
         // 8. enum payload
-        let w = Wrap.Has(ps[0].word);
+        let w = Wrap.Has(ps[0].word.clone());
         acc = acc + match w { Wrap.Has(s) => s.len(), Wrap.Non => 0 };
         // The container's own field must still read correctly afterwards.
         acc = acc + ps[0].word.len();

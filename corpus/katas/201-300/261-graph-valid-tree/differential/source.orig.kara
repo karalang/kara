@@ -1,0 +1,358 @@
+// LeetCode 261 — differential harness.
+//
+// Runs all THREE deciders over randomized graphs: union-find, BFS-with-edge-
+// count, and leaf-peeling.
+//
+// There is no "obvious reference" here the way an O(n³) enumeration is the
+// reference for a counting problem — all three are O(n α) or O(n + m) and all
+// three are equally believable. What makes the comparison worth running is that
+// they establish DIFFERENT PAIRS of the three tree conditions:
+//
+//     union-find   (acyclic, connected)      — never reads the edge count
+//     bfs          (|E| = n-1, connected)    — never looks for a cycle
+//     peel         (acyclic, connected)      — from residue, builds no spanning
+//                                              structure and reads no count
+//
+// Since any two conditions imply the third, each is complete on its own; a bug
+// that drops one of a pair shows up as disagreement with the other two.
+//
+// GENERATOR DESIGN is the whole exercise. A uniformly random edge set on n nodes
+// is essentially never a tree, so a naive generator answers false ~always and
+// tests only the rejection path. Worse, it almost never produces the case that
+// actually separates these algorithms: a graph with EXACTLY n-1 edges that is
+// still not a tree. Five families are drawn deliberately instead:
+//
+//     0  a real random tree (parent-attachment), edges shuffled     -> true
+//     1  tree + one extra edge         cycle, n edges               -> false
+//     2  tree - one edge               forest, n-2 edges            -> false
+//     3  tree with one edge REWIRED    still exactly n-1 edges      -> either
+//     4  uniform random edge set sized near n-1                     -> mostly false
+//
+// Family 3 is the one that matters: it holds |E| = n-1 fixed and varies only the
+// shape, so `return edges.len() == n - 1` — the single most tempting wrong
+// answer to this problem — is wrong on exactly those cases and right on the
+// rest. Family 0 is what keeps the accept path live; without it the harness
+// would agree trivially by rejecting everything.
+//
+// No self-loops and no duplicate edges are emitted, matching the problem's
+// constraints. That matters: a parent-skipping DFS (not one of the three here)
+// is correct ONLY under the no-duplicates constraint, since it cannot tell the
+// second copy of an edge from the one it arrived on.
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut r = x;
+    while parent[r] != r {
+        r = parent[r];
+    }
+    let mut c = x;
+    while parent[c] != r {
+        let nxt = parent[c];
+        parent[c] = r;
+        c = nxt;
+    }
+    return r;
+}
+
+fn valid_union(n: i64, edges: ref Vec[Vec[i64]]) -> bool {
+    let mut parent: Vec[i64] = Vec.new();
+    let mut size: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        parent.push(i);
+        size.push(1);
+        i = i + 1;
+    }
+    let mut components = n;
+    let mut e = 0;
+    while e < edges.len() {
+        let edge = ref edges[e];
+        let ra = find(mut parent, edge[0]);
+        let rb = find(mut parent, edge[1]);
+        if ra == rb { return false; }
+        if size[ra] < size[rb] {
+            parent[ra] = rb;
+            size[rb] = size[rb] + size[ra];
+        } else {
+            parent[rb] = ra;
+            size[ra] = size[ra] + size[rb];
+        }
+        components = components - 1;
+        e = e + 1;
+    }
+    return components == 1;
+}
+
+fn valid_bfs(n: i64, edges: ref Vec[Vec[i64]]) -> bool {
+    if edges.len() != n - 1 { return false; }
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        adj.push(Vec.new());
+        i = i + 1;
+    }
+    let mut e = 0;
+    while e < edges.len() {
+        let edge = ref edges[e];
+        adj[edge[0]].push(edge[1]);
+        adj[edge[1]].push(edge[0]);
+        e = e + 1;
+    }
+    let mut seen: Vec[bool] = Vec.new();
+    let mut s = 0;
+    while s < n {
+        seen.push(false);
+        s = s + 1;
+    }
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    seen[0] = true;
+    let mut reached = 1;
+    let mut head = 0;
+    while head < queue.len() {
+        let node = queue[head];
+        head = head + 1;
+        let nbrs = ref adj[node];
+        let mut k = 0;
+        while k < nbrs.len() {
+            let nb = nbrs[k];
+            if not seen[nb] {
+                seen[nb] = true;
+                reached = reached + 1;
+                queue.push(nb);
+            }
+            k = k + 1;
+        }
+    }
+    return reached == n;
+}
+
+fn valid_peel(n: i64, edges: ref Vec[Vec[i64]]) -> bool {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    let mut deg: Vec[i64] = Vec.new();
+    let mut gone: Vec[bool] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        adj.push(Vec.new());
+        deg.push(0);
+        gone.push(false);
+        i = i + 1;
+    }
+    let mut e = 0;
+    while e < edges.len() {
+        let edge = ref edges[e];
+        let u = edge[0];
+        let v = edge[1];
+        adj[u].push(v);
+        adj[v].push(u);
+        deg[u] = deg[u] + 1;
+        deg[v] = deg[v] + 1;
+        e = e + 1;
+    }
+    let mut queue: Vec[i64] = Vec.new();
+    let mut s = 0;
+    while s < n {
+        if deg[s] == 1 { queue.push(s); }
+        s = s + 1;
+    }
+    let mut removed = 0;
+    let mut head = 0;
+    while head < queue.len() {
+        let node = queue[head];
+        head = head + 1;
+        if gone[node] or deg[node] != 1 { continue; }
+        gone[node] = true;
+        removed = removed + 1;
+        deg[node] = 0;
+        let nbrs = ref adj[node];
+        let mut k = 0;
+        while k < nbrs.len() {
+            let nb = nbrs[k];
+            if not gone[nb] {
+                deg[nb] = deg[nb] - 1;
+                if deg[nb] == 1 { queue.push(nb); }
+            }
+            k = k + 1;
+        }
+    }
+    return n - removed == 1;
+}
+
+fn has_edge(mat: ref Vec[Vec[bool]], u: i64, v: i64) -> bool {
+    return mat[u][v];
+}
+
+fn main() {
+    let cases = 4000;
+    let mut seed = 261261;
+
+    let mut mismatches = 0;
+    let mut trues = 0;
+    let mut exact_count_not_tree = 0;   // |E| = n-1 yet not a tree
+    let mut total_edges = 0;
+    let mut digest = 0;
+
+    let mut c = 0;
+    while c < cases {
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let n = (seed / 65536) % 12 + 1;      // 1..12
+        seed = (seed * 1103515245 + 12345) & 2147483647;
+        let family = (seed / 65536) % 5;
+
+        // Adjacency matrix, so duplicate edges can be refused as they are drawn.
+        let mut mat: Vec[Vec[bool]] = Vec.new();
+        let mut r = 0;
+        while r < n {
+            let mut row: Vec[bool] = Vec.new();
+            let mut q = 0;
+            while q < n {
+                row.push(false);
+                q = q + 1;
+            }
+            mat.push(row);
+            r = r + 1;
+        }
+
+        let mut edges: Vec[Vec[i64]] = Vec.new();
+
+        if family <= 3 {
+            // Random tree by parent attachment: node i (i >= 1) picks a parent
+            // uniformly from 0..i. Every such graph is a tree, and every tree on
+            // labelled nodes with this root is reachable.
+            let mut i = 1;
+            while i < n {
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                let p = (seed / 65536) % i;
+                edges.push([p, i]);
+                mat[p][i] = true;
+                mat[i][p] = true;
+                i = i + 1;
+            }
+        }
+
+        if family == 1 {
+            // Add one edge that is not already present: closes a cycle.
+            let mut tries = 0;
+            while tries < 40 {
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                let u = (seed / 65536) % n;
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                let v = (seed / 65536) % n;
+                if u != v and not has_edge(mat, u, v) {
+                    edges.push([u, v]);
+                    mat[u][v] = true;
+                    mat[v][u] = true;
+                    tries = 40;
+                } else {
+                    tries = tries + 1;
+                }
+            }
+        }
+
+        if family == 2 and edges.len() > 0 {
+            // Drop one edge: a forest with n-2 edges.
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let drop = (seed / 65536) % edges.len();
+            let mut kept: Vec[Vec[i64]] = Vec.new();
+            let mut k = 0;
+            while k < edges.len() {
+                if k != drop { kept.push(edges[k]); }
+                k = k + 1;
+            }
+            edges = kept;
+        }
+
+        if family == 3 and edges.len() > 0 {
+            // ★ Rewire: drop one edge and add a different one, holding
+            // |E| = n-1 exactly. Sometimes still a tree, sometimes a cycle plus
+            // a stranded component — and `edges.len() == n-1` cannot tell.
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let drop = (seed / 65536) % edges.len();
+            let mut kept: Vec[Vec[i64]] = Vec.new();
+            let mut k = 0;
+            while k < edges.len() {
+                if k != drop {
+                    kept.push(edges[k]);
+                } else {
+                    let gone_edge = ref edges[k];
+                    mat[gone_edge[0]][gone_edge[1]] = false;
+                    mat[gone_edge[1]][gone_edge[0]] = false;
+                }
+                k = k + 1;
+            }
+            edges = kept;
+            let mut tries = 0;
+            while tries < 40 {
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                let u = (seed / 65536) % n;
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                let v = (seed / 65536) % n;
+                if u != v and not has_edge(mat, u, v) {
+                    edges.push([u, v]);
+                    mat[u][v] = true;
+                    mat[v][u] = true;
+                    tries = 40;
+                } else {
+                    tries = tries + 1;
+                }
+            }
+        }
+
+        if family == 4 {
+            // Uniform edge set, sized near n-1 so the count check is not a
+            // giveaway. Mostly false, and false for varied reasons.
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let want = n - 1 + (seed / 65536) % 3 - 1;
+            let mut placed = 0;
+            let mut tries = 0;
+            while placed < want and tries < 200 {
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                let u = (seed / 65536) % n;
+                seed = (seed * 1103515245 + 12345) & 2147483647;
+                let v = (seed / 65536) % n;
+                if u != v and not has_edge(mat, u, v) {
+                    edges.push([u, v]);
+                    mat[u][v] = true;
+                    mat[v][u] = true;
+                    placed = placed + 1;
+                }
+                tries = tries + 1;
+            }
+        }
+
+        // Shuffle the edge list, so no decider can lean on presentation order
+        // (the parent-attachment families emit edges in topological order).
+        let m = edges.len();
+        let mut sh = m - 1;
+        while sh > 0 {
+            seed = (seed * 1103515245 + 12345) & 2147483647;
+            let j = (seed / 65536) % (sh + 1);
+            let tmp = edges[sh].clone();
+            edges[sh] = edges[j].clone();
+            edges[j] = tmp;
+            sh = sh - 1;
+        }
+
+        let a = valid_union(n, edges);
+        let b = valid_bfs(n, edges);
+        let d = valid_peel(n, edges);
+
+        if a != b or a != d {
+            mismatches = mismatches + 1;
+        }
+        if a { trues = trues + 1; }
+        if m == n - 1 and not a { exact_count_not_tree = exact_count_not_tree + 1; }
+        total_edges = total_edges + m;
+
+        let mut bit = 0;
+        if a { bit = 1; }
+        digest = (digest * 131 + bit * 7 + n) % 1000000007;
+        c = c + 1;
+    }
+
+    println(f"cases {cases}");
+    println(f"valid trees {trues}");
+    println(f"|E|=n-1 but not a tree {exact_count_not_tree}");
+    println(f"edges generated {total_edges}");
+    println(f"digest {digest}");
+    println(f"mismatches {mismatches}");
+}

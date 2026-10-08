@@ -255,7 +255,7 @@ fn main() {
             let mut kept: Vec[Vec[i64]] = Vec.new();
             let mut k = 0;
             while k < edges.len() {
-                if k != drop { kept.push(edges[k]); }
+                if k != drop { kept.push(edges[k].clone()); }
                 k = k + 1;
             }
             edges = kept;
@@ -271,7 +271,7 @@ fn main() {
             let mut k = 0;
             while k < edges.len() {
                 if k != drop {
-                    kept.push(edges[k]);
+                    kept.push(edges[k].clone());
                 } else {
                     let gone_edge = ref edges[k];
                     mat[gone_edge[0]][gone_edge[1]] = false;

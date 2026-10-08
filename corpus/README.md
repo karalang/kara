@@ -42,6 +42,9 @@ kata/example file stem. A second distinct program in the same test gets `_2`.
 | `backends` | empty = all; otherwise the only backends it applies to |
 | `env` | extra environment for every run |
 | `note` | free text |
+| `bucket` | the classifier rule that decided `class`, or the failure (`mir-gap:<construct>`, `timeout`, `check-refuses:<code>`, ...) |
+| `classified_with` | the karac commit the classification ran at |
+| `fixed_by_classify` | `true` when `karac fix` rewrote `source.kara` (class b); the extracted text is `source.orig.kara` |
 
 Tags come from the source and from `karac check --output=json`: `drop`,
 `shared`, `par`, `closure`, `ref-return`, `panic` (legacy exits 101),
@@ -114,6 +117,26 @@ OLD behaviour, not a specification. Classification against the MIR
 interpreter writes `expected.out` per class, so the diff shows every program
 whose expectation moved.
 
+## Classification
+
+```bash
+cargo build
+python3 scripts/corpus/classify.py                  # every entry; writes meta.toml, expected.out, CLASSIFICATION.md
+python3 scripts/corpus/classify.py --filter katas/  # a subset
+python3 scripts/corpus/classify.py --report-only    # rewrite the report from meta.toml
+```
+
+`classify.py` classifies each entry against `karac __mir-run` by the rules in
+`review/corpus-classification.md` §3 (the rules themselves are in the script's
+docstring) and writes `corpus/CLASSIFICATION.md`: the M1 gate as passing over
+classified programs in the slice, with the denominator by bucket. The slice
+leaves out `post-m1:*` (par, net, process, `dyn`, escaping closures), `bench`
+variants and class d; the report also gives the number without `lib:`/`io:`.
+
+A class-b program is one `karac fix` repaired for a v2 ownership rule. Its
+fixed text is `source.kara` and is judged on its own output; the legacy
+backends run `source.orig.kara`, the text legacy recorded.
+
 ## The drop model's output
 
 `record.py --model` runs `corpus/tools/drop-model/kmodel.py` over every
@@ -129,4 +152,5 @@ On the mir backends `run.py` takes the expectation from `expected.out`, then
 `legacy.out`. A V2-REJECT program is not run: `karac check` must refuse it, and
 when check accepts it the verdict is MREJ, "model rejects, check accepts",
 counted on its own. MREJ needs only `karac check`, so it is judged before any
-mir backend exists. The legacy backends ignore all of this.
+mir backend exists. The legacy backends ignore all of this and compare to
+`legacy.out` whenever it exists.

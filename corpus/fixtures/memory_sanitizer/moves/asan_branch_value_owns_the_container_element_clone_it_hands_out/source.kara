@@ -8,11 +8,11 @@ fn mkp() -> Vec[P] {
 fn use_it(s: String) -> i64 { return s.len(); }
 
 fn pick_if(ps: ref Vec[P], c: bool) -> String {
-    return if c { ps[0].word } else { ps[1].word };
+    return if c { ps[0].word.clone() } else { ps[1].word.clone() };
 }
 
 fn pick_match(ps: ref Vec[P], c: bool) -> String {
-    return match c { true => ps[0].word, false => ps[1].word };
+    return match c { true => ps[0].word.clone(), false => ps[1].word.clone() };
 }
 
 fn main() {
@@ -22,25 +22,25 @@ fn main() {
     println(if c { p[0].word } else { p[1].word });
     println(match c { true => p[0].word, false => p[1].word });
 
-    println(f"{use_it(if c { p[0].word } else { p[1].word })}");
-    println(f"{use_it(match c { true => p[0].word, false => p[1].word })}");
+    println(f"{use_it(if c { p[0].word.clone() } else { p[1].word.clone() })}");
+    println(f"{use_it(match c { true => p[0].word.clone(), false => p[1].word.clone() })}");
 
-    let d = if c { p[0].word } else { p[1].word };
+    let d = if c { p[0].word.clone() } else { p[1].word.clone() };
     println(d);
-    let e = match c { true => p[0].word, false => p[1].word };
+    let e = match c { true => p[0].word.clone(), false => p[1].word.clone() };
     println(e);
 
     let mut out: Vec[String] = Vec.new();
-    out.push(if c { p[0].word } else { p[1].word });
-    out.push(match c { true => p[0].word, false => p[1].word });
+    out.push(if c { p[0].word.clone() } else { p[1].word.clone() });
+    out.push(match c { true => p[0].word.clone(), false => p[1].word.clone() });
     println(out[0]);
     println(out[1]);
 
     println(pick_if(p, c));
     println(pick_match(p, c));
 
-    if c { p[0].word } else { p[1].word };
-    match c { true => p[0].word, false => p[1].word };
+    if c { p[0].word.clone() } else { p[1].word.clone() };
+    match c { true => p[0].word.clone(), false => p[1].word.clone() };
 
     println(p[0].word);
     println(p[1].word);

@@ -5,7 +5,7 @@ fn main() {
     r0.push(11);
     r0.push(22);
     rows.push(r0);
-    let copy: Vec[i64] = Vec.from_slice(rows[0]);
+    let copy: Vec[i64] = Vec.from_slice(rows[0].clone());
     println(copy.len());
     println(copy[0]);
     println(copy[1]);

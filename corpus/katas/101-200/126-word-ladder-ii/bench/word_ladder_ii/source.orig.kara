@@ -1,0 +1,273 @@
+// Benchmark harness for LeetCode #126 — Word Ladder II.
+//
+// Build-once + punch (BENCHMARKS.md): the word list is generated once — every
+// 5-letter word over the 5-letter alphabet {a..e}, so 3,125 words — then
+// punched with 24 different (begin, end) pairs.
+//
+// Each punch runs the kata's two phases unchanged: a BFS that records ALL
+// same-level predecessors into a Map[String, Vec[String]], then a DFS that
+// walks that map back from `end` enumerating every shortest ladder. Because
+// every word over {a..e} is in the set, a pair at Hamming distance d has
+// exactly d! shortest ladders (one per order of fixing the d differing
+// positions), so the enumeration is bounded at 120 and cannot blow up.
+//
+// This is #127's shape plus a nested heap-owning collection: the predecessor
+// map is read-modify-written per edge (get a Vec[String] copy, push, insert
+// back) and then re-read under recursion. It is the densest ownership shape in
+// the corpus after #332.
+
+// LeetCode #126: Word Ladder II — all shortest transformation sequences.
+//
+// From `begin` to `end`, changing one letter per step, every intermediate word
+// in the list, find EVERY shortest ladder. Two phases:
+//   1. BFS level-graph — expand a frontier one letter at a time, recording for
+//      each newly-reached word ALL predecessors at the previous level (a word
+//      is committed to `visited` only after the whole level, so multiple
+//      same-level parents are captured). Stop at the level that reaches `end`.
+//   2. DFS reconstruction — walk the predecessor map back from `end` to `begin`,
+//      emitting each shortest path.
+//
+// To keep the oracle deterministic without pinning a path order, we report per
+// case `count` (#paths), `len` (path length), and an order-INDEPENDENT digest
+// (sum of per-path hashes), then fold a global sink — the #113 discipline.
+// Maps/sets are `Map[String, …]`; predecessors are `Map[String, Vec[String]]`.
+
+// MOD for the rolling hashes.
+fn modulus() -> i64 {
+    1000000007
+}
+
+// The n-th lowercase letter (n mod 26), via alphabet iteration.
+fn nth_letter(n: i64) -> char {
+    let alphabet: String = "abcdefghijklmnopqrstuvwxyz";
+    let target = n % 26;
+    let mut i = 0;
+    for ch in alphabet.chars() {
+        if i == target {
+            return ch;
+        }
+        i = i + 1;
+    }
+    'a'
+}
+
+// `word` with the character at `pos` replaced by `new_ch`.
+fn replace_char(word: ref String, pos: i64, new_ch: char) -> String {
+    let mut out: String = "";
+    let mut i = 0;
+    for ch in word.chars() {
+        if i == pos {
+            out.push(new_ch);
+        } else {
+            out.push(ch);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Neighbours of `word` present in `word_set` (one-letter changes).
+fn neighbors(word: ref String, word_set: ref Map[String, i64]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let n = word.bytes().len();
+    let bytes = word.bytes();
+    let mut i = 0;
+    while i < n {
+        let orig = bytes[i];
+        let mut c = 0;
+        while c < 26 {
+            let ch = nth_letter(c);
+            // Skip the identity change (same letter already at position i).
+            if (c + 97) != (orig as i64) {
+                let cand = replace_char(word, i, ch);
+                match word_set.get(cand) {
+                    Some(_) => {
+                        out.push(cand);
+                    }
+                    None => {}
+                }
+            }
+            c = c + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Order-independent hash of ONE path. `path` is stored end -> begin (the DFS
+// order), so iterate it in reverse to hash begin -> end, matching the oracle.
+fn path_digest(path: ref Vec[String]) -> i64 {
+    let m = modulus();
+    let mut h = 0;
+    let mut idx = path.len() - 1;
+    while idx >= 0 {
+        let w = ref path[idx];
+        for b in w.bytes() {
+            h = (h * 131 + ((b as i64) - 96)) % m;
+        }
+        h = (h * 131 + 27) % m;
+        idx = idx - 1;
+    }
+    h
+}
+
+// DFS from `word` back to `begin` via `preds`, folding count + digest.
+fn dfs(
+    word: ref String,
+    begin: ref String,
+    preds: ref Map[String, Vec[String]],
+    path: mut ref Vec[String],
+    count: mut ref i64,
+    digest: mut ref i64,
+) {
+    if word == begin {
+        let m = modulus();
+        digest = (digest + path_digest(path)) % m;
+        count = count + 1;
+        return;
+    }
+    match preds.get(word.clone()) {
+        None => {}
+        Some(plist) => {
+            let mut i = 0;
+            while i < plist.len() {
+                let p = ref plist[i];
+                path.push(p.clone());
+                dfs(p, begin, preds, path, count, digest);
+                path.pop();
+                i = i + 1;
+            }
+        }
+    }
+}
+
+struct LadderResult {
+    count: i64,
+    len: i64,
+    digest: i64,
+}
+
+fn find_ladders(begin: String, end: String, words: ref Vec[String]) -> LadderResult {
+    // Word set.
+    let mut word_set: Map[String, i64] = Map.new();
+    let mut wi = 0;
+    while wi < words.len() {
+        word_set.insert(words[wi], 1);
+        wi = wi + 1;
+    }
+    // `end` must be in the set for any ladder to exist.
+    match word_set.get(end) {
+        None => {
+            return LadderResult { count: 0, len: 0, digest: 0 };
+        }
+        Some(_) => {}
+    }
+
+    // BFS building predecessors.
+    let mut preds: Map[String, Vec[String]] = Map.new();
+    let mut visited: Map[String, i64] = Map.new();
+    visited.insert(begin.clone(), 1);
+    let mut cur: Vec[String] = Vec.new();
+    cur.push(begin.clone());
+    let mut found = false;
+    let mut depth = 1; // number of words on a path so far (begin counts as 1)
+
+    while cur.len() > 0 and not found {
+        let mut in_next: Map[String, i64] = Map.new();
+        let mut nxt: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < cur.len() {
+            let word = ref cur[i];
+            let nbs = neighbors(word, word_set);
+            let mut j = 0;
+            while j < nbs.len() {
+                let nb = nbs[j].clone();
+                match visited.get(nb) {
+                    Some(_) => {}
+                    None => {
+                        // Record `word` as a predecessor of `nb`.
+                        let mut plist: Vec[String] = match preds.get(nb) {
+                            Some(v) => v,
+                            None => Vec.new(),
+                        };
+                        plist.push(word.clone());
+                        preds.insert(nb.clone(), plist);
+                        // Add to the frontier once.
+                        match in_next.get(nb) {
+                            Some(_) => {}
+                            None => {
+                                if nb == end {
+                                    found = true;
+                                }
+                                in_next.insert(nb.clone(), 1);
+                                nxt.push(nb);
+                            }
+                        }
+                    }
+                }
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+        // Commit this level to visited.
+        let mut k = 0;
+        while k < nxt.len() {
+            visited.insert(nxt[k], 1);
+            k = k + 1;
+        }
+        cur = nxt;
+        depth = depth + 1;
+    }
+
+    if not found {
+        return LadderResult { count: 0, len: 0, digest: 0 };
+    }
+
+    // DFS reconstruction from end.
+    let mut path: Vec[String] = Vec.new();
+    path.push(end.clone());
+    let mut count = 0;
+    let mut digest = 0;
+    dfs(end, begin, preds, mut path, mut count, mut digest);
+
+    LadderResult { count: count, len: depth, digest: digest }
+}
+
+
+fn main() {
+    let alpha = 5;
+    let wlen = 5;
+    let iters = 24;
+
+    // All 5-letter words over {a..e}, in lexicographic order.
+    let mut words: Vec[String] = Vec.new();
+    let total = 3125;
+    let mut idx = 0;
+    while idx < total {
+        let mut w: String = "";
+        let mut d = 0;
+        let mut rem = idx;
+        let mut div = 625;
+        while d < wlen {
+            let digit = rem / div;
+            w.push(nth_letter(digit));
+            rem = rem - digit * div;
+            div = div / alpha;
+            d = d + 1;
+        }
+        words.push(w);
+        idx = idx + 1;
+    }
+
+    let m = modulus();
+    let mut sink = 0;
+    let mut it = 0;
+    while it < iters {
+        let b = (it * 257) % total;
+        let e = (it * 613 + 1234) % total;
+        let r = find_ladders(words[b].clone(), words[e].clone(), words);
+        sink = (sink * 1000003 + r.count * 7 + r.len * 13 + r.digest) % m;
+        it = it + 1;
+    }
+    println(f"{sink}");
+}

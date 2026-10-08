@@ -33,6 +33,6 @@ fn build() -> Vec[AttrN] {
 fn main() {
     let items = build();
     let mut total = 0;
-    for a in items { total = total + count(a); }
+    for a in items.into_iter() { total = total + count(a); }
     println(total);
 }

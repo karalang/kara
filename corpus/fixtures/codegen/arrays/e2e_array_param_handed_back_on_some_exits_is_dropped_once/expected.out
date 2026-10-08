@@ -1,0 +1,95 @@
+ret-t
+  y1:29
+  d1
+  d2
+ret-f
+  dies
+  d1
+  d2
+  y8
+  d8
+  d9
+itail-t
+  y1
+  d1
+  d2
+itail-f
+  d1
+  d2
+  y8
+  d8
+  d9
+mtch-t
+  y1
+  d1
+  d2
+mtch-f
+  d1
+  d2
+  y8
+  d8
+  d9
+mblk-t
+  one
+  y1
+  d1
+  d2
+mblk-f
+  other
+  d1
+  d2
+  y8
+  d8
+  d9
+rebind-t
+  y1
+  d1
+  d2
+rebind-f
+  dies
+  d1
+  d2
+  y8
+  d8
+  d9
+letif-f
+  mid
+  d1
+  d2
+  y8
+  d8
+  d9
+read-t
+  r2
+  y1
+  d1
+  d2
+read-f
+  r2
+  d1
+  d2
+  y8
+  d8
+  d9
+method-t
+  y1
+  d1
+  d2
+discard
+  dies
+  d1
+  d2
+  y
+  d8
+  d9
+loop
+  y30
+  d30
+  d40
+  dies
+  d31
+  d41
+  y8
+  d8
+  d9
+end

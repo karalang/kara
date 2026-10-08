@@ -1,0 +1,13 @@
+  d40
+  d41
+keep 41
+  d10
+  d11
+push 1
+  d20
+  d21
+tail 21
+  d30
+  d31
+rebeat 30
+end

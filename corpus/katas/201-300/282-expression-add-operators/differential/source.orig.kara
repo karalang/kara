@@ -1,0 +1,329 @@
+// LeetCode 282 — differential harness.
+//
+// Two solvers: the ★ backtracking search that carries its last operand, and a
+// full enumeration of all 4^(n-1) operator patterns evaluated with an ordinary
+// precedence-aware evaluator.
+//
+// THEY DISAGREE ABOUT NOTHING EXCEPT ARITHMETIC, which is the point. The ★
+// solver's whole claim to correctness is one line — `cur - last + last * n` —
+// which is an INCREMENTAL RESTATEMENT of precedence. The enumerator applies
+// precedence the way a calculator does, to a finished string. The two agree only
+// if the restatement is genuinely equivalent, and a sign error in it (forgetting
+// that `last` goes negative after a `-`) is correct on `+`-only inputs and wrong
+// the moment a `*` follows a `-`.
+//
+// FOUR CHECKS PER CASE, NOT ONE. The answer is a SET of strings, so equality
+// after sorting is the first; the other three are properties every returned
+// expression must have on its own, verified without reference to either solver:
+//
+//   1. THE SETS MATCH after sorting.
+//   2. EVERY EXPRESSION EVALUATES TO THE TARGET — re-evaluated independently.
+//      (Checks 2-4 run over BOTH solvers' output. Validating only one would
+//      catch the other's bugs solely through the set comparison — a weaker
+//      signal that says nothing about what is actually wrong.)
+//   3. EVERY EXPRESSION IS LEGAL — no multi-digit operand starting with `0`.
+//   4. EVERY EXPRESSION PRESERVES THE DIGITS, in order. Strip the operators and
+//      what remains must be `num` exactly.
+//
+// CHECK 4 IS THE ONE THAT LOOKS REDUNDANT AND IS NOT. This is a construction
+// problem, and checks 2 and 3 are both satisfied by expressions built from the
+// WRONG DIGITS — "1+1" evaluates to 2 and has no leading zero, and would sail
+// past both while having nothing to do with an input of "123". It is kata 280's
+// multiset lesson in a different costume: when the answer is built from the
+// input, something has to verify that the input is what it was built from.
+//
+// EXHAUSTIVE OVER SHORT INPUTS. Every digit string of length 1..3 over a small
+// digit set, against a range of targets — which reaches the shapes that matter
+// (a `*` after a `-`, leading zeros in every position, all-zero inputs) rather
+// than sampling long strings and hoping. Lengths 4 and 5 were dropped
+// deliberately, and the range was chosen by MEASUREMENT rather than by feel: at
+// length 3 every injection in the README's table is still caught, with every
+// qualitative signature intact — including the row where both solvers agree and
+// only the legality check fires. Longer inputs add DEPTH but no new shape, while
+// the `--interp` leg goes 35s -> ~9min -> ~2h. The range is set by the slowest
+// surface, as in kata 279.
+
+fn digit_at(s: ref String, i: i64) -> i64 {
+    let b = s.bytes();
+    return (b[i] as i64) - 48;
+}
+
+fn slice(s: ref String, lo: i64, hi: i64) -> String {
+    return s.substring(lo, hi);
+}
+
+fn search(num: ref String, target: i64, pos: i64, expr: String, cur: i64, last: i64,
+          out: mut ref Vec[String]) {
+    if pos == num.len() {
+        if cur == target { out.push(expr); }
+        return;
+    }
+    let mut end = pos + 1;
+    while end <= num.len() {
+        // leading zero: only the single digit `0` may start at a `0`
+        if end > pos + 1 and digit_at(num, pos) == 0 {
+            return;
+        }
+        let piece = slice(num, pos, end);
+        let mut n = 0;
+        let mut k = pos;
+        while k < end {
+            n = n * 10 + digit_at(num, k);
+            k = k + 1;
+        }
+        if pos == 0 {
+            // first operand — no operator in front of it
+            search(num, target, end, piece, n, n, out);
+        } else {
+            search(num, target, end, expr + "+" + piece.clone(), cur + n, n, out);
+            search(num, target, end, expr + "-" + piece, cur - n, 0 - n, out);
+            // `*` binds to the previous term: undo it, re-add it multiplied
+            search(num, target, end, expr + "*" + piece, cur - last + last * n, last * n, out);
+        }
+        end = end + 1;
+    }
+}
+
+fn solve_backtrack(num: String, target: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if num.len() == 0 { return out; }
+    search(num, target, 0, "", 0, 0, mut out);
+    return out;
+}
+
+fn eval_expr(expr: ref String) -> i64 {
+    // tokenize: operands and the operators between them
+    let mut vals: Vec[i64] = Vec.new();
+    let mut ops: Vec[i64] = Vec.new();     // 0 = '+', 1 = '-', 2 = '*'
+    let b = expr.bytes();
+    let mut i = 0;
+    let mut cur = 0;
+    let mut started = false;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c >= 48 and c <= 57 {
+            cur = cur * 10 + (c - 48);
+            started = true;
+        } else {
+            vals.push(cur);
+            cur = 0;
+            started = false;
+            if c == 43 { ops.push(0); }
+            if c == 45 { ops.push(1); }
+            if c == 42 { ops.push(2); }
+        }
+        i = i + 1;
+    }
+    vals.push(cur);
+
+    // pass 1 — fold every `*`
+    let mut v2: Vec[i64] = Vec.new();
+    let mut o2: Vec[i64] = Vec.new();
+    v2.push(vals[0]);
+    let mut k = 0;
+    while k < ops.len() {
+        if ops[k] == 2 {
+            let top = v2[v2.len() - 1];
+            v2[v2.len() - 1] = top * vals[k + 1];
+        } else {
+            o2.push(ops[k]);
+            v2.push(vals[k + 1]);
+        }
+        k = k + 1;
+    }
+
+    // pass 2 — fold `+` and `-` left to right
+    let mut acc = v2[0];
+    let mut m = 0;
+    while m < o2.len() {
+        if o2[m] == 0 { acc = acc + v2[m + 1]; } else { acc = acc - v2[m + 1]; }
+        m = m + 1;
+    }
+    return acc;
+}
+
+// A built expression is legal iff no operand of length > 1 starts with '0'.
+fn operands_legal(expr: ref String) -> bool {
+    let b = expr.bytes();
+    let mut i = 0;
+    let mut start = 0;
+    while i <= b.len() {
+        let at_end = i == b.len();
+        let mut is_op = false;
+        if not at_end {
+            let c = b[i] as i64;
+            if c == 43 or c == 45 or c == 42 { is_op = true; }
+        }
+        if at_end or is_op {
+            let len = i - start;
+            if len > 1 and (b[start] as i64) == 48 { return false; }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn pow4(e: i64) -> i64 {
+    let mut p = 1;
+    let mut i = 0;
+    while i < e { p = p * 4; i = i + 1; }
+    return p;
+}
+
+fn solve_enumerate(num: String, target: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let n = num.len();
+    if n == 0 { return out; }
+    let gaps = n - 1;
+    let total = pow4(gaps);
+    let mut mask = 0;
+    while mask < total {
+        // build the expression: digit, then the gap's choice, then the next
+        let mut expr: String = num.substring(0, 1);
+        let mut g = 0;
+        let mut m = mask;
+        while g < gaps {
+            let choice = m % 4;
+            m = m / 4;
+            if choice == 1 { expr = expr + "+"; }
+            if choice == 2 { expr = expr + "-"; }
+            if choice == 3 { expr = expr + "*"; }
+            expr = expr + num.substring(g + 1, g + 2);
+            g = g + 1;
+        }
+        if operands_legal(expr) {
+            if eval_expr(expr) == target { out.push(expr); }
+        }
+        mask = mask + 1;
+    }
+    return out;
+}
+
+fn show(v: ref Vec[String]) -> String {
+    let mut s: String = "[";
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 { s = s + ", "; }
+        s = s + v[i];
+        i = i + 1;
+    }
+    return s + "]";
+}
+
+fn sort_strings(v: mut ref Vec[String]) {
+    // the answer is a SET, and the two solvers enumerate it in different orders
+    // (DFS versus mask order), so both sort before reporting — that makes the
+    // two mains directly diffable without either pretending order is meaningful
+    let mut a = 1;
+    while a < v.len() {
+        let mut b = a;
+        while b > 0 and v[b - 1] > v[b] {
+            let t = v[b - 1].clone();
+            v[b - 1] = v[b].clone();
+            v[b] = t;
+            b = b - 1;
+        }
+        a = a + 1;
+    }
+}
+
+
+fn strip_operators(expr: ref String) -> String {
+    let b = expr.bytes();
+    let mut out: String = "";
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c >= 48 and c <= 57 { out = out + expr.substring(i, i + 1); }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn main() {
+    let mut cases = 0;
+    let mut set_mismatches = 0;
+    let mut wrong_value = 0;
+    let mut illegal_operand = 0;
+    let mut digits_not_preserved = 0;
+    let mut expressions_found = 0;
+    let mut cases_with_a_solution = 0;
+    let mut digest = 0;
+
+    // every digit string of length 1..5 over {0,1,2,3}, against targets -4..8
+    let mut len = 1;
+    while len <= 3 {
+        let mut span = 1;
+        let mut e = 0;
+        while e < len { span = span * 4; e = e + 1; }
+        let mut code = 0;
+        while code < span {
+            let mut num: String = "";
+            let mut m = code;
+            let mut d = 0;
+            while d < len {
+                let dig = m % 4;
+                m = m / 4;
+                if dig == 0 { num = num + "0"; }
+                if dig == 1 { num = num + "1"; }
+                if dig == 2 { num = num + "2"; }
+                if dig == 3 { num = num + "3"; }
+                d = d + 1;
+            }
+            let mut target = 0 - 4;
+            while target <= 8 {
+                let mut a = solve_backtrack(num.clone(), target);
+                let mut b = solve_enumerate(num, target);
+                sort_strings(mut a);
+                sort_strings(mut b);
+
+                if a.len() != b.len() {
+                    set_mismatches = set_mismatches + 1;
+                } else {
+                    let mut i = 0;
+                    let mut same = true;
+                    while i < a.len() {
+                        if a[i] != b[i] { same = false; }
+                        i = i + 1;
+                    }
+                    if not same { set_mismatches = set_mismatches + 1; }
+                }
+
+                // the per-expression checks run over BOTH solvers' output, not
+                // just the first: a harness that validated only one would catch
+                // a bug in the other solely through the set comparison, which is
+                // a weaker signal and says nothing about WHAT is wrong
+                let mut j = 0;
+                while j < a.len() {
+                    if eval_expr(a[j]) != target { wrong_value = wrong_value + 1; }
+                    if not operands_legal(a[j]) { illegal_operand = illegal_operand + 1; }
+                    if strip_operators(a[j]) != num { digits_not_preserved = digits_not_preserved + 1; }
+                    digest = (digest * 131 + a[j].len() + target + 5) % 1000000007;
+                    j = j + 1;
+                }
+                let mut jb = 0;
+                while jb < b.len() {
+                    if eval_expr(b[jb]) != target { wrong_value = wrong_value + 1; }
+                    if not operands_legal(b[jb]) { illegal_operand = illegal_operand + 1; }
+                    if strip_operators(b[jb]) != num { digits_not_preserved = digits_not_preserved + 1; }
+                    jb = jb + 1;
+                }
+                expressions_found = expressions_found + a.len();
+                if a.len() > 0 { cases_with_a_solution = cases_with_a_solution + 1; }
+                cases = cases + 1;
+                target = target + 1;
+            }
+            code = code + 1;
+        }
+        len = len + 1;
+    }
+
+    println(f"cases {cases}, of which have at least one solution {cases_with_a_solution}");
+    println(f"expressions returned {expressions_found}");
+    println(f"digest {digest}");
+    println(f"expressions whose value is wrong {wrong_value}");
+    println(f"expressions with an illegal leading zero {illegal_operand}");
+    println(f"expressions not preserving the input digits {digits_not_preserved}");
+    println(f"set mismatches between the two solvers {set_mismatches}");
+}

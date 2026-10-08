@@ -1,0 +1,28 @@
+
+enum Val { Nothing, Ident(String) }
+struct A { value: Option[Val] }
+struct B { value: Option[Val] }
+fn ident_len(v: Val) -> i64 { match v { Val.Ident(s) => s.len(), Val.Nothing => 0 } }
+fn via_match(a: A) -> i64 { let A { value } = a; match value { Some(v) => ident_len(v), None => 0 } }
+fn via_iflet(a: A) -> i64 { let A { value } = a; if let Some(v) = value { ident_len(v) } else { 0 } }
+fn via_whilelet(a: A) -> i64 {
+    let A { value } = a;
+    let mut vv = value;
+    let mut acc = 0;
+    while let Some(v) = vv { acc = acc + ident_len(v); vv = val_none(); }
+    acc
+}
+fn val_none() -> Option[Val] { Option.None }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { value: Some(Val.Ident("payload-borrow-only-aaaaaaaaaaaaaaaaaaaaaaaa".to_string())) }); i = i + 1; }
+    v
+}
+fn main() {
+    let mut t = 0;
+    for a in build() { t = t + via_match(a); }
+    for a in build() { t = t + via_iflet(a); }
+    for a in build() { t = t + via_whilelet(a); }
+    println(t);
+}

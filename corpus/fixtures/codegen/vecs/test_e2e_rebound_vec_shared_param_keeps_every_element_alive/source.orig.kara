@@ -1,0 +1,18 @@
+
+shared struct Node { val: i64 }
+
+fn probe(xs: Vec[Node]) -> i64 {
+    let mut work = xs;
+    work[0].val + work[1].val
+}
+
+fn main() {
+    let a = Node { val: 7 };
+    let b = Node { val: 9 };
+    let mut v: Vec[Node] = Vec.new();
+    v.push(a);
+    v.push(b);
+    println(probe(v));
+    println(probe(v));
+    println(v[0].val);
+}

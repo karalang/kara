@@ -1,0 +1,23 @@
+
+struct B { m: Map[String, i64] }
+impl B {
+    pub fn get_m(ref self) -> Map[String, i64] { return self.m; }
+}
+fn take_field(b: B) -> Map[String, i64] { return b.m; }
+fn mk() -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    let _ = m.insert("kkkkkkkkkkkkkkkk", 1);
+    return m;
+}
+fn main() {
+    let mut k = 0;
+    while k < 20 {
+        let b1 = B { m: mk() };
+        println(f"{take_field(b1)}");
+        let b2 = B { m: mk() };
+        println(f"{b2.get_m()}");
+        println(f"{b2.m}");
+        k = k + 1;
+    }
+    println("done");
+}

@@ -1,0 +1,16 @@
+"A man, a plan, a canal: Panama" -> true
+"race a car" -> false
+" " -> true
+"Able was I ere I saw elBA" -> true
+"No lemon, no melon" -> true
+"0P" -> false
+"a1b2b1a" -> true
+"1a2" -> false
+".," -> true
+"a" -> true
+"" -> true
+"aa" -> true
+"ab" -> false
+"Madam, I'm Adam" -> true
+"Was it a car or a cat I saw?" -> true
+"Mr. Owl ate my metal worm" -> true

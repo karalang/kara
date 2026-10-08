@@ -3,7 +3,7 @@ const NAMES: Vec[String] = ["ab".to_string(), "cd".to_string()];
 const CW: Array[String, 2] = ["x", "yy"];
 let WORDS: Array[String, 2] = ["a", "bb"];
 fn main() {
-    let v = NUMS;
+    let v = NUMS.clone();
     let w = NUMS[0];
     let mut k = 0;
     for nm in NAMES { k += nm.len(); }
@@ -11,7 +11,7 @@ fn main() {
     let mut out: Vec[String] = Vec.new();
     for w2 in WORDS { out.push(w2.clone()); }
     for c in CW { out.push(c.clone()); }
-    out.push(NAMES[1]);
+    out.push(NAMES[1].clone());
     let mut i = 0;
     while i < 2 { k += NAMES[1].len() + WORDS[1].len() + CW[0].clone().len(); i += 1; }
     println(f"{v[2]} {w} {k} {NAMES.len()} {NAMES[0]} {out.len()} {out[4]} {CW.len()}");

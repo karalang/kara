@@ -68,7 +68,8 @@ def entries(corpus: Path) -> list[Path]:
 REFUSAL = re.compile(rb"^error(\[[A-Za-z_-]+\])?:", re.M)
 
 
-def run_program(entry: Path, backend: str, karac: str, timeout: float, env_extra: dict) -> dict:
+def run_program(entry: Path, backend: str, karac: str, timeout: float, env_extra: dict,
+                source: str = "source.kara") -> dict:
     """Run one entry. Returns {status, exit, stdout, stderr, secs} where status
     is ran | refused | timeout."""
     spec = BACKENDS[backend]
@@ -78,7 +79,7 @@ def run_program(entry: Path, backend: str, karac: str, timeout: float, env_extra
     start = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="corpus-") as tmp:
         tmpd = Path(tmp)
-        shutil.copy(entry / "source.kara", tmpd / "source.kara")
+        shutil.copy(entry / source, tmpd / "source.kara")
         try:
             if spec.get("check"):
                 c = subprocess.run([karac, "check", "source.kara"], cwd=tmpd, env=env,

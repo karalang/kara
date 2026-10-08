@@ -1,0 +1,123 @@
+// THE CONTROL THAT SPLIT B-2026-08-28-76's SECOND HALF — `exprops.kara` with
+// one change: each branch builds its expression with a clone plus two
+// `push_str` calls instead of a concatenation chain.
+//
+// `expr.clone() + "+" + piece.clone()` allocates FOUR times — one per clone,
+// and one per `+`, because each `+` builds a fresh buffer from its two operands.
+// Three of the four are dead on the next instruction. The C mirror mallocs ONCE
+// per branch, sized to the total, and memcpys the parts in.
+//
+// MEASURED on an M5 Pro, sequential lanes, cumulative allocation counts via a
+// dyld-interposed counter with each language's own startup subtracted. Sink
+// 60478588 in every lane:
+//
+//     lane                   alloc calls           bytes     vs C
+//     C mirror                19,224,041     296,384,992     1.00x
+//     concat chain            70,482,502     734,792,852     3.67x
+//     this file               44,894,302     719,074,952     2.34x
+//
+// So the CHAIN is 36% of the gap (25.6M allocations) and the residual 2.34x is
+// the clones plus push_str's growth reallocs. Bytes barely move, which is the
+// point: this is a call-FREQUENCY defect, and call frequency is what macOS
+// libmalloc serialises on.
+//
+// COUNTED, NOT TIMED, deliberately: this kata has the corpus's largest
+// build-to-build placement spread (1.38x on the SAME compiler), so a timing
+// answer would cost far more and settle far less.
+//
+// THIS IS A CONTROL, NOT A PROPOSED REWRITE. The idiomatic spelling is the one
+// in `exprops.kara`; the fix belongs in the compiler (B-2026-09-13-22).
+
+fn digit_at(s: ref String, i: i64) -> i64 {
+    let b = s.bytes();
+    return (b[i] as i64) - 48;
+}
+
+fn search(num: ref String, target: i64, pos: i64, expr: String, cur: i64, last: i64,
+          found: mut ref i64, hash: mut ref i64) {
+    if pos == num.len() {
+        if cur == target {
+            found = found + 1;
+            hash = (hash * 31 + expr.len()) % 1000000007;
+        }
+        return;
+    }
+    let mut end = pos + 1;
+    while end <= num.len() {
+        if end > pos + 1 and digit_at(num, pos) == 0 { return; }
+        let piece = num.substring(pos, end);
+        let mut n = 0;
+        let mut k = pos;
+        while k < end {
+            n = n * 10 + digit_at(num, k);
+            k = k + 1;
+        }
+        if pos == 0 {
+            search(num, target, end, piece, n, n, found, hash);
+        } else {
+            let mut ep = expr.clone();
+            ep.push_str("+");
+            ep.push_str(piece);
+            search(num, target, end, ep, cur + n, n, found, hash);
+            let mut em = expr.clone();
+            em.push_str("-");
+            em.push_str(piece);
+            search(num, target, end, em, cur - n, 0 - n, found, hash);
+            let mut et = expr;
+            et.push_str("*");
+            et.push_str(piece);
+            search(num, target, end, et, cur - last + last * n, last * n, found, hash);
+        }
+        end = end + 1;
+    }
+}
+
+fn make_input(idx: i64) -> String {
+    // deterministic per-input digits, so a branch can build its own without
+    // threading a shared seed through the parallel loop
+    let mut seed = (20260820 + idx * 7919) % 2147483648;
+    let mut num: String = "";
+    let mut d = 0;
+    while d < 9 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let dig = 1 + (seed / 19) % 6;
+        if dig == 1 { num = num + "1"; }
+        if dig == 2 { num = num + "2"; }
+        if dig == 3 { num = num + "3"; }
+        if dig == 4 { num = num + "4"; }
+        if dig == 5 { num = num + "5"; }
+        if dig == 6 { num = num + "6"; }
+        d = d + 1;
+    }
+    return num;
+}
+
+fn target_for(idx: i64) -> i64 {
+    let mut seed = (20260820 + idx * 7919) % 2147483648;
+    let mut d = 0;
+    while d < 10 { seed = (seed * 1103515245 + 12345) % 2147483648; d = d + 1; }
+    return (seed / 23) % 40;
+}
+
+fn main() {
+    let inputs = 220;
+
+    let mut parts: Vec[i64] = Vec.new();
+    #[par_order_free]
+    for i in 0..inputs {
+        let num = make_input(i);
+        let target = target_for(i);
+        let mut found = 0;
+        let mut hash = 0;
+        search(num, target, 0, "", 0, 0, mut found, mut hash);
+        parts.push((i * 1000003 + found * 31 + hash) % 1000000007);
+    }
+
+    let mut sink = 0;
+    let mut k = 0;
+    while k < parts.len() {
+        sink = (sink + parts[k]) % 1000000007;
+        k = k + 1;
+    }
+    println(sink);
+}

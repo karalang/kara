@@ -1,7 +1,7 @@
 
 struct H { s: String }
 fn take(s: String) -> i64 { s.len() }
-fn pick(v: ref Vec[(i64, (String, i64))]) -> String { v[0].1.0 }
+fn pick(v: ref Vec[(i64, (String, i64))]) -> String { v[0].1.0.clone() }
 fn mkv() -> Vec[(i64, (String, i64))] { [(1, (f"alpha-{1}-long-enough-to-heap", 7)), (2, (f"beta-{2}-long-enough-to-heap", 8))] }
 fn leg_reads() {
     let v = mkv();
@@ -11,32 +11,32 @@ fn leg_reads() {
 }
 fn leg_consumers() {
     let v = mkv();
-    let s = v[0].1.0;
+    let s = v[0].1.0.clone();
     let mut o: Vec[String] = [];
-    o.push(v[1].1.0);
-    o.push(v[0].1.0);
-    let h = H { s: v[1].1.0 };
-    let t = (v[0].1.0, 3);
+    o.push(v[1].1.0.clone());
+    o.push(v[0].1.0.clone());
+    let h = H { s: v[1].1.0.clone() };
+    let t = (v[0].1.0.clone(), 3);
     let mut a = String.new();
-    a = v[1].1.0;
-    println(f"co {s} {o.len()} {o[1]} {h.s} {t.0} {a} {take(v[0].1.0)} {pick(v)}");
+    a = v[1].1.0.clone();
+    println(f"co {s} {o.len()} {o[1]} {h.s} {t.0} {a} {take(v[0].1.0.clone())} {pick(v)}");
     println(f"co {v[0].1.0} {v[1].1.0}");
 }
 fn leg_three_levels() {
     let v: Vec[(i64, (i64, (String, i64)))] = [(1, (2, (f"gamma-{3}-long-enough-to-heap", 7)))];
     println(v[0].1.1.0);
-    let s = v[0].1.1.0;
+    let s = v[0].1.1.0.clone();
     println(f"tl {s} {v[0].1.1.1}");
 }
 fn leg_vec_leaf() {
     let v: Vec[(i64, (Vec[String], i64))] = [(1, ([f"delta-{4}-long-enough-to-heap"], 7))];
     println(f"vl {v[0].1.0.len()}");
-    let w = v[0].1.0;
+    let w = v[0].1.0.clone();
     println(f"vl {w[0]} {v[0].1.0[0]}");
 }
 fn leg_whole_inner() {
     let v = mkv();
-    let t = v[0].1;
+    let t = v[0].1.clone();
     println(f"wi {t.0} {t.1} {v[0].1.0}");
 }
 fn main() {

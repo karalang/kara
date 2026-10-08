@@ -13,7 +13,7 @@ fn main() {
     println(make(5).xs.len());
     // The copy has to OUTLIVE the temporary it was read from, which is the
     // half a clone emitted after the release cannot deliver.
-    let kept = make(6).tag;
+    let kept = make(6).tag.clone();
     println(kept);
     // The bound receiver was never broken and must not become a double free.
     let b = make(7);

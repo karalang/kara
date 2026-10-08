@@ -6,19 +6,19 @@ fn mkps() -> Vec[(String, i64)] {
 fn leg_ref_tuple() {
     let ps = mkps();
     let p = ref ps[1];
-    let name = p.0;
+    let name = p.0.clone();
     println(f"rt {name} {p.1} {ps[1].0}");
 }
 fn leg_ref_struct() {
     let qs: Vec[P] = [P { name: f"delta-{4}-long-enough", n: 4 }];
     let q = ref qs[0];
-    let m = q.name;
+    let m = q.name.clone();
     println(f"rs {m} {q.n} {qs[0].name}");
 }
 fn leg_iter_tuple() {
     let ps = mkps();
     for p in ps.iter() {
-        let n = p.0;
+        let n = p.0.clone();
         println(f"it {n} {p.1}");
     }
     println(f"it {ps[2].0}");
@@ -26,14 +26,14 @@ fn leg_iter_tuple() {
 fn leg_owned_loop_tuple() {
     let ps = mkps();
     for p in ps {
-        let n = p.0;
+        let n = p.0.clone();
         println(f"ol {n} {p.1}");
     }
 }
 fn leg_mut_copy() {
     let ps = mkps();
     for p in ps.iter() {
-        let mut n = p.0;
+        let mut n = p.0.clone();
         n.push_str("-X");
         println(f"mu {n} {p.0}");
     }
@@ -41,21 +41,21 @@ fn leg_mut_copy() {
 fn leg_vec_leaf() {
     let ps: Vec[(Vec[String], i64)] = [([f"a-{1}-long-enough-to-heap", f"b{2}"], 1)];
     for p in ps {
-        let v = p.0;
+        let v = p.0.clone();
         println(f"vl {v.len()} {v[0]} {p.1}");
     }
     let r = ref ps[0];
-    let w = r.0;
+    let w = r.0.clone();
     println(f"vl {w[1]} {ps[0].0.len()}");
 }
 fn leg_nested() {
     let ps: Vec[(i64, (String, i64))] = [(1, (f"nest-{7}-long-enough-to-heap", 7))];
     for p in ps.iter() {
-        let n = p.1.0;
+        let n = p.1.0.clone();
         println(f"ne {n} {p.0}");
     }
     let r = ref ps[0];
-    let m = r.1.0;
+    let m = r.1.0.clone();
     println(f"ne {m}");
 }
 fn leg_whole() {
@@ -69,7 +69,7 @@ fn leg_whole() {
 fn leg_option_leaf() {
     let ps: Vec[(Option[String], i64)] = [(Some(f"opt-{5}-long-enough-to-heap"), 1), (None, 2)];
     for p in ps {
-        let o = p.0;
+        let o = p.0.clone();
         match o { Some(s) => println(f"op {s}"), None => println("op none") }
     }
 }
@@ -78,8 +78,8 @@ fn leg_push() {
     let mut names: Vec[String] = [];
     let mut whole: Vec[(String, i64)] = [];
     for p in ps.iter() {
-        names.push(p.0);
-        whole.push(p);
+        names.push(p.0.clone());
+        whole.push(p.clone());
     }
     println(f"pu {names[2]} {whole[1].0} {ps[0].0}");
 }

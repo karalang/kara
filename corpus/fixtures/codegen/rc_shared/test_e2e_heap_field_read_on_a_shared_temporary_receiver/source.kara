@@ -19,7 +19,7 @@ fn main() {
     println(if not c { make(5) } else { make(6) }.tag);
     println(make(7).xs.len());
     println(make(8).v);
-    let kept = make(9).tag;
+    let kept = make(9).tag.clone();
     println(kept);
     let b = make(10);
     println(b.tag);

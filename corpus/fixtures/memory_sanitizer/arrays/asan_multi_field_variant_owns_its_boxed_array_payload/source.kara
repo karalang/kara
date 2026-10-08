@@ -39,7 +39,7 @@ fn main() {
         { let w = Mix.M(mka(f"j{i}"), 5); let r = mout(w); println(f"out:{r[1].len()}"); }
         { let w = Mx.M(mka(f"k{i}"), f"b1515-sib-aaaaaaaaaaaaaaaa"); println(f"heapsib:{mxlen(w)}"); }
         let src = mka(f"m{i}");
-        { let w = Mix.M(src, 5); println(f"srcmove:{mlen(w)}"); }
+        { let w = Mix.M(src.clone(), 5); println(f"srcmove:{mlen(w)}"); }
         println(f"srcread:{src[0].len()}");
         { let w = Wrp.Full(mka(f"n{i}")); println(f"single:{wlen(w)}"); }
         i = i + 1;

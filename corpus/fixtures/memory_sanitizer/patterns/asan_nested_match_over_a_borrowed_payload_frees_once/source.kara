@@ -10,7 +10,7 @@ fn digits(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}
 fn boxed(i: i64) -> i64 {
     let mut n = 0;
     let a: Option[E] = Some(E.A { s: s_of(i) });
-    match a { Some(p) => { match p { E.A { s } => { if s.contains(digits(i)) { n = n + s.len(); } } E.B => {} } } None => {} }
+    match a { Some(ref p) => { match p { E.A { s } => { if s.contains(digits(i)) { n = n + s.len(); } } E.B => {} } } None => {} }
     match a { Some(p) => { match p { E.A { s } => { if s.contains(digits(i)) { n = n + s.len(); } } E.B => {} } } None => {} }
     return n;
 }
@@ -18,7 +18,7 @@ fn boxed(i: i64) -> i64 {
 fn inline_if_let(i: i64) -> i64 {
     let mut n = 0;
     let b: Result[E, i64] = Ok(E.A { s: s_of(i) });
-    if let Ok(p) = b { match p { E.A { s } => { if s.contains(digits(i)) { n = n + s.len(); } } E.B => {} } }
+    if let Ok(ref p) = b { match p { E.A { s } => { if s.contains(digits(i)) { n = n + s.len(); } } E.B => {} } }
     if let Ok(p) = b { match p { E.A { s } => { if s.contains(digits(i)) { n = n + s.len(); } } E.B => {} } }
     return n;
 }
@@ -49,11 +49,11 @@ fn moved(i: i64) -> i64 {
 }
 fn main() {
     let base: i64 = env.args().len();
-    let mut n = 0i64;
+    let mut n = 0;
     let mut i = base;
-    while i < base + 50i64 {
+    while i < base + 50 {
         n = n + boxed(i) + inline_if_let(i) + moved(i);
         i = i + 1;
     }
-    if n > 0i64 { println("done"); }
+    if n > 0 { println("done"); }
 }

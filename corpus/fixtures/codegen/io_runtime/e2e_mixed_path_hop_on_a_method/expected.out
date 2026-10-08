@@ -1,0 +1,21 @@
+method_hop_handback
+  v=1
+method_hop_dies
+  dR2
+  v=90
+assoc_hop_handback
+  v=3
+assoc_hop_dies
+  dR4
+  v=91
+method_nohop_handback
+  v=5
+named_into_method_hop
+  v=6
+end
+  dR6
+  dR5
+  dR91
+  dR3
+  dR90
+  dR1

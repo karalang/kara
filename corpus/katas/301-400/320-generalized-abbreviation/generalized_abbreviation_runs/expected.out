@@ -1,0 +1,15 @@
+"word" -> 16
+word 1ord 1o1d 1o2 1or1 2rd 2r1 3d 4 w1rd w1r1 w2d w3 wo1d wo2 wor1
+"" -> 1
+
+"a" -> 2
+a 1
+"ab" -> 4
+ab 1b 2 a1
+"abc" -> 8
+abc 1bc 1b1 2c 3 a1c a2 ab1
+"aaaa" -> 16
+aaaa 1aaa 1a1a 1a2 1aa1 2aa 2a1 3a 4 a1aa a1a1 a2a a3 aa1a aa2 aaa1
+"leet" -> 16
+leet 1eet 1e1t 1e2 1ee1 2et 2e1 3t 4 l1et l1e1 l2t l3 le1t le2 lee1
+"abcdefghij" -> 1024 abbreviations (2^n = 1024)

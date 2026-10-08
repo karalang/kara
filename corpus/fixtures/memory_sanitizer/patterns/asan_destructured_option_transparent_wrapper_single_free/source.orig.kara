@@ -1,0 +1,17 @@
+
+struct Inner { s: String }
+struct A { value: Option[Inner] }
+fn use_a(a: A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
+fn build(n: i64) -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < n + 49 { v.push(A { value: Some(Inner { s: f"payload-{i}-ssssssssssssssssssssssssssssss" }) }); i = i + 1; }
+    v
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let xs = build(base);
+    let mut t = 0;
+    for a in xs { t = t + use_a(a); }
+    println(t);
+}

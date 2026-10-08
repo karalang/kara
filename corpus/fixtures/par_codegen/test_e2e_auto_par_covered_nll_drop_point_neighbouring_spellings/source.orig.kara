@@ -1,0 +1,42 @@
+
+struct R { id: i64, v: Vec[String] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+
+fn mk(id: i64) -> R {
+    let mut v: Vec[String] = Vec.new();
+    v.push("p");
+    return R { id: id, v: v }
+}
+
+fn use_r(r: ref R) -> String { return r.v[0] }
+
+fn before_group() {
+    println("B");
+    let r = mk(1);
+    println(f"{use_r(r)}");
+    println("B end");
+}
+
+fn both_inside() {
+    println("D");
+    let r = mk(7);
+    let s = use_r(r);
+    println(s);
+    println("D end");
+}
+
+fn staggered() {
+    println("E");
+    let a = mk(8);
+    let b = mk(9);
+    println(f"{use_r(a)}");
+    println(f"{use_r(b)}");
+    println("E end");
+}
+
+fn main() {
+    before_group();
+    both_inside();
+    staggered();
+    println("end");
+}

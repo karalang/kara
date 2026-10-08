@@ -23,8 +23,8 @@ fn build(n: i64) -> Vec[Span] {
     out
 }
 fn main() {
-    let toks = build(3_i64);
-    for t in toks {
+    let toks = build(3);
+    for t in toks.into_iter() {
         println(render(t));
     }
     println("done");

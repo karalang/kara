@@ -1,0 +1,34 @@
+local/seeded
+  held
+  dSaaaaaaaa0
+  dSaaaaaaaa1
+arg/seeded
+  in
+  dSbbbbbbbb0
+  dSbbbbbbbb1
+arg/read
+  r:cccccccc0
+  dScccccccc0
+  dScccccccc1
+userenum
+  held
+  dSdddddddd0
+  dSdddddddd1
+noheap/elem
+  held
+  dN1
+  dN2
+nodrop/elem
+  in
+  held
+bare/string
+  held
+freshtemp
+  r:gggggggg0
+  dSgggggggg0
+  dSgggggggg1
+localrebind
+  r:hhhhhhhh0
+  dShhhhhhhh0
+  dShhhhhhhh1
+end

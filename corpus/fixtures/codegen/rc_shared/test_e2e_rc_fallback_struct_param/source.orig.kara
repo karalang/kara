@@ -1,0 +1,9 @@
+
+struct Point { x: i64, y: i64 }
+fn consume_p(p: Point) { }
+fn main() {
+    let cond: bool = false;
+    let p = Point { x: 3, y: 7 };
+    if cond { consume_p(p); }
+    println(p.x + p.y);
+}

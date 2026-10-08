@@ -1,0 +1,14 @@
+
+fn first_word(s: String) -> Option[String] {
+    let words = s.split(" ");
+    if words.len() > 0 { Some(words[0]) } else { None }
+}
+fn main() {
+    let r = first_word("hello world");
+    match r {
+        Some(w) => println(w),
+        None => println("e"),
+    };
+    let e = first_word("");
+    println(e.unwrap_or("none").len());
+}

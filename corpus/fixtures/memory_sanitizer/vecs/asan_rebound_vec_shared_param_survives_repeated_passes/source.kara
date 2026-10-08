@@ -13,8 +13,8 @@ fn main() {
     v.push(a);
     v.push(b);
     let mut total = 0;
-    total = total + probe(v);
-    total = total + probe(v);
+    total = total + probe(v.clone());
+    total = total + probe(v.clone());
     total = total + probe(v);
     println(total);
 }

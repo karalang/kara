@@ -1,0 +1,13 @@
+tail
+  mx 10
+stmt
+  mx 10
+tailF
+  mx 0
+chain
+  mx 10
+chainF
+  mx 0
+fnTail
+  mx 10
+end

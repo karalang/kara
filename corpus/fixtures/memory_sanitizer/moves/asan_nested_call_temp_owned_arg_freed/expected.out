@@ -1,0 +1,6 @@
+bound:
+drop 1 nn1
+9
+discard:
+drop 2 oo2
+end

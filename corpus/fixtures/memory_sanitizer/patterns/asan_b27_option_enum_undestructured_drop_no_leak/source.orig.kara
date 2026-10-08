@@ -1,0 +1,19 @@
+
+enum Val { Nothing, Ident(String) }
+struct A { value: Option[Val] }
+fn use_wild(a: A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
+fn mk() -> A { A { value: Some(Val.Ident("kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk".to_string())) } }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { value: Some(Val.Ident("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())) }); i = i + 1; }
+    v
+}
+fn main() {
+    let mut t = 0;
+    let xs = build();                            // moved-in owned param source
+    for a in xs { t = t + use_wild(a); }
+    let mut i = 0;                               // fresh-temp source
+    while i < 6 { t = t + use_wild(mk()); i = i + 1; }
+    println(t);
+}

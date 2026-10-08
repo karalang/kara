@@ -1,0 +1,38 @@
+string_arg
+  v=1
+  dR1
+vec_arg
+  v=2
+  dR2
+struct_arg
+  v=3
+  dR3
+two_string_args
+  v=30
+  dR30
+option_return
+  v=40
+  dR40
+bodyless_return
+  v=50
+  dR50
+chained
+  v=60
+  dR60
+same_type
+  v=7
+  dR7
+wrap_control
+  v=8
+  dR8
+wrap_bodied_control
+  v=9
+  dH3
+  dR9
+scalar_control
+  v=10
+  dR10
+read_only_arg
+  v=11
+  dR11
+end
