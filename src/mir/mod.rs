@@ -659,6 +659,43 @@ fn main(_1: shared Node) -> () {{
     /// strong handle lives and `None` after, the value is dropped at strong
     /// count zero, and its slot is freed when the last weak handle goes.
     #[test]
+    fn mir_interp_reuses_freed_slots() {
+        // The second allocation reuses the slot the first one freed, so the
+        // interpreter's memory follows live allocations.
+        let text = "
+struct Node { id: i64 }
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: shared Node;
+    let _2: shared Node;
+    bb0: {
+        _1 = shared Node { const 1_i64 };
+        drop(_1) -> bb1;
+    }
+    bb1: {
+        _2 = shared Node { const 2_i64 };
+        drop(_2) -> bb2;
+    }
+    bb2: {
+        _0 = const ();
+        return;
+    }
+}
+";
+        let m = parse_module(text).unwrap_or_else(|e| panic!("{e}"));
+        let prog = interp::Program::from_module(&m);
+        let r = interp::run(&prog, &m.tys, "main", vec![]);
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        let trace = r.trace();
+        let allocs: Vec<&str> = trace.lines().filter(|l| l.starts_with("alloc")).collect();
+        let frees: Vec<&str> = trace.lines().filter(|l| l.starts_with("free")).collect();
+        assert_eq!(allocs.len(), 2, "{trace}");
+        assert!(allocs.iter().all(|l| l.starts_with("alloc a0")), "{trace}");
+        assert_eq!(frees, ["free a0", "free a0"], "{trace}");
+    }
+
+    #[test]
     fn mir_interp_weak_counts() {
         let text = "
 struct Node { id: i64 }

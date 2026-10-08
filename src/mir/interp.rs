@@ -74,6 +74,10 @@ impl Program {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AllocId(pub u32);
 
+/// The empty weak handle: a `weak T` made from `None`. It upgrades to
+/// `None` and owns no weak count.
+const EMPTY_WEAK: AllocId = AllocId(u32::MAX);
+
 impl fmt::Display for AllocId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "a{}", self.0)
@@ -299,6 +303,7 @@ fn run_with(
         frames: Vec::new(),
         next_frame_id: 0,
         heap: Vec::new(),
+        free: Vec::new(),
         events: Vec::new(),
         trace,
         stream,
@@ -449,6 +454,8 @@ struct Interp<'a> {
     frames: Vec<Frame>,
     next_frame_id: u64,
     heap: Vec<Option<HeapObj>>,
+    /// Freed slots of `heap`, reused by [`Interp::alloc`].
+    free: Vec<u32>,
     events: Vec<Event>,
     /// Whether `events` is kept. A run outside the tests skips it: one
     /// event per statement is most of the time and memory a long program
@@ -645,7 +652,7 @@ impl<'a> Interp<'a> {
                 let held: Vec<Value> = match v {
                     Value::Box(id) => {
                         let fs = std::mem::take(self.vec_elems(*id)?);
-                        self.heap[id.0 as usize] = None;
+                        self.free_slot(*id);
                         if self.trace {
                             self.events.push(Event::Free(*id));
                         }
@@ -1146,7 +1153,7 @@ impl<'a> Interp<'a> {
                     return err(format!("{name} takes the other Vec by value"));
                 }
                 if matches!(other, Value::Box(_)) {
-                    self.heap[from.0 as usize] = None;
+                    self.free_slot(from);
                     if self.trace {
                         self.events.push(Event::Free(from));
                     }
@@ -1284,12 +1291,11 @@ impl<'a> Interp<'a> {
                     .map(|l| body.local(l).ty)
                     .ok_or_else(|| Stop::Error(format!("{name}: a closure body with no env")))?;
                 let by_value = !matches!(self.tys.kind(env_ty), TyKind::Ref(_) | TyKind::MutRef(_));
-                let slot = AllocId(self.heap.len() as u32);
-                self.heap.push(Some(HeapObj {
+                let slot = self.alloc(HeapObj {
                     count: 1,
                     weak: 0,
                     value: v,
-                }));
+                });
                 Ok(Callee {
                     body,
                     env: Some(slot),
@@ -1349,8 +1355,10 @@ impl<'a> Interp<'a> {
             return err("call result overwrites a place that still owns a value");
         }
         *self.slot_mut(&addr)? = ret;
-        self.events
-            .push(Event::Init(self.place_str(body, destination)));
+        if self.trace {
+            self.events
+                .push(Event::Init(self.place_str(body, destination)));
+        }
         Ok(Some(*target))
     }
 
@@ -1371,12 +1379,11 @@ impl<'a> Interp<'a> {
                     .values()
                     .find(|b| b.instance.def == def)
                     .ok_or_else(|| Stop::Error(format!("Erase: no body for closure {def:?}")))?;
-                let slot = AllocId(self.heap.len() as u32);
-                self.heap.push(Some(HeapObj {
+                let slot = self.alloc(HeapObj {
                     count: 1,
                     weak: 0,
                     value: v,
-                }));
+                });
                 Ok(Value::Erased {
                     body: body.instance.name.clone(),
                     env: Some((slot, from)),
@@ -1435,7 +1442,7 @@ impl<'a> Interp<'a> {
                 &mut self.live(slot)?.value,
                 Value::Uninit,
             ));
-            self.heap[slot.0 as usize] = None;
+            self.free_slot(slot);
         } else {
             all.push(Value::Ref(at.clone()));
         }
@@ -1443,7 +1450,7 @@ impl<'a> Interp<'a> {
         let ret = self.call(&name, all)?;
         if by_value && !takes_env {
             self.drop_at(&at, env_ty)?;
-            self.heap[slot.0 as usize] = None;
+            self.free_slot(slot);
         }
         Ok(ret)
     }
@@ -1458,7 +1465,7 @@ impl<'a> Interp<'a> {
                 };
                 self.drop_at(&at, fty)?;
             }
-            self.heap[slot.0 as usize] = None;
+            self.free_slot(slot);
         }
         Ok(())
     }
@@ -1984,12 +1991,13 @@ impl<'a> Interp<'a> {
                 refs.push(v.clone());
                 continue;
             }
-            let slot = self.heap.len();
-            self.heap.push(Some(HeapObj {
-                count: 1,
-                weak: 0,
-                value: v.clone(),
-            }));
+            let slot = self
+                .alloc(HeapObj {
+                    count: 1,
+                    weak: 0,
+                    value: v.clone(),
+                })
+                .0 as usize;
             scratch.push(slot);
             refs.push(Value::Ref(Addr {
                 root: Root::Heap(AllocId(slot as u32)),
@@ -1999,7 +2007,7 @@ impl<'a> Interp<'a> {
         let r = self.call(name, refs);
         // The copies share the values' allocations, so they go undropped.
         for slot in scratch {
-            self.heap[slot] = None;
+            self.free_slot(AllocId(slot as u32));
         }
         match r? {
             Value::Bool(b) => Ok(b),
@@ -2137,18 +2145,19 @@ impl<'a> Interp<'a> {
     /// Drops a value that has no place of its own (a duplicate key), by
     /// parking it in a scratch heap slot for the length of the drop.
     fn drop_value(&mut self, v: Value, ty: Ty) -> R<()> {
-        let scratch = self.heap.len();
-        self.heap.push(Some(HeapObj {
-            count: 1,
-            weak: 0,
-            value: v,
-        }));
+        let scratch = self
+            .alloc(HeapObj {
+                count: 1,
+                weak: 0,
+                value: v,
+            })
+            .0 as usize;
         let at = Addr {
             root: Root::Heap(AllocId(scratch as u32)),
             path: Vec::new(),
         };
         self.drop_at(&at, ty)?;
-        self.heap[scratch] = None;
+        self.free_slot(AllocId(scratch as u32));
         Ok(())
     }
 
@@ -2579,12 +2588,11 @@ impl<'a> Interp<'a> {
     }
 
     fn alloc_box(&mut self, ty_name: &str, value: Value) -> Value {
-        let a = AllocId(self.heap.len() as u32);
-        self.heap.push(Some(HeapObj {
+        let a = self.alloc(HeapObj {
             count: 1,
             weak: 0,
             value,
-        }));
+        });
         if self.trace {
             self.events.push(Event::Alloc(a, ty_name.to_string()));
         }
@@ -2760,19 +2768,20 @@ impl<'a> Interp<'a> {
     /// `v` shown by its type's user `to_string` body, which takes
     /// it by reference: a scratch slot holds a shallow copy for the call.
     fn call_display(&mut self, name: &str, v: &Value) -> R<String> {
-        let scratch = self.heap.len();
-        self.heap.push(Some(HeapObj {
-            count: 1,
-            weak: 0,
-            value: v.clone(),
-        }));
+        let scratch = self
+            .alloc(HeapObj {
+                count: 1,
+                weak: 0,
+                value: v.clone(),
+            })
+            .0 as usize;
         let at = Addr {
             root: Root::Heap(AllocId(scratch as u32)),
             path: Vec::new(),
         };
         let shown = self.call(name, vec![Value::Ref(at)]);
         // The copy shares `v`'s allocations, so it goes without a drop.
-        self.heap[scratch] = None;
+        self.free_slot(AllocId(scratch as u32));
         let shown = shown?;
         let text = self.string_at(&shown)?;
         let st = self.program.bodies[name].locals[0].ty;
@@ -3092,8 +3101,10 @@ impl<'a> Interp<'a> {
                 }
                 *self.slot_mut(&addr)? = v.clone();
                 if p.projection.is_empty() && body.local(p.local).kind == LocalKind::DropFlag {
-                    self.events
-                        .push(Event::Flag(p.local, matches!(v, Value::Bool(true))));
+                    if self.trace {
+                        self.events
+                            .push(Event::Flag(p.local, matches!(v, Value::Bool(true))));
+                    }
                 } else {
                     if self.trace {
                         self.events.push(Event::Init(self.place_str(body, p)));
@@ -3322,17 +3333,26 @@ impl<'a> Interp<'a> {
                 self.erase(x, from)
             }
             Rvalue::Cast(CastKind::Downgrade, o, _) => {
-                // A new weak handle to the value a `ref shared T` or
-                // `ref weak T` reaches.
+                // A new weak handle to the value a `ref shared T`,
+                // `ref weak T` or `ref Option[shared T]` reaches; `None`
+                // gives the empty weak handle.
                 let (x, _) = self.operand(body, o)?;
-                let id = self.handle_behind(&x)?;
-                self.live(id)?.weak += 1;
+                let id = match self.handle_behind(&x)? {
+                    Some(id) => id,
+                    None => return Ok(Value::Weak(EMPTY_WEAK)),
+                };
+                if id != EMPTY_WEAK {
+                    self.live(id)?.weak += 1;
+                }
                 Ok(Value::Weak(id))
             }
             Rvalue::Cast(CastKind::Upgrade, o, to) => {
                 // `Some` of a new strong handle while the value lives.
                 let (x, _) = self.operand(body, o)?;
-                let id = self.handle_behind(&x)?;
+                let id = self.handle_behind(&x)?.unwrap_or(EMPTY_WEAK);
+                if id == EMPTY_WEAK {
+                    return self.option(*to, None);
+                }
                 let obj = self.live(id)?;
                 let alive = obj.count > 0;
                 if alive {
@@ -3403,12 +3423,11 @@ impl<'a> Interp<'a> {
                     AggregateKind::Adt { ty, variant } => self.adt_value(*ty, *variant, vals),
                     AggregateKind::Shared { ty, variant } => {
                         let value = self.adt_value(*ty, *variant, vals);
-                        let a = AllocId(self.heap.len() as u32);
-                        self.heap.push(Some(HeapObj {
+                        let a = self.alloc(HeapObj {
                             count: 1,
                             weak: 0,
                             value,
-                        }));
+                        });
                         if self.trace {
                             self.events.push(Event::Alloc(a, self.tys.display(*ty)));
                         }
@@ -3670,7 +3689,7 @@ impl<'a> Interp<'a> {
                         path: Vec::new(),
                     };
                     self.drop_at(&at, env_ty)?;
-                    self.heap[slot.0 as usize] = None;
+                    self.free_slot(slot);
                     Ok(())
                 }
                 other => err(format!("a function-value place holds {other:?}")),
@@ -3718,7 +3737,7 @@ impl<'a> Interp<'a> {
                     }
                 }
                 self.live(id)?;
-                self.heap[id.0 as usize] = None;
+                self.free_slot(id);
                 if self.trace {
                     self.events.push(Event::Free(id));
                 }
@@ -3795,18 +3814,19 @@ impl<'a> Interp<'a> {
                 // handle does. The object stays live, at count 0, until
                 // the body returns.
                 (TyKind::Shared(_), Root::Heap(id)) if addr.path.is_empty() => {
-                    let scratch = self.heap.len();
-                    self.heap.push(Some(HeapObj {
-                        count: 0,
-                        weak: 0,
-                        value: Value::Shared(*id),
-                    }));
+                    let scratch = self
+                        .alloc(HeapObj {
+                            count: 0,
+                            weak: 0,
+                            value: Value::Shared(*id),
+                        })
+                        .0 as usize;
                     let handle = Addr {
                         root: Root::Heap(AllocId(scratch as u32)),
                         path: Vec::new(),
                     };
                     let r = self.call(&f, vec![Value::Ref(handle)]);
-                    self.heap[scratch] = None;
+                    self.free_slot(AllocId(scratch as u32));
                     r?;
                 }
                 _ => {
@@ -3836,7 +3856,32 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// A heap slot for `obj`: a freed one when there is one, so memory
+    /// follows the live allocations rather than all of them.
+    fn alloc(&mut self, obj: HeapObj) -> AllocId {
+        match self.free.pop() {
+            Some(i) => {
+                self.heap[i as usize] = Some(obj);
+                AllocId(i)
+            }
+            None => {
+                self.heap.push(Some(obj));
+                AllocId(self.heap.len() as u32 - 1)
+            }
+        }
+    }
+
+    /// Frees slot `id` for reuse. A slot with weak handles is never freed
+    /// here: `release` keeps it, dead, until the last weak handle goes, so
+    /// an `Upgrade` cannot reach whatever reuses it.
+    fn free_slot(&mut self, id: AllocId) {
+        if self.heap[id.0 as usize].take().is_some() {
+            self.free.push(id.0);
+        }
+    }
+
     fn release(&mut self, id: AllocId, ty: Ty, a: AdtId) -> R<()> {
+        debug_assert!(id != EMPTY_WEAK);
         let obj = self.live(id)?;
         obj.count -= 1;
         let c = obj.count;
@@ -3855,7 +3900,7 @@ impl<'a> Interp<'a> {
                 obj.value = Value::Uninit;
                 return Ok(());
             }
-            self.heap[id.0 as usize] = None;
+            self.free_slot(id);
             if self.trace {
                 self.events.push(Event::Free(id));
             }
@@ -3866,10 +3911,13 @@ impl<'a> Interp<'a> {
     /// Drops one weak handle to `id`, freeing the slot when it was the
     /// last handle of any kind.
     fn release_weak(&mut self, id: AllocId) -> R<()> {
+        if id == EMPTY_WEAK {
+            return Ok(());
+        }
         let obj = self.live(id)?;
         obj.weak -= 1;
         if obj.weak == 0 && obj.count == 0 {
-            self.heap[id.0 as usize] = None;
+            self.free_slot(id);
             if self.trace {
                 self.events.push(Event::Free(id));
             }
@@ -3877,14 +3925,23 @@ impl<'a> Interp<'a> {
         Ok(())
     }
 
-    /// The handle behind a `ref shared T` or `ref weak T` operand.
-    fn handle_behind(&mut self, v: &Value) -> R<AllocId> {
+    /// The handle behind a `ref shared T`, `ref weak T` or
+    /// `ref Option[shared T]` operand; `None` for an `Option` that is
+    /// `None`.
+    fn handle_behind(&mut self, v: &Value) -> R<Option<AllocId>> {
         let held = match v {
             Value::Ref(addr) => self.slot(addr)?,
             other => other.clone(),
         };
         match held {
-            Value::Shared(id) | Value::Weak(id) => Ok(id),
+            Value::Shared(id) | Value::Weak(id) => Ok(Some(id)),
+            Value::Variant(_, fs) if fs.is_empty() => Ok(None),
+            Value::Variant(_, fs) => match fs.as_slice() {
+                [Value::Shared(id)] => Ok(Some(*id)),
+                _ => err(format!(
+                    "expected an Option of a shared handle, found {fs:?}"
+                )),
+            },
             other => err(format!("expected a shared or weak handle, found {other:?}")),
         }
     }
