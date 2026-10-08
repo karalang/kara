@@ -4,7 +4,7 @@ fn eat(a: Array[String, 2]) -> i64 { return a[0].len() }
 fn eatv(v: Vec[String]) -> i64 { return v.len() }
 fn eats(s: String) -> i64 { return s.len() }
 fn eatp(p: P) -> i64 { return p.s.len() + p.n }
-fn mka(s: own String) -> Array[String, 2] { return [s, f"yy"] }
+fn mka(s: String) -> Array[String, 2] { return [s, f"yy"] }
 fn mkv(s: own String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(s); return v }
 fn rda(g: G[Array[String, 2]]) -> i64 { match g { G.Y(x) => { x[0].len() } G.N => { 0 } } }
 fn hov(g: G[Vec[String]]) -> i64 { match g { G.Y(x) => { eatv(x) } G.N => { 0 } } }

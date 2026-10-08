@@ -263,3 +263,19 @@ fn main() {
     assert!(out.contains("fn make(p: own String, base: i64)"), "{out}");
     assert!(out.contains("fn local(p: String)"), "{out}");
 }
+
+/// A parameter written into a collection literal moves into it, so it keeps
+/// `own` (`[x]`, `Vec[...]`, a map literal's key and value).
+#[test]
+fn a_parameter_moved_into_a_collection_literal_gets_own() {
+    let src = "\
+fn dup(x: String) -> Vec[String] { [x] }
+fn local_use(x: String) -> i64 { let v = [x]; v.len() }
+fn width(x: String) -> i64 { x.len() }
+fn main() { println(dup(\"a\".to_string()).len()); println(local_use(\"b\".to_string())); println(width(\"c\".to_string())); }
+";
+    let out = migrate(src);
+    assert!(out.contains("fn dup(x: own String)"), "{out}");
+    assert!(out.contains("fn local_use(x: own String)"), "{out}");
+    assert!(out.contains("fn width(x: String)"), "{out}");
+}

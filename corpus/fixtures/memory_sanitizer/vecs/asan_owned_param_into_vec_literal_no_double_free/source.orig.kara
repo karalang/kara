@@ -1,0 +1,10 @@
+
+fn dup(x: String) -> Vec[String] { [x] }
+fn local_use(x: String) -> i64 { let v = [x]; v.len() }
+fn dupv(x: Vec[i64]) -> Vec[Vec[i64]] { [x] }
+fn main() {
+    println(dup("z".to_string())[0]);
+    println(local_use("hi".to_string()));
+    let vv = dupv([1, 2, 3]);
+    println(vv[0][2]);
+}

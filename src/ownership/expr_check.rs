@@ -1520,24 +1520,43 @@ impl<'a> super::OwnershipChecker<'a> {
                     self.check_expr_reading(e, states, param_types, param_usage);
                 }
             }
+            // D5 migration: a literal's elements move into it (`[x]`), as a
+            // tuple's and a struct literal's do. Legacy reads them.
             ExprKind::ArrayLiteral(elements) => {
                 for elem in elements {
-                    self.check_expr_reading(elem, states, param_types, param_usage);
+                    if self.d5.is_some() {
+                        self.check_expr_consuming(elem, states, param_types, param_usage);
+                    } else {
+                        self.check_expr_reading(elem, states, param_types, param_usage);
+                    }
                 }
             }
             ExprKind::RepeatLiteral { value, count, .. } => {
-                self.check_expr_reading(value, states, param_types, param_usage);
+                if self.d5.is_some() {
+                    self.check_expr_consuming(value, states, param_types, param_usage);
+                } else {
+                    self.check_expr_reading(value, states, param_types, param_usage);
+                }
                 self.check_expr_reading(count, states, param_types, param_usage);
             }
             ExprKind::PrefixCollectionLiteral { items, .. } => {
                 for elem in items {
-                    self.check_expr_reading(elem, states, param_types, param_usage);
+                    if self.d5.is_some() {
+                        self.check_expr_consuming(elem, states, param_types, param_usage);
+                    } else {
+                        self.check_expr_reading(elem, states, param_types, param_usage);
+                    }
                 }
             }
             ExprKind::MapLiteral { entries, .. } => {
                 for (key, val) in entries {
-                    self.check_expr_reading(key, states, param_types, param_usage);
-                    self.check_expr_reading(val, states, param_types, param_usage);
+                    if self.d5.is_some() {
+                        self.check_expr_consuming(key, states, param_types, param_usage);
+                        self.check_expr_consuming(val, states, param_types, param_usage);
+                    } else {
+                        self.check_expr_reading(key, states, param_types, param_usage);
+                        self.check_expr_reading(val, states, param_types, param_usage);
+                    }
                 }
             }
             ExprKind::Providers { bindings, body } => {

@@ -1,7 +1,7 @@
 
-fn dup(x: String) -> Vec[String] { [x] }
-fn local_use(x: String) -> i64 { let v = [x]; v.len() }
-fn dupv(x: Vec[i64]) -> Vec[Vec[i64]] { [x] }
+fn dup(x: own String) -> Vec[String] { [x] }
+fn local_use(x: own String) -> i64 { let v = [x]; v.len() }
+fn dupv(x: own Vec[i64]) -> Vec[Vec[i64]] { [x] }
 fn main() {
     println(dup("z".to_string())[0]);
     println(local_use("hi".to_string()));
