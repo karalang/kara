@@ -225,6 +225,24 @@ fn read_only_errors(body: &Body, tys: &TyInterner) -> Vec<String> {
             } else {
                 terminator_accesses(&block.terminator.kind)
             };
+            // §9.3: an erased function value is owned and may be stored,
+            // so erasing one reached through a reference stores a borrowed
+            // closure (a non-escaping parameter), whether or not it is `Copy`.
+            if si < n {
+                if let StatementKind::Assign(
+                    _,
+                    Rvalue::Cast(CastKind::Erase, Operand::Copy(p) | Operand::Move(p), _),
+                ) = &block.statements[si].kind
+                {
+                    if p.projection.contains(&ProjElem::Deref) {
+                        errs.push(format!(
+                            "{}: {} is borrowed, so it cannot be stored as a function value; declare the parameter `escaping` (core semantics §9.3)",
+                            loc((bi, si), n),
+                            show_place(body, tys, p),
+                        ));
+                    }
+                }
+            }
             for (place, access) in accesses {
                 let what = match access {
                     Access::Write => "write",
@@ -1437,8 +1455,8 @@ fn main() -> () {
             ("err_move_out_of_ref", true, "borrow check name_of:"),
             ("err_ref_from_temp", true, "borrow check main:"),
             ("err_write_through_ref", true, "borrow check add:"),
-            ("err_escaping_capture_reused", false, "borrow check"),
-            ("err_store_nonescaping_param", false, "borrow check"),
+            ("err_escaping_capture_reused", true, "move check main:"),
+            ("err_store_nonescaping_param", true, "borrow check keep{"),
             ("err_taskgroup_origin_declared_after", false, "borrow check"),
             ("err_taskgroup_write_while_borrowed", false, "borrow check"),
         ];

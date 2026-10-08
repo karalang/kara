@@ -315,6 +315,13 @@ impl<'a> Lcx<'a> {
         }
     }
 
+    /// The type whose impl defines `d` (`Command` for `Command.new`).
+    fn def_owner(&self, d: DefId) -> Option<String> {
+        let segs = &self.defs.table.get(d).path.segments;
+        let n = segs.len();
+        (n >= 3 && segs[n - 2].starts_with("impl")).then(|| segs[n - 3].clone())
+    }
+
     fn def_name(&self, d: DefId) -> String {
         self.defs
             .table
@@ -575,7 +582,20 @@ impl<'a> Lcx<'a> {
             HK::Opaque { .. } => return Err("an iterator value".into()),
             HK::Error => return Err("a type that failed to check".into()),
             HK::Weak(_) => return Err("a `weak` type".into()),
-            HK::Fn { .. } => return Err("a function value".into()),
+            HK::Fn {
+                params,
+                ret,
+                once,
+                mutable,
+            } => HK::Fn {
+                params: {
+                    let tys = list(self, params)?;
+                    self.tys.tcx().intern_list(&tys)
+                },
+                ret: self.convert(ret)?,
+                once,
+                mutable,
+            },
             HK::RawPtr { .. } => return Err("a raw pointer".into()),
             other => other,
         };
@@ -721,6 +741,9 @@ struct Bx<'l, 'a> {
     /// The next closure literal lowered goes to a library call, so its
     /// parameters borrow.
     closure_ref_params: bool,
+    /// The next closure literal lowered escapes (it is stored as a
+    /// function value), so it captures by move.
+    closure_escapes: bool,
     /// Types for expressions the checker left untyped, taken from where
     /// they are used (`v.push(None)` gives `None` the element type).
     ty_hints: FxHashMap<NodeId, Ty>,
@@ -750,6 +773,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             captured: FxHashMap::default(),
             closure_count: 0,
             closure_ref_params: false,
+            closure_escapes: false,
             ty_hints: FxHashMap::default(),
             par_acc: None,
         }
@@ -841,6 +865,19 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     fn assign(&mut self, place: impl Into<Place>, rv: Rvalue) {
         let place = place.into();
+        let pt = self.place_type(&place);
+        let rv = match rv {
+            // A closure or function item stored in a function-typed slot
+            // is erased to that type.
+            Rvalue::Use(op) if self.erases(&op, pt) => {
+                Rvalue::Cast(CastKind::Erase, self.erase_source(op), pt)
+            }
+            Rvalue::Aggregate(kind, ops) => {
+                let ops = self.erase_parts(&place, &kind, ops);
+                Rvalue::Aggregate(kind, ops)
+            }
+            rv => rv,
+        };
         let rv = match rv {
             Rvalue::Use(o @ Operand::Const(_)) => {
                 Rvalue::Use(self.fit_const(o, self.place_type(&place)))
@@ -853,6 +890,80 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let bb = self.cur;
         self.b.assign(bb, place, rv);
+    }
+
+    /// The type of an operand's value.
+    fn operand_ty(&self, op: &Operand) -> Ty {
+        match op {
+            Operand::Copy(p) | Operand::Move(p) => self.place_type(p),
+            Operand::Const(c) => c.ty,
+        }
+    }
+
+    /// Whether `op` is a closure, function item or function value of
+    /// another kind going into the function-typed slot `t`.
+    fn erases(&self, op: &Operand, t: Ty) -> bool {
+        let tcx = self.tys().tcx();
+        if !matches!(tcx.kind(t), HK::Fn { .. }) {
+            return false;
+        }
+        let mut ot = self.operand_ty(op);
+        if let HK::Ref(inner) | HK::MutRef(inner) = tcx.kind(ot) {
+            ot = inner;
+        }
+        ot != t
+            && matches!(
+                tcx.kind(ot),
+                HK::Closure { .. } | HK::FnDef { .. } | HK::Fn { .. }
+            )
+    }
+
+    /// The operand an `Erase` takes: the value itself, moved out from
+    /// behind a reference when it is one (which the borrow check refuses:
+    /// a borrowed closure, such as a non-escaping parameter, cannot be
+    /// stored).
+    fn erase_source(&self, op: Operand) -> Operand {
+        let ot = self.operand_ty(&op);
+        match (&op, self.tys().tcx().kind(ot)) {
+            (Operand::Copy(p) | Operand::Move(p), HK::Ref(_) | HK::MutRef(_)) => {
+                Operand::Move(p.clone().project(ProjElem::Deref))
+            }
+            _ => op,
+        }
+    }
+
+    /// An aggregate's parts, each closure or function item going into a
+    /// function-typed field erased first.
+    fn erase_parts(
+        &mut self,
+        place: &Place,
+        kind: &AggregateKind,
+        ops: Vec<Operand>,
+    ) -> Vec<Operand> {
+        let mut out = Vec::with_capacity(ops.len());
+        for (i, o) in ops.into_iter().enumerate() {
+            let tcx = self.tys().tcx();
+            let slot = match kind {
+                AggregateKind::Array(elem) => Some(*elem),
+                AggregateKind::Tuple => tcx.field_ty(self.place_type(place), None, i as u32),
+                AggregateKind::Adt { ty, variant } | AggregateKind::Shared { ty, variant } => {
+                    let is_enum = tcx.adt_of(*ty).is_some_and(|(a, _)| a.is_enum);
+                    tcx.field_ty(*ty, is_enum.then_some(variant.0), i as u32)
+                }
+                AggregateKind::Closure { .. } => None,
+            };
+            match slot {
+                Some(t) if self.erases(&o, t) => {
+                    let l = self.temp(t);
+                    let bb = self.cur;
+                    let o = self.erase_source(o);
+                    self.b.assign(bb, l, Rvalue::Cast(CastKind::Erase, o, t));
+                    out.push(Operand::Move(Place::local(l)));
+                }
+                _ => out.push(o),
+            }
+        }
+        out
     }
 
     /// A numeric literal in a slot of another numeric type takes the
@@ -1118,7 +1229,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // The value's temporaries are the statement's; the bindings
                 // belong to the enclosing block.
                 if let PatternKind::Binding(name) = &pattern.kind {
-                    if self.is_fn_typed(pattern.id) {
+                    // A closure or function item keeps its own type; any
+                    // other function-typed value (a call's result, a
+                    // field) is an erased `Fn` value.
+                    let item = matches!(
+                        value.kind,
+                        ExprKind::Closure { .. } | ExprKind::Identifier(_) | ExprKind::Path { .. }
+                    );
+                    if item && self.is_fn_typed(pattern.id) {
                         self.push_scope();
                         let (op, t) = self.fn_value(value)?;
                         let l = self.user_local(name, t, pattern.id);
@@ -2064,6 +2182,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             ExprKind::Identifier(_) if !self.is_local(e) => self.path_value(e, dest),
             ExprKind::Closure { .. } => {
+                // A closure stored as a function value escapes, so it
+                // captures by move (core semantics §9.3).
+                let dt = self.place_type(&dest);
+                self.closure_escapes = matches!(self.tys().tcx().kind(dt), HK::Fn { .. });
                 let (op, _) = self.closure_value(e)?;
                 self.assign(dest, Rvalue::Use(op));
                 Ok(())
@@ -2745,6 +2867,33 @@ impl<'l, 'a> Bx<'l, 'a> {
         let r = self.temp(rt);
         self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
         Operand::Move(Place::local(r))
+    }
+
+    /// `dest = p.clone()` for a place of type `t`: a copy, a counted copy
+    /// of a handle, a tuple part by part, else the library's `clone`.
+    fn clone_into(&mut self, p: Place, t: Ty, dest: Place) {
+        if self.is_copy(t) {
+            self.assign(dest, Rvalue::Use(Operand::Copy(p)));
+            return;
+        }
+        if self.is_handle(t) || self.is_handle_aggregate(t) {
+            self.count_copy(p, t, dest);
+            return;
+        }
+        if let HK::Tuple(parts) = self.tys().tcx().kind(t) {
+            let parts = self.tys().tcx().list(parts).to_vec();
+            let mut ops = Vec::new();
+            for (i, pt) in parts.into_iter().enumerate() {
+                let l = self.temp(pt);
+                self.clone_into(p.field(i as u32, pt), pt, Place::local(l));
+                ops.push(Operand::Move(Place::local(l)));
+            }
+            self.assign(dest, Rvalue::Aggregate(AggregateKind::Tuple, ops));
+            return;
+        }
+        let r = self.ref_to(p, t);
+        let name = format!("{}.clone", self.tys().display(t));
+        self.call_native(&name, vec![r], dest);
     }
 
     /// `dest = l == r` for two places of type `t`.
@@ -4939,9 +5088,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                     if !inst_args.is_empty() || name.contains('.') {
                         return self.unsupported(e.span, "a call to this function");
                     }
-                    // A library function with no Kāra body (`sleep_ms(2)`):
-                    // the interpreter's, by name. Copy arguments go by
+                    // A library function with no Kāra body (`sleep_ms(2)`,
+                    // `Command.new("ls")`): the interpreter's, by its name
+                    // qualified with the owning type. Copy arguments go by
                     // value, the rest by reference.
+                    let name = match self.lcx.def_owner(d) {
+                        Some(owner) => format!("{owner}.{name}"),
+                        None => name,
+                    };
                     let mut ops = Vec::new();
                     for a in args {
                         let t = self.expr_ty(&a.value)?;
@@ -5540,6 +5694,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         if method == "cmp" && self.scalar_cmp(e, object, args, dest.clone())? {
             return Ok(());
         }
+        if method == "clone" && args.is_empty() && !self.lcx.calls.contains_key(&e.id) {
+            // A tuple's `clone` (the checker records no callee for it).
+            let (p, t) = self.deref_place(object, false)?;
+            self.clone_into(p, t, dest);
+            return Ok(());
+        }
         if method == "collect" && args.is_empty() {
             if let Some(text) = self.chars_of(object)? {
                 return self.collect_chars(e, text, dest);
@@ -6091,6 +6251,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             return self.unsupported(e.span, "this closure");
         };
         let ref_params = std::mem::take(&mut self.closure_ref_params);
+        let escapes = std::mem::take(&mut self.closure_escapes);
         let once = match self
             .lcx
             .node_types
@@ -6140,6 +6301,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             // once-callable closure moves something out of its captures, so
             // its non-`Copy` captures move in (core semantics §9.1).
             let cm = match mode {
+                _ if escapes => CapMode::Value,
                 Some(OwnershipMode::MutRef) => CapMode::Mut,
                 Some(OwnershipMode::Own) => CapMode::Value,
                 _ if self.is_copy(t) => CapMode::Value,
@@ -6359,6 +6521,34 @@ impl<'l, 'a> Bx<'l, 'a> {
                     vec![env],
                     job_params,
                 )
+            }
+            // An erased function value: called through a `ref` (`Fn`), a
+            // `mut ref` (`MutFn`) or by value (`OnceFn`).
+            HK::Fn {
+                params,
+                once,
+                mutable,
+                ..
+            } => {
+                let mut p = self.expr_place(callee, mutable && !once)?;
+                if peeled != ct {
+                    p = p.project(ProjElem::Deref);
+                }
+                let func = if once {
+                    Operand::Move(p)
+                } else {
+                    let rt = self.tys().tcx().reference(peeled, mutable);
+                    let r = self.temp(rt);
+                    let kind = if mutable {
+                        BorrowKind::Mut
+                    } else {
+                        BorrowKind::Shared
+                    };
+                    self.assign(r, Rvalue::Ref(kind, p));
+                    Operand::Copy(Place::local(r))
+                };
+                let pts = self.tys().tcx().list(params).to_vec();
+                (func, Vec::new(), pts)
             }
             _ => return self.unsupported(e.span, "a call through a function value"),
         };
