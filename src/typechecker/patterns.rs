@@ -108,6 +108,22 @@ impl<'a> super::TypeChecker<'a> {
     /// `Unit` (the synth path's behavior); we delegate to
     /// `check_assignable` for that diagnostic so the message is uniform
     /// with non-branching cases.
+    /// The type of a branching expression whose arms were each checked
+    /// against the expected type: the join of the arms that do not diverge.
+    /// The join and not the first arm, because an arm can satisfy a
+    /// partly-unknown expectation without pinning it: `None` against
+    /// `Option[U]` leaves `U` open where a later `Some(w)` fills it.
+    fn join_checked_arms(&self, arms: impl IntoIterator<Item = Type>) -> Type {
+        let mut out: Option<Type> = None;
+        for t in arms.into_iter().filter(|t| *t != Type::Never) {
+            out = Some(match out {
+                None => t,
+                Some(acc) => self.join_branch_types(&acc, &t).unwrap_or(acc),
+            });
+        }
+        out.unwrap_or(Type::Never)
+    }
+
     pub(super) fn check_if_against(
         &mut self,
         condition: &Expr,
@@ -135,11 +151,7 @@ impl<'a> super::TypeChecker<'a> {
             // against `expected` if it didn't comply; no need to re-check
             // cross-branch compatibility (it's transitive through expected).
             // Pick a non-Never type as the recorded result.
-            let result_ty = if then_ty != Type::Never {
-                then_ty
-            } else {
-                else_ty
-            };
+            let result_ty = self.join_checked_arms([then_ty, else_ty]);
             self.record_expr_type(span, &result_ty);
             result_ty
         } else {
@@ -206,11 +218,7 @@ impl<'a> super::TypeChecker<'a> {
         self.local_scope.pop();
         if let Some(else_expr) = else_branch {
             let else_ty = self.check_expr(else_expr, expected);
-            let result_ty = if then_ty != Type::Never {
-                then_ty
-            } else {
-                else_ty
-            };
+            let result_ty = self.join_checked_arms([then_ty, else_ty]);
             self.record_expr_type(span, &result_ty);
             result_ty
         } else {
@@ -318,11 +326,7 @@ impl<'a> super::TypeChecker<'a> {
         if !scrutinee_mismatch {
             self.check_exhaustiveness(&dispatch_ty, arms, *span);
         }
-        let result_ty = arm_types
-            .iter()
-            .find(|t| **t != Type::Never)
-            .cloned()
-            .unwrap_or(Type::Never);
+        let result_ty = self.join_checked_arms(arm_types);
         self.record_expr_type(span, &result_ty);
         result_ty
     }

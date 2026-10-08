@@ -53023,3 +53023,21 @@ fn par_for_is_a_vec_and_keeps_jumps_inside() {
         typecheck_errors("fn main() {\n    let v = par(limit: true) for i in 0..3 { i };\n}\n");
     assert!(!errs.is_empty());
 }
+
+/// A branching closure body checked against a partly-unknown expectation
+/// (`Option[U]`, with `U` the callee's own parameter) takes the join of its
+/// arms, not its first one: a leading `None` leaves `U` open and the later
+/// `Some(w)` fills it, in `if` and `match` alike.
+#[test]
+fn a_none_first_branch_does_not_leave_the_call_s_parameter_unsolved() {
+    typecheck_ok(
+        r#"
+fn ap[U](f: OnceFn(i64) -> Option[U]) -> Option[U] { f(1) }
+fn main() {
+    let a = ap(|w| if w == 2 { None } else { Some(w) });
+    let b = ap(|w| match w { 2 => None, _ => Some(w) });
+    println(a.unwrap() + b.unwrap());
+}
+"#,
+    );
+}
