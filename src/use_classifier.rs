@@ -671,6 +671,14 @@ impl<'a> UseClassifier<'a> {
         }
     }
 
+    /// A pattern binding inside a closure body is closure-local, like an
+    /// inner `let`: moving it is a fresh move, not a capture consume.
+    fn note_closure_locals(&mut self, pattern: &Pattern) {
+        if let Some(locals) = self.closure_local_stack.last_mut() {
+            locals.extend(pattern.binding_names());
+        }
+    }
+
     fn walk_expr(&mut self, expr: &Expr, mode: Mode) {
         match &expr.kind {
             ExprKind::Identifier(name) => {
@@ -977,7 +985,16 @@ impl<'a> UseClassifier<'a> {
                 self.walk_expr(index, Mode::Reading);
             }
 
-            ExprKind::Block(block) => self.walk_block(block, mode),
+            // v2 core §3.1: a block's tail value moves, also where the
+            // block's value is then only borrowed (`{ loc }.len()`).
+            ExprKind::Block(block) => {
+                let tail = if crate::ownership::core_rules() {
+                    Mode::Consuming
+                } else {
+                    mode
+                };
+                self.walk_block(block, tail)
+            }
 
             ExprKind::If {
                 condition,
@@ -994,8 +1011,9 @@ impl<'a> UseClassifier<'a> {
                 value,
                 then_block,
                 else_branch,
-                ..
+                pattern,
             } => {
+                self.note_closure_locals(pattern);
                 // The scrutinee of `if let` is a pattern match — same shape
                 // as `match` step 4. For simplicity (and to align with the
                 // dataflow conservative read-of-scrutinee in ownership.rs)
@@ -1055,6 +1073,7 @@ impl<'a> UseClassifier<'a> {
                         self.walk_expr(g, Mode::Reading);
                     }
                     let bound = crate::cfg::pattern_bindings(&arm.pattern);
+                    self.note_closure_locals(&arm.pattern);
                     self.arm_consumed_names.push(HashSet::new());
                     self.walk_expr(&arm.body, mode);
                     let consumed = self.arm_consumed_names.pop().unwrap_or_default();
@@ -1078,7 +1097,13 @@ impl<'a> UseClassifier<'a> {
                 self.walk_expr(condition, Mode::Reading);
                 self.walk_block(body, Mode::Reading);
             }
-            ExprKind::WhileLet { value, body, .. } => {
+            ExprKind::WhileLet {
+                value,
+                body,
+                pattern,
+                ..
+            } => {
+                self.note_closure_locals(pattern);
                 let scrut_mode = if self.core_pattern_moves(value) {
                     Mode::Consuming
                 } else {
@@ -1087,7 +1112,13 @@ impl<'a> UseClassifier<'a> {
                 self.walk_expr(value, scrut_mode);
                 self.walk_block(body, Mode::Reading);
             }
-            ExprKind::For { iterable, body, .. } => {
+            ExprKind::For {
+                iterable,
+                body,
+                pattern,
+                ..
+            } => {
+                self.note_closure_locals(pattern);
                 // design.md § Iterable: "The collection is always borrowed
                 // — `for` never consumes it. To consume a collection while
                 // iterating, call `.into_iter()` explicitly." A consuming

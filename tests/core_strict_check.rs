@@ -1817,3 +1817,92 @@ fn main() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "7 3 2 3 3 3\n");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// §3.1: a block's tail moves, also where the block's value is only
+/// borrowed afterwards (`{ loc }.len()`), so a later use of `loc` is E0500.
+#[test]
+fn a_block_tail_moves_even_when_the_block_is_only_borrowed() {
+    rejected_then_fixed(
+        "block_tail_moves",
+        r#"
+fn main() {
+    let loc = "abc".to_string();
+    let n = { loc }.len();
+    println(f"{n} {loc}");
+}
+"#,
+        "value 'loc' moved here",
+    );
+}
+
+/// §5.6: a `ref` pattern binding borrows its scrutinee until its last use,
+/// so a write to the scrutinee before that use is an error and one after it
+/// is not.
+#[test]
+fn a_write_to_a_scrutinee_while_its_ref_binding_is_live_is_an_error() {
+    rejected(
+        "ref_binding_live_write",
+        r#"
+struct T { tag: i64 }
+enum E { X(T), Y }
+impl E { fn clear(mut ref self) { self = E.Y; } }
+fn main() {
+    let mut g = E.X(T { tag: 1 });
+    match g {
+        E.X(ref t) => {
+            g.clear();
+            println(t.tag);
+        }
+        E.Y => println(0),
+    }
+}
+"#,
+        "while `ref t` borrows `g`",
+    );
+    accepted(
+        "ref_binding_dead_write",
+        r#"
+struct T { tag: i64 }
+enum E { X(T), Y }
+fn main() {
+    let mut g = E.X(T { tag: 1 });
+    match g {
+        E.X(ref t) => {
+            println(t.tag);
+            g = E.Y;
+        }
+        E.Y => println(0),
+    }
+    let mut i = 0;
+    while let E.X(ref t) = g {
+        i = i + 1;
+        if i > 1 {
+            println(t.tag);
+            g = E.Y;
+        } else {
+            println(t.tag + 1);
+        }
+    }
+}
+"#,
+    );
+}
+
+/// §3.1 makes a block's tail a move, so a closure body written as a block
+/// moves what its `match` arm bound. That binding is the closure's own, not
+/// a capture, so the closure stays callable more than once.
+#[test]
+fn a_closure_moving_its_own_match_binding_is_not_once_callable() {
+    accepted(
+        "closure_arm_binding",
+        r#"
+enum Ho { Full(String), Empty }
+fn main() {
+    let f = |q: Ho| { match q { Ho.Full(s) => s, Ho.Empty => "e".to_string() } };
+    let a = f(Ho.Full("x".to_string()));
+    let b = f(Ho.Empty);
+    println(f"{a} {b}");
+}
+"#,
+    );
+}

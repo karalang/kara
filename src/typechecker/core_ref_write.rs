@@ -80,6 +80,8 @@ struct Walk<'t, 'a> {
     errors: Vec<(Span, String, Option<FixIt>)>,
     /// The places enclosing `for` loops iterate, innermost last.
     borrowed: Vec<Borrowed>,
+    /// The `if` / `match` branches the walk is inside (see `exclusive`).
+    branches: Vec<(usize, usize)>,
     /// Conflicting writes to a borrowed place (§5.6, §6.2).
     conflicts: Vec<(Span, String)>,
     /// The program's own free functions by name, for the kind check at a
@@ -109,7 +111,8 @@ struct Walk<'t, 'a> {
     once_calls: FxHashSet<SpanKey>,
 }
 
-/// A place a `for` loop borrows for its whole body.
+/// A place a `for` loop borrows for its whole body, or a `ref` pattern
+/// binding borrows until its last use.
 struct Borrowed {
     root: Root,
     /// Field and tuple steps from the root; `None` is an index.
@@ -118,6 +121,27 @@ struct Borrowed {
     text: String,
     /// Reached through a `shared` handle (§6.2 rather than §5.6).
     handle: bool,
+    /// For a `ref` pattern binding: what it borrows until its last use.
+    binding: Option<RefHold>,
+}
+
+/// A `ref` pattern binding's borrow (§5.6): a write to the place conflicts
+/// while some use of the binding can still follow it.
+#[derive(Clone)]
+struct RefHold {
+    name: String,
+    /// The binding's offset, which identifies the hold.
+    at: usize,
+    /// Each use: its offset and the branches it sits in.
+    uses: Vec<(usize, Vec<(usize, usize)>)>,
+}
+
+/// The branches (`if` / `match` node offset, branch index) on the path to a
+/// point. Two points whose paths take different branches of one node are
+/// never both reached.
+fn exclusive(a: &[(usize, usize)], b: &[(usize, usize)]) -> bool {
+    a.iter()
+        .any(|(n, i)| b.iter().any(|(m, j)| n == m && i != j))
 }
 
 /// Which binding a place is rooted at: `self`, or a position in `scopes`.
@@ -203,6 +227,7 @@ impl<'a> TypeChecker<'a> {
             self_fix: None,
             errors: Vec::new(),
             borrowed: Vec::new(),
+            branches: Vec::new(),
             conflicts: Vec::new(),
             fn_decls: &fn_decls,
             method_decls: &method_decls,
@@ -249,6 +274,7 @@ impl<'a> TypeChecker<'a> {
                 })
                 .collect()];
             w.borrowed.clear();
+            w.branches.clear();
             w.mut_fn_params.clear();
             w.mut_closure_locals.clear();
             let mut_fns: Vec<String> = f
@@ -427,7 +453,76 @@ impl Walk<'_, '_> {
             path,
             text: place_text(e)?,
             handle,
+            binding: None,
         })
+    }
+
+    /// Push `held`, returning what identifies each for `release`.
+    fn hold(&mut self, held: Vec<Borrowed>) -> Vec<usize> {
+        let keys = held
+            .iter()
+            .filter_map(|b| b.binding.as_ref().map(|h| h.at))
+            .collect();
+        self.borrowed.extend(held);
+        keys
+    }
+
+    /// Drop the borrows `hold` pushed. An assignment in between may have
+    /// removed some already.
+    fn release(&mut self, keys: &[usize]) {
+        self.borrowed
+            .retain(|b| b.binding.as_ref().is_none_or(|h| !keys.contains(&h.at)));
+    }
+
+    /// The scrutinee place each `ref` / `mut ref` binding of `pattern`
+    /// borrows while the binding is live: from here to its last use in
+    /// `body` (§5.6). A binding never used after the pattern borrows
+    /// nothing a write could conflict with.
+    fn ref_binding_borrows(
+        &self,
+        pattern: &Pattern,
+        scrutinee: &Expr,
+        body: &[&Expr],
+        blocks: &[&Block],
+    ) -> Vec<Borrowed> {
+        let program = self.tc.program;
+        let Some((root, path, handle)) = self.place_path(scrutinee) else {
+            return Vec::new();
+        };
+        let Some(text) = place_text(scrutinee) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (name, sp) in pattern.binding_name_spans() {
+            let key = SpanKey::from_span(&sp);
+            if !program.ref_binding_spans.contains(&key)
+                && !program.mut_ref_binding_spans.contains(&key)
+            {
+                continue;
+            }
+            let mut uses = Vec::new();
+            let mut branch = self.branches.clone();
+            for e in body {
+                uses_in_expr(e, &name, &mut branch, &mut uses);
+            }
+            for b in blocks {
+                uses_in_block(b, &name, &mut branch, &mut uses);
+            }
+            if !uses.is_empty() {
+                out.push(Borrowed {
+                    root,
+                    path: path.clone(),
+                    text: text.clone(),
+                    handle,
+                    binding: Some(RefHold {
+                        name,
+                        at: sp.offset,
+                        uses,
+                    }),
+                });
+            }
+        }
+        out
     }
 
     /// §5.6 / §6.2: a write to `place` while an enclosing `for` loop iterates
@@ -440,8 +535,13 @@ impl Walk<'_, '_> {
         let Some((root, path, handle)) = self.place_path(place) else {
             return;
         };
+        let branches = &self.branches;
         let overlaps = |b: &Borrowed| {
-            b.root == root
+            b.binding.as_ref().is_none_or(|h| {
+                h.uses
+                    .iter()
+                    .any(|(u, p)| *u > at.offset && !exclusive(p, branches))
+            }) && b.root == root
                 && b.path
                     .iter()
                     .zip(&path)
@@ -451,7 +551,14 @@ impl Walk<'_, '_> {
             return;
         };
         let text = place_text(place).unwrap_or_else(|| b.text.clone());
-        let message = if b.handle || handle {
+        let message = if let Some(RefHold { name, .. }) = &b.binding {
+            format!(
+                "cannot {verb} `{text}` while `ref {name}` borrows `{}`: `{name}` is used \
+                 after this (core-semantics.md §5.6). Use `{name}` before the write, or \
+                 clone what you need from it first",
+                b.text
+            )
+        } else if b.handle || handle {
             format!(
                 "cannot {verb} `{text}` while the `for` loop over `{}` borrows it: a `mut` \
                  field of a shared value is borrowed for the whole loop, and this write \
@@ -602,15 +709,44 @@ impl Walk<'_, '_> {
             }
             ExprKind::Match { scrutinee, arms } => {
                 self.expr(scrutinee);
-                for arm in arms {
+                for (i, arm) in arms.iter().enumerate() {
                     self.check_mut_ref_bindings(&arm.pattern, scrutinee);
+                    let held = self.ref_binding_borrows(
+                        &arm.pattern,
+                        scrutinee,
+                        &[arm.guard.as_ref(), Some(&arm.body)]
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>(),
+                        &[],
+                    );
+                    let keys = self.hold(held);
                     self.scopes.push(Vec::new());
                     self.bind(&arm.pattern, Origin::Owned, None);
+                    self.branches.push((e.span.offset, i + 1));
                     if let Some(g) = &arm.guard {
                         self.expr(g);
                     }
                     self.expr(&arm.body);
+                    self.branches.pop();
                     self.scopes.pop();
+                    self.release(&keys);
+                }
+                return;
+            }
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.expr(condition);
+                self.branches.push((e.span.offset, 1));
+                self.block(then_block);
+                self.branches.pop();
+                if let Some(x) = else_branch {
+                    self.branches.push((e.span.offset, 2));
+                    self.expr(x);
+                    self.branches.pop();
                 }
                 return;
             }
@@ -622,12 +758,19 @@ impl Walk<'_, '_> {
             } => {
                 self.expr(value);
                 self.check_mut_ref_bindings(pattern, value);
+                let held = self.ref_binding_borrows(pattern, value, &[], &[then_block]);
+                let keys = self.hold(held);
                 self.scopes.push(Vec::new());
                 self.bind(pattern, Origin::Owned, None);
+                self.branches.push((e.span.offset, 1));
                 self.block(then_block);
+                self.branches.pop();
                 self.scopes.pop();
-                if let Some(e) = else_branch {
-                    self.expr(e);
+                self.release(&keys);
+                if let Some(x) = else_branch {
+                    self.branches.push((e.span.offset, 2));
+                    self.expr(x);
+                    self.branches.pop();
                 }
                 return;
             }
@@ -639,10 +782,13 @@ impl Walk<'_, '_> {
             } => {
                 self.expr(value);
                 self.check_mut_ref_bindings(pattern, value);
+                let held = self.ref_binding_borrows(pattern, value, &[], &[body]);
+                let keys = self.hold(held);
                 self.scopes.push(Vec::new());
                 self.bind(pattern, Origin::Owned, None);
                 self.block(body);
                 self.scopes.pop();
+                self.release(&keys);
                 return;
             }
             ExprKind::Closure {
@@ -1081,6 +1227,77 @@ impl Walk<'_, '_> {
             _ => false,
         }
     }
+}
+
+/// Every read of the identifier `name` in `e`, with the branches it sits in.
+fn uses_in_expr(
+    e: &Expr,
+    name: &str,
+    branch: &mut Vec<(usize, usize)>,
+    out: &mut Vec<(usize, Vec<(usize, usize)>)>,
+) {
+    let at = e.span.offset;
+    match &e.kind {
+        ExprKind::Identifier(n) if n == name => out.push((at, branch.clone())),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            uses_in_expr(condition, name, branch, out);
+            branch.push((at, 1));
+            uses_in_block(then_block, name, branch, out);
+            branch.pop();
+            if let Some(x) = else_branch {
+                branch.push((at, 2));
+                uses_in_expr(x, name, branch, out);
+                branch.pop();
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            uses_in_expr(value, name, branch, out);
+            branch.push((at, 1));
+            uses_in_block(then_block, name, branch, out);
+            branch.pop();
+            if let Some(x) = else_branch {
+                branch.push((at, 2));
+                uses_in_expr(x, name, branch, out);
+                branch.pop();
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            uses_in_expr(scrutinee, name, branch, out);
+            for (i, arm) in arms.iter().enumerate() {
+                branch.push((at, i + 1));
+                if let Some(g) = &arm.guard {
+                    uses_in_expr(g, name, branch, out);
+                }
+                uses_in_expr(&arm.body, name, branch, out);
+                branch.pop();
+            }
+        }
+        _ => for_each_child_public(e, &mut |c| match c {
+            Child::Expr(x) => uses_in_expr(x, name, branch, out),
+            Child::Block(b) => uses_in_block(b, name, branch, out),
+        }),
+    }
+}
+
+fn uses_in_block(
+    b: &Block,
+    name: &str,
+    branch: &mut Vec<(usize, usize)>,
+    out: &mut Vec<(usize, Vec<(usize, usize)>)>,
+) {
+    crate::index_disjoint::for_each_block_child(b, &mut |c| match c {
+        Child::Expr(x) => uses_in_expr(x, name, branch, out),
+        Child::Block(b) => uses_in_block(b, name, branch, out),
+    });
 }
 
 /// A place expression as written: `self.items`, `b.items[]`.
