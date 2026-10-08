@@ -66,12 +66,12 @@ impl Client {
     fn new() -> Client { Client { } }
 
     #[compiler_builtin]
-    fn get(ref self, url: String) -> Result[Response, HttpError] {
+    fn get(ref self, url: own String) -> Result[Response, HttpError] {
         Err(HttpError { message: "" })
     }
 
     #[compiler_builtin]
-    fn post(ref self, url: String, body: String) -> Result[Response, HttpError] {
+    fn post(ref self, url: own String, body: own String) -> Result[Response, HttpError] {
         Err(HttpError { message: "" })
     }
 
@@ -84,7 +84,7 @@ impl Client {
     // shortest form for unconfigured requests — the chained surface
     // is purely additive.
     #[compiler_builtin]
-    fn request(ref self, method: String, url: String) -> RequestBuilder {
+    fn request(ref self, method: own String, url: own String) -> RequestBuilder {
         RequestBuilder { handle: 0 }
     }
 }
@@ -97,14 +97,14 @@ impl RequestBuilder {
     // multiple values stack for set-semantics headers like
     // `Set-Cookie` (though the latter is request-side rare).
     #[compiler_builtin]
-    fn header(self, name: String, value: String) -> RequestBuilder {
+    fn header(own self, name: own String, value: own String) -> RequestBuilder {
         self
     }
 
     // Replace the request entity body. Idempotent — last call wins.
     // Empty string means no entity (correct for GET / HEAD).
     #[compiler_builtin]
-    fn body(self, b: String) -> RequestBuilder {
+    fn body(own self, b: own String) -> RequestBuilder {
         self
     }
 
@@ -113,7 +113,7 @@ impl RequestBuilder {
     // values apply `ureq::Request::timeout` so a slow / hung origin
     // yields a transport error rather than blocking forever.
     #[compiler_builtin]
-    fn timeout(self, ms: i64) -> RequestBuilder {
+    fn timeout(own self, ms: i64) -> RequestBuilder {
         self
     }
 
@@ -161,7 +161,7 @@ impl Response {
     fn bytes(ref self) -> Vec[u8] { Vec.new() }
 
     #[compiler_builtin]
-    fn header(ref self, name: String) -> Option[String] { None }
+    fn header(ref self, name: own String) -> Option[String] { None }
 
     // Return every response header as `(name, value)` pairs in the order
     // the server sent them (phase-8 line 39 follow-up). A Vec (not a Map)
@@ -245,7 +245,7 @@ impl Request {
     // pointer (`karac_runtime_http_request_header` returns null only
     // when no header with the requested name exists).
     #[compiler_builtin]
-    fn header(ref self, name: String) -> Option[String] { None }
+    fn header(ref self, name: own String) -> Option[String] { None }
 
     // Return every request header as `(name, value)` pairs in
     // request order. A Vec (not a Map) so repeated header names (e.g.
@@ -295,7 +295,7 @@ impl Server {
     // take over the canary role.
     #[unstable(note: "serve_static is a fixed-body convenience subsumed by Server.serve(handler); use serve(handler) for real servers")]
     #[compiler_builtin]
-    fn serve_static(addr: String, body: String) -> Result[Unit, HttpError] {
+    fn serve_static(addr: own String, body: own String) -> Result[Unit, HttpError] {
         Err(HttpError { message: "" })
     }
 
@@ -335,7 +335,7 @@ impl Server {
     // item); v1 surfaces the abort to operators via a non-zero exit
     // code on the server binary.
     #[compiler_builtin]
-    fn serve(addr: String, handler: Fn(Request) -> Response) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
+    fn serve(addr: own String, handler: own Fn(Request) -> Response) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
         Err(HttpError { message: "" })
     }
 
@@ -352,7 +352,7 @@ impl Server {
     // so a single bad client cannot kill the accept loop. Same
     // `BOUND_PORT=<n>` stdout convention as `serve`.
     #[compiler_builtin]
-    fn serve_tls(addr: String, cert_pem: String, key_pem: String, handler: Fn(Request) -> Response) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
+    fn serve_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(Request) -> Response) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
         Err(HttpError { message: "" })
     }
 
@@ -385,7 +385,7 @@ impl Server {
     // WebSocket-over-HTTP/2 (RFC 8441) is out of scope for v1 — only
     // HTTP/1.1 connections take the upgrade path.
     #[compiler_builtin]
-    fn serve_ws(addr: String, handler: Fn(Request) -> Response, ws_handler: Fn(WebSocket)) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
+    fn serve_ws(addr: own String, handler: own Fn(Request) -> Response, ws_handler: own Fn(WebSocket)) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
         Err(HttpError { message: "" })
     }
 
@@ -398,7 +398,7 @@ impl Server {
     // advertises no h2): a WebSocket upgrade is an h1 mechanism, so h2
     // workloads belong on `serve_tls`.
     #[compiler_builtin]
-    fn serve_ws_tls(addr: String, cert_pem: String, key_pem: String, handler: Fn(Request) -> Response, ws_handler: Fn(WebSocket)) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
+    fn serve_ws_tls(addr: own String, cert_pem: own String, key_pem: own String, handler: own Fn(Request) -> Response, ws_handler: own Fn(WebSocket)) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
         Err(HttpError { message: "" })
     }
 }

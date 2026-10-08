@@ -45,7 +45,7 @@ impl RateLimiter {
     // available (and consumes it), `false` when `key` is currently rate
     // limited. Non-blocking — never waits.
     #[compiler_builtin]
-    fn try_acquire(ref self, key: String) -> bool {
+    fn try_acquire(ref self, key: own String) -> bool {
         false
     }
 }

@@ -211,9 +211,17 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
     // set, `karac fix` writes `own` on every bare parameter and receiver whose
     // body needs ownership, and nothing else, so the migration is one
     // reviewable rewrite. `own T` means `T` until the flip.
+    // `KARAC_D5_MIGRATE=all` writes it on every bare non-`Copy` position, for
+    // placeholder bodies that say nothing about what the real code keeps.
     if std::env::var_os("KARAC_D5_MIGRATE").is_some() {
         fixes = FixSet::default();
-        if let (false, Some(t)) = (pipeline.has_parse_errors(), pipeline.typed.as_ref()) {
+        let keep_meaning = std::env::var("KARAC_D5_MIGRATE").is_ok_and(|v| v == "all");
+        // `all` reads only signatures, so a baked stdlib file (which the
+        // resolver refuses outside the compiler) needs no type check: a
+        // type it cannot see is taken as not `Copy`, and gets `own`.
+        let untyped = crate::typechecker::TypeCheckResult::default();
+        let typed = pipeline.typed.as_ref().or(keep_meaning.then_some(&untyped));
+        if let (false, Some(t)) = (pipeline.has_parse_errors(), typed) {
             let _core_rules = crate::ownership::CoreRulesGuard::new(true);
             // Derive-synthesized methods carry spans that are not this
             // file's text, so an insertion lands only where the source shows
@@ -228,7 +236,7 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
                         && !after[4..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))
             };
             fixes.singles(
-                crate::ownership::d5_own_param_edits(&pipeline.parsed.program, t)
+                crate::ownership::d5_own_param_edits(&pipeline.parsed.program, t, keep_meaning)
                     .into_iter()
                     .filter(|e| at_param(e.offset)),
             );

@@ -10,11 +10,11 @@
 // Real bodies (no interception) — each delegates to the baked assoc fn.
 
 #[must_use("the column reference is the root of a predicate tree — discarding it builds nothing")]
-pub fn col(name: String) -> LazyExpr {
+pub fn col(name: own String) -> LazyExpr {
     LazyExpr.col(name)
 }
 
 #[must_use("the literal expression is a predicate building block — discarding it builds nothing")]
-pub fn lit[T](v: T) -> LazyExpr {
+pub fn lit[T](v: own T) -> LazyExpr {
     LazyExpr.lit(v)
 }

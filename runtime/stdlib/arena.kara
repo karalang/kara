@@ -81,7 +81,7 @@ impl[T] Arena[T] {
     // Bump-allocate `value` into the arena and return a handle to it.
     // The handle's `index` is the value's position in the backing vec.
     #[compiler_builtin]
-    fn push(ref self, value: T) -> ArenaRef[T] {
+    fn push(ref self, value: own T) -> ArenaRef[T] {
         ArenaRef { arena_handle_id: self.handle_id, index: 0 }
     }
 
@@ -90,7 +90,7 @@ impl[T] Arena[T] {
     // hands back the value at `r.index`; this body is a never-evaluated
     // placeholder (a self-call so it stays type-correct as `ref T`).
     #[compiler_builtin]
-    fn get(ref self, r: ArenaRef[T]) -> ref T {
+    fn get(ref self, r: own ArenaRef[T]) -> ref T {
         self.get(r)
     }
 
@@ -106,7 +106,7 @@ impl[T] Arena[T] {
     // checkpoint dangle afterwards (no v1 liveness check). A checkpoint
     // minted by a different arena is ignored.
     #[compiler_builtin]
-    fn rewind_to(ref self, cp: ArenaCheckpoint) -> Unit {
+    fn rewind_to(ref self, cp: own ArenaCheckpoint) -> Unit {
         Unit
     }
 

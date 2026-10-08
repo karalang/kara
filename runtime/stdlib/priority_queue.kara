@@ -77,14 +77,14 @@ impl[T: Ord] PriorityQueue[T] {
     // Build a smallest-first queue from an existing vector in O(n) —
     // Floyd's heapify, sifting down from the last internal node rather
     // than pushing n times (which would be O(n log n)).
-    fn from(v: Vec[T]) -> PriorityQueue[T] {
+    fn from(v: own Vec[T]) -> PriorityQueue[T] {
         let mut h = PriorityQueue { xs: v, max: false };
         h.heapify();
         h
     }
 
     // `from`'s largest-first sibling, same O(n) build.
-    fn max_first_from(v: Vec[T]) -> PriorityQueue[T] {
+    fn max_first_from(v: own Vec[T]) -> PriorityQueue[T] {
         let mut h = PriorityQueue { xs: v, max: true };
         h.heapify();
         h
@@ -174,7 +174,7 @@ impl[T: Ord] PriorityQueue[T] {
         }
     }
 
-    fn push(mut ref self, x: T) {
+    fn push(mut ref self, x: own T) {
         self.xs.push(x);
         let n = self.xs.len();
         self.sift_up(n - 1);
@@ -223,7 +223,7 @@ impl[T: Ord] PriorityQueue[T] {
 
     // Drain into a vector in pop order: ascending for a smallest-first
     // queue, descending for a largest-first one.
-    fn into_sorted_vec(self) -> Vec[T] {
+    fn into_sorted_vec(own self) -> Vec[T] {
         let mut h = self;
         let mut out: Vec[T] = Vec.new();
         while h.xs.len() > 0 {

@@ -47,11 +47,11 @@ impl[W] BufWriter[W] {
     // arm, which clones the underlying file descriptor and wraps it in
     // `std::io::BufWriter`.
     #[compiler_builtin]
-    fn new(writer: W) -> BufWriter[W] { BufWriter { } }
+    fn new(writer: own W) -> BufWriter[W] { BufWriter { } }
 
     // Wrap `writer` with an explicit buffer capacity (bytes).
     #[compiler_builtin]
-    fn with_capacity(writer: W, cap: usize) -> BufWriter[W] { BufWriter { } }
+    fn with_capacity(writer: own W, cap: usize) -> BufWriter[W] { BufWriter { } }
 
     // Write `buf` into the internal buffer, flushing to the underlying
     // writer if the buffer fills. Returns the byte count accepted.

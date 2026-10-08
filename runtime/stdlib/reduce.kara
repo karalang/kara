@@ -57,7 +57,7 @@ trait Reduce[T] {
     // closure fold loop — the body below never runs); a user implementor
     // writes the fold by hand. S6c: the fold primitive on the trait surface,
     // so `fn f[C: Reduce[i64]](c: ref C)` may call `c.fold(0, |a, x| a + x)`.
-    fn fold[A](ref self, init: A, f: Fn(A, T) -> A) -> A;
+    fn fold[A](ref self, init: own A, f: own Fn(A, T) -> A) -> A;
 
     // Spread between the largest and smallest element (`max - min`). The first
     // DEFAULT method on `Reduce` (S6b-4): any implementor that provides

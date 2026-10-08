@@ -71,20 +71,20 @@ impl[T] Column[T] {
 
     // Column from a `Vec[T]`, every slot valid (no nulls).
     #[compiler_builtin]
-    fn from_vec(values: Vec[T]) -> Column[T] {
+    fn from_vec(values: own Vec[T]) -> Column[T] {
         Column { handle_id: 0 }
     }
 
     // Column from a `Vec[Option[T]]` — `Some(v)` becomes a valid slot,
     // `None` becomes a SQL null.
     #[compiler_builtin]
-    fn from_iter_nullable(values: Vec[Option[T]]) -> Column[T] {
+    fn from_iter_nullable(values: own Vec[Option[T]]) -> Column[T] {
         Column { handle_id: 0 }
     }
 
     // Append a valid value.
     #[compiler_builtin]
-    fn push(mut ref self, value: T) {}
+    fn push(mut ref self, value: own T) {}
 
     // Append a SQL null (a non-valid slot).
     #[compiler_builtin]
@@ -134,7 +134,7 @@ impl[T] Column[T] {
     // also replaced — the opt-in NaN→null normalization (design.md § Data
     // types). The flag is a no-op for non-float element types.
     #[compiler_builtin]
-    fn fillna(ref self, value: T, treat_nan_as_null: bool = false) -> Column[T] {
+    fn fillna(ref self, value: own T, treat_nan_as_null: bool = false) -> Column[T] {
         Column { handle_id: 0 }
     }
 
@@ -173,7 +173,7 @@ impl[T] Column[T] {
     // lets an empty / all-null column (serialized as Int64 by the write side's
     // fallback) read back at any `T`.
     #[compiler_builtin]
-    fn from_arrow_ipc(bytes: Vec[u8]) -> Column[T] {
+    fn from_arrow_ipc(bytes: own Vec[u8]) -> Column[T] {
         Column { handle_id: 0 }
     }
 
@@ -230,7 +230,7 @@ impl[T] Column[T] {
     // `karac build` inlines the closure body over a POD element/accumulator
     // (heap `A`/`T` is a follow-on codegen slice — see `compile_column_fold`).
     #[compiler_builtin]
-    fn fold[A](ref self, init: A, f: Fn(A, T) -> A) -> A {
+    fn fold[A](ref self, init: own A, f: own Fn(A, T) -> A) -> A {
         loop {}
     }
 
@@ -241,7 +241,7 @@ impl[T] Column[T] {
     // native path inlines the closure body (POD + inline-literal only). `other`
     // is `ref` — the operand is READ, not consumed (so it may be reused after).
     #[compiler_builtin]
-    fn zip_with(ref self, other: ref Column[T], f: Fn(T, T) -> T) -> Column[T] {
+    fn zip_with(ref self, other: ref Column[T], f: own Fn(T, T) -> T) -> Column[T] {
         loop {}
     }
 
@@ -285,7 +285,7 @@ impl[T] Column[T] {
     // the pairwise-valid slots (≥ 2 required). A zero-variance operand
     // yields `NaN`. Only defined on `Column[f64]`.
     #[compiler_builtin]
-    fn corr(ref self, other: Column[f64]) -> f64 {
+    fn corr(ref self, other: own Column[f64]) -> f64 {
         0.0
     }
 }
@@ -325,7 +325,7 @@ impl[T] Reduce[T] for Column[T] {
     }
 
     #[compiler_builtin]
-    fn fold[A](ref self, init: A, f: Fn(A, T) -> A) -> A {
+    fn fold[A](ref self, init: own A, f: own Fn(A, T) -> A) -> A {
         loop {}
     }
 }
@@ -338,12 +338,12 @@ impl[T] Reduce[T] for Column[T] {
 // C) -> C { c.map(|x| x * 2) }` accepts a `Column[i64]` and a `Tensor[i64, S]`.
 impl[T] ElementwiseMap[T] for Column[T] {
     #[compiler_builtin]
-    fn map(ref self, f: Fn(T) -> T) -> Self {
+    fn map(ref self, f: own Fn(T) -> T) -> Self {
         loop {}
     }
 
     #[compiler_builtin]
-    fn zip_with(ref self, other: ref Self, f: Fn(T, T) -> T) -> Self {
+    fn zip_with(ref self, other: ref Self, f: own Fn(T, T) -> T) -> Self {
         loop {}
     }
 }

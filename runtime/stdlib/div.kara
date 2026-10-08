@@ -3,5 +3,5 @@
 // CR-202 slice 5k. Per design.md § Operator Traits.
 
 trait Div {
-    fn div(self, rhs: Self) -> Self;
+    fn div(own self, rhs: own Self) -> Self;
 }

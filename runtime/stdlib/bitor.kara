@@ -3,5 +3,5 @@
 // CR-202 slice 5l. Per design.md § Operator Traits — binary bitwise.
 
 trait BitOr {
-    fn bitor(self, rhs: Self) -> Self;
+    fn bitor(own self, rhs: own Self) -> Self;
 }

@@ -77,7 +77,7 @@ impl Span {
     // Root span — `parent_id` zeroed. Caller supplies a unique
     // `span_id` (in v1, typically from a per-program monotonic
     // counter the caller maintains).
-    fn root(name: String, span_id: i64) -> Span {
+    fn root(name: own String, span_id: i64) -> Span {
         Span {
             name: name,
             span_id: span_id,
@@ -88,7 +88,7 @@ impl Span {
 
     // Child span with this span as parent. Caller supplies the
     // child's `span_id`.
-    fn child(ref self, name: String, child_id: i64) -> Span {
+    fn child(ref self, name: own String, child_id: i64) -> Span {
         Span {
             name: name,
             span_id: child_id,
@@ -99,7 +99,7 @@ impl Span {
 
     // Builder method: attach a structured key/value pair. Consumes
     // and returns `self` to keep the chain readable.
-    fn with_field(self, key: String, value: String) -> Span {
+    fn with_field(own self, key: own String, value: own String) -> Span {
         let mut new_fields = self.fields;
         new_fields.push(SpanField { key: key, value: value });
         Span {
@@ -112,7 +112,7 @@ impl Span {
 }
 
 impl LogEvent {
-    fn trace(message: String) -> LogEvent {
+    fn trace(message: own String) -> LogEvent {
         LogEvent {
             level: "trace",
             message: message,
@@ -121,7 +121,7 @@ impl LogEvent {
         }
     }
 
-    fn debug(message: String) -> LogEvent {
+    fn debug(message: own String) -> LogEvent {
         LogEvent {
             level: "debug",
             message: message,
@@ -130,7 +130,7 @@ impl LogEvent {
         }
     }
 
-    fn info(message: String) -> LogEvent {
+    fn info(message: own String) -> LogEvent {
         LogEvent {
             level: "info",
             message: message,
@@ -139,7 +139,7 @@ impl LogEvent {
         }
     }
 
-    fn warn(message: String) -> LogEvent {
+    fn warn(message: own String) -> LogEvent {
         LogEvent {
             level: "warn",
             message: message,
@@ -148,7 +148,7 @@ impl LogEvent {
         }
     }
 
-    fn error(message: String) -> LogEvent {
+    fn error(message: own String) -> LogEvent {
         LogEvent {
             level: "error",
             message: message,
@@ -158,7 +158,7 @@ impl LogEvent {
     }
 
     // Builder method: attach a structured key/value pair.
-    fn with_field(self, key: String, value: String) -> LogEvent {
+    fn with_field(own self, key: own String, value: own String) -> LogEvent {
         let mut new_fields = self.fields;
         new_fields.push(SpanField { key: key, value: value });
         LogEvent {
@@ -172,7 +172,7 @@ impl LogEvent {
     // Associate this event with a span. Caller passes the span's id
     // explicitly — `span_id` rather than the whole `Span` keeps the
     // signature ownership-flat.
-    fn in_span(self, span_id: i64) -> LogEvent {
+    fn in_span(own self, span_id: i64) -> LogEvent {
         LogEvent {
             level: self.level,
             message: self.message,
@@ -188,15 +188,15 @@ impl LogEvent {
 // shape — that's the v1 commitment: trait surface is stable, default
 // is no-op, ecosystem fills the implementation slot.
 trait Exporter {
-    fn export_span(ref self, span: Span);
-    fn export_event(ref self, event: LogEvent);
+    fn export_span(ref self, span: own Span);
+    fn export_event(ref self, event: own LogEvent);
 }
 
 struct NoOpExporter { }
 
 impl Exporter for NoOpExporter {
-    fn export_span(ref self, span: Span) { }
-    fn export_event(ref self, event: LogEvent) { }
+    fn export_span(ref self, span: own Span) { }
+    fn export_event(ref self, event: own LogEvent) { }
 }
 
 // The first output-producing exporter — the v1 emission surface.
@@ -220,7 +220,7 @@ impl Exporter for NoOpExporter {
 struct StdoutExporter { }
 
 impl Exporter for StdoutExporter {
-    fn export_span(ref self, span: Span) {
+    fn export_span(ref self, span: own Span) {
         let mut line = f"[span] {span.name} span_id={span.span_id}";
         if span.parent_id != 0 {
             line = line + f" parent_id={span.parent_id}";
@@ -231,7 +231,7 @@ impl Exporter for StdoutExporter {
         println(line);
     }
 
-    fn export_event(ref self, event: LogEvent) {
+    fn export_event(ref self, event: own LogEvent) {
         let mut line = f"[{event.level}] {event.message}";
         for field in event.fields {
             line = line + f" {field.key}={field.value}";
@@ -278,23 +278,23 @@ impl Log {
     // through the ambient sink — the registered exporter if one is set,
     // else the default `StdoutExporter` (`tracing_emit_event` performs
     // that branch). `LogEvent.{level}` still auto-stamps the active span.
-    fn trace(message: String) {
+    fn trace(message: own String) {
         if tracing_level_enabled(0) { tracing_emit_event(LogEvent.trace(message)); }
     }
 
-    fn debug(message: String) {
+    fn debug(message: own String) {
         if tracing_level_enabled(1) { tracing_emit_event(LogEvent.debug(message)); }
     }
 
-    fn info(message: String) {
+    fn info(message: own String) {
         if tracing_level_enabled(2) { tracing_emit_event(LogEvent.info(message)); }
     }
 
-    fn warn(message: String) {
+    fn warn(message: own String) {
         if tracing_level_enabled(3) { tracing_emit_event(LogEvent.warn(message)); }
     }
 
-    fn error(message: String) {
+    fn error(message: own String) {
         if tracing_level_enabled(4) { tracing_emit_event(LogEvent.error(message)); }
     }
 
@@ -305,7 +305,7 @@ impl Log {
     // lower through the `tracing_set_min_level` builtin → the process
     // global; the interpreter intercepts the `Log.set_min_level` call
     // itself (eval_call.rs::try_eval_log_call), so this body is dead there.
-    fn set_min_level(level: String) {
+    fn set_min_level(level: own String) {
         if level == "trace" { tracing_set_min_level(0); }
         if level == "debug" { tracing_set_min_level(1); }
         if level == "info" { tracing_set_min_level(2); }
@@ -318,7 +318,7 @@ impl Log {
     // both backends intercept the `Log.set_exporter` call directly (codegen
     // at the call site, so the concrete exporter type is known from the
     // argument; interpreter in `try_eval_log_call`), so this never runs.
-    fn set_exporter[E: Exporter](exporter: E) { }
+    fn set_exporter[E: Exporter](exporter: own E) { }
 
     // Restore defaults: minimum level `trace` (emit everything) and the
     // default per-call `StdoutExporter` sink. Useful between test cases.
@@ -356,7 +356,7 @@ fn tracing_active_span() -> i64 {
 }
 
 #[compiler_builtin]
-fn with_span[T](span: ref Span, body: OnceFn() -> T) -> T {
+fn with_span[T](span: ref Span, body: own OnceFn() -> T) -> T {
     body()
 }
 
@@ -381,7 +381,7 @@ fn tracing_level_enabled(rank: i64) -> bool {
 // Route an already-built event to the ambient sink (registered exporter
 // if set, else the default `StdoutExporter`).
 #[compiler_builtin]
-fn tracing_emit_event(event: LogEvent) {
+fn tracing_emit_event(event: own LogEvent) {
 }
 
 // Set the process-global minimum level by rank (trace=0 .. error=4).

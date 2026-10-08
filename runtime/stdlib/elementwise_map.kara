@@ -17,8 +17,8 @@ trait ElementwiseMap[T] {
     // Apply `f` to every element, yielding a same-shaped container.
     // Implementors with validity semantics (null slots) propagate
     // nulls: `f` runs on valid slots only.
-    fn map(ref self, f: Fn(T) -> T) -> Self;
+    fn map(ref self, f: own Fn(T) -> T) -> Self;
 
     // Combine two same-shaped containers elementwise.
-    fn zip_with(ref self, other: ref Self, f: Fn(T, T) -> T) -> Self;
+    fn zip_with(ref self, other: ref Self, f: own Fn(T, T) -> T) -> Self;
 }

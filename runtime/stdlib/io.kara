@@ -166,7 +166,7 @@ impl File {
     // `offset`) rather than Rust's payload-carrying `SeekFrom::Start(n)`.
     // See the ledger row for that trade.
     #[compiler_builtin]
-    fn seek(ref self, whence: SeekFrom, offset: i64) -> Result[i64, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn seek(ref self, whence: own SeekFrom, offset: i64) -> Result[i64, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
 }
 
 // B-2026-08-10-3. Payload-free by design: the offset rides `File.seek`'s
@@ -192,7 +192,7 @@ impl Env {
     fn var(name: ref String) -> Result[String, VarError] { Err(VarError.NotPresent) }
 
     #[compiler_builtin]
-    fn set(name: String, value: String) { }
+    fn set(name: own String, value: own String) { }
 }
 
 struct Clock { }
@@ -217,7 +217,7 @@ impl RandomSource {
 // `IoError.InvalidUtf8`). One-way only — the reverse direction is not
 // meaningful (a generic I/O error has no `VarError` projection).
 impl From for IoError {
-    fn from(e: VarError) -> IoError {
+    fn from(e: own VarError) -> IoError {
         match e {
             VarError.NotPresent => IoError.NotFound,
             VarError.NotUnicode => IoError.InvalidUtf8,

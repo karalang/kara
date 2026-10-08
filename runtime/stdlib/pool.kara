@@ -105,7 +105,7 @@ impl[T] Pool[T] {
     // arm, which writes the create_fn + bounds into `pool_table`
     // and returns a `Pool { handle_id }` carrying the fresh handle.
     #[compiler_builtin]
-    fn new(create_fn: Fn() -> T, max_connections: i64, max_waiters: i64) -> Pool[T] {
+    fn new(create_fn: own Fn() -> T, max_connections: i64, max_waiters: i64) -> Pool[T] {
         Pool { handle_id: 0 }
     }
 
@@ -137,7 +137,7 @@ impl[T] Pool[T] {
     // `release` is optional — keep it for eager hand-back (return a
     // connection to the pool before the binding leaves scope).
     #[compiler_builtin]
-    fn release(ref self, conn: PooledConnection[T]) -> Unit {
+    fn release(ref self, conn: own PooledConnection[T]) -> Unit {
         Unit
     }
 
@@ -154,7 +154,7 @@ impl[T] Pool[T] {
     // Dispatched through `try_eval_pool_method`; the body is a
     // typecheck-only placeholder.
     #[compiler_builtin]
-    fn with_health_check(ref self, check: Fn(T) -> bool) -> Pool[T] {
+    fn with_health_check(ref self, check: own Fn(T) -> bool) -> Pool[T] {
         Pool { handle_id: self.handle_id }
     }
 }

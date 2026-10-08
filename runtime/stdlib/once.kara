@@ -113,7 +113,7 @@ impl[T] OnceLock[T] {
     // never-evaluated placeholder (a self-call so it stays type-correct
     // as `Result[Unit, AlreadySetError[T]]`).
     #[compiler_builtin]
-    fn set(ref self, value: T) -> Result[Unit, AlreadySetError[T]] {
+    fn set(ref self, value: own T) -> Result[Unit, AlreadySetError[T]] {
         self.set(value)
     }
 
@@ -128,7 +128,7 @@ impl[T] OnceLock[T] {
     // `get_or_init` after the cell is filled returns the cached value
     // without invoking the closure.
     #[compiler_builtin]
-    fn get_or_init(ref self, init: Fn() -> T) -> ref T {
+    fn get_or_init(ref self, init: own Fn() -> T) -> ref T {
         self.get_or_init(init)
     }
 
@@ -152,7 +152,7 @@ impl[T] OnceCell[T] {
     }
 
     #[compiler_builtin]
-    fn set(ref self, value: T) -> Result[Unit, AlreadySetError[T]] {
+    fn set(ref self, value: own T) -> Result[Unit, AlreadySetError[T]] {
         self.set(value)
     }
 
@@ -162,7 +162,7 @@ impl[T] OnceCell[T] {
     }
 
     #[compiler_builtin]
-    fn get_or_init(ref self, init: Fn() -> T) -> ref T {
+    fn get_or_init(ref self, init: own Fn() -> T) -> ref T {
         self.get_or_init(init)
     }
 
@@ -179,7 +179,7 @@ impl[T] LazyLock[T] {
     // returns a `LazyLock { handle_id }`. The closure is NOT run here --
     // that is the whole point of the primitive.
     #[compiler_builtin]
-    fn new(init: Fn() -> T) -> LazyLock[T] {
+    fn new(init: own Fn() -> T) -> LazyLock[T] {
         LazyLock { handle_id: 0 }
     }
 

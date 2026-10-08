@@ -63,20 +63,20 @@ impl DataFrame {
     // count (`height()`) — the Arrow equal-length invariant; a mismatch
     // is a runtime error.
     #[compiler_builtin]
-    fn insert[T](mut ref self, name: String, col: Column[T]) {}
+    fn insert[T](mut ref self, name: own String, col: own Column[T]) {}
 
     // Look up a column by name, as `Column[T]` — a view sharing the
     // stored column's buffer. `T` comes from the binding annotation /
     // downstream use (see the header note). A missing name is a runtime
     // error.
     #[compiler_builtin]
-    fn column[T](ref self, name: String) -> Column[T] {
+    fn column[T](ref self, name: own String) -> Column[T] {
         Column.new()
     }
 
     // Whether a column with this name exists.
     #[compiler_builtin]
-    fn has_column(ref self, name: String) -> bool {
+    fn has_column(ref self, name: own String) -> bool {
         false
     }
 
@@ -104,7 +104,7 @@ impl DataFrame {
     // selected columns are views sharing the source's buffers (like
     // `column`); a name absent from this table is a runtime error.
     #[compiler_builtin]
-    fn select(ref self, cols: Vec[String]) -> DataFrame {
+    fn select(ref self, cols: own Vec[String]) -> DataFrame {
         DataFrame { handle_id: 0 }
     }
 
@@ -134,7 +134,7 @@ impl DataFrame {
     // cells with Rust `Display` (tracker: phase-11-stdlib-longtail.md
     // § Arrow IPC and Parquet, CSV leg).
     #[compiler_builtin]
-    fn write_csv(ref self, path: String) -> Result[Unit, IoError] with writes(FileSystem) {
+    fn write_csv(ref self, path: own String) -> Result[Unit, IoError] with writes(FileSystem) {
         Err(IoError.Other("placeholder"))
     }
 
@@ -153,7 +153,7 @@ impl DataFrame {
     // (`karac_runtime_df_read_csv`, which builds the frame's control-block
     // graph runtime-side) share the same splitter/inference semantics.
     #[compiler_builtin]
-    fn read_csv(path: String) -> Result[DataFrame, IoError] with reads(FileSystem) {
+    fn read_csv(path: own String) -> Result[DataFrame, IoError] with reads(FileSystem) {
         Err(IoError.Other("placeholder"))
     }
 
@@ -184,7 +184,7 @@ impl DataFrame {
     // runtime errors are a malformed stream or a field type outside the
     // supported set. Works under `karac build` as well as the interpreter.
     #[compiler_builtin]
-    fn from_arrow_ipc(bytes: Vec[u8]) -> DataFrame {
+    fn from_arrow_ipc(bytes: own Vec[u8]) -> DataFrame {
         DataFrame.new()
     }
 
@@ -240,7 +240,7 @@ impl LazyExpr {
     // bare `col("age")` spelling is the `std.lazy` module's free-fn
     // wrapper (`import std.lazy.{col}` — runtime/stdlib/lazy.kara).
     #[compiler_builtin]
-    fn col(name: String) -> LazyExpr {
+    fn col(name: own String) -> LazyExpr {
         LazyExpr { handle_id: 0 }
     }
 
@@ -252,7 +252,7 @@ impl LazyExpr {
     // optimized plan. Accepts i64 / f64 / String / bool; anything else
     // is a loud construction error. Free-fn wrapper in std.lazy.
     #[compiler_builtin]
-    fn lit[T](v: T) -> LazyExpr {
+    fn lit[T](v: own T) -> LazyExpr {
         LazyExpr { handle_id: 0 }
     }
 
@@ -262,17 +262,17 @@ impl LazyExpr {
     // (String vs number) is a runtime error at collect. A NULL slot makes
     // the comparison false (the row is dropped — SQL-ish semantics).
     #[compiler_builtin]
-    fn gt[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn gt[T](own self, rhs: own T) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn ge[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn ge[T](own self, rhs: own T) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn lt[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn lt[T](own self, rhs: own T) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn le[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn le[T](own self, rhs: own T) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn eq[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn eq[T](own self, rhs: own T) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn ne[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn ne[T](own self, rhs: own T) -> LazyExpr { LazyExpr { handle_id: 0 } }
 
     // Numeric arithmetic (phase-11 slice 7) — `rhs` is a numeric literal
     // or another `LazyExpr`. NULL on either side makes the result NULL;
@@ -281,24 +281,24 @@ impl LazyExpr {
     // thereafter). The bare-operator spelling (`col("a") * 2`) waits on
     // the queued operator-overload decision, like the comparisons.
     #[compiler_builtin]
-    fn add[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn add[T](own self, rhs: own T) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn sub[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn sub[T](own self, rhs: own T) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn mul[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn mul[T](own self, rhs: own T) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn div[T](self, rhs: T) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn div[T](own self, rhs: own T) -> LazyExpr { LazyExpr { handle_id: 0 } }
 
     // Boolean combinators over predicate sub-expressions. `and` / `or` /
     // `not` are Kāra KEYWORDS (the logical operators), so the methods take
     // a trailing underscore — the exact convention Polars-Python adopted
     // for the same keyword collision.
     #[compiler_builtin]
-    fn and_(self, rhs: LazyExpr) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn and_(own self, rhs: own LazyExpr) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn or_(self, rhs: LazyExpr) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn or_(own self, rhs: own LazyExpr) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn not_(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn not_(own self) -> LazyExpr { LazyExpr { handle_id: 0 } }
 
     // Aggregates (phase-11 slice 4) — only meaningful inside
     // `LazyGroupBy.agg(..)`; a loud error in filter / sort position.
@@ -308,28 +308,28 @@ impl LazyExpr {
     // numbers and Strings. Default output name is `<col>_<op>`
     // (`score_sum`); `alias_(..)` overrides it.
     #[compiler_builtin]
-    fn count(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn count(own self) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn sum(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn sum(own self) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn mean(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn mean(own self) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn min(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn min(own self) -> LazyExpr { LazyExpr { handle_id: 0 } }
     #[compiler_builtin]
-    fn max(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn max(own self) -> LazyExpr { LazyExpr { handle_id: 0 } }
 
     // Name the output column of an aggregate: `col("name").count()
     // .alias_("cnt")`. The design sketch spells this `.alias(..)`, but
     // `alias` is a Kāra KEYWORD — the same trailing-underscore convention
     // as `and_`/`or_`/`not_` applies.
     #[compiler_builtin]
-    fn alias_(self, name: String) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn alias_(own self, name: own String) -> LazyExpr { LazyExpr { handle_id: 0 } }
 
     // Sort-direction marker: `sort(vec![col("cnt").desc()])`. ONLY
     // meaningful as a `LazyFrame.sort` key — using a desc-wrapped
     // expression in a filter is a runtime error at collect.
     #[compiler_builtin]
-    fn desc(self) -> LazyExpr { LazyExpr { handle_id: 0 } }
+    fn desc(own self) -> LazyExpr { LazyExpr { handle_id: 0 } }
 }
 
 impl LazyFrame {
@@ -338,7 +338,7 @@ impl LazyFrame {
     // from the upstream selection is a runtime error AT COLLECT (plans
     // are validated when they run, not when they build).
     #[compiler_builtin]
-    fn select(self, cols: Vec[String]) -> LazyFrame {
+    fn select(own self, cols: own Vec[String]) -> LazyFrame {
         LazyFrame { handle_id: 0 }
     }
 
@@ -349,7 +349,7 @@ impl LazyFrame {
     // deterministic total order). Sort does NOT commute with limit
     // (top-k ≠ truncate-then-sort); the optimizer preserves their order.
     #[compiler_builtin]
-    fn sort(self, keys: Vec[LazyExpr]) -> LazyFrame {
+    fn sort(own self, keys: own Vec[LazyExpr]) -> LazyFrame {
         LazyFrame { handle_id: 0 }
     }
 
@@ -361,7 +361,7 @@ impl LazyFrame {
     // optimizer preserves their relative order) but do commute with
     // selects (predicates reference pre-projection columns).
     #[compiler_builtin]
-    fn filter(self, pred: LazyExpr) -> LazyFrame {
+    fn filter(own self, pred: own LazyExpr) -> LazyFrame {
         LazyFrame { handle_id: 0 }
     }
 
@@ -369,7 +369,7 @@ impl LazyFrame {
     // `n` past the table height keeps every row. Consecutive limits
     // fuse to the minimum.
     #[compiler_builtin]
-    fn limit(self, n: i64) -> LazyFrame {
+    fn limit(own self, n: i64) -> LazyFrame {
         LazyFrame { handle_id: 0 }
     }
 
@@ -381,7 +381,7 @@ impl LazyFrame {
     // first-occurrence (deterministic). The output schema is the key
     // columns followed by one column per aggregate.
     #[compiler_builtin]
-    fn group_by(self, keys: Vec[LazyExpr]) -> LazyGroupBy {
+    fn group_by(own self, keys: own Vec[LazyExpr]) -> LazyGroupBy {
         LazyGroupBy { handle_id: 0 }
     }
 
@@ -396,7 +396,7 @@ impl LazyFrame {
     // Pushdown does not yet cross a join (the scan reads every column) —
     // that is the P2 optimizer-expansion entry.
     #[compiler_builtin]
-    fn join(self, other: LazyFrame, on: Vec[String]) -> LazyFrame {
+    fn join(own self, other: own LazyFrame, on: own Vec[String]) -> LazyFrame {
         LazyFrame { handle_id: 0 }
     }
 
@@ -410,7 +410,7 @@ impl LazyFrame {
     // is a loud error). Combined with `select(names)` this is the full
     // expression-projection surface: compute here, project there.
     #[compiler_builtin]
-    fn with_columns(self, exprs: Vec[LazyExpr]) -> LazyFrame {
+    fn with_columns(own self, exprs: own Vec[LazyExpr]) -> LazyFrame {
         LazyFrame { handle_id: 0 }
     }
 
@@ -419,7 +419,7 @@ impl LazyFrame {
     // truncates them (the eager-`select` sharing semantics); a limit
     // materializes fresh truncated columns.
     #[compiler_builtin]
-    fn collect(self) -> DataFrame {
+    fn collect(own self) -> DataFrame {
         DataFrame { handle_id: 0 }
     }
 
@@ -447,7 +447,7 @@ impl LazyGroupBy {
     // `Agg`-wrapped `col(..)`, optionally `alias_`ed). Non-aggregate
     // expressions here are a runtime error at collect.
     #[compiler_builtin]
-    fn agg(self, aggs: Vec[LazyExpr]) -> LazyFrame {
+    fn agg(own self, aggs: own Vec[LazyExpr]) -> LazyFrame {
         LazyFrame { handle_id: 0 }
     }
 }

@@ -9,5 +9,5 @@
 // declaration parses.
 
 trait Not {
-    fn not(self) -> Self;
+    fn not(own self) -> Self;
 }

@@ -122,3 +122,37 @@ fn main() { println(keep(\"a\")); }
     let once = migrate(src);
     assert_eq!(migrate(&once), once);
 }
+
+#[test]
+fn keep_meaning_writes_own_on_every_bare_non_copy_position() {
+    // `all` is for placeholder bodies: what the body does says nothing.
+    let src = "\
+struct S { n: i64 }
+impl S {
+    fn take(self, s: String, n: i64) -> i64 { n }
+    fn look(ref self, s: String) -> i64 { 0 }
+}
+fn main() { println(S { n: 1 }.take(\"a\", 2)); }
+";
+    let dir = std::env::temp_dir().join(format!("karac_d5_all_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("t.kara");
+    std::fs::write(&path, src).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .env("KARAC_D5_MIGRATE", "all")
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        text.contains("fn take(own self, s: own String, n: i64)"),
+        "{text}"
+    );
+    assert!(text.contains("fn look(ref self, s: own String)"), "{text}");
+}

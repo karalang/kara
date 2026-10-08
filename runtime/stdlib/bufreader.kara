@@ -58,11 +58,11 @@ impl[R] BufReader[R] {
     // arm, which clones the underlying file descriptor and wraps it in
     // `std::io::BufReader`.
     #[compiler_builtin]
-    fn new(reader: R) -> BufReader[R] { BufReader { } }
+    fn new(reader: own R) -> BufReader[R] { BufReader { } }
 
     // Wrap `reader` with an explicit buffer capacity (bytes).
     #[compiler_builtin]
-    fn with_capacity(reader: R, cap: usize) -> BufReader[R] { BufReader { } }
+    fn with_capacity(reader: own R, cap: usize) -> BufReader[R] { BufReader { } }
 
     // Read until the next `\n` (inclusive) or EOF, appending the bytes
     // read into `buf`. Returns the byte count appended; `0` signals EOF.

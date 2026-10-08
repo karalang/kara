@@ -3,5 +3,5 @@
 // CR-202 slice 5l. Per design.md § Operator Traits.
 
 trait Rem {
-    fn rem(self, rhs: Self) -> Self;
+    fn rem(own self, rhs: own Self) -> Self;
 }

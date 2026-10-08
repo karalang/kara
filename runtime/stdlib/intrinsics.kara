@@ -44,7 +44,7 @@ pub fn align_of[T]() -> usize { 0 }
 // The placeholder body is never lowered (the call site is intercepted;
 // `#[compiler_builtin]` skips body emission).
 #[compiler_builtin]
-pub fn forget[T](value: T) {}
+pub fn forget[T](value: own T) {}
 
 // `ref_eq[T](a: ref T, b: ref T) -> bool` — REFERENCE-IDENTITY comparison for
 // `shared` types (design.md § Equality Semantics / roadmap `Core Types`). Two
@@ -99,7 +99,7 @@ pub fn ref_eq[T](a: ref T, b: ref T) -> bool { false }
 /// `src` must point to a live, correctly-aligned MMIO region readable as
 /// `T`; the read must be sound to perform (no aliasing model violation).
 #[compiler_builtin]
-pub unsafe fn volatile_read[T](src: *const T) -> T with reads(Hardware) {
+pub unsafe fn volatile_read[T](src: own *const T) -> T with reads(Hardware) {
     volatile_read(src)
 }
 
@@ -110,7 +110,7 @@ pub unsafe fn volatile_read[T](src: *const T) -> T with reads(Hardware) {
 /// `dst` must point to a live, correctly-aligned MMIO region writable as
 /// `T`; the write must be sound to perform.
 #[compiler_builtin]
-pub unsafe fn volatile_write[T](dst: *mut T, value: T) with writes(Hardware) {
+pub unsafe fn volatile_write[T](dst: own *mut T, value: own T) with writes(Hardware) {
     volatile_write(dst, value)
 }
 
@@ -151,11 +151,11 @@ pub unsafe fn volatile_write[T](dst: *mut T, value: T) with writes(Hardware) {
 /// correctly ordered. `order` must be `Acquire` / `Release` / `AcqRel` /
 /// `SeqCst` (not `Relaxed`).
 #[compiler_builtin]
-pub unsafe fn fence(order: MemoryOrdering) {}
+pub unsafe fn fence(order: own MemoryOrdering) {}
 
 /// Compiler-only fence — restrains compile-time reordering per `order` without
 /// emitting a CPU barrier. Sound within a single thread (e.g. ISR-to-main on
 /// one core), hence safe. `order` must be `Acquire` / `Release` / `AcqRel` /
 /// `SeqCst` (not `Relaxed`).
 #[compiler_builtin]
-pub fn compiler_fence(order: MemoryOrdering) {}
+pub fn compiler_fence(order: own MemoryOrdering) {}

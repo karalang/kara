@@ -130,7 +130,7 @@ impl TaskGroup {
     // group's borrow, which composes correctly with the scope-exit
     // drop's "wait for all spawned children" contract.
     #[compiler_builtin]
-    fn spawn[T](mut ref self, f: OnceFn() -> T) -> TaskHandle[T] {
+    fn spawn[T](mut ref self, f: own OnceFn() -> T) -> TaskHandle[T] {
         TaskHandle { task_id: 0 }
     }
 
@@ -178,7 +178,7 @@ impl[T] TaskHandle[T] {
     // parking is internal to the runtime helper — the kara surface
     // sees a synchronous-looking call that returns T.
     #[compiler_builtin]
-    fn join(self) -> T {
+    fn join(own self) -> T {
         // Stub body — codegen replaces via the slice 4 lowering.
         // Returns `self.task_id` cast through T-shape is not
         // representable in pure kara; the body remains a never-
@@ -248,7 +248,7 @@ impl Drop for TaskGroup {
 // lands the declaration so the call resolves to a real stdlib item;
 // the boundary-detection behavior is unchanged.
 #[compiler_builtin]
-fn spawn[T](f: OnceFn() -> T) -> TaskHandle[T] {
+fn spawn[T](f: own OnceFn() -> T) -> TaskHandle[T] {
     TaskHandle { task_id: 0 }
 }
 
@@ -267,7 +267,7 @@ fn spawn[T](f: OnceFn() -> T) -> TaskHandle[T] {
 // in the interpreter (`eval_collect_all_vec`) and in codegen. The stub
 // body below only satisfies the declared return type; it never runs.
 #[compiler_builtin]
-fn collect_all_vec[T, E](fs: Vec[Fn() -> Result[T, E]]) -> Vec[Result[T, E]] {
+fn collect_all_vec[T, E](fs: own Vec[Fn() -> Result[T, E]]) -> Vec[Result[T, E]] {
     Vec.new()
 }
 

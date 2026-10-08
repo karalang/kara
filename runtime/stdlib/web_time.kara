@@ -60,7 +60,7 @@ impl Duration {
 // registration — so the channel stays open after `after` returns (the
 // local `tx` dropping here only releases its own reference), and the host
 // owns the surviving sender, dropping it once it has fired the `()`.
-pub fn after(duration: Duration) -> Receiver[()] with writes(Timer) {
+pub fn after(duration: own Duration) -> Receiver[()] with writes(Timer) {
     // Annotate the destructure so the channel element type is `()`. `after`
     // never performs a `send`/`recv` itself (the host fires the send), so
     // there is no downstream channel op to infer the element from — and an
@@ -116,7 +116,7 @@ pub fn animation_frames() -> Receiver[()] with writes(Timer) {
 // registration, which owns it for the interval's lifetime. Same `--features
 // wasm-threads` requirement as `after`/`animation_frames` (a sequential build
 // has no thread to park in `recv` while the host event loop runs the timer).
-pub fn every(duration: Duration) -> Receiver[()] with writes(Timer) {
+pub fn every(duration: own Duration) -> Receiver[()] with writes(Timer) {
     let (tx, rx): (Sender[()], Receiver[()]) = Channel.new();
     tx.__schedule_every(duration.as_ms());
     rx

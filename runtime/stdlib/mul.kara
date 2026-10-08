@@ -3,5 +3,5 @@
 // CR-202 slice 5j. Per design.md § Operator Traits.
 
 trait Mul {
-    fn mul(self, rhs: Self) -> Self;
+    fn mul(own self, rhs: own Self) -> Self;
 }

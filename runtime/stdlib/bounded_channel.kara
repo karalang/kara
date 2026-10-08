@@ -48,7 +48,7 @@ impl[T] BoundedChannel[T] {
     // governing a `send` that hits the bound. Dispatched through
     // `eval_call.rs`'s `"BoundedChannel.new"` path-string arm.
     #[compiler_builtin]
-    fn new(capacity: i64, on_full: OnFull) -> BoundedChannel[T] {
+    fn new(capacity: i64, on_full: own OnFull) -> BoundedChannel[T] {
         BoundedChannel { handle_id: 0 }
     }
 
@@ -56,7 +56,7 @@ impl[T] BoundedChannel[T] {
     // the buffer is at capacity (immediately for `FailFast`; also for
     // `Block` under v1's collapsed single-threaded semantics).
     #[compiler_builtin]
-    fn send(ref self, value: T) -> Result[Unit, ChannelError] {
+    fn send(ref self, value: own T) -> Result[Unit, ChannelError] {
         Err(ChannelError.Full)
     }
 

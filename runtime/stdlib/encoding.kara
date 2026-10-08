@@ -25,7 +25,7 @@ impl Base64 {
     fn encode_url_safe(bytes: Slice[u8]) -> String { "" }
 
     #[compiler_builtin]
-    fn decode(s: String) -> Result[Vec[u8], DecodeError] {
+    fn decode(s: own String) -> Result[Vec[u8], DecodeError] {
         Err(DecodeError { message: "" })
     }
 }
@@ -38,17 +38,17 @@ impl Hex {
     fn encode_upper(bytes: Slice[u8]) -> String { "" }
 
     #[compiler_builtin]
-    fn decode(s: String) -> Result[Vec[u8], DecodeError] {
+    fn decode(s: own String) -> Result[Vec[u8], DecodeError] {
         Err(DecodeError { message: "" })
     }
 }
 
 impl Url {
     #[compiler_builtin]
-    fn encode(s: String) -> String { "" }
+    fn encode(s: own String) -> String { "" }
 
     #[compiler_builtin]
-    fn decode(s: String) -> Result[String, DecodeError] {
+    fn decode(s: own String) -> Result[String, DecodeError] {
         Err(DecodeError { message: "" })
     }
 }

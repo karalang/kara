@@ -220,8 +220,37 @@ impl<'a> OwnershipChecker<'a> {
 }
 
 /// The `own ` insertions that keep `program`'s meaning across D5.
-pub fn d5_own_param_edits(program: &Program, typecheck_result: &TypeCheckResult) -> Vec<TextEdit> {
+///
+/// With `keep_meaning`, every bare non-`Copy` position gets `own` whatever
+/// its body does: for signatures whose body is a placeholder (the baked
+/// stdlib's compiler builtins), where the body says nothing about what the
+/// real implementation keeps.
+pub fn d5_own_param_edits(
+    program: &Program,
+    typecheck_result: &TypeCheckResult,
+    keep_meaning: bool,
+) -> Vec<TextEdit> {
     let decls = decls(program);
+    if keep_meaning {
+        let checker = OwnershipChecker::new(program, typecheck_result);
+        let mut edits: Vec<TextEdit> = Vec::new();
+        let mut seen = FxHashSet::default();
+        for d in &decls {
+            for (i, offset) in bare_positions(d) {
+                let copy = i != SELF_IDX
+                    && checker.is_copy_type(&checker.lower_type_for_ownership(&d.params[i].ty));
+                if !copy && seen.insert(offset) {
+                    edits.push(TextEdit {
+                        offset,
+                        length: 0,
+                        replacement: "own ".to_string(),
+                    });
+                }
+            }
+        }
+        edits.sort_by_key(|e| e.offset);
+        return edits;
+    }
     let mut groups: FxHashMap<&str, Vec<&str>> = FxHashMap::default();
     for d in &decls {
         if let Some(g) = &d.group {

@@ -123,17 +123,17 @@ impl Arg {
         Arg { is_required: false, help_text: "" }
     }
 
-    fn required(self) -> Arg {
+    fn required(own self) -> Arg {
         Arg { is_required: true, help_text: self.help_text }
     }
 
-    fn help(self, h: String) -> Arg {
+    fn help(own self, h: own String) -> Arg {
         Arg { is_required: self.is_required, help_text: h }
     }
 }
 
 impl Parser {
-    fn new(name: String) -> Parser {
+    fn new(name: own String) -> Parser {
         Parser {
             program_name: name,
             about_text: "",
@@ -144,7 +144,7 @@ impl Parser {
         }
     }
 
-    fn about(self, description: String) -> Parser {
+    fn about(own self, description: own String) -> Parser {
         Parser {
             program_name: self.program_name,
             about_text: description,
@@ -155,7 +155,7 @@ impl Parser {
         }
     }
 
-    fn version(self, ver: String) -> Parser {
+    fn version(own self, ver: own String) -> Parser {
         Parser {
             program_name: self.program_name,
             about_text: self.about_text,
@@ -166,7 +166,7 @@ impl Parser {
         }
     }
 
-    fn arg(self, name: String, a: Arg) -> Parser {
+    fn arg(own self, name: own String, a: own Arg) -> Parser {
         let mut new_args = self.args;
         new_args.push(ArgEntry {
             name: name,
@@ -183,7 +183,7 @@ impl Parser {
         }
     }
 
-    fn flag(self, name: String, short: char, help: String) -> Parser {
+    fn flag(own self, name: own String, short: char, help: own String) -> Parser {
         let mut new_flags = self.flags;
         new_flags.push(FlagEntry {
             name: name,
@@ -201,7 +201,7 @@ impl Parser {
         }
     }
 
-    fn subcommand(self, name: String, sub_parser: Parser) -> Parser {
+    fn subcommand(own self, name: own String, sub_parser: own Parser) -> Parser {
         let mut new_subs = self.subcommands;
         new_subs.push(Subcommand {
             name: name,
@@ -571,7 +571,7 @@ impl Parser {
 }
 
 impl Args {
-    fn get_string(ref self, name: String) -> Result[String, CliError] {
+    fn get_string(ref self, name: own String) -> Result[String, CliError] {
         let mut i: i64 = 0;
         while i < self.values.len() {
             match self.values.get(i) {
@@ -587,7 +587,7 @@ impl Args {
         Err(CliError { message: "argument not found" })
     }
 
-    fn get_flag(ref self, name: String) -> bool {
+    fn get_flag(ref self, name: own String) -> bool {
         let mut i: i64 = 0;
         while i < self.flags_set.len() {
             match self.flags_set.get(i) {
@@ -614,7 +614,7 @@ impl Args {
 }
 
 impl SubcommandResult {
-    fn get_string(ref self, name: String) -> Result[String, CliError] {
+    fn get_string(ref self, name: own String) -> Result[String, CliError] {
         let mut i: i64 = 0;
         while i < self.values.len() {
             match self.values.get(i) {
@@ -630,7 +630,7 @@ impl SubcommandResult {
         Err(CliError { message: "subcommand argument not found" })
     }
 
-    fn get_flag(ref self, name: String) -> bool {
+    fn get_flag(ref self, name: own String) -> bool {
         let mut i: i64 = 0;
         while i < self.flags_set.len() {
             match self.flags_set.get(i) {

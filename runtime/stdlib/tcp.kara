@@ -140,7 +140,7 @@ impl TcpListener {
     // before returning so smoke tests can read back the assigned
     // ephemeral port.
     #[compiler_builtin]
-    fn bind(addr: String) -> Result[TcpListener, TcpError] {
+    fn bind(addr: own String) -> Result[TcpListener, TcpError] {
         Result.Err(TcpError.Other(-1))
     }
 
@@ -179,7 +179,7 @@ impl TcpStream {
     // a fatal failure is phase-8 line 74. Stub body never executes —
     // codegen replaces via `lower_tcp_stream_connect`.
     #[compiler_builtin]
-    fn connect(addr: String) -> Result[TcpStream, TcpError]
+    fn connect(addr: own String) -> Result[TcpStream, TcpError]
         with sends(Network) receives(Network)
     {
         Result.Err(TcpError.Other(-1))

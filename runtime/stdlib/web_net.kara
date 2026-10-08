@@ -19,6 +19,6 @@
 // `std.http` (`Result[Response, HttpError]`) so SSR/hydration code can
 // share response-handling paths across native and browser targets.
 
-fn fetch(url: String) -> Result[Response, HttpError] with sends(Network) receives(Network) {
+fn fetch(url: own String) -> Result[Response, HttpError] with sends(Network) receives(Network) {
     Err(HttpError { message: "std.web.net.fetch: host-call lowering not wired yet (phase-10 `host fn`)" })
 }

@@ -145,14 +145,14 @@ impl ProtoBuf {
 
     // Encode a length-delimited field: a varint byte count followed by the
     // raw bytes. The framing for `string` / `bytes` / embedded messages.
-    fn encode_len_delim(data: Vec[u8]) -> Vec[u8] {
+    fn encode_len_delim(data: own Vec[u8]) -> Vec[u8] {
         let mut out = ProtoBuf.encode_varint(data.len() as u64);
         out.extend_from_slice(data);
         out
     }
 
     // Encode a UTF-8 string as a length-delimited field.
-    fn encode_string(s: String) -> Vec[u8] {
+    fn encode_string(s: own String) -> Vec[u8] {
         let b = s.bytes();
         let mut out = ProtoBuf.encode_varint(b.len() as u64);
         out.extend_from_slice(b);
@@ -202,7 +202,7 @@ struct ProtoReader {
 
 impl ProtoReader {
     // Wrap an encoded byte buffer at offset 0.
-    fn new(bytes: Vec[u8]) -> ProtoReader {
+    fn new(bytes: own Vec[u8]) -> ProtoReader {
         ProtoReader { bytes: bytes, pos: 0 }
     }
 
@@ -804,7 +804,7 @@ comptime fn proto_index_to_enum(idx: ref String, en: ref String, vnames: ref Vec
 }
 
 // Emit `impl T { encode / decode / merge }` for a `#[derive(Message)]` struct.
-comptime fn derive_message(comptime T: Type) -> Vec[Item] {
+comptime fn derive_message(comptime T: own Type) -> Vec[Item] {
     let n = T.name();
     // #[derive(Message)] applies to a struct (a proto3 message). A proto3 enum
     // is a FIELD type, not a top-level message — it is encoded as a varint of

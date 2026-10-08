@@ -115,7 +115,7 @@ struct ExitStatus {
 }
 
 impl Command {
-    fn new(program: String) -> Command {
+    fn new(program: own String) -> Command {
         Command {
             program: program,
             cmd_args: Vec.new(),
@@ -126,7 +126,7 @@ impl Command {
         }
     }
 
-    fn arg(self, a: String) -> Command {
+    fn arg(own self, a: own String) -> Command {
         let mut new_args = self.cmd_args;
         new_args.push(a);
         Command {
@@ -139,7 +139,7 @@ impl Command {
         }
     }
 
-    fn env(self, key: String, value: String) -> Command {
+    fn env(own self, key: own String, value: own String) -> Command {
         let mut new_env = self.cmd_env;
         new_env.push(EnvVar { key: key, value: value });
         Command {
@@ -153,7 +153,7 @@ impl Command {
     }
 
     // Redirect the child's standard input. Default `Stdio.Inherit`.
-    fn stdin(self, cfg: Stdio) -> Command {
+    fn stdin(own self, cfg: own Stdio) -> Command {
         Command {
             program: self.program,
             cmd_args: self.cmd_args,
@@ -166,7 +166,7 @@ impl Command {
 
     // Redirect the child's standard output. Default `Stdio.Inherit`;
     // `Stdio.Null` discards it (no terminal noise from the child).
-    fn stdout(self, cfg: Stdio) -> Command {
+    fn stdout(own self, cfg: own Stdio) -> Command {
         Command {
             program: self.program,
             cmd_args: self.cmd_args,
@@ -178,7 +178,7 @@ impl Command {
     }
 
     // Redirect the child's standard error. Default `Stdio.Inherit`.
-    fn stderr(self, cfg: Stdio) -> Command {
+    fn stderr(own self, cfg: own Stdio) -> Command {
         Command {
             program: self.program,
             cmd_args: self.cmd_args,
@@ -281,7 +281,7 @@ impl ChildStdin {
     // parks the calling thread when the OS pipe buffer is full until
     // the child drains it.
     #[compiler_builtin]
-    fn write(ref self, data: String) -> Result[Unit, IoError] blocks {
+    fn write(ref self, data: own String) -> Result[Unit, IoError] blocks {
         Err(IoError.NotFound)
     }
 

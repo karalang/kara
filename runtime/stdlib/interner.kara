@@ -82,7 +82,7 @@ impl Interner {
     // as `ref String`). A handle minted by a different interner, or one
     // out of range, degrades to the empty string.
     #[compiler_builtin]
-    fn resolve(ref self, sym: Symbol) -> ref String {
+    fn resolve(ref self, sym: own Symbol) -> ref String {
         self.resolve(sym)
     }
 

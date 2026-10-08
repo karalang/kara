@@ -40,14 +40,14 @@ impl Ordering {
 // other's buffer — fixed in both the non-generic and generic/monomorphized
 // paths (B-2026-07-08-6).
 
-pub fn min[T: Ord](a: T, b: T) -> T {
+pub fn min[T: Ord](a: own T, b: own T) -> T {
     match a.cmp(b) {
         Ordering.Greater => b,
         _ => a,
     }
 }
 
-pub fn max[T: Ord](a: T, b: T) -> T {
+pub fn max[T: Ord](a: own T, b: own T) -> T {
     match a.cmp(b) {
         Ordering.Less => b,
         _ => a,
@@ -57,7 +57,7 @@ pub fn max[T: Ord](a: T, b: T) -> T {
 // Clamp `value` into the inclusive range `[low, high]`. Caller must pass
 // `low <= high`; when `low > high` the low bound wins (value is pinned to
 // `low`), matching the "clamp to the nearer active bound" reading.
-pub fn clamp[T: Ord](value: T, low: T, high: T) -> T {
+pub fn clamp[T: Ord](value: own T, low: own T, high: own T) -> T {
     match value.cmp(low) {
         Ordering.Less => low,
         _ => match value.cmp(high) {

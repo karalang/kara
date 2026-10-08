@@ -155,7 +155,7 @@ impl TlsListener {
     // that). Stub body never executes — codegen replaces via
     // `lower_tls_listener_bind_tls` (see `src/codegen/tls.rs`).
     #[compiler_builtin]
-    fn bind_tls(addr: String, cert_pem: String, key_pem: String) -> Result[TlsListener, TlsError] {
+    fn bind_tls(addr: own String, cert_pem: own String, key_pem: own String) -> Result[TlsListener, TlsError] {
         Result.Err(TlsError.Protocol(-1))
     }
 
@@ -223,7 +223,7 @@ impl TlsStream {
     // stay `Protocol(-1)`. Stub body never executes — codegen replaces
     // via `lower_tls_stream_connect`.
     #[compiler_builtin]
-    fn connect(addr: String, server_name: String, roots_pem: String) -> Result[TlsStream, TlsError]
+    fn connect(addr: own String, server_name: own String, roots_pem: own String) -> Result[TlsStream, TlsError]
         with sends(Network) receives(Network)
     {
         Result.Err(TlsError.Protocol(-1))

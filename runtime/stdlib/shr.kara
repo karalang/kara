@@ -4,5 +4,5 @@
 // rhs = Self per v1 homogeneity rule.
 
 trait Shr {
-    fn shr(self, rhs: Self) -> Self;
+    fn shr(own self, rhs: own Self) -> Self;
 }

@@ -50,19 +50,19 @@ impl[T, ...S] Tensor[T, S] {
     // static shape `S` comes from the binding annotation / call-site
     // inference: `let a: Tensor[f64, [3, 4]] = Tensor.zeros([3, 4]);`.
     #[compiler_builtin]
-    fn zeros(dims: Vec[i64]) -> Tensor[T, S] {
+    fn zeros(dims: own Vec[i64]) -> Tensor[T, S] {
         Tensor { handle_id: 0 }
     }
 
     // Fresh tensor with the given runtime dims, one-filled.
     #[compiler_builtin]
-    fn ones(dims: Vec[i64]) -> Tensor[T, S] {
+    fn ones(dims: own Vec[i64]) -> Tensor[T, S] {
         Tensor { handle_id: 0 }
     }
 
     // Typed fill — every element is a copy of `value`.
     #[compiler_builtin]
-    fn full(dims: Vec[i64], value: T) -> Tensor[T, S] {
+    fn full(dims: own Vec[i64], value: own T) -> Tensor[T, S] {
         Tensor { handle_id: 0 }
     }
 
@@ -78,7 +78,7 @@ impl[T, ...S] Tensor[T, S] {
     // (`eval_tensor_from`) intercept on the call syntax before this
     // signature is consulted.
     #[compiler_builtin]
-    fn from[D](data: D) -> Tensor[T, S] {
+    fn from[D](data: own D) -> Tensor[T, S] {
         Tensor { handle_id: 0 }
     }
 
@@ -125,7 +125,7 @@ impl[T, ...S] Tensor[T, S] {
     // extent the stream carries. Element types convert as for `Column`
     // (numeric widths freely, in both directions).
     #[compiler_builtin]
-    fn from_arrow_ipc(bytes: Vec[u8]) -> Tensor[T, S] {
+    fn from_arrow_ipc(bytes: own Vec[u8]) -> Tensor[T, S] {
         Tensor { handle_id: 0 }
     }
 
@@ -162,7 +162,7 @@ impl[T, ...S] Tensor[T, S] {
     // entries become `?` dims. Element counts must match — checked at
     // compile time when fully static, at runtime otherwise.
     #[compiler_builtin]
-    fn reshape(ref self, dims: Vec[i64]) -> Tensor[T, S] {
+    fn reshape(ref self, dims: own Vec[i64]) -> Tensor[T, S] {
         Tensor { handle_id: 0 }
     }
 
@@ -172,7 +172,7 @@ impl[T, ...S] Tensor[T, S] {
     // permutation of `0..rank` (checked at compile time); static dims
     // — including `?` slots — move with their axis.
     #[compiler_builtin]
-    fn permute(ref self, axes: Vec[i64]) -> Tensor[T, S] {
+    fn permute(ref self, axes: own Vec[i64]) -> Tensor[T, S] {
         Tensor { handle_id: 0 }
     }
 
@@ -240,7 +240,7 @@ impl[T, ...S] Tensor[T, S] {
     // `A`/`T`, and `karac build` inlines the closure body over a POD
     // element/accumulator (heap `A`/`T` is a follow-on — see `Column.fold`).
     #[compiler_builtin]
-    fn fold[A](ref self, init: A, f: Fn(A, T) -> A) -> A {
+    fn fold[A](ref self, init: own A, f: own Fn(A, T) -> A) -> A {
         loop {}
     }
 
@@ -250,7 +250,7 @@ impl[T, ...S] Tensor[T, S] {
     // native path inlines the closure body (POD + inline-literal only). `other`
     // is `ref` — READ, not consumed (so it may be reused after).
     #[compiler_builtin]
-    fn zip_with(ref self, other: ref Tensor[T, S], f: Fn(T, T) -> T) -> Tensor[T, S] {
+    fn zip_with(ref self, other: ref Tensor[T, S], f: own Fn(T, T) -> T) -> Tensor[T, S] {
         loop {}
     }
 
@@ -378,7 +378,7 @@ impl[T, ...S] Reduce[T] for Tensor[T, S] {
     }
 
     #[compiler_builtin]
-    fn fold[A](ref self, init: A, f: Fn(A, T) -> A) -> A {
+    fn fold[A](ref self, init: own A, f: own Fn(A, T) -> A) -> A {
         loop {}
     }
 }
@@ -389,12 +389,12 @@ impl[T, ...S] Reduce[T] for Tensor[T, S] {
 // both route through the existing intercepts (the bodies below never run).
 impl[T, ...S] ElementwiseMap[T] for Tensor[T, S] {
     #[compiler_builtin]
-    fn map(ref self, f: Fn(T) -> T) -> Self {
+    fn map(ref self, f: own Fn(T) -> T) -> Self {
         loop {}
     }
 
     #[compiler_builtin]
-    fn zip_with(ref self, other: ref Self, f: Fn(T, T) -> T) -> Self {
+    fn zip_with(ref self, other: ref Self, f: own Fn(T, T) -> T) -> Self {
         loop {}
     }
 }

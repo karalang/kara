@@ -60,7 +60,7 @@ impl Json {
     // Parse a JSON-encoded `String` into a `Json` tree. Returns
     // `Err(JsonError { line, column, message })` on syntax errors.
     #[compiler_builtin]
-    fn parse(s: String) -> Result[Json, JsonError] {
+    fn parse(s: own String) -> Result[Json, JsonError] {
         Err(JsonError { line: 0, column: 0, message: "" })
     }
 
@@ -70,7 +70,7 @@ impl Json {
     // output and canonical-form (alphabetized) output are post-v1
     // additives.
     #[compiler_builtin]
-    fn stringify(self) -> String { "" }
+    fn stringify(own self) -> String { "" }
 }
 
 // Manual-impl-only in v1 per locked design (v); `#[derive(ToJson)]`
@@ -78,7 +78,7 @@ impl Json {
 // trait is intentionally minimal — `to_json(self) -> Json` — so user
 // impls can construct any of the six `Json` variants directly.
 pub trait ToJson {
-    fn to_json(self) -> Json;
+    fn to_json(own self) -> Json;
 }
 
 // Peer trait for typed deserialization. Returns `Result[Self, JsonError]`
@@ -86,5 +86,5 @@ pub trait ToJson {
 // parse-time errors. v1 ships builtin impls for the common scalars and
 // collections; user types get manual impls.
 pub trait FromJson {
-    fn from_json(j: Json) -> Result[Self, JsonError];
+    fn from_json(j: own Json) -> Result[Self, JsonError];
 }

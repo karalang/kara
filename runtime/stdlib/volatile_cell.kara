@@ -43,7 +43,7 @@ pub struct VolatileCell[=T: Copy] {
 
 impl[T: Copy] VolatileCell[T] {
     /// Wrap `value` in a `VolatileCell`.
-    pub fn new(value: T) -> VolatileCell[T] {
+    pub fn new(value: own T) -> VolatileCell[T] {
         VolatileCell { value: value }
     }
 
@@ -56,7 +56,7 @@ impl[T: Copy] VolatileCell[T] {
     }
 
     /// Volatile-write `value` into the cell.
-    pub fn write(mut ref self, value: T) with writes(Hardware) {
+    pub fn write(mut ref self, value: own T) with writes(Hardware) {
         // Safety: `self.value` is a live, aligned field of the receiver for the
         // duration of the write; `T: Copy` makes the byte-store sound.
         unsafe { volatile_write(ptr.mut(self.value), value) }

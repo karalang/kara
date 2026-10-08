@@ -20,7 +20,7 @@ pub fn swap[T](a: mut ref T, b: mut ref T) {}
 // stub body just satisfies the return-type shape — the real move-without-
 // drop is the call-site intercept.
 #[compiler_builtin]
-pub fn replace[T](dest: mut ref T, value: T) -> T { value }
+pub fn replace[T](dest: mut ref T, value: own T) -> T { value }
 
 // Move the value out of `*dest`, leaving `T.default()` in its place, and
 // return the moved-out value. The dual of `replace` with the incoming value

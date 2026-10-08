@@ -23,19 +23,19 @@ struct Match {
 
 impl Regex {
     #[compiler_builtin]
-    fn compile(pattern: String) -> Result[Regex, RegexError] {
+    fn compile(pattern: own String) -> Result[Regex, RegexError] {
         Err(RegexError { message: "" })
     }
 
     #[compiler_builtin]
-    fn is_match(ref self, s: String) -> bool { false }
+    fn is_match(ref self, s: own String) -> bool { false }
 
     #[compiler_builtin]
-    fn find(ref self, s: String) -> Option[Match] { None }
+    fn find(ref self, s: own String) -> Option[Match] { None }
 
     #[compiler_builtin]
-    fn find_all(ref self, s: String) -> Vec[Match] { Vec.new() }
+    fn find_all(ref self, s: own String) -> Vec[Match] { Vec.new() }
 
     #[compiler_builtin]
-    fn replace_all(ref self, s: String, replacement: String) -> String { "" }
+    fn replace_all(ref self, s: own String, replacement: own String) -> String { "" }
 }
