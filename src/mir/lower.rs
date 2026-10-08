@@ -1043,6 +1043,8 @@ struct Bx<'l, 'a> {
     /// The next closure literal lowered escapes (it is stored as a
     /// function value), so it captures by move.
     closure_escapes: bool,
+    /// The captures a closure body assigns to, found with its moves.
+    assigned_caps: std::cell::RefCell<FxHashSet<SymbolId>>,
     /// Types for expressions the checker left untyped, taken from where
     /// they are used (`v.push(None)` gives `None` the element type).
     ty_hints: FxHashMap<NodeId, Ty>,
@@ -1082,6 +1084,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_count: 0,
             closure_ref_params: false,
             closure_escapes: false,
+            assigned_caps: Default::default(),
             ty_hints: FxHashMap::default(),
             par_acc: None,
             old_vals: FxHashMap::default(),
@@ -7627,15 +7630,33 @@ impl<'l, 'a> Bx<'l, 'a> {
         })
     }
 
+    /// Record the capture an assignment's target is rooted at.
+    fn note_assigned(&self, target: &Expr, caps: &[SymbolId]) {
+        let mut e = target;
+        while let ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. }
+        | ExprKind::Index { object, .. } = &e.kind
+        {
+            e = object;
+        }
+        if let Some(Res::Local(sym)) = self.lcx.res.get(&e.id) {
+            if caps.contains(sym) {
+                self.assigned_caps.borrow_mut().insert(*sym);
+            }
+        }
+    }
+
     fn mv_block(&self, b: &'a Block, ctx: bool, caps: &[SymbolId], out: &mut FxHashSet<SymbolId>) {
         for st in &b.stmts {
             match &st.kind {
                 StmtKind::Let { value, .. } => self.mv_expr(value, true, caps, out),
                 StmtKind::Assign { target, value } => {
+                    self.note_assigned(target, caps);
                     self.mv_expr(target, false, caps, out);
                     self.mv_expr(value, true, caps, out);
                 }
                 StmtKind::CompoundAssign { target, value, .. } => {
+                    self.note_assigned(target, caps);
                     self.mv_expr(target, false, caps, out);
                     self.mv_expr(value, false, caps, out);
                 }
@@ -7710,6 +7731,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     None => false,
                 };
+                // A method that writes its receiver mutates the capture
+                // it is rooted at.
+                let writes = match def {
+                    Some(d) => matches!(self.lcx.fns[&d].f.self_param, Some(SelfParam::MutRef)),
+                    None => {
+                        crate::ast::is_mutating_collection_method(method)
+                            || matches!(method.as_str(), "push_str" | "set" | "entry")
+                    }
+                };
+                if writes {
+                    self.note_assigned(object, caps);
+                }
                 go(object, recv_owned, out);
                 let stores = matches!(
                     method.as_str(),
@@ -7833,7 +7866,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         let mut caps = Vec::new();
         let mut ops = Vec::new();
         let captured = self.closure_captures(body);
+        self.assigned_caps.borrow_mut().clear();
         let moved = self.moved_captures(body, &captured);
+        let assigned = std::mem::take(&mut *self.assigned_caps.borrow_mut());
         for sym in captured {
             let place = match self.locals.get(&sym) {
                 Some(&l) => Place::local(l),
@@ -7866,6 +7901,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             let cm = match mode {
                 _ if escapes => CapMode::Value,
                 Some(OwnershipMode::MutRef) => CapMode::Mut,
+                // A capture the body assigns to is lent by `mut ref` (§9.1).
+                _ if !explicit && assigned.contains(&sym) && !moved.contains(&sym) => CapMode::Mut,
                 Some(OwnershipMode::Own) => CapMode::Value,
                 _ if self.is_copy(t) => CapMode::Value,
                 None | Some(OwnershipMode::Ref) if (once || moved.contains(&sym)) && !explicit => {
@@ -8541,11 +8578,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // (docs/library/collections.md).
                     PendingRecv::Ready(self.expr_operand(object)?)
                 } else {
-                    // `Atomic` and `Mutex` methods write through a shared
-                    // borrow (core semantics §6.3).
+                    // `Atomic`, `Mutex` and the library cells write through
+                    // a shared borrow (core semantics §6.3).
                     let interior = {
                         let shown = self.tys().display(base);
-                        shown.starts_with("Atomic") || shown.starts_with("Mutex")
+                        ["Atomic", "Mutex", "Arena", "OnceLock", "OnceCell"]
+                            .iter()
+                            .any(|c| shown.starts_with(c))
                     };
                     let mutates = !interior
                         && (crate::ast::is_mutating_collection_method(method)
@@ -9619,6 +9658,31 @@ fn main() {
             run_source(src),
             Ok((
                 "5 4 4 3 6 2
+"
+                .to_string(),
+                Some(0)
+            ))
+        );
+    }
+
+    /// A capture the closure body assigns to, or writes through a
+    /// mutating method, is lent by `mut ref` (core semantics §9.1).
+    #[test]
+    fn closure_mutating_a_capture_borrows_it_mutably() {
+        let src = r#"
+fn main() {
+    let mut log: Vec[i64] = [];
+    let mut n = 0;
+    let mut add = |x: i64| { log.push(x); n += x; };
+    add(2);
+    add(5);
+    println(f"{log.len()} {n}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok((
+                "2 7
 "
                 .to_string(),
                 Some(0)
