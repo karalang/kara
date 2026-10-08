@@ -8531,6 +8531,18 @@ pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
     ))
 }
 
+/// [`run_source`], writing the program's output to the process's stdout
+/// and stderr as it runs (`karac __mir-run`).
+pub fn run_source_streaming(src: &str) -> Result<interp::RunResult, String> {
+    let lowered = build_source(src)?;
+    Ok(interp::run_streaming(
+        &lowered.program,
+        &lowered.tys,
+        "main",
+        vec![],
+    ))
+}
+
 /// Check one source file, build its MIR and elaborate drops; or the first
 /// stage that refused it.
 pub fn build_source(src: &str) -> Result<Lowered, String> {

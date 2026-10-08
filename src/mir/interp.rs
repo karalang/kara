@@ -252,7 +252,7 @@ const MAX_STEPS: u64 = 4_000_000_000;
 /// Runs `entry` with `args`, validating every body first, and records
 /// the [`Event`] trace.
 pub fn run(program: &Program, tys: &TyInterner, entry: &str, args: Vec<Value>) -> RunResult {
-    run_with(program, tys, entry, args, true)
+    run_with(program, tys, entry, args, true, false)
 }
 
 /// [`run`], without the trace: [`RunResult::events`] stays empty.
@@ -262,7 +262,19 @@ pub fn run_untraced(
     entry: &str,
     args: Vec<Value>,
 ) -> RunResult {
-    run_with(program, tys, entry, args, false)
+    run_with(program, tys, entry, args, false, false)
+}
+
+/// [`run_untraced`], writing the program's stdout and stderr to the
+/// process's as it goes, so what printed survives an abort;
+/// [`RunResult::output`] and [`RunResult::stderr`] stay empty.
+pub fn run_streaming(
+    program: &Program,
+    tys: &TyInterner,
+    entry: &str,
+    args: Vec<Value>,
+) -> RunResult {
+    run_with(program, tys, entry, args, false, true)
 }
 
 fn run_with(
@@ -271,6 +283,7 @@ fn run_with(
     entry: &str,
     args: Vec<Value>,
     trace: bool,
+    stream: bool,
 ) -> RunResult {
     let mut problems = Vec::new();
     for (name, body) in &program.bodies {
@@ -286,6 +299,7 @@ fn run_with(
         heap: Vec::new(),
         events: Vec::new(),
         trace,
+        stream,
         needs_drop: Default::default(),
         output: String::new(),
         stderr: String::new(),
@@ -434,6 +448,8 @@ struct Interp<'a> {
     /// event per statement is most of the time and memory a long program
     /// spends.
     trace: bool,
+    /// Write output to the process's stdout and stderr as it happens.
+    stream: bool,
     /// `needs_drop` per type, asked on every write: the type context
     /// walks the type each time.
     needs_drop: std::cell::RefCell<rustc_hash::FxHashMap<Ty, bool>>,
@@ -519,16 +535,11 @@ impl<'a> Interp<'a> {
             ("println" | "print" | "eprintln" | "eprint", "") => {
                 // The arguments print one after another (an f-string's
                 // parts); a reference prints what it points to.
-                let text = self.show(&args, arg_tys)?;
-                let out = if name.starts_with('e') {
-                    &mut self.stderr
-                } else {
-                    &mut self.output
-                };
-                out.push_str(&text);
+                let mut text = self.show(&args, arg_tys)?;
                 if name.ends_with("ln") {
-                    out.push('\n');
+                    text.push('\n');
                 }
+                self.write_out(name.starts_with('e'), &text);
                 Ok(Value::Unit)
             }
             ("sleep_ms", "") => {
@@ -610,6 +621,7 @@ impl<'a> Interp<'a> {
                     (TyKind::Int(IntTy::U64 | IntTy::Usize), Value::Int(i)) => {
                         fs.apply_uint(*i as u64)
                     }
+                    (TyKind::Int(IntTy::I128), Value::Int(i)) => fs.apply_int128(*i),
                     (_, Value::Int(i)) => fs.apply_int(*i as i64),
                     (_, Value::Float(f)) => fs.apply_float(*f),
                     _ => {
@@ -3814,12 +3826,28 @@ impl<'a> Interp<'a> {
                     return err("Result.Err has no payload");
                 };
                 let text = self.display_typed(&fs[0], et)?;
-                self.stderr.push_str(&format!("Error: {text}\n"));
+                self.write_out(true, &format!("Error: {text}\n"));
                 done = Outcome::Exited(1);
             }
         }
         self.drop_value(v, ret)?;
         Ok(done)
+    }
+
+    /// `text` onto the program's stdout, or its stderr when `err`.
+    fn write_out(&mut self, err: bool, text: &str) {
+        use std::io::Write;
+        match (self.stream, err) {
+            (true, false) => {
+                let _ = std::io::stdout().write_all(text.as_bytes());
+            }
+            (true, true) => {
+                let _ = std::io::stdout().flush();
+                let _ = std::io::stderr().write_all(text.as_bytes());
+            }
+            (false, false) => self.output.push_str(text),
+            (false, true) => self.stderr.push_str(text),
+        }
     }
 
     fn leaks(&self) -> Option<String> {

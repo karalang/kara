@@ -105,7 +105,7 @@ pub fn parse_args(args: &[String]) -> Command {
             // by recursion, so it runs on a thread with room for that.
             let result = std::thread::Builder::new()
                 .stack_size(1 << 30)
-                .spawn(move || crate::mir::lower::run_source(&src))
+                .spawn(move || crate::mir::lower::run_source_streaming(&src))
                 .expect("failed to spawn the MIR interpreter thread")
                 .join()
                 .unwrap_or_else(|p| std::panic::resume_unwind(p));
