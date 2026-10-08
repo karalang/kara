@@ -64,6 +64,7 @@ pub fn lower_program(
     let mut lcx = Lcx {
         tc,
         ref_bindings: &program.ref_binding_spans,
+        escaping_fns: &program.escaping_fn_types,
         defs,
         res,
         node_types,
@@ -164,6 +165,8 @@ struct Lcx<'a> {
     tc: &'a TypeCheckResult,
     /// `ref name` pattern bindings, by the binding's span.
     ref_bindings: &'a FxHashSet<SpanKey>,
+    /// The types of `escaping Fn(..)` parameters, by span.
+    escaping_fns: &'a FxHashSet<SpanKey>,
     defs: &'a ProgramDefs,
     res: &'a FxHashMap<NodeId, Res>,
     node_types: FxHashMap<NodeId, Ty>,
@@ -3209,6 +3212,28 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// A path naming a value: a unit variant (`None`, `E.A`) or a constant.
     fn path_value(&mut self, e: &'a Expr, dest: Place) -> R<()> {
+        // `None` stored into a `weak` slot is an empty weak reference: the
+        // `None` downgraded, the same shape as an `Option` value stored there.
+        let t = self.expr_ty(e)?;
+        if let HK::Weak(inner) = self.tys().tcx().kind(t) {
+            let Some(ot) = self.option_of(inner) else {
+                return self.unsupported(e.span, "this path");
+            };
+            let none = self
+                .tys()
+                .tcx()
+                .adt_of(ot)
+                .and_then(|(a, _)| a.variants.iter().position(|v| v.name == "None"));
+            let Some(idx) = none else {
+                return self.unsupported(e.span, "this path");
+            };
+            let l = self.temp(ot);
+            let kind = self.adt_aggregate(ot, idx as u32);
+            self.assign(l, Rvalue::Aggregate(kind, Vec::new()));
+            let w = self.downgrade(Operand::Move(Place::local(l)), t);
+            self.assign(dest, Rvalue::Use(w));
+            return Ok(());
+        }
         match self.lcx.res.get(&e.id) {
             Some(Res::Def(d)) => {
                 let d = *d;
@@ -6027,7 +6052,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let mut ops = Vec::new();
         let mut fn_tys: Vec<Option<Ty>> = Vec::new();
         for (a, p) in args.iter().zip(&f.params) {
-            if self.is_fn_typed(p.pattern.id) {
+            if self.is_fn_typed(p.pattern.id) && !self.fn_param_owned(p) {
                 let (op, t) = self.fn_arg(&a.value)?;
                 ops.push(PendingRecv::Ready(op));
                 fn_tys.push(Some(t));
@@ -6099,6 +6124,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             | HK::Closure { .. } => t,
             _ => tcx.reference(t, false),
         }
+    }
+
+    /// Whether a function-typed parameter takes its function by value
+    /// (`escaping Fn(..)`, core semantics §9.3): the callee may store it,
+    /// so it is not specialised to the argument's closure.
+    fn fn_param_owned(&self, p: &ast::Param) -> bool {
+        self.lcx
+            .escaping_fns
+            .contains(&SpanKey::from_span(&p.ty.span))
     }
 
     /// An argument for a `mut ref` parameter whose borrow waits until every
@@ -6213,6 +6247,14 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             None => {
                 let op = self.owned_operand(a, pt)?;
+                if self.erases(&op, pt) {
+                    // A closure or function item passed to an `escaping`
+                    // function parameter, as the parameter's type.
+                    let l = self.temp(pt);
+                    let o = self.erase_source(op);
+                    self.assign(l, Rvalue::Cast(CastKind::Erase, o, pt));
+                    return Ok(Operand::Move(Place::local(l)));
+                }
                 Ok(self.widen(op, pt))
             }
             _ => self.expr_operand(a),
@@ -6766,7 +6808,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // A function-typed parameter takes the closure or function
                     // item itself, and the instance is specialised to it, as
                     // for a free function's call.
-                    if self.is_fn_typed(p.pattern.id) {
+                    if self.is_fn_typed(p.pattern.id) && !self.fn_param_owned(p) {
                         let (op, t) = self.fn_arg(&a.value)?;
                         rest.push(PendingRecv::Ready(op));
                         fn_tys.push(Some(t));
@@ -8769,6 +8811,26 @@ fn main() {
             run_source(src),
             Ok(("2 13 2\nd1\n0 2\n1 7 5\nd0\nd2\n".to_string(), Some(0)))
         );
+    }
+
+    /// An `escaping` function parameter takes its closure by value, as the
+    /// parameter's function type, so the callee may store it (core
+    /// semantics §9.3).
+    #[test]
+    fn escaping_fn_parameter_takes_the_closure_by_value() {
+        let src = r#"
+struct MapIt[T, B] { v: T, f: MutFn(T) -> B }
+fn wrap[T, B](v: own T, f: escaping MutFn(T) -> B) -> MapIt[T, B] { MapIt { v: v, f: f } }
+fn keep(f: escaping Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(f); v }
+fn main() {
+    let k = 3;
+    let mut m = wrap(4, |x| x * 10 + k);
+    let r = (m.f)(m.v);
+    let fs = keep(|x| x + k);
+    println(f"{r} {fs[0](1)}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("43 4\n".to_string(), Some(0))));
     }
 
     /// A generic type's `Drop` body runs for each instance of the type, at
