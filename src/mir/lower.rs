@@ -8534,6 +8534,35 @@ fn unit_const(unit: Ty) -> Operand {
 /// on the MIR interpreter; or the first stage that refused it.
 pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
     let lowered = build_source(src)?;
+    // Core §11.2: conflicting `par` branches are a compile error.
+    // `KARAC_MIR_EFFECTS=0` skips the check.
+    let has_par = lowered
+        .program
+        .bodies
+        .values()
+        .any(|b| !b.par_regions.is_empty());
+    if has_par && std::env::var("KARAC_MIR_EFFECTS").as_deref() != Ok("0") {
+        let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
+        if let Some((name, c)) = report
+            .par_conflicts
+            .iter()
+            .find_map(|(n, v)| v.first().map(|c| (n, c)))
+        {
+            let which = if c.branches.0 == c.branches.1 {
+                "two iterations of the `par for`".to_string()
+            } else {
+                format!(
+                    "branches {} and {} of the `par`",
+                    c.branches.0 + 1,
+                    c.branches.1 + 1
+                )
+            };
+            return Err(format!(
+                "effects: in `{name}` at line {}, {which} conflict: `{}` and `{}`",
+                c.line, c.first.1, c.second.1
+            ));
+        }
+    }
     Ok(interp::run_untraced(
         &lowered.program,
         &lowered.tys,

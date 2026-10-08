@@ -758,11 +758,13 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // A comparison native on a user type is a derived one: it reads its
         // operands and nothing else.
         (_, "cmp" | "partial_cmp" | "eq" | "ne") => vec![PANICS],
-        // An atomic is a resource of its own, keyed by the atomic value.
-        ("Atomic", "load") => vec![(Reads, "Atomic", Some(0))],
-        ("Atomic", "store" | "swap" | "compare_exchange" | "fetch_add" | "fetch_sub") => {
-            vec![(Writes, "Atomic", Some(0))]
+        // Atomics and locks are how concurrent branches and tasks share
+        // mutable state (design.md "Locks and atomics"), so their operations
+        // order nothing; taking a lock may wait.
+        ("Atomic", "load" | "store" | "swap" | "compare_exchange" | "fetch_add" | "fetch_sub") => {
+            vec![]
         }
+        ("Mutex", "lock" | "try_lock") => vec![(Blocks, "", None)],
         // D6: channels and connections key their effects by the endpoint
         // (argument 0, the receiver); files by the open file. These have no
         // MIR natives yet (M2 brings the I/O intrinsics); the entries fix
@@ -848,9 +850,9 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         }
         ("NoOpExporter", "export_event" | "export_span") => vec![],
         ("usleep", "") => vec![(Blocks, "", None)],
-        // A fence orders the atomics around it, so it conflicts with every
-        // atomic; the scheduler queries read the scheduler's state.
-        ("fence" | "compiler_fence", "") => vec![(Writes, "Atomic", None)],
+        // A fence orders memory accesses, not effects; the scheduler
+        // queries read the scheduler's state.
+        ("fence" | "compiler_fence", "") => vec![],
         ("list_par_blocks" | "list_tasks", "") => vec![(Reads, "Scheduler", None), HEAP],
         ("has_debug_metadata", "") => vec![],
         _ => return None,
@@ -2106,6 +2108,33 @@ fn store(_1: ref Vec[i64], _2: ref Vec[i64]) -> () {
             par_conflicts_of(&r, "store"),
             [(0, 1, "writes(File @ p1)".into(), "writes(File @ p2)".into())]
         );
+    }
+
+    /// A conflict refuses the program before it runs; atomics, the way
+    /// concurrent branches share mutable state, do not conflict.
+    #[test]
+    fn effects_par_conflict_refuses_the_run() {
+        let printing = "fn main() {
+    let (a, b) = par { println(\"a\"), println(\"b\") };
+}
+";
+        let Err(e) = crate::mir::lower::run_source(printing) else {
+            panic!("two printing branches must be refused");
+        };
+        assert!(
+            e.starts_with("effects: in `main` at line 2, branches 1 and 2 of the `par` conflict"),
+            "{e}"
+        );
+        let atomic = "par struct Counter { count: Atomic[i64] }
+fn bump(c: ref Counter) { let _ = c.count.fetch_add(1, MemoryOrdering.Relaxed); }
+fn main() {
+    let c = Counter { count: Atomic.new(0) };
+    par { bump(c); bump(c); }
+    println(c.count.load(MemoryOrdering.Relaxed));
+}
+";
+        let r = from_source(atomic);
+        assert_eq!(par_conflicts_of(&r, "main"), []);
     }
 
     /// A recursion that walks deeper into its parameter each round still
