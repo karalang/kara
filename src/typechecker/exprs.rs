@@ -4902,6 +4902,73 @@ impl<'a> super::TypeChecker<'a> {
     /// subset of the other (`bf16` trades mantissa for `f32`'s exponent range),
     /// so a coercion between them is caught by the `source != target` arm
     /// rather than waved through as a same-rank move.
+    /// design.md § 5's widening table, for an integer into a float slot:
+    /// implicit only where every value of the integer type is exact in the
+    /// float, so `i32` -> `f64` widens and `i64`/`u64` -> `f64` needs
+    /// `as f64` (it rounds above 2^53). The integer must fit the float's
+    /// significand: 32 bits for `f64`, 16 for `f32`, 8 for `f16`/`bf16`.
+    /// An integer literal's value is known, so it is exempt, as in the
+    /// integer gate. Reported by the strict commands (`check`, `fix`) only:
+    /// the legacy backends keep accepting the coercion.
+    fn check_int_to_float_coercion(&mut self, expr: &Expr, target: &Type, source: &Type) {
+        let Type::Float(size) = target else {
+            return;
+        };
+        let bits = match source {
+            Type::Int(s) => match s {
+                IntSize::I8 => 8,
+                IntSize::I16 => 16,
+                IntSize::I32 => 32,
+                _ => 64,
+            },
+            Type::UInt(s) => match s {
+                UIntSize::U8 => 8,
+                UIntSize::U16 => 16,
+                UIntSize::U32 => 32,
+                _ => 64,
+            },
+            _ => return,
+        };
+        if Self::unsuffixed_int_literal_value(expr).is_some()
+            || Self::suffixed_int_literal_value(expr).is_some()
+        {
+            return;
+        }
+        let fits = match size {
+            crate::typechecker::types::FloatSize::F64 => 32,
+            crate::typechecker::types::FloatSize::F32 => 16,
+            _ => 8,
+        };
+        if bits <= fits {
+            return;
+        }
+        let message = format!(
+            "implicit conversion from '{}' to '{}' can lose precision; write \
+             an explicit 'as {}' (design.md § 5: only an integer type whose \
+             every value the float holds exactly widens implicitly)",
+            type_display(source),
+            type_display(target),
+            type_display(target),
+        );
+        match super::expr_ops::appended_cast_end_offset(expr) {
+            Some(end) => self.type_error_with_fix_it(
+                message,
+                expr.span,
+                TypeErrorKind::TypeMismatch,
+                crate::typechecker::FixIt {
+                    span: Span {
+                        line: expr.span.line,
+                        column: expr.span.column,
+                        offset: end,
+                        length: 0,
+                    },
+                    replacement: format!(" as {}", type_display(target)),
+                },
+            ),
+            None => self.type_error(message, expr.span, TypeErrorKind::TypeMismatch),
+        }
+    }
+
     pub(super) fn check_float_narrowing_coercion(
         &mut self,
         expr: &Expr,
@@ -4921,6 +4988,9 @@ impl<'a> super::TypeChecker<'a> {
         let source = peel(actual);
         if target == source {
             return;
+        }
+        if self.cli_lint_overrides.strict_core {
+            self.check_int_to_float_coercion(expr, &target, &source);
         }
         let (Some(target_rank), Some(source_rank)) =
             (float_width_rank(&target), float_width_rank(&source))

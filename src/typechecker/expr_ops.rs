@@ -122,7 +122,7 @@ fn int_cast_preserves_all_values(src: &Type, dst: &Type) -> bool {
 /// `s.len() as i64` casts the call). A `Binary` operand can never qualify
 /// even with a known extent: its parens are span-transparent, so the
 /// insertion would land INSIDE them and cast only the last term.
-fn appended_cast_end_offset(expr: &Expr) -> Option<usize> {
+pub(super) fn appended_cast_end_offset(expr: &Expr) -> Option<usize> {
     match &expr.kind {
         ExprKind::Identifier(_)
         | ExprKind::SelfValue

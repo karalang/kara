@@ -1780,3 +1780,40 @@ fn collect_all_is_removed() {
         "free `spawn` is removed (§11.1)",
     );
 }
+
+/// design.md § 5: `i64`/`u64` -> `f64` rounds above 2^53, so it is not an
+/// implicit widening; `check` refuses it at a return, a `let`, an argument,
+/// a field and a push, and `fix` writes the `as f64`. `i32` -> `f64` is
+/// exact and stays implicit, and `run` keeps accepting the old spelling.
+#[test]
+fn a_64_bit_integer_into_f64_needs_as() {
+    let src = "\
+fn tailf(v: u64) -> f64 { v }
+fn takef(x: f64) -> f64 { x }
+fn exact(v: i32) -> f64 { v }
+struct S { f: f64 }
+fn main() {
+    let n: i64 = 3;
+    let slot: f64 = n;
+    let s = S { f: n };
+    let mut vf: Vec[f64] = [];
+    vf.push(n);
+    println(f\"{tailf(7)} {takef(n)} {exact(2)} {slot} {s.f} {vf[0]}\");
+}
+";
+    rejected_then_fixed_by(
+        "int_to_f64",
+        src,
+        "implicit conversion from 'u64' to 'f64' can lose precision",
+        "n as f64",
+    );
+    let (dir, path) = fixture("int_to_f64_run", src);
+    let out = karac()
+        .arg("run")
+        .arg("--interp")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "7 3 2 3 3 3\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
