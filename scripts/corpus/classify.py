@@ -193,7 +193,10 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
             if errs and (want in ("", "codegen") or want in codes):
                 return {**out, "class": "a", "bucket": "a:refused"}
             r = sh([args.karac, "__mir-run", "source.kara"], d, env, args.timeout)
-            if r is not None and r.returncode == 3 and b"error[mir]: build" not in r.stderr:
+            # A MIR refusal is a static check (move or borrow check), not a
+            # construct the builder cannot lower or a run-time failure.
+            if r is not None and r.returncode == 3 and b"error[mir]: build" not in r.stderr \
+                    and b"error[mir]: run" not in r.stderr:
                 return {**out, "class": "a", "bucket": "a:refused"}
             if want != "codegen":
                 return {**out, "class": "e", "bucket": f"e-not-refused:{want or 'any'}"}

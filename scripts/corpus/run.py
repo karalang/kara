@@ -90,7 +90,7 @@ def judge(entry: Path, corpus: Path, args) -> dict:
         code = expect.split(":", 1)[1] if ":" in expect else ""
         if res["status"] != "refused":
             why = f"expected a refusal ({code}), program ran (exit {res['exit']})"
-        elif mir and b"error[mir]: build" in res["stderr"]:
+        elif mir and (b"error[mir]: build" in res["stderr"] or b"error[mir]: run" in res["stderr"]):
             why = f"expected a refusal ({code}); check accepts and MIR cannot build it yet"
         elif code not in ("codegen", "") and code not in check_codes(entry, args) + [None]:
             why = f"refused, but without {code}"
