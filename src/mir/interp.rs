@@ -71,7 +71,7 @@ impl Program {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AllocId(pub u32);
 
 /// The empty weak handle: a `weak T` made from `None`. It upgrades to
@@ -304,6 +304,7 @@ fn run_with(
         next_frame_id: 0,
         heap: Vec::new(),
         free: Vec::new(),
+        key_index: Default::default(),
         events: Vec::new(),
         trace,
         stream,
@@ -456,6 +457,11 @@ struct Interp<'a> {
     heap: Vec<Option<HeapObj>>,
     /// Freed slots of `heap`, reused by [`Interp::alloc`].
     free: Vec<u32>,
+    /// Per `Map`/`Set`: each key's hashable form ([`Interp::key_repr`]) to
+    /// its entry's position, built on the first lookup and kept up to date
+    /// by the table's own inserts and removes. `None` for a table holding a
+    /// key with no hashable form, which is searched entry by entry.
+    key_index: rustc_hash::FxHashMap<AllocId, Option<rustc_hash::FxHashMap<String, usize>>>,
     events: Vec<Event>,
     /// Whether `events` is kept. A run outside the tests skips it: one
     /// event per statement is most of the time and memory a long program
@@ -1601,7 +1607,7 @@ impl<'a> Interp<'a> {
                     (true, None, [val]) => {
                         let entry = Value::Agg(vec![key.clone(), val.clone()]);
                         let at = self.insert_at(id, key, is_map, sorted)?;
-                        self.vec_elems(id)?.insert(at, entry);
+                        self.table_insert(id, at, entry, key)?;
                         self.option(ret, None)
                     }
                     (false, Some(_), []) => {
@@ -1610,7 +1616,7 @@ impl<'a> Interp<'a> {
                     }
                     (false, None, []) => {
                         let at = self.insert_at(id, key, is_map, sorted)?;
-                        self.vec_elems(id)?.insert(at, key.clone());
+                        self.table_insert(id, at, key.clone(), key)?;
                         Ok(Value::Bool(true))
                     }
                     _ => err(format!("{name}: wrong arguments")),
@@ -1625,7 +1631,7 @@ impl<'a> Interp<'a> {
                         Ok(Value::Bool(false))
                     };
                 };
-                let removed = self.vec_elems(id)?.remove(i);
+                let removed = self.table_remove(id, i)?;
                 if !is_map {
                     self.drop_value(removed, key_ty)?;
                     return Ok(Value::Bool(true));
@@ -1725,8 +1731,7 @@ impl<'a> Interp<'a> {
                         } else {
                             val.clone()
                         };
-                        self.vec_elems(id)?
-                            .insert(at, Value::Agg(vec![key.clone(), v]));
+                        self.table_insert(id, at, Value::Agg(vec![key.clone(), v]), key)?;
                         at
                     }
                 };
@@ -1750,6 +1755,7 @@ impl<'a> Interp<'a> {
                     }
                 }
                 self.vec_elems(id)?.clear();
+                self.key_index.remove(&id);
                 Ok(Value::Unit)
             }
             _ => err(format!("call of unknown function {name}")),
@@ -1761,22 +1767,24 @@ impl<'a> Interp<'a> {
     /// Where a new key goes: the end of an insertion-ordered table, or
     /// before the first larger key of a sorted one.
     fn insert_at(&mut self, id: AllocId, key: &Value, is_map: bool, sorted: bool) -> R<usize> {
-        let entries = self.vec_elems(id)?.clone();
+        let n = self.vec_elems(id)?.len();
         if !sorted {
-            return Ok(entries.len());
+            return Ok(n);
         }
+        // The first entry whose key is larger, by binary search: the
+        // entries are in key order.
         let want = self.key_form(key)?;
-        for (i, e) in entries.iter().enumerate() {
-            let k = match (is_map, e) {
-                (true, Value::Agg(pair)) => &pair[0],
-                (false, k) => k,
-                _ => return err("a malformed map entry"),
-            };
-            if key_order(&self.key_form(k)?, &want) == std::cmp::Ordering::Greater {
-                return Ok(i);
+        let (mut lo, mut hi) = (0, n);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let k = self.entry_key(id, mid, is_map)?;
+            if key_order(&self.key_form(&k)?, &want) == std::cmp::Ordering::Greater {
+                hi = mid;
+            } else {
+                lo = mid + 1;
             }
         }
-        Ok(entries.len())
+        Ok(lo)
     }
 
     /// `VecDeque[T]`: a `Vec`'s allocation, used from both ends.
@@ -1947,23 +1955,117 @@ impl<'a> Interp<'a> {
     /// The index of the entry whose key equals `key`, if any.
     fn find_key(&mut self, id: AllocId, key: &Value, key_ty: Ty, is_map: bool) -> R<Option<usize>> {
         let user_eq = self.user_eq(key_ty);
-        let want = self.key_form(key)?;
-        let entries = self.vec_elems(id)?.clone();
-        for (i, e) in entries.iter().enumerate() {
-            let k = match (is_map, e) {
-                (true, Value::Agg(pair)) => &pair[0],
-                (false, k) => k,
-                _ => return err("a malformed map entry"),
-            };
+        if user_eq.is_none() {
+            if let Some(r) = self.key_repr(key)? {
+                self.build_key_index(id, is_map)?;
+                if let Some(Some(ix)) = self.key_index.get(&id) {
+                    return Ok(ix.get(&r).copied());
+                }
+            }
+        }
+        let want = match user_eq {
+            Some(_) => Value::Unit,
+            None => self.key_form(key)?,
+        };
+        let n = self.vec_elems(id)?.len();
+        for i in 0..n {
+            let k = self.entry_key(id, i, is_map)?;
             let equal = match &user_eq {
-                Some(eq) => self.call_eq(eq, k, key)?,
-                None => self.key_form(k)? == want,
+                Some(eq) => self.call_eq(eq, &k, key)?,
+                None => self.key_form(&k)? == want,
             };
             if equal {
                 return Ok(Some(i));
             }
         }
         Ok(None)
+    }
+
+    /// The key of table `id`'s entry `i`.
+    fn entry_key(&mut self, id: AllocId, i: usize, is_map: bool) -> R<Value> {
+        match (is_map, &self.vec_elems(id)?[i]) {
+            (true, Value::Agg(pair)) => Ok(pair[0].clone()),
+            (false, k) => Ok(k.clone()),
+            _ => err("a malformed map entry"),
+        }
+    }
+
+    /// A string that two keys share exactly when they are equal, for the
+    /// table index; `None` for a key holding a float, whose equality is not
+    /// its representation's (`-0.0 == 0.0`, `NaN != NaN`).
+    fn key_repr(&mut self, k: &Value) -> R<Option<String>> {
+        fn has_float(v: &Value) -> bool {
+            match v {
+                Value::Float(_) => true,
+                Value::Agg(fs) | Value::Variant(_, fs) => fs.iter().any(has_float),
+                _ => false,
+            }
+        }
+        let f = self.key_form(k)?;
+        Ok((!has_float(&f)).then(|| format!("{f:?}")))
+    }
+
+    /// Builds table `id`'s key index unless it has one.
+    fn build_key_index(&mut self, id: AllocId, is_map: bool) -> R<()> {
+        if self.key_index.contains_key(&id) {
+            return Ok(());
+        }
+        let n = self.vec_elems(id)?.len();
+        let mut ix = rustc_hash::FxHashMap::default();
+        for i in 0..n {
+            let k = self.entry_key(id, i, is_map)?;
+            match self.key_repr(&k)? {
+                Some(r) => {
+                    ix.insert(r, i);
+                }
+                None => {
+                    self.key_index.insert(id, None);
+                    return Ok(());
+                }
+            }
+        }
+        self.key_index.insert(id, Some(ix));
+        Ok(())
+    }
+
+    /// Inserts `entry`, whose key is `key`, at position `at` of table `id`.
+    fn table_insert(&mut self, id: AllocId, at: usize, entry: Value, key: &Value) -> R<()> {
+        let r = match self.key_index.get(&id) {
+            Some(Some(_)) => self.key_repr(key)?,
+            _ => None,
+        };
+        let len = self.vec_elems(id)?.len();
+        self.vec_elems(id)?.insert(at, entry);
+        if let Some(slot) = self.key_index.get_mut(&id) {
+            match (slot.as_mut(), r) {
+                (Some(ix), Some(r)) => {
+                    if at < len {
+                        for v in ix.values_mut() {
+                            if *v >= at {
+                                *v += 1;
+                            }
+                        }
+                    }
+                    ix.insert(r, at);
+                }
+                _ => *slot = None,
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes and returns entry `i` of table `id`.
+    fn table_remove(&mut self, id: AllocId, i: usize) -> R<Value> {
+        let removed = self.vec_elems(id)?.remove(i);
+        if let Some(Some(ix)) = self.key_index.get_mut(&id) {
+            ix.retain(|_, v| *v != i);
+            for v in ix.values_mut() {
+                if *v > i {
+                    *v -= 1;
+                }
+            }
+        }
+        Ok(removed)
     }
 
     /// The lowered body of `ty`'s user `PartialEq.eq`, if it has one.
@@ -3875,6 +3977,7 @@ impl<'a> Interp<'a> {
     /// here: `release` keeps it, dead, until the last weak handle goes, so
     /// an `Upgrade` cannot reach whatever reuses it.
     fn free_slot(&mut self, id: AllocId) {
+        self.key_index.remove(&id);
         if self.heap[id.0 as usize].take().is_some() {
             self.free.push(id.0);
         }
