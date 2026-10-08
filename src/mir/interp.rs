@@ -318,6 +318,7 @@ fn run_with(
             .unwrap_or(MAX_STEPS),
         snapshots: Vec::new(),
         arenas: 0,
+        sorted_tables: Default::default(),
         flags: Vec::new(),
     };
     let outcome = if !problems.is_empty() {
@@ -482,6 +483,8 @@ struct Interp<'a> {
     snapshots: Vec<AllocId>,
     /// The last `Arena` id handed out.
     arenas: i128,
+    /// The tables a `Vacant` entry was made from that keep key order.
+    sorted_tables: rustc_hash::FxHashSet<AllocId>,
     /// The borrow flags currently held, by field address.
     flags: Vec<(Addr, Flag)>,
 }
@@ -582,6 +585,7 @@ impl<'a> Interp<'a> {
                 Ok(self.alloc_box(ty_name, Value::Str(s.clone())))
             }
             ("Atomic", _) => self.atomic_method(name, method, args, ret),
+            ("Entry", _) => self.entry_method(name, method, args, arg_tys, ret),
             ("OnceLock" | "OnceCell", _) => self.once_method(name, method, args, arg_tys, ret),
             ("Arena", _) => self.arena_method(name, method, args, arg_tys),
             ("Vec", "from_array") => {
@@ -1703,6 +1707,73 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// `Entry[K, V]`'s methods, on the `Occupied` / `Vacant` value
+    /// `Map.entry` makes; each takes the entry by value.
+    fn entry_method(
+        &mut self,
+        name: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
+        let Some(Value::Variant(k, fields)) = args.first() else {
+            return err(format!("{name} needs an entry"));
+        };
+        let entry_ty = *arg_tys
+            .first()
+            .ok_or_else(|| Stop::Error(format!("{name} needs the entry's type")))?;
+        let (adt, _) = self
+            .tys
+            .tcx()
+            .adt_of(entry_ty)
+            .ok_or_else(|| Stop::Error(format!("{name} of a non-entry")))?;
+        let occupied = adt.variants.get(*k as usize).map(|v| v.name.as_str()) == Some("Occupied");
+        let call = |me: &mut Self, f: &Value, fty: Ty, args: Vec<Value>| -> R<Value> {
+            let mut callee = me.hold_callee(f.clone(), fty, name)?;
+            let v = me.call_callee(&mut callee, args);
+            me.release_callee(callee, fty)?;
+            v
+        };
+        match (method, &args[1..], fields.as_slice()) {
+            ("and_modify", [f], _) => {
+                let fty = arg_tys.get(1).copied().unwrap_or(ret);
+                if let (true, [at]) = (occupied, fields.as_slice()) {
+                    call(self, f, fty, vec![at.clone()])?;
+                } else {
+                    // An unused closure still drops.
+                    self.drop_value(f.clone(), fty)?;
+                }
+                Ok(args[0].clone())
+            }
+            ("or_insert" | "or_insert_with", rest, [at]) if occupied => {
+                if let (Some(v), Some(&t)) = (rest.first(), arg_tys.get(1)) {
+                    self.drop_value(v.clone(), t)?;
+                }
+                Ok(at.clone())
+            }
+            ("or_insert" | "or_insert_with", rest, [key, map]) => {
+                let v = match (method, rest) {
+                    ("or_insert", [v]) => v.clone(),
+                    ("or_insert_with", [f]) => {
+                        let fty = arg_tys.get(1).copied().unwrap_or(ret);
+                        call(self, f, fty, Vec::new())?
+                    }
+                    _ => return err(format!("{name}: wrong arguments")),
+                };
+                let id = self.box_behind(map)?;
+                let sorted = self.sorted_tables.contains(&id);
+                let at = self.insert_at(id, key, true, sorted)?;
+                self.table_insert(id, at, Value::Agg(vec![key.clone(), v]), key)?;
+                Ok(Value::Ref(Addr {
+                    root: Root::Heap(id),
+                    path: vec![at as u64, 1],
+                }))
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
     /// The struct a (possibly doubly) referenced library cell points at.
     fn cell_struct(&mut self, v: &Value, name: &str) -> R<Addr> {
         let mut v = v.clone();
@@ -1962,6 +2033,25 @@ impl<'a> Interp<'a> {
                 }
                 let vname = self.tys.display(ret);
                 Ok(self.alloc_box(&vname, Value::Agg(out)))
+            }
+            ("entry", [key]) if is_map => {
+                // `Occupied` lends the stored value; `Vacant` keeps the key
+                // and the map until `or_insert` (design.md § Entry[K, V]).
+                let found = self.find_key(id, key, key_ty, true)?;
+                if let Some(i) = found {
+                    self.drop_value(key.clone(), key_ty)?;
+                    let at = Value::Ref(Addr {
+                        root: Root::Heap(id),
+                        path: vec![i as u64, 1],
+                    });
+                    return self.variant_named(ret, None, "Occupied", vec![at]);
+                }
+                if sorted {
+                    self.sorted_tables.insert(id);
+                } else {
+                    self.sorted_tables.remove(&id);
+                }
+                self.variant_named(ret, None, "Vacant", vec![key.clone(), recv.clone()])
             }
             ("entry_or_insert" | "entry_or_insert_with", [key, val]) if is_map => {
                 // `m.entry(k).or_insert(v)`, fused: a reference to the

@@ -7894,7 +7894,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 go(object, recv_owned, out);
                 let stores = matches!(
                     method.as_str(),
-                    "push" | "push_back" | "push_front" | "insert" | "extend" | "append" | "set"
+                    "push"
+                        | "push_back"
+                        | "push_front"
+                        | "insert"
+                        | "extend"
+                        | "append"
+                        | "set"
+                        | "or_insert"
                 );
                 for (i, a) in args.iter().enumerate() {
                     let owned = match def {
@@ -8766,6 +8773,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         | "fill"
                         | "set"
                         | "entry"
+                        | "or_insert"
                 );
                 for a in args {
                     if self.is_fn_typed(a.value.id)
