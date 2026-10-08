@@ -1,0 +1,80 @@
+
+fn cls(r: Result[Option[Option[i64]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(x))) => x,
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn clserr(r: Result[i64, Option[Option[i64]]]) -> i64 {
+    match r {
+        Result.Ok(k) => k,
+        Result.Err(Option.Some(Option.Some(x))) => x,
+        Result.Err(_) => -1,
+    }
+}
+fn clsstr(r: own Result[Option[Option[String]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(s))) => if s.len() > 0 { 1 } else { 0 },
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn nobox(r: Result[Option[i64], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(x)) => x,
+        Result.Ok(Option.None) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn idr(r: Result[Option[Option[i64]], i64]) -> Result[Option[Option[i64]], i64] { r }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        let va = match a {
+            Result.Ok(Option.Some(Option.Some(x))) => x,
+            Result.Ok(_) => -1,
+            Result.Err(e) => e,
+        };
+        acc = acc + va - n;
+
+        let b: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        acc = acc + cls(b) - n;
+
+        let c: Result[i64, Option[Option[i64]]] = Result.Err(Option.Some(Option.Some(n + i)));
+        acc = acc + clserr(c) - n;
+
+        let d: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        let back = idr(d);
+        acc = acc + cls(back) - n;
+
+        let e1: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        let r1 = idr(e1);
+        let r2 = idr(r1);
+        acc = acc + cls(r2) - n;
+
+        let f: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        idr(f);
+        acc = acc + 1;
+
+        let g: Result[Option[Option[i64]], i64] = Result.Ok(Option.None);
+        acc = acc + cls(g);
+
+        let h: Result[Option[Option[i64]], i64] = Result.Err(n + i);
+        acc = acc + cls(h) - n;
+
+        let k: Result[Option[i64], i64] = Result.Ok(Option.Some(n + i));
+        acc = acc + nobox(k) - n;
+
+        let s = f"p{n + i}";
+        let m: Result[Option[Option[String]], i64] = Result.Ok(Option.Some(Option.Some(s)));
+        acc = acc + clsstr(m);
+
+        i = i + 1;
+    }
+    println(acc);
+}

@@ -1,0 +1,62 @@
+
+fn tri(r: Result[Option[Option[Option[i64]]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(Option.Some(x)))) => x,
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn quad(r: Result[Option[Option[Option[Option[i64]]]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(Option.Some(Option.Some(x))))) => x,
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn duo(r: Result[Option[Option[i64]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(x))) => x,
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn tristr(r: own Result[Option[Option[Option[String]]], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(Option.Some(Option.Some(s)))) => if s.len() > 0 { 1 } else { 0 },
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 40 {
+        let a: Result[Option[Option[Option[i64]]], i64] = Result.Ok(Option.Some(Option.Some(Option.Some(n + i))));
+        acc = acc + tri(a) - n;
+
+        let b: Result[Option[Option[Option[Option[i64]]]], i64] = Result.Ok(Option.Some(Option.Some(Option.Some(Option.Some(n + i)))));
+        acc = acc + quad(b) - n;
+
+        acc = acc + tri(Result.Ok(Option.Some(Option.Some(Option.Some(n + i))))) - n;
+
+        let c: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(n + i)));
+        acc = acc + duo(c) - n;
+
+        let d: Result[Option[Option[Option[i64]]], i64] = Result.Ok(Option.Some(Option.None));
+        acc = acc + tri(d);
+
+        let e1: Result[Option[Option[Option[i64]]], i64] = Result.Ok(Option.None);
+        acc = acc + tri(e1);
+
+        let g: Result[Option[Option[Option[i64]]], i64] = Result.Err(n + i);
+        acc = acc + tri(g) - n;
+
+        let s = f"p{n + i}";
+        let h: Result[Option[Option[Option[String]]], i64] = Result.Ok(Option.Some(Option.Some(Option.Some(s))));
+        acc = acc + tristr(h);
+
+        i = i + 1;
+    }
+    println(acc);
+}

@@ -1,5 +1,5 @@
 
-fn make(p: String) -> Fn(i64) -> i64 { |n| p.len() + n }
+fn make(p: own String) -> Fn(i64) -> i64 { |n| p.len() + n }
 fn main() {
     let f = make(String.from("a heap-backed string well beyond the sso inline limit"));
     let g = f;

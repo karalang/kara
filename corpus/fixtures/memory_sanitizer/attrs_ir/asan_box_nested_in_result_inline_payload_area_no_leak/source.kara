@@ -1,12 +1,12 @@
 
-fn cls(r: Result[Option[Option[i64]], i64]) -> i64 {
+fn cls(r: own Result[Option[Option[i64]], i64]) -> i64 {
     match r {
         Result.Ok(Option.Some(Option.Some(x))) => x,
         Result.Ok(_) => -1,
         Result.Err(e) => e,
     }
 }
-fn clserr(r: Result[i64, Option[Option[i64]]]) -> i64 {
+fn clserr(r: own Result[i64, Option[Option[i64]]]) -> i64 {
     match r {
         Result.Ok(k) => k,
         Result.Err(Option.Some(Option.Some(x))) => x,
@@ -20,14 +20,14 @@ fn clsstr(r: own Result[Option[Option[String]], i64]) -> i64 {
         Result.Err(e) => e,
     }
 }
-fn nobox(r: Result[Option[i64], i64]) -> i64 {
+fn nobox(r: own Result[Option[i64], i64]) -> i64 {
     match r {
         Result.Ok(Option.Some(x)) => x,
         Result.Ok(Option.None) => -1,
         Result.Err(e) => e,
     }
 }
-fn idr(r: Result[Option[Option[i64]], i64]) -> Result[Option[Option[i64]], i64] { r }
+fn idr(r: own Result[Option[Option[i64]], i64]) -> Result[Option[Option[i64]], i64] { r }
 
 fn main() {
     let n = env.args().len() as i64;

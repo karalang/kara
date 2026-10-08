@@ -11,9 +11,9 @@ fn mko() -> H { return H { opt: Some("op".to_string()), n: 5 }; }
 fn take(x: String) -> i64 { return x.len(); }
 fn get() -> String { return mk().s; }
 fn get2() -> String { mk().s }
-fn f(w: W) -> W { let g = || w; g() }
-fn fv(w: Wv) -> Wv { let g = || w; g() }
-fn fe(e: E) -> E { let g = || e; g() }
+fn f(w: own W) -> W { let g = || w; g() }
+fn fv(w: own Wv) -> Wv { let g = || w; g() }
+fn fe(e: own E) -> E { let g = || e; g() }
 fn main() {
     let mut i: i64 = 0;
     let mut acc2: i64 = 0;

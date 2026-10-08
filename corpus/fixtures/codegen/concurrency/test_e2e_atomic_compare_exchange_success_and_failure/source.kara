@@ -6,7 +6,7 @@ impl Cell {
     }
     fn get(ref self) -> i64 { self.v.load(MemoryOrdering.SeqCst) }
 }
-fn report(r: Result[i64, i64]) {
+fn report(r: own Result[i64, i64]) {
     match r {
         Ok(prev) => { println(100 + prev); }
         Err(actual) => { println(200 + actual); }

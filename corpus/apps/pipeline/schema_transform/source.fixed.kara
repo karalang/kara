@@ -27,7 +27,7 @@ impl JsonParser {
     fn peek(ref self) -> Option[char] {
         if self.pos < self.chars.len() { Some(self.chars[self.pos]) } else { None }
     }
-    fn fail(ref self, msg: String) -> ParseError {
+    fn fail(ref self, msg: own String) -> ParseError {
         ParseError { pos: self.pos, msg: msg }
     }
     // Consumes `c` if it is the next character.

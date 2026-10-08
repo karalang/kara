@@ -4,7 +4,7 @@ fn mk(k: i64) -> Result[Sh, String] { if k > 5 { Result.Ok(Sh { k: k, s: hs(k) }
 fn mi(k: i64) -> Result[Sh, i64] { if k > 5 { Result.Ok(Sh { k: k, s: hs(k) }) } else { Result.Err(k) } }
 fn mo(k: i64) -> Option[Sh] { if k > 5 { Option.Some(Sh { k: k, s: hs(k) }) } else { Option.None } }
 fn pr(r: own Result[i64, String]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e) } }
-fn pi(r: Result[i64, i64]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e) } }
+fn pi(r: own Result[i64, i64]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e) } }
 fn po(r: Option[i64]) { match r { Option.Some(v) => println(v), Option.None => println(0) } }
 fn m1(k: i64) -> Result[i64, String] { let r = mk(k); match r { Result.Ok(x) => Result.Ok(x.k), Result.Err(e) => Result.Err(e) } }
 fn m2(k: i64) -> i64 { match mk(k) { Result.Ok(x) => x.k, Result.Err(e) => e.len() } }

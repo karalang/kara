@@ -4,7 +4,7 @@ struct WideS { a: i64, b: i64, c: i64, d: i64, s: String }
 fn u(v: Option[Option[i64]]) -> i64 {
     match v { Option.Some(Option.Some(x)) => x, Option.Some(Option.None) => -1, Option.None => -2 }
 }
-fn ur(v: Result[Option[Option[i64]], i64]) -> i64 {
+fn ur(v: own Result[Option[Option[i64]], i64]) -> i64 {
     match v { Result.Ok(Option.Some(Option.Some(x))) => x, Result.Ok(_) => -1, Result.Err(e) => e }
 }
 fn main() {

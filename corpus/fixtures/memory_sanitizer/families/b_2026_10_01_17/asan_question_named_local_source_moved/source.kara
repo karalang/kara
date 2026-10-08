@@ -32,7 +32,7 @@ fn h10(k: i64) -> Result[i64, i64] { let r = m10(k); let x = r?; match x { E.A(q
 fn h11(n: i64) -> Result[i64, i64] { let mut t = 0; for i in 6..n { let r = m4(i); let x = r?; t = t + x.id; } Result.Ok(t) }
 fn h12(k: i64) -> Result[i64, i64] { let mut r = m4(1); r = m4(k); let x = r?; println(x.v); Result.Ok(x.id) }
 fn h13(k: i64, c: bool) -> Result[i64, i64] { let r = m4(k); if c { let x = r?; println(x.v); return Result.Ok(x.id) } println("skip"); Result.Ok(0) }
-fn pr(r: Result[i64, i64]) { match r { Result.Ok(v) => println(f"ok{v}"), Result.Err(e) => println(f"err{e}") } }
+fn pr(r: own Result[i64, i64]) { match r { Result.Ok(v) => println(f"ok{v}"), Result.Err(e) => println(f"err{e}") } }
 fn po(o: Option[i64]) { match o { Option.Some(v) => println(f"some{v}"), Option.None => println("none") } }
 fn main() {
     pr(h1(8));

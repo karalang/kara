@@ -52,7 +52,7 @@ impl DiffError {
 }
 
 impl Document {
-    fn parse(name: String, text: String) -> Result[Document, DiffError] {
+    fn parse(name: own String, text: String) -> Result[Document, DiffError] {
         if name.is_empty() {
             return Err(DiffError.EmptyName);
         }
@@ -263,7 +263,7 @@ fn print_diff(old: ref Document, new: ref Document) {
     println(f"summary: {hunks.len()} hunk(s), {stats.insertions} insertion(s)(+), {stats.deletions} deletion(s)(-), {stats.unchanged} unchanged");
 }
 
-fn diff_pair(old_name: String, old_text: String, new_name: String, new_text: String) -> Result[(), DiffError] {
+fn diff_pair(old_name: own String, old_text: String, new_name: own String, new_text: String) -> Result[(), DiffError] {
     let old = Document.parse(old_name, old_text)?;
     let new = Document.parse(new_name, new_text)?;
     print_diff(old, new);

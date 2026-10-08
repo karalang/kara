@@ -39,7 +39,7 @@ fn c_local(n: i64) -> i64 {
   let t = out.h;
   return hit(t.s.clone());
 }
-fn c_iflet(b: Es, n: i64) -> i64 {
+fn c_iflet(b: own Es, n: i64) -> i64 {
   let mut out: Ws = Ws { h: Sh { s: outs(n) } };
   if let Es.A(w) = b { out = w; }
   let t = out.h;

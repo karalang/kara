@@ -1,19 +1,19 @@
 
-fn tri(r: Result[Option[Option[Option[i64]]], i64]) -> i64 {
+fn tri(r: own Result[Option[Option[Option[i64]]], i64]) -> i64 {
     match r {
         Result.Ok(Option.Some(Option.Some(Option.Some(x)))) => x,
         Result.Ok(_) => -1,
         Result.Err(e) => e,
     }
 }
-fn quad(r: Result[Option[Option[Option[Option[i64]]]], i64]) -> i64 {
+fn quad(r: own Result[Option[Option[Option[Option[i64]]]], i64]) -> i64 {
     match r {
         Result.Ok(Option.Some(Option.Some(Option.Some(Option.Some(x))))) => x,
         Result.Ok(_) => -1,
         Result.Err(e) => e,
     }
 }
-fn duo(r: Result[Option[Option[i64]], i64]) -> i64 {
+fn duo(r: own Result[Option[Option[i64]], i64]) -> i64 {
     match r {
         Result.Ok(Option.Some(Option.Some(x))) => x,
         Result.Ok(_) => -1,

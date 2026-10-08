@@ -1,0 +1,11 @@
+
+fn pick(a: String, b: String) -> String {
+    match a > b {
+        true => a,
+        false => b,
+    }
+}
+
+fn main() {
+    println(pick(f"apple", f"banana"));
+}

@@ -115,7 +115,7 @@ fn parse_bool(text: ref String) -> Option[bool] {
     }
 }
 
-fn coerce(key: String, raw: String, kind: ref Kind, layer: String) -> Result[Value, ConfigError] {
+fn coerce(key: own String, raw: String, kind: ref Kind, layer: own String) -> Result[Value, ConfigError] {
     let text = raw.trim();
     match kind {
         Kind.Int { min, max } => match i64.parse(text) {
@@ -154,11 +154,11 @@ fn coerce(key: String, raw: String, kind: ref Kind, layer: String) -> Result[Val
 }
 
 impl Config {
-    fn new(schema: SortedMap[String, Kind]) -> Config {
+    fn new(schema: own SortedMap[String, Kind]) -> Config {
         Config { schema, entries: SortedMap.new(), errors: Vec.new() }
     }
 
-    fn apply(mut ref self, key: String, raw: String, layer: Layer) {
+    fn apply(mut ref self, key: own String, raw: String, layer: own Layer) {
         match self.schema.get(key) {
             None => self.errors.push(ConfigError.UnknownKey { layer: layer.label(), key }),
             Some(kind) => match coerce(key.clone(), raw, kind, layer.label()) {

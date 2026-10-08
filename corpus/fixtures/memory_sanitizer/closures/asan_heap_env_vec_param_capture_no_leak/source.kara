@@ -1,5 +1,5 @@
 
-fn make(v: Vec[i64]) -> Fn(i64) -> i64 { |n| v.len() + n }
+fn make(v: own Vec[i64]) -> Fn(i64) -> i64 { |n| v.len() + n }
 fn main() {
     let mut xs = Vec.new();
     xs.push(1i64);

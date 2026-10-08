@@ -69,11 +69,11 @@ struct FreqTable {
 }
 
 impl FreqTable {
-    fn new(label: String) -> FreqTable {
+    fn new(label: own String) -> FreqTable {
         FreqTable { label, counts: Map.new(), total_tokens: 0, kept_tokens: 0 }
     }
 
-    fn add(mut ref self, word: String, n: i64) {
+    fn add(mut ref self, word: own String, n: i64) {
         let current = match self.counts.get(word) {
             Some(c) => c,
             None => 0,
@@ -153,7 +153,7 @@ fn write_corpus(docs: ref Vec[Document]) -> Result[(), AppError] {
     Ok(())
 }
 
-fn describe_io(e: IoError) -> String {
+fn describe_io(e: own IoError) -> String {
     match e {
         IoError.NotFound => "not found",
         IoError.PermissionDenied => "permission denied",
@@ -165,7 +165,7 @@ fn describe_io(e: IoError) -> String {
     }
 }
 
-fn into_document(path: String, read: Result[String, IoError]) -> Result[Document, AppError] {
+fn into_document(path: own String, read: own Result[String, IoError]) -> Result[Document, AppError] {
     match read {
         Ok(body) => Ok(Document { name: path, body }),
         Err(e) => Err(AppError.Io { path, reason: describe_io(e) }),

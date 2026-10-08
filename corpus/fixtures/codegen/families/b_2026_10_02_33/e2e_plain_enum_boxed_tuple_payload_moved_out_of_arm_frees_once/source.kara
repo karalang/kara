@@ -11,7 +11,7 @@ fn r2(s: own F) -> (Array[String, 2], Option[String]) { match s { F.S(x) => { re
 fn r5(s: own E) -> i64 { match s { E.S(x) => { return eat(x); } E.N => { return 0; } } }
 fn r6(s: own E) -> (Array[String, 2], i64) { match s { E.S(x) => x, E.N => mkt("z") } }
 fn r7(s: own E) -> i64 { match s { E.S(x) => { println(x.0[0]); return x.1; } E.N => { return 0; } } }
-fn r8(s: E) -> (Array[String, 2], i64) { if let E.S(x) = s { return x; } return mkt("z"); }
+fn r8(s: own E) -> (Array[String, 2], i64) { if let E.S(x) = s { return x; } return mkt("z"); }
 fn r9(s: own H) -> (Array[String, 2], i64) { match s { H.S { t } => { return t; } H.N => { return mkt("z"); } } }
 fn ra(s: own E) -> i64 { let mut v: Vec[(Array[String, 2], i64)] = Vec.new(); match s { E.S(x) => { v.push(x); } E.N => { } } return v.len(); }
 fn rc(s: own E) -> (Array[String, 2], i64) { let r = match s { E.S(x) => x, E.N => mkt("z") }; return r; }

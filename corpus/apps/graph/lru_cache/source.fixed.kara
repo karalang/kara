@@ -86,7 +86,7 @@ impl LruCache {
         }
     }
 
-    fn on_evict(mut ref self, listener: Listener) {
+    fn on_evict(mut ref self, listener: own Listener) {
         self.listeners.push(listener);
     }
 
@@ -124,7 +124,7 @@ impl LruCache {
         self.push_front(node);
     }
 
-    fn notify(ref self, key: String, value: i64, reason: EvictReason) {
+    fn notify(ref self, key: String, value: i64, reason: own EvictReason) {
         for listener in self.listeners {
             match (listener.on_evict)(key.clone(), value, reason) {
                 Some(msg) => println(f"    [{listener.name}] {msg}"),
@@ -133,7 +133,7 @@ impl LruCache {
         }
     }
 
-    fn evict_lru(mut ref self, reason: EvictReason) {
+    fn evict_lru(mut ref self, reason: own EvictReason) {
         let victim = match self.tail {
             Some(t) => t,
             None => return,
@@ -167,7 +167,7 @@ impl LruCache {
         }
     }
 
-    fn put(mut ref self, key: String, value: i64) {
+    fn put(mut ref self, key: own String, value: i64) {
         match self.index.get(key) {
             Some(node) => {
                 node.value = value;
@@ -230,7 +230,7 @@ fn join(parts: Vec[String], sep: String) -> String {
     out
 }
 
-fn parse_number(line: i64, text: String) -> Result[i64, ScriptError] {
+fn parse_number(line: i64, text: own String) -> Result[i64, ScriptError] {
     match i64.parse(text) {
         Some(n) => Ok(n),
         None => Err(ScriptError.BadNumber { line, text }),

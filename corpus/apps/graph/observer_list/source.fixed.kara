@@ -214,7 +214,7 @@ impl Sheet {
         }
         Ok(())
     }
-    fn define(mut ref self, name: String, formula: Formula) -> Result[(), SheetError] {
+    fn define(mut ref self, name: own String, formula: own Formula) -> Result[(), SheetError] {
         if self.index.contains_key(name) { return Err(SheetError.DuplicateCell(name)); }
         self.check_formula(name, formula)?;
         let value = self.eval(name, formula)?;
@@ -266,7 +266,7 @@ impl Sheet {
         }
         hit
     }
-    fn set(mut ref self, name: String, formula: Formula) -> Result[i64, SheetError] {
+    fn set(mut ref self, name: String, formula: own Formula) -> Result[i64, SheetError] {
         let idx = self.lookup(name)?;
         self.check_formula(name, formula)?;
         println(f"set {name} = {formula}");
@@ -310,7 +310,7 @@ impl Sheet {
             }
         }
     }
-    fn subscribe(mut ref self, label: String, watch: String, kind: ObserverKind) -> i64 {
+    fn subscribe(mut ref self, label: own String, watch: own String, kind: own ObserverKind) -> i64 {
         let id = self.next_id;
         self.next_id += 1;
         println(f"subscribe {label}#{id} on {watch}");
@@ -341,14 +341,14 @@ impl Sheet {
     }
 }
 
-fn report_err(step: String, r: Result[(), SheetError]) {
+fn report_err(step: String, r: own Result[(), SheetError]) {
     match r {
         Ok(()) => {}
         Err(e) => println(f"{step} failed: {e}"),
     }
 }
 
-fn apply(sheet: mut ref Sheet, name: String, formula: Formula) {
+fn apply(sheet: mut ref Sheet, name: String, formula: own Formula) {
     match sheet.set(name.clone(), formula) {
         Ok(_) => {}
         Err(e) => println(f"set {name} rejected: {e}"),

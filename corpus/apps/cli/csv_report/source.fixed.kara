@@ -65,7 +65,7 @@ struct MonthTotal {
 }
 
 impl MonthTotal {
-    fn new(region: String, month: String) -> MonthTotal {
+    fn new(region: own String, month: own String) -> MonthTotal {
         MonthTotal { region: region, month: month, orders: 0, units: 0, revenue_cents: 0 }
     }
 

@@ -1,7 +1,7 @@
 
-fn dup(x: String) -> String { let g = || x; g() }
+fn dup(x: own String) -> String { let g = || x; g() }
 fn loc() -> String { let s = "L".to_string(); let g = || s; g() }
-fn mk(x: String) -> Fn() -> String { || x }
+fn mk(x: own String) -> Fn() -> String { || x }
 fn main() {
     println(dup("P".to_string()));
     println(loc());

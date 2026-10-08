@@ -1,0 +1,10 @@
+
+fn make(v: Vec[i64]) -> Fn(i64) -> i64 { |n| v.len() + n }
+fn main() {
+    let mut xs = Vec.new();
+    xs.push(1i64);
+    xs.push(2i64);
+    xs.push(3i64);
+    let f = make(xs);
+    println(f"{f(10i64)}");
+}

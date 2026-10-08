@@ -179,7 +179,7 @@ impl Limiter {
         Ok(decision)
     }
 
-    fn decide(mut ref self, req: ref Request, policy: Policy) -> Decision {
+    fn decide(mut ref self, req: ref Request, policy: own Policy) -> Decision {
         let blocked_until = match self.clients.get(req.client) {
             Some(stats) => stats.blocked_until,
             None => -1,
@@ -308,7 +308,7 @@ fn describe(decision: ref Decision) -> String {
     }
 }
 
-fn parse_num(text: ref String, field: String) -> Result[i64, ParseError] {
+fn parse_num(text: ref String, field: own String) -> Result[i64, ParseError] {
     match i64.parse(text) {
         Some(n) => Ok(n),
         None => Err(ParseError.BadNumber { field, text: text.clone() }),

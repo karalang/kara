@@ -135,7 +135,7 @@ struct Subscriber {
 }
 
 impl Subscriber {
-    fn new(name: String, capacity: i64) -> Subscriber {
+    fn new(name: own String, capacity: i64) -> Subscriber {
         Subscriber { name, capacity, patterns: Vec.new(), mailbox: VecDeque.new(), accepted: 0, dropped: 0 }
     }
 
@@ -150,7 +150,7 @@ impl Subscriber {
 
     // Appends to the mailbox; when full, the oldest message is evicted and
     // handed back so the broker can log it.
-    fn deliver(mut ref self, msg: Message) -> Option[Message] {
+    fn deliver(mut ref self, msg: own Message) -> Option[Message] {
         let mut evicted: Option[Message] = None;
         if self.mailbox.len() >= self.capacity {
             evicted = self.mailbox.pop_front();
@@ -194,7 +194,7 @@ impl Broker {
         }
     }
 
-    fn hand_to(mut ref self, idx: i64, msg: Message, log: mut ref Vec[String]) {
+    fn hand_to(mut ref self, idx: i64, msg: own Message, log: mut ref Vec[String]) {
         self.deliveries += 1;
         if let Some(old) = self.clients[idx].deliver(msg) {
             self.evictions += 1;
@@ -202,7 +202,7 @@ impl Broker {
         }
     }
 
-    fn connect(mut ref self, name: String, capacity: i64) -> Result[Vec[String], BrokerError] {
+    fn connect(mut ref self, name: own String, capacity: i64) -> Result[Vec[String], BrokerError] {
         if self.find(name).is_some() {
             return Err(BrokerError.DuplicateClient(name));
         }
@@ -211,7 +211,7 @@ impl Broker {
         Ok([line])
     }
 
-    fn subscribe(mut ref self, name: String, pattern: String) -> Result[Vec[String], BrokerError] {
+    fn subscribe(mut ref self, name: String, pattern: own String) -> Result[Vec[String], BrokerError] {
         validate_pattern(pattern)?;
         let idx = self.lookup(name)?;
         let mut log: Vec[String] = Vec.new();
@@ -235,7 +235,7 @@ impl Broker {
         Ok(log)
     }
 
-    fn unsubscribe(mut ref self, name: String, pattern: String) -> Result[Vec[String], BrokerError] {
+    fn unsubscribe(mut ref self, name: own String, pattern: String) -> Result[Vec[String], BrokerError] {
         let idx = self.lookup(name)?;
         match self.clients[idx].patterns.iter().position(|p| p == pattern) {
             Some(pos) => {
@@ -246,7 +246,7 @@ impl Broker {
         }
     }
 
-    fn publish(mut ref self, topic: String, payload: String, retain: bool) -> Result[Vec[String], BrokerError] {
+    fn publish(mut ref self, topic: own String, payload: own String, retain: bool) -> Result[Vec[String], BrokerError] {
         validate_topic(topic)?;
         if retain and payload.is_empty() {
             let had = self.retained.remove(topic).is_some();

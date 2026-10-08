@@ -1,0 +1,7 @@
+
+fn make(p: String) -> Fn(i64) -> i64 { |n| p.len() + n }
+fn main() {
+    let f = make(String.from("a heap-backed string well beyond the sso inline limit"));
+    let g = f;
+    println(f"{f(0i64) + g(0i64)}");
+}

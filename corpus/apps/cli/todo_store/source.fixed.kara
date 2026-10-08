@@ -36,7 +36,7 @@ impl Display for TodoError {
 }
 
 impl From[IoError] for TodoError {
-    fn from(e: IoError) -> TodoError {
+    fn from(e: own IoError) -> TodoError {
         let msg = match e {
             IoError.NotFound => "file not found",
             IoError.PermissionDenied => "permission denied",
@@ -77,7 +77,7 @@ struct Todo {
 }
 
 impl Todo {
-    fn new(id: i64, title: String) -> Todo {
+    fn new(id: i64, title: own String) -> Todo {
         Todo { id, title, done: false, tags: Vec.new() }
     }
 
@@ -169,7 +169,7 @@ fn need_id(words: ref Vec[String], op: ref String) -> Result[i64, TodoError] {
     parse_id(words[1])
 }
 
-fn need_text(words: ref Vec[String], from: i64, complaint: String) -> Result[String, TodoError] {
+fn need_text(words: ref Vec[String], from: i64, complaint: own String) -> Result[String, TodoError] {
     let text = join_from(words, from, " ");
     if text.is_empty() { return Err(TodoError.BadArgs(complaint)); }
     Ok(text)
@@ -267,7 +267,7 @@ impl Store {
         out
     }
 
-    fn apply(mut ref self, cmd: Command) -> Result[String, TodoError] {
+    fn apply(mut ref self, cmd: own Command) -> Result[String, TodoError] {
         match cmd {
             Command.Add(title) => {
                 let id = self.next_id;

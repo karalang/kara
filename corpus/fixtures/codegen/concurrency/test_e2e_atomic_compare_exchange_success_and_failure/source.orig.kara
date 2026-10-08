@@ -1,0 +1,21 @@
+
+par struct Cell { v: Atomic[i64] }
+impl Cell {
+    fn cas(ref self, old: i64, new: i64) -> Result[i64, i64] {
+        self.v.compare_exchange(old, new, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst)
+    }
+    fn get(ref self) -> i64 { self.v.load(MemoryOrdering.SeqCst) }
+}
+fn report(r: Result[i64, i64]) {
+    match r {
+        Ok(prev) => { println(100 + prev); }
+        Err(actual) => { println(200 + actual); }
+    }
+}
+fn main() {
+    let c = Cell { v: Atomic.new(5) };
+    report(c.cas(5, 9));   // 5 == 5 -> Ok(5)  -> 105
+    println(c.get());      // 9 (swapped)
+    report(c.cas(5, 1));   // 5 != 9 -> Err(9) -> 209
+    println(c.get());      // 9 (unchanged — failed CAS does not store)
+}

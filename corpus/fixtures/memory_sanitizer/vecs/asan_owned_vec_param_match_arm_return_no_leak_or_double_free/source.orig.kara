@@ -1,0 +1,23 @@
+
+fn choose(a: Vec[String], b: Vec[String], first: bool) -> Vec[String] {
+    match first {
+        true => a,
+        false => b,
+    }
+}
+
+fn main() {
+    let mut i: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while i < 100i64 {
+        let mut x: Vec[String] = Vec.new();
+        x.push(f"one{i}");
+        x.push(f"two{i}");
+        let mut y: Vec[String] = Vec.new();
+        y.push(f"three{i}");
+        let r = choose(x, y, false);
+        total = total + r.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}

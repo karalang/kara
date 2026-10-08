@@ -1,5 +1,5 @@
 
-fn pick(a: String, b: String) -> String {
+fn pick(a: own String, b: own String) -> String {
     match a > b {
         true => a,
         false => b,

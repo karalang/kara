@@ -1,0 +1,58 @@
+
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+shared struct Sh { k: i64, s: String }
+struct S1 { n: i64, v: String }
+struct S2 { v: String, w: Vec[i64] }
+struct S3 { r: R, v: String }
+struct S4 { id: i64, v: String }
+impl Drop for S4 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct S5 { h: Sh, v: String }
+enum E { A(R), B(String) }
+fn hs(k: i64) -> String { f"heap-string-long-enough-{k}" }
+fn m1(k: i64) -> Result[S1, i64] { if k > 5 { Result.Ok(S1 { n: k, v: hs(k) }) } else { Result.Err(k) } }
+fn m2(k: i64) -> Result[S2, i64] { if k > 5 { Result.Ok(S2 { v: hs(k), w: [1, 2] }) } else { Result.Err(k) } }
+fn m3(k: i64) -> Result[S3, i64] { if k > 5 { Result.Ok(S3 { r: R { id: k }, v: hs(k) }) } else { Result.Err(k) } }
+fn m4(k: i64) -> Result[S4, i64] { if k > 5 { Result.Ok(S4 { id: k, v: hs(k) }) } else { Result.Err(k) } }
+fn m5(k: i64) -> Result[S5, i64] { if k > 5 { Result.Ok(S5 { h: Sh { k: k, s: hs(k) }, v: hs(k) }) } else { Result.Err(k) } }
+fn m6(k: i64) -> Option[S4] { if k > 5 { Option.Some(S4 { id: k, v: hs(k) }) } else { Option.None } }
+fn m7(k: i64) -> Result[i64, S4] { if k > 5 { Result.Err(S4 { id: k, v: hs(k) }) } else { Result.Ok(k) } }
+fn m8(k: i64) -> Result[i64, S3] { if k > 5 { Result.Err(S3 { r: R { id: k }, v: hs(k) }) } else { Result.Ok(k) } }
+fn m9(k: i64) -> Option[Option[S4]] { if k > 5 { Option.Some(Option.Some(S4 { id: k, v: hs(k) })) } else { Option.None } }
+fn m10(k: i64) -> Result[E, i64] { if k > 5 { Result.Ok(E.A(R { id: k })) } else if k > 3 { Result.Ok(E.B(hs(k))) } else { Result.Err(k) } }
+fn h1(k: i64) -> Result[i64, i64] { let r = m1(k); let x = r?; println(x.v); Result.Ok(x.n) }
+fn h2(k: i64) -> Result[i64, i64] { let r = m2(k); let x = r?; println(x.v); Result.Ok(x.w.len()) }
+fn h3(k: i64) -> Result[i64, i64] { let r = m3(k); let x = r?; println(x.v); Result.Ok(x.r.id) }
+fn h4(k: i64) -> Result[i64, i64] { let r = m4(k); let x = r?; println(x.v); Result.Ok(x.id) }
+fn h5(k: i64) -> Result[i64, i64] { let r = m5(k); let x = r?; println(x.v); Result.Ok(x.h.k) }
+fn h6(k: i64) -> Option[i64] { let r = m6(k); let x = r?; println(x.v); Option.Some(x.id) }
+fn h7(k: i64) -> Result[i64, S4] { let r = m7(k); let x = r?; Result.Ok(x) }
+fn h8(k: i64) -> Result[i64, S3] { let r = m8(k); let x = r?; Result.Ok(x) }
+fn h9(k: i64) -> Option[i64] { let r = m9(k); let x = r?; match x { Option.Some(s) => Option.Some(s.id), Option.None => Option.None } }
+fn h10(k: i64) -> Result[i64, i64] { let r = m10(k); let x = r?; match x { E.A(q) => Result.Ok(q.id), E.B(s) => Result.Ok(s.len()) } }
+fn h11(n: i64) -> Result[i64, i64] { let mut t = 0; for i in 6..n { let r = m4(i); let x = r?; t = t + x.id; } Result.Ok(t) }
+fn h12(k: i64) -> Result[i64, i64] { let mut r = m4(1); r = m4(k); let x = r?; println(x.v); Result.Ok(x.id) }
+fn h13(k: i64, c: bool) -> Result[i64, i64] { let r = m4(k); if c { let x = r?; println(x.v); return Result.Ok(x.id) } println("skip"); Result.Ok(0) }
+fn pr(r: Result[i64, i64]) { match r { Result.Ok(v) => println(f"ok{v}"), Result.Err(e) => println(f"err{e}") } }
+fn po(o: Option[i64]) { match o { Option.Some(v) => println(f"some{v}"), Option.None => println("none") } }
+fn main() {
+    pr(h1(8));
+    pr(h1(1));
+    pr(h2(8));
+    pr(h3(8));
+    pr(h3(1));
+    pr(h4(8));
+    pr(h5(8));
+    po(h6(8));
+    po(h6(1));
+    match h7(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.v) }
+    match h8(8) { Result.Ok(v) => println(v), Result.Err(e) => println(e.v) }
+    po(h9(8));
+    pr(h10(8));
+    pr(h10(4));
+    pr(h11(9));
+    pr(h12(8));
+    pr(h13(8, true));
+    pr(h13(9, false));
+    println("end")
+}

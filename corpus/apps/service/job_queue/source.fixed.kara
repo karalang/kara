@@ -45,7 +45,7 @@ struct Job {
 }
 
 impl Job {
-    fn new(id: i64, kind: JobKind, payload: String, priority: i64) -> Job {
+    fn new(id: i64, kind: own JobKind, payload: own String, priority: i64) -> Job {
         Job { id, kind, payload, priority, attempts: 0, ready_at: 0 }
     }
 
@@ -94,7 +94,7 @@ impl Queue {
         }
     }
 
-    fn submit(mut ref self, job: Job) {
+    fn submit(mut ref self, job: own Job) {
         self.events.push(f"submit {job.label()} prio={job.priority}");
         self.pending.push(job);
     }
@@ -129,7 +129,7 @@ impl Queue {
         Some(self.pending.remove(best))
     }
 
-    fn settle(mut ref self, tick: i64, cfg: ref Config, outcome: Outcome) {
+    fn settle(mut ref self, tick: i64, cfg: ref Config, outcome: own Outcome) {
         let mut job = outcome.job;
         let w = outcome.worker;
         match outcome.result {
@@ -215,7 +215,7 @@ fn call_remote(job: ref Job, attempt: i64) -> Result[String, JobError] {
 }
 
 // One worker handles at most one job per tick.
-fn run_worker(worker: i64, slot: Option[Job]) -> Option[Outcome] {
+fn run_worker(worker: i64, slot: own Option[Job]) -> Option[Outcome] {
     match slot {
         None => None,
         Some(job) => {

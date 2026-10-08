@@ -1,0 +1,73 @@
+
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64 }
+struct WideS { a: i64, b: i64, c: i64, d: i64, s: String }
+fn u(v: Option[Option[i64]]) -> i64 {
+    match v { Option.Some(Option.Some(x)) => x, Option.Some(Option.None) => -1, Option.None => -2 }
+}
+fn ur(v: Result[Option[Option[i64]], i64]) -> i64 {
+    match v { Result.Ok(Option.Some(Option.Some(x))) => x, Result.Ok(_) => -1, Result.Err(e) => e }
+}
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 30 {
+        let k = n + i;
+
+        let mut a1: Option[Option[i64]] = Option.Some(Option.Some(k));
+        let s1: Option[Option[i64]] = Option.Some(Option.Some(k + 100));
+        a1 = s1;
+        acc = acc + u(a1) - n - 100;
+
+        let mut a2: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(k)));
+        let s2: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(k + 100)));
+        a2 = s2;
+        acc = acc + ur(a2) - n - 100;
+
+        let b3: Result[Option[Option[i64]], i64] = Result.Ok(Option.Some(Option.Some(k)));
+        let a3: Result[Option[Option[i64]], i64] = b3;
+        acc = acc + ur(a3) - n;
+
+        let mut a4: Option[Wide] = Option.Some(Wide { a: k, b: 1, c: 2, d: 3, e: 4 });
+        let s4: Option[Wide] = Option.Some(Wide { a: k + 100, b: 1, c: 2, d: 3, e: 4 });
+        a4 = s4;
+        acc = acc + (match a4 { Option.Some(w) => w.a, Option.None => -1 }) - n - 100;
+
+        let mut a5: Option[Option[i64]] = Option.Some(Option.Some(k));
+        a5 = a5;
+        acc = acc + u(a5) - n;
+
+        let mut a6: Option[Option[i64]] = Option.Some(Option.Some(k));
+        let s6: Option[Option[i64]] = Option.Some(Option.Some(k));
+        if i % 2 == 0 { a6 = s6; }
+        acc = acc + u(a6) - n;
+
+        let mut a7: Option[Option[i64]] = Option.Some(Option.Some(k));
+        let mut s7: Option[Option[i64]] = Option.Some(Option.Some(k + 100));
+        a7 = s7;
+        s7 = Option.Some(Option.Some(k + 200));
+        acc = acc + u(a7) - n - 100;
+        acc = acc + u(s7) - n - 200;
+
+        let mut a8: Option[Option[i64]] = Option.Some(Option.Some(k));
+        let s8: Option[Option[i64]] = Option.Some(Option.Some(k + 100));
+        a8 = s8;
+        a8 = Option.Some(Option.Some(k + 200));
+        acc = acc + u(a8) - n - 200;
+
+        let mut a9: Option[Option[i64]] = Option.Some(Option.Some(k));
+        let s9: Option[Option[i64]] = Option.Some(Option.Some(k + 100));
+        let mut d9: Option[Option[i64]] = Option.Some(Option.Some(k + 200));
+        a9 = s9;
+        d9 = a9;
+        acc = acc + u(d9) - n - 100;
+
+        let mut aa: Option[WideS] = Option.Some(WideS { a: k, b: 1, c: 2, d: 3, s: "p" + k.to_string() });
+        let sa: Option[WideS] = Option.Some(WideS { a: k + 100, b: 1, c: 2, d: 3, s: "q" + k.to_string() });
+        aa = sa;
+        acc = acc + (match aa { Option.Some(w) => w.a + (if w.s.len() > 0 { 1 } else { 0 }), Option.None => -1 }) - n - 100;
+
+        i = i + 1;
+    }
+    println(acc);
+}

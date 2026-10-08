@@ -7,12 +7,12 @@ fn z() -> Array[R, 2] { return [mk(0), mk(0)]; }
 fn zs() -> Array[String, 2] { return ["a", "b"]; }
 fn me(i: i64) -> EArr { return EArr.A([mk(i), mk(i + 1)]); }
 fn n8(x: own EArr) -> Array[R, 2] { if let EArr.A(v) = x { v } else { z() } }
-fn n9(x: EStr) -> Array[String, 2] { if let EStr.A(v) = x { v } else { zs() } }
+fn n9(x: own EStr) -> Array[String, 2] { if let EStr.A(v) = x { v } else { zs() } }
 fn r1(x: own EArr) -> Array[R, 2] { if let EArr.A(v) = x { let u = v; u } else { z() } }
-fn r2(x: EStr) -> Array[String, 2] { if let EStr.A(v) = x { let u = v; u } else { zs() } }
+fn r2(x: own EStr) -> Array[String, 2] { if let EStr.A(v) = x { let u = v; u } else { zs() } }
 fn l1() -> Array[R, 2] { let e = me(5); if let EArr.A(v) = e { v } else { z() } }
 fn f1() -> Array[R, 2] { if let EArr.A(v) = me(7) { v } else { z() } }
-fn m2(x: EStr) -> i64 { let k: Array[String, 2] = if let EStr.A(v) = x { v } else { zs() }; return k[1].len() as i64; }
+fn m2(x: own EStr) -> i64 { let k: Array[String, 2] = if let EStr.A(v) = x { v } else { zs() }; return k[1].len() as i64; }
 fn e1(x: own EArr, y: own EArr) -> Array[R, 2] { if let EArr.A(v) = x { v } else if let EArr.A(w) = y { w } else { z() } }
 fn b1(x: own EArr) -> Array[R, 2] { if let EArr.A(v) = x { v } else { z() } }
 fn main() {

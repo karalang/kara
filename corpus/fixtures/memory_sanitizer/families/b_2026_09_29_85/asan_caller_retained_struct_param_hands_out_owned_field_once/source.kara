@@ -14,7 +14,7 @@ impl Q {
 fn f1(q: own Q) -> String { q.s }
 fn f2(q: own Q) -> String { let Q { i, n, s, v, w } = q; s }
 fn f3(q: own Q) -> String { match q { Q { s, .. } => s } }
-fn f4(q: Q) -> i64 { if let Q { s, .. } = q { s.len() } else { 0 } }
+fn f4(q: own Q) -> i64 { if let Q { s, .. } = q { s.len() } else { 0 } }
 fn f5(q: own Q) -> i64 { match q { Q { i, n, s, .. } => n } }
 fn f6(q: own Q) -> i64 { let mut o = Vec.new(); o.push(q.s); o.len() }
 fn f7(q: own Q) -> i64 { match q { Q { v, .. } => v.len() } }
