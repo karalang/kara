@@ -395,3 +395,42 @@ fn main() {
         "1\n2\n11\n12\n1 102\n2 103\n10\ntrue\n3\ntrue\n7\n3\n6\n",
     );
 }
+
+/// A program's own adaptor whose impl fixes one of the struct's arguments
+/// (`impl[I: Iterator, B] Iterator for Mapped[I, I.Item, B]`): the impl's
+/// arguments are read off the struct's by position (`[0, 2]`), for a `for`
+/// over it and a method call on it. Its stored closure is `escaping`, so it
+/// writes its own moved-in copy of `seen`, which stays 0 outside.
+#[test]
+fn an_impl_that_fixes_a_struct_argument_and_a_stored_closure_that_writes() {
+    let src = r#"
+struct Counter { n: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] { self.n = self.n + 1; Some(self.n) }
+}
+struct Mapped[I, T, B] { it: I, f: MutFn(own T) -> B }
+impl[I: Iterator, B] Iterator for Mapped[I, I.Item, B] {
+    type Item = B;
+    fn next(mut ref self) -> Option[B] {
+        match self.it.next() {
+            Some(x) => Some((self.f)(x)),
+            None => None,
+        }
+    }
+}
+fn mapped[T, I: Iterator[Item = T], B](it: own I, f: escaping MutFn(own T) -> B) -> Mapped[I, T, B] {
+    Mapped { it: it, f: f }
+}
+fn main() {
+    for x in mapped(Counter { n: 0 }, |x: i64| x * 10).take(3) { println(x); }
+    let mut seen = 0;
+    for s in mapped(Counter { n: 0 }.take(2), |x: i64| { seen = seen + 1; f"<{x}>" }) {
+        println(s);
+    }
+    println(seen);
+    println(mapped(Counter { n: 5 }, |x: i64| x + 1).nth(1).unwrap());
+}
+"#;
+    assert_runs(src, "10\n20\n30\n<1>\n<2>\n0\n8\n");
+}

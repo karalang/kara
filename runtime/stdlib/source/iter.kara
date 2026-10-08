@@ -7,8 +7,11 @@
 // much as a program's own iterators. The legacy backends do not read it.
 //
 // Each adaptor is a struct holding the iterator it wraps. The adaptors that
-// would store a function (`map`, `filter`, ...) follow once a closure can be
-// a struct field; the methods that only call one (`fold`, `any`, ...) are here.
+// store a function (`map`, `filter`, ...) take it as a type parameter with a
+// function-trait bound (`F: MutFn(own Self.Item) -> U`), so its captures are
+// borrowed as core semantics §9.1 says; they follow once the checker and the
+// MIR builder support those bounds. The methods that only call a function
+// (`fold`, `any`, ...) are here.
 
 trait Iterator {
     type Item;

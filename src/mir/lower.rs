@@ -197,10 +197,53 @@ struct FnItem<'a> {
     impl_prim: Option<Ty>,
     /// The impl's generic parameters, which come before the method's.
     impl_generics: Option<&'a ast::GenericParams>,
+    /// Where each impl parameter sits among the target's arguments, when
+    /// that is not simply the leading ones in order: `impl[I, B] ... for
+    /// MapIter[I, I.Item, B]` gives `[0, 2]`.
+    impl_arg_pos: Option<Vec<usize>>,
     /// The impl block's span: with the method's own span, the key of the
     /// checker's per-function tables (a trait default method copied into
     /// several impls has the same span in each).
     impl_span: Option<SpanKey>,
+}
+
+impl FnItem<'_> {
+    /// The impl's generic arguments, read off its target's arguments.
+    fn impl_args(&self, targs: &[Ty]) -> Option<Vec<Ty>> {
+        match &self.impl_arg_pos {
+            Some(pos) => pos.iter().map(|&k| targs.get(k).copied()).collect(),
+            None => targs.get(..self.impl_params).map(<[Ty]>::to_vec),
+        }
+    }
+}
+
+/// Where each of `b`'s generic parameters is written among its target's
+/// arguments, or `None` when they are those arguments' first ones in
+/// order (or are not each written bare, which nothing maps yet).
+fn impl_arg_positions(b: &ast::ImplBlock) -> Option<Vec<usize>> {
+    let params = &b.generic_params.as_ref()?.params;
+    let ast::TypeKind::Path(p) = &b.target_type.kind else {
+        return None;
+    };
+    let targs = p.generic_args.as_ref()?;
+    let bare = |a: &ast::GenericArg| match a {
+        ast::GenericArg::Type(t) => match &t.kind {
+            ast::TypeKind::Path(q) if q.generic_args.is_none() && q.segments.len() == 1 => {
+                Some(q.segments[0].clone())
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    let pos = params
+        .iter()
+        .map(|g| {
+            targs
+                .iter()
+                .position(|a| bare(a).as_deref() == Some(g.name.as_str()))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!pos.iter().copied().eq(0..params.len())).then_some(pos)
 }
 
 struct Lcx<'a> {
@@ -344,6 +387,7 @@ impl<'a> Lcx<'a> {
                                 impl_params: 0,
                                 impl_prim: None,
                                 impl_generics: None,
+                                impl_arg_pos: None,
                                 impl_span: None,
                             },
                         );
@@ -377,6 +421,7 @@ impl<'a> Lcx<'a> {
                     }
                     let impl_path = self.defs.table.get(impl_id).path.segments.clone();
                     let impl_params = b.generic_params.as_ref().map_or(0, |g| g.params.len());
+                    let impl_arg_pos = impl_arg_positions(b);
                     for it in &b.items {
                         let ImplItem::Method(f) = it else { continue };
                         let mut p = impl_path.clone();
@@ -393,6 +438,7 @@ impl<'a> Lcx<'a> {
                                     impl_params,
                                     impl_prim: prim,
                                     impl_generics: b.generic_params.as_ref(),
+                                    impl_arg_pos: impl_arg_pos.clone(),
                                     impl_span: Some(SpanKey::from_span(&b.span)),
                                 },
                             );
@@ -4320,14 +4366,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let d = self.lcx.defs.table.lookup(&DefPath::new(path))?;
         let d = self.lcx.lowered_def(d)?;
         let item = self.lcx.fns.get(&d)?;
-        Some((
-            d,
-            if item.impl_params == 0 {
-                Vec::new()
-            } else {
-                args
-            },
-        ))
+        Some((d, item.impl_args(&args)?))
     }
 
     /// The `from` of the user's non-generic `impl From[source] for
@@ -5771,8 +5810,10 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let info = &self.lcx.fns[&d];
         let f = info.f;
-        if info.impl_params != args.len()
-            || !f.params.is_empty()
+        let Some(args) = info.impl_args(&args) else {
+            return Ok(None);
+        };
+        if !f.params.is_empty()
             || f.self_param != Some(SelfParam::MutRef)
             || f.generic_params
                 .as_ref()
@@ -7270,11 +7311,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         {
             return None;
         }
-        let n = item.impl_params;
-        if n > targs.len() {
-            return None;
-        }
-        Some((d, targs[..n].to_vec()))
+        Some((d, item.impl_args(&targs)?))
     }
 
     fn user_method_call(
@@ -7865,6 +7902,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             .unwrap_or_default();
         let mut caps = Vec::new();
         let mut ops = Vec::new();
+        // Whether the body writes a capture, which then needs the
+        // environment lent mutably even when the capture was moved in.
+        let mut writes = false;
         let captured = self.closure_captures(body);
         self.assigned_caps.borrow_mut().clear();
         let moved = self.moved_captures(body, &captured);
@@ -7898,6 +7938,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             // A `Copy` place is copied in unless the body assigns to it. A
             // once-callable closure moves something out of its captures, so
             // its non-`Copy` captures move in (core semantics §9.1).
+            writes |= mode == Some(OwnershipMode::MutRef);
             let cm = match mode {
                 _ if escapes => CapMode::Value,
                 Some(OwnershipMode::MutRef) => CapMode::Mut,
@@ -7934,7 +7975,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .any(|&(_, m, t)| m == CapMode::Value && !self.is_copy(t))
         {
             EnvMode::Value
-        } else if caps.iter().any(|&(_, m, _)| m == CapMode::Mut) {
+        } else if writes || caps.iter().any(|&(_, m, _)| m == CapMode::Mut) {
             EnvMode::Mut
         } else {
             EnvMode::Ref
