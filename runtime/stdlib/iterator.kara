@@ -21,4 +21,5 @@
 
 trait Iterator {
     type Item;
+    fn next(mut ref self) -> Option[Self.Item];
 }

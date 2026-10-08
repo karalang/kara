@@ -564,6 +564,14 @@ impl<'a> super::TypeChecker<'a> {
             else {
                 return ty;
             };
+            // A param seen only as a projection's receiver (`Self` in a
+            // trait default body's `Option[Self.Item]`) is not freshened:
+            // substituting a variable there renames the projection's
+            // receiver to that variable, which the next round finds
+            // unbound in turn, and the loop never ends.
+            if !param_occurs_bare(&ty, &param) {
+                return ty;
+            }
             let var = self.env.fresh_type_var();
             if let Type::TypeVar(id) = var {
                 self.freshened_scrutinee_vars.insert(id);
@@ -3458,5 +3466,41 @@ fn borrowed_field_binding_ty(field: &Type, is_mut: bool) -> Type {
         Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. } | Type::Error => field.clone(),
         _ if is_mut => Type::MutRef(Box::new(field.clone())),
         _ => Type::Ref(Box::new(field.clone())),
+    }
+}
+
+/// Does `name` occur in `ty` as a type parameter itself, rather than only as
+/// the receiver of an associated-type projection?
+fn param_occurs_bare(ty: &Type, name: &str) -> bool {
+    match ty {
+        Type::TypeParam(p) => p == name,
+        Type::Tuple(ts) => ts.iter().any(|t| param_occurs_bare(t, name)),
+        Type::Array { element, .. } | Type::Slice { element, .. } => {
+            param_occurs_bare(element, name)
+        }
+        Type::Ref(t) | Type::MutRef(t) | Type::Weak(t) | Type::Pointer { inner: t, .. } => {
+            param_occurs_bare(t, name)
+        }
+        Type::Named { args, .. } => args.iter().any(|t| param_occurs_bare(t, name)),
+        Type::Function {
+            params,
+            return_type,
+        }
+        | Type::OnceFunction {
+            params,
+            return_type,
+        } => {
+            params.iter().any(|t| param_occurs_bare(t, name))
+                || param_occurs_bare(return_type, name)
+        }
+        Type::AssocProjection {
+            args,
+            receiver_args,
+            ..
+        } => args
+            .iter()
+            .chain(receiver_args)
+            .any(|t| param_occurs_bare(t, name)),
+        _ => false,
     }
 }

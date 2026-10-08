@@ -185,7 +185,7 @@ pub struct ImplInfo {
 /// e.g. `Column[T]` → `[TypeParam("T")]`) against a concrete receiver's args
 /// (`actual`, e.g. `[f64]`), recursing through compound forms. First binding
 /// wins. Only the parameterized-bound arg check uses this (B-2026-07-02-42).
-fn bind_impl_params(decl: &[Type], actual: &[Type], out: &mut HashMap<String, Type>) {
+pub(super) fn bind_impl_params(decl: &[Type], actual: &[Type], out: &mut HashMap<String, Type>) {
     for (d, a) in decl.iter().zip(actual.iter()) {
         bind_impl_param_one(d, a, out);
     }

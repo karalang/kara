@@ -455,6 +455,30 @@ impl<'a> Lcx<'a> {
         self.mir_ty(hir, args)
     }
 
+    /// `self`'s type in `f`, instantiated, when the checker recorded the
+    /// impl target with its args written out: `Option[Option[i64]]` for
+    /// `impl[T] Option[Option[T]]` at `T = i64`, where building the target
+    /// from the impl's params by position gives `Option[i64]`. `None` when
+    /// the recorded target has its args erased, as most generic impls'
+    /// targets are.
+    fn fn_self_written(&mut self, f: &Function, args: &[Ty]) -> Option<Result<Ty, String>> {
+        let key = SpanKey::from_span(&f.span);
+        let (ty, frame) = self.tc.fn_self_types.get(&key)?;
+        if !matches!(ty, Type::Named { args, .. } if !args.is_empty()) {
+            return None;
+        }
+        let params = self
+            .tc
+            .node_generic_frames
+            .get(*frame as usize)
+            .cloned()
+            .unwrap_or_default();
+        Some(
+            self.lower_legacy(ty, &params)
+                .and_then(|hir| self.mir_ty(hir, args)),
+        )
+    }
+
     fn lower_legacy(&self, ty: &Type, params: &[String]) -> Result<Ty, String> {
         let defs = self.defs;
         let lookup = |name: &str| {
@@ -659,6 +683,10 @@ enum ScopeEntry<'a> {
     /// A local whose storage ends with the scope.
     Storage(Local),
 }
+
+/// An iterator type's `next`, instantiated for a `for` loop: its definition,
+/// instance args and name, and the `Option[Item]` it returns.
+type NextFn = (DefId, Vec<Ty>, String, Ty);
 
 struct LoopCx {
     label: Option<String>,
@@ -988,12 +1016,19 @@ impl<'l, 'a> Bx<'l, 'a> {
             let t = match seen {
                 Some(t) => t,
                 None => {
-                    let tcx = self.tys().tcx();
-                    let params: Vec<Ty> = self.args[..n.min(self.args.len())].to_vec();
-                    let target_ty = tcx.adt(target, &params);
-                    match self.lcx.convert(target_ty) {
-                        Ok(t) => t,
-                        Err(e) => return self.unsupported(f.span, &e),
+                    let args = self.args.clone();
+                    match self.lcx.fn_self_written(f, &args).filter(|_| n > 0) {
+                        Some(Ok(t)) => t,
+                        Some(Err(e)) => return self.unsupported(f.span, &e),
+                        None => {
+                            let tcx = self.tys().tcx();
+                            let params: Vec<Ty> = self.args[..n.min(self.args.len())].to_vec();
+                            let target_ty = tcx.adt(target, &params);
+                            match self.lcx.convert(target_ty) {
+                                Ok(t) => t,
+                                Err(e) => return self.unsupported(f.span, &e),
+                            }
+                        }
                     }
                 }
             };
@@ -3103,6 +3138,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             return self.for_chars(label, pattern, body, text, dest);
         }
+        if idx.is_none() {
+            if let Some(next) = self.iterator_next(iterable)? {
+                return self.for_iterator(label, pattern, iterable, next, body, dest);
+            }
+        }
         #[derive(PartialEq, Clone, Copy)]
         enum Mode {
             Ref,
@@ -4105,6 +4145,170 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.goto(join);
         self.cur = join;
         self.pop_scope()
+    }
+
+    /// The `next` method of `iterable`'s type, instantiated, when the type
+    /// is a program or library type that implements it: what a `for` loop
+    /// over an `Iterator` calls. `None` for every other type, and for a
+    /// library collection, whose loop reads it by position.
+    fn iterator_next(&mut self, iterable: &'a Expr) -> R<Option<NextFn>> {
+        // A type the builder cannot spell (the checker's opaque
+        // `Iterator[T]` of `v.iter()`) is not an `Iterator` implementation;
+        // the caller's own paths take it, so its refusal is not recorded.
+        let before = self.errors.len();
+        let Ok(t) = self.expr_ty(iterable) else {
+            self.errors.truncate(before);
+            return Ok(None);
+        };
+        let tcx = self.tys().tcx();
+        let HK::Adt { def, args } = tcx.kind(t) else {
+            return Ok(None);
+        };
+        let args = tcx.list(args).to_vec();
+        let Some(cands) = self.lcx.defs.methods.get(&def).and_then(|m| m.get("next")) else {
+            return Ok(None);
+        };
+        let Some(d) = cands.iter().copied().find(|d| self.lcx.fns.contains_key(d)) else {
+            return Ok(None);
+        };
+        let info = &self.lcx.fns[&d];
+        let f = info.f;
+        if info.impl_params != args.len()
+            || !f.params.is_empty()
+            || f.self_param != Some(SelfParam::MutRef)
+            || f.generic_params
+                .as_ref()
+                .is_some_and(|g| !g.params.is_empty())
+        {
+            return Ok(None);
+        }
+        let ret = match self.lcx.fn_return(f, &args) {
+            Ok(r) => r,
+            Err(err) => return self.unsupported(iterable.span, &err),
+        };
+        let name = self.lcx.instance(d, args.clone());
+        Ok(Some((d, args, name, ret)))
+    }
+
+    /// `for pattern in it` over an `Iterator`: the loop owns `it` and calls
+    /// its `next` until that returns `None`, binding each `Some` payload to
+    /// `pattern`. `it` is dropped when the loop ends, however it ends.
+    fn for_iterator(
+        &mut self,
+        label: &Option<String>,
+        pattern: &'a Pattern,
+        iterable: &'a Expr,
+        (d, args, name, opt_t): NextFn,
+        body: &'a Block,
+        dest: Place,
+    ) -> R<()> {
+        let Some(some) = self
+            .error_variant(opt_t)
+            .filter(|_| {
+                self.tys()
+                    .tcx()
+                    .adt_of(opt_t)
+                    .is_some_and(|(a, _)| a.name == "Option")
+            })
+            .map(|none| 1 - none)
+        else {
+            return self.unsupported(iterable.span, "a `next` that returns no `Option`");
+        };
+        let Some(item_t) = self.tys().tcx().field_ty(opt_t, Some(some), 0) else {
+            return self.unsupported(iterable.span, "a `next` with no payload");
+        };
+        let it_t = self.expr_ty(iterable)?;
+        self.push_scope();
+        let it = self.scoped_temp(it_t);
+        self.expr_into(iterable, Place::local(it))?;
+        let head = self.b.new_block();
+        let exit = self.b.new_block();
+        self.goto(head);
+        self.cur = head;
+        self.loops.push(LoopCx {
+            label: label.clone(),
+            break_bb: exit,
+            continue_bb: head,
+            depth: self.scopes.len(),
+            dest: None,
+        });
+        let r = self.for_iterator_round(
+            pattern,
+            it,
+            (d, args, name, opt_t),
+            some,
+            item_t,
+            body,
+            head,
+            exit,
+        );
+        self.loops.pop();
+        r?;
+        self.cur = exit;
+        self.pop_scope()?;
+        self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+        Ok(())
+    }
+
+    /// One round of [`Self::for_iterator`], shaped like a `while let`
+    /// round: `next`, then leave for `exit` on `None` or bind and run the
+    /// body on `Some`.
+    #[allow(clippy::too_many_arguments)]
+    fn for_iterator_round(
+        &mut self,
+        pattern: &'a Pattern,
+        it: Local,
+        (d, args, name, opt_t): NextFn,
+        some: u32,
+        item_t: Ty,
+        body: &'a Block,
+        head: BasicBlock,
+        exit: BasicBlock,
+    ) -> R<()> {
+        self.push_scope();
+        let it_t = self.b.local_ty(it);
+        let rt = self.tys().tcx().reference(it_t, true);
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(it)));
+        let opt = self.scoped_temp(opt_t);
+        let func = self.fn_operand(&name, d, args);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: vec![Operand::Move(Place::local(r))],
+                destination: Place::local(opt),
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        let fail = self.b.new_block();
+        self.switch_variant(&Place::local(opt), some, fail);
+        let matched = self.cur;
+        self.cur = fail;
+        let entries = std::mem::take(self.scopes.last_mut().unwrap());
+        let r = self.exit_entries(&entries, false);
+        *self.scopes.last_mut().unwrap() = entries;
+        r?;
+        self.goto(exit);
+        self.cur = matched;
+        self.push_scope();
+        let payload = Place::local(opt)
+            .project(ProjElem::Downcast(VariantIdx(some)))
+            .field(0, item_t);
+        let mut binds = Vec::new();
+        self.bind_pattern(pattern, &payload, item_t, false, &mut binds)?;
+        for &(l, t) in &binds {
+            self.declare(l, t);
+        }
+        let t = self.unit();
+        let tmp = self.temp(t);
+        self.block_into(body, Place::local(tmp))?;
+        self.pop_scope()?;
+        self.pop_scope()?;
+        self.goto(head);
+        Ok(())
     }
 
     /// One round of `while let`: test the scrutinee, leaving for `exit` (its
@@ -6946,6 +7150,33 @@ fn main() {
             run_source(src),
             Ok(("5 3 7 40 2 5 7 200 4 9 2 true\n".to_string(), Some(0)))
         );
+    }
+
+    /// A method of an impl whose target nests its params: `self` in
+    /// `impl[T] Option[Option[T]]` at `T = i64` is an `Option[Option[i64]]`,
+    /// so its payload is the `Option[i64]` the method returns.
+    #[test]
+    fn a_nested_impl_target_types_self() {
+        let src = r#"
+impl[T] Option[Option[T]] {
+    fn flat(self) -> Option[T] {
+        match self {
+            Some(inner) => inner,
+            None => None,
+        }
+    }
+}
+fn main() {
+    let a: Option[Option[i64]] = Some(Some(5));
+    let b: Option[Option[i64]] = Some(None);
+    match a.flat() {
+        Some(v) => println(f"{v}"),
+        None => println("none"),
+    }
+    println(f"{b.flat().is_none()}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("5\ntrue\n".to_string(), Some(0))));
     }
 
     /// Or-patterns, range patterns (ints and chars, open and closed) and

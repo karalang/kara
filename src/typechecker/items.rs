@@ -1846,6 +1846,9 @@ impl<'a> super::TypeChecker<'a> {
         for (name, bounds) in Self::collect_param_bounds(&f.generic_params, &f.where_clause) {
             self.enclosing_bounds.insert(name, bounds);
         }
+        let saved_assoc_eqs = self.enclosing_assoc_eqs.clone();
+        self.enclosing_assoc_eqs
+            .extend(Self::collect_assoc_eqs(&f.where_clause));
 
         // Collect the DIM params used in shape positions in the signature (and
         // any `const` / `...S` params) so body-level annotations can resolve
@@ -1926,6 +1929,10 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(st) = self_type {
                 self.local_scope.insert("self".to_string(), st.clone());
                 self.current_self_type = Some(st.clone());
+                self.fn_self_types.insert(
+                    SpanKey::from_span(&f.span),
+                    (st.clone(), self.current_generic_frame),
+                );
             }
         }
 
@@ -2121,6 +2128,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_return_type = None;
         self.current_self_type = None;
         self.enclosing_bounds = saved_bounds;
+        self.enclosing_assoc_eqs = saved_assoc_eqs;
         self.current_body_dim_scope = saved_body_dim_scope;
         self.current_fn_stdlib_origin = saved_fn_stdlib_origin;
         self.current_generic_frame = saved_generic_frame;
@@ -3386,6 +3394,21 @@ impl<'a> super::TypeChecker<'a> {
                 // `Foo[T]`), and a shared struct is non-generic at v1 — see
                 // `Type::Shared`'s own doc. There are no args to erase.
                 Type::Shared(_) => lowered.clone(),
+                // On the MIR pipeline, a generic target that NESTS its
+                // params (`impl[T] Option[Option[T]]`) keeps its args. Erased
+                // to `Option`, `self` gives a `match` binding no type at all,
+                // so `Some(inner) => inner` checked against anything; the
+                // erasure is a legacy-codegen protocol the MIR does not use.
+                // A target whose args are all bare params (`Option[T]`) is
+                // left to `current_impl_target` below, as before.
+                Type::Named { args, .. }
+                    if self.library_methods_from_source
+                        && !args.is_empty()
+                        && !args.iter().all(|a| matches!(a, Type::TypeParam(_)))
+                        && !args.iter().all(type_is_fully_concrete) =>
+                {
+                    lowered.clone()
+                }
                 _ => Type::Named {
                     name: type_name.clone(),
                     args: Vec::new(),
@@ -3564,6 +3587,9 @@ impl<'a> super::TypeChecker<'a> {
         for (name, bounds) in Self::collect_param_bounds(&imp.generic_params, &imp.where_clause) {
             self.enclosing_bounds.insert(name, bounds);
         }
+        let saved_assoc_eqs = self.enclosing_assoc_eqs.clone();
+        self.enclosing_assoc_eqs
+            .extend(Self::collect_assoc_eqs(&imp.where_clause));
 
         // Lint-level slice 4b — push the impl block's lint overrides
         // so per-method `check_function` calls inherit the impl's
@@ -3766,6 +3792,7 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         self.enclosing_bounds = saved_bounds;
+        self.enclosing_assoc_eqs = saved_assoc_eqs;
         self.current_impl_target = saved_impl_target;
         self.current_concrete_impl_target = saved_concrete_impl_target;
         self.lint_override_stack.pop();

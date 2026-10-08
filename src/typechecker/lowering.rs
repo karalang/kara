@@ -741,7 +741,11 @@ impl<'a> super::TypeChecker<'a> {
             // assoc-type segment by convention). Lower them as the
             // projection's `args` so the type system retains the
             // instantiation through substitution and resolution.
-            if path.segments.len() == 2 && generic_scope.contains(&path.segments[0]) {
+            // `Self.Item` is a projection too, in a trait's own signatures
+            // as much as in its impls: `Self` is never a module.
+            if path.segments.len() == 2
+                && (generic_scope.contains(&path.segments[0]) || path.segments[0] == "Self")
+            {
                 let assoc = path.segments[1].clone();
                 let args =
                     self.lower_generic_args_named(&path.generic_args, generic_scope, Some(&assoc));
@@ -1303,6 +1307,28 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         map
+    }
+
+    /// The `where P.Assoc = T` equalities of a where clause, keyed by
+    /// `(P, Assoc)`; see `enclosing_assoc_eqs`.
+    pub(super) fn collect_assoc_eqs(
+        where_clause: &Option<WhereClause>,
+    ) -> Vec<((String, String), crate::ast::TypeExpr)> {
+        let Some(wc) = where_clause else {
+            return Vec::new();
+        };
+        wc.constraints
+            .iter()
+            .filter_map(|c| match c {
+                WhereConstraint::AssocTypeEq {
+                    type_name,
+                    assoc_name,
+                    ty,
+                    ..
+                } => Some(((type_name.clone(), assoc_name.clone()), ty.clone())),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Walk `ty` and resolve any `AssocProjection { param, assoc, args,

@@ -2019,6 +2019,13 @@ pub struct TypeCheckResult {
     /// Each function's declared return type (`Self` resolved), keyed by the
     /// function's span, with the generic frame its parameters are placed in.
     pub fn_return_types: FxHashMap<SpanKey, (Type, u32)>,
+    /// Each method's `self` type as its body was checked, keyed by the
+    /// method's span, with the generic frame its parameters are placed in.
+    /// A generic impl's target is usually recorded with its args erased
+    /// (`Foo` for `impl[T] Foo[T]`); one that nests its params keeps them on
+    /// the MIR pipeline (`Option[Option[T]]`), and that is the case a reader
+    /// of this table is after.
+    pub fn_self_types: FxHashMap<SpanKey, (Type, u32)>,
     /// Per-call-site generic-param substitutions as ELEMENT-AWARE mono-mangle
     /// TOKENS (`T` → `"Vec_i64"` / `"Vec_String"` / `"String"`), the sibling of
     /// `call_type_subs` (which is head-only: both `Vec[i64]` and `Vec[String]`
@@ -2765,6 +2772,7 @@ pub struct TypeChecker<'a> {
     pub(super) current_generic_frame: u32,
     pub(super) node_call_subs: FxHashMap<crate::ids::NodeId, FxHashMap<String, Type>>,
     pub(super) fn_return_types: FxHashMap<SpanKey, (Type, u32)>,
+    pub(super) fn_self_types: FxHashMap<SpanKey, (Type, u32)>,
     /// `(part, whole, how)`: a node whose type is a projection of another's,
     /// in recording order (a whole after its parts). See
     /// `refine_node_types_from_wholes`.
@@ -2840,6 +2848,12 @@ pub struct TypeChecker<'a> {
     /// path. Used to resolve bare `method(args)` calls at expected-type
     /// positions when the expected type is a generic param.
     pub(super) enclosing_bounds: FxHashMap<String, Vec<crate::ast::TraitBound>>,
+    /// The associated-type equalities in scope, `(param, assoc) -> type`:
+    /// the `Item = i64` of `I: Iterator[Item = i64]`, which the desugar pass
+    /// hoists into a `where I.Item = i64`. Saved and restored with
+    /// `enclosing_bounds`, and read to normalize `I.Item` in a method's
+    /// signature when the receiver is that parameter.
+    pub(super) enclosing_assoc_eqs: FxHashMap<(String, String), crate::ast::TypeExpr>,
     /// Generic-parameter names that are DIM/const params (appear in a shape
     /// position `[D]` in the current function's signature, or are declared
     /// `const` / `...S`) — the subset whose body-annotation resolution needs
@@ -3136,6 +3150,7 @@ impl<'a> TypeChecker<'a> {
             node_call_subs: FxHashMap::default(),
             node_type_links: Vec::new(),
             fn_return_types: FxHashMap::default(),
+            fn_self_types: FxHashMap::default(),
             node_method_callees: FxHashMap::default(),
             node_call_callees: FxHashMap::default(),
             current_call_node: None,
@@ -3153,6 +3168,7 @@ impl<'a> TypeChecker<'a> {
             pending_typevar_pattern_bindings: Vec::new(),
             freshened_scrutinee_vars: std::collections::HashSet::new(),
             enclosing_bounds: FxHashMap::default(),
+            enclosing_assoc_eqs: FxHashMap::default(),
             current_body_dim_scope: Vec::new(),
             enclosing_trait: None,
             closure_once_reasons: FxHashMap::default(),
@@ -3498,6 +3514,7 @@ impl<'a> TypeChecker<'a> {
             node_method_callees: std::mem::take(&mut self.node_method_callees),
             node_call_callees: std::mem::take(&mut self.node_call_callees),
             fn_return_types: std::mem::take(&mut self.fn_return_types),
+            fn_self_types: std::mem::take(&mut self.fn_self_types),
             float_coerced_arg_sites: self.float_coerced_arg_sites,
             cast_source_unsigned: self.cast_source_unsigned,
             weak_elem_store_sites: self.weak_elem_store_sites,

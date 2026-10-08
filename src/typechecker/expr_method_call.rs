@@ -541,13 +541,32 @@ impl<'a> super::TypeChecker<'a> {
                 // — without this, `c.sum()` under `C: Reduce[i64]` typed
                 // as the raw TypeParam `T` (S6a, expected-i64-found-T).
                 let trait_subs = self.trait_bound_arg_subs(&bound);
-                self.dispatch_trait_assoc_fn(
+                let ret = self.dispatch_trait_assoc_fn(
                     type_param_name,
                     &trait_method,
                     &trait_subs,
                     args,
                     span,
-                )
+                );
+                // `I.Item` in the result names the type a `where I.Item = T`
+                // (or an `I: Iterator[Item = T]` bound) fixes, so `next()`
+                // under that bound is an `Option[T]`, not an abstract
+                // projection nothing can add or compare.
+                let eqs: Vec<(String, crate::ast::TypeExpr)> = self
+                    .enclosing_assoc_eqs
+                    .iter()
+                    .filter(|((p, _), _)| p == type_param_name)
+                    .map(|((_, a), te)| (a.clone(), te.clone()))
+                    .collect();
+                if eqs.is_empty() {
+                    return ret;
+                }
+                let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
+                let bindings: Vec<(String, Type)> = eqs
+                    .iter()
+                    .map(|(a, te)| (a.clone(), self.lower_type_expr(te, &scope)))
+                    .collect();
+                substitute_existential_assoc_bindings(&ret, type_param_name, &bindings)
             }
             _ => {
                 let trait_list = candidates

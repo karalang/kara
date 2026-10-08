@@ -725,17 +725,32 @@ impl<'a> super::TypeChecker<'a> {
                 // value-receiver path consistent with UFCS dispatch; for a
                 // non-generic receiver (empty `type_args` / no impl generics)
                 // `recv_subs` is empty and behavior is unchanged.
-                let recv_subs: HashMap<String, SubstValue> = imp
-                    .generic_params
-                    .as_ref()
-                    .map(|gp| {
-                        gp.params
-                            .iter()
-                            .zip(type_args.iter())
-                            .map(|(p, t)| (p.name.clone(), SubstValue::Type(t.clone())))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                //
+                // The params are bound by matching the impl's TARGET against
+                // the receiver, not by position: under `impl[T]
+                // Option[Option[T]]` a receiver `Option[Option[i64]]` binds
+                // `T` to `i64`, where zipping the impl's params with the
+                // receiver's args bound it to `Option[i64]`. Positional zipping
+                // remains only for an impl whose target args were not recorded.
+                let recv_subs: HashMap<String, SubstValue> = if imp.target_generic_args.is_empty() {
+                    imp.generic_params
+                        .as_ref()
+                        .map(|gp| {
+                            gp.params
+                                .iter()
+                                .zip(type_args.iter())
+                                .map(|(p, t)| (p.name.clone(), SubstValue::Type(t.clone())))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    let mut bound = HashMap::new();
+                    super::env::bind_impl_params(&imp.target_generic_args, &type_args, &mut bound);
+                    bound
+                        .into_iter()
+                        .map(|(p, t)| (p, SubstValue::Type(t)))
+                        .collect()
+                };
                 self.record_node_impl_subs(span, &recv_subs);
                 // B-2026-08-30-43 — hand the same binding to the interpreter.
                 // It is computed here anyway; the tree-walk had no way to see
@@ -773,16 +788,28 @@ impl<'a> super::TypeChecker<'a> {
                 // type. (Self-receiver dispatch returned earlier at the
                 // `TypeParam("Self")` arm, so `receiver_for_lookup` is concrete
                 // here.)
+                // `Self.Item` in a trait default method's signature names
+                // the receiver's own `Item`, as `Self` names the receiver.
+                let self_subs: HashMap<String, SubstValue> = std::iter::once((
+                    "Self".to_string(),
+                    SubstValue::Type(receiver_for_lookup.clone()),
+                ))
+                .collect();
                 let params: Vec<Type> = sig
                     .params
                     .iter()
                     .map(|p| substitute_type_params(p, &recv_subs))
                     .map(|p| Self::resolve_self_in_type(p, receiver_for_lookup))
+                    .map(|p| {
+                        self.resolve_assoc_projections(&substitute_type_params(&p, &self_subs))
+                    })
                     .collect();
                 let return_type = Self::resolve_self_in_type(
                     substitute_type_params(&sig.return_type, &recv_subs),
                     receiver_for_lookup,
                 );
+                let return_type = self
+                    .resolve_assoc_projections(&substitute_type_params(&return_type, &self_subs));
                 // B-2026-08-31-13 — a BAKED builtin impl carries its receiver
                 // IN `params`: `register_builtin_impl`'s comparison signatures
                 // are `param_names: [self, other], params: [ty, ty]`. A USER
