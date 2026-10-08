@@ -80,7 +80,7 @@ impl[T] Option[T] {
         }
     }
 
-    fn r#or(own self, other: own Option[T]) -> Option[T] {
+    fn or(own self, other: own Option[T]) -> Option[T] {
         match self {
             Some(x) => Some(x),
             None => other,

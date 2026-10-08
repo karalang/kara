@@ -42,7 +42,7 @@ fn main() {
     let d = a.and_then(|x| if x > 1 { Some(x.to_string()) } else { None });
     println(f"{d.unwrap()}");
     let e: Option[String] = None;
-    println(f"{e.r#or(Some("z".to_string())).unwrap()}");
+    println(f"{e.or(Some("z".to_string())).unwrap()}");
     println(f"{a.filter(|x| x > 5).is_none()}");
     let r = a.ok_or("none".to_string());
     println(f"{r.is_ok()}");
