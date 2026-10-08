@@ -265,7 +265,7 @@ impl Validator<'_> {
                             TyKind::Fn { params: p, ret: r, kind: k },
                             TyKind::Fn { params: q, ret: s, kind: l },
                         ) if p == q && r == s && k <= l
-                    );
+                    ) || self.weak_cast(*kind, from, *t);
                     if !ok {
                         self.err(format!(
                             "{kind:?} cast from {} to {}",
@@ -398,6 +398,30 @@ impl Validator<'_> {
 }
 
 impl Validator<'_> {
+    /// §6.5: `Downgrade` takes `ref shared T` or `ref weak T` to `weak T`;
+    /// `Upgrade` takes `ref weak T` to `Option[shared T]`.
+    fn weak_cast(&self, kind: CastKind, from: Ty, to: Ty) -> bool {
+        let TyKind::Ref(inner) = self.tys.kind(from) else {
+            return false;
+        };
+        match (kind, self.tys.kind(inner), self.tys.kind(to)) {
+            (CastKind::Downgrade, TyKind::Shared(_), TyKind::Weak(w)) => w == inner,
+            (CastKind::Downgrade, TyKind::Weak(v), TyKind::Weak(w)) => v == w,
+            (CastKind::Upgrade, TyKind::Weak(w), TyKind::Adt(a)) => {
+                // Checked by shape, since MIR text names an instance with
+                // its arguments (`Option[shared Node]`).
+                let adt = self.tys.adt(a);
+                let pos = |n: &str| adt.variants.iter().position(|v| v.name == n);
+                adt.is_enum
+                    && adt.variants.len() == 2
+                    && pos("None").is_some()
+                    && pos("Some")
+                        .is_some_and(|some| self.tys.field_ty(to, Some(some as u32), 0) == Some(w))
+            }
+            _ => false,
+        }
+    }
+
     /// A call through an erased function value (core semantics §9.6):
     /// `Fn` is called through a `ref`, `MutFn` through a `mut ref`, and
     /// `OnceFn` by moving it; the arguments and result match its type.

@@ -412,6 +412,11 @@ impl Parser {
             let a = self.adt(&c.type_name()?)?;
             return Ok(self.tys.intern(TyKind::Shared(a)));
         }
+        if c.eat_kw("weak") {
+            let a = self.adt(&c.type_name()?)?;
+            let s = self.tys.intern(TyKind::Shared(a));
+            return Ok(self.tys.intern(TyKind::Weak(s)));
+        }
         let name = c.ident()?;
         let fn_kind = match name {
             "Fn" => Some(FnKind::Fn),
@@ -1005,6 +1010,8 @@ impl Parser {
                     "CharToInt" => CastKind::CharToInt,
                     "BoolToInt" => CastKind::BoolToInt,
                     "Erase" => CastKind::Erase,
+                    "Downgrade" => CastKind::Downgrade,
+                    "Upgrade" => CastKind::Upgrade,
                     other => return Err(format!("unknown cast kind `{other}`")),
                 };
                 c.expect(")")?;

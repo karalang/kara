@@ -172,11 +172,11 @@ fn takes_flag(tys: &TyInterner, t: Ty) -> bool {
     !tys.is_copy(t) && !counted(tys, t)
 }
 
-/// A `shared` handle, or an `Option` or tuple of only handles, `Copy`
+/// A `shared` or `weak` handle, or an `Option` or tuple of only handles, `Copy`
 /// parts and further such aggregates with at least one handle (§6.1).
 fn counted(tys: &TyInterner, t: Ty) -> bool {
     let parts: Vec<Ty> = match tys.kind(t) {
-        TyKind::Shared(_) => return true,
+        TyKind::Shared(_) | TyKind::Weak(_) => return true,
         TyKind::Tuple(ts) => ts.to_vec(),
         TyKind::Adt(a) if tys.adt(a).name == "Option" => {
             let adt = tys.adt(a);

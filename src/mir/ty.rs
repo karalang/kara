@@ -129,6 +129,10 @@ pub enum TyKind {
     Adt(AdtId),
     /// A `shared struct` / `shared enum` handle (reference counted).
     Shared(AdtId),
+    /// A `weak` handle (core semantics §6.5): the `shared` type it points
+    /// at. It keeps the object's memory but not the object alive, is
+    /// move-only, and is read through an `Upgrade` cast.
+    Weak(Ty),
     Ref(Ty),
     MutRef(Ty),
     /// A library collection the MIR interpreter implements natively
@@ -240,6 +244,7 @@ impl TyInterner {
                 def: a.def(),
                 args: none(),
             },
+            TyKind::Weak(t) => SharedKind::Weak(t),
             TyKind::Ref(t) => SharedKind::Ref(t),
             TyKind::MutRef(t) => SharedKind::MutRef(t),
             TyKind::Intrinsic(IntrinsicTy::String) => SharedKind::Str,
@@ -310,6 +315,9 @@ impl TyInterner {
             SharedKind::Slice { elem, .. } => TyKind::Slice(elem),
             SharedKind::Adt { def, .. } => TyKind::Adt(AdtId(def.0)),
             SharedKind::Shared { def, .. } => TyKind::Shared(AdtId(def.0)),
+            SharedKind::Weak(t) if matches!(tcx.kind(t), SharedKind::Shared { .. }) => {
+                TyKind::Weak(t)
+            }
             SharedKind::Ref(t) => TyKind::Ref(t),
             SharedKind::MutRef(t) => TyKind::MutRef(t),
             SharedKind::Intrinsic { kind, args } => {
@@ -418,6 +426,7 @@ impl TyInterner {
             TyKind::Slice(e) => format!("Slice[{}]", self.display(e)),
             TyKind::Adt(_) => self.adt_name(t),
             TyKind::Shared(_) => format!("shared {}", self.adt_name(t)),
+            TyKind::Weak(s) => format!("weak {}", self.adt_name(s)),
             TyKind::Ref(t) => format!("ref {}", self.display(t)),
             TyKind::MutRef(t) => format!("mut ref {}", self.display(t)),
             TyKind::Intrinsic(IntrinsicTy::String) => "String".into(),

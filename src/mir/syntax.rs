@@ -328,6 +328,14 @@ pub enum CastKind {
     /// that accepts it (`Fn` into `MutFn` or `OnceFn`, `MutFn` into
     /// `OnceFn`).
     Erase,
+    /// `ref shared T` (or `ref weak T`) into a new `weak T` (core
+    /// semantics §6.5). The operand is borrowed, so no strong count is
+    /// taken and given back; copying a weak value is a downgrade of it.
+    Downgrade,
+    /// `ref weak T` into `Option[shared T]`: `Some` with a new handle,
+    /// counted, while the object is alive, `None` after its last handle
+    /// is dropped.
+    Upgrade,
 }
 
 #[derive(Debug, Clone, PartialEq)]

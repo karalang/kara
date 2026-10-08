@@ -491,4 +491,95 @@ fn main() -> () {{
             assert!(errors_mention(&errs, want), "{want}: {errs:?}");
         }
     }
+
+    /// `weak` handles: the `Downgrade` and `Upgrade` casts, what the
+    /// validator accepts, and that a weak value is move-only, needs drop
+    /// and is dropped whole.
+    #[test]
+    fn mir_weak_handles() {
+        let src = |body: &str| {
+            format!(
+                "
+struct Node {{ id: i64 }}
+enum Option[shared Node] {{ None, Some(shared Node) }}
+
+fn main(_1: shared Node) -> () {{
+    let mut _0: ();
+    let _2: ref shared Node;
+    let _3: weak Node;
+    let _4: ref weak Node;
+    let _5: weak Node;
+    let _6: Option[shared Node];
+    let _7: i64;
+    bb0: {{
+        _2 = &_1;
+        _3 = copy _2 as weak Node (Downgrade);
+        _4 = &_3;
+{body}        _0 = const ();
+        drop(_6) -> bb1;
+    }}
+    bb1: {{
+        drop(_5) -> bb2;
+    }}
+    bb2: {{
+        drop(_3) -> bb3;
+    }}
+    bb3: {{
+        drop(_1) -> bb4;
+    }}
+    bb4: {{
+        return;
+    }}
+}}
+"
+            )
+        };
+        let ok = src(
+            "        _5 = copy _4 as weak Node (Downgrade);\n        _6 = copy _4 as Option[shared Node] (Upgrade);\n",
+        );
+        let m = parse_module(&ok).unwrap_or_else(|e| panic!("{e}"));
+        let body = &m.bodies[0];
+        assert_eq!(validate(body, &m.tys), Vec::<String>::new());
+        let printed = pretty_body(body, &m.tys);
+        for line in [
+            "let _3: weak Node;",
+            "_3 = copy _2 as weak Node (Downgrade);",
+            "_6 = copy _4 as Option[shared Node] (Upgrade);",
+        ] {
+            assert!(printed.contains(line), "{line}: {printed}");
+        }
+        let mut m2 = parse_module(&pretty_module(&m)).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(pretty_body(&m2.bodies[0], &m2.tys), printed);
+        let w = body.locals[3].ty;
+        assert!(!m.tys.is_copy(w));
+        assert!(m.tys.needs_drop(w));
+        let b = &mut m2.bodies[0];
+        elaborate_drops(b, &mut m2.tys).unwrap();
+        assert_eq!(validate(b, &m2.tys), Vec::<String>::new());
+        let elaborated = pretty_body(b, &m2.tys);
+        assert!(elaborated.contains("drop(_3)"), "{elaborated}");
+        assert!(elaborated.contains("drop(_5)"), "{elaborated}");
+        // A weak value holds no borrow: writing the handle it came from
+        // while it lives is fine.
+        assert!(check_borrows(&m.bodies[0], &m.tys, &|_| false).is_ok());
+
+        let mut errs = Vec::new();
+        for body in [
+            // Upgrade reads through a `ref weak`, not a `ref shared`.
+            "        _5 = copy _4 as weak Node (Downgrade);\n        _6 = copy _2 as Option[shared Node] (Upgrade);\n",
+            // Downgrade takes a reference, and yields a weak value.
+            "        _5 = move _3 as weak Node (Downgrade);\n        _6 = copy _4 as Option[shared Node] (Upgrade);\n",
+            "        _5 = copy _4 as weak Node (Downgrade);\n        _7 = copy _4 as i64 (Upgrade);\n        _6 = copy _4 as Option[shared Node] (Upgrade);\n",
+        ] {
+            let m = parse_module(&src(body)).unwrap_or_else(|e| panic!("{e}"));
+            errs.extend(validate(&m.bodies[0], &m.tys));
+        }
+        for want in [
+            "Upgrade cast from ref shared Node to Option[shared Node]",
+            "Downgrade cast from weak Node to weak Node",
+            "Upgrade cast from ref weak Node to i64",
+        ] {
+            assert!(errors_mention(&errs, want), "{want}: {errs:?}");
+        }
+    }
 }
