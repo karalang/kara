@@ -542,6 +542,7 @@ impl Origins {
                         [x, y].into_iter().filter_map(root).collect()
                     }
                     Rvalue::Aggregate(_, ops) => ops.iter().filter_map(root).collect(),
+                    Rvalue::NullaryOp(..) => Vec::new(),
                 };
                 for src in srcs {
                     flow(&mut preds, src, d, true);

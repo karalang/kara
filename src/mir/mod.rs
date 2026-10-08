@@ -13,6 +13,7 @@ pub mod effects;
 pub mod elaborate;
 pub mod flags;
 pub mod interp;
+pub mod layout;
 pub mod lower;
 pub mod movecheck;
 pub mod parse;

@@ -228,6 +228,15 @@ impl Validator<'_> {
                 // builder; not re-derived here.
                 None
             }
+            Rvalue::NullaryOp(_, t) => {
+                if super::layout::layout(self.tys, *t).is_none() {
+                    self.err(format!(
+                        "layout of {}, which has none",
+                        self.tys.display(*t)
+                    ));
+                }
+                None
+            }
             Rvalue::BinaryOp(_, a, b) | Rvalue::CheckedBinaryOp(_, a, b) => {
                 let ta = self.operand(a);
                 let tb = self.operand(b);

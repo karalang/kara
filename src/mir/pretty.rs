@@ -262,6 +262,8 @@ pub fn rvalue(body: &Body, tys: &TyInterner, rv: &Rvalue) -> String {
         }
         Rvalue::Discriminant(p) => format!("discriminant({})", place(body, tys, p)),
         Rvalue::Len(p) => format!("Len({})", place(body, tys, p)),
+        Rvalue::NullaryOp(NullOp::SizeOf, t) => format!("SizeOf({})", tys.display(*t)),
+        Rvalue::NullaryOp(NullOp::AlignOf, t) => format!("AlignOf({})", tys.display(*t)),
         Rvalue::Aggregate(kind, v) => match kind {
             AggregateKind::Tuple => format!("({})", ops(v)),
             AggregateKind::Array(_) => format!("[{}]", ops(v)),

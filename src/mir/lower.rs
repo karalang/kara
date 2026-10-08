@@ -6535,6 +6535,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                     if self.scalar_min_max(e, &name, args, dest.clone())? {
                         return Ok(());
                     }
+                    // `T.size_of()` / `T.align_of()`: a fact about this
+                    // instance's `T`, answered from its layout.
+                    let layout_op = match name.as_str() {
+                        "size_of" => Some(NullOp::SizeOf),
+                        "align_of" => Some(NullOp::AlignOf),
+                        _ => None,
+                    };
+                    if let (Some(op), None, [t]) =
+                        (layout_op, self.lcx.def_owner(d), inst_args.as_slice())
+                    {
+                        self.assign(dest, Rvalue::NullaryOp(op, *t));
+                        return Ok(());
+                    }
                     // A library function with no Kāra body (`sleep_ms(2)`,
                     // `Command.new("ls")`, `Arena[i64].new()`): the
                     // interpreter's, by its name qualified with the owning
@@ -9853,6 +9866,35 @@ fn main() {
                 .to_string(),
                 Some(0)
             ))
+        );
+    }
+
+    /// `T.size_of()` and `T.align_of()` answer from `mir::layout`, in a
+    /// generic body for the instance's `T`.
+    #[test]
+    fn layout_queries() {
+        let src = r#"
+struct P { a: u8, b: i64, c: u16 }
+enum E { A, B(i64), C(u8, String) }
+shared struct S { x: i64 }
+fn sz[T](x: T) -> i64 { T.size_of() }
+fn main() {
+    let a = i32.size_of();
+    let b = u8.align_of();
+    let c = String.size_of();
+    let d = P.size_of();
+    let e = P.align_of();
+    let g = E.size_of();
+    let i = sz(P { a: 1, b: 2, c: 3 });
+    let j = sz((1u8, 2i32));
+    let k = S.size_of();
+    let l = i128.align_of();
+    println(f"{a} {b} {c} {d} {e} {g} {i} {j} {k} {l}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("4 1 24 24 8 32 24 8 8 16\n".to_string(), Some(0)))
         );
     }
 

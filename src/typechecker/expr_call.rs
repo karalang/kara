@@ -317,6 +317,15 @@ impl<'a> super::TypeChecker<'a> {
             }
         };
         let resolved = self.lower_type_expr_inner(type_arg_expr, &[], true);
+        // Typed HIR reads the queried type as the call's one type argument.
+        if let Some((node, key)) = self.current_call_node {
+            if key == SpanKey::from_span(span) && !node.is_dummy() {
+                self.node_call_subs
+                    .entry(node)
+                    .or_default()
+                    .insert("T".to_string(), resolved.clone());
+            }
+        }
         if let Type::Named {
             name: ref ty_name, ..
         } = resolved

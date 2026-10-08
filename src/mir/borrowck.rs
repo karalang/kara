@@ -440,7 +440,8 @@ impl Cx<'_> {
             Rvalue::BinaryOp(..)
             | Rvalue::CheckedBinaryOp(..)
             | Rvalue::Discriminant(_)
-            | Rvalue::Len(_) => {}
+            | Rvalue::Len(_)
+            | Rvalue::NullaryOp(..) => {}
         }
         self.assign(o, dest, val);
     }
@@ -720,6 +721,7 @@ fn rvalue_places(rv: &Rvalue, f: &mut impl FnMut(&Place)) {
         }
         Rvalue::Aggregate(_, ops) => ops.iter().for_each(op),
         Rvalue::Ref(_, p) | Rvalue::Retain(p) | Rvalue::Discriminant(p) | Rvalue::Len(p) => f(p),
+        Rvalue::NullaryOp(..) => {}
     }
 }
 
@@ -746,6 +748,7 @@ pub(super) fn statement_accesses(s: &StatementKind) -> Vec<(Place, Access)> {
                 Rvalue::Retain(p) | Rvalue::Discriminant(p) | Rvalue::Len(p) => {
                     vec![(p.clone(), Access::Read)]
                 }
+                Rvalue::NullaryOp(..) => Vec::new(),
             };
             v.push((dest.clone(), Access::Write));
             v

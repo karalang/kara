@@ -3780,6 +3780,13 @@ impl<'a> Interp<'a> {
                     _ => err("discriminant of a value that is not an initialized enum"),
                 }
             }
+            Rvalue::NullaryOp(op, t) => match super::layout::layout(self.tys, *t) {
+                Some(l) => Ok(Value::Int(i128::from(match op {
+                    NullOp::SizeOf => l.size,
+                    NullOp::AlignOf => l.align,
+                }))),
+                None => err("layout of a type that has none"),
+            },
             Rvalue::Len(p) => {
                 let (addr, _) = self.resolve_read(body, p)?;
                 match self.slot(&addr)? {

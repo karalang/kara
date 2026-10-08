@@ -363,9 +363,11 @@ pub(super) fn rvalue_operands(rv: &Rvalue) -> Vec<&Operand> {
         Rvalue::Use(o) | Rvalue::UnaryOp(_, o) | Rvalue::Cast(_, o, _) => vec![o],
         Rvalue::BinaryOp(_, a, b) | Rvalue::CheckedBinaryOp(_, a, b) => vec![a, b],
         Rvalue::Aggregate(_, ops) => ops.iter().collect(),
-        Rvalue::Ref(..) | Rvalue::Retain(_) | Rvalue::Discriminant(_) | Rvalue::Len(_) => {
-            Vec::new()
-        }
+        Rvalue::Ref(..)
+        | Rvalue::Retain(_)
+        | Rvalue::Discriminant(_)
+        | Rvalue::Len(_)
+        | Rvalue::NullaryOp(..) => Vec::new(),
     }
 }
 

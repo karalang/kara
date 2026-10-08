@@ -329,6 +329,15 @@ impl BinOp {
     }
 }
 
+/// A query about a type, answered from its layout (`mir::layout`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NullOp {
+    /// `T.size_of()`: the bytes a value of `T` takes, padding included.
+    SizeOf,
+    /// `T.align_of()`.
+    AlignOf,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnOp {
     Not,
@@ -399,6 +408,8 @@ pub enum Rvalue {
     Discriminant(Place),
     Len(Place),
     Aggregate(AggregateKind, Vec<Operand>),
+    /// A `usize` fact about a type.
+    NullaryOp(NullOp, Ty),
 }
 
 #[derive(Debug, Clone, PartialEq)]

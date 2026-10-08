@@ -1122,6 +1122,16 @@ impl Parser {
                 "retain" => Rvalue::Retain(one(self, c)?),
                 "discriminant" => Rvalue::Discriminant(one(self, c)?),
                 "Len" => Rvalue::Len(one(self, c)?),
+                "SizeOf" | "AlignOf" => {
+                    let t = self.ty(c)?;
+                    c.expect(")")?;
+                    let op = if head == "SizeOf" {
+                        NullOp::SizeOf
+                    } else {
+                        NullOp::AlignOf
+                    };
+                    Rvalue::NullaryOp(op, t)
+                }
                 "Not" | "Neg" => {
                     let o = self.operand(body, c)?;
                     c.expect(")")?;
