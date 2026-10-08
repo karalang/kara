@@ -38,6 +38,12 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(trait_name, "Numeric" | "GpuSafe") {
             return true;
         }
+        // Function-trait bounds (`F: MutFn(own T) -> U`, design.md § 7):
+        // the bound's signature is checked where a value of `F` is called
+        // and where an argument is passed for it.
+        if matches!(trait_name, "Fn" | "MutFn" | "OnceFn") {
+            return true;
+        }
         if self.env.traits.contains_key(trait_name)
             || self.env.trait_aliases.contains(trait_name)
             || DERIVE_ONLY_BUILTINS.contains(&trait_name)
@@ -91,6 +97,81 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         None
+    }
+
+    /// The function type a function-trait bound stands for: its signature,
+    /// a `Function` for `Fn` / `MutFn` and a `OnceFunction` for `OnceFn`,
+    /// lowered with `scope`'s type parameters.
+    pub(super) fn fn_bound_type(
+        &mut self,
+        bound: &crate::ast::TraitBound,
+        scope: &[String],
+    ) -> Option<Type> {
+        let kind = bound.path.last()?;
+        if !matches!(kind.as_str(), "Fn" | "MutFn" | "OnceFn") {
+            return None;
+        }
+        let t = self.lower_type_expr(bound.fn_sig.as_ref()?, scope);
+        Some(self.resolve_assoc_projections(&t))
+    }
+
+    /// The function type of the in-scope type parameter `param`'s
+    /// function-trait bound, for calling a value of type `param`.
+    pub(super) fn enclosing_fn_bound(&mut self, param: &str) -> Option<Type> {
+        let bound = self
+            .enclosing_bounds
+            .get(param)?
+            .iter()
+            .find(|b| b.fn_sig.is_some())?
+            .clone();
+        let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
+        self.fn_bound_type(&bound, &scope)
+    }
+
+    /// The type a call's argument for the callee's type parameter `param`
+    /// is checked against when `param` has a function-trait bound in
+    /// `where_clause`: the bound's signature over the call's metavariables,
+    /// so a closure argument gets its parameter types from it.
+    pub(super) fn call_fn_bound_expectation(
+        &mut self,
+        param: &str,
+        where_clause: Option<&WhereClause>,
+        name_to_id: &std::collections::HashMap<String, super::types::TypeVarId>,
+    ) -> Option<Type> {
+        let bound = where_clause?.constraints.iter().find_map(|c| match c {
+            WhereConstraint::TypeBound {
+                type_name, bounds, ..
+            } if type_name == param => bounds.iter().find(|b| b.fn_sig.is_some()).cloned(),
+            _ => None,
+        })?;
+        if !matches!(
+            bound.path.last().map(String::as_str),
+            Some("Fn" | "MutFn" | "OnceFn")
+        ) {
+            return None;
+        }
+        // Projections on the callee's parameters (`I.Item`) stay unresolved
+        // here: they resolve once the substitution has solved `I`.
+        let scope: Vec<String> = name_to_id.keys().cloned().collect();
+        let t = self.lower_type_expr(bound.fn_sig.as_ref()?, &scope);
+        let subs: std::collections::HashMap<String, super::types::SubstValue> = name_to_id
+            .iter()
+            .map(|(n, id)| {
+                // A parameter the arguments already solved is substituted
+                // with its solution, so a projection on it (`I.Item`)
+                // resolves; an unsolved one stays its metavariable.
+                let solved = super::inference::resolve_type_vars(
+                    &Type::TypeVar(*id),
+                    &self.env.substitutions,
+                    &Default::default(),
+                    &self.env.const_substitutions,
+                    &Default::default(),
+                );
+                (n.clone(), super::types::SubstValue::Type(solved))
+            })
+            .collect();
+        let t = super::inference::substitute_type_params(&t, &subs);
+        Some(self.resolve_assoc_projections(&t))
     }
 
     /// Emit the v1 trait-alias stub diagnostic at a use site.

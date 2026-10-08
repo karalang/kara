@@ -1750,6 +1750,14 @@ pub struct TypeCheckResult {
     /// type for the fat-pointer call (B-2026-06-22-4). Lowering folds this into
     /// `Program.fn_value_typed_exprs`.
     pub fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
+    /// The parameter types of a call's callee when it is a function VALUE
+    /// (a closure binding, a struct field, a value whose type parameter has
+    /// a function-trait bound), keyed by the call's FIRST ARGUMENT's span.
+    /// The ownership checker reads each parameter's `ref` / `mut ref` off it,
+    /// so `(self.f)(x)` with `F: MutFn(ref T)` borrows `x` rather than moving
+    /// it. The first argument's span is unique to its call, where the
+    /// callee's span is shared with the call and any call it is the callee of.
+    pub fn_value_param_types: FxHashMap<SpanKey, Vec<Type>>,
     /// The STATIC TYPE of each `dbg(x)` argument, keyed by the ARGUMENT's span
     /// (B-2026-08-23-18).
     ///
@@ -2666,6 +2674,7 @@ pub struct TypeChecker<'a> {
     /// a non-identifier callee. See the public copy on `TypeCheckResult` for
     /// the full rationale.
     pub(super) fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
+    pub(super) fn_value_param_types: FxHashMap<SpanKey, Vec<Type>>,
     pub(super) dbg_arg_types: FxHashMap<SpanKey, Type>,
     /// Per-existential capture sets, keyed by the SpanKey of the
     /// `TypeKind::ImplTrait` AST node. See the public copy on
@@ -3146,6 +3155,7 @@ impl<'a> TypeChecker<'a> {
             method_typeparam_receiver: FxHashMap::default(),
             method_typeparam_trait_key: FxHashMap::default(),
             fn_value_callee_types: FxHashMap::default(),
+            fn_value_param_types: FxHashMap::default(),
             dbg_arg_types: FxHashMap::default(),
             impl_trait_captures: FxHashMap::default(),
             method_unwrap_inner_types: FxHashMap::default(),
@@ -3524,6 +3534,7 @@ impl<'a> TypeChecker<'a> {
             method_typeparam_receiver: self.method_typeparam_receiver,
             method_typeparam_trait_key: self.method_typeparam_trait_key,
             fn_value_callee_types: self.fn_value_callee_types,
+            fn_value_param_types: self.fn_value_param_types,
             dbg_arg_types: self.dbg_arg_types,
             impl_trait_captures: self.impl_trait_captures,
             method_unwrap_inner_types: self.method_unwrap_inner_types,

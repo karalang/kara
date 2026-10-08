@@ -1906,3 +1906,55 @@ fn main() {
 "#,
     );
 }
+
+/// A function value called through a type parameter with a function-trait
+/// bound (`F: MutFn(ref I.Item)`) or through a struct field typed
+/// `Fn(ref String)` borrows the argument the signature marks `ref`, so
+/// using it again after the call is not a use after move.
+#[test]
+fn a_ref_parameter_of_a_bounded_or_field_held_function_borrows() {
+    accepted(
+        "fn-bound-ref",
+        r#"
+struct Counter { n: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] { self.n = self.n + 1; Some(self.n) }
+}
+struct Insp[I, F] { it: I, f: F }
+impl[I: Iterator, F: MutFn(ref I.Item)] Iterator for Insp[I, F] {
+    type Item = I.Item;
+    fn next(mut ref self) -> Option[I.Item] {
+        match self.it.next() {
+            Some(x) => { (self.f)(x); Some(x) }
+            None => None,
+        }
+    }
+}
+fn insp[I: Iterator, F: MutFn(ref I.Item)](it: own I, f: own F) -> Insp[I, F] { Insp { it: it, f: f } }
+fn twice[F: Fn(ref String) -> i64](f: own F, s: own String) -> i64 { f(s) + f(s) }
+struct H { f: Fn(ref String) -> i64 }
+fn main() {
+    let mut seen = 0;
+    for x in insp(Counter { n: 0 }, |x| { seen = seen + 1; }) { if x == 4 { break; } }
+    let h = H { f: |s: ref String| s.len() };
+    let s = "abc";
+    let n = (h.f)(s);
+    println(f"{seen} {n} {s} {twice(|s| s.len(), "xy")}");
+}
+"#,
+    );
+}
+
+/// The same call through an `own` parameter of the bound still moves.
+#[test]
+fn an_own_parameter_of_a_bounded_function_moves() {
+    rejected_then_fixed(
+        "fn-bound-own",
+        r#"
+fn take[F: Fn(own String) -> i64](f: own F, s: own String) -> i64 { f(s) + f(s) }
+fn main() { println(take(|s| s.len(), "ab")); }
+"#,
+        "moved here",
+    );
+}

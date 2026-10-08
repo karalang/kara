@@ -766,7 +766,7 @@ impl<'a> UseClassifier<'a> {
                 let modes = self
                     .callee_modes_for_call(callee)
                     .cloned()
-                    .or_else(|| self.fn_typed_callee_modes(callee));
+                    .or_else(|| self.fn_typed_callee_modes(callee, args));
                 // B-2026-07-02-23: a comparison operator (`==` `!=` `<` `<=`
                 // `>` `>=`) lowers to `Call(Path([Type, "eq"/…]), [lhs, rhs])`
                 // — a free-call to an *instance* trait method, so it never
@@ -1535,9 +1535,22 @@ impl<'a> UseClassifier<'a> {
     /// Only ever turns a Consume into a Read, and only where the type says
     /// `ref` / `mut ref` in that position. A `Fn(String)` slot keeps the
     /// consume default, because there the call really does take ownership.
-    fn fn_typed_callee_modes(&self, callee: &Expr) -> Option<Vec<OwnershipMode>> {
+    fn fn_typed_callee_modes(
+        &self,
+        callee: &Expr,
+        args: &[crate::ast::CallArg],
+    ) -> Option<Vec<OwnershipMode>> {
+        // A function VALUE the checker resolved at this call — a struct
+        // field `(h.f)(x)`, or a value whose type parameter has a
+        // function-trait bound (`F: MutFn(ref T)`) — keyed by the first
+        // argument, which no other call shares.
+        let recorded = args.first().and_then(|a| {
+            self.tc
+                .fn_value_param_types
+                .get(&SpanKey::from_span(&a.value.span))
+        });
         let ExprKind::Identifier(name) = &callee.kind else {
-            return None;
+            return recorded.map(|params| Self::modes_of_fn_params(params));
         };
         // NAME-KEYED TABLES ONLY — deliberately no `expr_types` span fallback,
         // unlike `classify_identifier`'s chain. The parser gives a postfix
@@ -1552,21 +1565,26 @@ impl<'a> UseClassifier<'a> {
         let ty = self
             .param_types
             .get(name.as_str())
-            .or_else(|| self.local_types.get(name.as_str()))?;
-        let params = match ty {
-            Type::Function { params, .. } | Type::OnceFunction { params, .. } => params,
-            _ => return None,
-        };
-        Some(
-            params
-                .iter()
-                .map(|p| match p {
-                    Type::Ref(_) => OwnershipMode::Ref,
-                    Type::MutRef(_) => OwnershipMode::MutRef,
-                    _ => OwnershipMode::Own,
-                })
-                .collect(),
-        )
+            .or_else(|| self.local_types.get(name.as_str()));
+        match ty {
+            Some(Type::Function { params, .. } | Type::OnceFunction { params, .. }) => {
+                Some(Self::modes_of_fn_params(params))
+            }
+            // `f: F` with `F: MutFn(ref T)`: the checker called it with the
+            // bound's signature and recorded it.
+            _ => recorded.map(|params| Self::modes_of_fn_params(params)),
+        }
+    }
+
+    fn modes_of_fn_params(params: &[Type]) -> Vec<OwnershipMode> {
+        params
+            .iter()
+            .map(|p| match p {
+                Type::Ref(_) => OwnershipMode::Ref,
+                Type::MutRef(_) => OwnershipMode::MutRef,
+                _ => OwnershipMode::Own,
+            })
+            .collect()
     }
 
     /// The resolved `"Type.method"` / `"Trait.method"` mode key for a method

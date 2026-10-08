@@ -434,3 +434,39 @@ fn main() {
 "#;
     assert_runs(src, "10\n20\n30\n<1>\n<2>\n0\n8\n");
 }
+
+/// An adaptor generic over its function, `F: MutFn(ref I.Item)`: the call
+/// solves `I` from the iterator, the bound's projection gives the closure
+/// its parameter type, and the stored function is called with the bound's
+/// signature.
+#[test]
+fn an_adaptor_generic_over_a_function_bound() {
+    assert_runs(
+        r#"
+struct Counter { n: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] { self.n = self.n + 1; Some(self.n) }
+}
+struct Insp[I, F] { it: I, f: F }
+impl[I: Iterator, F: MutFn(ref I.Item)] Iterator for Insp[I, F] {
+    type Item = I.Item;
+    fn next(mut ref self) -> Option[I.Item] {
+        match self.it.next() {
+            Some(x) => { (self.f)(x); Some(x) }
+            None => None,
+        }
+    }
+}
+fn insp[I: Iterator, F: MutFn(ref I.Item)](it: own I, f: own F) -> Insp[I, F] { Insp { it: it, f: f } }
+fn show(x: ref i64) { println(f"<{x}>"); }
+fn main() {
+    let mut t = 0;
+    for x in insp(Counter { n: 0 }, show) { t = t + x; if x == 2 { break; } }
+    for x in insp(Counter { n: 0 }, |x| println(x * 10)) { t = t + x; if x == 2 { break; } }
+    println(t);
+}
+"#,
+        "<1>\n<2>\n10\n20\n6\n",
+    );
+}

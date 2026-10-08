@@ -2373,8 +2373,20 @@ impl<'a> super::TypeChecker<'a> {
         // `let g = Col.A`. Mark the callee so that arm can tell them apart —
         // see `infer_expr`, which passes the marker to a `Path` node only.
         self.variant_ctor_in_callee = true;
-        let callee_ty = self.infer_expr(annotated_callee.as_ref().unwrap_or(callee));
+        let mut callee_ty = self.infer_expr(annotated_callee.as_ref().unwrap_or(callee));
         self.variant_ctor_in_callee = false;
+        // A value whose type is a type parameter with a function-trait bound
+        // (`f: F` with `F: MutFn(T) -> U`) is called with the bound's
+        // signature.
+        let peeled = match &callee_ty {
+            Type::Ref(t) | Type::MutRef(t) => (**t).clone(),
+            t => t.clone(),
+        };
+        if let Some(p) = self.type_param_name(&peeled).cloned() {
+            if let Some(f) = self.enclosing_fn_bound(&p) {
+                callee_ty = f;
+            }
+        }
 
         // Closure-VALUE call through a non-identifier callee — a struct field
         // `(h.f)(x)`, a Vec/array index `v[i](x)`, a tuple index `(t.0)(x)`,
@@ -2397,6 +2409,15 @@ impl<'a> super::TypeChecker<'a> {
                 SpanKey::from_span(&callee.span),
                 Self::type_to_type_expr(&callee_ty),
             );
+        }
+
+        if let (Type::Function { params, .. } | Type::OnceFunction { params, .. }, Some(first)) =
+            (&callee_ty, args.first())
+        {
+            if !matches!(&callee.kind, ExprKind::Path { .. }) {
+                self.fn_value_param_types
+                    .insert(SpanKey::from_span(&first.value.span), params.clone());
+            }
         }
 
         match &callee_ty {

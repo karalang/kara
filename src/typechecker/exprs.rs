@@ -2704,11 +2704,22 @@ impl<'a> super::TypeChecker<'a> {
         // closure args, the resolved slot may be a concrete
         // `Fn(i64) -> i64` (when T solved) and check_expr's pushdown
         // gives the closure params their types.
-        for ((arg, sub_param_ty), arg_ty_opt) in
-            args.iter().zip(sub_params.iter()).zip(arg_tys.iter())
+        for (((arg, sub_param_ty), arg_ty_opt), formal) in args
+            .iter()
+            .zip(sub_params.iter())
+            .zip(arg_tys.iter())
+            .zip(params.iter())
         {
+            // A closure for a parameter typed by a type parameter with a
+            // function-trait bound is checked against the bound's signature.
+            let bound_sig = match (arg_ty_opt, formal) {
+                (None, Type::TypeParam(p)) => {
+                    self.call_fn_bound_expectation(p, where_clause, &name_to_id)
+                }
+                _ => None,
+            };
             let resolved = resolve_type_vars(
-                sub_param_ty,
+                bound_sig.as_ref().unwrap_or(sub_param_ty),
                 &self.env.substitutions,
                 &id_to_name,
                 &self.env.const_substitutions,
@@ -3872,6 +3883,11 @@ impl<'a> super::TypeChecker<'a> {
         // `derived_traits` directly, matching the pattern used for
         // Hash / Display / Eq above.
         match trait_name {
+            // A function-trait bound is met by a function value; its
+            // signature was checked against the argument where it was
+            // passed. An `OnceFn` bound also takes a once-callable closure.
+            "Fn" | "MutFn" => return matches!(ty, Type::Function { .. }),
+            "OnceFn" => return matches!(ty, Type::Function { .. } | Type::OnceFunction { .. }),
             "Hash" => return self.type_supports_hash(ty),
             "Eq" => return self.type_supports_eq(ty),
             "PartialEq" => return self.type_supports_partial_eq(ty),

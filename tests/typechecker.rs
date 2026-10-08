@@ -53041,3 +53041,23 @@ fn main() {
 "#,
     );
 }
+
+/// A function-trait bound is a known trait; a value of the bounded type is
+/// callable with the bound's signature, and a closure argument takes its
+/// parameter types from it.
+#[test]
+fn a_function_trait_bound_types_calls_and_closure_arguments() {
+    typecheck_ok(
+        r#"
+fn apply[F: MutFn(i64) -> i64](f: own F, x: i64) -> i64 { f(x) + 1 }
+fn main() { let k = 3; println(apply(|x| x * k, 2)); }
+"#,
+    );
+    let errs = typecheck_errors(
+        r#"
+fn apply[F: MutFn(i64) -> i64](f: own F, x: i64) -> i64 { f(x) + 1 }
+fn main() { println(apply(|x| x == "a", 2)); }
+"#,
+    );
+    assert!(!errs.is_empty(), "a closure the bound's signature rejects");
+}
