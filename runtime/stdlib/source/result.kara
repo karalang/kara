@@ -18,77 +18,77 @@ impl[T, E] Result[T, E] {
         }
     }
 
-    fn ok(self) -> Option[T] {
+    fn ok(own self) -> Option[T] {
         match self {
             Ok(x) => Some(x),
             Err(_) => None,
         }
     }
 
-    fn err(self) -> Option[E] {
+    fn err(own self) -> Option[E] {
         match self {
             Ok(_) => None,
             Err(e) => Some(e),
         }
     }
 
-    fn map[U](self, f: OnceFn(T) -> U) -> Result[U, E] {
+    fn map[U](own self, f: own OnceFn(own T) -> U) -> Result[U, E] {
         match self {
             Ok(x) => Ok(f(x)),
             Err(e) => Err(e),
         }
     }
 
-    fn map_err[F](self, f: OnceFn(E) -> F) -> Result[T, F] {
+    fn map_err[F](own self, f: own OnceFn(own E) -> F) -> Result[T, F] {
         match self {
             Ok(x) => Ok(x),
             Err(e) => Err(f(e)),
         }
     }
 
-    fn and_then[U](self, f: OnceFn(T) -> Result[U, E]) -> Result[U, E] {
+    fn and_then[U](own self, f: own OnceFn(own T) -> Result[U, E]) -> Result[U, E] {
         match self {
             Ok(x) => f(x),
             Err(e) => Err(e),
         }
     }
 
-    fn or_else[F](self, f: OnceFn(E) -> Result[T, F]) -> Result[T, F] {
+    fn or_else[F](own self, f: own OnceFn(own E) -> Result[T, F]) -> Result[T, F] {
         match self {
             Ok(x) => Ok(x),
             Err(e) => f(e),
         }
     }
 
-    fn unwrap(self) -> T {
+    fn unwrap(own self) -> T {
         match self {
             Ok(x) => x,
             Err(_) => panic("called unwrap() on Err"),
         }
     }
 
-    fn expect(self, msg: String) -> T {
+    fn expect(own self, msg: own String) -> T {
         match self {
             Ok(x) => x,
             Err(_) => panic(msg),
         }
     }
 
-    fn unwrap_err(self) -> E {
+    fn unwrap_err(own self) -> E {
         match self {
             Ok(_) => panic("called unwrap_err() on Ok"),
             Err(e) => e,
         }
     }
 
-    fn unwrap_or(self, default: T) -> T {
+    fn unwrap_or(own self, default: own T) -> T {
         match self {
             Ok(x) => x,
             Err(_) => default,
         }
     }
 
-    fn unwrap_or_else(self, f: OnceFn(E) -> T) -> T {
+    fn unwrap_or_else(own self, f: own OnceFn(own E) -> T) -> T {
         match self {
             Ok(x) => x,
             Err(e) => f(e),

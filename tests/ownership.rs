@@ -7212,7 +7212,7 @@ fn test_concurrent_shared_struct_fires_on_two_branch_use() {
         .as_ref()
         .expect("suggestion should be present");
     assert!(
-        suggestion.contains("par struct Counter"),
+        suggestion.contains("sync struct Counter"),
         "suggestion should spell out the rename; got: {suggestion}",
     );
     assert!(
@@ -7566,7 +7566,7 @@ fn test_concurrent_plain_struct_fires_on_two_branch_use() {
         .as_ref()
         .expect("suggestion should be present");
     assert!(
-        suggestion.contains("rename `struct Counter` to `par struct Counter`"),
+        suggestion.contains("rename `struct Counter` to `sync struct Counter`"),
         "plain-struct suggestion should describe the keyword insertion (not the shared-struct rename); got: {suggestion}",
     );
     assert!(
@@ -7835,7 +7835,7 @@ fn test_concurrent_struct_fix_diff_wraps_each_mut_field() {
     );
     let prefix_count = edits.iter().filter(|e| e.replacement == "Mutex[").count();
     let suffix_count = edits.iter().filter(|e| e.replacement == "]").count();
-    let rename_count = edits.iter().filter(|e| e.replacement == "par").count();
+    let rename_count = edits.iter().filter(|e| e.replacement == "sync").count();
     let strip_count = edits
         .iter()
         .filter(|e| e.replacement.is_empty() && e.length > 0)
@@ -7885,7 +7885,7 @@ fn test_concurrent_plain_struct_fix_diff_wraps_each_mut_field() {
     assert!(
         edits
             .iter()
-            .any(|e| e.replacement == "par " && e.length == 0),
+            .any(|e| e.replacement == "sync " && e.length == 0),
         "expected a pure-insertion `par ` edit"
     );
     assert!(
@@ -7934,7 +7934,7 @@ fn test_concurrent_struct_fix_diff_keyword_rename_only_when_no_mut_fields() {
         "expected exactly 1 edit (keyword rename only); got {}",
         edits.len(),
     );
-    assert_eq!(edits[0].replacement, "par");
+    assert_eq!(edits[0].replacement, "sync");
 }
 
 // ── L201a: keyword rewrite + mut-strip edits — byte precision ─────
@@ -7975,7 +7975,7 @@ fn test_l201a_shared_keyword_rename_targets_shared_token() {
     let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
     let rename = edits
         .iter()
-        .find(|e| e.replacement == "par")
+        .find(|e| e.replacement == "sync")
         .expect("expected `shared` → `par` rename edit");
     let shared_off = src.find("shared").unwrap();
     assert_eq!(rename.offset, shared_off, "rename offset must hit `shared`");
@@ -8011,7 +8011,7 @@ fn test_l201a_plain_keyword_insert_targets_struct_token() {
     let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
     let insert = edits
         .iter()
-        .find(|e| e.replacement == "par ")
+        .find(|e| e.replacement == "sync ")
         .expect("expected `par ` insert edit");
     let struct_off = src.find("struct").unwrap();
     assert_eq!(
@@ -11040,7 +11040,7 @@ fn immutable_shared_struct_conflict_suggests_the_one_keyword_migration() {
         .expect("expected E_CONCURRENT_SHARED_STRUCT");
     let sugg = hit.suggestion.as_ref().expect("suggestion must be present");
     assert!(
-        sugg.contains("no `mut` fields") && sugg.contains("par struct Node"),
+        sugg.contains("no `mut` fields") && sugg.contains("sync struct Node"),
         "an immutable type should be told the rename is sufficient; got: {sugg}"
     );
     assert!(

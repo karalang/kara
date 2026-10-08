@@ -451,6 +451,20 @@ impl<'a> super::OwnershipChecker<'a> {
                     self.check_expr_consuming_inner(object, states, param_types, param_usage);
                 }
             }
+            // D5 migration: moving `self` (or a part of it, through the
+            // projection arm above) needs an owned receiver. Only tracked
+            // when the migration walk put `self` in `param_usage`.
+            ExprKind::SelfValue if param_usage.contains_key("self") => {
+                let is_copy = self
+                    .typecheck_result
+                    .expr_types
+                    .get(&SpanKey::from_span(&expr.span))
+                    .is_some_and(|t| self.is_copy_type(t));
+                if !is_copy {
+                    param_usage.insert("self".to_string(), ParamUsage::Consumed);
+                }
+                self.check_expr_reading(expr, states, param_types, param_usage);
+            }
             // For compound expressions, delegate to reading (they don't consume at top level)
             _ => self.check_expr_reading(expr, states, param_types, param_usage),
         }

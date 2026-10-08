@@ -2321,7 +2321,7 @@ fn build_concurrent_struct_error(
         let suggestion = format!(
             concat!(
                 "`{ty}` is a built-in type with no declaration in this program, so it cannot be ",
-                "migrated to `par struct` — there is no `struct {ty}` here to rename. Give each ",
+                "migrated to `sync struct` — there is no `struct {ty}` here to rename. Give each ",
                 "branch its own value instead:\n",
                 "  1. hoist a per-branch copy BEFORE the `par` block (`let a = {bn}.clone(); ",
                 "let b = {bn}.clone();`, then use `a` in one branch and `b` in the other)\n",
@@ -2357,7 +2357,7 @@ fn build_concurrent_struct_error(
         let suggestion = format!(
             concat!(
                 "`{ty}` has no `mut` fields, so it is already safe to read from several ",
-                "tasks at once — rename `shared struct {ty}` to `par struct {ty}` and ",
+                "tasks at once — rename `shared struct {ty}` to `sync struct {ty}` and ",
                 "nothing else changes. A `par` type's immutable fields are freely readable ",
                 "across tasks: no `Mutex[T]`, no `Atomic[T]`, no annotation at the use ",
                 "site. The only cost is that the type's reference counting becomes atomic. ",
@@ -2376,11 +2376,11 @@ fn build_concurrent_struct_error(
     }
     let suggestion = match tracked.kind {
         BindingKind::Shared => format!(
-            "convert `{ty}` to `par struct` and wrap mut fields in `Mutex[T]`/`Atomic[T]`. The migration is structural:\n  1. rename `shared struct {ty}` to `par struct {ty}`\n  2. wrap each bare `mut` field in `Mutex[T]` (refine to `Atomic[T]` post-review where lock-free access is appropriate)\n  3. insert `lock field {{ ... }}` blocks at every write site within `par` regions\n  4. call sites that previously relied on implicit `Rc`-clone now produce `Arc`-clone semantics\nThe machine-applicable `fix_diff` covers steps 1 and 2 (keyword rewrite, `mut ` stripping, and per-field `Mutex[T]` wrap); steps 3 and 4 remain the human review step. Or run `karac migrate shared-to-par {ty}` for a preemptive workspace rewrite.",
+            "convert `{ty}` to `sync struct` and wrap mut fields in `Mutex[T]`/`Atomic[T]`. The migration is structural:\n  1. rename `shared struct {ty}` to `sync struct {ty}`\n  2. wrap each bare `mut` field in `Mutex[T]` (refine to `Atomic[T]` post-review where lock-free access is appropriate)\n  3. insert `lock field {{ ... }}` blocks at every write site within `par` regions\n  4. call sites that previously relied on implicit `Rc`-clone now produce `Arc`-clone semantics\nThe machine-applicable `fix_diff` covers steps 1 and 2 (keyword rewrite, `mut ` stripping, and per-field `Mutex[T]` wrap); steps 3 and 4 remain the human review step. Or run `karac migrate shared-to-par {ty}` for a preemptive workspace rewrite.",
             ty = tracked.type_name,
         ),
         BindingKind::Plain => format!(
-            "convert `{ty}` to `par struct` and wrap mut fields in `Mutex[T]`/`Atomic[T]`. The migration is structural:\n  1. rename `struct {ty}` to `par struct {ty}`\n  2. wrap each bare `mut` field in `Mutex[T]` (refine to `Atomic[T]` post-review where lock-free access is appropriate)\n  3. insert `lock field {{ ... }}` blocks at every write site within `par` regions\n  4. consumers that took the value by ownership now share an `Arc` clone\nThe machine-applicable `fix_diff` covers steps 1 and 2 (keyword insert, `mut ` stripping, and per-field `Mutex[T]` wrap); steps 3 and 4 remain the human review step.",
+            "convert `{ty}` to `sync struct` and wrap mut fields in `Mutex[T]`/`Atomic[T]`. The migration is structural:\n  1. rename `struct {ty}` to `sync struct {ty}`\n  2. wrap each bare `mut` field in `Mutex[T]` (refine to `Atomic[T]` post-review where lock-free access is appropriate)\n  3. insert `lock field {{ ... }}` blocks at every write site within `par` regions\n  4. consumers that took the value by ownership now share an `Arc` clone\nThe machine-applicable `fix_diff` covers steps 1 and 2 (keyword insert, `mut ` stripping, and per-field `Mutex[T]` wrap); steps 3 and 4 remain the human review step.",
             ty = tracked.type_name,
         ),
     };
@@ -2475,7 +2475,7 @@ pub(crate) fn build_fix_diff_edits_with_field_kinds(
                     edits.push(TextEdit {
                         offset: kw.offset,
                         length: kw.length,
-                        replacement: "par".to_string(),
+                        replacement: "sync".to_string(),
                     });
                 }
             }
@@ -2486,7 +2486,7 @@ pub(crate) fn build_fix_diff_edits_with_field_kinds(
                 edits.push(TextEdit {
                     offset: sk.offset,
                     length: 0,
-                    replacement: "par ".to_string(),
+                    replacement: "sync ".to_string(),
                 });
             }
         }

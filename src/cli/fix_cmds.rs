@@ -207,6 +207,34 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
         }
     }
 
+    // D5 migration (`docs/core-semantics.md` §4.1): with `KARAC_D5_MIGRATE`
+    // set, `karac fix` writes `own` on every bare parameter and receiver whose
+    // body needs ownership, and nothing else, so the migration is one
+    // reviewable rewrite. `own T` means `T` until the flip.
+    if std::env::var_os("KARAC_D5_MIGRATE").is_some() {
+        fixes = FixSet::default();
+        if let (false, Some(t)) = (pipeline.has_parse_errors(), pipeline.typed.as_ref()) {
+            let _core_rules = crate::ownership::CoreRulesGuard::new(true);
+            // Derive-synthesized methods carry spans that are not this
+            // file's text, so an insertion lands only where the source shows
+            // a parameter's type (after its `:`) or a `self` receiver.
+            let at_param = |offset: usize| {
+                let (Some(before), Some(after)) = (source.get(..offset), source.get(offset..))
+                else {
+                    return false;
+                };
+                before.trim_end().ends_with(':')
+                    || (after.starts_with("self")
+                        && !after[4..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+            };
+            fixes.singles(
+                crate::ownership::d5_own_param_edits(&pipeline.parsed.program, t)
+                    .into_iter()
+                    .filter(|e| at_param(e.offset)),
+            );
+        }
+    }
+
     if fixes.edits.is_empty() {
         println!("(no fixable diagnostics in {filename})");
         return;
@@ -978,7 +1006,7 @@ mod tests {
         // the single edit is left out.
         let edits = vec![
             (0, edit(0, 0, "#[derive(Copy)]\n")),
-            (1, edit(0, 0, "par ")),
+            (1, edit(0, 0, "sync ")),
             (1, edit(20, 4, "")),
             (1, edit(30, 0, "Mutex[")),
             (2, edit(40, 0, ".clone()")),

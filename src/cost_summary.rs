@@ -267,7 +267,7 @@ fn shared_struct_mut_field_note(name: &str, mut_fields: &[&str], span: &Span) ->
     let message = format!(
         "`shared struct {name}` has mut field{plural} ({field_list}); if a future caller \
          needs concurrent access, the migration to `par struct` is structural — consider \
-         defining as `par struct` from the start.",
+         defining as `sync struct` from the start.",
         plural = if mut_fields.len() == 1 { "" } else { "s" },
     );
     PerfNote {

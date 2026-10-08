@@ -11516,7 +11516,7 @@ fn test_fix_applies_concurrent_plain_struct_migration() {
     assert!(stdout.contains("applied 4 fix"), "stdout: {stdout}");
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("par struct State"),
+        rewritten.contains("sync struct State"),
         "expected `par struct` migration, got: {rewritten}"
     );
     assert!(
@@ -11562,8 +11562,8 @@ fn test_fix_applies_concurrent_shared_struct_migration() {
     assert!(stdout.contains("applied 7 fix"), "stdout: {stdout}");
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("par struct Counter"),
-        "expected `shared` → `par` rename, got: {rewritten}"
+        rewritten.contains("sync struct Counter"),
+        "expected `shared` → `sync` rename, got: {rewritten}"
     );
     assert!(
         rewritten.contains("count: Mutex[i64]") && rewritten.contains("tag: Mutex[i64]"),
@@ -17738,7 +17738,7 @@ fn test_migrate_dry_run_prints_diff_for_shared_struct() {
         "expected dry-run header in stdout; got: {stdout}",
     );
     assert!(
-        stdout.contains("`shared` → `par`"),
+        stdout.contains("`shared` → `sync`"),
         "expected keyword rename edit in dry-run; got: {stdout}",
     );
     assert!(
@@ -17783,7 +17783,7 @@ fn test_migrate_apply_rewrites_file() {
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("par struct Counter"),
+        rewritten.contains("sync struct Counter"),
         "expected `par struct Counter` post-migrate; got: {rewritten}",
     );
     assert!(
@@ -17898,7 +17898,7 @@ fn test_migrate_multiple_mut_fields_all_wrapped() {
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("par struct State"),
+        rewritten.contains("sync struct State"),
         "expected keyword rewrite; got: {rewritten}",
     );
     assert!(
@@ -17979,7 +17979,7 @@ fn test_migrate_wraps_assign_writes_against_typed_let_binding() {
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("par struct Counter"),
+        rewritten.contains("sync struct Counter"),
         "type-def rewrite missing; got: {rewritten}",
     );
     assert!(
@@ -18191,7 +18191,7 @@ fn test_migrate_dry_run_lists_consumer_edits_in_addition_to_typedef() {
         "expected 7 edits (4 type-def + 3 consumer for the single write); got: {stdout}",
     );
     assert!(
-        stdout.contains("`shared` → `par`"),
+        stdout.contains("`shared` → `sync`"),
         "type-def keyword rename should still appear; got: {stdout}",
     );
     assert!(
@@ -18445,7 +18445,7 @@ fn test_migrate_typecheck_failure_falls_back_to_annotated_only() {
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("par struct Counter"),
+        rewritten.contains("sync struct Counter"),
         "type-def rewrite should still run on typecheck-failing source; got: {rewritten}",
     );
     assert!(
@@ -18535,7 +18535,7 @@ fn test_migrate_project_mode_walks_modules() {
         "expected counter.kara in output; stdout={stdout}",
     );
     assert!(
-        stdout.contains("`shared` → `par`"),
+        stdout.contains("`shared` → `sync`"),
         "expected keyword rename edit; stdout={stdout}",
     );
     assert!(
@@ -18599,7 +18599,7 @@ fn test_migrate_project_mode_apply_rewrites_all_files() {
     );
     // Type-def file post-rewrite.
     assert!(
-        counter_after.contains("par struct Counter"),
+        counter_after.contains("sync struct Counter"),
         "counter.kara should have `par struct Counter`; got: {counter_after}",
     );
     assert!(

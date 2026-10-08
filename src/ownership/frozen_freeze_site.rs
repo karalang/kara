@@ -143,8 +143,8 @@ impl super::OwnershipChecker<'_> {
                     ),
                 ),
                 Refusal::AlreadyPar => (
-                    format!("`{shown}` is a `par struct`, so `frozen` adds nothing"),
-                    "a `par struct` is already safe to read from several tasks at once — its \
+                    format!("`{shown}` is a `sync struct`, so `frozen` adds nothing"),
+                    "a `sync struct` is already safe to read from several tasks at once — its \
                      refcounting is atomic by construction. Drop `frozen`; the sharing you want \
                      already works"
                         .to_string(),

@@ -20,6 +20,7 @@ mod borrow;
 mod capture_body;
 mod closure_escape;
 mod concurrent_shared;
+mod d5_migrate;
 mod elision;
 mod expr_check;
 mod frozen_escape;
@@ -47,6 +48,7 @@ fn is_compiler_builtin_fn(f: &Function) -> bool {
 // rewrite. L215b3 adds `ConsumerRewriteTypeCtx` so the migrate tool can
 // thread typecheck-derived data (inferred-binding discovery + mutating-
 // method-call classifier) when the full pipeline succeeded.
+pub use d5_migrate::d5_own_param_edits;
 pub use elision::{ElidedCluster, ElisionBlocked, ReturnedChain};
 
 // These edit-builders are consumed only by `cli::cmd_migrate` / `cmd_fix`,
@@ -1638,6 +1640,8 @@ pub struct OwnershipChecker<'a> {
     /// state-machine's post-walk `ValueState::Moved` state. `None`
     /// outside a `check_function` invocation.
     pub(crate) current_classification: Option<crate::cfg::Classification>,
+    /// The D5 migration walk's state (`d5_migrate`); `None` outside it.
+    pub(crate) d5: Option<d5_migrate::D5State>,
     /// Stack of enclosing loop / break-target frames for the walk in
     /// progress, driving post-`loop` break-dominance definite assignment
     /// (B-2026-08-17-17). Pushed/popped by the `While` / `WhileLet` /
@@ -1854,6 +1858,7 @@ impl<'a> OwnershipChecker<'a> {
             binding_scope_depth: HashMap::new(),
             slice_binding_scope_depth: HashMap::new(),
             current_classification: None,
+            d5: None,
         }
     }
 
@@ -2718,6 +2723,11 @@ impl<'a> OwnershipChecker<'a> {
                 param_usage.insert(name, ParamUsage::Unused);
             }
         }
+        // D5 migration: a bare `self` is tracked like a parameter, so a body
+        // that moves it is seen.
+        if self.d5.is_some() && matches!(f.self_param, Some(SelfParam::Owned)) && !f.self_is_own {
+            param_usage.insert("self".to_string(), ParamUsage::Unused);
+        }
 
         // Round 12.16 + 12.21: predicate pre-pass populates
         // `rc_values` AND emits `UseAfterMove` errors for this
@@ -2771,6 +2781,7 @@ impl<'a> OwnershipChecker<'a> {
         self.check_block(&f.body, &mut states, &param_types, &mut param_usage);
 
         self.current_classification = None;
+        self.d5_record(f, &fn_key, &param_types, &param_usage);
 
         // Round 12.35–12.39 — Closure ownership Step 7: detect ref-
         // captured values that escape their borrow's lifetime. A

@@ -5,8 +5,9 @@
 // keep their hard-coded arms until the legacy pipeline is deleted (M3), and
 // then the type in `../option.kara` and these methods become one file.
 //
-// Written in today's parameter spelling (bare `self` is owned, `ref self`
-// borrows); the D5 migration rewrites it with everything else.
+// Written in the D5 spelling (`docs/library/core-types.md`): `own` marks
+// what a method takes ownership of, which today means the same as a bare
+// parameter. `ref self` stays until the flip makes it a redundant spelling.
 
 impl[T] Option[T] {
     fn is_some(ref self) -> bool {
@@ -23,98 +24,98 @@ impl[T] Option[T] {
         }
     }
 
-    fn is_some_and(ref self, pred: OnceFn(ref T) -> bool) -> bool {
+    fn is_some_and(ref self, pred: own OnceFn(ref T) -> bool) -> bool {
         match self {
             Some(x) => pred(x),
             None => false,
         }
     }
 
-    fn unwrap(self) -> T {
+    fn unwrap(own self) -> T {
         match self {
             Some(x) => x,
             None => panic("called unwrap() on None"),
         }
     }
 
-    fn expect(self, msg: String) -> T {
+    fn expect(own self, msg: own String) -> T {
         match self {
             Some(x) => x,
             None => panic(msg),
         }
     }
 
-    fn unwrap_or(self, default: T) -> T {
+    fn unwrap_or(own self, default: own T) -> T {
         match self {
             Some(x) => x,
             None => default,
         }
     }
 
-    fn unwrap_or_else(self, f: OnceFn() -> T) -> T {
+    fn unwrap_or_else(own self, f: own OnceFn() -> T) -> T {
         match self {
             Some(x) => x,
             None => f(),
         }
     }
 
-    fn map[U](self, f: OnceFn(T) -> U) -> Option[U] {
+    fn map[U](own self, f: own OnceFn(own T) -> U) -> Option[U] {
         match self {
             Some(x) => Some(f(x)),
             None => None,
         }
     }
 
-    fn map_or[U](self, default: U, f: OnceFn(T) -> U) -> U {
+    fn map_or[U](own self, default: own U, f: own OnceFn(own T) -> U) -> U {
         match self {
             Some(x) => f(x),
             None => default,
         }
     }
 
-    fn and_then[U](self, f: OnceFn(T) -> Option[U]) -> Option[U] {
+    fn and_then[U](own self, f: own OnceFn(own T) -> Option[U]) -> Option[U] {
         match self {
             Some(x) => f(x),
             None => None,
         }
     }
 
-    fn r#or(self, other: Option[T]) -> Option[T] {
+    fn r#or(own self, other: own Option[T]) -> Option[T] {
         match self {
             Some(x) => Some(x),
             None => other,
         }
     }
 
-    fn or_else(self, f: OnceFn() -> Option[T]) -> Option[T] {
+    fn or_else(own self, f: own OnceFn() -> Option[T]) -> Option[T] {
         match self {
             Some(x) => Some(x),
             None => f(),
         }
     }
 
-    fn filter(self, pred: OnceFn(ref T) -> bool) -> Option[T] {
+    fn filter(own self, pred: own OnceFn(ref T) -> bool) -> Option[T] {
         match self {
             Some(x) => if pred(x) { Some(x) } else { None },
             None => None,
         }
     }
 
-    fn ok_or[E](self, err: E) -> Result[T, E] {
+    fn ok_or[E](own self, err: own E) -> Result[T, E] {
         match self {
             Some(x) => Ok(x),
             None => Err(err),
         }
     }
 
-    fn ok_or_else[E](self, f: OnceFn() -> E) -> Result[T, E] {
+    fn ok_or_else[E](own self, f: own OnceFn() -> E) -> Result[T, E] {
         match self {
             Some(x) => Ok(x),
             None => Err(f()),
         }
     }
 
-    fn zip[U](self, other: Option[U]) -> Option[(T, U)] {
+    fn zip[U](own self, other: own Option[U]) -> Option[(T, U)] {
         match self {
             Some(x) => match other {
                 Some(y) => Some((x, y)),
