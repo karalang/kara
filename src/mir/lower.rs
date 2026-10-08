@@ -140,6 +140,8 @@ struct FnItem<'a> {
     /// declares (they come first in the method's positional generics).
     impl_target: Option<DefId>,
     impl_params: usize,
+    /// The impl's generic parameters, which come before the method's.
+    impl_generics: Option<&'a ast::GenericParams>,
 }
 
 struct Lcx<'a> {
@@ -211,6 +213,9 @@ struct ClosureJob<'a> {
     caps: Vec<(SymbolId, CapMode, Ty)>,
     env: EnvMode,
     ty: Ty,
+    /// Its parameters borrow what the caller passes: a closure handed to
+    /// a library call, which lends it elements in place.
+    ref_params: bool,
 }
 
 /// A variant as the checker records it: its name and named field types.
@@ -255,6 +260,7 @@ impl<'a> Lcx<'a> {
                                 f,
                                 impl_target: None,
                                 impl_params: 0,
+                                impl_generics: None,
                             },
                         );
                     }
@@ -291,6 +297,7 @@ impl<'a> Lcx<'a> {
                                     f,
                                     impl_target: Some(target),
                                     impl_params,
+                                    impl_generics: b.generic_params.as_ref(),
                                 },
                             );
                         }
@@ -676,6 +683,9 @@ struct Bx<'l, 'a> {
     captured: FxHashMap<SymbolId, Place>,
     /// Closures created in this body so far, for their names.
     closure_count: u32,
+    /// The next closure literal lowered goes to a library call, so its
+    /// parameters borrow.
+    closure_ref_params: bool,
     /// Types for expressions the checker left untyped, taken from where
     /// they are used (`v.push(None)` gives `None` the element type).
     ty_hints: FxHashMap<NodeId, Ty>,
@@ -701,6 +711,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             name,
             captured: FxHashMap::default(),
             closure_count: 0,
+            closure_ref_params: false,
             ty_hints: FxHashMap::default(),
         }
     }
@@ -790,8 +801,63 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     fn assign(&mut self, place: impl Into<Place>, rv: Rvalue) {
+        let place = place.into();
+        let rv = match rv {
+            Rvalue::Use(o @ Operand::Const(_)) => {
+                Rvalue::Use(self.fit_const(o, self.place_type(&place)))
+            }
+            Rvalue::Aggregate(kind, ops) => {
+                let ops = self.fit_parts(&place, &kind, ops);
+                Rvalue::Aggregate(kind, ops)
+            }
+            rv => rv,
+        };
         let bb = self.cur;
         self.b.assign(bb, place, rv);
+    }
+
+    /// A numeric literal in a slot of another numeric type takes the
+    /// slot's (the checker records an unsuffixed literal as `i64` or `f64`
+    /// wherever it sits; `let x: f64 = 2` reads the integer as a float).
+    fn fit_const(&self, o: Operand, t: Ty) -> Operand {
+        let Operand::Const(c) = o else {
+            return o;
+        };
+        let tcx = self.tys().tcx();
+        let int = |t| matches!(tcx.kind(t), HK::Int(_) | HK::UInt(_));
+        let float = |t| matches!(tcx.kind(t), HK::Float(_));
+        let kind = match c.kind {
+            ConstKind::Scalar(v) if int(c.ty) && float(t) => {
+                ConstKind::Float(((v as i128) as f64).to_bits())
+            }
+            k @ ConstKind::Scalar(_) if int(c.ty) && int(t) => k,
+            k @ ConstKind::Float(_) if float(c.ty) && float(t) => k,
+            kind => return Operand::Const(Const { ty: c.ty, kind }),
+        };
+        Operand::Const(Const { ty: t, kind })
+    }
+
+    /// An aggregate's literal parts, fitted to their slots' types.
+    fn fit_parts(&self, place: &Place, kind: &AggregateKind, ops: Vec<Operand>) -> Vec<Operand> {
+        let tcx = self.tys().tcx();
+        let slot = |i: usize| -> Option<Ty> {
+            match kind {
+                AggregateKind::Array(elem) => Some(*elem),
+                AggregateKind::Tuple => tcx.field_ty(self.place_type(place), None, i as u32),
+                AggregateKind::Adt { ty, variant } | AggregateKind::Shared { ty, variant } => {
+                    let is_enum = tcx.adt_of(*ty).is_some_and(|(a, _)| a.is_enum);
+                    tcx.field_ty(*ty, is_enum.then_some(variant.0), i as u32)
+                }
+                AggregateKind::Closure { .. } => None,
+            }
+        };
+        ops.into_iter()
+            .enumerate()
+            .map(|(i, o)| match (&o, slot(i)) {
+                (Operand::Const(_), Some(t)) => self.fit_const(o, t),
+                _ => o,
+            })
+            .collect()
     }
 
     /// End the current block with `kind`; continue in `next`.
@@ -1272,6 +1338,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             return self.unsupported(target.span, "a compound assignment to a non-scalar");
         }
         let lhs = Operand::Copy(place.clone());
+        let rhs = if matches!(bin, BinOp::Shl | BinOp::Shr) {
+            rhs
+        } else {
+            self.fit_const(rhs, t)
+        };
         self.arith(bin, lhs, rhs, t, place);
         Ok(())
     }
@@ -1617,7 +1688,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return self.lib_arg(index, true);
             }
         }
-        self.expr_operand(index)
+        // A position held through a `mut ref` reads through it.
+        Ok(self.scalar_operand(index)?.0)
     }
 
     /// `object[idx]`: a library call yielding a reference, then its target.
@@ -2048,7 +2120,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     _ => return self.unsupported(e.span, "this unary operator"),
                 };
-                let o = self.expr_operand(operand)?;
+                let (o, _) = self.scalar_operand(operand)?;
                 self.assign(dest, Rvalue::UnaryOp(mop, o));
                 Ok(())
             }
@@ -2563,8 +2635,20 @@ impl<'l, 'a> Bx<'l, 'a> {
         if !self.is_copy(lt) {
             return self.unsupported(left.span, "an operator on a non-scalar");
         }
-        let (r, _) = self.scalar_operand(right)?;
-        self.arith(bin, l, r, lt, dest);
+        let (r, rt) = self.scalar_operand(right)?;
+        // An unsuffixed literal takes the other operand's type (the
+        // checker records `x * 2` with `x: f64` as an `i64` literal). A
+        // shift's amount keeps its own.
+        let shift = matches!(bin, BinOp::Shl | BinOp::Shr);
+        let lit = |o: &Operand| matches!(o, Operand::Const(_));
+        let t = if lit(&l) && !lit(&r) && !shift {
+            rt
+        } else {
+            lt
+        };
+        let l = self.fit_const(l, t);
+        let r = if shift { r } else { self.fit_const(r, t) };
+        self.arith(bin, l, r, t, dest);
         Ok(())
     }
 
@@ -2817,6 +2901,29 @@ impl<'l, 'a> Bx<'l, 'a> {
                 args
             },
         ))
+    }
+
+    /// The `from` of the user's non-generic `impl From[source] for
+    /// target`, as `?` converts an error.
+    fn user_from(&mut self, target: Ty, source: Ty) -> Option<DefId> {
+        let (adt, _) = self.tys().tcx().adt_of(target)?;
+        let base = self.lcx.defs.table.get(adt.def).path.segments.clone();
+        for k in 0.. {
+            let mut path = base.clone();
+            path.push(format!("impl From#{k}"));
+            path.push("from".to_string());
+            let d = self.lcx.defs.table.lookup(&DefPath::new(path))?;
+            let item = self.lcx.fns.get(&d)?;
+            if item.impl_params != 0 {
+                continue;
+            }
+            let p = item.f.params.first()?;
+            let t = *self.lcx.node_types.get(&p.pattern.id)?;
+            if self.lcx.mir_ty(t, &[]).ok() == Some(source) {
+                return Some(d);
+            }
+        }
+        None
     }
 
     // ── loops ───────────────────────────────────────────────────────
@@ -3740,6 +3847,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             None => Vec::new(),
         };
         let mut ops = Vec::new();
+        let have = fields.first().copied();
         for (i, ft) in fields.into_iter().enumerate() {
             let fp = p
                 .project(ProjElem::Downcast(VariantIdx(err)))
@@ -3749,6 +3857,30 @@ impl<'l, 'a> Bx<'l, 'a> {
         let Some(ret_err) = self.error_variant(ret_ty) else {
             return self.unsupported(e.span, "`?` in a function that returns no `Result`");
         };
+        // An error of another type converts through the target's `From`.
+        let want = self.tys().tcx().field_ty(ret_ty, Some(ret_err), 0);
+        if let (Some(want), Some(have), 1) = (want, have, ops.len()) {
+            if want != have {
+                let Some(d) = self.user_from(want, have) else {
+                    return self.unsupported(e.span, "`?` converting this error");
+                };
+                let name = self.lcx.instance(d, Vec::new());
+                let func = self.fn_operand(&name, d, Vec::new());
+                let t = self.temp(want);
+                let next = self.b.new_block();
+                self.goto_with(
+                    TerminatorKind::Call {
+                        func,
+                        args: std::mem::take(&mut ops),
+                        destination: Place::local(t),
+                        target: Some(next),
+                        unwind: UnwindAction::Abort,
+                    },
+                    next,
+                );
+                ops.push(Operand::Move(Place::local(t)));
+            }
+        }
         let kind = self.adt_aggregate(ret_ty, ret_err);
         self.assign(ret, Rvalue::Aggregate(kind, ops));
         self.return_exit()?;
@@ -4429,6 +4561,13 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     fn call(&mut self, e: &'a Expr, callee: &'a Expr, args: &'a [CallArg], dest: Place) -> R<()> {
         let Some(rc) = self.lcx.calls.get(&e.id) else {
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                if let [tp, m] = segments.as_slice() {
+                    if let Some(t) = self.type_param(tp) {
+                        return self.type_param_call(e, t, m, args, dest);
+                    }
+                }
+            }
             return self.unsupported(e.span, "a call with no resolved callee");
         };
         let callee_kind = rc.callee.clone();
@@ -4497,42 +4636,103 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.call_native(&name, ops, dest);
                     return Ok(());
                 };
-                if args.len() != f.params.len() {
-                    return self.unsupported(e.span, "a call that leaves out default arguments");
-                }
-                let mut ops = Vec::new();
-                let mut fn_tys: Vec<Option<Ty>> = Vec::new();
-                for (a, p) in args.iter().zip(&f.params) {
-                    if self.is_fn_typed(p.pattern.id) {
-                        let (op, t) = self.fn_arg(&a.value)?;
-                        ops.push(op);
-                        fn_tys.push(Some(t));
-                        continue;
-                    }
-                    let pt = self.callee_param_ty(p, &inst_args)?;
-                    ops.push(self.arg_operand(&a.value, pt)?);
-                    fn_tys.push(None);
-                }
-                let name = if fn_tys.iter().any(Option::is_some) {
-                    self.lcx.instance_with_fns(d, inst_args.clone(), fn_tys)
-                } else {
-                    self.lcx.instance(d, inst_args.clone())
-                };
-                let func = self.fn_operand(&name, d, inst_args);
-                let next = self.b.new_block();
-                self.goto_with(
-                    TerminatorKind::Call {
-                        func,
-                        args: ops,
-                        destination: dest,
-                        target: Some(next),
-                        unwind: UnwindAction::Abort,
-                    },
-                    next,
-                );
-                Ok(())
+                self.def_call(e, d, f, inst_args, args, dest)
             }
         }
+    }
+
+    /// The type a generic parameter named `name` has in this instance.
+    fn type_param(&self, name: &str) -> Option<Ty> {
+        let item = self.lcx.fns.get(&self.b.instance().def)?;
+        let names = item
+            .impl_generics
+            .into_iter()
+            .chain(item.f.generic_params.as_ref())
+            .flat_map(|g| g.params.iter());
+        let i = names.into_iter().position(|p| p.name == name)?;
+        self.args.get(i).copied()
+    }
+
+    /// `T.make(args)` in a generic body: the impl's method for `T`'s type
+    /// in this instance; for a primitive, its library function (`default`
+    /// is zero).
+    fn type_param_call(
+        &mut self,
+        e: &'a Expr,
+        t: Ty,
+        m: &str,
+        args: &'a [CallArg],
+        dest: Place,
+    ) -> R<()> {
+        if let Some((d, inst_args)) = self.method_by_receiver(t, m) {
+            let f = self.lcx.fns[&d].f;
+            return self.def_call(e, d, f, inst_args, args, dest);
+        }
+        let tcx = self.tys().tcx();
+        let zero = match tcx.kind(t) {
+            HK::Int(_) | HK::UInt(_) | HK::Bool | HK::Char => Some(ConstKind::Scalar(0)),
+            HK::Float(_) => Some(ConstKind::Float(0f64.to_bits())),
+            _ => None,
+        };
+        if let (Some(kind), "default", []) = (zero, m, args) {
+            self.assign(dest, Rvalue::Use(Operand::Const(Const { ty: t, kind })));
+            return Ok(());
+        }
+        let mut ops = Vec::new();
+        for a in args {
+            let at = self.expr_ty(&a.value)?;
+            let by_ref = !self.is_copy(at);
+            ops.push(self.lib_arg(&a.value, by_ref)?);
+        }
+        let name = format!("{}.{m}", self.tys().display(t));
+        self.call_native(&name, ops, dest);
+        Ok(())
+    }
+
+    /// A call of the program's function `d` (`f`) in instance `inst_args`.
+    fn def_call(
+        &mut self,
+        e: &'a Expr,
+        d: DefId,
+        f: &'a Function,
+        inst_args: Vec<Ty>,
+        args: &'a [CallArg],
+        dest: Place,
+    ) -> R<()> {
+        if args.len() != f.params.len() {
+            return self.unsupported(e.span, "a call that leaves out default arguments");
+        }
+        let mut ops = Vec::new();
+        let mut fn_tys: Vec<Option<Ty>> = Vec::new();
+        for (a, p) in args.iter().zip(&f.params) {
+            if self.is_fn_typed(p.pattern.id) {
+                let (op, t) = self.fn_arg(&a.value)?;
+                ops.push(op);
+                fn_tys.push(Some(t));
+                continue;
+            }
+            let pt = self.callee_param_ty(p, &inst_args)?;
+            ops.push(self.arg_operand(&a.value, pt)?);
+            fn_tys.push(None);
+        }
+        let name = if fn_tys.iter().any(Option::is_some) {
+            self.lcx.instance_with_fns(d, inst_args.clone(), fn_tys)
+        } else {
+            self.lcx.instance(d, inst_args.clone())
+        };
+        let func = self.fn_operand(&name, d, inst_args);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: ops,
+                destination: dest,
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        Ok(())
     }
 
     /// The MIR types of a call's type arguments, in this instance.
@@ -4778,6 +4978,77 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(true)
     }
 
+    /// `a.cmp(b)` on integers, `char` or `bool`: two comparisons choosing
+    /// the `Ordering` variant.
+    fn scalar_cmp(
+        &mut self,
+        e: &'a Expr,
+        object: &'a Expr,
+        args: &'a [CallArg],
+        dest: Place,
+    ) -> R<bool> {
+        let [b] = args else {
+            return Ok(false);
+        };
+        let ot = self.expr_ty(object)?;
+        let t = match self.tys().tcx().kind(ot) {
+            HK::Ref(inner) | HK::MutRef(inner) => inner,
+            _ => ot,
+        };
+        if !matches!(
+            self.tys().tcx().kind(t),
+            HK::Int(_) | HK::UInt(_) | HK::Char | HK::Bool
+        ) {
+            return Ok(false);
+        }
+        let ord = self.expr_ty(e)?;
+        let Some((adt, _)) = self.tys().tcx().adt_of(ord) else {
+            return Ok(false);
+        };
+        let variant = |name: &str| adt.variants.iter().position(|v| v.name == name);
+        let (Some(less), Some(equal), Some(greater)) =
+            (variant("Less"), variant("Equal"), variant("Greater"))
+        else {
+            return Ok(false);
+        };
+        let x = self.temp(t);
+        let (o, _) = self.scalar_operand(object)?;
+        self.assign(x, Rvalue::Use(o));
+        let y = self.temp(t);
+        let (o, _) = self.scalar_operand(&b.value)?;
+        self.assign(y, Rvalue::Use(o));
+        let bool_t = self.tys().bool();
+        let join = self.b.new_block();
+        let pick = |me: &mut Self, op: BinOp, variant: usize| {
+            let c = me.temp(bool_t);
+            let (xo, yo) = (
+                Operand::Copy(Place::local(x)),
+                Operand::Copy(Place::local(y)),
+            );
+            me.assign(c, Rvalue::BinaryOp(op, xo, yo));
+            let yes = me.b.new_block();
+            let no = me.b.new_block();
+            me.goto_with(
+                TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(Place::local(c)),
+                    targets: SwitchTargets::if_else(yes, no),
+                },
+                yes,
+            );
+            let kind = me.adt_aggregate(ord, variant as u32);
+            me.assign(dest.clone(), Rvalue::Aggregate(kind, Vec::new()));
+            me.goto(join);
+            me.cur = no;
+        };
+        pick(self, BinOp::Lt, less);
+        pick(self, BinOp::Gt, greater);
+        let kind = self.adt_aggregate(ord, equal as u32);
+        self.assign(dest, Rvalue::Aggregate(kind, Vec::new()));
+        self.goto(join);
+        self.cur = join;
+        Ok(true)
+    }
+
     fn builtin_call(&mut self, e: &'a Expr, name: &str, args: &'a [CallArg], dest: Place) -> R<()> {
         match name {
             "println" | "print" => {
@@ -4929,6 +5200,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 ops.push(self.lib_arg(&a.value, by_ref)?);
             }
             self.call_native(&format!("{owner}.{method}"), ops, dest);
+            return Ok(());
+        }
+        if method == "cmp" && self.scalar_cmp(e, object, args, dest.clone())? {
             return Ok(());
         }
         if method == "collect" && args.is_empty() {
@@ -5481,6 +5755,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         else {
             return self.unsupported(e.span, "this closure");
         };
+        let ref_params = std::mem::take(&mut self.closure_ref_params);
         let once = match self
             .lcx
             .node_types
@@ -5587,6 +5862,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             caps,
             env,
             ty,
+            ref_params,
         });
         let l = self.scoped_temp(ty);
         self.assign(l, Rvalue::Aggregate(AggregateKind::Closure { ty }, ops));
@@ -5622,17 +5898,45 @@ impl<'l, 'a> Bx<'l, 'a> {
             };
             self.captured.insert(sym, p);
         }
+        // The arguments come first (`_2..`); a borrowed one binds its name
+        // after all of them are declared.
+        let mut through = Vec::new();
         for p in params {
             let PatternKind::Binding(name) = &p.pattern.kind else {
                 return self.unsupported(p.span, "a destructuring closure parameter");
             };
             let t = self.node_ty(p.pattern.id, p.span)?;
+            let sym = self
+                .lcx
+                .binding_syms
+                .get(&(p.pattern.id, name.clone()))
+                .copied();
+            if job.ref_params && !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_)) {
+                let rt = self.tys().tcx().reference(t, false);
+                let arg = self.b.arg("arg", rt);
+                through.push((name, p.pattern.id, sym, arg, t));
+                continue;
+            }
             let l = self.b.arg(name, t);
-            if let Some(&sym) = self.lcx.binding_syms.get(&(p.pattern.id, name.clone())) {
+            if let Some(sym) = sym {
                 self.locals.insert(sym, l);
             }
             if self.needs_drop(t) {
                 self.schedule(ScopeEntry::Drop(Place::local(l)));
+            }
+        }
+        // A closure handed to a library call gets each element by
+        // reference; its name binds through it as a match part does (a
+        // `Copy` value is copied out).
+        for (name, node, sym, arg, t) in through {
+            let mut out = Vec::new();
+            let elem = Place::local(arg).project(ProjElem::Deref);
+            self.bind_one(name, node, elem, t, true, &mut out);
+            for (l, lt) in out {
+                if let Some(sym) = sym {
+                    self.locals.insert(sym, l);
+                }
+                self.declare(l, lt);
             }
         }
         let ret = Place::local(Local::RETURN_PLACE);
@@ -6169,8 +6473,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                         || matches!(a.value.kind, ExprKind::Closure { .. })
                     {
                         // A closure or function goes by value; the native
-                        // calls it.
-                        let (op, _) = self.fn_value(&a.value)?;
+                        // calls it, lending each element by reference.
+                        self.closure_ref_params = true;
+                        let v = self.fn_value(&a.value);
+                        self.closure_ref_params = false;
+                        let (op, _) = v?;
                         rest.push(op);
                         continue;
                     }
@@ -6552,6 +6859,92 @@ fn main() -> Result[(), String] {
         assert_eq!(
             run_source(src),
             Ok(("3 t 7 0 2\n2 r - 5 -1 4\n0:10\n1:20\n".to_string(), Some(0)))
+        );
+    }
+
+    /// A tuple of references is matched through them, and a binding of
+    /// a part of a `shared` value borrows it rather than moving it out.
+    #[test]
+    fn ref_parts_and_shared_parts_in_patterns() {
+        let src = r#"
+enum Region { Eu, Us }
+enum Cat { Food, Tech }
+shared enum Jv { Str(String), Num(i64) }
+fn rate(region: ref Region, cat: ref Cat) -> i64 {
+    match (region, cat) {
+        (Region.Eu, Cat.Food) => 5,
+        (Region.Eu, _) => 20,
+        (Region.Us, Cat.Tech) => 8,
+        _ => 0,
+    }
+}
+fn text(v: Option[Jv]) -> Option[String] {
+    match v {
+        Some(Jv.Str(s)) => Some(s.clone()),
+        _ => None,
+    }
+}
+fn main() {
+    let r = Region.Eu;
+    let c = Cat.Tech;
+    println(f"{rate(r, c)} {rate(Region.Us, Cat.Tech)}");
+    let t = text(Some(Jv.Str("hi".to_string()))) ?? "none".to_string();
+    let u = text(Some(Jv.Num(3))) ?? "none".to_string();
+    println(f"{t} {u}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("20 8\nhi none\n".to_string(), Some(0)))
+        );
+    }
+
+    /// A closure given to a library call borrows its elements; `?`
+    /// converts the error through `From`; unsuffixed literals take their
+    /// slot's type; `cmp` on scalars; a `mut ref` position and flag read
+    /// through; `T.make()` on a type parameter calls `T`'s impl.
+    #[test]
+    fn library_closures_from_literals_and_type_param_calls() {
+        let src = r#"
+trait Make { fn make() -> Self; }
+struct P { x: i64 }
+impl Make for P { fn make() -> P { return P { x: 7 }; } }
+fn mk[T: Make]() -> T { return T.make(); }
+struct Low { n: i64 }
+struct High { n: i64 }
+impl From[Low] for High { fn from(l: Low) -> High { High { n: l.n * 10 } } }
+fn low(fail: bool) -> Result[i64, Low] { if fail { Err(Low { n: 4 }) } else { Ok(1) } }
+fn high(fail: bool) -> Result[i64, High] { let v = low(fail)?; Ok(v + 1) }
+fn at(v: ref Vec[i64], i: mut ref i64, seen: mut ref bool) -> i64 {
+    let x = v[i];
+    i = i + 1;
+    if not seen { seen = true; }
+    x
+}
+fn main() {
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    cells.push((3, 1));
+    cells.push((5, 2));
+    cells.push((1, 3));
+    cells.sort_by(|a, b| b.0.cmp(a.0));
+    let p: P = mk();
+    let r = match high(true) { Ok(v) => v, Err(e) => e.n };
+    let s = match high(false) { Ok(v) => v, Err(e) => e.n };
+    let mut f: f64 = 1.5;
+    f += 1;
+    let g = f * 2;
+    let w: (i32, u8) = (7, 200);
+    let mut i = 0;
+    let mut seen = false;
+    let v = [4, 9];
+    let a = at(v, mut i, mut seen);
+    let b = at(v, mut i, mut seen);
+    println(f"{cells[0].0} {cells[2].1} {p.x} {r} {s} {g} {w.0} {w.1} {a} {b} {i} {seen}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("5 3 7 40 2 5 7 200 4 9 2 true\n".to_string(), Some(0)))
         );
     }
 
