@@ -130,6 +130,13 @@ const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
         "parse: 'mut' is a reserved keyword and cannot be used as an \
          identifier — predates the keyword reservation.",
     ),
+    (
+        "std_net/ws_echo_freespawn.kara",
+        "typecheck: free `spawn` is removed (§11.1, E0520). The file is the \
+         legacy probe for the free-spawn coroutine leak \
+         (docs/spikes/windows-iocp-scale-investigation.md); legacy `build` \
+         still accepts it, and ws_echo_spawn.kara is the TaskGroup form.",
+    ),
 ];
 
 fn is_excluded(rel: &Path) -> bool {
