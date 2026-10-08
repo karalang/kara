@@ -5,18 +5,18 @@ fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
 enum G[T] { X(T), Y }
 impl[T] Drop for G[T] { fn drop(mut ref self) { println("  dG") } }
 impl[T] G[T] {
-    fn gread(self) -> i64 { match self { G.X(t) => { return 1; } G.Y => { return 0; } } }
+    fn gread(own self) -> i64 { match self { G.X(t) => { return 1; } G.Y => { return 0; } } }
     fn gnone(self) -> i64 { return 5 }
 }
 
 enum K[T] { X(T), Y }
 impl Drop for K[R] { fn drop(mut ref self) { println("  dK") } }
-impl[T] K[T] { fn kread(self) -> i64 { match self { K.X(t) => { return 1; } K.Y => { return 0; } } } }
+impl[T] K[T] { fn kread(own self) -> i64 { match self { K.X(t) => { return 1; } K.Y => { return 0; } } } }
 
 enum H[T] { X(T), Y }
 impl[T] H[T] {
     fn hnone(self) -> i64 { return 5 }
-    fn hread(self) -> i64 { match self { H.X(t) => { return 1; } H.Y => { return 0; } } }
+    fn hread(own self) -> i64 { match self { H.X(t) => { return 1; } H.Y => { return 0; } } }
 }
 
 enum P[T] { X(T), Y }
@@ -26,7 +26,7 @@ fn mkp(i: i64) -> P[R] { return P.X(mk(i)) }
 enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 impl E {
-    fn eread(self) -> i64 { match self { E.A(t) => { return 1; } E.B => { return 0; } } }
+    fn eread(own self) -> i64 { match self { E.A(t) => { return 1; } E.B => { return 0; } } }
     fn enone(self) -> i64 { return 5 }
 }
 

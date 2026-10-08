@@ -5,7 +5,7 @@ shared enum Mk { K(Map[String, Vec[String]]), L }
 shared enum Mn { K(Map[i64, Node]), L }
 shared enum Mv { K { m: Map[i64, i64], n: i64 }, L }
 shared enum Mt { K(Map[i64, String], String), L }
-fn hs(s: String) -> String { s + "-heap-string-long-enough" }
+fn hs(s: own String) -> String { s + "-heap-string-long-enough" }
 fn mk() -> Map[i64, String] { let mut m: Map[i64, String] = Map.new(); m.insert(1, hs("a")); m }
 fn take(g: Mm) -> Map[i64, String] { match g { Mm.K(x) => x, Mm.L => Map.new() } }
 fn main() {

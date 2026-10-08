@@ -1,11 +1,11 @@
-fn stmtDiscard[T](v: Vec[String], c: bool, t: T) -> T { if c { v[0] } else { v[1] }; return t; }
-fn loopDiscard[T](v: Vec[String], t: T) -> T { for i in 0..2 { if i == 0 { v[0] } else { v[1] } } return t; }
-fn blockDiscard[T](v: Vec[String], c: bool, t: T) -> T { { if c { v[0] } else { v[1] } }; return t; }
-fn matchDiscard[T](v: Vec[String], c: i64, t: T) -> T { match c { 0 => { v[0] } _ => { v[1] } }; return t; }
-fn keptValue[T](v: Vec[String], c: bool, t: T) -> T { let s = if c { v[0] } else { v[1] }; println(f"  kept {s.len()}"); return t; }
-fn innerDiscard[T](v: Vec[String], c: bool, t: T) -> T { if c { v[0] } else { v[1] }; return t; }
-fn outerCalls[T](v: Vec[String], c: bool, t: T) -> T { let r = innerDiscard(v, c, t); return r; }
-fn ident[T](t: T) -> T { return t; }
+fn stmtDiscard[T](v: Vec[String], c: bool, t: own T) -> T { if c { v[0] } else { v[1] }; return t; }
+fn loopDiscard[T](v: Vec[String], t: own T) -> T { for i in 0..2 { if i == 0 { v[0] } else { v[1] } } return t; }
+fn blockDiscard[T](v: Vec[String], c: bool, t: own T) -> T { { if c { v[0] } else { v[1] } }; return t; }
+fn matchDiscard[T](v: Vec[String], c: i64, t: own T) -> T { match c { 0 => { v[0] } _ => { v[1] } }; return t; }
+fn keptValue[T](v: Vec[String], c: bool, t: own T) -> T { let s = if c { v[0] } else { v[1] }; println(f"  kept {s.len()}"); return t; }
+fn innerDiscard[T](v: Vec[String], c: bool, t: own T) -> T { if c { v[0] } else { v[1] }; return t; }
+fn outerCalls[T](v: Vec[String], c: bool, t: own T) -> T { let r = innerDiscard(v, c, t); return r; }
+fn ident[T](t: own T) -> T { return t; }
 fn mkVec() -> Vec[String] {
     let mut v: Vec[String] = Vec.new();
     v.push(f"aaaaaaaaaaaaaaaaaaaaaaaa-0");

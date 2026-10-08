@@ -56,6 +56,8 @@ def judge(entry: Path, corpus: Path, args) -> dict:
     if expect == "skip" or (meta.get("backends") and backend not in meta["backends"]):
         return {**base, "verdict": "SKIP", "why": expect if expect == "skip" else "backend excluded", "ran": False}
     mir = backend.startswith("mir-")
+    if mir and meta.get("v2_reject"):
+        expect = "error"  # legacy ran it; v2 refuses it
     if mir and meta.get("model_verdict") == "V2-REJECT" and not expect.startswith("error"):
         if check_refuses(entry, args):
             return {**base, "verdict": "PASS", "why": "", "ran": True}
@@ -82,6 +84,10 @@ def judge(entry: Path, corpus: Path, args) -> dict:
         # source.kara is the fixed text legacy never ran.
         exp_file = entry / "expected.out" if mir or not (entry / "legacy.out").exists() else entry / "legacy.out"
         as_set = False
+        if mir and exp_file.exists() and meta.get("expected_from") == "spec" and "model_exit" in meta:
+            # expected.out copied from the model: held to the model's exit.
+            want_exit = int(meta["model_exit"])
+            as_set = meta.get("model_verdict") == "ORDER-UNSPEC"
         if not exp_file.exists() and mir and (entry / "model.out").exists():
             exp_file = entry / "model.out"
             want_exit = int(meta.get("model_exit", want_exit))

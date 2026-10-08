@@ -121,7 +121,10 @@ impl Router {
         self.routes.push(Route { method, pattern: compile_pattern(pattern), handler });
     }
 
-    fn handler_at(ref self, index: i64) -> Handler { self.routes[index].handler }
+    fn call_at(ref self, index: i64, ctx: RouteCtx, store: mut ref UserStore) -> Result[Reply, ApiError] {
+        let route = ref self.routes[index];
+        (route.handler)(ctx, store)
+    }
 
     fn lookup(ref self, method: Method, path: ref String) -> RouteResult {
         let parts = split_path(path);
@@ -312,9 +315,8 @@ impl App {
         };
         match self.router.lookup(method, req.path) {
             RouteResult.Matched { index, params } => {
-                let handler = self.router.handler_at(index);
                 let ctx = RouteCtx { params, body: req.body.clone() };
-                match handler(ctx, mut self.store) {
+                match self.router.call_at(index, ctx, mut self.store) {
                     Ok(reply) => reply,
                     Err(e) => e.to_reply(),
                 }

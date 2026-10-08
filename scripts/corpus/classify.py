@@ -60,7 +60,7 @@ from corpus_lib import ROOT, entries, read_toml, write_toml  # noqa: E402
 PASSING = {"a", "b", "c"}
 # expected.out that states the spec rather than a legacy record: a core pin,
 # the drop model (drop-matrix/, or an e-spec resolution), an apps mirror.
-SPEC_SOURCES = ("pin", "spec", "mirror")
+SPEC_SOURCES = ("pin", "spec", "mirror", "decision")
 SPEC_VERDICTS = {"SAME", "ORDER", "ORDER-UNSPEC", "DIFF"}
 # What M1 does not promise (gate rules 2026-10-08, item 2).
 POST_M1 = [
@@ -69,6 +69,12 @@ POST_M1 = [
     ("process", r"\bCommand\b|\bChild\b"),
     ("dyn", r"\bdyn\s+[A-Z]"),
     ("escaping", r"\bescaping\b"),
+    # Deferred past M1 by design.md: providers to M4a services (§ Deferred),
+    # SIMD, contracts and predicates on distinct types to the later tracks.
+    ("provider", r"\bwith_provider\b|\bproviders\s*\{"),
+    ("simd", r"\bVector\["),
+    ("contract", r"(?m)\bfn\b[^\n{]*\b(?:requires|ensures)\b|^[ \t]*(?:requires|ensures)(?:\(\w+\))?[ \t]+\S"),
+    ("refinement", r"\btype\s+[A-Z]\w*(?:\[[^\]]*\])?\s*=[^\n;]*\bwhere\b"),
 ]
 LIB = [("map", r"\bMap\b"), ("set", r"\bSet\b"), ("sortedmap", r"\bSortedMap\b"),
        ("sortedset", r"\bSortedSet\b"), ("vecdeque", r"\bVecDeque\b"), ("heap", r"\bBinaryHeap\b")]
@@ -130,7 +136,17 @@ def gap_construct(stderr: str) -> str:
 
 
 def slice_tags(src: str, rel: str):
-    tags = [f"post-m1:{k}" for k, rx in POST_M1 if re.search(rx, src)]
+    # A program's own `enum Command` or `struct HttpRequest` is not the
+    # library's: a match on a name the program declares does not count.
+    own = set(re.findall(r"\b(?:struct|enum|type|trait)\s+([A-Z]\w*)", src))
+
+    def uses(rx):
+        def theirs(m):
+            name = re.search(r"[A-Za-z_]\w*", m.group(0))
+            return name is None or name.group(0) not in own
+        return any(theirs(m) for m in re.finditer(rx, src))
+
+    tags = [f"post-m1:{k}" for k, rx in POST_M1 if uses(rx)]
     tags += [f"lib:{k}" for k, rx in LIB if re.search(rx, src)]
     tags += [f"io:{k}" for k, rx in IO if re.search(rx, src)]
     if "/bench/" in f"/{rel}/":
@@ -156,6 +172,9 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
     tags += slice_tags(src, rel)
     out = {"rel": rel, "tags": tags}
     expect = meta.get("expect", "stdout")
+    if meta.get("v2_reject"):
+        # Legacy ran it; v2 refuses it (the reason is in `v2_reject`).
+        expect = "error"
     if meta.get("class") == "d" or any(t.startswith("deferred:") for t in tags):
         return {**out, "class": "d", "bucket": "d"}
     if expect == "skip":
@@ -204,6 +223,11 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
     spec, spec_exit, as_set = None, want_exit, False
     if meta.get("expected_from") in SPEC_SOURCES and (entry / "expected.out").exists():
         spec = (entry / "expected.out").read_bytes()
+        # An auto-resolved entry's expected.out is the model's output, held
+        # to the model's exit, not legacy's.
+        if meta.get("expected_from") == "spec" and "model_exit" in meta:
+            spec_exit = int(meta["model_exit"])
+            as_set = meta.get("model_verdict") == "ORDER-UNSPEC"
     elif meta.get("model_verdict") in SPEC_VERDICTS and meta.get("model_rev") == rev \
             and (entry / "model.out").exists():
         spec = (entry / "model.out").read_bytes()
@@ -343,11 +367,22 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=60.0)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--report-only", action="store_true")
+    ap.add_argument("--retag", action="store_true",
+                    help="recompute the slice tags from each source without running anything, then report")
     ap.add_argument("--resume", action="store_true",
                     help="skip entries already classified with this compiler commit")
     args = ap.parse_args()
     corpus = Path(args.corpus)
-    if not args.report_only:
+    if args.retag:
+        for e in entries(corpus):
+            meta = read_toml(e / "meta.toml")
+            src = (e / ("source.orig.kara" if meta.get("fixed_by_classify") else "source.kara")).read_text()
+            tags = [t for t in meta.get("tags", []) if not t.startswith(("post-m1:", "lib:", "io:")) and t != "bench"]
+            tags += slice_tags(src, str(e.relative_to(corpus)))
+            if tags != meta.get("tags", []):
+                meta["tags"] = tags
+                write_toml(e / "meta.toml", meta)
+    elif not args.report_only:
         sha = compiler_commit()
         rev = model_rev()
         todo = [e for e in entries(corpus)

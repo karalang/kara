@@ -14,9 +14,9 @@ enum Ese { A(Wse), B }
 fn outs(n: i64) -> String { return f"out-{n}-oooooooooooooooooooooooo"; }
 fn pays(n: i64) -> String { return f"pay-{n}-pppppppppppppppppppppppppppppppppp"; }
 
-fn mkw(t: String) -> Ws { return Ws { h: Sh { s: t } }; }
-fn mkm(i: i64, t: String) -> Wm { return Wm { id: i, h: Sh { s: t }, n: i }; }
-fn mkp(n: i64, t: String) -> Ps { return Ps { a: t, n: n }; }
+fn mkw(t: own String) -> Ws { return Ws { h: Sh { s: t } }; }
+fn mkm(i: i64, t: own String) -> Wm { return Wm { id: i, h: Sh { s: t }, n: i }; }
+fn mkp(n: i64, t: own String) -> Ps { return Ps { a: t, n: n }; }
 
 fn hit(s: String) -> i64 { if s.contains(f"pppp") { return 1; } return 0; }
 
@@ -26,7 +26,7 @@ fn c_call(n: i64) -> i64 {
   let t = out.h;
   return hit(t.s);
 }
-fn c_arm(b: Es, n: i64) -> i64 {
+fn c_arm(b: own Es, n: i64) -> i64 {
   let mut out: Ws = Ws { h: Sh { s: outs(n) } };
   match b { Es.A(w) => { out = w; } Es.B => { } }
   let t = out.h;
@@ -45,7 +45,7 @@ fn c_iflet(b: Es, n: i64) -> i64 {
   let t = out.h;
   return hit(t.s);
 }
-fn c_opt(b: Eo, n: i64) -> i64 {
+fn c_opt(b: own Eo, n: i64) -> i64 {
   let mut out: Wo = Wo { h: Option.Some(Sh { s: outs(n) }) };
   match b { Eo.A(w) => { out = w; } Eo.B => { } }
   match out.h { Option.Some(x) => { return hit(x.s); } Option.None => { return 0; } }
@@ -65,7 +65,7 @@ fn c_plain(n: i64) -> i64 {
   return hit(t);
 }
 
-fn c_senum_arm(b: Ese, n: i64) -> i64 {
+fn c_senum_arm(b: own Ese, n: i64) -> i64 {
   let mut out: Wse = Wse { h: Se.V(outs(n)) };
   match b { Ese.A(w) => { out = w; } Ese.B => { } }
   match out.h { Se.V(s) => { return hit(s); } Se.N => { return 0; } }
@@ -75,7 +75,7 @@ fn c_senum_inline(n: i64) -> i64 {
   out = Wse { h: Se.V(pays(n)) };
   match out.h { Se.V(s) => { return hit(s); } Se.N => { return 0; } }
 }
-fn c_shadow(b: Es, n: i64) -> i64 {
+fn c_shadow(b: own Es, n: i64) -> i64 {
   // NOT a displacement: a shadowing `let` leaves the first binding intact, so
   // it must still release through its own scope exit. Deliberately unread --
   // any read would move the field out and remove the action under test.

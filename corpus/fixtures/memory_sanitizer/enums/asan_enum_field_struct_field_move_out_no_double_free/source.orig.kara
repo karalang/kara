@@ -2,7 +2,7 @@
 enum Tok { Id(String), Eof }
 struct Span2 { offset: i64, length: i64 }
 struct Span { token: Tok, span: Span2 }
-fn render(t: Span) -> String {
+fn render(t: own Span) -> String {
     let off = t.span.offset;
     let mut line = f"{off}:";
     let tk = t.token;

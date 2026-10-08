@@ -12,4 +12,4 @@ backends = []
 env = {}
 note = "A pattern that binds nothing by value moves nothing (§4.6). On main 8be1a08d3 karac check gives E0500 at 13:11 and 19:9 (checker bug, sent to Thread A 2026-10-07); legacy interp prints `drop level` second, dropping lv at the match. The drop model prints expected.out. legacy.out recorded from the legacy build when landed. e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "8f557bac5+local"
+classified_with = "078a05d91"

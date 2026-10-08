@@ -6,17 +6,17 @@ impl Drop for Tagged { fn drop(mut ref self) { println("dT") } }
 struct H { n: i64 }
 fn mk(i: i64) -> String { return f"pay-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; }
 fn mr(i: i64) -> R { return R { id: i, s: mk(i) }; }
-fn show(x: Slot) { match x { Slot.Held(v) => println(f"C{v.id}"), Slot.Pair(v, n) => println(f"P{v.id}"), Slot.Boxed { r, n } => println(f"X{r.id}"), Slot.Empty => println("CE") } }
-fn fslot(r: R, k: bool) -> Slot { if k { return Slot.Empty; } return Slot.Held(r); }
-fn fpair(r: R, k: bool) -> Slot { if k { return Slot.Empty; } return Slot.Pair(r, 1); }
-fn fboxed(r: R, k: bool) -> Slot { if k { return Slot.Empty; } return Slot.Boxed { r: r, n: 1 }; }
-fn ffresh(r: R, k: bool) -> Slot { if k { return Slot.Held(mr(90)); } return Slot.Held(r); }
-fn ftail(r: R, k: bool) -> Slot { if k { Slot.Empty } else { Slot.Held(r) } }
-fn fnest(r: R, k: bool, j: bool) -> Slot { if k { if j { return Slot.Held(r); } } return Slot.Empty; }
-fn ftag(r: R, k: bool) -> Tagged { if k { return Tagged.Empty; } return Tagged.Held(r); }
+fn show(x: own Slot) { match x { Slot.Held(v) => println(f"C{v.id}"), Slot.Pair(v, n) => println(f"P{v.id}"), Slot.Boxed { r, n } => println(f"X{r.id}"), Slot.Empty => println("CE") } }
+fn fslot(r: own R, k: bool) -> Slot { if k { return Slot.Empty; } return Slot.Held(r); }
+fn fpair(r: own R, k: bool) -> Slot { if k { return Slot.Empty; } return Slot.Pair(r, 1); }
+fn fboxed(r: own R, k: bool) -> Slot { if k { return Slot.Empty; } return Slot.Boxed { r: r, n: 1 }; }
+fn ffresh(r: own R, k: bool) -> Slot { if k { return Slot.Held(mr(90)); } return Slot.Held(r); }
+fn ftail(r: own R, k: bool) -> Slot { if k { Slot.Empty } else { Slot.Held(r) } }
+fn fnest(r: own R, k: bool, j: bool) -> Slot { if k { if j { return Slot.Held(r); } } return Slot.Empty; }
+fn ftag(r: own R, k: bool) -> Tagged { if k { return Tagged.Empty; } return Tagged.Held(r); }
 impl H {
-    fn aslot(r: R, k: bool) -> Slot { if k { return Slot.Empty; } return Slot.Held(r); }
-    fn mslot(ref self, r: R, k: bool) -> Slot { if k { return Slot.Empty; } return Slot.Held(r); }
+    fn aslot(r: own R, k: bool) -> Slot { if k { return Slot.Empty; } return Slot.Held(r); }
+    fn mslot(ref self, r: own R, k: bool) -> Slot { if k { return Slot.Empty; } return Slot.Held(r); }
 }
 fn main() {
     let h = H { n: 0 };

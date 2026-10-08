@@ -1,0 +1,14 @@
+subword=true
+subword-ne-s=false
+subword-ne-a=false
+subword-ne-b=false
+subword-tag=false
+scalarstruct=true
+scalarstruct-ne=false
+zeros=true
+nan=false
+floats=true
+floats-ne=false
+ints=true
+ints-ne=false
+num-tag=false

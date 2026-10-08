@@ -2,9 +2,9 @@ struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 enum Ho[T] { Full(T), Empty }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
-fn shows(h: Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
-fn outer(h: Ho[S]) { println("o"); shows(h) }
-fn two(a: Ho[S], b: Ho[S]) { shows(a); println("m"); shows(b) }
+fn shows(h: own Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
+fn outer(h: own Ho[S]) { println("o"); shows(h) }
+fn two(a: own Ho[S], b: own Ho[S]) { shows(a); println("m"); shows(b) }
 fn main() {
     let mut v: Vec[Ho[S]] = Vec.new();
     v.push(Ho.Full(mks(1)));

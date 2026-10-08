@@ -5,7 +5,7 @@ enum Vs { Z(Ms), N }
 shared enum Ms { S(String), T }
 enum V2 { P(i64, M), N }
 enum Vf { Z { m: M, k: i64 }, N }
-fn mkv(s: String) -> Vec[String] { let mut v = Vec.new(); v.push(s); v.push("second-heap-string-long-enough".to_string()); v }
+fn mkv(s: own String) -> Vec[String] { let mut v = Vec.new(); v.push(s); v.push("second-heap-string-long-enough".to_string()); v }
 fn hs(k: i64) -> String { f"heap-string-long-enough-{k}" }
 fn cnt(v: ref V) -> i64 { match v { V.Z(M.My(x)) => x.len(), _ => 0 } }
 fn main() {

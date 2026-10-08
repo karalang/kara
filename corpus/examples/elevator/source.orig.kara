@@ -37,7 +37,7 @@ enum Request {
     CabinPress { floor: i64 },
 }
 
-fn floor_of(req: Request) -> i64 {
+fn floor_of(req: own Request) -> i64 {
     match req {
         FloorCall { floor, direction: _ } => floor,
         CabinPress { floor }             => floor,
@@ -71,7 +71,7 @@ impl Elevator {
         self.stops.sort();
     }
 
-    fn add_request(mut ref self, req: Request) {
+    fn add_request(mut ref self, req: own Request) {
         self.enqueue(floor_of(req));
     }
 

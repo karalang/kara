@@ -3,7 +3,7 @@ struct B { m: Map[String, i64] }
 impl B {
     pub fn get_m(ref self) -> Map[String, i64] { return self.m; }
 }
-fn take_field(b: B) -> Map[String, i64] { return b.m; }
+fn take_field(b: own B) -> Map[String, i64] { return b.m; }
 fn mk() -> Map[String, i64] {
     let mut m: Map[String, i64] = Map.new();
     let _ = m.insert("kkkkkkkkkkkkkkkk", 1);

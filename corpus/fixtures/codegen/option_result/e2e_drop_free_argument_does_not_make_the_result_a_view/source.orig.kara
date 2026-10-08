@@ -6,28 +6,28 @@ struct Q { s: String, n: i64 }
 struct W { r: R, n: i64 }
 struct N { r: R, n: i64 }
 
-fn from_string(i: i64, s: String) -> R { return R { id: i, name: s }; }
+fn from_string(i: i64, s: own String) -> R { return R { id: i, name: s }; }
 fn from_vec(i: i64, v: Vec[String]) -> R { return R { id: i, name: v[0] }; }
-fn from_struct(q: Q) -> R { return R { id: q.n, name: q.s }; }
-fn from_two(a: String, b: String) -> R { return R { id: 30, name: a }; }
-fn into_option(s: String) -> Option[R] { return Option.Some(R { id: 40, name: s }); }
-fn into_bodyless(s: String) -> N { return N { r: R { id: 50, name: s }, n: 1 }; }
-fn hand_back(r: R) -> R { return r; }
-fn wrap_bodyless(r: R) -> W { return W { r: r, n: 2 }; }
-fn wrap_bodied(r: R) -> H { return H { r: r, n: 3 }; }
+fn from_struct(q: own Q) -> R { return R { id: q.n, name: q.s }; }
+fn from_two(a: own String, b: String) -> R { return R { id: 30, name: a }; }
+fn into_option(s: own String) -> Option[R] { return Option.Some(R { id: 40, name: s }); }
+fn into_bodyless(s: own String) -> N { return N { r: R { id: 50, name: s }, n: 1 }; }
+fn hand_back(r: own R) -> R { return r; }
+fn wrap_bodyless(r: own R) -> W { return W { r: r, n: 2 }; }
+fn wrap_bodied(r: own R) -> H { return H { r: r, n: 3 }; }
 fn from_scalar(i: i64) -> R { return R { id: i, name: f"s{i}" }; }
 fn no_store(i: i64, v: Vec[i64]) -> R { return R { id: i, name: f"n{v.len()}" }; }
 
-fn string_arg(i: i64, nm: String) { let x = from_string(i, nm); println(f"  v={x.id}"); }
+fn string_arg(i: i64, nm: own String) { let x = from_string(i, nm); println(f"  v={x.id}"); }
 fn vec_arg(i: i64, v: Vec[String]) { let x = from_vec(i, v); println(f"  v={x.id}"); }
-fn struct_arg(q: Q) { let x = from_struct(q); println(f"  v={x.id}"); }
-fn two_string_args(a: String, b: String) { let x = from_two(a, b); println(f"  v={x.id}"); }
-fn option_return(s: String) { let o = into_option(s); match o { Option.Some(r) => { println(f"  v={r.id}"); } Option.None => { println("  v=none"); } } }
-fn bodyless_return(s: String) { let n = into_bodyless(s); println(f"  v={n.r.id}"); }
-fn chained(s: String) { let x = from_string(60, s); let y = hand_back(x); println(f"  v={y.id}"); }
-fn same_type(r: R) { let y = hand_back(r); println(f"  v={y.id}"); }
-fn wrap_control(r: R) { let w = wrap_bodyless(r); println(f"  v={w.r.id}"); }
-fn wrap_bodied_control(r: R) { let h = wrap_bodied(r); println(f"  v={h.r.id}"); }
+fn struct_arg(q: own Q) { let x = from_struct(q); println(f"  v={x.id}"); }
+fn two_string_args(a: own String, b: String) { let x = from_two(a, b); println(f"  v={x.id}"); }
+fn option_return(s: own String) { let o = into_option(s); match o { Option.Some(r) => { println(f"  v={r.id}"); } Option.None => { println("  v=none"); } } }
+fn bodyless_return(s: own String) { let n = into_bodyless(s); println(f"  v={n.r.id}"); }
+fn chained(s: own String) { let x = from_string(60, s); let y = hand_back(x); println(f"  v={y.id}"); }
+fn same_type(r: own R) { let y = hand_back(r); println(f"  v={y.id}"); }
+fn wrap_control(r: own R) { let w = wrap_bodyless(r); println(f"  v={w.r.id}"); }
+fn wrap_bodied_control(r: own R) { let h = wrap_bodied(r); println(f"  v={h.r.id}"); }
 fn scalar_control(i: i64) { let x = from_scalar(i); println(f"  v={x.id}"); }
 fn read_only_arg(i: i64, v: Vec[i64]) { let x = no_store(i, v); println(f"  v={x.id}"); }
 

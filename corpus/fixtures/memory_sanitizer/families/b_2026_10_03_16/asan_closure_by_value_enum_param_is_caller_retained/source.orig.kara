@@ -1,15 +1,15 @@
 enum Ho[T] { Full(T), Empty }
 enum Hc { Full(String), Empty }
-fn mkh(s: String) -> Ho[String] { return Ho.Full(s + "-heap-string-long-enough"); }
-fn mkc(s: String) -> Hc { return Hc.Full(s + "-heap-string-long-enough"); }
-fn keep(h: Ho[String]) -> i64 { match h { Ho.Full(s) => s.len(), Ho.Empty => 0 } }
+fn mkh(s: own String) -> Ho[String] { return Ho.Full(s + "-heap-string-long-enough"); }
+fn mkc(s: own String) -> Hc { return Hc.Full(s + "-heap-string-long-enough"); }
+fn keep(h: own Ho[String]) -> i64 { match h { Ho.Full(s) => s.len(), Ho.Empty => 0 } }
 fn takes(s: String) -> i64 { s.len() }
 struct W { s: String }
 struct P { a: String, b: i64 }
 enum Hp { Full(P), Empty }
-fn mkw(s: String) -> W { return W { s: s + "-heap-string-long-enough" }; }
-fn mko(s: String) -> Option[String] { return Some(s + "-heap-string-long-enough"); }
-fn mkr(s: String) -> Result[String, String] { return Ok(s + "-heap-string-long-enough"); }
+fn mkw(s: own String) -> W { return W { s: s + "-heap-string-long-enough" }; }
+fn mko(s: own String) -> Option[String] { return Some(s + "-heap-string-long-enough"); }
+fn mkr(s: own String) -> Result[String, String] { return Ok(s + "-heap-string-long-enough"); }
 fn mk() -> Fn(Ho[String]) -> i64 { |q: Ho[String]| keep(q) }
 fn k1() { let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; println(f"k1 {f(mkh("a"))}"); }
 fn k2() { let h = mkh("bb"); let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; println(f"k2 {f(h)}"); }

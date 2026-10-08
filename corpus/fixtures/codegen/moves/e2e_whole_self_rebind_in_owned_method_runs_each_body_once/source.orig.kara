@@ -8,14 +8,14 @@ struct S { r: R }
 struct Sd { r: R }
 impl Drop for Sd { fn drop(mut ref self) { println("  dS") } }
 impl E {
-    fn m_let(self) -> i64 { let e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
-    fn m_cond(self, c: bool) -> i64 { if c { let e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } } else { match self { E.A(r) => { return r.id + 100; } E.B => { return 100; } } } }
-    fn m_mut(self) -> i64 { let mut e = self; e = E.B; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn m_let(own self) -> i64 { let e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn m_cond(own self, c: bool) -> i64 { if c { let e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } } else { match self { E.A(r) => { return r.id + 100; } E.B => { return 100; } } } }
+    fn m_mut(own self) -> i64 { let mut e = self; e = E.B; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
 }
-impl F { fn m_let(self) -> i64 { let e = self; match e { F.A(r) => { return r.id; } F.B => { return 0; } } } }
-impl S { fn m_let(self) -> i64 { let e = self; return e.r.id; } }
-impl Sd { fn m_let(self) -> i64 { let e = self; return e.r.id; } }
-fn f_let(x: E) -> i64 { let e = x; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+impl F { fn m_let(own self) -> i64 { let e = self; match e { F.A(r) => { return r.id; } F.B => { return 0; } } } }
+impl S { fn m_let(own self) -> i64 { let e = self; return e.r.id; } }
+impl Sd { fn m_let(own self) -> i64 { let e = self; return e.r.id; } }
+fn f_let(x: own E) -> i64 { let e = x; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
 fn main() {
     println("enum/local"); let a = E.A(mk(1)); let x1 = a.m_let(); println(f"  x{x1}");
     println("enum/temp"); let x2 = E.A(mk(2)).m_let(); println(f"  x{x2}");

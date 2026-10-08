@@ -1,6 +1,6 @@
 
 struct A { keep: i64, sv: Option[String] }
-fn f(a: A) -> i64 {
+fn f(a: own A) -> i64 {
     let x = a.sv;
     match x { Some(s) => { if s.len() >= 0 { 1 } else { 0 } } None => 0 }
 }

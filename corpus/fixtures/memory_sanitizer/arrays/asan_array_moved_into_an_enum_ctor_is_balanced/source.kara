@@ -10,7 +10,7 @@ fn glen(g: own G[Array[String, 2]]) -> i64 { match g { G.Y(x) => { return x[0].l
 fn ilen(w: own Wi) -> i64 { match w { Wi.Full(x) => { return x[0]; } Wi.Empty => { return 0; } } }
 fn plen(w: own Wp) -> i64 { match w { Wp.Full(x) => { return x[0].s.len(); } Wp.Empty => { return 0; } } }
 fn takeo(o: Option[Array[String, 2]]) -> i64 { match o { Some(x) => { return x[0].len(); } None => { return 0; } } }
-fn viaparam(a: Array[String, 2]) -> i64 {
+fn viaparam(a: own Array[String, 2]) -> i64 {
     { let w = Wrp.Full(a.clone()); println(f"param-in:{wlen(w)}"); }
     return a[0].len();
 }

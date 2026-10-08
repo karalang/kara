@@ -13,17 +13,17 @@ fn mka(t: String) -> Array[String, 2] {
     return [f"b1515-{t}-aaaaaaaaaaaaaaaa", f"b1515-{t}-bbbbbbbbbbbbbbbb"];
 }
 fn eat(a: Array[String, 2]) -> i64 { return a[0].len(); }
-fn tlen(t: Two) -> i64 { match t { Two.Both(x, y) => { return x[0].len() + y[1].len(); } Two.None2 => { return 0; } } }
-fn mlen(m: Mix) -> i64 { match m { Mix.M(x, k) => { return x[0].len() + k; } Mix.N => { return 0; } } }
-fn mlen2(m: Mix2) -> i64 { match m { Mix2.M(k, x) => { return x[0].len() + k; } Mix2.N => { return 0; } } }
-fn trilen(t: Tri) -> i64 { match t { Tri.T(x, k, y) => { return x[0].len() + k + y[1].len(); } Tri.N => { return 0; } } }
-fn stlen(s: St) -> i64 { match s { St.S { a, n } => { return a[0].len() + n; } St.N => { return 0; } } }
-fn sthand(s: St) -> i64 { match s { St.S { a, n } => { return eat(a) + n; } St.N => { return 0; } } }
-fn st1hand(s: St1) -> i64 { match s { St1.S { a } => { return eat(a); } St1.N => { return 0; } } }
-fn mhand(m: Mix) -> i64 { match m { Mix.M(x, k) => { return eat(x) + k; } Mix.N => { return 0; } } }
-fn mout(m: Mix) -> Array[String, 2] { match m { Mix.M(x, k) => { return x; } Mix.N => { return mka("z"); } } }
-fn mxlen(m: Mx) -> i64 { match m { Mx.M(x, s) => { return x[0].len() + s.len(); } Mx.N => { return 0; } } }
-fn wlen(w: Wrp) -> i64 { match w { Wrp.Full(x) => { return x[0].len(); } Wrp.Empty => { return 0; } } }
+fn tlen(t: own Two) -> i64 { match t { Two.Both(x, y) => { return x[0].len() + y[1].len(); } Two.None2 => { return 0; } } }
+fn mlen(m: own Mix) -> i64 { match m { Mix.M(x, k) => { return x[0].len() + k; } Mix.N => { return 0; } } }
+fn mlen2(m: own Mix2) -> i64 { match m { Mix2.M(k, x) => { return x[0].len() + k; } Mix2.N => { return 0; } } }
+fn trilen(t: own Tri) -> i64 { match t { Tri.T(x, k, y) => { return x[0].len() + k + y[1].len(); } Tri.N => { return 0; } } }
+fn stlen(s: own St) -> i64 { match s { St.S { a, n } => { return a[0].len() + n; } St.N => { return 0; } } }
+fn sthand(s: own St) -> i64 { match s { St.S { a, n } => { return eat(a) + n; } St.N => { return 0; } } }
+fn st1hand(s: own St1) -> i64 { match s { St1.S { a } => { return eat(a); } St1.N => { return 0; } } }
+fn mhand(m: own Mix) -> i64 { match m { Mix.M(x, k) => { return eat(x) + k; } Mix.N => { return 0; } } }
+fn mout(m: own Mix) -> Array[String, 2] { match m { Mix.M(x, k) => { return x; } Mix.N => { return mka("z"); } } }
+fn mxlen(m: own Mx) -> i64 { match m { Mx.M(x, s) => { return x[0].len() + s.len(); } Mx.N => { return 0; } } }
+fn wlen(w: own Wrp) -> i64 { match w { Wrp.Full(x) => { return x[0].len(); } Wrp.Empty => { return 0; } } }
 
 fn main() {
     let mut i: i64 = 0;

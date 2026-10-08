@@ -12,4 +12,4 @@ backends = []
 env = {}
 note = "e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "8f557bac5+local"
+classified_with = "078a05d91"

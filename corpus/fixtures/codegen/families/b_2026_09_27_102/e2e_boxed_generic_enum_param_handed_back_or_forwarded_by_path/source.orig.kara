@@ -1,14 +1,14 @@
 enum Ho[T] { Full(T), Empty }
 struct K { k: i64 }
-fn showt(h: Ho[String]) { match h { Ho.Full(r) => println(f"t{r}"), Ho.Empty => println("e") } }
-fn keep(h: Ho[String]) -> Ho[String] { h }
-fn fwd(h: Ho[String]) { showt(h) }
-fn mk(s: String) -> Ho[String] { return Ho.Full(s + "!") }
-fn pk(h: Ho[String], k: bool) -> Ho[String] { if k { return h } showt(h); return Ho.Empty }
-fn pkc(h: Ho[String], k: bool) -> Ho[String] { if k { return keep(h) } fwd(h); return Ho.Empty }
+fn showt(h: own Ho[String]) { match h { Ho.Full(r) => println(f"t{r}"), Ho.Empty => println("e") } }
+fn keep(h: own Ho[String]) -> Ho[String] { h }
+fn fwd(h: own Ho[String]) { showt(h) }
+fn mk(s: own String) -> Ho[String] { return Ho.Full(s + "!") }
+fn pk(h: own Ho[String], k: bool) -> Ho[String] { if k { return h } showt(h); return Ho.Empty }
+fn pkc(h: own Ho[String], k: bool) -> Ho[String] { if k { return keep(h) } fwd(h); return Ho.Empty }
 impl K {
-    fn pks(h: Ho[String], k: bool) -> Ho[String] { if k { return h } showt(h); return Ho.Empty }
-    fn pkm(self, h: Ho[String], k: bool) -> Ho[String] { if k { return h } showt(h); return Ho.Empty }
+    fn pks(h: own Ho[String], k: bool) -> Ho[String] { if k { return h } showt(h); return Ho.Empty }
+    fn pkm(self, h: own Ho[String], k: bool) -> Ho[String] { if k { return h } showt(h); return Ho.Empty }
 }
 fn main() {
     println("free");

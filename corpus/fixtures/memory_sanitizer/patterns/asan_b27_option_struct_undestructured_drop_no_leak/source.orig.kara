@@ -1,7 +1,7 @@
 
 struct Inner { s: String }
 struct A { value: Option[Inner] }
-fn use_a(a: A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
+fn use_a(a: own A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
 fn mk() -> A { A { value: Some(Inner { s: "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm".to_string() }) } }
 fn build() -> Vec[A] {
     let mut v: Vec[A] = Vec.new();

@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: '3:bravo-b044-payload-bbbbbbbbbbbbbbbbbbbb 2:alpha-b044-payload-aaaaaaaaaaaaaaaaaaaa 3:delta-b044-payload-ddddddddddddddd'"
 bucket = "mir-gap:an iterator value"
-classified_with = "8f557bac5+local"
+classified_with = "078a05d91"
 model_rev = "7b8ab2eb"

@@ -41,7 +41,7 @@ kata/example file stem. A second distinct program in the same test gets `_2`.
 | `exit` | expected exit code |
 | `tags` | see below |
 | `class` | `a`..`e` once classified against the MIR interpreter; `unknown` until then |
-| `expected_from` | `assert` (the test's own string literal matches), `legacy-run`, `spec` (the drop model), `pin`, or `mirror` (the same-stem Python mirror, `apps/`) |
+| `expected_from` | `assert` (the test's own string literal matches), `legacy-run`, `spec` (the drop model), `pin`, `mirror` (the same-stem Python mirror, `apps/`), or `decision` (a spec ruling recorded in `note`) |
 | `legacy_backend` | the backend today's suite used: `legacy-interp` for `tests/interpreter`, else `legacy-build` |
 | `rules` | core-semantics sections the program pins |
 | `backends` | empty = all; otherwise the only backends it applies to |
@@ -49,6 +49,7 @@ kata/example file stem. A second distinct program in the same test gets `_2`.
 | `note` | free text |
 | `bucket` | the classifier rule that decided `class`, or the failure (`mir-gap:<construct>`, `timeout`, `check-refuses:<code>`, ...) |
 | `classified_with` | the karac commit the classification ran at |
+| `v2_reject` | the reason v2 refuses a program legacy ran (a core-semantics rule); the mir backends and the classifier expect a refusal |
 | `fixed_by_classify` | `true` when `karac fix` rewrote `source.kara` (class b); the extracted text is `source.orig.kara` |
 
 Tags come from the source and from `karac check --output=json`: `drop`,

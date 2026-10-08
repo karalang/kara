@@ -6,7 +6,7 @@ struct H1 { e: E }
 struct H2 { r: R }
 struct H3 { r: R, n: i64 }
 fn mk(n: i64) -> R { return R { id: n, tag: f"tag-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa{n}", xs: [n, n] } }
-fn keep(r: R) -> R { return r; }
+fn keep(r: own R) -> R { return r; }
 fn s1() -> i64 { let c = H2 { r: mk(1) }; match c { H2 { r } => { let m = r; println("s1in"); return m.id; } } }
 fn s2() -> R { let c = H2 { r: mk(2) }; match c { H2 { r } => r } }
 fn s3() -> i64 { let c = H2 { r: mk(3) }; if let H2 { r } = c { let m = r; println("s3in"); return m.id; } return 0; }

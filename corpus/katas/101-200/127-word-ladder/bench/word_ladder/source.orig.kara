@@ -69,7 +69,7 @@ fn neighbors(word: ref String, word_set: ref Map[String, i64]) -> Vec[String] {
     out
 }
 
-fn ladder_length(begin: String, end: String, words: ref Vec[String]) -> i64 {
+fn ladder_length(begin: own String, end: String, words: ref Vec[String]) -> i64 {
     let mut word_set: Map[String, i64] = Map.new();
     let mut wi = 0;
     while wi < words.len() {

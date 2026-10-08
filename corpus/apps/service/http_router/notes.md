@@ -18,3 +18,5 @@ workarounds:
 - These were language-rule corrections from my own reading, not workarounds: `!`/`||` became `not`/`or`, an assignment used as a match-arm body got braces, and `let user = store.users[id]` (move out of an index) became `store.users.get(id)`.
 
 ignored diagnostics: 3
+
+v2 edit (2026-10-08): an erased `Fn(..)` value is move-only (core-semantics §1.1; review thread ruling), so `Router.handler_at` copying a handler out of `ref self` is refused (E0517). The handler is now called in place through `Router.call_at(index, ctx, store)`. Output unchanged (`karac run` still matches expected.out).

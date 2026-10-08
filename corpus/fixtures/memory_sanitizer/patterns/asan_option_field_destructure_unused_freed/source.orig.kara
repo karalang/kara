@@ -1,6 +1,6 @@
 
 struct A { path: Vec[String], sv: Option[String] }
-fn f(a: A) -> i64 {
+fn f(a: own A) -> i64 {
     let A { path, sv } = a;
     0
 }

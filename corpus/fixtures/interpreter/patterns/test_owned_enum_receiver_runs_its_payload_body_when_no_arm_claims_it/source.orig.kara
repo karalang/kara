@@ -8,9 +8,9 @@ enum G[T] { X(T), Y }
 struct W { e: E }
 impl E {
     fn none(self) -> i64 { return 5 }
-    fn matches(self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
-    fn ret_self(self) -> E { return self }
-    fn wrap(self) -> W { return W { e: self } }
+    fn matches(own self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn ret_self(own self) -> E { return self }
+    fn wrap(own self) -> W { return W { e: self } }
     fn refm(ref self) -> i64 { return 3 }
 }
 impl N { fn none(self) -> i64 { return 5 } }

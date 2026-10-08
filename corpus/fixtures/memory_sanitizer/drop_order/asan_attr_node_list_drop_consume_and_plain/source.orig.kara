@@ -3,7 +3,7 @@ shared enum Val { Nothing, Ident(String), Num(i64) }
 struct ArgN { name: Option[String], value: Option[Val] }
 struct AttrN { path: Vec[String], args: Vec[ArgN], string_value: Option[String] }
 
-fn render_arg(a: ArgN) -> i64 {
+fn render_arg(a: own ArgN) -> i64 {
     let ArgN { name, value } = a;
     let mut touched = 0;
     match name { Some(s) => { if s.len() >= 0 { touched = touched + 1; } } None => {} }
@@ -14,7 +14,7 @@ fn render_arg(a: ArgN) -> i64 {
     touched
 }
 
-fn render_attr(a: AttrN) -> i64 {
+fn render_attr(a: own AttrN) -> i64 {
     let AttrN { path, args, string_value } = a;
     let mut touched = 0;
     for seg in path { if seg.len() >= 0 { touched = touched + 1; } }

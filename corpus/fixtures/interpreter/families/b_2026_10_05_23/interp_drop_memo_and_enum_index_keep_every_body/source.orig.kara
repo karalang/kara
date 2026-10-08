@@ -10,7 +10,7 @@ enum Pair[T] {
     Two(T, T),
 }
 struct Holder { t: Tree, n: i64 }
-fn count(t: Tree) -> i64 {
+fn count(t: own Tree) -> i64 {
     match t {
         Leaf(r) => { return r.id; }
         Node(kids) => {
@@ -23,7 +23,7 @@ fn count(t: Tree) -> i64 {
         Empty => { return 0; }
     }
 }
-fn take(p: Pair[R]) -> i64 {
+fn take(p: own Pair[R]) -> i64 {
     match p {
         One(a) => { return a.id; }
         Two(a, b) => { return a.id * 10 + b.id; }

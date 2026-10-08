@@ -7,16 +7,16 @@ enum P { A(R), B }
 enum T { A(R, R), B }
 impl Drop for T { fn drop(mut ref self) { println("  dT") } }
 impl E {
-    fn m_wild(self) -> i64 { match self { E.A(_) => { return 1; } E.B => { return 0; } } }
-    fn m_unit(self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn m_wild(own self) -> i64 { match self { E.A(_) => { return 1; } E.B => { return 0; } } }
+    fn m_unit(own self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
     fn m_ifwild(self) -> i64 { if let E.A(_) = self { return 1; } else { return 0; } }
 }
-impl P { fn m_wild(self) -> i64 { match self { P.A(_) => { return 1; } P.B => { return 0; } } } }
+impl P { fn m_wild(own self) -> i64 { match self { P.A(_) => { return 1; } P.B => { return 0; } } } }
 impl T {
-    fn m_half(self) -> i64 { match self { T.A(_, r) => { return r.id; } T.B => { return 0; } } }
-    fn m_both(self) -> i64 { match self { T.A(_, _) => { return 2; } T.B => { return 0; } } }
+    fn m_half(own self) -> i64 { match self { T.A(_, r) => { return r.id; } T.B => { return 0; } } }
+    fn m_both(own self) -> i64 { match self { T.A(_, _) => { return 2; } T.B => { return 0; } } }
 }
-fn f_wild(e: E) -> i64 { match e { E.A(_) => { return 1; } E.B => { return 0; } } }
+fn f_wild(e: own E) -> i64 { match e { E.A(_) => { return 1; } E.B => { return 0; } } }
 fn main() {
     println("wild/local"); let a = E.A(mk(1)); let x = a.m_wild(); println(f"  x{x}");
     println("wild/temp"); let x2 = E.A(mk(2)).m_wild(); println(f"  x{x2}");

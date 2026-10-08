@@ -5,20 +5,20 @@ enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 struct H2 { e: E, n: i64 }
 struct Hr { r: R, n: i64 }
-fn consume_e(x: E) -> i64 { match x { E.A(r) => { return r.id; } E.B => { return 0; } } }
+fn consume_e(x: own E) -> i64 { match x { E.A(r) => { return r.id; } E.B => { return 0; } } }
 
-fn p_let(h: H2) -> E { let H2 { e, n } = h; return e; }
-fn p_let_unused(h: H2) -> i64 { let H2 { e, n } = h; return n; }
-fn p_let_rebind(h: H2) -> E { let H2 { e, n } = h; let k = e; return k; }
-fn p_let_call(h: H2) -> i64 { let H2 { e, n } = h; return consume_e(e) + n; }
-fn p_let_r(h: Hr) -> R { let Hr { r, n } = h; return r; }
-fn p_match(h: H2) -> E { match h { H2 { e, n } => { return e; } } }
-fn p_tuple(t: (E, i64)) -> E { match t { (e, n) => { return e; } } }
-fn p_tuple_unused(t: (E, i64)) -> i64 { match t { (e, n) => { return n; } } }
-fn p_tuple_call(t: (E, i64)) -> i64 { match t { (e, n) => { return consume_e(e) + n; } } }
-fn p_tuple_r(t: (R, i64)) -> R { match t { (r, n) => { return r; } } }
+fn p_let(h: own H2) -> E { let H2 { e, n } = h; return e; }
+fn p_let_unused(h: own H2) -> i64 { let H2 { e, n } = h; return n; }
+fn p_let_rebind(h: own H2) -> E { let H2 { e, n } = h; let k = e; return k; }
+fn p_let_call(h: own H2) -> i64 { let H2 { e, n } = h; return consume_e(e) + n; }
+fn p_let_r(h: own Hr) -> R { let Hr { r, n } = h; return r; }
+fn p_match(h: own H2) -> E { match h { H2 { e, n } => { return e; } } }
+fn p_tuple(t: own (E, i64)) -> E { match t { (e, n) => { return e; } } }
+fn p_tuple_unused(t: own (E, i64)) -> i64 { match t { (e, n) => { return n; } } }
+fn p_tuple_call(t: own (E, i64)) -> i64 { match t { (e, n) => { return consume_e(e) + n; } } }
+fn p_tuple_r(t: own (R, i64)) -> R { match t { (r, n) => { return r; } } }
 fn p_tuple_iflet(t: (E, i64)) -> E { if let (e, n) = t { return e; } else { return E.B; } }
-fn p_tuple_let(t: (E, i64)) -> E { let (e, n) = t; return e; }
+fn p_tuple_let(t: own (E, i64)) -> E { let (e, n) = t; return e; }
 
 fn main() {
     println("let/local"); let a1 = H2 { e: E.A(mk(1)), n: 10 }; let x1 = p_let(a1); println("  got"); let _ = x1;

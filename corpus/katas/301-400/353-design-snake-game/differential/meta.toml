@@ -11,5 +11,5 @@ rules = []
 backends = []
 env = {}
 bucket = "mir-gap:indexing this type is not lowered yet; 38:20 in `SetGame.step`: indexing this ty"
-classified_with = "8f557bac5+local"
+classified_with = "078a05d91"
 model_rev = "7b8ab2eb"

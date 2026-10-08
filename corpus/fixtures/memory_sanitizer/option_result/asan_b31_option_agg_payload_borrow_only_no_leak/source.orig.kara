@@ -2,10 +2,10 @@
 enum Val { Nothing, Ident(String) }
 struct A { value: Option[Val] }
 struct B { value: Option[Val] }
-fn ident_len(v: Val) -> i64 { match v { Val.Ident(s) => s.len(), Val.Nothing => 0 } }
-fn via_match(a: A) -> i64 { let A { value } = a; match value { Some(v) => ident_len(v), None => 0 } }
-fn via_iflet(a: A) -> i64 { let A { value } = a; if let Some(v) = value { ident_len(v) } else { 0 } }
-fn via_whilelet(a: A) -> i64 {
+fn ident_len(v: own Val) -> i64 { match v { Val.Ident(s) => s.len(), Val.Nothing => 0 } }
+fn via_match(a: own A) -> i64 { let A { value } = a; match value { Some(v) => ident_len(v), None => 0 } }
+fn via_iflet(a: own A) -> i64 { let A { value } = a; if let Some(v) = value { ident_len(v) } else { 0 } }
+fn via_whilelet(a: own A) -> i64 {
     let A { value } = a;
     let mut vv = value;
     let mut acc = 0;

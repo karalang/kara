@@ -22,7 +22,7 @@
 fn visit(
     adj: mut ref Map[String, Vec[String]],
     cursor: mut ref Map[String, i64],
-    airport: String,
+    airport: own String,
     route: mut ref Vec[String],
 ) {
     while true {

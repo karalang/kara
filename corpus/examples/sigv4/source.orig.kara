@@ -191,7 +191,7 @@ fn sha256(msg: Vec[u8]) -> Vec[u8] {
 // exclusive branches, and `inner`, whose flagged "re-use" actually PRECEDED
 // the consume. Both were false positives and both are gone, so the allow is
 // gone with them; the code is unchanged.
-fn hmac_sha256(key: Vec[u8], msg: Vec[u8]) -> Vec[u8] {
+fn hmac_sha256(key: own Vec[u8], msg: Vec[u8]) -> Vec[u8] {
     // A key longer than the block is replaced by its own digest — the path
     // RFC 4231 test case 6 exists to exercise. Normalizing to one binding
     // first keeps `key` on a single ownership path: consumed by `sha256` on
@@ -385,11 +385,11 @@ fn canonical_query(params: Vec[QueryParam]) -> String {
 
 // Stage 1 — the canonical request. Its SHA-256 is what gets signed.
 fn canonical_request(
-    method: String,
+    method: own String,
     path: String,
     params: Vec[QueryParam],
     headers: Vec[Header],
-    payload_hash: String,
+    payload_hash: own String,
 ) -> String {
     let sorted = sort_headers(headers);
     let mut canon_headers = String.new();
@@ -409,14 +409,14 @@ fn canonical_request(
 }
 
 // Stage 2 — the string to sign.
-fn string_to_sign(stamp: String, scope: String, creq: String) -> String {
+fn string_to_sign(stamp: own String, scope: own String, creq: String) -> String {
     "AWS4-HMAC-SHA256\n" + stamp + "\n" + scope + "\n" + to_hex(sha256(bytes_of(creq)))
 }
 
 // Stage 3 — the derived signing key: four chained HMACs, each keyed by the
 // previous digest. This is what makes a leaked signature scoped to one day,
 // one region and one service.
-fn signing_key(secret: String, date: String, region: String, service: String) -> Vec[u8] {
+fn signing_key(secret: own String, date: String, region: String, service: String) -> Vec[u8] {
     let k_date = hmac_sha256(bytes_of("AWS4" + secret), bytes_of(date));
     let k_region = hmac_sha256(k_date, bytes_of(region));
     let k_service = hmac_sha256(k_region, bytes_of(service));
@@ -425,11 +425,11 @@ fn signing_key(secret: String, date: String, region: String, service: String) ->
 
 // Stage 4 — the signature.
 fn sign_request(
-    secret: String,
+    secret: own String,
     date: String,
     region: String,
     service: String,
-    stamp: String,
+    stamp: own String,
     creq: String,
 ) -> String {
     let scope = date.clone() + "/" + region.clone() + "/" + service.clone() + "/aws4_request";
@@ -438,15 +438,15 @@ fn sign_request(
     to_hex(hmac_sha256(key, bytes_of(sts)))
 }
 
-fn header(name: String, value: String) -> Header {
+fn header(name: own String, value: own String) -> Header {
     Header { name: name, value: value }
 }
 
-fn param(key: String, value: String) -> QueryParam {
+fn param(key: own String, value: own String) -> QueryParam {
     QueryParam { key: key, value: value }
 }
 
-fn check(label: String, got: String, want: String) {
+fn check(label: own String, got: own String, want: own String) {
     if got == want {
         println(label + " ok");
     } else {

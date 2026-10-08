@@ -17,7 +17,7 @@ fn agg(entries: Vec[Entry]) -> Vec[Stat] {
     return stats;
 }
 
-fn tag_once(b: Bag) -> Vec[String] {
+fn tag_once(b: own Bag) -> Vec[String] {
     let mut seen: Set[Vec[String]] = Set.new();
     let _ = seen.insert(b.tags);
     return b.tags;
