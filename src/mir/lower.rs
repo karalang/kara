@@ -25,7 +25,7 @@ use crate::ownership::OwnershipMode;
 use crate::resolver::{ResolveResult, SpanKey, SymbolId};
 use crate::token::Span;
 use crate::ty::{AdtDef, IntrinsicKind, TyKind as HK, TypeName, VariantDef};
-use crate::typechecker::types::{IntSize, Type, UIntSize, VariantTypeInfo};
+use crate::typechecker::types::{FloatSize, IntSize, Type, UIntSize, VariantTypeInfo};
 use crate::typechecker::TypeCheckResult;
 use crate::typed_hir::{Callee, ResolvedCall, TypedHir};
 
@@ -153,6 +153,9 @@ struct FnItem<'a> {
     /// declares (they come first in the method's positional generics).
     impl_target: Option<DefId>,
     impl_params: usize,
+    /// The primitive an impl is for (`impl Step for i64`), which has no
+    /// definition to be `impl_target`.
+    impl_prim: Option<Ty>,
     /// The impl's generic parameters, which come before the method's.
     impl_generics: Option<&'a ast::GenericParams>,
     /// The impl block's span: with the method's own span, the key of the
@@ -300,6 +303,7 @@ impl<'a> Lcx<'a> {
                                 f,
                                 impl_target: None,
                                 impl_params: 0,
+                                impl_prim: None,
                                 impl_generics: None,
                                 impl_span: None,
                             },
@@ -322,9 +326,16 @@ impl<'a> Lcx<'a> {
                     let Some(&impl_id) = impl_ids.next() else {
                         continue;
                     };
-                    let Some(target) = self.defs.impls.get(&impl_id).and_then(|i| i.target) else {
-                        continue;
+                    let target = self.defs.impls.get(&impl_id).and_then(|i| i.target);
+                    let prim = match (&b.target_type.kind, target) {
+                        (ast::TypeKind::Path(p), None) if b.generic_params.is_none() => {
+                            p.segments.last().and_then(|n| self.primitive(n))
+                        }
+                        _ => None,
                     };
+                    if target.is_none() && prim.is_none() {
+                        continue;
+                    }
                     let impl_path = self.defs.table.get(impl_id).path.segments.clone();
                     let impl_params = b.generic_params.as_ref().map_or(0, |g| g.params.len());
                     for it in &b.items {
@@ -332,12 +343,16 @@ impl<'a> Lcx<'a> {
                         let mut p = impl_path.clone();
                         p.push(f.name.clone());
                         if let Some(d) = self.defs.table.lookup(&DefPath::new(p)) {
+                            if let Some(t) = prim {
+                                self.self_tys.insert(d, t);
+                            }
                             self.fns.insert(
                                 d,
                                 FnItem {
                                     f,
-                                    impl_target: Some(target),
+                                    impl_target: target,
                                     impl_params,
+                                    impl_prim: prim,
                                     impl_generics: b.generic_params.as_ref(),
                                     impl_span: Some(SpanKey::from_span(&b.span)),
                                 },
@@ -348,6 +363,30 @@ impl<'a> Lcx<'a> {
                 _ => {}
             }
         }
+    }
+
+    /// The scalar a primitive type name spells, for an impl on it.
+    fn primitive(&self, name: &str) -> Option<Ty> {
+        let kind = match name {
+            "i8" => HK::Int(IntSize::I8),
+            "i16" => HK::Int(IntSize::I16),
+            "i32" => HK::Int(IntSize::I32),
+            "i64" => HK::Int(IntSize::I64),
+            "i128" => HK::Int(IntSize::I128),
+            "isize" => HK::Int(IntSize::Isize),
+            "u8" => HK::UInt(UIntSize::U8),
+            "u16" => HK::UInt(UIntSize::U16),
+            "u32" => HK::UInt(UIntSize::U32),
+            "u64" => HK::UInt(UIntSize::U64),
+            "u128" => HK::UInt(UIntSize::U128),
+            "usize" => HK::UInt(UIntSize::Usize),
+            "f32" => HK::Float(FloatSize::F32),
+            "f64" => HK::Float(FloatSize::F64),
+            "bool" => HK::Bool,
+            "char" => HK::Char,
+            _ => return None,
+        };
+        Some(self.tys.tcx().intern(kind))
     }
 
     /// The type whose impl defines `d` (`Command` for `Command.new`).
@@ -415,6 +454,16 @@ impl<'a> Lcx<'a> {
                     s = format!("{s}[{}]", show(own));
                 }
                 s
+            }
+            Some(FnItem {
+                impl_prim: Some(t), ..
+            }) => {
+                let s = format!("{}.{name}", self.tys.display(*t));
+                if args.is_empty() {
+                    s
+                } else {
+                    format!("{s}[{}]", show(args))
+                }
             }
             _ if args.is_empty() => name,
             _ => format!("{name}[{}]", show(args)),
@@ -1485,15 +1534,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.impl_target = impl_target;
         self.push_scope();
         if let Some(mode) = &f.self_param {
-            let Some((target, n)) = impl_target else {
-                return self.unsupported(f.span, "a `self` parameter outside an impl");
-            };
-            let seen = (n == 0)
+            let seen = impl_target
+                .is_none_or(|(_, n)| n == 0)
                 .then(|| self.lcx.self_tys.get(&self.b.instance().def).copied())
                 .flatten();
             let t = match seen {
                 Some(t) => t,
                 None => {
+                    let Some((target, n)) = impl_target else {
+                        return self.unsupported(f.span, "a `self` parameter outside an impl");
+                    };
                     let args = self.args.clone();
                     let def = self.b.instance().def;
                     match self.lcx.fn_self_written(def, &args).filter(|_| n > 0) {
@@ -6794,6 +6844,20 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// are the receiver's type arguments).
     fn method_by_receiver(&self, recv: Ty, method: &str) -> Option<(DefId, Vec<Ty>)> {
         let (kind, base) = self.strip_ty_full(recv);
+        // A primitive's impl (`impl Step for i64`) has no target definition.
+        let mut prim = self
+            .lcx
+            .fns
+            .iter()
+            .filter(|(_, i)| i.impl_prim == Some(base) && i.f.name == method);
+        if let Some((&d, item)) = prim.next() {
+            let generic = item
+                .f
+                .generic_params
+                .as_ref()
+                .is_some_and(|g| !g.params.is_empty());
+            return (prim.next().is_none() && !generic).then(|| (d, Vec::new()));
+        }
         let (target, targs) = match kind {
             HK::Adt { def, args } | HK::Shared { def, args } => (def, self.tys().tcx().list(args)),
             HK::Intrinsic { kind, args } => {
@@ -6824,7 +6888,6 @@ impl<'l, 'a> Bx<'l, 'a> {
         {
             return None;
         }
-        let _ = base;
         let n = item.impl_params;
         if n > targs.len() {
             return None;
@@ -9042,6 +9105,43 @@ fn main() {
 }
 "#;
         assert_eq!(run_source(src), Ok(("5\ntrue\n".to_string(), Some(0))));
+    }
+
+    /// A trait implemented on a primitive (`impl Step for i64`): the
+    /// method is called directly, through a generic function's bound, and
+    /// on a generic impl's field.
+    #[test]
+    fn a_trait_impl_on_a_primitive_is_called_directly_and_generically() {
+        let src = r#"
+trait Step {
+    fn succ(self) -> Self;
+    fn gap(ref self, o: Self) -> i64;
+}
+impl Step for i64 {
+    fn succ(self) -> i64 { self + 1 }
+    fn gap(ref self, o: i64) -> i64 { o - self }
+}
+impl Step for char {
+    fn succ(self) -> char { if self == 'a' { 'b' } else { 'z' } }
+    fn gap(ref self, o: char) -> i64 { if self == o { 0 } else { 1 } }
+}
+fn twice[T: Step](x: T) -> T { x.succ().succ() }
+struct R[T] { lo: T, hi: T }
+impl[T: Step] R[T] {
+    fn width(ref self) -> i64 { self.lo.gap(self.hi) }
+}
+fn main() {
+    println(5.succ());
+    println(twice(5));
+    println(twice('a'));
+    println(R { lo: 3, hi: 10 }.width());
+    println(R { lo: 'a', hi: 'a' }.width());
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("6\n7\nz\n7\n0\n".to_string(), Some(0)))
+        );
     }
 
     /// Or-patterns, range patterns (ints and chars, open and closed) and
