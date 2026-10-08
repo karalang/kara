@@ -329,10 +329,20 @@ impl super::Formatter {
                 pattern,
                 iterable,
                 body,
+                par,
                 ..
             } => {
                 if let Some(ref l) = label {
                     write!(self.output, "'{l}: ").unwrap();
+                }
+                if let Some(p) = par {
+                    self.write_str("par");
+                    if let Some(n) = &p.limit {
+                        self.write_str("(limit: ");
+                        self.format_expr(n);
+                        self.write_str(")");
+                    }
+                    self.write_str(" ");
                 }
                 self.write_str("for ");
                 self.format_pattern(pattern);

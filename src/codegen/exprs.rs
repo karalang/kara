@@ -2156,6 +2156,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.current_branch_expr_span = prev;
                 r
             }
+            ExprKind::For { par: Some(_), .. } => Err(
+                "`par for` is not supported by the legacy backend; it runs on the MIR pipeline"
+                    .to_string(),
+            ),
             ExprKind::For {
                 label,
                 pattern,

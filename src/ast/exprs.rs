@@ -58,6 +58,14 @@ pub fn narrow_literal_to_i64(n: i128) -> i64 {
     }
 }
 
+/// The `par` prefix of a `par for` loop.
+#[derive(Debug, Clone)]
+pub struct ParLoop {
+    /// `n` in `par(limit: n) for`: at most `n` iterations run at once.
+    /// Evaluated once, before the iterable; `n <= 0` panics.
+    pub limit: Option<Box<Expr>>,
+}
+
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     // Literals
@@ -202,6 +210,11 @@ pub enum ExprKind {
         body: Block,
         /// See [`ExprKind::While::attributes`].
         attributes: Vec<Attribute>,
+        /// `Some` for `par for` / `par(limit: n) for`: one branch per
+        /// element, and the loop's value is the `Vec` of the bodies'
+        /// values in iteration order (design.md § `par for`). `None`
+        /// for a plain `for`, whose value is `()`.
+        par: Option<ParLoop>,
     },
     Loop {
         label: Option<String>,

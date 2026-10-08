@@ -14,8 +14,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ast::{
     self, BinOp as AstBinOp, Block, CallArg, CompoundOp, Expr, ExprKind, Function, ImplItem, Item,
-    LiteralPattern, ParsedInterpolationPart, Pattern, PatternKind, SelfParam, Stmt, StmtKind,
-    UnaryOp,
+    LiteralPattern, ParLoop, ParsedInterpolationPart, Pattern, PatternKind, SelfParam, Stmt,
+    StmtKind, UnaryOp,
 };
 use crate::def_path::DefPath;
 use crate::def_table::ProgramDefs;
@@ -717,6 +717,9 @@ struct Bx<'l, 'a> {
     /// Types for expressions the checker left untyped, taken from where
     /// they are used (`v.push(None)` gives `None` the element type).
     ty_hints: FxHashMap<NodeId, Ty>,
+    /// The `par for` whose body is lowered next: its body, the `Vec` local
+    /// that collects the bodies' values, and that `Vec`'s type.
+    par_acc: Option<(*const Block, Local, Ty)>,
 }
 
 type R<T> = Result<T, ()>;
@@ -741,6 +744,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_count: 0,
             closure_ref_params: false,
             ty_hints: FxHashMap::default(),
+            par_acc: None,
         }
     }
 
@@ -2358,6 +2362,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 pattern,
                 iterable,
                 body,
+                par: Some(par),
+                ..
+            } => self.par_for(e, label, pattern, iterable, body, par, dest),
+            ExprKind::For {
+                label,
+                pattern,
+                iterable,
+                body,
                 ..
             } => self.for_range(e, label, pattern, iterable, body, dest),
             ExprKind::Return(value) => {
@@ -2988,13 +3000,110 @@ impl<'l, 'a> Bx<'l, 'a> {
             depth: self.scopes.len(),
             dest,
         });
-        let t = self.unit();
-        let tmp = self.temp(t);
-        let r = self.block_into(body, Place::local(tmp));
+        let r = self.for_body(body);
         self.loops.pop();
         r?;
         self.goto(continue_bb);
         Ok(())
+    }
+
+    /// A loop body, whose value is dropped, or for the body of a `par for`,
+    /// pushed onto the `Vec` the loop builds.
+    fn for_body(&mut self, body: &'a Block) -> R<()> {
+        let acc = match self.par_acc {
+            Some((b, acc, vt)) if std::ptr::eq(b, body) => {
+                self.par_acc = None;
+                Some((acc, vt))
+            }
+            _ => None,
+        };
+        let Some((acc, vt)) = acc else {
+            let t = self.unit();
+            let tmp = self.temp(t);
+            return self.block_into(body, Place::local(tmp));
+        };
+        let et = match self.tys().tcx().kind(vt) {
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => self.tys().tcx().list(args)[0],
+            _ => return self.unsupported(body.span, "this `par for`"),
+        };
+        let v = self.temp(et);
+        self.block_into(body, Place::local(v))?;
+        let rt = self.tys().tcx().reference(vt, true);
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(acc)));
+        let u = self.unit();
+        let u = self.temp(u);
+        let name = format!("{}.push", self.tys().display(vt));
+        self.call_native(
+            &name,
+            vec![
+                Operand::Move(Place::local(r)),
+                Operand::Move(Place::local(v)),
+            ],
+            Place::local(u),
+        );
+        Ok(())
+    }
+
+    /// `par for x in it { body }`: one branch per element, and the value is
+    /// the `Vec` of the bodies' values in iteration order (design.md
+    /// § `par for`). Branches that do not conflict may run in any order, so
+    /// running them one after another in iteration order is one of the
+    /// allowed schedules. A limit is evaluated first, and `n <= 0` panics.
+    #[allow(clippy::too_many_arguments)]
+    fn par_for(
+        &mut self,
+        e: &'a Expr,
+        label: &Option<String>,
+        pattern: &'a Pattern,
+        iterable: &'a Expr,
+        body: &'a Block,
+        par: &'a ParLoop,
+        dest: Place,
+    ) -> R<()> {
+        if let Some(n) = &par.limit {
+            let nt = self.expr_ty(n)?;
+            let nv = self.expr_operand(n)?;
+            let bool_t = self.tys().bool();
+            let c = self.temp(bool_t);
+            let zero = Operand::Const(Const {
+                ty: nt,
+                kind: ConstKind::Scalar(0),
+            });
+            self.assign(c, Rvalue::BinaryOp(BinOp::Le, nv, zero));
+            let bad = self.b.new_block();
+            let ok = self.b.new_block();
+            self.goto_with(
+                TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(Place::local(c)),
+                    targets: SwitchTargets::if_else(bad, ok),
+                },
+                bad,
+            );
+            self.diverge(TerminatorKind::Abort {
+                reason: AbortReason::Panic,
+            });
+            self.cur = ok;
+        }
+        let vt = self.expr_ty(e)?;
+        self.push_scope();
+        let acc = self.temp(vt);
+        let bb = self.cur;
+        self.b.push(bb, StatementKind::StorageLive(acc));
+        let name = format!("{}.new", self.tys().display(vt));
+        self.call_native(&name, Vec::new(), Place::local(acc));
+        self.declare(acc, vt);
+        let saved = self.par_acc.replace((body as *const Block, acc, vt));
+        let t = self.unit();
+        let unit = self.temp(t);
+        let r = self.for_range(e, label, pattern, iterable, body, Place::local(unit));
+        self.par_acc = saved;
+        r?;
+        self.assign(dest, Rvalue::Use(Operand::Move(Place::local(acc))));
+        self.pop_scope()
     }
 
     /// `for i in a..b { body }` over integers.
@@ -3520,9 +3629,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             for &(l, t) in &binds {
                 this.declare(l, t);
             }
-            let t = this.unit();
-            let tmp = this.temp(t);
-            this.block_into(body, Place::local(tmp))
+            this.for_body(body)
         });
         r?;
         self.pop_scope()?;
@@ -3652,9 +3759,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             for &(l, t) in &binds {
                 self.declare(l, t);
             }
-            let t = self.unit();
-            let tmp = self.temp(t);
-            self.block_into(body, Place::local(tmp))?;
+            self.for_body(body)?;
             self.pop_scope()
         })();
         self.loops.pop();
@@ -3784,9 +3889,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         for &(l, t) in &binds {
             self.declare(l, t);
         }
-        let t = self.unit();
-        let tmp = self.temp(t);
-        self.block_into(body, Place::local(tmp))?;
+        self.for_body(body)?;
         self.pop_scope()
     }
 
@@ -4302,9 +4405,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         for &(l, t) in &binds {
             self.declare(l, t);
         }
-        let t = self.unit();
-        let tmp = self.temp(t);
-        self.block_into(body, Place::local(tmp))?;
+        self.for_body(body)?;
         self.pop_scope()?;
         self.pop_scope()?;
         self.goto(head);
@@ -6973,6 +7074,38 @@ fn main() {
             run_source(src),
             Ok(("p = pos, q = neg\nneg\n".to_string(), Some(0)))
         );
+    }
+
+    /// `par for` gives the `Vec` of its bodies' values in iteration order;
+    /// `?` in the body returns the earliest error, and a limit is checked
+    /// before the loop runs (design.md § `par for`).
+    #[test]
+    fn par_for_collects_the_bodies_values() {
+        let src = r#"
+fn check(n: i64) -> Result[i64, String] {
+    if n == 3 { Err(f"bad {n}") } else { Ok(n * 10) }
+}
+fn upto(k: i64) -> Result[Vec[i64], String] {
+    let v = par(limit: 2) for i in 0..k { check(i)? };
+    Ok(v)
+}
+fn main() {
+    let sq = par for i in 0..5 { i * i };
+    println(f"{sq.len()} {sq[0]} {sq[4]}");
+    let mut names: Vec[String] = Vec.new();
+    names.push("ab".to_string());
+    names.push("cde".to_string());
+    let tagged = par for n in names { f"<{n}>" };
+    println(f"{tagged[0]}{tagged[1]} {names.len()}");
+    println(f"{upto(3).unwrap().len()} {upto(5).unwrap_err()}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("5 0 16\n<ab><cde> 2\n3 bad 3\n".to_string(), Some(0)))
+        );
+        let zero = "fn main() {\n    let v = par(limit: 0) for i in 0..2 { i };\n    println(f\"{v.len()}\");\n}\n";
+        assert_eq!(run_source(zero).map(|r| r.1), Ok(Some(101)));
     }
 
     /// `u8 as char`, `char as` an integer and `bool as` an integer.

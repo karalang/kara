@@ -52993,3 +52993,33 @@ fn unsolved_collection_is_pinned_by_the_declared_slot_it_flows_into() {
         "a String push after an i64 pin must be refused"
     );
 }
+
+/// design.md § `par for`: the loop's value is `Vec[T]` of the body type, the
+/// limit is an `i64`, and `break`, `continue` and `return` may not cross out
+/// of the body or target the `par for` itself.
+#[test]
+fn par_for_is_a_vec_and_keeps_jumps_inside() {
+    typecheck_ok(
+        "fn main() {\n    let v: Vec[i64] = par for i in 0..3 { i * 2 };\n    let n: i64 = 2;\n    let w: Vec[bool] = par(limit: n) for i in 0..3 { i > 0 };\n    println(f\"{v.len()} {w.len()}\");\n}\n",
+    );
+    for (body, what) in [
+        ("if i > 1 { break; } i", "`break`"),
+        ("if i > 1 { continue; } i", "`continue`"),
+        ("if i > 1 { return; } i", "`return`"),
+    ] {
+        let src = format!("fn main() {{\n    let v = par for i in 0..3 {{ {body} }};\n}}\n");
+        let errs = typecheck_errors(&src);
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains(what) && e.message.contains("par for")),
+            "{body}: {errs:?}"
+        );
+    }
+    // A loop nested in the body keeps its own `break`.
+    typecheck_ok(
+        "fn main() {\n    let v = par for i in 0..3 { let mut k = 0; while k < i { k += 1; if k > 5 { break; } } k };\n    println(f\"{v.len()}\");\n}\n",
+    );
+    let errs =
+        typecheck_errors("fn main() {\n    let v = par(limit: true) for i in 0..3 { i };\n}\n");
+    assert!(!errs.is_empty());
+}

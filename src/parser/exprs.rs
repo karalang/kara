@@ -1680,14 +1680,7 @@ impl super::Parser {
             {
                 self.advance();
                 if !self.check(&Token::LeftBrace) {
-                    // `par for` is in the v1 spec but not in this parser yet;
-                    // say so rather than reading `par` as a name and then
-                    // asking for a `;` before the `for`.
-                    self.error(
-                        "`par for` is not supported by this compiler yet; \
-                         write a plain `for`, or a `par { ... }` block",
-                    );
-                    return None;
+                    return self.parse_par_for(start);
                 }
                 let block = if self.par_block_lists_branches() {
                     self.parse_par_branches()?
@@ -2031,6 +2024,38 @@ impl super::Parser {
         })
     }
 
+    /// `par for x in it { body }` or `par(limit: n) for ...`, with the
+    /// cursor just past `par`. The loop is an ordinary `For` whose `par`
+    /// field is set; its value is the `Vec` of the bodies' values.
+    fn parse_par_for(&mut self, start: Span) -> Option<Expr> {
+        let mut limit = None;
+        if self.eat(&Token::LeftParen) {
+            match self.peek_token_ref().clone() {
+                Token::Identifier { name, .. } if name == "limit" => {
+                    self.advance();
+                }
+                _ => {
+                    self.error("expected `limit: n` in `par(limit: n) for`");
+                    return None;
+                }
+            }
+            self.expect(&Token::Colon)?;
+            limit = Some(Box::new(self.parse_expression()?));
+            self.eat(&Token::Comma);
+            self.expect(&Token::RightParen)?;
+        }
+        if !self.check(&Token::For) {
+            self.error("expected `for` after `par(limit: n)`");
+            return None;
+        }
+        let mut e = self.parse_for_expr()?;
+        if let ExprKind::For { par, .. } = &mut e.kind {
+            *par = Some(ParLoop { limit });
+        }
+        e.span = self.span_from(&start);
+        Some(e)
+    }
+
     fn parse_for_expr(&mut self) -> Option<Expr> {
         self.parse_for_expr_with_label_and_attrs(None, Vec::new())
     }
@@ -2065,6 +2090,7 @@ impl super::Parser {
                 iterable: Box::new(iterable),
                 body,
                 attributes,
+                par: None,
             },
         })
     }

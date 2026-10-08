@@ -182,6 +182,33 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// `Never` contributes nothing to the join (rule 0) and `Error` means a
     /// diagnostic already fired, so both are skipped.
+    /// design.md § `par for`: `break` and `continue` may not cross out of
+    /// a `par for` body, and may not target the `par for` itself, since each
+    /// iteration is a branch of one `par` block.
+    fn reject_jump_out_of_par_for(&mut self, what: &str, label: Option<&str>, span: Span) {
+        let target = match label {
+            Some(name) => self
+                .break_value_types
+                .iter()
+                .rposition(|f| f.label.as_deref() == Some(name)),
+            None => self
+                .break_value_types
+                .iter()
+                .rposition(|f| f.unlabeled_target),
+        };
+        let Some(i) = target else { return };
+        if self.break_value_types[i..].iter().any(|f| f.par_barrier) {
+            self.type_error(
+                format!(
+                    "`{what}` may not cross out of a `par for` body: each iteration is \
+                     a branch of one `par` block"
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+    }
+
     fn check_break_values_agree(&mut self, values: &[Type], span: Span) {
         let mut first: Option<&Type> = None;
         for v in values {
@@ -6273,8 +6300,14 @@ impl<'a> super::TypeChecker<'a> {
                 iterable,
                 body,
                 label,
+                par,
                 ..
             } => {
+                // design.md § `par for`: the limit is evaluated once, before
+                // the iterable.
+                if let Some(n) = par.as_ref().and_then(|p| p.limit.as_ref()) {
+                    self.check_expr(n, &Type::Int(IntSize::I64));
+                }
                 let iter_ty = self.infer_expr(iterable);
                 self.local_scope.push();
                 // Resolve element type via IntoIterator.Item (impl_assoc_types),
@@ -6334,14 +6367,16 @@ impl<'a> super::TypeChecker<'a> {
                     .collect();
                 // See the `While` arm: valueless frame, so an unlabeled
                 // `break` stops here instead of reaching an outer `loop`.
-                self.break_value_types
-                    .push(BreakFrame::for_valueless_loop(label.clone()));
+                let mut frame = BreakFrame::for_valueless_loop(label.clone());
+                frame.par_barrier = par.is_some();
+                self.break_value_types.push(frame);
                 for stmt in &body.stmts {
                     self.check_stmt(stmt);
                 }
-                if let Some(ref final_expr) = body.final_expr {
-                    self.infer_expr(final_expr);
-                }
+                let body_ty = match body.final_expr {
+                    Some(ref final_expr) => self.infer_expr(final_expr),
+                    None => Type::Unit,
+                };
                 self.break_value_types.pop();
                 for (n, prev) in saved_into_iter {
                     match prev {
@@ -6350,7 +6385,15 @@ impl<'a> super::TypeChecker<'a> {
                     };
                 }
                 self.local_scope.pop();
-                Type::Unit
+                if par.is_some() {
+                    // The `Vec` of the bodies' values, in iteration order.
+                    Type::Named {
+                        name: "Vec".to_string(),
+                        args: vec![body_ty],
+                    }
+                } else {
+                    Type::Unit
+                }
             }
 
             ExprKind::Loop { body, label, .. } => {
@@ -6540,6 +6583,13 @@ impl<'a> super::TypeChecker<'a> {
             }
 
             ExprKind::Return(inner) => {
+                if self.break_value_types.iter().any(|f| f.par_barrier) {
+                    self.type_error(
+                        "`return` may not cross out of a `par for` body".to_string(),
+                        expr.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
                 // B-2026-07-31-18 — inside a closure literal body, `return E`
                 // returns from the CLOSURE (design.md § with_provider
                 // signature: the body is `Fn() -> T`; the interpreter and
@@ -6605,6 +6655,7 @@ impl<'a> super::TypeChecker<'a> {
                 // innermost frame that accepts unlabeled breaks — every
                 // loop form, but never a labeled block, which is reachable
                 // only by name (design.md § Labeled blocks).
+                self.reject_jump_out_of_par_for("break", label.as_deref(), expr.span);
                 let target = match label {
                     Some(name) => self
                         .break_value_types
@@ -6645,7 +6696,10 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Never
             }
-            ExprKind::Continue { .. } => Type::Never,
+            ExprKind::Continue { label, .. } => {
+                self.reject_jump_out_of_par_for("continue", label.as_deref(), expr.span);
+                Type::Never
+            }
 
             ExprKind::Tuple(exprs) => {
                 // The empty-tuple literal `()` IS the unit value — canonicalize

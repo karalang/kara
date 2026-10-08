@@ -3066,6 +3066,7 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
                     span: s8,
                 },
                 attributes: Vec::new(),
+                par: None,
             },
             span: s8,
         }),

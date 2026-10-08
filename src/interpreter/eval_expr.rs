@@ -2192,6 +2192,11 @@ impl<'a> super::Interpreter<'a> {
                 Value::Unit
             }
 
+            // `par for` runs on the MIR pipeline only.
+            ExprKind::For { par: Some(_), .. } => self.record_runtime_error(
+                "`par for` is not supported by the legacy interpreter; it runs on the MIR pipeline",
+                &expr.span,
+            ),
             // For loop
             ExprKind::For {
                 pattern,

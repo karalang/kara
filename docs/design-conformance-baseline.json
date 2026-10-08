@@ -141,27 +141,6 @@
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): tuple-valued `par { e1, e2 }` (core-semantics amendment 6)",
       "first_diagnostic": "undefined name 'sum_first_half'"
     },
-    "e830a8dc160c": {
-      "line": 5628,
-      "heading": "13. Concurrency > `par for`",
-      "outcome": "REJECTED",
-      "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `par for` and `par(limit: n)`",
-      "first_diagnostic": "`par for` is not supported by this compiler yet; write a plain `for`, or a `par { ... }` block"
-    },
-    "ee9c19e0b207": {
-      "line": 5640,
-      "heading": "13. Concurrency > `par for`",
-      "outcome": "REJECTED",
-      "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `par for` and `par(limit: n)`",
-      "first_diagnostic": "`par for` is not supported by this compiler yet; write a plain `for`, or a `par { ... }` block"
-    },
-    "9ae39970664b": {
-      "line": 5649,
-      "heading": "13. Concurrency > `par for`",
-      "outcome": "REJECTED",
-      "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `par for` and `par(limit: n)`",
-      "first_diagnostic": "`par for` is not supported by this compiler yet; write a plain `for`, or a `par { ... }` block"
-    },
     "5a485a6c0269": {
       "line": 5747,
       "heading": "13. Concurrency > Locks and atomics",

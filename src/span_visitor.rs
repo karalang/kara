@@ -621,8 +621,12 @@ fn visit_expr(e: &Expr, visit: &mut impl FnMut(&Span)) {
             pattern,
             iterable,
             body,
+            par,
             ..
         } => {
+            if let Some(n) = par.as_ref().and_then(|p| p.limit.as_ref()) {
+                visit_expr(n, visit);
+            }
             visit_pattern(pattern, visit);
             visit_expr(iterable, visit);
             visit_block(body, visit);
@@ -1025,8 +1029,12 @@ fn walk_expr_mut(e: &mut Expr, visit: &mut impl MutVisitor) {
             pattern,
             iterable,
             body,
+            par,
             ..
         } => {
+            if let Some(n) = par.as_mut().and_then(|p| p.limit.as_mut()) {
+                walk_expr_mut(n, visit);
+            }
             visit_pattern_spans_mut(pattern, visit);
             walk_expr_mut(iterable, visit);
             visit_block_spans_mut(body, visit);

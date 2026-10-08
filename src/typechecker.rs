@@ -486,6 +486,9 @@ pub(super) struct BreakFrame {
     pub(super) accepts_value: bool,
     /// Value types of the `break`s that resolved to this frame.
     pub(super) values: Vec<Type>,
+    /// A `par for` body: `break`, `continue` and `return` may not cross
+    /// out of it, nor target the `par for` itself (design.md § `par for`).
+    pub(super) par_barrier: bool,
 }
 
 impl BreakFrame {
@@ -496,6 +499,7 @@ impl BreakFrame {
             unlabeled_target: true,
             accepts_value: true,
             values: Vec::new(),
+            par_barrier: false,
         }
     }
 
@@ -508,6 +512,7 @@ impl BreakFrame {
             unlabeled_target: true,
             accepts_value: false,
             values: Vec::new(),
+            par_barrier: false,
         }
     }
 
@@ -518,6 +523,7 @@ impl BreakFrame {
             unlabeled_target: false,
             accepts_value: true,
             values: Vec::new(),
+            par_barrier: false,
         }
     }
 }

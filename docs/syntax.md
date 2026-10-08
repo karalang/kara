@@ -132,7 +132,7 @@ lock         // `lock m { ... }` / `lock m as x { ... }` — before a name
 resource  verb  group  stable  transparent   // effect declarations
 reads  writes  sends  receives  allocates  panics  blocks  suspends
              // effect verbs — inside a `with` clause or effect declaration
-seq  par     // `seq { ... }` / `par { ... }` — before `{`
+seq  par     // `seq { ... }` / `par { ... }` — before `{`; `par for` / `par(limit: n) for`
 sync         // `sync struct` / `sync enum` (older spelling: `par struct` / `par enum`)
 layout       // `layout NAME ...`; `group` inside a layout block
 alias  independent   // resource-aliasing declarations, followed by a name
@@ -1261,6 +1261,7 @@ PRIMARY = INTEGER | FLOAT | STRING | MULTI_STR | INTERP_STR | CHAR_LIT | BOOL
         | LOOP_EXPR
         | SEQUENTIAL_EXPR
         | PAR_EXPR
+        | PAR_FOR_EXPR
         | LOCK_EXPR
         | UNSAFE_BLOCK
         | TRY_EXPR
@@ -1590,6 +1591,17 @@ PAR_EXPR = "par" "{" EXPR { "," EXPR } [ "," ] "}"
 
 ```
 let (profile, orders) = par { fetch_profile(id)?, fetch_orders(id)? };
+```
+
+```
+PAR_FOR_EXPR = "par" [ "(" "limit" ":" EXPR [ "," ] ")" ] FOR_EXPR
+```
+
+`par for x in it { body }` runs one branch per element and its value is the `Vec` of the bodies' values, in iteration order. The parser records it as a `for` loop whose `par` field is set; `par(limit: n)` evaluates `n` once, before the iterable, and `n <= 0` panics. `break`, `continue` and `return` may not cross out of the body.
+
+```
+let configs = par for p in paths { parse_config(p)? };
+let pages = par(limit: 50) for url in urls { fetch(url) };
 ```
 
 `par for x in it { body }`, whose value is the `Vec` of the bodies' values, is not parsed yet; the parser reports it as unsupported.

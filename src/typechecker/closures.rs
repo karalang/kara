@@ -633,8 +633,12 @@ impl<'a> super::TypeChecker<'a> {
                 pattern,
                 iterable,
                 body,
+                par,
                 ..
             } => {
+                if let Some(n) = par.as_ref().and_then(|p| p.limit.as_ref()) {
+                    self.walk_capture_consume(n, CaptureWalkMode::Reading, outer, shadows, reason);
+                }
                 self.walk_capture_consume(
                     iterable,
                     CaptureWalkMode::Consuming,

@@ -602,8 +602,12 @@ impl<'a> super::Resolver<'a> {
                 iterable,
                 body,
                 label,
+                par,
                 ..
             } => {
+                if let Some(n) = par.as_ref().and_then(|p| p.limit.as_ref()) {
+                    self.resolve_expr(n);
+                }
                 self.resolve_expr(iterable);
                 self.loop_labels.push((label.clone(), LabelKind::Loop));
                 self.table.push_scope(ScopeKind::Loop);

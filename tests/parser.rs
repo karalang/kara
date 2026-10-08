@@ -15978,29 +15978,58 @@ fn method_turbofish_is_named_and_deleted() {
     );
 }
 
-/// `par` is a contextual keyword, so `par for` must not read as a name `par`
-/// followed by a missing `;`; until the parser has `par for`, it says so.
+/// `par for` and `par(limit: n) for` are `For` loops whose `par` is set,
+/// and the formatter writes them back.
 #[test]
-fn par_for_reports_unsupported_not_a_missing_semicolon() {
-    par_for_is_unsupported("fn main() { let v = par for p in xs { f(p) }; }");
-    par_for_is_unsupported("fn main() { let v = par(limit: 50) for p in xs { f(p) }; }");
-}
-
-fn par_for_is_unsupported(src: &str) {
-    let result = parse(src);
+fn par_for_parses_as_a_for_loop_marked_par() {
+    let prog = parse_ok(
+        "fn main() {\n    let v = par for p in xs { f(p) };\n    par(limit: 50) for p in xs { f(p) }\n}\n",
+    );
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("not a function")
+    };
+    let StmtKind::Let { value: v, .. } = &f.body.stmts[0].kind else {
+        panic!("not a let")
+    };
+    assert!(matches!(
+        &v.kind,
+        ExprKind::For {
+            par: Some(ParLoop { limit: None }),
+            ..
+        }
+    ));
+    let tail = match (&f.body.final_expr, f.body.stmts.get(1).map(|s| &s.kind)) {
+        (Some(e), _) => &**e,
+        (None, Some(StmtKind::Expr(e))) => e,
+        other => panic!("no second loop: {other:?}"),
+    };
+    let ExprKind::For { par: Some(p), .. } = &tail.kind else {
+        panic!("not a par for")
+    };
+    assert!(p.limit.is_some());
+    let formatted = karac::formatter::format_program(&prog);
     assert!(
-        result
-            .errors
-            .iter()
-            .any(|e| e.message.contains("`par for` is not supported")),
-        "got: {:?}",
-        result.errors
+        formatted.contains("let v = par for p in xs {"),
+        "{formatted}"
     );
     assert!(
+        formatted.contains("par(limit: 50) for p in xs {"),
+        "{formatted}"
+    );
+    assert_eq!(
+        karac::formatter::format_program(&parse_ok(&formatted)),
+        formatted
+    );
+}
+
+#[test]
+fn par_with_an_argument_other_than_limit_is_an_error() {
+    let result = parse("fn main() { par(width: 2) for p in xs { f(p) } }");
+    assert!(
         result
             .errors
             .iter()
-            .all(|e| !e.message.contains("Expected Semicolon")),
+            .any(|e| e.message.contains("expected `limit: n`")),
         "got: {:?}",
         result.errors
     );
