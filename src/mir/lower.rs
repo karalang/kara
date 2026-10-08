@@ -1140,6 +1140,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Rvalue::Cast(CastKind::Erase, self.erase_source(op), pt)
             }
             Rvalue::Use(op) if self.downgrades(&op, pt) => Rvalue::Use(self.downgrade(op, pt)),
+            Rvalue::Use(op) if self.reads_through(&op, pt) => {
+                Rvalue::Use(self.read_through(op, pt))
+            }
             Rvalue::Use(op @ (Operand::Copy(_) | Operand::Move(_)))
                 if self.widening(self.operand_ty(&op), pt).is_some() =>
             {
@@ -1234,6 +1237,30 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.b
             .assign(bb, Place::local(l), Rvalue::Cast(kind, op, t));
         Operand::Copy(Place::local(l))
+    }
+
+    /// Whether `op` is a reference whose target goes into the slot `t` by
+    /// value: a borrowed parameter (D5) stored into a field or a local.
+    fn reads_through(&self, op: &Operand, t: Ty) -> bool {
+        let tcx = self.tys().tcx();
+        !matches!(op, Operand::Const(_))
+            && matches!(tcx.kind(self.operand_ty(op)), HK::Ref(i) | HK::MutRef(i) if i == t)
+    }
+
+    /// The value `op` refers to, for the slot `t`: a `Copy` value copies, a
+    /// handle or handle aggregate counts (§6.1), and anything else moves
+    /// out of the borrow, which the borrow check refuses.
+    fn read_through(&mut self, op: Operand, t: Ty) -> Operand {
+        let (Operand::Copy(p) | Operand::Move(p)) = op else {
+            return op;
+        };
+        let target = p.project(ProjElem::Deref);
+        if self.is_handle(t) || self.is_handle_aggregate(t) {
+            let l = self.temp(t);
+            self.count_copy(target, t, Place::local(l));
+            return Operand::Move(Place::local(l));
+        }
+        self.use_place(target, t)
     }
 
     /// Whether `op` is a strong handle going into the `weak` slot `t`.
@@ -1359,6 +1386,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     out.push(Operand::Move(Place::local(l)));
                 }
                 Some(t) if self.downgrades(&o, t) => out.push(self.downgrade(o, t)),
+                Some(t) if self.reads_through(&o, t) => out.push(self.read_through(o, t)),
                 Some(t) if !matches!(o, Operand::Const(_)) => out.push(self.widen(o, t)),
                 _ => out.push(o),
             }
@@ -5258,6 +5286,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                 };
                 let name = self.lcx.instance(d, Vec::new());
                 let func = self.fn_operand(&name, d, Vec::new());
+                // Under D5 `from` borrows its source: pass a reference to
+                // the payload and drop the payload after the call.
+                let item = &self.lcx.fns[&d];
+                let pt = self.callee_param_ty(&item.f.params[0], &[])?;
+                let mut held = None;
+                if matches!(self.tys().tcx().kind(pt), HK::Ref(i) if i == have) {
+                    let h = self.temp(have);
+                    self.assign(h, Rvalue::Use(ops.pop().expect("one payload")));
+                    ops.push(self.ref_to(Place::local(h), have));
+                    held = Some(h);
+                }
                 let t = self.temp(want);
                 let next = self.b.new_block();
                 self.goto_with(
@@ -5270,6 +5309,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                     },
                     next,
                 );
+                if let Some(h) = held.filter(|_| self.needs_drop(have)) {
+                    let next = self.b.new_block();
+                    self.goto_with(
+                        TerminatorKind::Drop {
+                            place: Place::local(h),
+                            target: next,
+                            unwind: UnwindAction::Abort,
+                        },
+                        next,
+                    );
+                }
                 ops.push(Operand::Move(Place::local(t)));
             }
         }
@@ -9233,6 +9283,34 @@ fn main() { println(f"{f(S { v: 1 })} {g(S { v: 2 })}"); }
             err.contains("move of (*_1) through a shared reference"),
             "{err}"
         );
+    }
+
+    /// Under D5 a borrowed handle (or `Option` of one) stored into a field
+    /// counts a new reference, and `?` lends its error to a borrowing
+    /// `From.from`, dropping the error after the call.
+    #[test]
+    fn d5_borrowed_handle_stored_and_from_borrows() {
+        D5.with(|c| c.set(Some(true)));
+        let src = r#"
+shared struct T { v: i64, l: Option[T] }
+fn node(v: i64, l: Option[T]) -> T { T { v, l } }
+struct Low { n: i64 }
+impl Drop for Low { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+struct High { n: i64 }
+impl From[Low] for High { fn from(l: Low) -> High { High { n: l.n * 10 } } }
+fn low(n: i64) -> Result[i64, Low] { if n > 0 { Ok(n) } else { Err(Low { n: 7 }) } }
+fn high(n: i64) -> Result[i64, High] { let v = low(n)?; Ok(v) }
+fn main() {
+    let leaf = Some(node(1, None));
+    let t = node(2, leaf);
+    match t.l { Some(c) => println(f"{t.v} {c.v}"), None => println("none") }
+    match leaf { Some(c) => println(f"{c.v}"), None => println("none") }
+    match high(0) { Ok(v) => println(f"ok {v}"), Err(h) => println(f"err {h.n}") }
+}
+"#;
+        let out = run_source(src);
+        D5.with(|c| c.set(None));
+        assert_eq!(out, Ok(("2 1\n1\ndrop 7\nerr 70\n".to_string(), Some(0))));
     }
 
     /// `m[k] = v` on a map inserts, dropping any old value (design.md §9,
