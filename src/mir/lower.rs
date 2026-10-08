@@ -807,7 +807,7 @@ impl<'a> Lcx<'a> {
                             .map(|(n, t, _)| (n.clone(), t.clone()))
                             .collect(),
                     )],
-                    s.is_shared,
+                    s.is_shared || s.is_par,
                     &s.derived_traits,
                 )
             } else if let Some(e) = tc.enum_info.get(&name) {
@@ -827,7 +827,12 @@ impl<'a> Lcx<'a> {
                         (n.clone(), fields)
                     })
                     .collect();
-                (e.generic_params.clone(), vs, e.is_shared, &e.derived_traits)
+                (
+                    e.generic_params.clone(),
+                    vs,
+                    e.is_shared || e.is_par,
+                    &e.derived_traits,
+                )
             } else {
                 return Err(format!("no definition for type `{name}`"));
             };
@@ -1242,6 +1247,23 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.b
             .assign(bb, Place::local(l), Rvalue::Cast(kind, op, t));
         Operand::Copy(Place::local(l))
+    }
+
+    /// `let y = x` where `x` is a reference to a value that is neither
+    /// `Copy` nor counted: `y` copies the reference (core semantics §4.6,
+    /// §5.1), so it reads through it rather than moving the target out.
+    fn ref_rebind(&mut self, value: &'a Expr, t: Ty) -> R<Option<Ty>> {
+        if self.is_copy(t) || self.is_handle(t) || self.is_handle_aggregate(t) {
+            return Ok(None);
+        }
+        if !matches!(value.kind, ExprKind::Identifier(_)) {
+            return Ok(None);
+        }
+        let vt = self.expr_ty(value)?;
+        Ok(match self.tys().tcx().kind(vt) {
+            HK::Ref(i) | HK::MutRef(i) if i == t => Some(vt),
+            _ => None,
+        })
     }
 
     /// Whether `op` is a reference whose target goes into the slot `t` by
@@ -1776,7 +1798,9 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     fn stmt(&mut self, s: &'a Stmt) -> R<()> {
         match &s.kind {
-            StmtKind::Let { pattern, value, .. } => {
+            StmtKind::Let {
+                pattern, value, ty, ..
+            } => {
                 // The value's temporaries are the statement's; the bindings
                 // belong to the enclosing block.
                 if let PatternKind::Binding(name) = &pattern.kind {
@@ -1796,7 +1820,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                         self.declare(l, t);
                         return Ok(());
                     }
-                    let t = self.node_ty(pattern.id, pattern.span)?;
+                    let mut t = self.node_ty(pattern.id, pattern.span)?;
+                    if ty.is_none() {
+                        if let Some(rt) = self.ref_rebind(value, t)? {
+                            t = rt;
+                        }
+                    }
                     let l = self.user_local(name, t, pattern.id);
                     self.push_scope();
                     self.expr_into(value, Place::local(l))?;
@@ -6502,8 +6531,13 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => pt,
         };
         if let HK::Slice { mutable, .. } = self.tys().tcx().kind(slice_t) {
-            if !matches!(self.strip_ty(at), HK::Slice { .. }) {
-                // A `Vec` or array passed for a slice: view it as one.
+            let reborrow = mutable
+                && self.is_place(a)
+                && matches!(self.strip_ty(at), HK::Slice { mutable: true, .. });
+            if reborrow || !matches!(self.strip_ty(at), HK::Slice { .. }) {
+                // A `Vec` or array passed for a slice: view it as one. A
+                // `mut Slice` place is re-viewed, a reborrow, so the caller
+                // keeps it.
                 let s = self.slice_view(a, None, slice_t, mutable)?;
                 return Ok(match borrow {
                     Some(kind) => {
@@ -7266,6 +7300,18 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             let p = self.expr_place(object, mutable)?.project(ProjElem::Deref);
             return Ok(PendingRecv::Borrow(p, inner, mutable));
+        }
+        if let ExprKind::StringLit(lit) = &object.kind {
+            // A literal receiver is a static `Str` with no origins (core
+            // semantics §5.4): a view of it may outlive the statement, so
+            // its `String` lives to the end of the enclosing block.
+            let l = self.temp(t);
+            let op = self.static_str(lit);
+            self.call_native("String.from", vec![op], Place::local(l));
+            let n = self.scopes.len();
+            let at = n.saturating_sub(2);
+            self.scopes[at].push(ScopeEntry::Drop(Place::local(l)));
+            return Ok(PendingRecv::Borrow(Place::local(l), t, mutable));
         }
         let p = self.expr_place(object, mutable)?;
         Ok(PendingRecv::Borrow(p, t, mutable))
@@ -8335,11 +8381,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // (docs/library/collections.md).
                     PendingRecv::Ready(self.expr_operand(object)?)
                 } else {
-                    let mutates = crate::ast::is_mutating_collection_method(method)
-                        || matches!(
-                            method,
-                            "push_str" | "set" | "sort_unstable" | "sort_unstable_by" | "entry"
-                        );
+                    // `Atomic` and `Mutex` methods write through a shared
+                    // borrow (core semantics §6.3).
+                    let interior = {
+                        let shown = self.tys().display(base);
+                        shown.starts_with("Atomic") || shown.starts_with("Mutex")
+                    };
+                    let mutates = !interior
+                        && (crate::ast::is_mutating_collection_method(method)
+                            || matches!(
+                                method,
+                                "push_str" | "set" | "sort_unstable" | "sort_unstable_by" | "entry"
+                            ));
                     self.recv_place(object, mutates)?
                 };
                 if method == "to_string" {
@@ -9373,6 +9426,39 @@ fn main() {
 held
 1 8
 b
+"
+                .to_string(),
+                Some(0)
+            ))
+        );
+    }
+
+    /// `let x = s` over a reference copies the reference (§5.1); a
+    /// `sync struct` is a counted handle (§6.3); a `mut Slice` passed on
+    /// is reborrowed; a literal's `bytes()` view outlives the statement.
+    #[test]
+    fn ref_rebind_sync_handle_slice_reborrow_literal_view() {
+        let src = r#"
+sync struct C { n: i64 }
+fn read(c: C) -> i64 { c.n }
+fn bump(xs: mut Slice[i64]) { xs[0] = xs[0] + 1; }
+fn twice(xs: mut Slice[i64]) { bump(xs); bump(xs); }
+fn main() {
+    let v: Vec[String] = ["ab".to_string(), "cde".to_string()];
+    let mut n = 0;
+    for s in v { let x = s; n = n + x.len(); }
+    let a = C { n: 4 };
+    let b = a;
+    let mut w: Vec[i64] = [1, 2];
+    twice(mut w);
+    let bs = "héllo".bytes();
+    println(f"{n} {read(a)} {b.n} {w[0]} {bs.len()} {v.len()}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok((
+                "5 4 4 3 6 2
 "
                 .to_string(),
                 Some(0)
