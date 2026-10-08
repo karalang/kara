@@ -401,13 +401,24 @@ WHERE_CLAUSE = "where" WHERE_BOUND { "," WHERE_BOUND }
 WHERE_BOUND  = TYPE ":" TRAIT_BOUND { "+" TRAIT_BOUND }
              | TYPE "." IDENT "=" TYPE   // associated type equality constraint
 
-PARAM_LIST = PARAM { "," PARAM } [ "," ]
-PARAM      = IDENT ":" TYPE [ "=" EXPR ]
+PARAM_LIST = [ PARAMS ] [ ";" [ NAMED_PARAMS ] ]
+             // At most one ";". The parameters before it are positional; the
+             // ones after it are named (design.md § Named and default parameters).
+             // A method writes it after the receiver: `fn get(ref self, key: K; fallback: V = 0)`,
+             // and a function with only named parameters starts with it: `fn f(; n: i64)`.
+PARAMS       = PARAM { "," PARAM } [ "," ]
+NAMED_PARAMS = NAMED_PARAM { "," NAMED_PARAM } [ "," ]
+NAMED_PARAM  = IDENT ":" TYPE [ "=" EXPR ]
+PARAM      = IDENT ":" TYPE
            | PATTERN ":" TYPE
-             // First form: named parameter with optional default value.
-             // Default must be a pure constant expression.
-             // Constraint: defaulted params must be trailing — non-defaulted params
-             // may not follow a defaulted one (enforced semantically, not in the grammar).
+             // Only a named parameter takes a default, which must be a constant
+             // expression; named parameters with and without defaults come in any
+             // order. A call passes positional arguments unlabeled and in order,
+             // then named arguments by label in any order (`f(x, b: 2, a: 1)`);
+             // arguments are evaluated in the order written, and an omitted named
+             // argument takes its default. `karac check` rejects a default on a
+             // positional parameter; `build` and `run` still accept the older
+             // trailing-defaults form while sources migrate.
              //
              // **No anonymous parameter form.** A parameter is always either a
              // named IDENT or an explicit PATTERN (which includes the `_` wildcard).
@@ -415,7 +426,6 @@ PARAM      = IDENT ":" TYPE [ "=" EXPR ]
              // E_TRAIT_METHOD_ANONYMOUS_PARAM (in trait methods) or the equivalent
              // diagnostic for free functions; users write `_: i32` for an unused
              // parameter. See design.md § Trait method parameter names — required.
-             // Omitting a defaulted argument requires a label for any argument that follows.
              // Second form: destructuring parameter (irrefutable patterns only).
              //
              // Parameter modes are always declared at the signature (design.md Feature 4
@@ -429,7 +439,7 @@ PARAM      = IDENT ":" TYPE [ "=" EXPR ]
 // "ref self" / "mut ref self" = explicit borrow forms.
 // The rule matches non-self parameters: default is bare, borrows are written.
 SELF_PARAM = "self" | "ref" "self" | "mut" "ref" "self"
-METHOD_PARAMS = SELF_PARAM [ "," PARAM_LIST ]
+METHOD_PARAMS = SELF_PARAM [ "," PARAM_LIST | ";" [ NAMED_PARAMS ] ]
 
 CONTRACT = "requires" EXPR
          | "ensures" "(" IDENT ")" EXPR
@@ -1721,7 +1731,10 @@ CALL_EXPR   = EXPR [ "[" TYPE_LIST "]" ] "(" [ ARG_LIST ] ")"
               // Type args ([T]) for explicit generic specialization, omitted when inferable
 ARG_LIST    = ARG { "," ARG } [ "," ]
 ARG         = [ IDENT ":" ] [ "mut" ] EXPR
-              // Optional label — must match the parameter name at that position.
+              // A label names a named parameter (the ones after a `;` in the
+              // signature); labeled arguments follow the unlabeled ones, in any order.
+              // A function with no named parameters still accepts a label that
+              // matches the parameter name at that position.
               // Optional `mut` marker — required for fresh bindings passed to parameters
               // declared `mut ref T` or `mut Slice[T]`; rejected in all other argument
               // positions (see design.md Feature 4 Part 1½: Call-site Mutation Markers).

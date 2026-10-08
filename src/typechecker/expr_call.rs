@@ -2033,7 +2033,26 @@ impl<'a> super::TypeChecker<'a> {
             _ => None,
         };
 
-        if let Some(ref names) = param_names {
+        // A function with named parameters (design.md § Named and default
+        // parameters): the default fill already completed and ordered every
+        // well-formed call, so one that reaches here unfilled is wrong, and
+        // the label rules say how better than an argument count does.
+        let named_key = match &callee.kind {
+            ExprKind::Identifier(name) if self.local_scope.lookup(name).is_none() => {
+                Some(name.clone())
+            }
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                Some(format!("{}.{}", segments[0], segments[1]))
+            }
+            _ => None,
+        };
+        let named_diag = named_key
+            .and_then(|k| self.named_fns.get(&k))
+            .and_then(|info| crate::default_args::diagnose_named(args, info));
+        let named_reported = named_diag.is_some();
+        if let Some((msg, at)) = named_diag {
+            self.type_error(msg, at.unwrap_or(*span), TypeErrorKind::LabelMismatch);
+        } else if let Some(ref names) = param_names {
             self.validate_labels(args, names, span);
         }
 
@@ -2315,6 +2334,12 @@ impl<'a> super::TypeChecker<'a> {
                 params,
                 return_type,
             } => {
+                if args.len() != params.len() && named_reported {
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return *return_type.clone();
+                }
                 if args.len() != params.len() {
                     // Phrase the expectation as a range when the callee is an
                     // unshadowed free fn with defaulted params — the call-site

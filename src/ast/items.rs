@@ -383,6 +383,10 @@ pub struct Param {
     /// of a bare `T` flips to borrowed, `own T` means exactly `T`; the bit
     /// is kept so the formatter writes it back and the flip can read it.
     pub is_own: bool,
+    /// A named parameter: one after the `;` in the parameter list
+    /// (design.md § Named and default parameters), passed as
+    /// `name: value` at every call.
+    pub is_named: bool,
 }
 
 impl Param {
@@ -8573,6 +8577,7 @@ pub fn closure_as_function(params: &[super::ClosureParam], body: &Expr) -> Funct
                 is_comptime: false,
                 is_frozen: false,
                 is_own: false,
+                is_named: false,
             })
             .collect(),
         self_param: None,

@@ -2864,6 +2864,7 @@ pub fn make_impl_method_function(
             // params never go through it.
             is_frozen: false,
             is_own: false,
+            is_named: false,
         };
         f.params.insert(0, self_param);
     }

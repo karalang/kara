@@ -275,8 +275,13 @@ impl super::Formatter {
                 SelfParam::MutRef => self.write_str("mut ref self"),
             }
         }
+        let mut named = false;
         for p in params {
-            if !first {
+            if p.is_named && !named {
+                // `;` opens the named parameters.
+                named = true;
+                self.write_str("; ");
+            } else if !first {
                 self.write_str(", ");
             }
             first = false;

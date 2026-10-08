@@ -485,6 +485,27 @@ impl<'a> super::TypeChecker<'a> {
 
         let mut seen_default = false;
         for param in params {
+            // Once per signature, at the first such parameter.
+            //
+            // design.md § Named and default parameters: only a named
+            // parameter (after the `;`) takes a default. Reported by `karac
+            // check` and `karac fix`; the legacy `build` and `run` still
+            // accept a positional default while sources migrate.
+            if param.default_value.is_some()
+                && !param.is_named
+                && !seen_default
+                && self.cli_lint_overrides.strict_core
+            {
+                self.type_error(
+                    format!(
+                        "only a named parameter can have a default; write `;` before \
+                         `{}` to make it and the parameters after it named",
+                        param.name().unwrap_or("_")
+                    ),
+                    param.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
             if let Some(ref default_expr) = param.default_value {
                 seen_default = true;
                 // Type-check the default value against the parameter type
@@ -516,7 +537,7 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                 }
-            } else if seen_default {
+            } else if seen_default && !param.is_named {
                 // Non-defaulted param after a defaulted one
                 self.type_error(
                     "non-defaulted parameter cannot follow a defaulted parameter".to_string(),

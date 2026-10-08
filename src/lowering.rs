@@ -1554,7 +1554,15 @@ impl<'a> Lowerer<'a> {
             let key = (SpanKey::from_span(&self_span), method.clone());
             if let Some(filled) = self.tc.method_default_fills.get(&key).cloned() {
                 if let ExprKind::MethodCall { args, .. } = &mut expr.kind {
-                    if args.len() < filled.len() {
+                    // Also when no argument was left out but labeled ones
+                    // were written out of declaration order (named
+                    // parameters). Comparing labels rather than lengths keeps
+                    // a second visit from splicing the plan over arguments
+                    // already lowered.
+                    let labels = |a: &[crate::ast::CallArg]| -> Vec<Option<String>> {
+                        a.iter().map(|x| x.label.clone()).collect()
+                    };
+                    if args.len() < filled.len() || labels(args) != labels(&filled) {
                         *args = filled;
                     }
                 }

@@ -533,6 +533,7 @@ pub(super) fn make_generic_impl_method_function(imp: &ImplBlock, method: &Functi
             // params never go through it.
             is_frozen: false,
             is_own: false,
+            is_named: false,
         };
         f.params.insert(0, self_param);
     }

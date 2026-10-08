@@ -71,11 +71,18 @@ pub(crate) struct FnDefaultInfo {
     pub(crate) names: Vec<Option<String>>,
     /// One entry per parameter: the default expression, if declared.
     pub(crate) defaults: Vec<Option<Expr>>,
+    /// The index of the first named parameter (after the `;`), or the
+    /// parameter count when there are none.
+    pub(crate) named_from: usize,
 }
 
 impl FnDefaultInfo {
     fn of(params: &[Param]) -> Self {
         FnDefaultInfo {
+            named_from: params
+                .iter()
+                .position(|p| p.is_named)
+                .unwrap_or(params.len()),
             names: params
                 .iter()
                 .map(|p| p.name().map(|s| s.to_string()))
@@ -131,7 +138,11 @@ pub(crate) fn method_default_table(program: &Program) -> HashMap<String, FnDefau
             if m.self_param.is_none() {
                 continue;
             }
-            if !m.params.iter().any(|p| p.default_value.is_some()) {
+            if !m
+                .params
+                .iter()
+                .any(|p| p.default_value.is_some() || p.is_named)
+            {
                 continue;
             }
             let key = format!("{head}.{}", m.name);
@@ -176,11 +187,18 @@ pub(crate) fn fill_default_args_in_program(program: &mut Program) {
     // program silently. Recorded and then REMOVED below, so the ambiguous case
     // falls back to today's arity error.
     let mut assoc_ambiguous: Vec<String> = Vec::new();
+    let mut values: HashMap<String, Vec<(String, TypeExpr)>> = HashMap::new();
     for item in &program.items {
         match item {
             Item::Function(f) => {
-                if f.params.iter().any(|p| p.default_value.is_some()) {
+                if f.params
+                    .iter()
+                    .any(|p| p.default_value.is_some() || p.is_named)
+                {
                     table.insert(f.name.clone(), FnDefaultInfo::of(&f.params));
+                    if let Some(ps) = value_params(f) {
+                        values.insert(f.name.clone(), ps);
+                    }
                 }
             }
             Item::ImplBlock(imp) => {
@@ -196,7 +214,11 @@ pub(crate) fn fill_default_args_in_program(program: &mut Program) {
                     if m.self_param.is_some() {
                         continue;
                     }
-                    if !m.params.iter().any(|p| p.default_value.is_some()) {
+                    if !m
+                        .params
+                        .iter()
+                        .any(|p| p.default_value.is_some() || p.is_named)
+                    {
                         continue;
                     }
                     let key = format!("{head}.{}", m.name);
@@ -214,13 +236,23 @@ pub(crate) fn fill_default_args_in_program(program: &mut Program) {
     for key in assoc_ambiguous {
         assoc.remove(&key);
     }
-    if table.is_empty() && assoc.is_empty() {
+    let mut methods: HashMap<String, Vec<FnDefaultInfo>> = HashMap::new();
+    for (key, info) in method_default_table(program) {
+        if info.named_from < info.names.len() {
+            let name = key.rsplit('.').next().unwrap_or(&key).to_string();
+            methods.entry(name).or_default().push(info);
+        }
+    }
+    if table.is_empty() && assoc.is_empty() && methods.is_empty() {
         return;
     }
     let mut filler = Filler {
         table,
         assoc,
+        methods,
+        values,
         scopes: Vec::new(),
+        hoisted: 0,
     };
     for item in &mut program.items {
         match item {
@@ -255,6 +287,14 @@ struct Filler {
     /// Lexical scope stack of locally-bound names. A callee identifier that
     /// appears here refers to a local value, not the top-level fn — no fill.
     scopes: Vec<HashSet<String>>,
+    /// Instance methods with named parameters, by method name, for
+    /// [`reorders`].
+    methods: HashMap<String, Vec<FnDefaultInfo>>,
+    /// Free functions with named parameters that can be used as values,
+    /// with their positional parameters ([`value_params`]).
+    values: HashMap<String, Vec<(String, TypeExpr)>>,
+    /// Fresh-name counter for [`hoist_impure_args`].
+    hoisted: usize,
 }
 
 impl Filler {
@@ -334,6 +374,21 @@ impl Filler {
         // Recurse into children first (an inner call inside an argument is
         // filled before the outer call is considered), then attempt the fill
         // on this node.
+        let mut hoisted = Vec::new();
+        // A function with named parameters used as a value: the closure
+        // that takes its positional parameters and calls it, so each call
+        // through it uses the defaults (design.md § Function values).
+        if let ExprKind::Identifier(name) = &expr.kind {
+            if !self.is_shadowed(name) {
+                if let Some(ps) = self.values.get(name) {
+                    *expr = value_closure(name, ps, expr.span);
+                } else {
+                    return;
+                }
+            } else {
+                return;
+            }
+        }
         match &mut expr.kind {
             ExprKind::Integer(..)
             | ExprKind::Float(..)
@@ -436,14 +491,37 @@ impl Filler {
                     self.scopes.pop();
                 }
             }
-            ExprKind::MethodCall { object, args, .. } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
                 self.walk_expr(object);
-                for a in args {
+                for a in args.iter_mut() {
                     self.walk_expr(&mut a.value);
+                }
+                // The receiver's type is not known yet, so this asks every
+                // method of this name with named parameters; hoisting when
+                // only some of them would reorder costs nothing but a `let`.
+                // The receiver is bound first when it is hoisted too, since
+                // it is evaluated before the arguments.
+                let reordered = self
+                    .methods
+                    .get(method.as_str())
+                    .is_some_and(|infos| infos.iter().any(|i| reorders(args, i)));
+                if reordered && args.iter().any(|a| !is_pure(&a.value)) {
+                    if !is_pure(object) {
+                        hoisted.push(bind_fresh(object, &mut self.hoisted));
+                    }
+                    hoisted.extend(hoist_impure_args(args, &mut self.hoisted));
                 }
             }
             ExprKind::Call { callee, args } => {
-                self.walk_expr(callee);
+                // A callee named directly is a call, not a function value.
+                if !matches!(callee.kind, ExprKind::Identifier(_)) {
+                    self.walk_expr(callee);
+                }
                 for a in args.iter_mut() {
                     self.walk_expr(&mut a.value);
                 }
@@ -462,6 +540,12 @@ impl Filler {
                     _ => None,
                 };
                 if let Some(info) = info {
+                    if info.named_from < info.defaults.len()
+                        && reorders(args, info)
+                        && try_fill(args, info).is_some()
+                    {
+                        hoisted = hoist_impure_args(args, &mut self.hoisted);
+                    }
                     if let Some(filled) = try_fill(args, info) {
                         *args = filled;
                     }
@@ -560,6 +644,9 @@ impl Filler {
                 self.scopes.pop();
             }
         }
+        if !hoisted.is_empty() {
+            wrap_in_block(expr, hoisted);
+        }
     }
 }
 
@@ -568,6 +655,9 @@ impl Filler {
 /// existing diagnostics should fire unchanged — see the module doc).
 pub(crate) fn try_fill(args: &[CallArg], info: &FnDefaultInfo) -> Option<Vec<CallArg>> {
     let n = info.defaults.len();
+    if info.named_from < n {
+        return fill_named(args, info);
+    }
     if args.len() >= n {
         return None;
     }
@@ -622,6 +712,327 @@ pub(crate) fn try_fill(args: &[CallArg], info: &FnDefaultInfo) -> Option<Vec<Cal
         return None;
     }
     Some(out)
+}
+
+/// The argument list of a call to a function with named parameters
+/// (design.md § Named and default parameters), in declaration order: the
+/// positional arguments, then each named parameter's labeled argument or,
+/// when omitted, its default. `None` leaves the call to the typechecker's
+/// diagnostics: a wrong positional count, a label that names no named
+/// parameter or names one twice, an unlabeled argument after a labeled one,
+/// or an omitted named parameter with no default.
+///
+/// The arguments' written order is their evaluation order; a caller that
+/// reorders them hoists any with side effects first ([`hoist_impure_args`]).
+fn fill_named(args: &[CallArg], info: &FnDefaultInfo) -> Option<Vec<CallArg>> {
+    let n = info.defaults.len();
+    let positional = args.iter().take_while(|a| a.label.is_none()).count();
+    if positional != info.named_from {
+        return None;
+    }
+    let mut given: Vec<Option<CallArg>> = vec![None; n - info.named_from];
+    for arg in &args[positional..] {
+        let label = arg.label.as_deref()?;
+        let k = (info.named_from..n).find(|&k| info.names[k].as_deref() == Some(label))?;
+        let slot = &mut given[k - info.named_from];
+        if slot.is_some() {
+            return None;
+        }
+        *slot = Some(arg.clone());
+    }
+    let mut out: Vec<CallArg> = args[..positional].to_vec();
+    for (i, g) in given.into_iter().enumerate() {
+        let k = info.named_from + i;
+        out.push(match g {
+            Some(a) => a,
+            None => synthesize_arg(info.defaults[k].as_ref()?, &info.names[k]),
+        });
+    }
+    Some(out)
+}
+
+/// The positional parameters of a free function with named parameters that
+/// can be a value: one that is not generic, binds each positional parameter
+/// to a name, and gives every named parameter a default (design.md
+/// § Function values). `None` for any other function.
+fn value_params(f: &Function) -> Option<Vec<(String, TypeExpr)>> {
+    if f.generic_params.is_some() || !f.params.iter().any(|p| p.is_named) {
+        return None;
+    }
+    let mut out = Vec::new();
+    for p in &f.params {
+        if p.is_named {
+            p.default_value.as_ref()?;
+        } else {
+            out.push((p.name()?.to_string(), p.ty.clone()));
+        }
+    }
+    Some(out)
+}
+
+/// `|p0: T0, ...| name(p0, ...)`: the call inside is filled like any other.
+fn value_closure(name: &str, params: &[(String, TypeExpr)], span: crate::token::Span) -> Expr {
+    let dummy = crate::ids::NodeId::DUMMY;
+    let ident = |n: &str| Expr {
+        kind: ExprKind::Identifier(n.to_string()),
+        span,
+        id: dummy,
+    };
+    let args = params
+        .iter()
+        .map(|(n, _)| CallArg {
+            label: None,
+            mut_marker: false,
+            mut_marker_span: None,
+            span,
+            value: ident(n),
+        })
+        .collect();
+    Expr {
+        kind: ExprKind::Closure {
+            params: params
+                .iter()
+                .map(|(n, t)| ClosureParam {
+                    pattern: Pattern {
+                        id: dummy,
+                        kind: PatternKind::Binding(n.clone()),
+                        span,
+                    },
+                    ty: Some(t.clone()),
+                    span,
+                })
+                .collect(),
+            capture_mode: None,
+            prefix_span: None,
+            body: Box::new(Expr {
+                kind: ExprKind::Call {
+                    callee: Box::new(ident(name)),
+                    args,
+                },
+                span,
+                id: dummy,
+            }),
+        },
+        span,
+        id: dummy,
+    }
+}
+
+/// Why [`fill_named`] declined a call, for the typechecker to report:
+/// the message and the argument to point at (`None`: the whole call).
+/// `None` when the call fills.
+pub(crate) fn diagnose_named(
+    args: &[CallArg],
+    info: &FnDefaultInfo,
+) -> Option<(String, Option<crate::token::Span>)> {
+    let n = info.defaults.len();
+    let first_named = |k: usize| info.names[k].clone().unwrap_or_else(|| "_".to_string());
+    let positional = args.iter().take_while(|a| a.label.is_none()).count();
+    if positional < info.named_from {
+        let arg = &args[positional..].first();
+        return Some(match arg {
+            Some(a)
+                if (0..info.named_from).any(|k| info.names[k].as_deref() == a.label.as_deref()) =>
+            {
+                (
+                    format!(
+                        "`{}` is a positional parameter; pass it without a label",
+                        a.label.as_deref().unwrap_or("_")
+                    ),
+                    Some(a.span),
+                )
+            }
+            _ => (
+                format!(
+                    "expected {} positional argument(s) before the named ones, found {}",
+                    info.named_from, positional
+                ),
+                arg.map(|a| a.span),
+            ),
+        });
+    }
+    if positional > info.named_from {
+        let a = &args[info.named_from];
+        let msg = if info.named_from < n {
+            format!(
+                "too many positional arguments: `{}` and the parameters after it are named; \
+                 write `{}: ...`",
+                first_named(info.named_from),
+                first_named(info.named_from)
+            )
+        } else {
+            format!("expected {} argument(s), found {}", n, args.len())
+        };
+        return Some((msg, Some(a.span)));
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    for a in &args[positional..] {
+        let Some(label) = a.label.as_deref() else {
+            return Some((
+                "an argument without a label cannot follow a labeled one".to_string(),
+                Some(a.span),
+            ));
+        };
+        if !(info.named_from..n).any(|k| info.names[k].as_deref() == Some(label)) {
+            let msg = if (0..info.named_from).any(|k| info.names[k].as_deref() == Some(label)) {
+                format!("`{label}` is a positional parameter; pass it without a label")
+            } else {
+                format!("no named parameter `{label}`")
+            };
+            return Some((msg, Some(a.span)));
+        }
+        if seen.contains(&label) {
+            return Some((format!("`{label}` is passed twice"), Some(a.span)));
+        }
+        seen.push(label);
+    }
+    let missing: Vec<String> = (info.named_from..n)
+        .filter(|&k| info.defaults[k].is_none())
+        .map(first_named)
+        .filter(|name| !seen.contains(&name.as_str()))
+        .collect();
+    if !missing.is_empty() {
+        let list = missing
+            .iter()
+            .map(|m| format!("`{m}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Some((format!("missing named argument(s) {list}"), None));
+    }
+    None
+}
+
+/// Free and associated functions with named parameters, keyed `"name"` and
+/// `"Type.name"`, for the typechecker's call diagnostics ([`diagnose_named`]).
+pub(crate) fn named_param_table(program: &Program) -> HashMap<String, FnDefaultInfo> {
+    let mut out = HashMap::new();
+    for item in &program.items {
+        match item {
+            Item::Function(f) if f.params.iter().any(|p| p.is_named) => {
+                out.insert(f.name.clone(), FnDefaultInfo::of(&f.params));
+            }
+            Item::ImplBlock(imp) => {
+                let Some(head) = impl_target_head(&imp.target_type) else {
+                    continue;
+                };
+                for it in &imp.items {
+                    let ImplItem::Method(m) = it else { continue };
+                    if m.self_param.is_none() && m.params.iter().any(|p| p.is_named) {
+                        out.insert(format!("{head}.{}", m.name), FnDefaultInfo::of(&m.params));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Whether evaluating `e` can have an effect or depend on one: anything
+/// but a literal or a place read through names and fields.
+fn is_pure(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Integer(..)
+        | ExprKind::Float(..)
+        | ExprKind::Bool(_)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        // Making a closure runs nothing, and hoisting one would cut it off
+        // from the parameter type it infers its own parameters from.
+        | ExprKind::Closure { .. } => true,
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            is_pure(object)
+        }
+        // Kept in place so a literal operand still takes the parameter's
+        // type (`f(n: -1)` for a `u8` parameter).
+        ExprKind::Unary { operand, .. } => is_pure(operand),
+        ExprKind::Binary { left, right, .. } => is_pure(left) && is_pure(right),
+        _ => false,
+    }
+}
+
+/// Binds each argument with side effects to a fresh local, in the order
+/// written, and returns the `let`s for [`wrap_in_block`] to put ahead of the
+/// call. Used on a call whose labeled arguments the fill puts back in
+/// declaration order ([`reorders`]): the hoisting keeps that from reordering
+/// their evaluation (design.md § Named and default parameters: arguments are
+/// evaluated in the order written). Pure arguments stay in place.
+fn hoist_impure_args(args: &mut [CallArg], counter: &mut usize) -> Vec<Stmt> {
+    args.iter_mut()
+        .filter(|a| !is_pure(&a.value))
+        .map(|a| bind_fresh(&mut a.value, counter))
+        .collect()
+}
+
+/// Moves `e` into `let __karac_argN = e` and leaves the name in its place.
+fn bind_fresh(e: &mut Expr, counter: &mut usize) -> Stmt {
+    let name = format!("__karac_arg{}", *counter);
+    *counter += 1;
+    let span = e.span;
+    let value = std::mem::replace(
+        e,
+        Expr {
+            kind: ExprKind::Identifier(name.clone()),
+            span,
+            id: crate::ids::NodeId::DUMMY,
+        },
+    );
+    Stmt {
+        kind: StmtKind::Let {
+            is_mut: false,
+            pattern: Pattern {
+                id: crate::ids::NodeId::DUMMY,
+                kind: PatternKind::Binding(name),
+                span,
+            },
+            ty: None,
+            value,
+        },
+        span,
+        id: crate::ids::NodeId::DUMMY,
+    }
+}
+
+/// Whether filling `args` against `info` changes their order: a labeled
+/// argument written before one whose parameter comes earlier.
+fn reorders(args: &[CallArg], info: &FnDefaultInfo) -> bool {
+    let mut last = 0usize;
+    for a in args {
+        let Some(label) = &a.label else { continue };
+        let Some(k) = info.names.iter().position(|n| n.as_deref() == Some(label)) else {
+            continue;
+        };
+        if k < last {
+            return true;
+        }
+        last = k;
+    }
+    false
+}
+
+/// Replaces `expr` with `{ stmts; expr }`.
+fn wrap_in_block(expr: &mut Expr, stmts: Vec<Stmt>) {
+    let span = expr.span;
+    let inner = std::mem::replace(
+        expr,
+        Expr {
+            kind: ExprKind::Tuple(Vec::new()),
+            span,
+            id: crate::ids::NodeId::DUMMY,
+        },
+    );
+    *expr = Expr {
+        kind: ExprKind::Block(Block {
+            stmts,
+            final_expr: Some(Box::new(inner)),
+            span,
+        }),
+        span,
+        id: crate::ids::NodeId::DUMMY,
+    };
 }
 
 /// Build the spliced argument for an omitted parameter: a clone of the

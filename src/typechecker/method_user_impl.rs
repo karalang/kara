@@ -710,9 +710,24 @@ impl<'a> super::TypeChecker<'a> {
                     self.method_default_fills
                         .insert((SpanKey::from_span(span), method.to_string()), list.clone());
                 }
+                // A method with named parameters whose call the fill
+                // declined: say which label rule it broke.
+                let named_diag = if default_filled.is_none() {
+                    self.method_defaults
+                        .get(&format!("{type_name}.{method}"))
+                        .filter(|i| i.named_from < i.names.len())
+                        .and_then(|i| crate::default_args::diagnose_named(args, i))
+                } else {
+                    None
+                };
+                let named_reported = named_diag.is_some();
                 let args: &[CallArg] = default_filled.as_deref().unwrap_or(args);
-                // Validate labels against method parameter names
-                self.validate_labels(args, &sig.param_names, span);
+                if let Some((msg, at)) = named_diag {
+                    self.type_error(msg, at.unwrap_or(*span), TypeErrorKind::LabelMismatch);
+                } else {
+                    // Validate labels against method parameter names
+                    self.validate_labels(args, &sig.param_names, span);
+                }
                 // Pre-bind the impl's generic params to the receiver's
                 // concrete type args (mirroring the concrete-type UFCS path
                 // above) BEFORE solving the call args. Without this, a method
@@ -855,16 +870,18 @@ impl<'a> super::TypeChecker<'a> {
                     } else {
                         params.len().to_string()
                     };
-                    self.type_error(
-                        format!(
-                            "method '{}' expects {} argument(s), found {}",
-                            method,
-                            expected,
-                            args.len()
-                        ),
-                        *span,
-                        TypeErrorKind::WrongNumberOfArgs,
-                    );
+                    if !named_reported {
+                        self.type_error(
+                            format!(
+                                "method '{}' expects {} argument(s), found {}",
+                                method,
+                                expected,
+                                args.len()
+                            ),
+                            *span,
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
                     for arg in args {
                         self.infer_expr(&arg.value);
                     }

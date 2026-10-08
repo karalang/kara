@@ -6172,9 +6172,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.assign(dest, Rvalue::Aggregate(kind, ops));
                     return Ok(());
                 }
-                if args.iter().any(|a| a.label.is_some()) {
-                    return self.unsupported(e.span, "a call with labelled arguments");
-                }
+                // Labels need no lowering: the default-argument fill has
+                // already put a labeled call's arguments in declaration
+                // order, and the typechecker rejected any it could not.
                 let inst_args = self.instance_args(e.span, &substs)?;
                 let f = self.lcx.fns.get(&d).map(|i| i.f);
                 let Some(f) = f else {
@@ -7025,6 +7025,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         args: &'a [CallArg],
         dest: Place,
     ) -> R<()> {
+        // The argument list the typechecker completed: defaults filled in
+        // and named arguments in declaration order (the legacy pipeline's
+        // `lowering` splices the same list into the tree).
+        let tc: &'a TypeCheckResult = self.lcx.tc;
+        let args: &'a [CallArg] = match &e.kind {
+            ExprKind::MethodCall { method, .. } => tc
+                .method_default_fills
+                .get(&(SpanKey::from_span(&e.span), method.clone()))
+                .map_or(args, |v| v.as_slice()),
+            _ => args,
+        };
         {
             {
                 let f = self.lcx.fns[&d].f;

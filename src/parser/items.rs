@@ -1540,20 +1540,34 @@ impl super::Parser {
             if let Some((sp, sp_span)) = self.try_parse_self_param() {
                 self_param = Some(sp);
                 self_span = Some(sp_span);
-                if !self.eat(&Token::Comma) {
+                if !self.check(&Token::Semicolon) && !self.eat(&Token::Comma) {
                     return Some((self_param, self_span, params));
                 }
             }
         }
 
-        // Parse remaining params
+        // Parse remaining params. A `;` ends the positional ones: those
+        // after it are named (design.md § Named and default parameters).
+        let mut named = false;
         loop {
+            if self.check(&Token::Semicolon) {
+                let semi = self.current_span();
+                self.advance();
+                if named {
+                    self.error_at(
+                        "a parameter list has at most one `;`, before its named parameters",
+                        semi,
+                    );
+                }
+                named = true;
+            }
             if self.check(&Token::RightParen) {
                 break;
             }
-            let param = self.parse_param()?;
+            let mut param = self.parse_param()?;
+            param.is_named = named;
             params.push(param);
-            if !self.eat(&Token::Comma) {
+            if !self.eat(&Token::Comma) && !self.check(&Token::Semicolon) {
                 break;
             }
         }
@@ -1692,6 +1706,7 @@ impl super::Parser {
                 // reported. Never frozen.
                 is_frozen: false,
                 is_own: false,
+                is_named: false,
             });
         }
 
@@ -1739,6 +1754,7 @@ impl super::Parser {
             is_comptime,
             is_frozen,
             is_own,
+            is_named: false,
         })
     }
 
