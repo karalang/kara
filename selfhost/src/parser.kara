@@ -2976,14 +2976,15 @@ impl Parser {
         if self.pos >= self.tokens.len() {
             return Item.ErrItem(SpanNode { span: self.current_span() });
         }
-        // Contextual item keywords: `union NAME`, `par struct` / `par enum`.
+        // Contextual item keywords: `union NAME`, `sync struct` / `sync enum`
+        // (or the older `par struct` / `par enum`).
         // Each is a keyword only when the next token fits. (`use` is gone:
         // it reaches the error arm below, as the seed rejects it.)
         let w = self.word_at(0);
         if w == "union" and self.word_at(1) != "" {
             return self.parse_union_def(is_pub, attrs, doc);
         }
-        if w == "par" and self.pos + 1 < self.tokens.len() {
+        if (w == "par" or w == "sync") and self.pos + 1 < self.tokens.len() {
             let par_item = match self.tokens[self.pos + 1].token {
                 Struct => true,
                 Enum => true,

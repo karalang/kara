@@ -95,6 +95,102 @@ impl super::Parser {
     /// of guessing. The kind stays `Syntax` rather than `ReservedKeyword`
     /// because the structural reading is primary: a keyword construct is
     /// missing its block.
+    /// Whether the cursor is on `par` followed by a parenthesized argument
+    /// list and then `for`: `par(limit: n) for ...`. A call `par(..)` is never
+    /// followed by `for`, so this cannot misread one.
+    fn par_limit_then_for(&self) -> bool {
+        if !matches!(self.peek_token_ref_at(1), Token::LeftParen) {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut i = self.pos + 1;
+        while let Some(t) = self.tokens.get(i) {
+            match t.token {
+                Token::LeftParen | Token::LeftBrace | Token::LeftBracket => depth += 1,
+                Token::RightParen | Token::RightBrace | Token::RightBracket => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return matches!(
+                            self.tokens.get(i + 1).map(|t| &t.token),
+                            Some(Token::For)
+                        );
+                    }
+                }
+                Token::EOF => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /// Whether the `{` at the cursor opens `par { e1, e2, ... }`, the form
+    /// whose branches are comma-separated expressions: a `,` directly inside
+    /// the braces, before any `;` there.
+    fn par_block_lists_branches(&self) -> bool {
+        if !self.check(&Token::LeftBrace) {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut i = self.pos;
+        while let Some(t) = self.tokens.get(i) {
+            match t.token {
+                Token::LeftBrace | Token::LeftParen | Token::LeftBracket => depth += 1,
+                Token::RightBrace | Token::RightParen | Token::RightBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return false;
+                    }
+                }
+                Token::Comma if depth == 1 => return true,
+                Token::Semicolon if depth == 1 => return false,
+                Token::EOF => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /// `par { e1, e2, ... }`: each branch is one expression, and the block's
+    /// value is the tuple of the branch values in source order. The branches
+    /// are recorded as a block with no statements whose value is a tuple of
+    /// them, so `par { a, b }` is `Par(Block { stmts: [], final_expr:
+    /// Tuple([a, b]) })`. A backend that runs the block as an ordinary block
+    /// computes the right value, branches in source order.
+    fn parse_par_branches(&mut self) -> Option<Block> {
+        let open = self.current_span();
+        self.expect(&Token::LeftBrace)?;
+        let first = self.current_span();
+        let mut branches = Vec::new();
+        while !self.check(&Token::RightBrace) && !self.is_at_end() {
+            branches.push(self.parse_expression()?);
+            if !self.eat(&Token::Comma) {
+                break;
+            }
+        }
+        let last_end = branches
+            .last()
+            .map(|e| e.span.offset + e.span.length)
+            .unwrap_or(first.offset);
+        self.expect(&Token::RightBrace)?;
+        let tuple = Expr {
+            id: crate::ids::NodeId::DUMMY,
+            span: Span {
+                line: first.line,
+                column: first.column,
+                offset: first.offset,
+                length: last_end.saturating_sub(first.offset),
+            },
+            kind: ExprKind::Tuple(branches),
+        };
+        Some(Block {
+            stmts: Vec::new(),
+            final_expr: Some(Box::new(tuple)),
+            span: self.span_from(&open),
+        })
+    }
+
     fn expect_keyword_block(&mut self, kw: &str) -> Option<Block> {
         if !self.check(&Token::LeftBrace) {
             let mut msg = format!(
@@ -1579,10 +1675,11 @@ impl super::Parser {
                 ref name,
                 raw: false,
             } if name == "par"
-                && matches!(self.peek_token_ref_at(1), Token::LeftBrace | Token::For) =>
+                && (matches!(self.peek_token_ref_at(1), Token::LeftBrace | Token::For)
+                    || self.par_limit_then_for()) =>
             {
                 self.advance();
-                if self.check(&Token::For) {
+                if !self.check(&Token::LeftBrace) {
                     // `par for` is in the v1 spec but not in this parser yet;
                     // say so rather than reading `par` as a name and then
                     // asking for a `;` before the `for`.
@@ -1592,7 +1689,11 @@ impl super::Parser {
                     );
                     return None;
                 }
-                let block = self.expect_keyword_block("par")?;
+                let block = if self.par_block_lists_branches() {
+                    self.parse_par_branches()?
+                } else {
+                    self.expect_keyword_block("par")?
+                };
                 Some(Expr {
                     id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),

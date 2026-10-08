@@ -548,7 +548,27 @@ impl super::Formatter {
             }
             ExprKind::Par(block) => {
                 self.write_str("par ");
-                self.format_block(block);
+                // `par { a, b }`: the branches are a tuple with no statements
+                // around it (see the parser's `parse_par_branches`).
+                match block.final_expr.as_deref() {
+                    Some(Expr {
+                        kind: ExprKind::Tuple(branches),
+                        ..
+                    }) if block.stmts.is_empty() && !branches.is_empty() => {
+                        self.write_str("{ ");
+                        for (i, b) in branches.iter().enumerate() {
+                            if i > 0 {
+                                self.write_str(", ");
+                            }
+                            self.format_expr(b);
+                        }
+                        if branches.len() == 1 {
+                            self.write_str(",");
+                        }
+                        self.write_str(" }");
+                    }
+                    _ => self.format_block(block),
+                }
             }
             ExprKind::Lock { mutex, alias, body } => {
                 // `lock <place> [alias] { body }` — the alias has NO `as`

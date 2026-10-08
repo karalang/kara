@@ -2475,16 +2475,19 @@ fn test_plain_and_shared_structs_are_not_par() {
 
 #[test]
 fn test_par_struct_round_trips_through_formatter() {
-    // Phase 6 `par struct` slice D: the formatter must re-emit the `par`
-    // keyword. Before the fix, `karac fmt` silently dropped it, turning a
-    // `par struct` into a plain `struct` (a semantics-changing rewrite).
-    let src = "par struct Counter {\n    name: String,\n    count: Atomic[i64],\n}\n";
+    // Phase 6 `par struct` slice D: the formatter must re-emit the keyword.
+    // Before the fix, `karac fmt` silently dropped it, turning a `par struct`
+    // into a plain `struct` (a semantics-changing rewrite). The keyword is
+    // now spelled `sync`, and the formatter writes that spelling.
+    let src = "sync struct Counter {\n    name: String,\n    count: Atomic[i64],\n}\n";
     let prog = parse_ok(src);
     let formatted = karac::formatter::format_program(&prog);
     assert_eq!(
         formatted, src,
-        "par struct round-trip mismatch:\n{formatted}"
+        "sync struct round-trip mismatch:\n{formatted}"
     );
+    let old = parse_ok(&src.replacen("sync", "par", 1));
+    assert_eq!(karac::formatter::format_program(&old), src);
 }
 
 #[test]
@@ -2534,10 +2537,13 @@ fn test_lock_place_expr_parses_identifier_and_field() {
 
 #[test]
 fn test_par_enum_round_trips_through_formatter() {
-    let src = "par enum Msg {\n    Ping,\n    Data(i64),\n}\n";
+    let src = "sync enum Msg {\n    Ping,\n    Data(i64),\n}\n";
     let prog = parse_ok(src);
     let formatted = karac::formatter::format_program(&prog);
-    assert_eq!(formatted, src, "par enum round-trip mismatch:\n{formatted}");
+    assert_eq!(
+        formatted, src,
+        "sync enum round-trip mismatch:\n{formatted}"
+    );
 }
 
 #[test]
@@ -15976,7 +15982,12 @@ fn method_turbofish_is_named_and_deleted() {
 /// followed by a missing `;`; until the parser has `par for`, it says so.
 #[test]
 fn par_for_reports_unsupported_not_a_missing_semicolon() {
-    let result = parse("fn main() { let v = par for p in xs { f(p) }; }");
+    par_for_is_unsupported("fn main() { let v = par for p in xs { f(p) }; }");
+    par_for_is_unsupported("fn main() { let v = par(limit: 50) for p in xs { f(p) }; }");
+}
+
+fn par_for_is_unsupported(src: &str) {
+    let result = parse(src);
     assert!(
         result
             .errors
@@ -16094,4 +16105,52 @@ fn formatter_parenthesizes_a_return_type_that_has_its_own_with() {
         out.contains("-> (impl Iterator with reads(Fs)) with allocates(Heap)"),
         "{out}"
     );
+}
+
+/// Design review 2026-10-07 (amendment 6): `sync struct` / `sync enum` name
+/// the cross-task sharing tier; the older `par` spelling still parses, and
+/// the formatter writes `sync`.
+#[test]
+fn sync_struct_and_enum_are_the_cross_task_types() {
+    let src = "sync struct Counter { hits: Atomic[u64] }\nsync enum Job { A, B }\npar struct Old { n: Atomic[u64] }\n";
+    let r = parse(src);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let mut seen = 0;
+    for item in &r.program.items {
+        match item {
+            Item::StructDef(s) => {
+                assert!(s.is_par, "{}", s.name);
+                seen += 1;
+            }
+            Item::EnumDef(e) => {
+                assert!(e.is_par, "{}", e.name);
+                seen += 1;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(seen, 3);
+    let out = karac::formatter::format_program(&r.program);
+    assert!(out.contains("sync struct Counter"), "{out}");
+    assert!(out.contains("sync enum Job"), "{out}");
+    assert!(out.contains("sync struct Old"), "{out}");
+    assert!(!out.contains("par struct"), "{out}");
+}
+
+/// `par { e1, e2 }` lists its branches separated by commas, and its value is
+/// the tuple of the branch values. The `;` form still parses as a block.
+#[test]
+fn par_block_branches_are_comma_separated_and_give_a_tuple() {
+    let src =
+        "fn f() -> Result[(i64, i64), E] { let (x, y) = par { fail(1)?, work()? }; Ok((x, y)) }\n\
+               fn g() { par { a(); b(); } }\n\
+               fn h() -> (i64, (i64, i64)) { par { step_a(), par { x(), y() }, } }\n";
+    let r = parse(src);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let out = karac::formatter::format_program(&r.program);
+    assert!(out.contains("par { fail(1)?, work()? }"), "{out}");
+    assert!(out.contains("par { step_a(), par { x(), y() } }"), "{out}");
+    let again = parse(&out);
+    assert!(again.errors.is_empty(), "{:?}", again.errors);
+    assert_eq!(karac::formatter::format_program(&again.program), out);
 }

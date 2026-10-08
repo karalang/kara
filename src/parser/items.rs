@@ -123,7 +123,8 @@ impl super::Parser {
                     }
                 }
             }
-            // `par struct` / `par enum` — the design's mechanism for
+            // `sync struct` / `sync enum` (spelled `par struct` / `par enum`
+            // before design review 2026-10-07; both parse) — the design's mechanism for
             // *intentional* concurrent struct sharing (always Arc; every `mut`
             // field constrained to `Atomic[T]` / `Mutex[T]`; cross-task-safe by
             // definition per design.md § "Part 5b: Concurrent Shared Types").
@@ -136,14 +137,16 @@ impl super::Parser {
             Token::Identifier {
                 ref name,
                 raw: false,
-            } if name == "par"
-                && matches!(
-                    self.peek_token_ref_at(1),
-                    Token::Struct | Token::Enum | Token::Fn | Token::Trait | Token::Impl
-                ) =>
+            } if (name == "sync"
+                && matches!(self.peek_token_ref_at(1), Token::Struct | Token::Enum))
+                || (name == "par"
+                    && matches!(
+                        self.peek_token_ref_at(1),
+                        Token::Struct | Token::Enum | Token::Fn | Token::Trait | Token::Impl
+                    )) =>
             {
                 let par_kw_span = self.current_span();
-                self.advance(); // consume `par`
+                self.advance(); // consume `sync` / `par`
                 match self.peek_token_ref() {
                     Token::Struct => Some(Item::StructDef(self.parse_struct_def(
                         attributes,

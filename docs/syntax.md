@@ -132,7 +132,8 @@ lock         // `lock m { ... }` / `lock m as x { ... }` — before a name
 resource  verb  group  stable  transparent   // effect declarations
 reads  writes  sends  receives  allocates  panics  blocks  suspends
              // effect verbs — inside a `with` clause or effect declaration
-seq  par     // `seq { ... }` / `par { ... }` — before `{`; `par struct` / `par enum`
+seq  par     // `seq { ... }` / `par { ... }` — before `{`
+sync         // `sync struct` / `sync enum` (older spelling: `par struct` / `par enum`)
 layout       // `layout NAME ...`; `group` inside a layout block
 alias  independent   // resource-aliasing declarations, followed by a name
 ```
@@ -491,7 +492,7 @@ fn create_server(host: String, port: u16 = 8080, timeout_ms: i64 = 5000) -> Serv
 ### 3.2 Structs
 
 ```
-STRUCT_DEF = [ ATTRIBUTES ] [ VISIBILITY ] [ "shared" ] "struct" IDENT [ GENERIC_PARAMS ]
+STRUCT_DEF = [ ATTRIBUTES ] [ VISIBILITY ] [ "shared" | "sync" ] "struct" IDENT [ GENERIC_PARAMS ]
              [ WHERE_CLAUSE ]
              "{" [ STRUCT_FIELDS ] [ STRUCT_INVARIANT ] "}"
 
@@ -564,7 +565,7 @@ struct DateRange {
 ### 3.3 Enums
 
 ```
-ENUM_DEF = [ ATTRIBUTES ] [ VISIBILITY ] [ "shared" ] "enum" IDENT [ GENERIC_PARAMS ]
+ENUM_DEF = [ ATTRIBUTES ] [ VISIBILITY ] [ "shared" | "sync" ] "enum" IDENT [ GENERIC_PARAMS ]
            [ WHERE_CLAUSE ]
            "{" VARIANT { "," VARIANT } [ "," ] "}"
 
@@ -1581,18 +1582,17 @@ seq {
 ### 5.9 Parallel Blocks
 
 ```
-PAR_EXPR = "par" BLOCK
+PAR_EXPR = "par" "{" EXPR { "," EXPR } [ "," ] "}"
+         | "par" BLOCK          // older form, still parsed: one branch per statement
 ```
 
-`par { }` is an explicit fork-join scope — each top-level statement in the block becomes a concurrent branch. All branches join before execution continues past the block. The block is an expression; its value is the value of the last expression. Effect checking still applies: statements with conflicting effects on the same resource are serialized in source order within the block.
+`par { e1, e2, ... }` runs its comma-separated branches concurrently and joins them at the closing brace. Its value is the tuple of the branch values, in source order; a branch may be a block. The parser records the branches as a block with no statements whose value is the tuple `(e1, e2, ...)`, so a backend that runs the block in order computes the same value. A `,` directly inside the braces, before any `;`, selects this form.
 
 ```
-let (a, b) = par {
-    let x = fetch_profile(id);
-    let y = fetch_orders(id);
-    (x, y)
-};
+let (profile, orders) = par { fetch_profile(id)?, fetch_orders(id)? };
 ```
+
+`par for x in it { body }`, whose value is the `Vec` of the bodies' values, is not parsed yet; the parser reports it as unsupported.
 
 See [Explicit Concurrency: `par {}` and `spawn()`](design.md#13-concurrency) in the design doc for full semantics, failure handling, and relationship to auto-concurrency and `spawn()`.
 
