@@ -34,13 +34,30 @@
 //! `receives`, which keeps two sends on one connection in source order;
 //! `sends` with `receives` never conflicts (full duplex), and neither do the
 //! capability verbs (`allocates`, `panics`, `blocks`).
+//!
+//! **Which values a key can name.** Two keys on distinct roots overlap when
+//! [`Origins`] finds a value both may hold: a clone of a `Sender` names the
+//! clone's channel, and every parameter may be any value the caller has.
+//! A key on a value made inside a call (a local of the callee, a connection
+//! a client call opens) is [`Key::Fresh`] in that call's summary and
+//! overlaps nothing, and so are `Network` and `FileSystem` effects that no
+//! value roots: those are capabilities, not conflict keys (core §12 item 5).
+//!
+//! **`par` branches (core §11.2).** Each [`ParRegion`] is checked after
+//! the fixpoint: every pair of branches of a `par` block, and a `par for`
+//! body against itself (two iterations), must have no two effects that
+//! keep their order. A key on a value the branch makes itself is fresh
+//! there, so one iteration's channel does not conflict with the next's.
+//! The conflicts are reported in [`EffectReport::par_conflicts`].
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use super::interp::Program;
 use super::place_ty::place_ty;
 use super::syntax::*;
-use super::ty::{AdtId, Ty, TyInterner};
+use super::ty::{AdtId, Ty, TyCtxt, TyInterner};
 use crate::ids::DefId;
 use crate::ty::TyKind as SK;
 
@@ -80,15 +97,10 @@ pub enum Key {
     Param(u32, Vec<u32>),
     /// A local of the body, then a field path. Never appears in a summary.
     Local(u32, Vec<u32>),
-}
-
-impl Key {
-    fn widen_locals(self) -> Key {
-        match self {
-            Key::Local(..) => Key::Any,
-            k => k,
-        }
-    }
+    /// A value no other key can name: one made inside the call this summary
+    /// describes, or inside the `par` branch being checked, or a capability
+    /// with no value at all (a path on the file system). Overlaps nothing.
+    Fresh,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -115,6 +127,7 @@ impl Effect {
         }
         let key = match &self.key {
             Key::Any => String::new(),
+            Key::Fresh => " @ fresh".to_string(),
             Key::Param(p, path) | Key::Local(p, path) => {
                 let tag = if matches!(self.key, Key::Param(..)) {
                     "p"
@@ -195,6 +208,22 @@ pub struct EffectReport {
     pub summaries: BTreeMap<String, EffectSet>,
     /// Per instance name: each effectful terminator's own effects.
     pub sites: BTreeMap<String, Vec<Site>>,
+    /// Per instance name: the `par` regions whose branches conflict.
+    pub par_conflicts: BTreeMap<String, Vec<ParConflict>>,
+}
+
+/// Two branches of a `par` block, or two iterations of a `par for` body
+/// (`branches` is then `(0, 0)`), with an effect from each that must keep
+/// its order (core §11.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParConflict {
+    /// The index into the body's [`Body::par_regions`].
+    pub region: usize,
+    pub line: usize,
+    pub branches: (usize, usize),
+    /// The block and the effect on each side.
+    pub first: (BasicBlock, String),
+    pub second: (BasicBlock, String),
 }
 
 /// Compute every body's effects.
@@ -219,6 +248,10 @@ pub fn analyze(program: &Program, tys: &TyInterner) -> EffectReport {
             out
         })
         .collect();
+    let origins: Vec<Origins> = names
+        .iter()
+        .map(|n| Origins::of(&program.bodies[*n], tys))
+        .collect();
     let mut report = EffectReport::default();
     // Tarjan yields each component after every component it reaches, so
     // callees are summarised before their callers.
@@ -235,7 +268,7 @@ pub fn analyze(program: &Program, tys: &TyInterner) -> EffectReport {
                         .effects
                         .into_iter()
                         .map(|mut x| {
-                            x.key = x.key.widen_locals();
+                            x.key = origins[i].widen(x.key);
                             x
                         })
                         .collect();
@@ -252,13 +285,75 @@ pub fn analyze(program: &Program, tys: &TyInterner) -> EffectReport {
             }
         }
     }
+    for (i, name) in names.iter().enumerate() {
+        let body = &program.bodies[*name];
+        if body.par_regions.is_empty() {
+            continue;
+        }
+        let found = par_conflicts(body, &report.sites[*name], &origins[i]);
+        if !found.is_empty() {
+            report.par_conflicts.insert((*name).clone(), found);
+        }
+    }
     report
+}
+
+/// The conflicting branch pairs of `body`'s `par` regions, at most one per
+/// pair, given its sites.
+fn par_conflicts(body: &Body, sites: &[Site], origins: &Origins) -> Vec<ParConflict> {
+    let at: BTreeMap<BasicBlock, &EffectSet> =
+        sites.iter().map(|s| (s.block, &s.effects)).collect();
+    let alias = |a: &Key, b: &Key| origins.may_alias(a, b);
+    let mut out = Vec::new();
+    for (ri, r) in body.par_regions.iter().enumerate() {
+        // Each branch's sites, in block order, with keys on the values the
+        // branch makes itself turned fresh.
+        let sides: Vec<Vec<(BasicBlock, EffectSet)>> = r
+            .branches
+            .iter()
+            .map(|br| {
+                let blocks: BTreeSet<BasicBlock> = br.iter().copied().collect();
+                let mut v: Vec<(BasicBlock, EffectSet)> = blocks
+                    .iter()
+                    .filter_map(|b| at.get(b).map(|s| (*b, origins.privatize(s, &blocks))))
+                    .collect();
+                v.sort_by_key(|(b, _)| *b);
+                v
+            })
+            .collect();
+        let pairs: Vec<(usize, usize)> = match r.kind {
+            ParKind::Block => (0..sides.len())
+                .flat_map(|i| (i + 1..sides.len()).map(move |j| (i, j)))
+                .collect(),
+            // Two iterations run the same body.
+            ParKind::For { .. } => (0..sides.len()).map(|i| (i, i)).collect(),
+        };
+        for (i, j) in pairs {
+            'pair: for (k, (bx, x)) in sides[i].iter().enumerate() {
+                let from = if i == j { k } else { 0 };
+                for (by, y) in &sides[j][from..] {
+                    if let Some((ex, ey)) = conflict_witness(x, y, &alias) {
+                        out.push(ParConflict {
+                            region: ri,
+                            line: r.span.line,
+                            branches: (i, j),
+                            first: (*bx, ex),
+                            second: (*by, ey),
+                        });
+                        break 'pair;
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 impl EffectReport {
     /// `{"functions": [{"instance", "effects", "unknown_because", "sites":
-    /// [{"block", "effects"}]}]}`, instances in name order: the output of
-    /// `karac __mir-effects`.
+    /// [{"block", "effects"}], "par_conflicts": [{"region", "line",
+    /// "branches", "first": {"block", "effect"}, "second"}]}]}`, instances
+    /// in name order: the output of `karac __mir-effects`.
     pub fn to_json(&self) -> serde_json::Value {
         use serde_json::json;
         let fns: Vec<_> = self
@@ -270,11 +365,25 @@ impl EffectReport {
                         .map(|site| json!({"block": site.block.0, "effects": site.effects.display()}))
                         .collect()
                 });
+                let par: Vec<_> = self.par_conflicts.get(name).map_or(Vec::new(), |v| {
+                    v.iter()
+                        .map(|c| {
+                            json!({
+                                "region": c.region,
+                                "line": c.line,
+                                "branches": [c.branches.0, c.branches.1],
+                                "first": {"block": c.first.0 .0, "effect": c.first.1},
+                                "second": {"block": c.second.0 .0, "effect": c.second.1},
+                            })
+                        })
+                        .collect()
+                });
                 json!({
                     "instance": name,
                     "effects": s.display(),
                     "unknown_because": s.why.iter().collect::<Vec<_>>(),
                     "sites": sites,
+                    "par_conflicts": par,
                 })
             })
             .collect();
@@ -299,48 +408,307 @@ pub fn conflicts(a: &Effect, b: &Effect, may_alias: &dyn Fn(&Key, &Key) -> bool)
 }
 
 /// Do two effect sets need to keep their order? An unknown set conflicts
-/// with anything that has an effect, and so does a set that still calls a
-/// parameter's function value, whose effects only the caller knows.
+/// with anything that has an effect that keeps an order, and so does a set
+/// that still calls a parameter's function value, whose effects only the
+/// caller knows.
 pub fn sets_conflict(a: &EffectSet, b: &EffectSet, may_alias: &dyn Fn(&Key, &Key) -> bool) -> bool {
-    let top = |s: &EffectSet| s.unknown || !s.calls.is_empty();
-    if (top(a) && !b.is_empty()) || (top(b) && !a.is_empty()) {
-        return true;
+    conflict_witness(a, b, may_alias).is_some()
+}
+
+/// The first pair of effects, one from each set, that must keep their
+/// order, displayed.
+pub fn conflict_witness(
+    a: &EffectSet,
+    b: &EffectSet,
+    may_alias: &dyn Fn(&Key, &Key) -> bool,
+) -> Option<(String, String)> {
+    if let (Some(x), Some(y)) = (top(a), ordered_effect(b)) {
+        return Some((x, y));
     }
-    a.effects
-        .iter()
-        .any(|x| b.effects.iter().any(|y| conflicts(x, y, may_alias)))
+    if let (Some(x), Some(y)) = (ordered_effect(a), top(b)) {
+        return Some((x, y));
+    }
+    a.effects.iter().find_map(|x| {
+        b.effects
+            .iter()
+            .find(|y| conflicts(x, y, may_alias))
+            .map(|y| (x.display(), y.display()))
+    })
+}
+
+/// What makes a set conflict with everything: an unknown callee, or a call
+/// through a parameter's function value.
+fn top(s: &EffectSet) -> Option<String> {
+    if s.unknown {
+        return Some("unknown".to_string());
+    }
+    s.calls.iter().next().map(|p| format!("calls(p{p})"))
+}
+
+/// An effect of `s` that an unknown effect would conflict with: one that
+/// keeps an order, on a value someone else can name.
+fn ordered_effect(s: &EffectSet) -> Option<String> {
+    use Verb::*;
+    top(s).or_else(|| {
+        s.effects
+            .iter()
+            .find(|e| matches!(e.verb, Reads | Writes | Sends | Receives) && e.key != Key::Fresh)
+            .map(Effect::display)
+    })
 }
 
 fn keys_overlap(a: &Key, b: &Key, may_alias: &dyn Fn(&Key, &Key) -> bool) -> bool {
     match (a, b) {
+        (Key::Fresh, _) | (_, Key::Fresh) => false,
         (Key::Any, _) | (_, Key::Any) => true,
         (Key::Param(r1, p1) | Key::Local(r1, p1), Key::Param(r2, p2) | Key::Local(r2, p2)) => {
             let same_root = r1 == r2 && std::mem::discriminant(a) == std::mem::discriminant(b);
-            if same_root {
-                // One path is a prefix of the other: the same value or a
-                // part of it.
-                let n = p1.len().min(p2.len());
-                p1[..n] == p2[..n]
-            } else {
-                may_alias(a, b)
-            }
+            // One path is a prefix of the other: the same value or a part of
+            // it. Two different fields can still hold clones of one handle.
+            let n = p1.len().min(p2.len());
+            (same_root && p1[..n] == p2[..n]) || may_alias(a, b)
         }
     }
 }
 
-/// The default aliasing rule for one body: two distinct roots may name the
-/// same value when either is a shared reference (`ref T`); owned values
-/// and `mut ref`s are unique.
-pub fn may_alias_in<'b>(body: &'b Body, tys: &'b TyInterner) -> impl Fn(&Key, &Key) -> bool + 'b {
-    move |a: &Key, b: &Key| {
-        let shared_ref = |k: &Key| match k {
-            Key::Param(r, _) | Key::Local(r, _) => body
-                .locals
-                .get(*r as usize)
-                .is_some_and(|d| matches!(tys.tcx().kind(d.ty), SK::Ref(_))),
-            Key::Any => true,
+/// Where each local's value may come from, in one body: what decides
+/// whether two keys can name the same value (D6, "when the compiler cannot
+/// tell whether two such values are the same, they conflict"), and whether
+/// a value is made inside a `par` branch.
+///
+/// An edge `a -> b` says `b` may hold a value that `a` held, or part of
+/// one: an assignment, a projection, an aggregate, a call's result from its
+/// arguments, and an argument stored into another that the callee can
+/// write through (a reference, a `shared` handle, a closure). When the
+/// receiving local is itself such a reference, the edge also runs back,
+/// since writing through it changes what it points to. Every parameter
+/// comes from one origin, the caller, which may pass one value (or clones
+/// of one handle) twice. Scalars and strings hold no resource and are left
+/// out. The relation ignores order, so a value is assumed to hold anything
+/// that ever flows into its local.
+pub struct Origins {
+    /// Per local, the locals it receives values from directly; the extra
+    /// last entry is the caller.
+    preds: Vec<Vec<u32>>,
+    /// Per local, the blocks that assign it.
+    assigned: Vec<BTreeSet<BasicBlock>>,
+    cache: RefCell<BTreeMap<u32, Rc<BTreeSet<u32>>>>,
+}
+
+impl Origins {
+    pub fn of(body: &Body, tys: &TyInterner) -> Origins {
+        let tcx = tys.tcx();
+        let n = body.locals.len();
+        let carries: Vec<bool> = body
+            .locals
+            .iter()
+            .map(|d| carries_value(tcx, d.ty))
+            .collect();
+        let by_ref: Vec<bool> = body.locals.iter().map(|d| refers(tcx, d.ty, 0)).collect();
+        let mut preds: Vec<Vec<u32>> = vec![Vec::new(); n + 1];
+        let mut assigned = vec![BTreeSet::new(); n];
+        let flow = |preds: &mut Vec<Vec<u32>>, src: usize, dst: usize, back: bool| {
+            if src == dst || !carries[src] || !carries[dst] {
+                return;
+            }
+            preds[dst].push(src as u32);
+            if back && by_ref[dst] {
+                preds[src].push(dst as u32);
+            }
         };
-        shared_ref(a) || shared_ref(b)
+        for a in body.args() {
+            if carries[a.index()] {
+                preds[a.index()].push(n as u32);
+            }
+        }
+        let root = |o: &Operand| o.place().map(|p| p.local.index());
+        for (bi, bb) in body.blocks.iter().enumerate() {
+            let block = BasicBlock(bi as u32);
+            for st in &bb.statements {
+                let StatementKind::Assign(dst, rv) = &st.kind else {
+                    continue;
+                };
+                let d = dst.local.index();
+                assigned[d].insert(block);
+                let srcs: Vec<usize> = match rv {
+                    Rvalue::Use(o) | Rvalue::UnaryOp(_, o) | Rvalue::Cast(_, o, _) => {
+                        root(o).into_iter().collect()
+                    }
+                    Rvalue::Ref(_, p)
+                    | Rvalue::Retain(p)
+                    | Rvalue::Discriminant(p)
+                    | Rvalue::Len(p) => vec![p.local.index()],
+                    Rvalue::BinaryOp(_, x, y) | Rvalue::CheckedBinaryOp(_, x, y) => {
+                        [x, y].into_iter().filter_map(root).collect()
+                    }
+                    Rvalue::Aggregate(_, ops) => ops.iter().filter_map(root).collect(),
+                };
+                for src in srcs {
+                    flow(&mut preds, src, d, true);
+                }
+            }
+            if let TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                ..
+            } = &bb.terminator.kind
+            {
+                let d = destination.local.index();
+                assigned[d].insert(block);
+                let ins: Vec<usize> = std::iter::once(func).chain(args).filter_map(root).collect();
+                for &a in &ins {
+                    flow(&mut preds, a, d, true);
+                    // The callee may store `a` through any argument it can
+                    // write through.
+                    for &b in &ins {
+                        if by_ref[b] {
+                            flow(&mut preds, a, b, false);
+                        }
+                    }
+                }
+            }
+        }
+        for p in &mut preds {
+            p.sort_unstable();
+            p.dedup();
+        }
+        Origins {
+            preds,
+            assigned,
+            cache: RefCell::new(BTreeMap::new()),
+        }
+    }
+
+    /// The caller, as an origin.
+    fn caller(&self) -> u32 {
+        self.assigned.len() as u32
+    }
+
+    /// Every local (and possibly the caller) whose value `l` may hold,
+    /// `l` included.
+    fn origins(&self, l: u32) -> Rc<BTreeSet<u32>> {
+        if let Some(s) = self.cache.borrow().get(&l) {
+            return s.clone();
+        }
+        let mut seen = BTreeSet::from([l]);
+        let mut work = vec![l];
+        while let Some(x) = work.pop() {
+            for &p in self.preds.get(x as usize).map_or(&[][..], |v| v.as_slice()) {
+                if seen.insert(p) {
+                    work.push(p);
+                }
+            }
+        }
+        let s = Rc::new(seen);
+        self.cache.borrow_mut().insert(l, s.clone());
+        s
+    }
+
+    /// Can two keys of this body name the same value? Two distinct roots
+    /// can when they share an origin; one root always can, since two of its
+    /// fields may hold clones of one handle.
+    pub fn may_alias(&self, a: &Key, b: &Key) -> bool {
+        let root = |k: &Key| match k {
+            Key::Param(r, _) | Key::Local(r, _) => Some(*r),
+            _ => None,
+        };
+        match (a, b) {
+            (Key::Fresh, _) | (_, Key::Fresh) => false,
+            _ => match (root(a), root(b)) {
+                (Some(x), Some(y)) if x == y => true,
+                (Some(x), Some(y)) => {
+                    let ox = self.origins(x);
+                    self.origins(y).iter().any(|o| ox.contains(o))
+                }
+                _ => true,
+            },
+        }
+    }
+
+    /// A key as the body's callers see it: a local that may hold a value
+    /// the caller passed is some value of its class; one that cannot was
+    /// made inside the call.
+    fn widen(&self, k: Key) -> Key {
+        match k {
+            Key::Local(r, _) if self.origins(r).contains(&self.caller()) => Key::Any,
+            Key::Local(..) => Key::Fresh,
+            k => k,
+        }
+    }
+
+    /// Is every value `l` holds made inside `blocks`? It is when `l` and
+    /// all its origins are assigned there and nowhere else.
+    fn made_in(&self, l: u32, blocks: &BTreeSet<BasicBlock>) -> bool {
+        let here = |x: u32| {
+            self.assigned
+                .get(x as usize)
+                .is_some_and(|a| !a.is_empty() && a.is_subset(blocks))
+        };
+        self.origins(l).iter().all(|&x| here(x))
+    }
+
+    /// `s` with the keys on values made inside `blocks` made fresh.
+    fn privatize(&self, s: &EffectSet, blocks: &BTreeSet<BasicBlock>) -> EffectSet {
+        let mut out = s.clone();
+        out.effects = s
+            .effects
+            .iter()
+            .map(|e| {
+                let mut e = e.clone();
+                if let Key::Local(r, _) = e.key {
+                    if self.made_in(r, blocks) {
+                        e.key = Key::Fresh;
+                    }
+                }
+                e
+            })
+            .collect();
+        out
+    }
+}
+
+/// Can a value of type `ty` hold a resource? Scalars and strings cannot,
+/// nor can a reference to one.
+fn carries_value(tcx: &TyCtxt, ty: Ty) -> bool {
+    let mut t = ty;
+    while let SK::Ref(i) | SK::MutRef(i) | SK::RawPtr { pointee: i, .. } = tcx.kind(t) {
+        t = i;
+    }
+    !matches!(
+        tcx.kind(t),
+        SK::Int(_)
+            | SK::UInt(_)
+            | SK::Float(_)
+            | SK::Bool
+            | SK::Char
+            | SK::Str
+            | SK::StaticStr
+            | SK::Unit
+            | SK::Never
+            | SK::FnDef { .. }
+    )
+}
+
+/// Can writing through a value of type `ty` change another value: is it,
+/// or does it contain, a reference, a `shared` handle or a closure?
+fn refers(tcx: &TyCtxt, ty: Ty, depth: u32) -> bool {
+    if depth > 4 {
+        return true;
+    }
+    match tcx.kind(ty) {
+        SK::Ref(_)
+        | SK::MutRef(_)
+        | SK::RawPtr { .. }
+        | SK::Shared { .. }
+        | SK::Weak(_)
+        | SK::Closure { .. }
+        | SK::Fn { .. } => true,
+        SK::Tuple(l) | SK::Adt { args: l, .. } | SK::Intrinsic { args: l, .. } => {
+            tcx.list(l).into_iter().any(|t| refers(tcx, t, depth + 1))
+        }
+        SK::Array { elem, .. } | SK::Slice { elem, .. } => refers(tcx, elem, depth + 1),
+        _ => false,
     }
 }
 
@@ -399,8 +767,11 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // (argument 0, the receiver); files by the open file. These have no
         // MIR natives yet (M2 brings the I/O intrinsics); the entries fix
         // the keying the conflict rule relies on.
+        ("Channel", "new") => vec![HEAP],
         ("Sender", "send") => vec![(Sends, "Channel", Some(0)), (Blocks, "", None)],
+        ("Sender", "try_send") => vec![(Sends, "Channel", Some(0))],
         ("Receiver", "recv") => vec![(Receives, "Channel", Some(0)), (Blocks, "", None)],
+        ("Receiver", "try_recv") => vec![(Receives, "Channel", Some(0))],
         ("TcpStream", "write" | "write_all" | "flush") => {
             vec![(Sends, "Network", Some(0)), (Blocks, "", None)]
         }
@@ -699,7 +1070,14 @@ impl<'p> Analysis<'p> {
         match native_effects(base, method).filter(|_| native) {
             Some(table) => {
                 for (verb, class, key_arg) in table {
-                    let key = key_arg.map_or(Key::Any, arg_key);
+                    // `Network` and `FileSystem` with no value to root them
+                    // are capabilities, not conflict keys (core §12 item 5).
+                    let unrooted = if matches!(class, "Network" | "FileSystem") {
+                        Key::Fresh
+                    } else {
+                        Key::Any
+                    };
+                    let key = key_arg.map_or(unrooted, arg_key);
                     eff.add(Effect::new(verb, class, key));
                 }
                 // A closure or function handed to a native runs inside it.
@@ -784,12 +1162,8 @@ impl<'p> Analysis<'p> {
         }
         // A part keeps the key only as "part of this value"; its own field
         // path is not tracked.
-        let part_key = match &key {
-            Key::Any => Key::Any,
-            k => k.clone(),
-        };
         for part in self.parts(ty) {
-            self.drop_glue(part, part_key.clone(), summaries, seen, eff);
+            self.drop_glue(part, key.clone(), summaries, seen, eff);
         }
         seen.pop();
     }
@@ -827,6 +1201,7 @@ fn substitute(
         let key = match &e.key {
             Key::Param(p, path) => match arg_key(*p as usize - 1) {
                 Key::Any => Key::Any,
+                Key::Fresh => Key::Fresh,
                 Key::Param(r, mut base) => {
                     base.extend(path);
                     base.truncate(MAX_PATH);
@@ -1400,12 +1775,13 @@ fn main() -> () {
             site.effects.display(),
             ["sends(Channel @ l1)", "receives(Channel @ l2)", "blocks"],
         );
-        // The summary cannot name `main`'s locals.
+        // The summary cannot name `main`'s locals, which no caller can
+        // reach: they are fresh.
         assert_eq!(
             effects(&r, "main")[..2],
             [
-                "sends(Channel)".to_string(),
-                "receives(Channel)".to_string()
+                "sends(Channel @ fresh)".to_string(),
+                "receives(Channel @ fresh)".to_string()
             ],
         );
     }
@@ -1442,9 +1818,9 @@ fn io(_1: ref Vec[i64], _2: ref Vec[i64], _3: ref Vec[i64]) -> () {
             effects(&r, "io"),
             [
                 "writes(File @ p3)",
-                "sends(Network)",
+                "sends(Network @ fresh)",
                 "sends(ProcessTable @ p1)",
-                "receives(Network)",
+                "receives(Network @ fresh)",
                 "allocates(Heap)",
                 "blocks",
             ],
@@ -1528,6 +1904,37 @@ fn io(_1: ref Vec[i64], _2: ref Vec[i64], _3: ref Vec[i64]) -> () {
             &e(Sends, "Channel", f1),
             &distinct
         ));
+        // A fresh value, or a capability no value roots, overlaps nothing.
+        assert!(!conflicts(
+            &e(Sends, "Network", Key::Fresh),
+            &e(Sends, "Network", Key::Any),
+            &aliased
+        ));
+        assert!(!conflicts(
+            &e(Writes, "FileSystem", Key::Fresh),
+            &e(Writes, "FileSystem", Key::Fresh),
+            &aliased
+        ));
+        // An unknown set conflicts with an ordered effect, but not with a
+        // fresh one or a capability verb.
+        let set = |es: Vec<Effect>| EffectSet {
+            effects: es.into_iter().collect(),
+            ..EffectSet::default()
+        };
+        let unknown = EffectSet::unknown("test".to_string());
+        assert!(sets_conflict(
+            &unknown,
+            &set(vec![e(Reads, "File", b.clone())]),
+            &distinct
+        ));
+        assert!(!sets_conflict(
+            &unknown,
+            &set(vec![
+                e(Sends, "Channel", Key::Fresh),
+                e(Allocates, "Heap", Key::Any)
+            ]),
+            &distinct
+        ));
         // Capability verbs never order anything.
         assert!(!conflicts(
             &e(Allocates, "Heap", Key::Any),
@@ -1539,6 +1946,166 @@ fn io(_1: ref Vec[i64], _2: ref Vec[i64], _3: ref Vec[i64]) -> () {
             &e(Blocks, "", Key::Any),
             &aliased
         ));
+    }
+
+    fn par_conflicts_of(r: &EffectReport, name: &str) -> Vec<(usize, usize, String, String)> {
+        r.par_conflicts.get(name).map_or(Vec::new(), |v| {
+            v.iter()
+                .map(|c| {
+                    (
+                        c.branches.0,
+                        c.branches.1,
+                        c.first.1.clone(),
+                        c.second.1.clone(),
+                    )
+                })
+                .collect()
+        })
+    }
+
+    /// Core §11.2 with D6 keys: `par` branches that send on one channel
+    /// (through a clone) conflict, two channels do not; a `par for` body
+    /// conflicts with itself on a channel from outside, not on one each
+    /// iteration makes; printing conflicts, and so does a `Drop` body that
+    /// prints, which only the blocks drop elaboration adds reach.
+    #[test]
+    fn effects_par_branches_conflict_on_shared_resources() {
+        let r = from_source(
+            "struct Loud {
+    n: i64,
+}
+
+impl Drop for Loud {
+    fn drop(mut ref self) {
+        println(self.n);
+    }
+}
+
+fn produce(tx: Sender[i64], from: i64, to: i64) -> i64 {
+    for i in from..to { tx.send(i); }
+    to - from
+}
+
+fn two_channels() {
+    let (tx1, rx1): (Sender[i64], Receiver[i64]) = Channel.new();
+    let (tx2, rx2): (Sender[i64], Receiver[i64]) = Channel.new();
+    let (r1, r2) = par { produce(tx1, 0, 4), produce(tx2, 4, 8) };
+}
+
+fn one_channel() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    let tx2 = tx.clone();
+    let (r1, r2) = par { produce(tx, 0, 4), produce(tx2, 4, 8) };
+}
+
+fn outer_tx() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    let v = par for i in 0..3 { tx.send(i); i };
+}
+
+fn local_tx() {
+    let v = par for i in 0..3 {
+        let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+        tx.send(i);
+        i
+    };
+}
+
+fn prints() {
+    let (a, b) = par { println(\"a\"), println(\"b\") };
+}
+
+fn drops() {
+    let (a, b) = par { { let x = Loud { n: 1 }; 1 }, { let y = Loud { n: 2 }; 2 } };
+}
+
+fn quiet() {
+    let (a, b) = par { 1 + 2, 3 * 4 };
+}
+
+fn main() {
+    two_channels();
+    one_channel();
+    outer_tx();
+    local_tx();
+    prints();
+    drops();
+    quiet();
+}
+",
+        );
+        for name in ["two_channels", "local_tx", "quiet"] {
+            assert_eq!(par_conflicts_of(&r, name), [], "{name}");
+        }
+        let one = par_conflicts_of(&r, "one_channel");
+        assert_eq!(one.len(), 1, "{one:?}");
+        assert_eq!((one[0].0, one[0].1), (0, 1));
+        assert!(one[0].2.starts_with("sends(Channel @ l"), "{one:?}");
+        let outer = par_conflicts_of(&r, "outer_tx");
+        assert_eq!(outer.len(), 1, "{outer:?}");
+        assert_eq!((outer[0].0, outer[0].1), (0, 0));
+        for name in ["prints", "drops"] {
+            assert_eq!(
+                par_conflicts_of(&r, name),
+                [(0, 1, "writes(Stdout)".into(), "writes(Stdout)".into())],
+                "{name}"
+            );
+        }
+    }
+
+    /// Two client calls open two connections: the `Network` capability
+    /// does not order them. Two writes on files a caller passed do conflict,
+    /// since the caller can pass one file twice.
+    #[test]
+    fn effects_par_capabilities_do_not_conflict_but_parameters_may_alias() {
+        let (p, tys) = from_mir(
+            "
+fn fetch(_1: ref Vec[i64], _2: ref Vec[i64]) -> () {
+    let mut _0: ();
+    let _3: ();
+    let _4: ();
+    par#0 block [bb1] [bb2]
+    bb0: {
+        goto -> bb1;
+    }
+    bb1: {
+        _3 = Client.get(copy _1, const 1_i64) -> bb2;
+    }
+    bb2: {
+        _4 = Client.get(copy _2, const 2_i64) -> bb3;
+    }
+    bb3: {
+        return;
+    }
+}
+
+fn store(_1: ref Vec[i64], _2: ref Vec[i64]) -> () {
+    let mut _0: ();
+    let _3: ();
+    let _4: ();
+    par#0 block [bb1] [bb2]
+    bb0: {
+        goto -> bb1;
+    }
+    bb1: {
+        _3 = File.write(copy _1, const 1_i64) -> bb2;
+    }
+    bb2: {
+        _4 = File.write(copy _2, const 2_i64) -> bb3;
+    }
+    bb3: {
+        return;
+    }
+}
+",
+            &[],
+        );
+        let r = analyze(&p, &tys);
+        assert_eq!(par_conflicts_of(&r, "fetch"), []);
+        assert_eq!(
+            par_conflicts_of(&r, "store"),
+            [(0, 1, "writes(File @ p1)".into(), "writes(File @ p2)".into())]
+        );
     }
 
     /// A recursion that walks deeper into its parameter each round still

@@ -15,7 +15,7 @@
 //! names a place that is fully initialized whenever it runs, which the
 //! MIR interpreter checks.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::place_ty::place_ty;
 use super::syntax::*;
@@ -243,8 +243,32 @@ pub fn elaborate_drops(body: &mut Body, tys: &mut TyInterner) -> Result<(), Stri
         e.init_flags_at_entry();
     }
 
+    extend_par_regions(e.body, n_orig);
     e.body.phase = MirPhase::DropsElaborated;
     Ok(())
+}
+
+/// Adds to each `par` branch the blocks this pass created that the branch
+/// reaches (its drop ladders and flag edges), so the effect-conflict check
+/// sees the drops that run inside the branch. A new block is reached only
+/// from the block whose terminator it replaced, so it belongs to that
+/// block's branch; the walk stops at the original blocks, which the
+/// builder already listed.
+fn extend_par_regions(body: &mut Body, n_orig: usize) {
+    for r in &mut body.par_regions {
+        for branch in &mut r.branches {
+            let mut seen: BTreeSet<BasicBlock> = branch.iter().copied().collect();
+            let mut work = branch.clone();
+            while let Some(b) = work.pop() {
+                for s in body.blocks[b.index()].terminator.kind.successors() {
+                    if s.index() >= n_orig && seen.insert(s) {
+                        branch.push(s);
+                        work.push(s);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Move paths for every place `track`ed by type that is moved, assigned or
