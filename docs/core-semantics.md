@@ -283,7 +283,7 @@ Pins:
 - While a `ref` borrow of `p` is live, `p` may not be written, moved, mutably borrowed or dropped.
 - **Overlap:** a place overlaps its prefixes and its extensions. Distinct fields do not overlap. Any index projection overlaps the whole collection.
 - **Liveness:** a borrow is live from its creation to its last use. Unlike drops, this is non-lexical, because when a borrow ends cannot be observed.
-- **Method calls:** in a method call with a `mut ref self` receiver, the receiver's borrow starts after the arguments are evaluated. So `v.push(v.len())` is legal (two-phase borrow).
+- **Calls (two-phase borrows):** in any call, the borrow for a `mut ref` argument, a `mut ref self` receiver included, starts after every argument is evaluated. So `v.push(v.len())` and `insert(nodes, nodes[root].left, v)` are legal. A later argument may read the place; one whose value still borrows the place when the call starts is an error. (Extended from receivers to every `mut ref` argument by Gowtham, 2026-10-08.)
 
 **5.7 Where a view may not go.** A view may not be stored in, or flow into:
 - a field of a `shared`, `sync` or `frozen` type;

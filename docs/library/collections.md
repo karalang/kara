@@ -121,6 +121,7 @@ Build a `Vec` from an iterator with `collect` ([iterators.md](iterators.md)).
 | `clear` | `fn clear(mut ref self)` | Drops every entry |
 | `reserve` | `fn reserve(mut ref self, additional: i64)` | Makes room for `additional` more entries. `additional <= 0` does nothing. There is no `capacity()`: the bucket count is not part of the contract |
 | `[]` | `m[key]` | Index operator through `Index`. Panics if the key is missing |
+| `[]=` | `m[key] = val` | Index assignment through `IndexSet` ([design.md §9](../design.md#index-and-indexmut)): inserts the entry, or replaces and drops the old value. `m[key] += 1` and `m[key].push(x)` go through `IndexMut` and panic if the key is missing; use `entry` for those |
 
 **`Entry[K, V]`: insert or modify in place.** `entry` gives one lookup with an in-place update path, with no second hash and no key clone:
 
@@ -185,6 +186,8 @@ A B-tree map, `K: Ord`. Iteration is in ascending key order.
 | `values` | `fn values(self) -> impl Iterator[Item = ref V]` | In key order |
 | `range` | `fn range(self, from: K, to: K) -> impl Iterator[Item = (ref K, ref V)]` | Entries with keys in `[from, to)` |
 | `clear` | `fn clear(mut ref self)` | |
+| `[]` | `m[key]` | Index operator through `Index`. Panics if the key is missing |
+| `[]=` | `m[key] = val` | Index assignment through `IndexSet`, as for `Map` |
 
 ## `SortedSet[T]`
 
@@ -273,7 +276,7 @@ Every collection works with `for`. A collection is `Iterable`, so `for x in c` b
 
 ## Common traits
 
-`Vec`, `Map`, `Set`, `VecDeque`, `SortedMap` and `SortedSet` implement `Clone`. Every collection implements `Display` when its elements implement `Display`, and `FromIterator` for its natural element type, so `collect` can build it.
+`Vec`, `Map`, `Set`, `VecDeque`, `SortedMap` and `SortedSet` implement `Clone`. Every collection implements `Display` when its elements implement `Display`, and `FromIterator` for its natural element type, so `collect` can build it. `Display` adds only punctuation, never a type name ([design.md §9](../design.md#9-traits)): `Vec`, `Array`, `Slice` and `VecDeque` render as `[a, b]`, `Map` and `SortedMap` as `{k: v, k2: v2}`, and `Set` and `SortedSet` as `{a, b}`; empty ones render as `[]` or `{}`.
 
 `Vec[T]`, `Array[T, N]`, `Slice[T]` and `VecDeque[T]` implement `PartialEq` (with `Rhs = Self`) when `T: PartialEq`, and `Eq` when `T: Eq`: two sequences are equal when they have the same length and equal elements in order. They implement `PartialOrd` and `Ord` when `T` does, comparing lexicographically. The comparison traits borrow both operands ([design.md §9](../design.md#operator-traits)).
 

@@ -16,7 +16,7 @@ This directory specifies the standard library's public API: its types, functions
 
 ## How the library is built
 
-The standard library is ordinary Kāra code. The compiler knows a closed list of lang-item traits (`Copy`, `Drop`, the operator traits, `Index`/`IndexMut`, `Iterator` and `Iterable`, the `?` protocol and `Display`; see [design.md §9](../design.md#lang-item-traits)) and a small set of intrinsics for memory, arithmetic, hashing, UTF-8 and runtime calls ([design.md §15](../design.md#intrinsics)). Everything else is written in Kāra on top of them: `Clone`, `Default`, `From`/`Into`, `IntoIterator`, every iterator adaptor, every collection method.
+The standard library is ordinary Kāra code. The compiler knows a closed list of lang-item traits (`Copy`, `Drop`, the operator traits, `Index`/`IndexMut`/`IndexSet`, `Iterator` and `Iterable`, the `?` protocol and `Display`; see [design.md §9](../design.md#lang-item-traits)) and a small set of intrinsics for memory, arithmetic, hashing, UTF-8 and runtime calls ([design.md §15](../design.md#intrinsics)). Everything else is written in Kāra on top of them: `Clone`, `Default`, `From`/`Into`, `IntoIterator`, every iterator adaptor, every collection method.
 
 Two consequences follow:
 - A user type gets the same surface as a library type. A user `impl Iterator` gets every adaptor in [iterators.md](iterators.md).

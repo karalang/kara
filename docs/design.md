@@ -394,6 +394,7 @@ Escaping one of these is `error[E_RAW_IDENT_NOT_ALLOWED]` (`E0004`). It is a dif
 **Type.** A string literal is a `String` by default and a `Str` where a `Str` is expected, the same way an integer literal is `i64` by default and takes an expected type ([§8](#8-type-inference-and-generics)). The rule is the same in every scope.
 - `let s = "hi";` makes a `String`. `let s: Str = "hi";` and a `Str` argument make a `Str`.
 - A literal typed as `Str` is a view of static data. It allocates nothing and borrows nothing, so it may go anywhere, a `const` and a global included ([core-semantics.md §5.3](core-semantics.md#5-references-and-views-c5)).
+- A literal used as the receiver of a method defined on `Str` is a `Str`, so `"0123456789abcdef".bytes()` is a view of static data and may be bound and kept ([library/strings.md](library/strings.md)). A literal receiving a method only `String` has (`push_str`, `own self` methods) is a `String` temporary.
 - `const NAME: Str = "x";` is the recommended form for a string constant ([Constants](#constants)).
 
 `String` and `Str` are specified in [§5](#strings) and [library/strings.md](library/strings.md).
@@ -2765,6 +2766,7 @@ A closure **escapes** when it, or a value containing it, is returned, stored in 
 - **Function-typed parameters are non-escaping by default.** The callee may call such a parameter, or pass it to another non-escaping parameter, and nothing else.
 - **`escaping` is written only on parameters**, the one place where a function type is non-escaping by default. A function type in a return type, a field or a collection element is escaping by nature and is not marked: `make_counter` below returns a `MutFn() -> i64`.
 - **An `escaping` parameter is owned.** The argument moves into the callee, and `own` is not written beside `escaping`.
+- **A value of a function type is move-only.** Only a closure literal that [core-semantics.md §1.1](core-semantics.md#1-values) makes `Copy` is copied. A stored `Fn(..)` is called through a `ref` (`(self.routes[i].handler)(req)`) or borrowed out (`fn handler(self, i: i64) -> ref Handler`). To give one handler many holders, wrap it in a `shared` type: `shared struct Handler { f: Fn(Request) -> Response }`; copying that handle counts.
 - **To store or return a parameter**, declare it `escaping`:
 
 ```kara
@@ -3466,11 +3468,11 @@ The bound is checked at every impl, so any `T: Parseable` has `T.Output: Display
 | `Iterator` | `Item` | The element `next` produces |
 | `Iterable` | `Item` | The element `iter()` yields |
 | `IntoIterator` | `Item` | The element of the iterator `into_iter()` returns |
-| `Index[Idx]`, `IndexMut[Idx]` | `Output` | The element `collection[idx]` refers to |
+| `Index[Idx]`, `IndexMut[Idx]`, `IndexSet[Idx]` | `Output` | The element `collection[idx]` refers to |
 | The [operator traits](#operator-traits) | `Output` | The result type of the operator |
 | `TryFrom[T]` | `Error` | The error of a failed conversion |
 
-`Index` and `IndexMut` keep their `Idx` parameter, because the caller chooses the index type, and fix `Output`, because the collection fixes the element type.
+`Index`, `IndexMut` and `IndexSet` keep their `Idx` parameter, because the caller chooses the index type, and fix `Output`, because the collection fixes the element type.
 
 Generic associated types (`type Mapped[U]`) are in [deferred.md](deferred.md#unscheduled-language-extensions).
 
@@ -3572,7 +3574,7 @@ The compiler knows a closed list of traits, called lang items. For each it knows
 | `Copy` | implicit copies ([`Copy`, `Clone` and `Drop`](#copy-clone-and-drop)) |
 | `Drop` | destruction ([core-semantics.md §7](core-semantics.md#7-destruction-c6-supersedes-the-drop-judgment-0)) |
 | the operator traits | `+`, `-`, `==`, `<`, `&` and the other operators ([Operator traits](#operator-traits)) |
-| `Index`, `IndexMut` | `c[i]` ([`Index` and `IndexMut`](#index-and-indexmut)) |
+| `Index`, `IndexMut`, `IndexSet` | `c[i]` and `c[i] = v` ([`Index` and `IndexMut`](#index-and-indexmut)) |
 | `Iterator`, `Iterable` | `for` loops ([`Iterator` and `Iterable`](#iterator-and-iterable)) |
 | the `?` protocol | `?` ([§10 Results and propagation](#results-and-propagation)) |
 | `Display` | `{}` in f-strings ([`Display` and `Debug`](#display-and-debug)) |
@@ -3634,7 +3636,7 @@ Every operator is a call to a trait method. There is no separate operator table 
 | Equality | `PartialEq` (and the marker `Eq`) | `a == b` → `PartialEq.eq(a, b)`; `a != b` → `not PartialEq.eq(a, b)` |
 | Ordering | `PartialOrd` (and `Ord`) | `a < b` → `PartialOrd.partial_cmp(a, b).is_lt()`, and likewise for `<=`, `>`, `>=` |
 | Bitwise | `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`, `Not` | `a & b` → `BitAnd.bitand(a, b)`; `~a` → `Not.not(a)` |
-| Subscript | `Index`, `IndexMut` | see [`Index` and `IndexMut`](#index-and-indexmut) |
+| Subscript | `Index`, `IndexMut`, `IndexSet` | see [`Index` and `IndexMut`](#index-and-indexmut) |
 
 **Definitions:**
 
@@ -3766,7 +3768,7 @@ Without the derive, unwrap explicitly: `FloorNum(a.raw() + 1)`. That is the righ
 
 ### `Index` and `IndexMut`
 
-`[]` is defined by two traits:
+`[]` is defined by three traits:
 
 ```kara
 trait Index[Idx] {
@@ -3778,16 +3780,23 @@ trait IndexMut[Idx] {
     type Output;
     fn index_mut(mut ref self, idx: Idx) -> mut ref Self.Output;
 }
+
+trait IndexSet[Idx] {
+    type Output;
+    fn index_set(mut ref self, idx: own Idx, value: own Self.Output);
+}
 ```
 
 | Syntax | Meaning |
 |---|---|
 | `c[key]` | the place `*Index.index(c, key)`, with `c` borrowed |
 | `c[i, j, k]` | `c[(i, j, k)]`: tuple-index sugar |
-| `c[key] = value` | `*IndexMut.index_mut(c, key) = value`, with `c` borrowed mutably |
-| `c[i, j, k] = value` | `*IndexMut.index_mut(c, (i, j, k)) = value` |
+| `c[key] = value` | `IndexSet.index_set(c, key, value)` when `c`'s type implements `IndexSet`; otherwise `*IndexMut.index_mut(c, key) = value`. Either way `c` is borrowed mutably |
+| `c[i, j, k] = value` | the same, with the index `(i, j, k)` |
 
-User types may implement both, so a user container supports `[]`.
+User types may implement all three, so a user container supports `[]`.
+
+**`IndexSet` is the "store at a key" form** (decision 2026-10-08). It exists for keyed collections, where the key may not be present yet and `index_mut` has nothing to point at. `Map` and `SortedMap` implement it as `insert`, so `m[k] = v` adds the entry or replaces the old value, which is dropped ([library/collections.md](library/collections.md#mapk-v-h)). Sequences (`Vec`, `Array`, `Slice`, `VecDeque`) do not implement it, so `v[i] = x` out of bounds still panics. Only a plain `=` to the whole element uses `IndexSet`. A compound assignment (`m[k] += 1`), a method call through the index (`m[k].push(x)`) and a write to a part (`m[k].f = v`) go through `IndexMut`, so on a `Map` they panic when the key is missing; use `entry` for read-modify-write on a key that may be absent.
 
 **An index expression is a place, not a value.** `c[i]` refers to an element that `c` still owns.
 - **Reading it as a value copies it**, so `let t = v[i];` needs the element type to be `Copy`. For a non-`Copy` element it would move the element out of the container, which is error `E_INDEX_MOVE_NON_COPY` ([core-semantics.md §3.7](core-semantics.md#3-moves)). A container has no representation for a hole, so an element cannot be moved out of a live one.
