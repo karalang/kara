@@ -582,4 +582,51 @@ fn main(_1: shared Node) -> () {{
             assert!(errors_mention(&errs, want), "{want}: {errs:?}");
         }
     }
+
+    /// `f16`, `bf16`, `i128` and `isize` are MIR types, and a cast into
+    /// a narrow float rounds to its precision.
+    #[test]
+    fn mir_narrow_floats_and_wide_ints() {
+        let text = "
+fn main() -> () {
+    let mut _0: ();
+    let _1: bf16;
+    let _2: f16;
+    let _3: f64;
+    let _4: i128;
+    let _5: isize;
+    let _6: ();
+    bb0: {
+        _1 = const 257_i64 as bf16 (IntToFloat);
+        _2 = const 2049_i64 as f16 (IntToFloat);
+        _3 = copy _2 as f64 (FloatToFloat);
+        _4 = const 9223372036854775807_i64 as i128 (IntToInt);
+        _5 = copy _4 as isize (IntToInt);
+        _6 = println(copy _1, copy _3, copy _5) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+";
+        let m = parse_module(text).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(validate(&m.bodies[0], &m.tys), Vec::<String>::new());
+        let printed = pretty_body(&m.bodies[0], &m.tys);
+        for line in [
+            "let _1: bf16;",
+            "let _2: f16;",
+            "let _4: i128;",
+            "let _5: isize;",
+        ] {
+            assert!(printed.contains(line), "{line}: {printed}");
+        }
+        let prog = interp::Program::from_module(&m);
+        let r = interp::run(&prog, &m.tys, "main", vec![]);
+        // 257 has no bf16 (8 significant bits): it rounds to even, 256;
+        // 2049 has no f16 (11 bits) and rounds to 2048.
+        assert_eq!(r.output, "25620489223372036854775807\n", "{:?}", r.outcome);
+        assert_eq!(ty::FloatTy::BF16.round(1.1), 1.1015625);
+        assert_eq!(ty::FloatTy::F16.round(65520.0), f64::INFINITY);
+    }
 }

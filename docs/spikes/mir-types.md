@@ -232,7 +232,7 @@ The MIR interpreter is the reference implementation and the oracle the LLVM back
 | `flag <local> <bool>` | a drop flag is set |
 | `abort <reason>` | an `Abort` terminator runs |
 
-The trace is the reference for drop behaviour: a program's printed output shows only the user `Drop` bodies, while the trace also shows every free and every count change, so a difference in plain memory handling between the two backends is visible too. Allocation ids are assigned in allocation order, so traces are deterministic for a single-threaded program. At exit the interpreter reports every allocation still live as a leak.
+The trace is the reference for drop behaviour: a program's printed output shows only the user `Drop` bodies, while the trace also shows every free and every count change, so a difference in plain memory handling between the two backends is visible too. Allocation ids are assigned in allocation order, so traces are deterministic for a single-threaded program. At exit the interpreter reports every allocation still live as a leak. `interp::run` records the trace; `interp::run_untraced`, which `karac __mir-run` and the corpus use, does not, since one event per statement is most of the time and memory a long program spends. Leaks are reported either way.
 
 Because the interpreter checks initialization on every read, any drop elaboration bug that drops a moved place, or never drops a live one, shows up as a reported error on the first program that exercises it, rather than as a wrong line of output.
 

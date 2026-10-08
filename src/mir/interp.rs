@@ -230,8 +230,29 @@ const MAX_DEPTH: usize = 1000;
 /// runner's timeout bounds wall time. `KARAC_MIR_MAX_STEPS` overrides it.
 const MAX_STEPS: u64 = 4_000_000_000;
 
-/// Runs `entry` with `args`, validating every body first.
+/// Runs `entry` with `args`, validating every body first, and records
+/// the [`Event`] trace.
 pub fn run(program: &Program, tys: &TyInterner, entry: &str, args: Vec<Value>) -> RunResult {
+    run_with(program, tys, entry, args, true)
+}
+
+/// [`run`], without the trace: [`RunResult::events`] stays empty.
+pub fn run_untraced(
+    program: &Program,
+    tys: &TyInterner,
+    entry: &str,
+    args: Vec<Value>,
+) -> RunResult {
+    run_with(program, tys, entry, args, false)
+}
+
+fn run_with(
+    program: &Program,
+    tys: &TyInterner,
+    entry: &str,
+    args: Vec<Value>,
+    trace: bool,
+) -> RunResult {
     let mut problems = Vec::new();
     for (name, body) in &program.bodies {
         for e in validate(body, tys) {
@@ -245,6 +266,8 @@ pub fn run(program: &Program, tys: &TyInterner, entry: &str, args: Vec<Value>) -
         next_frame_id: 0,
         heap: Vec::new(),
         events: Vec::new(),
+        trace,
+        needs_drop: Default::default(),
         output: String::new(),
         steps: 0,
         max_steps: std::env::var("KARAC_MIR_MAX_STEPS")
@@ -325,6 +348,13 @@ struct Interp<'a> {
     next_frame_id: u64,
     heap: Vec<Option<HeapObj>>,
     events: Vec<Event>,
+    /// Whether `events` is kept. A run outside the tests skips it: one
+    /// event per statement is most of the time and memory a long program
+    /// spends.
+    trace: bool,
+    /// `needs_drop` per type, asked on every write: the type context
+    /// walks the type each time.
+    needs_drop: std::cell::RefCell<rustc_hash::FxHashMap<Ty, bool>>,
     output: String,
     steps: u64,
     max_steps: u64,
@@ -361,13 +391,15 @@ impl<'a> Interp<'a> {
             locals,
             held: Vec::new(),
         });
-        self.events.push(Event::Enter(name.to_string()));
+        if self.trace {
+            self.events.push(Event::Enter(name.to_string()));
+        }
         let result = self.run_body(body);
         let frame = self.frames.pop().expect("frame");
         for (_, flags) in frame.held {
             self.release_flags(flags);
         }
-        if result.is_ok() {
+        if result.is_ok() && self.trace {
             self.events.push(Event::Exit(name.to_string()));
         }
         result
@@ -457,7 +489,9 @@ impl<'a> Interp<'a> {
                     other => return err(format!("{name} of {other:?}")),
                 };
                 if *i < 0 || *i >= len {
-                    self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    }
                     return Err(Stop::Abort(AbortReason::BoundsCheck));
                 }
                 Ok(Value::Ref(Addr {
@@ -506,7 +540,9 @@ impl<'a> Interp<'a> {
                     Value::Box(id) => {
                         let fs = std::mem::take(self.vec_elems(*id)?);
                         self.heap[id.0 as usize] = None;
-                        self.events.push(Event::Free(*id));
+                        if self.trace {
+                            self.events.push(Event::Free(*id));
+                        }
                         fs
                     }
                     view => {
@@ -985,7 +1021,9 @@ impl<'a> Interp<'a> {
                 }
                 if matches!(other, Value::Box(_)) {
                     self.heap[from.0 as usize] = None;
-                    self.events.push(Event::Free(from));
+                    if self.trace {
+                        self.events.push(Event::Free(from));
+                    }
                 }
                 Ok(Value::Unit)
             }
@@ -1304,7 +1342,9 @@ impl<'a> Interp<'a> {
             ("as_slice" | "as_mut_slice", []) => Ok(Value::Slice { base, lo, len }),
             ("slice" | "slice_mut", [Value::Int(a), Value::Int(b)]) => {
                 if *a < 0 || a > b || *b > len as i128 {
-                    self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    }
                     return Err(Stop::Abort(AbortReason::BoundsCheck));
                 }
                 Ok(Value::Slice {
@@ -1317,7 +1357,9 @@ impl<'a> Interp<'a> {
             ("is_empty", []) => Ok(Value::Bool(len == 0)),
             ("index" | "index_mut", [Value::Int(i)]) => {
                 if *i < 0 || *i >= len as i128 {
-                    self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    }
                     return Err(Stop::Abort(AbortReason::BoundsCheck));
                 }
                 Ok(Value::Ref(base.child(lo + *i as u64)))
@@ -1392,7 +1434,9 @@ impl<'a> Interp<'a> {
                 // `m[k]`: a missing key panics (design.md § Collection
                 // Core Methods).
                 let Some(i) = self.find_key(id, key, true)? else {
-                    self.events.push(Event::Abort(AbortReason::Panic));
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::Panic));
+                    }
                     return Err(Stop::Abort(AbortReason::Panic));
                 };
                 Ok(Value::Ref(Addr {
@@ -1833,7 +1877,9 @@ impl<'a> Interp<'a> {
                 let obj = self.live(*id)?;
                 obj.count += 1;
                 let c = obj.count;
-                self.events.push(Event::Retain(*id, c));
+                if self.trace {
+                    self.events.push(Event::Retain(*id, c));
+                }
                 Ok(Value::Shared(*id))
             }
             (TyKind::Intrinsic(IntrinsicTy::Map(k, val) | IntrinsicTy::SortedMap(k, val)), _) => {
@@ -2006,7 +2052,9 @@ impl<'a> Interp<'a> {
                 }
                 let (lo, hi) = (lo as usize, hi as usize);
                 if !s.is_char_boundary(lo) || !s.is_char_boundary(hi) {
-                    self.events.push(Event::Abort(AbortReason::Panic));
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::Panic));
+                    }
                     return Err(Stop::Abort(AbortReason::Panic));
                 }
                 let t = s[lo..hi].to_string();
@@ -2021,7 +2069,9 @@ impl<'a> Interp<'a> {
                     .then(|| s.get(i as usize..).and_then(|t| t.chars().next()))
                     .flatten();
                 let Some(c) = c else {
-                    self.events.push(Event::Abort(AbortReason::Panic));
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::Panic));
+                    }
                     return Err(Stop::Abort(AbortReason::Panic));
                 };
                 Ok(Value::Char(c))
@@ -2036,7 +2086,9 @@ impl<'a> Interp<'a> {
                     && s.is_char_boundary(lo as usize)
                     && s.is_char_boundary(hi as usize);
                 if !ok {
-                    self.events.push(Event::Abort(AbortReason::Panic));
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::Panic));
+                    }
                     return Err(Stop::Abort(AbortReason::Panic));
                 }
                 let t = s[lo as usize..hi as usize].to_string();
@@ -2082,7 +2134,9 @@ impl<'a> Interp<'a> {
         let fit = |me: &mut Self, v: i128| -> R<Value> {
             match it {
                 Some(it) if wrap(v, it) != v => {
-                    me.events.push(Event::Abort(AbortReason::Overflow));
+                    if me.trace {
+                        me.events.push(Event::Abort(AbortReason::Overflow));
+                    }
                     Err(Stop::Abort(AbortReason::Overflow))
                 }
                 _ => Ok(Value::Int(v)),
@@ -2126,7 +2180,9 @@ impl<'a> Interp<'a> {
             }
             ("rem_euclid" | "div_euclid", [Value::Int(a), Value::Int(b)]) => {
                 if *b == 0 {
-                    self.events.push(Event::Abort(AbortReason::DivByZero));
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::DivByZero));
+                    }
                     return Err(Stop::Abort(AbortReason::DivByZero));
                 }
                 if method == "rem_euclid" {
@@ -2179,7 +2235,9 @@ impl<'a> Interp<'a> {
         if (0..limit).contains(&i) {
             Ok(i as usize)
         } else {
-            self.events.push(Event::Abort(AbortReason::BoundsCheck));
+            if self.trace {
+                self.events.push(Event::Abort(AbortReason::BoundsCheck));
+            }
             Err(Stop::Abort(AbortReason::BoundsCheck))
         }
     }
@@ -2283,7 +2341,9 @@ impl<'a> Interp<'a> {
     fn alloc_box(&mut self, ty_name: &str, value: Value) -> Value {
         let a = AllocId(self.heap.len() as u32);
         self.heap.push(Some(HeapObj { count: 1, value }));
-        self.events.push(Event::Alloc(a, ty_name.to_string()));
+        if self.trace {
+            self.events.push(Event::Alloc(a, ty_name.to_string()));
+        }
         Value::Box(a)
     }
 
@@ -2746,7 +2806,9 @@ impl<'a> Interp<'a> {
                     self.events
                         .push(Event::Flag(p.local, matches!(v, Value::Bool(true))));
                 } else {
-                    self.events.push(Event::Init(self.place_str(body, p)));
+                    if self.trace {
+                        self.events.push(Event::Init(self.place_str(body, p)));
+                    }
                 }
                 Ok(())
             }
@@ -2848,7 +2910,9 @@ impl<'a> Interp<'a> {
             BorrowKind::Mut => f.writer || f.readers > 0,
         };
         if conflict {
-            self.events.push(Event::Abort(AbortReason::Panic));
+            if self.trace {
+                self.events.push(Event::Abort(AbortReason::Panic));
+            }
             return Err(Stop::Abort(AbortReason::Panic));
         }
         Ok(())
@@ -2879,7 +2943,9 @@ impl<'a> Interp<'a> {
                 }
                 if let Operand::Move(_) = o {
                     *self.slot_mut(&addr)? = Value::Uninit;
-                    self.events.push(Event::Move(self.place_str(body, p)));
+                    if self.trace {
+                        self.events.push(Event::Move(self.place_str(body, p)));
+                    }
                 }
                 Ok((v, ty))
             }
@@ -2917,7 +2983,9 @@ impl<'a> Interp<'a> {
                 let obj = self.live(a)?;
                 obj.count += 1;
                 let c = obj.count;
-                self.events.push(Event::Retain(a, c));
+                if self.trace {
+                    self.events.push(Event::Retain(a, c));
+                }
                 Ok(Value::Shared(a))
             }
             Rvalue::BinaryOp(op, a, b) => {
@@ -2947,7 +3015,9 @@ impl<'a> Interp<'a> {
                         let r = -i;
                         if wrap(r, it) != r {
                             // `-MIN` overflows, and C8 traps it.
-                            self.events.push(Event::Abort(AbortReason::Overflow));
+                            if self.trace {
+                                self.events.push(Event::Abort(AbortReason::Overflow));
+                            }
                             return Err(Stop::Abort(AbortReason::Overflow));
                         }
                         Ok(Value::Int(r))
@@ -2967,7 +3037,9 @@ impl<'a> Interp<'a> {
                     (CastKind::IntToInt, Value::Int(i), TyKind::Int(it)) => {
                         Ok(Value::Int(wrap(i, it)))
                     }
-                    (CastKind::IntToFloat, Value::Int(i), _) => Ok(Value::Float(i as f64)),
+                    (CastKind::IntToFloat, Value::Int(i), TyKind::Float(ft)) => {
+                        Ok(Value::Float(ft.round(i as f64)))
+                    }
                     (CastKind::FloatToInt, Value::Float(f), TyKind::Int(it)) => {
                         let (lo, hi) = range(it);
                         Ok(Value::Int(if f.is_nan() {
@@ -2977,10 +3049,7 @@ impl<'a> Interp<'a> {
                         }))
                     }
                     (CastKind::FloatToFloat, Value::Float(f), TyKind::Float(ft)) => {
-                        Ok(Value::Float(match ft {
-                            super::ty::FloatTy::F32 => f as f32 as f64,
-                            super::ty::FloatTy::F64 => f,
-                        }))
+                        Ok(Value::Float(ft.round(f)))
                     }
                     (CastKind::IntToChar, Value::Int(i), _) => match u8::try_from(i) {
                         Ok(b) => Ok(Value::Char(b as char)),
@@ -3026,7 +3095,9 @@ impl<'a> Interp<'a> {
                         let value = self.adt_value(*ty, *variant, vals);
                         let a = AllocId(self.heap.len() as u32);
                         self.heap.push(Some(HeapObj { count: 1, value }));
-                        self.events.push(Event::Alloc(a, self.tys.display(*ty)));
+                        if self.trace {
+                            self.events.push(Event::Alloc(a, self.tys.display(*ty)));
+                        }
                         Value::Shared(a)
                     }
                 })
@@ -3213,14 +3284,18 @@ impl<'a> Interp<'a> {
                         "drop of {what}, which is partly moved; elaboration must drop its parts"
                     ));
                 }
-                self.events.push(Event::Drop(what, self.tys.display(ty)));
+                if self.trace {
+                    self.events.push(Event::Drop(what, self.tys.display(ty)));
+                }
                 self.drop_at(&addr, ty)?;
                 *self.slot_mut(&addr)? = Value::Uninit;
                 Ok(Some(*target))
             }
             TerminatorKind::Return => Ok(None),
             TerminatorKind::Abort { reason } => {
-                self.events.push(Event::Abort(reason.clone()));
+                if self.trace {
+                    self.events.push(Event::Abort(reason.clone()));
+                }
                 Err(Stop::Abort(reason.clone()))
             }
             TerminatorKind::Unreachable => err("reached an unreachable terminator"),
@@ -3316,7 +3391,9 @@ impl<'a> Interp<'a> {
                 }
                 self.live(id)?;
                 self.heap[id.0 as usize] = None;
-                self.events.push(Event::Free(id));
+                if self.trace {
+                    self.events.push(Event::Free(id));
+                }
                 Ok(())
             }
             _ => Ok(()),
@@ -3328,8 +3405,17 @@ impl<'a> Interp<'a> {
     /// A fieldless variant, or one whose payload was moved out, owns
     /// nothing, so leaving it in place at a return or overwriting it is
     /// not a missing drop.
+    fn needs_drop(&self, ty: Ty) -> bool {
+        if let Some(&d) = self.needs_drop.borrow().get(&ty) {
+            return d;
+        }
+        let d = self.tys.needs_drop(ty);
+        self.needs_drop.borrow_mut().insert(ty, d);
+        d
+    }
+
     fn owns_drop(&self, v: &Value, ty: Ty) -> bool {
-        if !self.tys.needs_drop(ty) {
+        if !self.needs_drop(ty) {
             return false;
         }
         let (variant, parts) = match v {
@@ -3366,7 +3452,9 @@ impl<'a> Interp<'a> {
             let Some(f) = self.program.drop_impls.get(&a) else {
                 return err(format!("no Drop body registered for {}", adt.name));
             };
-            self.events.push(Event::DropBody(adt.name.clone()));
+            if self.trace {
+                self.events.push(Event::DropBody(adt.name.clone()));
+            }
             let f = f.clone();
             match (self.tys.kind(ty), &addr.root) {
                 // `fn T.drop(mut ref self)` on a `shared` type takes a
@@ -3418,7 +3506,9 @@ impl<'a> Interp<'a> {
         let obj = self.live(id)?;
         obj.count -= 1;
         let c = obj.count;
-        self.events.push(Event::Release(id, c));
+        if self.trace {
+            self.events.push(Event::Release(id, c));
+        }
         if c == 0 {
             let root = Addr {
                 root: Root::Heap(id),
@@ -3426,7 +3516,9 @@ impl<'a> Interp<'a> {
             };
             self.drop_adt(&root, ty, a)?;
             self.heap[id.0 as usize] = None;
-            self.events.push(Event::Free(id));
+            if self.trace {
+                self.events.push(Event::Free(id));
+            }
         }
         Ok(())
     }

@@ -28,6 +28,8 @@ pub enum IntTy {
     I16,
     I32,
     I64,
+    I128,
+    Isize,
     U8,
     U16,
     U32,
@@ -42,6 +44,8 @@ impl IntTy {
             IntTy::I16 => "i16",
             IntTy::I32 => "i32",
             IntTy::I64 => "i64",
+            IntTy::I128 => "i128",
+            IntTy::Isize => "isize",
             IntTy::U8 => "u8",
             IntTy::U16 => "u16",
             IntTy::U32 => "u32",
@@ -55,12 +59,16 @@ impl IntTy {
             IntTy::I8 | IntTy::U8 => 8,
             IntTy::I16 | IntTy::U16 => 16,
             IntTy::I32 | IntTy::U32 => 32,
-            IntTy::I64 | IntTy::U64 | IntTy::Usize => 64,
+            IntTy::I64 | IntTy::U64 | IntTy::Isize | IntTy::Usize => 64,
+            IntTy::I128 => 128,
         }
     }
 
     pub fn signed(self) -> bool {
-        matches!(self, IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64)
+        matches!(
+            self,
+            IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64 | IntTy::I128 | IntTy::Isize
+        )
     }
 }
 
@@ -71,6 +79,8 @@ impl IntTy {
             IntTy::I16 => SharedKind::Int(IntSize::I16),
             IntTy::I32 => SharedKind::Int(IntSize::I32),
             IntTy::I64 => SharedKind::Int(IntSize::I64),
+            IntTy::I128 => SharedKind::Int(IntSize::I128),
+            IntTy::Isize => SharedKind::Int(IntSize::Isize),
             IntTy::U8 => SharedKind::UInt(UIntSize::U8),
             IntTy::U16 => SharedKind::UInt(UIntSize::U16),
             IntTy::U32 => SharedKind::UInt(UIntSize::U32),
@@ -85,6 +95,8 @@ impl IntTy {
             SharedKind::Int(IntSize::I16) => IntTy::I16,
             SharedKind::Int(IntSize::I32) => IntTy::I32,
             SharedKind::Int(IntSize::I64) => IntTy::I64,
+            SharedKind::Int(IntSize::I128) => IntTy::I128,
+            SharedKind::Int(IntSize::Isize) => IntTy::Isize,
             SharedKind::UInt(UIntSize::U8) => IntTy::U8,
             SharedKind::UInt(UIntSize::U16) => IntTy::U16,
             SharedKind::UInt(UIntSize::U32) => IntTy::U32,
@@ -97,8 +109,131 @@ impl IntTy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FloatTy {
+    F16,
+    BF16,
     F32,
     F64,
+}
+
+impl FloatTy {
+    pub fn name(self) -> &'static str {
+        match self {
+            FloatTy::F16 => "f16",
+            FloatTy::BF16 => "bf16",
+            FloatTy::F32 => "f32",
+            FloatTy::F64 => "f64",
+        }
+    }
+
+    /// `x` rounded to this type's precision (to nearest, ties to even),
+    /// as the compiled backends round it. `f16` goes through `f32` first,
+    /// as the legacy interpreter does; `bf16` drops the low half of the
+    /// `f32` bits.
+    pub fn round(self, x: f64) -> f64 {
+        match self {
+            FloatTy::F16 => f16_bits_to_f64(f32_to_f16_bits(x as f32)),
+            FloatTy::BF16 => {
+                let f = x as f32;
+                let bits = f.to_bits();
+                let out: u16 = if f.is_nan() {
+                    ((bits | 0x0040_0000) >> 16) as u16
+                } else {
+                    let lsb = (bits >> 16) & 1;
+                    (bits.wrapping_add(0x7FFF + lsb) >> 16) as u16
+                };
+                f32::from_bits((out as u32) << 16) as f64
+            }
+            FloatTy::F32 => x as f32 as f64,
+            FloatTy::F64 => x,
+        }
+    }
+}
+
+// The f16 conversions, copied from the legacy interpreter
+// (`interpreter/eval_expr.rs`), which is frozen and goes away at M3.
+
+/// f32 → f16 bit pattern with round-to-nearest-even, handling
+/// Inf/NaN/overflow/subnormals/underflow.
+fn f32_to_f16_bits(x: f32) -> u16 {
+    let b = x.to_bits();
+    let sign = ((b >> 16) & 0x8000) as u16;
+    let exp = ((b >> 23) & 0xFF) as i32;
+    let frac = b & 0x007F_FFFF;
+    if exp == 0xFF {
+        // Inf / NaN (quiet the NaN, keep the top payload bits)
+        return if frac != 0 {
+            sign | 0x7E00 | ((frac >> 13) as u16)
+        } else {
+            sign | 0x7C00
+        };
+    }
+    if exp == 0 && frac == 0 {
+        return sign;
+    }
+    let e = exp - 127;
+    if e >= 16 {
+        return sign | 0x7C00; // ≥ 2^16 → Inf
+    }
+    if e >= -14 {
+        // Normal f16 range: 24-bit significand → 11 bits, RNE on the cut.
+        let mant = 0x0080_0000 | frac;
+        let base = mant >> 13;
+        let rem = mant & 0x1FFF;
+        let mut r = base;
+        if rem > 0x1000 || (rem == 0x1000 && (base & 1) == 1) {
+            r += 1;
+        }
+        let mut ee = (e + 15) as u32;
+        let mut mm = r & 0x3FF;
+        if r == 0x800 {
+            // Mantissa carry (0x7FF+1): bump the exponent.
+            ee += 1;
+            mm = 0;
+        }
+        if ee >= 31 {
+            return sign | 0x7C00; // rounded past 65504 → Inf
+        }
+        return sign | ((ee as u16) << 10) | (mm as u16);
+    }
+    if e < -25 {
+        return sign; // below half the smallest subnormal → ±0
+    }
+    // Subnormal f16: shift the significand into the subnormal position,
+    // RNE on the cut. (`r` reaching 0x400 IS the smallest normal — the
+    // bit pattern composes correctly.)
+    let mant = 0x0080_0000u32 | frac;
+    let shift = (13 + (-14 - e)) as u32;
+    let base = mant >> shift;
+    let rem = mant & ((1u32 << shift) - 1);
+    let half = 1u32 << (shift - 1);
+    let mut r = base as u16;
+    if rem > half || (rem == half && (r & 1) == 1) {
+        r += 1;
+    }
+    sign | r
+}
+
+/// f16 bit pattern → f64 (exact — every f16 is an f64).
+fn f16_bits_to_f64(h: u16) -> f64 {
+    let neg = h & 0x8000 != 0;
+    let exp = ((h >> 10) & 0x1F) as i32;
+    let mant = (h & 0x3FF) as f64;
+    let v = if exp == 31 {
+        if mant != 0.0 {
+            f64::NAN
+        } else {
+            f64::INFINITY
+        }
+    } else if exp == 0 {
+        mant * (2.0f64).powi(-24)
+    } else {
+        (1.0 + mant / 1024.0) * (2.0f64).powi(exp - 15)
+    };
+    if neg {
+        -v
+    } else {
+        v
+    }
 }
 
 /// An ADT's index: the [`DefId`] it is registered under.
@@ -222,6 +357,8 @@ impl TyInterner {
             TyKind::Bool => SharedKind::Bool,
             TyKind::Char => SharedKind::Char,
             TyKind::Int(i) => i.to_shared(),
+            TyKind::Float(FloatTy::F16) => SharedKind::Float(FloatSize::F16),
+            TyKind::Float(FloatTy::BF16) => SharedKind::Float(FloatSize::BF16),
             TyKind::Float(FloatTy::F32) => SharedKind::Float(FloatSize::F32),
             TyKind::Float(FloatTy::F64) => SharedKind::Float(FloatSize::F64),
             TyKind::Unit => SharedKind::Unit,
@@ -301,6 +438,8 @@ impl TyInterner {
                 Some(i) => TyKind::Int(i),
                 None => TyKind::Other,
             },
+            SharedKind::Float(FloatSize::F16) => TyKind::Float(FloatTy::F16),
+            SharedKind::Float(FloatSize::BF16) => TyKind::Float(FloatTy::BF16),
             SharedKind::Float(FloatSize::F32) => TyKind::Float(FloatTy::F32),
             SharedKind::Float(FloatSize::F64) => TyKind::Float(FloatTy::F64),
             SharedKind::Unit => TyKind::Unit,
@@ -413,8 +552,7 @@ impl TyInterner {
             TyKind::Bool => "bool".into(),
             TyKind::Char => "char".into(),
             TyKind::Int(i) => i.name().into(),
-            TyKind::Float(FloatTy::F32) => "f32".into(),
-            TyKind::Float(FloatTy::F64) => "f64".into(),
+            TyKind::Float(f) => f.name().into(),
             TyKind::Unit => "()".into(),
             TyKind::Never => "!".into(),
             TyKind::Str => "str".into(),

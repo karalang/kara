@@ -6912,7 +6912,12 @@ fn unit_const(unit: Ty) -> Operand {
 /// on the MIR interpreter; or the first stage that refused it.
 pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
     let lowered = build_source(src)?;
-    Ok(interp::run(&lowered.program, &lowered.tys, "main", vec![]))
+    Ok(interp::run_untraced(
+        &lowered.program,
+        &lowered.tys,
+        "main",
+        vec![],
+    ))
 }
 
 /// Check one source file, build its MIR and elaborate drops; or the first
