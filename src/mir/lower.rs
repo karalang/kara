@@ -389,6 +389,37 @@ impl<'a> Lcx<'a> {
         Some(self.tys.tcx().intern(kind))
     }
 
+    /// The method `d` resolves to, or the same method of another impl of
+    /// the same trait on the same type that has a body here. The baked
+    /// stdlib's impls are not lowered; a library source re-states one in
+    /// Kāra (`impl Display for AllocError` is the baked `impl Display#0`
+    /// and the appended source's `impl Display#1`), and calls resolved to
+    /// the baked one run the source one.
+    fn lowered_def(&self, d: DefId) -> Option<DefId> {
+        if self.fns.contains_key(&d) {
+            return Some(d);
+        }
+        let segs = &self.defs.table.get(d).path.segments;
+        let n = segs.len();
+        if n < 2 {
+            return None;
+        }
+        let (label, _) = segs[n - 2].rsplit_once('#')?;
+        if !label.starts_with("impl") {
+            return None;
+        }
+        let mut path = segs.clone();
+        for k in 0..8 {
+            path[n - 2] = format!("{label}#{k}");
+            if let Some(t) = self.defs.table.lookup(&DefPath::new(path.clone())) {
+                if self.fns.contains_key(&t) {
+                    return Some(t);
+                }
+            }
+        }
+        None
+    }
+
     /// The type whose impl defines `d` (`Command` for `Command.new`).
     fn def_owner(&self, d: DefId) -> Option<String> {
         let segs = &self.defs.table.get(d).path.segments;
@@ -4000,6 +4031,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         path.push(format!("impl {tr}#0"));
         path.push(method.to_string());
         let d = self.lcx.defs.table.lookup(&DefPath::new(path))?;
+        let d = self.lcx.lowered_def(d)?;
         let item = self.lcx.fns.get(&d)?;
         Some((
             d,
@@ -6831,6 +6863,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.user_method_call(e, object, d, inst_args, args, dest)
             }
             Callee::Def(d) => {
+                if let Some(t) = self.lcx.lowered_def(d) {
+                    let inst_args = self.instance_args(e.span, &substs)?;
+                    return self.user_method_call(e, object, t, inst_args, args, dest);
+                }
                 let key = format!("{}.{method}", self.lcx.def_name(d));
                 self.builtin_method(e, &key, object, method, args, dest)
             }

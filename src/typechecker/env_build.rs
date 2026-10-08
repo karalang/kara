@@ -892,7 +892,11 @@ impl<'a> super::TypeChecker<'a> {
                 Item::StructDef(s) => self.env_add_struct(s),
                 Item::EnumDef(e) => self.env_add_enum(e),
                 Item::TraitDef(t) => self.env_add_trait(t),
-                Item::ImplBlock(i) => self.env_add_impl(i),
+                Item::ImplBlock(i) => {
+                    let n = self.env.impls.len();
+                    self.env_add_impl(i);
+                    self.baked_impls.extend(n..self.env.impls.len());
+                }
                 // Baked `distinct type`s (e.g. `Symbol`, `ExitCode`) register
                 // their derived-trait set + base type the same way user
                 // distinct types do, so downstream phases see e.g. `Symbol`'s
@@ -2915,7 +2919,7 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        self.env.add_impl(ImplInfo {
+        let info = ImplInfo {
             target_type: type_name,
             do_not_recommend: imp.do_not_recommend,
             target_args,
@@ -2926,7 +2930,23 @@ impl<'a> super::TypeChecker<'a> {
             generic_params: imp.generic_params.clone(),
             where_clause: imp.where_clause.clone(),
             target_span: Some(imp.target_type.span),
-        });
+        };
+        // On the MIR pipeline a library source re-states a baked stdlib
+        // trait impl in Kāra (`impl Display for AllocError`); it replaces the
+        // baked entry rather than making every call ambiguous. A program's
+        // own impl of the same pair is not baked and is left alone.
+        if self.library_methods_from_source && info.trait_name.is_some() {
+            if let Some(i) = self.env.impls.iter().enumerate().position(|(i, e)| {
+                self.baked_impls.contains(&i)
+                    && e.trait_name == info.trait_name
+                    && e.target_type == info.target_type
+                    && e.target_args == info.target_args
+            }) {
+                self.env.impls[i] = info;
+                return;
+            }
+        }
+        self.env.add_impl(info);
     }
 
     /// Theme-4 overlap detection. Returns `Some(..)` iff registering an impl

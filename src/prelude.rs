@@ -782,6 +782,10 @@ pub const LIBRARY_SOURCES: &[(&str, &str)] = &[
         "source/iter.kara",
         include_str!("../runtime/stdlib/source/iter.kara"),
     ),
+    (
+        "source/alloc_error.kara",
+        include_str!("../runtime/stdlib/source/alloc_error.kara"),
+    ),
 ];
 
 /// Embedded stdlib sources, keyed by their on-disk basename (relative to

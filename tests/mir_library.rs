@@ -176,3 +176,22 @@ fn main() {
 "#;
     assert_runs(src, "e\nnone\n");
 }
+
+/// A baked stdlib trait impl re-stated as a library source runs on the MIR
+/// pipeline: `AllocError` prints through its written-out `Display`, by
+/// interpolation and by `to_string`, not as the derived variant name.
+#[test]
+fn alloc_error_displays_through_its_library_impl() {
+    let src = r#"
+fn main() {
+    println(f"{AllocError.CapacityOverflow}");
+    let e = AllocError.OutOfMemory { requested_bytes: 64 };
+    println(f"{e}");
+    println(e.to_string());
+}
+"#;
+    assert_runs(
+        src,
+        "capacity overflow\nout of memory: 64 bytes\nout of memory: 64 bytes\n",
+    );
+}

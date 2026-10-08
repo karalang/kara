@@ -1,0 +1,15 @@
+// `AllocError`'s `Display`, as Kāra (redesign A2), for the MIR pipeline.
+//
+// The baked `../alloc_error.kara` states the same impl for the legacy
+// backends, which do not read this file; the two become one when the legacy
+// pipeline is deleted (M3). The MIR builder lowers no baked impl, so a call
+// resolved to that one runs this one.
+
+impl Display for AllocError {
+    fn to_string(ref self) -> String {
+        match self {
+            AllocError.OutOfMemory { requested_bytes } => f"out of memory: {requested_bytes} bytes",
+            AllocError.CapacityOverflow => "capacity overflow",
+        }
+    }
+}
