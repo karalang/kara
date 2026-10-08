@@ -49,6 +49,7 @@ Every DIFF and REJECT is explained; none points at the model.
   directory), `MODEL_TIMEOUT` seconds per program (use 3 for the whole corpus).
   Verdicts: SAME, ORDER (same lines, other order), ORDER-UNSPEC (differs only in Map drop order),
   DIFF, V2-REJECT, LEGACY-REJECT, UNSUP, PARSE, CRASH.
+- **D5 (2026-10-08).** `kparse.py` reads a bare parameter `x: T` and a bare `self` as borrowed, and `own T` / `own self` as owned. Sources written before the D5 migration used bare for owned: run them with `KARA_MODEL_BARE_PARAM=own`. `emit` writes `own T` for an owned non-Copy parameter, so the drop matrix and the core pins that test a callee-owned parameter say so explicitly. `validate.py` gives core 33 agree, 6 unsupported, drop-matrix 256/256 under either reading.
 - `validate.py`: the model against `corpus/core` and `corpus/drop-matrix`; exits 1 on a FAIL.
   Result: core 30 agree, 3 unsupported (escaping capture, `par`, nonescaping param);
   drop-matrix 256/256. Re-run 2026-10-07 with D1: core 32 agree, 6 unsupported, drop-matrix 256/256, with the flags on or off. Fault injection (fields dropped first to last) gives 113 matrix failures.

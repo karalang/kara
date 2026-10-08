@@ -185,7 +185,7 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
         d = Path(tmp)
         (d / "source.kara").write_text(src)
         errs = check_errors(args.karac, d, env, args.timeout)
-        fixed = None
+        fixed, legacy_interp = None, None
         if expect.startswith("error"):
             want = expect.split(":", 1)[1] if ":" in expect else ""
             codes = [e.get("code") for e in errs]
@@ -194,7 +194,15 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
             r = sh([args.karac, "__mir-run", "source.kara"], d, env, args.timeout)
             if r is not None and r.returncode == 3 and b"error[mir]: build" not in r.stderr:
                 return {**out, "class": "a", "bucket": "a:refused"}
-            return {**out, "class": "e", "bucket": f"e-not-refused:{want or 'any'}"}
+            if want != "codegen":
+                return {**out, "class": "e", "bucket": f"e-not-refused:{want or 'any'}"}
+            # `error:codegen` records only that legacy-build's codegen declined
+            # the program, which is no language rule. `karac check` accepts
+            # it, so it is judged on its output, with legacy's interpreter as
+            # the legacy baseline.
+            li = sh([args.karac, "run", "--interp", "source.kara"], d, env, args.timeout)
+            legacy_interp = (li.stdout, li.returncode) if li is not None else (None, None)
+            expect = "stdout"
         if errs:
             codes = sorted({diag_key(e) for e in errs})
             if not any(is_v2(e) for e in errs):
@@ -220,6 +228,9 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
     legacy = (entry / "legacy.out").read_bytes() if (entry / "legacy.out").exists() else None
     want_exit = int(expect.split(":", 1)[1]) if expect.startswith("panic:") else int(meta.get("exit", 0))
     legacy_exit = int(meta.get("legacy_exit", want_exit))
+    if legacy_interp is not None:
+        legacy, legacy_exit = legacy_interp
+        res["legacy_interp"] = legacy_exit
     spec, spec_exit, as_set = None, want_exit, False
     if meta.get("expected_from") in SPEC_SOURCES and (entry / "expected.out").exists():
         spec = (entry / "expected.out").read_bytes()
@@ -279,6 +290,9 @@ def write_back(entry: Path, r: dict, sha: str):
         (entry / "expected.out").write_bytes(r["expected"])
         if r["bucket"].endswith("e-spec"):
             meta["expected_from"] = "spec"
+        elif r.get("legacy_interp") is not None:
+            meta["expected_from"] = "legacy-interp"
+            meta["exit"] = r["legacy_interp"]
     if r["bucket"].endswith("e-spec"):
         note += " " + E_SPEC_NOTE
     if r["bucket"].endswith("c-unreviewed"):

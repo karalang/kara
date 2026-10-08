@@ -2,7 +2,7 @@ struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
 struct W { k: i64, a: R, b: R }
 impl Drop for W { fn drop(mut ref self) { println(f"w{self.k}"); } }
-fn consume(x: W) {
+fn consume(x: own W) {
     let l = R { id: 9 };
     println("in");
 }

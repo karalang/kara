@@ -37,11 +37,11 @@ kata/example file stem. A second distinct program in the same test gets `_2`.
 |---|---|
 | `source` | `tests/<file>.rs::<test>`, or the kata/example path |
 | `dedup_of` | every other test whose program text is identical |
-| `expect` | `stdout`, `panic:<exit>`, `error:<code>` (`codegen` = any refusal), or `skip` |
+| `expect` | `stdout`, `panic:<exit>`, `error:<code>` (`codegen` = legacy-build declined it; the mir backends accept a check refusal or judge the output), or `skip` |
 | `exit` | expected exit code |
 | `tags` | see below |
 | `class` | `a`..`e` once classified against the MIR interpreter; `unknown` until then |
-| `expected_from` | `assert` (the test's own string literal matches), `legacy-run`, `spec` (the drop model), `pin`, `mirror` (the same-stem Python mirror, `apps/`), or `decision` (a spec ruling recorded in `note`) |
+| `expected_from` | `assert` (the test's own string literal matches), `legacy-run`, `legacy-interp` (legacy-build's codegen declined it, so legacy's interpreter is the baseline), `spec` (the drop model), `pin`, `mirror` (the same-stem Python mirror, `apps/`), or `decision` (a spec ruling recorded in `note`) |
 | `legacy_backend` | the backend today's suite used: `legacy-interp` for `tests/interpreter`, else `legacy-build` |
 | `rules` | core-semantics sections the program pins |
 | `backends` | empty = all; otherwise the only backends it applies to |
@@ -49,6 +49,7 @@ kata/example file stem. A second distinct program in the same test gets `_2`.
 | `note` | free text |
 | `bucket` | the classifier rule that decided `class`, or the failure (`mir-gap:<construct>`, `timeout`, `check-refuses:<code>`, ...) |
 | `classified_with` | the karac commit the classification ran at |
+| `legacy_expect` | legacy's expectation where v2 accepts what legacy refused (`expect` is then v2's); the legacy backends use it |
 | `v2_reject` | the reason v2 refuses a program legacy ran (a core-semantics rule); the mir backends and the classifier expect a refusal |
 | `fixed_by_classify` | `true` when `karac fix` rewrote `source.kara` (class b); the extracted text is `source.orig.kara` |
 

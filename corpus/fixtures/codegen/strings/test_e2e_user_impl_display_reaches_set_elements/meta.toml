@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "v2 Display: collections print no type prefix (design.md §9 'A value renders the same at every depth'; review thread decision 2026-10-08)"
 bucket = "e-differs:stdout"
-classified_with = "078a05d91"
+classified_with = "5050532d8"
 model_rev = "7b8ab2eb"

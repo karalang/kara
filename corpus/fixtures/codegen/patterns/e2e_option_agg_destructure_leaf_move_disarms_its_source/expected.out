@@ -1,0 +1,48 @@
+rebind
+dR2:s2:2
+  qtrue
+dR102:s102:2
+ret
+dR3:s3:2
+  ztrue
+dR103:s103:2
+twohop
+dR6:s6:2
+  wtrue
+dR106:s106:2
+loopreb
+dR7:s7:2
+dR107:s107:2
+dR7:s7:2
+dR107:s107:2
+  lr
+slot0
+  k5true
+dR8:s8:2
+matched
+dR4:s4:2
+  g104
+dR104:s104:2
+arg
+dR14:s14:2
+dR114:s114:2
+  e114
+stay
+dR5:s5:2
+  ytrue
+dR105:s105:2
+plain
+dR9:s9:2
+  p109
+dR109:s109:2
+instr
+dR15:s15:2
+  itrue
+fld
+  ftrue
+dR113:s113:2
+dR13:s13:2
+loc
+  otrue
+dR11:s11:2
+done

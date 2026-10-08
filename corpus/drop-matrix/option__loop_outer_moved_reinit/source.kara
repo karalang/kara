@@ -1,6 +1,6 @@
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
-fn consume(x: Option[R]) {
+fn consume(x: own Option[R]) {
     let l = R { id: 9 };
     println("in");
 }

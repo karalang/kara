@@ -1,6 +1,6 @@
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
-fn pass(x: Option[R]) -> Option[R] {
+fn pass(x: own Option[R]) -> Option[R] {
     println("pass");
     x
 }

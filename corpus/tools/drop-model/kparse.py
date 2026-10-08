@@ -9,6 +9,7 @@ program as skipped, never as passing.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -299,6 +300,12 @@ class Program:
 KEYWORDS = {"let", "mut", "fn", "if", "else", "match", "while", "for", "in", "loop", "return",
             "break", "continue", "struct", "enum", "impl", "trait", "ref", "true", "false",
             "defer", "errdefer", "as", "pub", "const", "shared", "move", "self", "use", "import"}
+
+
+# D5 (2026-10-07): a bare parameter `x: T` and a bare `self` borrow; `own T` and
+# `own self` are owned. Sources written before the migration used bare for owned:
+# run them with KARA_MODEL_BARE_PARAM=own.
+BARE_MODE = "own" if os.environ.get("KARA_MODEL_BARE_PARAM") == "own" else "ref"
 
 
 class Parser:
@@ -619,9 +626,12 @@ class Parser:
         recv = None
         while not self.eat(")"):
             self.attrs()
-            if self.at("self"):
-                self.i += 1
+            if self.at("own") and self.at("self", 1):
+                self.i += 2
                 recv = "own"
+            elif self.at("self"):
+                self.i += 1
+                recv = BARE_MODE
             elif self.at("ref") and self.at("self", 1):
                 self.i += 2
                 recv = "ref"
@@ -639,8 +649,9 @@ class Parser:
                 self.expect(":")
                 if self.at("escaping") or self.at("Fn") or self.at("fn"):
                     raise Unsupported("function-typed parameters")
+                owned = self.eat("own")
                 t = self.ty()
-                mode = "own"
+                mode = "own" if owned else BARE_MODE
                 if t[0] == "ref":
                     mode, t = "ref", t[1]
                 elif t[0] == "mutref":

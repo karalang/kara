@@ -26,7 +26,11 @@ lines as a set), then legacy.out. An entry the model rejects (model_verdict
 V2-REJECT) is not run: `karac check` must refuse it. When check accepts it the
 verdict is MREJ ("model rejects, check accepts"), neither a pass nor a fail:
 each one is a checker gap or a model bug. MREJ is judged even before a mir
-backend has a command, since it needs only `karac check`.
+backend has a command, since it needs only `karac check`. `error:codegen` says
+only that legacy-build's codegen declined the program: on a mir backend it
+passes when `karac check` refuses, and is otherwise judged on its output. The
+interpreter backends skip kata bench variants (`bench`), which measure the
+compiled backend.
 
 Output: one `PASS|FAIL|SKIP|MREJ <entry>` line per program (FAIL lines carry the
 reason), then a summary by class and by tag, and the number of programs
@@ -56,8 +60,19 @@ def judge(entry: Path, corpus: Path, args) -> dict:
     if expect == "skip" or (meta.get("backends") and backend not in meta["backends"]):
         return {**base, "verdict": "SKIP", "why": expect if expect == "skip" else "backend excluded", "ran": False}
     mir = backend.startswith("mir-")
+    if not mir and meta.get("legacy_expect"):
+        expect = meta["legacy_expect"]  # legacy refuses what v2 accepts
     if mir and meta.get("v2_reject"):
         expect = "error"  # legacy ran it; v2 refuses it
+    if mir and expect == "error:codegen":
+        # Only legacy-build's codegen declined it: no language rule. A check
+        # refusal still passes; otherwise it is judged on its output.
+        if check_refuses(entry, args):
+            return {**base, "verdict": "PASS", "why": "", "ran": True}
+        expect = "stdout"
+    if backend in ("mir-interp", "legacy-interp") and "bench" in meta.get("tags", []):
+        # A kata's bench variant measures the compiled backend; no interpreter finishes it.
+        return {**base, "verdict": "SKIP", "why": "AOT throughput workload", "ran": False}
     if mir and meta.get("model_verdict") == "V2-REJECT" and not expect.startswith("error"):
         if check_refuses(entry, args):
             return {**base, "verdict": "PASS", "why": "", "ran": True}
@@ -75,6 +90,8 @@ def judge(entry: Path, corpus: Path, args) -> dict:
         code = expect.split(":", 1)[1] if ":" in expect else ""
         if res["status"] != "refused":
             why = f"expected a refusal ({code}), program ran (exit {res['exit']})"
+        elif mir and b"error[mir]: build" in res["stderr"]:
+            why = f"expected a refusal ({code}); check accepts and MIR cannot build it yet"
         elif code not in ("codegen", "") and code not in check_codes(entry, args) + [None]:
             why = f"refused, but without {code}"
     else:

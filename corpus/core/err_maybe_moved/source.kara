@@ -1,4 +1,4 @@
-fn take(s: String) { println(s); }
+fn take(s: own String) { println(s); }
 fn f(c: bool) {
     let s = "hi".to_string();
     if c { take(s); }

@@ -459,7 +459,9 @@ def emit(prog: Program) -> str:
         vs = [v if not tys else f"{v}(" + ", ".join(tys) + ")" for v, tys in ed.variants]
         em.w(0, f"enum {ed.name} {{ " + ", ".join(vs) + " }")
     for fn in prog.fns:
-        ps = ", ".join(f"{p.name}: {'ref ' if p.mode == 'ref' else ''}{p.ty}" for p in fn.params)
+        # D5: a bare parameter borrows, so an owned one is written `own T` (a Copy one needs neither).
+        ps = ", ".join(f"{p.name}: {'ref ' if p.mode == 'ref' else '' if p.ty in ('i64', 'bool') else 'own '}{p.ty}"
+                       for p in fn.params)
         ret = f" -> {fn.ret}" if fn.ret else ""
         em.w(0, f"fn {fn.name}({ps}){ret} {{")
         em.block(fn.body, 1)
