@@ -55,6 +55,17 @@ impl Validator<'_> {
                 self.err(format!("_{i}: a drop flag must be bool"));
             }
         }
+        for (i, r) in body.par_regions.iter().enumerate() {
+            self.loc = format!("par#{i}");
+            if r.branches.is_empty() {
+                self.err("a par region needs at least one branch");
+            }
+            for b in r.branches.iter().flatten() {
+                if b.index() >= body.blocks.len() {
+                    self.err(format!("{b} does not exist"));
+                }
+            }
+        }
         if body.blocks.is_empty() {
             self.loc = "body".into();
             self.err("no blocks");

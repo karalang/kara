@@ -90,6 +90,29 @@ pub struct SourceScopeData {
     pub span: Span,
 }
 
+/// What a [`ParRegion`] came from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParKind {
+    /// `par { a, b }` (one branch per expression) or the older
+    /// `par { s1; s2; }` (one branch per statement).
+    Block,
+    /// `par for`, with its `limit` when it has one.
+    For { limit: Option<Operand> },
+}
+
+/// The blocks of a `par` construct's branches, for the effect-conflict
+/// check (C10). A `Block` region has one entry per branch; a `For` region
+/// has one, the body of one iteration (the push onto the result `Vec` is
+/// outside it). The blocks are those the builder opened while lowering the
+/// branch, its exits included; drop elaboration adds blocks it does not
+/// list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParRegion {
+    pub kind: ParKind,
+    pub span: Span,
+    pub branches: Vec<Vec<BasicBlock>>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Body {
     pub instance: InstanceId,
@@ -99,6 +122,9 @@ pub struct Body {
     pub scopes: Vec<SourceScopeData>,
     pub phase: MirPhase,
     pub span: Span,
+    /// The `par` regions, outer before inner (a region nested in another's
+    /// branch comes after it).
+    pub par_regions: Vec<ParRegion>,
 }
 
 impl Body {

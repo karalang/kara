@@ -549,6 +549,14 @@ impl Parser {
             i += 1;
         }
 
+        // `par` regions: `par#0 block [bb2 bb3] [bb4]`, `par#1 for [bb6]`
+        // or `par#1 for [bb6] limit copy _3`. Read once the locals exist.
+        let par_start = i;
+        while lines.get(i).is_some_and(|l| l.code.starts_with("par#")) {
+            i += 1;
+        }
+        let par_lines = &lines[par_start..i];
+
         let mut body = Body {
             instance: InstanceId {
                 def: self.fns[&name],
@@ -564,7 +572,14 @@ impl Parser {
             }],
             phase: MirPhase::Built,
             span: SourceInfo::dummy().span,
+            par_regions: Vec::new(),
         };
+        for line in par_lines {
+            let r = self
+                .par_region(&body, &line.code)
+                .map_err(|e| at(line, e))?;
+            body.par_regions.push(r);
+        }
 
         // Blocks, until the body's closing brace.
         loop {
@@ -879,6 +894,50 @@ impl Parser {
         } else {
             Err(format!("expected an operand at `{}`", c.rest()))
         }
+    }
+
+    fn par_region(&mut self, body: &Body, code: &str) -> Result<ParRegion, String> {
+        let mut c = Cur::new(code);
+        c.expect("par#")?;
+        let n = c.number()? as usize;
+        if n != body.par_regions.len() {
+            return Err(format!(
+                "expected par#{}, found par#{n}",
+                body.par_regions.len()
+            ));
+        }
+        let is_for = if c.eat_kw("block") {
+            false
+        } else if c.eat_kw("for") {
+            true
+        } else {
+            return Err(format!("expected `block` or `for` at `{}`", c.rest()));
+        };
+        let mut branches = Vec::new();
+        while c.eat("[") {
+            let mut bs = Vec::new();
+            while !c.eat("]") {
+                bs.push(c.block()?);
+            }
+            branches.push(bs);
+        }
+        // The limit comes last: an operand followed by `[` would read as
+        // an index.
+        let kind = if !is_for {
+            ParKind::Block
+        } else if c.eat_kw("limit") {
+            ParKind::For {
+                limit: Some(self.operand(body, &mut c)?),
+            }
+        } else {
+            ParKind::For { limit: None }
+        };
+        c.done()?;
+        Ok(ParRegion {
+            kind,
+            span: SourceInfo::dummy().span,
+            branches,
+        })
     }
 
     fn operands_until(

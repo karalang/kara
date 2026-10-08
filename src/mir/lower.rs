@@ -896,7 +896,7 @@ struct Bx<'l, 'a> {
     ty_hints: FxHashMap<NodeId, Ty>,
     /// The `par for` whose body is lowered next: its body, the `Vec` local
     /// that collects the bodies' values, and that `Vec`'s type.
-    par_acc: Option<(*const Block, Local, Ty)>,
+    par_acc: Option<(*const Block, Local, Ty, usize)>,
     /// Each `old(e)` of this function's `ensures` clauses: `e`'s value,
     /// taken on entry.
     old_vals: FxHashMap<NodeId, Local>,
@@ -1643,25 +1643,6 @@ impl<'l, 'a> Bx<'l, 'a> {
             None => self.assign(dest, Rvalue::Use(unit_const(self.unit()))),
         }
         self.pop_scope()
-    }
-
-    /// `par { .. }`, run in order: its branches' bindings join the
-    /// enclosing scope, so they live on past the block.
-    fn par_into(&mut self, block: &'a Block, dest: Place) -> R<()> {
-        for s in &block.stmts {
-            self.stmt(s)?;
-        }
-        match &block.final_expr {
-            Some(e) => {
-                self.push_scope();
-                self.expr_into(e, dest)?;
-                self.pop_scope()
-            }
-            None => {
-                self.assign(dest, Rvalue::Use(unit_const(self.unit())));
-                Ok(())
-            }
-        }
     }
 
     fn stmt(&mut self, s: &'a Stmt) -> R<()> {
@@ -3065,7 +3046,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             // The branches of a `par` block run one after another, in source
             // order: one of the schedules the block allows (the sequential
             // scheduler's).
-            ExprKind::Par(b) => self.par_into(b, dest),
+            ExprKind::Par(b) => self.par_block(e, b, dest),
             ExprKind::RepeatLiteral { value, count, .. } => {
                 self.repeat_literal(e, value, count, dest)
             }
@@ -4041,13 +4022,13 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// pushed onto the `Vec` the loop builds.
     fn for_body(&mut self, body: &'a Block) -> R<()> {
         let acc = match self.par_acc {
-            Some((b, acc, vt)) if std::ptr::eq(b, body) => {
+            Some((b, acc, vt, region)) if std::ptr::eq(b, body) => {
                 self.par_acc = None;
-                Some((acc, vt))
+                Some((acc, vt, region))
             }
             _ => None,
         };
-        let Some((acc, vt)) = acc else {
+        let Some((acc, vt, region)) = acc else {
             let t = self.unit();
             let tmp = self.temp(t);
             return self.block_into(body, Place::local(tmp));
@@ -4060,7 +4041,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => return self.unsupported(body.span, "this `par for`"),
         };
         let v = self.temp(et);
+        let entry = self.branch_begin();
         self.block_into(body, Place::local(v))?;
+        self.branch_end(region, entry);
         let rt = self.tys().tcx().reference(vt, true);
         let r = self.temp(rt);
         self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(acc)));
@@ -4075,6 +4058,76 @@ impl<'l, 'a> Bx<'l, 'a> {
             ],
             Place::local(u),
         );
+        Ok(())
+    }
+
+    /// Opens a `par` region whose branches are filled in as they lower.
+    fn open_par_region(&mut self, kind: ParKind, span: Span) -> usize {
+        self.b.par_regions.push(ParRegion {
+            kind,
+            span,
+            branches: Vec::new(),
+        });
+        self.b.par_regions.len() - 1
+    }
+
+    /// Starts a branch in a block of its own, so the branch's blocks are
+    /// exactly those opened from here to [`Self::branch_end`].
+    fn branch_begin(&mut self) -> BasicBlock {
+        let entry = self.b.new_block();
+        self.goto(entry);
+        self.cur = entry;
+        entry
+    }
+
+    /// Ends the branch begun at `entry`, recording its blocks in `region`,
+    /// and continues in a fresh block.
+    fn branch_end(&mut self, region: usize, entry: BasicBlock) {
+        let end = self.b.block_count() as u32;
+        let blocks = (entry.0..end).map(BasicBlock).collect();
+        self.b.par_regions[region].branches.push(blocks);
+        let after = self.b.new_block();
+        self.goto(after);
+        self.cur = after;
+    }
+
+    /// `par { a, b }`: each expression is a branch and the value is the
+    /// tuple of theirs. The older `par { s1; s2; }` has one branch per
+    /// statement. Branches that do not conflict may run in any order, so
+    /// running them in source order is one of the allowed schedules.
+    fn par_block(&mut self, e: &'a Expr, b: &'a Block, dest: Place) -> R<()> {
+        let region = self.open_par_region(ParKind::Block, e.span);
+        if b.stmts.is_empty() {
+            if let Some(ExprKind::Tuple(es)) = b.final_expr.as_deref().map(|x| &x.kind) {
+                if !es.is_empty() {
+                    let mut ops = Vec::new();
+                    for x in es {
+                        let entry = self.branch_begin();
+                        ops.push(self.expr_operand(x)?);
+                        self.branch_end(region, entry);
+                    }
+                    self.assign(dest, Rvalue::Aggregate(AggregateKind::Tuple, ops));
+                    return Ok(());
+                }
+            }
+        }
+        // The branches' bindings join the enclosing scope, so they live on
+        // past the block.
+        for s in &b.stmts {
+            let entry = self.branch_begin();
+            self.stmt(s)?;
+            self.branch_end(region, entry);
+        }
+        match &b.final_expr {
+            Some(x) => {
+                let entry = self.branch_begin();
+                self.push_scope();
+                self.expr_into(x, dest)?;
+                self.pop_scope()?;
+                self.branch_end(region, entry);
+            }
+            None => self.assign(dest, Rvalue::Use(unit_const(self.unit()))),
+        }
         Ok(())
     }
 
@@ -4094,9 +4147,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         par: &'a ParLoop,
         dest: Place,
     ) -> R<()> {
+        let mut limit = None;
         if let Some(n) = &par.limit {
             let nt = self.expr_ty(n)?;
             let nv = self.expr_operand(n)?;
+            let held = self.temp(nt);
+            self.assign(held, Rvalue::Use(nv));
+            let nv = Operand::Copy(Place::local(held));
+            limit = Some(nv.clone());
             let bool_t = self.tys().bool();
             let c = self.temp(bool_t);
             let zero = Operand::Const(Const {
@@ -4126,7 +4184,10 @@ impl<'l, 'a> Bx<'l, 'a> {
         let name = format!("{}.new", self.tys().display(vt));
         self.call_native(&name, Vec::new(), Place::local(acc));
         self.declare(acc, vt);
-        let saved = self.par_acc.replace((body as *const Block, acc, vt));
+        let region = self.open_par_region(ParKind::For { limit }, e.span);
+        let saved = self
+            .par_acc
+            .replace((body as *const Block, acc, vt, region));
         let t = self.unit();
         let unit = self.temp(t);
         let r = self.for_range(e, label, pattern, iterable, body, Place::local(unit));
@@ -8473,6 +8534,41 @@ fn main() {
         );
         let zero = "fn main() {\n    let v = par(limit: 0) for i in 0..2 { i };\n    println(f\"{v.len()}\");\n}\n";
         assert_eq!(run_source(zero).map(|r| r.1), Ok(Some(101)));
+    }
+
+    /// `par { a, b }` and `par for` record their branches' blocks as
+    /// `par` regions, outer before inner, for the effect-conflict check.
+    #[test]
+    fn par_constructs_record_their_regions() {
+        let src = r#"
+fn f(n: i64) -> i64 { n * 2 }
+fn main() {
+    let (a, b) = par { f(1), f(2) };
+    let n: i64 = 2;
+    let v = par(limit: n) for i in 0..3 { let w = par { f(i), 1 }; w.0 };
+    println(f"{a} {b} {v.len()}");
+}
+"#;
+        let lowered = super::build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let main = &lowered.program.bodies["main"];
+        let rs = &main.par_regions;
+        assert_eq!(rs.len(), 3, "{rs:?}");
+        assert!(matches!(rs[0].kind, ParKind::Block));
+        assert_eq!(rs[0].branches.len(), 2);
+        assert!(matches!(rs[1].kind, ParKind::For { limit: Some(_) }));
+        assert_eq!(rs[1].branches.len(), 1);
+        // The inner `par` lies inside the `par for` body's blocks.
+        assert!(matches!(rs[2].kind, ParKind::Block));
+        let body = &rs[1].branches[0];
+        assert!(rs[2].branches.iter().flatten().all(|b| body.contains(b)));
+        for r in rs {
+            assert!(r.branches.iter().all(|bs| !bs.is_empty()));
+        }
+        let printed = crate::mir::pretty::pretty_body(main, &lowered.tys);
+        assert!(printed.contains("    par#0 block ["), "{printed}");
+        assert!(printed.contains("    par#1 for ["), "{printed}");
+        assert!(printed.contains("] limit copy _"), "{printed}");
+        assert_eq!(run_source(src), Ok(("2 4 3\n".to_string(), Some(0))));
     }
 
     /// `char.try_from`, `String.cmp` (here through `sort_by`) and

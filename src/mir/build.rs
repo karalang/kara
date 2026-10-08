@@ -14,6 +14,8 @@ pub struct BodyBuilder {
     blocks: Vec<(Vec<Statement>, Option<Terminator>)>,
     scopes: Vec<SourceScopeData>,
     info: SourceInfo,
+    /// See [`Body::par_regions`].
+    pub par_regions: Vec<ParRegion>,
 }
 
 impl BodyBuilder {
@@ -41,6 +43,7 @@ impl BodyBuilder {
                 span: info.span,
             }],
             info,
+            par_regions: Vec::new(),
         }
     }
 
@@ -108,6 +111,11 @@ impl BodyBuilder {
         self.locals[l.index()].ty
     }
 
+    /// How many blocks the body has so far.
+    pub fn block_count(&self) -> usize {
+        self.blocks.len()
+    }
+
     pub fn new_block(&mut self) -> BasicBlock {
         let b = BasicBlock(self.blocks.len() as u32);
         self.blocks.push((Vec::new(), None));
@@ -171,6 +179,7 @@ impl BodyBuilder {
             scopes: self.scopes,
             phase: MirPhase::Built,
             span: self.info.span,
+            par_regions: self.par_regions,
         })
     }
 }

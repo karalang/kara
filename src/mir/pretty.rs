@@ -38,6 +38,22 @@ pub fn pretty_body(body: &Body, tys: &TyInterner) -> String {
         };
         let _ = writeln!(out, "    let {m}_{i}: {};{note}", tys.display(decl.ty));
     }
+    for (i, r) in body.par_regions.iter().enumerate() {
+        let (kind, limit) = match &r.kind {
+            ParKind::Block => ("block", String::new()),
+            ParKind::For { limit: None } => ("for", String::new()),
+            ParKind::For { limit: Some(n) } => ("for", format!(" limit {}", operand(body, tys, n))),
+        };
+        let branches: Vec<String> = r
+            .branches
+            .iter()
+            .map(|bs| {
+                let names: Vec<String> = bs.iter().map(|b| b.to_string()).collect();
+                format!("[{}]", names.join(" "))
+            })
+            .collect();
+        let _ = writeln!(out, "    par#{i} {kind} {}{limit}", branches.join(" "));
+    }
     for (i, block) in body.blocks.iter().enumerate() {
         let _ = writeln!(out, "    bb{i}: {{");
         for st in &block.statements {

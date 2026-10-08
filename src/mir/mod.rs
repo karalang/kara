@@ -402,6 +402,69 @@ fn main() -> () {{
         );
     }
 
+    /// `par` region lines read and print back, and the validator checks
+    /// their blocks exist.
+    #[test]
+    fn mir_par_regions_round_trip() {
+        let src = |regions: &str| {
+            format!(
+                "
+fn main() -> () {{
+    let mut _0: ();
+    let _1: i64;
+{regions}    bb0: {{
+        _1 = const 2_i64;
+        goto -> bb1;
+    }}
+    bb1: {{
+        goto -> bb2;
+    }}
+    bb2: {{
+        goto -> bb3;
+    }}
+    bb3: {{
+        _0 = const ();
+        return;
+    }}
+}}
+"
+            )
+        };
+        let ok = src("    par#0 block [bb1] [bb2]\n    par#1 for [bb2 bb3] limit copy _1\n    par#2 for [bb3]\n");
+        let m = parse_module(&ok).unwrap_or_else(|e| panic!("{e}"));
+        let body = &m.bodies[0];
+        assert_eq!(validate(body, &m.tys), Vec::<String>::new());
+        assert_eq!(body.par_regions.len(), 3);
+        assert_eq!(body.par_regions[0].kind, ParKind::Block);
+        assert_eq!(body.par_regions[0].branches.len(), 2);
+        assert!(matches!(
+            body.par_regions[1].kind,
+            ParKind::For { limit: Some(_) }
+        ));
+        assert_eq!(body.par_regions[2].kind, ParKind::For { limit: None });
+        let printed = pretty_body(body, &m.tys);
+        for line in [
+            "par#0 block [bb1] [bb2]",
+            "par#1 for [bb2 bb3] limit copy _1",
+            "par#2 for [bb3]",
+        ] {
+            assert!(printed.contains(line), "{printed}");
+        }
+        let m2 = parse_module(&pretty_module(&m)).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(pretty_body(&m2.bodies[0], &m2.tys), printed);
+
+        let bad = parse_module(&src("    par#0 block [bb9]\n    par#1 for\n"))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let errs = validate(&bad.bodies[0], &bad.tys);
+        assert!(errors_mention(&errs, "bb9 does not exist"), "{errs:?}");
+        assert!(
+            errors_mention(&errs, "a par region needs at least one branch"),
+            "{errs:?}"
+        );
+        let skipped = parse_module(&src("    par#1 block [bb1]\n"));
+        assert!(skipped.is_err());
+    }
+
     /// Erased function values: the `Erase` cast, calls through `ref`,
     /// `mut ref` and by value, and what the validator, the borrow check
     /// and drop elaboration make of them.
