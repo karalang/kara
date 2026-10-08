@@ -789,6 +789,11 @@ impl TypeEnv {
                 let owned;
                 let target_ty: &Type = if let Some(&t) = subs.get(type_name.as_str()) {
                     t
+                } else if gp.params.iter().any(|p| &p.name == type_name) {
+                    // An impl param the receiver gave no arg for (`self`
+                    // inside the impl, whose type is the bare target): as
+                    // undecidable as the inline-bounds arm above.
+                    continue;
                 } else {
                     owned = Type::Named {
                         name: type_name.clone(),

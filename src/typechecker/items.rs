@@ -1686,6 +1686,31 @@ impl<'a> super::TypeChecker<'a> {
                 params: params.into_iter().map(rec).collect(),
                 return_type: Box::new(rec(*return_type)),
             },
+            // `Self.Item` names the impl's own associated type: the
+            // projection's base becomes the impl target, and the caller's
+            // `resolve_assoc_projections` reads the impl's binding.
+            Type::AssocProjection {
+                param,
+                assoc,
+                args,
+                receiver_args,
+            } => match concrete {
+                Type::Named {
+                    name,
+                    args: target_args,
+                } if param == "Self" => Type::AssocProjection {
+                    param: name.clone(),
+                    assoc,
+                    args: args.into_iter().map(rec).collect(),
+                    receiver_args: target_args.clone(),
+                },
+                _ => Type::AssocProjection {
+                    param,
+                    assoc,
+                    args: args.into_iter().map(rec).collect(),
+                    receiver_args: receiver_args.into_iter().map(rec).collect(),
+                },
+            },
             other => other,
         }
     }
@@ -1884,7 +1909,7 @@ impl<'a> super::TypeChecker<'a> {
             // checks. A trait default body keeps `Self` abstract.
             if let Some(st) = self_type {
                 if !Self::is_self_type(st) {
-                    ty = Self::resolve_self_in_type(ty, st);
+                    ty = self.resolve_assoc_projections(&Self::resolve_self_in_type(ty, st));
                 }
             }
             // `E_TYPE_VALUE_AT_RUNTIME` (substrate 2): a `Type` value is
@@ -1953,7 +1978,8 @@ impl<'a> super::TypeChecker<'a> {
         // `TypeParam("Self")`, so we leave `Self` abstract there.
         if let Some(st) = self_type {
             if !Self::is_self_type(st) {
-                return_type = Self::resolve_self_in_type(return_type, st);
+                return_type =
+                    self.resolve_assoc_projections(&Self::resolve_self_in_type(return_type, st));
             }
         }
         self.current_return_type = Some(return_type.clone());
@@ -4752,8 +4778,14 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         let unbound_type: Option<String> = {
-            let in_scope: HashSet<&str> =
-                self.enclosing_bounds.keys().map(|s| s.as_str()).collect();
+            // `Self` in a trait's default body is the implementor, never a
+            // parameter waiting to be inferred.
+            let in_scope: HashSet<&str> = self
+                .enclosing_bounds
+                .keys()
+                .map(|s| s.as_str())
+                .chain(["Self"])
+                .collect();
             find_unbound_type_param(inferred, &in_scope).map(|s| s.to_string())
         };
         if let Some(name) = unbound_type {

@@ -163,3 +163,89 @@ fn main() {
 "#;
     assert_runs(src, "2\n");
 }
+
+/// A trait default method may name `Self.Item` in a parameter: inside each
+/// impl it is that impl's own `Item`.
+#[test]
+fn a_default_method_parameter_names_self_item() {
+    let src = r#"
+trait It2 {
+    type Item;
+    fn nxt(mut ref self) -> Option[Self.Item];
+    fn fold2[B](mut ref self, init: B, f: MutFn(B, Self.Item) -> B) -> B {
+        let mut acc = init;
+        loop {
+            match self.nxt() {
+                Some(x) => { acc = f(acc, x); }
+                None => break,
+            }
+        }
+        acc
+    }
+}
+struct Counter { n: i64, stop: i64 }
+impl It2 for Counter {
+    type Item = i64;
+    fn nxt(mut ref self) -> Option[i64] {
+        if self.n >= self.stop { return None; }
+        self.n = self.n + 1;
+        Some(self.n)
+    }
+}
+fn main() {
+    let mut d = Counter { n: 0, stop: 4 };
+    println(f"{d.fold2(100, |a, x| a + x)}");
+}
+"#;
+    assert_runs(src, "110\n");
+}
+
+/// An adaptor written in Kāra: a default `map2` wraps `self` in a generic
+/// struct whose `It` impl carries `where I: It[Item = T]`. It type checks,
+/// including `let it = self` in a default body and the impl's own methods
+/// called on `self` inside it; the builder stops at the closure stored in
+/// the struct's `MutFn` field, which erased function values will lower.
+#[test]
+fn a_map_adaptor_in_kara_type_checks_up_to_its_stored_closure() {
+    let src = r#"
+trait It {
+    type Item;
+    fn nxt(mut ref self) -> Option[Self.Item];
+    fn map2[B](own self, f: own MutFn(Self.Item) -> B) -> MapIt[Self, Self.Item, B] {
+        MapIt { it: self, f: f }
+    }
+    fn count2(own self) -> i64 {
+        let mut it = self;
+        let mut n = 0;
+        while let Some(_) = it.nxt() { n = n + 1; }
+        n
+    }
+}
+struct MapIt[I, T, B] { it: I, f: MutFn(T) -> B }
+impl[I, T, B] It for MapIt[I, T, B] where I: It[Item = T] {
+    type Item = B;
+    fn nxt(mut ref self) -> Option[B] {
+        match self.it.nxt() {
+            Some(x) => Some((self.f)(x)),
+            None => None,
+        }
+    }
+}
+struct Counter { n: i64, stop: i64 }
+impl It for Counter {
+    type Item = i64;
+    fn nxt(mut ref self) -> Option[i64] {
+        if self.n >= self.stop { return None; }
+        self.n = self.n + 1;
+        Some(self.n)
+    }
+}
+fn main() {
+    println(Counter { n: 0, stop: 3 }.map2(|x| x + 1).count2());
+}
+"#;
+    match run(src) {
+        Err(e) if e.contains("a function value") => {}
+        other => panic!("want the stored-closure refusal, got {other:?}"),
+    }
+}
