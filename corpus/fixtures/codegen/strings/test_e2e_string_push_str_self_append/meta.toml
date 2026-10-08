@@ -11,6 +11,6 @@ rules = []
 backends = []
 env = {}
 bucket = "a:refused"
-classified_with = "078a05d91"
+classified_with = "30baabfe7"
 model_rev = "7b8ab2eb"
 v2_reject = "core-semantics §5.6 exclusivity (drop schedule thread, 2026-10-08)"

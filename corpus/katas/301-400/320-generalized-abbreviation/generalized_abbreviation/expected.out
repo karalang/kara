@@ -1,0 +1,17 @@
+"word" -> 16
+word 1ord w1rd 2rd wo1d 1o1d w2d 3d wor1 1or1 w1r1 2r1 wo2 1o2 w3 4
+"" -> 1
+
+"a" -> 2
+a 1
+"ab" -> 4
+ab 1b a1 2
+"abc" -> 8
+abc 1bc a1c 2c ab1 1b1 a2 3
+"aaaa" -> 16
+aaaa 1aaa a1aa 2aa aa1a 1a1a a2a 3a aaa1 1aa1 a1a1 2a1 aa2 1a2 a3 4
+"leet" -> 16
+leet 1eet l1et 2et le1t 1e1t l2t 3t lee1 1ee1 l1e1 2e1 le2 1e2 l3 4
+"abcdefgh" -> 256 abbreviations, 1600 chars, fold 404223735
+"mississippi" -> 2048 abbreviations, 17411 chars, fold 567791903
+"abcdefghijklmnop" -> 65536 abbreviations, 803072 chars, fold 433791680

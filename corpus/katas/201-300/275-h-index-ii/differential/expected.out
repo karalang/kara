@@ -1,0 +1,8 @@
+cases 9435
+of which EXHAUSTIVE (every sorted array, len 0..7, vals 0..7) 6435
+answers at the floor (h = 0) 623
+answers at the ceiling (h = n) 131
+arrays with a citation count above n (the bucket clamp) 3213
+answers refuted by the DEFINITION 0
+digest 826433451
+mismatches 0

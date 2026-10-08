@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "v2 accepts: core-semantics §9.3, an escaping closure captures by move and a non-escaping one may capture by ref; legacy refused it (E0508). No v2 oracle yet."
 bucket = "mir-gap:the `Drop` body of generic type `Pool`"
-classified_with = "5050532d8"
+classified_with = "30baabfe7"
 legacy_expect = "error:E0508"
 model_rev = "7b8ab2eb"

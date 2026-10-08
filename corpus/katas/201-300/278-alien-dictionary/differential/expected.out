@@ -1,0 +1,8 @@
+cases 1200
+satisfiable 776
+unsatisfiable by CYCLE 263, by the PREFIX RULE 161
+DFS answers that differed from the lex-smallest 365
+DFS answers that failed VALIDATION 0
+digest 275239060
+kahn vs brute, as strings 0
+existence disagreements 0

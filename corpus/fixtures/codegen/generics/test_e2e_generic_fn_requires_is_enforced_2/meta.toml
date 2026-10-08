@@ -11,5 +11,5 @@ rules = []
 backends = []
 env = {}
 bucket = "mir-gap:a `requires`/`ensures` contract is not lowered yet; 2:1 in `gen_req`: a `require"
-classified_with = "078a05d91"
+classified_with = "30baabfe7"
 model_rev = "7b8ab2eb"

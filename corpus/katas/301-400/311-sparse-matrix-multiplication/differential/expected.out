@@ -1,0 +1,9 @@
+cases 3000
+P1 arm disagreements 0
+P2 identity failures 0
+P3 annihilation failures 0
+P4 distributivity failures 0
+P5 associativity failures 0
+P6 scaling failures 0
+P7 transpose-law failures 0
+DIFFERENTIAL OK

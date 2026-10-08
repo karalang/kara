@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'Config { name: alice, token: <redacted> }'"
 bucket = "e-differs:stdout"
-classified_with = "5050532d8"
+classified_with = "30baabfe7"
 model_rev = "7b8ab2eb"

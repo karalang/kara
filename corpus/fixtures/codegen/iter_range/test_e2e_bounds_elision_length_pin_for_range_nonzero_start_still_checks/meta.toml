@@ -12,7 +12,7 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'for 1..n fill must keep the bounds check (panic), got stdout={:?}'"
 bucket = "a"
-classified_with = "078a05d91"
+classified_with = "30baabfe7"
 model_exit = 101
 model_rev = "7b8ab2eb"
 model_verdict = "SAME"

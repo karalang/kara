@@ -1,0 +1,10 @@
+sequences 2160
+steps 26460
+P1 arm disagreements 0
+P2 range failures 0
+P3 delta-bound failures 0
+P4 duplicate-op failures 0
+P5 independent-recount failures 0
+P6 filled-grid failures 0
+P7 order-dependence failures 0
+DIFFERENTIAL OK

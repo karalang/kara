@@ -4,14 +4,15 @@ expect = "stdout"
 exit = 0
 tags = ["lib:map"]
 class = "e"
-expected_from = "assert"
+expected_from = "decision"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
+note = "`m[k] = v` on a missing Map key inserts (Gowtham, decision card 2026-10-08 14:14Z): legacy's output is the expected output."
 bucket = "e-differs:stdout"
-classified_with = "5050532d8"
+classified_with = "30baabfe7"
 model_exit = 0
 model_rev = "7b8ab2eb"
 model_verdict = "DIFF"

@@ -1,0 +1,6 @@
+band 1 (all three arms, n = 0..800): 801 cases
+  closed form vs dp:   0 mismatches
+  closed form vs memo: 0 mismatches
+band 2 (closed form vs dp, sampled to 100000): 12 cases, 0 mismatches
+band 3 (closed form alone, property-checked near 2^31): 8 cases, 0 bad
+  NOTE: band 3 has no independent oracle -- the DP cannot reach here.

@@ -1,0 +1,15 @@
+cases 952 brute-cases 763 samples 15232 relabel-cases 680
+P1  dp-vs-star disagreements 0
+P2  frontier-vs-star disagreements 0
+P3  brute-vs-star disagreements 0
+P4  wrong length or non-digit 0
+P5  unrealizable answers 0
+P6  sampled rivals that beat the answer 0
+P7  swap-symmetry failures 0
+P8  append-monotonicity failures 0
+P9  lead-digit failures 0
+P10 take-everything multiset failures 0
+P11 relabel-commutes failures 0
+P12 fixed-point failures 0
+P13 k+1 deletion-bound failures 0
+DIFFERENTIAL OK

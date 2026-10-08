@@ -1,0 +1,3 @@
+n in 2..119: brute force to 40, 3422 sums checked, answers mod 1e9+7 add up to 35232087804
+failures 0
+all properties hold

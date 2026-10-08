@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'pair_sum'"
 bucket = "mir-gap:an expression with no recorded type is not lowered yet; 3:9 in `pair_sum`: an ex"
-classified_with = "078a05d91"
+classified_with = "30baabfe7"
 fixed_by_classify = true
 model_rev = "7b8ab2eb"
