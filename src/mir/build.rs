@@ -111,6 +111,10 @@ impl BodyBuilder {
         self.locals[l.index()].ty
     }
 
+    pub fn set_local_ty(&mut self, l: Local, t: Ty) {
+        self.locals[l.index()].ty = t;
+    }
+
     /// How many blocks the body has so far.
     pub fn block_count(&self) -> usize {
         self.blocks.len()

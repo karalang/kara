@@ -34,6 +34,40 @@ use super::interp;
 use super::syntax::*;
 use super::ty::{AdtId, FloatTy, Ty, TyInterner};
 
+/// The value of an operator tree made only of unsuffixed integer literals,
+/// when every step is in range. A lone literal is not a tree.
+fn fold_int(e: &Expr) -> Option<i128> {
+    fn go(e: &Expr) -> Option<i128> {
+        match &e.kind {
+            ExprKind::Integer(v, None) => Some(*v),
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => go(operand)?.checked_neg(),
+            ExprKind::Binary { op, left, right } => {
+                let (a, b) = (go(left)?, go(right)?);
+                match op {
+                    AstBinOp::Add => a.checked_add(b),
+                    AstBinOp::Sub => a.checked_sub(b),
+                    AstBinOp::Mul => a.checked_mul(b),
+                    AstBinOp::BitAnd => Some(a & b),
+                    AstBinOp::BitOr => Some(a | b),
+                    AstBinOp::BitXor => Some(a ^ b),
+                    AstBinOp::Shl if (0..64).contains(&b) => a.checked_shl(b as u32),
+                    AstBinOp::Shr if (0..64).contains(&b) => Some(a >> b),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+    match &e.kind {
+        ExprKind::Binary { .. } => go(e),
+        ExprKind::Unary { operand, .. } if !matches!(operand.kind, ExprKind::Integer(..)) => go(e),
+        _ => None,
+    }
+}
+
 /// The lowered program, or why it could not be lowered.
 pub struct Lowered {
     pub program: interp::Program,
@@ -607,7 +641,20 @@ impl<'a> Lcx<'a> {
         let (Some(target), n) = (item.impl_target, item.impl_params) else {
             return t;
         };
-        if n == 0 || n > args.len() {
+        if n == 0 {
+            // A concrete impl over an applied generic (`impl Bx[String]`):
+            // its target's args are the receiver's, as a call recorded them.
+            let tcx = self.tys.tcx();
+            let applied = match self.self_tys.get(&def).map(|&st| tcx.kind(st)) {
+                Some(HK::Adt { args, .. } | HK::Shared { args, .. }) => tcx.list(args),
+                _ => Vec::new(),
+            };
+            if applied.is_empty() {
+                return t;
+            }
+            return tcx.fill_erased_args(t, target, &applied);
+        }
+        if n > args.len() {
             return t;
         }
         self.tys.tcx().fill_erased_args(t, target, &args[..n])
@@ -1234,6 +1281,54 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
+    /// Whether every value of numeric type `from` is exactly a value of `to`.
+    fn lossless(&self, from: Ty, to: Ty) -> bool {
+        // (signed, unsigned or float; value bits)
+        let class = |t: Ty| match self.tys().tcx().kind(t) {
+            HK::Int(s) => Some((
+                's',
+                match s {
+                    IntSize::I8 => 8,
+                    IntSize::I16 => 16,
+                    IntSize::I32 => 32,
+                    IntSize::I64 | IntSize::Isize => 64,
+                    IntSize::I128 => 128,
+                },
+            )),
+            HK::UInt(s) => Some((
+                'u',
+                match s {
+                    UIntSize::U8 => 8,
+                    UIntSize::U16 => 16,
+                    UIntSize::U32 => 32,
+                    UIntSize::U64 | UIntSize::Usize => 64,
+                    UIntSize::U128 => 128,
+                },
+            )),
+            // The significand's bits, the implicit one included.
+            HK::Float(s) => Some((
+                'f',
+                match s {
+                    FloatSize::BF16 => 8,
+                    FloatSize::F16 => 11,
+                    FloatSize::F32 => 24,
+                    FloatSize::F64 => 53,
+                },
+            )),
+            _ => None,
+        };
+        let (Some((fc, fb)), Some((tc, tb))) = (class(from), class(to)) else {
+            return false;
+        };
+        match (fc, tc) {
+            ('s', 's') | ('u', 'u') | ('u', 's') => fb < tb,
+            ('s', 'f') => fb - 1 <= tb,
+            ('u', 'f') => fb <= tb,
+            ('f', 'f') => fb < tb,
+            _ => false,
+        }
+    }
+
     /// `op` widened into the numeric slot `t`, if it needs it.
     fn widen(&mut self, op: Operand, t: Ty) -> Operand {
         if let Operand::Const(_) = op {
@@ -1247,6 +1342,24 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.b
             .assign(bb, Place::local(l), Rvalue::Cast(kind, op, t));
         Operand::Copy(Place::local(l))
+    }
+
+    /// Whether `p` is reached through a `shared` value, a reference or an
+    /// index, so its contents cannot be moved out.
+    fn borrowed_place(&self, p: &Place) -> bool {
+        let mut q = Place::local(p.local);
+        for el in &p.projection {
+            let t = self.place_type(&q);
+            if matches!(
+                self.tys().tcx().kind(t),
+                HK::Shared { .. } | HK::Ref(_) | HK::MutRef(_)
+            ) || matches!(el, ProjElem::Index(_) | ProjElem::ConstIndex(_))
+            {
+                return true;
+            }
+            q = q.project(*el);
+        }
+        false
     }
 
     /// `let y = x` where `x` is a reference to a value that is neither
@@ -2932,11 +3045,24 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Operand::Const(c) => c,
                 _ => unreachable!(),
             })),
+            ExprKind::Binary { .. } | ExprKind::Unary { .. } if fold_int(e).is_some() => {
+                // An operator tree of unsuffixed integer literals is one
+                // constant, so it takes its destination's type as a single
+                // literal does (`let n: i32 = -(2 * 3)`).
+                scalar(self, fold_int(e).unwrap_or(0) as u128)
+            }
             ExprKind::Unary {
                 op: UnaryOp::Neg,
                 operand,
             } => match &operand.kind {
                 ExprKind::Integer(v, _) => scalar(self, (-*v) as u128),
+                ExprKind::Float(f, _) => {
+                    let ty = self.expr_ty(e)?;
+                    Ok(Some(Const {
+                        ty,
+                        kind: ConstKind::Float((-*f).to_bits()),
+                    }))
+                }
                 _ => Ok(None),
             },
             _ => Ok(None),
@@ -3299,6 +3425,17 @@ impl<'l, 'a> Bx<'l, 'a> {
             } => self.for_range(e, label, pattern, iterable, body, dest),
             ExprKind::Return(value) => {
                 let ret = Place::local(Local::RETURN_PLACE);
+                // A closure whose every exit is a `return` was typed as
+                // returning `!`; its returns say what it gives back.
+                if let Some(v) = value {
+                    let never = self.tys().tcx().intern(HK::Never);
+                    if self.b.local_ty(Local::RETURN_PLACE) == never {
+                        let vt = self.expr_ty(v)?;
+                        if vt != never {
+                            self.b.set_local_ty(Local::RETURN_PLACE, vt);
+                        }
+                    }
+                }
                 match value {
                     Some(v) => self.expr_into(v, ret)?,
                     None => self.assign(ret, Rvalue::Use(unit_const(self.unit()))),
@@ -3692,6 +3829,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let l = self.fit_const(l, t);
         let r = if shift { r } else { self.fit_const(r, t) };
+        // Operands of different widths meet at the wider one when the
+        // widening is lossless (design.md, implicit widening).
+        let (l, r, t) = match (self.operand_ty(&l), self.operand_ty(&r)) {
+            (a, b) if a != b && !shift && self.lossless(a, b) => (self.widen(l, b), r, b),
+            (a, b) if a != b && !shift && self.lossless(b, a) => (l, self.widen(r, a), a),
+            _ => (l, r, t),
+        };
         self.arith(bin, l, r, t, dest);
         Ok(())
     }
@@ -5271,7 +5415,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let ok = 1 - err;
         let p = if self.is_place(inner) {
-            self.expr_place(inner, false)?
+            let p = self.expr_place(inner, false)?;
+            if self.borrowed_place(&p) && (self.is_handle_aggregate(it) || self.is_handle(it)) {
+                // Read out of a shared value or a borrow: a handle
+                // aggregate is copied by counting (core semantics §6.1).
+                let l = self.temp(it);
+                self.count_copy(p, it, Place::local(l));
+                self.schedule(ScopeEntry::Drop(Place::local(l)));
+                Place::local(l)
+            } else {
+                p
+            }
         } else {
             let l = self.temp_of(inner, it)?;
             Place::local(l)
@@ -5535,7 +5689,13 @@ impl<'l, 'a> Bx<'l, 'a> {
             // in a `ref self` method, `v[i]`) is a `ref` scrutinee too
             // (core semantics §4.6): matched through a shared reborrow, so
             // its bindings are `ref`s even under a `mut ref`.
-            _ if place.projection.contains(&ProjElem::Deref) => {
+            _ if place.projection.iter().any(|p| {
+                matches!(
+                    p,
+                    ProjElem::Deref | ProjElem::Index(_) | ProjElem::ConstIndex(_)
+                )
+            }) =>
+            {
                 let rt = self.tys().tcx().reference(st, false);
                 let r = self.temp(rt);
                 self.assign(r, Rvalue::Ref(BorrowKind::Shared, place));
