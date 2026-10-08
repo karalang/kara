@@ -121,6 +121,8 @@ pub enum Value {
     /// An enum value: the variant index and its fields.
     Variant(u32, Vec<Value>),
     Shared(AllocId),
+    /// A `weak` handle to the `shared` value in this slot.
+    Weak(AllocId),
     /// A library collection (`String`, `Vec[T]`): the sole owner of its
     /// heap allocation, which holds a `Str` or the elements as an `Agg`.
     Box(AllocId),
@@ -426,6 +428,10 @@ struct Flag {
 
 struct HeapObj {
     count: u32,
+    /// The `weak` handles to a `shared` value (core semantics §6.5). At
+    /// strong count zero the value is dropped; the slot is freed once
+    /// this is zero too.
+    weak: u32,
     value: Value,
 }
 
@@ -1279,7 +1285,11 @@ impl<'a> Interp<'a> {
                     .ok_or_else(|| Stop::Error(format!("{name}: a closure body with no env")))?;
                 let by_value = !matches!(self.tys.kind(env_ty), TyKind::Ref(_) | TyKind::MutRef(_));
                 let slot = AllocId(self.heap.len() as u32);
-                self.heap.push(Some(HeapObj { count: 1, value: v }));
+                self.heap.push(Some(HeapObj {
+                    count: 1,
+                    weak: 0,
+                    value: v,
+                }));
                 Ok(Callee {
                     body,
                     env: Some(slot),
@@ -1362,7 +1372,11 @@ impl<'a> Interp<'a> {
                     .find(|b| b.instance.def == def)
                     .ok_or_else(|| Stop::Error(format!("Erase: no body for closure {def:?}")))?;
                 let slot = AllocId(self.heap.len() as u32);
-                self.heap.push(Some(HeapObj { count: 1, value: v }));
+                self.heap.push(Some(HeapObj {
+                    count: 1,
+                    weak: 0,
+                    value: v,
+                }));
                 Ok(Value::Erased {
                     body: body.instance.name.clone(),
                     env: Some((slot, from)),
@@ -1973,6 +1987,7 @@ impl<'a> Interp<'a> {
             let slot = self.heap.len();
             self.heap.push(Some(HeapObj {
                 count: 1,
+                weak: 0,
                 value: v.clone(),
             }));
             scratch.push(slot);
@@ -2123,7 +2138,11 @@ impl<'a> Interp<'a> {
     /// parking it in a scratch heap slot for the length of the drop.
     fn drop_value(&mut self, v: Value, ty: Ty) -> R<()> {
         let scratch = self.heap.len();
-        self.heap.push(Some(HeapObj { count: 1, value: v }));
+        self.heap.push(Some(HeapObj {
+            count: 1,
+            weak: 0,
+            value: v,
+        }));
         let at = Addr {
             root: Root::Heap(AllocId(scratch as u32)),
             path: Vec::new(),
@@ -2561,7 +2580,11 @@ impl<'a> Interp<'a> {
 
     fn alloc_box(&mut self, ty_name: &str, value: Value) -> Value {
         let a = AllocId(self.heap.len() as u32);
-        self.heap.push(Some(HeapObj { count: 1, value }));
+        self.heap.push(Some(HeapObj {
+            count: 1,
+            weak: 0,
+            value,
+        }));
         if self.trace {
             self.events.push(Event::Alloc(a, ty_name.to_string()));
         }
@@ -2740,6 +2763,7 @@ impl<'a> Interp<'a> {
         let scratch = self.heap.len();
         self.heap.push(Some(HeapObj {
             count: 1,
+            weak: 0,
             value: v.clone(),
         }));
         let at = Addr {
@@ -3297,6 +3321,25 @@ impl<'a> Interp<'a> {
                 let (x, from) = self.operand(body, o)?;
                 self.erase(x, from)
             }
+            Rvalue::Cast(CastKind::Downgrade, o, _) => {
+                // A new weak handle to the value a `ref shared T` or
+                // `ref weak T` reaches.
+                let (x, _) = self.operand(body, o)?;
+                let id = self.handle_behind(&x)?;
+                self.live(id)?.weak += 1;
+                Ok(Value::Weak(id))
+            }
+            Rvalue::Cast(CastKind::Upgrade, o, to) => {
+                // `Some` of a new strong handle while the value lives.
+                let (x, _) = self.operand(body, o)?;
+                let id = self.handle_behind(&x)?;
+                let obj = self.live(id)?;
+                let alive = obj.count > 0;
+                if alive {
+                    obj.count += 1;
+                }
+                self.option(*to, alive.then_some(Value::Shared(id)))
+            }
             Rvalue::Cast(kind, o, to) => {
                 let (x, _) = self.operand(body, o)?;
                 let to_kind = self.tys.kind(*to).clone();
@@ -3361,7 +3404,11 @@ impl<'a> Interp<'a> {
                     AggregateKind::Shared { ty, variant } => {
                         let value = self.adt_value(*ty, *variant, vals);
                         let a = AllocId(self.heap.len() as u32);
-                        self.heap.push(Some(HeapObj { count: 1, value }));
+                        self.heap.push(Some(HeapObj {
+                            count: 1,
+                            weak: 0,
+                            value,
+                        }));
                         if self.trace {
                             self.events.push(Event::Alloc(a, self.tys.display(*ty)));
                         }
@@ -3590,6 +3637,12 @@ impl<'a> Interp<'a> {
                 };
                 self.release(id, ty, a)
             }
+            TyKind::Weak(_) => {
+                let Value::Weak(id) = v else {
+                    return err("a weak-typed place holds no handle");
+                };
+                self.release_weak(id)
+            }
             TyKind::Tuple(ts) | TyKind::Closure(_, ts) => {
                 for i in (0..ts.len()).rev() {
                     self.drop_at(&addr.child(i as u64), ts[i])?;
@@ -3742,6 +3795,7 @@ impl<'a> Interp<'a> {
                     let scratch = self.heap.len();
                     self.heap.push(Some(HeapObj {
                         count: 0,
+                        weak: 0,
                         value: Value::Shared(*id),
                     }));
                     let handle = Addr {
@@ -3792,12 +3846,44 @@ impl<'a> Interp<'a> {
                 path: Vec::new(),
             };
             self.drop_adt(&root, ty, a)?;
+            let obj = self.live(id)?;
+            if obj.weak > 0 {
+                // Weak handles keep the slot, dead, for `Upgrade` to see.
+                obj.value = Value::Uninit;
+                return Ok(());
+            }
             self.heap[id.0 as usize] = None;
             if self.trace {
                 self.events.push(Event::Free(id));
             }
         }
         Ok(())
+    }
+
+    /// Drops one weak handle to `id`, freeing the slot when it was the
+    /// last handle of any kind.
+    fn release_weak(&mut self, id: AllocId) -> R<()> {
+        let obj = self.live(id)?;
+        obj.weak -= 1;
+        if obj.weak == 0 && obj.count == 0 {
+            self.heap[id.0 as usize] = None;
+            if self.trace {
+                self.events.push(Event::Free(id));
+            }
+        }
+        Ok(())
+    }
+
+    /// The handle behind a `ref shared T` or `ref weak T` operand.
+    fn handle_behind(&mut self, v: &Value) -> R<AllocId> {
+        let held = match v {
+            Value::Ref(addr) => self.slot(addr)?,
+            other => other.clone(),
+        };
+        match held {
+            Value::Shared(id) | Value::Weak(id) => Ok(id),
+            other => err(format!("expected a shared or weak handle, found {other:?}")),
+        }
     }
 
     /// What `main` returning `v` means: an `Err` goes to stderr as

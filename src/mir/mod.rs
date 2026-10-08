@@ -655,6 +655,74 @@ fn main(_1: shared Node) -> () {{
         }
     }
 
+    /// The interpreter's weak count: `Upgrade` yields `Some` while a
+    /// strong handle lives and `None` after, the value is dropped at strong
+    /// count zero, and its slot is freed when the last weak handle goes.
+    #[test]
+    fn mir_interp_weak_counts() {
+        let text = "
+struct Node { id: i64 }
+enum Option[shared Node] { None, Some(shared Node) }
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: shared Node;
+    let _2: ref shared Node;
+    let _3: weak Node;
+    let _4: ref weak Node;
+    let _5: Option[shared Node];
+    let _6: Option[shared Node];
+    let _7: isize;
+    let _8: isize;
+    let _9: ();
+    bb0: {
+        _1 = shared Node { const 1_i64 };
+        _2 = &_1;
+        _3 = copy _2 as weak Node (Downgrade);
+        _4 = &_3;
+        _5 = copy _4 as Option[shared Node] (Upgrade);
+        _7 = discriminant(_5);
+        _9 = println(copy _7) -> bb1;
+    }
+    bb1: {
+        drop(_5) -> bb2;
+    }
+    bb2: {
+        drop(_1) -> bb3;
+    }
+    bb3: {
+        _6 = copy _4 as Option[shared Node] (Upgrade);
+        _8 = discriminant(_6);
+        _9 = println(copy _8) -> bb4;
+    }
+    bb4: {
+        drop(_6) -> bb5;
+    }
+    bb5: {
+        drop(_3) -> bb6;
+    }
+    bb6: {
+        _0 = const ();
+        return;
+    }
+}
+";
+        let m = parse_module(text).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(validate(&m.bodies[0], &m.tys), Vec::<String>::new());
+        let prog = interp::Program::from_module(&m);
+        let r = interp::run(&prog, &m.tys, "main", vec![]);
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        // `Some` is variant 1, `None` variant 0.
+        assert_eq!(r.output, "1\n0\n");
+        let trace = r.trace();
+        let frees: Vec<&str> = trace.lines().filter(|l| l.starts_with("free")).collect();
+        assert_eq!(frees, ["free a0"], "{trace}");
+        // The slot outlives the strong handles: it is freed after `_3`'s drop.
+        let free_at = trace.find("free a0").unwrap();
+        let last_release = trace.rfind("release a0 0").unwrap();
+        assert!(free_at > last_release, "{trace}");
+    }
+
     /// `f16`, `bf16`, `i128` and `isize` are MIR types, and a cast into
     /// a narrow float rounds to its precision.
     #[test]
