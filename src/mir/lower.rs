@@ -4316,6 +4316,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         body: &'a Block,
         dest: Place,
     ) -> R<()> {
+        // An `Iterator` implementation in source, the library's adaptors
+        // included (`it.skip(2).enumerate()`), loops through its own `next`.
+        if let Some(next) = self.iterator_next(iterable)? {
+            return self.for_iterator(label, pattern, iterable, next, body, dest);
+        }
         // `for (i, x) in c.iter().enumerate()`: the loop over `c`, with `i`
         // bound to the position.
         let (iterable, idx, pattern) = match (&iterable.kind, &pattern.kind) {
@@ -4337,11 +4342,6 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return self.unsupported(e.span, "`enumerate` over chars");
             }
             return self.for_chars(label, pattern, body, text, dest);
-        }
-        if idx.is_none() {
-            if let Some(next) = self.iterator_next(iterable)? {
-                return self.for_iterator(label, pattern, iterable, next, body, dest);
-            }
         }
         #[derive(PartialEq, Clone, Copy)]
         enum Mode {

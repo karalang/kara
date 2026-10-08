@@ -1,0 +1,260 @@
+// `Iterator` and the adaptors that need no function argument, as Kāra
+// (redesign A2; docs/library/iterators.md).
+//
+// The MIR pipeline appends this file to the program. Its `trait Iterator`
+// shadows the baked declaration in `../iterator.kara`, so every type that
+// implements `next` gets these provided methods, the library's adaptors as
+// much as a program's own iterators. The legacy backends do not read it.
+//
+// Each adaptor is a struct holding the iterator it wraps. The adaptors that
+// would store a function (`map`, `filter`, ...) follow once a closure can be
+// a struct field; the methods that only call one (`fold`, `any`, ...) are here.
+
+trait Iterator {
+    type Item;
+
+    fn next(mut ref self) -> Option[Self.Item];
+
+    /// The number of items.
+    fn count(own self) -> i64 {
+        let mut it = self;
+        let mut n = 0;
+        while let Some(_) = it.next() {
+            n = n + 1;
+        }
+        n
+    }
+
+    /// The last item, or `None` if there are none.
+    fn last(own self) -> Option[Self.Item] {
+        let mut it = self;
+        let mut last: Option[Self.Item] = None;
+        while let Some(x) = it.next() {
+            last = Some(x);
+        }
+        last
+    }
+
+    /// The item at index `n`, counting from 0.
+    fn nth(own self, n: i64) -> Option[Self.Item] {
+        let mut it = self;
+        let mut i = 0;
+        while let Some(x) = it.next() {
+            if i == n {
+                return Some(x);
+            }
+            i = i + 1;
+        }
+        None
+    }
+
+    /// At most `n` items.
+    fn take(own self, n: i64) -> Take[Self] {
+        Take { it: self, left: n }
+    }
+
+    /// Drops the first `n` items.
+    fn skip(own self, n: i64) -> Skip[Self] {
+        Skip { it: self, left: n }
+    }
+
+    /// Pairs each item with its index, from 0.
+    fn enumerate(own self) -> Enumerate[Self] {
+        Enumerate { it: self, i: 0 }
+    }
+
+    /// The first item, then every `step`-th.
+    fn step_by(own self, step: i64) -> StepBy[Self] {
+        StepBy { it: self, step: step, first: true }
+    }
+
+    /// This iterator's items, then `other`'s.
+    fn chain[J: Iterator[Item = Self.Item]](own self, other: own J) -> Chain[Self, J] {
+        Chain { a: self, b: other, a_done: false }
+    }
+
+    /// Pairs of items, one from each, until either runs out.
+    fn zip[J: Iterator](own self, other: own J) -> Zip[Self, J] {
+        Zip { a: self, b: other }
+    }
+
+    /// Folds every item into an accumulator, front to back.
+    fn fold[B](own self, init: own B, f: own MutFn(own B, own Self.Item) -> B) -> B {
+        let mut it = self;
+        let mut acc = init;
+        while let Some(x) = it.next() {
+            acc = f(acc, x);
+        }
+        acc
+    }
+
+    /// Calls `f` on every item.
+    fn for_each(own self, f: own MutFn(own Self.Item)) {
+        let mut it = self;
+        while let Some(x) = it.next() {
+            f(x);
+        }
+    }
+
+    /// Whether `pred` holds for some item; stops at the first that does.
+    fn any(mut ref self, pred: own MutFn(own Self.Item) -> bool) -> bool {
+        while let Some(x) = self.next() {
+            if pred(x) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Whether `pred` holds for every item; stops at the first that does not.
+    fn all(mut ref self, pred: own MutFn(own Self.Item) -> bool) -> bool {
+        while let Some(x) = self.next() {
+            if not pred(x) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The first item `pred` holds for.
+    fn find(mut ref self, pred: own MutFn(ref Self.Item) -> bool) -> Option[Self.Item] {
+        while let Some(x) = self.next() {
+            if pred(x) {
+                return Some(x);
+            }
+        }
+        None
+    }
+
+    /// The index of the first item `pred` holds for.
+    fn position(mut ref self, pred: own MutFn(own Self.Item) -> bool) -> Option[i64] {
+        let mut i = 0;
+        while let Some(x) = self.next() {
+            if pred(x) {
+                return Some(i);
+            }
+            i = i + 1;
+        }
+        None
+    }
+}
+
+struct Take[I] {
+    it: I,
+    left: i64,
+}
+
+impl[I: Iterator] Iterator for Take[I] {
+    type Item = I.Item;
+
+    fn next(mut ref self) -> Option[I.Item] {
+        if self.left <= 0 {
+            return None;
+        }
+        self.left = self.left - 1;
+        self.it.next()
+    }
+}
+
+struct Skip[I] {
+    it: I,
+    left: i64,
+}
+
+impl[I: Iterator] Iterator for Skip[I] {
+    type Item = I.Item;
+
+    fn next(mut ref self) -> Option[I.Item] {
+        while self.left > 0 {
+            self.left = self.left - 1;
+            if self.it.next().is_none() {
+                return None;
+            }
+        }
+        self.it.next()
+    }
+}
+
+struct Enumerate[I] {
+    it: I,
+    i: i64,
+}
+
+impl[I: Iterator] Iterator for Enumerate[I] {
+    type Item = (i64, I.Item);
+
+    fn next(mut ref self) -> Option[(i64, I.Item)] {
+        match self.it.next() {
+            Some(x) => {
+                let k = self.i;
+                self.i = self.i + 1;
+                Some((k, x))
+            }
+            None => None,
+        }
+    }
+}
+
+struct StepBy[I] {
+    it: I,
+    step: i64,
+    first: bool,
+}
+
+impl[I: Iterator] Iterator for StepBy[I] {
+    type Item = I.Item;
+
+    fn next(mut ref self) -> Option[I.Item] {
+        if self.first {
+            self.first = false;
+            return self.it.next();
+        }
+        let mut k = 1;
+        while k < self.step {
+            if self.it.next().is_none() {
+                return None;
+            }
+            k = k + 1;
+        }
+        self.it.next()
+    }
+}
+
+struct Chain[A, B] {
+    a: A,
+    b: B,
+    a_done: bool,
+}
+
+impl[A: Iterator, B: Iterator[Item = A.Item]] Iterator for Chain[A, B] {
+    type Item = A.Item;
+
+    fn next(mut ref self) -> Option[A.Item] {
+        if not self.a_done {
+            match self.a.next() {
+                Some(x) => return Some(x),
+                None => self.a_done = true,
+            }
+        }
+        self.b.next()
+    }
+}
+
+struct Zip[A, B] {
+    a: A,
+    b: B,
+}
+
+impl[A: Iterator, B: Iterator] Iterator for Zip[A, B] {
+    type Item = (A.Item, B.Item);
+
+    fn next(mut ref self) -> Option[(A.Item, B.Item)] {
+        match self.a.next() {
+            Some(x) => match self.b.next() {
+                Some(y) => Some((x, y)),
+                None => None,
+            },
+            None => None,
+        }
+    }
+}

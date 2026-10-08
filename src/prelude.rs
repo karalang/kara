@@ -778,6 +778,10 @@ pub const LIBRARY_SOURCES: &[(&str, &str)] = &[
         "source/result.kara",
         include_str!("../runtime/stdlib/source/result.kara"),
     ),
+    (
+        "source/iter.kara",
+        include_str!("../runtime/stdlib/source/iter.kara"),
+    ),
 ];
 
 /// Embedded stdlib sources, keyed by their on-disk basename (relative to

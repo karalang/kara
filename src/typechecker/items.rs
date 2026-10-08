@@ -80,7 +80,54 @@ impl<'a> super::TypeChecker<'a> {
         self.lint_override_stack.pop();
     }
 
+    /// Registers every impl block's non-generic associated type bindings
+    /// (`type Item = I.Item;`) before any body is checked.
+    ///
+    /// `check_impl_block` records the full entry, but in item order, so a
+    /// body checked before the impl (a `main` above it, or any program the
+    /// MIR pipeline's library sources are appended to) found no
+    /// `(Take, Item)` entry and could not see through `Take[Counter]` in a
+    /// `for` loop. The full entry overwrites this one when the impl is
+    /// checked; diagnostics from this early lowering are discarded, since
+    /// that later lowering reports them.
+    fn preregister_impl_assoc_types(&mut self) {
+        let (errors, warnings) = (self.errors.len(), self.warnings.len());
+        let items: &[Item] = &self.program.items;
+        for item in items {
+            let Item::ImplBlock(imp) = item else { continue };
+            let TypeKind::Path(p) = &imp.target_type.kind else {
+                continue;
+            };
+            let type_name = p.segments.last().cloned().unwrap_or_default();
+            if self.env.opaque_foreign_types.contains(&type_name) {
+                continue;
+            }
+            let gp = Self::generic_param_names(&imp.generic_params);
+            for impl_item in &imp.items {
+                let ImplItem::AssocType(binding) = impl_item else {
+                    continue;
+                };
+                if binding.generic_params.is_some() {
+                    continue;
+                }
+                let ty = self.lower_type_expr(&binding.ty, &gp);
+                self.env
+                    .impl_assoc_types
+                    .entry((type_name.clone(), binding.name.clone()))
+                    .or_insert(crate::typechecker::env::ImplAssocTypeEntry {
+                        ty,
+                        gat_params: Vec::new(),
+                        param_bound_traits: Vec::new(),
+                        where_clause: None,
+                    });
+            }
+        }
+        self.errors.truncate(errors);
+        self.warnings.truncate(warnings);
+    }
+
     pub(super) fn check_items(&mut self) {
+        self.preregister_impl_assoc_types();
         let items: &[Item] = &self.program.items;
         for item in items {
             match item {

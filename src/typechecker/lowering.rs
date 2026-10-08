@@ -1595,7 +1595,10 @@ impl<'a> super::TypeChecker<'a> {
                     .zip(args.iter())
                     .map(|(p, a)| (p.clone(), SubstValue::Type(a.clone())))
                     .collect();
-                substitute_type_params(&entry.ty, &subs)
+                // An adaptor's item names its inner iterator's
+                // (`type Item = (A.Item, B.Item)` on `Zip[A, B]`), which the
+                // substitution leaves as `Counter.Item`: resolve it.
+                self.resolve_assoc_projections(&substitute_type_params(&entry.ty, &subs))
             }
             _ => ty.clone(),
         }

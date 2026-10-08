@@ -320,3 +320,78 @@ fn main() {
 "#;
     assert_runs(src, "4\n0 10\n1 20\n2 30\n50\n0 50\n");
 }
+
+/// The library's `Iterator` (`runtime/stdlib/source/iter.kara`) gives a
+/// program's own iterator its provided methods: the adaptors chain, a `for`
+/// destructures what `enumerate` yields, and `main` comes before the impls
+/// whose `type Item` it loops through.
+#[test]
+fn the_library_iterator_methods_chain_on_a_programs_iterator() {
+    let src = r#"
+fn main() {
+    println(Counter { n: 0 }.take(3).count());
+    for (i, x) in Counter { n: 0 }.skip(2).step_by(3).take(3).enumerate() {
+        println(f"{i}: {x}");
+    }
+    println(Counter { n: 0 }.take(5).last().unwrap());
+    println(Counter { n: 0 }.nth(4).unwrap());
+    for w in Words { n: 0 }.skip(1).take(2) {
+        println(w);
+    }
+    println(Words { n: 0 }.take(3).last().unwrap());
+}
+struct Counter { n: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        self.n = self.n + 1;
+        Some(self.n * 10)
+    }
+}
+struct Words { n: i64 }
+impl Iterator for Words {
+    type Item = String;
+    fn next(mut ref self) -> Option[String] {
+        self.n = self.n + 1;
+        Some(f"w{self.n}")
+    }
+}
+"#;
+    assert_runs(src, "3\n0: 30\n1: 60\n2: 90\n50\n50\nw2\nw3\nw3\n");
+}
+
+/// The library methods that combine iterators or call a function on each
+/// item: `chain`, `zip` (whose item is a tuple of two inner items, so a
+/// `for` resolves both), `fold`, `any` (which stops early and leaves the
+/// rest), `all`, `find`, `position` and `for_each`.
+#[test]
+fn the_library_iterator_combinators_and_folds() {
+    let src = r#"
+struct Counter { n: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] { self.n = self.n + 1; Some(self.n) }
+}
+fn main() {
+    for x in Counter { n: 0 }.take(2).chain(Counter { n: 10 }.take(2)) { println(x); }
+    for (a, b) in Counter { n: 0 }.zip(Counter { n: 100 }.skip(1)).take(2) {
+        println(f"{a} {b}");
+        if a > 1 { break; }
+    }
+    println(Counter { n: 0 }.take(4).fold(0, |acc, x| acc + x));
+    let mut c = Counter { n: 0 };
+    println(c.any(|x| x == 3));
+    println(c.n);
+    println(Counter { n: 0 }.take(5).all(|x| x < 9));
+    println(Counter { n: 0 }.find(|x| *x > 6).unwrap());
+    println(Counter { n: 0 }.position(|x| x == 4).unwrap());
+    let mut total = 0;
+    Counter { n: 0 }.take(3).for_each(|x| { total = total + x; });
+    println(total);
+}
+"#;
+    assert_runs(
+        src,
+        "1\n2\n11\n12\n1 102\n2 103\n10\ntrue\n3\ntrue\n7\n3\n6\n",
+    );
+}
