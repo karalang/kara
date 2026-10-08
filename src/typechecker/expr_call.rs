@@ -43,6 +43,77 @@ impl<'a> super::TypeChecker<'a> {
         format!("expected {} argument(s), found {}", param_count, found)
     }
 
+    /// design.md §8: `[T]` is never applied at a call site. `karac check`
+    /// reports each older form with the spelling that replaces it; `build`
+    /// and `run` still accept them while sources migrate.
+    fn reject_call_site_type_args(&mut self, callee: &Expr) {
+        let fix = match &callee.kind {
+            // `f[A, B](x)`. `size_of[T]` in this shape is what the parser
+            // builds for `T.size_of()`; written by hand it is the
+            // single-argument index form below.
+            ExprKind::Path {
+                segments,
+                generic_args: Some(_),
+            } if segments.len() == 1
+                && !matches!(segments[0].as_str(), "size_of" | "align_of")
+                && !crate::parser::starts_upper(&segments[0]) =>
+            {
+                Some(format!(
+                    "`{}` cannot take type arguments at the call; annotate the result \
+                     or a parameter so the types are inferred",
+                    segments[0]
+                ))
+            }
+            ExprKind::Index { object, index } => match &object.kind {
+                ExprKind::Identifier(name) if name == "size_of" || name == "align_of" => {
+                    expr_as_type_expr(index).map(|t| {
+                        format!(
+                            "write `{}.{name}()`",
+                            crate::formatter::render_type_expr(&t)
+                        )
+                    })
+                }
+                ExprKind::FieldAccess { object: m, field } => match &m.kind {
+                    ExprKind::Identifier(module)
+                        if self
+                            .env
+                            .functions
+                            .contains_key(&format!("{module}.{field}"))
+                            && expr_as_type_expr(index).is_some() =>
+                    {
+                        Some(format!(
+                            "write `{module}.{field}()` and annotate the result's type \
+                             (`let p: *const T = ptr.null();`)"
+                        ))
+                    }
+                    _ => None,
+                },
+                ExprKind::Identifier(name)
+                    if is_literal_const_arg_expr(index)
+                        && self
+                            .env
+                            .functions
+                            .get(name)
+                            .is_some_and(|s| !s.generic_params.is_empty()) =>
+                {
+                    Some(format!(
+                        "`{name}` cannot take a const argument at the call; annotate the \
+                         result so it is inferred"
+                    ))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(fix) = fix {
+            self.type_error(
+                format!("Kāra has no call-site type arguments (design.md §8): {fix}"),
+                callee.span,
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+    }
+
     /// `(explicit_args, formal_generic_params)` into the call-args
     /// substitution flow so the inference solver pre-binds each
     /// ConstVar / TypeVar to its user-supplied value before
@@ -606,6 +677,9 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
+        if self.cli_lint_overrides.strict_core {
+            self.reject_call_site_type_args(callee);
+        }
         // Comptime `Type` reflection in the path-call form. `MyType.name()`,
         // `MyType.fields()`, … parse as `Call(Path([Type, method]))` (the
         // value-receiver form `t.name()` is handled in `infer_method_call`).

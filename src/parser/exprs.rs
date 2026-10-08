@@ -391,21 +391,29 @@ impl super::Parser {
                                 let args_close_span = self.tokens[self.pos - 1].span;
                                 // B-2026-08-18-24 — MEASUREMENT SCAFFOLD.
                                 let end = args_close_span.offset + args_close_span.length;
-                                lhs = Expr {
-                                    id: crate::ids::NodeId::DUMMY,
-                                    span: Span {
-                                        line: lhs.span.line,
-                                        column: lhs.span.column,
-                                        offset: lhs.span.offset,
-                                        length: end.saturating_sub(lhs.span.offset),
-                                    },
-                                    kind: ExprKind::MethodCall {
-                                        object: Box::new(lhs),
-                                        method,
-                                        turbofish,
-                                        args,
-                                        args_close_span,
-                                    },
+                                let span = Span {
+                                    line: lhs.span.line,
+                                    column: lhs.span.column,
+                                    offset: lhs.span.offset,
+                                    length: end.saturating_sub(lhs.span.offset),
+                                };
+                                lhs = if args.is_empty()
+                                    && matches!(method.as_str(), "size_of" | "align_of")
+                                    && Self::is_type_receiver(&lhs)
+                                {
+                                    Self::layout_query(lhs, &method, span)
+                                } else {
+                                    Expr {
+                                        id: crate::ids::NodeId::DUMMY,
+                                        span,
+                                        kind: ExprKind::MethodCall {
+                                            object: Box::new(lhs),
+                                            method,
+                                            turbofish,
+                                            args,
+                                            args_close_span,
+                                        },
+                                    }
                                 };
                             } else {
                                 // Field access — B-2026-08-18-31 MEASUREMENT
@@ -447,6 +455,29 @@ impl super::Parser {
                     // collision the five postfix arms carried: `f(x)(y)` and
                     // `mk()(z)` collapse onto `f` / `mk`.
                     let call_span = self.span_from(&lhs.span);
+                    // `T.size_of()` with `T` a primitive or Type-class name
+                    // parses as the two-segment path `T.size_of`.
+                    if let ExprKind::Path {
+                        segments,
+                        generic_args: None,
+                    } = &lhs.kind
+                    {
+                        if args.is_empty()
+                            && segments.len() == 2
+                            && matches!(segments[1].as_str(), "size_of" | "align_of")
+                        {
+                            let ty = Expr {
+                                id: crate::ids::NodeId::DUMMY,
+                                span: lhs.span,
+                                kind: ExprKind::Identifier(segments[0].clone()),
+                            };
+                            if Self::is_type_receiver(&ty) {
+                                let name = segments[1].clone();
+                                lhs = Self::layout_query(ty, &name, call_span);
+                                continue;
+                            }
+                        }
+                    }
                     lhs = Expr {
                         id: crate::ids::NodeId::DUMMY,
                         span: call_span,
@@ -2377,6 +2408,20 @@ impl super::Parser {
                 self.advance();
                 let args = self.parse_arg_list()?;
                 self.expect(&Token::RightParen)?;
+                // `P.size_of()`: see the postfix-call arm.
+                if args.is_empty()
+                    && path.len() == 2
+                    && matches!(path[1].as_str(), "size_of" | "align_of")
+                {
+                    let ty = Expr {
+                        id: crate::ids::NodeId::DUMMY,
+                        span: start,
+                        kind: ExprKind::Identifier(path[0].clone()),
+                    };
+                    if Self::is_type_receiver(&ty) {
+                        return Some(Self::layout_query(ty, &path[1], self.span_from(&start)));
+                    }
+                }
                 return Some(Expr {
                     id: crate::ids::NodeId::DUMMY,
                     span: self.span_from(&start),
@@ -2650,6 +2695,70 @@ impl super::Parser {
             i += 1;
         }
         false
+    }
+
+    /// Whether `e`, in receiver position, names a type: a primitive type
+    /// name, a Type-class identifier, or a type path with arguments
+    /// (`Vec[i64]`). design.md §3: such a name is never a value.
+    fn is_type_receiver(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Identifier(n) => {
+                crate::effectchecker::LOWERED_OP_HEADS.contains(&n.as_str()) || starts_upper(n)
+            }
+            ExprKind::Path {
+                segments,
+                generic_args: Some(_),
+            } => segments.len() == 1,
+            _ => false,
+        }
+    }
+
+    /// `T.size_of()` / `T.align_of()` (design.md § Unsafe, the layout
+    /// queries): the size or alignment of `T` as an `i64`. Built as the
+    /// intrinsic call with `T` as its generic argument, cast to `i64`, so
+    /// every phase after the parser handles it as before. `ty` is a
+    /// receiver [`Self::is_type_receiver`] accepted.
+    fn layout_query(ty: Expr, name: &str, span: Span) -> Expr {
+        let dummy = crate::ids::NodeId::DUMMY;
+        let path = |segments: Vec<String>, generic_args: Option<Vec<GenericArg>>| TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments,
+                generic_args,
+                span: ty.span,
+            }),
+            span: ty.span,
+        };
+        let arg = match &ty.kind {
+            ExprKind::Path {
+                segments,
+                generic_args,
+            } => path(segments.clone(), generic_args.clone()),
+            ExprKind::Identifier(n) => path(vec![n.clone()], None),
+            _ => unreachable!("not a type receiver"),
+        };
+        let call = Expr {
+            id: dummy,
+            span,
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    id: dummy,
+                    span,
+                    kind: ExprKind::Path {
+                        segments: vec![name.to_string()],
+                        generic_args: Some(vec![GenericArg::Type(arg)]),
+                    },
+                }),
+                args: Vec::new(),
+            },
+        };
+        Expr {
+            id: dummy,
+            span,
+            kind: ExprKind::Cast {
+                expr: Box::new(call),
+                ty: path(vec!["i64".to_string()], None),
+            },
+        }
     }
 
     fn lookahead_concrete_type_ufcs(&self) -> bool {

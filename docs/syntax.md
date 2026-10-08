@@ -1727,8 +1727,12 @@ expression. See `design.md § Closure Behavior`, Rule 2½.
 ### 5.12 Function and Method Calls
 
 ```
-CALL_EXPR   = EXPR [ "[" TYPE_LIST "]" ] "(" [ ARG_LIST ] ")"
-              // Type args ([T]) for explicit generic specialization, omitted when inferable
+CALL_EXPR   = EXPR "(" [ ARG_LIST ] ")"
+              // No call-site type arguments (design.md §8): `f[x](args)` is an index
+              // followed by a call. Types come from a qualified receiver
+              // (`Vec[i64].new()`, `u32.size_of()`) or an annotation. `karac check`
+              // rejects the older `f[A, B](x)`, `size_of[T]()` and `ptr.null[T]()`
+              // forms; `build` and `run` still accept them while sources migrate.
 ARG_LIST    = ARG { "," ARG } [ "," ]
 ARG         = [ IDENT ":" ] [ "mut" ] EXPR
               // A label names a named parameter (the ones after a `;` in the
@@ -1741,8 +1745,8 @@ ARG         = [ IDENT ":" ] [ "mut" ] EXPR
               // `ref` and `mut ref` are **not** legal at call sites — the keyword is
               // rejected with a diagnostic pointing at the signature-declared mode.
 
-METHOD_CALL = EXPR "." IDENT [ "[" TYPE_LIST "]" ] "(" [ ARG_LIST ] ")"
-              // Type args for explicit specialization; no turbofish syntax
+METHOD_CALL = EXPR "." IDENT "(" [ ARG_LIST ] ")"
+              // No type arguments on a method either.
               // Method-call receivers never carry the `mut` marker (the `.` dispatch
               // signals mutation through the receiver; marker is suppressed by convention).
 ```
