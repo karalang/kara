@@ -241,7 +241,7 @@ Identifiers are ASCII. Non-ASCII identifiers are a parse error. Unicode identifi
 
 Kāra keeps its hard keywords few, so that common words stay usable as names.
 
-**Hard keywords** are words that start an item, a statement or an expression, plus the operators spelled as words. They can never be identifiers except through `r#` ([Raw identifiers](#raw-identifiers)).
+**Hard keywords** are words that start an item, a statement or an expression, plus the operators spelled as words. Outside member names (below), they can never be identifiers except through `r#` ([Raw identifiers](#raw-identifiers)).
 
 - Items: `fn`, `struct`, `enum`, `trait`, `impl`, `type`, `const`, `import`, `extern`, `unsafe`, `pub`, `private`.
 - Statements: `let`, `mut`, `if`, `else`, `match`, `while`, `for`, `in`, `loop`, `return`, `break`, `continue`, `defer`, `errdefer`.
@@ -279,6 +279,8 @@ fn create_server(host: String, port: u16) { ... }
 
 The logical operators are the words `and`, `or` and `not`. The symbols `&&`, `||` and prefix `!` are rejected with a fix that rewrites them.
 
+**Keywords as member names.** A member name may be any keyword, hard or reserved, without `r#`, in two positions where no keyword can start anything: directly after `.` (`opt.or(fallback)`, `ptr.const(x)`, `handle.await`), and as the name of a method or associated function declared in an `impl` or `trait` (`fn or(own self, other: own Option[T]) -> Option[T]`, `fn not(own self) -> Self.Output`). A free function, a local, a field declaration or a type still needs `r#`, since a bare call `or(x)` would read as the operator. Declaring or calling such a member with `r#` is also legal and means the same.
+
 #### Reserved for future use
 
 These words are reserved, so that a later feature can use them without breaking code. All but `pure` have no meaning yet. Using one as an identifier is `error[E_RESERVED_KEYWORD]` (`E0003`), and the fix is `r#name`.
@@ -310,7 +312,7 @@ The list is closed for v1. Adding a hard or reserved keyword is a breaking chang
 let r#async = compute_handle();             // `async` is reserved; r#async names a local
 fn r#try() -> Result[i32, AnyError] { ... } // r#try is a function
 struct Config { r#move: bool }              // r#move is a field
-let h = handle.r#await;                     // a field, not the keyword
+let h = handle.r#await;                     // a field; `handle.await` means the same
 import std.collections.r#async_map;         // a raw module-path segment
 ```
 
