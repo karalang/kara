@@ -3091,6 +3091,29 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(self.use_place(p, inner))
     }
 
+    /// `e` as an operand for a slot of type `want`. A tuple literal is
+    /// built at the slot's element types, each element widened into its
+    /// position: `(b, d)` with `b: u8` fills a `(i64, i64)` slot as
+    /// `(b as i64, d as i64)`, not as the `(u8, u32)` the checker records.
+    fn operand_at(&mut self, e: &'a Expr, want: Ty) -> R<Operand> {
+        if let ExprKind::Tuple(es) = &e.kind {
+            if let HK::Tuple(l) = self.tys().tcx().kind(want) {
+                let wts = self.tys().tcx().list(l);
+                if !es.is_empty() && wts.len() == es.len() && self.expr_ty(e)? != want {
+                    let mut ops = Vec::with_capacity(es.len());
+                    for (x, &wt) in es.iter().zip(&wts) {
+                        ops.push(self.operand_at(x, wt)?);
+                    }
+                    let l = self.temp(want);
+                    self.assign(l, Rvalue::Aggregate(AggregateKind::Tuple, ops));
+                    return Ok(Operand::Move(Place::local(l)));
+                }
+            }
+        }
+        let op = self.expr_operand(e)?;
+        Ok(self.widen(op, want))
+    }
+
     fn expr_operand(&mut self, e: &'a Expr) -> R<Operand> {
         if let Some(c) = self.constant(e)? {
             return Ok(Operand::Const(c));
@@ -3328,9 +3351,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             ExprKind::Tuple(es) => {
+                // Each element is built at its position's type in the
+                // destination, which may be wider than the element's own.
+                let dt = self.place_type(&dest);
+                let wts = match self.tys().tcx().kind(dt) {
+                    HK::Tuple(l) => self.tys().tcx().list(l),
+                    _ => Vec::new(),
+                };
                 let mut ops = Vec::new();
-                for x in es {
-                    ops.push(self.expr_operand(x)?);
+                for (i, x) in es.iter().enumerate() {
+                    ops.push(match wts.get(i) {
+                        Some(&wt) if wts.len() == es.len() => self.operand_at(x, wt)?,
+                        _ => self.expr_operand(x)?,
+                    });
                 }
                 self.assign(dest, Rvalue::Aggregate(AggregateKind::Tuple, ops));
                 Ok(())
@@ -3357,10 +3390,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // declaration order.
                 let mut vals: Vec<(u32, Operand)> = Vec::new();
                 for fi in fields {
-                    let Some((idx, _)) = self.field_of(t, variant, &fi.name) else {
+                    let Some((idx, ft)) = self.field_of(t, variant, &fi.name) else {
                         return self.unsupported(fi.span, "this field");
                     };
-                    let op = self.expr_operand(&fi.value)?;
+                    let op = self.operand_at(&fi.value, ft)?;
                     vals.push((idx, op));
                 }
                 vals.sort_by_key(|(i, _)| *i);
@@ -3729,7 +3762,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let mut ops = Vec::new();
         for x in es {
-            ops.push(self.expr_operand(x)?);
+            ops.push(self.operand_at(x, elem)?);
         }
         let agg = Rvalue::Aggregate(AggregateKind::Array(elem), ops);
         if !vec {
@@ -8988,8 +9021,18 @@ fn unit_const(unit: Ty) -> Operand {
 /// on the MIR interpreter; or the first stage that refused it.
 pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
     let lowered = build_source(src)?;
-    // Core §11.2: conflicting `par` branches are a compile error.
-    // `KARAC_MIR_EFFECTS=0` skips the check.
+    par_check(&lowered)?;
+    Ok(interp::run_untraced(
+        &lowered.program,
+        &lowered.tys,
+        "main",
+        vec![],
+    ))
+}
+
+/// Core §11.2: conflicting `par` branches are a compile error.
+/// `KARAC_MIR_EFFECTS=0` skips the check.
+fn par_check(lowered: &Lowered) -> Result<(), String> {
     let has_par = lowered
         .program
         .bodies
@@ -9017,18 +9060,14 @@ pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
             ));
         }
     }
-    Ok(interp::run_untraced(
-        &lowered.program,
-        &lowered.tys,
-        "main",
-        vec![],
-    ))
+    Ok(())
 }
 
 /// [`run_source`], writing the program's output to the process's stdout
 /// and stderr as it runs (`karac __mir-run`).
 pub fn run_source_streaming(src: &str) -> Result<interp::RunResult, String> {
     let lowered = build_source(src)?;
+    par_check(&lowered)?;
     Ok(interp::run_streaming(
         &lowered.program,
         &lowered.tys,
@@ -9866,6 +9905,28 @@ fn main() {
                 .to_string(),
                 Some(0)
             ))
+        );
+    }
+
+    /// A tuple literal is built at its slot's element types: a struct
+    /// field, an array element, a nested tuple, a return value.
+    #[test]
+    fn tuple_literal_takes_its_slots_element_widths() {
+        let src = r#"
+struct P { t: (i64, i64), n: i64 }
+fn nest() -> ((i64, i64), i64) { let b: u8 = 200u8; let d: u32 = 4000000000u32; ((b, d), 7) }
+fn main() {
+    let b: u8 = 200u8;
+    let d: u32 = 4000000000u32;
+    let p = P { t: (b, d), n: 7 };
+    let w: Vec[(i32, u8, i64)] = vec![(-1, 200, 3), (5, 7, 9)];
+    let r = nest();
+    println(f"{p.t.0 + p.t.1} {w[1].2} {r.0.0 + r.0.1}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("4000000200 9 4000000200\n".to_string(), Some(0)))
         );
     }
 
