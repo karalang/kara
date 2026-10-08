@@ -263,10 +263,37 @@ pub(super) fn gather_move_paths(
             mp.intern(&Place::local(Local(i as u32)));
         }
     }
-    let mut add = |p: &Place| {
-        if p.local != Local::RETURN_PLACE
+    let tracked = |p: &Place| place_ty(body, tys, p).is_ok_and(|pt| track(pt.ty));
+    // A place reached through a `shared` handle is the object's, not this
+    // function's: nothing moves out of it (core semantics §6.1).
+    let ours = |p: &Place| {
+        p.local != Local::RETURN_PLACE
             && !p.is_move_forbidden()
-            && place_ty(body, tys, p).is_ok_and(|pt| track(pt.ty))
+            && !(0..p.projection.len()).any(|i| {
+                let prefix = Place {
+                    local: p.local,
+                    projection: p.projection[..i].to_vec(),
+                };
+                place_ty(body, tys, &prefix)
+                    .is_ok_and(|pt| matches!(tys.kind(pt.ty), TyKind::Shared(_)))
+            })
+    };
+    let add = |p: &Place, mp: &mut MovePaths| {
+        if ours(p) && tracked(p) {
+            mp.intern(p);
+        }
+    };
+    // A move out of an untracked part of a tracked place still leaves the
+    // place partly moved, so its drop must be opened.
+    let add_moved = |p: &Place, mp: &mut MovePaths| {
+        if ours(p)
+            && (tracked(p)
+                || (0..p.projection.len()).any(|i| {
+                    tracked(&Place {
+                        local: p.local,
+                        projection: p.projection[..i].to_vec(),
+                    })
+                }))
         {
             mp.intern(p);
         }
@@ -274,33 +301,33 @@ pub(super) fn gather_move_paths(
     for block in &body.blocks {
         for s in &block.statements {
             if let StatementKind::Assign(dest, rv) = &s.kind {
-                add(dest);
+                add(dest, &mut mp);
                 for o in rvalue_operands(rv) {
                     if let Operand::Move(p) = o {
-                        add(p);
+                        add_moved(p, &mut mp);
                     }
                 }
             }
         }
         match &block.terminator.kind {
-            TerminatorKind::Drop { place, .. } => add(place),
+            TerminatorKind::Drop { place, .. } => add(place, &mut mp),
             TerminatorKind::Call {
                 func,
                 args,
                 destination,
                 ..
             } => {
-                add(destination);
+                add(destination, &mut mp);
                 for o in std::iter::once(func).chain(args) {
                     if let Operand::Move(p) = o {
-                        add(p);
+                        add_moved(p, &mut mp);
                     }
                 }
             }
             TerminatorKind::SwitchInt {
                 discr: Operand::Move(p),
                 ..
-            } => add(p),
+            } => add_moved(p, &mut mp),
             _ => {}
         }
     }
@@ -1603,6 +1630,30 @@ fn main() -> () {
         let r = run(&Program::from_module(&m), &m.tys, "main", vec![]);
         assert_eq!(r.outcome, Outcome::Returned(Value::Unit), "{}", r.output);
         assert_eq!(r.output, "drop 1\ndrop 2\n");
+    }
+
+    /// Moving out a part whose type needs no drop still leaves its owner
+    /// partly moved: `x?` takes the `Ok` payload, so the drop of the
+    /// `Result` is opened and drops only an `Err` payload.
+    #[test]
+    fn mir_elab_move_of_a_no_drop_part_opens_the_drop() {
+        let src = "\
+enum Src { Web, Ev }
+enum Er { Bad(String) }
+fn pc(s: ref String) -> Result[Src, Er] {
+    if s == \"w\" { Ok(Src.Web) } else { Err(Er.Bad(s.clone())) }
+}
+fn go(s: ref String) -> Result[i64, Er] {
+    let c = pc(s)?;
+    match c { Src.Web => Ok(1), Src.Ev => Ok(2) }
+}
+fn main() {
+    match go(\"w\".to_string()) { Ok(n) => println(f\"{n}\"), Err(_) => println(\"e\") }
+    match go(\"x\".to_string()) { Ok(n) => println(f\"{n}\"), Err(_) => println(\"e\") }
+}
+";
+        let out = crate::mir::lower::tests::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(out, ("1\ne\n".to_string(), Some(0)));
     }
 
     /// Elaborating the same body twice is refused rather than repeated.
