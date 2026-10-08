@@ -7108,6 +7108,32 @@ fn main() {
         assert_eq!(run_source(zero).map(|r| r.1), Ok(Some(101)));
     }
 
+    /// `char.try_from`, `String.cmp` (here through `sort_by`) and
+    /// `is_power_of_two` from source.
+    #[test]
+    fn try_from_cmp_and_power_of_two() {
+        let src = r#"
+fn main() {
+    let a = char.try_from(97);
+    let b = char.try_from(55296);
+    println(f"{a.unwrap()} {b.unwrap_err()}");
+    let mut words: Vec[String] = Vec.new();
+    words.push("pear".to_string());
+    words.push("apple".to_string());
+    words.push("fig".to_string());
+    words.sort_by(|x, y| x.cmp(y));
+    println(f"{words[0]} {words[1]} {words[2]}");
+    let n: u64 = 64;
+    let m: u64 = 96;
+    println(f"{n.is_power_of_two()} {m.is_power_of_two()}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("a 55296\napple fig pear\ntrue false\n".to_string(), Some(0)))
+        );
+    }
+
     /// `u8 as char`, `char as` an integer and `bool as` an integer.
     #[test]
     fn char_and_bool_casts() {

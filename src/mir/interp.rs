@@ -120,6 +120,13 @@ pub enum Value {
         len: u64,
     },
     Fn(InstanceId),
+    /// An erased function value (`Fn`, `MutFn`, `OnceFn`): the body it
+    /// calls and, for a closure, the heap slot holding its environment,
+    /// whose type is `env_ty`. It owns the environment.
+    Erased {
+        body: String,
+        env: Option<(AllocId, Ty)>,
+    },
 }
 
 impl Value {
@@ -539,6 +546,14 @@ impl<'a> Interp<'a> {
             ("String", _) if STRING_TEXT_METHODS.contains(&method) => {
                 self.string_text_method(name, method, args, ret)
             }
+            ("char", "try_from") => match args.as_slice() {
+                // `Err` holds the codepoint that is not a Unicode scalar.
+                [Value::Int(n)] => match u32::try_from(*n).ok().and_then(char::from_u32) {
+                    Some(c) => self.variant_named(ret, None, "Ok", vec![Value::Char(c)]),
+                    None => self.variant_named(ret, None, "Err", vec![Value::Int(*n)]),
+                },
+                _ => err(format!("{name} takes an integer")),
+            },
             ("char", "len_utf8") => match args.as_slice() {
                 [Value::Char(c)] => Ok(Value::Int(c.len_utf8() as i128)),
                 _ => err(format!("{name} takes a char")),
@@ -587,7 +602,7 @@ impl<'a> Interp<'a> {
                 _,
                 "max" | "min" | "abs" | "pow" | "wrapping_add" | "wrapping_sub" | "wrapping_mul"
                 | "count_ones" | "signum" | "sqrt" | "floor" | "ceil" | "round" | "rem_euclid"
-                | "div_euclid",
+                | "div_euclid" | "is_power_of_two",
             ) if args
                 .first()
                 .is_some_and(|a| matches!(a, Value::Int(_) | Value::Float(_))) =>
@@ -1142,6 +1157,123 @@ impl<'a> Interp<'a> {
         }
         all.extend(args);
         self.call(&f.body.instance.name, all)
+    }
+
+    /// Writes a call's result to its destination and goes on to `target`.
+    fn finish_call(
+        &mut self,
+        body: &Body,
+        destination: &Place,
+        target: &Option<BasicBlock>,
+        ret: Value,
+        what: &str,
+    ) -> R<Option<BasicBlock>> {
+        let Some(target) = target else {
+            return err(format!(
+                "{what} returned, but the call site says it never does"
+            ));
+        };
+        let (addr, ty) = self
+            .resolve(body, destination, Mode::Write)?
+            .expect("write mode never probes");
+        let old = self.slot(&addr)?;
+        if self.owns_drop(&old, ty) {
+            return err("call result overwrites a place that still owns a value");
+        }
+        *self.slot_mut(&addr)? = ret;
+        self.events
+            .push(Event::Init(self.place_str(body, destination)));
+        Ok(Some(*target))
+    }
+
+    /// The `Erase` cast: a function item, a closure (whose environment
+    /// moves to a heap slot the erased value owns), or an erased value
+    /// widened to another kind, which is the same value.
+    fn erase(&mut self, x: Value, from: Ty) -> R<Value> {
+        match (x, self.tys.kind(from).clone()) {
+            (Value::Fn(inst), _) => Ok(Value::Erased {
+                body: inst.name,
+                env: None,
+            }),
+            (v @ Value::Erased { .. }, _) => Ok(v),
+            (v, TyKind::Closure(def, _)) => {
+                let program: &'a Program = self.program;
+                let body = program
+                    .bodies
+                    .values()
+                    .find(|b| b.instance.def == def)
+                    .ok_or_else(|| Stop::Error(format!("Erase: no body for closure {def:?}")))?;
+                let slot = AllocId(self.heap.len() as u32);
+                self.heap.push(Some(HeapObj { count: 1, value: v }));
+                Ok(Value::Erased {
+                    body: body.instance.name.clone(),
+                    env: Some((slot, from)),
+                })
+            }
+            (v, _) => err(format!(
+                "cannot erase {v:?} of type {}",
+                self.tys.display(from)
+            )),
+        }
+    }
+
+    /// A call through an erased value: by `ref` or `mut ref` (the value
+    /// stays), or by value (an `OnceFn`, consumed by the call). The
+    /// closure body takes its environment the way its own first parameter
+    /// says; an environment it only borrowed is dropped once a by-value
+    /// call returns.
+    fn call_erased(&mut self, f: Value, args: Vec<Value>) -> R<Value> {
+        let (f, by_value) = match f {
+            Value::Ref(a) => (self.slot(&a)?, false),
+            v => (v, true),
+        };
+        let Value::Erased { body: name, env } = f else {
+            return err(format!("call through {f:?}, which is not a function value"));
+        };
+        let Some((slot, env_ty)) = env else {
+            return self.call(&name, args);
+        };
+        let program: &'a Program = self.program;
+        let body = program
+            .bodies
+            .get(&name)
+            .ok_or_else(|| Stop::Error(format!("no body for {name}")))?;
+        let takes_env = body
+            .args()
+            .next()
+            .map(|l| {
+                !matches!(
+                    self.tys.kind(body.local(l).ty),
+                    TyKind::Ref(_) | TyKind::MutRef(_)
+                )
+            })
+            .ok_or_else(|| Stop::Error(format!("{name}: a closure body with no env")))?;
+        let at = Addr {
+            root: Root::Heap(slot),
+            path: Vec::new(),
+        };
+        let mut all = Vec::with_capacity(args.len() + 1);
+        if takes_env {
+            if !by_value {
+                return err(format!(
+                    "{name} takes its environment by value and is called through a reference"
+                ));
+            }
+            all.push(std::mem::replace(
+                &mut self.live(slot)?.value,
+                Value::Uninit,
+            ));
+            self.heap[slot.0 as usize] = None;
+        } else {
+            all.push(Value::Ref(at.clone()));
+        }
+        all.extend(args);
+        let ret = self.call(&name, all)?;
+        if by_value && !takes_env {
+            self.drop_at(&at, env_ty)?;
+            self.heap[slot.0 as usize] = None;
+        }
+        Ok(ret)
     }
 
     /// Drops what is left of a held closure's environment.
@@ -1816,6 +1948,14 @@ impl<'a> Interp<'a> {
         let s = text(0)?;
         match method {
             "lt" => Ok(Value::Bool(s < text(1)?)),
+            "cmp" => {
+                let want = match s.cmp(text(1)?) {
+                    std::cmp::Ordering::Less => "Less",
+                    std::cmp::Ordering::Equal => "Equal",
+                    std::cmp::Ordering::Greater => "Greater",
+                };
+                self.variant_named(ret, None, want, Vec::new())
+            }
             "find" => {
                 // The byte offset of the first occurrence of a String or
                 // char needle (legacy's `str::find`).
@@ -1976,6 +2116,7 @@ impl<'a> Interp<'a> {
                 };
                 Ok(Value::Int(wrap(r, it)))
             }
+            ("is_power_of_two", [Value::Int(a)]) => Ok(Value::Bool(*a > 0 && (*a & (*a - 1)) == 0)),
             ("count_ones", [Value::Int(a)]) => {
                 let bits = match self.tys.kind(ret) {
                     TyKind::Int(_) => (*a as u128 & u64::MAX as u128).count_ones(),
@@ -2815,6 +2956,10 @@ impl<'a> Interp<'a> {
                     (op, x, _) => err(format!("cannot apply {op:?} to {x:?}")),
                 }
             }
+            Rvalue::Cast(CastKind::Erase, o, _) => {
+                let (x, from) = self.operand(body, o)?;
+                self.erase(x, from)
+            }
             Rvalue::Cast(kind, o, to) => {
                 let (x, _) = self.operand(body, o)?;
                 let to_kind = self.tys.kind(*to).clone();
@@ -3016,9 +3161,6 @@ impl<'a> Interp<'a> {
                 unwind: UnwindAction::Abort,
             } => {
                 let (f, _) = self.operand(body, func)?;
-                let Value::Fn(inst) = f else {
-                    return err("call of a value that is not a function item");
-                };
                 let mut vals = Vec::with_capacity(args.len());
                 let mut arg_tys = Vec::with_capacity(args.len());
                 for a in args {
@@ -3029,28 +3171,20 @@ impl<'a> Interp<'a> {
                 let ret_ty = place_ty(body, self.tys, destination)
                     .map_err(|e| Stop::Error(format!("call destination: {e}")))?
                     .ty;
+                let inst = match f {
+                    Value::Fn(inst) => inst,
+                    erased @ (Value::Erased { .. } | Value::Ref(_)) => {
+                        let ret = self.call_erased(erased, vals)?;
+                        return self.finish_call(body, destination, target, ret, "an erased call");
+                    }
+                    _ => return err("call of a value that is not a function item"),
+                };
                 let ret = if self.program.bodies.contains_key(&inst.name) {
                     self.call(&inst.name, vals)?
                 } else {
                     self.native(&inst.name, vals, &arg_tys, ret_ty)?
                 };
-                let Some(target) = target else {
-                    return err(format!(
-                        "{} returned, but the call site says it never does",
-                        inst.name
-                    ));
-                };
-                let (addr, ty) = self
-                    .resolve(body, destination, Mode::Write)?
-                    .expect("write mode never probes");
-                let old = self.slot(&addr)?;
-                if self.owns_drop(&old, ty) {
-                    return err("call result overwrites a place that still owns a value");
-                }
-                *self.slot_mut(&addr)? = ret;
-                self.events
-                    .push(Event::Init(self.place_str(body, destination)));
-                Ok(Some(*target))
+                self.finish_call(body, destination, target, ret, &inst.name)
             }
             TerminatorKind::Drop {
                 place,
@@ -3121,6 +3255,23 @@ impl<'a> Interp<'a> {
                 }
                 Ok(())
             }
+            // An erased function value owns its closure's environment.
+            TyKind::Fn { .. } => match v {
+                Value::Erased { env: None, .. } => Ok(()),
+                Value::Erased {
+                    env: Some((slot, env_ty)),
+                    ..
+                } => {
+                    let at = Addr {
+                        root: Root::Heap(slot),
+                        path: Vec::new(),
+                    };
+                    self.drop_at(&at, env_ty)?;
+                    self.heap[slot.0 as usize] = None;
+                    Ok(())
+                }
+                other => err(format!("a function-value place holds {other:?}")),
+            },
             TyKind::Intrinsic(k) => {
                 let Value::Box(id) = v else {
                     return err(format!("a {} place holds no box", self.tys.display(ty)));
@@ -3299,6 +3450,7 @@ impl<'a> Interp<'a> {
 /// `String` methods [`Interp::string_text_method`] implements.
 const STRING_TEXT_METHODS: &[&str] = &[
     "find",
+    "cmp",
     "char_at",
     "contains",
     "starts_with",
@@ -4165,7 +4317,7 @@ fn main() -> () {
             (std::fs::read_to_string(out).unwrap(), 0)
         };
         let ran = run_pin_files("tests/mir/lib", MirPhase::DropsElaborated, &want);
-        assert_eq!(ran, 10);
+        assert_eq!(ran, 11);
     }
 
     /// A strict drop of a fieldless variant, a fieldless variant left in

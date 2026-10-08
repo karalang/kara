@@ -1,0 +1,78 @@
+struct R: Drop { id: i64 }
+
+fn R.drop(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const "d", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn main.c0(_1: ref closure#2(R), _2: i64) -> i64 {
+    let mut _0: i64;
+    bb0: {
+        _0 = Add(copy (*_1).0.0, copy _2);
+        return;
+    }
+}
+
+fn main.c1(_1: ref closure#3(R), _2: i64) -> i64 {
+    let mut _0: i64;
+    bb0: {
+        _0 = Mul(copy (*_1).0.0, copy _2);
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: R;
+    let _2: closure#2(R);
+    let _3: Fn(i64) -> i64;
+    let _4: ref Fn(i64) -> i64;
+    let _5: i64;
+    let _6: ();
+    let _7: R;
+    let _8: closure#3(R);
+    let _9: OnceFn(i64) -> i64;
+    bb0: {
+        _1 = R { const 10_i64 };
+        _2 = closure#2(R) [move _1];
+        _3 = move _2 as Fn(i64) -> i64 (Erase);
+        _4 = &_3;
+        _5 = copy _4(const 1_i64) -> bb1;
+    }
+    bb1: {
+        _6 = println(copy _5) -> bb2;
+    }
+    bb2: {
+        _4 = &_3;
+        _5 = copy _4(const 2_i64) -> bb3;
+    }
+    bb3: {
+        _6 = println(copy _5) -> bb4;
+    }
+    bb4: {
+        _7 = R { const 5_i64 };
+        _8 = closure#3(R) [move _7];
+        _9 = move _8 as OnceFn(i64) -> i64 (Erase);
+        _5 = move _9(const 3_i64) -> bb5;
+    }
+    bb5: {
+        _6 = println(copy _5) -> bb6;
+    }
+    bb6: {
+        _6 = println(const "end") -> bb7;
+    }
+    bb7: {
+        drop(_3) -> bb8;
+    }
+    bb8: {
+        _0 = const ();
+        return;
+    }
+}
