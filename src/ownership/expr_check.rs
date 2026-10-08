@@ -836,7 +836,17 @@ impl<'a> super::OwnershipChecker<'a> {
                 then_block,
                 else_branch,
             } => {
-                self.check_expr_reading(value, states, param_types, param_usage);
+                // D5 migration: a binding moves its part out of an owned
+                // scrutinee, as `match` below treats it, so a bare parameter
+                // matched this way keeps `own`. Legacy reads it.
+                if self.d5.is_some()
+                    && self.pattern_binds_anything(pattern)
+                    && !self.is_borrow_typed_scrutinee(value, param_types)
+                {
+                    self.check_expr_consuming(value, states, param_types, param_usage);
+                } else {
+                    self.check_expr_reading(value, states, param_types, param_usage);
+                }
                 self.report_mut_ref_pattern_write(pattern, value);
                 let mut then_states = states.clone();
                 self.define_pattern_states(pattern, &mut then_states);
@@ -894,7 +904,24 @@ impl<'a> super::OwnershipChecker<'a> {
                     if let Some(guard) = &arm.guard {
                         self.check_expr_reading(guard, &mut arm_states, param_types, param_usage);
                     }
-                    self.check_expr_reading(&arm.body, &mut arm_states, param_types, param_usage);
+                    // D5 migration: an arm's value is the match's, which
+                    // this walk consumes (`true => a` returns `a`), as an
+                    // `if` branch's block tail is. Legacy reads it.
+                    if self.d5.is_some() {
+                        self.check_expr_consuming(
+                            &arm.body,
+                            &mut arm_states,
+                            param_types,
+                            param_usage,
+                        );
+                    } else {
+                        self.check_expr_reading(
+                            &arm.body,
+                            &mut arm_states,
+                            param_types,
+                            param_usage,
+                        );
+                    }
                     self.reject_shared_enum_drop_payload_move(
                         scrutinee,
                         &arm.pattern,
@@ -1097,7 +1124,13 @@ impl<'a> super::OwnershipChecker<'a> {
                     }
                 }
 
-                self.check_expr_reading(body, states, &closure_param_types, param_usage);
+                // D5 migration: the body's value is the closure's result, so
+                // `|| w` takes `w` (legacy reads it).
+                if self.d5.is_some() {
+                    self.check_expr_consuming(body, states, &closure_param_types, param_usage);
+                } else {
+                    self.check_expr_reading(body, states, &closure_param_types, param_usage);
+                }
 
                 // Harvest closure-param mode classifications. Each
                 // `param_usage` entry was zeroed before the walk, so

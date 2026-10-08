@@ -38,6 +38,9 @@ pub(crate) struct D5State {
     pub(crate) own: FxHashSet<(String, usize)>,
     /// Bare positions this walk found needing `own`.
     pub(crate) needs: Vec<(String, usize)>,
+    /// Bindings of the function being walked that a closure takes away:
+    /// captured by move, or captured at all by a closure that escapes.
+    pub(crate) closure_taken: FxHashSet<String>,
 }
 
 /// A user-written function, with the key the ownership pass knows it by and
@@ -162,6 +165,7 @@ impl<'a> OwnershipChecker<'a> {
         self.d5 = Some(D5State {
             own,
             needs: Vec::new(),
+            closure_taken: FxHashSet::default(),
         });
         self
     }
@@ -183,6 +187,23 @@ impl<'a> OwnershipChecker<'a> {
     ) {
         if self.d5.is_none() {
             return;
+        }
+        // A closure that moves a parameter, or outlives the call holding it,
+        // takes it away from the caller.
+        let mut taken = self
+            .d5
+            .as_mut()
+            .map(|d| std::mem::take(&mut d.closure_taken))
+            .unwrap_or_default();
+        for (key, caps) in &self.closure_captures {
+            if self.closure_function.get(key).map(String::as_str) != Some(fn_key) {
+                continue;
+            }
+            for (name, mode) in caps {
+                if matches!(mode, OwnershipMode::Own) {
+                    taken.insert(name.clone());
+                }
+            }
         }
         let mut needs = Vec::new();
         for (i, p) in f.params.iter().enumerate() {
@@ -212,7 +233,8 @@ impl<'a> OwnershipChecker<'a> {
                 matches!(
                     param_usage.get(n),
                     Some(ParamUsage::Consumed | ParamUsage::Mutated)
-                ) || self.d5_runs_user_drop(t, &mut Vec::new())
+                ) || taken.contains(n)
+                    || self.d5_runs_user_drop(t, &mut Vec::new())
             });
             if unique_fn || moved {
                 needs.push((fn_key.to_string(), i));

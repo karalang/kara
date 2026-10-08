@@ -96,6 +96,10 @@ impl<'a> super::OwnershipChecker<'a> {
                 None => continue,
             };
             for (cap_name, mode) in &captures {
+                // D5 migration: an escaping closure takes what it captures.
+                if let Some(d5) = self.d5.as_mut() {
+                    d5.closure_taken.insert(cap_name.clone());
+                }
                 if !matches!(mode, OwnershipMode::Ref | OwnershipMode::MutRef) {
                     continue;
                 }

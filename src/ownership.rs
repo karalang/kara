@@ -1253,6 +1253,19 @@ pub(crate) fn collect_copy_bounded_type_params(
 /// `lower_type_for_ownership` both produce for a type parameter; `TypeParam`
 /// is what reaches here from `tc.expr_types`. Both are accepted — see the
 /// typechecker's `type_param_has_trait_bound` for the Named-vs-TypeParam trap.
+/// Whether `ty` holds a `Result` by value (in itself, an `Option`, a tuple or
+/// an array), which core semantics §1.1 never makes `Copy`.
+fn mentions_result(ty: &Type) -> bool {
+    match ty {
+        Type::Named { name, args } => {
+            name == "Result" || (name == "Option" && args.iter().any(mentions_result))
+        }
+        Type::Tuple(ts) => ts.iter().any(mentions_result),
+        Type::Array { element, .. } => mentions_result(element),
+        _ => false,
+    }
+}
+
 pub(crate) fn is_copy_type_in_scope(
     ty: &Type,
     tc: &TypeCheckResult,
@@ -1880,6 +1893,11 @@ impl<'a> OwnershipChecker<'a> {
     /// #[derive(Copy)], or a generic parameter the function under check
     /// declares `Copy` (B-2026-09-02-19).
     fn is_copy_type(&self, ty: &Type) -> bool {
+        // D5 migration: core semantics §1.1 makes no `Result` `Copy`, so a
+        // bare `Result` parameter used by value keeps `own`.
+        if self.d5.is_some() && mentions_result(ty) {
+            return false;
+        }
         is_copy_type_in_scope(ty, self.typecheck_result, &self.copy_bounded_type_params)
     }
 
@@ -2781,7 +2799,6 @@ impl<'a> OwnershipChecker<'a> {
         self.check_block(&f.body, &mut states, &param_types, &mut param_usage);
 
         self.current_classification = None;
-        self.d5_record(f, &fn_key, &param_types, &param_usage);
 
         // Round 12.35–12.39 — Closure ownership Step 7: detect ref-
         // captured values that escape their borrow's lifetime. A
@@ -2801,6 +2818,9 @@ impl<'a> OwnershipChecker<'a> {
         // case (iv). Emits E0508 at the closure expression with a
         // three-fix message.
         let escaping_own_params = self.check_closure_ref_capture_escapes(f);
+        // After the escape check, which tells the D5 migration what the
+        // function's escaping closures take.
+        self.d5_record(f, &fn_key, &param_types, &param_usage);
 
         // Source-pinning for borrow returns (`-> ref T`): every returned
         // borrow must trace to a `ref` parameter, or it would dangle.

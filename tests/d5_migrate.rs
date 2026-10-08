@@ -219,3 +219,47 @@ fn main() { consume(W { id: 1 }); println(look(Plain { s: \"a\" })); }
     assert!(out.contains("fn show(own self)"), "{out}");
     assert!(out.contains("fn peek(ref self)"), "{out}");
 }
+
+/// The shapes Thread B's D5 corpus run found still moving out of a borrow:
+/// a parameter handed back as a `match` arm's value, a payload moved out by
+/// `if let`, a `Result` (never `Copy`, core semantics §1.1), a parameter a
+/// closure moves out, and one captured by a closure that is returned. A
+/// closure that only reads a parameter and stays in the function leaves it
+/// borrowed, and so does an `if let` over a `Copy` value.
+#[test]
+fn match_arms_if_let_results_and_closures_that_take_a_parameter_get_own() {
+    let src = "\
+enum E { S(String), N }
+struct W { s: String }
+fn pick(a: String, b: String) -> String { match a > b { true => a, false => b } }
+fn take(s: E) -> String { if let E.S(x) = s { return x; } \"z\".to_string() }
+fn small(o: Option[i64]) -> i64 { if let Some(x) = o { x } else { 0 } }
+fn idr(r: Result[Option[i64], i64]) -> Result[Option[i64], i64] { r }
+fn back(w: W) -> W { let g = || w; g() }
+fn make(p: String, base: i64) -> Fn(i64) -> i64 { |n| p.len() + base + n }
+fn local(p: String) -> i64 { let g = |n: i64| p.len() + n; g(1) }
+fn main() {
+    println(pick(\"x\".to_string(), \"y\".to_string()));
+    println(take(E.N));
+    println(small(None));
+    println(idr(Ok(None)).is_ok());
+    println(back(W { s: \"w\".to_string() }).s);
+    println(make(\"ab\".to_string(), 1)(2));
+    println(local(\"abc\".to_string()));
+}
+";
+    let out = migrate(src);
+    assert!(
+        out.contains("fn pick(a: own String, b: own String)"),
+        "{out}"
+    );
+    assert!(out.contains("fn take(s: own E)"), "{out}");
+    assert!(out.contains("fn small(o: Option[i64])"), "{out}");
+    assert!(
+        out.contains("fn idr(r: own Result[Option[i64], i64])"),
+        "{out}"
+    );
+    assert!(out.contains("fn back(w: own W)"), "{out}");
+    assert!(out.contains("fn make(p: own String, base: i64)"), "{out}");
+    assert!(out.contains("fn local(p: String)"), "{out}");
+}
