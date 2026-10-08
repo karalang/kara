@@ -2898,6 +2898,10 @@ pub struct TypeChecker<'a> {
     /// the injected copy, and the skip corrupted its lowering — broke the
     /// `e2e_tracing_*` / `ordering` codegen).
     pub(super) compiling_stdlib: bool,
+    /// A library type's method that a source `impl` declares is typed
+    /// through that impl, ahead of the hard-coded arms (redesign A2; set by
+    /// the MIR pipeline, which appends the library's Kāra source).
+    pub(super) library_methods_from_source: bool,
     /// Set once [`Self::report_empty_prefix_literal`] has reported an
     /// un-inferrable empty collection literal, so the bound-discharge path
     /// does not report the SAME root cause a second time in different words
@@ -3155,6 +3159,7 @@ impl<'a> TypeChecker<'a> {
             closure_param_seeds: FxHashMap::default(),
             current_fn_stdlib_origin: false,
             compiling_stdlib: false,
+            library_methods_from_source: false,
             reported_uninferrable_empty_literal: false,
             variant_ctor_in_callee: false,
             uninferrable_binding_origins: FxHashMap::default(),
@@ -3198,6 +3203,14 @@ impl<'a> TypeChecker<'a> {
     /// this `false` and collision-skips any module it redefines.
     pub fn compiling_stdlib(mut self) -> Self {
         self.compiling_stdlib = true;
+        self
+    }
+
+    /// Type a call of a library type's method through the source `impl`
+    /// that declares it, when there is one, rather than through the
+    /// hard-coded arms. See [`crate::prelude::LIBRARY_SOURCES`].
+    pub fn library_methods_from_source(mut self) -> Self {
+        self.library_methods_from_source = true;
         self
     }
 

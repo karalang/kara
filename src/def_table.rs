@@ -51,6 +51,11 @@ pub struct ProgramDefs {
     pub methods: HashMap<DefId, HashMap<String, Vec<DefId>>>,
     /// Every impl block.
     pub impls: HashMap<DefId, ImplData>,
+    /// Per module (indexed by [`ModuleId`]): its impl blocks' DefIds, in the
+    /// order the blocks appear among its items. An impl's `#n` counts every
+    /// impl of the same target and label, the stdlib's included, so it cannot
+    /// be recomputed from one module's items alone.
+    pub module_impls: Vec<Vec<DefId>>,
     /// A method's impl block, or the trait that declares it.
     pub parent: HashMap<DefId, DefId>,
     /// Each generic definition's own type and const parameters, in declaration
@@ -186,8 +191,9 @@ impl ProgramDefs {
         for id in 0..n {
             defs.module_imports[id] = Self::imports_of(&defs, tree, id);
         }
+        defs.module_impls = vec![Vec::new(); n];
         for (id, m) in tree.modules.iter().enumerate() {
-            defs.add_impls(&m.items, |defs, name| defs.lookup(id, name));
+            defs.module_impls[id] = defs.add_impls(&m.items, |defs, name| defs.lookup(id, name));
         }
         defs
     }
@@ -200,7 +206,7 @@ impl ProgramDefs {
         let items = defs.add_items(&[], &program.items);
         defs.module_items = vec![items];
         defs.module_imports = vec![HashMap::new()];
-        defs.add_impls(&program.items, |defs, name| defs.lookup(0, name));
+        defs.module_impls = vec![defs.add_impls(&program.items, |defs, name| defs.lookup(0, name))];
         defs
     }
 
@@ -340,7 +346,13 @@ impl ProgramDefs {
     /// `n` counting that type's impls of that trait in build order, so two
     /// impls of one generic trait (`From[i32]`, `From[String]`) stay apart; its
     /// methods hang off it.
-    fn add_impls(&mut self, items: &[Item], resolve: impl Fn(&Self, &str) -> Option<DefId>) {
+    /// Intern the impl blocks in `items`; returns their DefIds in order.
+    fn add_impls(
+        &mut self,
+        items: &[Item],
+        resolve: impl Fn(&Self, &str) -> Option<DefId>,
+    ) -> Vec<DefId> {
+        let mut out = Vec::new();
         for item in items {
             let Item::ImplBlock(b) = item else { continue };
             let target_name = match &b.target_type.kind {
@@ -370,6 +382,7 @@ impl ProgramDefs {
                 n += 1;
             };
             let impl_id = self.table.intern(impl_path.clone(), DefKind::Impl);
+            out.push(impl_id);
             let trait_def = trait_name.as_deref().and_then(|t| resolve(self, t));
             self.impls.insert(
                 impl_id,
@@ -403,6 +416,7 @@ impl ProgramDefs {
                 }
             }
         }
+        out
     }
 
     /// The names module `id`'s imports bind, each followed to the module that

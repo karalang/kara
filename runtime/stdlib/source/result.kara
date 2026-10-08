@@ -1,0 +1,97 @@
+// `Result[T, E]`'s methods, as Kāra (redesign A2; docs/library/core-types.md).
+//
+// Appended to the program by the MIR pipeline only; see `option.kara` in
+// this directory for why the legacy backends do not read it.
+
+impl[T, E] Result[T, E] {
+    fn is_ok(ref self) -> bool {
+        match self {
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
+
+    fn is_err(ref self) -> bool {
+        match self {
+            Ok(_) => false,
+            Err(_) => true,
+        }
+    }
+
+    fn ok(self) -> Option[T] {
+        match self {
+            Ok(x) => Some(x),
+            Err(_) => None,
+        }
+    }
+
+    fn err(self) -> Option[E] {
+        match self {
+            Ok(_) => None,
+            Err(e) => Some(e),
+        }
+    }
+
+    fn map[U](self, f: OnceFn(T) -> U) -> Result[U, E] {
+        match self {
+            Ok(x) => Ok(f(x)),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn map_err[F](self, f: OnceFn(E) -> F) -> Result[T, F] {
+        match self {
+            Ok(x) => Ok(x),
+            Err(e) => Err(f(e)),
+        }
+    }
+
+    fn and_then[U](self, f: OnceFn(T) -> Result[U, E]) -> Result[U, E] {
+        match self {
+            Ok(x) => f(x),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn or_else[F](self, f: OnceFn(E) -> Result[T, F]) -> Result[T, F] {
+        match self {
+            Ok(x) => Ok(x),
+            Err(e) => f(e),
+        }
+    }
+
+    fn unwrap(self) -> T {
+        match self {
+            Ok(x) => x,
+            Err(_) => panic("called unwrap() on Err"),
+        }
+    }
+
+    fn expect(self, msg: String) -> T {
+        match self {
+            Ok(x) => x,
+            Err(_) => panic(msg),
+        }
+    }
+
+    fn unwrap_err(self) -> E {
+        match self {
+            Ok(_) => panic("called unwrap_err() on Ok"),
+            Err(e) => e,
+        }
+    }
+
+    fn unwrap_or(self, default: T) -> T {
+        match self {
+            Ok(x) => x,
+            Err(_) => default,
+        }
+    }
+
+    fn unwrap_or_else(self, f: OnceFn(E) -> T) -> T {
+        match self {
+            Ok(x) => x,
+            Err(e) => f(e),
+        }
+    }
+}

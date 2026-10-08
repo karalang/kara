@@ -304,7 +304,11 @@ fn place_substs(
 ) -> Result<Vec<Ty>, HirError> {
     let order = match callee {
         Callee::Def(def) => defs.generics(*def),
-        Callee::Builtin(_) | Callee::Value => None,
+        // A call through a value (a function-typed parameter or local) has
+        // no type parameters of its own; whatever the checker recorded at
+        // the node is the enclosing generic body's, not the callee's.
+        Callee::Value => return Ok(Vec::new()),
+        Callee::Builtin(_) => None,
     };
     let Some(order) = order else {
         return match solved {

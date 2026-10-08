@@ -239,12 +239,12 @@ fn at(span: Span) -> String {
 impl<'a> Lcx<'a> {
     // ── items ───────────────────────────────────────────────────────
 
-    /// Map each function and method in the AST to its DefId. An impl is
-    /// `[..target, "impl#n"]` or `[..target, "impl Trait#n"]` with `n`
-    /// counting that target's impls of that trait in order, which is the
-    /// order the definition table numbered them in.
+    /// Map each function and method in the AST to its DefId. An impl's
+    /// DefId comes from the definition table, which numbered the program's
+    /// impl blocks in item order after the stdlib's: a program's
+    /// `impl Option[T]` is `impl#1` when the stdlib already has one.
     fn index_functions(&mut self, program: &'a ast::Program) {
-        let mut impl_counts: FxHashMap<(Vec<String>, String), usize> = FxHashMap::default();
+        let mut impl_ids = self.defs.module_impls.first().into_iter().flatten();
         for item in &program.items {
             match item {
                 Item::Function(f) => {
@@ -272,24 +272,13 @@ impl<'a> Lcx<'a> {
                     }
                 }
                 Item::ImplBlock(b) => {
-                    let target_name = match &b.target_type.kind {
-                        ast::TypeKind::Path(p) => p.segments.last().cloned(),
-                        _ => None,
-                    };
-                    let Some(target) = target_name.and_then(|n| self.defs.lookup(0, &n)) else {
+                    let Some(&impl_id) = impl_ids.next() else {
                         continue;
                     };
-                    let target_path = self.defs.table.get(target).path.segments.clone();
-                    let label = match b.trait_name.as_ref().and_then(|t| t.segments.last()) {
-                        Some(t) => format!("impl {t}"),
-                        None => "impl".to_string(),
+                    let Some(target) = self.defs.impls.get(&impl_id).and_then(|i| i.target) else {
+                        continue;
                     };
-                    let n = impl_counts
-                        .entry((target_path.clone(), label.clone()))
-                        .or_insert(0);
-                    let mut impl_path = target_path;
-                    impl_path.push(format!("{label}#{n}"));
-                    *n += 1;
+                    let impl_path = self.defs.table.get(impl_id).path.segments.clone();
                     let impl_params = b.generic_params.as_ref().map_or(0, |g| g.params.len());
                     for it in &b.items {
                         let ImplItem::Method(f) = it else { continue };
@@ -5022,13 +5011,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                     None => return self.unsupported(e.span, "an associated function as a method"),
                 };
                 let mut rest = Vec::with_capacity(args.len());
+                let mut fn_tys: Vec<Option<Ty>> = Vec::with_capacity(args.len());
                 for (a, p) in args.iter().zip(&f.params) {
+                    // A function-typed parameter takes the closure or function
+                    // item itself, and the instance is specialised to it, as
+                    // for a free function's call.
+                    if self.is_fn_typed(p.pattern.id) {
+                        let (op, t) = self.fn_arg(&a.value)?;
+                        rest.push(op);
+                        fn_tys.push(Some(t));
+                        continue;
+                    }
                     let pt = self.callee_param_ty(p, &inst_args)?;
                     rest.push(self.arg_operand(&a.value, pt)?);
+                    fn_tys.push(None);
                 }
                 let mut ops = vec![self.recv_borrow_after(recv, &mut rest)];
                 ops.extend(rest);
-                let name = self.lcx.instance(d, inst_args.clone());
+                let name = if fn_tys.iter().any(Option::is_some) {
+                    self.lcx.instance_with_fns(d, inst_args.clone(), fn_tys)
+                } else {
+                    self.lcx.instance(d, inst_args.clone())
+                };
                 let func = self.fn_operand(&name, d, inst_args);
                 let next = self.b.new_block();
                 self.goto_with(
@@ -6275,7 +6279,14 @@ pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
 /// Check one source file, build its MIR and elaborate drops; or the first
 /// stage that refused it.
 pub fn build_source(src: &str) -> Result<Lowered, String> {
-    let parsed = crate::parse(src);
+    // The library's Kāra methods go after the program, so the program's own
+    // line numbers and spans are unchanged (redesign A2).
+    let mut src = src.to_string();
+    for (_, lib) in crate::prelude::LIBRARY_SOURCES {
+        src.push('\n');
+        src.push_str(lib);
+    }
+    let parsed = crate::parse(&src);
     if !parsed.errors.is_empty() {
         return Err(format!("parse: {:?}", parsed.errors[0]));
     }
@@ -6285,7 +6296,7 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     if !r.errors.is_empty() {
         return Err(format!("resolve: {:?}", r.errors[0]));
     }
-    let tc = crate::typecheck(&program, &r);
+    let tc = crate::typecheck_with_library_source(&program, &r);
     if !tc.errors.is_empty() {
         return Err(format!("typecheck: {}", tc.errors[0].message));
     }

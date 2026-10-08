@@ -1439,6 +1439,21 @@ impl<'a> super::TypeChecker<'a> {
             return Type::Error;
         }
 
+        // A library type's method with a Kāra body (redesign A2) is typed
+        // through that body's signature, so the call records the callee and
+        // the method's own type arguments like any other source method.
+        if self.library_methods_from_source {
+            let receiver = receiver_for_method_lookup(&obj_ty);
+            if let Some(type_name) = self.library_source_method_owner(&receiver, method) {
+                self.record_method_callee(
+                    SpanKey::from_span(span),
+                    format!("{type_name}.{method}"),
+                );
+                self.record_node_receiver_impl_subs(span, &obj_ty, &type_name, method);
+                return self.dispatch_user_impl_method(object, method, args, span, &receiver);
+            }
+        }
+
         // Raw-pointer instance methods (design.md § raw pointers).
         // Extracted to `method_pointer.rs`; it keeps this position in the
         // first-match-wins chain and the block order within it.

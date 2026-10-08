@@ -43,6 +43,30 @@ impl<'a> super::TypeChecker<'a> {
     /// "no method 'map' on type 'Array': iterator adaptors/terminals require an
     /// explicit `.iter()`". Both call sites read this, so the two halves cannot
     /// disagree about which receiver goes where.
+    /// The library type whose source inherent `impl` declares `method`, for
+    /// a receiver of one of [`crate::prelude::LIBRARY_SOURCE_TYPES`].
+    pub(super) fn library_source_method_owner(
+        &self,
+        receiver: &Type,
+        method: &str,
+    ) -> Option<String> {
+        let Type::Named { name, .. } = receiver else {
+            return None;
+        };
+        if !crate::prelude::LIBRARY_SOURCE_TYPES.contains(&name.as_str()) {
+            return None;
+        }
+        self.env
+            .impls
+            .iter()
+            .any(|imp| {
+                imp.target_type == *name
+                    && imp.trait_name.is_none()
+                    && imp.methods.contains_key(method)
+            })
+            .then(|| name.clone())
+    }
+
     fn array_user_impl_declares(&self, method: &str) -> bool {
         self.env
             .impls

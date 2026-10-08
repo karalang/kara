@@ -592,7 +592,10 @@ impl<'a> super::TypeChecker<'a> {
         // A synthesized type that still names a parameter from some signature
         // (`None` as `Option[T]`) is less precise than the type it was checked
         // against; typed HIR records the context's type instead.
-        if self.mentions_foreign_param(&ty) && !self.mentions_foreign_param(expected) {
+        if (self.mentions_foreign_param(&ty)
+            || self.is_underdetermined_variant(expr, &ty, expected))
+            && !self.mentions_foreign_param(expected)
+        {
             self.record_node_type(expr.id, expected);
         } else {
             self.record_node_type(expr.id, &ty);
@@ -600,6 +603,42 @@ impl<'a> super::TypeChecker<'a> {
         self.link_part_node_types(expr);
         self.deny_for_element_drop_copy_in_literal(expr);
         ty
+    }
+
+    /// Whether `expr` builds a variant of a generic enum (`None`, `O.N`,
+    /// `Ok(x)`, `R.B(e)`) whose synthesized type still holds one of the
+    /// enum's declared parameters, where `expected` is the same enum.
+    ///
+    /// The parameter is the ENUM's, not the enclosing signature's, even when
+    /// the two are spelled alike: inside `impl[T, E] Result[T, E]`, `None`
+    /// synthesizes as `Option[T]` and `Ok(x)` in a `-> Result[T, F]` method
+    /// as `Result[T, E]`, which typed HIR would read as the impl's `T` and
+    /// `E`. `mentions_foreign_param` cannot see that, since those names are
+    /// in scope; the context's type is the precise one.
+    fn is_underdetermined_variant(&self, expr: &Expr, ty: &Type, expected: &Type) -> bool {
+        let (Type::Named { name, args }, Type::Named { name: want, .. }) = (ty, expected) else {
+            return false;
+        };
+        if name != want || ty == expected || !args.iter().any(contains_type_param) {
+            return false;
+        }
+        let Some(info) = self.env.enums.get(name) else {
+            return false;
+        };
+        let is_variant = |v: &str| info.variants.iter().any(|(n, _)| n == v);
+        let names_variant = |e: &Expr| match &e.kind {
+            ExprKind::Identifier(v) => is_variant(v),
+            ExprKind::Path { segments, .. } => segments.last().is_some_and(|v| is_variant(v)),
+            _ => false,
+        };
+        match &expr.kind {
+            ExprKind::Identifier(_) | ExprKind::Path { .. } => names_variant(expr),
+            ExprKind::Call { callee, .. } => names_variant(callee),
+            ExprKind::MethodCall { object, method, .. } => {
+                matches!(&object.kind, ExprKind::Identifier(e) if e == name) && is_variant(method)
+            }
+            _ => false,
+        }
     }
 
     /// Link the parts of `expr` whose type is a projection of its type (the

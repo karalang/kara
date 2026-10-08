@@ -307,6 +307,17 @@ pub fn typecheck(program: &Program, resolve_result: &ResolveResult) -> TypeCheck
     checker.check()
 }
 
+/// Type-check a program the MIR pipeline built with the library's Kāra
+/// sources appended ([`prelude::LIBRARY_SOURCES`]): a call of a library
+/// type's method that those sources define is typed through its body.
+pub fn typecheck_with_library_source(
+    program: &Program,
+    resolve_result: &ResolveResult,
+) -> TypeCheckResult {
+    let checker = TypeChecker::new(program, resolve_result).library_methods_from_source();
+    checker.check()
+}
+
 /// Type-check a baked stdlib module compiled as its own program
 /// (`codegen::lower_stdlib_source`). Identical to [`typecheck`] except the
 /// always-injected-stdlib collision-skip (#34) is disabled — a stdlib module's

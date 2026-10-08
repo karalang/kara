@@ -759,6 +759,27 @@ pub fn lookup_exitcode_const(type_name: &str, const_name: &str) -> Option<i32> {
     }
 }
 
+/// The library types whose methods have Kāra bodies in [`LIBRARY_SOURCES`]
+/// (redesign A2).
+pub const LIBRARY_SOURCE_TYPES: &[&str] = &["Option", "Result"];
+
+/// Library methods written in Kāra (redesign A2), from
+/// `runtime/stdlib/source/`. The MIR pipeline appends them to the program and
+/// type-checks calls of a [`LIBRARY_SOURCE_TYPES`] method through them
+/// ([`crate::typechecker::TypeChecker::library_methods_from_source`]). The
+/// legacy pipeline never reads them; its hard-coded arms stay until it is
+/// deleted.
+pub const LIBRARY_SOURCES: &[(&str, &str)] = &[
+    (
+        "source/option.kara",
+        include_str!("../runtime/stdlib/source/option.kara"),
+    ),
+    (
+        "source/result.kara",
+        include_str!("../runtime/stdlib/source/result.kara"),
+    ),
+];
+
 /// Embedded stdlib sources, keyed by their on-disk basename (relative to
 /// `runtime/stdlib/`). Sources are baked at compile time via `include_str!`
 /// so the resulting binary is self-contained.
