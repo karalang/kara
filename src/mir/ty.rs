@@ -34,6 +34,7 @@ pub enum IntTy {
     U16,
     U32,
     U64,
+    U128,
     Usize,
 }
 
@@ -50,6 +51,7 @@ impl IntTy {
             IntTy::U16 => "u16",
             IntTy::U32 => "u32",
             IntTy::U64 => "u64",
+            IntTy::U128 => "u128",
             IntTy::Usize => "usize",
         }
     }
@@ -60,7 +62,7 @@ impl IntTy {
             IntTy::I16 | IntTy::U16 => 16,
             IntTy::I32 | IntTy::U32 => 32,
             IntTy::I64 | IntTy::U64 | IntTy::Isize | IntTy::Usize => 64,
-            IntTy::I128 => 128,
+            IntTy::I128 | IntTy::U128 => 128,
         }
     }
 
@@ -85,6 +87,7 @@ impl IntTy {
             IntTy::U16 => SharedKind::UInt(UIntSize::U16),
             IntTy::U32 => SharedKind::UInt(UIntSize::U32),
             IntTy::U64 => SharedKind::UInt(UIntSize::U64),
+            IntTy::U128 => SharedKind::UInt(UIntSize::U128),
             IntTy::Usize => SharedKind::UInt(UIntSize::Usize),
         }
     }
@@ -101,6 +104,7 @@ impl IntTy {
             SharedKind::UInt(UIntSize::U16) => IntTy::U16,
             SharedKind::UInt(UIntSize::U32) => IntTy::U32,
             SharedKind::UInt(UIntSize::U64) => IntTy::U64,
+            SharedKind::UInt(UIntSize::U128) => IntTy::U128,
             SharedKind::UInt(UIntSize::Usize) => IntTy::Usize,
             _ => return None,
         })

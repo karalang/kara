@@ -885,4 +885,49 @@ fn main() -> () {
         assert_eq!(ty::FloatTy::BF16.round(1.1), 1.1015625);
         assert_eq!(ty::FloatTy::F16.round(65520.0), f64::INFINITY);
     }
+
+    /// `u128`: the interpreter holds its values as their bits in an
+    /// `i128`, so one above `i128::MAX` must still multiply, compare,
+    /// shift, divide, print and convert as unsigned.
+    #[test]
+    fn mir_u128_above_i128_max() {
+        let text = "
+fn main() -> () {
+    let mut _0: ();
+    let _1: u128;
+    let _2: u128;
+    let _3: u128;
+    let _4: bool;
+    let _5: u128;
+    let _6: f64;
+    let _7: ();
+    bb0: {
+        _1 = const 18446744073709551615_u64 as u128 (IntToInt);
+        _2 = Mul(copy _1, copy _1);
+        _3 = Shr(copy _2, const 127_u128);
+        _4 = Gt(copy _2, copy _1);
+        _5 = Div(copy _2, copy _1);
+        _6 = copy _2 as f64 (IntToFloat);
+        _7 = println(copy _2, const \" \", copy _3, const \" \", copy _4, const \" \", copy _5, const \" \", copy _6) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+";
+        let m = parse_module(text).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(validate(&m.bodies[0], &m.tys), Vec::<String>::new());
+        assert!(pretty_body(&m.bodies[0], &m.tys).contains("let _1: u128;"));
+        let prog = interp::Program::from_module(&m);
+        let r = interp::run(&prog, &m.tys, "main", vec![]);
+        // (2^64 - 1)^2 = 2^128 - 2^65 + 1.
+        let sq = (u64::MAX as u128) * (u64::MAX as u128);
+        assert_eq!(
+            r.output,
+            format!("{sq} 1 true {} {}\n", u64::MAX, sq as f64),
+            "{:?}",
+            r.outcome
+        );
+    }
 }

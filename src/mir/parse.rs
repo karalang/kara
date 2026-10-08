@@ -1210,6 +1210,7 @@ fn int_ty(s: &str) -> Option<IntTy> {
         "u16" => IntTy::U16,
         "u32" => IntTy::U32,
         "u64" => IntTy::U64,
+        "u128" => IntTy::U128,
         "usize" => IntTy::Usize,
         _ => return None,
     })

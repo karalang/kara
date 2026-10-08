@@ -647,6 +647,7 @@ impl<'a> Interp<'a> {
                         fs.apply_uint(*i as u64)
                     }
                     (TyKind::Int(IntTy::I128), Value::Int(i)) => fs.apply_int128(*i),
+                    (TyKind::Int(IntTy::U128), Value::Int(i)) => fs.apply_uint128(*i as u128),
                     (_, Value::Int(i)) => fs.apply_int(*i as i64),
                     (_, Value::Float(f)) => fs.apply_float(*f),
                     _ => {
@@ -2176,20 +2177,26 @@ impl<'a> Interp<'a> {
             text.parse::<f64>().ok().map(Value::Float)
         } else {
             let (bits, signed) = int_width(ty).expect("checked by the caller");
-            let n = if (2..=36).contains(&radix) && (signed || !text.starts_with('-')) {
-                i128::from_str_radix(text, radix as u32).ok()
-            } else {
+            let n = if !(2..=36).contains(&radix) || (!signed && text.starts_with('-')) {
                 None
+            } else if bits == 128 && !signed {
+                // A `u128` is held as its bits.
+                u128::from_str_radix(text, radix as u32)
+                    .ok()
+                    .map(|n| n as i128)
+            } else {
+                i128::from_str_radix(text, radix as u32).ok().filter(|n| {
+                    if bits == 128 {
+                        true
+                    } else if signed {
+                        let half = 1i128 << (bits - 1);
+                        (-half..half).contains(n)
+                    } else {
+                        *n >= 0 && *n < (1i128 << bits)
+                    }
+                })
             };
-            n.filter(|n| {
-                if signed {
-                    let half = 1i128 << (bits - 1);
-                    (-half..half).contains(n)
-                } else {
-                    *n >= 0 && (bits == 128 || *n < (1i128 << bits))
-                }
-            })
-            .map(Value::Int)
+            n.map(Value::Int)
         };
         self.option(ret, v)
     }
@@ -3002,6 +3009,7 @@ impl<'a> Interp<'a> {
                 .collect()
         };
         Ok(match (self.tys.kind(ty), v) {
+            (TyKind::Int(IntTy::U128), Value::Int(i)) => (*i as u128).to_string(),
             (TyKind::Ref(t) | TyKind::MutRef(t), Value::Ref(addr)) => {
                 let inner = self.slot(addr)?;
                 if !inner.fully_init() {
@@ -3719,14 +3727,24 @@ impl<'a> Interp<'a> {
                 self.option(*to, alive.then_some(Value::Shared(id)))
             }
             Rvalue::Cast(kind, o, to) => {
-                let (x, _) = self.operand(body, o)?;
+                let (x, from) = self.operand(body, o)?;
+                let from_u128 = self.tys.kind(from) == TyKind::Int(IntTy::U128);
                 let to_kind = self.tys.kind(*to).clone();
                 match (kind, x, to_kind) {
                     (CastKind::IntToInt, Value::Int(i), TyKind::Int(it)) => {
                         Ok(Value::Int(wrap(i, it)))
                     }
                     (CastKind::IntToFloat, Value::Int(i), TyKind::Float(ft)) => {
-                        Ok(Value::Float(ft.round(i as f64)))
+                        let f = if from_u128 {
+                            i as u128 as f64
+                        } else {
+                            i as f64
+                        };
+                        Ok(Value::Float(ft.round(f)))
+                    }
+                    (CastKind::FloatToInt, Value::Float(f), TyKind::Int(IntTy::U128)) => {
+                        // Saturating, as the compiled backends' `fptoui.sat`.
+                        Ok(Value::Int(if f.is_nan() { 0 } else { f as u128 as i128 }))
                     }
                     (CastKind::FloatToInt, Value::Float(f), TyKind::Int(it)) => {
                         let (lo, hi) = range(it);
@@ -3820,6 +3838,9 @@ impl<'a> Interp<'a> {
             })
         };
         match (x, y) {
+            (Value::Int(a), Value::Int(b)) if self.tys.kind(ty) == TyKind::Int(IntTy::U128) => {
+                Ok(u128_binop(op, a as u128, b as u128, cmp)?)
+            }
             (Value::Int(a), Value::Int(b)) => {
                 if op.is_comparison() {
                     return Ok((cmp(a.cmp(&b)), false));
@@ -4499,6 +4520,38 @@ fn locate(s: Stop, body: &Body, at: String) -> Stop {
     }
 }
 
+/// A `u128` operation. Its values are held as their bits in an `i128`, so
+/// they are compared, divided and shifted as `u128` here.
+fn u128_binop(
+    op: BinOp,
+    a: u128,
+    b: u128,
+    cmp: impl Fn(std::cmp::Ordering) -> Value,
+) -> R<(Value, bool)> {
+    use BinOp::*;
+    if op.is_comparison() {
+        return Ok((cmp(a.cmp(&b)), false));
+    }
+    let (r, of) = match op {
+        Add => a.overflowing_add(b),
+        Sub => a.overflowing_sub(b),
+        Mul => a.overflowing_mul(b),
+        Div | Rem if b == 0 => return err("division by zero; the builder must guard it"),
+        Div => (a / b, false),
+        Rem => (a % b, false),
+        BitAnd => (a & b, false),
+        BitOr => (a | b, false),
+        BitXor => (a ^ b, false),
+        Shl | Shr if b >= 128 => return Ok((Value::Int(0), true)),
+        Shl => (a << b, false),
+        Shr => (a >> b, false),
+        _ => unreachable!(),
+    };
+    Ok((Value::Int(r as i128), of))
+}
+
+/// The range of `it`, for a type narrower than `u128` (whose values the
+/// interpreter holds as their bits in an `i128`).
 fn range(it: IntTy) -> (i128, i128) {
     let bits = it.bits();
     if it.signed() {
