@@ -9,7 +9,7 @@ fn al(a: R, b: R) -> Array[R, 2] { let x: Array[R, 2] = [a, b]; return x; }
 fn vm(a: R, b: R) -> Vec[R] { let v = vec![a, b]; return v; }
 fn vu(a: R, b: R) -> Vec[R] { let v = [a, b]; return v; }
 fn vr(a: R, b: R) -> Vec[R] { let v = [a, b]; let w = v; return w; }
-fn vn(a: R) -> Vec[P] { let v: Vec[P] = [P { r: a, n: 1 }]; return v; }
+fn vn(a: own R) -> Vec[P] { let v: Vec[P] = [P { r: a, n: 1 }]; return v; }
 fn vf(a: R) -> Vec[R] { let v = [a, mk(30)]; return v; }
 fn vt(a: R, b: R) -> Vec[R] { let v = [a, b]; v }
 fn cvl(a: R, f: bool) -> Vec[R] { let v = [a]; if f { return v; } return [mk(90)]; }

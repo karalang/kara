@@ -5,20 +5,20 @@ struct W { t: (Array[String, 2], i64) }
 fn mkt(t: String) -> (Array[String, 2], i64) { let a: Array[String, 2] = [f"e-{t}-bbbbbbbbbbbbbbbbbbbbbbbb", f"e-{t}-cc"]; return (a, 7); }
 fn mkf(t: String) -> (Array[String, 2], Option[String]) { let a: Array[String, 2] = [f"f-{t}-bbbbbbbbbbbbbbbbbbbbbbbb", f"f-{t}-cc"]; return (a, Some(f"o-{t}-dddddddddddddddddddddddd")); }
 fn eat(t: (Array[String, 2], i64)) -> i64 { return t.1; }
-fn back(t: (Array[String, 2], i64)) -> (Array[String, 2], i64) { return t; }
-fn r1(s: E) -> (Array[String, 2], i64) { match s { E.S(x) => { return x; } E.N => { return mkt("z"); } } }
-fn r2(s: F) -> (Array[String, 2], Option[String]) { match s { F.S(x) => { return x; } F.N => { return mkf("z"); } } }
-fn r5(s: E) -> i64 { match s { E.S(x) => { return eat(x); } E.N => { return 0; } } }
-fn r6(s: E) -> (Array[String, 2], i64) { match s { E.S(x) => x, E.N => mkt("z") } }
-fn r7(s: E) -> i64 { match s { E.S(x) => { println(x.0[0]); return x.1; } E.N => { return 0; } } }
+fn back(t: own (Array[String, 2], i64)) -> (Array[String, 2], i64) { return t; }
+fn r1(s: own E) -> (Array[String, 2], i64) { match s { E.S(x) => { return x; } E.N => { return mkt("z"); } } }
+fn r2(s: own F) -> (Array[String, 2], Option[String]) { match s { F.S(x) => { return x; } F.N => { return mkf("z"); } } }
+fn r5(s: own E) -> i64 { match s { E.S(x) => { return eat(x); } E.N => { return 0; } } }
+fn r6(s: own E) -> (Array[String, 2], i64) { match s { E.S(x) => x, E.N => mkt("z") } }
+fn r7(s: own E) -> i64 { match s { E.S(x) => { println(x.0[0]); return x.1; } E.N => { return 0; } } }
 fn r8(s: E) -> (Array[String, 2], i64) { if let E.S(x) = s { return x; } return mkt("z"); }
-fn r9(s: H) -> (Array[String, 2], i64) { match s { H.S { t } => { return t; } H.N => { return mkt("z"); } } }
-fn ra(s: E) -> i64 { let mut v: Vec[(Array[String, 2], i64)] = Vec.new(); match s { E.S(x) => { v.push(x); } E.N => { } } return v.len(); }
-fn rc(s: E) -> (Array[String, 2], i64) { let r = match s { E.S(x) => x, E.N => mkt("z") }; return r; }
-fn s2(s: E) -> W { match s { E.S(x) => { return W { t: x }; } E.N => { return W { t: mkt("z") }; } } }
-fn s3(s: E) -> Option[(Array[String, 2], i64)] { match s { E.S(x) => { return Some(x); } E.N => { return None; } } }
-fn s4(s: E) -> ((Array[String, 2], i64), i64) { match s { E.S(x) => { return (x, 1); } E.N => { return (mkt("z"), 0); } } }
-fn s5(s: E) -> (Array[String, 2], i64) { match s { E.S(x) => { return back(x); } E.N => { return mkt("z"); } } }
+fn r9(s: own H) -> (Array[String, 2], i64) { match s { H.S { t } => { return t; } H.N => { return mkt("z"); } } }
+fn ra(s: own E) -> i64 { let mut v: Vec[(Array[String, 2], i64)] = Vec.new(); match s { E.S(x) => { v.push(x); } E.N => { } } return v.len(); }
+fn rc(s: own E) -> (Array[String, 2], i64) { let r = match s { E.S(x) => x, E.N => mkt("z") }; return r; }
+fn s2(s: own E) -> W { match s { E.S(x) => { return W { t: x }; } E.N => { return W { t: mkt("z") }; } } }
+fn s3(s: own E) -> Option[(Array[String, 2], i64)] { match s { E.S(x) => { return Some(x); } E.N => { return None; } } }
+fn s4(s: own E) -> ((Array[String, 2], i64), i64) { match s { E.S(x) => { return (x, 1); } E.N => { return (mkt("z"), 0); } } }
+fn s5(s: own E) -> (Array[String, 2], i64) { match s { E.S(x) => { return back(x); } E.N => { return mkt("z"); } } }
 fn s7(b: bool) -> (Array[String, 2], i64) { let s = E.S(mkt("x")); match s { E.S(x) => { if b { return x; } return mkt("q"); } E.N => { return mkt("z"); } } }
 fn main() {
     let y1 = r1(E.S(mkt("a"))); println(f"r1 {y1.0[0]} {y1.1}");

@@ -1,6 +1,6 @@
 
 struct Box[T] { v: T }
-impl[T] Box[T] { fn take(self) -> T { self.v } }
+impl[T] Box[T] { fn take(own self) -> T { self.v } }
 fn main() {
     let n: i64 = env.args().len();
     let f: f64 = 1.5;

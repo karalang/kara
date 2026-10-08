@@ -8,7 +8,7 @@ enum Hn { N(Option[Nd]), E }
 enum H2 { T(Option[String], i64), E }
 fn hs(s: String) -> String { f"{s}xxxxxxxxxxxxxxxxxxxxxxxx" }
 fn go(h: ref Ho) -> i64 { match h { Ho.O(o) => match o { Some(s) => s.len(), None => 1 }, Ho.E => 0 } }
-fn take(h: Ho) -> String { match h { Ho.O(o) => match o { Some(s) => s, None => "n" }, Ho.E => "e" } }
+fn take(h: own Ho) -> String { match h { Ho.O(o) => match o { Some(s) => s, None => "n" }, Ho.E => "e" } }
 fn gr(h: ref Hr) -> i64 { match h { Hr.R(r) => match r { Ok(s) => s.len(), Err(e) => e }, Hr.E => 0 } }
 fn gv(h: ref Hv) -> i64 { match h { Hv.V(o) => match o { Some(v) => v.len(), None => 1 }, Hv.E => 0 } }
 fn gi(h: ref Hi) -> i64 { match h { Hi.I(o) => match o { Some(v) => v, None => 1 }, Hi.E => 0 } }

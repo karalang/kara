@@ -5,7 +5,7 @@ impl[T: Ord] Bag[T] {
         self.xs.swap(i, j);
     }
     fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }
-    fn build(v: Vec[T]) -> Bag[T] { let mut b = Bag { xs: v }; b.arrange(); b }
+    fn build(v: own Vec[T]) -> Bag[T] { let mut b = Bag { xs: v }; b.arrange(); b }
     fn take(mut ref self) -> Option[T] { self.xs.pop() }
 }
 struct PlainBag { xs: Vec[String] }
@@ -14,7 +14,7 @@ impl PlainBag {
         self.xs.swap(i, j);
     }
     fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }
-    fn build(v: Vec[String]) -> PlainBag { let mut b = PlainBag { xs: v }; b.arrange(); b }
+    fn build(v: own Vec[String]) -> PlainBag { let mut b = PlainBag { xs: v }; b.arrange(); b }
 }
 fn main() {
     // (a) heap-carrying T — segfaulted pre-fix. Assert CONTENTS, not the count.

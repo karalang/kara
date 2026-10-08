@@ -16,7 +16,7 @@ struct NestedIter {
 }
 
 impl NestedIter {
-    fn new(items: Vec[Nested]) -> NestedIter {
+    fn new(items: own Vec[Nested]) -> NestedIter {
         let mut stack: Vec[Nested] = Vec.new();
         let mut rest = items;
         while let Some(x) = rest.pop() {
@@ -44,7 +44,7 @@ impl Iterator for NestedIter {
     }
 }
 
-fn flatten(items: Vec[Nested]) -> Vec[i64] {
+fn flatten(items: own Vec[Nested]) -> Vec[i64] {
     let mut out: Vec[i64] = Vec.new();
     for v in NestedIter.new(items) {
         out.push(v);

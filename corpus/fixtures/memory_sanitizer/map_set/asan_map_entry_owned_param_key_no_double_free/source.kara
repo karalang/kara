@@ -1,5 +1,5 @@
 
-fn bump(m: mut ref Map[String, i64], k: String) {
+fn bump(m: mut ref Map[String, i64], k: own String) {
     *m.entry(k).or_insert(0_i64) += 1_i64;
 }
 

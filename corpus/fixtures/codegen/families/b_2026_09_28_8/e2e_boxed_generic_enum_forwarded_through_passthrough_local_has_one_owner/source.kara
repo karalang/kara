@@ -3,14 +3,14 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 enum G[T] { Y(T), N }
 fn mk(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 fn glen[T](g: G[T]) -> i64 { return 1 }
-fn gid[T](g: G[T]) -> G[T] { return g }
-fn gvia[T](g: G[T]) -> i64 { let h = gid(g); return glen(h) }
-fn gviam[T](g: G[T]) -> i64 { let h = gid(g); match h { G.Y(x) => { return 5 }, G.N => { return 0 } } }
-fn gviac[T](g: G[T], c: bool) -> i64 { let h = gid(g); if c { return glen(h) } println("keep"); return 0 }
-fn gviar[T](g: G[T]) -> G[T] { let h = gid(g); return h }
-fn gvia2[T](g: G[T]) -> i64 { let h = gid(g); let k = gid(h); return glen(k) }
-fn gviaf[T](g: G[T]) -> i64 { let h = gid(g); return gvia(h) }
-fn gkeep[T](g: G[T]) -> i64 { let h = gid(g); println("keep"); return 0 }
+fn gid[T](g: own G[T]) -> G[T] { return g }
+fn gvia[T](g: own G[T]) -> i64 { let h = gid(g); return glen(h) }
+fn gviam[T](g: own G[T]) -> i64 { let h = gid(g); match h { G.Y(x) => { return 5 }, G.N => { return 0 } } }
+fn gviac[T](g: own G[T], c: bool) -> i64 { let h = gid(g); if c { return glen(h) } println("keep"); return 0 }
+fn gviar[T](g: own G[T]) -> G[T] { let h = gid(g); return h }
+fn gvia2[T](g: own G[T]) -> i64 { let h = gid(g); let k = gid(h); return glen(k) }
+fn gviaf[T](g: own G[T]) -> i64 { let h = gid(g); return gvia(h) }
+fn gkeep[T](g: own G[T]) -> i64 { let h = gid(g); println("keep"); return 0 }
 fn main() {
     let a1: G[R] = G.Y(mk(1));
     println(f"q1 {gvia(a1)}");

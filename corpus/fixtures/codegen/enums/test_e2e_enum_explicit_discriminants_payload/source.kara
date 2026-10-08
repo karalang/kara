@@ -1,7 +1,7 @@
 
 #[repr(u8)] enum Op { Reset = 1, Ping(u32) = 5, Stop = 255 }
 
-fn code(o: Op) -> i64 {
+fn code(o: own Op) -> i64 {
     match o {
         Op.Reset => 1_i64,
         Op.Ping(n) => n as i64,

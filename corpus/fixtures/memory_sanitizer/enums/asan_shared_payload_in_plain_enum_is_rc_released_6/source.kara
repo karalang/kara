@@ -1,6 +1,6 @@
 shared struct Sh { n: i64 }
 enum Et { A(Sh), B }
-fn passt(e: Et) -> Et { return e; }
+fn passt(e: own Et) -> Et { return e; }
 fn main() {
     let z = passt(Et.A(Sh { n: 5 }));
     match z { Et.A(s) => { println(f"n:{s.n}") } Et.B => { println("b") } }

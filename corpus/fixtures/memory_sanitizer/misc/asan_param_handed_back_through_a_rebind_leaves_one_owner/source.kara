@@ -8,14 +8,14 @@ struct P { id: i64, name: String }
 impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
 fn mkP(i: i64) -> P { return P { id: i, name: f"p{i}" }; }
 
-fn top(r: R) -> R { let m = r; return m; }
-fn two(r: R) -> R { let m = r; let n = m; return n; }
-fn tail(r: R) -> R { let m = r; m }
-fn pair(a: i64, r: R) -> R { let m = r; return m; }
-fn bx(r: R) -> Box2 { let m = r; return Box2 { r: m }; }
-fn rd(r: R) -> R { let m = r; println(f"in={m.name}"); return m; }
-fn ctl(p: P) -> P { let m = p; return m; }
-fn ret(r: R) -> R { return r; }
+fn top(r: own R) -> R { let m = r; return m; }
+fn two(r: own R) -> R { let m = r; let n = m; return n; }
+fn tail(r: own R) -> R { let m = r; m }
+fn pair(a: i64, r: own R) -> R { let m = r; return m; }
+fn bx(r: own R) -> Box2 { let m = r; return Box2 { r: m }; }
+fn rd(r: own R) -> R { let m = r; println(f"in={m.name}"); return m; }
+fn ctl(p: own P) -> P { let m = p; return m; }
+fn ret(r: own R) -> R { return r; }
 
 fn main() {
   let a = top(mk(41)); println(f"top={a.inner.v}");

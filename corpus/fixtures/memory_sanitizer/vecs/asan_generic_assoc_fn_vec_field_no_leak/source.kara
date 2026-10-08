@@ -2,7 +2,7 @@
 struct S[T] { items: Vec[T] }
 impl[T] S[T] {
     fn new() -> S[T] { S { items: Vec.new() } }
-    fn push(mut ref self, x: T) { self.items.push(x); }
+    fn push(mut ref self, x: own T) { self.items.push(x); }
     fn len(ref self) -> i64 { self.items.len() }
 }
 fn main() {

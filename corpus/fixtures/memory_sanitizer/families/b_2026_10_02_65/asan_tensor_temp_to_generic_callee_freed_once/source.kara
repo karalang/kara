@@ -5,8 +5,8 @@ fn make() -> Tensor[f64, [2, 2]] {
 fn eat[T](t: T) -> i64 { 1 }
 fn first[T](t: Tensor[f64, [2, 2]], u: T) -> f64 { t[0, 0] }
 fn peek[U](t: ref Tensor[f64, [2, 2]], u: U) -> f64 { t[0, 0] }
-fn id[T](t: T) -> T { t }
-fn keepv[T](t: T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(t); v }
+fn id[T](t: own T) -> T { t }
+fn keepv[T](t: own T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(t); v }
 fn main() {
     println(eat(make()));
     println(eat(make()));

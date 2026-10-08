@@ -6,11 +6,11 @@ impl Drop for Rs { fn drop(mut ref self) { println(f"ds{self.id} {self.s.len()}"
 enum E { A(R), B }
 struct Hv { v: Vec[R], n: i64 }
 fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
-fn b1(g: G[E]) -> i64 { match g { G { v, n } => n } }
-fn b2(g: G[Vec[R]]) -> i64 { match g { G { v, n } => v.len() + n } }
-fn b3(g: G[E], c: bool) -> i64 { if c { match g { G { v, n } => n } } else { 0 } }
-fn b4(g: G[Vec[Rs]]) -> i64 { match g { G { v, n } => v.len() + n } }
-fn b5(g: G[E]) -> i64 { match g { G { v, n } => match v { E.A(r) => r.id, E.B => n } } }
+fn b1(g: own G[E]) -> i64 { match g { G { v, n } => n } }
+fn b2(g: own G[Vec[R]]) -> i64 { match g { G { v, n } => v.len() + n } }
+fn b3(g: own G[E], c: bool) -> i64 { if c { match g { G { v, n } => n } } else { 0 } }
+fn b4(g: own G[Vec[Rs]]) -> i64 { match g { G { v, n } => v.len() + n } }
+fn b5(g: own G[E]) -> i64 { match g { G { v, n } => match v { E.A(r) => r.id, E.B => n } } }
 fn main() {
     let g1 = G { v: E.A(R { id: 1 }), n: 10 };
     let k1 = match g1 { G { v, n } => n };

@@ -9,19 +9,19 @@ struct H2 { s: S }
 fn consume(x: R) -> i64 { return x.id }
 
 impl H1 {
-    fn take(self) -> i64 { match self.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
-    fn read(self) -> i64 { match self.e { E.A(r) => { return r.id; } E.B => { return 0; } } }
-    fn viacall(self) -> i64 { match self.e { E.A(r) => { return consume(r); } E.B => { return 0; } } }
+    fn take(own self) -> i64 { match self.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
+    fn read(own self) -> i64 { match self.e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn viacall(own self) -> i64 { match self.e { E.A(r) => { return consume(r); } E.B => { return 0; } } }
     fn iflet(self) -> i64 { if let E.A(r) = self.e { let m = r; return m.id; } else { return 0; } }
-    fn letelse(self) -> i64 { let E.A(r) = self.e else { return 0; }; let m = r; return m.id; }
+    fn letelse(own self) -> i64 { let E.A(r) = self.e else { return 0; }; let m = r; return m.id; }
     fn whilelet(self) -> i64 { while let E.A(r) = self.e { let m = r; return m.id; } return 0; }
     fn borrowed(mut ref self) -> i64 { match self.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
 }
 impl H2 {
-    fn take2(self) -> i64 { match self.s.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
-    fn read2(self) -> i64 { match self.s.e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn take2(own self) -> i64 { match self.s.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
+    fn read2(own self) -> i64 { match self.s.e { E.A(r) => { return r.id; } E.B => { return 0; } } }
 }
-fn p_take(h: H1) -> i64 { match h.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
+fn p_take(h: own H1) -> i64 { match h.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
 fn p_iflet(h: H1) -> i64 { if let E.A(r) = h.e { let m = r; return m.id; } else { return 0; } }
 
 fn main() {

@@ -3,8 +3,8 @@ impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
 fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
 struct W { r: D, s: D, b: i64 }
 fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
-fn gid[T](x: T) -> T { x }
-fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn gid[T](x: own T) -> T { x }
+fn gst[T](v: mut ref Vec[T], x: own T) { v.push(x); }
 fn gn[T](x: T) -> i64 { 1 }
 fn gw[T](x: T) -> i64 { gn(x) }
 fn main() {

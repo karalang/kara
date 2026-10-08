@@ -6,14 +6,14 @@ enum Tnest { Pnest(((String, i64), i64)), Qnest }
 enum S2 { R(Pr), Z }
 enum V2 { W(String), Y }
 
-fn take2(s: T2) -> bool { match s { P(x) => x.0.contains("row"), Q => false, } }
+fn take2(s: own T2) -> bool { match s { P(x) => x.0.contains("row"), Q => false, } }
 fn peek2(s: ref T2) -> bool { match s { P(x) => x.0.contains("row"), Q => false, } }
 fn mk2(i: i64, n: i64) -> T2 { return P((f"row-cccccccccccc-{i}-{n}", 1i64)); }
-fn takev(s: Tvec) -> i64 {
+fn takev(s: own Tvec) -> i64 {
     match s { Pvec(x) => { let mut k: i64 = 0i64; for e in x.0 { if e.contains("row") { k = k + 1i64; } } return k; }, Qvec => { return 0i64; } }
 }
-fn takes(s: S2) -> bool { match s { R(x) => x.s.contains("row"), Z => false, } }
-fn takew(s: V2) -> bool { match s { W(x) => x.contains("row"), Y => false, } }
+fn takes(s: own S2) -> bool { match s { R(x) => x.s.contains("row"), Z => false, } }
+fn takew(s: own V2) -> bool { match s { W(x) => x.contains("row"), Y => false, } }
 
 fn main() {
     let n = env.args().len() as i64;

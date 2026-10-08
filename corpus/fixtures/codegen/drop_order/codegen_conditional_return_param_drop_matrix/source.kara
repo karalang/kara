@@ -2,10 +2,10 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct H { n: i64 }
 fn mk(i: i64) -> String { return f"pay-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; }
-fn fpick(a: R, k: bool) -> R { if k { return R { id: 98, s: mk(98) }; } return a; }
+fn fpick(a: own R, k: bool) -> R { if k { return R { id: 98, s: mk(98) }; } return a; }
 impl H {
-    fn apick(a: R, k: bool) -> R { if k { return R { id: 98, s: mk(98) }; } return a; }
-    fn mpick(ref self, a: R, k: bool) -> R { if k { return R { id: 98, s: mk(98) }; } return a; }
+    fn apick(a: own R, k: bool) -> R { if k { return R { id: 98, s: mk(98) }; } return a; }
+    fn mpick(ref self, a: own R, k: bool) -> R { if k { return R { id: 98, s: mk(98) }; } return a; }
 }
 fn ff_t() { let x = fpick(R { id: 11, s: mk(11) }, true); println(f"A{x.id}"); }
 fn ff_f() { let x = fpick(R { id: 12, s: mk(12) }, false); println(f"B{x.id}"); }

@@ -12,7 +12,7 @@ shared struct Node {
     mut neighbors: Vec[Node],
 }
 
-fn clone_graph(root: Node) -> Node {
+fn clone_graph(root: own Node) -> Node {
     let mut visited: Map[i64, Node] = Map.new();
     let mut queue: VecDeque[Node] = VecDeque.new();
 

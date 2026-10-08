@@ -1,7 +1,7 @@
 
 enum Token { Ident(String), Int(i64) }
 struct Spanned { tok: Token, off: i64 }
-fn make_spanned(t: Token, o: i64) -> Spanned { Spanned { tok: t, off: o } }
+fn make_spanned(t: own Token, o: i64) -> Spanned { Spanned { tok: t, off: o } }
 fn main() {
     let t = Token.Ident("hello".to_string());
     let s = make_spanned(t, 3);

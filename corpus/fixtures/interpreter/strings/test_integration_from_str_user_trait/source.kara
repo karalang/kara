@@ -1,12 +1,12 @@
 
 trait FromStr {
-    fn from_str(s: String) -> Self;
+    fn from_str(s: own String) -> Self;
 }
 
 struct Tag { label: String }
 
 impl FromStr for Tag {
-    fn from_str(s: String) -> Tag { Tag { label: s } }
+    fn from_str(s: own String) -> Tag { Tag { label: s } }
 }
 
 fn main() {

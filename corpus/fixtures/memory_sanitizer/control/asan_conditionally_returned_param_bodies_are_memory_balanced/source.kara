@@ -2,10 +2,10 @@
 struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
 struct Wrap { r: R }
-fn cond(r: R, k: bool) -> R { if k { r } else { R { id: 99, name: f"n99" } } }
-fn cond_match(r: R, k: i64) -> R { match k { 1 => { r } _ => { R { id: 98, name: f"n98" } } } }
-fn two(a: R, b: R, k: bool) -> R { if k { a } else { b } }
-fn agg(r: R, k: bool) -> Wrap { if k { Wrap { r: r } } else { Wrap { r: R { id: 95, name: f"n95" } } } }
+fn cond(r: own R, k: bool) -> R { if k { r } else { R { id: 99, name: f"n99" } } }
+fn cond_match(r: own R, k: i64) -> R { match k { 1 => { r } _ => { R { id: 98, name: f"n98" } } } }
+fn two(a: own R, b: own R, k: bool) -> R { if k { a } else { b } }
+fn agg(r: own R, k: bool) -> Wrap { if k { Wrap { r: r } } else { Wrap { r: R { id: 95, name: f"n95" } } } }
 fn main() {
     let base: i64 = env.args().len();
     let a = cond(R { id: base, name: f"a{base}" }, false);

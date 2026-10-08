@@ -31,7 +31,7 @@ fn inline_payload(o: Option[W2]) {
     let t: (W2, i64) = match o { Some(w) => (w, 1), None => (W2 { v: 0 }, 0) };
     println(f"ip{t.0.v} {t.1}")
 }
-fn user_enum(o: E) {
+fn user_enum(o: own E) {
     let t: (W1, i64) = match o { E.A(w) => (w, 1), E.B => (mk(0), 0) };
     println(f"ue{t.0.v} {t.1}")
 }

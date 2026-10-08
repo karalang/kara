@@ -80,7 +80,7 @@ fn hash_arr(a: ref Vec[i64]) -> i64 {
     acc
 }
 
-fn report(grid: Vec[i64], s: mut ref String) {
+fn report(grid: own Vec[i64], s: mut ref String) {
     let mut a = grid;
     sort_colors(mut a);
     print_arr(a);

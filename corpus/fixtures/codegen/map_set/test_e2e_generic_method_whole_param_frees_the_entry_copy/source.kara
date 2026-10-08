@@ -8,9 +8,9 @@ impl Drop for D { fn drop(mut ref self) { println(f"dD{self.tag}") } }
 fn mkd(i: i64) -> D { return D { s: Sh { v: i }, tag: f"x{i}" }; }
 struct H { n: i64 }
 impl H {
-  fn keep[T](ref self, x: T) -> T { println("inK"); return x; }
-  fn keepN(ref self, x: R) -> R { println("inN"); return x; }
-  fn maybe[T](ref self, x: T, k: bool) -> T { println("inM"); if k { return x; } return x; }
+  fn keep[T](ref self, x: own T) -> T { println("inK"); return x; }
+  fn keepN(ref self, x: own R) -> R { println("inN"); return x; }
+  fn maybe[T](ref self, x: own T, k: bool) -> T { println("inM"); if k { return x; } return x; }
   fn scalar[T](ref self, x: T) -> i64 { println("inS"); return 3; }
 }
 fn main() {

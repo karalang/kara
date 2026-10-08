@@ -1,5 +1,5 @@
 
-fn grow[T](v: mut ref Vec[T], x: T) -> i64
+fn grow[T](v: mut ref Vec[T], x: own T) -> i64
     ensures(result) result == old(v.len()) + 1
 where T: Ord
 {

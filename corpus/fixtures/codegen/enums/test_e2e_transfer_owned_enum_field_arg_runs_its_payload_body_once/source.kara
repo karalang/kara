@@ -12,8 +12,8 @@ struct Two { w: Wpr, u: Wpr, n: i64 }
 struct Mix { w: Wpr, s: Sp, n: i64 }
 struct MixNT { w: Wpr, v: Wps, n: i64 }
 
-fn eat_r(g: Wpr) -> i64 { match g { Wpr.A(x) => { return 7; } Wpr.S(i) => { return 1; } Wpr.N => { return 0; } } }
-fn eat_s(g: Wps) -> i64 { match g { Wps.A(x) => { return 7; } Wps.N => { return 0; } } }
+fn eat_r(g: own Wpr) -> i64 { match g { Wpr.A(x) => { return 7; } Wpr.S(i) => { return 1; } Wpr.N => { return 0; } } }
+fn eat_s(g: own Wps) -> i64 { match g { Wps.A(x) => { return 7; } Wps.N => { return 0; } } }
 
 fn proj_sib() { let b: Br = Br { w: Wpr.A([Sp { v: 42 }]), n: 1 }; println(f"a:{eat_r(b.w)}"); }
 fn proj_nosib() { let b: Bs = Bs { w: Wps.A([Sp { v: 41 }]), n: 1 }; println(f"b:{eat_s(b.w)}"); }

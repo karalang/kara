@@ -144,11 +144,11 @@ fn canonical_query(params: Vec[QueryParam]) -> String {
 
 // Stage 1 — the canonical request. Its SHA-256 is what gets signed.
 fn canonical_request(
-    method: String,
+    method: own String,
     path: String,
     params: Vec[QueryParam],
     headers: Vec[Header],
-    payload_hash: String,
+    payload_hash: own String,
 ) -> String {
     let sorted = sort_headers(headers);
     let mut canon_headers = String.new();
@@ -168,11 +168,11 @@ fn canonical_request(
 }
 
 
-fn header(name: String, value: String) -> Header {
+fn header(name: own String, value: own String) -> Header {
     Header { name: name, value: value }
 }
 
-fn param(key: String, value: String) -> QueryParam {
+fn param(key: own String, value: own String) -> QueryParam {
     QueryParam { key: key, value: value }
 }
 

@@ -26,7 +26,7 @@ struct SetGame {
 }
 
 impl SetGame {
-    fn new(width: i64, height: i64, food: Vec[(i64, i64)]) -> SetGame {
+    fn new(width: i64, height: i64, food: own Vec[(i64, i64)]) -> SetGame {
         let mut body: VecDeque[i64] = VecDeque.new();
         body.push_back(0);
         let mut covered: Set[i64] = Set.new();
@@ -75,7 +75,7 @@ struct GridGame {
 }
 
 impl GridGame {
-    fn new(width: i64, height: i64, food: Vec[(i64, i64)]) -> GridGame {
+    fn new(width: i64, height: i64, food: own Vec[(i64, i64)]) -> GridGame {
         let cap = width * height;
         let mut covered = vec![false; cap];
         covered[0] = true;
@@ -130,7 +130,7 @@ struct StampGame {
 }
 
 impl StampGame {
-    fn new(width: i64, height: i64, food: Vec[(i64, i64)]) -> StampGame {
+    fn new(width: i64, height: i64, food: own Vec[(i64, i64)]) -> StampGame {
         let mut entered = vec![-1; width * height];
         entered[0] = 0;
         StampGame { width, height, food, next_food: 0, entered, moves: 0, len: 1, head: (0, 0) }
@@ -193,7 +193,7 @@ impl Dir {
 }
 
 impl Point {
-    fn moved(self, d: Dir, width: i64, height: i64) -> Option[Point] {
+    fn moved(self, d: own Dir, width: i64, height: i64) -> Option[Point] {
         let p = match d {
             Dir.Up => Point { r: self.r - 1, c: self.c },
             Dir.Down => Point { r: self.r + 1, c: self.c },

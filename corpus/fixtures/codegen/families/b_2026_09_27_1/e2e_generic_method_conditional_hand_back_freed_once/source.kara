@@ -3,10 +3,10 @@ struct S2 { h: Sh, id: i64 }
 impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
 struct S3 { h: Sh, id: i64 }
 struct K { n: i64 }
-impl K { fn gpk[T](ref self, v: T, c: bool, w: T) -> T { if c { return v } return w } }
-impl K { fn gpm[T](mut ref self, v: T, c: bool, w: T) -> T { self.n = self.n + 1; if c { return v } return w } }
+impl K { fn gpk[T](ref self, v: own T, c: bool, w: own T) -> T { if c { return v } return w } }
+impl K { fn gpm[T](mut ref self, v: own T, c: bool, w: own T) -> T { self.n = self.n + 1; if c { return v } return w } }
 struct Q[U] { u: U }
-impl[U] Q[U] { fn qpk[T](ref self, v: T, c: bool, w: T) -> T { if c { return v } return w } }
+impl[U] Q[U] { fn qpk[T](ref self, v: own T, c: bool, w: own T) -> T { if c { return v } return w } }
 fn main() {
     let k = K { n: 1 };
     { let s = S3 { h: Sh { k: 98 }, id: 1 }; let w = S3 { h: Sh { k: 4 }, id: 2 }; let t = k.gpk(s, true, w); println(f"a{t.h.k}") }

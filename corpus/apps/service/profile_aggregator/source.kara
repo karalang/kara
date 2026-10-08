@@ -145,7 +145,7 @@ impl OrdersBackend {
         backend
     }
 
-    fn add(mut ref self, user_id: i64, order_id: i64, item: String, amount_cents: i64, status: OrderStatus) {
+    fn add(mut ref self, user_id: i64, order_id: i64, item: own String, amount_cents: i64, status: own OrderStatus) {
         let order = Order { order_id, item, amount_cents, status };
         self.table.entry(user_id).or_insert_with(|| Vec.new()).push(order);
     }

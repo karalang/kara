@@ -3,8 +3,8 @@ impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 enum E { A(S), B(i64) }
 impl E {
-  fn m1(self) -> i64 { return match self { E.A(s) => s.id, E.B(n) => n } }
-  fn m4(self) -> i64 { match self { E.A(s) => { return s.id }, E.B(n) => { return n } } }
+  fn m1(own self) -> i64 { return match self { E.A(s) => s.id, E.B(n) => n } }
+  fn m4(own self) -> i64 { match self { E.A(s) => { return s.id }, E.B(n) => { return n } } }
 }
 fn v1(c: bool) -> i64 { let t = E.A(mks(6)); if c { let t = t.m1(); return t }; return 0 }
 fn v2(c: bool) -> i64 { let t = E.A(mks(7)); if c { let u = t.m1(); return u }; return 0 }
@@ -12,7 +12,7 @@ fn v3(c: bool) -> i64 { let t = E.A(mks(8)); if c { let t = t.m4(); return t }; 
 fn v4(c: bool) -> i64 { let t = E.A(mks(9)); if c { let t = t.m4(); println("in") }; return 0 }
 fn v5() -> i64 { let t = E.A(mks(10)); let t = t.m1(); return t }
 fn v6() -> i64 { let t = E.A(mks(11)); { let t = t.m1(); println(f"blk {t}") }; return 0 }
-fn w1(t: E) -> i64 { let t = t.m1(); return t }
+fn w1(t: own E) -> i64 { let t = t.m1(); return t }
 fn w2() -> i64 { let t = E.A(mks(21)); let t = t.m1(); let t = t + 1; return t }
 fn w3() -> i64 { let mut n = 0; let mut i = 0;
   while i < 2 { let t = E.A(mks(30 + i)); let t = t.m1(); n = n + t; i = i + 1; }

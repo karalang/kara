@@ -15,7 +15,7 @@ fn bothOut(o: Option[(R, R)]) -> (R, R) { match o { Option.Some((a, b)) => { ret
 fn readOnly(o: Option[(R, R)]) -> i64 { match o { Option.Some((a, b)) => { return a.id + b.id; } Option.None => { return 0; } } }
 fn wholeOut(o: Option[(R, i64)]) -> (R, i64) { match o { Option.Some(t) => { return t; } Option.None => { return (R { id: 0 }, 0); } } }
 fn condOut(o: Option[(R, R)], k: bool) -> R { match o { Option.Some((a, b)) => { if k { return a; } return b; } Option.None => { return R { id: 0 }; } } }
-fn genOut[T](o: Option[(R, T)], d: T) -> T { match o { Option.Some((a, b)) => { return b; } Option.None => { return d; } } }
+fn genOut[T](o: Option[(R, T)], d: own T) -> T { match o { Option.Some((a, b)) => { return b; } Option.None => { return d; } } }
 
 fn main() {
     println("scalarout");  { let got: i64 = scalarOut(Option.Some((R { id: 5 }, 9))); println(f"  got:{got}") }

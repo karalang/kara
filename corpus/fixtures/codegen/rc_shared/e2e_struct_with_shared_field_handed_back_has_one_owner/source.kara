@@ -4,14 +4,14 @@ impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
 struct S3 { h: Sh, id: i64 }
 struct Bx[T] { v: T }
 struct K { n: i64 }
-impl K { fn keep[T](ref self, x: T) -> T { return x } }
-fn idg[T](v: T) -> T { return v }
-fn idS3(v: S3) -> S3 { return v }
-fn wrap[T](v: T) -> Bx[T] { return Bx { v: v } }
-fn in2[T](v: T) -> T { let t = v; return t }
-fn in5[T](v: T) -> T { let t = idg(v); t }
-fn st[T](a: T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(a); return v }
-fn stS3(a: S3) -> Vec[S3] { let mut v: Vec[S3] = Vec.new(); v.push(a); return v }
+impl K { fn keep[T](ref self, x: own T) -> T { return x } }
+fn idg[T](v: own T) -> T { return v }
+fn idS3(v: own S3) -> S3 { return v }
+fn wrap[T](v: own T) -> Bx[T] { return Bx { v: v } }
+fn in2[T](v: own T) -> T { let t = v; return t }
+fn in5[T](v: own T) -> T { let t = idg(v); t }
+fn st[T](a: own T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(a); return v }
+fn stS3(a: own S3) -> Vec[S3] { let mut v: Vec[S3] = Vec.new(); v.push(a); return v }
 fn a_gen_drop() { let s = S2 { h: Sh { k: 1 }, id: 1 }; let t = idg(s); println(f"t{t.id}") }
 fn b_gen_plain() { let s = S3 { h: Sh { k: 1 }, id: 2 }; let t = idg(s); println(f"t{t.id}") }
 fn c_conc_plain() { let s = S3 { h: Sh { k: 1 }, id: 3 }; let t = idS3(s); println(f"t{t.id}") }

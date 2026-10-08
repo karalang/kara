@@ -41,7 +41,7 @@ fn wfcall() { let HoW { a, b } = mkhw(15); println(f"  rd{a.id}");
               match b { Result.Ok(w) => println(f"  ok{w.id}"), Result.Err(e) => println(f"  er{e}") } }
 fn wfcallu(){ let HoW { a, b } = mkhw(16); println(f"  rd{a.id}") }
 fn param()  { take(HoRes { a: mk(17), b: Result.Ok(mk(117)) }) }
-fn take(h: HoRes) { let HoRes { a, b } = h; println(f"  rd{a.id}");
+fn take(h: own HoRes) { let HoRes { a, b } = h; println(f"  rd{a.id}");
               match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
 
 fn main() {

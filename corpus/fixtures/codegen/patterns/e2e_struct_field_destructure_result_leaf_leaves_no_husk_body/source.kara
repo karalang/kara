@@ -10,7 +10,7 @@ struct HoRes  { a: R,  b: Result[R, String] }
 struct HoRes3 { a: R3, b: Result[R3, String] }
 
 fn mkho(n: i64) -> HoRes { return HoRes { a: mk(n), b: Result.Ok(mk(n + 100)) }; }
-fn takes(h: HoRes) { let HoRes { a, b } = h; println(f"  p{a.id}") }
+fn takes(h: own HoRes) { let HoRes { a, b } = h; println(f"  p{a.id}") }
 
 fn main() {
     println("loc");

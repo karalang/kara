@@ -1,6 +1,6 @@
 struct R { name: String, id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.name}") } }
-fn mk(n: i64, s: String) -> R { R { name: s, id: n } }
+fn mk(n: i64, s: own String) -> R { R { name: s, id: n } }
 fn gr(x: mut ref Result[R, i64]) -> i64 { x = Err(7); 1 }
 fn gn(x: mut ref Option[R]) -> i64 { x = None; 2 }
 fn g2(x: mut ref Option[R]) -> i64 { x = Some(mk(50, f"p")); x = Some(mk(51, f"q")); 3 }

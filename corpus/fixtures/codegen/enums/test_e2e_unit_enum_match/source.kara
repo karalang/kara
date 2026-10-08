@@ -1,6 +1,6 @@
 
 enum Color { Red, Green, Blue }
-fn describe(c: Color) -> i64 {
+fn describe(c: own Color) -> i64 {
     match c {
         Color.Red => 1,
         Color.Green => 2,

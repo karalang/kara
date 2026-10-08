@@ -238,7 +238,7 @@ pub fn parse_row(raw: String) -> Result[ValidatedRow, ParseError]
 // `row.qty` directly (design.md § Contracts Rule 4) — it captures the
 // pre-state with `old(row.qty)` (Clone of an i64 = free). The contract states
 // the structural invariant: enrichment re-prices, it never changes quantity.
-pub fn enrich_row(row: ValidatedRow) -> EnrichedRow
+pub fn enrich_row(row: own ValidatedRow) -> EnrichedRow
     with reads(CurrencyDB)
     ensures(result) result.qty == old(row.qty)
 {

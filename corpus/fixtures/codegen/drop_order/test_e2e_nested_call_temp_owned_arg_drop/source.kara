@@ -4,7 +4,7 @@ impl Drop for Res {
     fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
 }
 struct Holder { xs: Vec[Res], tag: i64 }
-fn mk(v: Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }
+fn mk(v: own Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }
 fn mkh() -> Holder {
     let mut v: Vec[Res] = Vec.new();
     v.push(Res { id: 7, name: f"g{7}" });

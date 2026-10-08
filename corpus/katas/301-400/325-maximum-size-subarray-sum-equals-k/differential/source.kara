@@ -159,7 +159,7 @@ struct Tally {
 }
 
 impl Tally {
-    fn check(mut ref self, ok: bool, what: String) {
+    fn check(mut ref self, ok: bool, what: own String) {
         if not ok and self.failures.len() < 10 {
             self.failures.push(what);
         }

@@ -12,7 +12,7 @@ fn mkStep(n: i64) -> Ve { if n >= 3 { return Ve.B } return Ve.A(f"steppayload{n}
 fn deboxIfLet(v: Ve) -> String { if let Ve.A(s) = v { s } else { "none".to_string() } }
 
 enum Opt[T] { Yes(T), No }
-fn getIfLet[T](o: Opt[T], d: T) -> T { if let Opt.Yes(v) = o { v } else { d } }
+fn getIfLet[T](o: Opt[T], d: own T) -> T { if let Opt.Yes(v) = o { v } else { d } }
 
 #[allow(partial_move_of_drop_enum)]
 fn main() {

@@ -13,7 +13,7 @@ struct Reader {
     mut buf_pos: i64,
 }
 
-fn new_reader(src: String) -> Reader {
+fn new_reader(src: own String) -> Reader {
     return Reader { src: src, pos: 0, buf: "", buf_pos: 0 };
 }
 

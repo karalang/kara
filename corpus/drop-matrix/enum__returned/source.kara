@@ -1,7 +1,7 @@
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
 enum E { Two(R, R), One(R) }
-fn pass(x: E) -> E {
+fn pass(x: own E) -> E {
     println("pass");
     x
 }

@@ -1,10 +1,10 @@
 struct R { id: i64, names: Vec[String] }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, names: [f"a{i}", f"b{i}"] }; }
-fn passG[T](x: T) -> T { return x; }
-fn passN(x: R) -> R { return x; }
+fn passG[T](x: own T) -> T { return x; }
+fn passN(x: own R) -> R { return x; }
 struct H { n: i64 }
-impl H { fn keep[T](ref self, x: T) -> T { return x; } fn keepN(ref self, x: R) -> R { return x; } }
+impl H { fn keep[T](ref self, x: own T) -> T { return x; } fn keepN(ref self, x: own R) -> R { return x; } }
 fn main() {
     { let g: R = mk(1); passG(g); println("one") }
     { let g: R = mk(2); let _ = passG(g); println("two") }

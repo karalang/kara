@@ -7,17 +7,17 @@ enum Ho[T] { Full(T), Empty }
 enum HoW { Full(W), Empty }
 enum P2[A, B] { Two(A, B), Nil }
 
-fn c1(x: Ho[W]) { match x { Full(r) => { let z = r; println(f"c1:{z.a.len()}") } Empty => { println("e") } } }
-fn c2(x: Ho[W], f: bool) { match x { Full(r) => { if f { let z = r; println(f"c2t:{z.a.len()}") } else { println(f"c2f:{r.a.len()}") } } Empty => { println("e") } } }
-fn c3(x: Ho[W]) -> W { match x { Full(r) => { let z = r; println("c3"); z } Empty => { mkw(0) } } }
-fn c4(x: Ho[W]) { match x { Full(r) => { let z = r; let y = z; println(f"c4:{y.a.len()}") } Empty => { println("e") } } }
-fn c5(x: P2[W, i64]) { match x { Two(r, n) => { let z = r; println(f"c5:{z.a.len()}/{n}") } Nil => { println("e") } } }
-fn c6(x: Ho[W]) { match x { Full(r) => { println(f"c6:{r.a.len()}") } Empty => { println("e") } } }
-fn c7(x: HoW) { match x { Full(r) => { let z = r; println(f"c7:{z.a.len()}") } Empty => { println("e") } } }
-fn c8(x: Ho[V]) { match x { Full(r) => { let z = r; println(f"c8:{z.id}") } Empty => { println("e") } } }
+fn c1(x: own Ho[W]) { match x { Full(r) => { let z = r; println(f"c1:{z.a.len()}") } Empty => { println("e") } } }
+fn c2(x: own Ho[W], f: bool) { match x { Full(r) => { if f { let z = r; println(f"c2t:{z.a.len()}") } else { println(f"c2f:{r.a.len()}") } } Empty => { println("e") } } }
+fn c3(x: own Ho[W]) -> W { match x { Full(r) => { let z = r; println("c3"); z } Empty => { mkw(0) } } }
+fn c4(x: own Ho[W]) { match x { Full(r) => { let z = r; let y = z; println(f"c4:{y.a.len()}") } Empty => { println("e") } } }
+fn c5(x: own P2[W, i64]) { match x { Two(r, n) => { let z = r; println(f"c5:{z.a.len()}/{n}") } Nil => { println("e") } } }
+fn c6(x: own Ho[W]) { match x { Full(r) => { println(f"c6:{r.a.len()}") } Empty => { println("e") } } }
+fn c7(x: own HoW) { match x { Full(r) => { let z = r; println(f"c7:{z.a.len()}") } Empty => { println("e") } } }
+fn c8(x: own Ho[V]) { match x { Full(r) => { let z = r; println(f"c8:{z.id}") } Empty => { println("e") } } }
 fn sink(w: W) { println(f"sink{w.a.len()}") }
-fn c9(x: Ho[W]) { match x { Full(r) => { sink(r); println("c9") } Empty => { println("e") } } }
-fn c10(x: Ho[W]) { match x { Full(r) => { let z = r; println("c10") } Empty => { println("e") } } }
+fn c9(x: own Ho[W]) { match x { Full(r) => { sink(r); println("c9") } Empty => { println("e") } } }
+fn c10(x: own Ho[W]) { match x { Full(r) => { let z = r; println("c10") } Empty => { println("e") } } }
 
 fn main() {
     c1(Ho.Full(mkw(1))); println("-1");

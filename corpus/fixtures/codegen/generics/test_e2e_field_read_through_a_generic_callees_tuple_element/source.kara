@@ -3,10 +3,10 @@ struct Tag { n: i64, a: i64 }
 struct Other { a: i64, n: i64 }
 struct Box3 { k: i64 }
 
-fn firstof[T](x: T) -> (T, i64) { return (x, 1); }
-fn outer[U](y: U) -> i64 { let q = firstof(y); return q.1; }
+fn firstof[T](x: own T) -> (T, i64) { return (x, 1); }
+fn outer[U](y: own U) -> i64 { let q = firstof(y); return q.1; }
 
-impl Box3 { fn pair[T](ref self, x: T) -> (T, i64) { return (x, self.k); } }
+impl Box3 { fn pair[T](ref self, x: own T) -> (T, i64) { return (x, self.k); } }
 
 fn main() {
     let a = firstof(Tag { n: 9, a: 99 });

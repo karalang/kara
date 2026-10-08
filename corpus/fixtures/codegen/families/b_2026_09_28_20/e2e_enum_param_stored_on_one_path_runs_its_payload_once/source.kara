@@ -3,16 +3,16 @@ impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
 fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
 struct W { r: D, s: D, b: i64 }
 fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
-fn keep(d: D) -> D { d }
+fn keep(d: own D) -> D { d }
 enum G { A(D), B }
 struct V { g: G, n: i64 }
 fn mkv(n: i64) -> V { V { g: G.A(mkd(n)), n: n } }
 struct U { v: V }
-fn csg(v: mut ref Vec[G], x: G, c: bool) { if c { v.push(x); } }
-fn tl(v: mut ref Vec[G], x: G, c: bool) { if c { v.push(x) } }
-fn loc(x: G, c: bool) -> i64 { let mut ys: Vec[G] = Vec.new(); if c { ys.push(x); } ys.len() }
+fn csg(v: mut ref Vec[G], x: own G, c: bool) { if c { v.push(x); } }
+fn tl(v: mut ref Vec[G], x: own G, c: bool) { if c { v.push(x) } }
+fn loc(x: own G, c: bool) -> i64 { let mut ys: Vec[G] = Vec.new(); if c { ys.push(x); } ys.len() }
 struct H { k: i64 }
-impl H { fn m(ref self, v: mut ref Vec[G], x: G, c: bool) { if c { v.push(x); } } }
+impl H { fn m(ref self, v: mut ref Vec[G], x: own G, c: bool) { if c { v.push(x); } } }
 fn main() {
     let mut xs: Vec[G] = Vec.new();
     csg(mut xs, mkv(1).g, false); csg(mut xs, mkv(2).g, true); println(f"a{xs.len()}");

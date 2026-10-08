@@ -1,7 +1,7 @@
 
 enum Tok { Id(String), Int(i64) }
 struct H { pe: (Tok, i64), tag: i64 }
-fn sinkt(p: (Tok, i64)) -> String { match p.0 { Id(s) => s, Int(n) => n.to_string() } }
+fn sinkt(p: own (Tok, i64)) -> String { match p.0 { Id(s) => s, Int(n) => n.to_string() } }
 fn main() {
     let a = H { pe: (Tok.Id("alpha".to_string()), 1), tag: 1 };
     let (t, n) = a.pe;

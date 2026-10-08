@@ -1,8 +1,8 @@
 
 struct Name { s: String }
-fn id(a: Name) -> Name { a }
-fn pick(a: Name, b: Name) -> Name { a }
-fn choose(a: Name, b: Name, t: bool) -> Name { if t { a } else { b } }
+fn id(a: own Name) -> Name { a }
+fn pick(a: own Name, b: Name) -> Name { a }
+fn choose(a: own Name, b: own Name, t: bool) -> Name { if t { a } else { b } }
 fn main() {
     let mut i: i64 = 0i64;
     while i < 2i64 {

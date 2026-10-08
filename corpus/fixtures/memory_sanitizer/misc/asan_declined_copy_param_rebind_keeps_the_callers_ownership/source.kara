@@ -21,21 +21,21 @@ struct P { id: i64, name: String }
 impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
 fn mkp(i: i64) -> P { return P { id: i, name: f"h{i}" }; }
 
-fn top(r: R) -> i64 { let m = r; return m.inner.v; }
-fn br(r: R, keep: bool) -> i64 { if keep { let m = r; return m.inner.v; } return 0; }
-fn two(r: R) -> i64 { let m = r; let n = m; return n.inner.v; }
-fn keeps(x: R) -> R { return x; }
-fn call(r: R) -> i64 { let w = keeps(r); return w.inner.v; }
-fn pair(a: R, b: R) -> i64 { let m = b; return m.inner.v + a.id; }
-fn deep(s: S) -> i64 { let m = s; return m.mid.d.v; }
-fn nodrop(n: N) -> i64 { let m = n; return m.inner.v; }
-fn selfref(nd: Node) -> i64 { let m = nd; return m.id; }
-fn ctl(p: P) -> i64 { let m = p; return m.id; }
-fn rd(r: R) -> String { let m = r; return f"{r.name}"; }
-fn rdi(r: R) -> i64 { let m = r; return r.inner.v; }
-fn rdb(r: R) -> i64 { let m = r; return m.id + r.id; }
-fn rdc(r: R) -> String { let m = r; let n = m; return f"{m.name}"; }
-impl R { fn takerd(self) -> String { let m = self; let n = m; return f"{m.name}"; } }
+fn top(r: own R) -> i64 { let m = r; return m.inner.v; }
+fn br(r: own R, keep: bool) -> i64 { if keep { let m = r; return m.inner.v; } return 0; }
+fn two(r: own R) -> i64 { let m = r; let n = m; return n.inner.v; }
+fn keeps(x: own R) -> R { return x; }
+fn call(r: own R) -> i64 { let w = keeps(r); return w.inner.v; }
+fn pair(a: R, b: own R) -> i64 { let m = b; return m.inner.v + a.id; }
+fn deep(s: own S) -> i64 { let m = s; return m.mid.d.v; }
+fn nodrop(n: own N) -> i64 { let m = n; return m.inner.v; }
+fn selfref(nd: own Node) -> i64 { let m = nd; return m.id; }
+fn ctl(p: own P) -> i64 { let m = p; return m.id; }
+fn rd(r: own R) -> String { let m = r; return f"{r.name}"; }
+fn rdi(r: own R) -> i64 { let m = r; return r.inner.v; }
+fn rdb(r: own R) -> i64 { let m = r; return m.id + r.id; }
+fn rdc(r: own R) -> String { let m = r; let n = m; return f"{m.name}"; }
+impl R { fn takerd(own self) -> String { let m = self; let n = m; return f"{m.name}"; } }
 
 fn main() {
     println(f"top={top(mk(21))}");

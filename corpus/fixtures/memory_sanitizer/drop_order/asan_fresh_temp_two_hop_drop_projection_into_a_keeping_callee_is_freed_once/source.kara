@@ -5,11 +5,11 @@ struct W { r: D, s: D, name: String, b: i64 }
 fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w-string-longer-than-sso-{n}", b: n }; }
 struct X { w: W, t: D }
 fn mkx(n: i64) -> X { return X { w: mkw(n), t: mkd(n + 300) }; }
-fn keep(d: D) -> D { d }
-fn stash(v: mut ref Vec[D], d: D) { v.push(d); }
-fn maybe(d: D, c: bool) -> Option[D] { if c { return Some(d); } None }
+fn keep(d: own D) -> D { d }
+fn stash(v: mut ref Vec[D], d: own D) { v.push(d); }
+fn maybe(d: own D, c: bool) -> Option[D] { if c { return Some(d); } None }
 struct H { k: i64 }
-impl H { fn kp(self, d: D) -> D { d } }
+impl H { fn kp(self, d: own D) -> D { d } }
 fn main() {
     let k = keep(mkx(1).w.r);
     println(f"a{k.id}");

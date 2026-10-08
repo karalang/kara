@@ -190,7 +190,7 @@ impl Resolver {
     }
 
     // Highest release of `name` satisfying `c`.
-    fn best_match(ref self, name: String, c: ref Constraint, required_by: String) -> Result[i64, ResolveError] {
+    fn best_match(ref self, name: own String, c: ref Constraint, required_by: own String) -> Result[i64, ResolveError] {
         let mut best: i64 = -1;
         let mut available: Vec[String] = Vec.new();
         let mut i = 0;
@@ -217,7 +217,7 @@ impl Resolver {
         Ok(best)
     }
 
-    fn require(mut ref self, name: String, c: ref Constraint, required_by: String) -> Result[(), ResolveError] {
+    fn require(mut ref self, name: own String, c: ref Constraint, required_by: own String) -> Result[(), ResolveError] {
         if let Some(idx) = self.chosen.get(name) {
             let rel = ref self.releases[idx];
             if c.matches(rel.version) {
@@ -238,7 +238,7 @@ impl Resolver {
     }
 
     // Post-order DFS: 0 = unvisited, 1 = on the stack, 2 = done.
-    fn visit(ref self, name: String, state: mut ref Map[String, i64], stack: mut ref Vec[String],
+    fn visit(ref self, name: own String, state: mut ref Map[String, i64], stack: mut ref Vec[String],
              order: mut ref Vec[String]) -> Result[(), ResolveError] {
         let mark = match state.get(name) { Some(s) => s, None => 0 };
         if mark == 2 {

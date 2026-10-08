@@ -1,6 +1,6 @@
 
 enum E { A(String), N(i64) }
-fn wrap(e: E) -> E { e }
+fn wrap(e: own E) -> E { e }
 fn main() {
     let f = E.A("hi".to_string());
     let g = wrap(f);

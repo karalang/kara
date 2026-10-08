@@ -1,7 +1,7 @@
 
 fn mkA(n: i64) -> String { return f"A{n}-aaaaaaaaaaaa"; }
 fn mkB(n: i64) -> String { return f"B{n}-bbbbbbbbbbbbbbbbbbbbbbbb"; }
-fn wrapped(n: i64, c: bool, t: String) -> String { { if c { mkA(n) } else { t } } }
+fn wrapped(n: i64, c: bool, t: own String) -> String { { if c { mkA(n) } else { t } } }
 
 fn main() {
     let n: i64 = env.args().len();

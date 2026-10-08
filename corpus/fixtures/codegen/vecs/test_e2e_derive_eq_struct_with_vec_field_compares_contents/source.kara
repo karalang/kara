@@ -7,7 +7,7 @@ struct S { v: Vec[String] }
 struct P { name: String, n: i64 }
 fn one(a: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(a); v }
 fn two(a: i64, b: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(a); v.push(b); v }
-fn strs(a: String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(a); v }
+fn strs(a: own String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(a); v }
 fn main() {
     // False positives: differ only above the first byte / in a later element.
     println(I { v: one(7) } == I { v: one(263) });

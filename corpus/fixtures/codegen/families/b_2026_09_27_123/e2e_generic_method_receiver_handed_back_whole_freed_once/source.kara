@@ -2,8 +2,8 @@ struct R { id: i64, tag: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 enum G[T] { X(T), Y }
 impl[T] G[T] {
-    fn id(self) -> Self { return self; }
-    fn tail(self) -> Self { self }
+    fn id(own self) -> Self { return self; }
+    fn tail(own self) -> Self { self }
 }
 fn main() {
     { let d: G[R] = G.X(R { id: 1, tag: f"a" }); let d2 = d.id(); match d2 { G.X(t) => { println(f"m{t.id}") } G.Y => { println("mY") } } }

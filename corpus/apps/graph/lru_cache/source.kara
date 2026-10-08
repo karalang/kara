@@ -88,7 +88,7 @@ impl LruCache {
         }
     }
 
-    fn on_evict(mut ref self, listener: Listener) {
+    fn on_evict(mut ref self, listener: own Listener) {
         self.listeners.push(listener);
     }
 
@@ -97,7 +97,7 @@ impl LruCache {
     }
 
     // Remove a node from the list, leaving it free-standing.
-    fn unlink(mut ref self, node: Node) {
+    fn unlink(mut ref self, node: own Node) {
         match node.prev {
             Some(p) => { p.next = node.next; }
             None => { self.head = node.next; }
@@ -111,7 +111,7 @@ impl LruCache {
     }
 
     // Insert a free-standing node at the most-recently-used end.
-    fn push_front(mut ref self, node: Node) {
+    fn push_front(mut ref self, node: own Node) {
         node.prev = None;
         node.next = self.head;
         match self.head {
@@ -121,7 +121,7 @@ impl LruCache {
         self.head = Some(node);
     }
 
-    fn touch(mut ref self, node: Node) {
+    fn touch(mut ref self, node: own Node) {
         self.unlink(node);
         self.push_front(node);
     }
@@ -169,7 +169,7 @@ impl LruCache {
         }
     }
 
-    fn put(mut ref self, key: String, value: i64) {
+    fn put(mut ref self, key: own String, value: i64) {
         match self.index.get(key) {
             Some(node) => {
                 node.value = value;
@@ -232,7 +232,7 @@ fn join(parts: Vec[String], sep: String) -> String {
     out
 }
 
-fn parse_number(line: i64, text: String) -> Result[i64, ScriptError] {
+fn parse_number(line: i64, text: own String) -> Result[i64, ScriptError] {
     match i64.parse(text) {
         Some(n) => Ok(n),
         None => Err(ScriptError.BadNumber { line, text }),

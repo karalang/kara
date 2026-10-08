@@ -1,10 +1,10 @@
 struct G[T] { v: T, n: i64 }
 struct P[A, B] { a: A, b: B }
-fn f1(g: G[String]) -> i64 { let G { v, n } = g; v.len() + n }
-fn f2(g: G[Vec[i64]]) -> i64 { let G { v, .. } = g; v.len() }
-fn f3(p: P[String, Vec[String]]) -> i64 { let P { a, b } = p; a.len() + b.len() }
-fn f4[T](g: G[T]) -> i64 { let G { v, n } = g; n }
-fn f5(g: G[String]) -> String { let G { n, v } = g; v }
+fn f1(g: own G[String]) -> i64 { let G { v, n } = g; v.len() + n }
+fn f2(g: own G[Vec[i64]]) -> i64 { let G { v, .. } = g; v.len() }
+fn f3(p: own P[String, Vec[String]]) -> i64 { let P { a, b } = p; a.len() + b.len() }
+fn f4[T](g: own G[T]) -> i64 { let G { v, n } = g; n }
+fn f5(g: own G[String]) -> String { let G { n, v } = g; v }
 fn main() {
     let mut w = Vec.new(); w.push(1); w.push(2);
     let mut ws = Vec.new(); ws.push("heap-string-longer-than-sso-xxxxxx");

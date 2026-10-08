@@ -51,7 +51,7 @@ struct NestedIterator {
 }
 
 impl NestedIterator {
-    fn new(items: Vec[Nested]) -> NestedIterator {
+    fn new(items: own Vec[Nested]) -> NestedIterator {
         return NestedIterator { root: items, path: [0] };
     }
 
@@ -82,7 +82,7 @@ impl NestedIterator {
     }
 }
 
-fn flatten(items: Vec[Nested]) -> Vec[i64] {
+fn flatten(items: own Vec[Nested]) -> Vec[i64] {
     let mut it = NestedIterator.new(items);
     let mut out: Vec[i64] = Vec.new();
     while it.has_next() {

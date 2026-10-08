@@ -7,7 +7,7 @@ enum Ev { A(Q), B(i64) }
 struct Hold { n: i64 }
 impl Q {
   fn make2() -> Q { return mkq(62); }
-  fn passq(q: Q) -> Q { return q; }
+  fn passq(q: own Q) -> Q { return q; }
   fn count() -> i64 { return 7; }
 }
 impl W { fn mkw() -> W { return W { q: mkq(77), n: 1 }; } }

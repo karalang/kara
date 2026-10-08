@@ -4,10 +4,10 @@ struct Box[T] { v: T }
 struct P { v: Wide }
 enum Col { Red, Green, Blue }
 impl[T] Box[T] {
-    fn take(self) -> T { self.v }
-    fn wrap(self) -> Box[T] { Box { v: self.v } }
+    fn take(own self) -> T { self.v }
+    fn wrap(own self) -> Box[T] { Box { v: self.v } }
 }
-impl P { fn take(self) -> Wide { self.v } }
+impl P { fn take(own self) -> Wide { self.v } }
 fn main() {
     let n: i64 = env.args().len();
     // (a) the reported shape — chained field on a bare-`T` return.

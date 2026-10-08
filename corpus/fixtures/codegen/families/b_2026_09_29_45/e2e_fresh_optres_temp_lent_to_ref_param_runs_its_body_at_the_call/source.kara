@@ -2,7 +2,7 @@ struct R { name: String, id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.name}") } }
 struct S { id: i64 }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
-fn mk(n: i64, s: String) -> R { R { name: s, id: n } }
+fn mk(n: i64, s: own String) -> R { R { name: s, id: n } }
 fn mko(n: i64) -> Option[S] { Some(S { id: n }) }
 fn mkr(n: i64) -> Result[R, i64] { Ok(mk(n, f"r-heap-string-longer-than-sso")) }
 fn g1(x: ref Option[R]) -> i64 { match x { Some(r) => r.id, None => 0 } }

@@ -1,5 +1,5 @@
 
-fn tag(s: String) -> String { s }
+fn tag(s: own String) -> String { s }
 fn nlen(s: String) -> i64 { s.len() }
 fn main() {
     let mut round: i64 = 0i64;

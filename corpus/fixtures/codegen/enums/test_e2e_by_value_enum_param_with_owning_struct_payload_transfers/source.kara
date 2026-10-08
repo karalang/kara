@@ -13,8 +13,8 @@ enum D { T(Xd), U(i64) }
 enum C { T(Ctl), U(i64) }
 struct H { n: i64 }
 fn sink(w: W) {}
-fn eat(w: W) -> i64 { return match w { W.T(x) => x.a.unwrap_or(0), W.U(n) => n } }
-fn hand(w: W) -> W { return w; }
+fn eat(w: own W) -> i64 { return match w { W.T(x) => x.a.unwrap_or(0), W.U(n) => n } }
+fn hand(w: own W) -> W { return w; }
 fn hop(w: W) { sink(w); }
 fn sinkv(v: V) {}
 fn sinky(y: Y) {}

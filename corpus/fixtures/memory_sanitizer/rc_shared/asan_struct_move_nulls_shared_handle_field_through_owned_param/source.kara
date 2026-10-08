@@ -3,7 +3,7 @@ shared struct Cell { mut value: i64 }
 struct Cmd { cell: Cell }
 struct Ed { stack: Vec[Cmd] }
 impl Ed {
-    fn record(mut ref self, cell: Cell) {
+    fn record(mut ref self, cell: own Cell) {
         let cmd = Cmd { cell: cell };
         self.stack.push(cmd);
     }

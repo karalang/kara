@@ -1,5 +1,5 @@
 
-fn identity[T](x: T) -> T { x }
+fn identity[T](x: own T) -> T { x }
 fn main() {
     let _ = identity(1);
     let _ = identity(2);

@@ -1,6 +1,6 @@
 
 struct Big { a: String, b: String }
-fn orphan(seed: Big) -> Sender[Big] {
+fn orphan(seed: own Big) -> Sender[Big] {
     let (tx, rx) = Channel.new();
     let t2 = tx.clone();
     t2.send(seed);

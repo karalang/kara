@@ -11,17 +11,17 @@ struct Q { id: i64, t: Map[String, i64] }
 impl Drop for Q { fn drop(mut ref self) { println(f"dQ{self.id}") } }
 fn mkQ(i: i64) -> Q { let mut t = Map.new(); t.insert(f"k{i}", i); return Q { id: i, t: t }; }
 
-fn top(r: R) -> R { let m = r; return m; }
-fn two(r: R) -> R { let m = r; let n = m; return n; }
-fn tail(r: R) -> R { let m = r; m }
-fn pair(a: i64, r: R) -> R { let m = r; return m; }
-fn bx(r: R) -> Box2 { let m = r; return Box2 { r: m }; }
-fn tp(r: R) -> (R, i64) { let m = r; return (m, 9); }
-fn op(r: R) -> Option[R] { let m = r; return Option.Some(m); }
-fn rd(r: R) -> R { let m = r; println(f"in={m.name}"); return m; }
-fn qq(q: Q) -> Q { let m = q; return m; }
-fn ctl(p: P) -> P { let m = p; return m; }
-fn ret(r: R) -> R { return r; }
+fn top(r: own R) -> R { let m = r; return m; }
+fn two(r: own R) -> R { let m = r; let n = m; return n; }
+fn tail(r: own R) -> R { let m = r; m }
+fn pair(a: i64, r: own R) -> R { let m = r; return m; }
+fn bx(r: own R) -> Box2 { let m = r; return Box2 { r: m }; }
+fn tp(r: own R) -> (R, i64) { let m = r; return (m, 9); }
+fn op(r: own R) -> Option[R] { let m = r; return Option.Some(m); }
+fn rd(r: own R) -> R { let m = r; println(f"in={m.name}"); return m; }
+fn qq(q: own Q) -> Q { let m = q; return m; }
+fn ctl(p: own P) -> P { let m = p; return m; }
+fn ret(r: own R) -> R { return r; }
 
 fn main() {
   let a = top(mk(41)); println(f"top={a.inner.v}");

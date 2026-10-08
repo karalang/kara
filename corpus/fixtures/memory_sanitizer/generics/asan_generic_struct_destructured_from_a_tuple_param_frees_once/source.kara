@@ -1,4 +1,4 @@
 
 struct Bag[T] { xs: Vec[T] }
-fn take[T](p: (Bag[T], i64)) -> Vec[T] { let (b, _n) = p; b.xs }
+fn take[T](p: own (Bag[T], i64)) -> Vec[T] { let (b, _n) = p; b.xs }
 fn main() { let r = take((Bag { xs: [10, 20] }, 0)); println(f"len={r.len()} [{r[0]}]"); }

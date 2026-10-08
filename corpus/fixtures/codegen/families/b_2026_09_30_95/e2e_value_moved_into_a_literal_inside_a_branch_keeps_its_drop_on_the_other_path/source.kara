@@ -2,8 +2,8 @@ struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 struct P { r: R, n: i64 }
-fn ps(a: R, f: bool) -> P { if f { let x = P { r: a, n: 1 }; return x; } return P { r: mk(92), n: 1 }; }
-fn pt(a: R, f: bool) -> (R, i64) { if f { let x = (a, 1); return x; } return (mk(93), 1); }
+fn ps(a: own R, f: bool) -> P { if f { let x = P { r: a, n: 1 }; return x; } return P { r: mk(92), n: 1 }; }
+fn pt(a: own R, f: bool) -> (R, i64) { if f { let x = (a, 1); return x; } return (mk(93), 1); }
 fn pv(a: R, f: bool) -> Vec[R] { if f { let x = [a]; return x; } return [mk(94)]; }
 fn ls(k: i64, f: bool) { let a = mk(k); if f { let x = P { r: a, n: 1 }; println(f"in{x.n}"); } println("out") }
 fn lt(k: i64, f: bool) { let a = mk(k); if f { let x = (a, 1); println(f"in{x.1}"); } println("out") }

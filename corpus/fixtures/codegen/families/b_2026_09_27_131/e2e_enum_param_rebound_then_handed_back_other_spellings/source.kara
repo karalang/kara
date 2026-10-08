@@ -2,20 +2,20 @@ struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
 enum Ho[T] { Full(T), Empty }
-fn shows(h: Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
+fn shows(h: own Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
 enum Hc { Full(S), Empty }
 fn eat(h: Hc) { println("x") }
-fn shc(h: Hc) { match h { Hc.Full(r) => println(f"s{r.id}"), Hc.Empty => println("e") } }
+fn shc(h: own Hc) { match h { Hc.Full(r) => println(f"s{r.id}"), Hc.Empty => println("e") } }
 struct K { z: i64 }
 impl K {
-    fn mp(ref self, h: Hc, k: bool) -> Hc { let m = h; if k { return m } shc(m); return Hc.Empty }
-    fn ap(h: Ho[S], k: bool) -> Ho[S] { let m = h; if k { return m } println("ad"); return Ho.Empty }
+    fn mp(ref self, h: own Hc, k: bool) -> Hc { let m = h; if k { return m } shc(m); return Hc.Empty }
+    fn ap(h: own Ho[S], k: bool) -> Ho[S] { let m = h; if k { return m } println("ad"); return Ho.Empty }
 }
-fn nest(h: Hc, k: bool) -> Hc { if k { let m = h; return m } println("nd"); return Hc.Empty }
-fn two(h: Hc, k: bool) -> Hc { let m = h; let n = m; if k { return n } eat(n); return Hc.Empty }
-fn wrap(h: Hc, k: bool) -> Option[Hc] { let m = h; if k { return Option.Some(m) } println("wd"); return Option.None }
+fn nest(h: own Hc, k: bool) -> Hc { if k { let m = h; return m } println("nd"); return Hc.Empty }
+fn two(h: own Hc, k: bool) -> Hc { let m = h; let n = m; if k { return n } eat(n); return Hc.Empty }
+fn wrap(h: own Hc, k: bool) -> Option[Hc] { let m = h; if k { return Option.Some(m) } println("wd"); return Option.None }
 fn rr(h: Result[S, i64], k: bool) -> Result[S, i64] { let m = h; if k { return m } println("rd"); return Result.Err(0) }
-fn gn[T](h: Ho[T], k: bool) -> Ho[T] { let m = h; if k { return m } println("gd"); return Ho.Empty }
+fn gn[T](h: own Ho[T], k: bool) -> Ho[T] { let m = h; if k { return m } println("gd"); return Ho.Empty }
 fn main() {
     let kk = K { z: 0 };
     let a1 = kk.mp(Hc.Full(mks(1)), false); shc(a1);

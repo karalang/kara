@@ -1,5 +1,5 @@
 
-fn pick[T: Ord](a: T, b: T) -> T {
+fn pick[T: Ord](a: own T, b: own T) -> T {
     if a > b { a } else { b }
 }
 

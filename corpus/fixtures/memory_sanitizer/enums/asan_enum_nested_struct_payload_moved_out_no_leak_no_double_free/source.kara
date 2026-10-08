@@ -7,13 +7,13 @@ fn mk(x: i64) -> Vec[i64] {
     v.push(x + 1);
     return v;
 }
-fn sink(e: E) -> i64 {
+fn sink(e: own E) -> i64 {
     match e {
         Wrap(inner) => inner.n,
         Empty => 0,
     }
 }
-fn unwrap_or(e: E) -> Inner {
+fn unwrap_or(e: own E) -> Inner {
     match e {
         Wrap(inner) => inner,
         Empty => Inner { data: mk(0), n: 0 },

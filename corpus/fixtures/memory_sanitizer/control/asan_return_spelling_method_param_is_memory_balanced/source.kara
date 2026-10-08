@@ -4,14 +4,14 @@ impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
 struct T1 { n: i64 }
 struct Hh { r: R }
 impl T1 {
-    fn take(ref self, ra: R) -> R { return ra; }
-    fn keep(ref self, rb: R) -> R { rb }
-    fn wrap(ref self, rc: R) -> Hh { return Hh { r: rc }; }
-    fn gtake[X](ref self, rd: R, x: X) -> R { return rd; }
+    fn take(ref self, ra: own R) -> R { return ra; }
+    fn keep(ref self, rb: own R) -> R { rb }
+    fn wrap(ref self, rc: own R) -> Hh { return Hh { r: rc }; }
+    fn gtake[X](ref self, rd: own R, x: X) -> R { return rd; }
     fn swapout(ref self, re: R) -> R { println(f"saw {re.name}"); return R { id: 99, name: f"z9" }; }
     fn eat(ref self, rf: R, k: bool) { if k { return; } println(f"kept {rf.name}"); }
 }
-fn take_free(rg: R) -> R { return rg; }
+fn take_free(rg: own R) -> R { return rg; }
 fn main() {
     let base: i64 = env.args().len();
     let t = T1 { n: 1 };

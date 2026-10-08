@@ -5,7 +5,7 @@ enum G2[T] { X(T, i64), Z }
 struct S[T] { g: G1[T], k: i64 }
 struct Sm { g: G1[W], k: i64 }
 fn mk(n: i64) -> G1[W] { return G1.Y(W { s: f"payload-heap-string-{n}", n: n }) }
-fn takeg(g: G1[W]) { match g { G1.Y(w) => println(f"took{w.n}"), G1.N => println("n") } }
+fn takeg(g: own G1[W]) { match g { G1.Y(w) => println(f"took{w.n}"), G1.N => println("n") } }
 fn mksm(n: i64) -> Sm { return Sm { g: mk(n), k: n } }
 fn main() {
     let s1 = S { g: mk(1), k: 7 }; println(f"a{s1.k}");

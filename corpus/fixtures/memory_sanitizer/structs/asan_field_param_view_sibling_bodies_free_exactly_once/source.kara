@@ -13,7 +13,7 @@ fn mk(n: i64) -> R {
 }
 
 #[allow(partial_move_of_drop_enum)]
-fn two_views(b: E, c: E) -> i64 {
+fn two_views(b: own E, c: own E) -> i64 {
     let mut h: H3 = H3 { f: mk(30), g: mk(31), k: mk(32) };
     match b { E.A(r) => { h.f = r; } E.B => { } }
     match c { E.A(r2) => { h.g = r2; } E.B => { } }

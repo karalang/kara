@@ -5,14 +5,14 @@ struct P { id: i64, name: String, xs: Vec[i64] }
 impl Drop for P { fn drop(mut ref self) { println(f"  dP{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
 fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}", xs: [i] }; }
-fn f(r: R) -> R { return r; }
-fn ppass(p: P) -> P { return p; }
+fn f(r: own R) -> R { return r; }
+fn ppass(p: own P) -> P { return p; }
 fn dies(r: R) -> i64 { return r.id; }
-fn via(r: R) -> R { return f(r); }
-fn via2(r: R) -> R { let m = r; return f(m); }
-fn pvia(p: P) -> P { return ppass(p); }
+fn via(r: own R) -> R { return f(r); }
+fn via2(r: own R) -> R { let m = r; return f(m); }
+fn pvia(p: own P) -> P { return ppass(p); }
 fn dvia(r: R) -> i64 { return dies(r); }
-fn mvia(r: R, c: bool) -> R { if c { return f(r); } return mk(99); }
+fn mvia(r: own R, c: bool) -> R { if c { return f(r); } return mk(99); }
 fn main() {
   println("named_hop"); let a = mk(1); let z = via(a); println(f"  v={z.inner.v}");
   println("fresh_hop"); let w = via(mk(2)); println(f"  v={w.inner.v}");

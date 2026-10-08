@@ -2,9 +2,9 @@ struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
 enum Hc { Full(S), Empty }
-fn shc(h: Hc) { match h { Hc.Full(r) => println(f"s{r.id}"), Hc.Empty => println("e") } }
+fn shc(h: own Hc) { match h { Hc.Full(r) => println(f"s{r.id}"), Hc.Empty => println("e") } }
 enum Ho[T] { Full(T), Empty }
 fn mkh() -> i64 { let h: Ho[S] = Ho.Full(mks(9)); match h { Ho.Full(r) => r.id, Ho.Empty => 0 } }
 fn eat(h: Hc) { println("x") }
-fn pk(h: Hc, k: bool) -> Hc { if k { return h } eat(h); return Hc.Empty }
+fn pk(h: own Hc, k: bool) -> Hc { if k { return h } eat(h); return Hc.Empty }
 fn main() { println(f"m{mkh()}"); let a = Hc.Full(mks(4)); let r = pk(a, false); shc(r); let b = Hc.Full(mks(5)); let q = pk(b, true); shc(q); println("end") }

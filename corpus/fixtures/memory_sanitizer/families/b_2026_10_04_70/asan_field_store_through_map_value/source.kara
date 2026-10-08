@@ -5,7 +5,7 @@ impl O {
     fn set(mut ref self, k: i64) { self.m[k].n = 40; self.m[k].s = f"self{k}"; }
 }
 fn bump(m: mut ref Map[String, P]) { m["a"].s = f"z{9}"; m["a"].n += 3; }
-fn mk(n: i64, t: String) -> P { P { n: n, s: t, q: Q { n: n * 10 } } }
+fn mk(n: i64, t: own String) -> P { P { n: n, s: t, q: Q { n: n * 10 } } }
 fn main() {
     let mut m: Map[i64, P] = Map.new();
     m.insert(1, mk(5, f"a{1}"));

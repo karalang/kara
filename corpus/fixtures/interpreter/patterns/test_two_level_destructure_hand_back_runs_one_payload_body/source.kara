@@ -7,14 +7,14 @@ struct H1 { e: E }
 struct S { e: E }
 struct H2 { s: S }
 struct Hb { e: E, b: E }
-fn p_r(e: E) -> R { match e { E.A(r) => { return r; } E.B => { return mk(0); } } }
-fn p_h(h: H1) -> R { match h { H1 { e } => { match e { E.A(r) => { return r; } E.B => { return mk(0); } } } } }
-fn p_let(h: H1) -> R { let H1 { e } = h; match e { E.A(r) => { return r; } E.B => { return mk(0); } } }
-fn p_iflet(h: H1) -> R { match h { H1 { e } => { if let E.A(r) = e { return r; } else { return mk(0); } } } }
-fn p_proj(h: H1) -> R { match h.e { E.A(r) => { return r; } E.B => { return mk(0); } } }
-fn p_deep(h: H2) -> R { match h { H2 { s } => { match s { S { e } => { match e { E.A(r) => { return r; } E.B => { return mk(0); } } } } } } }
-fn p_two(h: Hb) -> R { match h { Hb { e, b } => { match e { E.A(r) => { return r; } E.B => { return mk(0); } } } } }
-impl H1 { fn hand(self) -> R { match self { H1 { e } => { match e { E.A(r) => { return r; } E.B => { return mk(0); } } } } } }
+fn p_r(e: own E) -> R { match e { E.A(r) => { return r; } E.B => { return mk(0); } } }
+fn p_h(h: own H1) -> R { match h { H1 { e } => { match e { E.A(r) => { return r; } E.B => { return mk(0); } } } } }
+fn p_let(h: own H1) -> R { let H1 { e } = h; match e { E.A(r) => { return r; } E.B => { return mk(0); } } }
+fn p_iflet(h: own H1) -> R { match h { H1 { e } => { if let E.A(r) = e { return r; } else { return mk(0); } } } }
+fn p_proj(h: own H1) -> R { match h.e { E.A(r) => { return r; } E.B => { return mk(0); } } }
+fn p_deep(h: own H2) -> R { match h { H2 { s } => { match s { S { e } => { match e { E.A(r) => { return r; } E.B => { return mk(0); } } } } } } }
+fn p_two(h: own Hb) -> R { match h { Hb { e, b } => { match e { E.A(r) => { return r; } E.B => { return mk(0); } } } } }
+impl H1 { fn hand(own self) -> R { match self { H1 { e } => { match e { E.A(r) => { return r; } E.B => { return mk(0); } } } } } }
 fn main() {
     println("r/local"); let a1 = E.A(mk(1)); let x1 = p_r(a1); println(f"  r{x1.id}");
     println("h/local"); let a2 = H1 { e: E.A(mk(2)) }; let x2 = p_h(a2); println(f"  r{x2.id}");

@@ -9,12 +9,12 @@ fn p_call(t: (R, i64)) -> i64 { if let (r, k) = t { consume(r) } else { 0 } }
 fn p_rebind(t: (R, i64)) -> i64 { if let (r, k) = t { let m = r; m.id } else { 0 } }
 fn p_out(t: (R, i64)) -> R { if let (r, k) = t { r } else { mk(0) } }
 fn p_field(h: H) -> i64 { if let (r, k) = h.t { k } else { 0 } }
-fn p_letelse(t: (R, i64)) -> i64 { let (r, k) = t else { return 0 }; k }
+fn p_letelse(t: own (R, i64)) -> i64 { let (r, k) = t else { return 0 }; k }
 fn p_while(t: (R, i64)) -> i64 { while let (r, k) = t { return k }; 0 }
 fn l_read() -> i64 { let t = (mk(21), 0); if let (r, k) = t { k } else { 0 } }
 fn l_rebind() -> i64 { let t = (mk(22), 0); if let (r, k) = t { let m = r; m.id } else { 0 } }
 fn l_two() -> i64 { let t = (mk(23), mk(24)); if let (a, b) = t { let m = a; m.id } else { 0 } }
-fn m_read(t: (R, i64)) -> i64 { match t { (r, k) => { k } } }
+fn m_read(t: own (R, i64)) -> i64 { match t { (r, k) => { k } } }
 
 fn main() {
     println("p_read"); let a = p_read((mk(1), 0)); println(f"  r{a}");

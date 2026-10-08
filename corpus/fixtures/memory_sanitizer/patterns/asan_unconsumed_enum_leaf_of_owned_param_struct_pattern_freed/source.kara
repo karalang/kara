@@ -4,8 +4,8 @@ fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
 enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 struct H1 { e: E }
-impl H1 { fn shell(self) -> i64 { match self { H1 { e } => { return 9; } } } }
-fn p_shell(h: H1) -> i64 { match h { H1 { e } => { return 9; } } }
+impl H1 { fn shell(own self) -> i64 { match self { H1 { e } => { return 9; } } } }
+fn p_shell(h: own H1) -> i64 { match h { H1 { e } => { return 9; } } }
 fn main() {
     println("recv/local"); let a1 = H1 { e: E.A(mk(31)) }; let x1 = a1.shell(); println(f"  r{x1}");
     println("recv/temp"); let x2 = H1 { e: E.A(mk(32)) }.shell(); println(f"  r{x2}");

@@ -7,8 +7,8 @@ shared struct N { v: i64 }
 struct Z { d: D, h: N }
 struct Q { z: Z, t: D }
 struct X { w: W, t: D }
-fn gst[T](xs: mut ref Vec[T], x: T, c: bool) { if c { xs.push(x); } }
-fn gown[T](x: T, c: bool) -> i64 { let mut xs: Vec[T] = Vec.new(); if c { xs.push(x); } xs.len() }
+fn gst[T](xs: mut ref Vec[T], x: own T, c: bool) { if c { xs.push(x); } }
+fn gown[T](x: own T, c: bool) -> i64 { let mut xs: Vec[T] = Vec.new(); if c { xs.push(x); } xs.len() }
 fn main() {
     let mut ws: Vec[W] = Vec.new();
     gst(mut ws, mkw(1), false); println("a");

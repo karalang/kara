@@ -4,7 +4,7 @@ shared struct ListNode {
     mut next: Option[ListNode],
 }
 
-fn probe(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
+fn probe(lists: own Vec[Option[ListNode]]) -> Option[ListNode] {
     let mut work = lists;
     work[0] = work[1].clone();
     work[0]

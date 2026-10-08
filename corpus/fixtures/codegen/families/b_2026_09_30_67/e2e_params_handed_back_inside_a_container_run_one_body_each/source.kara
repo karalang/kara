@@ -7,8 +7,8 @@ fn arrc(a: R, b: R) -> Array[R, 2] { return [a, b]; }
 fn arrg[T](a: T, b: T) -> Array[T, 2] { return [a, b]; }
 fn arr1(a: R) -> Array[R, 1] { return [a]; }
 fn vc(a: R, b: R) -> Vec[R] { return vec![a, b]; }
-fn tupc(a: R, b: R) -> (R, R) { return (a, b); }
-fn tupk(a: R) -> (R, i64) { return (a, 7); }
+fn tupc(a: own R, b: own R) -> (R, R) { return (a, b); }
+fn tupk(a: own R) -> (R, i64) { return (a, 7); }
 fn oc(a: R, b: R) -> i64 { let e = arrc(a, b); return 1; }
 fn ov(a: R, b: R) -> i64 { let e = vc(a, b); return 1; }
 fn o1(a: R) -> i64 { let e = arr1(a); return 1; }
@@ -18,15 +18,15 @@ fn orr(a: R, b: R) -> i64 { let e = arrc(a, b); println(f"i{e[0].id}"); return 1
 fn ob(a: R, b: R) -> i64 { let e = arrc(a, b); let f = e; return 1; }
 fn dc(a: R, b: R) -> i64 { arrc(a, b); return 1; }
 fn dv(a: R, b: R) -> i64 { vc(a, b); return 1; }
-fn dt(a: R, b: R) -> i64 { tupc(a, b); return 1; }
+fn dt(a: own R, b: own R) -> i64 { tupc(a, b); return 1; }
 fn dg(a: R, b: R) -> i64 { arrg(a, b); return 1; }
 fn wc(a: R, b: R) -> i64 { let _ = arrc(a, b); return 1; }
 fn wv(a: R, b: R) -> i64 { let _ = vc(a, b); return 1; }
-fn wt(a: R, b: R) -> i64 { let _ = tupc(a, b); return 1; }
-fn mt(a: R) -> i64 { let e = tupc(a, mk(51)); return 1; }
-fn md(a: R) -> i64 { tupc(a, mk(52)); return 1; }
-fn mw(a: R) -> i64 { let _ = tupc(a, mk(53)); return 1; }
-fn pk(a: R) -> i64 { let t = tupk(a); return t.1; }
+fn wt(a: own R, b: own R) -> i64 { let _ = tupc(a, b); return 1; }
+fn mt(a: own R) -> i64 { let e = tupc(a, mk(51)); return 1; }
+fn md(a: own R) -> i64 { tupc(a, mk(52)); return 1; }
+fn mw(a: own R) -> i64 { let _ = tupc(a, mk(53)); return 1; }
+fn pk(a: own R) -> i64 { let t = tupk(a); return t.1; }
 fn main() {
   println("oc"); oc(mk(1), mk(2));
   println("ov"); ov(mk(3), mk(4));

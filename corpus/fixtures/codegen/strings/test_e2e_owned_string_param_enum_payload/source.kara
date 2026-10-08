@@ -1,5 +1,5 @@
 
-fn wrap(s: String) -> Option[String] {
+fn wrap(s: own String) -> Option[String] {
     Some(s)
 }
 

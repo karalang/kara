@@ -1,4 +1,4 @@
-fn pick(m: ref SortedMap[String, i64], at: String) -> String {
+fn pick(m: ref SortedMap[String, i64], at: own String) -> String {
     match m.ceiling(at) {
         Some((k, v)) => return f"{k}={v}",
         None => return "none",

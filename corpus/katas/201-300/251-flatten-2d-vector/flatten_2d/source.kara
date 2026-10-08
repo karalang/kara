@@ -20,7 +20,7 @@ struct Vector2D {
     mut col: i64,
 }
 
-fn v_new(data: Vec[Vec[i64]]) -> Vector2D {
+fn v_new(data: own Vec[Vec[i64]]) -> Vector2D {
     return Vector2D { data: data, row: 0, col: 0 };
 }
 

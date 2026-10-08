@@ -32,7 +32,7 @@ impl Dir {
 }
 
 impl Point {
-    fn moved(self, d: Dir, width: i64, height: i64) -> Option[Point] {
+    fn moved(self, d: own Dir, width: i64, height: i64) -> Option[Point] {
         let p = match d {
             Dir.Up => Point { r: self.r - 1, c: self.c },
             Dir.Down => Point { r: self.r + 1, c: self.c },

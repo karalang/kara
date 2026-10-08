@@ -79,7 +79,7 @@ struct SensorLedger { on_time: i64, merged: i64, dropped: i64, worst_merged: i64
 
 impl SensorLedger {
     // Tallies one arrival; returns whether the event should be windowed.
-    fn record(mut ref self, arrival: Arrival) -> bool {
+    fn record(mut ref self, arrival: own Arrival) -> bool {
         match arrival {
             Arrival.OnTime => {
                 self.on_time += 1;
@@ -109,7 +109,7 @@ struct Pipeline {
 }
 
 impl Pipeline {
-    fn new(config: Config) -> Pipeline {
+    fn new(config: own Config) -> Pipeline {
         Pipeline {
             config: config,
             high_water: Map.new(),
@@ -172,7 +172,7 @@ impl Pipeline {
 }
 
 // Folds one value into a window's running stats, creating it on first use.
-fn bump(windows: mut ref Map[WindowKey, WindowStats], key: WindowKey, value: i64) {
+fn bump(windows: mut ref Map[WindowKey, WindowStats], key: own WindowKey, value: i64) {
     let mut st = match windows.remove(key) {
         Some(existing) => existing,
         None => WindowStats.new(),
@@ -220,7 +220,7 @@ fn fmt_fixed(v: i64, places: i64) -> String {
     f"{sign}{mag / scale}.{frac}"
 }
 
-fn pad_left(s: String, width: i64) -> String {
+fn pad_left(s: own String, width: i64) -> String {
     let mut out = s;
     while out.len() < width {
         out = " " + out;

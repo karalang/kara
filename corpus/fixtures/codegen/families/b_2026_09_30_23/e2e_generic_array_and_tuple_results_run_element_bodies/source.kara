@@ -5,11 +5,11 @@ struct G2[T] { q: T, r: T }
 fn arrg[T](a: T, b: T) -> Array[T, 2] { return [a, b]; }
 fn arrgf[T](w: G2[T]) -> Array[T, 2] { return [w.q, w.r]; }
 fn arrm[T](a: T) -> Array[T, 1] { return [a]; }
-fn tupg[T](a: T, b: T) -> (T, T) { return (a, b); }
-fn tupm[T](a: T, n: i64) -> (T, i64) { return (a, n); }
-fn tupf[T](w: G2[T]) -> (T, T) { return (w.q, w.r); }
-fn tupp1[T](w: G2[T]) -> (T, i64) { return (w.r, 5); }
-fn tupp2[T](w: G2[T]) -> (i64, T) { return (5, w.r); }
+fn tupg[T](a: own T, b: own T) -> (T, T) { return (a, b); }
+fn tupm[T](a: own T, n: i64) -> (T, i64) { return (a, n); }
+fn tupf[T](w: own G2[T]) -> (T, T) { return (w.q, w.r); }
+fn tupp1[T](w: own G2[T]) -> (T, i64) { return (w.r, 5); }
+fn tupp2[T](w: own G2[T]) -> (i64, T) { return (5, w.r); }
 fn outer[U](a: U) -> i64 { let t = tupg(mk(60), mk(61)); let e = arrm(mk(62)); return 1; }
 fn main() {
   println("-c1"); let e = arrg(mk(1), mk(2)); println(f"r{e[1].id}");

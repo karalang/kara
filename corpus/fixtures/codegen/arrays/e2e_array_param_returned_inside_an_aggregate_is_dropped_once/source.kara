@@ -4,16 +4,16 @@ fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
 struct B7 { v: Array[R, 2], t: String }
 struct Ou { b: B7, k: i64 }
 struct Two { p: Array[R, 2], q: Array[R, 2] }
-fn bind(a: Array[R, 2]) -> B7 { let b = B7 { v: a, t: f"b" }; println("bind"); return b }
-fn tail(a: Array[R, 2]) -> B7 { println("tail"); B7 { v: a, t: f"t" } }
-fn tup(a: Array[R, 2]) -> (Array[R, 2], i64) { println("tup"); return (a, 3) }
-fn nest(a: Array[R, 2]) -> Ou { println("nest"); Ou { b: B7 { v: a, t: f"n" }, k: 1 } }
-fn two(a: Array[R, 2], b: Array[R, 2]) -> Two { println("two"); Two { p: a, q: b } }
+fn bind(a: own Array[R, 2]) -> B7 { let b = B7 { v: a, t: f"b" }; println("bind"); return b }
+fn tail(a: own Array[R, 2]) -> B7 { println("tail"); B7 { v: a, t: f"t" } }
+fn tup(a: own Array[R, 2]) -> (Array[R, 2], i64) { println("tup"); return (a, 3) }
+fn nest(a: own Array[R, 2]) -> Ou { println("nest"); Ou { b: B7 { v: a, t: f"n" }, k: 1 } }
+fn two(a: own Array[R, 2], b: own Array[R, 2]) -> Two { println("two"); Two { p: a, q: b } }
 fn mk() -> (i64, Array[R, 2]) { println("mk"); (5, [mkr(40), mkr(41)]) }
-fn fwd(a: Array[R, 2]) -> (i64, Array[R, 2]) { println("fwd"); (6, a) }
+fn fwd(a: own Array[R, 2]) -> (i64, Array[R, 2]) { println("fwd"); (6, a) }
 fn eat(a: Array[R, 2]) { println(f"eat{a[0].id}") }
 struct Hd { k: i64 }
-impl Hd { fn meth(ref self, a: Array[R, 2]) -> B7 { println("meth"); B7 { v: a, t: f"m" } } }
+impl Hd { fn meth(ref self, a: own Array[R, 2]) -> B7 { println("meth"); B7 { v: a, t: f"m" } } }
 fn main() {
     { let a: Array[R, 2] = [mkr(1), mkr(2)]; let w = bind(a); println(f"k1 {w.t}") }
     { let a: Array[R, 2] = [mkr(3), mkr(4)]; let w = tail(a); println(f"k2 {w.v[1].id}") }

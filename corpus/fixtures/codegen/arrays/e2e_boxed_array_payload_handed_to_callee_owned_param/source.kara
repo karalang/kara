@@ -4,15 +4,15 @@ enum M { M(Array[String, 2]), N }
 
 fn eats(a: Array[String, 2]) -> i64 { return a[0].len(); }
 
-fn hand_gen(g: G[Array[String, 2]]) -> i64 {
+fn hand_gen(g: own G[Array[String, 2]]) -> i64 {
     match g { G.Y(x) => { return eats(x); } G.N => { return 0; } }
 }
 
-fn hand_mono(g: M) -> i64 {
+fn hand_mono(g: own M) -> i64 {
     match g { M.M(x) => { return eats(x); } M.N => { return 0; } }
 }
 
-fn read_gen(g: G[Array[String, 2]]) -> i64 {
+fn read_gen(g: own G[Array[String, 2]]) -> i64 {
     match g { G.Y(x) => { return x[0].len(); } G.N => { return 0; } }
 }
 

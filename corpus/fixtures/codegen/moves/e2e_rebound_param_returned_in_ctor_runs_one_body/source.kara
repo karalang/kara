@@ -1,19 +1,19 @@
 struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
-fn uncond_rebind(r: R) -> Option[R] { let m = r; return Option.Some(m); }
-fn rebind(r: R, keep: bool) -> Option[R] { let m = r; if keep { return Option.Some(m); } return Option.None; }
-fn rebind_ok(r: R, keep: bool) -> Result[R, i64] { let m = r; if keep { return Result.Ok(m); } return Result.Err(0); }
-fn bare_rebind(r: R) -> R { let m = r; return m; }
-fn top(r: R) -> Option[R] { return Option.Some(r); }
-fn chain(r: R, keep: bool) -> Option[R] { let m = r; let n = m; if keep { return Option.Some(n); } return Option.None; }
-fn inbranch(r: R, keep: bool) -> Option[R] { if keep { let m = r; return Option.Some(m); } println("after"); return Option.None; }
-fn tail(r: R, keep: bool) -> Option[R] { let m = r; if keep { Option.Some(m) } else { Option.None } }
-fn shadow(r: R, keep: bool) -> Option[R] { let m = r; if keep { return Option.Some(m); } let m = mk(99); println(f"sh {m.id}"); return Option.None; }
+fn uncond_rebind(r: own R) -> Option[R] { let m = r; return Option.Some(m); }
+fn rebind(r: own R, keep: bool) -> Option[R] { let m = r; if keep { return Option.Some(m); } return Option.None; }
+fn rebind_ok(r: own R, keep: bool) -> Result[R, i64] { let m = r; if keep { return Result.Ok(m); } return Result.Err(0); }
+fn bare_rebind(r: own R) -> R { let m = r; return m; }
+fn top(r: own R) -> Option[R] { return Option.Some(r); }
+fn chain(r: own R, keep: bool) -> Option[R] { let m = r; let n = m; if keep { return Option.Some(n); } return Option.None; }
+fn inbranch(r: own R, keep: bool) -> Option[R] { if keep { let m = r; return Option.Some(m); } println("after"); return Option.None; }
+fn tail(r: own R, keep: bool) -> Option[R] { let m = r; if keep { Option.Some(m) } else { Option.None } }
+fn shadow(r: own R, keep: bool) -> Option[R] { let m = r; if keep { return Option.Some(m); } let m = mk(99); println(f"sh {m.id}"); return Option.None; }
 struct K { n: i64 }
 impl K {
-    fn mrebind(ref self, r: R, keep: bool) -> Option[R] { let m = r; if keep { return Option.Some(m); } return Option.None; }
-    fn muncond(ref self, r: R) -> Option[R] { let m = r; return Option.Some(m); }
+    fn mrebind(ref self, r: own R, keep: bool) -> Option[R] { let m = r; if keep { return Option.Some(m); } return Option.None; }
+    fn muncond(ref self, r: own R) -> Option[R] { let m = r; return Option.Some(m); }
 }
 fn main() {
     let k = K { n: 0 };

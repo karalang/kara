@@ -13,10 +13,10 @@ fn mk(id: i64) -> H {
     return H { id: id, xs: v, tag: pad(id), name: pad(id) };
 }
 struct W { t: (H, i64) }
-fn take(t: (H, i64)) {
+fn take(t: own (H, i64)) {
     match t { (r, k) => { let n = r.name; println(f"p{n.len()}:{r.tag.len()}:{r.xs.len()}:{k}"); } }
 }
-fn nested(t: ((H, i64), i64)) {
+fn nested(t: own ((H, i64), i64)) {
     match t { ((r, j), k) => { let n = r.name; println(f"q{n.len()}:{r.tag.len()}:{r.xs.len()}:{j}:{k}"); } }
 }
 fn main() {

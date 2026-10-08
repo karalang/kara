@@ -1,6 +1,6 @@
 
 struct Bag[T] { xs: Vec[T] }
-fn take[T](p: (Bag[T], i64)) -> Vec[T] { let (b, _n) = p; b.xs }
+fn take[T](p: own (Bag[T], i64)) -> Vec[T] { let (b, _n) = p; b.xs }
 fn main() {
     let a = take((Bag { xs: ["x", "y"] }, 0));
     println(f"{a.len()} {a[0]}");

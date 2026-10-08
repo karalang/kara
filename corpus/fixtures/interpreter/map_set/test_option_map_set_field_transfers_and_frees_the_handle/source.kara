@@ -8,7 +8,7 @@ fn consume_opt(o: Option[Map[i64, String]]) -> i64 {
         Option.None => { 0 }
     }
 }
-fn eat_om(x: Om) -> i64 {
+fn eat_om(x: own Om) -> i64 {
     match x.s {
         Option.Some(inner) => { inner.len() }
         Option.None => { 0 }

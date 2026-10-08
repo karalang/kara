@@ -1,8 +1,8 @@
 enum Hs[T] { Full(T), Empty }
-fn sh(h: Hs[String]) { match h { Hs.Full(r) => println(r), Hs.Empty => println("e") } }
-fn pf(h: Hs[String], k: bool) -> Hs[String] { if k { return h } sh(h); return Hs.Empty }
-fn pv(h: Hs[String], k: bool, w: mut ref Vec[Hs[String]]) -> Hs[String] { if k { return h } w.push(h); return Hs.Empty }
-fn pm(h: Hs[String], k: bool) -> Hs[String] { if k { return h } match h { Hs.Full(s) => println(f"m{s}"), Hs.Empty => println("me") } return Hs.Empty }
+fn sh(h: own Hs[String]) { match h { Hs.Full(r) => println(r), Hs.Empty => println("e") } }
+fn pf(h: own Hs[String], k: bool) -> Hs[String] { if k { return h } sh(h); return Hs.Empty }
+fn pv(h: own Hs[String], k: bool, w: mut ref Vec[Hs[String]]) -> Hs[String] { if k { return h } w.push(h); return Hs.Empty }
+fn pm(h: own Hs[String], k: bool) -> Hs[String] { if k { return h } match h { Hs.Full(s) => println(f"m{s}"), Hs.Empty => println("me") } return Hs.Empty }
 fn main() {
     let mut w: Vec[Hs[String]] = Vec.new();
     let mut i = 0;

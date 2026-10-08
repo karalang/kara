@@ -2,7 +2,7 @@ shared enum U { Ua, Ub, Uc }
 impl Drop for U { fn drop(mut ref self) { println(f"  dU") } }
 enum Plain { Pa, Pb, Pc }
 struct P2 { x: i64 }
-fn show(p: Plain) -> String { match p { Plain.Pa => "a", Plain.Pb => "b", Plain.Pc => "c" } }
+fn show(p: own Plain) -> String { match p { Plain.Pa => "a", Plain.Pb => "b", Plain.Pc => "c" } }
 fn main() {
     println("shadow-shared"); { let Uc = 7; let s = Uc; println(f"  n{s}") } println("  out");
     println("shadow-plain"); { let Pc = 9; let s = Pc; println(f"  n{s}") } println("  out");

@@ -3,7 +3,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
 struct W { k: i64, a: R, b: R }
 impl Drop for W { fn drop(mut ref self) { println(f"w{self.k}"); } }
 struct Q { w: W, t: (R, R) }
-fn pass(x: Q) -> Q {
+fn pass(x: own Q) -> Q {
     println("pass");
     x
 }

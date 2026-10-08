@@ -1,6 +1,6 @@
 fn mk() -> (Array[Array[String, 2], 2], i64) { ([[f"a{1}", f"b{2}"], [f"c{3}", f"d{4}"]], 3) }
 fn eat(t: (Array[Array[String, 2], 2], i64)) -> i64 { t.1 }
-fn thru(t: (Array[Array[String, 2], 2], i64)) -> (Array[Array[String, 2], 2], i64) { t }
+fn thru(t: own (Array[Array[String, 2], 2], i64)) -> (Array[Array[String, 2], 2], i64) { t }
 fn main() {
     let nested: (Array[Array[String, 2], 2], i64) = ([[f"a{1}", f"b{2}"], [f"c{3}", f"d{4}"]], 3);
     println(f"{nested.1}");

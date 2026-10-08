@@ -5,12 +5,12 @@ struct Node { attributes: Vec[AttrNode] }
 struct BareNode { attributes: Vec[Bare] }
 struct P { pos: i64 }
 impl P {
-    fn wrap(mut ref self, attrs: Vec[AttrNode]) -> Node {
+    fn wrap(mut ref self, attrs: own Vec[AttrNode]) -> Node {
         self.pos = self.pos + 1;
         Node { attributes: attrs }
     }
 }
-fn wrap_bare(attrs: Vec[Bare]) -> BareNode {
+fn wrap_bare(attrs: own Vec[Bare]) -> BareNode {
     BareNode { attributes: attrs }
 }
 fn build() -> Vec[AttrNode] {

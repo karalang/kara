@@ -8,25 +8,25 @@ struct W3 { u: S2, n: i64 }
 struct S4 { h: Sh, id: i64 }
 struct W6 { u: S4, n: i64 }
 struct Kp { a: i64 }
-impl Kp { fn keep4(ref self, s: S4) -> S4 { return s } }
+impl Kp { fn keep4(ref self, s: own S4) -> S4 { return s } }
 struct W7 { u: S5, n: i64 }
-fn keep(s: S2) -> S2 { return s }
-fn keepr(s: S2) -> S2 { let m = s; return m }
-fn keep5(s: S5) -> S5 { return s }
-fn keep2[T](x: T) -> T { return x }
+fn keep(s: own S2) -> S2 { return s }
+fn keepr(s: own S2) -> S2 { let m = s; return m }
+fn keep5(s: own S5) -> S5 { return s }
+fn keep2[T](x: own T) -> T { return x }
 fn eat(s: S2) { println(f"e{s.id}") }
-fn f1(q: W3) -> S2 { return keep(q.u) }
-fn f2(q: W3) -> S2 { let k = keep(q.u); return k }
-fn f3(q: W3) -> S2 { let x = q.u; return keep(x) }
-fn f4(q: W3) -> S2 { return keepr(q.u) }
-fn f5(q: W3) -> S2 { let x = q.u; let W3 { n, .. } = q; println(f"n{n}"); return keep(x) }
-fn f6(q: W3) -> S2 { return keep2(q.u) }
-fn f7(q: W3) -> S2 { let x = q.u; return keep2(x) }
-fn f8(q: W7) -> S5 { return keep5(q.u) }
-fn f9(q: W3) { let k = keep(q.u); println(f"k{k.id}") }
+fn f1(q: own W3) -> S2 { return keep(q.u) }
+fn f2(q: own W3) -> S2 { let k = keep(q.u); return k }
+fn f3(q: own W3) -> S2 { let x = q.u; return keep(x) }
+fn f4(q: own W3) -> S2 { return keepr(q.u) }
+fn f5(q: own W3) -> S2 { let x = q.u; let W3 { n, .. } = q; println(f"n{n}"); return keep(x) }
+fn f6(q: own W3) -> S2 { return keep2(q.u) }
+fn f7(q: own W3) -> S2 { let x = q.u; return keep2(x) }
+fn f8(q: own W7) -> S5 { return keep5(q.u) }
+fn f9(q: own W3) { let k = keep(q.u); println(f"k{k.id}") }
 fn f10(q: W3) { eat(q.u) }
-fn f11(q: W6) -> S4 { let kp = Kp { a: 1 }; return kp.keep4(q.u) }
-fn f12(q: W6) -> S4 { let kp = Kp { a: 1 }; let x = q.u; return kp.keep4(x) }
+fn f11(q: own W6) -> S4 { let kp = Kp { a: 1 }; return kp.keep4(q.u) }
+fn f12(q: own W6) -> S4 { let kp = Kp { a: 1 }; let x = q.u; return kp.keep4(x) }
 fn main() {
   println("-c1"); let a = f1(W3 { u: mk(9), n: 2 }); println(f"r{a.id}{a.h.k}");
   println("-c2"); let b = f2(W3 { u: mk(8), n: 2 }); println(f"r{b.id}{b.h.k}");

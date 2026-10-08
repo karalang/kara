@@ -17,7 +17,7 @@ fn flat() { let h: H1 = H1 { pe: (mk(8), 1) }; let (r, k) = h.pe; let m: R = r; 
 fn plainlocal() { let t: ((R, i64), i64) = ((mk(6), 1), 2); let (inner, y) = t; let (r, x) = inner; let m: R = r; println(f"  pl {m.id}") }
 fn fromcall() { let inner = mkpair(); let (r, x) = inner; let m: R = r; println(f"  fc {m.id}") }
 fn wholecopy() { let h: H2 = H2 { pe: ((mk(12), 1), 2) }; let t = h.pe; let (inner, y) = t; let (r, x) = inner; let m: R = r; println(f"  wc {m.id}") }
-fn param3(h: H2) { let (inner, y) = h.pe; let (r, x) = inner; let m: R = r; println(f"  p3 {m.id}") }
+fn param3(h: own H2) { let (inner, y) = h.pe; let (r, x) = inner; let m: R = r; println(f"  p3 {m.id}") }
 
 fn main() {
     println("local3"); local3();

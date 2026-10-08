@@ -3,9 +3,9 @@ enum E { A(String), N(i64) }
 struct Inner { s: String }
 struct Wrap { t: Inner }
 struct Spanned { tok: E, off: i64 }
-fn wrap_enum(e: E) -> E { e }
-fn wrap_struct(t: Inner) -> Wrap { Wrap { t: t } }
-fn make_spanned(t: E, o: i64) -> Spanned { Spanned { tok: t, off: o } }
+fn wrap_enum(e: own E) -> E { e }
+fn wrap_struct(t: own Inner) -> Wrap { Wrap { t: t } }
+fn make_spanned(t: own E, o: i64) -> Spanned { Spanned { tok: t, off: o } }
 fn read_struct(v: Inner) { if v.s.len() > 99999 { println(v.s); } }
 fn main() {
     let mut i: i64 = 0;

@@ -3,5 +3,5 @@ struct S2 { h: Sh, id: i64 }
 impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mk(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
 struct Q[U] { u: U, n: i64 }
-fn f[U](q: Q[U]) -> i64 { let x = q.u; let Q { n, .. } = q; return n }
+fn f[U](q: own Q[U]) -> i64 { let x = q.u; let Q { n, .. } = q; return n }
 fn main() { let r = f(Q { u: mk(9), n: 2 }); println(f"r{r}"); println("end") }

@@ -7,17 +7,17 @@ enum Slot { Held(R), Empty }
 struct H { n: i64 }
 fn mk(i: i64) -> String { return f"pay-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; }
 fn mr(i: i64) -> R { return R { id: i, s: mk(i) }; }
-fn fmake(r: R, k: bool) -> Box2 { if k { return Box2 { r: mr(77) }; } return Box2 { r: r }; }
-fn fplain(r: R, k: bool) -> P2 { if k { return P2 { r: mr(78), n: 1 }; } return P2 { r: r, n: 2 }; }
-fn ftup(r: R, k: bool) -> (R, i64) { if k { return (mr(79), 1); } return (r, 2); }
-fn fslot(r: R, k: bool) -> Slot { if k { return Slot.Empty; } return Slot.Held(r); }
-fn ftail(r: R, k: bool) -> P2 { if k { P2 { r: mr(80), n: 1 } } else { P2 { r: r, n: 2 } } }
-fn fnest(r: R, k: bool, j: bool) -> P2 { if k { if j { return P2 { r: r, n: 3 }; } } return P2 { r: mr(81), n: 1 }; }
-fn ftwo(r: R, k: bool) -> Box2 { if k { return Box2 { r: mr(82) }; } let p = P2 { r: r, n: 1 }; return Box2 { r: p.r }; }
+fn fmake(r: own R, k: bool) -> Box2 { if k { return Box2 { r: mr(77) }; } return Box2 { r: r }; }
+fn fplain(r: own R, k: bool) -> P2 { if k { return P2 { r: mr(78), n: 1 }; } return P2 { r: r, n: 2 }; }
+fn ftup(r: own R, k: bool) -> (R, i64) { if k { return (mr(79), 1); } return (r, 2); }
+fn fslot(r: own R, k: bool) -> Slot { if k { return Slot.Empty; } return Slot.Held(r); }
+fn ftail(r: own R, k: bool) -> P2 { if k { P2 { r: mr(80), n: 1 } } else { P2 { r: r, n: 2 } } }
+fn fnest(r: own R, k: bool, j: bool) -> P2 { if k { if j { return P2 { r: r, n: 3 }; } } return P2 { r: mr(81), n: 1 }; }
+fn ftwo(r: own R, k: bool) -> Box2 { if k { return Box2 { r: mr(82) }; } let p = P2 { r: r, n: 1 }; return Box2 { r: p.r }; }
 impl H {
-    fn amake(r: R, k: bool) -> Box2 { if k { return Box2 { r: mr(87) }; } return Box2 { r: r }; }
-    fn aplain(r: R, k: bool) -> P2 { if k { return P2 { r: mr(88), n: 1 }; } return P2 { r: r, n: 2 }; }
-    fn mmake(ref self, r: R, k: bool) -> Box2 { if k { return Box2 { r: mr(89) }; } return Box2 { r: r }; }
+    fn amake(r: own R, k: bool) -> Box2 { if k { return Box2 { r: mr(87) }; } return Box2 { r: r }; }
+    fn aplain(r: own R, k: bool) -> P2 { if k { return P2 { r: mr(88), n: 1 }; } return P2 { r: r, n: 2 }; }
+    fn mmake(ref self, r: own R, k: bool) -> Box2 { if k { return Box2 { r: mr(89) }; } return Box2 { r: r }; }
 }
 fn main() {
     let h = H { n: 0 };

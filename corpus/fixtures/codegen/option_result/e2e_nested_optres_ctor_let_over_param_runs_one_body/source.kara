@@ -1,19 +1,19 @@
 struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
-fn fl(r: R, keep: bool) -> i64 { if keep { let o = Option.Some(r); println("held"); } return 7; }
-fn flb(r: R, keep: bool) -> i64 { if keep { let o = Some(r); println("held"); } return 7; }
-fn flt(r: R) -> i64 { let o = Option.Some(r); println("held"); return 7; }
-fn flr(r: R, keep: bool) -> i64 { if keep { let o: Result[R, i64] = Result.Ok(r); println("held"); } return 7; }
-fn flu(r: R, keep: bool) -> i64 { if keep { let o = Option.Some(r); println("held"); let p = o; println("used"); } return 7; }
-fn fln(r: R, n: i64) -> i64 { let o = Option.Some(r); println("held"); return n; }
+fn fl(r: own R, keep: bool) -> i64 { if keep { let o = Option.Some(r); println("held"); } return 7; }
+fn flb(r: own R, keep: bool) -> i64 { if keep { let o = Some(r); println("held"); } return 7; }
+fn flt(r: own R) -> i64 { let o = Option.Some(r); println("held"); return 7; }
+fn flr(r: own R, keep: bool) -> i64 { if keep { let o: Result[R, i64] = Result.Ok(r); println("held"); } return 7; }
+fn flu(r: own R, keep: bool) -> i64 { if keep { let o = Option.Some(r); println("held"); let p = o; println("used"); } return 7; }
+fn fln(r: own R, n: i64) -> i64 { let o = Option.Some(r); println("held"); return n; }
 struct K { z: i64 }
 impl K {
-    fn l(ref self, r: R, keep: bool) -> i64 { if keep { let o = Option.Some(r); println("held"); } return 7; }
-    fn lb(ref self, r: R, keep: bool) -> i64 { if keep { let o = Some(r); println("held"); } return 7; }
-    fn lt(ref self, r: R) -> i64 { let o = Option.Some(r); println("held"); return 7; }
-    fn lr(ref self, r: R, keep: bool) -> i64 { if keep { let o: Result[R, i64] = Result.Ok(r); println("held"); } return 7; }
-    fn ln(ref self, r: R, n: i64) -> i64 { let o = Option.Some(r); println("held"); return n; }
+    fn l(ref self, r: own R, keep: bool) -> i64 { if keep { let o = Option.Some(r); println("held"); } return 7; }
+    fn lb(ref self, r: own R, keep: bool) -> i64 { if keep { let o = Some(r); println("held"); } return 7; }
+    fn lt(ref self, r: own R) -> i64 { let o = Option.Some(r); println("held"); return 7; }
+    fn lr(ref self, r: own R, keep: bool) -> i64 { if keep { let o: Result[R, i64] = Result.Ok(r); println("held"); } return 7; }
+    fn ln(ref self, r: own R, n: i64) -> i64 { let o = Option.Some(r); println("held"); return n; }
 }
 fn main() {
     let k = K { z: 0 };

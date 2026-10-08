@@ -3,12 +3,12 @@ struct S3 { h: Sh, id: i64 }
 enum Ho[T] { Full(T), Empty }
 struct H { n: i64 }
 fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
-fn mid3(v: S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
-fn wrap3(v: S3) -> Option[S3] { return Some(v) }
-fn ho3(v: S3) -> Ho[S3] { return Ho.Full(v) }
+fn mid3(v: own S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
+fn wrap3(v: own S3) -> Option[S3] { return Some(v) }
+fn ho3(v: own S3) -> Ho[S3] { return Ho.Full(v) }
 fn keep3(o: Option[S3]) -> Option[S3] { return o }
-fn r3(v: S3) -> Result[S3, i64] { return Ok(v) }
-impl H { fn m(ref self, v: S3) -> Option[S3] { return Some(v) } fn a(v: S3, c: bool) -> Option[S3] { if c { return Some(v) } return None } }
+fn r3(v: own S3) -> Result[S3, i64] { return Ok(v) }
+impl H { fn m(ref self, v: own S3) -> Option[S3] { return Some(v) } fn a(v: own S3, c: bool) -> Option[S3] { if c { return Some(v) } return None } }
 fn a() { let s = mk3(1); let o = mid3(s, true); let v = o.unwrap(); println(f"a{v.id} {v.h.k}") }
 fn b() { let s = mk3(2); let o = mid3(s, false); println(f"b{o.is_none()}") }
 fn c() { let s = mk3(3); let o = mid3(s, true); println(f"c{o.is_some()}") }

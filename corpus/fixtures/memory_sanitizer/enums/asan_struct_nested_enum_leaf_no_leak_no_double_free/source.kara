@@ -5,7 +5,7 @@ struct Wrap { sp: Span, hi: i64 }
 struct Deep { w: Wrap, tag: i64 }
 fn sink(s: String) -> i64 { s.len() }
 fn mk_wrap(n: i64) -> Wrap { Wrap { sp: Span { tok: Tok.Id(f"w-{n}"), off: n }, hi: n + 1 } }
-fn fwd(w: Wrap) -> Wrap { w }
+fn fwd(w: own Wrap) -> Wrap { w }
 fn peek(w: ref Wrap) -> i64 { w.hi }
 fn main() {
     let mut i: i64 = 0;

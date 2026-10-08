@@ -23,13 +23,13 @@ struct NestedIterator {
 }
 
 impl NestedIterator {
-    fn new(items: Vec[Nested]) -> NestedIterator {
+    fn new(items: own Vec[Nested]) -> NestedIterator {
         let mut it = NestedIterator { stack: Vec.new() };
         it.push_reversed(items);
         return it;
     }
 
-    fn push_reversed(mut ref self, items: Vec[Nested]) {
+    fn push_reversed(mut ref self, items: own Vec[Nested]) {
         let mut rest = items;
         while let Some(x) = rest.pop() {
             self.stack.push(x);
@@ -58,7 +58,7 @@ impl NestedIterator {
     }
 }
 
-fn flatten(items: Vec[Nested]) -> Vec[i64] {
+fn flatten(items: own Vec[Nested]) -> Vec[i64] {
     let mut it = NestedIterator.new(items);
     let mut out: Vec[i64] = Vec.new();
     while it.has_next() {

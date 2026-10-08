@@ -2,14 +2,14 @@ struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 enum Ho[T] { Full(T), Empty }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
-fn shows(h: Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}{r.s}"), Ho.Empty => println("e") } }
-fn fwd(h: Ho[S]) { shows(h) }
-fn pkf(h: Ho[S], k: bool) -> Ho[S] { if k { return h } shows(h); return Ho.Empty }
-fn pk3(h: Ho[S], k: bool) -> Ho[S] { if k { return h } fwd(h); return Ho.Empty }
+fn shows(h: own Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}{r.s}"), Ho.Empty => println("e") } }
+fn fwd(h: own Ho[S]) { shows(h) }
+fn pkf(h: own Ho[S], k: bool) -> Ho[S] { if k { return h } shows(h); return Ho.Empty }
+fn pk3(h: own Ho[S], k: bool) -> Ho[S] { if k { return h } fwd(h); return Ho.Empty }
 struct K { k: i64 }
 impl K {
-    fn pk(h: Ho[S], k: bool) -> Ho[S] { if k { return h } shows(h); return Ho.Empty }
-    fn pkm(self, h: Ho[S], k: bool) -> Ho[S] { if k { return h } shows(h); return Ho.Empty }
+    fn pk(h: own Ho[S], k: bool) -> Ho[S] { if k { return h } shows(h); return Ho.Empty }
+    fn pkm(self, h: own Ho[S], k: bool) -> Ho[S] { if k { return h } shows(h); return Ho.Empty }
 }
 fn main() {
     let a: Ho[S] = Ho.Full(mks(1)); let ra = pkf(a, false); shows(ra);

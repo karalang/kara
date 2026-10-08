@@ -1,6 +1,6 @@
 struct R { name: String, id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.name}") } }
-fn mk(n: i64, s: String) -> R { R { name: s, id: n } }
+fn mk(n: i64, s: own String) -> R { R { name: s, id: n } }
 struct H { o: Option[R], k: i64 }
 enum E { A(R), B }
 fn gm(x: mut ref Option[R]) -> i64 { x = Some(mk(99, f"z-{1}-heap-string-longer-than-sso")); 5 }
@@ -8,7 +8,7 @@ fn hm(x: mut ref R) -> i64 { x = mk(98, f"y-{1}-heap-string-longer-than-sso"); 6
 fn gr(x: mut ref Result[R, i64]) -> i64 { x = Err(7); 1 }
 fn gh(x: mut ref H) -> i64 { x = H { o: Some(mk(70, f"h-{1}-heap-string-longer-than-sso")), k: 1 }; 1 }
 fn ge(x: mut ref E) -> i64 { x = E.A(mk(80, f"e-{1}-heap-string-longer-than-sso")); 2 }
-fn gg[T](x: mut ref Option[T], v: T) -> i64 { x = Some(v); 3 }
+fn gg[T](x: mut ref Option[T], v: own T) -> i64 { x = Some(v); 3 }
 fn gs(x: mut ref Option[String]) -> i64 { x = Some(f"new-{3}-heap-string-longer-than-sso"); 4 }
 fn main() {
     let mut o = Some(mk(1, f"a-{1}-heap-string-longer-than-sso")); println(f"n{gm(mut o)}"); println("a1");

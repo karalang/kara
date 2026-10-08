@@ -6,7 +6,7 @@ struct Wo { o: Option[S1] }
 fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
 fn tako(o: Option[S1]) -> i64 { 1 }
 fn keep(o: Option[S1]) -> i64 { match o { Some(r) => r.v, None => 0 } }
-fn outo(h: Ho) -> Option[S1] { match h { Ho.P(o) => o, Ho.Q => None } }
+fn outo(h: own Ho) -> Option[S1] { match h { Ho.P(o) => o, Ho.Q => None } }
 struct Ws { o: Option[String] }
 fn st(k: i64) -> String { f"ssssssss{k}" }
 fn takes(o: Option[String]) -> i64 { 1 }

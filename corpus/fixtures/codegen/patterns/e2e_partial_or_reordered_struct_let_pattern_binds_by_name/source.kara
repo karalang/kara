@@ -3,7 +3,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" }; }
 struct S3 { a: R, b: R }
 struct P3 { x: i64, y: i64, z: i64 }
-fn p_view_b(r: R) -> i64 { let s: S3 = S3 { a: r, b: mk(5) }; let S3 { b, .. } = s; return b.id; }
+fn p_view_b(r: own R) -> i64 { let s: S3 = S3 { a: r, b: mk(5) }; let S3 { b, .. } = s; return b.id; }
 fn p_scalar_partial() -> i64 { let p: P3 = P3 { x: 1, y: 2, z: 3 }; let P3 { z, .. } = p; return z; }
 fn p_scalar_swapped() -> i64 { let p: P3 = P3 { x: 1, y: 2, z: 3 }; let P3 { z, x, y } = p; return z * 100 + y * 10 + x; }
 fn p_scalar_mid() -> i64 { let p: P3 = P3 { x: 1, y: 2, z: 3 }; let P3 { y, .. } = p; return y; }

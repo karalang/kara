@@ -1,12 +1,12 @@
 enum Ho[T] { Full(T), Empty }
 enum Hc { Full(String), Empty }
 struct W { s: String }
-fn keep(h: Ho[String]) -> i64 { match h { Ho.Full(s) => s.len(), Ho.Empty => 0 } }
-fn keepc(h: Hc) -> i64 { match h { Hc.Full(s) => s.len(), Hc.Empty => 0 } }
+fn keep(h: own Ho[String]) -> i64 { match h { Ho.Full(s) => s.len(), Ho.Empty => 0 } }
+fn keepc(h: own Hc) -> i64 { match h { Hc.Full(s) => s.len(), Hc.Empty => 0 } }
 fn takes(s: String) -> i64 { s.len() }
 fn takew(w: W) -> i64 { w.s.len() }
-fn mkh(s: String) -> Ho[String] { return Ho.Full(s + "-heap-string-long-enough"); }
-fn mkw(s: String) -> W { return W { s: s + "-heap-string-long-enough" }; }
+fn mkh(s: own String) -> Ho[String] { return Ho.Full(s + "-heap-string-long-enough"); }
+fn mkw(s: own String) -> W { return W { s: s + "-heap-string-long-enough" }; }
 fn c1() { let h = mkh("a"); let f = || keep(h); println(f"c1 {f()}"); }
 fn c2() { let v: Vec[Ho[String]] = [mkh("bb"), Ho.Empty]; for g in v { let f = || keep(g); println(f"c2 {f()}") } }
 fn c3() { let w = mkw("ccc"); let f = || takew(w); println(f"c3 {f()}"); }

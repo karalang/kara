@@ -1,7 +1,7 @@
 
 enum Val { Nothing, Ident(String) }
 struct A { value: Option[Val] }
-fn use_wild(a: A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
+fn use_wild(a: own A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
 fn mk() -> A { A { value: Some(Val.Ident("kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk".to_string())) } }
 fn build() -> Vec[A] {
     let mut v: Vec[A] = Vec.new();

@@ -5,7 +5,7 @@ fn g_mul[T: Mul](a: T, b: T) -> T { a * b }
 fn g_div[T: Div](a: T, b: T) -> T { a / b }
 fn g_neg[T: Neg](a: T) -> T { -a }
 fn g_poly[T: Add + Mul](a: T, b: T) -> T { g_add(g_mul(a, b), b) }
-fn g_sum[T: Add](xs: Vec[T], zero: T) -> T {
+fn g_sum[T: Add](xs: Vec[T], zero: own T) -> T {
     let mut acc = zero;
     for x in xs { acc = acc + x; }
     acc

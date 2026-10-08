@@ -3,13 +3,13 @@ impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id} {self.name}")
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 struct K { n: i64 }
 impl K {
-    fn f(ref self, r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }
-    fn ok(ref self, r: R, keep: bool) -> Result[R, i64] { if keep { return Result.Ok(r); } return Result.Err(0); }
-    fn er(ref self, r: R, keep: bool) -> Result[i64, R] { if keep { return Result.Err(r); } return Result.Ok(0); }
-    fn t(ref self, r: R, keep: bool) -> Option[R] { if keep { Option.Some(r) } else { Option.None } }
+    fn f(ref self, r: own R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }
+    fn ok(ref self, r: own R, keep: bool) -> Result[R, i64] { if keep { return Result.Ok(r); } return Result.Err(0); }
+    fn er(ref self, r: own R, keep: bool) -> Result[i64, R] { if keep { return Result.Err(r); } return Result.Ok(0); }
+    fn t(ref self, r: own R, keep: bool) -> Option[R] { if keep { Option.Some(r) } else { Option.None } }
 }
-fn freefn_opt(r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }
-fn ft(r: R, keep: bool) -> Option[R] { if keep { Option.Some(r) } else { Option.None } }
+fn freefn_opt(r: own R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }
+fn ft(r: own R, keep: bool) -> Option[R] { if keep { Option.Some(r) } else { Option.None } }
 fn main() {
     let k = K { n: 0 };
     println("S1"); let _ = k.f(mk(3), false); let _ = k.f(mk(4), true); let _ = k.f(mk(5), false);

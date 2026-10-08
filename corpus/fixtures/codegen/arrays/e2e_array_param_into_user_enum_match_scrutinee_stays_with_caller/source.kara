@@ -6,14 +6,14 @@ enum W { P(Array[S, 2]), Q }
 enum V { P(Array[String, 2]), Q }
 enum U { P(Array[N, 2]), Q }
 enum T3 { P(Array[S, 3]), Q }
-fn u_bind(a: Array[S, 2]) -> i64 { match W.P(a) { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
-fn u_wild(a: Array[S, 2]) -> i64 { match W.P(a) { W.P(_) => { println("  w"); return 1 }, W.Q => { println("  n"); return 0 } } }
-fn u_read(a: Array[S, 2]) -> i64 { match W.P(a) { W.P(v) => { println(f"  r:{v[0].tag}"); return 1 }, W.Q => { println("  n"); return 0 } } }
-fn u_iflet(a: Array[S, 2]) -> i64 { if let W.P(v) = W.P(a) { println("  r"); return 1 } else { return 0 } }
-fn u_letelse(a: Array[S, 2]) -> i64 { let W.P(v) = W.P(a) else { return 0 }; println("  r"); return 1 }
-fn u_three(a: Array[S, 3]) -> i64 { match T3.P(a) { T3.P(v) => { println("  r"); return 1 }, T3.Q => { println("  n"); return 0 } } }
-fn u_noheap(a: Array[N, 2]) -> i64 { match U.P(a) { U.P(v) => { println("  r"); return 1 }, U.Q => { println("  n"); return 0 } } }
-fn b_str(a: Array[String, 2]) -> i64 { match V.P(a) { V.P(v) => { println(f"  r:{v[0]}"); return 1 }, V.Q => { println("  n"); return 0 } } }
+fn u_bind(a: own Array[S, 2]) -> i64 { match W.P(a) { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn u_wild(a: own Array[S, 2]) -> i64 { match W.P(a) { W.P(_) => { println("  w"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn u_read(a: own Array[S, 2]) -> i64 { match W.P(a) { W.P(v) => { println(f"  r:{v[0].tag}"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn u_iflet(a: own Array[S, 2]) -> i64 { if let W.P(v) = W.P(a) { println("  r"); return 1 } else { return 0 } }
+fn u_letelse(a: own Array[S, 2]) -> i64 { let W.P(v) = W.P(a) else { return 0 }; println("  r"); return 1 }
+fn u_three(a: own Array[S, 3]) -> i64 { match T3.P(a) { T3.P(v) => { println("  r"); return 1 }, T3.Q => { println("  n"); return 0 } } }
+fn u_noheap(a: own Array[N, 2]) -> i64 { match U.P(a) { U.P(v) => { println("  r"); return 1 }, U.Q => { println("  n"); return 0 } } }
+fn b_str(a: own Array[String, 2]) -> i64 { match V.P(a) { V.P(v) => { println(f"  r:{v[0]}"); return 1 }, V.Q => { println("  n"); return 0 } } }
 fn b_local() -> i64 { let a: Array[S, 2] = [S { tag: f"llllllll0" }, S { tag: f"llllllll1" }]; match W.P(a) { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
 fn main() {
     println("u/bind");    { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let z = u_bind(a); }

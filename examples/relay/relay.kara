@@ -66,7 +66,7 @@ impl Metrics {
 // Decode the request line's path from the first `n` request bytes:
 // "GET /api/users HTTP/1.1\r\n..." -> "/api/users". Consumes the byte Vec.
 // Returns "/" if the bytes aren't valid UTF-8 or the line is malformed.
-fn request_path(bytes: Vec[u8]) -> String {
+fn request_path(bytes: own Vec[u8]) -> String {
     match String.from_utf8(bytes) {
         Result.Ok(line) => {
             let parts = line.split(' ');

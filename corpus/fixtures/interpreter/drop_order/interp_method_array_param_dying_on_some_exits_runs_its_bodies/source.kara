@@ -5,10 +5,10 @@ fn mka(k: i64) -> Array[R, 2] { return [mkr(k), mkr(k + 1)] }
 fn consume(a: Array[R, 2]) { println(f"  c{a[0].id}") }
 struct H { k: i64 }
 impl H {
-    fn ret(ref self, a: Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; println("  dies"); mka(8) }
+    fn ret(ref self, a: own Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; println("  dies"); mka(8) }
     fn tail(ref self, a: Array[R, 2], c: bool) -> Array[R, 2] { match c { true => a, false => mka(8) } }
-    fn byval(self, a: Array[R, 2], c: bool) -> Array[R, 2] { for i in 0..2 { if c and i == 1 { return a } }; println("  dies"); mka(8) }
-    fn pass(ref self, a: Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; consume(a); println("  dies"); mka(8) }
+    fn byval(self, a: own Array[R, 2], c: bool) -> Array[R, 2] { for i in 0..2 { if c and i == 1 { return a } }; println("  dies"); mka(8) }
+    fn pass(ref self, a: own Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; consume(a); println("  dies"); mka(8) }
 }
 fn main() {
     let h = H { k: 1 };

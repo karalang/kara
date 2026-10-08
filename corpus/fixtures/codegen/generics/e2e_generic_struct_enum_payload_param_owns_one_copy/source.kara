@@ -3,19 +3,19 @@ struct Pair[A, B] { a: A, b: B, n: i64 }
 enum Wb { Full(Box2[String]), Empty }
 enum Wv { Full(Box2[Vec[String]]), Empty }
 enum Wp { Full(Pair[String, Vec[i64]]), Empty }
-fn blen(w: Wb) -> i64 {
+fn blen(w: own Wb) -> i64 {
     match w { Wb.Full(q) => { let i = q.f; return i.len(); } Wb.Empty => { return 0; } }
 }
-fn vlen(w: Wv) -> i64 {
+fn vlen(w: own Wv) -> i64 {
     match w { Wv.Full(q) => { let i = q.f; return i.len(); } Wv.Empty => { return 0; } }
 }
-fn plen(w: Wp) -> i64 {
+fn plen(w: own Wp) -> i64 {
     match w { Wp.Full(q) => { let s = q.a; return s.len() + q.n; } Wp.Empty => { return 0; } }
 }
-fn take(w: Wb) -> Box2[String] {
+fn take(w: own Wb) -> Box2[String] {
     match w { Wb.Full(q) => q, Wb.Empty => Box2 { f: f"none" } }
 }
-fn takef(w: Wb) -> String {
+fn takef(w: own Wb) -> String {
     match w { Wb.Full(q) => q.f, Wb.Empty => f"none" }
 }
 fn main() {

@@ -38,7 +38,7 @@ fn encode_code(n: i64) -> String {
 }
 
 // Register `url`, returning its freshly minted code.
-fn shorten(url: String) -> String {
+fn shorten(url: own String) -> String {
     let code = encode_code(SEQ);
     SEQ = SEQ + 1;
     LINKS.insert(code.clone(), url);
@@ -48,7 +48,7 @@ fn shorten(url: String) -> String {
 }
 
 // Resolve `code`, bumping its hit count. Empty string when unknown.
-fn follow(code: String) -> String {
+fn follow(code: own String) -> String {
     match LINKS.get(code.clone()) {
         Some(target) => {
             let seen = match HITS.get(code.clone()) {

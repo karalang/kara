@@ -4,22 +4,22 @@ fn mka(t: String) -> Array[String, 2] { let a: Array[String, 2] = [f"a-{t}-bbbbb
 fn mkt(t: String) -> (Array[String, 2], i64) { return (mka(t), 7); }
 fn eata(a: Array[String, 2]) -> i64 { return 2; }
 fn eatt(t: (Array[String, 2], i64)) -> i64 { return t.1; }
-fn a1(s: E) -> Array[String, 2] { match s { E.S(x) => { let u = x; return u; } E.N => { return mka("z"); } } }
-fn a2(s: E) -> i64 { match s { E.S(x) => { let u = x; return eata(u); } E.N => { return 0; } } }
-fn a3(s: E) -> i64 { let mut v: Vec[Array[String, 2]] = Vec.new(); match s { E.S(x) => { let u = x; v.push(u); } E.N => { } } return v.len(); }
-fn a4(s: E) -> Option[Array[String, 2]] { match s { E.S(x) => { let u = x; return Some(u); } E.N => { return None; } } }
-fn a5(s: E) -> Array[String, 2] { match s { E.S(x) => { let u = x; u } E.N => mka("z") } }
-fn a6(s: E) -> Array[String, 2] { match s { E.S(x) => { let u = x; let w = u; return w; } E.N => { return mka("z"); } } }
-fn a7(s: E) -> String { match s { E.S(x) => { let u = x; return u[0].clone(); } E.N => { return "n"; } } }
-fn a8(s: E, b: bool) -> Array[String, 2] { match s { E.S(x) => { let u = x; if b { return u; } return mka("q"); } E.N => { return mka("z"); } } }
+fn a1(s: own E) -> Array[String, 2] { match s { E.S(x) => { let u = x; return u; } E.N => { return mka("z"); } } }
+fn a2(s: own E) -> i64 { match s { E.S(x) => { let u = x; return eata(u); } E.N => { return 0; } } }
+fn a3(s: own E) -> i64 { let mut v: Vec[Array[String, 2]] = Vec.new(); match s { E.S(x) => { let u = x; v.push(u); } E.N => { } } return v.len(); }
+fn a4(s: own E) -> Option[Array[String, 2]] { match s { E.S(x) => { let u = x; return Some(u); } E.N => { return None; } } }
+fn a5(s: own E) -> Array[String, 2] { match s { E.S(x) => { let u = x; u } E.N => mka("z") } }
+fn a6(s: own E) -> Array[String, 2] { match s { E.S(x) => { let u = x; let w = u; return w; } E.N => { return mka("z"); } } }
+fn a7(s: own E) -> String { match s { E.S(x) => { let u = x; return u[0].clone(); } E.N => { return "n"; } } }
+fn a8(s: own E, b: bool) -> Array[String, 2] { match s { E.S(x) => { let u = x; if b { return u; } return mka("q"); } E.N => { return mka("z"); } } }
 fn a9(s: E) -> Array[String, 2] { if let E.S(x) = s { let u = x; return u; } return mka("z"); }
-fn t1(s: T) -> (Array[String, 2], i64) { match s { T.S(x) => { let u = x; return u; } T.N => { return mkt("z"); } } }
-fn t2(s: T) -> i64 { match s { T.S(x) => { let u = x; return eatt(u); } T.N => { return 0; } } }
-fn t3(s: T) -> i64 { let mut v: Vec[(Array[String, 2], i64)] = Vec.new(); match s { T.S(x) => { let u = x; v.push(u); } T.N => { } } return v.len(); }
-fn t5(s: T) -> (Array[String, 2], i64) { match s { T.S(x) => { let u = x; u } T.N => mkt("z") } }
-fn t6(s: T) -> (Array[String, 2], i64) { match s { T.S(x) => { let u = x; let w = u; return w; } T.N => { return mkt("z"); } } }
-fn t7(s: T) -> i64 { match s { T.S(x) => { let u = x; return u.1; } T.N => { return 0; } } }
-fn t8(s: T, b: bool) -> (Array[String, 2], i64) { match s { T.S(x) => { let u = x; if b { return u; } return mkt("q"); } T.N => { return mkt("z"); } } }
+fn t1(s: own T) -> (Array[String, 2], i64) { match s { T.S(x) => { let u = x; return u; } T.N => { return mkt("z"); } } }
+fn t2(s: own T) -> i64 { match s { T.S(x) => { let u = x; return eatt(u); } T.N => { return 0; } } }
+fn t3(s: own T) -> i64 { let mut v: Vec[(Array[String, 2], i64)] = Vec.new(); match s { T.S(x) => { let u = x; v.push(u); } T.N => { } } return v.len(); }
+fn t5(s: own T) -> (Array[String, 2], i64) { match s { T.S(x) => { let u = x; u } T.N => mkt("z") } }
+fn t6(s: own T) -> (Array[String, 2], i64) { match s { T.S(x) => { let u = x; let w = u; return w; } T.N => { return mkt("z"); } } }
+fn t7(s: own T) -> i64 { match s { T.S(x) => { let u = x; return u.1; } T.N => { return 0; } } }
+fn t8(s: own T, b: bool) -> (Array[String, 2], i64) { match s { T.S(x) => { let u = x; if b { return u; } return mkt("q"); } T.N => { return mkt("z"); } } }
 fn main() {
     let y1 = a1(E.S(mka("a"))); println(f"a1 {y1[0]}");
     println(f"a2 {a2(E.S(mka("b")))}");

@@ -91,7 +91,7 @@ fn equil(ux: f64, uy: f64, rho: f64) -> LbmNode {
 
 // BGK collision: relax a cell toward local equilibrium by `omega`. Pure per-cell
 // — no neighbour reads — so it parallelizes trivially (slice 2).
-fn collide(n: LbmNode, om: f64) -> LbmNode {
+fn collide(n: own LbmNode, om: f64) -> LbmNode {
     let rho = n.f0 + n.f1 + n.f2 + n.f3 + n.f4 + n.f5 + n.f6 + n.f7 + n.f8;
     if rho <= 0.0 {
         return n;

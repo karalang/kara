@@ -1,6 +1,6 @@
 struct S { tag: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.tag}") } }
-fn mk(a: String, b: String) -> Array[S, 2] { return [S { tag: a }, S { tag: b }]; }
+fn mk(a: own String, b: own String) -> Array[S, 2] { return [S { tag: a }, S { tag: b }]; }
 fn pa(x: Option[Array[S, 2]]) {
     match x { Some(t) => { let u = t; println(f"s{u[0].tag}") } None => { println("n") } }
     println("post");

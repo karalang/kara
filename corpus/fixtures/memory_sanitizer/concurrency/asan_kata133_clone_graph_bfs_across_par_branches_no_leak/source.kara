@@ -25,7 +25,7 @@ fn clone_bfs(g: frozen Node) -> Node {
     return root_clone;
 }
 
-fn checksum(root: Node) -> i64 {
+fn checksum(root: own Node) -> i64 {
     let mut seen: Map[i64, i64] = Map.new();
     let mut work: Vec[Node] = Vec.new();
     work.push(root);

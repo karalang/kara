@@ -3,27 +3,27 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 struct H2 { pe: ((R, i64), i64) }
 enum E { A(R), B }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
-fn keep(t: (R, i64)) -> (R, i64) { return t; }
-fn keeps(r: R) -> R { return r; }
-fn keepg[T](x: T) -> T { return x; }
-fn keepe(e: E) -> E { return e; }
-fn t_keep_direct(t: (R, i64)) { let w: (R, i64) = keep(t); println(f"tkd {w.0.id}") }
-fn t_keep_rebind(t: (R, i64)) { let z: (R, i64) = t; let w: (R, i64) = keep(z); println(f"tkr {w.0.id}") }
-fn s_keep_direct(r: R) { let w: R = keeps(r); println(f"skd {w.id}") }
-fn s_keep_rebind(r: R) { let z: R = r; let w: R = keeps(z); println(f"skr {w.id}") }
-fn s_keep_unread(r: R) { let w: R = keeps(r); println("sku") }
-fn s_keep_twice(r: R) { let w: R = keeps(r); let v: R = keeps(w); println(f"skt {v.id}") }
-fn s_keep_generic(r: R) { let w: R = keepg(r); println(f"skg {w.id}") }
-fn s_keep_assoc(r: R) { let w: R = K.id(r); println(f"ska {w.id}") }
-fn s_keep_nested(r: R, k: bool) { if k { let w: R = keeps(r); println(f"skn {w.id}"); } println("skn-out") }
-fn s_keep_arm(r: R, k: bool) -> i64 { let w: R = keeps(r); if k { return 1; } println(f"skm {w.id}"); return 0 }
-fn e_keep(e: E) { let w: E = keepe(e); match w { E.A(x) => println(f"ek {x.id}"), E.B => println("ekB") } }
+fn keep(t: own (R, i64)) -> (R, i64) { return t; }
+fn keeps(r: own R) -> R { return r; }
+fn keepg[T](x: own T) -> T { return x; }
+fn keepe(e: own E) -> E { return e; }
+fn t_keep_direct(t: own (R, i64)) { let w: (R, i64) = keep(t); println(f"tkd {w.0.id}") }
+fn t_keep_rebind(t: own (R, i64)) { let z: (R, i64) = t; let w: (R, i64) = keep(z); println(f"tkr {w.0.id}") }
+fn s_keep_direct(r: own R) { let w: R = keeps(r); println(f"skd {w.id}") }
+fn s_keep_rebind(r: own R) { let z: R = r; let w: R = keeps(z); println(f"skr {w.id}") }
+fn s_keep_unread(r: own R) { let w: R = keeps(r); println("sku") }
+fn s_keep_twice(r: own R) { let w: R = keeps(r); let v: R = keeps(w); println(f"skt {v.id}") }
+fn s_keep_generic(r: own R) { let w: R = keepg(r); println(f"skg {w.id}") }
+fn s_keep_assoc(r: own R) { let w: R = K.id(r); println(f"ska {w.id}") }
+fn s_keep_nested(r: own R, k: bool) { if k { let w: R = keeps(r); println(f"skn {w.id}"); } println("skn-out") }
+fn s_keep_arm(r: own R, k: bool) -> i64 { let w: R = keeps(r); if k { return 1; } println(f"skm {w.id}"); return 0 }
+fn e_keep(e: own E) { let w: E = keepe(e); match w { E.A(x) => println(f"ek {x.id}"), E.B => println("ekB") } }
 fn s_local() { let l = mk(30); let w: R = keeps(l); println(f"sl {w.id}") }
-fn v_keep(h: H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; let w: (R, i64) = keep(z); println(f"vk {w.0.id}") }
+fn v_keep(h: own H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; let w: (R, i64) = keep(z); println(f"vk {w.0.id}") }
 struct K { n: i64 }
 impl K {
-    fn id(r: R) -> R { return r; }
-    fn m_keep(ref self, r: R) { let w: R = keeps(r); println(f"mk {w.id}") }
+    fn id(r: own R) -> R { return r; }
+    fn m_keep(ref self, r: own R) { let w: R = keeps(r); println(f"mk {w.id}") }
 }
 fn main() {
     let k = K { n: 0 };

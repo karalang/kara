@@ -1,10 +1,10 @@
 struct R { id: i64, v: Vec[i64] }
 impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
 fn mks(i: i64) -> String { return f"heap-string-longer-than-sso-{i}" }
-fn strs(a: Array[String, 2], c: bool) -> Array[String, 2] { if c { a } else { [mks(8), mks(9)] } }
-fn early(a: Array[String, 2], c: bool) -> Array[String, 2] { if c { return a } [mks(8), mks(9)] }
-fn vecs(a: Array[Vec[i64], 2], c: bool) -> Array[Vec[i64], 2] { if c { a } else { [vec![8, 8], Vec[9; 4]] } }
-fn rs(a: Array[R, 2], c: bool) -> Array[R, 2] { if c { a } else { [R { id: 8, v: vec![8] }, R { id: 9, v: vec![9, 9] }] } }
+fn strs(a: own Array[String, 2], c: bool) -> Array[String, 2] { if c { a } else { [mks(8), mks(9)] } }
+fn early(a: own Array[String, 2], c: bool) -> Array[String, 2] { if c { return a } [mks(8), mks(9)] }
+fn vecs(a: own Array[Vec[i64], 2], c: bool) -> Array[Vec[i64], 2] { if c { a } else { [vec![8, 8], Vec[9; 4]] } }
+fn rs(a: own Array[R, 2], c: bool) -> Array[R, 2] { if c { a } else { [R { id: 8, v: vec![8] }, R { id: 9, v: vec![9, 9] }] } }
 fn main() {
     for c in [true, false] {
         println(f"c={c}");

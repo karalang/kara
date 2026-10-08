@@ -1,7 +1,7 @@
 
 struct Foo { age: i64 }
 fn read_int(n: i64) -> i64 { n + 100 }
-fn show(f: Foo) -> i64 {
+fn show(f: own Foo) -> i64 {
     match f {
         Foo { age } => read_int(age),
     }

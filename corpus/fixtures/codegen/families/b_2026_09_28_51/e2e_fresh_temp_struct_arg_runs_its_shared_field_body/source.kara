@@ -17,8 +17,8 @@ fn mky(n: i64) -> Y { Y { h: N { v: n }, k: n } }
 fn zn(z: Z) -> i64 { z.h.v }
 fn yn(y: Y) -> i64 { y.k }
 fn wn(w: W) -> i64 { w.k }
-fn back(z: Z) -> Z { z }
-fn keep(zs: mut ref Vec[Z], z: Z) { zs.push(z); }
+fn back(z: own Z) -> Z { z }
+fn keep(zs: mut ref Vec[Z], z: own Z) { zs.push(z); }
 fn qn(q: Q) -> i64 { q.t }
 fn pn(p: P) -> i64 { p.a.v + p.b.v }
 fn main() {

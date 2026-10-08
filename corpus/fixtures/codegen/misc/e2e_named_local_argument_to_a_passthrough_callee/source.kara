@@ -5,9 +5,9 @@ struct P { id: i64, name: String, xs: Vec[i64] }
 impl Drop for P { fn drop(mut ref self) { println(f"  dP{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
 fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}", xs: [i] }; }
-fn pass(r: R) -> R { return r; }
-fn rebpass(r: R) -> R { let m = r; return m; }
-fn ppass(p: P) -> P { return p; }
+fn pass(r: own R) -> R { return r; }
+fn rebpass(r: own R) -> R { let m = r; return m; }
+fn ppass(p: own P) -> P { return p; }
 fn dies(r: R) -> i64 { return r.id; }
 fn main() {
   println("named"); let a = mk(1); let z = pass(a); println(f"  v={z.inner.v}");

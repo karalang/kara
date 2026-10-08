@@ -7,22 +7,22 @@ enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 
 impl E {
-    fn cond_match(self, c: bool) -> i64 {
+    fn cond_match(own self, c: bool) -> i64 {
         if c { let e = self; match e { E.A(ref r) => { return r.id; } E.B => { return 0; } } }
         else { match self { E.A(ref r) => { return r.id + 100; } E.B => { return 100; } } }
     }
-    fn cond_bare(self, c: bool) -> i64 { if c { let e = self; return 7; } return 0; }
-    fn cond_mut(self, c: bool) -> i64 { if c { let mut e = self; match e { E.A(ref r) => { return r.id; } E.B => { return 0; } } } else { return 5; } }
-    fn cond_loop(self, n: i64) -> i64 { let mut i = 0; while i < n { let e = self; return 9; } return 0; }
-    fn cond_arm(self, k: i64) -> i64 { match k { 1 => { let e = self; return 1; } _ => { return 2; } } }
-    fn top_let(self) -> i64 { let e = self; match e { E.A(ref r) => { return r.id; } E.B => { return 0; } } }
+    fn cond_bare(own self, c: bool) -> i64 { if c { let e = self; return 7; } return 0; }
+    fn cond_mut(own self, c: bool) -> i64 { if c { let mut e = self; match e { E.A(ref r) => { return r.id; } E.B => { return 0; } } } else { return 5; } }
+    fn cond_loop(own self, n: i64) -> i64 { let mut i = 0; while i < n { let e = self; return 9; } return 0; }
+    fn cond_arm(own self, k: i64) -> i64 { match k { 1 => { let e = self; return 1; } _ => { return 2; } } }
+    fn top_let(own self) -> i64 { let e = self; match e { E.A(ref r) => { return r.id; } E.B => { return 0; } } }
     fn plain(self, c: bool) -> i64 { if c { return 1; } return 2; }
     fn borrowed(ref self, c: bool) -> i64 { if c { return 1; } return 2; }
 }
 
 impl S {
-    fn cond_struct(self, c: bool) -> i64 { if c { let s2 = self; return s2.n; } return self.n + 100; }
-    fn both_arms(self, c: bool) -> i64 { if c { let s1 = self; return s1.n; } else { let s2 = self; return s2.n + 50; } }
+    fn cond_struct(own self, c: bool) -> i64 { if c { let s2 = self; return s2.n; } return self.n + 100; }
+    fn both_arms(own self, c: bool) -> i64 { if c { let s1 = self; return s1.n; } else { let s2 = self; return s2.n + 50; } }
 }
 
 fn main() {

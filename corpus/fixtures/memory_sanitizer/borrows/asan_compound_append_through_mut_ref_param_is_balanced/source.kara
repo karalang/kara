@@ -1,5 +1,5 @@
 
-fn append(s: mut ref String, x: String) {
+fn append(s: mut ref String, x: own String) {
     let mut i = 0i64;
     while i < 200i64 { s += x; i = i + 1i64; }
 }

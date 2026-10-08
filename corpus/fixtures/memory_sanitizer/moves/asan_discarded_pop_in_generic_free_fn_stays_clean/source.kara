@@ -1,4 +1,4 @@
 
 struct Heap[T] { xs: Vec[T] }
-fn take[T](s: Heap[T]) -> i64 { let mut h = s; h.xs.pop(); h.xs.len() }
+fn take[T](s: own Heap[T]) -> i64 { let mut h = s; h.xs.pop(); h.xs.len() }
 fn main() { let h = Heap { xs: [[1], [2], [3]] }; println(f"n={take(h)}"); }

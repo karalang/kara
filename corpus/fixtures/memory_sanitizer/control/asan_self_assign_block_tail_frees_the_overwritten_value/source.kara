@@ -10,10 +10,10 @@ struct P { id: i64, name: String }
 enum E { A(String), B }
 impl Drop for E { fn drop(mut ref self) { println("dropE") } }
 
-fn pass(r: R) -> R { return r; }
-fn passw(w: W) -> W { return w; }
-fn passp(p: P) -> P { return p; }
-fn passe(x: E) -> E { return x; }
+fn pass(r: own R) -> R { return r; }
+fn passw(w: own W) -> W { return w; }
+fn passp(p: own P) -> P { return p; }
+fn passe(x: own E) -> E { return x; }
 
 fn main() {
     let n: i64 = env.args().len();

@@ -13,7 +13,7 @@
 // Segments are read straight off a `Vec[u8]` of the digit bytes (value folded and the
 // segment string built in the same pass), no substring copies.
 
-fn backtrack(s: ref Vec[u8], n: i64, start: i64, part: i64, path: String,
+fn backtrack(s: ref Vec[u8], n: i64, start: i64, part: i64, path: own String,
         out: mut ref Vec[String]) {
     if part == 4 {
         if start == n {

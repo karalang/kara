@@ -6,9 +6,9 @@ fn mk(i: i64) -> Map[String, i64] {
     mm.insert("map_key_long_enough_to_force_a_heap_allocation".to_string(), i);
     mm
 }
-fn take_match(a: Sa) -> i64 { match a.m { Some(x) => { x.len() } None => { 0 } } }
-fn take_let(a: Sa) -> i64 { let mm = a.m; match mm { Some(x) => { x.len() } None => { 0 } } }
-fn take_escape(a: Sa) -> Option[Map[String, i64]] { a.m }
+fn take_match(a: own Sa) -> i64 { match a.m { Some(x) => { x.len() } None => { 0 } } }
+fn take_let(a: own Sa) -> i64 { let mm = a.m; match mm { Some(x) => { x.len() } None => { 0 } } }
+fn take_escape(a: own Sa) -> Option[Map[String, i64]] { a.m }
 fn main() {
     let mut t: i64 = 0;
     let mut i: i64 = 0;

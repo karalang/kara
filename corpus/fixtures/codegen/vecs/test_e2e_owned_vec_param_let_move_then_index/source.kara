@@ -13,7 +13,7 @@ fn pick(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
     }
 }
 
-fn merge_k(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
+fn merge_k(lists: own Vec[Option[ListNode]]) -> Option[ListNode] {
     let mut work = lists;
     let k = work.len();
     if k == 0 {

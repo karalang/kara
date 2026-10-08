@@ -1,10 +1,10 @@
 struct H { n: i64 }
 
 impl H {
-    fn pick[T](self, x: T) -> T { return x }
+    fn pick[T](self, x: own T) -> T { return x }
 }
 
-fn ident[T](x: T) -> T { return x }
+fn ident[T](x: own T) -> T { return x }
 
 fn main() {
     let a2: Array[i64, 2] = Array[3, 4];

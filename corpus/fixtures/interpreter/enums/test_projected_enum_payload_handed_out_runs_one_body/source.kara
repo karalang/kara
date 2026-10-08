@@ -8,17 +8,17 @@ struct H1 { e: E }
 struct H2 { s: S }
 
 impl H1 {
-    fn out(self) -> R { match self.e { E.A(r) => { return r; } E.B => { return mk(0); } } }
+    fn out(own self) -> R { match self.e { E.A(r) => { return r; } E.B => { return mk(0); } } }
     fn out_iflet(self) -> R { if let E.A(r) = self.e { return r; } else { return mk(0); } }
-    fn out_tail(self) -> R { match self.e { E.A(r) => r, E.B => mk(0) } }
-    fn out_some(self, k: bool) -> R { match self.e { E.A(r) => { if k { return r; } return mk(1); } E.B => { return mk(0); } } }
-    fn read(self) -> i64 { match self.e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn out_tail(own self) -> R { match self.e { E.A(r) => r, E.B => mk(0) } }
+    fn out_some(own self, k: bool) -> R { match self.e { E.A(r) => { if k { return r; } return mk(1); } E.B => { return mk(0); } } }
+    fn read(own self) -> i64 { match self.e { E.A(r) => { return r.id; } E.B => { return 0; } } }
 }
-impl H2 { fn out2(self) -> R { match self.s.e { E.A(r) => { return r; } E.B => { return mk(0); } } } }
-fn p_out(h: H1) -> R { match h.e { E.A(r) => { return r; } E.B => { return mk(0); } } }
-fn p_out2(h: H2) -> R { match h.s.e { E.A(r) => { return r; } E.B => { return mk(0); } } }
-fn p_read(h: H1) -> i64 { match h.e { E.A(r) => { return r.id; } E.B => { return 0; } } }
-fn e_out(b: E) -> R { match b { E.A(r) => { return r; } E.B => { return mk(0); } } }
+impl H2 { fn out2(own self) -> R { match self.s.e { E.A(r) => { return r; } E.B => { return mk(0); } } } }
+fn p_out(h: own H1) -> R { match h.e { E.A(r) => { return r; } E.B => { return mk(0); } } }
+fn p_out2(h: own H2) -> R { match h.s.e { E.A(r) => { return r; } E.B => { return mk(0); } } }
+fn p_read(h: own H1) -> i64 { match h.e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+fn e_out(b: own E) -> R { match b { E.A(r) => { return r; } E.B => { return mk(0); } } }
 
 fn main() {
     println("out/local"); let a1 = H1 { e: E.A(mk(1)) }; let r1 = a1.out(); println(f"  got{r1.id}");

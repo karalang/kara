@@ -2,7 +2,7 @@
 struct W[=T] { v: Vec[T] }
 
 impl[T: Ord] W[T] {
-    fn add(mut ref self, x: T) { self.v.push(x); }
+    fn add(mut ref self, x: own T) { self.v.push(x); }
     fn n(ref self) -> i64 { return self.v.len(); }
 }
 

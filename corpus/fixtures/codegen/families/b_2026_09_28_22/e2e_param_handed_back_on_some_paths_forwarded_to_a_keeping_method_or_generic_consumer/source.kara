@@ -3,21 +3,21 @@ impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
 fn geat[T](t: T) { println("gx") }
 fn geo[T](o: Option[T]) { println("go") }
-fn gkeep[T](t: T, v: mut ref Vec[T]) { v.push(t) }
+fn gkeep[T](t: own T, v: mut ref Vec[T]) { v.push(t) }
 struct K { k: i64 }
 impl K {
     fn eat(ref self, s: S) { println("mx") }
     fn eato(ref self, o: Option[S]) { println("mo") }
     fn aeat(s: S) { println("ax") }
-    fn back(ref self, s: S) -> S { return s }
+    fn back(ref self, s: own S) -> S { return s }
 }
 struct V { v: Vec[S] }
-impl V { fn put(mut ref self, s: S) { self.v.push(s) } }
-fn gid[T](t: T) -> T { return t }
-fn pk(s: S, k: bool, v: mut ref Vec[S]) -> S { if k { return s } gkeep(s, v); return mks(0) }
-fn pv(s: S, k: bool, w: mut ref V) -> S { if k { return s } w.put(s); return mks(0) }
-fn pb(s: S, k: bool, q: K) -> S { if k { return s } let t = q.back(s); println(f"t{t.id}"); return mks(0) }
-fn pr(s: S, k: bool) -> S { if k { return s } let t = gid(s); println(f"t{t.id}"); return mks(0) }
+impl V { fn put(mut ref self, s: own S) { self.v.push(s) } }
+fn gid[T](t: own T) -> T { return t }
+fn pk(s: own S, k: bool, v: mut ref Vec[S]) -> S { if k { return s } gkeep(s, v); return mks(0) }
+fn pv(s: own S, k: bool, w: mut ref V) -> S { if k { return s } w.put(s); return mks(0) }
+fn pb(s: own S, k: bool, q: K) -> S { if k { return s } let t = q.back(s); println(f"t{t.id}"); return mks(0) }
+fn pr(s: own S, k: bool) -> S { if k { return s } let t = gid(s); println(f"t{t.id}"); return mks(0) }
 fn main() {
     let mut v: Vec[S] = Vec.new();
     let a = pk(mks(1), false, mut v); println(f"a{a.id}"); println(f"n{v.len()}");

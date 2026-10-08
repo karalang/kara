@@ -2,14 +2,14 @@ struct S { id: i64, v: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 struct T { w: String }
 struct E7 { n: i64 }
-impl From[T] for E7 { fn from(t: T) -> E7 { E7 { n: t.w.len() } } }
-impl From[S] for E7 { fn from(s: S) -> E7 { E7 { n: s.id } } }
+impl From[T] for E7 { fn from(t: own T) -> E7 { E7 { n: t.w.len() } } }
+impl From[S] for E7 { fn from(s: own S) -> E7 { E7 { n: s.id } } }
 struct E8 { n: i64 }
-impl From[S] for E8 { fn from(s: S) -> E8 { E8 { n: s.id } } }
-impl From[T] for E8 { fn from(t: T) -> E8 { E8 { n: t.w.len() } } }
+impl From[S] for E8 { fn from(s: own S) -> E8 { E8 { n: s.id } } }
+impl From[T] for E8 { fn from(t: own T) -> E8 { E8 { n: t.w.len() } } }
 struct E9 { inner: S }
-impl From[S] for E9 { fn from(s: S) -> E9 { E9 { inner: s } } }
-impl From[T] for E9 { fn from(t: T) -> E9 { E9 { inner: S { id: 0, v: t.w } } } }
+impl From[S] for E9 { fn from(s: own S) -> E9 { E9 { inner: s } } }
+impl From[T] for E9 { fn from(t: own T) -> E9 { E9 { inner: S { id: 0, v: t.w } } } }
 fn mk(k: i64) -> Result[i64, S] { if k > 5 { Result.Err(S { id: k, v: f"err-heap-string-long-enough-{k}" }) } else { Result.Ok(k) } }
 fn mt(k: i64) -> Result[i64, T] { if k > 5 { Result.Err(T { w: f"err-heap-string-long-enough-{k}" }) } else { Result.Ok(k) } }
 fn h1(k: i64) -> Result[i64, E7] { let r = mk(k); let x = r?; Result.Ok(x) }

@@ -1,7 +1,7 @@
 struct Bx[T] { v: T, n: i64 }
 struct W[T] { inner: Bx[T], tag: T }
 struct Pr[A, B] { a: Bx[A], b: Bx[B] }
-fn mk[T](x: T, y: T) -> W[T] { W { inner: Bx { v: x, n: 1 }, tag: y } }
+fn mk[T](x: own T, y: own T) -> W[T] { W { inner: Bx { v: x, n: 1 }, tag: y } }
 fn main() {
     let w = W { inner: Bx { v: 5, n: 0 }, tag: 3 };
     println(f"{w.tag} {w.inner.v} {w.inner.n}");

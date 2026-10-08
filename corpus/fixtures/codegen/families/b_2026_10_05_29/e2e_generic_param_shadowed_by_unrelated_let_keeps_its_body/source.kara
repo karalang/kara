@@ -5,7 +5,7 @@ fn mks(i: i64) -> S { S { r: R { id: i }, s: f"ssssssssssssssssssssssssssss{i}" 
 fn g1[T](s: T, n: i64) -> i64 { let s = n; s }
 fn g2[T](s: Option[T], n: i64) -> i64 { let s = n; s }
 fn g3[T](s: T, n: i64) -> i64 { let t = n; t }
-fn g8[T](s: T, n: i64) -> i64 { let m = s; let s = n; s }
+fn g8[T](s: own T, n: i64) -> i64 { let m = s; let s = n; s }
 fn g9[T](s: T, n: i64) -> i64 { let s = n + 1; s }
 fn main() {
     println(f"k{g1(R { id: 13 }, 4)}"); println("_a1");

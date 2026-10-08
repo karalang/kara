@@ -60,7 +60,7 @@ struct Peeking {
     mut full: bool,
 }
 
-fn make_peeking(data: Vec[i64]) -> Peeking {
+fn make_peeking(data: own Vec[i64]) -> Peeking {
     let mut s = Source { data: data, pos: 0, pulls: 0 };
     let mut full = false;
     let mut slot = 0;

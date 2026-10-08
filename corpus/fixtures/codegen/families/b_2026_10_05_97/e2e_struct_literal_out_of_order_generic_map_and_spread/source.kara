@@ -1,7 +1,7 @@
 struct Bx[T] { a: T, b: i64 }
 struct C { m: Map[i64, String], k: i64 }
 struct F { a: i64, b: i64, c: String }
-fn mk[T](v: T) -> Bx[T] { return Bx { b: 2, a: v }; }
+fn mk[T](v: own T) -> Bx[T] { return Bx { b: 2, a: v }; }
 fn main() {
     let x = Bx { b: 1, a: "s".to_string() };
     println(f"x:{x.a} {x.b}");

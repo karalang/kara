@@ -62,7 +62,7 @@ fn maximal_rectangle(matrix: Vec[Vec[i64]]) -> i64 {
     return best;
 }
 
-fn row(vals: Vec[i64]) -> Vec[i64] {
+fn row(vals: own Vec[i64]) -> Vec[i64] {
     return vals;
 }
 

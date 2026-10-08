@@ -2,11 +2,11 @@
 struct Heap[T] { xs: Vec[T] }
 impl[T] Heap[T] {
     fn pop_one(mut ref self) -> Option[T] { self.xs.pop() }
-    fn take_one(self) -> Option[T] {
+    fn take_one(own self) -> Option[T] {
         let mut h = self;
         h.pop_one()
     }
-    fn into_sorted(self) -> Vec[T] {
+    fn into_sorted(own self) -> Vec[T] {
         let mut h = self;
         let mut out: Vec[T] = Vec.new();
         while h.xs.len() > 0 {
@@ -18,7 +18,7 @@ impl[T] Heap[T] {
 struct PlainHeap { xs: Vec[String] }
 impl PlainHeap {
     fn pop_one(mut ref self) -> Option[String] { self.xs.pop() }
-    fn take_one(self) -> Option[String] { let mut h = self; h.pop_one() }
+    fn take_one(own self) -> Option[String] { let mut h = self; h.pop_one() }
 }
 fn main() {
     // (a) minimal: ONE sibling call through the rebound owned receiver.

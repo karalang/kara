@@ -15,7 +15,7 @@ enum Wide { A(Array[Sd, 2]), N }
 enum Plain { A(Sd), N }
 enum Scalar { A(Array[Sn, 1]), N }
 
-fn eat(g: One) -> i64 { match g { One.A(x) => { return 7; } One.N => { return 0; } } }
+fn eat(g: own One) -> i64 { match g { One.A(x) => { return 7; } One.N => { return 0; } } }
 
 fn a_bind() { let g: One = One.A([Sd { h: Inner { tag: "q" } }]); println("a"); }
 fn b_nobody() { let g: Bare = Bare.A([Sq { h: Inner { tag: "q" } }]); println("b"); }

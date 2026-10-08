@@ -89,7 +89,7 @@ fn print_graph(root: Option[Node]) {
     }
 }
 
-fn bfs_print(start: Node) {
+fn bfs_print(start: own Node) {
     let mut queue: VecDeque[Node] = VecDeque.new();
     let mut visited: Map[i64, bool] = Map.new();
     queue.push_back(start);

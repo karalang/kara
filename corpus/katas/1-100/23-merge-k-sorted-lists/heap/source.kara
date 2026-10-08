@@ -36,7 +36,7 @@ shared struct ListNode {
 }
 
 // Append `node` and sift it up until its parent is no larger.
-fn heap_push(heap: mut ref Vec[ListNode], node: ListNode) {
+fn heap_push(heap: mut ref Vec[ListNode], node: own ListNode) {
     heap.push(node);
     let mut i = heap.len() - 1;
     while i > 0 {

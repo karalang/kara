@@ -5,16 +5,16 @@ enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("dE") } }
 struct W { e: E }
 impl E {
-    fn ret_self(self) -> E { return self }
-    fn wrap(self) -> W { return W { e: self } }
-    fn opt(self) -> Option[E] { return Some(self) }
+    fn ret_self(own self) -> E { return self }
+    fn wrap(own self) -> W { return W { e: self } }
+    fn opt(own self) -> Option[E] { return Some(self) }
     fn swap(self) -> E { println("sw"); return E.B }
-    fn maybe(self, c: bool) -> E { if c { return self } println("mb"); return E.B }
+    fn maybe(own self, c: bool) -> E { if c { return self } println("mb"); return E.B }
 }
 enum P { A(R), B }
 impl P {
     fn swap(self) -> P { println("sw"); return P.B }
-    fn maybe(self, c: bool) -> P { if c { return self } println("mb"); return P.B }
+    fn maybe(own self, c: bool) -> P { if c { return self } println("mb"); return P.B }
 }
 fn main() {
     { let a: E = E.A(mk(1)); let b: E = a.ret_self(); println("k1") }

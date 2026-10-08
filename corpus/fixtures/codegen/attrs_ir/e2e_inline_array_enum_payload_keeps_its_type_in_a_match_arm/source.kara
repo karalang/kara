@@ -9,9 +9,9 @@ enum Flat { P(Array[Plain, 1]), Q }
 fn eat_cell(a: Array[Cell, 1]) -> i64 { return a[0].v; }
 fn eat_plain(a: Array[Plain, 1]) -> i64 { return a[0].v; }
 
-fn hand(g: One) -> i64 { match g { One.P(x) => { return eat_cell(x); } One.Q => { return 0; } } }
-fn read(g: One) -> i64 { match g { One.P(x) => { return x[0].v; } One.Q => { return 0; } } }
-fn hand_flat(g: Flat) -> i64 { match g { Flat.P(x) => { return eat_plain(x); } Flat.Q => { return 0; } } }
+fn hand(g: own One) -> i64 { match g { One.P(x) => { return eat_cell(x); } One.Q => { return 0; } } }
+fn read(g: own One) -> i64 { match g { One.P(x) => { return x[0].v; } One.Q => { return 0; } } }
+fn hand_flat(g: own Flat) -> i64 { match g { Flat.P(x) => { return eat_plain(x); } Flat.Q => { return 0; } } }
 fn read_opt(o: Option[Array[Cell, 1]]) -> i64 { match o { Some(x) => { return x[0].v; } None => { return 0; } } }
 
 fn main() {

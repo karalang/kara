@@ -1,11 +1,11 @@
-fn rep(d: mut ref String, v: String) -> String { return replace(d, v) }
-fn repg[T](d: mut ref T, v: T) -> T { return replace(d, v) }
-fn repv(d: mut ref Vec[String], v: Vec[String]) -> Vec[String] { return replace(d, v) }
-fn repc(d: mut ref String, v: String, c: bool) -> String {
+fn rep(d: mut ref String, v: own String) -> String { return replace(d, v) }
+fn repg[T](d: mut ref T, v: own T) -> T { return replace(d, v) }
+fn repv(d: mut ref Vec[String], v: own Vec[String]) -> Vec[String] { return replace(d, v) }
+fn repc(d: mut ref String, v: own String, c: bool) -> String {
     if c { return replace(d, v) }
     return "heap-string-longer-than-sso-none".to_string()
 }
-fn put(d: mut ref String, v: String) { let o = replace(d, v); println(o); }
+fn put(d: mut ref String, v: own String) { let o = replace(d, v); println(o); }
 fn main() {
     let mut s = "heap-string-longer-than-sso-0".to_string();
     let i = 5;

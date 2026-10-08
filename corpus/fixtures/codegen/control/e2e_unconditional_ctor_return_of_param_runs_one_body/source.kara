@@ -1,8 +1,8 @@
 struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
-fn top(r: R) -> Option[R] { return Option.Some(r); }
-fn topwrap(r: R) -> Result[R, String] { return Result.Ok(r); }
+fn top(r: own R) -> Option[R] { return Option.Some(r); }
+fn topwrap(r: own R) -> Result[R, String] { return Result.Ok(r); }
 fn main() {
     println("top");    let _ = top(mk(1));
     println("wrap");   let _ = topwrap(mk(2));

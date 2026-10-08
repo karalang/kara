@@ -5,12 +5,12 @@ struct Inner { tok: Tok, k: i64 }
 struct Outer { inner: Inner, n: i64 }
 struct V { xs: Vec[i64], n: i64 }
 struct Sink { total: i64 }
-fn consume(w: W) -> String { match w.tok { Id(s) => s, Int(z) => z.to_string() } }
-fn consume_outer(o: Outer) -> String { match o.inner.tok { Id(s) => s, Int(z) => z.to_string() } }
+fn consume(w: own W) -> String { match w.tok { Id(s) => s, Int(z) => z.to_string() } }
+fn consume_outer(o: own Outer) -> String { match o.inner.tok { Id(s) => s, Int(z) => z.to_string() } }
 fn consume_vec(v: V) -> i64 { v.xs.len() }
 fn mkv(n: i64) -> Vec[i64] { let mut a: Vec[i64] = Vec.new(); a.push(n); a.push(n + 1); a }
 impl Sink {
-    fn take(mut ref self, w: W) -> String { match w.tok { Id(s) => s, Int(z) => z.to_string() } }
+    fn take(mut ref self, w: own W) -> String { match w.tok { Id(s) => s, Int(z) => z.to_string() } }
 }
 fn main() {
     println(consume(W { tok: Tok.Id("alpha".to_string()), n: 1 }));

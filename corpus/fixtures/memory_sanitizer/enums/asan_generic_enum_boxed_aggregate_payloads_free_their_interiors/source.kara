@@ -6,16 +6,16 @@ enum Slot[T] { Filled(T), Blank }
 fn opeek(s: ref Slot[Option[String]]) -> bool {
     match s { Filled(x) => match x { Some(y) => y.contains("row"), None => false, }, Blank => false, }
 }
-fn otake(s: Slot[Option[String]]) -> bool {
+fn otake(s: own Slot[Option[String]]) -> bool {
     match s { Filled(x) => match x { Some(y) => y.contains("row"), None => false, }, Blank => false, }
 }
 fn wpeek(s: ref Slot[Wrap[String]]) -> bool {
     match s { Filled(x) => x.val.contains("row"), Blank => false, }
 }
-fn ttake(s: Slot[(String, i64)]) -> bool {
+fn ttake(s: own Slot[(String, i64)]) -> bool {
     match s { Filled(x) => x.0.contains("row"), Blank => false, }
 }
-fn wtake(s: Slot[Wrap[String]]) -> bool {
+fn wtake(s: own Slot[Wrap[String]]) -> bool {
     match s { Filled(x) => x.val.contains("row"), Blank => false, }
 }
 

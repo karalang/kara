@@ -2,7 +2,7 @@
 shared struct Node { val: i64 }
 struct Bag { kids: Vec[Node] }
 
-fn probe(p: Bag) -> i64 {
+fn probe(p: own Bag) -> i64 {
     let ks = p.kids;
     ks[0].val + ks[1].val
 }

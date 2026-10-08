@@ -1,7 +1,7 @@
 
 fn describe(e: JsonError) -> i64 { return e.message.len() + (e.line as i64); }
 
-fn propagate(text: String) -> Result[i64, JsonError] {
+fn propagate(text: own String) -> Result[i64, JsonError] {
     let j = Json.parse(text)?;
     return Result.Ok(1i64);
 }

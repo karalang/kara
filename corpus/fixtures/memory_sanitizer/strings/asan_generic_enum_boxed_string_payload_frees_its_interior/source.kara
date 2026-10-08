@@ -4,7 +4,7 @@ enum StrSlot { FilledS(String), BlankS }
 
 fn peek(s: ref Slot[String]) -> bool { match s { Filled(x) => x.contains("row"), Blank => false, } }
 fn blind(s: ref Slot[String]) -> bool { return true; }
-fn take(s: Slot[String]) -> bool { match s { Filled(x) => x.contains("row"), Blank => false, } }
+fn take(s: own Slot[String]) -> bool { match s { Filled(x) => x.contains("row"), Blank => false, } }
 fn mono(s: ref StrSlot) -> bool { match s { FilledS(x) => x.contains("row"), BlankS => false, } }
 fn vpeek(s: ref Slot[Vec[String]]) -> i64 {
     match s {
@@ -16,7 +16,7 @@ fn vpeek(s: ref Slot[Vec[String]]) -> i64 {
         Blank => 0i64,
     }
 }
-fn vtake(s: Slot[Vec[String]]) -> i64 {
+fn vtake(s: own Slot[Vec[String]]) -> i64 {
     match s {
         Filled(x) => {
             let mut c: i64 = 0i64;

@@ -6,8 +6,8 @@ fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
 enum G { A(D), B }
 struct V { g: G, d: D }
 fn mkv(n: i64) -> V { return V { g: G.A(mkd(n + 20)), d: mkd(n + 30) }; }
-fn gid[T](x: T) -> T { x }
-fn gmaybe[T](x: T, c: bool) -> Option[T] { if c { return Some(x); } None }
+fn gid[T](x: own T) -> T { x }
+fn gmaybe[T](x: own T, c: bool) -> Option[T] { if c { return Some(x); } None }
 fn main() {
     let o = gmaybe(mkw(7).r, true);
     println("o");

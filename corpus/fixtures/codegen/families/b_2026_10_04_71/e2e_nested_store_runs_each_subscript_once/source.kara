@@ -2,7 +2,7 @@ struct P { n: i64, s: String }
 struct H { xs: Vec[Vec[i64]], t: (i64, Vec[i64]) }
 fn idx(k: i64) -> i64 { println(f"idx{k}"); return k }
 fn val(k: i64) -> i64 { println(f"val{k}"); return k }
-fn key(k: String) -> String { println(f"key{k}"); return k }
+fn key(k: own String) -> String { println(f"key{k}"); return k }
 fn main() {
     let mut w: Vec[Vec[i64]] = [[1, 2], [3, 4]];
     w[idx(0)][idx(1)] = val(5);

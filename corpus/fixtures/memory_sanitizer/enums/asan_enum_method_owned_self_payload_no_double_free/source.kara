@@ -1,7 +1,7 @@
 
 enum E { V(String) }
-impl E { fn extract(self) -> String { match self { E.V(s) => s } } }
-impl E { fn length(self) -> i64 { match self { E.V(s) => s.len() } } }
+impl E { fn extract(own self) -> String { match self { E.V(s) => s } } }
+impl E { fn length(own self) -> i64 { match self { E.V(s) => s.len() } } }
 fn main() {
     let e = E.V("hi".to_string());
     println(e.extract());

@@ -3,7 +3,7 @@ struct Holder {
     name: String,
 }
 
-fn make(s: String) -> Holder {
+fn make(s: own String) -> Holder {
     Holder { name: s }
 }
 

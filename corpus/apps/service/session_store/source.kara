@@ -132,7 +132,7 @@ struct Store {
 }
 
 impl Store {
-    fn new(cfg: Config) -> Store {
+    fn new(cfg: own Config) -> Store {
         let first_sweep = cfg.sweep_interval;
         Store {
             cfg,
@@ -143,7 +143,7 @@ impl Store {
         }
     }
 
-    fn add_user(mut ref self, user: String, password: String) {
+    fn add_user(mut ref self, user: own String, password: own String) {
         self.credentials.insert(user, password);
     }
 
@@ -291,7 +291,7 @@ fn resolve(r: ref TokenRef, issued: ref Vec[String]) -> String {
     }
 }
 
-fn login_req(t: i64, user: String, password: String) -> Request {
+fn login_req(t: i64, user: own String, password: own String) -> Request {
     Request { t, op: Op.Login { user, password } }
 }
 

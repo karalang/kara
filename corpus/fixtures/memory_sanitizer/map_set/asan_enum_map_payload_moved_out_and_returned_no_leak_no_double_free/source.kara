@@ -1,6 +1,6 @@
 
 enum V { Table(Map[String, i64]) }
-fn unwrap(v: V) -> Map[String, i64] { match v { Table(m) => m } }
+fn unwrap(v: own V) -> Map[String, i64] { match v { Table(m) => m } }
 fn main() {
     let mut total: i64 = 0;
     let mut i = 0;

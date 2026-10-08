@@ -7,15 +7,15 @@ impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
 enum Ho[T] { Full(T), Empty }
 fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
 fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
-fn wrapS(v: S2) -> Option[S2] { return Some(v) }
-fn midS(v: S2, c: bool) -> Option[S2] { if c { return Some(v) } return None }
-fn mkhS(v: S2) -> Ho[S2] { return Ho.Full(v) }
-fn wrap3(v: S3) -> Option[S3] { return Some(v) }
-fn mid3(v: S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
-fn ho3(v: S3) -> Ho[S3] { return Ho.Full(v) }
-fn wrapP(v: P) -> Option[P] { return Some(v) }
-fn outq(s: S2) -> Option[S2] { let o = Some(s); return o }
-fn dup(a: S2, b: S2) -> Option[S2] { return Some(a) }
+fn wrapS(v: own S2) -> Option[S2] { return Some(v) }
+fn midS(v: own S2, c: bool) -> Option[S2] { if c { return Some(v) } return None }
+fn mkhS(v: own S2) -> Ho[S2] { return Ho.Full(v) }
+fn wrap3(v: own S3) -> Option[S3] { return Some(v) }
+fn mid3(v: own S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
+fn ho3(v: own S3) -> Ho[S3] { return Ho.Full(v) }
+fn wrapP(v: own P) -> Option[P] { return Some(v) }
+fn outq(s: own S2) -> Option[S2] { let o = Some(s); return o }
+fn dup(a: own S2, b: S2) -> Option[S2] { return Some(a) }
 fn noret(v: S2) -> Option[S2] { println(f"n{v.id}"); return None }
 fn ca() { let o = wrapS(mk2(1)); println(f"s{o.is_some()}"); }
 fn cb() { let o = wrapS(S2 { h: Sh { k: 2 }, id: 2 }); println(f"s{o.is_some()}"); }

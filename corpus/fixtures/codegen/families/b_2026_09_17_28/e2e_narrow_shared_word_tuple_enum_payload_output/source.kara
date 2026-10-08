@@ -2,10 +2,10 @@ enum M { P((bool, i32, String)), Q }
 enum N { P((String, i32, bool)), Q }
 enum K { P((u8, u8, u8, String, i32)), Q }
 enum L { P((i32, String), i64), Q }
-fn take(m: M) -> i64 { match m { M.P((b, k, s)) => { return s.len() + k as i64; }, M.Q => { return 0; } } }
-fn peek(m: M) -> i64 { match m { M.P((b, k, s)) => { return k as i64; }, M.Q => { return 0; } } }
+fn take(m: own M) -> i64 { match m { M.P((b, k, s)) => { return s.len() + k as i64; }, M.Q => { return 0; } } }
+fn peek(m: own M) -> i64 { match m { M.P((b, k, s)) => { return k as i64; }, M.Q => { return 0; } } }
 fn ign(m: M) -> i64 { return 5; }
-fn keepS(m: M) -> String { match m { M.P((b, k, s)) => { return s; }, M.Q => { return f"q"; } } }
+fn keepS(m: own M) -> String { match m { M.P((b, k, s)) => { return s; }, M.Q => { return f"q"; } } }
 fn main() {
     let mut i = 0;
     while i < 3 {

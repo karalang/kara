@@ -3,23 +3,23 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 fn mk(i: i64) -> R { R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 enum E { A(R), B }
 fn eat(r: R) { println(f"eat{r.id}") }
-fn gsel[T](a: T, b: T, c: bool) -> T { let (v, n) = if c { (a, 1) } else { (b, 2) }; v }
-fn csel(a: R, b: R, c: bool) -> R { let (v, n) = if c { (a, 1) } else { (b, 2) }; v }
-fn gtup[T](a: T, b: T) -> T { let (v, n) = (a, 1); v }
-fn ctup(a: R, b: R) -> R { let (v, n) = (a, 1); v }
-fn gif[T](a: T, b: T, c: bool) -> T { let v = if c { a } else { b }; v }
+fn gsel[T](a: own T, b: own T, c: bool) -> T { let (v, n) = if c { (a, 1) } else { (b, 2) }; v }
+fn csel(a: own R, b: own R, c: bool) -> R { let (v, n) = if c { (a, 1) } else { (b, 2) }; v }
+fn gtup[T](a: own T, b: T) -> T { let (v, n) = (a, 1); v }
+fn ctup(a: own R, b: R) -> R { let (v, n) = (a, 1); v }
+fn gif[T](a: own T, b: own T, c: bool) -> T { let v = if c { a } else { b }; v }
 fn gmat[T](a: T, b: T, c: bool) -> T { let v = match c { true => a, false => b }; v }
-fn both(a: R, b: R) -> R { let (v, w) = (a, b); v }
-fn none(a: R, b: R) -> i64 { let (v, w) = (a, b); println("in"); 3 }
-fn eatw(a: R, b: R) -> R { let (v, w) = (a, b); eat(w); v }
-fn swap(a: R, b: R) -> (R, R) { let (v, w) = (a, b); (w, v) }
-fn rebw(a: R, b: R) -> R { let (v, w) = (a, b); let z = w; v }
-fn cret(a: R, c: bool) -> R { let (v, n) = (a, 1); if c { return v } mk(9) }
-fn gw[T](a: T, b: T) -> T { let (v, w) = (a, b); w }
-fn vecs(a: Vec[R], b: Vec[R]) -> Vec[R] { let (v, w) = (a, b); v }
-fn enums(a: E, b: E) -> E { let (v, w) = (a, b); v }
+fn both(a: own R, b: own R) -> R { let (v, w) = (a, b); v }
+fn none(a: own R, b: own R) -> i64 { let (v, w) = (a, b); println("in"); 3 }
+fn eatw(a: own R, b: own R) -> R { let (v, w) = (a, b); eat(w); v }
+fn swap(a: own R, b: own R) -> (R, R) { let (v, w) = (a, b); (w, v) }
+fn rebw(a: own R, b: own R) -> R { let (v, w) = (a, b); let z = w; v }
+fn cret(a: own R, c: bool) -> R { let (v, n) = (a, 1); if c { return v } mk(9) }
+fn gw[T](a: own T, b: own T) -> T { let (v, w) = (a, b); w }
+fn vecs(a: own Vec[R], b: own Vec[R]) -> Vec[R] { let (v, w) = (a, b); v }
+fn enums(a: own E, b: own E) -> E { let (v, w) = (a, b); v }
 struct K { z: i64 }
-impl K { fn m(ref self, a: R, b: R) -> R { let (v, w) = (a, b); v } }
+impl K { fn m(ref self, a: own R, b: own R) -> R { let (v, w) = (a, b); v } }
 fn main() {
     let x1 = gsel(mk(10), mk(11), true); println(f"_{x1.id}");
     let x2 = gsel(mk(20), mk(21), false); println(f"_{x2.id}");

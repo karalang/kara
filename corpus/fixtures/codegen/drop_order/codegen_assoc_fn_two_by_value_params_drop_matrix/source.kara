@@ -4,7 +4,7 @@ struct H { n: i64 }
 fn mk(i: i64) -> String { return f"pay-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; }
 
 impl H {
-    fn two(a: R, b: R, k: bool) -> R { if k { return b; } return a; }
+    fn two(a: own R, b: own R, k: bool) -> R { if k { return b; } return a; }
 }
 
 fn t_t() { let x = H.two(R { id: 41, s: mk(41) }, R { id: 42, s: mk(42) }, true); println(f"T{x.id}"); }

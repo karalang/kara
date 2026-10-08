@@ -9,7 +9,7 @@ fn mkh(i: i64) -> H { H { id: i } }
 fn take(h: H) -> i64 { h.id }
 fn takeo(o: Option[H]) -> i64 { match o { Some(h) => h.id, None => 0 } }
 fn ret(i: i64) -> H { let (a, b) = mks(i); a }
-fn gn[T](x: T) -> (T, i64) { (x, 1) }
+fn gn[T](x: own T) -> (T, i64) { (x, 1) }
 fn main() {
     { let (a1, b1) = mk(1); println(f"a{a1.unwrap().id} {b1}") }
     { let p2 = mk(2); let (a2, b2) = p2; println(f"b{b2}") }

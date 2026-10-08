@@ -1,7 +1,7 @@
 
 struct Box[T] { v: T }
-fn take[T](b: Box[T]) -> T { b.v }
-fn takeu[U](b: Box[U]) -> U { b.v }
+fn take[T](b: own Box[T]) -> T { b.v }
+fn takeu[U](b: own Box[U]) -> U { b.v }
 fn main() {
     // Runtime-derived payload — a constant-folded one is a dead allocation the
     // optimizer deletes, and the fixture then passes vacuously against the

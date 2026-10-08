@@ -3,14 +3,14 @@ impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } 
 fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
 struct W { r: D, s: D, b: i64 }
 fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
-fn keep(d: D) -> D { d }
+fn keep(d: own D) -> D { d }
 shared struct Sh { v: i64 }
 struct F { id: i64, h: Sh }
 impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
 struct V { f: F, d: D }
 struct Y { v: V, n: i64 }
-fn keepf(x: F) -> F { x }
-fn maybe(x: D, c: bool) -> Option[D] { if c { return Some(x); } None }
+fn keepf(x: own F) -> F { x }
+fn maybe(x: own D, c: bool) -> Option[D] { if c { return Some(x); } None }
 struct X { w: W, t: D }
 fn mkx(n: i64) -> X { X { w: mkw(n), t: mkd(n + 300) } }
 struct B2 { r: D }

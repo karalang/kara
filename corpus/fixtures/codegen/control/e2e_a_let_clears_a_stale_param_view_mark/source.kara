@@ -2,21 +2,21 @@ struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 enum E { A(R), B }
 
-fn tup(t: (R, i64)) {
+fn tup(t: own (R, i64)) {
     match t { (r, k) => { println(f"  arm{r.id}"); } }
     let r = R { id: 99 };
     let m = r;
     println(f"  fresh{m.id}")
 }
 
-fn enu(t: E) {
+fn enu(t: own E) {
     match t { E.A(r) => { let m = r; println(f"  arm{m.id}"); } E.B => { } }
     let r = R { id: 98 };
     let m2 = r;
     println(f"  fresh{m2.id}")
 }
 
-fn selfrebind(t: (R, i64)) {
+fn selfrebind(t: own (R, i64)) {
     match t { (r, k) => { let r = r; println(f"  arm{r.id}"); } }
 }
 

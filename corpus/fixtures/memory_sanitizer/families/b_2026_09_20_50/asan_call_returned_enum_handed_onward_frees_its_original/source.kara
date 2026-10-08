@@ -7,20 +7,20 @@ enum Tv { A(Vec[String]), B }
 struct Box2 { t: Ts }
 struct Bag { xs: Vec[Ts] }
 impl Bag {
-    fn put(mut ref self, e: Ts) { self.xs.push(e); }
-    fn give(ref self, e: Ts) -> Ts { e }
-    fn sgive(e: Ts) -> Ts { e }
+    fn put(mut ref self, e: own Ts) { self.xs.push(e); }
+    fn give(ref self, e: own Ts) -> Ts { e }
+    fn sgive(e: own Ts) -> Ts { e }
 }
 fn mks(n: i64) -> Ts { Ts.A(f"payload-{n}-xxxxxxxxxxxxxxxxxxxx") }
 fn mkr(n: i64) -> Tr { Tr.A(R { id: n, s: f"r-{n}" }) }
 fn mkv(n: i64) -> Tv { Tv.A([f"v-{n}", f"w-{n}"]) }
-fn gives(e: Ts) -> Ts { e }
-fn giver(e: Tr) -> Tr { e }
-fn givev(e: Tv) -> Tv { e }
-fn puts(v: mut ref Vec[Ts], e: Ts) { v.push(e); }
-fn putr(v: mut ref Vec[Tr], e: Tr) { v.push(e); }
-fn holds(e: Ts) -> Box2 { Box2 { t: e } }
-fn passg[T](e: T) -> T { e }
+fn gives(e: own Ts) -> Ts { e }
+fn giver(e: own Tr) -> Tr { e }
+fn givev(e: own Tv) -> Tv { e }
+fn puts(v: mut ref Vec[Ts], e: own Ts) { v.push(e); }
+fn putr(v: mut ref Vec[Tr], e: own Tr) { v.push(e); }
+fn holds(e: own Ts) -> Box2 { Box2 { t: e } }
+fn passg[T](e: own T) -> T { e }
 fn eat(e: Ts) -> i64 { 7 }
 fn show(t: ref Ts) -> String { match t { Ts.A(s) => s.clone(), Ts.B => "b" } }
 fn main() {

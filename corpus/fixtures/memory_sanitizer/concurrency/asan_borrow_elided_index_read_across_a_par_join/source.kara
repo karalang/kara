@@ -16,7 +16,7 @@ fn spiral(m: ref Vec[Vec[i64]]) -> Vec[i64] {
     out
 }
 
-fn report(grid: Vec[Vec[i64]]) {
+fn report(grid: own Vec[Vec[i64]]) {
     let m = grid;
     let order = spiral(m);
     let mut line: String = "";

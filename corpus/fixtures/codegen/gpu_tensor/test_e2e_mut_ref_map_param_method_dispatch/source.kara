@@ -1,6 +1,6 @@
 
 shared struct Node { val: i64 }
-fn helper(node: Node, visited: mut ref Map[i64, Node]) -> Node {
+fn helper(node: own Node, visited: mut ref Map[i64, Node]) -> Node {
     match visited.get(node.val) {
         Some(x) => x,
         None => {

@@ -2,7 +2,7 @@
 struct Builder { parts: Vec[i64] }
 
 impl Builder {
-    fn add(self, p: i64) -> Builder {
+    fn add(own self, p: i64) -> Builder {
         let mut b = self;
         b.parts.push(p);
         b
@@ -12,7 +12,7 @@ impl Builder {
 struct Sb { text: String, n: i64 }
 
 impl Sb {
-    fn append(self, s: String) -> Sb {
+    fn append(own self, s: own String) -> Sb {
         let mut b = self;
         b.text = s;
         b.n = b.n + 1;

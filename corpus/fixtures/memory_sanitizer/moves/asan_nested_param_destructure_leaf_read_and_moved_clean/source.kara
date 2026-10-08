@@ -6,10 +6,10 @@ struct Gn2[T] { inner: Gd[T], z: i64 }
 struct Hd { r: R, z: i64 }
 struct Hn { inner: Hd, z: i64 }
 fn mk(k: i64) -> R { return R { id: k, tag: f"t{k}", xs: [k] } }
-fn hLive(h: Hn) -> i64 { let Hn { inner, z } = h; println("in"); let q: i64 = inner.z; return z + q }
-fn hLiveLocal(h: Hn) -> i64 { let Hn { inner, z } = h; println("in"); let g: Hd = inner; println("moved"); return z + g.z }
-fn gLive[T](h: Gn2[T]) -> i64 { let Gn2 { inner, z } = h; println("in"); let q: i64 = inner.z; return z + q }
-fn gLiveLocal[T](h: Gn2[T]) -> i64 { let Gn2 { inner, z } = h; println("in"); let g: Gd[T] = inner; println("moved"); return z + g.z }
+fn hLive(h: own Hn) -> i64 { let Hn { inner, z } = h; println("in"); let q: i64 = inner.z; return z + q }
+fn hLiveLocal(h: own Hn) -> i64 { let Hn { inner, z } = h; println("in"); let g: Hd = inner; println("moved"); return z + g.z }
+fn gLive[T](h: own Gn2[T]) -> i64 { let Gn2 { inner, z } = h; println("in"); let q: i64 = inner.z; return z + q }
+fn gLiveLocal[T](h: own Gn2[T]) -> i64 { let Gn2 { inner, z } = h; println("in"); let g: Gd[T] = inner; println("moved"); return z + g.z }
 fn main() {
     { let a: i64 = hLive(Hn { inner: Hd { r: mk(1), z: 1 }, z: 9 }); println(f"one{a}") }
     { let n: Hn = Hn { inner: Hd { r: mk(2), z: 1 }, z: 9 }; let a: i64 = hLive(n); println(f"two{a}") }

@@ -1,11 +1,11 @@
 struct P { x: i64 }
 struct H { name: String, n: i64, tags: Vec[String], p: P }
 struct W { h: H }
-fn rep(h: mut ref H, v: String) -> String { return replace(h.name, v) }
+fn rep(h: mut ref H, v: own String) -> String { return replace(h.name, v) }
 fn repn(h: mut ref H, v: i64) -> i64 { return replace(h.n, v) }
-fn sw(h: mut ref H, o: String) -> String { let mut q = o; swap(h.name, mut q); return q; }
-fn repv(h: mut ref H, v: Vec[String]) -> Vec[String] { return replace(h.tags, v) }
-fn deep(w: mut ref W, v: String) -> String { return replace(w.h.name, v) }
+fn sw(h: mut ref H, o: own String) -> String { let mut q = o; swap(h.name, mut q); return q; }
+fn repv(h: mut ref H, v: own Vec[String]) -> Vec[String] { return replace(h.tags, v) }
+fn deep(w: mut ref W, v: own String) -> String { return replace(w.h.name, v) }
 fn px(h: mut ref H) -> i64 { return replace(h.p.x, 77) }
 fn bump(v: mut ref i64) { v = v + 1; }
 fn go(w: mut ref W) { bump(w.h.n); bump(w.h.p.x); }

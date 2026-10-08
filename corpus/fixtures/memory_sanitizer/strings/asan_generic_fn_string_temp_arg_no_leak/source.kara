@@ -1,7 +1,7 @@
 
 fn mk() -> String { let mut s = String.from(""); s.push_str("abcdefghijklmno"); s }
-fn wrap[T](x: T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(x); v }
-fn passthru[T](x: T) -> T { x }
+fn wrap[T](x: own T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(x); v }
+fn passthru[T](x: own T) -> T { x }
 fn main() {
     let a = wrap(mk());
     let b = passthru(mk());

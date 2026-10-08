@@ -7,7 +7,7 @@ struct H { f: R }
 struct H2 { f: R, g: R }
 
 #[allow(partial_move_of_drop_enum)]
-fn dies(b: E) -> i64 {
+fn dies(b: own E) -> i64 {
     let mut h: H = H { f: R { id: 0, tag: f"t0" } };
     match b { E.A(r) => { h.f = r; } E.B => { } }
     println("m");
@@ -16,7 +16,7 @@ fn dies(b: E) -> i64 {
 
 #[allow(partial_move_of_drop_enum)]
 #[allow(partial_move_of_drop_enum)]
-fn refreshed(b: E) -> i64 {
+fn refreshed(b: own E) -> i64 {
     let mut h: H = H { f: R { id: 0, tag: f"t0" } };
     match b { E.A(r) => { h.f = r; } E.B => { } }
     println("m1");
@@ -33,7 +33,7 @@ fn plain() -> i64 {
 }
 
 #[allow(partial_move_of_drop_enum)]
-fn sibs(b: E) -> i64 {
+fn sibs(b: own E) -> i64 {
     let mut h: H2 = H2 { f: R { id: 30, tag: f"t30" }, g: R { id: 31, tag: f"t31" } };
     match b { E.A(r) => { h.f = r; } E.B => { } }
     println("s");

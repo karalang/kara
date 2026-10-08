@@ -1,7 +1,7 @@
 
 shared enum Expr { Str(String), Blk(Block), Error }
 struct Block { tail: Option[Expr] }
-fn render_block(b: Block) -> String {
+fn render_block(b: own Block) -> String {
     let Block { tail } = b;
     match tail { Some(e) => render_expr(e), None => "no-tail".to_string() }
 }

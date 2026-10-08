@@ -9,8 +9,8 @@ struct S3 { s2: S2, t: String }
 struct W7 { u: S3, n: i64 }
 struct Q[U] { u: U, n: i64 }
 struct W4 { s: Sh, n: i64 }
-impl W3 { fn go(self) -> i64 { let x = self.u; let W3 { n, .. } = self; println(f"x{x.id}"); return n } }
-fn pv(q: W3) -> i64 { let x = q.u; let W3 { n, .. } = q; println(f"x{x.id}"); return n }
+impl W3 { fn go(own self) -> i64 { let x = self.u; let W3 { n, .. } = self; println(f"x{x.id}"); return n } }
+fn pv(q: own W3) -> i64 { let x = q.u; let W3 { n, .. } = q; println(f"x{x.id}"); return n }
 fn c1() { let mut q = W3 { u: mk(9), n: 2 }; let x = q.u; let W3 { n, .. } = q; println(f"x{x.id}{n}") }
 fn c2() { let q = W5 { u: mk(9), s: "a" }; let x = q.u; let W5 { s, .. } = q; println(f"x{x.id}{s}") }
 fn c3() { let q = W6 { u: mk(9), v: mk(4) }; let x = q.u; let W6 { v, .. } = q; println(f"x{x.id}{v.id}") }

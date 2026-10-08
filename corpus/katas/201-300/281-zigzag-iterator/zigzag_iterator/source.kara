@@ -40,7 +40,7 @@ struct Zigzag {
     mut remaining: i64,
 }
 
-fn make_zigzag(lists: Vec[Vec[i64]]) -> Zigzag {
+fn make_zigzag(lists: own Vec[Vec[i64]]) -> Zigzag {
     let mut cursor: Vec[i64] = Vec.new();
     let mut remaining = 0;
     let mut i = 0;
@@ -84,7 +84,7 @@ fn next(z: mut ref Zigzag) -> i64 {
     return v;
 }
 
-fn drain(lists: Vec[Vec[i64]]) -> Vec[i64] {
+fn drain(lists: own Vec[Vec[i64]]) -> Vec[i64] {
     let mut z = make_zigzag(lists);
     let mut out: Vec[i64] = Vec.new();
     while has_next(z) {

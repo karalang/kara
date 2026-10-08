@@ -6,13 +6,13 @@ struct W[A] { a: A, n: i64 }
 impl P[String, Vec[i64]] {
     fn eat(ref self, o: P[String, Vec[i64]]) -> i64 { o.b.len() }
     fn both(self, o: P[String, Vec[i64]]) -> i64 { 2 }
-    fn take(ref self, o: P[String, Vec[i64]]) -> String { let s = o.a; s }
-    fn back(ref self, o: P[String, Vec[i64]]) -> P[String, Vec[i64]] { o }
+    fn take(ref self, o: own P[String, Vec[i64]]) -> String { let s = o.a; s }
+    fn back(ref self, o: own P[String, Vec[i64]]) -> P[String, Vec[i64]] { o }
     fn w(ref self, o: W[String]) -> i64 { o.n }
 }
 impl P[R, i64] {
     fn eatr(ref self, o: P[R, i64]) -> i64 { o.b }
-    fn backr(ref self, o: P[R, i64]) -> P[R, i64] { o }
+    fn backr(ref self, o: own P[R, i64]) -> P[R, i64] { o }
 }
 fn mkp(t: String) -> P[String, Vec[i64]] { return P { a: f"{t}-heap-xxxxxxxxxxxxxxxxxxxxxxx", b: vec![7, 8] }; }
 fn main() {

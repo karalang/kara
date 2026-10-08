@@ -1,6 +1,6 @@
 
-fn id[T](x: T) -> T { x }
-fn twice[T](x: T) -> T { id(x) }
+fn id[T](x: own T) -> T { x }
+fn twice[T](x: own T) -> T { id(x) }
 fn main() {
     let mut i: i64 = 0i64;
     let mut total: i64 = 0i64;

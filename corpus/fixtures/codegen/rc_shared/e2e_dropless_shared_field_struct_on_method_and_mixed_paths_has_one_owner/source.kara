@@ -2,17 +2,17 @@ shared struct Sh { k: i64 }
 struct S3 { h: Sh, id: i64 }
 struct K { n: i64 }
 impl K {
-    fn keep3(ref self, v: S3) -> S3 { return v }
-    fn akeep3(v: S3) -> S3 { return v }
-    fn pk(ref self, v: S3, c: bool, w: S3) -> S3 { if c { return v } return w }
+    fn keep3(ref self, v: own S3) -> S3 { return v }
+    fn akeep3(v: own S3) -> S3 { return v }
+    fn pk(ref self, v: own S3, c: bool, w: own S3) -> S3 { if c { return v } return w }
 }
 struct Hold { xs: Vec[S3] }
-impl Hold { fn maybe(mut ref self, r: S3, k: bool) { if k { self.xs.push(r); } } }
+impl Hold { fn maybe(mut ref self, r: own S3, k: bool) { if k { self.xs.push(r); } } }
 fn mk(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
-fn pickS3(v: S3, c: bool, w: S3) -> S3 { if c { return v } return w }
-fn keep1(v: S3, c: bool) -> S3 { if c { return v } return mk(99) }
-fn stcS3(a: S3, c: bool) -> Vec[S3] { let mut v: Vec[S3] = Vec.new(); if c { v.push(a) } return v }
-fn midS3(v: S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
+fn pickS3(v: own S3, c: bool, w: own S3) -> S3 { if c { return v } return w }
+fn keep1(v: own S3, c: bool) -> S3 { if c { return v } return mk(99) }
+fn stcS3(a: own S3, c: bool) -> Vec[S3] { let mut v: Vec[S3] = Vec.new(); if c { v.push(a) } return v }
+fn midS3(v: own S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
 fn a_method() { let k = K { n: 0 }; let s = mk(1); let t = k.keep3(s); let u = mk(2); let w = K.akeep3(u); println(f"a{t.id} {w.id}") }
 fn b_method_disc() { let k = K { n: 0 }; let s = mk(3); k.keep3(s); let u = mk(4); let _ = K.akeep3(u); println("b") }
 fn c_pick() { let s = mk(5); let w = mk(6); let t = pickS3(s, true, w); let s2 = mk(7); let w2 = mk(8); let t2 = pickS3(s2, false, w2); println(f"c{t.id} {t2.id}") }

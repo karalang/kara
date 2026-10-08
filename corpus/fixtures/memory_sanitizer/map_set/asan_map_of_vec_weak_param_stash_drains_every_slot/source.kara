@@ -1,7 +1,7 @@
 
 shared struct N { v: i64 }
 
-fn stash(xs: Vec[weak N]) -> i64 {
+fn stash(xs: own Vec[weak N]) -> i64 {
     let mut m: Map[i64, Vec[weak N]] = Map.new();
     m.insert(1, xs);
     match m.get(1) { Some(inner) => { match inner[0] { Some(x) => { x.v } None => { 0 - 1 } } } None => { 0 - 2 } }

@@ -11,15 +11,15 @@ impl Es { fn is_a(ref self) -> i64 { match self { Es.A(s) => { return 1; } Es.B 
 
 struct BoxE { mut xs: Vec[Ev] }
 impl BoxE {
-    fn put(mut ref self, e: Ev) { self.xs.push(e); }
-    fn stash(b: mut ref BoxE, e: Ev) { b.xs.push(e); }
+    fn put(mut ref self, e: own Ev) { self.xs.push(e); }
+    fn stash(b: mut ref BoxE, e: own Ev) { b.xs.push(e); }
 }
 struct BoxS { mut ys: Vec[Es] }
-impl BoxS { fn puts(mut ref self, e: Es) { self.ys.push(e); } }
+impl BoxS { fn puts(mut ref self, e: own Es) { self.ys.push(e); } }
 
-fn pute(b: mut ref BoxS, e: Es) { b.ys.push(e); }
-fn stashg[T](v: mut ref Vec[T], x: T) { v.push(x); }
-fn passe(e: Es) -> Es { return e; }
+fn pute(b: mut ref BoxS, e: own Es) { b.ys.push(e); }
+fn stashg[T](v: mut ref Vec[T], x: own T) { v.push(x); }
+fn passe(e: own Es) -> Es { return e; }
 
 fn c_meth()   { let mut b = BoxE { xs: Vec.new() }; b.put(mke(60)); println(f"a{b.xs.len()}"); }
 fn c_ctor()   { let mut b = BoxE { xs: Vec.new() }; b.put(Ev.A(77, In2 { v: 1 })); println(f"b{b.xs.len()}"); }

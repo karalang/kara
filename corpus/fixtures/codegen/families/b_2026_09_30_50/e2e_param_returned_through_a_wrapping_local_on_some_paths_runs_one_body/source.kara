@@ -4,15 +4,15 @@ fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 struct P { r: R, n: i64 }
 struct Q { r: R }
 impl Drop for Q { fn drop(mut ref self) { println(f"dQ{self.r.id}") } }
-fn ctl(a: R, f: bool) -> (R, i64) { let x = (a, 1); if f { return x; } return (mk(90), 1); }
-fn cst(a: R, f: bool) -> P { let x = P { r: a, n: 1 }; if f { return x; } return P { r: mk(91), n: 1 }; }
+fn ctl(a: own R, f: bool) -> (R, i64) { let x = (a, 1); if f { return x; } return (mk(90), 1); }
+fn cst(a: own R, f: bool) -> P { let x = P { r: a, n: 1 }; if f { return x; } return P { r: mk(91), n: 1 }; }
 fn cvl(a: R, f: bool) -> Vec[R] { let v = [a]; if f { return v; } return [mk(92)]; }
-fn g2(a: R, b: R, f: bool) -> (R, R) { let x = (a, b); if f { return x; } return (mk(93), mk(94)); }
-fn g4(a: R, f: bool) -> (P, i64) { let x = P { r: a, n: 1 }; let y = (x, 2); if f { return y; } return (P { r: mk(95), n: 1 }, 2); }
-fn g5(a: R, f: bool) -> Q { let x = Q { r: a }; if f { return x; } return Q { r: mk(96) }; }
-fn g6[T](a: T, f: bool, d: T) -> (T, i64) { let x = (a, 1); if f { return x; } return (d, 1); }
+fn g2(a: own R, b: own R, f: bool) -> (R, R) { let x = (a, b); if f { return x; } return (mk(93), mk(94)); }
+fn g4(a: own R, f: bool) -> (P, i64) { let x = P { r: a, n: 1 }; let y = (x, 2); if f { return y; } return (P { r: mk(95), n: 1 }, 2); }
+fn g5(a: own R, f: bool) -> Q { let x = Q { r: a }; if f { return x; } return Q { r: mk(96) }; }
+fn g6[T](a: own T, f: bool, d: own T) -> (T, i64) { let x = (a, 1); if f { return x; } return (d, 1); }
 fn g8(a: R, f: bool) -> Vec[R] { let v: Vec[R] = [a]; if f { return v; } return [mk(97)]; }
-fn g9(a: R, f: bool) -> R { let x = P { r: a, n: 1 }; if f { return x.r; } return mk(98); }
+fn g9(a: own R, f: bool) -> R { let x = P { r: a, n: 1 }; if f { return x.r; } return mk(98); }
 fn main() {
   let t1 = ctl(mk(1), true); println(f"r{t1.1}");
   let t2 = ctl(mk(2), false); println(f"r{t2.1}");

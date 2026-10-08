@@ -5,26 +5,26 @@ impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn eat(r: R) { println(f"e{r.id}") }
 struct Ws { r: R, n: i64 }
 impl Ws {
-    fn getr(self) -> R { return self.r }
-    fn gett(self) -> R { self.r }
-    fn getl(self) -> R { let q = self.r; q }
-    fn getd(self) -> R { let Ws { r, n } = self; r }
+    fn getr(own self) -> R { return self.r }
+    fn gett(own self) -> R { self.r }
+    fn getl(own self) -> R { let q = self.r; q }
+    fn getd(own self) -> R { let Ws { r, n } = self; r }
     fn none(self) -> i64 { return 5 }
     fn gete(self) { eat(self.r) }
 }
-fn getf(w: Ws) -> R { return w.r }
+fn getf(w: own Ws) -> R { return w.r }
 struct Wq { r: R, q: R }
 impl Wq {
-    fn getr(self) -> R { return self.r }
+    fn getr(own self) -> R { return self.r }
 }
 struct Wh { s: S, n: i64 }
-impl Wh { fn get(self) -> S { return self.s } }
+impl Wh { fn get(own self) -> S { return self.s } }
 struct In { r: R, k: i64 }
 struct Wn { i: In, n: i64 }
-impl Wn { fn get(self) -> R { return self.i.r } }
+impl Wn { fn get(own self) -> R { return self.i.r } }
 enum HoR { Full(R), Empty }
 struct Wr { h: HoR }
-impl Wr { fn get(self) -> HoR { return self.h } }
+impl Wr { fn get(own self) -> HoR { return self.h } }
 fn main() {
     let w1 = Ws { r: R { id: 1 }, n: 0 }; let x1 = w1.getr(); println(f"x{x1.id}");
     let w2 = Ws { r: R { id: 2 }, n: 0 }; let x2 = w2.gett(); println(f"x{x2.id}");

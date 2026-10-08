@@ -2,13 +2,13 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 enum G1[T] { Y(T), N }
 struct H[T] { g: G1[T] }
-fn mid[T](g: G1[T], c: bool) -> G1[T] { if c { return g } return G1.N }
-fn idg[T](g: G1[T]) -> G1[T] { return g }
-fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }
+fn mid[T](g: own G1[T], c: bool) -> G1[T] { if c { return g } return G1.N }
+fn idg[T](g: own G1[T]) -> G1[T] { return g }
+fn wrap[T](g: own G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }
 fn mk(n: i64) -> R { R { id: n, s: f"ssssssss{n}" } }
-fn two[T](a: G1[T], b: G1[T], c: bool) -> G1[T] { if c { return a } return b }
+fn two[T](a: own G1[T], b: own G1[T], c: bool) -> G1[T] { if c { return a } return b }
 struct W { n: i64 }
-impl W { fn keep[T](ref self, g: G1[T], c: bool) -> G1[T] { if c { return g } return G1.N } }
+impl W { fn keep[T](ref self, g: own G1[T], c: bool) -> G1[T] { if c { return g } return G1.N } }
 fn early(c: bool) -> i64 { let g: G1[R] = G1.Y(mk(50)); let b = mid(g, c); if c { return 1 } println("early_tail"); 0 }
 
 fn main() {

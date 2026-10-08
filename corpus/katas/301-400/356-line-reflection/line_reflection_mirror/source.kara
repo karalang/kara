@@ -7,7 +7,7 @@
 // canonical order, and the line reflects the set exactly when the two lists
 // are equal element by element.
 
-fn canonical(points: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+fn canonical(points: own Vec[(i64, i64)]) -> Vec[(i64, i64)] {
     let mut sorted = points;
     sorted.sort();
     sorted.dedup();

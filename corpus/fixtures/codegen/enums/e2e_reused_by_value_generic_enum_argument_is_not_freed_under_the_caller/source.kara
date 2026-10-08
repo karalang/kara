@@ -4,11 +4,11 @@ struct Holder { g: Gen[String] }
 struct Hg[T] { g: Gen[T] }
 struct Wide { a: String, b: String, c: String }
 
-fn shw(g: Gen[String]) { match g { Gen.Y(v) => { println(f"s:{v}") } Gen.N => { println("s:none") } } }
-fn idf(g: Gen[String]) -> Gen[String] { return g }
-fn shs(g: Gen[Wide]) { match g { Gen.Y(v) => { println(f"w:{v.a}") } Gen.N => { println("w:none") } } }
-fn shv(g: Gen[Vec[String]]) { match g { Gen.Y(v) => { println(f"v:{v.len()}") } Gen.N => { println("v:none") } } }
-fn wrap[T](g: Gen[T], c: bool) -> Hg[T] { if c { return Hg { g: g } } return Hg { g: Gen.N } }
+fn shw(g: own Gen[String]) { match g { Gen.Y(v) => { println(f"s:{v}") } Gen.N => { println("s:none") } } }
+fn idf(g: own Gen[String]) -> Gen[String] { return g }
+fn shs(g: own Gen[Wide]) { match g { Gen.Y(v) => { println(f"w:{v.a}") } Gen.N => { println("w:none") } } }
+fn shv(g: own Gen[Vec[String]]) { match g { Gen.Y(v) => { println(f"v:{v.len()}") } Gen.N => { println("v:none") } } }
+fn wrap[T](g: own Gen[T], c: bool) -> Hg[T] { if c { return Hg { g: g } } return Hg { g: Gen.N } }
 
 fn main() {
     let a: Gen[String] = Gen.Y(f"aa-local-2"); shw(a); shw(a);

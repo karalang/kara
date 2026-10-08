@@ -2,12 +2,12 @@
 enum Ho[T] { Full(T), Empty }
 enum Hc { Full(String), Empty }
 struct W { s: String }
-fn keep(h: Ho[String]) -> i64 { match h { Ho.Full(s) => s.len(), Ho.Empty => 0 } }
-fn keepc(h: Hc) -> i64 { match h { Hc.Full(s) => s.len(), Hc.Empty => 0 } }
+fn keep(h: own Ho[String]) -> i64 { match h { Ho.Full(s) => s.len(), Ho.Empty => 0 } }
+fn keepc(h: own Hc) -> i64 { match h { Hc.Full(s) => s.len(), Hc.Empty => 0 } }
 fn takes(s: String) -> i64 { s.len() }
-fn mkh(s: String) -> Ho[String] { return Ho.Full(s + "-heap-string-long-enough"); }
-fn mkc(s: String) -> Hc { return Hc.Full(s + "-heap-string-long-enough"); }
-fn mkw(s: String) -> W { return W { s: s + "-heap-string-long-enough" }; }
+fn mkh(s: own String) -> Ho[String] { return Ho.Full(s + "-heap-string-long-enough"); }
+fn mkc(s: own String) -> Hc { return Hc.Full(s + "-heap-string-long-enough"); }
+fn mkw(s: own String) -> W { return W { s: s + "-heap-string-long-enough" }; }
 fn d1() { let h = mkh("a"); let f = || { match h { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; println(f"d1 {f()}"); }
 fn d2() { let h = mkc("bb"); let f = || { match h { Hc.Full(s) => s.len(), Hc.Empty => 0 } }; println(f"d2 {f()} {f()}"); }
 fn d3() { let h = mkc("ccc"); let f = || { match h { Hc.Full(s) => takes(s), Hc.Empty => 0 } }; println(f"d3 {f()}"); }

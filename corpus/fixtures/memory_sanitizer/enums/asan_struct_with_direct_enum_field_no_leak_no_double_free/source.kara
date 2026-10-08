@@ -1,8 +1,8 @@
 
 enum Tok { Id(String), Int(i64) }
 struct Span { tok: Tok, off: i64 }
-fn wrap(s: Span) -> Span { s }
-fn make_spanned(t: Tok, o: i64) -> Span { Span { tok: t, off: o } }
+fn wrap(s: own Span) -> Span { s }
+fn make_spanned(t: own Tok, o: i64) -> Span { Span { tok: t, off: o } }
 fn peek(s: ref Span) -> i64 { s.off }
 fn sink(s: String) -> i64 { s.len() }
 fn drop_only(s: Span) { if s.off > 99999 { println(s.off.to_string()); } }

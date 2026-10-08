@@ -7,7 +7,7 @@ fn loc(c: bool) -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let m = 
 fn tailif(c: bool) -> Array[R, 2] { let x: Array[R, 2] = mka(3); if c { x } else { mka(8) } }
 fn inloop(c: bool) -> Array[R, 2] { let x: Array[R, 2] = mka(5); for i in 0..3 { if c and i == 1 { return x } }; println("  dies"); return mka(8) }
 fn passed(c: bool) -> Array[R, 2] { let x: Array[R, 2] = mka(11); if c { return x }; consume(x); println("  dies"); return mka(8) }
-fn ppass(a: Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; consume(a); println("  dies"); return mka(8) }
+fn ppass(a: own Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; consume(a); println("  dies"); return mka(8) }
 fn strs(c: bool) -> Array[String, 2] { let x: Array[String, 2] = [f"heap-string-longer-than-sso-p", f"heap-string-longer-than-sso-qq"]; for i in 0..2 { if c and i == 1 { return x } }; [f"heap-string-longer-than-sso-rrr", f"heap-string-longer-than-sso-ssss"] }
 fn main() {
     println("loc-t");    { let b = loc(true); println(f"  y{b[0].id}"); }

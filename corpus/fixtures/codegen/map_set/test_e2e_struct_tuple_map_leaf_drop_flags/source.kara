@@ -3,9 +3,9 @@ struct Hi { m: (Map[i64, i64], i64) }
 struct Hs { m: (Map[String, i64], i64) }
 struct Hv { m: (Map[i64, Vec[i64]], i64) }
 struct Sp { m: Map[i64, i64] }
-fn ci(p: (Map[i64, i64], i64)) -> i64 { let (mm, n) = p; mm.len() + n }
-fn cs(p: (Map[String, i64], i64)) -> i64 { let (mm, n) = p; mm.len() + n }
-fn cv(p: (Map[i64, Vec[i64]], i64)) -> i64 { let (mm, n) = p; mm.len() + n }
+fn ci(p: own (Map[i64, i64], i64)) -> i64 { let (mm, n) = p; mm.len() + n }
+fn cs(p: own (Map[String, i64], i64)) -> i64 { let (mm, n) = p; mm.len() + n }
+fn cv(p: own (Map[i64, Vec[i64]], i64)) -> i64 { let (mm, n) = p; mm.len() + n }
 fn main() {
     // Scalar tuple-Map field, local source (the #23 double-free shape) + by-value consume.
     let mut a: Map[i64, i64] = Map.new();

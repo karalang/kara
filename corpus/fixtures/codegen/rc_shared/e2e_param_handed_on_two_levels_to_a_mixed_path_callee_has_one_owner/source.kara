@@ -4,33 +4,33 @@ impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
 struct S3 { h: Sh, id: i64 }
 fn mk(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
 fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
-fn pickS3(v: S3, c: bool, w: S3) -> S3 { if c { return v } return w }
-fn pickS2(v: S2, c: bool, w: S2) -> S2 { if c { return v } return w }
-fn passp(a: S3, c: bool) -> S3 { let w = mk(98); return pickS3(a, c, w) }
-fn passp2(a: S2, c: bool) -> S2 { let w = mk2(98); return pickS2(a, c, w) }
-fn outer(a: S3, c: bool) -> S3 { return passp(a, c) }
-fn outer2(a: S2, c: bool) -> S2 { return passp2(a, c) }
-fn outerR(a: S3, c: bool) -> S3 { let t = passp(a, c); return t }
-fn outerR2(a: S2, c: bool) -> S2 { let t = passp2(a, c); return t }
-fn outerS(a: S3, c: bool) -> S3 { return passp(a, c); }
-fn outer3(a: S3, c: bool) -> S3 { return outer(a, c) }
-fn outer32(a: S2, c: bool) -> S2 { return outer2(a, c) }
-fn outerQ(a: S3, c: bool) -> S3 { let q = a; return passp(q, c) }
-fn outerI(a: S3, c: bool) -> S3 { if c { return passp(a, true) } return passp(a, false) }
-fn outerD(a: S2, c: bool) { let t = passp2(a, c); println(f"u{t.id}") }
+fn pickS3(v: own S3, c: bool, w: own S3) -> S3 { if c { return v } return w }
+fn pickS2(v: own S2, c: bool, w: own S2) -> S2 { if c { return v } return w }
+fn passp(a: own S3, c: bool) -> S3 { let w = mk(98); return pickS3(a, c, w) }
+fn passp2(a: own S2, c: bool) -> S2 { let w = mk2(98); return pickS2(a, c, w) }
+fn outer(a: own S3, c: bool) -> S3 { return passp(a, c) }
+fn outer2(a: own S2, c: bool) -> S2 { return passp2(a, c) }
+fn outerR(a: own S3, c: bool) -> S3 { let t = passp(a, c); return t }
+fn outerR2(a: own S2, c: bool) -> S2 { let t = passp2(a, c); return t }
+fn outerS(a: own S3, c: bool) -> S3 { return passp(a, c); }
+fn outer3(a: own S3, c: bool) -> S3 { return outer(a, c) }
+fn outer32(a: own S2, c: bool) -> S2 { return outer2(a, c) }
+fn outerQ(a: own S3, c: bool) -> S3 { let q = a; return passp(q, c) }
+fn outerI(a: own S3, c: bool) -> S3 { if c { return passp(a, true) } return passp(a, false) }
+fn outerD(a: own S2, c: bool) { let t = passp2(a, c); println(f"u{t.id}") }
 struct P { id: i64 }
 impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
 struct R { id: i64, s: String }
-fn pickP(v: P, c: bool, w: P) -> P { if c { return v } return w }
-fn passP(a: P, c: bool) -> P { return pickP(a, c, P { id: 98 }) }
-fn outP(a: P, c: bool) -> P { return passP(a, c) }
-fn pickR(v: R, c: bool, w: R) -> R { if c { return v } return w }
-fn passR(a: R, c: bool) -> R { return pickR(a, c, R { id: 98, s: f"w" }) }
-fn outRR(a: R, c: bool) -> R { return passR(a, c) }
-fn outB(a: S2, c: bool, k: bool) -> S2 { if k { let t = passp2(a, c); return t } return mk2(77) }
-fn outU(a: S2, c: bool) -> S2 { println(f"pre{a.id}"); return passp2(a, c) }
+fn pickP(v: own P, c: bool, w: own P) -> P { if c { return v } return w }
+fn passP(a: own P, c: bool) -> P { return pickP(a, c, P { id: 98 }) }
+fn outP(a: own P, c: bool) -> P { return passP(a, c) }
+fn pickR(v: own R, c: bool, w: own R) -> R { if c { return v } return w }
+fn passR(a: own R, c: bool) -> R { return pickR(a, c, R { id: 98, s: f"w" }) }
+fn outRR(a: own R, c: bool) -> R { return passR(a, c) }
+fn outB(a: own S2, c: bool, k: bool) -> S2 { if k { let t = passp2(a, c); return t } return mk2(77) }
+fn outU(a: own S2, c: bool) -> S2 { println(f"pre{a.id}"); return passp2(a, c) }
 struct K { n: i64 }
-impl K { fn mp(ref self, a: S3, c: bool) -> S3 { return passp(a, c) } }
+impl K { fn mp(ref self, a: own S3, c: bool) -> S3 { return passp(a, c) } }
 fn c00() { let s = mk(1); let t = outer(s, true); println(f"t{t.id}"); }
 fn c01() { let s = mk(2); let t = outer(s, false); println(f"t{t.id}"); }
 fn c02() { let s = mk2(3); let t = outer2(s, true); println(f"t{t.id}"); }

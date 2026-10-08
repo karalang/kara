@@ -5,7 +5,7 @@ enum Plain { P, Q, R }
 enum Data { N(i64), S(i64) }
 struct W { v: i64 }
 
-fn name_of(c: UsbClass) -> String {
+fn name_of(c: own UsbClass) -> String {
     match c {
         UsbClass.Audio => return "audio",
         UsbClass.Hid => return "hid",
@@ -20,7 +20,7 @@ fn err_q() -> Result[i64, Plain] { Err(Plain.Q) }
 fn ok_data() -> Result[Data, String] { Ok(Data.S(7)) }
 fn ok_struct() -> Result[W, String] { Ok(W { v: 9 }) }
 
-fn tag(c: UsbClass) -> i64 {
+fn tag(c: own UsbClass) -> i64 {
     match c {
         UsbClass.Audio => 1,
         UsbClass.Hid => 3,

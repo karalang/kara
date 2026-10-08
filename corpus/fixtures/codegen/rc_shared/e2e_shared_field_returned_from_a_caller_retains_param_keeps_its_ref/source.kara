@@ -25,7 +25,7 @@ fn ret_ref(b: ref Holder) -> Node { return b.v; }
 fn ret_generic(b: Box[Node]) -> Node { return b.v; }
 
 // A no-shared struct on the transfer path, unrelated to rc accounting.
-fn ret_plain(p: Plain) -> String { return p.t; }
+fn ret_plain(p: own Plain) -> String { return p.t; }
 
 fn main() {
     let n: i64 = env.args().len();

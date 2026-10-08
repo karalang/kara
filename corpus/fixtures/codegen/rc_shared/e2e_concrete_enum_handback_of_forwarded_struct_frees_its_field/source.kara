@@ -6,15 +6,15 @@ enum Ho[T] { Full(T), Empty }
 enum HoS { FullS(S2), EmptyS }
 fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
 fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
-fn wrapS(v: S2) -> Option[S2] { return Some(v) }
-fn mkhS(v: S2) -> Ho[S2] { return Ho.Full(v) }
-fn mkHoS(v: S2) -> HoS { return HoS.FullS(v) }
-fn midS(v: S2, c: bool) -> Option[S2] { if c { return Some(v) } return None }
+fn wrapS(v: own S2) -> Option[S2] { return Some(v) }
+fn mkhS(v: own S2) -> Ho[S2] { return Ho.Full(v) }
+fn mkHoS(v: own S2) -> HoS { return HoS.FullS(v) }
+fn midS(v: own S2, c: bool) -> Option[S2] { if c { return Some(v) } return None }
 struct H { n: i64 }
 impl H {
-    fn wrapm(ref self, v: S2) -> Option[S2] { return Some(v) }
-    fn midm(ref self, v: S2, c: bool) -> Option[S2] { if c { return Some(v) } return None }
-    fn wrapa(v: S2) -> Option[S2] { return Some(v) }
+    fn wrapm(ref self, v: own S2) -> Option[S2] { return Some(v) }
+    fn midm(ref self, v: own S2, c: bool) -> Option[S2] { if c { return Some(v) } return None }
+    fn wrapa(v: own S2) -> Option[S2] { return Some(v) }
 }
 fn a_wrap() { let s = mk2(1); let o = wrapS(s); println("a") }
 fn b_mkh() { let s = mk2(2); let h = mkhS(s); println("b") }

@@ -4,9 +4,9 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, tag: f"tag{i}", xs: [i, i] }; }
 struct H1 { pe: (R, i64) }
 struct H2 { pe: ((R, i64), i64) }
-fn t_proj(t: (R, i64)) { let x: R = t.0; println(f"tp {x.id} {x.tag} {x.xs.len()}"); }
-fn f_proj(h: H1) { let x: R = h.pe.0; println(f"fp {x.id} {x.tag}"); }
-fn v_proj(h: H2) { let (inner, y) = h.pe; let x: R = inner.0; println(f"vp {x.id} {x.tag}"); }
+fn t_proj(t: own (R, i64)) { let x: R = t.0; println(f"tp {x.id} {x.tag} {x.xs.len()}"); }
+fn f_proj(h: own H1) { let x: R = h.pe.0; println(f"fp {x.id} {x.tag}"); }
+fn v_proj(h: own H2) { let (inner, y) = h.pe; let x: R = inner.0; println(f"vp {x.id} {x.tag}"); }
 fn main() {
     let mut i = 0;
     while i < 3 {

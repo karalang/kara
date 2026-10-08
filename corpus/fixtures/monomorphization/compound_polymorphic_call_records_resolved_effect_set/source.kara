@@ -1,7 +1,7 @@
 
 effect resource Log;
 pub fn write_log() with writes(Log) {}
-pub fn run[T, with E](x: T, cb: Fn(T) -> () with E) with E { cb(x) }
+pub fn run[T, with E](x: own T, cb: Fn(T) -> () with E) with E { cb(x) }
 pub fn main() with writes(Log) {
     run(7i64, |y| write_log())
 }

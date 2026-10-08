@@ -8,7 +8,7 @@ fn borrow_opt(h: OptH) -> i64 {
     match h.value { Some(_) => { r = 1; } None => {} }
     r
 }
-fn destr_opt(h: OptH) -> i64 {
+fn destr_opt(h: own OptH) -> i64 {
     let OptH { value } = h;
     let mut r = 0;
     match value { Some(_) => { r = 1; } None => {} }

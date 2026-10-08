@@ -4,7 +4,7 @@ impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct Holder { xs: Vec[D] }
 struct Bag { xs: Vec[D] }
 impl Bag {
-  fn put(mut ref self, t: D) { self.xs[0] = t; }
+  fn put(mut ref self, t: own D) { self.xs[0] = t; }
 }
 fn mk(k: i64) -> D { return D { id: k, s: f"m{k}" } }
 fn one() { let mut a: Vec[D] = [D { id: 11, s: f"a" }]; let t: D = D { id: 12, s: f"b" }; a[0] = t; println(f"one:{a[0].id}") }

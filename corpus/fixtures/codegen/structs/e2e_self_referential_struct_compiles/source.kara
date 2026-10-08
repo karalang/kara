@@ -4,11 +4,11 @@ struct Plain { id: i64, next: Option[Plain], tag: String }
 struct Env { id: i64, inner: Option[Option[i64]] }
 fn mkn(i: i64) -> Node { return Node { id: i, next: Option.None, tag: f"t{i}" }; }
 fn mkp(i: i64) -> Plain { return Plain { id: i, next: Option.None, tag: f"p{i}" }; }
-fn top(n: Node) -> i64 { let m = n; return m.id; }
+fn top(n: own Node) -> i64 { let m = n; return m.id; }
 fn read(n: Node) -> i64 { return n.id; }
-fn topp(p: Plain) -> i64 { let m = p; return m.id; }
+fn topp(p: own Plain) -> i64 { let m = p; return m.id; }
 fn enve(e: Env) -> i64 { return e.id; }
-impl Node { fn take(self) -> i64 { let m = self; return m.id; } }
+impl Node { fn take(own self) -> i64 { let m = self; return m.id; } }
 
 fn main() {
     println("bare_local"); let a = mkp(1); println(f"  v={a.id}");

@@ -4,18 +4,18 @@ fn mkd(n: i64) -> D { D { id: n, name: f"n{n}" } }
 struct W { r: D, s: D, b: i64 }
 struct X { w: W, t: D }
 fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 1), b: n } }
-fn keep(d: D) -> D { d }
-fn retr(w: W) -> D { w.r }
+fn keep(d: own D) -> D { d }
+fn retr(w: own W) -> D { w.r }
 struct H { k: i64 }
-impl H { fn f(ref self, w: W) -> i64 { let k = keep(w.r); k.id } }
-fn gk[T](w: W, t: T) -> i64 { let k = keep(w.r); k.id }
-fn keepf(w: W) -> i64 { let k = keep(w.r); k.id }
-fn keeps(w: W) -> i64 { keep(w.s); w.b }
-fn tup(w: W) -> i64 { let t = (keep(w.r), 5); t.1 }
-fn pushf(w: W) -> i64 { let mut xs: Vec[D] = Vec.new(); xs.push(w.r); xs.len() }
-fn aliasp(w: W) -> i64 { let r = w.r; let mut xs: Vec[D] = Vec.new(); xs.push(r); xs.len() }
-fn ins(w: W) -> i64 { let mut m: Map[i64, D] = Map.new(); m.insert(w.b, w.r); m.len() }
-fn hop2(x: X) -> i64 { let k = keep(x.w.r); k.id }
+impl H { fn f(ref self, w: own W) -> i64 { let k = keep(w.r); k.id } }
+fn gk[T](w: own W, t: T) -> i64 { let k = keep(w.r); k.id }
+fn keepf(w: own W) -> i64 { let k = keep(w.r); k.id }
+fn keeps(w: own W) -> i64 { keep(w.s); w.b }
+fn tup(w: own W) -> i64 { let t = (keep(w.r), 5); t.1 }
+fn pushf(w: own W) -> i64 { let mut xs: Vec[D] = Vec.new(); xs.push(w.r); xs.len() }
+fn aliasp(w: own W) -> i64 { let r = w.r; let mut xs: Vec[D] = Vec.new(); xs.push(r); xs.len() }
+fn ins(w: own W) -> i64 { let mut m: Map[i64, D] = Map.new(); m.insert(w.b, w.r); m.len() }
+fn hop2(x: own X) -> i64 { let k = keep(x.w.r); k.id }
 fn main() {
     println(f"a{keepf(mkw(10))}");
     println(f"b{keeps(mkw(20))}");

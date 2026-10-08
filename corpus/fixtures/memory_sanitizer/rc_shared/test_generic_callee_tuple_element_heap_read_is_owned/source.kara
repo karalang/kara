@@ -1,7 +1,7 @@
 
 struct R { id: i64, name: String }
 
-fn firstof[T](x: T) -> (T, i64) { return (x, 1); }
+fn firstof[T](x: own T) -> (T, i64) { return (x, 1); }
 
 fn main() {
     let q = firstof(R { id: 1, name: f"n{41}" });

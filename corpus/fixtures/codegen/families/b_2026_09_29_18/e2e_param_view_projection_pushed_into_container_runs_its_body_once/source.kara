@@ -6,17 +6,17 @@ fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
 struct O { w: W, k: i64 }
 fn mko(n: i64) -> O { O { w: mkw(n), k: n } }
 impl O {
-    fn take(self, xs: mut ref Vec[D], c: bool) { let w = self.w; if c { xs.push(w.r); } }
+    fn take(own self, xs: mut ref Vec[D], c: bool) { let w = self.w; if c { xs.push(w.r); } }
 }
-fn v5(o: O, c: bool) -> i64 { let O { w, k } = o; let mut ys: Vec[D] = Vec.new(); if c { ys.push(w.r); } ys.len() }
-fn v6(xs: mut ref Vec[D], o: O, c: bool) { let w = o.w; if c { xs.push(w.r); } else { println(f"k{w.r.id}"); } }
-fn v7(xs: mut ref Vec[D], o: O, c: bool) { let w = o.w; if c { xs.push(w.r); } else { xs.push(w.s); } }
-fn v8(xs: mut ref Vec[D], t: (W, i64), c: bool) { let (w, k) = t; if c { xs.push(w.r); } }
-fn v9(xs: mut ref Vec[D], o: O, c: bool) { let O { w, k } = o; if c { xs.push(w.r); return; } println("kept"); }
-fn u1(xs: mut ref Vec[D], o: O, c: bool) { let O { w, k } = o; if c { xs.push(w.r); } }
-fn u2(xs: mut ref Vec[D], o: O) { let O { w, k } = o; xs.push(w.r); }
-fn u3(xs: mut ref Vec[D], o: O, c: bool) { let w = o.w; if c { xs.push(w.r); } }
-fn u4(xs: mut ref Vec[D], o: O) { let w = o.w; xs.push(w.r); }
+fn v5(o: own O, c: bool) -> i64 { let O { w, k } = o; let mut ys: Vec[D] = Vec.new(); if c { ys.push(w.r); } ys.len() }
+fn v6(xs: mut ref Vec[D], o: own O, c: bool) { let w = o.w; if c { xs.push(w.r); } else { println(f"k{w.r.id}"); } }
+fn v7(xs: mut ref Vec[D], o: own O, c: bool) { let w = o.w; if c { xs.push(w.r); } else { xs.push(w.s); } }
+fn v8(xs: mut ref Vec[D], t: own (W, i64), c: bool) { let (w, k) = t; if c { xs.push(w.r); } }
+fn v9(xs: mut ref Vec[D], o: own O, c: bool) { let O { w, k } = o; if c { xs.push(w.r); return; } println("kept"); }
+fn u1(xs: mut ref Vec[D], o: own O, c: bool) { let O { w, k } = o; if c { xs.push(w.r); } }
+fn u2(xs: mut ref Vec[D], o: own O) { let O { w, k } = o; xs.push(w.r); }
+fn u3(xs: mut ref Vec[D], o: own O, c: bool) { let w = o.w; if c { xs.push(w.r); } }
+fn u4(xs: mut ref Vec[D], o: own O) { let w = o.w; xs.push(w.r); }
 fn main() {
     let mut ds: Vec[D] = Vec.new();
     println(f"{v5(mko(1), false)}"); println(f"{v5(mko(2), true)}");

@@ -5,27 +5,27 @@ enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("dE") } }
 
 #[allow(partial_move_of_drop_enum)]
-fn dies(b: E) -> i64 {
+fn dies(b: own E) -> i64 {
     let mut out: R = R { id: 0, tag: f"t0" };
     match b { E.A(r) => { out = r; } E.B => { } }
     println("mid");
     return out.id
 }
 
-fn fresh(b: E) -> i64 {
+fn fresh(b: own E) -> i64 {
     let mut out: R = R { id: 1, tag: f"t1" };
     match b { E.A(r) => { out = R { id: 7, tag: f"t7" }; } E.B => { } }
     return out.id
 }
 
-fn uncond(p: R) -> i64 {
+fn uncond(p: own R) -> i64 {
     let mut out: R = R { id: 2, tag: f"t2" };
     out = p;
     return out.id
 }
 
 #[allow(partial_move_of_drop_enum)]
-fn refreshed(b: E) -> i64 {
+fn refreshed(b: own E) -> i64 {
     let mut out: R = R { id: 0, tag: f"t0" };
     match b { E.A(r) => { out = r; } E.B => { } }
     println("m1");

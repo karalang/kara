@@ -11,9 +11,9 @@ fn mks(n: i64) -> Hs { Hs { ps: (Inner { tok: Tok.Id(f"s-{n}"), k: n }, n), tag:
 fn mkv(n: i64) -> Hv { let mut v: Vec[i64] = Vec.new(); v.push(n); Hv { pv: (v, n), tag: n } }
 fn sink(s: String) -> i64 { s.len() }
 fn sinkv(v: Vec[i64]) -> i64 { v.len() }
-fn sinkt(p: (Tok, i64)) -> i64 { match p.0 { Id(s) => s.len(), Int(z) => { if z > 99999 { 1 } else { 0 } } } }
-fn sinke(t: Tok) -> i64 { match t { Id(s) => s.len(), Int(z) => { if z > 99999 { 1 } else { 0 } } } }
-fn sinki(p: (Inner, i64)) -> i64 { match p.0.tok { Id(s) => s.len(), Int(z) => { if z > 99999 { 1 } else { 0 } } } }
+fn sinkt(p: own (Tok, i64)) -> i64 { match p.0 { Id(s) => s.len(), Int(z) => { if z > 99999 { 1 } else { 0 } } } }
+fn sinke(t: own Tok) -> i64 { match t { Id(s) => s.len(), Int(z) => { if z > 99999 { 1 } else { 0 } } } }
+fn sinki(p: own (Inner, i64)) -> i64 { match p.0.tok { Id(s) => s.len(), Int(z) => { if z > 99999 { 1 } else { 0 } } } }
 fn main() {
     let mut i: i64 = 0;
     let mut acc: i64 = 0;

@@ -7,12 +7,12 @@ struct O { h: Hr, m: i64 }
 fn f2(g: Hr) -> i64 { g.n }
 fn fq(g: Hq) -> i64 { g.n }
 fn fref(g: ref Hq) -> i64 { g.n }
-fn back(g: Hr) -> Hr { g }
+fn back(g: own Hr) -> Hr { g }
 fn gg[T](g: G[T]) -> i64 { g.n }
 fn nest(o: O) -> i64 { o.m }
 fn opt(g: Option[Hr]) -> i64 { 1 }
 fn tup(g: (Hr, i64)) -> i64 { g.1 }
-fn keep(v: mut ref Vec[Hr], g: Hr) { v.push(g) }
+fn keep(v: mut ref Vec[Hr], g: own Hr) { v.push(g) }
 struct K { n: i64 }
 impl K {
     fn m(ref self, g: Hr) -> i64 { g.n }

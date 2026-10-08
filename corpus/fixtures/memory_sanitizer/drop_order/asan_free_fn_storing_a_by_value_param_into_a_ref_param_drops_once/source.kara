@@ -1,7 +1,7 @@
 
 struct Item { id: i64, name: String }
 impl Drop for Item { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
-fn add_to(v: mut ref Vec[Item], x: Item) { v.push(x); }
+fn add_to(v: mut ref Vec[Item], x: own Item) { v.push(x); }
 fn main() {
     let mut v: Vec[Item] = Vec.new();
     add_to(mut v, Item { id: 7, name: f"nn{7}" });

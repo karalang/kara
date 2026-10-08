@@ -1,7 +1,7 @@
 
 shared struct Node { val: i64 }
 
-fn probe(xs: Vec[Node]) -> i64 {
+fn probe(xs: own Vec[Node]) -> i64 {
     let mut work = xs;
     work[0].val
 }

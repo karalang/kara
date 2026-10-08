@@ -1,4 +1,4 @@
-fn id(x: i128) -> i128 { x }
+fn id(x: own i128) -> i128 { x }
 fn five() -> i128 { 5 }
 
 fn main() {

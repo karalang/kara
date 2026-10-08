@@ -19,7 +19,7 @@ shared enum Se {
     Leaf,
 }
 
-fn show(e: E) -> String {
+fn show(e: own E) -> String {
     match e {
         Int(l) => l.value.to_string() + " " + l.suffix,
         Nest(o) => {

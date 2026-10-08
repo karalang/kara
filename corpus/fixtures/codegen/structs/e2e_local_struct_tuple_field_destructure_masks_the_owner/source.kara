@@ -15,7 +15,7 @@ fn n3() { let t = (mk(23), 0); let (r, k) = t; let m = r; println(f"  b{m.id}/{m
 fn n4() { let h = H2 { pe: (mk(24), 0), other: mk(94) }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
 fn n5() { let h = H3 { pe: (mk(25), mk(95)) }; let (a, b) = h.pe; println(f"  b{a.id}/{b.id}") }
 fn n6() { let h = H { pe: (mk(26), 0) }; println(f"  b{h.pe.0.id}/{h.pe.0.tag}") }
-fn n7(h: H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n7(h: own H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
 fn n8() { let g = G { h: H { pe: (mk(31), 0) } }; let (r, k) = g.h.pe; let m = r; println(f"  b{m.id}/{m.tag}/{m.xs.len()}") }
 fn n9() { let g = G2 { h: H { pe: (mk(32), 0) }, outer: mk(82) }; let (r, k) = g.h.pe; println(f"  b{r.id}/{r.tag}") }
 fn n10() { let g = G3 { h: H2 { pe: (mk(33), 0), other: mk(83) } }; let (r, k) = g.h.pe; println(f"  b{r.id}/{r.tag}") }

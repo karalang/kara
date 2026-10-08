@@ -1,5 +1,5 @@
 
-fn id(s: String) -> String {
+fn id(s: own String) -> String {
     return s;
 }
 

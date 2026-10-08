@@ -5,14 +5,14 @@ impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 struct Ws { r: R, n: i64 }
 struct Hs { s: S, n: i64 }
 impl Ws {
-    fn opt(self) -> Option[R] { return Some(self.r) }
-    fn tl(self) -> Option[R] { Some(self.r) }
-    fn ok(self) -> Result[R, i64] { Ok(self.r) }
-    fn er(self) -> Result[i64, R] { Err(self.r) }
-    fn nn(self) -> Option[Option[R]] { Some(Some(self.r)) }
+    fn opt(own self) -> Option[R] { return Some(self.r) }
+    fn tl(own self) -> Option[R] { Some(self.r) }
+    fn ok(own self) -> Result[R, i64] { Ok(self.r) }
+    fn er(own self) -> Result[i64, R] { Err(self.r) }
+    fn nn(own self) -> Option[Option[R]] { Some(Some(self.r)) }
 }
-fn optp(w: Ws) -> Option[R] { return Some(w.r) }
-fn opth(w: Hs) -> Option[S] { Some(w.s) }
+fn optp(w: own Ws) -> Option[R] { return Some(w.r) }
+fn opth(w: own Hs) -> Option[S] { Some(w.s) }
 fn show(o: Option[R]) { match o { Some(x) => println(f"x{x.id}"), None => println("n") } }
 fn main() {
     let a = Ws { r: R { id: 1 }, n: 0 };

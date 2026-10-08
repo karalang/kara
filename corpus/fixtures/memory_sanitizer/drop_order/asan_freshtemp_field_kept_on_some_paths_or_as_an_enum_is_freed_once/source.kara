@@ -6,11 +6,11 @@ fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
 enum G { A(D), B }
 struct V { g: G, d: D }
 fn mkv(n: i64) -> V { return V { g: G.A(mkd(n + 20)), d: mkd(n + 30) }; }
-fn gid[T](x: T) -> T { x }
-fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
-fn gmaybe[T](x: T, c: bool) -> Option[T] { if c { return Some(x); } None }
-fn gcs[T](v: mut ref Vec[T], x: T, c: bool) { if c { v.push(x); } }
-fn keepg(x: G) -> G { x }
+fn gid[T](x: own T) -> T { x }
+fn gst[T](v: mut ref Vec[T], x: own T) { v.push(x); }
+fn gmaybe[T](x: own T, c: bool) -> Option[T] { if c { return Some(x); } None }
+fn gcs[T](v: mut ref Vec[T], x: own T, c: bool) { if c { v.push(x); } }
+fn keepg(x: own G) -> G { x }
 fn main() {
     let o1 = gmaybe(mkw(1).r, true);
     let o2 = gmaybe(mkw(2).r, false);

@@ -1,7 +1,7 @@
 
 fn eat(a: Array[String, 2]) -> i64 { return a[0].len(); }
 fn sink(a: Array[String, 2]) { println(f"s:{a[1]}"); }
-fn passthru_arr(a: Array[String, 2]) -> Array[String, 2] { return a; }
+fn passthru_arr(a: own Array[String, 2]) -> Array[String, 2] { return a; }
 
 fn main() {
     let mut j: i64 = 0;

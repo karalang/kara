@@ -3,10 +3,10 @@
 struct Pair { word: String, n: i64 }
 #[derive(Clone)]
 struct Bag { tags: Vec[String], n: i64 }
-fn passthru(p: Pair) -> Pair { p }
-fn takes(s: String) -> Pair { Pair { word: s, n: 1 } }
-fn join(a: String, b: String) -> Pair { Pair { word: a + b, n: 2 } }
-fn grow(b: Bag) -> Bag { Bag { tags: b.tags, n: b.n + 1 } }
+fn passthru(p: own Pair) -> Pair { p }
+fn takes(s: own String) -> Pair { Pair { word: s, n: 1 } }
+fn join(a: own String, b: own String) -> Pair { Pair { word: a + b, n: 2 } }
+fn grow(b: own Bag) -> Bag { Bag { tags: b.tags, n: b.n + 1 } }
 fn main() {
     let k = env.args().len() as i64;
     let mut i = 0;

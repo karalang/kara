@@ -6,20 +6,20 @@ fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
 struct O { w: W, k: i64 }
 fn mko(n: i64) -> O { O { w: mkw(n), k: n } }
 impl O {
-    fn take(self, xs: mut ref Vec[D], c: bool) { let O { w: W { r, s, b }, k } = self; if c { xs.push(r); } }
-    fn take2(self, xs: mut ref Vec[D], c: bool) { let W { r, s, b } = self.w; if c { xs.push(r); } }
+    fn take(own self, xs: mut ref Vec[D], c: bool) { let O { w: W { r, s, b }, k } = self; if c { xs.push(r); } }
+    fn take2(own self, xs: mut ref Vec[D], c: bool) { let W { r, s, b } = self.w; if c { xs.push(r); } }
 }
 struct H { z: i64 }
-impl H { fn m(ref self, xs: mut ref Vec[D], t: (D, i64), c: bool) { let (r, k) = t; if c { xs.push(r); } } }
-fn t2(xs: mut ref Vec[D], t: (D, i64), c: bool) { let (r, k) = t; if c { xs.push(r); } }
-fn t3(xs: mut ref Vec[D], t: (D, i64), c: bool) { let r = t.0; if c { xs.push(r); } }
-fn t4(t: (D, i64), c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); let (r, k) = t; if c { xs.push(r); } xs.len() }
-fn t5(xs: mut ref Vec[D], t: (D, D), c: bool) { let (r, q) = t; if c { xs.push(r); } println("in"); }
-fn t6(xs: mut ref Vec[D], t: (W, i64), c: bool) { let r = t.0.r; if c { xs.push(r); } }
-fn t7(xs: mut ref Vec[D], t: (D, i64), c: bool) -> i64 { let (r, k) = t; if c { xs.push(r); return 1; } k }
-fn t8(xs: mut ref Vec[D], t: (D, i64), c: bool) { let (r, k) = t; if c { xs.push(r); } else { println(f"k{k}{r.id}"); } }
-fn n3(xs: mut ref Vec[D], o: O, c: bool) { let O { w, k } = o; let W { r, s, b } = w; if c { xs.push(r); } }
-fn n4(xs: mut ref Vec[D], o: O, c: bool) { let w = o.w; let W { r, s, b } = w; if c { xs.push(r); } }
+impl H { fn m(ref self, xs: mut ref Vec[D], t: own (D, i64), c: bool) { let (r, k) = t; if c { xs.push(r); } } }
+fn t2(xs: mut ref Vec[D], t: own (D, i64), c: bool) { let (r, k) = t; if c { xs.push(r); } }
+fn t3(xs: mut ref Vec[D], t: own (D, i64), c: bool) { let r = t.0; if c { xs.push(r); } }
+fn t4(t: own (D, i64), c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); let (r, k) = t; if c { xs.push(r); } xs.len() }
+fn t5(xs: mut ref Vec[D], t: own (D, D), c: bool) { let (r, q) = t; if c { xs.push(r); } println("in"); }
+fn t6(xs: mut ref Vec[D], t: own (W, i64), c: bool) { let r = t.0.r; if c { xs.push(r); } }
+fn t7(xs: mut ref Vec[D], t: own (D, i64), c: bool) -> i64 { let (r, k) = t; if c { xs.push(r); return 1; } k }
+fn t8(xs: mut ref Vec[D], t: own (D, i64), c: bool) { let (r, k) = t; if c { xs.push(r); } else { println(f"k{k}{r.id}"); } }
+fn n3(xs: mut ref Vec[D], o: own O, c: bool) { let O { w, k } = o; let W { r, s, b } = w; if c { xs.push(r); } }
+fn n4(xs: mut ref Vec[D], o: own O, c: bool) { let w = o.w; let W { r, s, b } = w; if c { xs.push(r); } }
 fn main() {
     let mut ds: Vec[D] = Vec.new();
     t2(mut ds, (mkd(1), 1), false); println("a1"); t2(mut ds, (mkd(2), 1), true); println("a2");

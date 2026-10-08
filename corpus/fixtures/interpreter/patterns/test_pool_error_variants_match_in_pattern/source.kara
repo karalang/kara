@@ -1,4 +1,4 @@
-fn classify(e: PoolError) -> String {
+fn classify(e: own PoolError) -> String {
              match e {
                  PoolError.Timeout => "timeout",
                  PoolError.PoolClosed => "closed",

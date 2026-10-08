@@ -2,11 +2,11 @@ shared struct Inner { v: i64 }
 struct R { id: i64, name: String, inner: Inner }
 impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
-fn fwd(r: R) -> R { return r; }
+fn fwd(r: own R) -> R { return r; }
 struct Hold { n: i64 }
-impl Hold { fn pick2(ref self, r: R, k: bool) -> R { if k { return mk(90); } return fwd(r); } }
-impl R { fn picka2(r: R, k: bool) -> R { if k { return mk(91); } return fwd(r); } }
-impl Hold { fn pick(ref self, r: R, k: bool) -> R { if k { return mk(92); } return r; } }
+impl Hold { fn pick2(ref self, r: own R, k: bool) -> R { if k { return mk(90); } return fwd(r); } }
+impl R { fn picka2(r: own R, k: bool) -> R { if k { return mk(91); } return fwd(r); } }
+impl Hold { fn pick(ref self, r: own R, k: bool) -> R { if k { return mk(92); } return r; } }
 fn main() {
   let h = Hold { n: 0 };
   println("method_hop_handback"); let a = h.pick2(mk(1), false); println(f"  v={a.inner.v}");

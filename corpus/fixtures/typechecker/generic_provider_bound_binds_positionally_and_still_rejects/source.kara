@@ -1,6 +1,6 @@
 
         trait Channel[T] { fn send(ref self, v: T) -> T; }
         effect resource RequestCh: Channel[String];
-        fn push(v: String) -> String with sends(RequestCh) { return RequestCh.send(v); }
+        fn push(v: own String) -> String with sends(RequestCh) { return RequestCh.send(v); }
         fn main() { push("x"); }
         

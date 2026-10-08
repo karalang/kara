@@ -3,7 +3,7 @@ enum V { Table(Map[String, i64]) }
 enum S { Names(Set[String]) }
 enum W { Pairs(Map[String, String]) }
 fn size(v: ref V) -> i64 { match v { Table(m) => m.len() as i64 } }
-fn consume(v: V) -> i64 { match v { Table(m) => m.len() as i64 } }
+fn consume(v: own V) -> i64 { match v { Table(m) => m.len() as i64 } }
 fn main() {
     let mut total: i64 = 0;
     let mut i = 0;

@@ -2,7 +2,7 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 fn mk(n: i64) -> R { R { id: n, s: f"s{n}" } }
 fn g(a: Option[Array[R, 2]], d: Array[R, 2]) -> Array[R, 2] { return match a { Some(x) => x, None => d } }
-fn h(c: bool, d: Array[R, 2]) -> Array[R, 2] { if c { return if c { d } else { [mk(8), mk(9)] } } [mk(6), mk(7)] }
+fn h(c: bool, d: own Array[R, 2]) -> Array[R, 2] { if c { return if c { d } else { [mk(8), mk(9)] } } [mk(6), mk(7)] }
 fn main() {
     let a: Option[Array[R, 2]] = None;
     let r = g(a, [mk(1), mk(2)]); println(f"got {r[0].id} {r[1].id}");

@@ -61,7 +61,7 @@ fn by_rows(points: ref Vec[(i64, i64)]) -> bool {
     true
 }
 
-fn mirror_canonical(points: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+fn mirror_canonical(points: own Vec[(i64, i64)]) -> Vec[(i64, i64)] {
     let mut sorted = points;
     sorted.sort();
     sorted.dedup();

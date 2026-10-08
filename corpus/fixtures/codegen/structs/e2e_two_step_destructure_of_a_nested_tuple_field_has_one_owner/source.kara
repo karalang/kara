@@ -4,15 +4,15 @@ fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
 struct H2 { pe: ((R, i64), i64) }
 struct H1 { pe: (R, i64) }
 struct H3 { pe: (((R, i64), i64), i64) }
-fn v3(h: H2) { let (inner, y) = h.pe; let (r, x) = inner; let m: R = r; println(f"v3 {m.id}") }
-fn v3_read(h: H2) { let (inner, y) = h.pe; let (r, x) = inner; println(f"v3r {r.id}") }
-fn v3_unread(h: H2) { let (inner, y) = h.pe; let (r, x) = inner; println("v3u") }
-fn v3_ret(h: H2) -> R { let (inner, y) = h.pe; let (r, x) = inner; return r; }
-fn v3_one(h: H2) { let (inner, y) = h.pe; println("v3o") }
-fn v3_inner_move(h: H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; println(f"v3m {z.0.id}") }
-fn flat(h: H1) { let (r, k) = h.pe; let m: R = r; println(f"flat {m.id}") }
-fn flat_read(h: H1) { let (r, k) = h.pe; println(f"flatr {r.id}") }
-fn deep(h: H3) { let (mid, a) = h.pe; let (inner, b) = mid; let (r, c) = inner; let m: R = r; println(f"deep {m.id}") }
+fn v3(h: own H2) { let (inner, y) = h.pe; let (r, x) = inner; let m: R = r; println(f"v3 {m.id}") }
+fn v3_read(h: own H2) { let (inner, y) = h.pe; let (r, x) = inner; println(f"v3r {r.id}") }
+fn v3_unread(h: own H2) { let (inner, y) = h.pe; let (r, x) = inner; println("v3u") }
+fn v3_ret(h: own H2) -> R { let (inner, y) = h.pe; let (r, x) = inner; return r; }
+fn v3_one(h: own H2) { let (inner, y) = h.pe; println("v3o") }
+fn v3_inner_move(h: own H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; println(f"v3m {z.0.id}") }
+fn flat(h: own H1) { let (r, k) = h.pe; let m: R = r; println(f"flat {m.id}") }
+fn flat_read(h: own H1) { let (r, k) = h.pe; println(f"flatr {r.id}") }
+fn deep(h: own H3) { let (mid, a) = h.pe; let (inner, b) = mid; let (r, c) = inner; let m: R = r; println(f"deep {m.id}") }
 fn local3() { let h: H2 = H2 { pe: ((mk(9), 1), 2) }; let (inner, y) = h.pe; let (r, x) = inner; let m: R = r; println(f"l3 {m.id}") }
 fn main() {
     { v3(H2 { pe: ((mk(1), 1), 2) }); println("one") }

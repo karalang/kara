@@ -11,7 +11,7 @@
 // Exercises the same tuple-typed `sort_by(|a, b| a.0.cmp(b.0))` idiom as
 // kata 56 (routed through karac's Slice 6.4 integer-tuple mono sort path).
 
-fn insert_interval(intervals: Slice[(i64, i64)], new_interval: (i64, i64)) -> Vec[(i64, i64)] {
+fn insert_interval(intervals: Slice[(i64, i64)], new_interval: own (i64, i64)) -> Vec[(i64, i64)] {
     let mut s: Vec[(i64, i64)] = Vec.from_slice(intervals);
     s.push(new_interval);
     s.sort_by(|a, b| a.0.cmp(b.0));
@@ -39,7 +39,7 @@ fn insert_interval(intervals: Slice[(i64, i64)], new_interval: (i64, i64)) -> Ve
     result
 }
 
-fn report(intervals: Slice[(i64, i64)], new_interval: (i64, i64)) {
+fn report(intervals: Slice[(i64, i64)], new_interval: own (i64, i64)) {
     let merged = insert_interval(intervals, new_interval);
     println(merged.len());
     for m in merged.iter() {

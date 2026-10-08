@@ -3,13 +3,13 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct R2 { id: i64, s: String }
 impl Drop for R2 { fn drop(mut ref self) { println(f"e{self.id}") } }
 struct B { n: i64 }
-impl B { fn st(ref self, a: R) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(a); v } }
-fn st(a: R) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(a); v }
-fn stl(a: R) -> i64 { let mut v: Vec[R] = Vec.new(); v.push(a); 9 }
+impl B { fn st(ref self, a: own R) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(a); v } }
+fn st(a: own R) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(a); v }
+fn stl(a: own R) -> i64 { let mut v: Vec[R] = Vec.new(); v.push(a); 9 }
 fn sto(a: Option[R]) -> Vec[Option[R]] { let mut v: Vec[Option[R]] = Vec.new(); v.push(a); v }
-fn stg[T](a: T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(a); v }
-fn stm(a: R) -> Map[i64, R] { let mut m: Map[i64, R] = Map.new(); m.insert(1, a); m }
-fn st2(a: R2) -> Vec[R2] { let mut v: Vec[R2] = Vec.new(); v.push(a); v }
+fn stg[T](a: own T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(a); v }
+fn stm(a: own R) -> Map[i64, R] { let mut m: Map[i64, R] = Map.new(); m.insert(1, a); m }
+fn st2(a: own R2) -> Vec[R2] { let mut v: Vec[R2] = Vec.new(); v.push(a); v }
 fn main() {
     { let a = R { id: 1 }; let v = st(a); println(f"k{v.len()}"); }
     { let v = st(R { id: 2 }); println(f"k{v.len()}"); }

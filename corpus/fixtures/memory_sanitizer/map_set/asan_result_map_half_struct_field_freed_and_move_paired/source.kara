@@ -9,7 +9,7 @@ fn mk(n: i64) -> Map[i64, String] {
     m.insert(n, "mapv-padded-out-to-force-a-real-heap-buffer".repeat(1));
     m
 }
-fn take(s: S) -> i64 {
+fn take(s: own S) -> i64 {
     match s.s { Ok(inner) => { inner.len() } Err(e) => { e } }
 }
 

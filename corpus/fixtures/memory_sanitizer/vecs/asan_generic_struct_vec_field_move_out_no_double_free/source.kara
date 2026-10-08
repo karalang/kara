@@ -1,7 +1,7 @@
 
 struct Box[T] { v: T }
-fn get[T](b: Box[T]) -> T { b.v }
-impl[T] Box[T] { fn take(self) -> T { self.v } }
+fn get[T](b: own Box[T]) -> T { b.v }
+impl[T] Box[T] { fn take(own self) -> T { self.v } }
 fn main() {
     let a = Box { v: [1, 2, 3] };
     println(get(a).len());

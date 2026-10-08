@@ -1,7 +1,7 @@
 enum E { A(String), B }
 enum E2 { A(String, i64), B(i64) }
-fn pass(e: E) -> E { return e; }
-fn pass2(e: E2) -> E2 { return e; }
+fn pass(e: own E) -> E { return e; }
+fn pass2(e: own E2) -> E2 { return e; }
 fn flip(e: E) -> E { return E.B; }
 fn tag(e: ref E) -> String { match e { E.A(s) => s.clone(), E.B => f"b" } }
 fn tag2(e: ref E2) -> String { match e { E2.A(s, n) => f"{s}{n}", E2.B(n) => f"b{n}" } }

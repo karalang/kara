@@ -8,8 +8,8 @@ shared enum H { Z(M), N }
 shared enum P { A { v: Vec[String], k: i64 }, B }
 struct St { s: String }
 shared enum Q2 { K(Vec[St]), L }
-fn mkv(s: String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(s + "-heap-string-long-enough"); v }
-fn hs(s: String) -> String { s + "-heap-string-long-enough" }
+fn mkv(s: own String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(s + "-heap-string-long-enough"); v }
+fn hs(s: own String) -> String { s + "-heap-string-long-enough" }
 fn take(v: Vec[String]) -> i64 { v.len() }
 fn first(m: M) -> Vec[String] { match m { M.Y(x) => x.clone(), M.N => Vec.new() } }
 struct Pt { a: i64, b: i64 }

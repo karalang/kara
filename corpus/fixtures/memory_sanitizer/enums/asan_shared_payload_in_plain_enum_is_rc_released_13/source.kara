@@ -1,4 +1,4 @@
 shared struct Sh { n: i64 }
 enum Et { A(Sh), B }
-impl Et { fn passm(self) -> Et { return self; } }
+impl Et { fn passm(own self) -> Et { return self; } }
 fn main() { let z = Et.A(Sh { n: 3 }).passm(); println("ok"); }

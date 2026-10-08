@@ -48,7 +48,7 @@ struct Peeking {
     mut full: bool,
 }
 
-fn make_peeking(data: Vec[i64]) -> Peeking {
+fn make_peeking(data: own Vec[i64]) -> Peeking {
     let s = Source { data: data, pos: 0, pulls: 0 };
     return Peeking { src: s, slot: 0, full: false };
 }

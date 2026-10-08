@@ -1,9 +1,9 @@
 
 struct Box[T] { v: T }
 struct Box2[T] { v: T, n: i64 }
-fn take[T](b: Box[T]) -> T { b.v }
-impl[T] Box[T] { fn get(self) -> T { self.v } }
-impl[T] Box2[T] { fn get(self) -> T { self.v } }
+fn take[T](b: own Box[T]) -> T { b.v }
+impl[T] Box[T] { fn get(own self) -> T { self.v } }
+impl[T] Box2[T] { fn get(own self) -> T { self.v } }
 fn main() {
     println(take(Box { v: "a".to_string() }));
     let b = Box { v: "b".to_string() };

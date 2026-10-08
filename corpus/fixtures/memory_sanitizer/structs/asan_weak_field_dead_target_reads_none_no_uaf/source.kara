@@ -1,6 +1,6 @@
 
 shared struct Node { mut val: i64, mut random: weak Node }
-fn make_and_drop(holder: Node) {
+fn make_and_drop(holder: own Node) {
     let victim: Node = Node { val: 99i64, random: None };
     holder.random = victim;
 }

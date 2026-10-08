@@ -136,7 +136,7 @@ fn hash_grid(m: ref Vec[Vec[i64]]) -> i64 {
     acc
 }
 
-fn report(grid: Vec[Vec[i64]], s: mut ref String) {
+fn report(grid: own Vec[Vec[i64]], s: mut ref String) {
     let mut m = grid;
     set_zeroes(mut m);
     print_grid(m);

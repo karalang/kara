@@ -6,16 +6,16 @@ struct Box2 { r: R }
 struct W { p: P2 }
 struct K { n: i64 }
 
-fn ftwo(r: R, k: bool) -> Box2 { if k { return Box2 { r: mr(82) }; } let p = P2 { r: r, n: 1 }; return Box2 { r: p.r }; }
-fn fone(r: R, k: bool) -> Box2 { if k { return Box2 { r: mr(83) }; } let p = Box2 { r: r }; return p; }
-fn fproj(r: R, k: bool) -> R { if k { return mr(84); } let p = P2 { r: r, n: 1 }; return p.r; }
-fn flet(r: R, k: bool) -> Box2 { if k { return Box2 { r: mr(85) }; } let p = P2 { r: r, n: 1 }; let q = p.r; return Box2 { r: q }; }
-fn fnest(r: R, k: bool) -> W { if k { return W { p: P2 { r: mr(86), n: 0 } }; } let p = P2 { r: r, n: 1 }; let w = W { p: p }; return w; }
-fn ftup(r: R, k: bool) -> Box2 { if k { return Box2 { r: mr(87) }; } let t = (r, 1); return Box2 { r: t.0 }; }
-fn frebind(r: R, k: bool) -> P2 { if k { return P2 { r: mr(88), n: 0 }; } let p = P2 { r: r, n: 1 }; let q = p; return q; }
-fn fearly(r: R, k: bool) -> Box2 { let p = P2 { r: r, n: 1 }; if k { return Box2 { r: mr(89) }; } return Box2 { r: p.r }; }
-fn funcond(r: R) -> Box2 { let p = P2 { r: r, n: 1 }; return Box2 { r: p.r }; }
-fn fpart(r: R, k: bool) -> i64 { let p = P2 { r: r, n: 1 }; if k { return 0; } return p.r.id; }
+fn ftwo(r: own R, k: bool) -> Box2 { if k { return Box2 { r: mr(82) }; } let p = P2 { r: r, n: 1 }; return Box2 { r: p.r }; }
+fn fone(r: own R, k: bool) -> Box2 { if k { return Box2 { r: mr(83) }; } let p = Box2 { r: r }; return p; }
+fn fproj(r: own R, k: bool) -> R { if k { return mr(84); } let p = P2 { r: r, n: 1 }; return p.r; }
+fn flet(r: own R, k: bool) -> Box2 { if k { return Box2 { r: mr(85) }; } let p = P2 { r: r, n: 1 }; let q = p.r; return Box2 { r: q }; }
+fn fnest(r: own R, k: bool) -> W { if k { return W { p: P2 { r: mr(86), n: 0 } }; } let p = P2 { r: r, n: 1 }; let w = W { p: p }; return w; }
+fn ftup(r: own R, k: bool) -> Box2 { if k { return Box2 { r: mr(87) }; } let t = (r, 1); return Box2 { r: t.0 }; }
+fn frebind(r: own R, k: bool) -> P2 { if k { return P2 { r: mr(88), n: 0 }; } let p = P2 { r: r, n: 1 }; let q = p; return q; }
+fn fearly(r: own R, k: bool) -> Box2 { let p = P2 { r: r, n: 1 }; if k { return Box2 { r: mr(89) }; } return Box2 { r: p.r }; }
+fn funcond(r: own R) -> Box2 { let p = P2 { r: r, n: 1 }; return Box2 { r: p.r }; }
+fn fpart(r: own R, k: bool) -> i64 { let p = P2 { r: r, n: 1 }; if k { return 0; } return p.r.id; }
 fn lproj() -> Box2 { let p = P2 { r: mr(19), n: 1 }; return Box2 { r: p.r }; }
 fn lbare() -> R { let p = P2 { r: mr(20), n: 1 }; return p.r; }
 fn ltail() -> Box2 { let p = P2 { r: mr(21), n: 1 }; Box2 { r: p.r } }
@@ -23,9 +23,9 @@ fn lopt() -> Option[R] { let p = P2 { r: mr(22), n: 1 }; return Option.Some(p.r)
 fn lnest() -> R { let w = W { p: P2 { r: mr(23), n: 1 } }; return w.p.r; }
 impl K {
     fn mlocal(self) -> Box2 { let p = P2 { r: mr(24), n: self.n }; return Box2 { r: p.r }; }
-    fn m(self, r: R, k: bool) -> Box2 { if k { return Box2 { r: mr(90) }; } let p = P2 { r: r, n: self.n }; return Box2 { r: p.r }; }
-    fn mref(ref self, r: R, k: bool) -> Box2 { if k { return Box2 { r: mr(91) }; } let p = P2 { r: r, n: self.n }; return Box2 { r: p.r }; }
-    fn muncond(self, r: R) -> Box2 { let p = P2 { r: r, n: self.n }; return Box2 { r: p.r }; }
+    fn m(self, r: own R, k: bool) -> Box2 { if k { return Box2 { r: mr(90) }; } let p = P2 { r: r, n: self.n }; return Box2 { r: p.r }; }
+    fn mref(ref self, r: own R, k: bool) -> Box2 { if k { return Box2 { r: mr(91) }; } let p = P2 { r: r, n: self.n }; return Box2 { r: p.r }; }
+    fn muncond(self, r: own R) -> Box2 { let p = P2 { r: r, n: self.n }; return Box2 { r: p.r }; }
 }
 
 fn main() {

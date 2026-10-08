@@ -1,7 +1,7 @@
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(n: i64) -> R { R { id: n, s: f"ssssssss{n}" } }
-fn gid[T](x: T) -> T { x }
+fn gid[T](x: own T) -> T { x }
 enum G1[T] { Y(T), N }
 enum Ea { A(Array[R, 2]), B }
 fn eats(s: String) -> i64 { s.len() }

@@ -7,9 +7,9 @@ fn mkName(i: i64) -> R { return R { id: 7, name: f"n{i}" }; }
 fn mkOpt(i: i64) -> Option[R] { return Option.Some(R { id: i, name: f"o{i}" }); }
 fn mkFlt(x: f64) -> R { return R { id: 20, name: f"f{x}" }; }
 fn mkChr(c: char) -> R { return R { id: 21, name: f"c{c}" }; }
-fn keep(r: R) -> R { return r; }
-fn wrap(r: R) -> H { return H { r: r, n: 1 }; }
-fn both(i: i64, r: R) -> R { return r; }
+fn keep(r: own R) -> R { return r; }
+fn wrap(r: own R) -> H { return H { r: r, n: 1 }; }
+fn both(i: i64, r: own R) -> R { return r; }
 impl H { fn make(i: i64) -> R { return R { id: i, name: f"a{i}" }; } }
 
 fn scalar_arg(i: i64) { let x = mkUses(i); println(f"  v={x.id}"); }
@@ -23,9 +23,9 @@ fn scalar_option(i: i64) { let o = mkOpt(i); match o { Option.Some(r) => { print
 fn scalar_float(x: f64) { let r = mkFlt(x); println(f"  v={r.id}"); }
 fn scalar_char(c: char) { let r = mkChr(c); println(f"  v={r.id}"); }
 fn scalar_assoc(i: i64) { let x = H.make(i); println(f"  v={x.id}"); }
-fn owned_handback(r: R) { let x = keep(r); println(f"  v={x.id}"); }
-fn owned_wrapped(r: R) { let x = wrap(r); println(f"  v={x.r.id}"); }
-fn mixed_args(i: i64, r: R) { let x = both(i, r); println(f"  v={x.id}"); }
+fn owned_handback(r: own R) { let x = keep(r); println(f"  v={x.id}"); }
+fn owned_wrapped(r: own R) { let x = wrap(r); println(f"  v={x.r.id}"); }
+fn mixed_args(i: i64, r: own R) { let x = both(i, r); println(f"  v={x.id}"); }
 fn local_scalar() { let n = 31; let x = mkUses(n); println(f"  v={x.id}"); }
 
 fn main() {

@@ -1,9 +1,9 @@
 struct Bx[T] { a: T, b: i64 }
 struct Pr[A, B] { x: A, y: B }
-fn wrapit[T](v: T) -> i64 { let k = |x: T| Bx { a: x, b: 3 }; return k(v).b; }
-fn keep[T](v: T) -> T { let k = |x: T| Bx { a: x, b: 4 }; let r = k(v); return r.a; }
-fn pair[A, B](a: A, b: B) -> B { let k = |p: A, q: B| Pr { x: p, y: q }; let r = k(a, b); return r.y; }
-fn lens[T](v: Vec[T]) -> i64 { let k = |x: Vec[T]| Bx { a: x, b: 1 }; let r = k(v); return r.a.len() + r.b; }
+fn wrapit[T](v: own T) -> i64 { let k = |x: T| Bx { a: x, b: 3 }; return k(v).b; }
+fn keep[T](v: own T) -> T { let k = |x: T| Bx { a: x, b: 4 }; let r = k(v); return r.a; }
+fn pair[A, B](a: own A, b: own B) -> B { let k = |p: A, q: B| Pr { x: p, y: q }; let r = k(a, b); return r.y; }
+fn lens[T](v: own Vec[T]) -> i64 { let k = |x: Vec[T]| Bx { a: x, b: 1 }; let r = k(v); return r.a.len() + r.b; }
 fn main() {
     println(f"a:{wrapit("s".to_string())} {wrapit(7)} {wrapit(2.5)}");
     println(f"b:{keep("kept".to_string())} {keep(9)}");

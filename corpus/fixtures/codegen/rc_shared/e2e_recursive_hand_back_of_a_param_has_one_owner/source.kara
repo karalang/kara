@@ -8,16 +8,16 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}{self.s}") } }
 fn mk(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
 fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
-fn rs(a: P, n: i64) -> P { if n == 0 { return a } return rs(a, n - 1) }
-fn rs3(a: S3, n: i64) -> S3 { if n == 0 { return a } return rs3(a, n - 1) }
-fn rs2(a: S2, n: i64) -> S2 { if n == 0 { return a } return rs2(a, n - 1) }
-fn rsR(a: R, n: i64) -> R { if n == 0 { return a } return rsR(a, n - 1) }
-fn rt(a: P, n: i64) -> P { if n == 0 { a } else { rt(a, n - 1) } }
-fn rsemi(a: P, n: i64) -> P { if n == 0 { return a; } return rs(a, n - 1); }
-fn rmid(a: S2, n: i64) -> S2 { println(f"r{n}"); if n == 0 { return a } let t = rmid(a, n - 1); return t }
-fn rh(a: P, n: i64) -> P { if n == 0 { return a } return rg(a, n - 1) }
-fn rg(a: P, n: i64) -> P { return rh(a, n) }
-fn wrap(a: P, n: i64) -> P { return rs(a, n) }
+fn rs(a: own P, n: i64) -> P { if n == 0 { return a } return rs(a, n - 1) }
+fn rs3(a: own S3, n: i64) -> S3 { if n == 0 { return a } return rs3(a, n - 1) }
+fn rs2(a: own S2, n: i64) -> S2 { if n == 0 { return a } return rs2(a, n - 1) }
+fn rsR(a: own R, n: i64) -> R { if n == 0 { return a } return rsR(a, n - 1) }
+fn rt(a: own P, n: i64) -> P { if n == 0 { a } else { rt(a, n - 1) } }
+fn rsemi(a: own P, n: i64) -> P { if n == 0 { return a; } return rs(a, n - 1); }
+fn rmid(a: own S2, n: i64) -> S2 { println(f"r{n}"); if n == 0 { return a } let t = rmid(a, n - 1); return t }
+fn rh(a: own P, n: i64) -> P { if n == 0 { return a } return rg(a, n - 1) }
+fn rg(a: own P, n: i64) -> P { return rh(a, n) }
+fn wrap(a: own P, n: i64) -> P { return rs(a, n) }
 fn c00() { let s = P { id: 1 }; let t = rs(s, 2); println(f"t{t.id}"); }
 fn c01() { let s = P { id: 2 }; let t = rs(s, 0); println(f"t{t.id}"); }
 fn c02() { let t = rs(P { id: 3 }, 2); println(f"t{t.id}"); }

@@ -1,5 +1,5 @@
 
-fn id(v: Vec[Map[i64, i64]]) -> Vec[Map[i64, i64]] {
+fn id(v: own Vec[Map[i64, i64]]) -> Vec[Map[i64, i64]] {
     v
 }
 

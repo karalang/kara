@@ -1,7 +1,7 @@
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
 struct P { a: R, b: R, c: R }
-fn pass(x: P) -> P {
+fn pass(x: own P) -> P {
     println("pass");
     x
 }

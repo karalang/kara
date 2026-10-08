@@ -9,7 +9,7 @@ fn mk(n: i64) -> R {
     return R { id: n, xs: v }
 }
 
-fn while_first(p: R) -> i64 {
+fn while_first(p: own R) -> i64 {
     let mut i: i64 = 0;
     let mut acc: i64 = 0;
     while i < 3 {
@@ -21,7 +21,7 @@ fn while_first(p: R) -> i64 {
     return acc
 }
 
-fn while_middle(p: R) -> i64 {
+fn while_middle(p: own R) -> i64 {
     let mut i: i64 = 0;
     let mut acc: i64 = 0;
     while i < 3 {
@@ -33,7 +33,7 @@ fn while_middle(p: R) -> i64 {
     return acc
 }
 
-fn outside(p: R) -> i64 {
+fn outside(p: own R) -> i64 {
     let mut out: R = mk(70);
     let mut i: i64 = 0;
     while i < 3 {

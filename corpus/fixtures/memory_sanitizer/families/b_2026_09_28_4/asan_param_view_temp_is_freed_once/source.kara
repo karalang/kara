@@ -4,7 +4,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct S { r: R, s: String }
 fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
 fn mk2(i: i64) -> Option[S] { Some(mk(i)) }
-fn mk2o(x: S) -> Option[S] { Some(x) }
+fn mk2o(x: own S) -> Option[S] { Some(x) }
 fn eat(o: Option[S]) { println("eat") }
 struct E { n: i64 }
 impl E {
@@ -12,17 +12,17 @@ impl E {
     fn aeat(o: Option[S]) { println("aeat") }
 }
 impl S {
-    fn wrap(self) -> Option[S] { Some(self) }
-    fn probe(self) -> bool { self.wrap().is_some() }
+    fn wrap(own self) -> Option[S] { Some(self) }
+    fn probe(own self) -> bool { self.wrap().is_some() }
 }
-fn c1(x: S) { mk2o(x); println("in1") }
-fn c2(x: S) { let _ = mk2o(x); println("in2") }
-fn c3(x: S) { let _ = Some(x); println("in3") }
-fn c4(x: S) { eat(mk2o(x)); println("in4") }
-fn c5(x: S) { let e = E { n: 0 }; e.eat(mk2o(x)); println("in5") }
-fn c6(x: S) { E.aeat(mk2o(x)); println("in6") }
-fn c7(x: S) -> bool { mk2o(x).is_some() }
-fn c8(x: S) -> bool { let y = x; mk2o(y).is_some() }
+fn c1(x: own S) { mk2o(x); println("in1") }
+fn c2(x: own S) { let _ = mk2o(x); println("in2") }
+fn c3(x: own S) { let _ = Some(x); println("in3") }
+fn c4(x: own S) { eat(mk2o(x)); println("in4") }
+fn c5(x: own S) { let e = E { n: 0 }; e.eat(mk2o(x)); println("in5") }
+fn c6(x: own S) { E.aeat(mk2o(x)); println("in6") }
+fn c7(x: own S) -> bool { mk2o(x).is_some() }
+fn c8(x: own S) -> bool { let y = x; mk2o(y).is_some() }
 fn c9(x: S) -> bool { mk2(x.r.id + 100).is_some() }
 fn main() {
     c1(mk(1));

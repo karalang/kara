@@ -4,7 +4,7 @@ shared enum H6 { W(H2), N }
 shared enum Ms { S { t: String }, T }
 shared enum Hs { Z(Ms), N }
 shared enum H5 { Z { m: M2, j: i64 }, N }
-fn mkv(s: String) -> Vec[String] { let mut v = Vec.new(); v.push(s); v.push("second-heap-string-long-enough".to_string()); v }
+fn mkv(s: own String) -> Vec[String] { let mut v = Vec.new(); v.push(s); v.push("second-heap-string-long-enough".to_string()); v }
 fn hs(k: i64) -> String { f"heap-string-long-enough-{k}" }
 fn main() {
     let a = H2.Z(M2.P { v: mkv(hs(1)), k: 4 });

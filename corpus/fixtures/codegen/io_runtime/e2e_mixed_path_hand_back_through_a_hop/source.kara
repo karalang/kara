@@ -5,11 +5,11 @@ struct P { id: i64, name: String, xs: Vec[i64] }
 impl Drop for P { fn drop(mut ref self) { println(f"  dP{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
 fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}", xs: [i] }; }
-fn f(r: R) -> R { return r; }
-fn pf(p: P) -> P { return p; }
-fn mvia(r: R, c: bool) -> R { if c { return f(r); } return mk(90); }
-fn cvia(r: R, c: bool) -> R { if c { return r; } return mk(91); }
-fn pvia(p: P, c: bool) -> P { if c { return pf(p); } return mkp(92); }
+fn f(r: own R) -> R { return r; }
+fn pf(p: own P) -> P { return p; }
+fn mvia(r: own R, c: bool) -> R { if c { return f(r); } return mk(90); }
+fn cvia(r: own R, c: bool) -> R { if c { return r; } return mk(91); }
+fn pvia(p: own P, c: bool) -> P { if c { return pf(p); } return mkp(92); }
 fn main() {
   println("hop_handback"); let a = mk(1); let z = mvia(a, true); println(f"  v={z.inner.v}");
   println("hop_dies_inside"); let b = mk(2); let y = mvia(b, false); println(f"  v={y.id}");

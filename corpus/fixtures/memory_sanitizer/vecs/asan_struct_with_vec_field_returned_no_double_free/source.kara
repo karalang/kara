@@ -7,7 +7,7 @@ fn build() -> Holder {
     let h: Holder = Holder { v: inner };
     h
 }
-fn first_elem(h: Holder) -> i64 {
+fn first_elem(h: own Holder) -> i64 {
     let inner = h.v;
     inner[0]
 }

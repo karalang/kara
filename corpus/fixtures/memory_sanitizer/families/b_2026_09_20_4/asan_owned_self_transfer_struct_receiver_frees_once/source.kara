@@ -8,7 +8,7 @@ fn eat(h: Ha) { println(f"  ate {h.g[0]}") }
 fn mka() -> Array[String, 2] { return [f"aaaaaaaa-1", f"bbbbbbbb-2"] }
 impl Ha {
     fn give(self) { println("  held") }
-    fn take(self) -> Array[String, 2] { return self.g }
+    fn take(own self) -> Array[String, 2] { return self.g }
     fn fwd(self) { eat(self) }
     fn two(self) { self.give() }
     fn peek(ref self) -> i64 { return self.g[1].len() }

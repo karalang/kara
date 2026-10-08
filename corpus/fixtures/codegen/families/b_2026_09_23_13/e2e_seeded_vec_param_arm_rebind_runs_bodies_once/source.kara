@@ -3,16 +3,16 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
 fn mkv(i: i64) -> Vec[R] { return [mkr(i), mkr(i + 1)] }
 fn take(v: Vec[R]) -> i64 { println(f"t{v.len()}"); return 1 }
-fn f1(a: Vec[R]) -> i64 { match Option.Some(a) { Some(v) => { println(f"r{v.len()}"); return 7 }, None => { return 0 } } }
-fn f2(a: Vec[R]) -> i64 { match Option.Some(a) { Some(v) => { let u = v; println("r1"); return 7 }, None => { return 0 } } }
-fn f3(a: Vec[R]) -> i64 { if let Some(v) = Option.Some(a) { let u = v; println("r1"); return 7 } return 0 }
-fn f4(a: Vec[R]) -> i64 { let o = Option.Some(a); match o { Some(v) => { let u = v; println("r1"); return 7 }, None => { return 0 } } }
-fn f6(a: Vec[R]) -> i64 { match Result.Ok(a) { Ok(v) => { let u = v; println("r1"); return 7 }, Err(e) => { return 0 } } }
-fn h2(a: Vec[R]) -> i64 { match Option.Some(a) { Some(v) => { let u = v; return take(u) }, None => { return 0 } } }
-fn h3(a: Vec[R]) -> i64 { let Some(v) = Option.Some(a) else { return 0 }; let u = v; println("r1"); return 7 }
-fn h4(a: Vec[R]) -> i64 { match Result.Err(a) { Ok(x) => { return 1 }, Err(v) => { let u = v; println("r1"); return 7 } } }
-fn h6(a: Vec[R], c: bool) -> i64 { match Option.Some(a) { Some(v) => { if c { let u = v; println("r1"); } return 7 }, None => { return 0 } } }
-fn h7(a: Vec[R]) -> i64 { match Option.Some(a) { Some(v) => { let u = v; let w = u; println("r1"); return 7 }, None => { return 0 } } }
+fn f1(a: own Vec[R]) -> i64 { match Option.Some(a) { Some(v) => { println(f"r{v.len()}"); return 7 }, None => { return 0 } } }
+fn f2(a: own Vec[R]) -> i64 { match Option.Some(a) { Some(v) => { let u = v; println("r1"); return 7 }, None => { return 0 } } }
+fn f3(a: own Vec[R]) -> i64 { if let Some(v) = Option.Some(a) { let u = v; println("r1"); return 7 } return 0 }
+fn f4(a: own Vec[R]) -> i64 { let o = Option.Some(a); match o { Some(v) => { let u = v; println("r1"); return 7 }, None => { return 0 } } }
+fn f6(a: own Vec[R]) -> i64 { match Result.Ok(a) { Ok(v) => { let u = v; println("r1"); return 7 }, Err(e) => { return 0 } } }
+fn h2(a: own Vec[R]) -> i64 { match Option.Some(a) { Some(v) => { let u = v; return take(u) }, None => { return 0 } } }
+fn h3(a: own Vec[R]) -> i64 { let Some(v) = Option.Some(a) else { return 0 }; let u = v; println("r1"); return 7 }
+fn h4(a: own Vec[R]) -> i64 { match Result.Err(a) { Ok(x) => { return 1 }, Err(v) => { let u = v; println("r1"); return 7 } } }
+fn h6(a: own Vec[R], c: bool) -> i64 { match Option.Some(a) { Some(v) => { if c { let u = v; println("r1"); } return 7 }, None => { return 0 } } }
+fn h7(a: own Vec[R]) -> i64 { match Option.Some(a) { Some(v) => { let u = v; let w = u; println("r1"); return 7 }, None => { return 0 } } }
 fn l1() -> i64 { match Option.Some(mkv(40)) { Some(v) => { let u = v; println("r1"); return 7 }, None => { return 0 } } }
 fn l3() -> i64 { let a = mkv(42); match Option.Some(a) { Some(v) => { let u = v; println("r1"); return 7 }, None => { return 0 } } }
 fn main() {

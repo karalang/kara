@@ -1,6 +1,6 @@
 
 struct A { path: Vec[String] }
-fn f(a: A) -> i64 {
+fn f(a: own A) -> i64 {
     let A { path } = a;
     let mut t = 0;
     for s in path { if s.len() >= 0 { t = t + 1; } }

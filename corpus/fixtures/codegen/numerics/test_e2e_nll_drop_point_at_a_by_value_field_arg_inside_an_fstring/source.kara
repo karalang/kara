@@ -10,7 +10,7 @@ fn mk(n: i64) -> Res {
     return Res { id: n, buf: v }
 }
 
-fn hand(r: Res) -> Res { return r }
+fn hand(r: own Res) -> Res { return r }
 fn readf(r: Res) -> i64 { return r.buf[3] }
 
 fn main() {

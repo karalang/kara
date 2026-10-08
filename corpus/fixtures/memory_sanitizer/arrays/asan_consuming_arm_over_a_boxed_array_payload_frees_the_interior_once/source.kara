@@ -22,7 +22,7 @@ fn takeg(a: Array[i64, 3]) -> i64 { return a[0] + a[2]; }
 fn takeb(a: Array[D, 2]) -> i64 { return a[0].id; }
 fn take3(s: String) -> i64 { return s.len(); }
 
-fn eat(e: E) -> i64 {
+fn eat(e: own E) -> i64 {
     match e {
         E.A(a) => { return take(a); }
         E.B => { return 0; }

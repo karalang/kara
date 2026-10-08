@@ -1,6 +1,6 @@
 struct Q { a: String, n: i64 }
 impl Q {
-    fn both(self, o: Self) -> String { o.a }
+    fn both(self, o: own Self) -> String { o.a }
     fn pair(ref self, o: ref Self) -> i64 { self.n + o.n }
     fn tup(ref self, t: (Self, i64)) -> i64 { t.1 + t.0.n }
 }

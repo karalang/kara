@@ -9,10 +9,10 @@ fn vtail(a: D, b: D) -> Vec[D] { Vec[a, b] }
 fn keep1(a: D, b: D) -> Array[D, 1] { [a] }
 fn condv(a: D, k: bool) -> Vec[D] { if k { return Vec[a]; } Vec[mkd(90)] }
 fn witha(a: D) -> Array[D, 2] { return Array[a, mkd(91)]; }
-fn nest(a: D, b: D) -> (Array[D, 1], D) { ([a], b) }
+fn nest(a: D, b: own D) -> (Array[D, 1], D) { ([a], b) }
 fn fwd(a: D) -> Array[D, 1] { keep1(a, mkd(92)) }
 fn condt(a: D, k: bool) -> Array[D, 1] { if k { [a] } else { [mkd(93)] } }
-fn tup(a: D, b: D) -> (D, D) { (a, b) }
+fn tup(a: own D, b: own D) -> (D, D) { (a, b) }
 fn main() {
     println(f"a {usea(tail(mkd(1), mkd(2)))}");
     { let x = tail(mkd(3), mkd(4)); println(f"b {x[0].id}") }

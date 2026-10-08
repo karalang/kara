@@ -4,7 +4,7 @@ enum Ep { P(i64, i64), Q }
 shared enum H5 { Z(Ep), N }
 enum Es { S(String), T }
 shared enum H6 { Z(Es, i64), N }
-fn mkv(s: String) -> Vec[String] { let mut v = Vec.new(); v.push(s); v.push("second-heap-string-long-enough".to_string()); v }
+fn mkv(s: own String) -> Vec[String] { let mut v = Vec.new(); v.push(s); v.push("second-heap-string-long-enough".to_string()); v }
 fn hs(k: i64) -> String { f"heap-string-long-enough-{k}" }
 enum C { X, Y }
 shared enum Hc { Z(C), N }
@@ -14,7 +14,7 @@ shared enum H7 { Z { e: E, k: i64 }, N }
 fn mki(n: i64) -> Vec[i64] { let mut v = Vec.new(); for i in 0..n { v.push(i) }; v }
 fn take(h: H4) -> E { match h { H4.Z(e) => e, _ => E.B } }
 fn peek(h: ref H4) -> i64 { match h { H4.Z(E.A(x)) => x.len(), _ => 0 } }
-fn elen(e: E) -> i64 { match e { E.A(x) => x.len(), E.B => 0 } }
+fn elen(e: own E) -> i64 { match e { E.A(x) => x.len(), E.B => 0 } }
 fn main() {
     let a = H4.Z(E.B);
     println("c1");

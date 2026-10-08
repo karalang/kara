@@ -9,8 +9,8 @@ enum Box2[T] { V(T), N }
 enum Pair[A, B] { L(A), R(B) }
 enum Et { A(Sh), B }
 
-fn pg(b: Box2[Sh]) -> Box2[Sh] { return b }
-fn pc(b: Et) -> Et { return b }
+fn pg(b: own Box2[Sh]) -> Box2[Sh] { return b }
+fn pc(b: own Et) -> Et { return b }
 fn eg(b: Box2[Sh]) { println("  eaten") }
 fn ec(b: Et) { println("  eaten") }
 

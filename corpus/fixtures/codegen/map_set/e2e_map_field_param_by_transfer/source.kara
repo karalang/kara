@@ -10,9 +10,9 @@ fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}", xs: [i] }; }
 
 fn norebind(q: Q) -> i64 { return q.id; }
 fn readmap(q: Q) -> i64 { return q.tbl.len(); }
-fn rebind(q: Q) -> i64 { let m = q; return m.id; }
+fn rebind(q: own Q) -> i64 { let m = q; return m.id; }
 fn nodrop(q: QNoDrop) -> i64 { return q.id; }
-fn copyable(p: P) -> i64 { let m = p; return m.id; }
+fn copyable(p: own P) -> i64 { let m = p; return m.id; }
 
 fn main() {
     println("temp_arg"); println(f"  v={norebind(mkq(1))}");

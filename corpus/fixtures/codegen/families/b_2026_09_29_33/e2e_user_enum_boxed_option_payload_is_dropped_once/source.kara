@@ -11,20 +11,20 @@ enum Hn { N(Option[Nd]), E }
 struct W { h: Hs }
 fn hs(k: i64) -> String { f"ssssssss{k}" }
 fn mk(k: i64) -> Hs { Hs.P(Option.Some(hs(k))) }
-fn take(h: Hs) -> i64 { match h { Hs.P(o) => match o { Some(s) => s.len(), None => 0 }, Hs.Q => -1 } }
+fn take(h: own Hs) -> i64 { match h { Hs.P(o) => match o { Some(s) => s.len(), None => 0 }, Hs.Q => -1 } }
 fn peek(h: ref Hs) -> i64 { match h { Hs.P(o) => match o { Some(s) => s.len(), None => 0 }, Hs.Q => -1 } }
 fn gn(h: ref Hn) -> i64 { match h { Hn.N(o) => match o { Some(n) => n.v, None => 1 }, Hn.E => 0 } }
-fn outs(h: Hs) -> String { match h { Hs.P(Some(s)) => s, _ => "none" } }
-fn outo(h: Hs) -> Option[String] { match h { Hs.P(o) => o, Hs.Q => None } }
-fn nest(h: Hs) -> i64 { match h { Hs.P(o) => match o { Some(s) => s.len(), None => 0 }, Hs.Q => -1 } }
+fn outs(h: own Hs) -> String { match h { Hs.P(Some(s)) => s, _ => "none" } }
+fn outo(h: own Hs) -> Option[String] { match h { Hs.P(o) => o, Hs.Q => None } }
+fn nest(h: own Hs) -> i64 { match h { Hs.P(o) => match o { Some(s) => s.len(), None => 0 }, Hs.Q => -1 } }
 fn keepo(o: Option[String]) -> i64 { match o { Some(s) => s.len(), None => 0 } }
-fn pass(h: Hs) -> i64 { match h { Hs.P(o) => keepo(o), Hs.Q => -1 } }
-fn back(h: Hs) -> Hs { h }
+fn pass(h: own Hs) -> i64 { match h { Hs.P(o) => keepo(o), Hs.Q => -1 } }
+fn back(h: own Hs) -> Hs { h }
 enum Hk { P { o: Option[String], k: i64 }, Q }
 enum Hw { P(Option[Vec[String]]), Q }
 enum Hq { P(Option[Option[String]]), Q }
-fn kk(h: Hk) -> Option[String] { match h { Hk.P { o, k } => o, Hk.Q => None } }
-fn le(h: Hs) -> i64 { let Hs.P(Some(s)) = h else { return -1 }; s.len() }
+fn kk(h: own Hk) -> Option[String] { match h { Hk.P { o, k } => o, Hk.Q => None } }
+fn le(h: own Hs) -> i64 { let Hs.P(Some(s)) = h else { return -1 }; s.len() }
 fn main() {
     { let h = Hs.P(Option.Some(hs(1))); println("a") }
     { let h = Hv.P(Option.Some([1, 2, 3])); println("b") }

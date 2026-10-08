@@ -1,10 +1,10 @@
 struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
-fn f(r: R) -> (R, i64) { return (r, 9); }
-fn fa(x: Array[R, 2]) -> Array[R, 2] { return x; }
+fn f(r: own R) -> (R, i64) { return (r, 9); }
+fn fa(x: own Array[R, 2]) -> Array[R, 2] { return x; }
 struct H { n: i64 }
-impl H { fn w(self, r: R) -> (R, i64) { return (r, 7); } }
+impl H { fn w(self, r: own R) -> (R, i64) { return (r, 7); } }
 fn main() {
     let n = 1;
     let c = true;

@@ -8,10 +8,10 @@ fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}" }; }
 struct Box2 { mut xs: Vec[R] }
 
 impl Box2 {
-    fn before(mut ref self, r: R, k: bool) { println(f"s{r.inner.v}"); if k { self.xs.push(r); } }
-    fn bare(mut ref self, r: R, k: bool) { if k { self.xs.push(r); } }
+    fn before(mut ref self, r: own R, k: bool) { println(f"s{r.inner.v}"); if k { self.xs.push(r); } }
+    fn bare(mut ref self, r: own R, k: bool) { if k { self.xs.push(r); } }
 }
-fn pf(v: mut ref Vec[P], p: P, k: bool) { if k { v.push(p); } println(f"s{p.id}"); }
+fn pf(v: mut ref Vec[P], p: own P, k: bool) { if k { v.push(p); } println(f"s{p.id}"); }
 
 fn main() {
     let mut b = Box2 { xs: Vec.new() };

@@ -1,5 +1,5 @@
 enum Et { S(String), B }
-impl Et { fn passm(self) -> Et { return self; } }
+impl Et { fn passm(own self) -> Et { return self; } }
 fn main() {
     let a = Et.S(f"b1011-buffer-aaaaaaaa");
     let z = a.passm();

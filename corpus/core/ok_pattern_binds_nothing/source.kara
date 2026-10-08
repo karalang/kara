@@ -1,7 +1,7 @@
 enum Level { Info, Error(String) }
 impl Drop for Level { fn drop(mut ref self) { println("drop level"); } }
 enum Op { Undo, Add(String) }
-fn eat(o: Op) {
+fn eat(o: own Op) {
     match o {
         Op.Add(s) => println(f"add {s}"),
         Op.Undo => println("undo"),

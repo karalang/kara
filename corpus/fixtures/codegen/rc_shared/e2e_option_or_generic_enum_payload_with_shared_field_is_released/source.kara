@@ -22,11 +22,11 @@ fn j_loop() { for i in 0..3 { let o = Some(mk(i)); println(f"j{o.is_some()}") } 
 fn k_enum() { let o = Some(En.A(Sh { k: 1 })); let p = Some(P6 { e: En.A(Sh { k: 2 }), id: 2 }); println(f"k{o.is_some()}{p.is_some()}") }
 fn l_moves() { let mut m: Map[i64, Option[S2]] = Map.new(); let o = Some(mk2(13)); m.insert(1, o); let p = Some(mk2(14)); let w = W { p: p }; println(f"l{m.len()}") }
 fn ret() -> Option[S2] { let o = Some(mk2(15)); return o }
-fn midS3(v: S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
-fn wrap3(v: S3) -> Option[S3] { return Some(v) }
-fn inner3(a: S3) { let o = Some(a); println(f"n{o.is_some()}") }
-fn inner2(a: S2) { let o = Some(a); println(f"n{o.is_some()}") }
-fn innerho(a: S3) { let o = Ho.Full(a); println("nho") }
+fn midS3(v: own S3, c: bool) -> Option[S3] { if c { return Some(v) } return None }
+fn wrap3(v: own S3) -> Option[S3] { return Some(v) }
+fn inner3(a: own S3) { let o = Some(a); println(f"n{o.is_some()}") }
+fn inner2(a: own S2) { let o = Some(a); println(f"n{o.is_some()}") }
+fn innerho(a: own S3) { let o = Ho.Full(a); println("nho") }
 fn n_params() { let s = mk(18); let o = midS3(s, true); let s2 = mk(19); let o2 = midS3(s2, false); let s3 = mk(20); let o3 = wrap3(s3); let s4 = mk(21); inner3(s4); let s5 = mk2(22); inner2(s5); let s6 = mk(23); innerho(s6); println("n") }
 fn main() {
     a_some();

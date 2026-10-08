@@ -7,17 +7,17 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}{self.s}") } }
 struct H { n: i64 }
 fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
-fn c1(s: P, c: bool) -> Option[P] { let o = Some(s); if c { return o } return None }
-fn cs2(s: S2, c: bool) -> Option[S2] { let o = Some(s); if c { return o } return None }
-fn cr(s: R, c: bool) -> Option[R] { let o = Some(s); if c { return o } return None }
-fn ce(s: P, c: bool) -> Result[i64, P] { let o: Result[i64, P] = Err(s); if c { return o } return Ok(1) }
-fn cq(s: P, c: bool) -> Option[P] { let o = Some(s); let q = o; if c { return q } return None }
-fn nq(s: P, c: bool) -> Option[P] { let o = Some(s); if c { let q = o; return q } return None }
-fn sq(s: S2, c: bool) -> Option[S2] { let o = Some(s); let q = o; if c { return q } return None }
-fn ct(s: P, c: bool) -> Option[P] { let o = Some(s); if c { o } else { None } }
-fn cl(s: P, n: i64) -> Option[P] { let o = Some(s); let mut i = 0; while i < n { if i == 2 { return o } i = i + 1; } return None }
-fn cp(s: P, c: bool) -> Option[P] { let o = Some(s); println("in"); if c { return o } println("no"); return None }
-impl H { fn m(ref self, s: P, c: bool) -> Option[P] { let o = Some(s); if c { return o } return None } fn a(s: P, c: bool) -> Option[P] { let o = Some(s); if c { return o } return None } }
+fn c1(s: own P, c: bool) -> Option[P] { let o = Some(s); if c { return o } return None }
+fn cs2(s: own S2, c: bool) -> Option[S2] { let o = Some(s); if c { return o } return None }
+fn cr(s: own R, c: bool) -> Option[R] { let o = Some(s); if c { return o } return None }
+fn ce(s: own P, c: bool) -> Result[i64, P] { let o: Result[i64, P] = Err(s); if c { return o } return Ok(1) }
+fn cq(s: own P, c: bool) -> Option[P] { let o = Some(s); let q = o; if c { return q } return None }
+fn nq(s: own P, c: bool) -> Option[P] { let o = Some(s); if c { let q = o; return q } return None }
+fn sq(s: own S2, c: bool) -> Option[S2] { let o = Some(s); let q = o; if c { return q } return None }
+fn ct(s: own P, c: bool) -> Option[P] { let o = Some(s); if c { o } else { None } }
+fn cl(s: own P, n: i64) -> Option[P] { let o = Some(s); let mut i = 0; while i < n { if i == 2 { return o } i = i + 1; } return None }
+fn cp(s: own P, c: bool) -> Option[P] { let o = Some(s); println("in"); if c { return o } println("no"); return None }
+impl H { fn m(ref self, s: own P, c: bool) -> Option[P] { let o = Some(s); if c { return o } return None } fn a(s: own P, c: bool) -> Option[P] { let o = Some(s); if c { return o } return None } }
 fn a() { let p = c1(P { id: 1 }, true); println(f"a{p.is_some()}") }
 fn b() { let s = P { id: 2 }; let p = c1(s, false); println(f"b{p.is_some()}") }
 fn c() { let s = mk2(3); let p = cs2(s, true); println(f"c{p.is_some()}") }

@@ -6,7 +6,7 @@ fn make(v: f64) -> Tensor[f64, [2, 2]] {
 
 fn total(t: Tensor[f64, [2, 2]]) -> f64 { t.sum() }
 
-fn id(t: Tensor[f64, [2, 2]]) -> Tensor[f64, [2, 2]] { t }
+fn id(t: own Tensor[f64, [2, 2]]) -> Tensor[f64, [2, 2]] { t }
 
 fn main() {
     let mut i: i64 = 0;

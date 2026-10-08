@@ -5,7 +5,7 @@ enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("dE") } }
 
 #[allow(partial_move_of_drop_enum)]
-fn looped(b: E) -> i64 {
+fn looped(b: own E) -> i64 {
     let mut i: i64 = 0;
     let mut acc: i64 = 0;
     while i < 2 {

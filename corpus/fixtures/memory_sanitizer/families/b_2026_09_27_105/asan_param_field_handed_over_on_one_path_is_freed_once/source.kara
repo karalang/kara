@@ -5,16 +5,16 @@ struct W { r: D, s: D, b: i64 }
 fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
 struct X { w: W, t: D }
 fn mkx(n: i64) -> X { X { w: mkw(n), t: mkd(n + 300) } }
-fn keep(d: D) -> D { d }
-fn ret(w: W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } 0 }
-fn push(w: W, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(w.r); } xs.len() }
-fn tailpush(w: W, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(w.r) } xs.len() }
-fn viaalias(w: W, c: bool) -> i64 { let r = w.r; if c { let k = keep(r); return k.id; } 0 }
-fn viaaliaspush(w: W, c: bool) -> i64 { let r = w.r; let mut xs: Vec[D] = Vec.new(); if c { xs.push(r); } xs.len() }
-fn arm(w: W, c: bool) -> i64 { match c { true => { let k = keep(w.r); k.id } false => 0 } }
-fn twohop(x: X, c: bool) -> i64 { if c { let k = keep(x.w.r); return k.id; } 0 }
-fn fwd(w: W, c: bool) -> i64 { ret(w, c) }
-impl W { fn assoc(w: W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } 0 } }
+fn keep(d: own D) -> D { d }
+fn ret(w: own W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } 0 }
+fn push(w: own W, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(w.r); } xs.len() }
+fn tailpush(w: own W, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(w.r) } xs.len() }
+fn viaalias(w: own W, c: bool) -> i64 { let r = w.r; if c { let k = keep(r); return k.id; } 0 }
+fn viaaliaspush(w: own W, c: bool) -> i64 { let r = w.r; let mut xs: Vec[D] = Vec.new(); if c { xs.push(r); } xs.len() }
+fn arm(w: own W, c: bool) -> i64 { match c { true => { let k = keep(w.r); k.id } false => 0 } }
+fn twohop(x: own X, c: bool) -> i64 { if c { let k = keep(x.w.r); return k.id; } 0 }
+fn fwd(w: own W, c: bool) -> i64 { ret(w, c) }
+impl W { fn assoc(w: own W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } 0 } }
 fn main() {
     println(f"a{ret(mkw(1), false)}"); println(f"a{ret(mkw(2), true)}");
     println(f"b{push(mkw(3), false)}"); println(f"b{push(mkw(4), true)}");

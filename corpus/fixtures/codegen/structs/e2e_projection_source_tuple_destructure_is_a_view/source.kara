@@ -4,11 +4,11 @@ struct H  { pe: (R, i64) }
 struct Hs { pe: (R, i64), name: String }
 struct G  { h: H }
 
-fn f1(h: H)   { let (r, k) = h.pe;   let m = r; println(f"  b{m.id}") }
-fn f2(hs: Hs) { let (r, k) = hs.pe;  let m = r; println(f"  b{m.id} {hs.name}") }
-fn f3(g: G)   { let (r, k) = g.h.pe; let m = r; println(f"  b{m.id}") }
-fn f4(h: H)   { let (r, k) = h.pe;   println(f"  b{r.id}") }
-fn f5(h: H)   { let h2 = h; let (r, k) = h2.pe; let m = r; println(f"  b{m.id}") }
+fn f1(h: own H)   { let (r, k) = h.pe;   let m = r; println(f"  b{m.id}") }
+fn f2(hs: own Hs) { let (r, k) = hs.pe;  let m = r; println(f"  b{m.id} {hs.name}") }
+fn f3(g: own G)   { let (r, k) = g.h.pe; let m = r; println(f"  b{m.id}") }
+fn f4(h: own H)   { let (r, k) = h.pe;   println(f"  b{r.id}") }
+fn f5(h: own H)   { let h2 = h; let (r, k) = h2.pe; let m = r; println(f"  b{m.id}") }
 fn f6(h: ref H) { println(f"  b{h.pe.0.id}") }
 
 fn main() {

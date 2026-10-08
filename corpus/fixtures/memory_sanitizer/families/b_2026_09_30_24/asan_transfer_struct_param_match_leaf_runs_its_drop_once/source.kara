@@ -6,14 +6,14 @@ impl Drop for Rs { fn drop(mut ref self) { println(f"ds{self.id} {self.s.len()}"
 enum E { A(R), B }
 fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
 fn eat(r: R) -> i64 { r.id }
-fn a1[T](g: G[T]) -> i64 { match g { G { v, n } => { let w = v; n } } }
-fn a2(g: G[R]) -> i64 { match g { G { v, n } => n } }
-fn a3(g: G[R]) -> i64 { match g { G { v, n } => { println(f"r{v.id}"); n } } }
-fn a4(g: G[Rs]) -> i64 { match g { G { v, n } => n } }
-fn a5(g: G[R]) -> i64 { match g { G { v, n } => eat(v) + n } }
-fn a6(g: G[Rs]) -> i64 { match g { G { v, n } => { if n > 0 { return n } v.id } } }
-fn a7(g: G[E]) -> i64 { match g { G { v, n } => { let w = v; n } } }
-fn a8(g: G[Vec[Rs]]) -> i64 { match g { G { v, n } => { let w = v; n } } }
+fn a1[T](g: own G[T]) -> i64 { match g { G { v, n } => { let w = v; n } } }
+fn a2(g: own G[R]) -> i64 { match g { G { v, n } => n } }
+fn a3(g: own G[R]) -> i64 { match g { G { v, n } => { println(f"r{v.id}"); n } } }
+fn a4(g: own G[Rs]) -> i64 { match g { G { v, n } => n } }
+fn a5(g: own G[R]) -> i64 { match g { G { v, n } => eat(v) + n } }
+fn a6(g: own G[Rs]) -> i64 { match g { G { v, n } => { if n > 0 { return n } v.id } } }
+fn a7(g: own G[E]) -> i64 { match g { G { v, n } => { let w = v; n } } }
+fn a8(g: own G[Vec[Rs]]) -> i64 { match g { G { v, n } => { let w = v; n } } }
 fn mkg(k: i64) -> G[R] { G { v: R { id: k }, n: 1 } }
 fn main() {
     println(a1(G { v: R { id: 1 }, n: 1 }));

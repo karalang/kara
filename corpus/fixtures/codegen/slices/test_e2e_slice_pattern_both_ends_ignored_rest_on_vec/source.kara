@@ -1,5 +1,5 @@
 
-fn ends(v: Vec[i64]) -> i64 {
+fn ends(v: own Vec[i64]) -> i64 {
     match v {
         [first, .., last] => first + last,
         [only] => only,

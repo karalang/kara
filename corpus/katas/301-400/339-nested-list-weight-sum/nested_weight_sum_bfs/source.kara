@@ -18,7 +18,7 @@ enum Nested {
     List(Vec[Nested]),
 }
 
-fn weight_sum(items: Vec[Nested]) -> i64 {
+fn weight_sum(items: own Vec[Nested]) -> i64 {
     let mut total = 0;
     let mut depth = 1;
     let mut level = items;

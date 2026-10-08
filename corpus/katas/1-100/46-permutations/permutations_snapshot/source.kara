@@ -31,7 +31,7 @@ fn contains(path: ref Vec[i64], x: i64) -> bool {
     false
 }
 
-fn backtrack(nums: ref Vec[i64], path: Vec[i64], out: mut ref Vec[Vec[i64]]) {
+fn backtrack(nums: ref Vec[i64], path: own Vec[i64], out: mut ref Vec[Vec[i64]]) {
     let n = nums.len();
     if path.len() == n {
         out.push(path);

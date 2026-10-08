@@ -1,7 +1,7 @@
 
 shared struct N { v: i64 }
 
-fn probe(xs: Vec[weak N]) -> i64 {
+fn probe(xs: own Vec[weak N]) -> i64 {
     let work = xs;
     match work[0] { Some(x) => { x.v } None => { 0 - 1 } }
 }

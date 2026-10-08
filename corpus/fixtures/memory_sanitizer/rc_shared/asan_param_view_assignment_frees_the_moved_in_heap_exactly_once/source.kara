@@ -9,11 +9,11 @@ fn mk(n: i64) -> R {
     return R { id: n, tag: f"tag-payloadpayload-{n}", xs: v }
 }
 
-fn basic(h: R) -> i64 { let mut a: R = mk(1); a = h; return a.id }
-fn rearm(h: R) -> i64 { let mut a: R = mk(2); a = h; a = mk(5); return a.id }
-fn chain(h: R) -> i64 { let mut a: R = mk(3); a = h; let mut b: R = mk(4); b = a; return b.id }
-fn viewlet(h: R) -> i64 { let a = h; let mut b: R = mk(6); b = a; return b.id }
-fn cond(h: R, c: bool) -> i64 { let mut a: R = mk(7); if c { a = h; } return a.id }
+fn basic(h: own R) -> i64 { let mut a: R = mk(1); a = h; return a.id }
+fn rearm(h: own R) -> i64 { let mut a: R = mk(2); a = h; a = mk(5); return a.id }
+fn chain(h: own R) -> i64 { let mut a: R = mk(3); a = h; let mut b: R = mk(4); b = a; return b.id }
+fn viewlet(h: own R) -> i64 { let a = h; let mut b: R = mk(6); b = a; return b.id }
+fn cond(h: own R, c: bool) -> i64 { let mut a: R = mk(7); if c { a = h; } return a.id }
 
 fn main() {
     let mut i: i64 = 0;

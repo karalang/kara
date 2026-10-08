@@ -6,7 +6,7 @@ fn pick(b: i128, k: i64) -> i128 {
     }
 }
 
-fn pk(b: i128, c: bool) -> i128 {
+fn pk(b: own i128, c: bool) -> i128 {
     if c { 1 } else { b }
 }
 

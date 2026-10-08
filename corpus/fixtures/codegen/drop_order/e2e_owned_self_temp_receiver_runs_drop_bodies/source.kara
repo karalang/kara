@@ -12,10 +12,10 @@ impl OwnD { fn eat(self) { println(f"  od{self.n}") } }
 impl R {
   fn ident(self) { println(f"  id{self.id}") }
   fn area(self) -> i64 { return self.id * 2; }
-  fn me(self) -> R { return self; }
+  fn me(own self) -> R { return self; }
 }
 struct W { a: R }
-impl W { fn unwrap_a(self) -> R { return self.a; } fn opt(self) -> Option[R] { return Option.Some(self.a); } }
+impl W { fn unwrap_a(own self) -> R { return self.a; } fn opt(own self) -> Option[R] { return Option.Some(self.a); } }
 
 fn p_plain(h: HoRes) { println(f"  pd{h.a.id}") }
 

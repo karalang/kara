@@ -152,7 +152,7 @@ impl World {
         self.positions[e.index].unwrap()
     }
 
-    fn spawn(mut ref self, kind: String, team: Team, pos: Pos) -> EntityRef {
+    fn spawn(mut ref self, kind: own String, team: Team, pos: Pos) -> EntityRef {
         let t = template(kind).unwrap();
         let e = match self.free.pop() {
             Some(index) => {

@@ -9,12 +9,12 @@ struct Dx[T] { v: T, k: i64 }
 impl[T] Drop for Dx[T] { fn drop(mut ref self) { println(f"dDx{self.k}") } }
 enum Ho[T] { Full(T), Empty }
 struct K { n: i64 }
-impl K { fn keep[T](ref self, x: T) -> T { return x } }
-fn idg[T](v: T) -> T { return v }
-fn wrap[T](v: T) -> Bx[T] { return Bx { v: v } }
-fn wrapd[T](v: T) -> Dx[T] { return Dx { v: v, k: 9 } }
-fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }
-fn takep(h: Ho[P]) { match h { Ho.Full(r) => println(f"p{r.id}"), Ho.Empty => println("e") } }
+impl K { fn keep[T](ref self, x: own T) -> T { return x } }
+fn idg[T](v: own T) -> T { return v }
+fn wrap[T](v: own T) -> Bx[T] { return Bx { v: v } }
+fn wrapd[T](v: own T) -> Dx[T] { return Dx { v: v, k: 9 } }
+fn mkh[T](v: own T) -> Ho[T] { return Ho.Full(v); }
+fn takep(h: own Ho[P]) { match h { Ho.Full(r) => println(f"p{r.id}"), Ho.Empty => println("e") } }
 fn a_let() { let p = P { id: 1 }; let q = idg(p); println(f"q{q.id}") }
 fn b_wrap() { let p = P { id: 2 }; let b = wrap(p); println(f"b{b.v.id}") }
 fn c_arg() { let p = P { id: 3 }; takep(mkh(p)) }

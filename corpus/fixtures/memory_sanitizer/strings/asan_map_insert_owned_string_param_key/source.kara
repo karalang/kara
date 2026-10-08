@@ -1,5 +1,5 @@
 
-fn store(m: mut ref Map[String, i64], k: String) {
+fn store(m: mut ref Map[String, i64], k: own String) {
     m.insert(k, 1i64);
 }
 

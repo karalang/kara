@@ -6,19 +6,19 @@ impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 struct W { e: E }
 enum F { A(R), B }
 impl E {
-    fn m_read(self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
-    fn m_r(self) -> R { match self { E.A(r) => { return r; } E.B => { return mk(0); } } }
-    fn m_print(self) { match self { E.A(r) => { println(f"  p{r.id}"); } E.B => { println("  pB"); } } }
+    fn m_read(own self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn m_r(own self) -> R { match self { E.A(r) => { return r; } E.B => { return mk(0); } } }
+    fn m_print(own self) { match self { E.A(r) => { println(f"  p{r.id}"); } E.B => { println("  pB"); } } }
     fn m_ref(ref self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
     fn m_iflet(self) -> i64 { if let E.A(r) = self { return r.id; } else { return 0; } }
-    fn me(self) -> E { return self; }
-    fn wrap(self) -> W { return W { e: self }; }
-    fn m_opt(self) -> Option[R] { match self { E.A(r) => { return Some(r); } E.B => { return None; } } }
-    fn m_optself(self) -> Option[E] { return Some(self); }
+    fn me(own self) -> E { return self; }
+    fn wrap(own self) -> W { return W { e: self }; }
+    fn m_opt(own self) -> Option[R] { match self { E.A(r) => { return Some(r); } E.B => { return None; } } }
+    fn m_optself(own self) -> Option[E] { return Some(self); }
     fn m_mut(mut ref self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
 }
 impl F {
-    fn m_read(self) -> i64 { match self { F.A(r) => { return r.id; } F.B => { return 0; } } }
+    fn m_read(own self) -> i64 { match self { F.A(r) => { return r.id; } F.B => { return 0; } } }
     fn m_ref(ref self) -> i64 { match self { F.A(r) => { return r.id; } F.B => { return 0; } } }
 }
 fn main() {

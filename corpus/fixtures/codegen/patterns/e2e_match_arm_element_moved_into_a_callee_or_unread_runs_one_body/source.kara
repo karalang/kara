@@ -4,22 +4,22 @@ fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
 fn consume(x: R) -> i64 { return x.id }
 struct H { n: i64 }
 impl H {
-    fn m_call(ref self, t: (R, i64)) -> i64 { match t { (r, k) => { consume(r) + self.n } } }
-    fn m_unread(ref self, t: (R, i64)) -> i64 { match t { (r, k) => { k + self.n } } }
+    fn m_call(ref self, t: own (R, i64)) -> i64 { match t { (r, k) => { consume(r) + self.n } } }
+    fn m_unread(ref self, t: own (R, i64)) -> i64 { match t { (r, k) => { k + self.n } } }
 }
-fn p_call(t: (R, i64)) -> i64 { match t { (r, k) => { consume(r) } } }
-fn p_unread(t: (R, i64)) -> i64 { match t { (r, k) => { k } } }
-fn p_ret(t: (R, i64)) -> R { match t { (r, k) => { r } } }
-fn p_read(t: (R, i64)) -> i64 { match t { (r, k) => { r.id } } }
-fn p_rebind_call(t: (R, i64)) -> i64 { match t { (r, k) => { let g: R = r; consume(g) } } }
-fn p_wild(t: (R, i64)) -> i64 { match t { (_, k) => { k } } }
-fn p_let_call(t: (R, i64)) -> i64 { let (r, k) = t; consume(r) }
-fn t_two(t: (R, R)) -> R { match t { (a, b) => { a } } }
-fn t_two_call(t: (R, R)) -> i64 { match t { (a, b) => { consume(a) } } }
-fn t_nested(t: ((R, i64), i64)) -> i64 { match t { ((r, j), k) => { k } } }
-fn t_cond(t: (R, i64), c: bool) -> i64 { match t { (r, k) => { if c { consume(r) } else { k } } } }
-fn t_nested_match(t: (R, i64)) -> i64 { match t { (r, k) => { match k { 0 => { consume(r) }, _ => { k } } } } }
-fn t_two_arms(t: (R, i64)) -> i64 { match t { (r, 0) => { consume(r) }, (r, k) => { k } } }
+fn p_call(t: own (R, i64)) -> i64 { match t { (r, k) => { consume(r) } } }
+fn p_unread(t: own (R, i64)) -> i64 { match t { (r, k) => { k } } }
+fn p_ret(t: own (R, i64)) -> R { match t { (r, k) => { r } } }
+fn p_read(t: own (R, i64)) -> i64 { match t { (r, k) => { r.id } } }
+fn p_rebind_call(t: own (R, i64)) -> i64 { match t { (r, k) => { let g: R = r; consume(g) } } }
+fn p_wild(t: own (R, i64)) -> i64 { match t { (_, k) => { k } } }
+fn p_let_call(t: own (R, i64)) -> i64 { let (r, k) = t; consume(r) }
+fn t_two(t: own (R, R)) -> R { match t { (a, b) => { a } } }
+fn t_two_call(t: own (R, R)) -> i64 { match t { (a, b) => { consume(a) } } }
+fn t_nested(t: own ((R, i64), i64)) -> i64 { match t { ((r, j), k) => { k } } }
+fn t_cond(t: own (R, i64), c: bool) -> i64 { match t { (r, k) => { if c { consume(r) } else { k } } } }
+fn t_nested_match(t: own (R, i64)) -> i64 { match t { (r, k) => { match k { 0 => { consume(r) }, _ => { k } } } } }
+fn t_two_arms(t: own (R, i64)) -> i64 { match t { (r, 0) => { consume(r) }, (r, k) => { k } } }
 fn main() {
     let h: H = H { n: 100 };
     { let d: i64 = p_call((mk(1), 0)); println(f"r{d}"); println("one") }

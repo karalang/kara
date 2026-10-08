@@ -6,13 +6,13 @@ impl Drop for P { fn drop(mut ref self) { println(f"  dP{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
 fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}", xs: [i] }; }
 impl R {
-    fn take(self) -> i64 { let m = self; return m.id; }
-    fn twice(self) -> i64 { let m = self; let n = m; return n.id; }
+    fn take(own self) -> i64 { let m = self; return m.id; }
+    fn twice(own self) -> i64 { let m = self; let n = m; return n.id; }
     fn plain(self) -> i64 { return self.id; }
     fn borrowed(ref self) -> i64 { return self.id; }
 }
-impl P { fn take(self) -> i64 { let m = self; return m.id; } }
-fn top(r: R) -> i64 { let m = r; return m.id; }
+impl P { fn take(own self) -> i64 { let m = self; return m.id; } }
+fn top(r: own R) -> i64 { let m = r; return m.id; }
 
 fn main() {
     println("temp_receiver"); println(f"  v={mk(1).take()}");

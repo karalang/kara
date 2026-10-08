@@ -2,12 +2,12 @@ struct R { id: i64, tag: String, xs: Vec[i64] }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
 struct Gd[T] { r: T, z: i64 }
-fn kEsc[T](p: (T, i64)) -> T { let (r, z) = p; println("in"); return r; }
-fn nEsc(p: (R, i64)) -> R { let (r, z) = p; println("in2"); return r; }
-fn zEsc[T](p: (T, i64)) -> i64 { let (r, z) = p; println("in3"); return z; }
-fn kEsc1[T](p: (i64, T)) -> T { let (z, r) = p; println("in5"); return r; }
-fn tOnly[T](p: (T, i64)) { let (r, z) = p; println("in6"); }
-fn gEsc[T](h: Gd[T]) -> T { let Gd { r, z } = h; println("in7"); return r; }
+fn kEsc[T](p: own (T, i64)) -> T { let (r, z) = p; println("in"); return r; }
+fn nEsc(p: own (R, i64)) -> R { let (r, z) = p; println("in2"); return r; }
+fn zEsc[T](p: own (T, i64)) -> i64 { let (r, z) = p; println("in3"); return z; }
+fn kEsc1[T](p: own (i64, T)) -> T { let (z, r) = p; println("in5"); return r; }
+fn tOnly[T](p: own (T, i64)) { let (r, z) = p; println("in6"); }
+fn gEsc[T](h: own Gd[T]) -> T { let Gd { r, z } = h; println("in7"); return r; }
 fn main() {
   let a = (mk(91), 9);  let o1 = kEsc(a);   println(f"got{o1.id}");
   let b = (mk(92), 9);  let o2 = nEsc(b);   println(f"got{o2.id}");

@@ -1,19 +1,19 @@
 struct D { id: i64, name: String }
 impl Drop for D { fn drop(mut ref self) { println(f"d{self.id}{self.name}") } }
 fn mkd(n: i64) -> D { D { id: n, name: f"n{n}" } }
-fn keep(d: D) -> D { d }
+fn keep(d: own D) -> D { d }
 struct W { r: D, s: D, b: i64 }
 fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
 struct T { w: W, t: D }
 fn mkt(n: i64) -> T { T { w: mkw(n), t: mkd(n + 300) } }
 impl W {
-    fn take(self) -> i64 { let k = keep(self.r); k.id }
-    fn pushr(self) -> i64 { let mut xs: Vec[D] = Vec.new(); xs.push(self.r); xs.len() }
-    fn both(self) -> D { let k = keep(self.r); println(f"k{k.id}"); self.s }
+    fn take(own self) -> i64 { let k = keep(self.r); k.id }
+    fn pushr(own self) -> i64 { let mut xs: Vec[D] = Vec.new(); xs.push(self.r); xs.len() }
+    fn both(own self) -> D { let k = keep(self.r); println(f"k{k.id}"); self.s }
     fn getb(self) -> i64 { self.b }
 }
 impl T {
-    fn deep(self) -> i64 { let k = keep(self.w.r); k.id }
+    fn deep(own self) -> i64 { let k = keep(self.w.r); k.id }
 }
 fn main() {
     let w = mkw(1);

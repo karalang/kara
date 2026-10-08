@@ -1,4 +1,4 @@
-fn run_cmd(prog: String) -> Result[Child, IoError] with sends(ProcessTable) {
+fn run_cmd(prog: own String) -> Result[Child, IoError] with sends(ProcessTable) {
              Command.new(prog).spawn()
          }
          fn main() {

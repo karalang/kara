@@ -2,7 +2,7 @@
 struct Pair { word: String, n: i64 }
 struct Deep { inner: Pair, tag: i64 }
 struct Outer { mid: Deep, label: String }
-fn sink(s: String) -> String { s + "!" }
+fn sink(s: own String) -> String { s + "!" }
 fn main() {
     let k = env.args().len() as i64;
     let mut i = 0i64;

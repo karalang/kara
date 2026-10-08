@@ -5,12 +5,12 @@ struct S { r: R, s: String }
 fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
 fn mm(i: i64) -> Option[Option[S]] { Some(Some(mk(i))) }
 fn mr(i: i64) -> Option[Result[S, i64]] { Some(Ok(mk(i))) }
-fn c1(x: S) { Some(Some(x)); println("in1") }
-fn c2(x: S) { let _ = Some(Some(x)); println("in2") }
-fn c3(x: S) -> bool { Some(Some(x)).is_some() }
-fn c4(x: S) { let o = Some(Some(x)); println("in4") }
-fn c5(x: S) { let o = Some(Some(x)); match o { Some(Some(s)) => println(f"m{s.r.id}"), _ => println("x") } println("in5") }
-fn c6(x: S) { let o = Some(Some(x)); let o2 = o; println("in6") }
+fn c1(x: own S) { Some(Some(x)); println("in1") }
+fn c2(x: own S) { let _ = Some(Some(x)); println("in2") }
+fn c3(x: own S) -> bool { Some(Some(x)).is_some() }
+fn c4(x: own S) { let o = Some(Some(x)); println("in4") }
+fn c5(x: own S) { let o = Some(Some(x)); match o { Some(Some(s)) => println(f"m{s.r.id}"), _ => println("x") } println("in5") }
+fn c6(x: own S) { let o = Some(Some(x)); let o2 = o; println("in6") }
 fn main() {
     Some(mk(1));
     println("a");

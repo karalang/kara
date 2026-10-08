@@ -1,6 +1,6 @@
 
 distinct type UserId = i64;
-fn identity(id: UserId) -> UserId { id }
+fn identity(id: own UserId) -> UserId { id }
 fn main() {
     let u = identity(UserId(7));
     println(u.raw());

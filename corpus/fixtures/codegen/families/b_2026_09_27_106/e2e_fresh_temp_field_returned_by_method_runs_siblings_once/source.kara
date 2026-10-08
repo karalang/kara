@@ -6,16 +6,16 @@ fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
 struct T { w: W, t: D }
 fn mkt(n: i64) -> T { T { w: mkw(n), t: mkd(n + 300) } }
 struct H { k: i64 }
-impl H { fn g(ref self, w: W) -> D { w.r } }
+impl H { fn g(ref self, w: own W) -> D { w.r } }
 impl W {
-    fn getr(self) -> D { self.r }
-    fn gets(self) -> D { return self.s; }
+    fn getr(own self) -> D { self.r }
+    fn gets(own self) -> D { return self.s; }
     fn getb(self) -> i64 { self.b }
-    fn dest(self) -> D { let W { r, s, b } = self; r }
+    fn dest(own self) -> D { let W { r, s, b } = self; r }
 }
 impl T {
-    fn deep(self) -> D { self.w.r }
-    fn getw(self) -> W { self.w }
+    fn deep(own self) -> D { self.w.r }
+    fn getw(own self) -> W { self.w }
 }
 fn main() {
     let h = H { k: 0 };

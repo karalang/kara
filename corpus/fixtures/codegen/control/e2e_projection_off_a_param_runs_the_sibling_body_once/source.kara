@@ -4,15 +4,15 @@ fn mk(i: i64) -> R { return R { id: i, name: f"n{i}", xs: [i] }; }
 struct S3 { a: R, b: R }
 struct T { r: R, v: Vec[i64] }
 
-fn proj_none(s: S3) -> i64 { let a = s.a; println("  mid"); return 1; }
-fn proj_ret(s: S3) -> i64 { let a = s.a; println("  mid"); return a.id; }
-fn proj_b(s: S3) -> i64 { let b = s.b; println("  mid"); return b.id; }
-fn proj_both(s: S3) -> i64 { let a = s.a; let b = s.b; println("  mid"); return a.id + b.id; }
-fn proj_reads(s: S3) -> i64 { let a = s.a; println(f"  m{a.id}"); let b = s.b; println(f"  m{b.id}"); return 1; }
-fn proj_whole(s: S3) -> R { let a = s.a; println("  mid"); return a; }
-fn proj_heap(t: T) -> i64 { let r = t.r; println("  mid"); return r.id + t.v.len(); }
-fn destr(s: S3) -> i64 { let S3 { a, b } = s; println("  mid"); return a.id; }
-impl S3 { fn m(self) -> i64 { let a = self.a; println("  mid"); return a.id; } }
+fn proj_none(s: own S3) -> i64 { let a = s.a; println("  mid"); return 1; }
+fn proj_ret(s: own S3) -> i64 { let a = s.a; println("  mid"); return a.id; }
+fn proj_b(s: own S3) -> i64 { let b = s.b; println("  mid"); return b.id; }
+fn proj_both(s: own S3) -> i64 { let a = s.a; let b = s.b; println("  mid"); return a.id + b.id; }
+fn proj_reads(s: own S3) -> i64 { let a = s.a; println(f"  m{a.id}"); let b = s.b; println(f"  m{b.id}"); return 1; }
+fn proj_whole(s: own S3) -> R { let a = s.a; println("  mid"); return a; }
+fn proj_heap(t: own T) -> i64 { let r = t.r; println("  mid"); return r.id + t.v.len(); }
+fn destr(s: own S3) -> i64 { let S3 { a, b } = s; println("  mid"); return a.id; }
+impl S3 { fn m(own self) -> i64 { let a = self.a; println("  mid"); return a.id; } }
 
 fn main() {
     println("proj_none"); let v1 = proj_none(S3 { a: mk(1), b: mk(2) }); println(f"  v={v1}");

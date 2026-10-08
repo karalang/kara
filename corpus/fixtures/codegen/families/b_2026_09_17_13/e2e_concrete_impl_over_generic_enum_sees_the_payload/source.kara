@@ -3,17 +3,17 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
 enum G[T] { X(T), Y }
 impl G[R] {
-    fn read(self) -> i64 { match self { G.X(t) => { return 1; } G.Y => { return 0; } } }
-    fn reb(self) -> i64 { let e = self; match e { G.X(t) => { return 2; } G.Y => { return 0; } } }
+    fn read(own self) -> i64 { match self { G.X(t) => { return 1; } G.Y => { return 0; } } }
+    fn reb(own self) -> i64 { let e = self; match e { G.X(t) => { return 2; } G.Y => { return 0; } } }
 }
 enum G1[T] { Y(T), N }
 impl G1[String] {
-    fn shm(self) { match self { G1.Y(v) => { println(f"mx {v}") } G1.N => { println("mx NONE") } } }
-    fn get(self) -> String { match self { G1.Y(v) => { v } G1.N => { f"none" } } }
+    fn shm(own self) { match self { G1.Y(v) => { println(f"mx {v}") } G1.N => { println("mx NONE") } } }
+    fn get(own self) -> String { match self { G1.Y(v) => { v } G1.N => { f"none" } } }
     fn peek(ref self) { match self { G1.Y(v) => { println(f"pk {v}") } G1.N => { println("pk none") } } }
     fn iflet(self) { if let G1.Y(v) = self { println(f"il {v}") } else { println("il none") } }
 }
-fn mks(s: String) -> G1[String] { return G1.Y(s); }
+fn mks(s: own String) -> G1[String] { return G1.Y(s); }
 fn main() {
     let g: G[R] = G.X(mk(23));
     println(f"a{g.read()}");

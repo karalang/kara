@@ -2,7 +2,7 @@
 struct Box[T] { xs: Vec[T] }
 impl[T] Box[T] {
     fn new() -> Box[T] { Box { xs: Vec.new() } }
-    fn add(mut ref self, x: T) { self.xs.push(x); }
+    fn add(mut ref self, x: own T) { self.xs.push(x); }
     fn at(ref self, i: i64) -> T { self.xs[i] }
     fn size(ref self) -> i64 { self.xs.len() }
 }

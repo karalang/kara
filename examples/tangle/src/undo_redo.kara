@@ -49,7 +49,7 @@ impl Editor {
     // Edit a cell: record the command (capturing the shared cell), write the
     // new value through the shared handle, and clear the redo stack — a fresh
     // edit invalidates any redo future.
-    fn set(mut ref self, cell: Cell, new_value: i64) {
+    fn set(mut ref self, cell: own Cell, new_value: i64) {
         let cmd = Command { cell: cell, old_value: cell.value, new_value: new_value };
         cell.value = new_value;
         self.undo_stack.push(cmd);

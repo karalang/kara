@@ -6,10 +6,10 @@ fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
 shared struct N { v: i64 }
 struct Z { d: D, h: N }
 struct Q { z: Z, t: D }
-fn zst(xs: mut ref Vec[Z], z: Z, c: bool) { if c { xs.push(z); } }
-fn zown(z: Z, c: bool) -> i64 { let mut xs: Vec[Z] = Vec.new(); if c { xs.push(z); } xs.len() }
+fn zst(xs: mut ref Vec[Z], z: own Z, c: bool) { if c { xs.push(z); } }
+fn zown(z: own Z, c: bool) -> i64 { let mut xs: Vec[Z] = Vec.new(); if c { xs.push(z); } xs.len() }
 struct H { k: i64 }
-impl H { fn m(ref self, xs: mut ref Vec[Z], z: Z, c: bool) { if c { xs.push(z); } } }
+impl H { fn m(ref self, xs: mut ref Vec[Z], z: own Z, c: bool) { if c { xs.push(z); } } }
 fn main() {
     let mut zs: Vec[Z] = Vec.new();
     zst(mut zs, Z { d: mkd(1), h: N { v: 1 } }, false); println("a");

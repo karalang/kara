@@ -9,7 +9,7 @@ struct G2 { n: i64 }
 trait Eat { fn eat(self); }
 impl W {
     fn g2(self) { println(f"g{self.n}") }
-    fn me(self) -> W { self }
+    fn me(own self) -> W { self }
     fn into_g(self) -> G { G { n: 1, keep: self.o } }
 }
 impl D { fn g2(self) { println(f"gd{self.n}") } }

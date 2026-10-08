@@ -1,6 +1,6 @@
 
 enum E { A(String), B(i64) }
-fn describe(e: E) -> String {
+fn describe(e: own E) -> String {
     match e {
         E.A(name) => f"A[{name}]",
         E.B(k) => f"B[{k}]",

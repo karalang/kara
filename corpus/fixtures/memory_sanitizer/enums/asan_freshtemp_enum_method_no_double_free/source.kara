@@ -1,7 +1,7 @@
 
 enum Msg { Text(String), Empty }
 impl Msg {
-    fn size(self) -> i64 {
+    fn size(own self) -> i64 {
         match self {
             Msg.Text(s) => return s.len(),
             Msg.Empty => return 0_i64,

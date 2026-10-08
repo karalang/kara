@@ -7,19 +7,19 @@ fn z() -> Array[R, 2] { return [mk(0), mk(0)]; }
 fn zs() -> Array[String, 2] { return [f"z{0}", f"z{1}"]; }
 fn eat(a: Array[R, 2]) -> i64 { return a[0].id + a[1].id; }
 fn eats(a: Array[String, 2]) -> i64 { return a[0].len() + a[1].len(); }
-fn s10(x: EArr, c: bool) -> i64 { let k: Array[R, 2] = match x { EArr.A(v) => { if c { v } else { z() } } EArr.B => z() }; println("mid"); return k[0].id; }
-fn s11(x: EArr, c: bool) -> Array[R, 2] { match x { EArr.A(v) => { if c { v } else { z() } } EArr.B => z() } }
-fn s12(x: EArr, c: bool) -> Array[R, 2] { match x { EArr.A(v) => { if c { z() } else { v } } EArr.B => z() } }
-fn s13(x: EArr, c: bool) -> Array[R, 2] { match x { EArr.A(v) => { if c { let u = v; u } else { z() } } EArr.B => z() } }
-fn s14(x: EArr, c: bool) -> i64 { return eat(match x { EArr.A(v) => { if c { v } else { z() } } EArr.B => z() }); }
-fn s16(x: EArr, c: bool, d: bool) -> Array[R, 2] { match x { EArr.A(v) => { if c { z() } else if d { v } else { z() } } EArr.B => z() } }
+fn s10(x: own EArr, c: bool) -> i64 { let k: Array[R, 2] = match x { EArr.A(v) => { if c { v } else { z() } } EArr.B => z() }; println("mid"); return k[0].id; }
+fn s11(x: own EArr, c: bool) -> Array[R, 2] { match x { EArr.A(v) => { if c { v } else { z() } } EArr.B => z() } }
+fn s12(x: own EArr, c: bool) -> Array[R, 2] { match x { EArr.A(v) => { if c { z() } else { v } } EArr.B => z() } }
+fn s13(x: own EArr, c: bool) -> Array[R, 2] { match x { EArr.A(v) => { if c { let u = v; u } else { z() } } EArr.B => z() } }
+fn s14(x: own EArr, c: bool) -> i64 { return eat(match x { EArr.A(v) => { if c { v } else { z() } } EArr.B => z() }); }
+fn s16(x: own EArr, c: bool, d: bool) -> Array[R, 2] { match x { EArr.A(v) => { if c { z() } else if d { v } else { z() } } EArr.B => z() } }
 fn s17(x: EArr, c: bool) -> Array[R, 2] { if let EArr.A(v) = x { if c { v } else { z() } } else { z() } }
-fn t2(x: EArr, o: Option[i64]) -> Array[R, 2] { match x { EArr.A(v) => { if let Some(q) = o { z() } else { v } } EArr.B => z() } }
-fn t3(x: EArr, c: bool) -> Array[R, 2] { match x { EArr.A(v) => { match c { true => v, false => z() } } EArr.B => z() } }
-fn u1(x: EStr, c: bool) -> Array[String, 2] { match x { EStr.A(v) => { match c { true => v, false => zs() } } EStr.B => zs() } }
-fn u2(x: EStr, c: bool) -> i64 { return eats(match x { EStr.A(v) => { if c { v } else { zs() } } EStr.B => zs() }); }
-fn u3(x: EStr, c: bool) -> i64 { let k: Array[String, 2] = match x { EStr.A(v) => { if c { v } else { zs() } } EStr.B => zs() }; return k[0].len(); }
-fn u4(x: EStr, o: Option[i64]) -> Array[String, 2] { match x { EStr.A(v) => { if let Some(q) = o { zs() } else { v } } EStr.B => zs() } }
+fn t2(x: own EArr, o: Option[i64]) -> Array[R, 2] { match x { EArr.A(v) => { if let Some(q) = o { z() } else { v } } EArr.B => z() } }
+fn t3(x: own EArr, c: bool) -> Array[R, 2] { match x { EArr.A(v) => { match c { true => v, false => z() } } EArr.B => z() } }
+fn u1(x: own EStr, c: bool) -> Array[String, 2] { match x { EStr.A(v) => { match c { true => v, false => zs() } } EStr.B => zs() } }
+fn u2(x: own EStr, c: bool) -> i64 { return eats(match x { EStr.A(v) => { if c { v } else { zs() } } EStr.B => zs() }); }
+fn u3(x: own EStr, c: bool) -> i64 { let k: Array[String, 2] = match x { EStr.A(v) => { if c { v } else { zs() } } EStr.B => zs() }; return k[0].len(); }
+fn u4(x: own EStr, o: Option[i64]) -> Array[String, 2] { match x { EStr.A(v) => { if let Some(q) = o { zs() } else { v } } EStr.B => zs() } }
 fn main() {
   println(f"a{s10(EArr.A([mk(1), mk(2)]), true)}");
   let b = s11(EArr.A([mk(3), mk(4)]), true); println(f"b{b[0].id}");

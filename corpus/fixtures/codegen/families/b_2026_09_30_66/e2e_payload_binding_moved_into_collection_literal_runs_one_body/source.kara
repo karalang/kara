@@ -1,9 +1,9 @@
 struct W1 { v: i64, s: String }
 impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
-fn pass(x: Array[W1, 1]) -> Array[W1, 1] { return x }
+fn pass(x: own Array[W1, 1]) -> Array[W1, 1] { return x }
 fn take(x: Array[W1, 1]) -> i64 { return x[0].v }
-fn passv(x: Vec[W1]) -> Vec[W1] { return x }
-fn pg[T](x: T) -> T { return x }
+fn passv(x: own Vec[W1]) -> Vec[W1] { return x }
+fn pg[T](x: own T) -> T { return x }
 fn mk(n: i64) -> W1 { return W1 { v: n, s: f"ssssssssssssssssssssssssssssss{n}" } }
 fn main() {
     let o1 = Some(mk(1));

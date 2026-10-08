@@ -3,7 +3,7 @@ shared enum H { Y(Option[M]), N }
 shared enum Hs { Y(Option[S]), N }
 shared enum M { My(Vec[String]), N }
 shared enum L { Cons(i64, Option[L]), Nil }
-fn mkv(s: String) -> Vec[String] { [s.clone() + "1", s + "2"] }
+fn mkv(s: own String) -> Vec[String] { [s.clone() + "1", s + "2"] }
 fn m_len(m: M) -> i64 { match m { M.My(v) => v.len(), M.N => 0 } }
 fn olen(o: Option[M]) -> i64 { match o { Some(m) => m_len(m), None => 0 } }
 fn a() -> i64 { let h = H.Y(Some(M.My(mkv("a")))); 1 }

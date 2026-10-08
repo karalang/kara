@@ -8,7 +8,7 @@ impl H { fn mk() -> Array[P, 2] { return [P { n: 1 }, P { n: 2 }] } }
 struct G[T] { k: T }
 impl[T] G[T] {
     fn mk() -> Array[P, 2] { return [P { n: 3 }, P { n: 4 }] }
-    fn mkq(x: T, y: T) -> Array[Q[T], 2] { return [Q { n: x }, Q { n: y }] }
+    fn mkq(x: own T, y: own T) -> Array[Q[T], 2] { return [Q { n: x }, Q { n: y }] }
     fn mkr() -> Array[R, 2] { return [R { id: 5 }, R { id: 6 }] }
     fn pr() -> (S, S) { return (S { n: 7, s: "a" }, S { n: 8, s: "b" }) }
 }

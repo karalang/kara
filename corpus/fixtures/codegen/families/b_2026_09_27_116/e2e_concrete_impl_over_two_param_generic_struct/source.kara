@@ -1,8 +1,8 @@
 struct P[A, B] { a: A, b: B }
 impl P[String, Vec[i64]] {
-    fn take(self) -> Vec[i64] { self.b }
-    fn name(self) -> String { self.a }
-    fn wrap(self) -> Option[Self] { Some(self) }
+    fn take(own self) -> Vec[i64] { self.b }
+    fn name(own self) -> String { self.a }
+    fn wrap(own self) -> Option[Self] { Some(self) }
 }
 fn main() {
     let p = P { a: "nm-heap-string-long-xx".to_string(), b: vec![1, 2, 3] };

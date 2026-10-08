@@ -4,9 +4,9 @@ fn mkd(n: i64) -> D { return D { id: n, s: f"{n}-heap-string-longer-than-sso" } 
 struct W { t: (Array[D, 2], i64) }
 struct W3 { t: ((Array[D, 2], i64), i64) }
 fn tk(t: (Array[D, 2], i64)) -> i64 { return t.1 }
-fn tkd(t: (Array[D, 2], i64)) -> i64 { let (x, n) = t; return x[0].id + n }
-fn pa(a: Array[D, 2]) -> (Array[D, 2], i64) { return (a, 1) }
-fn tt(a: Array[D, 2]) -> i64 { let t = (a, 7); return t.1 }
+fn tkd(t: own (Array[D, 2], i64)) -> i64 { let (x, n) = t; return x[0].id + n }
+fn pa(a: own Array[D, 2]) -> (Array[D, 2], i64) { return (a, 1) }
+fn tt(a: own Array[D, 2]) -> i64 { let t = (a, 7); return t.1 }
 fn main() {
     { let a: Array[D, 2] = [mkd(1), mkd(2)]; let t = (a, 7); println(f"s10 {t.1}") }
     { let a: Array[D, 2] = [mkd(3), mkd(4)]; let t: (Array[D, 2], i64) = (a, 7); println(f"s13 {t.1}") }

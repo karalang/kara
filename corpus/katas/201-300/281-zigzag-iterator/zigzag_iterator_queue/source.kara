@@ -26,7 +26,7 @@ struct QZigzag {
     mut head: i64,            // read cursor into `queue`
 }
 
-fn make_zigzag(lists: Vec[Vec[i64]]) -> QZigzag {
+fn make_zigzag(lists: own Vec[Vec[i64]]) -> QZigzag {
     let mut cursor: Vec[i64] = Vec.new();
     let mut queue: Vec[i64] = Vec.new();
     let mut i = 0;
@@ -53,7 +53,7 @@ fn next(z: mut ref QZigzag) -> i64 {
     return v;
 }
 
-fn drain(lists: Vec[Vec[i64]]) -> Vec[i64] {
+fn drain(lists: own Vec[Vec[i64]]) -> Vec[i64] {
     let mut z = make_zigzag(lists);
     let mut out: Vec[i64] = Vec.new();
     while has_next(z) {

@@ -30,7 +30,7 @@
 // what makes the disagreement in order a feature rather than a hazard: two
 // arms that agreed on order would likely be the same algorithm twice.
 
-fn walk(bs: ref Vec[u8], n: i64, i: i64, run: i64, path: String,
+fn walk(bs: ref Vec[u8], n: i64, i: i64, run: i64, path: own String,
         out: mut ref Vec[String]) {
     if i == n {
         let mut leaf = path;

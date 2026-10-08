@@ -6,10 +6,10 @@ fn one(b: R) -> i64 { return b.id; }
 enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 impl E {
-  fn both(self, o: R) -> i64    { match self { E.A(r) => { return two(r, o); } E.B => { return 0; } } }
-  fn onlyo(self, o: R) -> i64   { match self { E.A(r) => { return one(o); } E.B => { return 0; } } }
+  fn both(own self, o: R) -> i64    { match self { E.A(r) => { return two(r, o); } E.B => { return 0; } } }
+  fn onlyo(own self, o: R) -> i64   { match self { E.A(r) => { return one(o); } E.B => { return 0; } } }
   fn nomatch(self, o: R) -> i64 { return one(o); }
-  fn fresh(self, o: R) -> i64   { match self { E.A(r) => { return two(mk(7), o); } E.B => { return 0; } } }
+  fn fresh(own self, o: R) -> i64   { match self { E.A(r) => { return two(mk(7), o); } E.B => { return 0; } } }
 }
 fn main() {
     { let a: E = E.A(mk(1)); println(f"  x{a.onlyo(mk(10))}") }

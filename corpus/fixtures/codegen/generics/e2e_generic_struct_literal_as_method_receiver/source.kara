@@ -2,11 +2,11 @@
 struct Box[T] { v: T }
 struct Pair[T] { a: T, b: i64 }
 struct Num[T] { n: T }
-impl[T] Box[T] { fn take(self) -> T { self.v } }
+impl[T] Box[T] { fn take(own self) -> T { self.v } }
 impl[T] Box[T] { fn peek(ref self) -> i64 { 7 } }
-impl[T] Pair[T] { fn first(self) -> T { self.a } }
-impl[T] Num[T] { fn get(self) -> T { self.n } }
-fn takefn[T](b: Box[T]) -> T { b.v }
+impl[T] Pair[T] { fn first(own self) -> T { self.a } }
+impl[T] Num[T] { fn get(own self) -> T { self.n } }
+fn takefn[T](b: own Box[T]) -> T { b.v }
 fn main() {
     let n: i64 = env.args().len();
     println(Box { v: "payload-past-inline-width-here".repeat(n) }.take().len());

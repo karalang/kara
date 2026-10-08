@@ -7,14 +7,14 @@ fn mk(n: i64, i: i64) -> String {
     s.push_str("-padding-to-force-heap");
     s
 }
-fn get(o: Opt[String], d: i64) -> i64 {
+fn get(o: own Opt[String], d: i64) -> i64 {
     match o {
         Opt.Yes(s) => if s.contains("payload") { 1 } else { 0 },
         Opt.No => d,
     }
 }
-fn fwd(o: Opt[String]) -> i64 { get(o, -1) }
-fn ident(o: Opt[String]) -> Opt[String] { o }
+fn fwd(o: own Opt[String]) -> i64 { get(o, -1) }
+fn ident(o: own Opt[String]) -> Opt[String] { o }
 fn main() {
     let n = env.args().len() as i64;
     let mut acc: i64 = 0;

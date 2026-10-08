@@ -1,10 +1,10 @@
 enum G[T] { S { a: T }, N }
 enum M { S { a: Array[String, 2] }, N }
 fn eat(a: Array[String, 2]) -> i64 { return a[0].len(); }
-fn hand(g: G[Array[String, 2]]) -> i64 {
+fn hand(g: own G[Array[String, 2]]) -> i64 {
     match g { G.S { a } => { return eat(a); } G.N => { return 0; } }
 }
-fn handm(g: M) -> i64 {
+fn handm(g: own M) -> i64 {
     match g { M.S { a } => { return eat(a); } M.N => { return 0; } }
 }
 fn main() {

@@ -67,7 +67,7 @@ fn merge_two_lists(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNod
     dummy.next
 }
 
-fn merge_k_lists(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
+fn merge_k_lists(lists: own Vec[Option[ListNode]]) -> Option[ListNode] {
     let mut work = lists;
     let k = work.len();
     if k == 0 {

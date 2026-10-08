@@ -4,17 +4,17 @@ struct S { r: R, k: i64 }
 struct H { pe: (R, i64) }
 enum W { A(R), B }
 
-fn s1(t: (R, i64))  { let (r, k) = t; let m = r; println(f"  b{m.id}") }
-fn s2(t: (R, i64))  { let (r, k) = t; let m = r; let m2 = m; println(f"  b{m2.id}") }
-fn s3(t: (R, R))    { let (r, q) = t; let m = r; println(f"  b{m.id}_{q.id}") }
-fn s4(w: W)         { let W.A(r) = w else { return }; let m = r; println(f"  b{m.id}") }
-fn s5(t: (R, i64))  { let (r, k) = t; println(f"  b{r.id}") }
-fn s6(t: (R, i64))  { match t { (r, k) => { let m = r; println(f"  b{m.id}") } } }
+fn s1(t: own (R, i64))  { let (r, k) = t; let m = r; println(f"  b{m.id}") }
+fn s2(t: own (R, i64))  { let (r, k) = t; let m = r; let m2 = m; println(f"  b{m2.id}") }
+fn s3(t: own (R, R))    { let (r, q) = t; let m = r; println(f"  b{m.id}_{q.id}") }
+fn s4(w: own W)         { let W.A(r) = w else { return }; let m = r; println(f"  b{m.id}") }
+fn s5(t: own (R, i64))  { let (r, k) = t; println(f"  b{r.id}") }
+fn s6(t: own (R, i64))  { match t { (r, k) => { let m = r; println(f"  b{m.id}") } } }
 fn s7()             { let t = (R { id: 7 }, 0); let (r, k) = t; let m = r; println(f"  b{m.id}") }
-fn s8(s: S)         { let S { r, k } = s; let m = r; println(f"  b{m.id}") }
-fn s9(t: ((R, i64), i64)) { let ((r, a), b) = t; let m = r; println(f"  b{m.id}") }
-fn s10(t: (R, i64)) { let t2 = t; let (r, k) = t2; let m = r; println(f"  b{m.id}") }
-fn s11(h: H)        { let (r, k) = h.pe; let m = r; println(f"  b{m.id}") }
+fn s8(s: own S)         { let S { r, k } = s; let m = r; println(f"  b{m.id}") }
+fn s9(t: own ((R, i64), i64)) { let ((r, a), b) = t; let m = r; println(f"  b{m.id}") }
+fn s10(t: own (R, i64)) { let t2 = t; let (r, k) = t2; let m = r; println(f"  b{m.id}") }
+fn s11(h: own H)        { let (r, k) = h.pe; let m = r; println(f"  b{m.id}") }
 
 fn main() {
     println("param");      s1((R { id: 1 }, 0));            println("param end");

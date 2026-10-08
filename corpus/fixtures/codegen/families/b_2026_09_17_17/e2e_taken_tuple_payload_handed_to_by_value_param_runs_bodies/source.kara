@@ -4,7 +4,7 @@ fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" } }
 fn mko(i: i64) -> Option[(R, R)] { return Some((mk(i), mk(i + 1))) }
 fn eat(t: (R, R)) { println(f"  e{t.0.id}") }
 fn eat7(t: (R, R)) -> i64 { println("  eat"); return 7 }
-fn keep(t: (R, R)) -> (R, R) { return t }
+fn keep(t: own (R, R)) -> (R, R) { return t }
 fn viaparam(o: Option[(R, R)]) { match o { Some(t) => { eat(t); println("  p") } None => {} } }
 fn main() {
     println("row");    { let o = mko(1); println("  x"); match o { Some(t) => { println(f"  hit{eat7(t)}") } None => { println("  n") } } }

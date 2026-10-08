@@ -1,6 +1,6 @@
 
         #[require_simd]
-        fn d(a: Vector[i32, 3], b: Vector[i32, 3]) -> i32 {
+        fn d(a: Vector[i32, 3], b: own Vector[i32, 3]) -> i32 {
             a.dot(b)
         }
         fn main() {}

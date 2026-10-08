@@ -10,23 +10,23 @@ fn mks(i: i64) -> S { return S { id: i, name: f"s{i}" }; }
 
 struct Box2 { mut xs: Vec[R] }
 impl Box2 {
-    fn push(mut ref self, r: R) { self.xs.push(r); }
-    fn put2(mut ref self, a: R, c: R) { self.xs.push(a); self.xs.push(c); }
-    fn puts(mut ref self, r: R) -> i64 { self.xs.push(r); return 5; }
-    fn maybe(mut ref self, r: R, k: bool) { if k { self.xs.push(r); } }
-    fn stash(b: mut ref Box2, r: R) { b.xs.push(r); }
+    fn push(mut ref self, r: own R) { self.xs.push(r); }
+    fn put2(mut ref self, a: own R, c: own R) { self.xs.push(a); self.xs.push(c); }
+    fn puts(mut ref self, r: own R) -> i64 { self.xs.push(r); return 5; }
+    fn maybe(mut ref self, r: own R, k: bool) { if k { self.xs.push(r); } }
+    fn stash(b: mut ref Box2, r: own R) { b.xs.push(r); }
 }
 struct Box3 { mut one: R }
-impl Box3 { fn set(mut ref self, r: R) { self.one = r; } }
+impl Box3 { fn set(mut ref self, r: own R) { self.one = r; } }
 struct BoxS { mut xs: Vec[S] }
-impl BoxS { fn add(mut ref self, s: S) { self.xs.push(s); } }
+impl BoxS { fn add(mut ref self, s: own S) { self.xs.push(s); } }
 
-fn take(b: mut ref Box2, r: R) { b.xs.push(r); }
-fn inner_push(b: mut ref Box2, r: R) { b.xs.push(r); }
-fn outer_push(b: mut ref Box2, r: R) { inner_push(b, r); }
-fn pushv(v: mut ref Vec[R], r: R) { v.push(r); }
-fn stashg[T](v: mut ref Vec[T], x: T) { v.push(x); }
-fn takes(b: mut ref BoxS, s: S) { b.xs.push(s); }
+fn take(b: mut ref Box2, r: own R) { b.xs.push(r); }
+fn inner_push(b: mut ref Box2, r: own R) { b.xs.push(r); }
+fn outer_push(b: mut ref Box2, r: own R) { inner_push(b, r); }
+fn pushv(v: mut ref Vec[R], r: own R) { v.push(r); }
+fn stashg[T](v: mut ref Vec[T], x: own T) { v.push(x); }
+fn takes(b: mut ref BoxS, s: own S) { b.xs.push(s); }
 
 fn c_method() { let mut b = Box2 { xs: Vec.new() }; b.push(mk(16)); println(f"a{b.xs.len()}"); }
 fn c_field()  { let mut b = Box3 { one: mk(1) }; b.set(mk(17)); println(f"b{b.one.id}"); }

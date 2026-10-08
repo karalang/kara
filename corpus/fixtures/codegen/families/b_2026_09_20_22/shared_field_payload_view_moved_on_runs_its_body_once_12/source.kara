@@ -9,8 +9,8 @@ struct Wsx { h: Sh, s: String }
 impl Drop for Wsx { fn drop(mut ref self) { println(f"  dWsx-{self.h.s}-{self.s}") } }
 enum Esx { A(Wsx), B }
 enum E2 { A(Wsh, i64), B }
-fn mk(s: String) -> Wsh { return Wsh { h: Sh { s: s } } }
+fn mk(s: own String) -> Wsh { return Wsh { h: Sh { s: s } } }
 fn eat(w: Wsh) { println(f"  ate:{w.h.s}") }
 struct H { k: i64 }
-impl H { fn f(ref self, b: Esh) -> i64 { let mut out = mk(f"OUT"); match b { Esh.A(w) => { out = w; } Esh.B => { } } return 7; } }
+impl H { fn f(ref self, b: own Esh) -> i64 { let mut out = mk(f"OUT"); match b { Esh.A(w) => { out = w; } Esh.B => { } } return 7; } }
 fn main() { let h = H { k: 1 }; println(f"  r:{h.f(Esh.A(mk(f"PAY")))}"); }

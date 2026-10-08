@@ -170,7 +170,7 @@ struct ParsedLog {
     problems: Vec[String],
 }
 
-fn parse_log(service: String, text: ref String) -> ParsedLog {
+fn parse_log(service: own String, text: ref String) -> ParsedLog {
     let mut entries = Vec.new();
     let mut problems = Vec.new();
     let mut line_no = 0;

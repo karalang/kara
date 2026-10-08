@@ -10,7 +10,7 @@ fn u3()      { let h = H { pe: (mk(43), 0) }; let x = h.pe; let (a, b) = x; prin
 fn u4()      { let g = G { h: H { pe: (mk(44), 0) } }; let x = g.h.pe; println(f"  b{x.0.id}/{x.0.tag}") }
 fn u5()      { let t = (mk(45), 0); let x = t; println(f"  b{x.0.id}/{x.0.tag}") }
 fn u6()      { let h = H { pe: (mk(46), 0) }; println(f"  b{h.pe.0.id}/{h.pe.0.tag}") }
-fn u7(h: H)  { let x = h.pe; println(f"  b{x.0.id}/{x.0.tag}") }
+fn u7(h: own H)  { let x = h.pe; println(f"  b{x.0.id}/{x.0.tag}") }
 fn u8()      { let h = H { pe: (mk(48), 0) }; let x = h.pe; let y = x; println(f"  b{y.0.id}/{y.0.tag}") }
 
 fn main() {

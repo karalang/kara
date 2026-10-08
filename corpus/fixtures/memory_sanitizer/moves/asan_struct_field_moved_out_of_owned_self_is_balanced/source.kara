@@ -1,5 +1,5 @@
 struct Pair { a: String, b: String }
-impl Pair { fn take_a(self) -> String { return self.a; } }
+impl Pair { fn take_a(own self) -> String { return self.a; } }
 fn mk(i: i64) -> Pair { return Pair { a: f"a{i}", b: f"b{i}" }; }
 
 fn main() {

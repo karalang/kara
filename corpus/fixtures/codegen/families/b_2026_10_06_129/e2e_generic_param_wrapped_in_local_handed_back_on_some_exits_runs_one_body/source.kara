@@ -1,12 +1,12 @@
 struct P { id: i64 }
 impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
 enum E { A(P), B }
-fn cg[T](s: T, c: bool) -> Option[T] { let o = Some(s); if c { return o } return None }
-fn cr[T](s: T, c: bool) -> Result[T, i64] { let o: Result[T, i64] = Ok(s); if c { return o } return Err(0) }
-fn ce[T](s: T, c: bool) -> Result[i64, T] { let o: Result[i64, T] = Err(s); if c { return o } return Ok(0) }
-fn cn[T](s: T, c: bool) -> Option[Option[T]] { let o = Some(Some(s)); if c { return o } return None }
-fn cq[T](s: T, c: bool) -> Option[T] { let o = Some(s); let q = o; if c { return q } return None }
-fn ca[T](s: T) -> Option[T] { let o = Some(s); return o }
+fn cg[T](s: own T, c: bool) -> Option[T] { let o = Some(s); if c { return o } return None }
+fn cr[T](s: own T, c: bool) -> Result[T, i64] { let o: Result[T, i64] = Ok(s); if c { return o } return Err(0) }
+fn ce[T](s: own T, c: bool) -> Result[i64, T] { let o: Result[i64, T] = Err(s); if c { return o } return Ok(0) }
+fn cn[T](s: own T, c: bool) -> Option[Option[T]] { let o = Some(Some(s)); if c { return o } return None }
+fn cq[T](s: own T, c: bool) -> Option[T] { let o = Some(s); let q = o; if c { return q } return None }
+fn ca[T](s: own T) -> Option[T] { let o = Some(s); return o }
 fn c1() { let p = cg(P { id: 1 }, false); println(f"_1 {p.is_some()}"); }
 fn c2() { let p = cg(P { id: 2 }, true); println(f"_2 {p.is_some()}"); }
 fn c3() { let x = P { id: 3 }; let p = cg(x, false); println(f"_3 {p.is_some()}"); }

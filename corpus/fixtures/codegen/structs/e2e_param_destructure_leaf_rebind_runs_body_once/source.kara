@@ -7,20 +7,20 @@ struct WrapR { inner: HoRes }
 struct WrapO { inner: HoOpt }
 fn eat(x: R) { println(f"  eat{x.id}") }
 
-fn rebind(h: HoRes)    { let HoRes { a, b } = h; let c = b;
+fn rebind(h: own HoRes)    { let HoRes { a, b } = h; let c = b;
                          match c { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
-fn rebindu(h: HoRes)   { let HoRes { a, b } = h; let c = b; println("  m") }
-fn rebindcall(h: HoRes){ let HoRes { a, b } = h; let c = b;
+fn rebindu(h: own HoRes)   { let HoRes { a, b } = h; let c = b; println("  m") }
+fn rebindcall(h: own HoRes){ let HoRes { a, b } = h; let c = b;
                          match c { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
-fn orebind(h: HoOpt)   { let HoOpt { a, b } = h; let c = b;
+fn orebind(h: own HoOpt)   { let HoOpt { a, b } = h; let c = b;
                          match c { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
-fn prebind(w: WrapR)   { let HoRes { a, b } = w.inner; let c = b;
+fn prebind(w: own WrapR)   { let HoRes { a, b } = w.inner; let c = b;
                          match c { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
-fn porebind(w: WrapO)  { let HoOpt { a, b } = w.inner; let c = b;
+fn porebind(w: own WrapO)  { let HoOpt { a, b } = w.inner; let c = b;
                          match c { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
-fn direct(h: HoRes)    { let HoRes { a, b } = h;
+fn direct(h: own HoRes)    { let HoRes { a, b } = h;
                          match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
-fn twice(h: HoRes)     { let HoRes { a, b } = h; let c = b; let d = c;
+fn twice(h: own HoRes)     { let HoRes { a, b } = h; let c = b; let d = c;
                          match d { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
 
 fn main() {

@@ -3,7 +3,7 @@ shared struct N { v: i64 }
 
 struct Holder { kids: Vec[weak N] }
 
-fn probe(h: Holder) -> i64 {
+fn probe(h: own Holder) -> i64 {
     let ks = h.kids;
     match ks[0] { Some(x) => { x.v } None => { 0 - 1 } }
 }

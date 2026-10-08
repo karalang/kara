@@ -9,16 +9,16 @@ struct Wd { a: R, b: String, c: String }
 enum G[T] { X(T), Y }
 enum Ng { X(R), Y }
 
-fn ret(g: G[R]) -> i64 { match g { G.X(v) => { return v.id }, G.Y => { return 0 } } }
-fn letret(g: G[R]) -> i64 { match g { G.X(v) => { let x: i64 = v.id; return x }, G.Y => { return 0 } } }
-fn prnt(g: G[R]) -> i64 { match g { G.X(v) => { println(f"use{v.id}"); return 0 }, G.Y => { return 0 } } }
-fn none(g: G[R]) -> i64 { match g { G.X(v) => { return 0 }, G.Y => { return 0 } } }
-fn whole(g: G[R]) -> R { match g { G.X(v) => { return v }, G.Y => { return R { id: 0, s: f"b2044-zzzzzzzzzzzzzzzzzzzzzzzz" } } } }
-fn narrow(g: G[Rn]) -> i64 { match g { G.X(v) => { return v.id }, G.Y => { return 0 } } }
-fn wide(g: G[Rw]) -> i64 { match g { G.X(v) => { return v.id }, G.Y => { return 0 } } }
-fn ngret(g: Ng) -> i64 { match g { Ng.X(v) => { return v.id }, Ng.Y => { return 0 } } }
-fn ngprnt(g: Ng) -> i64 { match g { Ng.X(v) => { println(f"nguse{v.id}"); return 0 }, Ng.Y => { return 0 } } }
-fn nest(g: G[Wd]) -> i64 { match g { G.X(v) => { return v.a.id }, G.Y => { return 0 } } }
+fn ret(g: own G[R]) -> i64 { match g { G.X(v) => { return v.id }, G.Y => { return 0 } } }
+fn letret(g: own G[R]) -> i64 { match g { G.X(v) => { let x: i64 = v.id; return x }, G.Y => { return 0 } } }
+fn prnt(g: own G[R]) -> i64 { match g { G.X(v) => { println(f"use{v.id}"); return 0 }, G.Y => { return 0 } } }
+fn none(g: own G[R]) -> i64 { match g { G.X(v) => { return 0 }, G.Y => { return 0 } } }
+fn whole(g: own G[R]) -> R { match g { G.X(v) => { return v }, G.Y => { return R { id: 0, s: f"b2044-zzzzzzzzzzzzzzzzzzzzzzzz" } } } }
+fn narrow(g: own G[Rn]) -> i64 { match g { G.X(v) => { return v.id }, G.Y => { return 0 } } }
+fn wide(g: own G[Rw]) -> i64 { match g { G.X(v) => { return v.id }, G.Y => { return 0 } } }
+fn ngret(g: own Ng) -> i64 { match g { Ng.X(v) => { return v.id }, Ng.Y => { return 0 } } }
+fn ngprnt(g: own Ng) -> i64 { match g { Ng.X(v) => { println(f"nguse{v.id}"); return 0 }, Ng.Y => { return 0 } } }
+fn nest(g: own G[Wd]) -> i64 { match g { G.X(v) => { return v.a.id }, G.Y => { return 0 } } }
 
 fn main() {
     { let a1: R = R { id: 1, s: f"b2044-aaaaaaaaaaaaaaaaaaaaaaaa" }; let w1: G[R] = G.X(a1); println(f"ret={ret(w1)}") }

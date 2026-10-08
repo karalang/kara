@@ -4,18 +4,18 @@ fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
 enum E { A(R), B(i64) }
 struct W { r: R, n: i64 }
 struct Cd { r: R, z: i64 }
-fn f_m(t: (R, i64)) -> Option[R] { match t { (r, k) => { Option.Some(r) } } }
-fn f_l(t: (R, i64)) -> Option[R] { let (r, k) = t; Option.Some(r) }
-fn f_lr(t: (R, i64)) -> Option[R] { let (r, k) = t; return Option.Some(r); }
-fn f_res(t: (R, i64)) -> Result[R, i64] { let (r, k) = t; Result.Ok(r) }
-fn f_e(t: (R, i64)) -> E { let (r, k) = t; E.A(r) }
-fn f_em(t: (R, i64)) -> E { match t { (r, k) => { E.A(r) } } }
-fn f_w(t: (R, i64)) -> W { let (r, k) = t; W { r: r, n: k } }
-fn f_s(g: Cd) -> Option[R] { let Cd { r, z } = g; Option.Some(r) }
-fn f_sm(g: Cd) -> Option[R] { match g { Cd { r, z } => { Option.Some(r) } } }
+fn f_m(t: own (R, i64)) -> Option[R] { match t { (r, k) => { Option.Some(r) } } }
+fn f_l(t: own (R, i64)) -> Option[R] { let (r, k) = t; Option.Some(r) }
+fn f_lr(t: own (R, i64)) -> Option[R] { let (r, k) = t; return Option.Some(r); }
+fn f_res(t: own (R, i64)) -> Result[R, i64] { let (r, k) = t; Result.Ok(r) }
+fn f_e(t: own (R, i64)) -> E { let (r, k) = t; E.A(r) }
+fn f_em(t: own (R, i64)) -> E { match t { (r, k) => { E.A(r) } } }
+fn f_w(t: own (R, i64)) -> W { let (r, k) = t; W { r: r, n: k } }
+fn f_s(g: own Cd) -> Option[R] { let Cd { r, z } = g; Option.Some(r) }
+fn f_sm(g: own Cd) -> Option[R] { match g { Cd { r, z } => { Option.Some(r) } } }
 fn f_local() -> Option[R] { let t: (R, i64) = (mk(9), 0); let (r, k) = t; Option.Some(r) }
-fn f_bare(x: R) -> Option[R] { Option.Some(x) }
-fn f_two(t: (R, R)) -> Option[R] { let (a, b) = t; Option.Some(a) }
+fn f_bare(x: own R) -> Option[R] { Option.Some(x) }
+fn f_two(t: own (R, R)) -> Option[R] { let (a, b) = t; Option.Some(a) }
 fn main() {
     { let g: Option[R] = f_m((mk(1), 0)); println("got"); println("one") }
     { let g: Option[R] = f_l((mk(2), 0)); println("got"); println("two") }

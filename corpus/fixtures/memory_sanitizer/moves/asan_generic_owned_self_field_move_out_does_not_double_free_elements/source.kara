@@ -1,8 +1,8 @@
 
 struct Heap[T] { xs: Vec[T] }
-impl[T] Heap[T] { fn into_vec(self) -> Vec[T] { self.xs } }
+impl[T] Heap[T] { fn into_vec(own self) -> Vec[T] { self.xs } }
 struct PlainHeap { xs: Vec[Vec[i64]] }
-impl PlainHeap { fn into_vec(self) -> Vec[Vec[i64]] { self.xs } }
+impl PlainHeap { fn into_vec(own self) -> Vec[Vec[i64]] { self.xs } }
 fn main() {
     // (a) nested-Vec element: the filed shape.
     let a = Heap { xs: [[1, 2], [3], [4, 5, 6]] };

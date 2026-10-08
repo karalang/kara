@@ -6,14 +6,14 @@ struct H3 { pe: (((R, i64), i64), i64) }
 struct H2b { pe: ((R, R), i64) }
 struct S { r: R, n: i64 }
 struct H4 { pe: ((S, i64), i64) }
-fn v3_ret(h: H2) -> R { let (inner, y) = h.pe; let (r, x) = inner; return r; }
-fn v3_ret_direct(h: H2) -> R { return h.pe.0.0; }
-fn v3_ret_z(h: H2) -> R { let z: (R, i64) = h.pe.0; let (r, x) = z; return r; }
-fn v4_ret(h: H3) -> R { let (mid, a) = h.pe; let (inner, b) = mid; let (r, c) = inner; return r; }
-fn vb_ret0(h: H2b) -> R { let (inner, y) = h.pe; let (r, s) = inner; return r; }
-fn vb_ret1(h: H2b) -> R { let (inner, y) = h.pe; let (r, s) = inner; return s; }
-fn vs_ret(h: H4) -> R { let (inner, y) = h.pe; let (s, x) = inner; let S { r, n } = s; return r; }
-fn v3_ret_tuple(h: H2) -> (R, i64) { let (inner, y) = h.pe; return inner; }
+fn v3_ret(h: own H2) -> R { let (inner, y) = h.pe; let (r, x) = inner; return r; }
+fn v3_ret_direct(h: own H2) -> R { return h.pe.0.0; }
+fn v3_ret_z(h: own H2) -> R { let z: (R, i64) = h.pe.0; let (r, x) = z; return r; }
+fn v4_ret(h: own H3) -> R { let (mid, a) = h.pe; let (inner, b) = mid; let (r, c) = inner; return r; }
+fn vb_ret0(h: own H2b) -> R { let (inner, y) = h.pe; let (r, s) = inner; return r; }
+fn vb_ret1(h: own H2b) -> R { let (inner, y) = h.pe; let (r, s) = inner; return s; }
+fn vs_ret(h: own H4) -> R { let (inner, y) = h.pe; let (s, x) = inner; let S { r, n } = s; return r; }
+fn v3_ret_tuple(h: own H2) -> (R, i64) { let (inner, y) = h.pe; return inner; }
 fn main() {
     { let a: R = v3_ret(H2 { pe: ((mk(1), 1), 2) }); println(f"got{a.id}"); println("one") }
     { let a: R = v3_ret_direct(H2 { pe: ((mk(2), 1), 2) }); println(f"got{a.id}"); println("two") }

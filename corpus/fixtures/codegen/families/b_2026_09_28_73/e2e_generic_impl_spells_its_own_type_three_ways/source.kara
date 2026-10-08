@@ -1,18 +1,18 @@
 enum G[T] { X(T), Y }
 impl[T] G[T] {
-    fn id(self) -> Self { return self; }
-    fn id2(self) -> G[T] { return self; }
-    fn tail(self) -> G[T] { self }
-    fn pick(self, c: bool, o: Self) -> Self { if c { return self; } return o; }
+    fn id(own self) -> Self { return self; }
+    fn id2(own self) -> G[T] { return self; }
+    fn tail(own self) -> G[T] { self }
+    fn pick(own self, c: bool, o: own Self) -> Self { if c { return self; } return o; }
     fn fresh(self) -> Self { return G.Y; }
     fn fresh2(self) -> G[T] { return G.Y; }
 }
 struct W[T] { v: T }
 impl[T] W[T] {
-    fn back(self) -> W[T] { return self; }
-    fn other(self, o: Self) -> Self { o }
+    fn back(own self) -> W[T] { return self; }
+    fn other(self, o: own Self) -> Self { o }
 }
-fn show(g: G[i64]) {
+fn show(g: own G[i64]) {
     match g { G.X(v) => println(f"x{v}"), G.Y => println("y") }
 }
 fn main() {

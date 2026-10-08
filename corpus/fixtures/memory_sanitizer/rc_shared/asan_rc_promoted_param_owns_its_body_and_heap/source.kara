@@ -8,11 +8,11 @@ fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}" }; }
 struct Box2 { mut xs: Vec[R] }
 
 impl Box2 {
-    fn after(mut ref self, r: R, k: bool) { if k { self.xs.push(r); } println(f"s{r.inner.v}"); }
-    fn before(mut ref self, r: R, k: bool) { println(f"s{r.inner.v}"); if k { self.xs.push(r); } }
-    fn bare(mut ref self, r: R, k: bool) { if k { self.xs.push(r); } }
+    fn after(mut ref self, r: own R, k: bool) { if k { self.xs.push(r); } println(f"s{r.inner.v}"); }
+    fn before(mut ref self, r: own R, k: bool) { println(f"s{r.inner.v}"); if k { self.xs.push(r); } }
+    fn bare(mut ref self, r: own R, k: bool) { if k { self.xs.push(r); } }
 }
-fn ff(v: mut ref Vec[R], r: R, k: bool) { if k { v.push(r); } println(f"s{r.inner.v}"); }
-fn pf(v: mut ref Vec[P], p: P, k: bool) { if k { v.push(p); } println(f"s{p.id}"); }
+fn ff(v: mut ref Vec[R], r: own R, k: bool) { if k { v.push(r); } println(f"s{r.inner.v}"); }
+fn pf(v: mut ref Vec[P], p: own P, k: bool) { if k { v.push(p); } println(f"s{p.id}"); }
 
 fn main() { }

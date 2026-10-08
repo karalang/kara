@@ -16,9 +16,9 @@ fn tsnd(t: (D, i64)) -> i64 { return t.1 }
 fn tone(t: (D, D)) -> i64 { return 1 }
 fn qv(t: (Vec[D], i64)) -> i64 { return t.1 }
 fn qa(t: (Array[D, 1], i64)) -> i64 { return t.1 }
-fn qd(t: (Vec[D], i64)) -> i64 { let (a, j) = t; return a.len() + j }
-fn tkeep(t: (D, i64)) -> D { let (w, k) = t; return w }
-fn vkeep(x: Vec[D]) -> Vec[D] { return x }
+fn qd(t: own (Vec[D], i64)) -> i64 { let (a, j) = t; return a.len() + j }
+fn tkeep(t: own (D, i64)) -> D { let (w, k) = t; return w }
+fn vkeep(x: own Vec[D]) -> Vec[D] { return x }
 fn mka() -> Array[D, 1] { return [mkd(2)] }
 fn mkv() -> Vec[D] { return [mkd(5)] }
 fn mkt(n: i64) -> (D, i64) { return (mkd(n), 7) }

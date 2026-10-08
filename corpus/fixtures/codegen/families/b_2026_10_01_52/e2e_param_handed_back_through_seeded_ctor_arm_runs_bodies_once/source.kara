@@ -1,14 +1,14 @@
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
-fn h1(a: Vec[R]) -> Vec[R] { match Option.Some(a) { Some(v) => { return v }, None => { return Vec.new() } } }
-fn h2(a: Array[R, 2]) -> Array[R, 2] { match Option.Some(a) { Some(v) => { return v }, None => { return [mkr(90), mkr(91)] } } }
-fn h3(a: Vec[R]) -> Vec[R] { let o = Option.Some(a); match o { Some(v) => { return v }, None => { return Vec.new() } } }
-fn h4(a: Vec[R]) -> Vec[R] { match Option.Some(a) { Some(v) => v, None => Vec.new() } }
-fn h5(a: Vec[R]) -> Vec[R] { if let Option.Some(v) = Option.Some(a) { return v } return Vec.new() }
-fn h6(a: Vec[R]) -> Vec[R] { match Option.Some(a) { Some(v) => { let u = v; println("r1"); return u }, None => { return Vec.new() } } }
-fn h7(a: Vec[R]) -> Vec[R] { let r: Result[Vec[R], i64] = Ok(a); match r { Ok(v) => v, Err(_) => Vec.new() } }
-fn h8(a: R) -> R { let o = Some(a); match o { Some(v) => v, None => mkr(99) } }
+fn h1(a: own Vec[R]) -> Vec[R] { match Option.Some(a) { Some(v) => { return v }, None => { return Vec.new() } } }
+fn h2(a: own Array[R, 2]) -> Array[R, 2] { match Option.Some(a) { Some(v) => { return v }, None => { return [mkr(90), mkr(91)] } } }
+fn h3(a: own Vec[R]) -> Vec[R] { let o = Option.Some(a); match o { Some(v) => { return v }, None => { return Vec.new() } } }
+fn h4(a: own Vec[R]) -> Vec[R] { match Option.Some(a) { Some(v) => v, None => Vec.new() } }
+fn h5(a: own Vec[R]) -> Vec[R] { if let Option.Some(v) = Option.Some(a) { return v } return Vec.new() }
+fn h6(a: own Vec[R]) -> Vec[R] { match Option.Some(a) { Some(v) => { let u = v; println("r1"); return u }, None => { return Vec.new() } } }
+fn h7(a: own Vec[R]) -> Vec[R] { let r: Result[Vec[R], i64] = Ok(a); match r { Ok(v) => v, Err(_) => Vec.new() } }
+fn h8(a: own R) -> R { let o = Some(a); match o { Some(v) => v, None => mkr(99) } }
 fn main() {
   println("-h1"); let a1: Vec[R] = [mkr(1), mkr(2)]; let z1 = h1(a1); println(f"y{z1.len()}");
   println("-h2"); let a2: Array[R, 2] = [mkr(3), mkr(4)]; let z2 = h2(a2); println(f"y{z2[0].id}");

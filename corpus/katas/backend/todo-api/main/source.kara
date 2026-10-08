@@ -77,7 +77,7 @@ fn find_index_by_id(target: i64) -> Option[i64] {
 // match expects i1 — both routed around inline here. Returns the
 // empty String on missing key / wrong shape so callers can
 // emit a 400 response.
-fn extract_title(j: Json) -> String {
+fn extract_title(j: own Json) -> String {
     let mut result: String = "";
     match j {
         Json.Object(fields) => {
@@ -105,7 +105,7 @@ fn extract_title(j: Json) -> String {
 // narrowing in karac's pattern-bind reconstruction now inserts the
 // `trunc i64 → i1` automatically (karac `11ca0e1`), so `Json.Bool(b)
 // => b` returns the bool directly without the prior cast workaround.
-fn extract_completed(j: Json) -> bool {
+fn extract_completed(j: own Json) -> bool {
     match j {
         Json.Object(fields) => {
             let mut i: i64 = 0;
@@ -130,7 +130,7 @@ fn not_found() -> Response {
     Response { status: 404, body: "not found" }
 }
 
-fn bad_request(msg: String) -> Response {
+fn bad_request(msg: own String) -> Response {
     Response { status: 400, body: msg }
 }
 

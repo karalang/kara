@@ -2,13 +2,13 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 enum G[T] { Y(T), N }
 enum M { Y(String), N }
-fn mid[T](g: G[T], c: bool) -> G[T] { if c { return g } return G.N }
-fn allpaths[T](g: G[T]) -> G[T] { return g }
+fn mid[T](g: own G[T], c: bool) -> G[T] { if c { return g } return G.N }
+fn allpaths[T](g: own G[T]) -> G[T] { return g }
 fn diesinside[T](g: G[T]) -> G[T] { return G.N }
-fn tailmatch[T](g: G[T], c: i64) -> G[T] { match c { 1 => { return g } _ => { return G.N } } }
-fn pick[T](a: G[T], b: G[T], c: bool) -> G[T] { if c { return a } return G.N }
-fn midmono(g: M, c: bool) -> M { if c { return g } return M.N }
-fn show[T](g: G[String]) { match g { G.Y(v) => { println(f"  {v.len()}") } G.N => { println("  none") } } }
+fn tailmatch[T](g: own G[T], c: i64) -> G[T] { match c { 1 => { return g } _ => { return G.N } } }
+fn pick[T](a: own G[T], b: G[T], c: bool) -> G[T] { if c { return a } return G.N }
+fn midmono(g: own M, c: bool) -> M { if c { return g } return M.N }
+fn show[T](g: own G[String]) { match g { G.Y(v) => { println(f"  {v.len()}") } G.N => { println("  none") } } }
 
 fn main() {
     println("handback");  { let a: G[String] = G.Y(f"aaaaaaaa-1"); let b = mid(a, true); show(b) }

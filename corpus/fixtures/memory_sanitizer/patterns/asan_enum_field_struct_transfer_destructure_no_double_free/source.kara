@@ -2,8 +2,8 @@
 enum Tok { Id(String), Int(i64) }
 struct Span { tok: Tok, off: i64 }
 struct Wrap { sp: Span, hi: i64 }
-fn wrap(s: Span) -> Span { s }
-fn fwd(w: Wrap) -> Wrap { w }
+fn wrap(s: own Span) -> Span { s }
+fn fwd(w: own Wrap) -> Wrap { w }
 fn sink(s: String) -> i64 { s.len() }
 fn main() {
     let mut i: i64 = 0;

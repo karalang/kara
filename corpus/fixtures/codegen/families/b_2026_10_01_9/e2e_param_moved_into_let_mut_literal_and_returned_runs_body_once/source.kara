@@ -14,13 +14,13 @@ fn f6(x: R) -> Array[R, 1] { let mut v: Array[R, 1] = [x]; return v }
 fn f8(x: R) -> Vec[R] { let mut v = Vec[x]; let o = v.pop(); return v }
 fn f9(x: R) -> Vec[R] { let mut v = Vec[x]; v[0] = mk(7); return v }
 fn f10(x: R) -> Vec[R] { let mut v = Vec[x]; v }
-fn t1(x: R) -> (R, i64) { let mut t = (x, 1); t.1 = 5; return t }
-fn s1(x: R) -> P { let mut p = P { r: x, n: 1 }; p.n = 2; return p }
-fn c2(x: R, y: R) -> Vec[R] { let mut v = Vec[x]; v.push(y); return v }
+fn t1(x: own R) -> (R, i64) { let mut t = (x, 1); t.1 = 5; return t }
+fn s1(x: own R) -> P { let mut p = P { r: x, n: 1 }; p.n = 2; return p }
+fn c2(x: R, y: own R) -> Vec[R] { let mut v = Vec[x]; v.push(y); return v }
 fn gv[T](x: T) -> Vec[T] { let mut v = Vec[x]; return v }
 fn cnd(x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { return v } return Vec[mk(9)] }
 fn nr(x: R) -> i64 { let mut v = Vec[x]; return 3 }
-fn ow(x: R) -> Option[R] { let mut o = Some(x); return o }
+fn ow(x: own R) -> Option[R] { let mut o = Some(x); return o }
 fn rb(x: R) -> Vec[R] { let mut v = Vec[x]; let w = v; return w }
 fn lp(x: R) -> Vec[R] { let mut v = Vec[x]; for i in 0..2 { v.push(mk(30 + i)) } return v }
 fn main() {

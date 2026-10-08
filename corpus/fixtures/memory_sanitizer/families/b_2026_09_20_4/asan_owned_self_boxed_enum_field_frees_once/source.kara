@@ -5,7 +5,7 @@ fn mk() -> Array[String, 2] { return [f"aaaaaaaa-1", f"bbbbbbbb-2"] }
 impl Hb {
     fn give(self) { eatb(self.g) }
     fn held(self) { println(f"  held {self.n}") }
-    fn read(self) -> i64 { match self.g { Eb.A(a) => a[0].len(), Eb.B => 0 } }
+    fn read(own self) -> i64 { match self.g { Eb.A(a) => a[0].len(), Eb.B => 0 } }
     fn two(self) { self.give() }
     fn peek(ref self) -> i64 { return self.n }
 }

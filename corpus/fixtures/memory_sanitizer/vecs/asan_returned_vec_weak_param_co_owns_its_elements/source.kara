@@ -1,7 +1,7 @@
 
 shared struct N { v: i64 }
 
-fn hand_back(xs: Vec[weak N]) -> Vec[weak N] {
+fn hand_back(xs: own Vec[weak N]) -> Vec[weak N] {
     xs
 }
 

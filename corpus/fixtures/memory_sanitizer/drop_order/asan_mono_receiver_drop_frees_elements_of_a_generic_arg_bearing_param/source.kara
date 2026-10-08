@@ -4,12 +4,12 @@ impl[T] Heap[T] {
     fn pop_one(mut ref self) -> Option[T] { self.xs.pop() }
     // Takes ONE element and drops the rest on the floor. The elements left
     // behind are the ones that leaked.
-    fn take(self) -> Option[T] { let mut h = self; h.pop_one() }
+    fn take(own self) -> Option[T] { let mut h = self; h.pop_one() }
 }
 struct PlainHeap { xs: Vec[Vec[i64]] }
 impl PlainHeap {
     fn pop_one(mut ref self) -> Option[Vec[i64]] { self.xs.pop() }
-    fn take(self) -> Option[Vec[i64]] { let mut h = self; h.pop_one() }
+    fn take(own self) -> Option[Vec[i64]] { let mut h = self; h.pop_one() }
 }
 fn main() {
     // (a) the filed shape: `T` bound to `Vec[i64]`, which carries its own

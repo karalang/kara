@@ -2,21 +2,21 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
 fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 fn take(x: Array[R, 2]) -> i64 { println("  take"); return 1 }
-fn let_rb(a: Array[R, 2]) -> i64 { let m = a; println("  in"); return 1 }
-fn let_annot(a: Array[R, 2]) -> i64 { let m: Array[R, 2] = a; println("  in"); return 1 }
-fn let_chain(a: Array[R, 2]) -> i64 { let m = a; let m2 = m; println("  in"); return 1 }
-fn let_read(a: Array[R, 2]) -> i64 { let m = a; println(f"  r{m[0].id}:{m[1].s.len()}"); return 1 }
-fn let_onward(a: Array[R, 2]) -> i64 { let m = a; let t = take(m); println("  in"); return t }
-fn let_shadow(a: Array[R, 2]) -> i64 { let m = a; let m = [mkr(90), mkr(91)]; println(f"  in{m[0].id}"); return 1 }
-fn alias_seed(a: Array[R, 2]) -> i64 { let m = a; match Option.Some(m) { Option.Some(v) => { println("  arm"); return 1 }, Option.None => { return 0 } } }
-fn alias_seed_rb(a: Array[R, 2]) -> i64 { let m = a; match Option.Some(m) { Option.Some(v) => { let u = v; println("  arm"); return 1 }, Option.None => { return 0 } } }
-fn arm_rb(a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { let u = v; println("  arm"); return 1 }, Option.None => { return 0 } } }
-fn arm_read(a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { let u = v; println(f"  arm{u[1].id}"); return 1 }, Option.None => { return 0 } } }
-fn arm_chain(a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { let u = v; let w = u; println("  arm"); return 1 }, Option.None => { return 0 } } }
-fn arm_onward(a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { let u = v; let t = take(u); println("  arm"); return t }, Option.None => { return 0 } } }
-fn iflet_rb(a: Array[R, 2]) -> i64 { if let Option.Some(v) = Option.Some(a) { let u = v; println("  arm") }; return 1 }
-fn letelse_rb(a: Array[R, 2]) -> i64 { let Option.Some(v) = Option.Some(a) else { return 0 }; let u = v; println("  arm"); return 1 }
-fn str_rb(a: Array[String, 2]) -> i64 { let m = a; println(f"  in{m[1].len()}"); return 1 }
+fn let_rb(a: own Array[R, 2]) -> i64 { let m = a; println("  in"); return 1 }
+fn let_annot(a: own Array[R, 2]) -> i64 { let m: Array[R, 2] = a; println("  in"); return 1 }
+fn let_chain(a: own Array[R, 2]) -> i64 { let m = a; let m2 = m; println("  in"); return 1 }
+fn let_read(a: own Array[R, 2]) -> i64 { let m = a; println(f"  r{m[0].id}:{m[1].s.len()}"); return 1 }
+fn let_onward(a: own Array[R, 2]) -> i64 { let m = a; let t = take(m); println("  in"); return t }
+fn let_shadow(a: own Array[R, 2]) -> i64 { let m = a; let m = [mkr(90), mkr(91)]; println(f"  in{m[0].id}"); return 1 }
+fn alias_seed(a: own Array[R, 2]) -> i64 { let m = a; match Option.Some(m) { Option.Some(v) => { println("  arm"); return 1 }, Option.None => { return 0 } } }
+fn alias_seed_rb(a: own Array[R, 2]) -> i64 { let m = a; match Option.Some(m) { Option.Some(v) => { let u = v; println("  arm"); return 1 }, Option.None => { return 0 } } }
+fn arm_rb(a: own Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { let u = v; println("  arm"); return 1 }, Option.None => { return 0 } } }
+fn arm_read(a: own Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { let u = v; println(f"  arm{u[1].id}"); return 1 }, Option.None => { return 0 } } }
+fn arm_chain(a: own Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { let u = v; let w = u; println("  arm"); return 1 }, Option.None => { return 0 } } }
+fn arm_onward(a: own Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { let u = v; let t = take(u); println("  arm"); return t }, Option.None => { return 0 } } }
+fn iflet_rb(a: own Array[R, 2]) -> i64 { if let Option.Some(v) = Option.Some(a) { let u = v; println("  arm") }; return 1 }
+fn letelse_rb(a: own Array[R, 2]) -> i64 { let Option.Some(v) = Option.Some(a) else { return 0 }; let u = v; println("  arm"); return 1 }
+fn str_rb(a: own Array[String, 2]) -> i64 { let m = a; println(f"  in{m[1].len()}"); return 1 }
 fn ctl(a: Array[R, 2]) -> i64 { println("  in"); return 1 }
 fn main() {
     println("let");       { let a: Array[R, 2] = [mkr(1), mkr(2)]; let z = let_rb(a); }

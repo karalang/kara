@@ -70,7 +70,7 @@ impl Scope {
     // Bind or update a name. Updating an existing binding is an index-store
     // through a `mut` Vec field on a `shared` receiver — the write persists for
     // every handle to this scope.
-    fn set(self, name: String, val: i64) {
+    fn set(self, name: own String, val: i64) {
         let mut i = 0;
         loop {
             if i >= self.names.len() { break; }

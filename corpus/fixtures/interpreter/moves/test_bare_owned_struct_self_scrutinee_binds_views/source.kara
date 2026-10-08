@@ -9,25 +9,25 @@ struct Hs { e: E, s: String }
 fn consume(x: R) -> i64 { return x.id }
 
 impl H1 {
-    fn whole(self) -> i64 { match self { H1 { e } => { match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } } } }
-    fn plain(self) -> i64 { match self { H1 { e } => { match e { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
-    fn viacall(self) -> i64 { match self { H1 { e } => { match e { E.A(r) => { return consume(r); } E.B => { return 0; } } } } }
-    fn rebind(self) -> i64 { match self { H1 { e } => { let k = e; match k { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
-    fn shell(self) -> i64 { match self { H1 { e } => { return 9; } } }
+    fn whole(own self) -> i64 { match self { H1 { e } => { match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } } } }
+    fn plain(own self) -> i64 { match self { H1 { e } => { match e { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
+    fn viacall(own self) -> i64 { match self { H1 { e } => { match e { E.A(r) => { return consume(r); } E.B => { return 0; } } } } }
+    fn rebind(own self) -> i64 { match self { H1 { e } => { let k = e; match k { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
+    fn shell(own self) -> i64 { match self { H1 { e } => { return 9; } } }
 }
 impl H2 {
-    fn two(self) -> i64 { match self { H2 { e, n } => { match e { E.A(r) => { return r.id + n; } E.B => { return n; } } } } }
+    fn two(own self) -> i64 { match self { H2 { e, n } => { match e { E.A(r) => { return r.id + n; } E.B => { return n; } } } } }
 }
 impl Hs {
-    fn strleaf(self) -> i64 { match self { Hs { e, s } => { let m = s; println(f"  s{m}"); match e { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
+    fn strleaf(own self) -> i64 { match self { Hs { e, s } => { let m = s; println(f"  s{m}"); match e { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
 }
 impl E {
-    fn m_r(self) -> R { match self { E.A(r) => { return r; } E.B => { return mk(0); } } }
+    fn m_r(own self) -> R { match self { E.A(r) => { return r; } E.B => { return mk(0); } } }
 }
-fn p_whole(h: H1) -> i64 { match h { H1 { e } => { match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } } } }
-fn p_plain(h: H1) -> i64 { match h { H1 { e } => { match e { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
-fn p_rebind(h: H1) -> i64 { match h { H1 { e } => { let k = e; match k { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
-fn p_strleaf(h: Hs) -> i64 { match h { Hs { e, s } => { let m = s; println(f"  s{m}"); match e { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
+fn p_whole(h: own H1) -> i64 { match h { H1 { e } => { match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } } } }
+fn p_plain(h: own H1) -> i64 { match h { H1 { e } => { match e { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
+fn p_rebind(h: own H1) -> i64 { match h { H1 { e } => { let k = e; match k { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
+fn p_strleaf(h: own Hs) -> i64 { match h { Hs { e, s } => { let m = s; println(f"  s{m}"); match e { E.A(r) => { return r.id; } E.B => { return 0; } } } } }
 
 fn main() {
     println("whole/local"); let a1 = H1 { e: E.A(mk(31)) }; let x1 = a1.whole(); println(f"  r{x1}");

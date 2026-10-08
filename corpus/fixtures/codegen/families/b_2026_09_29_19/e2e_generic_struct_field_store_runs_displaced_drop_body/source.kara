@@ -3,10 +3,10 @@ struct S2 { h: Sh, id: i64 }
 impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
 enum E { A(S2), B }
 struct Q[U] { u: U }
-impl[U] Q[U] { fn wr(mut ref self, v: U) { self.u = v; } }
+impl[U] Q[U] { fn wr(mut ref self, v: own U) { self.u = v; } }
 struct D[U] { u: U, n: i64 }
 impl[U] Drop for D[U] { fn drop(mut ref self) { println(f"dD{self.n}") } }
-fn mq[U](q: mut ref Q[U], v: U) { q.u = v; }
+fn mq[U](q: mut ref Q[U], v: own U) { q.u = v; }
 fn mc(q: mut ref Q[S2]) { q.u = mk(5); }
 fn mk(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
 fn main() {

@@ -1,5 +1,5 @@
 
-fn choose(a: Vec[String], b: Vec[String], first: bool) -> Vec[String] {
+fn choose(a: own Vec[String], b: own Vec[String], first: bool) -> Vec[String] {
     if first { a } else { b }
 }
 

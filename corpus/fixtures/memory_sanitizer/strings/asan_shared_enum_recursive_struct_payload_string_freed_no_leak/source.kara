@@ -13,7 +13,7 @@ fn render(e: E) -> String {
     }
     out
 }
-fn ident(s: String) -> E {
+fn ident(s: own String) -> E {
     E.Ident(Id { name: s, off: 0 })
 }
 fn make() -> E {

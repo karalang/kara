@@ -1,5 +1,5 @@
 
-fn head_or(v: Vec[i64], default: i64) -> i64 {
+fn head_or(v: own Vec[i64], default: i64) -> i64 {
     match v {
         [first, ..] => first,
         [] => default,

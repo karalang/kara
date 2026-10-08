@@ -8,13 +8,13 @@ enum G1[T] { Y(T), N }
 fn mki(t: i64) -> Array[i64, 4] { return [t, t + 1, t + 2, t + 3]; }
 fn eat(a: Array[i64, 4]) -> i64 { return a[0]; }
 
-fn ga(g: Ga[Array[i64, 4]]) -> i64 { match g { Ga.Y(x, k) => { return x[0] + k; } Ga.N => { return 0; } } }
-fn gb(g: Gb[Array[i64, 4]]) -> i64 { match g { Gb.Y(k, x) => { return x[0] + k; } Gb.N => { return 0; } } }
-fn gt(g: Gt[Array[i64, 4]]) -> i64 { match g { Gt.Y(x, y) => { return x[0] + y[1]; } Gt.N => { return 0; } } }
-fn gs(g: Gs[Array[i64, 4]]) -> i64 { match g { Gs.Y { a, n } => { return a[0] + n; } Gs.N => { return 0; } } }
-fn ghand(g: Ga[Array[i64, 4]]) -> i64 { match g { Ga.Y(x, k) => { return eat(x) + k; } Ga.N => { return 0; } } }
-fn gout(g: Ga[Array[i64, 4]]) -> Array[i64, 4] { match g { Ga.Y(x, k) => { return x; } Ga.N => { return mki(0); } } }
-fn g1(g: G1[Array[i64, 4]]) -> i64 { match g { G1.Y(x) => { return x[0]; } G1.N => { return 0; } } }
+fn ga(g: own Ga[Array[i64, 4]]) -> i64 { match g { Ga.Y(x, k) => { return x[0] + k; } Ga.N => { return 0; } } }
+fn gb(g: own Gb[Array[i64, 4]]) -> i64 { match g { Gb.Y(k, x) => { return x[0] + k; } Gb.N => { return 0; } } }
+fn gt(g: own Gt[Array[i64, 4]]) -> i64 { match g { Gt.Y(x, y) => { return x[0] + y[1]; } Gt.N => { return 0; } } }
+fn gs(g: own Gs[Array[i64, 4]]) -> i64 { match g { Gs.Y { a, n } => { return a[0] + n; } Gs.N => { return 0; } } }
+fn ghand(g: own Ga[Array[i64, 4]]) -> i64 { match g { Ga.Y(x, k) => { return eat(x) + k; } Ga.N => { return 0; } } }
+fn gout(g: own Ga[Array[i64, 4]]) -> Array[i64, 4] { match g { Ga.Y(x, k) => { return x; } Ga.N => { return mki(0); } } }
+fn g1(g: own G1[Array[i64, 4]]) -> i64 { match g { G1.Y(x) => { return x[0]; } G1.N => { return 0; } } }
 
 fn main() {
     let mut i: i64 = 0;

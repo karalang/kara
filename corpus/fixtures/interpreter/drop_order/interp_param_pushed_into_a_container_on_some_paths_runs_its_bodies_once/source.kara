@@ -1,19 +1,19 @@
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
-fn semi(a: Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if c { v.push(a); } println(f"semi{v.len()}"); return 1 }
-fn tail(a: Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if c { v.push(a) } println(f"tail{v.len()}"); return 1 }
-fn arm(a: Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; match c { true => v.push(a), false => {} } println(f"arm{v.len()}"); return 1 }
-fn els(a: Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if not c { println("no") } else { v.push(a) } println(f"els{v.len()}"); return 1 }
-fn nest(a: Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if c { if v.len() == 0 { v.push(a) } } println(f"nest{v.len()}"); return 1 }
-fn outv(a: Array[R, 2], c: bool, out: mut ref Vec[Array[R, 2]]) -> i64 { if c { out.push(a) } println(f"out{out.len()}"); return 1 }
-fn st(a: R, c: bool) -> i64 { let mut v: Vec[R] = []; if c { v.push(a) } println(f"st{v.len()}"); return 1 }
-fn starm(a: R, c: bool) -> i64 { let mut v: Vec[R] = []; match c { true => v.push(a), false => {} } println(f"starm{v.len()}"); return 1 }
+fn semi(a: own Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if c { v.push(a); } println(f"semi{v.len()}"); return 1 }
+fn tail(a: own Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if c { v.push(a) } println(f"tail{v.len()}"); return 1 }
+fn arm(a: own Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; match c { true => v.push(a), false => {} } println(f"arm{v.len()}"); return 1 }
+fn els(a: own Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if not c { println("no") } else { v.push(a) } println(f"els{v.len()}"); return 1 }
+fn nest(a: own Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if c { if v.len() == 0 { v.push(a) } } println(f"nest{v.len()}"); return 1 }
+fn outv(a: own Array[R, 2], c: bool, out: mut ref Vec[Array[R, 2]]) -> i64 { if c { out.push(a) } println(f"out{out.len()}"); return 1 }
+fn st(a: own R, c: bool) -> i64 { let mut v: Vec[R] = []; if c { v.push(a) } println(f"st{v.len()}"); return 1 }
+fn starm(a: own R, c: bool) -> i64 { let mut v: Vec[R] = []; match c { true => v.push(a), false => {} } println(f"starm{v.len()}"); return 1 }
 struct H { k: i64 }
 impl H {
-    fn marr(ref self, a: Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if c { v.push(a) } println(f"marr{v.len()}"); return self.k }
-    fn mst(ref self, a: R, c: bool) -> i64 { let mut v: Vec[R] = []; if c { v.push(a) } println(f"mst{v.len()}"); return self.k }
-    fn mout(ref self, a: R, c: bool, out: mut ref Vec[R]) -> i64 { if c { out.push(a) } println(f"mout{out.len()}"); return self.k }
+    fn marr(ref self, a: own Array[R, 2], c: bool) -> i64 { let mut v: Vec[Array[R, 2]] = []; if c { v.push(a) } println(f"marr{v.len()}"); return self.k }
+    fn mst(ref self, a: own R, c: bool) -> i64 { let mut v: Vec[R] = []; if c { v.push(a) } println(f"mst{v.len()}"); return self.k }
+    fn mout(ref self, a: own R, c: bool, out: mut ref Vec[R]) -> i64 { if c { out.push(a) } println(f"mout{out.len()}"); return self.k }
 }
 fn main() {
     { let a: Array[R, 2] = [mkr(1), mkr(2)]; let z = semi(a, true); let b: Array[R, 2] = [mkr(3), mkr(4)]; let y = semi(b, false); println("k1") }

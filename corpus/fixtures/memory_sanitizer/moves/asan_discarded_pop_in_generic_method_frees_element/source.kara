@@ -1,7 +1,7 @@
 
 struct Heap[T] { xs: Vec[T] }
 impl[T] Heap[T] {
-    fn take(self) -> i64 { let mut h = self; h.xs.pop(); h.xs.len() }
+    fn take(own self) -> i64 { let mut h = self; h.xs.pop(); h.xs.len() }
 }
 fn main() {
     let hv = Heap { xs: [[1], [2], [3]] };

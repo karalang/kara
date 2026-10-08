@@ -5,14 +5,14 @@ struct D { o: Option[H], n: i64 }
 impl Drop for D { fn drop(mut ref self) { println(f"dD{self.n}") } }
 struct G2 { w: W }
 struct K { n: i64 }
-impl K { fn pass(ref self, w: W) -> W { w } }
-fn keepw(w: W) -> W { w }
-fn retw(w: W) -> W { return w; }
-fn rebw(w: W) -> W { let m = w; m }
-fn id[T](x: T) -> T { x }
-fn st(w: W) -> G2 { G2 { w: w } }
-fn k2(w: W) -> W { keepw(w) }
-fn keepd(d: D) -> D { d }
+impl K { fn pass(ref self, w: own W) -> W { w } }
+fn keepw(w: own W) -> W { w }
+fn retw(w: own W) -> W { return w; }
+fn rebw(w: own W) -> W { let m = w; m }
+fn id[T](x: own T) -> T { x }
+fn st(w: own W) -> G2 { G2 { w: w } }
+fn k2(w: own W) -> W { keepw(w) }
+fn keepd(d: own D) -> D { d }
 fn mkw(i: i64) -> W { W { o: Some(H { id: i }), n: i } }
 fn c1() { let k = keepw(W { o: Some(H { id: 1 }), n: 1 }); println(f"_1 {k.n}"); }
 fn c2() { let k = keepw(mkw(2)); println(f"_2 {k.n}"); }

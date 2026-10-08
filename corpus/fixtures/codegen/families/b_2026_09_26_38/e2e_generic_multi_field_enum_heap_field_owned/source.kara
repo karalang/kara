@@ -8,12 +8,12 @@ enum G2[T] { X(T, i64), Y }
 enum G3[T] { X(i64, T), Y }
 enum Gt[T] { X(T, T), Y }
 enum X2[A, B] { Two(A, B), Nil }
-fn tk(g: G2[String]) -> i64 { match g { G2.X(s, n) => s.len() + n, G2.Y => 0 } }
+fn tk(g: own G2[String]) -> i64 { match g { G2.X(s, n) => s.len() + n, G2.Y => 0 } }
 fn mk2(n: i64) -> G2[Vec[R]] { return G2.X([R { id: n }], n) }
-fn mks(s: String) -> G2[String] { return G2.X(s, 9) }
-fn rd(x: X2[W, i64]) { match x { X2.Two(r, n) => println(f"rd {r.a} {n}"), X2.Nil => println("n") } }
-fn wc(x: X2[W, i64]) { match x { X2.Two(_, n) => println(f"wc {n}"), X2.Nil => println("n") } }
-fn hb(x: G2[W]) -> W { match x { G2.X(r, n) => r, G2.Y => mkw(1) } }
+fn mks(s: own String) -> G2[String] { return G2.X(s, 9) }
+fn rd(x: own X2[W, i64]) { match x { X2.Two(r, n) => println(f"rd {r.a} {n}"), X2.Nil => println("n") } }
+fn wc(x: own X2[W, i64]) { match x { X2.Two(_, n) => println(f"wc {n}"), X2.Nil => println("n") } }
+fn hb(x: own G2[W]) -> W { match x { G2.X(r, n) => r, G2.Y => mkw(1) } }
 fn main() {
     { let w: G2[String] = G2.X(f"a-heap-string-longer-than-sso-1", 5); println("c1") }
     { let w: G2[Vec[R]] = G2.X([R { id: 1 }, R { id: 2 }], 5); println("c2") }

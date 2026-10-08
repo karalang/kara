@@ -5,15 +5,15 @@ shared struct S { k: i64 }
 struct F { id: i64, s: S, name: String }
 impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
 fn mkf(n: i64) -> F { F { id: n, s: S { k: n }, name: f"{n}-heap-string-longer-than-sso" } }
-fn std(v: mut ref Vec[D], x: D) { v.push(x); }
-fn stf(v: mut ref Vec[F], x: F) { v.push(x); }
-fn keepd(x: D) -> D { x }
-fn keepf(x: F) -> F { x }
-fn keepg[T](x: T) -> T { x }
+fn std(v: mut ref Vec[D], x: own D) { v.push(x); }
+fn stf(v: mut ref Vec[F], x: own F) { v.push(x); }
+fn keepd(x: own D) -> D { x }
+fn keepf(x: own F) -> F { x }
+fn keepg[T](x: own T) -> T { x }
 struct H { k: i64 }
 impl H {
-    fn hd(ref self, x: D) -> D { x }
-    fn hf(ref self, x: F) -> F { x }
+    fn hd(ref self, x: own D) -> D { x }
+    fn hf(ref self, x: own F) -> F { x }
 }
 fn main() {
     let h = H { k: 1 };

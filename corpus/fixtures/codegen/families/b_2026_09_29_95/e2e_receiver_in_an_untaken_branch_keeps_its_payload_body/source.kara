@@ -3,8 +3,8 @@ impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 enum E { A(S), B(i64) }
 impl E {
-  fn m1(self) -> i64 { return match self { E.A(s) => s.id, E.B(n) => n } }
-  fn mb(self) -> i64 { let E.A(s) = self else { return 0 }; return s.id }
+  fn m1(own self) -> i64 { return match self { E.A(s) => s.id, E.B(n) => n } }
+  fn mb(own self) -> i64 { let E.A(s) = self else { return 0 }; return s.id }
 }
 fn a1(c: bool) -> i64 { let t = E.A(mks(1)); if c { let t = t.m1(); return t }; return 0 }
 fn a2(c: bool) -> i64 { let t = E.A(mks(2)); if c { return t.m1() }; return 0 }

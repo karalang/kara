@@ -1,7 +1,7 @@
 
 struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
-fn take(p: (R, i64)) {
+fn take(p: own (R, i64)) {
     let (r, n) = p;
     println(f"n={r.id + n}");
 }

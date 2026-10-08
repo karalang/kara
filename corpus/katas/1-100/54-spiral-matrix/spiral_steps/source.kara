@@ -64,7 +64,7 @@ fn spiral(m: ref Vec[Vec[i64]]) -> Vec[i64] {
 
 // ---- test harness (shared verbatim by all three solvers) ------------------
 
-fn report(grid: Vec[Vec[i64]], s: mut ref String) {
+fn report(grid: own Vec[Vec[i64]], s: mut ref String) {
     let m = grid;
     let order = spiral(m);
     let mut line: String = "[";

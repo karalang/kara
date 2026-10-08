@@ -12,8 +12,8 @@ fn a8(c: bool) -> R { let o = Some(mkr(8)); match o { Some(v) => { if c { return
 fn a9(n: i64) -> R { let mut i = 0; while i < 3 { let o = Some(mkr(90 + i)); if let Some(v) = o { if i == n { return v; } } i = i + 1; } return mkr(0) }
 fn a10() -> R { match Option.Some(mkr(10)) { Some(v) => { let k = v; return k } None => { return mkr(0) } } }
 fn a11() -> i64 { match Option.Some(mkr(11)) { Some(v) => { return v.id } None => { return 0 } } }
-fn h1(a: R) -> R { match Option.Some(a) { Some(v) => { return v } None => { return mkr(0) } } }
-fn h6(a: R) -> R { if let Some(v) = Some(a) { return v } return mkr(0) }
+fn h1(a: own R) -> R { match Option.Some(a) { Some(v) => { return v } None => { return mkr(0) } } }
+fn h6(a: own R) -> R { if let Some(v) = Some(a) { return v } return mkr(0) }
 fn main() {
     println("-a1t"); let r = a1(true); println(f"y{r.id}");
     println("-a1f"); let r = a1(false); println(f"y{r.id}");

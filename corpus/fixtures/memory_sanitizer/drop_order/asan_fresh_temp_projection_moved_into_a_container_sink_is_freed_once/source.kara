@@ -6,7 +6,7 @@ fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w-string-lo
 struct Q { name: String, k: i64 }
 fn mkq(n: i64) -> Q { return Q { name: f"q-string-longer-than-sso-{n}", k: n } }
 struct G[T] { v: T, k: i64 }
-fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }
+fn wrap[T](x: own T) -> G[T] { return G { v: x, k: 7 }; }
 fn main() {
     let mut xs: Vec[D] = Vec.new();
     xs.push(mkw(1).r);

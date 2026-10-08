@@ -6,12 +6,12 @@ fn mkq(k: i64) -> Q {
     let mut v = Vec.new(); v.push(k);
     Q { i: ShIn { s: f"shared-heap-string-longer-than-sso-{k}" }, n: k, hs: Hs { sh: ShIn { s: f"inner-shared-longer-than-sso-{k}" }, t: f"hs-heap-string-longer-than-sso-{k}", v: v } }
 }
-fn f1(q: Q) -> i64 { match q { Q { hs, n, .. } => { let x = hs; x.t.len() + n } } }
-fn g2(q: Q) -> Hs { match q { Q { hs, .. } => hs } }
-fn f2(q: Q) -> i64 { g2(q).t.len() }
-fn f3(q: Q) -> i64 { match q { Q { hs, .. } => { let sh = hs.sh; hs.t.len() + sh.s.len() } } }
+fn f1(q: own Q) -> i64 { match q { Q { hs, n, .. } => { let x = hs; x.t.len() + n } } }
+fn g2(q: own Q) -> Hs { match q { Q { hs, .. } => hs } }
+fn f2(q: own Q) -> i64 { g2(q).t.len() }
+fn f3(q: own Q) -> i64 { match q { Q { hs, .. } => { let sh = hs.sh; hs.t.len() + sh.s.len() } } }
 fn f4(q: Q) -> i64 { if let Q { hs, .. } = q { hs.t.len() + hs.v.len() } else { 0 } }
-fn f5(q: Q) -> i64 { let mut out: Vec[Hs] = Vec.new(); match q { Q { hs, .. } => { out.push(hs); } } out.len() }
+fn f5(q: own Q) -> i64 { let mut out: Vec[Hs] = Vec.new(); match q { Q { hs, .. } => { out.push(hs); } } out.len() }
 fn main() {
     println(f"a{f1(mkq(1))}"); let b1 = mkq(2); println(f"b{f1(b1)}");
     println(f"a{f2(mkq(1))}"); let b2 = mkq(2); println(f"b{f2(b2)}");

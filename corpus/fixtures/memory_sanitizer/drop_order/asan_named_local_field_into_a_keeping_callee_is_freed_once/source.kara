@@ -8,11 +8,11 @@ struct F { id: i64, h: Sh, note: String }
 impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
 struct V { f: F, d: D }
 fn mkv(n: i64) -> V { return V { f: F { id: n, h: Sh { tag: f"shared-tag-longer-than-sso-{n}" }, note: f"note-string-longer-than-sso-{n}" }, d: mkd(n + 50) }; }
-fn keep(x: D) -> D { x }
-fn st(v: mut ref Vec[D], x: D) { v.push(x); }
-fn gst[T](v: mut ref Vec[T], x: T) { v.push(x); }
-fn keepf(x: F) -> F { x }
-fn stf(v: mut ref Vec[F], x: F) { v.push(x); }
+fn keep(x: own D) -> D { x }
+fn st(v: mut ref Vec[D], x: own D) { v.push(x); }
+fn gst[T](v: mut ref Vec[T], x: own T) { v.push(x); }
+fn keepf(x: own F) -> F { x }
+fn stf(v: mut ref Vec[F], x: own F) { v.push(x); }
 fn main() {
     let mut v: Vec[D] = Vec.new();
     let a = mkw(1);

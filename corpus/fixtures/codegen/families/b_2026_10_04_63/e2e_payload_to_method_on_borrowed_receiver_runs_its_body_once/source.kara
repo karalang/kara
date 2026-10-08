@@ -5,8 +5,8 @@ struct W { r: S, n: i64 }
 struct Q { z: i64, keep: Vec[S] }
 impl Q {
   fn eat(ref self, s: S) { println("qx") }
-  fn add(mut ref self, s: S) { self.keep.push(s) }
-  fn fwd(mut ref self, s: S) { self.add(s) }
+  fn add(mut ref self, s: own S) { self.keep.push(s) }
+  fn fwd(mut ref self, s: own S) { self.add(s) }
   fn ofwd(mut ref self, s: S) { self.eat(s) }
   fn po(ref self, o: Option[S]) { match o { Some(r) => self.eat(r), None => {} } println("po") }
   fn pi(ref self, o: Option[S]) { if let Some(r) = o { self.eat(r) } println("pi") }
@@ -16,7 +16,7 @@ impl Q {
   fn sa(mut ref self, o: Option[S]) { match o { Some(r) => self.add(r), None => {} } println("sa") }
   fn sf(mut ref self, o: Option[S]) { match o { Some(r) => self.fwd(r), None => {} } println("sf") }
   fn so(mut ref self, o: Option[S]) { match o { Some(r) => self.ofwd(r), None => {} } println("so") }
-  fn sw(mut ref self, w: W) { self.add(w.r); println("sw") }
+  fn sw(mut ref self, w: own W) { self.add(w.r); println("sw") }
   fn ret(ref self, o: Option[S]) -> Option[S] { match o { Some(r) => { self.eat2(r); return Some(r) }, None => {} } return None }
   fn eat2(ref self, s: ref S) { println("q2") }
 }

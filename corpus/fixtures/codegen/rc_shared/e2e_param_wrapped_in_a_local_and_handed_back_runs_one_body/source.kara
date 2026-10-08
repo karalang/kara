@@ -7,16 +7,16 @@ struct W2 { o: Option[P] }
 struct H { n: i64 }
 fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
 fn keep(o: Option[S2]) -> Option[S2] { return o }
-fn outq(s: S2) -> Option[S2] { let o = Some(s); return o }
-fn outp(s: S2) -> Option[S2] { let o = Some(s); let p = keep(o); return p }
-fn outk(s: S2) -> Option[S2] { let o = Some(s); return keep(o) }
-fn c3(s: P) -> Option[P] { let o = Some(s); let q = o; return q }
-impl H { fn m(ref self, s: P) -> Option[P] { let o = Some(s); return o } fn a(s: P) -> Option[P] { let o = Some(s); return o } }
-fn g1[T](s: T) -> Option[T] { let o = Some(s); return o }
-fn e1(s: P) -> Result[i64, P] { let o: Result[i64, P] = Err(s); return o }
-fn vv(s: Vec[P]) -> Option[Vec[P]] { let o = Some(s); return o }
-fn w1(s: P) -> W2 { let o = Some(s); let w = W2 { o: o }; return w }
-fn t1(s: P) -> (Option[P], i64) { let o = Some(s); return (o, 1) }
+fn outq(s: own S2) -> Option[S2] { let o = Some(s); return o }
+fn outp(s: own S2) -> Option[S2] { let o = Some(s); let p = keep(o); return p }
+fn outk(s: own S2) -> Option[S2] { let o = Some(s); return keep(o) }
+fn c3(s: own P) -> Option[P] { let o = Some(s); let q = o; return q }
+impl H { fn m(ref self, s: own P) -> Option[P] { let o = Some(s); return o } fn a(s: own P) -> Option[P] { let o = Some(s); return o } }
+fn g1[T](s: own T) -> Option[T] { let o = Some(s); return o }
+fn e1(s: own P) -> Result[i64, P] { let o: Result[i64, P] = Err(s); return o }
+fn vv(s: own Vec[P]) -> Option[Vec[P]] { let o = Some(s); return o }
+fn w1(s: own P) -> W2 { let o = Some(s); let w = W2 { o: o }; return w }
+fn t1(s: own P) -> (Option[P], i64) { let o = Some(s); return (o, 1) }
 fn a() { let s = mk2(1); let p = outq(s); let v = p.unwrap(); println(f"a{v.id}") }
 fn b() { let s = mk2(2); let p = outp(s); let v = p.unwrap(); println(f"b{v.id}") }
 fn c() { let s = mk2(3); let p = outk(s); let v = p.unwrap(); println(f"c{v.id}") }

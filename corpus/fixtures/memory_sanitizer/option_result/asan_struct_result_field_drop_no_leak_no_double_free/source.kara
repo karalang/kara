@@ -2,14 +2,14 @@
 struct H3 { res: Result[String, i64], n: i64 }
 struct P2 { r: Result[String, String], n: i64 }
 fn take_n(h: H3) -> i64 { return h.n; }
-fn take_s(h: H3) -> i64 {
+fn take_s(h: own H3) -> i64 {
     match h.res {
         Ok(s) => { return s.len(); }
         Err(e) => { return e; }
     }
     return -1;
 }
-fn mk(v: String) -> H3 { return H3 { res: Ok(v), n: 9 }; }
+fn mk(v: own String) -> H3 { return H3 { res: Ok(v), n: 9 }; }
 fn main() {
     let mut i: i64 = 0;
     let mut acc: i64 = 0;

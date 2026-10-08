@@ -37,7 +37,7 @@ struct RouteCtx { params: Map[String, String], body: String }
 
 enum ApiError { BadRequest(String), NotFound(String), Conflict(String) }
 impl ApiError {
-    fn to_reply(self) -> Reply {
+    fn to_reply(own self) -> Reply {
         match self {
             ApiError.BadRequest(msg) => Reply { status: 400, body: msg },
             ApiError.NotFound(msg) => Reply { status: 404, body: msg },
@@ -117,7 +117,7 @@ fn match_pattern(pattern: ref Vec[Segment], parts: ref Vec[String]) -> Option[Ma
 
 struct Router { routes: Vec[Route] }
 impl Router {
-    fn add(mut ref self, method: Method, pattern: String, handler: Handler) {
+    fn add(mut ref self, method: Method, pattern: String, handler: own Handler) {
         self.routes.push(Route { method, pattern: compile_pattern(pattern), handler });
     }
 
@@ -347,7 +347,7 @@ impl App {
     }
 }
 
-fn req(method: String, path: String, headers: Vec[(String, String)], body: String) -> HttpRequest {
+fn req(method: own String, path: own String, headers: own Vec[(String, String)], body: own String) -> HttpRequest {
     HttpRequest { method, path, headers, body }
 }
 

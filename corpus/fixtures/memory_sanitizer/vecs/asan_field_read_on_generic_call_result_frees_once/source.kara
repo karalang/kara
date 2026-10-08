@@ -3,11 +3,11 @@ struct P { s: String, n: i64 }
 struct R { q: Q, s: String }
 struct W[T] { v: T, k: i64 }
 fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
-fn id2[T](d: T) -> T { d }
-fn get[U](u: U) -> U { id2(u) }
-fn inner(p: P) -> i64 { id2(p).n }
-fn sel[T](c: bool, a: T, b: T) -> T { if c { a } else { b } }
-fn wrap[T](x: T) -> W[T] { W { v: x, k: 3 } }
+fn id2[T](d: own T) -> T { d }
+fn get[U](u: own U) -> U { id2(u) }
+fn inner(p: own P) -> i64 { id2(p).n }
+fn sel[T](c: bool, a: own T, b: own T) -> T { if c { a } else { b } }
+fn wrap[T](x: own T) -> W[T] { W { v: x, k: 3 } }
 fn main() {
     for i in 0..2 {
         let a = Some(P { s: f"heap-string-longer-than-sso-1-{i}", n: 1 });

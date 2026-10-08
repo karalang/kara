@@ -11,7 +11,7 @@ fn bound(t: ref Wt) -> String { let s = t.pair.0; return s; }
 fn arg(t: ref Wt) -> i64 { return sink(t.pair.0); }
 fn scalar(t: ref Wt) -> i64 { return t.pair.1; }
 fn structleaf(t: ref Wr) -> R { return t.pr.0; }
-fn owned(t: Wt) -> String { return t.pair.0; }
+fn owned(t: own Wt) -> String { return t.pair.0; }
 
 impl Wt { fn peek(ref self) -> String { return self.pair.0; } }
 

@@ -1,5 +1,5 @@
 
-fn second(v: Vec[i64]) -> i64 {
+fn second(v: own Vec[i64]) -> i64 {
     let mut work: Vec[i64] = Vec.new();
     work.push(0);
     work = v;

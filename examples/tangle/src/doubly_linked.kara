@@ -35,7 +35,7 @@ struct DList {
 // so `karac query ownership .../doubly_linked.kara.link` surfaces the shared(Rc)
 // node parameters — the `DList` methods themselves take only `self` + an i64, so
 // the declared-RC signal would otherwise be invisible to the query.
-fn link(a: Node, b: Node) {
+fn link(a: own Node, b: own Node) {
     a.next = Some(b);
     b.prev = Some(a);
 }
@@ -138,7 +138,7 @@ impl DList {
     }
 }
 
-fn print_list(label: String, xs: Vec[i64]) {
+fn print_list(label: own String, xs: Vec[i64]) {
     let mut s = label;
     let mut i = 0;
     loop {

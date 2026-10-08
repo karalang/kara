@@ -1,4 +1,4 @@
-fn pass(a: Array[String, 2]) -> Array[String, 2] { return a; }
+fn pass(a: own Array[String, 2]) -> Array[String, 2] { return a; }
 fn mk(i: i64) -> Array[String, 2] {
     let x = f"a{i}";
     let y = f"b{i}";

@@ -1,5 +1,5 @@
 
-fn sink(addr: String) {
+fn sink(addr: own String) {
     let mut held: Vec[String] = Vec.new();
     held.push(addr);
     if held[0] == "relay-upstream-127.0.0.1-9000" {

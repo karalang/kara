@@ -2,7 +2,7 @@
 fn mk(n: i64) -> Array[String, 2] {
     return Array[f"tmp-aaaaaaaaaaaaaaaa-{n}", f"tmp-bbbbbbbbbbbbbbbb-{n}"];
 }
-fn takes(a: Array[String, 2], v: mut ref Vec[Array[String, 2]]) {
+fn takes(a: own Array[String, 2], v: mut ref Vec[Array[String, 2]]) {
     v.push(a);
 }
 

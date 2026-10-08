@@ -12,24 +12,24 @@ struct W5 { u: S5, n: i64 }
 struct W4 { u: S4, n: i64 }
 struct Kp { a: i64 }
 impl Kp {
-  fn mk4(ref self, s: S4, b: bool) -> S4 { if b { return s } m4(0) }
-  fn gm[T](ref self, s: T, b: bool, w: T) -> T { if b { return s } w }
-  fn gk[T](ref self, s: T) -> T { return s }
+  fn mk4(ref self, s: own S4, b: bool) -> S4 { if b { return s } m4(0) }
+  fn gm[T](ref self, s: own T, b: bool, w: own T) -> T { if b { return s } w }
+  fn gk[T](ref self, s: own T) -> T { return s }
 }
-fn maybe(s: S2, b: bool) -> S2 { if b { return s } mk(0) }
-fn maybe5(s: S5, b: bool) -> S5 { if b { return s } m5(0) }
-fn maybe4(s: S4, b: bool) -> S4 { if b { return s } m4(0) }
-fn gmaybe[T](s: T, b: bool, w: T) -> T { if b { return s } w }
-fn f1(q: W3, b: bool) -> S2 { return maybe(q.u, b) }
-fn f2(q: W3, b: bool) -> S2 { let x = q.u; return maybe(x, b) }
-fn f3(q: W5, b: bool) -> S5 { return maybe5(q.u, b) }
-fn f4(q: W4, b: bool) -> S4 { return maybe4(q.u, b) }
-fn f5(q: W4, b: bool) -> S4 { let kp = Kp { a: 1 }; return kp.mk4(q.u, b) }
-fn f6(q: W3, b: bool) -> S2 { return gmaybe(q.u, b, mk(0)) }
-fn f7(q: W3, b: bool) -> S2 { let x = q.u; return gmaybe(x, b, mk(0)) }
-fn f8(q: W4, b: bool) -> S4 { let kp = Kp { a: 1 }; return kp.gm(q.u, b, m4(0)) }
-fn f9(q: W4) -> S4 { let kp = Kp { a: 1 }; return kp.gk(q.u) }
-fn f10(q: W3, b: bool) -> i64 { let r = maybe(q.u, b); println(f"n{q.n} r{r.id} k{r.h.k}"); return r.id * 10 + q.n }
+fn maybe(s: own S2, b: bool) -> S2 { if b { return s } mk(0) }
+fn maybe5(s: own S5, b: bool) -> S5 { if b { return s } m5(0) }
+fn maybe4(s: own S4, b: bool) -> S4 { if b { return s } m4(0) }
+fn gmaybe[T](s: own T, b: bool, w: own T) -> T { if b { return s } w }
+fn f1(q: own W3, b: bool) -> S2 { return maybe(q.u, b) }
+fn f2(q: own W3, b: bool) -> S2 { let x = q.u; return maybe(x, b) }
+fn f3(q: own W5, b: bool) -> S5 { return maybe5(q.u, b) }
+fn f4(q: own W4, b: bool) -> S4 { return maybe4(q.u, b) }
+fn f5(q: own W4, b: bool) -> S4 { let kp = Kp { a: 1 }; return kp.mk4(q.u, b) }
+fn f6(q: own W3, b: bool) -> S2 { return gmaybe(q.u, b, mk(0)) }
+fn f7(q: own W3, b: bool) -> S2 { let x = q.u; return gmaybe(x, b, mk(0)) }
+fn f8(q: own W4, b: bool) -> S4 { let kp = Kp { a: 1 }; return kp.gm(q.u, b, m4(0)) }
+fn f9(q: own W4) -> S4 { let kp = Kp { a: 1 }; return kp.gk(q.u) }
+fn f10(q: own W3, b: bool) -> i64 { let r = maybe(q.u, b); println(f"n{q.n} r{r.id} k{r.h.k}"); return r.id * 10 + q.n }
 fn main() {
   println("-c1"); let a = f1(W3 { u: mk(9), n: 2 }, true); println(f"r{a.id}{a.h.k}"); let a2 = f1(W3 { u: mk(8), n: 2 }, false); println(f"r{a2.id}{a2.h.k}");
   println("-c2"); let b = f2(W3 { u: mk(7), n: 2 }, true); println(f"r{b.id}{b.h.k}"); let b2 = f2(W3 { u: mk(6), n: 2 }, false); println(f"r{b2.id}{b2.h.k}");

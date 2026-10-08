@@ -1,5 +1,5 @@
 
-fn add_rec(cur: String, k: i64, out: mut ref Vec[String]) {
+fn add_rec(cur: own String, k: i64, out: mut ref Vec[String]) {
     if k == 0 {
         out.push(cur);
         return;

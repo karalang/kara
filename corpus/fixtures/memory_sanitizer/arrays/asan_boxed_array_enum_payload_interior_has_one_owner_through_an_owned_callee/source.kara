@@ -1,7 +1,7 @@
 
 enum Slot[T] { Filled(T), Blank }
 
-fn take(s: Slot[Array[String, 2]]) -> bool {
+fn take(s: own Slot[Array[String, 2]]) -> bool {
     match s { Filled(x) => x[0].contains("row"), Blank => false, }
 }
 

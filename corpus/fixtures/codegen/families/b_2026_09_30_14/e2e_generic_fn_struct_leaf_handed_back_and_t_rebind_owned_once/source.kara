@@ -3,17 +3,17 @@ struct G[T] { v: T, n: i64 }
 enum E[T] { A { x: T, k: i64 }, B }
 fn mk(p: String, k: i64) -> String { f"{p}-heap-string-longer-than-sso-{k}" }
 fn mv(k: i64) -> Vec[String] { let mut v = Vec.new(); v.push(mk("e", k)); v.push(mk("f", k)); v }
-fn h1[T](g: G[T]) -> T { match g { G { v, .. } => v } }
-fn h2[T](g: G[T]) -> T { match g { G { v, n } => { let w = v; w } } }
-fn h3[T](g: G[T]) -> Vec[T] { let mut o = Vec.new(); match g { G { v, .. } => o.push(v) } o }
+fn h1[T](g: own G[T]) -> T { match g { G { v, .. } => v } }
+fn h2[T](g: own G[T]) -> T { match g { G { v, n } => { let w = v; w } } }
+fn h3[T](g: own G[T]) -> Vec[T] { let mut o = Vec.new(); match g { G { v, .. } => o.push(v) } o }
 fn h4[T](g: G[T]) -> T { if let G { v, .. } = g { v } else { panic("no") } }
-fn h5[T](g: G[G[T]]) -> T { match g { G { v: G { v, .. }, .. } => v } }
-fn h6[T](e: E[T]) -> Option[T] { match e { E.A { x, .. } => Some(x), E.B => None } }
-fn k1[T](g: G[T]) -> i64 { match g { G { v, n } => { let w = v; n } } }
-fn k2[T](x: T) -> i64 { let w = x; 3 }
-fn k3[T](x: T, c: bool) -> i64 { if c { let w = x; 1 } else { 0 } }
+fn h5[T](g: own G[G[T]]) -> T { match g { G { v: G { v, .. }, .. } => v } }
+fn h6[T](e: own E[T]) -> Option[T] { match e { E.A { x, .. } => Some(x), E.B => None } }
+fn k1[T](g: own G[T]) -> i64 { match g { G { v, n } => { let w = v; n } } }
+fn k2[T](x: own T) -> i64 { let w = x; 3 }
+fn k3[T](x: own T, c: bool) -> i64 { if c { let w = x; 1 } else { 0 } }
 fn k4[T](xs: Vec[T]) -> i64 { let mut n = 0; for x in xs { let w = x; n = n + 1; } n }
-fn k5[T](e: E[T]) -> i64 { match e { E.A { x, k } => { let w = x; k } E.B => 0 } }
+fn k5[T](e: own E[T]) -> i64 { match e { E.A { x, k } => { let w = x; k } E.B => 0 } }
 fn main() {
     println(h1(G { v: mk("a", 1), n: 2 }));
     let g = G { v: mk("b", 2), n: 1 };

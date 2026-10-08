@@ -8,7 +8,7 @@ fn mk(k: i64) -> A {
     b.push_str("-tail-padding-to-force-heap");
     A { value: Some(Inner { s: b }) }
 }
-fn use_a(a: A) -> i64 {
+fn use_a(a: own A) -> i64 {
     match a.value { Some(w) => { if w.s.starts_with("payload") { 1 } else { 2 } } None => 0 }
 }
 fn main() {

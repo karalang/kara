@@ -7,7 +7,7 @@ fn make(n: i64) -> Guard {
     Guard { name: f"guard payload padded beyond thirty-six bytes {n}", id: n }
 }
 fn consume(g: Guard) { println(100 + g.id); }
-fn pass(g: Guard) -> Guard { g }
+fn pass(g: own Guard) -> Guard { g }
 fn main() {
     let mut i = 0;
     while i < 3 {

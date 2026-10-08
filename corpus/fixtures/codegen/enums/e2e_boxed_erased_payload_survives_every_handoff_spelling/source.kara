@@ -1,9 +1,9 @@
 enum G1[T] { Y(T), N }
 struct H[T] { g: G1[T] }
 struct H2[T] { h: H[T] }
-fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }
-fn wrapNest[T](g: G1[T], c: bool) -> H2[T] { if c { return H2 { h: H { g: g } } } return H2 { h: H { g: G1.N } } }
-fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } }
+fn wrap[T](g: own G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }
+fn wrapNest[T](g: own G1[T], c: bool) -> H2[T] { if c { return H2 { h: H { g: g } } } return H2 { h: H { g: G1.N } } }
+fn shw(g: own G1[String]) { match g { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } }
 fn fnTail() { let g: G1[String] = G1.Y(f"aaaaaaaa-6"); let h = wrap(g, true); shw(h.g) }
 
 fn main() {

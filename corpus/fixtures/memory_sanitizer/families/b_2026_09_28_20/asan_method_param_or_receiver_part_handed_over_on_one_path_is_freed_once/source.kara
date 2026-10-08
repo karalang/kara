@@ -3,24 +3,24 @@ impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
 fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
 struct W { r: D, s: D, b: i64 }
 fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
-fn keep(d: D) -> D { d }
+fn keep(d: own D) -> D { d }
 struct T { w: W, t: D }
 fn mkt(n: i64) -> T { T { w: mkw(n), t: mkd(n + 300) } }
 struct H { k: i64 }
 impl H {
-    fn ret(ref self, w: W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } 0 }
-    fn push(ref self, w: W, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(w.r); } xs.len() }
-    fn al(ref self, w: W, c: bool) -> i64 { let r = w.r; if c { let k = keep(r); return k.id; } 0 }
-    fn owns(self, w: W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } self.k }
-    fn two(ref self, a: i64, w: W, c: bool) -> i64 { if c { let k = keep(w.s); return k.id + a; } a }
+    fn ret(ref self, w: own W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } 0 }
+    fn push(ref self, w: own W, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(w.r); } xs.len() }
+    fn al(ref self, w: own W, c: bool) -> i64 { let r = w.r; if c { let k = keep(r); return k.id; } 0 }
+    fn owns(self, w: own W, c: bool) -> i64 { if c { let k = keep(w.r); return k.id; } self.k }
+    fn two(ref self, a: i64, w: own W, c: bool) -> i64 { if c { let k = keep(w.s); return k.id + a; } a }
 }
 impl W {
-    fn ret(self, c: bool) -> i64 { if c { let k = keep(self.r); return k.id; } 0 }
-    fn tail(self, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(self.r) } xs.len() }
-    fn al(self, c: bool) -> i64 { let r = self.r; if c { let k = keep(r); return k.id; } 0 }
-    fn both(self, c: bool) -> D { if c { let k = keep(self.r); println(f"k{k.id}"); } self.s }
+    fn ret(own self, c: bool) -> i64 { if c { let k = keep(self.r); return k.id; } 0 }
+    fn tail(own self, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(self.r) } xs.len() }
+    fn al(own self, c: bool) -> i64 { let r = self.r; if c { let k = keep(r); return k.id; } 0 }
+    fn both(own self, c: bool) -> D { if c { let k = keep(self.r); println(f"k{k.id}"); } self.s }
 }
-impl T { fn deep(self, c: bool) -> i64 { if c { let k = keep(self.w.r); return k.id; } 0 } }
+impl T { fn deep(own self, c: bool) -> i64 { if c { let k = keep(self.w.r); return k.id; } 0 } }
 fn main() {
     let h = H { k: 0 };
     println(f"a{h.ret(mkw(1), false)}"); println(f"a{h.ret(mkw(2), true)}");

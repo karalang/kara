@@ -4,8 +4,8 @@ fn mka() -> Array[W1, 1] { return [W1 { v: 40 }] }
 fn mkv() -> Vec[W1] { return [W1 { v: 41 }] }
 fn mkt() -> (W1, i64) { return (W1 { v: 42 }, 7) }
 fn mk2() -> ((W1, W1), i64) { return ((W1 { v: 43 }, W1 { v: 44 }), 1) }
-fn pa(x: Array[W1, 1]) -> Array[W1, 1] { return x }
-fn pt(x: (W1, i64)) -> (W1, i64) { return x }
+fn pa(x: own Array[W1, 1]) -> Array[W1, 1] { return x }
+fn pt(x: own (W1, i64)) -> (W1, i64) { return x }
 struct K { n: i64 }
 impl K { fn ma(ref self) -> Array[W1, 1] { return [W1 { v: 45 }] } fn mt(ref self) -> (W1, i64) { return (W1 { v: 46 }, 1) } }
 fn main() {

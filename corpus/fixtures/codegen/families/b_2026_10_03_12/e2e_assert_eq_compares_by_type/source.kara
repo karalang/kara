@@ -1,6 +1,6 @@
 shared struct Node { v: i64 }
 struct T3 { h: Node, a: i64, b: i64 }
-fn names(t: String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(t); v }
+fn names(t: own String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(t); v }
 fn main() {
     let a = names(f"a{1}");
     let b = names(f"a{1}");

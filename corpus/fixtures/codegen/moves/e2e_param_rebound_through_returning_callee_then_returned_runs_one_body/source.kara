@@ -2,26 +2,26 @@ struct R { id: i64, tag: String, xs: Vec[i64] }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 struct W { r: R, n: i64 }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
-fn keeps(r: R) -> R { return r; }
-fn keep(t: (R, i64)) -> (R, i64) { return t; }
-fn keepg[T](x: T) -> T { return x; }
-fn s_ret(r: R) -> R { let w: R = keeps(r); return w; }
-fn s_ret_tail(r: R) -> R { let w: R = keeps(r); w }
-fn s_ret_direct(r: R) -> R { return keeps(r); }
-fn s_ret_rebind(r: R) -> R { let z: R = r; let w: R = keeps(z); return w; }
-fn s_ret_twice(r: R) -> R { let w: R = keeps(r); let v: R = keeps(w); return v; }
-fn s_ret_generic(r: R) -> R { let w: R = keepg(r); return w; }
-fn s_ret_cond(r: R, k: bool) -> R { let w: R = keeps(r); if k { return w; } return mk(99); }
-fn s_ret_wrap(r: R) -> W { let w: R = keeps(r); return W { r: w, n: 1 }; }
-fn s_ret_opt(r: R) -> Option[R] { let w: R = keeps(r); return Option.Some(w); }
-fn t_ret(t: (R, i64)) -> (R, i64) { let w: (R, i64) = keep(t); return w; }
-fn s_ret_after(r: R) -> R { let w: R = keeps(r); println(f"mid {w.id}"); return w; }
-fn s_ret_nested(r: R, k: bool) -> R { if k { let w: R = keeps(r); return w; } return mk(98); }
-fn s_ret_chain(r: R) -> R { let w: R = keeps(r); let v: R = w; return v; }
-fn s_ret_unused_path(r: R, k: bool) -> R { let w: R = keeps(r); if k { return w; } println("np"); return w; }
+fn keeps(r: own R) -> R { return r; }
+fn keep(t: own (R, i64)) -> (R, i64) { return t; }
+fn keepg[T](x: own T) -> T { return x; }
+fn s_ret(r: own R) -> R { let w: R = keeps(r); return w; }
+fn s_ret_tail(r: own R) -> R { let w: R = keeps(r); w }
+fn s_ret_direct(r: own R) -> R { return keeps(r); }
+fn s_ret_rebind(r: own R) -> R { let z: R = r; let w: R = keeps(z); return w; }
+fn s_ret_twice(r: own R) -> R { let w: R = keeps(r); let v: R = keeps(w); return v; }
+fn s_ret_generic(r: own R) -> R { let w: R = keepg(r); return w; }
+fn s_ret_cond(r: own R, k: bool) -> R { let w: R = keeps(r); if k { return w; } return mk(99); }
+fn s_ret_wrap(r: own R) -> W { let w: R = keeps(r); return W { r: w, n: 1 }; }
+fn s_ret_opt(r: own R) -> Option[R] { let w: R = keeps(r); return Option.Some(w); }
+fn t_ret(t: own (R, i64)) -> (R, i64) { let w: (R, i64) = keep(t); return w; }
+fn s_ret_after(r: own R) -> R { let w: R = keeps(r); println(f"mid {w.id}"); return w; }
+fn s_ret_nested(r: own R, k: bool) -> R { if k { let w: R = keeps(r); return w; } return mk(98); }
+fn s_ret_chain(r: own R) -> R { let w: R = keeps(r); let v: R = w; return v; }
+fn s_ret_unused_path(r: own R, k: bool) -> R { let w: R = keeps(r); if k { return w; } println("np"); return w; }
 struct K { n: i64 }
 impl K {
-    fn m_ret(ref self, r: R) -> R { let w: R = keeps(r); return w; }
+    fn m_ret(ref self, r: own R) -> R { let w: R = keeps(r); return w; }
 }
 fn main() {
     let k = K { n: 0 };

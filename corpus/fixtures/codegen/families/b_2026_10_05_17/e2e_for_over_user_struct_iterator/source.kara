@@ -35,7 +35,7 @@ impl[T: Clone] Iterator for Rep[T] {
     }
 }
 struct Nested { items: Vec[Vec[i64]], o: i64, k: i64 }
-impl Nested { fn new(items: Vec[Vec[i64]]) -> Nested { Nested { items: items, o: 0, k: 0 } } }
+impl Nested { fn new(items: own Vec[Vec[i64]]) -> Nested { Nested { items: items, o: 0, k: 0 } } }
 impl Iterator for Nested {
     type Item = i64;
     fn next(mut ref self) -> Option[i64] {

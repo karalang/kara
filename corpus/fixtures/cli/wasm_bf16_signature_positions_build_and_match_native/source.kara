@@ -13,7 +13,7 @@ pub fn mixed(a: i64, b: bf16, c: f32, d: bf16) -> bf16 {
     return b + d + (a as bf16) + (c as bf16)
 }
 pub fn lit() -> bf16 { return 0.5 }
-fn pick[T](a: T, b: T) -> T { return a }
+fn pick[T](a: own T, b: T) -> T { return a }
 pub fn addh(a: f16, b: f16) -> f16 { return a + b }
 
 fn main() {

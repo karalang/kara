@@ -18,7 +18,7 @@ fn n1() { let h = Hn { pe: ((mk(4), 0), 1) };       let ((r, a), b) = h.pe; prin
 #[allow(partial_move_of_drop_struct)]
 fn d1() { let h = Hd { pe: (mk(5), 0), n: 5 };      let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
 fn c1() { let h = H  { pe: (mk(6), 0) };            let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
-fn c2(h: H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
+fn c2(h: own H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
 
 fn main() {
     println("wild");     w1();                      println("wild end");

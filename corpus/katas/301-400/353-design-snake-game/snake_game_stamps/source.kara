@@ -21,7 +21,7 @@ struct SnakeGame {
 }
 
 impl SnakeGame {
-    fn new(width: i64, height: i64, food: Vec[(i64, i64)]) -> SnakeGame {
+    fn new(width: i64, height: i64, food: own Vec[(i64, i64)]) -> SnakeGame {
         let mut entered = vec![-1; width * height];
         entered[0] = 0;
         SnakeGame { width, height, food, next_food: 0, entered, moves: 0, len: 1, head: (0, 0) }
@@ -79,7 +79,7 @@ fn cycle_moves(width: i64, height: i64) -> String {
     m
 }
 
-fn play(label: ref String, width: i64, height: i64, food: Vec[(i64, i64)], moves: ref String) {
+fn play(label: ref String, width: i64, height: i64, food: own Vec[(i64, i64)], moves: ref String) {
     let mut g = SnakeGame.new(width, height, food);
     let mut out = String.new();
     for d in moves.chars() {

@@ -37,7 +37,7 @@ fn res(o: Result[W1, String]) {
     let t = match o { Ok(w) => [w], Err(_) => [mk(0)] };
     println(f"rs{t[0].v}")
 }
-fn uenum(o: E) {
+fn uenum(o: own E) {
     let t = match o { E.A(w) => [w], E.B => [mk(0)] };
     println(f"ue{t[0].v}")
 }

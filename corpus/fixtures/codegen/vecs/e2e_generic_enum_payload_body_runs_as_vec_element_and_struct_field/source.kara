@@ -10,8 +10,8 @@ enum MoS { Full(S), Empty }
 struct H { g: Ho[R] }
 struct Hs { g: Ho[S] }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
-fn show(h: Ho[R]) { match h { Ho.Full(r) => println(f"r{r.id}"), Ho.Empty => println("e") } }
-fn shows(h: Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
+fn show(h: own Ho[R]) { match h { Ho.Full(r) => println(f"r{r.id}"), Ho.Empty => println("e") } }
+fn shows(h: own Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
 struct Hm { g: MoR }
 struct Gh[T] { g: Ho[T] }
 fn eat(h: H) { println("eat") }

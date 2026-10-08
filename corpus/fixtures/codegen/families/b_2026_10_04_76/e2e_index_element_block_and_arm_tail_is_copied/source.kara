@@ -1,5 +1,5 @@
 
-fn mkv(s: String) -> Vec[String] {
+fn mkv(s: own String) -> Vec[String] {
     let mut v: Vec[String] = Vec.new();
     v.push(s.clone() + "-a");
     v.push(s + "-b");

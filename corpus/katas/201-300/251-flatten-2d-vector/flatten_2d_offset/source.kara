@@ -23,7 +23,7 @@ struct Vector2D {
     mut k: i64,
 }
 
-fn v_new(data: Vec[Vec[i64]]) -> Vector2D {
+fn v_new(data: own Vec[Vec[i64]]) -> Vector2D {
     let mut prefix: Vec[i64] = Vec.new();
     prefix.push(0);
     let mut r = 0;

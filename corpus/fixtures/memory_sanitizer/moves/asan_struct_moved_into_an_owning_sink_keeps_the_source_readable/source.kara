@@ -4,7 +4,7 @@ struct P2 { s: String, t: String }
 struct Pv { v: Vec[String] }
 enum Ws { Full(P), Empty }
 
-fn wlen(w: Ws) -> i64 { match w { Ws.Full(q) => { return q.s.len(); } Ws.Empty => { return 0; } } }
+fn wlen(w: own Ws) -> i64 { match w { Ws.Full(q) => { return q.s.len(); } Ws.Empty => { return 0; } } }
 fn takep(p: P) -> i64 { return p.s.len(); }
 fn mkp(n: i64) -> P { return P { s: f"b1516-src-aaaaaaaaaaaa-{n}" }; }
 

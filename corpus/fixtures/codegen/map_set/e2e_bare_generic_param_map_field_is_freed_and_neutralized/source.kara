@@ -15,7 +15,7 @@ fn mkset(i: i64, n: i64) -> Set[String] {
 }
 
 fn sink(b: Box[Map[i64, String]]) -> i64 { return b.v.len(); }
-fn take(b: Box[Map[i64, String]]) -> Map[i64, String] { return b.v; }
+fn take(b: own Box[Map[i64, String]]) -> Map[i64, String] { return b.v; }
 fn eat(m: Map[i64, String]) -> i64 { return m.len(); }
 fn peek(b: ref Box[Map[i64, String]]) -> i64 { return b.v.len(); }
 fn sinkset(b: Box[Set[String]]) -> i64 { return b.v.len(); }

@@ -7,22 +7,22 @@ enum Pv { Pv1(Vec[R]), Qv }
 struct Bx { v: Array[R, 2] }
 struct Hm { k: i64 }
 impl Hm {
-    fn seeded(ref self, a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  arm"); return 1 }, Option.None => { return 0 } } }
-    fn named(ref self, a: Array[R, 2]) -> i64 { let o = Option.Some(a); println("  mid"); return 1 }
+    fn seeded(ref self, a: own Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  arm"); return 1 }, Option.None => { return 0 } } }
+    fn named(ref self, a: own Array[R, 2]) -> i64 { let o = Option.Some(a); println("  mid"); return 1 }
 }
-fn c_opt(a: Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println(f"  r{v[0].id}"); return 1 }, Option.None => { return 0 } } }
-fn c_bare(a: Array[R, 2]) -> i64 { match Some(a) { Some(v) => { println("  arm"); return 1 }, None => { return 0 } } }
-fn c_res(a: Array[R, 2]) -> i64 { match Result.Ok(a) { Result.Ok(v) => { println("  arm"); return 1 }, Result.Err(e) => { return 0 } } }
-fn c_user(a: Array[R, 2]) -> i64 { match Pw.P(a) { Pw.P(v) => { println(f"  r{v[1].id}"); return 1 }, Pw.Q => { return 0 } } }
-fn c_vec(a: Vec[R]) -> i64 { match Pv.Pv1(a) { Pv.Pv1(v) => { println("  arm"); return 1 }, Pv.Qv => { return 0 } } }
-fn c_iflet(a: Array[R, 2]) -> i64 { if let Option.Some(v) = Option.Some(a) { println(f"  r{v[1].id}"); return 1 } return 0 }
-fn c_letelse(a: Array[R, 2]) -> i64 { let Option.Some(v) = Option.Some(a) else { return 0 }; println(f"  r{v[0].id}"); return 1 }
-fn c_named(a: Array[R, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  arm"); return 1 }, Option.None => { return 0 } } }
-fn c_named_user(a: Array[R, 2]) -> i64 { let o = Pw.P(a); println("  mid"); return 1 }
-fn c_named_mixed(a: Array[R, 2]) -> i64 { let o = Pw2.P2(a, [mkr(90), mkr(91)]); println("  mid"); return 1 }
-fn c_named_rebind(a: Array[R, 2]) -> i64 { let o = Option.Some(a); let o2 = o; println("  mid"); return 1 }
-fn c_struct(a: Array[R, 2]) -> i64 { let b = Bx { v: a }; println(f"  r{b.v[0].id}"); return 1 }
-fn c_tuple(a: Array[R, 2]) -> i64 { let t = (a, 5); println(f"  r{t.1}"); return 1 }
+fn c_opt(a: own Array[R, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println(f"  r{v[0].id}"); return 1 }, Option.None => { return 0 } } }
+fn c_bare(a: own Array[R, 2]) -> i64 { match Some(a) { Some(v) => { println("  arm"); return 1 }, None => { return 0 } } }
+fn c_res(a: own Array[R, 2]) -> i64 { match Result.Ok(a) { Result.Ok(v) => { println("  arm"); return 1 }, Result.Err(e) => { return 0 } } }
+fn c_user(a: own Array[R, 2]) -> i64 { match Pw.P(a) { Pw.P(v) => { println(f"  r{v[1].id}"); return 1 }, Pw.Q => { return 0 } } }
+fn c_vec(a: own Vec[R]) -> i64 { match Pv.Pv1(a) { Pv.Pv1(v) => { println("  arm"); return 1 }, Pv.Qv => { return 0 } } }
+fn c_iflet(a: own Array[R, 2]) -> i64 { if let Option.Some(v) = Option.Some(a) { println(f"  r{v[1].id}"); return 1 } return 0 }
+fn c_letelse(a: own Array[R, 2]) -> i64 { let Option.Some(v) = Option.Some(a) else { return 0 }; println(f"  r{v[0].id}"); return 1 }
+fn c_named(a: own Array[R, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  arm"); return 1 }, Option.None => { return 0 } } }
+fn c_named_user(a: own Array[R, 2]) -> i64 { let o = Pw.P(a); println("  mid"); return 1 }
+fn c_named_mixed(a: own Array[R, 2]) -> i64 { let o = Pw2.P2(a, [mkr(90), mkr(91)]); println("  mid"); return 1 }
+fn c_named_rebind(a: own Array[R, 2]) -> i64 { let o = Option.Some(a); let o2 = o; println("  mid"); return 1 }
+fn c_struct(a: own Array[R, 2]) -> i64 { let b = Bx { v: a }; println(f"  r{b.v[0].id}"); return 1 }
+fn c_tuple(a: own Array[R, 2]) -> i64 { let t = (a, 5); println(f"  r{t.1}"); return 1 }
 fn main() {
     println("opt");         { let a: Array[R, 2] = [mkr(1), mkr(2)]; let z = c_opt(a); }
     println("bare");        { let a: Array[R, 2] = [mkr(3), mkr(4)]; let z = c_bare(a); }

@@ -7,18 +7,18 @@ impl Drop for Q { fn drop(mut ref self) { println(f"dQ{self.id}") } }
 struct Hs { q: Q, r: R }
 struct K { k: i64 }
 impl K {
-    fn eat(ref self, a: R) -> i64 { let mut c = a; c.id = c.id + 10; println("in"); 5 }
+    fn eat(ref self, a: own R) -> i64 { let mut c = a; c.id = c.id + 10; println("in"); 5 }
 }
-fn held(a: R) -> i64 { let mut c = a; c.id = c.id + 10; println("in"); 5 }
-fn rename(a: R) -> i64 { let mut c = a; c.name = "z"; c.id = 7; println(f"in {c.name}"); 5 }
-fn grow(a: Vec[R]) -> i64 { let mut c = a; c.push(mk(99)); c.len() }
-fn shrink(a: Vec[R]) -> i64 { let mut c = a; let r = c.pop(); println(f"in {r.is_some()}"); c.len() }
-fn part(a: H) -> i64 { let mut c = a; c.r.id = 21; let x = c.r; println("in"); 5 }
-fn swap(a: R) -> i64 { let mut c = a; c.id = 11; c = mk(9); println("in"); 5 }
-fn fwd(a: R) -> i64 { held(a) }
-fn keep(a: R) -> i64 { let mut v: Vec[R] = Vec.new(); v.push(a); 5 }
-fn fwdk(a: R) -> i64 { keep(a) }
-fn shared_field(a: Hs) -> i64 { let mut c = a; c.r.id = 11; c.q.id = 7; println("in"); 5 }
+fn held(a: own R) -> i64 { let mut c = a; c.id = c.id + 10; println("in"); 5 }
+fn rename(a: own R) -> i64 { let mut c = a; c.name = "z"; c.id = 7; println(f"in {c.name}"); 5 }
+fn grow(a: own Vec[R]) -> i64 { let mut c = a; c.push(mk(99)); c.len() }
+fn shrink(a: own Vec[R]) -> i64 { let mut c = a; let r = c.pop(); println(f"in {r.is_some()}"); c.len() }
+fn part(a: own H) -> i64 { let mut c = a; c.r.id = 21; let x = c.r; println("in"); 5 }
+fn swap(a: own R) -> i64 { let mut c = a; c.id = 11; c = mk(9); println("in"); 5 }
+fn fwd(a: own R) -> i64 { held(a) }
+fn keep(a: own R) -> i64 { let mut v: Vec[R] = Vec.new(); v.push(a); 5 }
+fn fwdk(a: own R) -> i64 { keep(a) }
+fn shared_field(a: own Hs) -> i64 { let mut c = a; c.r.id = 11; c.q.id = 7; println("in"); 5 }
 fn main() {
     let a = mk(1);
     println(f"k{held(a)}");

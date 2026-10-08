@@ -3,11 +3,11 @@ impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}{self.name}") } }
 fn mkd(n: i64) -> D { return D { id: n, name: f"n{n}" }; }
 struct W { r: D, s: D, b: i64 }
 fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
-fn keep(d: D) -> D { d }
-fn st(v: mut ref Vec[D], x: D) { v.push(x); }
-fn gid[T](x: T) -> T { x }
+fn keep(d: own D) -> D { d }
+fn st(v: mut ref Vec[D], x: own D) { v.push(x); }
+fn gid[T](x: own T) -> T { x }
 struct H { k: i64 }
-impl H { fn put(self, v: mut ref Vec[D], x: D) { v.push(x); } }
+impl H { fn put(self, v: mut ref Vec[D], x: own D) { v.push(x); } }
 fn main() {
     let w = mkw(7);
     let k = keep(w.r);

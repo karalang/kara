@@ -1,11 +1,11 @@
 struct R { id: i64, tag: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 enum G[T] { X(T), Y }
-impl[T] G[T] { fn id(self) -> Self { return self; } }
-fn idg[T](g: G[T]) -> G[T] { return g }
-fn mid[T](g: G[T], c: bool) -> G[T] { if c { return g } return G.Y }
+impl[T] G[T] { fn id(own self) -> Self { return self; } }
+fn idg[T](g: own G[T]) -> G[T] { return g }
+fn mid[T](g: own G[T], c: bool) -> G[T] { if c { return g } return G.Y }
 fn mk(n: i64) -> G[R] { return G.X(R { id: n, tag: f"t" }) }
-fn show(g: G[R]) { match g { G.X(t) => { println(f"s{t.id}") } G.Y => { println("sy") } } }
+fn show(g: own G[R]) { match g { G.X(t) => { println(f"s{t.id}") } G.Y => { println("sy") } } }
 fn main() {
     let c = true;
     if c { let d = mk(1); let d2 = idg(d); show(d2) }

@@ -9,7 +9,7 @@ struct Wsx { h: Sh, s: String }
 impl Drop for Wsx { fn drop(mut ref self) { println(f"  dWsx-{self.h.s}-{self.s}") } }
 enum Esx { A(Wsx), B }
 enum E2 { A(Wsh, i64), B }
-fn mk(s: String) -> Wsh { return Wsh { h: Sh { s: s } } }
+fn mk(s: own String) -> Wsh { return Wsh { h: Sh { s: s } } }
 fn eat(w: Wsh) { println(f"  ate:{w.h.s}") }
-fn f(b: Esh) -> i64 { let mut out = mk(f"OUT"); match b { Esh.A(w) => { let m = w; out = m; } Esh.B => { } } return 7; }
+fn f(b: own Esh) -> i64 { let mut out = mk(f"OUT"); match b { Esh.A(w) => { let m = w; out = m; } Esh.B => { } } return 7; }
 fn main() { println(f"  r:{f(Esh.A(mk(f"PAY")))}"); }

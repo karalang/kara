@@ -3,10 +3,10 @@ struct S2 { h: Sh, id: i64 }
 impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
 enum Ho[T] { Full(T), Empty }
 struct H { n: i64 }
-impl H { fn wrap[T](ref self, v: T) -> Option[T] { return Some(v) } }
+impl H { fn wrap[T](ref self, v: own T) -> Option[T] { return Some(v) } }
 fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
-fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }
-fn mid[T](v: T, c: bool) -> Option[T] { if c { return Some(v) } return None }
+fn mkh[T](v: own T) -> Ho[T] { return Ho.Full(v); }
+fn mid[T](v: own T, c: bool) -> Option[T] { if c { return Some(v) } return None }
 fn rd(x: ref S2) { println(f"rd{x.id}") }
 fn eat2(s: S2) { println(f"x{s.id}") }
 fn a_bound() { let s = mk2(1); let h = mkh(s); println("a") }

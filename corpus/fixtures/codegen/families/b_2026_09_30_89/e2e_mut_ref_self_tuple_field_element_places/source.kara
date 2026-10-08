@@ -2,7 +2,7 @@ struct P { n: i64 }
 struct H { t: (Array[P, 2], i64), s: (Array[String, 2], i64), v: (Vec[String], i64) }
 impl H {
     fn get(ref self) -> String { return f"{self.t.0[1].n} {self.t.1} {self.s.0[0]} {self.v.0[0]} {self.v.0.len()}" }
-    fn set(mut ref self, s: String) {
+    fn set(mut ref self, s: own String) {
         self.t.0[1].n = 40;
         self.t.1 = 2;
         self.t.0[0] = P { n: 11 };

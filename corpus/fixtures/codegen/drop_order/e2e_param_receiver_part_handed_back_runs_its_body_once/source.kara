@@ -4,26 +4,26 @@ struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}{self.s}") } }
 struct Ws { r: R, n: i64 }
 impl Ws {
-    fn getr(self) -> R { return self.r }
-    fn tl(self) -> R { self.r }
-    fn fw2(self) -> R { let x = self.getr(); println("in"); x }
+    fn getr(own self) -> R { return self.r }
+    fn tl(own self) -> R { self.r }
+    fn fw2(own self) -> R { let x = self.getr(); println("in"); x }
 }
 struct W2 { a: R, b: R }
-impl W2 { fn ta(self) -> R { return self.a } }
+impl W2 { fn ta(own self) -> R { return self.a } }
 struct Hs { s: S, n: i64 }
-impl Hs { fn gs(self) -> S { return self.s } }
+impl Hs { fn gs(own self) -> S { return self.s } }
 struct O { inner: Ws, t: R }
 struct V { w: Ws, k: i64 }
-impl V { fn fwd(self) -> R { return self.w.getr() } }
-fn via(w: Ws) -> R { let x = w.getr(); println("in"); x }
-fn viar(w: Ws) -> R { return w.getr() }
-fn viat(w: Ws) -> R { w.tl() }
-fn viah(w: Hs) -> S { let x = w.gs(); println("in"); x }
-fn via2(w: W2) -> R { let x = w.ta(); println("in"); x }
-fn vian(w: Ws) { let x = w.getr(); println(f"in{x.id}") }
-fn viad(w: Ws) -> i64 { w.getr(); 5 }
-fn viao(o: O) -> R { let x = o.inner.getr(); println("in"); x }
-fn fwdv(w: Ws) -> R { return viar(w) }
+impl V { fn fwd(own self) -> R { return self.w.getr() } }
+fn via(w: own Ws) -> R { let x = w.getr(); println("in"); x }
+fn viar(w: own Ws) -> R { return w.getr() }
+fn viat(w: own Ws) -> R { w.tl() }
+fn viah(w: own Hs) -> S { let x = w.gs(); println("in"); x }
+fn via2(w: own W2) -> R { let x = w.ta(); println("in"); x }
+fn vian(w: own Ws) { let x = w.getr(); println(f"in{x.id}") }
+fn viad(w: own Ws) -> i64 { w.getr(); 5 }
+fn viao(o: own O) -> R { let x = o.inner.getr(); println("in"); x }
+fn fwdv(w: own Ws) -> R { return viar(w) }
 fn main() {
     let a = Ws { r: R { id: 1 }, n: 0 };
     let x1 = via(a);

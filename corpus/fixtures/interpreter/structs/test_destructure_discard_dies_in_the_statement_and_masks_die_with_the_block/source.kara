@@ -3,7 +3,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 struct Two { a: R, b: R }
 struct Ho2 { a: R, b: Option[R] }
 fn mk(k: i64) -> R { return R { id: k, tag: f"t{k}", xs: [k] } }
-fn pDes(h: Two) { let Two { a, b: _ } = h; println("in") }
+fn pDes(h: own Two) { let Two { a, b: _ } = h; println("in") }
 fn main() {
     { let h: Two = Two { a: mk(1), b: mk(101) }; let Two { a, b: _ } = h; println("one") }
     { let h: Two = Two { a: mk(2), b: mk(102) }; let Two { a: _, b } = h; println("two") }

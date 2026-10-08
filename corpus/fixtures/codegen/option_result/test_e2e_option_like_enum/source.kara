@@ -3,7 +3,7 @@ enum MyOption {
     None,
     Some(i64),
 }
-fn get_value(opt: MyOption) -> i64 {
+fn get_value(opt: own MyOption) -> i64 {
     match opt {
         None => 0,
         Some(x) => x,

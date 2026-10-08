@@ -4,7 +4,7 @@ fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}"
 struct W { r: D, s: D, b: i64 }
 fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
 struct G[T] { v: T, k: i64 }
-fn wrap[T](x: T) -> G[T] { return G { v: x, k: 7 }; }
+fn wrap[T](x: own T) -> G[T] { return G { v: x, k: 7 }; }
 struct Q { name: String, k: i64 }
 fn mkq(n: i64) -> Q { return Q { name: f"q-string-longer-than-sso-{n}", k: n } }
 fn main() {

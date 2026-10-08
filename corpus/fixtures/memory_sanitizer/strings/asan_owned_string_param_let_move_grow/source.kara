@@ -1,5 +1,5 @@
 
-fn bang(s: String) -> String {
+fn bang(s: own String) -> String {
     let mut t = s;
     t.push_str("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
     t

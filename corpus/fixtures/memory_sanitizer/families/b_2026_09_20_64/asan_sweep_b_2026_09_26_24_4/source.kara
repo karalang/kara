@@ -4,5 +4,5 @@ impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
 enum HoS { FullS(S2), EmptyS }
 fn rd(x: ref S2) { println(f"rd{x.id}") }
 fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
-fn mkHoS(s: S2) -> HoS { return HoS.FullS(s) }
+fn mkHoS(s: own S2) -> HoS { return HoS.FullS(s) }
 fn main() { let o = HoS.FullS(mk2(9)); match o { HoS.FullS(x) => rd(x), HoS.EmptyS => println("e") }; println("end") }

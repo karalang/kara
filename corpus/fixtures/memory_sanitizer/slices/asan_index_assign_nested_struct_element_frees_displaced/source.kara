@@ -2,7 +2,7 @@
 struct Pair { word: String, n: i64 }
 #[derive(Clone)]
 struct Deep { inner: Pair, tag: i64 }
-fn bump(d: Deep) -> Deep { Deep { inner: Pair { word: d.inner.word, n: d.inner.n + 1 }, tag: d.tag } }
+fn bump(d: own Deep) -> Deep { Deep { inner: Pair { word: d.inner.word, n: d.inner.n + 1 }, tag: d.tag } }
 fn main() {
     let k = env.args().len() as i64;
     let mut i = 0i64;

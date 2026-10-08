@@ -1,8 +1,8 @@
 
 struct R { v: String }
-impl R { fn get(self) -> String { self.v } }
+impl R { fn get(own self) -> String { self.v } }
 enum E { A(String) }
-impl E { fn take(self) -> String { match self { E.A(s) => s } } }
+impl E { fn take(own self) -> String { match self { E.A(s) => s } } }
 fn mk(n: i64) -> R { R { v: f"chained-{n}" } }
 fn main() {
     let seed = env.args().len();

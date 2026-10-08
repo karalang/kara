@@ -1,7 +1,7 @@
 
 enum Ev { Request(String), Response(i64), Idle }
 enum Mode { Fast(i64), File }
-fn describe(e: Ev) -> String {
+fn describe(e: own Ev) -> String {
     match e {
         Request(p) => f"req {p}",
         Response(c) => f"resp {c}",

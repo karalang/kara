@@ -1,6 +1,6 @@
 struct Bx[T] { v: T, n: i64 }
-impl Bx[String] { fn get(self) -> String { self.v } fn tag(ref self) -> i64 { 1 } }
-impl Bx[Vec[i64]] { fn get(self) -> Vec[i64] { self.v } fn tag(ref self) -> i64 { 2 } }
+impl Bx[String] { fn get(own self) -> String { self.v } fn tag(ref self) -> i64 { 1 } }
+impl Bx[Vec[i64]] { fn get(own self) -> Vec[i64] { self.v } fn tag(ref self) -> i64 { 2 } }
 impl Bx[i64] { fn tag(ref self) -> i64 { 3 } }
 fn main() {
     let a = Bx { v: "a-heap-string-long-xxxx".to_string(), n: 1 };

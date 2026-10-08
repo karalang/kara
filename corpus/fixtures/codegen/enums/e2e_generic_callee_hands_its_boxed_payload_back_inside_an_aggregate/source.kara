@@ -1,12 +1,12 @@
 enum G1[T] { Y(T), N }
 struct H[T] { g: G1[T] }
 struct H2[T] { h: H[T] }
-fn wrap[T](g: G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }
-fn wrapAll[T](g: G1[T]) -> H[T] { return H { g: g } }
-fn wrapTup[T](g: G1[T], c: bool) -> (G1[T], i64) { if c { return (g, 7) } return (G1.N, 7) }
-fn wrapNest[T](g: G1[T], c: bool) -> H2[T] { if c { return H2 { h: H { g: g } } } return H2 { h: H { g: G1.N } } }
-fn bare[T](g: G1[T], c: bool) -> G1[T] { if c { return g } return G1.N }
-fn shw(g: G1[String]) { match g { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } }
+fn wrap[T](g: own G1[T], c: bool) -> H[T] { if c { return H { g: g } } return H { g: G1.N } }
+fn wrapAll[T](g: own G1[T]) -> H[T] { return H { g: g } }
+fn wrapTup[T](g: own G1[T], c: bool) -> (G1[T], i64) { if c { return (g, 7) } return (G1.N, 7) }
+fn wrapNest[T](g: own G1[T], c: bool) -> H2[T] { if c { return H2 { h: H { g: g } } } return H2 { h: H { g: G1.N } } }
+fn bare[T](g: own G1[T], c: bool) -> G1[T] { if c { return g } return G1.N }
+fn shw(g: own G1[String]) { match g { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } }
 
 fn main() {
     println("struct");  { let g: G1[String] = G1.Y(f"aaaaaaaa-1"); let h = wrap(g, true); shw(h.g) }

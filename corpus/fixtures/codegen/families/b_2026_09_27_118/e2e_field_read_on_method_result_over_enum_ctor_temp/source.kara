@@ -3,8 +3,8 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 struct W { r: R, n: i64 }
 enum E { X(R), Y, Z(i64, R) }
 impl E {
-    fn take(self) -> R { match self { E.X(t) => { return t; } E.Y => { return R { id: 0, tag: f"z" }; } E.Z(_, t) => { return t; } } }
-    fn wrap(self) -> W { match self { E.X(t) => W { r: t, n: 1 }, _ => W { r: R { id: 9, tag: f"w" }, n: 2 } } }
+    fn take(own self) -> R { match self { E.X(t) => { return t; } E.Y => { return R { id: 0, tag: f"z" }; } E.Z(_, t) => { return t; } } }
+    fn wrap(own self) -> W { match self { E.X(t) => W { r: t, n: 1 }, _ => W { r: R { id: 9, tag: f"w" }, n: 2 } } }
     fn peek(ref self) -> i64 { match self { E.X(t) => t.id, _ => -1 } }
 }
 shared enum S { A(i64), B }

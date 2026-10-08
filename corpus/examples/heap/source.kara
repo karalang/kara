@@ -47,7 +47,7 @@ impl[T: Ord] Heap[T] {
     // Insert, then sift the new leaf up until the min-heap property holds. The
     // `else { return; }` is an early return in a VOID generic monomorph
     // (B-2026-07-11-28).
-    fn push(mut ref self, x: T) {
+    fn push(mut ref self, x: own T) {
         self.xs.push(x);
         let mut i = self.xs.len() - 1;
         while i > 0 {

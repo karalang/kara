@@ -1,6 +1,6 @@
 struct H { xs: Vec[Vec[i64]], t: (i64, Vec[i64]) }
 fn idx(k: i64) -> i64 { println(f"idx{k}"); return k }
-fn key(k: String) -> String { println(f"key{k}"); return k }
+fn key(k: own String) -> String { println(f"key{k}"); return k }
 fn main() {
     let mut mv: Vec[Map[String, i64]] = [Map.new()];
     mv[idx(0)][key("a")] = 1;

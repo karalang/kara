@@ -9,19 +9,19 @@ enum Wn { Full(Out), Empty }
 enum W3 { Full(C3), Empty }
 enum Bx { One(In), None }
 
-fn arm_move(w: Wn) -> i64 {
+fn arm_move(w: own Wn) -> i64 {
     match w { Wn.Full(q) => { let i = q.i; return i.s.len(); } Wn.Empty => { return 0; } }
 }
-fn arm_move_d3(w: W3) -> i64 {
+fn arm_move_d3(w: own W3) -> i64 {
     match w { W3.Full(q) => { let b = q.b; let a = b.a; return a.s.len(); } W3.Empty => { return 0; } }
 }
-fn arm_push(w: Wn) -> i64 {
+fn arm_push(w: own Wn) -> i64 {
     match w {
         Wn.Full(q) => { let mut v: Vec[In] = []; v.push(q.i); return v[0].s.len(); }
         Wn.Empty => { return 0; }
     }
 }
-fn arm_ctor(w: Wn) -> i64 {
+fn arm_ctor(w: own Wn) -> i64 {
     match w {
         Wn.Full(q) => {
             let b = Bx.One(q.i);
@@ -31,10 +31,10 @@ fn arm_ctor(w: Wn) -> i64 {
     }
 }
 fn ilen(i: In) -> i64 { return i.s.len(); }
-fn arm_call(w: Wn) -> i64 {
+fn arm_call(w: own Wn) -> i64 {
     match w { Wn.Full(q) => { return ilen(q.i); } Wn.Empty => { return 0; } }
 }
-fn param_move(o: Out) -> i64 { let i = o.i; return i.s.len(); }
+fn param_move(o: own Out) -> i64 { let i = o.i; return i.s.len(); }
 
 fn main() {
     println(f"arm {arm_move(Wn.Full(Out { i: In { s: f"b1627-arm-aaaaaaaaaaaa" } }))}");

@@ -6,8 +6,8 @@ enum E { A((R, i64)), B }
 struct H { a: i64 }
 impl H {
   fn mint(i: i64) -> (R, i64) { return (mk(i), 5); }
-  fn pass(r: R) -> (R, i64) { return (r, 6); }
-  fn sf(w: Ws) -> (R, i64) { return (w.r, 5); }
+  fn pass(r: own R) -> (R, i64) { return (r, 6); }
+  fn sf(w: own Ws) -> (R, i64) { return (w.r, 5); }
   fn arr(i: i64) -> Array[R, 2] { return [mk(i), mk(i + 1)]; }
   fn two(i: i64) -> (R, R) { return (mk(i), mk(i + 1)); }
   fn nest(i: i64) -> ((R, i64), R) { return ((mk(i), 1), mk(i + 1)); }

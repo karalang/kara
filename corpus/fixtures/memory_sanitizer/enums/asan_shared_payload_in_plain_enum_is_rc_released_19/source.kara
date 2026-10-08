@@ -1,4 +1,4 @@
 shared struct Sh { n: i64 }
 enum Box2[T] { V(T), N }
-fn passb(b: Box2[Sh]) -> Box2[Sh] { return b }
+fn passb(b: own Box2[Sh]) -> Box2[Sh] { return b }
 fn main() { let z = passb(Box2.V(Sh { n: 3 })); println("ok"); }

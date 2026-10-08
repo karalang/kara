@@ -5,7 +5,7 @@ struct H { r: Result[Res, i64], t: i64 }
 struct Hm { r: Result[Res, String], t: i64 }
 fn take(h: H) -> i64 { h.t }
 fn mk() -> H { H { r: Result.Ok(Res { id: 2, name: f"bb{2}" }), t: 20 } }
-fn consume(h: H) -> i64 { match h.r { Result.Ok(x) => x.id, Result.Err(e) => e } }
+fn consume(h: own H) -> i64 { match h.r { Result.Ok(x) => x.id, Result.Err(e) => e } }
 fn main() {
     println("binding:");
     { let h = H { r: Result.Ok(Res { id: 1, name: f"a{1}" }), t: 10 }; println(h.t); }

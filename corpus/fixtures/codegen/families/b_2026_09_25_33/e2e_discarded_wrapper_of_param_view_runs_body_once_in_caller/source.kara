@@ -6,15 +6,15 @@ struct Two { a: R, b: R }
 struct OwnD { v: R }
 impl Drop for OwnD { fn drop(mut ref self) { println("dO") } }
 fn mk(i: i64) -> R { return R { id: i, tag: f"tttttttttttttttttttttttttttttt{i}" } }
-fn wrapC(v: R) -> BxP { return BxP { v: v } }
-fn wrap[T](v: T) -> Bx[T] { return Bx { v: v } }
-fn two(a: R, b: R) -> Two { Two { a: a, b: b } }
-fn ownd(v: R) -> OwnD { return OwnD { v: v } }
-fn outerC(x: R) { wrapC(x); println("c") }
-fn outerG[T](x: T) { wrap(x); println("g") }
-fn outerL(x: R) { let b = wrapC(x); println("l") }
-fn outerT(x: R) { two(x, mk(9)); println("t") }
-fn outerO(x: R) { ownd(x); println("o") }
+fn wrapC(v: own R) -> BxP { return BxP { v: v } }
+fn wrap[T](v: own T) -> Bx[T] { return Bx { v: v } }
+fn two(a: own R, b: own R) -> Two { Two { a: a, b: b } }
+fn ownd(v: own R) -> OwnD { return OwnD { v: v } }
+fn outerC(x: own R) { wrapC(x); println("c") }
+fn outerG[T](x: own T) { wrap(x); println("g") }
+fn outerL(x: own R) { let b = wrapC(x); println("l") }
+fn outerT(x: own R) { two(x, mk(9)); println("t") }
+fn outerO(x: own R) { ownd(x); println("o") }
 fn outerF(x: R) { wrapC(mk(5)); println("f") }
 fn main() {
     outerC(mk(1)); println("x"); outerG(mk(2)); println("x"); outerL(mk(3)); println("x");

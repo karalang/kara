@@ -15,16 +15,16 @@ struct Hs { v: Sv }
 fn mk(n: i64) -> E { return E.A(R { id: n }) }
 
 #[allow(partial_move_of_drop_enum)]
-fn f_enum(s: S)  { match s.e { E.A(ref r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
-fn f_opt(s: Ob)  { match s.o { Option.Some(r) => { let m = r; println(f"  b{m.id}"); } Option.None => { } } }
-fn f_res(s: Rb)  { match s.r { Result.Ok(r) => { let m = r; println(f"  b{m.id}"); } Result.Err(e) => { } } }
+fn f_enum(s: own S)  { match s.e { E.A(ref r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
+fn f_opt(s: own Ob)  { match s.o { Option.Some(r) => { let m = r; println(f"  b{m.id}"); } Option.None => { } } }
+fn f_res(s: own Rb)  { match s.r { Result.Ok(r) => { let m = r; println(f"  b{m.id}"); } Result.Err(e) => { } } }
 #[allow(partial_move_of_drop_enum)]
-fn f_two(w: W2)  { match w.s.e { E.A(ref r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
-fn f_sv(h: Hs)   { match h.v { Sv.Hold { inner: ref inner } => { let m = inner; println(f"  b{m.id}"); } Sv.Nil => { } } }
-fn f_tup(s: Tb)  { match s.t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
+fn f_two(w: own W2)  { match w.s.e { E.A(ref r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
+fn f_sv(h: own Hs)   { match h.v { Sv.Hold { inner: ref inner } => { let m = inner; println(f"  b{m.id}"); } Sv.Nil => { } } }
+fn f_tup(s: own Tb)  { match s.t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
 #[allow(partial_move_of_drop_enum)]
 fn f_ref(s: ref S) { match s.e { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
-fn f_norebind(s: S) { match s.e { E.A(ref r) => { println(f"  b{r.id}"); } E.B => { } } }
+fn f_norebind(s: own S) { match s.e { E.A(ref r) => { println(f"  b{r.id}"); } E.B => { } } }
 #[allow(partial_move_of_drop_enum)]
 fn f_local() { let s = S { e: mk(8) }; match s.e { E.A(ref r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
 #[allow(partial_move_of_drop_enum)]

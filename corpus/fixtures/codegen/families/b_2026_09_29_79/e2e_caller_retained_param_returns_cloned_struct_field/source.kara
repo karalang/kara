@@ -8,18 +8,18 @@ impl Drop for S5 { fn drop(mut ref self) { println(f"dT{self.id}") } }
 struct W3 { u: S2, n: i64 }
 struct W6 { u: S4, n: i64 }
 struct W7 { u: S5, n: i64 }
-impl W3 { fn go(self) -> S2 { let x = self.u; println(f"n{self.n}"); return x } }
-fn f1(q: W3) -> S2 { return q.u }
-fn f2(q: W3) -> S2 { q.u }
-fn f3(q: W3) -> S2 { let x = q.u; return x }
-fn f4(q: W3) -> S2 { let x = q.u; let W3 { n, .. } = q; println(f"n{n}"); return x }
-fn f5(q: W6) -> S4 { return q.u }
-fn f6(q: W7) -> S5 { return q.u }
-fn f7(q: W7) -> S5 { let x = q.u; let W7 { n, .. } = q; println(f"n{n}"); return x }
-fn f8(q: W7) -> i64 { let x = q.u; let W7 { n, .. } = q; println(f"x{x.t.len()}"); return n }
-fn f9(q: W3, b: bool) -> S2 { if b { return q.u } return mk(4) }
-fn f10(q: W3) -> S2 { let x = q.u; if q.n > 1 { return x } mk(5) }
-fn f11(q: W3) -> S2 { let x = q.u; let x = mk(3); return x }
+impl W3 { fn go(own self) -> S2 { let x = self.u; println(f"n{self.n}"); return x } }
+fn f1(q: own W3) -> S2 { return q.u }
+fn f2(q: own W3) -> S2 { q.u }
+fn f3(q: own W3) -> S2 { let x = q.u; return x }
+fn f4(q: own W3) -> S2 { let x = q.u; let W3 { n, .. } = q; println(f"n{n}"); return x }
+fn f5(q: own W6) -> S4 { return q.u }
+fn f6(q: own W7) -> S5 { return q.u }
+fn f7(q: own W7) -> S5 { let x = q.u; let W7 { n, .. } = q; println(f"n{n}"); return x }
+fn f8(q: own W7) -> i64 { let x = q.u; let W7 { n, .. } = q; println(f"x{x.t.len()}"); return n }
+fn f9(q: own W3, b: bool) -> S2 { if b { return q.u } return mk(4) }
+fn f10(q: own W3) -> S2 { let x = q.u; if q.n > 1 { return x } mk(5) }
+fn f11(q: own W3) -> S2 { let x = q.u; let x = mk(3); return x }
 fn main() {
   println("-c1"); let a = f1(W3 { u: mk(9), n: 2 }); println(f"r{a.id}{a.h.k}");
   println("-c2"); let b = f2(W3 { u: mk(8), n: 2 }); println(f"r{b.id}{b.h.k}");

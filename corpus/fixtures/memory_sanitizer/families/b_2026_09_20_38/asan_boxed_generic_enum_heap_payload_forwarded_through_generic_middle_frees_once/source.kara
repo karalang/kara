@@ -1,11 +1,11 @@
 struct Pr { a: String, b: i64 }
 enum G[T] { Y(T), N }
 fn glen[T](g: G[T]) -> i64 { return 1 }
-fn gm[T](g: G[T]) -> i64 { match g { G.Y(x) => { return 2 }, G.N => { return 0 } } }
+fn gm[T](g: own G[T]) -> i64 { match g { G.Y(x) => { return 2 }, G.N => { return 0 } } }
 fn gfwd[T](g: G[T]) -> i64 { return glen(g) }
 fn gtop[T](g: G[T]) -> i64 { return gfwd(g) }
 fn gcond[T](g: G[T], c: bool) -> i64 { if c { return glen(g) } println("keep"); return 0 }
-fn gbr[T](g: G[T], c: bool) -> i64 { if c { return glen(g) } else { return gm(g) } }
+fn gbr[T](g: own G[T], c: bool) -> i64 { if c { return glen(g) } else { return gm(g) } }
 fn main() {
     let s: G[String] = G.Y(f"ffffffffffff51-heap-string-longer");
     println(f"s {gfwd(s)}");

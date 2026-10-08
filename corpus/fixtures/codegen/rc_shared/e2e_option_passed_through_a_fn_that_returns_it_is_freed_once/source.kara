@@ -5,7 +5,7 @@ struct S3 { h: Sh, id: i64 }
 struct W { p: Option[S2] }
 fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
 fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
-fn wrapS(v: S2) -> Option[S2] { return Some(v) }
+fn wrapS(v: own S2) -> Option[S2] { return Some(v) }
 fn keep(o: Option[S2]) -> Option[S2] { return o }
 fn keepg[T](o: Option[T]) -> Option[T] { return o }
 fn keep3(o: Option[S3]) -> Option[S3] { return o }

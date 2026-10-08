@@ -25,7 +25,7 @@ fn plainStr()   -> i64 { return genStr(5); }
 fn plainMark()  -> i64 { return genMark(5); }
 fn plainNoDrop() -> i64 { return genNoDrop(5); }
 
-fn gfn[T](h: G[T]) -> i64 { let (r, k) = h.pe; println("  in"); return k; }
+fn gfn[T](h: own G[T]) -> i64 { let (r, k) = h.pe; println("  in"); return k; }
 fn gfnLocal() { let h = G[R] { pe: (mk(65), 5), z: 9 }; let _ = gfn(h); }
 
 fn main() {

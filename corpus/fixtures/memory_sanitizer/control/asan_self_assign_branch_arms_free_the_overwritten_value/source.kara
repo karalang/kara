@@ -7,9 +7,9 @@ struct P { id: i64, name: String }
 enum E { A(String), B }
 impl Drop for E { fn drop(mut ref self) { println("dropE") } }
 
-fn pass(r: R) -> R { return r; }
-fn passp(p: P) -> P { return p; }
-fn passe(x: E) -> E { return x; }
+fn pass(r: own R) -> R { return r; }
+fn passp(p: own P) -> P { return p; }
+fn passe(x: own E) -> E { return x; }
 fn mk(n: i64) -> R { return R { id: n, name: f"mk-aaaaaaaaaaaaaaaaaaaaaaaa" }; }
 
 fn main() {

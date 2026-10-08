@@ -2,7 +2,7 @@
 enum Cmd { Clear(Vec[String]) }
 struct Doc { lines: Vec[String] }
 struct Ed { doc: Doc }
-fn apply(d: mut ref Doc, c: Cmd) -> Cmd {
+fn apply(d: mut ref Doc, c: own Cmd) -> Cmd {
     match c {
         Clear(old) => {
             let mut snap: Vec[String] = Vec.new();

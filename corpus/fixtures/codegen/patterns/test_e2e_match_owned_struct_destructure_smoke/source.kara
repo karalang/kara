@@ -1,6 +1,6 @@
 
 struct Point { x: i64, y: i64 }
-fn show(p: Point) -> i64 {
+fn show(p: own Point) -> i64 {
     match p {
         Point { x, y } => x + y * 100,
     }

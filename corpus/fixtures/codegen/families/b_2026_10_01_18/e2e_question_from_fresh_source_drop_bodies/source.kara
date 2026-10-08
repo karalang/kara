@@ -13,17 +13,17 @@ fn e_q(k: i64) -> Result[i64, Q] { if k > 5 { Result.Err(Q.A(R { id: k })) } els
 struct M { k: i64 }
 impl M { fn get(self, k: i64) -> Result[i64, S] { e_s(k + self.k) } }
 struct E1 { n: i64 }
-impl From[S] for E1 { fn from(s: S) -> E1 { E1 { n: s.id } } }
+impl From[S] for E1 { fn from(s: own S) -> E1 { E1 { n: s.id } } }
 struct E2 { inner: S }
-impl From[S] for E2 { fn from(s: S) -> E2 { E2 { inner: s } } }
+impl From[S] for E2 { fn from(s: own S) -> E2 { E2 { inner: s } } }
 struct E3 { n: i64, inner: Option[S] }
-impl From[S] for E3 { fn from(s: S) -> E3 { if s.id > 100 { E3 { n: 0, inner: Option.Some(s) } } else { E3 { n: s.id, inner: Option.None } } } }
+impl From[S] for E3 { fn from(s: own S) -> E3 { if s.id > 100 { E3 { n: 0, inner: Option.Some(s) } } else { E3 { n: s.id, inner: Option.None } } } }
 struct E4 { n: i64 }
-impl From[S] for E4 { fn from(s: S) -> E4 { let t = s; E4 { n: t.id } } }
+impl From[S] for E4 { fn from(s: own S) -> E4 { let t = s; E4 { n: t.id } } }
 struct E5 { n: i64 }
-impl From[T] for E5 { fn from(t: T) -> E5 { E5 { n: t.v.len() } } }
+impl From[T] for E5 { fn from(t: own T) -> E5 { E5 { n: t.v.len() } } }
 struct E6 { n: i64 }
-impl From[Q] for E6 { fn from(q: Q) -> E6 { E6 { n: 1 } } }
+impl From[Q] for E6 { fn from(q: own Q) -> E6 { E6 { n: 1 } } }
 fn f1(k: i64) -> Result[i64, E1] { let x = e_s(k)?; Result.Ok(x) }
 fn f2(k: i64) -> Result[i64, E2] { let x = e_s(k)?; Result.Ok(x) }
 fn f3(k: i64) -> Result[i64, E3] { let x = e_s(k)?; Result.Ok(x) }

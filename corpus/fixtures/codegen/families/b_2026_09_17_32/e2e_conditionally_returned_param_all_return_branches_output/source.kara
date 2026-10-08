@@ -2,16 +2,16 @@ struct W { id: i64 }
 impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}"); } }
 struct H { id: i64, s: String }
 impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}"); } }
-fn m2(o: Option[i64], d: W) -> W { match o { Some(n) => { return W { id: n }; } None => { return d; } } }
-fn i2(k: bool, d: W) -> W { if k { return W { id: 5 }; } else { return d; } }
-fn il(o: Option[i64], d: W) -> W { if let Some(n) = o { return W { id: n }; } else { return d; } }
-fn m3(x: i64, d: W) -> W { match x { 0 => { return W { id: 50 }; } 1 => { return d; } _ => { return W { id: 52 }; } } }
-fn mg(o: Option[i64], d: W) -> W { match o { Some(n) if n > 0 => { return W { id: n }; } _ => { return d; } } }
-fn mh(o: Option[i64], d: H) -> H { match o { Some(n) => { return H { id: n, s: f"hhhhhhhhhhhhhhhhhhhhhhhhhhhh{n}" }; } None => { return d; } } }
-fn g8[T](o: Option[(T, i64)], d: T) -> T { match o { Some(t) => { return t.0; } None => { return d; } } }
-fn ms(k: bool, d: W) -> W { match k { true => { println("  side"); return W { id: 60 }; } false => { return d; } } }
-fn hh(o: Option[(H, i64)], d: H) -> H { match o { Some(t) => { return t.0; } None => { return d; } } }
-fn h8(o: Option[(W, i64)], d: W) -> W { match o { Some(t) => { return t.0; } None => { return d; } } }
+fn m2(o: Option[i64], d: own W) -> W { match o { Some(n) => { return W { id: n }; } None => { return d; } } }
+fn i2(k: bool, d: own W) -> W { if k { return W { id: 5 }; } else { return d; } }
+fn il(o: Option[i64], d: own W) -> W { if let Some(n) = o { return W { id: n }; } else { return d; } }
+fn m3(x: i64, d: own W) -> W { match x { 0 => { return W { id: 50 }; } 1 => { return d; } _ => { return W { id: 52 }; } } }
+fn mg(o: Option[i64], d: own W) -> W { match o { Some(n) if n > 0 => { return W { id: n }; } _ => { return d; } } }
+fn mh(o: Option[i64], d: own H) -> H { match o { Some(n) => { return H { id: n, s: f"hhhhhhhhhhhhhhhhhhhhhhhhhhhh{n}" }; } None => { return d; } } }
+fn g8[T](o: Option[(T, i64)], d: own T) -> T { match o { Some(t) => { return t.0; } None => { return d; } } }
+fn ms(k: bool, d: own W) -> W { match k { true => { println("  side"); return W { id: 60 }; } false => { return d; } } }
+fn hh(o: Option[(H, i64)], d: own H) -> H { match o { Some(t) => { return t.0; } None => { return d; } } }
+fn h8(o: Option[(W, i64)], d: own W) -> W { match o { Some(t) => { return t.0; } None => { return d; } } }
 fn mk(n: i64) -> H { return H { id: n, s: f"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkk{n}" }; }
 fn main() {
     println("m2-dies"); let a = m2(Some(7), W { id: 101 }); println(f"  {a.id}");

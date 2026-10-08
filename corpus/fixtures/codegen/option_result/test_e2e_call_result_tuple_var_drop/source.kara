@@ -11,7 +11,7 @@ fn ret_smap(i: i64) -> (Map[String, i64], i64) {
     m.insert(f"k{i}", i);
     return (m, i);
 }
-fn use_tok(t: Tok) -> String {
+fn use_tok(t: own Tok) -> String {
     match t { Id(s) => s, Num(n) => n.to_string() }
 }
 fn main() {

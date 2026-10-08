@@ -1,5 +1,5 @@
 
-fn wrap(s: String) -> String { "[" + s + "]" }
+fn wrap(s: own String) -> String { "[" + s + "]" }
 fn main() {
     let f = |s: String| wrap(wrap(s));
     let mut i: i64 = 0i64;

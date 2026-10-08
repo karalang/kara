@@ -2,18 +2,18 @@ struct W1 { v: i64, s: String }
 impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
 struct P { v: i64 }
 impl Drop for P { fn drop(mut ref self) { println(f"dP{self.v}") } }
-fn pass(x: Array[W1, 1]) -> Array[W1, 1] { return x }
-fn passv(x: Vec[W1]) -> Vec[W1] { return x }
+fn pass(x: own Array[W1, 1]) -> Array[W1, 1] { return x }
+fn passv(x: own Vec[W1]) -> Vec[W1] { return x }
 fn take(x: Array[W1, 1]) -> i64 { return x[0].v }
-fn p2(x: Array[W1, 2]) -> Array[W1, 2] { return x }
-fn pc(x: Array[W1, 1], c: bool) -> Option[Array[W1, 1]] { if c { return Some(x) } return None }
-fn keep(v: mut ref Vec[Array[W1, 1]], x: Array[W1, 1]) { v.push(x) }
-fn gp[T](x: T) -> T { return x }
-fn pp(x: Array[P, 1]) -> Array[P, 1] { return x }
+fn p2(x: own Array[W1, 2]) -> Array[W1, 2] { return x }
+fn pc(x: own Array[W1, 1], c: bool) -> Option[Array[W1, 1]] { if c { return Some(x) } return None }
+fn keep(v: mut ref Vec[Array[W1, 1]], x: own Array[W1, 1]) { v.push(x) }
+fn gp[T](x: own T) -> T { return x }
+fn pp(x: own Array[P, 1]) -> Array[P, 1] { return x }
 struct K { n: i64 }
-impl K { fn pm(ref self, x: Array[W1, 1]) -> Array[W1, 1] { return x } }
+impl K { fn pm(ref self, x: own Array[W1, 1]) -> Array[W1, 1] { return x } }
 struct Bag { xs: Vec[Array[W1, 1]] }
-impl Bag { fn put(mut ref self, x: Array[W1, 1]) { self.xs.push(x) } }
+impl Bag { fn put(mut ref self, x: own Array[W1, 1]) { self.xs.push(x) } }
 fn s(n: i64) -> String { return f"ssssssssssssssssssssssssssssss{n}" }
 fn main() {
     let w1 = W1 { v: 1, s: s(1) };

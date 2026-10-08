@@ -11,7 +11,7 @@ enum G1[T] { Y(T), N }
 
 fn shr[T](g: ref G1[T]) { match g { G1.Y(v) => { println(f"  rx {v}") } G1.N => { println("  rx NONE") } } }
 fn shm[T](g: mut ref G1[T]) { match g { G1.Y(v) => { println(f"  mx {v}") } G1.N => { println("  mx NONE") } } }
-fn shg[T](g: G1[T]) { match g { G1.Y(v) => { println(f"  vx {v}") } G1.N => { println("  vx NONE") } } }
+fn shg[T](g: own G1[T]) { match g { G1.Y(v) => { println(f"  vx {v}") } G1.N => { println("  vx NONE") } } }
 fn shw[T: Num](g: ref G1[T]) { match g { G1.Y(v) => { println(f"  wx {v.get()}") } G1.N => { println("  wx NONE") } } }
 
 impl[T] G1[T] {

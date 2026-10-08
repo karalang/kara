@@ -1,5 +1,5 @@
 
-fn count_bytes(path: String) -> Result[i64, IoError] with reads(FileSystem) {
+fn count_bytes(path: own String) -> Result[i64, IoError] with reads(FileSystem) {
     let lines = fs.read_lines(path)?;
     let mut total = 0;
     for line in lines {

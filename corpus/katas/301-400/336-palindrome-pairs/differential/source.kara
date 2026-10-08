@@ -266,7 +266,7 @@ fn fail(failures: mut ref i64, what: String, words: ref Vec[String]) {
     failures += 1;
 }
 
-fn sorted(pairs: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+fn sorted(pairs: own Vec[(i64, i64)]) -> Vec[(i64, i64)] {
     let mut p = pairs;
     p.sort();
     return p;

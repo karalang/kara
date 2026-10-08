@@ -2,7 +2,7 @@ struct M { b: i64, rows: Array[u16, 3], neg: Array[i8, 2], fl: Array[f32, 2] }
 struct W { x: i64, a: Array[u8, 2] }
 impl W {
     fn take(ref self, a: Array[u8, 3]) -> i64 { (a[0] as i64) + self.x }
-    fn make(a: Array[u8, 2]) -> W { W { x: 1, a } }
+    fn make(a: own Array[u8, 2]) -> W { W { x: 1, a } }
 }
 fn z() -> Array[u8, 4] { [255; 4] }
 fn g(a: Array[i16, 2], k: i64) -> i64 { (a[0] as i64) + (a[1] as i64) + k }

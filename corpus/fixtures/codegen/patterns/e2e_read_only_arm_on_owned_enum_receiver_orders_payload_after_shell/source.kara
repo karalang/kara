@@ -7,22 +7,22 @@ impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 enum N { A(R), B }
 struct W { e: E }
 impl E {
-    fn read(self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
-    fn wild(self) -> i64 { match self { E.A(_) => { return 1; } E.B => { return 0; } } }
+    fn read(own self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn wild(own self) -> i64 { match self { E.A(_) => { return 1; } E.B => { return 0; } } }
     fn iflet(self) -> i64 { if let E.A(r) = self { return r.id; } return 0; }
-    fn call(self) -> i64 { match self { E.A(r) => { return eat(r); } E.B => { return 0; } } }
-    fn me(self) -> E { return self; }
+    fn call(own self) -> i64 { match self { E.A(r) => { return eat(r); } E.B => { return 0; } } }
+    fn me(own self) -> E { return self; }
     fn none(self) -> i64 { return 5 }
-    fn letself(self) -> i64 { let e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
-    fn ret_self(self) -> E { return self }
-    fn wrap(self) -> W { return W { e: self } }
+    fn letself(own self) -> i64 { let e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn ret_self(own self) -> E { return self }
+    fn wrap(own self) -> W { return W { e: self } }
     fn refm(ref self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
 }
 impl N {
-    fn read(self) -> i64 { match self { N.A(r) => { return r.id; } N.B => { return 0; } } }
-    fn out(self) -> R { match self { N.A(r) => { return r; } N.B => { return mk(0); } } }
+    fn read(own self) -> i64 { match self { N.A(r) => { return r.id; } N.B => { return 0; } } }
+    fn out(own self) -> R { match self { N.A(r) => { return r; } N.B => { return mk(0); } } }
 }
-fn f_read(e: E) -> i64 { match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+fn f_read(e: own E) -> i64 { match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
 fn main() {
     println("named/read");   { let a: E = E.A(mk(1)); println(f"  x{a.read()}") }
     println("temp/read");    { println(f"  x{E.A(mk(2)).read()}") }

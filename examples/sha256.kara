@@ -195,7 +195,7 @@ fn sha256(msg: Vec[u8]) -> Vec[u8] {
 // exclusive branches, and `inner`, whose flagged "re-use" actually PRECEDED
 // the consume. Both were false positives and both are gone, so the allow is
 // gone with them; the code is unchanged.
-fn hmac_sha256(key: Vec[u8], msg: Vec[u8]) -> Vec[u8] {
+fn hmac_sha256(key: own Vec[u8], msg: Vec[u8]) -> Vec[u8] {
     // A key longer than the block is replaced by its own digest — the path
     // RFC 4231 test case 6 exists to exercise. Normalizing to one binding
     // first keeps `key` on a single ownership path: consumed by `sha256` on
@@ -265,7 +265,7 @@ fn repeat_byte(b: u8, n: i64) -> Vec[u8] {
 // `label` is consumed on exactly one of the two arms. This drew the third
 // B-2026-07-31-28 false positive and needed an `#[allow(rc_fallback)]`; the
 // analysis is path-sensitive across the join now, so it does not.
-fn check(label: String, got: String, want: String) {
+fn check(label: own String, got: own String, want: own String) {
     if got == want {
         println(label + " ok");
     } else {

@@ -5,7 +5,7 @@ impl Drop for Item {
 }
 struct Bag { xs: Vec[Item] }
 impl Bag {
-    fn add(mut ref self, x: Item) { self.xs.push(x); }
+    fn add(mut ref self, x: own Item) { self.xs.push(x); }
 }
 fn main() {
     let mut b = Bag { xs: Vec.new() };

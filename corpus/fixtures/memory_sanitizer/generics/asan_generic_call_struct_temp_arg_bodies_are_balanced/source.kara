@@ -4,8 +4,8 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
 struct G[T] { pe: (T, i64), z: i64 }
 struct Gn { pe: (R, i64), z: i64 }
-fn gfn[T](h: G[T]) -> i64 { let (r, k) = h.pe; return k; }
-fn nfn(h: Gn) -> i64 { let (r, k) = h.pe; return k; }
+fn gfn[T](h: own G[T]) -> i64 { let (r, k) = h.pe; return k; }
+fn nfn(h: own Gn) -> i64 { let (r, k) = h.pe; return k; }
 fn gLocal() { let h = G[R] { pe: (mk(80), 5), z: 9 }; let _ = gfn(h); }
 fn gTemp()  { let _ = gfn(G[R] { pe: (mk(81), 5), z: 9 }); }
 fn nLocal() { let h = Gn   { pe: (mk(82), 5), z: 9 }; let _ = nfn(h); }

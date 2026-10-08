@@ -5,14 +5,14 @@ impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}{self.s}") } }
 struct G[T] { r: T, n: i64 }
 struct G2[T] { a: T, b: T }
 impl[T] G[T] {
-    fn get(self) -> T { return self.r }
-    fn tl(self) -> T { self.r }
+    fn get(own self) -> T { return self.r }
+    fn tl(own self) -> T { self.r }
 }
-impl[T] G2[T] { fn ta(self) -> T { return self.a } }
-fn getg(w: G[R]) -> R { return w.r }
-fn getq[T](w: G[T]) -> T { w.r }
-fn geth(w: G[S]) -> S { return w.r }
-fn gets(w: G[R]) -> Option[R] { return Some(w.r) }
+impl[T] G2[T] { fn ta(own self) -> T { return self.a } }
+fn getg(w: own G[R]) -> R { return w.r }
+fn getq[T](w: own G[T]) -> T { w.r }
+fn geth(w: own G[S]) -> S { return w.r }
+fn gets(w: own G[R]) -> Option[R] { return Some(w.r) }
 fn mkl() -> R { let p = G { r: R { id: 9 }, n: 0 }; return p.r }
 fn mk2() -> R { let p = G2 { a: R { id: 10 }, b: R { id: 100 } }; p.a }
 fn main() {

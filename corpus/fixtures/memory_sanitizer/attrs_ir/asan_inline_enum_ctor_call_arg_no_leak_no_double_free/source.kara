@@ -7,15 +7,15 @@ fn mk() -> String {
     s.push_str("inline_enum_ctor_arg_payload");
     s
 }
-fn wrap_free(t: Tok) -> Wrap {
+fn wrap_free(t: own Tok) -> Wrap {
     Wrap { t: t, n: 1 }
 }
 impl Maker {
-    fn wrap(ref self, t: Tok) -> Wrap {
+    fn wrap(ref self, t: own Tok) -> Wrap {
         Wrap { t: t, n: self.id }
     }
 }
-fn tlen(w: Wrap) -> i64 {
+fn tlen(w: own Wrap) -> i64 {
     match w.t {
         V(s) => s.len(),
         Empty => 0,

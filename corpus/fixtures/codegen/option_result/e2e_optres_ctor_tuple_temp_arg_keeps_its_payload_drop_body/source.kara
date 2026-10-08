@@ -6,7 +6,7 @@ fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
 fn optArg(t: (R, Option[R]))       -> i64 { println(f"  rd{t.0.id}"); return 0; }
 fn resArg(t: (R, Result[R, i64]))  -> i64 { println(f"  rd{t.0.id}"); return 0; }
 fn enumArg(t: (R, W))              -> i64 { println(f"  rd{t.0.id}"); return 0; }
-fn destr(t: (R, Option[R]))        -> i64 { let (r, o) = t; println(f"  rd{r.id}"); return 0; }
+fn destr(t: own (R, Option[R]))        -> i64 { let (r, o) = t; println(f"  rd{r.id}"); return 0; }
 
 fn main() {
     println("opttemp");  let _ = optArg((mk(1), Option.Some(mk(11))));  println("opttemp end");

@@ -10,7 +10,7 @@ fn loc()  { let h = Ho2 { a: mk(1), b: Option.Some(mk(101)) }; let Ho2 { a, b } 
 fn lit()  { let Ho2 { a, b } = Ho2 { a: mk(2), b: Option.Some(mk(102)) }; println(f"  rd{a.id}") }
 fn call() { let Ho2 { a, b } = mkho(3); println(f"  rd{a.id}") }
 fn ctl()  { let h = Ho2 { a: mk(4), b: Option.Some(mk(104)) }; println(f"  rd{h.a.id}") }
-fn param(h: Ho2) { let Ho2 { a, b } = h; println(f"  rd{a.id}") }
+fn param(h: own Ho2) { let Ho2 { a, b } = h; println(f"  rd{a.id}") }
 fn used() { let h = Ho2 { a: mk(6), b: Option.Some(mk(106)) }; let Ho2 { a, b } = h;
             match b { Option.Some(x) => println(f"  got{x.id}"), Option.None => println("  none") }
             println(f"  rd{a.id}") }

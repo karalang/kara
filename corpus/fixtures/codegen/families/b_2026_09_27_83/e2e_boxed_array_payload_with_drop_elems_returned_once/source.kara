@@ -18,17 +18,17 @@ fn o9(x: Result[Array[R, 2], String]) -> Array[R, 2] { match x { Ok(t) => { retu
 fn l1() -> Array[R, 2] { let y: Array[R, 2] = [mk(1), mk(2)]; let x = Some(y); match x { Some(t) => { return t; } None => { return z(); } } }
 fn l2() -> Array[R, 2] { let y: Array[R, 2] = [mk(1), mk(2)]; let x = Some(y); match x { Some(t) => { let u = t; return u; } None => { return z(); } } }
 fn l3() -> i64 { let y: Array[R, 2] = [mk(1), mk(2)]; let x = Some(y); match x { Some(t) => { let u = t; return u[0].id; } None => { return 0; } } }
-fn u1(x: EArr) -> Array[R, 2] { match x { EArr.A(v) => { return v; } EArr.B => { return z(); } } }
-fn u2(x: EArr) -> Array[R, 2] { match x { EArr.A(v) => { let u = v; return u; } EArr.B => { return z(); } } }
-fn u3(x: EArr) -> Array[R, 2] { match x { EArr.A(v) => v, EArr.B => z() } }
-fn u4(x: EArr) -> i64 { match x { EArr.A(v) => { return eat(v); } EArr.B => { return 0; } } }
-fn u8(x: E2) -> Array[R, 2] { match x { E2.A(v, n) => { return v; } E2.B => { return z(); } } }
-fn u9(x: Esx) -> Array[R, 2] { match x { Esx.A { a } => { return a; } Esx.B => { return z(); } } }
-fn u10(x: EArr) -> Option[Array[R, 2]] { match x { EArr.A(v) => { return Some(v); } EArr.B => { return None; } } }
-fn u11(x: EArr, c: bool) -> Array[R, 2] { match x { EArr.A(v) => { if c { return v; } return z(); } EArr.B => { return z(); } } }
+fn u1(x: own EArr) -> Array[R, 2] { match x { EArr.A(v) => { return v; } EArr.B => { return z(); } } }
+fn u2(x: own EArr) -> Array[R, 2] { match x { EArr.A(v) => { let u = v; return u; } EArr.B => { return z(); } } }
+fn u3(x: own EArr) -> Array[R, 2] { match x { EArr.A(v) => v, EArr.B => z() } }
+fn u4(x: own EArr) -> i64 { match x { EArr.A(v) => { return eat(v); } EArr.B => { return 0; } } }
+fn u8(x: own E2) -> Array[R, 2] { match x { E2.A(v, n) => { return v; } E2.B => { return z(); } } }
+fn u9(x: own Esx) -> Array[R, 2] { match x { Esx.A { a } => { return a; } Esx.B => { return z(); } } }
+fn u10(x: own EArr) -> Option[Array[R, 2]] { match x { EArr.A(v) => { return Some(v); } EArr.B => { return None; } } }
+fn u11(x: own EArr, c: bool) -> Array[R, 2] { match x { EArr.A(v) => { if c { return v; } return z(); } EArr.B => { return z(); } } }
 fn u12() -> Array[R, 2] { let y: Array[R, 2] = [mk(1), mk(2)]; let x = EArr.A(y); match x { EArr.A(t) => { return t; } EArr.B => { return z(); } } }
 fn u13(x: EArr) -> Array[R, 2] { if let EArr.A(v) = x { return v; } return z(); }
-fn u15(x: EArr) -> i64 { return eat(match x { EArr.A(v) => v, EArr.B => z() }); }
+fn u15(x: own EArr) -> i64 { return eat(match x { EArr.A(v) => v, EArr.B => z() }); }
 fn main() {
   let a1 = o1(Some([mk(1), mk(2)])); println(f"o1 {a1[0].id}");
   let a2 = o2(Some([mk(3), mk(4)])); println(f"o2 {a2[0].id}");

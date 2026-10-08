@@ -14,7 +14,7 @@ fn mix(a: R) -> Array[R, 2] { return [a, mk(50)]; }
 fn inst(a: R, b: R) -> Hb { return Hb { xs: [a, b], n: 1 }; }
 fn intup(a: R, b: R) -> (Array[R, 2], i64) { return ([a, b], 3); }
 fn nest(a: R, b: R, c: R, d: R) -> Array[Array[R, 2], 2] { return [[a, b], [c, d]]; }
-fn rb(a: R, b: R) -> Array[R, 2] { let x = a; return [x, b]; }
+fn rb(a: own R, b: R) -> Array[R, 2] { let x = a; return [x, b]; }
 fn tail(a: R, b: R) -> Array[R, 2] { [a, b] }
 fn main() {
   println("-c1"); let c1 = arrc(mk(1), mk(2)); println(f"r{c1[0].id}{c1[1].id}");

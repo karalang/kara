@@ -4,11 +4,11 @@ struct W { t: (R, i64) }
 
 fn sink(x: R) { println(f"  sank{x.id}") }
 
-fn s1(t: (R, i64))       { match t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
-fn s1b(t: (R, i64))      { match t { (r, k) => { println(f"  b{r.id}"); } } }
-fn s1c(s: W)             { match s.t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
-fn s1d(s: W)             { match s.t { (r, k) => { println(f"  b{r.id}"); } } }
-fn s1e(t: (R, i64))      { match t { (r, k) => { sink(r); } } }
+fn s1(t: own (R, i64))       { match t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
+fn s1b(t: own (R, i64))      { match t { (r, k) => { println(f"  b{r.id}"); } } }
+fn s1c(s: own W)             { match s.t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
+fn s1d(s: own W)             { match s.t { (r, k) => { println(f"  b{r.id}"); } } }
+fn s1e(t: own (R, i64))      { match t { (r, k) => { sink(r); } } }
 fn s1f() { let t = (R { id: 6 }, 0); match t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
 
 fn main() {

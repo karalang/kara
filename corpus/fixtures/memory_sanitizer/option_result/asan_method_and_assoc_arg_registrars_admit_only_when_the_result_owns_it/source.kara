@@ -8,14 +8,14 @@ impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
 fn mkP(i: i64) -> P { return P { id: i, name: f"p{i}" }; }
 struct Hold { n: i64 }
 impl R {
-  fn passa(r: R) -> R { return r; }
+  fn passa(r: own R) -> R { return r; }
   fn mka() -> R { return mk(31); }
 }
-impl P { fn passp(p: P) -> P { return p; } }
+impl P { fn passp(p: own P) -> P { return p; } }
 impl Hold {
-  fn thru(ref self, r: R) -> R { return r; }
-  fn reb(ref self, r: R) -> R { let m = r; return m; }
-  fn thrup(ref self, p: P) -> P { return p; }
+  fn thru(ref self, r: own R) -> R { return r; }
+  fn reb(ref self, r: own R) -> R { let m = r; return m; }
+  fn thrup(ref self, p: own P) -> P { return p; }
 }
 fn main() {
   let h = Hold { n: 0 };

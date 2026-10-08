@@ -3,11 +3,11 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 enum G[T] { Y(T), N }
 fn mk(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 fn glen[T](g: G[T]) -> i64 { return 1 }
-fn gm[T](g: G[T]) -> i64 { match g { G.Y(x) => { return 2 }, G.N => { return 0 } } }
+fn gm[T](g: own G[T]) -> i64 { match g { G.Y(x) => { return 2 }, G.N => { return 0 } } }
 fn gfwd[T](g: G[T]) -> i64 { return glen(g) }
 fn gtop[T](g: G[T]) -> i64 { return gfwd(g) }
 fn gcond[T](g: G[T], c: bool) -> i64 { if c { return glen(g) } println("keep"); return 0 }
-fn gbr[T](g: G[T], c: bool) -> i64 { if c { return glen(g) } else { return gm(g) } }
+fn gbr[T](g: own G[T], c: bool) -> i64 { if c { return glen(g) } else { return gm(g) } }
 fn gany[T](x: T) -> i64 { return 3 }
 fn gfa[T](g: G[T]) -> i64 { return gany(g) }
 fn gr[T](g: ref G[T]) -> i64 { return 4 }

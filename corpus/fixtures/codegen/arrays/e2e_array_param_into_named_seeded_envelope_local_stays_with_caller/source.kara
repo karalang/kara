@@ -2,19 +2,19 @@ struct S { tag: String }
 impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
 struct N { id: i64 }
 impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
-fn s_bind(a: Array[S, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn s_wild(a: Array[S, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(_) => { println("  w"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn s_read(a: Array[S, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println(f"  r:{v[0].tag}"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn s_iflet(a: Array[S, 2]) -> i64 { let o = Option.Some(a); if let Option.Some(v) = o { println("  r"); return 1 } else { return 0 } }
-fn s_letelse(a: Array[S, 2]) -> i64 { let o = Option.Some(a); let Option.Some(v) = o else { return 0 }; println("  r"); return 1 }
-fn s_whilelet(a: Array[S, 2]) -> i64 { let mut o = Option.Some(a); while let Option.Some(v) = o { println("  r"); o = Option.None; } return 1 }
-fn s_res(a: Array[S, 2]) -> i64 { let o: Result[Array[S, 2], i64] = Result.Ok(a); match o { Result.Ok(v) => { println("  r"); return 1 }, Result.Err(e) => { println("  n"); return 0 } } }
-fn s_three(a: Array[S, 3]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn b_chain(a: Array[S, 2]) -> i64 { let o = Option.Some(a); let o2 = o; match o2 { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn b_noheap(a: Array[N, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn b_str(a: Array[String, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println(f"  r:{v[0]}"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn s_bind(a: own Array[S, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn s_wild(a: own Array[S, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(_) => { println("  w"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn s_read(a: own Array[S, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println(f"  r:{v[0].tag}"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn s_iflet(a: own Array[S, 2]) -> i64 { let o = Option.Some(a); if let Option.Some(v) = o { println("  r"); return 1 } else { return 0 } }
+fn s_letelse(a: own Array[S, 2]) -> i64 { let o = Option.Some(a); let Option.Some(v) = o else { return 0 }; println("  r"); return 1 }
+fn s_whilelet(a: own Array[S, 2]) -> i64 { let mut o = Option.Some(a); while let Option.Some(v) = o { println("  r"); o = Option.None; } return 1 }
+fn s_res(a: own Array[S, 2]) -> i64 { let o: Result[Array[S, 2], i64] = Result.Ok(a); match o { Result.Ok(v) => { println("  r"); return 1 }, Result.Err(e) => { println("  n"); return 0 } } }
+fn s_three(a: own Array[S, 3]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_chain(a: own Array[S, 2]) -> i64 { let o = Option.Some(a); let o2 = o; match o2 { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_noheap(a: own Array[N, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_str(a: own Array[String, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println(f"  r:{v[0]}"); return 1 }, Option.None => { println("  n"); return 0 } } }
 fn b_local() -> i64 { let a: Array[S, 2] = [S { tag: f"llllllll0" }, S { tag: f"llllllll1" }]; let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn b_freshtemp(a: Array[S, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn b_freshtemp(a: own Array[S, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
 fn b_ctl(a: Array[S, 2]) -> i64 { println("  r"); return 1 }
 fn main() {
     println("s/bind");     { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let z = s_bind(a); }

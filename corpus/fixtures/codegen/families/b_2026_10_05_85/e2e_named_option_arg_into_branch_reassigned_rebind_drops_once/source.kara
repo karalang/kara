@@ -5,7 +5,7 @@ fn f1(x: Option[R], c: bool) { let mut h = x; if c { h = None; } println("f1"); 
 fn f2(x: Option[Array[R, 2]], c: bool) { let mut h = x; if c { h = None; } println("f2"); }
 fn f3(x: Option[R], n: i64) { let mut h = x; match n { 1 => { h = Some(mk(9)); } _ => {} } println("f3"); }
 fn f4(x: Option[R]) { let mut h = x; h = None; println("f4"); }
-fn f5(x: R, c: bool) { let mut h = x; if c { h = mk(8); } println("f5"); }
+fn f5(x: own R, c: bool) { let mut h = x; if c { h = mk(8); } println("f5"); }
 fn main() {
     let o = Some(mk(1)); f1(o, true); println("_a1");
     let o = Some(mk(2)); f1(o, false); println("_a2");

@@ -16,7 +16,7 @@ fn e2(w: W2) -> i64 { return 7; }
 fn em(w: Wm) -> i64 { return 7; }
 fn ee(w: We) -> i64 { return 7; }
 fn et(w: Wt) -> i64 { return 7; }
-fn eread(w: W1) -> i64 {
+fn eread(w: own W1) -> i64 {
     match w { W1.Full(q) => { let i = q.i; return i.s.len(); } W1.Empty => { return 0; } }
 }
 fn estruct(o: One) -> i64 { return 7; }

@@ -5,7 +5,7 @@ enum E { A(R), B }
 
 fn mkr(i: i64) -> R { return R { id: i, tag: f"b1521-pay-{i}-aaaaaaaaaaaaaaaa" }; }
 
-fn asg(b: E) -> i64 {
+fn asg(b: own E) -> i64 {
     let mut out: R = R { id: 0, tag: f"b1521-out-aaaaaaaaaaaaaaaa" };
     match b { E.A(r) => { out = r; } E.B => { } }
     return out.id;
@@ -15,12 +15,12 @@ fn iflet(b: E) -> i64 {
     if let E.A(r) = b { out = r; }
     return out.id;
 }
-fn rebind(b: E) -> i64 {
+fn rebind(b: own E) -> i64 {
     let mut out: R = R { id: 0, tag: f"b1521-out-aaaaaaaaaaaaaaaa" };
     match b { E.A(r) => { let m = r; out = m; } E.B => { } }
     return out.id;
 }
-fn readonly(b: E) -> i64 {
+fn readonly(b: own E) -> i64 {
     match b { E.A(r) => { return r.id; } E.B => { return 0; } }
 }
 fn borrowed(b: ref E) -> i64 {

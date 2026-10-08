@@ -2,16 +2,16 @@ struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 enum Ho[T] { Full(T), Empty }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
-fn shows(h: Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
-fn pkf(h: Ho[S], k: bool) -> Ho[S] { if k { return h } shows(h); return Ho.Empty }
-fn pkv(h: Ho[S], k: bool, w: mut ref Vec[Ho[S]]) -> Ho[S] { if k { return h } w.push(h); return Ho.Empty }
-fn pkm(h: Ho[S], k: bool) -> Ho[S] { if k { return h } match h { Ho.Full(s) => println(f"m{s.id}"), Ho.Empty => println("me") } return Ho.Empty }
+fn shows(h: own Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
+fn pkf(h: own Ho[S], k: bool) -> Ho[S] { if k { return h } shows(h); return Ho.Empty }
+fn pkv(h: own Ho[S], k: bool, w: mut ref Vec[Ho[S]]) -> Ho[S] { if k { return h } w.push(h); return Ho.Empty }
+fn pkm(h: own Ho[S], k: bool) -> Ho[S] { if k { return h } match h { Ho.Full(s) => println(f"m{s.id}"), Ho.Empty => println("me") } return Ho.Empty }
 struct K { z: i64 }
 impl K {
-    fn mpv(ref self, h: Ho[S], k: bool, w: mut ref Vec[Ho[S]]) -> Ho[S] { if k { return h } w.push(h); return Ho.Empty }
-    fn mpm(ref self, h: Ho[S], k: bool) -> Ho[S] { if k { return h } match h { Ho.Full(s) => println(f"n{s.id}"), Ho.Empty => println("ne") } return Ho.Empty }
-    fn apm(h: Ho[S], k: bool) -> Ho[S] { if k { return h } match h { Ho.Full(s) => println(f"a{s.id}"), Ho.Empty => println("ae") } return Ho.Empty }
-    fn apv(h: Ho[S], k: bool, w: mut ref Vec[Ho[S]]) -> Ho[S] { if k { return h } w.push(h); return Ho.Empty }
+    fn mpv(ref self, h: own Ho[S], k: bool, w: mut ref Vec[Ho[S]]) -> Ho[S] { if k { return h } w.push(h); return Ho.Empty }
+    fn mpm(ref self, h: own Ho[S], k: bool) -> Ho[S] { if k { return h } match h { Ho.Full(s) => println(f"n{s.id}"), Ho.Empty => println("ne") } return Ho.Empty }
+    fn apm(h: own Ho[S], k: bool) -> Ho[S] { if k { return h } match h { Ho.Full(s) => println(f"a{s.id}"), Ho.Empty => println("ae") } return Ho.Empty }
+    fn apv(h: own Ho[S], k: bool, w: mut ref Vec[Ho[S]]) -> Ho[S] { if k { return h } w.push(h); return Ho.Empty }
 }
 fn main() {
     let kk = K { z: 0 };

@@ -3,8 +3,8 @@ shared enum E { A(String), B }
 struct H { s: String, k: i64 }
 struct R { id: i64 }
 enum Ho[T] { Full(T), Empty }
-fn mkh(s: String) -> Ho[String] { return Ho.Full(s + "-heap-string-long-enough"); }
-fn keep(h: Ho[String]) -> i64 { match h { Ho.Full(s) => s.len(), Ho.Empty => 0 } }
+fn mkh(s: own String) -> Ho[String] { return Ho.Full(s + "-heap-string-long-enough"); }
+fn keep(h: own Ho[String]) -> i64 { match h { Ho.Full(s) => s.len(), Ho.Empty => 0 } }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mks(n: i64) -> S { return S { v: n, t: f"t{n}" }; }
 fn a() { let s = mks(1); let j = |q: S| q; let u = j(s); println(f"a{u.t}{s.v}") }

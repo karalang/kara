@@ -18,12 +18,12 @@ struct Hg { g: G1[String] }
 struct Kg { h: Hg }
 shared struct Sh { g: Eb }
 struct Ksh { h: Sh }
-fn eatb(g: Eb) -> i64 { match g { Eb.A(a) => { return a[0].len() }, Eb.B => { return 0 } } }
+fn eatb(g: own Eb) -> i64 { match g { Eb.A(a) => { return a[0].len() }, Eb.B => { return 0 } } }
 fn peekb(g: ref Eb) -> i64 { match g { Eb.A(a) => { return a[1].len() }, Eb.B => { return 0 } } }
-fn eatr(g: Er) -> i64 { match g { Er.A(a) => { return a[0].id }, Er.B => { return 0 } } }
-fn eats(g: Es) -> i64 { match g { Es.A(s) => { return s.len() }, Es.B => { return 0 } } }
-fn eatv(g: Ev) -> i64 { match g { Ev.A(v) => { return v.len() }, Ev.B => { return 0 } } }
-fn eatg(g: G1[String]) -> i64 { match g { G1.Y(s) => { return s.len() }, G1.N => { return 0 } } }
+fn eatr(g: own Er) -> i64 { match g { Er.A(a) => { return a[0].id }, Er.B => { return 0 } } }
+fn eats(g: own Es) -> i64 { match g { Es.A(s) => { return s.len() }, Es.B => { return 0 } } }
+fn eatv(g: own Ev) -> i64 { match g { Ev.A(v) => { return v.len() }, Ev.B => { return 0 } } }
+fn eatg(g: own G1[String]) -> i64 { match g { G1.Y(s) => { return s.len() }, G1.N => { return 0 } } }
 fn mk() -> Array[String, 2] { return [f"aaaaaaaa-1", f"bbbbbbbb-22"]; }
 fn mkr(i: i64) -> R { return R { id: i, s: f"r{i}" } }
 fn main() {

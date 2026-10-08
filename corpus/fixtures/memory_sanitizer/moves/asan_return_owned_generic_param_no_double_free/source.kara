@@ -1,5 +1,5 @@
 
-fn echo[T](x: T) -> T { x }
+fn echo[T](x: own T) -> T { x }
 fn main() {
     let mut r: i64 = 0;
     while r < 3 {

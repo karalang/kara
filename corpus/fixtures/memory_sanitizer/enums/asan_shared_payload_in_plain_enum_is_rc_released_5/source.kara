@@ -1,5 +1,5 @@
 shared struct Sh { n: i64 }
 enum Et { A(Sh), B }
 fn mket(i: i64) -> Et { return Et.A(Sh { n: i }); }
-fn passt(e: Et) -> Et { return e; }
+fn passt(e: own Et) -> Et { return e; }
 fn main() { let z = passt(mket(3)); println("ok"); }

@@ -2,27 +2,27 @@ shared struct H { id: i64 }
 impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
 struct X { h: H, n: i64 }
 impl X {
-    fn me(self) -> X { self }
-    fn reb(self) -> X { let m = self; m }
-    fn ret(self) -> X { return self; }
+    fn me(own self) -> X { self }
+    fn reb(own self) -> X { let m = self; m }
+    fn ret(own self) -> X { return self; }
 }
 fn mkx(i: i64) -> X { X { h: H { id: i }, n: i } }
 struct D { h: H, n: i64 }
 impl Drop for D { fn drop(mut ref self) { println(f"dD{self.n}") } }
-impl D { fn me(self) -> D { self } }
+impl D { fn me(own self) -> D { self } }
 struct N { kids: Vec[N], n: i64 }
 impl Drop for N { fn drop(mut ref self) { println(f"dN{self.n}") } }
-impl N { fn me(self) -> N { self } }
+impl N { fn me(own self) -> N { self } }
 struct W { x: X }
-impl X { fn wrap(self) -> W { W { x: self } } }
+impl X { fn wrap(own self) -> W { W { x: self } } }
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { R { id: i } }
 struct S { r: R }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.r.id}") } }
-impl S { fn ret_self(self) -> S { return self } }
+impl S { fn ret_self(own self) -> S { return self } }
 struct P { r: R }
-impl P { fn ret_self(self) -> P { return self } }
+impl P { fn ret_self(own self) -> P { return self } }
 fn c1() { let x = mkx(1); let b = x.me(); println(f"_{b.n}"); }
 fn c2() { let x = mkx(2); let b = x.reb(); println(f"_{b.n}"); }
 fn c3() { let x = mkx(3); let b = x.ret(); println(f"_{b.n}"); }

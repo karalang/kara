@@ -5,14 +5,14 @@ struct P { id: i64, name: String, xs: Vec[i64] }
 impl Drop for P { fn drop(mut ref self) { println(f"  dP{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
 fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}", xs: [i] }; }
-fn fwd(r: R) -> R { return r; }
-fn pfwd(p: P) -> P { return p; }
+fn fwd(r: own R) -> R { return r; }
+fn pfwd(p: own P) -> P { return p; }
 fn dies(r: R) -> i64 { return r.id; }
 struct Hold { n: i64 }
-impl R { fn passb(r: R) -> R { return fwd(r); } }
-impl R { fn passa(r: R) -> R { return r; } }
-impl P { fn ppassb(p: P) -> P { return pfwd(p); } }
-impl Hold { fn thruv(ref self, r: R) -> R { return fwd(r); } }
+impl R { fn passb(r: own R) -> R { return fwd(r); } }
+impl R { fn passa(r: own R) -> R { return r; } }
+impl P { fn ppassb(p: own P) -> P { return pfwd(p); } }
+impl Hold { fn thruv(ref self, r: own R) -> R { return fwd(r); } }
 impl Hold { fn eats(ref self, r: R) -> i64 { return dies(r); } }
 fn main() {
   let h = Hold { n: 0 };

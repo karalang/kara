@@ -7,11 +7,11 @@ fn read(x: R) -> i64 { return x.id; }
 
 impl H {
     fn m1(ref self, r: R)        { println("  end") }
-    fn m2(ref self, r: R)        { let m = r; println("  end") }
-    fn m3(ref self, r: R)        { let m = r; read(m); println("  end") }
-    fn m4(ref self, r: R) -> i64 { let s = S1 { r: r }; let x = s.r; return 7; }
-    fn m5(ref self, t: (R, i64)) { let (a, b) = t; let m = a; read(m); println("  end") }
-    fn m6(ref self, t: (R, i64)) { let (a, b) = t; println("  end") }
+    fn m2(ref self, r: own R)        { let m = r; println("  end") }
+    fn m3(ref self, r: own R)        { let m = r; read(m); println("  end") }
+    fn m4(ref self, r: own R) -> i64 { let s = S1 { r: r }; let x = s.r; return 7; }
+    fn m5(ref self, t: own (R, i64)) { let (a, b) = t; let m = a; read(m); println("  end") }
+    fn m6(ref self, t: own (R, i64)) { let (a, b) = t; println("  end") }
 }
 
 fn main() {

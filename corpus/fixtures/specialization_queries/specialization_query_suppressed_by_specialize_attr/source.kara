@@ -1,6 +1,6 @@
 
 #[specialize(T: i64)]
-fn identity[T](x: T) -> T { x }
+fn identity[T](x: own T) -> T { x }
 fn main() {
     let _ = identity(1i64);
     let _ = identity(2i32);

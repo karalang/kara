@@ -23,14 +23,14 @@ fn new_node(val: i64) -> TreeNode {
 // Link `child` under `parent`. This is the line that creates the up/down
 // cycle: parent.children points down at child, child.parent points back up
 // at parent. Both handles refer to the same RC-managed nodes.
-fn add_child(parent: TreeNode, child: TreeNode) {
+fn add_child(parent: own TreeNode, child: own TreeNode) {
     child.parent = Some(parent);
     parent.children.push(child);
 }
 
 // Walk UP the parent chain to the root, counting edges. This traversal is
 // impossible without the back-pointer — it is the reason the shape exists.
-fn depth_from_root(node: TreeNode) -> i64 {
+fn depth_from_root(node: own TreeNode) -> i64 {
     let mut depth = 0;
     let mut cur = node;
     loop {

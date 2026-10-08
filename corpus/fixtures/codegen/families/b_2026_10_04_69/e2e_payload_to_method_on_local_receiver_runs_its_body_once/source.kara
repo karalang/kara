@@ -8,7 +8,7 @@ impl Q {
 }
 struct B { xs: Vec[S] }
 impl B {
-  fn add(mut ref self, s: S) { self.xs.push(s) }
+  fn add(mut ref self, s: own S) { self.xs.push(s) }
   fn peek(ref self, s: S) { println(f"pk{self.xs.len()}") }
 }
 fn mkq() -> Q { return Q { z: 2 } }

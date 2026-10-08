@@ -15,7 +15,7 @@ impl TicTacToe {
         return TicTacToe { n: n, lines: Map.new() };
     }
 
-    fn bump(mut ref self, key: (i64, i64), d: i64) -> bool {
+    fn bump(mut ref self, key: own (i64, i64), d: i64) -> bool {
         let v = self.lines.get(key).unwrap_or(0) + d;
         self.lines.insert(key, v);
         return v == d * self.n;

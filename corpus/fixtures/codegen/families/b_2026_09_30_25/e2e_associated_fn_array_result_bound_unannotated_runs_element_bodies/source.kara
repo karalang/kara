@@ -5,7 +5,7 @@ struct K { a: i64 }
 impl K {
   fn fr(i: i64) -> Array[R, 1] { return [mk(i)]; }
   fn f2(i: i64) -> Array[R, 2] { return [mk(i), mk(i + 1)]; }
-  fn pa(x: Array[R, 1]) -> Array[R, 1] { return x }
+  fn pa(x: own Array[R, 1]) -> Array[R, 1] { return x }
   fn gr[T](x: T) -> Array[T, 1] { return [x] }
   fn sc(i: i64) -> Array[i64, 2] { return [i, i + 1] }
 }

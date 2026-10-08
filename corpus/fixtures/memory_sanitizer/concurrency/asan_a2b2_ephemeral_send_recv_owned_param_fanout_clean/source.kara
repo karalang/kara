@@ -1,6 +1,6 @@
 
-fn get_a(u: String) -> String with sends(Network) receives(Network) { return u; }
-fn get_b(u: String) -> String with sends(Network) receives(Network) { return u; }
+fn get_a(u: own String) -> String with sends(Network) receives(Network) { return u; }
+fn get_b(u: own String) -> String with sends(Network) receives(Network) { return u; }
 fn main() {
     let x = get_a("aaaaaaaaaaaaaaaaaaaa");
     let y = get_b("bbbbbbbbbbbbbbbbbbbb");

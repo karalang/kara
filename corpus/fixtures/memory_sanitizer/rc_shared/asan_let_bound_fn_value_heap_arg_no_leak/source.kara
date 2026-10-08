@@ -1,6 +1,6 @@
 
 fn shout(s: String) -> String { f"{s}!" }
-fn apply(f: Fn(String) -> String, x: String) -> String { f(x) }
+fn apply(f: Fn(String) -> String, x: own String) -> String { f(x) }
 fn main() {
     let g = shout;
     let r = apply(g, "hello-this-is-a-fairly-long-payload-string");

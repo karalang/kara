@@ -4,7 +4,7 @@ fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}"
 struct W { r: D, s: D, b: i64 }
 fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
 struct G[T] { v: T, k: i64 }
-fn mkg(d: D) -> G[D] { return G { v: d, k: 5 }; }
+fn mkg(d: own D) -> G[D] { return G { v: d, k: 5 }; }
 fn tail() -> i64 { mkw(1).b }
 fn tailg() -> i64 { mkg(mkd(2)).k }
 fn taild() -> D { mkw(3).r }

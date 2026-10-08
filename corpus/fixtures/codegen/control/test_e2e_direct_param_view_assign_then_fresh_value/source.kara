@@ -4,14 +4,14 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 
 fn mk9() -> R { return R { id: 9, tag: f"n" } }
 
-fn refresh(h: R) -> i64 {
+fn refresh(h: own R) -> i64 {
     let mut a: R = R { id: 1, tag: f"a" };
     a = h;
     a = R { id: 5, tag: f"c" };
     return a.id
 }
 
-fn refresh_twice(h: R) -> i64 {
+fn refresh_twice(h: own R) -> i64 {
     let mut a: R = R { id: 1, tag: f"a" };
     a = h;
     a = R { id: 5, tag: f"c" };

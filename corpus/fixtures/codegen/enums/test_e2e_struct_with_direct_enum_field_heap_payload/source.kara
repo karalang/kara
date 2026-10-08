@@ -1,7 +1,7 @@
 
 enum Tok { Id(String), Int(i64) }
 struct Span { tok: Tok, off: i64 }
-fn wrap(s: Span) -> Span { s }
+fn wrap(s: own Span) -> Span { s }
 fn sink(x: String) { if x.len() > 9000 { println(x) } }
 fn main() {
     let a = Span { tok: Tok.Id("hello".to_string()), off: 1 };

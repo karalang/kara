@@ -16,7 +16,7 @@ impl GradeBook {
         GradeBook { names: Vec.new(), scores: Vec.new(), index: Map.new() }
     }
 
-    fn add(mut ref self, name: String, score: i64) {
+    fn add(mut ref self, name: own String, score: i64) {
         // `name` is needed as both the map key and a Vec element, so the key
         // takes a clone; the Vec takes ownership of the original.
         self.index.insert(name.clone(), score);

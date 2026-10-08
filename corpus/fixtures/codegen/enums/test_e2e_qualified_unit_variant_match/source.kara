@@ -1,7 +1,7 @@
 
 enum Dir { North, South, East, West }
 
-fn f(d: Dir) -> i64 {
+fn f(d: own Dir) -> i64 {
     match d {
         Dir.North => 0,
         Dir.South => 1,

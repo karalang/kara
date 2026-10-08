@@ -4,19 +4,19 @@ fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
 struct H2 { pe: ((R, i64), i64) }
 struct H1 { pe: (R, i64) }
 fn take(t: (R, i64)) { println(f"take {t.0.id}") }
-fn v3m(h: H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; println(f"v3m {z.0.id}") }
-fn v3m_unread(h: H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; println("v3mu") }
-fn v3m_destr(h: H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; let (r, x) = z; println(f"v3md {r.id}") }
-fn v3m_twice(h: H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; let w: (R, i64) = z; println(f"v3mt {w.0.id}") }
-fn v3m_ret(h: H2) -> (R, i64) { let (inner, y) = h.pe; let z: (R, i64) = inner; return z; }
-fn v3m_untyped(h: H2) { let (inner, y) = h.pe; let z = inner; println(f"vu {z.0.id}") }
-fn v3m_take(h: H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; take(z); println("vt") }
-fn flat_m(h: H1) { let p: (R, i64) = h.pe; println(f"fm {p.0.id}") }
-fn t_m(t: (R, i64)) { let z: (R, i64) = t; println(f"tm {z.0.id}") }
-fn t_destr(t: (R, i64)) { let z: (R, i64) = t; let (r, n) = z; println(f"td {r.id} {n}") }
-fn t_take(t: (R, i64)) { let z: (R, i64) = t; take(z); println("tt") }
-fn t_ret(t: (R, i64)) -> (R, i64) { let z: (R, i64) = t; return z; }
-fn t_untyped(t: (R, i64)) { let z = t; println(f"tu {z.0.id}") }
+fn v3m(h: own H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; println(f"v3m {z.0.id}") }
+fn v3m_unread(h: own H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; println("v3mu") }
+fn v3m_destr(h: own H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; let (r, x) = z; println(f"v3md {r.id}") }
+fn v3m_twice(h: own H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; let w: (R, i64) = z; println(f"v3mt {w.0.id}") }
+fn v3m_ret(h: own H2) -> (R, i64) { let (inner, y) = h.pe; let z: (R, i64) = inner; return z; }
+fn v3m_untyped(h: own H2) { let (inner, y) = h.pe; let z = inner; println(f"vu {z.0.id}") }
+fn v3m_take(h: own H2) { let (inner, y) = h.pe; let z: (R, i64) = inner; take(z); println("vt") }
+fn flat_m(h: own H1) { let p: (R, i64) = h.pe; println(f"fm {p.0.id}") }
+fn t_m(t: own (R, i64)) { let z: (R, i64) = t; println(f"tm {z.0.id}") }
+fn t_destr(t: own (R, i64)) { let z: (R, i64) = t; let (r, n) = z; println(f"td {r.id} {n}") }
+fn t_take(t: own (R, i64)) { let z: (R, i64) = t; take(z); println("tt") }
+fn t_ret(t: own (R, i64)) -> (R, i64) { let z: (R, i64) = t; return z; }
+fn t_untyped(t: own (R, i64)) { let z = t; println(f"tu {z.0.id}") }
 fn main() {
     { v3m(H2 { pe: ((mk(1), 1), 2) }); println("one") }
     { v3m_unread(H2 { pe: ((mk(2), 1), 2) }); println("two") }

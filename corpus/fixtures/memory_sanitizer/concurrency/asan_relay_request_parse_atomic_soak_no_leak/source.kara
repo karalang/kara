@@ -2,7 +2,7 @@
 par struct Counters {
     n: Atomic[i64],
 }
-fn request_path(bytes: Vec[u8]) -> String {
+fn request_path(bytes: own Vec[u8]) -> String {
     match String.from_utf8(bytes) {
         Result.Ok(line) => {
             let parts = line.split(' ');

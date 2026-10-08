@@ -4,13 +4,13 @@ impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
 struct T3 { n: i64 }
 struct Hx { r: R }
 impl T3 {
-    fn take(ref self, ra: R) -> R { return ra; }
-    fn keep(ref self, rb: R) -> R { rb }
-    fn wrap(ref self, rc: R) -> Hx { return Hx { r: rc }; }
+    fn take(ref self, ra: own R) -> R { return ra; }
+    fn keep(ref self, rb: own R) -> R { rb }
+    fn wrap(ref self, rc: own R) -> Hx { return Hx { r: rc }; }
     fn eat(ref self, rd: R) -> i64 { println(f"saw {rd.name}"); return 0; }
 }
-fn takef(re: R) -> R { return re; }
-fn keepf(rf: R) -> R { rf }
+fn takef(re: own R) -> R { return re; }
+fn keepf(rf: own R) -> R { rf }
 fn main() {
     let base: i64 = env.args().len();
     let t = T3 { n: 1 };

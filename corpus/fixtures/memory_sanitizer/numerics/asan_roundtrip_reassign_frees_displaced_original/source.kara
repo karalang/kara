@@ -9,9 +9,9 @@ impl Drop for Loud {
 }
 struct Plain { id: i64, name: String }
 fn mk_loud(n: i64) -> Loud { return Loud.Hold(Res { id: n, name: f"l{n}" }); }
-fn pass(b: Loud) -> Loud { return b; }
+fn pass(b: own Loud) -> Loud { return b; }
 fn mk_res(n: i64) -> Res { return Res { id: n, name: f"r{n}" }; }
-fn pass_res(b: Res) -> Res { return b; }
+fn pass_res(b: own Res) -> Res { return b; }
 fn mk_plain(n: i64) -> Plain { return Plain { id: n, name: f"p{n}" }; }
 fn remake(b: Plain) -> Plain { return Plain { id: b.id + 1, name: f"p{b.id + 1}" }; }
 fn main() {

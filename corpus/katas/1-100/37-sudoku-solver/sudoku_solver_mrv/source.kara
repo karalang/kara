@@ -144,7 +144,7 @@ fn render(board: ref Vec[Vec[i64]]) -> String {
     out
 }
 
-fn report(name: String, board: Vec[Vec[i64]]) {
+fn report(name: String, board: own Vec[Vec[i64]]) {
     let mut b = board;
     if solve(mut b) {
         let rendered = render(b);

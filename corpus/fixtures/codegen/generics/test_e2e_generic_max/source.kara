@@ -1,5 +1,5 @@
 
-fn max_val[T](a: T, b: T) -> T {
+fn max_val[T](a: own T, b: own T) -> T {
     if a > b { a } else { b }
 }
 fn main() {

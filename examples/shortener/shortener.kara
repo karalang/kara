@@ -75,7 +75,7 @@ fn no_headers() -> Vec[(String, String)] {
     Vec.new()
 }
 
-fn text(status: i64, body: String) -> Response {
+fn text(status: i64, body: own String) -> Response {
     Response { status: status, body: body, headers: no_headers() }
 }
 

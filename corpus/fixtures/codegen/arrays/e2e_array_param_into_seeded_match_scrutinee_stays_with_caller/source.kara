@@ -2,14 +2,14 @@ struct S { tag: String }
 impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.tag}") } }
 struct N { id: i64 }
 impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
-fn p_arr(a: Array[S, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println(f"  r:{v[0].tag}"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn p_wild(a: Array[S, 2]) -> i64 { match Option.Some(a) { Option.Some(_) => { println("  w"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn p_str(a: Array[String, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println(f"  r:{v[0]}"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn p_res(a: Array[S, 2]) -> i64 { match Result.Ok(a) { Result.Ok(v) => { println("  r"); return 1 }, Result.Err(e) => { println("  n"); return 0 } } }
-fn p_gen[T](a: Array[T, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn p_three(a: Array[S, 3]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn p_noheap(a: Array[N, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn p_nonefirst(a: Array[S, 2]) -> i64 { match Option.Some(a) { Option.None => { println("  n"); return 0 }, Option.Some(v) => { println("  r"); return 1 } } }
+fn p_arr(a: own Array[S, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println(f"  r:{v[0].tag}"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn p_wild(a: own Array[S, 2]) -> i64 { match Option.Some(a) { Option.Some(_) => { println("  w"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn p_str(a: own Array[String, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println(f"  r:{v[0]}"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn p_res(a: own Array[S, 2]) -> i64 { match Result.Ok(a) { Result.Ok(v) => { println("  r"); return 1 }, Result.Err(e) => { println("  n"); return 0 } } }
+fn p_gen[T](a: own Array[T, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn p_three(a: own Array[S, 3]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn p_noheap(a: own Array[N, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
+fn p_nonefirst(a: own Array[S, 2]) -> i64 { match Option.Some(a) { Option.None => { println("  n"); return 0 }, Option.Some(v) => { println("  r"); return 1 } } }
 fn b_local() -> i64 { let a: Array[S, 2] = [S { tag: f"llllllll0" }, S { tag: f"llllllll1" }]; match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
 fn main() {
     println("p/arr");       { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let z = p_arr(a); }

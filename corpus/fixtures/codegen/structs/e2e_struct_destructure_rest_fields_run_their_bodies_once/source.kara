@@ -12,9 +12,9 @@ fn local_wild(i: i64) -> i64 { let s = S3 { a: mk(i), b: mk(i + 1) }; let S3 { a
 fn lit_a(i: i64) -> i64 { let S3 { a, .. } = S3 { a: mk(i), b: mk(i + 1) }; println("  mid"); return a.id; }
 fn lit_wild(i: i64) -> i64 { let S3 { a, b: _ } = S3 { a: mk(i), b: mk(i + 1) }; println("  mid"); return a.id; }
 fn call_a(i: i64) -> i64 { let S3 { a, .. } = mks(i); println("  mid"); return a.id; }
-fn param_a(s: S3) -> i64 { let S3 { a, .. } = s; println("  mid"); return 1; }
-fn view_w(r: R) -> i64 { let s = S3 { a: mk(92), b: r }; let S3 { a, b: _ } = s; println("  mid"); return a.id; }
-fn view_a(r: R) -> i64 { let s = S3 { a: mk(90), b: r }; let S3 { a, .. } = s; println("  mid"); return a.id; }
+fn param_a(s: own S3) -> i64 { let S3 { a, .. } = s; println("  mid"); return 1; }
+fn view_w(r: own R) -> i64 { let s = S3 { a: mk(92), b: r }; let S3 { a, b: _ } = s; println("  mid"); return a.id; }
+fn view_a(r: own R) -> i64 { let s = S3 { a: mk(90), b: r }; let S3 { a, .. } = s; println("  mid"); return a.id; }
 
 fn main() {
     println("local_a"); let v1 = local_a(1); println(f"  v={v1}");

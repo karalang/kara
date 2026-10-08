@@ -1,6 +1,6 @@
 
 fn tsum[T](t: Tensor[T, [2, 2]]) -> i64 { return t.rank(); }
-fn keep[T](x: T) -> T { return x; }
+fn keep[T](x: own T) -> T { return x; }
 fn main() {
     let a: Tensor[f64, [2, 2]] = Tensor.zeros([2, 2]);
     print(tsum(a));

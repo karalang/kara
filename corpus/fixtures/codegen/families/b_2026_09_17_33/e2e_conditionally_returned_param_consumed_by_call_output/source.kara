@@ -2,30 +2,30 @@ struct R { name: String, id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.name}") } }
 fn eat(x: R) -> i64 { return x.id; }
 fn eatn(x: R) -> String { return x.name.clone(); }
-fn keep(x: R, v: mut ref Vec[R]) -> i64 { let n = x.id; v.push(x); return n; }
+fn keep(x: own R, v: mut ref Vec[R]) -> i64 { let n = x.id; v.push(x); return n; }
 fn geat[T](x: T) -> i64 { return 3; }
 fn two(a: R, b: R) -> i64 { return a.id + b.id; }
-fn p1(r: R, f: bool) -> R { if f { return r } return R { name: eatn(r), id: 90 } }
-fn p2(r: R, f: bool, v: mut ref Vec[R]) -> R { if f { return r } return R { name: f"z", id: keep(r, v) } }
-fn p3(r: R, f: bool) -> R { if f { return r } return R { name: f"z", id: geat(r) } }
-fn p5(r: R, f: bool) -> R { if f { return r } return R { name: f"z", id: two(r, R { name: f"t", id: 1 }) } }
-fn p6(r: R, f: bool) -> R { match f { true => { return r; } false => { return R { name: f"z", id: eat(r) + 1 }; } } }
-fn p7(r: R, f: bool) -> (R, i64) { if f { return (r, 1) } return (R { name: f"z", id: 0 }, eat(r)) }
-fn q1(r: R, f: bool) -> R { if f { return r } return R { name: f"z", id: eat(r) + 1 } }
-fn q2(r: R, f: bool) -> R { match f { true => { return r; } false => { return R { name: f"z", id: eat(r) }; } } }
-fn q3(r: R, f: bool) -> R { if f { return r; } else { return R { name: f"z", id: eat(r) }; } }
-fn fpick(r: R, flag: bool) -> R {
+fn p1(r: own R, f: bool) -> R { if f { return r } return R { name: eatn(r), id: 90 } }
+fn p2(r: own R, f: bool, v: mut ref Vec[R]) -> R { if f { return r } return R { name: f"z", id: keep(r, v) } }
+fn p3(r: own R, f: bool) -> R { if f { return r } return R { name: f"z", id: geat(r) } }
+fn p5(r: own R, f: bool) -> R { if f { return r } return R { name: f"z", id: two(r, R { name: f"t", id: 1 }) } }
+fn p6(r: own R, f: bool) -> R { match f { true => { return r; } false => { return R { name: f"z", id: eat(r) + 1 }; } } }
+fn p7(r: own R, f: bool) -> (R, i64) { if f { return (r, 1) } return (R { name: f"z", id: 0 }, eat(r)) }
+fn q1(r: own R, f: bool) -> R { if f { return r } return R { name: f"z", id: eat(r) + 1 } }
+fn q2(r: own R, f: bool) -> R { match f { true => { return r; } false => { return R { name: f"z", id: eat(r) }; } } }
+fn q3(r: own R, f: bool) -> R { if f { return r; } else { return R { name: f"z", id: eat(r) }; } }
+fn fpick(r: own R, flag: bool) -> R {
     if flag { return r }
     return R { name: f"z", id: eat(r) }
 }
 #[derive(Copy)]
 struct P {}
 impl P {
-    fn pick(r: R, flag: bool) -> R {
+    fn pick(r: own R, flag: bool) -> R {
         if flag { return r }
         return R { name: f"z", id: eat(r) }
     }
-    fn mpick(self, r: R, flag: bool) -> R {
+    fn mpick(self, r: own R, flag: bool) -> R {
         if flag { return r }
         return R { name: f"z", id: eat(r) }
     }

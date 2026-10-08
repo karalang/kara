@@ -24,7 +24,7 @@ pub struct Elevator[S: Scheduler] {
 }
 
 impl[S: Scheduler] Elevator[S] {
-    pub fn new(scheduler: S) -> Elevator[S] {
+    pub fn new(scheduler: own S) -> Elevator[S] {
         Elevator {
             floor:     MIN_FLOOR,
             direction: Direction.Idle,

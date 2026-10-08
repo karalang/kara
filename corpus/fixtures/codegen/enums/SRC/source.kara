@@ -10,7 +10,7 @@ fn text_of(e: Expr) -> String {
         Str(n) => n.value.clone(),
     }
 }
-fn tok_kind(t: Tok) -> i64 {
+fn tok_kind(t: own Tok) -> i64 {
     match t { Str(s, sp) => 1, Int(v) => 2 }
 }
 fn main() {

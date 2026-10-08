@@ -8,7 +8,7 @@ enum Hn { Wn(Wn), E }
 enum Hm { M(Map[i64, String]), E }
 enum Ht { T((String, i64)), E }
 enum Hk { K { a: String, b: Vec[String] }, E }
-fn hs(s: String) -> String { s + "-heap-string-long-enough" }
+fn hs(s: own String) -> String { s + "-heap-string-long-enough" }
 fn gr(h: ref Hc) -> i64 { match h { Hc.Full(s) => s.len(), Hc.Empty => 0 } }
 fn gv(h: ref Hv) -> i64 { match h { Hv.Vs(v) => v.len() * 100 + v[0].len(), Hv.Vi(v) => v.len() * 100 + v[0], Hv.E => 0 } }
 fn gw(h: ref Hw) -> i64 { match h { Hw.Wr(w) => w.s.len() + w.n, Hw.E => 0 } }

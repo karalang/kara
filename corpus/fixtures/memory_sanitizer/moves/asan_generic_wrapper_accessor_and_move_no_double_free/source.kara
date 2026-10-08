@@ -7,7 +7,7 @@ impl[T] Box[T] {
         self.v
     }
 }
-fn sink(b: Box[String]) -> i64 {
+fn sink(b: own Box[String]) -> i64 {
     let s = b.v;
     s.len()
 }

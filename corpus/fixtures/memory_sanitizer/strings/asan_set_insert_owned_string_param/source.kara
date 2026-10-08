@@ -1,5 +1,5 @@
 
-fn add(set: mut ref Set[String], v: String) {
+fn add(set: mut ref Set[String], v: own String) {
     set.insert(v);
 }
 

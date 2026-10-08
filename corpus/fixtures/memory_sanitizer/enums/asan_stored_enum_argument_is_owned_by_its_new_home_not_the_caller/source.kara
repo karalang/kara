@@ -6,11 +6,11 @@ impl Es { fn is_a(ref self) -> i64 { match self { Es.A(s) => { return 1; } Es.B 
 
 struct BoxS { mut ys: Vec[Es] }
 impl BoxS {
-    fn puts(mut ref self, e: Es) { self.ys.push(e); }
-    fn stash(b: mut ref BoxS, e: Es) { b.ys.push(e); }
+    fn puts(mut ref self, e: own Es) { self.ys.push(e); }
+    fn stash(b: mut ref BoxS, e: own Es) { b.ys.push(e); }
 }
-fn pute(b: mut ref BoxS, e: Es) { b.ys.push(e); }
-fn stashg[T](v: mut ref Vec[T], x: T) { v.push(x); }
+fn pute(b: mut ref BoxS, e: own Es) { b.ys.push(e); }
+fn stashg[T](v: mut ref Vec[T], x: own T) { v.push(x); }
 
 fn c_meth()   { let mut d = BoxS { ys: Vec.new() }; d.puts(mkes(61)); println(f"a{d.ys.len()}"); }
 fn c_ctor()   { let mut d = BoxS { ys: Vec.new() }; d.puts(Es.A("z")); println(f"b{d.ys.len()}"); }

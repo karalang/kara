@@ -8,16 +8,16 @@ struct H1 { e: E }
 struct H2 { s: S }
 
 impl H1 {
-    fn fieldlet(self) -> i64 { let e = self.e; match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
-    fn readlet(self) -> i64 { let e = self.e; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
-    fn justlet(self) -> i64 { let e = self.e; return 7; }
+    fn fieldlet(own self) -> i64 { let e = self.e; match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
+    fn readlet(own self) -> i64 { let e = self.e; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn justlet(own self) -> i64 { let e = self.e; return 7; }
     fn borrowedlet(mut ref self) -> i64 { let e = self.e; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
 }
 impl H2 {
-    fn deep(self) -> i64 { let e = self.s.e; match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
-    fn mid(self) -> i64 { let s = self.s; match s.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
+    fn deep(own self) -> i64 { let e = self.s.e; match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
+    fn mid(own self) -> i64 { let s = self.s; match s.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
 }
-fn p_fieldlet(h: H1) -> i64 { let e = h.e; match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
+fn p_fieldlet(h: own H1) -> i64 { let e = h.e; match e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
 
 fn main() {
     println("fieldlet/local"); let a1 = H1 { e: E.A(mk(1)) }; let x1 = a1.fieldlet(); println(f"  r{x1}");

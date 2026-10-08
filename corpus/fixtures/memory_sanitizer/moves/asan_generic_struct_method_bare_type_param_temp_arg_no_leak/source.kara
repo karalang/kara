@@ -2,7 +2,7 @@
 struct Stack[T] { items: Vec[T] }
 impl[T] Stack[T] {
     fn new() -> Stack[T] { Stack { items: Vec.new() } }
-    fn push(mut ref self, v: T) { self.items.push(v); }
+    fn push(mut ref self, v: own T) { self.items.push(v); }
     fn len(ref self) -> i64 { self.items.len() }
 }
 fn main() {

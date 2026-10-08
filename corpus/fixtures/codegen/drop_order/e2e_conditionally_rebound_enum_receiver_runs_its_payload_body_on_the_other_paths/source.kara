@@ -5,14 +5,14 @@ enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("dE") } }
 enum N { A(R), B }
 impl E {
-    fn cond(self, c: bool) -> i64 { if c { match self { E.A(ref r) => { return r.id; } E.B => { return 0; } } } return 0; }
-    fn loopy(self, n: i64) -> i64 { let mut i = 0; while i < n { match self { E.A(ref r) => { return r.id; } E.B => { return 0; } } } return 0; }
-    fn cond_mut(self, c: bool) -> i64 { if c { let mut e = self; match e { E.A(ref r) => { return r.id; } E.B => { return 0; } } } else { return 5; } }
-    fn cond_bare(self, c: bool) -> i64 { if c { let e = self; return 7; } return 0; }
+    fn cond(own self, c: bool) -> i64 { if c { match self { E.A(ref r) => { return r.id; } E.B => { return 0; } } } return 0; }
+    fn loopy(own self, n: i64) -> i64 { let mut i = 0; while i < n { match self { E.A(ref r) => { return r.id; } E.B => { return 0; } } } return 0; }
+    fn cond_mut(own self, c: bool) -> i64 { if c { let mut e = self; match e { E.A(ref r) => { return r.id; } E.B => { return 0; } } } else { return 5; } }
+    fn cond_bare(own self, c: bool) -> i64 { if c { let e = self; return 7; } return 0; }
 }
 impl N {
-    fn cond_bare(self, c: bool) -> i64 { if c { let e = self; return 7; } return 0; }
-    fn cond_loop(self, n: i64) -> i64 { let mut i = 0; while i < n { let e = self; return 9; } return 0; }
+    fn cond_bare(own self, c: bool) -> i64 { if c { let e = self; return 7; } return 0; }
+    fn cond_loop(own self, n: i64) -> i64 { let mut i = 0; while i < n { let e = self; return 9; } return 0; }
 }
 fn main() {
     println(f"k1 {E.A(mk(1)).cond(true)}");

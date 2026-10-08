@@ -3,13 +3,13 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 struct H { n: i64 }
 impl H {
-    fn wrap(ref self, r: R) -> (R, i64) { return (r, 9); }
-    fn pass(ref self, x: Array[R, 2]) -> Array[R, 2] { return x; }
+    fn wrap(ref self, r: own R) -> (R, i64) { return (r, 9); }
+    fn pass(ref self, x: own Array[R, 2]) -> Array[R, 2] { return x; }
 }
 struct Ws { r: R, n: i64 }
-impl Ws { fn pair(self) -> (R, i64) { return (self.r, 5); } }
+impl Ws { fn pair(own self) -> (R, i64) { return (self.r, 5); } }
 struct W2 { q: R, r: R }
-impl W2 { fn both(self) -> (R, R) { return (self.q, self.r); } }
+impl W2 { fn both(own self) -> (R, R) { return (self.q, self.r); } }
 fn main() {
     let h = H { n: 1 };
     println("stmt"); h.wrap(mk(1));

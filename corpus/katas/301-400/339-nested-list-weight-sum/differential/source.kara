@@ -39,7 +39,7 @@ fn weight_sum_star(items: ref Vec[Nested]) -> i64 {
 
 // ---- nested_weight_sum_bfs.kara ----
 
-fn weight_sum_bfs(items: Vec[Nested]) -> i64 {
+fn weight_sum_bfs(items: own Vec[Nested]) -> i64 {
     let mut total = 0;
     let mut depth = 1;
     let mut level = items;

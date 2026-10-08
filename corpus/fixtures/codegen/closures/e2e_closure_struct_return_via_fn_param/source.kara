@@ -1,8 +1,8 @@
 
 struct P { a: i64, b: i64 }
 impl P { fn twice(ref self) -> P { P { a: self.a * 2, b: self.b * 2 } } }
-fn ap(f: Fn(P) -> P, p: P) -> P { f(p) }
-fn ap_lit(f: Fn(P) -> P, p: P) -> P { f(p) }
+fn ap(f: Fn(P) -> P, p: own P) -> P { f(p) }
+fn ap_lit(f: Fn(P) -> P, p: own P) -> P { f(p) }
 fn ap_tup(f: Fn(i64) -> (i64, i64), x: i64) -> (i64, i64) { f(x) }
 fn main() {
     let r = ap(|q| q.twice(), P { a: 5, b: 6 });

@@ -7,7 +7,7 @@ enum G { A(S), B(i64) }
 struct H { k: i64 }
 impl H { fn mp(ref self, t: Option[S], c: bool) -> i64 { if c { let t = match t { Option.Some(v) => v, Option.None => mks(0) }; println(f"m{t.id}") }; return self.k } }
 fn ct(t: Option[S], c: bool) -> i64 { if c { let t = match t { Option.Some(q) => q, Option.None => mks(0) }; println(f"t{t.id}") }; return 1 }
-fn cg(t: G, c: bool) -> i64 { if c { let t = match t { G.A(v) => v, G.B(n) => mks(n) }; println(f"g{t.id}") }; return 1 }
+fn cg(t: own G, c: bool) -> i64 { if c { let t = match t { G.A(v) => v, G.B(n) => mks(n) }; println(f"g{t.id}") }; return 1 }
 fn cr(t: Result[S, i64], c: bool) -> i64 { if c { let t = match t { Result.Ok(v) => v, Result.Err(e) => mks(e) }; println(f"r{t.id}") } else { println("rn") }; return 1 }
 fn cl(t: Option[S], c: bool) -> i64 { if c { let t = if let Option.Some(v) = t { v } else { mks(0) }; println(f"l{t.id}") }; return 1 }
 fn cs(t: Option[S], v: mut ref Vec[Option[S]], c: i64) -> i64 { if c == 0 { v.push(t) } else if c == 1 { let t = match t { Option.Some(q) => q, Option.None => mks(0) }; println(f"s{t.id}") } else { println("sn") }; return 1 }

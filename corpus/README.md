@@ -12,6 +12,11 @@ corpus/<area>/<name>/expected.out      what the runner compares against
 corpus/<area>/<name>/meta.toml
 ```
 
+The D5 migration (`KARAC_D5_MIGRATE=1 karac fix`, borrow-by-default
+parameters) wrote `own` into 1,110 programs' signatures without a
+`source.orig.kara`: `own T` means `T` on every backend until the flip, so the
+recorded outputs still describe the program, and git holds the earlier text.
+
 Areas:
 
 | area | from |

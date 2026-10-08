@@ -4,7 +4,7 @@ struct Doc { lines: Vec[String] }
 struct Nums { xs: Vec[i64] }
 enum Got { N(i64) }
 impl Doc { fn first(ref self) -> String { let g = self.lines[0].clone(); g } }
-fn apply(d: mut ref Doc, c: Cmd) -> Cmd {
+fn apply(d: mut ref Doc, c: own Cmd) -> Cmd {
     match c {
         Insert(at, text) => { d.lines.insert(at as usize, text); Cmd.Delete(at, d.lines[at as usize].clone()) }
         Delete(at, _text) => { let gone = d.lines[at as usize].clone(); d.lines.remove(at as usize); Cmd.Insert(at, gone) }

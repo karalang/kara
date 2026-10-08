@@ -83,7 +83,7 @@ fn c_next(v: mut ref Cursor) -> i64 {
     return x;
 }
 
-fn run_cursor(data: Vec[Vec[i64]]) -> i64 {
+fn run_cursor(data: own Vec[Vec[i64]]) -> i64 {
     let mut v = Cursor { data: data, row: 0, col: 0 };
     let mut sum = 0;
     let mut n = 0;
@@ -190,7 +190,7 @@ fn o_next(v: mut ref Offset) -> i64 {
     return v.data[r][c];
 }
 
-fn run_offset(data: Vec[Vec[i64]]) -> i64 {
+fn run_offset(data: own Vec[Vec[i64]]) -> i64 {
     let mut prefix: Vec[i64] = Vec.new();
     prefix.push(0);
     let mut r = 0;

@@ -3,26 +3,26 @@ struct Res { id: i64, name: String }
 impl Drop for Res { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
 enum Box2 { Full(Res), Empty }
 struct Taker { tag: i64 }
-fn take_alias(b: Box2) -> Res {
+fn take_alias(b: own Box2) -> Res {
     match b {
         Box2.Full(r) => { let k: Res = r; return k; }
         Box2.Empty => { return Res { id: 0, name: f"z" }; }
     }
 }
-fn take_direct(b: Box2) -> Res {
+fn take_direct(b: own Box2) -> Res {
     match b {
         Box2.Full(r) => { return r; }
         Box2.Empty => { return Res { id: 0, name: f"z" }; }
     }
 }
-fn take_keep(b: Box2) -> i64 {
+fn take_keep(b: own Box2) -> i64 {
     match b {
         Box2.Full(r) => { let k: Res = r; return k.id; }
         Box2.Empty => { return 0i64; }
     }
 }
 impl Taker {
-    fn take(ref self, b: Box2) -> Res {
+    fn take(ref self, b: own Box2) -> Res {
         match b {
             Box2.Full(r) => { let k: Res = r; return k; }
             Box2.Empty => { return Res { id: 0, name: f"z" }; }

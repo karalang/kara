@@ -7,12 +7,12 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 struct P { id: i64 }
 fn mk(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
 fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
-fn pick[T](v: T, c: bool, w: T) -> T { if c { return v } return w }
-fn stc[T](a: T, c: bool) -> Vec[T] { let mut v: Vec[T] = Vec.new(); if c { v.push(a) } return v }
-fn gcond[T](v: mut ref Vec[T], x: T, k: bool) { if k { v.push(x) } }
-fn mid[T](v: T, c: bool) -> Option[T] { if c { return Some(v) } return None }
-fn passp(a: S3, c: bool) -> S3 { let w = mk(98); return pick(a, c, w) }
-fn passp2(a: S2, c: bool) -> S2 { let w = mk2(98); return pick(a, c, w) }
+fn pick[T](v: own T, c: bool, w: own T) -> T { if c { return v } return w }
+fn stc[T](a: own T, c: bool) -> Vec[T] { let mut v: Vec[T] = Vec.new(); if c { v.push(a) } return v }
+fn gcond[T](v: mut ref Vec[T], x: own T, k: bool) { if k { v.push(x) } }
+fn mid[T](v: own T, c: bool) -> Option[T] { if c { return Some(v) } return None }
+fn passp(a: own S3, c: bool) -> S3 { let w = mk(98); return pick(a, c, w) }
+fn passp2(a: own S2, c: bool) -> S2 { let w = mk2(98); return pick(a, c, w) }
 fn a_pick2() { let s = mk2(1); let w = mk2(2); let t = pick(s, true, w); println(f"a{t.id}"); let s2 = mk2(3); let w2 = mk2(4); let t2 = pick(s2, false, w2); println(f"a{t2.id}") }
 fn b_pick3() { let s = mk(5); let w = mk(6); let t = pick(s, true, w); let s2 = mk(7); let w2 = mk(8); let t2 = pick(s2, false, w2); println(f"b{t.id} {t2.id}") }
 fn c_disc() { let s = mk2(9); let w = mk2(10); pick(s, true, w); let s2 = mk2(11); let w2 = mk2(12); let _ = pick(s2, false, w2); let s3 = mk(13); let w3 = mk(14); pick(s3, true, w3); let s4 = mk(15); let w4 = mk(16); let _ = pick(s4, false, w4); println("c") }

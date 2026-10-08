@@ -65,7 +65,7 @@ fn indent(depth: i64) -> String {
 }
 
 impl DocTree {
-    fn new(title: String) -> DocTree {
+    fn new(title: own String) -> DocTree {
         let mut nodes = Vec.new();
         nodes.push(Node { kind: NodeKind.Document, title: title, parent: None, children: Vec.new(), alive: true });
         DocTree { nodes: nodes, root: 0 }
@@ -78,13 +78,13 @@ impl DocTree {
         Ok(())
     }
 
-    fn append(mut ref self, parent: i64, kind: NodeKind, title: String) -> Result[i64, TreeError] {
+    fn append(mut ref self, parent: i64, kind: own NodeKind, title: own String) -> Result[i64, TreeError] {
         self.check(parent)?;
         let len = self.nodes[parent].children.len();
         self.insert_at(parent, len, kind, title)
     }
 
-    fn insert_at(mut ref self, parent: i64, index: i64, kind: NodeKind, title: String) -> Result[i64, TreeError] {
+    fn insert_at(mut ref self, parent: i64, index: i64, kind: own NodeKind, title: own String) -> Result[i64, TreeError] {
         self.check(parent)?;
         if self.nodes[parent].kind == NodeKind.Paragraph {
             return Err(TreeError.LeafNode(self.path_of(parent)));
@@ -191,7 +191,7 @@ impl DocTree {
         join(parts, ".")
     }
 
-    fn find_by_path(ref self, path: String) -> Result[i64, TreeError] {
+    fn find_by_path(ref self, path: own String) -> Result[i64, TreeError] {
         let mut cur = self.root;
         for seg in path.split("/") {
             let mut next: Option[i64] = None;

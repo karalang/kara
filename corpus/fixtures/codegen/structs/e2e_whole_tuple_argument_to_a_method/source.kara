@@ -2,11 +2,11 @@ struct Q { id: i64, name: String }
 impl Drop for Q { fn drop(mut ref self) { println(f"  dQ{self.id}") } }
 fn mkq(i: i64) -> Q { return Q { id: i, name: f"q{i}" }; }
 struct Hold { n: i64 }
-impl Hold { fn thrut(ref self, t: (Q, i64)) -> (Q, i64) { return t; } }
+impl Hold { fn thrut(ref self, t: own (Q, i64)) -> (Q, i64) { return t; } }
 impl Hold { fn mkt(ref self) -> (Q, i64) { return (mkq(4), 1); } }
 impl Hold { fn eatt(ref self, t: (Q, i64)) -> i64 { return t.1; } }
-impl Q { fn passt(t: (Q, i64)) -> (Q, i64) { return t; } }
-fn passt(t: (Q, i64)) -> (Q, i64) { return t; }
+impl Q { fn passt(t: own (Q, i64)) -> (Q, i64) { return t; } }
+fn passt(t: own (Q, i64)) -> (Q, i64) { return t; }
 fn main() {
   let h = Hold { n: 0 };
   println("method_tuple"); let a = h.thrut((mkq(1), 7)); println(f"  v={a.1}");

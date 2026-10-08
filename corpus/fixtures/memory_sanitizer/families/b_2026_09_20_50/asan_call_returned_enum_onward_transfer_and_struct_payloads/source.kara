@@ -7,10 +7,10 @@ enum Tp { A(P), B }
 fn mka(n: i64) -> Ta { Ta.A([f"a-{n}", f"b-{n}"]) }
 fn mksh(n: i64) -> Tsh { Tsh.A(Sh { s: f"sh-{n}" }) }
 fn mkp(n: i64) -> Tp { Tp.A(P { id: n, s: f"p-{n}" }) }
-fn givea(e: Ta) -> Ta { e }
-fn givesh(e: Tsh) -> Tsh { e }
-fn givep(e: Tp) -> Tp { e }
-fn keepp(v: mut ref Vec[Tp], e: Tp) { v.push(e); }
+fn givea(e: own Ta) -> Ta { e }
+fn givesh(e: own Tsh) -> Tsh { e }
+fn givep(e: own Tp) -> Tp { e }
+fn keepp(v: mut ref Vec[Tp], e: own Tp) { v.push(e); }
 fn main() {
     let a = givea(mka(1)); match a { Ta.A(xs) => println(f"a:{xs[1]}"), Ta.B => println("b") }
     let s = givesh(mksh(2)); match s { Tsh.A(x) => println(f"s:{x.s}"), Tsh.B => println("b") }

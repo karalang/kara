@@ -6,13 +6,13 @@ struct H2 { pe: ((R, i64), i64) }
 struct S { r: R, n: i64 }
 struct G { s: S, n: i64 }
 struct H2b { pe: ((R, R), i64) }
-fn flat_ret(h: H1) -> R { let (r, k) = h.pe; return r; }
-fn flat_proj(h: H1) -> R { return h.pe.0; }
-fn v3_ret(h: H2) -> R { let (inner, y) = h.pe; let (r, x) = inner; return r; }
-fn g_ret(g: G) -> R { return g.s.r; }
-fn g_destr(g: G) -> R { let G { s, n } = g; let S { r, n: m } = s; return r; }
-fn vb_ret1(h: H2b) -> R { let (inner, y) = h.pe; let (r, s) = inner; return s; }
-fn flat_in(h: H1) -> R { println("in"); let (r, k) = h.pe; println("mid"); return r; }
+fn flat_ret(h: own H1) -> R { let (r, k) = h.pe; return r; }
+fn flat_proj(h: own H1) -> R { return h.pe.0; }
+fn v3_ret(h: own H2) -> R { let (inner, y) = h.pe; let (r, x) = inner; return r; }
+fn g_ret(g: own G) -> R { return g.s.r; }
+fn g_destr(g: own G) -> R { let G { s, n } = g; let S { r, n: m } = s; return r; }
+fn vb_ret1(h: own H2b) -> R { let (inner, y) = h.pe; let (r, s) = inner; return s; }
+fn flat_in(h: own H1) -> R { println("in"); let (r, k) = h.pe; println("mid"); return r; }
 fn main() {
     { let h: H1 = H1 { pe: (mk(1), 1) }; let a: R = flat_ret(h); println(f"got{a.id}"); println("one") }
     { let h: H2 = H2 { pe: ((mk(2), 1), 2) }; let a: R = v3_ret(h); println(f"got{a.id}"); println("two") }

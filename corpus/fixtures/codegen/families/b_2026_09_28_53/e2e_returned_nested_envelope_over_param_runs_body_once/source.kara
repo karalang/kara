@@ -3,13 +3,13 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct S { r: R, s: String }
 fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
 
-fn c1(x: S) -> Option[Option[S]] { let o = Some(Some(x)); o }
-fn c2(x: S) -> Option[Option[S]] { let o = Some(Some(x)); return o }
-fn c3(x: S) -> Result[Option[S], i64] { let o: Result[Option[S], i64] = Ok(Some(x)); o }
-fn c4(x: S, k: bool) -> Option[Option[S]] { let o = Some(Some(x)); if k { return o } None }
-fn c5(x: S, k: bool) -> Option[Option[S]] { let o = Some(Some(x)); let p = o; if k { return p } None }
-fn c6(x: S) -> Option[Option[S]] { let o = Some(x); let p = Some(o); p }
-fn c7(x: S) -> Option[S] { let o = Some(x); o }
+fn c1(x: own S) -> Option[Option[S]] { let o = Some(Some(x)); o }
+fn c2(x: own S) -> Option[Option[S]] { let o = Some(Some(x)); return o }
+fn c3(x: own S) -> Result[Option[S], i64] { let o: Result[Option[S], i64] = Ok(Some(x)); o }
+fn c4(x: own S, k: bool) -> Option[Option[S]] { let o = Some(Some(x)); if k { return o } None }
+fn c5(x: own S, k: bool) -> Option[Option[S]] { let o = Some(Some(x)); let p = o; if k { return p } None }
+fn c6(x: own S) -> Option[Option[S]] { let o = Some(x); let p = Some(o); p }
+fn c7(x: own S) -> Option[S] { let o = Some(x); o }
 
 fn show(t: String, v: Option[Option[S]]) {
     match v { Some(Some(s)) => println(f"{t}:{s.r.id}"), Some(None) => println(f"{t}:sn"), None => println(f"{t}:none") }

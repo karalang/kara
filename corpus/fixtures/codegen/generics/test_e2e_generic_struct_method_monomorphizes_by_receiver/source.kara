@@ -2,7 +2,7 @@
 struct Box[T] { v: T }
 impl[T] Box[T] {
     fn get_ref(ref self) -> T { self.v }
-    fn get_val(self) -> T { self.v }
+    fn get_val(own self) -> T { self.v }
 }
 struct Pair[T] { a: T, b: T }
 impl[T: Sub] Pair[T] {

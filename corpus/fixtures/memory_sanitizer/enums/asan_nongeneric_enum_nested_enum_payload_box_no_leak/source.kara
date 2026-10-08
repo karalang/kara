@@ -4,7 +4,7 @@ enum WrapS { W(Big), Empty }
 enum WrapE { W(Option[String]), Empty }
 enum WrapR { W(Result[String, i64]), Empty }
 struct Holder { o: WrapE, n: i64 }
-fn consume(w: WrapE) -> i64 {
+fn consume(w: own WrapE) -> i64 {
     match w {
         WrapE.W(Option.Some(s)) => if s.contains("payload") { 1 } else { 0 },
         WrapE.W(Option.None) => -1,

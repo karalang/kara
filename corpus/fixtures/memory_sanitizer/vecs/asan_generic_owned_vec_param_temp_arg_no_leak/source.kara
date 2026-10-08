@@ -1,10 +1,10 @@
 
 fn take[T](v: Vec[T]) -> i64 { return v.len(); }
 fn head[T](v: Vec[T]) -> T { return v[0]; }
-fn passthru[T](v: Vec[T]) -> Vec[T] { return v; }
-fn id[T](v: Vec[T]) -> Vec[T] { return v; }
-fn pick[T](a: Vec[T], b: Vec[T]) -> Vec[T] { return id(a); }
-fn sink[T](acc: mut ref Vec[Vec[T]], v: Vec[T]) { acc.push(v); }
+fn passthru[T](v: own Vec[T]) -> Vec[T] { return v; }
+fn id[T](v: own Vec[T]) -> Vec[T] { return v; }
+fn pick[T](a: own Vec[T], b: Vec[T]) -> Vec[T] { return id(a); }
+fn sink[T](acc: mut ref Vec[Vec[T]], v: own Vec[T]) { acc.push(v); }
 fn mk() -> Vec[i64] { let v: Vec[i64] = [11, 22, 33, 44, 55, 66, 77, 88]; return v; }
 fn main() {
     let nums: Vec[i64] = [1, 2, 3, 4, 5, 6, 7, 8];

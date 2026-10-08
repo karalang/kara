@@ -6,7 +6,7 @@ fn mk2(i: i64) -> Option[S] { Some(mk(i)) }
 fn mkr(i: i64) -> Option[R] { Some(R { id: i }) }
 fn mkok(i: i64) -> Result[S, i64] { Ok(mk(i)) }
 fn mkerr(i: i64) -> Result[i64, S] { Err(mk(i)) }
-fn wrapo[T](x: T) -> Option[T] { Some(x) }
+fn wrapo[T](x: own T) -> Option[T] { Some(x) }
 struct F { n: i64 }
 impl F { fn mko(ref self, i: i64) -> Option[S] { Some(mk(i + self.n)) } }
 fn main() {

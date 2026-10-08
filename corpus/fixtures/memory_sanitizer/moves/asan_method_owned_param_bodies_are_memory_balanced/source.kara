@@ -5,11 +5,11 @@ struct H { r: R }
 struct B2 { n: i64 }
 impl B2 {
     fn eat(ref self, r: R) -> i64 { 7 }
-    fn id(ref self, r: R) -> R { r }
-    fn pick(ref self, r: R, k: bool) -> R { if k { r } else { R { id: 99, name: f"n99" } } }
-    fn wrap(ref self, r: R) -> H { H { r: r } }
-    fn two(ref self, a: R, b: R, k: bool) -> R { if k { a } else { b } }
-    fn early(ref self, r: R, k: bool) -> R { if k { return R { id: 98, name: f"n98" }; } r }
+    fn id(ref self, r: own R) -> R { r }
+    fn pick(ref self, r: own R, k: bool) -> R { if k { r } else { R { id: 99, name: f"n99" } } }
+    fn wrap(ref self, r: own R) -> H { H { r: r } }
+    fn two(ref self, a: own R, b: own R, k: bool) -> R { if k { a } else { b } }
+    fn early(ref self, r: own R, k: bool) -> R { if k { return R { id: 98, name: f"n98" }; } r }
 }
 fn main() {
     let base: i64 = env.args().len();

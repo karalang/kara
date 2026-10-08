@@ -1,13 +1,13 @@
 struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
-fn pg[T](x: T) -> T { return x; }
-fn pt[T](x: T) -> (T, i64) { return (x, 1); }
+fn pg[T](x: own T) -> T { return x; }
+fn pt[T](x: own T) -> (T, i64) { return (x, 1); }
 fn gk[T](x: T) -> i64 { return 5; }
-fn pc[T](x: T, c: bool) -> T { if c { return x; } return x; }
-fn pv[T](x: T) -> T { let y = x; return y; }
+fn pc[T](x: own T, c: bool) -> T { if c { return x; } return x; }
+fn pv[T](x: own T) -> T { let y = x; return y; }
 struct H { n: i64 }
-impl H { fn keep[T](ref self, x: T) -> T { return x } }
+impl H { fn keep[T](ref self, x: own T) -> T { return x } }
 fn main() {
   println("-a1"); let a: Array[R, 2] = [mk(42), mk(43)]; pg(a); println("r");
   println("-a2"); let b: Array[R, 2] = [mk(44), mk(45)]; let c = pg(b); println(f"r{c[1].id}");

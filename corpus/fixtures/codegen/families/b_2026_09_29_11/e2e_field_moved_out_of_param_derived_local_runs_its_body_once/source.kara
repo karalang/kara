@@ -5,14 +5,14 @@ struct W { r: D, s: D, b: i64 }
 fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
 struct O { w: W, k: i64 }
 fn mko(n: i64) -> O { O { w: mkw(n), k: n } }
-fn g1(o: O) { let w = o.w; let r = w.r; println(f"{r.id}"); }
-fn g2(o: O) { let O { w, k } = o; let r = w.r; println(f"{r.id}"); }
-fn g3(xs: mut ref Vec[D], o: O, c: bool) { let w = o.w; let r = w.r; if c { xs.push(r); } }
-fn g4(xs: mut ref Vec[D], o: O, c: bool) { let O { w, k } = o; let r = w.r; if c { xs.push(r); } }
-fn g5(xs: mut ref Vec[D], o: O) { let w = o.w; let r = w.r; xs.push(r); }
-fn g6(o: O) -> D { let w = o.w; let r = w.r; println("in"); r }
-fn g7(o: O) -> i64 { let O { w, k } = o; let W { r, s, b } = w; r.id + s.id }
-fn g8(o: O) { let w = o.w; let r = w.r; let q = r; println(f"{q.id}"); }
+fn g1(o: own O) { let w = o.w; let r = w.r; println(f"{r.id}"); }
+fn g2(o: own O) { let O { w, k } = o; let r = w.r; println(f"{r.id}"); }
+fn g3(xs: mut ref Vec[D], o: own O, c: bool) { let w = o.w; let r = w.r; if c { xs.push(r); } }
+fn g4(xs: mut ref Vec[D], o: own O, c: bool) { let O { w, k } = o; let r = w.r; if c { xs.push(r); } }
+fn g5(xs: mut ref Vec[D], o: own O) { let w = o.w; let r = w.r; xs.push(r); }
+fn g6(o: own O) -> D { let w = o.w; let r = w.r; println("in"); r }
+fn g7(o: own O) -> i64 { let O { w, k } = o; let W { r, s, b } = w; r.id + s.id }
+fn g8(o: own O) { let w = o.w; let r = w.r; let q = r; println(f"{q.id}"); }
 fn main() {
     let mut ds: Vec[D] = Vec.new();
     g1(mko(1)); println("a");

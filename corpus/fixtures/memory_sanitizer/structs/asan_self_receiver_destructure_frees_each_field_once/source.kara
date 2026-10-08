@@ -5,16 +5,16 @@ struct HoRes { a: R, b: Result[R, String] }
 struct WrapR { inner: HoRes }
 fn eat(x: R) { println(f"  eat{x.id}") }
 impl HoRes {
-    fn s_match(self)  { let HoRes { a, b } = self; println(f"  rd{a.id}");
+    fn s_match(own self)  { let HoRes { a, b } = self; println(f"  rd{a.id}");
                         match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
-    fn s_unused(self) { let HoRes { a, b } = self; println(f"  rd{a.id}") }
-    fn s_call(self)   { let HoRes { a, b } = self;
+    fn s_unused(own self) { let HoRes { a, b } = self; println(f"  rd{a.id}") }
+    fn s_call(own self)   { let HoRes { a, b } = self;
                         match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
 }
 impl WrapR {
-    fn p_match(self)  { let HoRes { a, b } = self.inner; println(f"  rd{a.id}");
+    fn p_match(own self)  { let HoRes { a, b } = self.inner; println(f"  rd{a.id}");
                         match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
-    fn p_unused(self) { let HoRes { a, b } = self.inner; println(f"  rd{a.id}") }
+    fn p_unused(own self) { let HoRes { a, b } = self.inner; println(f"  rd{a.id}") }
 }
 fn main() {
     println("start");

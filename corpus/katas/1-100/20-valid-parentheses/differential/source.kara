@@ -16,7 +16,7 @@ fn by_stack(s: ref String) -> bool {
     want.is_empty()
 }
 
-fn by_deletion(s: String) -> bool {
+fn by_deletion(s: own String) -> bool {
     let mut cur = s;
     loop {
         let next = cur.replace("()", "").replace("[]", "").replace("{}", "");

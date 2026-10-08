@@ -18,7 +18,7 @@ impl Reduce[i64] for Pair {
     fn min(ref self) -> i64 { if self.a < self.b { self.a } else { self.b } }
     fn max(ref self) -> i64 { if self.a > self.b { self.a } else { self.b } }
     fn mean(ref self) -> f64 { 0.0 }
-    fn fold[A](ref self, init: A, f: Fn(A, i64) -> A) -> A { f(f(init, self.a), self.b) }
+    fn fold[A](ref self, init: own A, f: Fn(A, i64) -> A) -> A { f(f(init, self.a), self.b) }
 }
 
 fn dref[C: Doubler[i64]](c: ref C) -> i64 { c.dbl() }

@@ -1,8 +1,8 @@
 
 struct Box[T] { v: T }
 struct Two[T] { v: T, n: i64 }
-fn take(b: Box[String]) -> String { b.v }
-fn take2(b: Two[String]) -> String { b.v }
+fn take(b: own Box[String]) -> String { b.v }
+fn take2(b: own Two[String]) -> String { b.v }
 fn main() {
     // Runtime-derived payload: a constant-folded one is a dead allocation the
     // optimizer deletes, and the fixture then passes vacuously against the

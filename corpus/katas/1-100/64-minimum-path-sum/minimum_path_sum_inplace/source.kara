@@ -24,7 +24,7 @@
 // Costs ≤ 200 with m, n ≤ 200, so the answer is ≤ 80_000 — i64 for corpus
 // uniformity, nowhere near overflow.
 
-fn min_path_sum(grid: Vec[Vec[i64]]) -> i64 {
+fn min_path_sum(grid: own Vec[Vec[i64]]) -> i64 {
     let mut g = grid;                   // take ownership, rebind as mutable
     let rows = g.len();
     let cols = g[0].len();
@@ -60,7 +60,7 @@ fn min_path_sum(grid: Vec[Vec[i64]]) -> i64 {
 
 // ---- test harness (shared verbatim with minimum_path_sum.kara) ---------------
 
-fn report(grid: Vec[Vec[i64]], s: mut ref String) {
+fn report(grid: own Vec[Vec[i64]], s: mut ref String) {
     let ans = min_path_sum(grid);
     println(f"{ans}");
     s.push(' ');

@@ -6,14 +6,14 @@ enum E8 { A { v: Array[R, 2], k: i64 }, B }
 enum E9 { A(R), B }
 enum G[T] { A(T), B }
 struct Wr { e: E7, n: i64 }
-fn ret(a: Array[R, 2]) -> E7 { println("ret"); return E7.A(a) }
-fn tl(a: Array[R, 2]) -> E7 { println("tl"); E7.A(a) }
-fn sv(a: Array[R, 2]) -> E8 { println("sv"); E8.A { v: a, k: 3 } }
-fn one(r: R) -> E9 { println("one"); return E9.A(r) }
-fn mixed(a: Array[R, 2], c: bool) -> E7 { println("mixed"); if c { return E7.A(a) } E7.B }
-fn nest(a: Array[R, 2]) -> Wr { println("nest"); Wr { e: E7.A(a), n: 1 } }
-fn gnr(a: Array[R, 2]) -> G[Array[R, 2]] { println("gnr"); G.A(a) }
-fn gone(r: R) -> G[R] { println("gone"); G.A(r) }
+fn ret(a: own Array[R, 2]) -> E7 { println("ret"); return E7.A(a) }
+fn tl(a: own Array[R, 2]) -> E7 { println("tl"); E7.A(a) }
+fn sv(a: own Array[R, 2]) -> E8 { println("sv"); E8.A { v: a, k: 3 } }
+fn one(r: own R) -> E9 { println("one"); return E9.A(r) }
+fn mixed(a: own Array[R, 2], c: bool) -> E7 { println("mixed"); if c { return E7.A(a) } E7.B }
+fn nest(a: own Array[R, 2]) -> Wr { println("nest"); Wr { e: E7.A(a), n: 1 } }
+fn gnr(a: own Array[R, 2]) -> G[Array[R, 2]] { println("gnr"); G.A(a) }
+fn gone(r: own R) -> G[R] { println("gone"); G.A(r) }
 fn main() {
     { let a: Array[R, 2] = [mkr(1), mkr(2)]; let w = ret(a); println("k1") }
     { let a: Array[R, 2] = [mkr(3), mkr(4)]; let w = tl(a); match w { E7.A(v) => println(f"k2 {v[1].id}"), E7.B => println("k2 b") } }

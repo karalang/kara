@@ -1,19 +1,19 @@
 
 enum G1[T] { Y(T), N }
 
-fn one[T](a: G1[T]) {
+fn one[T](a: own G1[T]) {
     match a { G1.Y(v) => { println(f"  1x {v}") } G1.N => { println("  1x NONE") } }
 }
-fn two[T](a: G1[T], b: G1[T]) {
+fn two[T](a: own G1[T], b: own G1[T]) {
     match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } }
     match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } }
 }
-fn three[T](a: G1[T], b: G1[T], c: G1[T]) {
+fn three[T](a: own G1[T], b: own G1[T], c: own G1[T]) {
     match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } }
     match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } }
     match c { G1.Y(v) => { println(f"  cx {v}") } G1.N => { println("  cx NONE") } }
 }
-fn twoc(a: G1[String], b: G1[String]) {
+fn twoc(a: own G1[String], b: own G1[String]) {
     match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } }
     match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } }
 }

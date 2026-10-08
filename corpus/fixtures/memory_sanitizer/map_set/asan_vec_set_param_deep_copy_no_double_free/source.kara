@@ -1,5 +1,5 @@
 
-fn id(v: Vec[Set[i64]]) -> Vec[Set[i64]] {
+fn id(v: own Vec[Set[i64]]) -> Vec[Set[i64]] {
     v
 }
 

@@ -4,8 +4,8 @@ impl Drop for Res {
     fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
 }
 struct Holder { xs: Vec[Res], tag: i64 }
-fn passthru(v: Vec[Res]) -> Vec[Res] { v }
-fn mk(v: Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }
+fn passthru(v: own Vec[Res]) -> Vec[Res] { v }
+fn mk(v: own Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }
 fn consume(v: Vec[Res]) -> i64 { v.len() }
 fn main() {
     println("a");

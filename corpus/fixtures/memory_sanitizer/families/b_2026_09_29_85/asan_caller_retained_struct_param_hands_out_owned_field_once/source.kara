@@ -8,23 +8,23 @@ fn mkq(k: i64) -> Q {
 }
 fn keep(s: String) -> i64 { s.len() }
 impl Q {
-    fn take(self) -> String { self.s }
-    fn part(self) -> i64 { match self { Q { s, .. } => s.len() } }
+    fn take(own self) -> String { self.s }
+    fn part(own self) -> i64 { match self { Q { s, .. } => s.len() } }
 }
-fn f1(q: Q) -> String { q.s }
-fn f2(q: Q) -> String { let Q { i, n, s, v, w } = q; s }
-fn f3(q: Q) -> String { match q { Q { s, .. } => s } }
+fn f1(q: own Q) -> String { q.s }
+fn f2(q: own Q) -> String { let Q { i, n, s, v, w } = q; s }
+fn f3(q: own Q) -> String { match q { Q { s, .. } => s } }
 fn f4(q: Q) -> i64 { if let Q { s, .. } = q { s.len() } else { 0 } }
-fn f5(q: Q) -> i64 { match q { Q { i, n, s, .. } => n } }
-fn f6(q: Q) -> i64 { let mut o = Vec.new(); o.push(q.s); o.len() }
-fn f7(q: Q) -> i64 { match q { Q { v, .. } => v.len() } }
-fn f8(q: Q) -> i64 { match q { Q { w, .. } => w.len() } }
-fn f9(q: Q) -> Vec[String] { q.w }
-fn f10(q: Q) -> i64 { q.take().len() }
-fn f11(q: Q) -> i64 { q.part() }
-fn f12(q: Q) -> i64 { match q { Q { s: t, .. } => keep(t) } }
-fn f13(q: Q) -> i64 { let r = q; match r { Q { s, .. } => keep(s) } }
-fn f14(q: Q) -> ShIn { match q { Q { i, s, .. } => i } }
+fn f5(q: own Q) -> i64 { match q { Q { i, n, s, .. } => n } }
+fn f6(q: own Q) -> i64 { let mut o = Vec.new(); o.push(q.s); o.len() }
+fn f7(q: own Q) -> i64 { match q { Q { v, .. } => v.len() } }
+fn f8(q: own Q) -> i64 { match q { Q { w, .. } => w.len() } }
+fn f9(q: own Q) -> Vec[String] { q.w }
+fn f10(q: own Q) -> i64 { q.take().len() }
+fn f11(q: own Q) -> i64 { q.part() }
+fn f12(q: own Q) -> i64 { match q { Q { s: t, .. } => keep(t) } }
+fn f13(q: own Q) -> i64 { let r = q; match r { Q { s, .. } => keep(s) } }
+fn f14(q: own Q) -> ShIn { match q { Q { i, s, .. } => i } }
 fn main() {
     println(f"a{f1(mkq(1)).len()}"); let b1 = mkq(2); println(f"b{f1(b1).len()}");
     println(f"a{f2(mkq(1)).len()}"); let b2 = mkq(2); println(f"b{f2(b2).len()}");

@@ -11,7 +11,7 @@ impl P {
     fn maybe(mut ref self, b: bool) { if b { self = P { x: 50, s: "c".to_string() }; } }
 }
 struct Q { v: String, k: i64 }
-impl Q { fn re(mut ref self, x: String) { self = Q { v: x, k: self.k + 1 }; } }
+impl Q { fn re(mut ref self, x: own String) { self = Q { v: x, k: self.k + 1 }; } }
 enum Steps { Up(i64), Done }
 impl Iterator for Steps {
     type Item = i64;

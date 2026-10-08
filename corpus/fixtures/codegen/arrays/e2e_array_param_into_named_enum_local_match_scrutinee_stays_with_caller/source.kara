@@ -6,25 +6,25 @@ enum W { P(Array[S, 2]), Q }
 enum V { P(Array[String, 2]), Q }
 enum U { P(Array[N, 2]), Q }
 enum T3 { P(Array[S, 3]), Q }
-fn l_bind(a: Array[S, 2]) -> i64 { let o = W.P(a); match o { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
-fn l_wild(a: Array[S, 2]) -> i64 { let o = W.P(a); match o { W.P(_) => { println("  w"); return 1 }, W.Q => { println("  n"); return 0 } } }
-fn l_read(a: Array[S, 2]) -> i64 { let o = W.P(a); match o { W.P(v) => { println(f"  r:{v[0].tag}"); return 1 }, W.Q => { println("  n"); return 0 } } }
-fn l_iflet(a: Array[S, 2]) -> i64 { let o = W.P(a); if let W.P(v) = o { println("  r"); return 1 } else { return 0 } }
-fn l_letelse(a: Array[S, 2]) -> i64 { let o = W.P(a); let W.P(v) = o else { return 0 }; println("  r"); return 1 }
-fn l_three(a: Array[S, 3]) -> i64 { let o = T3.P(a); match o { T3.P(v) => { println("  r"); return 1 }, T3.Q => { println("  n"); return 0 } } }
-fn l_noheap(a: Array[N, 2]) -> i64 { let o = U.P(a); match o { U.P(v) => { println("  r"); return 1 }, U.Q => { println("  n"); return 0 } } }
-fn l_chain(a: Array[S, 2]) -> i64 { let o = W.P(a); let o2 = o; match o2 { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
-fn b_stale(a: Array[S, 2]) -> i64 {
+fn l_bind(a: own Array[S, 2]) -> i64 { let o = W.P(a); match o { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn l_wild(a: own Array[S, 2]) -> i64 { let o = W.P(a); match o { W.P(_) => { println("  w"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn l_read(a: own Array[S, 2]) -> i64 { let o = W.P(a); match o { W.P(v) => { println(f"  r:{v[0].tag}"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn l_iflet(a: own Array[S, 2]) -> i64 { let o = W.P(a); if let W.P(v) = o { println("  r"); return 1 } else { return 0 } }
+fn l_letelse(a: own Array[S, 2]) -> i64 { let o = W.P(a); let W.P(v) = o else { return 0 }; println("  r"); return 1 }
+fn l_three(a: own Array[S, 3]) -> i64 { let o = T3.P(a); match o { T3.P(v) => { println("  r"); return 1 }, T3.Q => { println("  n"); return 0 } } }
+fn l_noheap(a: own Array[N, 2]) -> i64 { let o = U.P(a); match o { U.P(v) => { println("  r"); return 1 }, U.Q => { println("  n"); return 0 } } }
+fn l_chain(a: own Array[S, 2]) -> i64 { let o = W.P(a); let o2 = o; match o2 { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn b_stale(a: own Array[S, 2]) -> i64 {
     let o = W.P(a);
     let b: Array[S, 2] = [S { tag: f"rrrrrrrr0" }, S { tag: f"rrrrrrrr1" }];
     let o = W.P(b);
     let o2 = o;
     match o2 { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } }
 }
-fn b_str(a: Array[String, 2]) -> i64 { let o = V.P(a); match o { V.P(v) => { println(f"  r:{v[0]}"); return 1 }, V.Q => { println("  n"); return 0 } } }
+fn b_str(a: own Array[String, 2]) -> i64 { let o = V.P(a); match o { V.P(v) => { println(f"  r:{v[0]}"); return 1 }, V.Q => { println("  n"); return 0 } } }
 fn b_local() -> i64 { let a: Array[S, 2] = [S { tag: f"llllllll0" }, S { tag: f"llllllll1" }]; let o = W.P(a); match o { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
 fn b_ctl(a: Array[S, 2]) -> i64 { println("  r"); return 1 }
-fn b_freshtemp(a: Array[S, 2]) -> i64 { match W.P(a) { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
+fn b_freshtemp(a: own Array[S, 2]) -> i64 { match W.P(a) { W.P(v) => { println("  r"); return 1 }, W.Q => { println("  n"); return 0 } } }
 fn main() {
     println("l/bind");    { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let z = l_bind(a); }
     println("l/wild");    { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; let z = l_wild(a); }

@@ -41,7 +41,7 @@ fn read(rd: mut ref Reader, n: i64) -> String {
     return result;
 }
 
-fn run(src: String, n: i64) {
+fn run(src: own String, n: i64) {
     let mut rd = Reader { src: src, pos: 0 };
     let r = read(mut rd, n);
     println(f"{r.len()} {r}");

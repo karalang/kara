@@ -27,13 +27,13 @@ struct StackIter {
 }
 
 impl StackIter {
-    fn new(items: Vec[Nested]) -> StackIter {
+    fn new(items: own Vec[Nested]) -> StackIter {
         let mut it = StackIter { stack: Vec.new() };
         it.push_reversed(items);
         return it;
     }
 
-    fn push_reversed(mut ref self, items: Vec[Nested]) {
+    fn push_reversed(mut ref self, items: own Vec[Nested]) {
         let mut rest = items;
         while let Some(x) = rest.pop() {
             self.stack.push(x);
@@ -62,7 +62,7 @@ impl StackIter {
     }
 }
 
-fn flatten_stack(items: Vec[Nested]) -> Vec[i64] {
+fn flatten_stack(items: own Vec[Nested]) -> Vec[i64] {
     let mut it = StackIter.new(items);
     let mut out: Vec[i64] = Vec.new();
     while it.has_next() {
@@ -149,7 +149,7 @@ struct PathIter {
 }
 
 impl PathIter {
-    fn new(items: Vec[Nested]) -> PathIter {
+    fn new(items: own Vec[Nested]) -> PathIter {
         return PathIter { root: items, path: [0] };
     }
 
@@ -180,7 +180,7 @@ impl PathIter {
     }
 }
 
-fn flatten_path(items: Vec[Nested]) -> Vec[i64] {
+fn flatten_path(items: own Vec[Nested]) -> Vec[i64] {
     let mut it = PathIter.new(items);
     let mut out: Vec[i64] = Vec.new();
     while it.has_next() {
@@ -197,7 +197,7 @@ struct PeekIter {
 }
 
 impl PeekIter {
-    fn new(items: Vec[Nested]) -> PeekIter {
+    fn new(items: own Vec[Nested]) -> PeekIter {
         let mut stack: Vec[Nested] = Vec.new();
         let mut rest = items;
         while let Some(x) = rest.pop() {
@@ -237,7 +237,7 @@ impl PeekIter {
     }
 }
 
-fn flatten_peek(items: Vec[Nested]) -> Vec[i64] {
+fn flatten_peek(items: own Vec[Nested]) -> Vec[i64] {
     let mut it = PeekIter.new(items);
     let mut out: Vec[i64] = Vec.new();
     while it.has_next() {
@@ -253,7 +253,7 @@ struct NestedIter {
 }
 
 impl NestedIter {
-    fn new(items: Vec[Nested]) -> NestedIter {
+    fn new(items: own Vec[Nested]) -> NestedIter {
         let mut stack: Vec[Nested] = Vec.new();
         let mut rest = items;
         while let Some(x) = rest.pop() {
@@ -281,7 +281,7 @@ impl Iterator for NestedIter {
     }
 }
 
-fn flatten_trait(items: Vec[Nested]) -> Vec[i64] {
+fn flatten_trait(items: own Vec[Nested]) -> Vec[i64] {
     let mut out: Vec[i64] = Vec.new();
     for v in NestedIter.new(items) {
         out.push(v);
@@ -291,7 +291,7 @@ fn flatten_trait(items: Vec[Nested]) -> Vec[i64] {
 
 // ---- the has_next stutter (P7) ----
 
-fn stutter_stack(items: Vec[Nested]) -> Vec[i64] {
+fn stutter_stack(items: own Vec[Nested]) -> Vec[i64] {
     let mut it = StackIter.new(items);
     let mut out: Vec[i64] = Vec.new();
     while it.has_next() and it.has_next() and it.has_next() {
@@ -303,7 +303,7 @@ fn stutter_stack(items: Vec[Nested]) -> Vec[i64] {
     return out;
 }
 
-fn stutter_path(items: Vec[Nested]) -> Vec[i64] {
+fn stutter_path(items: own Vec[Nested]) -> Vec[i64] {
     let mut it = PathIter.new(items);
     let mut out: Vec[i64] = Vec.new();
     while it.has_next() and it.has_next() and it.has_next() {
@@ -315,7 +315,7 @@ fn stutter_path(items: Vec[Nested]) -> Vec[i64] {
     return out;
 }
 
-fn stutter_peek(items: Vec[Nested]) -> Vec[i64] {
+fn stutter_peek(items: own Vec[Nested]) -> Vec[i64] {
     let mut it = PeekIter.new(items);
     let mut out: Vec[i64] = Vec.new();
     while it.has_next() and it.has_next() and it.has_next() {

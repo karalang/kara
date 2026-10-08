@@ -59,7 +59,7 @@ fn num_islands(grid: mut ref Vec[Vec[i64]]) -> i64 {
     return count;
 }
 
-fn report(grid: Vec[Vec[i64]]) {
+fn report(grid: own Vec[Vec[i64]]) {
     let mut g = grid;
     println(num_islands(mut g));
 }

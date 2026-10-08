@@ -3,13 +3,13 @@ impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"n{i}", xs: [i] }; }
 struct S3 { a: R, b: R }
 
-fn full_ret(s: S3) -> i64 { let S3 { a, b } = s; println("  mid"); return b.id; }
-fn full_let(s: S3) -> i64 { let S3 { a, b } = s; println("  mid"); let x = a.id + b.id; return x; }
-fn rest_ret(s: S3) -> i64 { let S3 { a, .. } = s; println("  mid"); return a.id; }
-fn wild_ret(s: S3) -> i64 { let S3 { a, b: _ } = s; println("  mid"); return a.id; }
-fn rest_len(s: S3) -> i64 { let S3 { a, .. } = s; println("  mid"); let n = a.name.len(); return n; }
-fn rest_none(s: S3) -> i64 { let S3 { a, .. } = s; println("  mid"); return 1; }
-fn whole_b(s: S3) -> R { let S3 { a, b } = s; println("  mid"); return b; }
+fn full_ret(s: own S3) -> i64 { let S3 { a, b } = s; println("  mid"); return b.id; }
+fn full_let(s: own S3) -> i64 { let S3 { a, b } = s; println("  mid"); let x = a.id + b.id; return x; }
+fn rest_ret(s: own S3) -> i64 { let S3 { a, .. } = s; println("  mid"); return a.id; }
+fn wild_ret(s: own S3) -> i64 { let S3 { a, b: _ } = s; println("  mid"); return a.id; }
+fn rest_len(s: own S3) -> i64 { let S3 { a, .. } = s; println("  mid"); let n = a.name.len(); return n; }
+fn rest_none(s: own S3) -> i64 { let S3 { a, .. } = s; println("  mid"); return 1; }
+fn whole_b(s: own S3) -> R { let S3 { a, b } = s; println("  mid"); return b; }
 
 fn main() {
     println("full_ret"); let v1 = full_ret(S3 { a: mk(1), b: mk(2) }); println(f"  v={v1}");

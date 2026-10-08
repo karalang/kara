@@ -1,7 +1,7 @@
 struct R { id: i64, tag: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(n: i64) -> R { R { id: n, tag: f"tag-aaaaaaaaaaaaaaaaaaaaaaaaaaaa{n}" } }
-fn idr(r: R) -> R { r }
+fn idr(r: own R) -> R { r }
 fn eat(r: R) -> i64 { r.id }
 fn k1() { let q = mk(1); { let q = idr(q); println(f"q={q.id}"); } println("k1") }
 fn k2(c: bool) { let q = mk(2); let q = if c { idr(q) } else { mk(20) }; println(f"q={q.id}"); println("k2") }

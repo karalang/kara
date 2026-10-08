@@ -2,13 +2,13 @@
 struct Pair { word: String, n: i64 }
 struct Deep { inner: Pair, tag: i64 }
 struct Outer { mid: Deep, label: String }
-fn ret(d: Deep) -> String { d.inner.word }
-fn lit(d: Deep) -> Deep { Deep { inner: Pair { word: d.inner.word, n: d.inner.n + 1 }, tag: d.tag } }
-fn sink(s: String) -> String { s + "!" }
-fn arg(d: Deep) -> String { sink(d.inner.word) }
-fn bound(d: Deep) -> String { let s = d.inner.word; s }
-fn deeper(o: Outer) -> String { o.mid.inner.word }
-fn one_level(p: Pair) -> String { p.word }
+fn ret(d: own Deep) -> String { d.inner.word }
+fn lit(d: own Deep) -> Deep { Deep { inner: Pair { word: d.inner.word, n: d.inner.n + 1 }, tag: d.tag } }
+fn sink(s: own String) -> String { s + "!" }
+fn arg(d: own Deep) -> String { sink(d.inner.word) }
+fn bound(d: own Deep) -> String { let s = d.inner.word; s }
+fn deeper(o: own Outer) -> String { o.mid.inner.word }
+fn one_level(p: own Pair) -> String { p.word }
 fn main() {
     let k = env.args().len() as i64;
     println(ret(Deep { inner: Pair { word: f"a{k}", n: 1 }, tag: 2 }));

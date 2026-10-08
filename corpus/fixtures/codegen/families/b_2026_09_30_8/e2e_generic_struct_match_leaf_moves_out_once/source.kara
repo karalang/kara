@@ -3,13 +3,13 @@ struct G2[T] { v: T, s: String }
 fn mk(p: String, k: i64) -> String {
     f"{p}-heap-string-longer-than-sso-{k}"
 }
-fn a1(g: G[String]) -> i64 { match g { G { v, n } => v.len() + n } }
-fn a2(g: G2[String]) -> i64 { match g { G2 { s, .. } => s.len() } }
-fn a3(g: G2[String]) -> i64 { match g { G2 { v, s } => v.len() + s.len() } }
+fn a1(g: own G[String]) -> i64 { match g { G { v, n } => v.len() + n } }
+fn a2(g: own G2[String]) -> i64 { match g { G2 { s, .. } => s.len() } }
+fn a3(g: own G2[String]) -> i64 { match g { G2 { v, s } => v.len() + s.len() } }
 fn a4(g: G2[Vec[i64]]) -> i64 { if let G2 { v, s } = g { v.len() + s.len() } else { 0 } }
-fn a5(g: G[String]) -> String { match g { G { v, .. } => v } }
-fn a6[T](g: G2[T]) -> i64 { match g { G2 { s, .. } => s.len() } }
-fn a7[T](g: G[T]) -> i64 { match g { G { v, n } => { let w = v; n } } }
+fn a5(g: own G[String]) -> String { match g { G { v, .. } => v } }
+fn a6[T](g: own G2[T]) -> i64 { match g { G2 { s, .. } => s.len() } }
+fn a7[T](g: own G[T]) -> i64 { match g { G { v, n } => { let w = v; n } } }
 fn a8() -> i64 { let g = G { v: mk("l", 8), n: 2 }; match g { G { v, n } => v.len() + n } }
 fn main() {
     println(f"{a1(G { v: mk("a", 1), n: 2 })}");

@@ -3,7 +3,7 @@ shared enum Expr { Lit(LitNode), Call(CallNode) }
 struct LitNode { name: String, val: i64 }
 struct Arg { value: Expr }
 struct CallNode { callee: Expr, args: Vec[Arg], nargs: i64 }
-fn lit(s: String, v: i64) -> Expr { Expr.Lit(LitNode { name: s, val: v }) }
+fn lit(s: own String, v: i64) -> Expr { Expr.Lit(LitNode { name: s, val: v }) }
 fn mk() -> Expr {
     let mut args: Vec[Arg] = Vec.new();
     args.push(Arg { value: lit("first_arg_value_identifier_long_enough_for_heap".to_string(), 1) });

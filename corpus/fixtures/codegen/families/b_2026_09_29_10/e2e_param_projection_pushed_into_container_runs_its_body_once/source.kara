@@ -6,16 +6,16 @@ fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
 struct O { w: W, k: i64 }
 fn mko(n: i64) -> O { O { w: mkw(n), k: n } }
 impl W {
-    fn give(self, xs: mut ref Vec[D], c: bool) { if c { xs.push(self.r); } }
-    fn give_all(self, xs: mut ref Vec[D]) { xs.push(self.s); }
+    fn give(own self, xs: mut ref Vec[D], c: bool) { if c { xs.push(self.r); } }
+    fn give_all(own self, xs: mut ref Vec[D]) { xs.push(self.s); }
 }
-fn f5(xs: mut ref Vec[D], w: W, c: bool) { if c { xs.push(w.r); } }
-fn f6(w: W, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(w.r); } xs.len() }
-fn f7(xs: mut ref Vec[D], w: W) { xs.push(w.r); }
-fn f8(xs: mut ref Vec[D], w: W, c: bool) { if c { xs.push(w.r); } else { println(f"k{w.r.id}"); } }
-fn g5(xs: mut ref Vec[D], o: O, c: bool) { if c { xs.push(o.w.r); } }
-fn a5(xs: mut ref Vec[D], t: (D, i64), c: bool) { if c { xs.push(t.0); } }
-fn a7(xs: mut ref Vec[D], t: (D, D)) { xs.push(t.1); }
+fn f5(xs: mut ref Vec[D], w: own W, c: bool) { if c { xs.push(w.r); } }
+fn f6(w: own W, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); if c { xs.push(w.r); } xs.len() }
+fn f7(xs: mut ref Vec[D], w: own W) { xs.push(w.r); }
+fn f8(xs: mut ref Vec[D], w: own W, c: bool) { if c { xs.push(w.r); } else { println(f"k{w.r.id}"); } }
+fn g5(xs: mut ref Vec[D], o: own O, c: bool) { if c { xs.push(o.w.r); } }
+fn a5(xs: mut ref Vec[D], t: own (D, i64), c: bool) { if c { xs.push(t.0); } }
+fn a7(xs: mut ref Vec[D], t: own (D, D)) { xs.push(t.1); }
 fn main() {
     let mut ds: Vec[D] = Vec.new();
     f5(mut ds, mkw(1), false); println("a1"); f5(mut ds, mkw(2), true); println("a2");

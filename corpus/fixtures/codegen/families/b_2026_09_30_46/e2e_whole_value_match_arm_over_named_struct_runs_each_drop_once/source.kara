@@ -8,12 +8,12 @@ struct H { v: Rs, n: i64 }
 struct P { s: String, n: i64 }
 fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
 fn sink(h: H) -> i64 { h.n }
-fn b1(g: H) -> i64 { match g { x => x.n } }
-fn b2(g: G[R]) -> i64 { match g { x => x.n } }
-fn b3(g: G[Rs]) -> i64 { match g { x => { let v = x.v; v.id } } }
-fn b4(g: H) -> i64 { match g { H { n: 0, .. } => 0, x => sink(x) } }
-fn b5(g: G[R]) -> i64 { let x = g; let v = x.v; v.id }
-fn b6(g: H) -> i64 { match g { x if x.n > 5 => x.n, y => 0 - y.n } }
+fn b1(g: own H) -> i64 { match g { x => x.n } }
+fn b2(g: own G[R]) -> i64 { match g { x => x.n } }
+fn b3(g: own G[Rs]) -> i64 { match g { x => { let v = x.v; v.id } } }
+fn b4(g: own H) -> i64 { match g { H { n: 0, .. } => 0, x => sink(x) } }
+fn b5(g: own G[R]) -> i64 { let x = g; let v = x.v; v.id }
+fn b6(g: own H) -> i64 { match g { x if x.n > 5 => x.n, y => 0 - y.n } }
 fn main() {
     println(b1(H { v: Rs { id: 1, s: mk(1) }, n: 10 }));
     println(b2(G { v: R { id: 2 }, n: 20 }));

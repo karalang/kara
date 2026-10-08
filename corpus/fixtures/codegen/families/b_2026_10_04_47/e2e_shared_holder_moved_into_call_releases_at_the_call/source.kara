@@ -9,7 +9,7 @@ fn co(o: Option[H]) { println("o") }
 fn ct(t: (H, i64)) { println(f"t{t.1}") }
 fn ce(e: E) { println("e") }
 fn cv(v: Vec[H]) { println(f"v{v.len()}") }
-fn keepw(w: W) -> W { w }
+fn keepw(w: own W) -> W { w }
 fn main() {
     let w = W { o: Some(H { id: 1 }), n: 7 }; cw(w); println("_1");
     let x = X { h: H { id: 2 }, n: 2 }; cx(x); println("_2");

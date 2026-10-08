@@ -47,7 +47,7 @@ fn slice(s: ref String, lo: i64, hi: i64) -> String {
     return s.substring(lo, hi);
 }
 
-fn search(num: ref String, target: i64, pos: i64, expr: String, cur: i64, last: i64,
+fn search(num: ref String, target: i64, pos: i64, expr: own String, cur: i64, last: i64,
           out: mut ref Vec[String]) {
     if pos == num.len() {
         if cur == target { out.push(expr); }

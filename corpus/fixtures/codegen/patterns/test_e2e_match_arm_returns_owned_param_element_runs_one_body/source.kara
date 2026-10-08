@@ -2,10 +2,10 @@
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 enum E { A(R), B }
-fn p4(t: (R, i64)) -> R { match t { (r, k) => { r } } }
-fn e4(t: E) -> R { match t { E.A(r) => { r } E.B => { R { id: 99 } } } }
-fn pf(t: (R, i64)) -> i64 { match t { (r, k) => { r.id } } }
-fn pr(t: (R, i64)) -> R { match t { (r, k) => { return r; } } }
+fn p4(t: own (R, i64)) -> R { match t { (r, k) => { r } } }
+fn e4(t: own E) -> R { match t { E.A(r) => { r } E.B => { R { id: 99 } } } }
+fn pf(t: own (R, i64)) -> i64 { match t { (r, k) => { r.id } } }
+fn pr(t: own (R, i64)) -> R { match t { (r, k) => { return r; } } }
 fn main() {
   let a = p4((R { id: 4 }, 0)); println(f"got{a.id}");
   let b = e4(E.A(R { id: 7 })); println(f"got{b.id}");

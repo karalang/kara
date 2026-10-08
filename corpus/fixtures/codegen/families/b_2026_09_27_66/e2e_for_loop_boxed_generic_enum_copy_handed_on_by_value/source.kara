@@ -1,11 +1,11 @@
 struct P { id: i64, s: String }
 enum Ho[T] { Full(T), Empty }
 fn mkp(i: i64) -> P { return P { id: i, s: "ab".to_string() + "cd" } }
-fn shows(h: Ho[P]) { match h { Ho.Full(r) => println(f"s{r.id}{r.s}"), Ho.Empty => println("e") } }
-fn keep(h: Ho[P]) -> Ho[P] { h }
-fn pick(a: Ho[P], b: Ho[P]) -> Ho[P] { shows(b); a }
-fn keept(h: Ho[String]) -> Ho[String] { h }
-fn showt(h: Ho[String]) { match h { Ho.Full(r) => println(f"t{r}"), Ho.Empty => println("e") } }
+fn shows(h: own Ho[P]) { match h { Ho.Full(r) => println(f"s{r.id}{r.s}"), Ho.Empty => println("e") } }
+fn keep(h: own Ho[P]) -> Ho[P] { h }
+fn pick(a: own Ho[P], b: own Ho[P]) -> Ho[P] { shows(b); a }
+fn keept(h: own Ho[String]) -> Ho[String] { h }
+fn showt(h: own Ho[String]) { match h { Ho.Full(r) => println(f"t{r}"), Ho.Empty => println("e") } }
 fn mkv(a: i64, b: i64) -> Vec[Ho[P]] {
     let mut v: Vec[Ho[P]] = Vec.new();
     v.push(Ho.Full(mkp(a)));

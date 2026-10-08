@@ -5,8 +5,8 @@ struct S3 { h: Sh, id: i64 }
 enum Ho[T] { Full(T), Empty }
 fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
 fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
-fn mkh[T](v: T) -> Ho[T] { return Ho.Full(v); }
-fn mid[T](v: T, c: bool) -> Option[T] { if c { return Some(v) } return None }
+fn mkh[T](v: own T) -> Ho[T] { return Ho.Full(v); }
+fn mid[T](v: own T, c: bool) -> Option[T] { if c { return Some(v) } return None }
 fn rd(x: ref S2) { println(f"rd{x.id}") }
 fn eat2(s: S2) { println(f"x{s.id}") }
 fn a_unwrap() { let s = mk2(1); let o = mid(s, true); let v = o.unwrap(); println(f"a{v.id}") }

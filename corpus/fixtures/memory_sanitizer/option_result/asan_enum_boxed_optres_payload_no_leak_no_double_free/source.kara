@@ -6,7 +6,7 @@ enum Wrap {
     Empty,
 }
 
-fn take(w: Wrap) -> i64 {
+fn take(w: own Wrap) -> i64 {
     match w {
         Wrap.W(Option.Some(s)) => s.len(),
         Wrap.W(Option.None) => -1,

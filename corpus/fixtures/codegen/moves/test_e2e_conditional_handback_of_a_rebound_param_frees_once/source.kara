@@ -10,15 +10,15 @@ struct P { id: i64, name: String }
 impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
 fn mkP(i: i64) -> P { return P { id: i, name: f"p{i}" }; }
 
-fn reb(r: R, c: bool) -> R { let m = r; if c { return m; } return mk(99); }
-fn bare(r: R, c: bool) -> R { if c { return r; } return mk(98); }
-fn arm(r: R, c: bool) -> R { let m = r; match c { true => m, false => mk(97) } }
-fn two(r: R, c: bool) -> R { let m = r; let n = m; if c { return n; } return mk(96); }
-fn rd(r: R, c: bool) -> R { let m = r; if c { return m; } println(f"in={m.name}"); return mk(95); }
-fn wrap(r: R, c: bool) -> Option[R] { let m = r; if c { return Option.Some(m); } return Option.None; }
-fn selfref(n: N, c: bool) -> N { let m = n; if c { return m; } return mkn(94); }
-fn copyok(p: P, c: bool) -> P { let m = p; if c { return m; } return mkP(93); }
-fn never(r: R, c: bool) -> i64 { let m = r; if c { return m.id; } return 0; }
+fn reb(r: own R, c: bool) -> R { let m = r; if c { return m; } return mk(99); }
+fn bare(r: own R, c: bool) -> R { if c { return r; } return mk(98); }
+fn arm(r: own R, c: bool) -> R { let m = r; match c { true => m, false => mk(97) } }
+fn two(r: own R, c: bool) -> R { let m = r; let n = m; if c { return n; } return mk(96); }
+fn rd(r: own R, c: bool) -> R { let m = r; if c { return m; } println(f"in={m.name}"); return mk(95); }
+fn wrap(r: own R, c: bool) -> Option[R] { let m = r; if c { return Option.Some(m); } return Option.None; }
+fn selfref(n: own N, c: bool) -> N { let m = n; if c { return m; } return mkn(94); }
+fn copyok(p: own P, c: bool) -> P { let m = p; if c { return m; } return mkP(93); }
+fn never(r: own R, c: bool) -> i64 { let m = r; if c { return m.id; } return 0; }
 
 fn main() {
   let a = reb(mk(1), true);  println(f"a={a.inner.v}");

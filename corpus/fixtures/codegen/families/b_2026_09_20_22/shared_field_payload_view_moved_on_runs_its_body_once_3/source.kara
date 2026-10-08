@@ -8,5 +8,5 @@ enum Epl { A(Wpl), B }
 struct Wsx { h: Sh, s: String }
 impl Drop for Wsx { fn drop(mut ref self) { println(f"  dWsx-{self.h.s}-{self.s}") } }
 enum Esx { A(Wsx), B }
-fn sh(b: Esh) -> i64 { let mut out: Wsh = Wsh { h: Sh { s: f"OUT" } }; match b { Esh.A(w) => { out = w; } Esh.B => { } } println(f"  now:{out.h.s}"); return 7; }
+fn sh(b: own Esh) -> i64 { let mut out: Wsh = Wsh { h: Sh { s: f"OUT" } }; match b { Esh.A(w) => { out = w; } Esh.B => { } } println(f"  now:{out.h.s}"); return 7; }
 fn main() { println(f"  r:{sh(Esh.A(Wsh { h: Sh { s: f"PAY" } }))}"); }

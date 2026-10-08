@@ -1,5 +1,5 @@
 
-fn middle_sum(v: Vec[i64]) -> i64 {
+fn middle_sum(v: own Vec[i64]) -> i64 {
     match v {
         [_, ..mid, _] => {
             let mut acc = 0;

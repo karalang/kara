@@ -1,20 +1,20 @@
 struct R { id: i64, tag: String, xs: Vec[i64] }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
-fn keepc(r: R, k: bool) -> R { if k { return r; } return mk(99); }
-fn keepo(r: R, k: bool) -> Option[R] { if k { return Option.Some(r); } return Option.None; }
-fn s_cond(r: R, k: bool) { let w: R = keepc(r, k); println(f"sc {w.id}") }
-fn s_cond_unread(r: R, k: bool) { let w: R = keepc(r, k); println("scu") }
-fn s_cond_disc(r: R, k: bool) { let _ = keepc(r, k); println("scd") }
-fn s_cond_stmt(r: R, k: bool) { keepc(r, k); println("scs") }
-fn s_cond_ret(r: R, k: bool) -> R { let w: R = keepc(r, k); return w; }
-fn s_cond_direct(r: R, k: bool) -> R { return keepc(r, k); }
-fn s_cond_opt(r: R, k: bool) { let o: Option[R] = keepo(r, k); match o { Option.Some(x) => println(f"so {x.id}"), Option.None => println("so none") } }
-fn s_cond_nested(r: R, k: bool, j: bool) { if j { let w: R = keepc(r, k); println(f"scn {w.id}"); } println("scn-out") }
+fn keepc(r: own R, k: bool) -> R { if k { return r; } return mk(99); }
+fn keepo(r: own R, k: bool) -> Option[R] { if k { return Option.Some(r); } return Option.None; }
+fn s_cond(r: own R, k: bool) { let w: R = keepc(r, k); println(f"sc {w.id}") }
+fn s_cond_unread(r: own R, k: bool) { let w: R = keepc(r, k); println("scu") }
+fn s_cond_disc(r: own R, k: bool) { let _ = keepc(r, k); println("scd") }
+fn s_cond_stmt(r: own R, k: bool) { keepc(r, k); println("scs") }
+fn s_cond_ret(r: own R, k: bool) -> R { let w: R = keepc(r, k); return w; }
+fn s_cond_direct(r: own R, k: bool) -> R { return keepc(r, k); }
+fn s_cond_opt(r: own R, k: bool) { let o: Option[R] = keepo(r, k); match o { Option.Some(x) => println(f"so {x.id}"), Option.None => println("so none") } }
+fn s_cond_nested(r: own R, k: bool, j: bool) { if j { let w: R = keepc(r, k); println(f"scn {w.id}"); } println("scn-out") }
 fn s_local(k: bool) { let l = mk(50); let w: R = keepc(l, k); println(f"sl {w.id}") }
 struct K { n: i64 }
 impl K {
-    fn m_cond(ref self, r: R, k: bool) { let w: R = keepc(r, k); println(f"mc {w.id}") }
+    fn m_cond(ref self, r: own R, k: bool) { let w: R = keepc(r, k); println(f"mc {w.id}") }
 }
 fn main() {
     let k = K { n: 0 };

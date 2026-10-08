@@ -122,7 +122,7 @@ impl Editor {
     }
 
     // Applies a command; returns how many redo groups were discarded.
-    fn execute(mut ref self, cmd: Command) -> Result[i64, EditError] {
+    fn execute(mut ref self, cmd: own Command) -> Result[i64, EditError] {
         let removed = match cmd {
             Command.Insert { pos, text: ref text } => self.buffer.splice(pos, 0, text)?,
             Command.Delete { pos, len } => self.buffer.splice(pos, len, "")?,
@@ -150,7 +150,7 @@ impl Editor {
         Ok(dropped)
     }
 
-    fn begin(mut ref self, label: String) -> Result[(), EditError] {
+    fn begin(mut ref self, label: own String) -> Result[(), EditError] {
         match self.group_label {
             Some(open) => return Err(EditError.NestedGroup(open.clone())),
             None => {}
@@ -218,7 +218,7 @@ impl Editor {
         Ok(label)
     }
 
-    fn run_step(mut ref self, step: Step) -> Result[String, EditError] {
+    fn run_step(mut ref self, step: own Step) -> Result[String, EditError] {
         match step {
             Step.Do(req) => {
                 let cmd = req.cmd;
@@ -267,7 +267,7 @@ fn labels(groups: ref Vec[Group]) -> String {
     out
 }
 
-fn ins(pos: i64, text: String) -> Step {
+fn ins(pos: i64, text: own String) -> Step {
     Step.Do(Request { cmd: Command.Insert { pos, text } })
 }
 
@@ -275,7 +275,7 @@ fn del(pos: i64, len: i64) -> Step {
     Step.Do(Request { cmd: Command.Delete { pos, len } })
 }
 
-fn rep(pos: i64, len: i64, text: String) -> Step {
+fn rep(pos: i64, len: i64, text: own String) -> Step {
     Step.Do(Request { cmd: Command.Replace { pos, len, text } })
 }
 

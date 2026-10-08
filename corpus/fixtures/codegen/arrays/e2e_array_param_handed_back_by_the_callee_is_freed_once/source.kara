@@ -2,14 +2,14 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
 fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 fn take(x: Array[R, 2]) -> i64 { println("  take"); return 1 }
-fn eat(a: Array[R, 2]) -> Array[R, 2] { println("  in"); return a }
-fn eat_rb(a: Array[R, 2]) -> Array[R, 2] { let m = a; println("  in"); return m }
-fn via(a: Array[R, 2]) -> Array[R, 2] { return eat(a) }
-fn pick(a: Array[R, 2], k: i64) -> Array[R, 2] { println(f"  in{k}"); return a }
-fn wrap(a: Array[R, 2]) -> Option[Array[R, 2]] { return Option.Some(a) }
-fn eat_s(a: Array[String, 2]) -> Array[String, 2] { println("  in"); return a }
+fn eat(a: own Array[R, 2]) -> Array[R, 2] { println("  in"); return a }
+fn eat_rb(a: own Array[R, 2]) -> Array[R, 2] { let m = a; println("  in"); return m }
+fn via(a: own Array[R, 2]) -> Array[R, 2] { return eat(a) }
+fn pick(a: own Array[R, 2], k: i64) -> Array[R, 2] { println(f"  in{k}"); return a }
+fn wrap(a: own Array[R, 2]) -> Option[Array[R, 2]] { return Option.Some(a) }
+fn eat_s(a: own Array[String, 2]) -> Array[String, 2] { println("  in"); return a }
 struct H { k: i64 }
-impl H { fn eat(ref self, a: Array[R, 2]) -> Array[R, 2] { println("  in"); return a } }
+impl H { fn eat(ref self, a: own Array[R, 2]) -> Array[R, 2] { println("  in"); return a } }
 fn main() {
     println("bound");   { let a: Array[R, 2] = [mkr(1), mkr(2)]; let b = eat(a); println(f"  y{b[0].id}:{b[1].s.len()}"); }
     println("annot");   { let a: Array[R, 2] = [mkr(3), mkr(4)]; let b: Array[R, 2] = eat(a); println(f"  y{b[1].id}"); }

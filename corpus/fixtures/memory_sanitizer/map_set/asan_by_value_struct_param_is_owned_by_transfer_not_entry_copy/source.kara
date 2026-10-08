@@ -9,7 +9,7 @@ fn mk(n: i64) -> Res {
 }
 
 fn eat(r: Res) -> i64 { return r.buf[1]; }
-fn hand(r: Res) -> Res { return r; }
+fn hand(r: own Res) -> Res { return r; }
 fn inner(r: Res) -> i64 { return r.buf[2]; }
 fn outer(r: Res) -> i64 { return inner(r); }
 

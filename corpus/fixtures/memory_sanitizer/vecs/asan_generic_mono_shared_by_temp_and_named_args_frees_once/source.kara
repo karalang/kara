@@ -1,12 +1,12 @@
-fn id2[T](d: T) -> T { d }
-fn id3[T](d: T) -> T { d }
-fn wrap[T](x: T) -> Option[T] { Some(x) }
-fn sel[T](c: bool, x: T, y: T) -> T { if c { x } else { y } }
-fn inner[T](d: T) -> T { d }
-fn outer[U](y: U) -> U { inner(y) }
-fn ints[T](x: T) -> T { x }
-fn dq[T](x: T) -> T { x }
-fn mkq(s: String) -> VecDeque[String] { let mut d = VecDeque[String].new(); d.push_back(s); d }
+fn id2[T](d: own T) -> T { d }
+fn id3[T](d: own T) -> T { d }
+fn wrap[T](x: own T) -> Option[T] { Some(x) }
+fn sel[T](c: bool, x: own T, y: own T) -> T { if c { x } else { y } }
+fn inner[T](d: own T) -> T { d }
+fn outer[U](y: own U) -> U { inner(y) }
+fn ints[T](x: own T) -> T { x }
+fn dq[T](x: own T) -> T { x }
+fn mkq(s: own String) -> VecDeque[String] { let mut d = VecDeque[String].new(); d.push_back(s); d }
 fn main() {
     let a = id2([f"heap-string-longer-than-sso-1", f"x"]);
     let n1 = [f"heap-string-longer-than-sso-2", f"y"];

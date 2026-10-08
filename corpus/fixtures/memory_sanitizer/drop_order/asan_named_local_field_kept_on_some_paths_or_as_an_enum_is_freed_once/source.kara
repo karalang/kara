@@ -9,13 +9,13 @@ impl Drop for F { fn drop(mut ref self) { println(f"dF{self.id}") } }
 enum G { A(D), B }
 struct V { f: F, g: G, b: i64 }
 fn mkv(n: i64) -> V { V { f: F { id: n + 10, h: Sh { v: n } }, g: G.A(mkd(n + 20)), b: n } }
-fn maybe(x: D, c: bool) -> Option[D] { if c { return Some(x); } None }
-fn cs(v: mut ref Vec[D], x: D, c: bool) { if c { v.push(x); } }
-fn gmaybe[T](x: T, c: bool) -> Option[T] { if c { return Some(x); } None }
-fn maybef(x: F, c: bool) -> Option[F] { if c { return Some(x); } None }
-fn csf(v: mut ref Vec[F], x: F, c: bool) { if c { v.push(x); } }
-fn maybeg(x: G, c: bool) -> Option[G] { if c { return Some(x); } None }
-fn keepg(x: G) -> G { x }
+fn maybe(x: own D, c: bool) -> Option[D] { if c { return Some(x); } None }
+fn cs(v: mut ref Vec[D], x: own D, c: bool) { if c { v.push(x); } }
+fn gmaybe[T](x: own T, c: bool) -> Option[T] { if c { return Some(x); } None }
+fn maybef(x: own F, c: bool) -> Option[F] { if c { return Some(x); } None }
+fn csf(v: mut ref Vec[F], x: own F, c: bool) { if c { v.push(x); } }
+fn maybeg(x: own G, c: bool) -> Option[G] { if c { return Some(x); } None }
+fn keepg(x: own G) -> G { x }
 fn main() {
     let w = mkw(1);
     let o1 = maybe(w.r, false);

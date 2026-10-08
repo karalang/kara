@@ -4,8 +4,8 @@ fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 struct W3 { q: R, r: R }
 fn arr(w: W3) -> Array[R, 2] { return [w.q, w.r]; }
 fn arr1(w: W3) -> Array[R, 1] { return [w.r]; }
-fn arral(w: W3) -> Array[R, 2] { let x = w.q; return [x, w.r]; }
-fn arrt(w: W3) -> Array[(R, i64), 1] { return [(w.r, 3)]; }
+fn arral(w: own W3) -> Array[R, 2] { let x = w.q; return [x, w.r]; }
+fn arrt(w: own W3) -> Array[(R, i64), 1] { return [(w.r, 3)]; }
 fn arrmix(w: W3) -> Array[R, 2] { return [w.r, mk(50)]; }
 struct Kp { a: i64 }
 impl Kp { fn ka(ref self, w: W3) -> Array[R, 2] { return [w.r, w.q]; } }

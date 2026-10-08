@@ -1,8 +1,8 @@
 fn pick2(c: bool, s: Option[String], d: Option[String]) -> Option[String] { if c { s } else { d } }
 fn pickr(c: bool, s: Option[String], d: Option[String]) -> Option[String] { if c { return s } return d }
 fn pick1(c: bool, s: Option[String]) -> Option[String] { if c { s } else { None } }
-fn pickg[T](c: bool, s: T, d: T) -> T { if c { s } else { d } }
-fn st[T](v: mut ref Vec[T], s: T) { v.push(s) }
+fn pickg[T](c: bool, s: own T, d: own T) -> T { if c { s } else { d } }
+fn st[T](v: mut ref Vec[T], s: own T) { v.push(s) }
 fn h(i: i64) -> Option[String] { Some(f"heap-string-longer-than-sso-{i}") }
 struct K { k: i64 }
 impl K {

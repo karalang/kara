@@ -1,11 +1,11 @@
 
 struct Heap[T] { xs: Vec[T] }
 impl[T] Heap[T] {
-    fn take(self) -> Option[T] { let mut h = self; h.xs.pop() }
+    fn take(own self) -> Option[T] { let mut h = self; h.xs.pop() }
 }
 struct PlainHeap { xs: Vec[Vec[i64]] }
 impl PlainHeap {
-    fn take(self) -> Option[Vec[i64]] { let mut h = self; h.xs.pop() }
+    fn take(own self) -> Option[Vec[i64]] { let mut h = self; h.xs.pop() }
 }
 fn main() {
     // (a) TEMPORARY receiver, nested-Vec elements at three distinct sizes.

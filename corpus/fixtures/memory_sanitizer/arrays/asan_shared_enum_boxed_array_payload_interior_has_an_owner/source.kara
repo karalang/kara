@@ -18,7 +18,7 @@ fn mkF(t: String) -> Array[String, 2] { return [f"cF-{t}-aaaaaaaaaaaaaaaaaaaaa",
 
 fn look(s: Sh) -> i64 { match s { Sh.S(x) => { return x[0].len(); } Sh.N => { return 0; } } }
 fn takeout(s: Sh) -> Array[String, 2] { match s { Sh.S(x) => { return x.clone(); } Sh.N => { return mk1("z"); } } }
-fn fwd(a: Array[String, 2]) -> Array[String, 2] { return a; }
+fn fwd(a: own Array[String, 2]) -> Array[String, 2] { return a; }
 fn build() -> Sh { let a = mkC("fr"); return Sh.S(a); }
 
 fn main() {

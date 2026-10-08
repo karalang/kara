@@ -1,8 +1,8 @@
 struct P { s: String, n: i64 }
 struct W[T] { v: T, k: i64 }
 struct Two[A, B] { a: A, b: B, k: i64 }
-fn wrap[T](x: T) -> W[T] { W { v: x, k: 3 } }
-fn two[A, B](a: A, b: B) -> Two[A, B] { Two { a: a, b: b, k: 4 } }
+fn wrap[T](x: own T) -> W[T] { W { v: x, k: 3 } }
+fn two[A, B](a: own A, b: own B) -> Two[A, B] { Two { a: a, b: b, k: 4 } }
 fn mkw(i: i64) -> W[String] { W { v: f"heap-string-longer-than-sso-w{i}", k: i } }
 fn main() {
     for i in 0..2 {

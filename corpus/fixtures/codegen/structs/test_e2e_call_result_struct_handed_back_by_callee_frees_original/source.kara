@@ -4,9 +4,9 @@ struct P { s: String, n: i64 }
 struct Q { o: Option[String], v: Vec[String] }
 struct H { s: String, r: R }
 struct W[T] { v: T, k: i64 }
-fn id2[T](d: T) -> T { d }
-fn idp(d: P) -> P { d }
-fn sel[T](c: bool, a: T, b: T) -> T { if c { a } else { b } }
+fn id2[T](d: own T) -> T { d }
+fn idp(d: own P) -> P { d }
+fn sel[T](c: bool, a: own T, b: own T) -> T { if c { a } else { b } }
 fn mk(i: i64) -> P { P { s: f"heap-string-longer-than-sso-{i}", n: i } }
 fn mkq(i: i64) -> Q { let mut v: Vec[String] = Vec.new(); v.push(f"heap-string-longer-than-sso-v{i}"); Q { o: Some(f"heap-string-longer-than-sso-o{i}"), v: v } }
 fn mkh(i: i64) -> H { H { s: f"heap-string-longer-than-sso-h{i}", r: R { id: i } } }

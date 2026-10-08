@@ -1,6 +1,6 @@
 struct S { tag: String }
 impl Drop for S { fn drop(mut ref self) { println(f"d{self.tag}") } }
-fn mk(t: String) -> S { return S { tag: t } }
+fn mk(t: own String) -> S { return S { tag: t } }
 fn mko() -> Option[Array[S, 1]] { let a: Array[S, 1] = [mk(f"gggggggg7")]; return Option.Some(a) }
 fn mkr() -> Result[Array[S, 1], i64] { let a: Array[S, 1] = [mk(f"hhhhhhhh8")]; return Result.Ok(a) }
 fn main() {

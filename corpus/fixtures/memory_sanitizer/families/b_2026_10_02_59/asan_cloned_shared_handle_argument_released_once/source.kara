@@ -3,7 +3,7 @@ shared enum E { P(i64, String), Q }
 impl S { fn take(self, o: S) -> i64 { return o.k + self.k; } }
 fn sg(s: S) -> i64 { return s.k; }
 fn eg(e: E) -> i64 { match e { E.P(n, _) => { return n; } E.Q => { return 0; } } }
-fn idn(s: S) -> S { return s; }
+fn idn(s: own S) -> S { return s; }
 struct H { s: S }
 fn main() {
     let a = S { s: f"a{1}", k: 10 };

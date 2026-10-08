@@ -5,7 +5,7 @@ struct Node {
 }
 
 impl Node {
-    fn adopt(mut ref self, child: Node) {
+    fn adopt(mut ref self, child: own Node) {
         self.kids.push(child);
     }
 }

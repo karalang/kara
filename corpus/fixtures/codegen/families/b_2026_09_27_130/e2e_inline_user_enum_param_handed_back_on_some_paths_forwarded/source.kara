@@ -2,15 +2,15 @@ struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
 enum Hc { Full(S), Empty }
-fn shc(h: Hc) { match h { Hc.Full(r) => println(f"s{r.id}"), Hc.Empty => println("e") } }
+fn shc(h: own Hc) { match h { Hc.Full(r) => println(f"s{r.id}"), Hc.Empty => println("e") } }
 enum Ho[T] { Full(T), Empty }
-fn shows(h: Ho[S]) { match h { Ho.Full(r) => println(f"t{r.id}"), Ho.Empty => println("te") } }
+fn shows(h: own Ho[S]) { match h { Ho.Full(r) => println(f"t{r.id}"), Ho.Empty => println("te") } }
 struct K { z: i64 }
 impl K {
-    fn mp(ref self, h: Hc, k: bool) -> Hc { if k { return h } shc(h); return Hc.Empty }
-    fn ap(h: Hc, k: bool) -> Hc { if k { return h } shc(h); return Hc.Empty }
+    fn mp(ref self, h: own Hc, k: bool) -> Hc { if k { return h } shc(h); return Hc.Empty }
+    fn ap(h: own Hc, k: bool) -> Hc { if k { return h } shc(h); return Hc.Empty }
 }
-fn pk(h: Hc, k: bool) -> Hc { if k { return h } shc(h); return Hc.Empty }
+fn pk(h: own Hc, k: bool) -> Hc { if k { return h } shc(h); return Hc.Empty }
 fn main() {
     let kk = K { z: 0 };
     let a = Hc.Full(mks(1)); let r1 = kk.mp(a, false); shc(r1);

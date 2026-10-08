@@ -1,12 +1,12 @@
 struct R { id: i64, tag: String }
 enum G[T] { X(T), Y }
 impl G[R] {
-    fn wg[U](self, u: U) -> i64 { match self { G.X(_) => { return 2; } G.Y => { return 0; } } }
-    fn pick[U](ref self, u: U, d: U) -> U { match self { G.X(_) => { return u; } G.Y => { return d; } } }
+    fn wg[U](own self, u: U) -> i64 { match self { G.X(_) => { return 2; } G.Y => { return 0; } } }
+    fn pick[U](ref self, u: own U, d: own U) -> U { match self { G.X(_) => { return u; } G.Y => { return d; } } }
     fn tag2[U: Display](ref self, u: U) -> String { match self { G.X(_) => { return f"x:{u}"; } G.Y => { return f"y:{u}"; } } }
 }
 enum H[T] { A(T), B }
-impl[T] H[T] { fn hw[U](self, u: U) -> U { match self { H.A(_) => { return u; } H.B => { return u; } } } }
+impl[T] H[T] { fn hw[U](own self, u: own U) -> U { match self { H.A(_) => { return u; } H.B => { return u; } } } }
 fn main() {
     let b: G[R] = G.X(R { id: 2, tag: f"b{1}" });
     let p1 = b.pick(f"s{1}", f"d{2}"); let p2 = b.pick(3, 4);

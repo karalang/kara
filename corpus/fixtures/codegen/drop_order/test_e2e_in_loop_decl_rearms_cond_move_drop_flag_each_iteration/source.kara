@@ -2,7 +2,7 @@
 struct R { id: i64, tag: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 
-fn while_first(p: R) -> i64 {
+fn while_first(p: own R) -> i64 {
     let mut i: i64 = 0;
     let mut acc: i64 = 0;
     while i < 3 {
@@ -15,7 +15,7 @@ fn while_first(p: R) -> i64 {
     return acc
 }
 
-fn while_middle(p: R) -> i64 {
+fn while_middle(p: own R) -> i64 {
     let mut i: i64 = 0;
     let mut acc: i64 = 0;
     while i < 3 {
@@ -28,7 +28,7 @@ fn while_middle(p: R) -> i64 {
     return acc
 }
 
-fn outside(p: R) -> i64 {
+fn outside(p: own R) -> i64 {
     let mut out: R = R { id: 70, tag: f"t" };
     let mut i: i64 = 0;
     while i < 3 {
@@ -39,7 +39,7 @@ fn outside(p: R) -> i64 {
     return out.id
 }
 
-fn nested(p: R) -> i64 {
+fn nested(p: own R) -> i64 {
     let mut acc: i64 = 0;
     for a in 0..2 {
         for b in 0..2 {

@@ -203,7 +203,7 @@ fn pad3(n: i64) -> String {
     if n < 10 { f"00{s}" } else if n < 100 { f"0{s}" } else { s }
 }
 
-fn group_thousands(n: i64, sep: String) -> String {
+fn group_thousands(n: i64, sep: own String) -> String {
     if n < 1000 {
         return n.to_string();
     }
@@ -237,7 +237,7 @@ fn pad_left(s: String, width: i64) -> String {
     out
 }
 
-fn pad_right(s: String, width: i64) -> String {
+fn pad_right(s: own String, width: i64) -> String {
     let mut out = s;
     while out.len() < width {
         out.push(' ');

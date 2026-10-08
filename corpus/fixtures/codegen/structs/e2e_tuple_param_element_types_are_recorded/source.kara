@@ -3,8 +3,8 @@ struct Z { tag: String }
 
 // FAILING TODAY
 fn q1(t: ((R, i64), i64)) { println(f"q1 {t.0.0.id}") }
-fn q2(t: (R, i64))        { let t2 = t; println(f"q2 {t2.0.id}") }
-fn q3(t: ((R, i64), i64)) { let (inner, y) = t; println(f"q3 {inner.0.id}") }
+fn q2(t: own (R, i64))        { let t2 = t; println(f"q2 {t2.0.id}") }
+fn q3(t: own ((R, i64), i64)) { let (inner, y) = t; println(f"q3 {inner.0.id}") }
 // CONTROLS THAT WORK
 fn q4(t: (R, i64))        { println(f"q4 {t.0.id}") }
 fn q5() { let t: ((R, i64), i64) = ((R { id: 5 }, 0), 0); println(f"q5 {t.0.0.id}") }

@@ -38,7 +38,7 @@ fn digit_at(s: ref String, i: i64) -> i64 {
     return (b[i] as i64) - 48;
 }
 
-fn search(num: ref String, target: i64, pos: i64, expr: String, cur: i64, last: i64,
+fn search(num: ref String, target: i64, pos: i64, expr: own String, cur: i64, last: i64,
           found: mut ref i64, hash: mut ref i64) {
     if pos == num.len() {
         if cur == target {

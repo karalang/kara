@@ -14,7 +14,7 @@ fn mks(i: i64, n: i64) -> SortedMap[i64, String] {
     return m;
 }
 
-fn take(h: MapH) -> Map[i64, String] { return h.m; }
+fn take(h: own MapH) -> Map[i64, String] { return h.m; }
 fn eat(m: Map[i64, String]) -> i64 { return m.len(); }
 fn eats(m: SortedMap[i64, String]) -> i64 { return m.len(); }
 

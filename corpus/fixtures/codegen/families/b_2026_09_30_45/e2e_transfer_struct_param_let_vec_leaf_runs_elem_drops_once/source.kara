@@ -5,12 +5,12 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct Rs { id: i64, s: String }
 impl Drop for Rs { fn drop(mut ref self) { println(f"ds{self.id} {self.s.len()}") } }
 fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
-fn a1(g: G[Vec[R]]) -> i64 { let G { v, n } = g; n }
-fn a2(g: G[Vec[R]]) -> i64 { let G { v, n } = g; println(v.len()); n }
-fn a3(g: G[Vec[R]]) -> i64 { let G { v, n } = g; let w = v; println(w.len()); n }
-fn a4[T](g: G[T]) -> i64 { let G { v, n } = g; n }
-fn a5(g: G[Vec[Rs]]) -> i64 { let G { v, n } = g; println(v[0].s.len()); n }
-fn a6(g: G[Vec[Rs]]) -> i64 { let G { v, n } = g; n }
+fn a1(g: own G[Vec[R]]) -> i64 { let G { v, n } = g; n }
+fn a2(g: own G[Vec[R]]) -> i64 { let G { v, n } = g; println(v.len()); n }
+fn a3(g: own G[Vec[R]]) -> i64 { let G { v, n } = g; let w = v; println(w.len()); n }
+fn a4[T](g: own G[T]) -> i64 { let G { v, n } = g; n }
+fn a5(g: own G[Vec[Rs]]) -> i64 { let G { v, n } = g; println(v[0].s.len()); n }
+fn a6(g: own G[Vec[Rs]]) -> i64 { let G { v, n } = g; n }
 fn main() {
     println(a1(G { v: [R { id: 1 }, R { id: 2 }], n: 10 }));
     println(a2(G { v: [R { id: 3 }, R { id: 4 }], n: 20 }));

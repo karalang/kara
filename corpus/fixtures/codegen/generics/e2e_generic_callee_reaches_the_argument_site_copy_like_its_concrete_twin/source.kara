@@ -1,10 +1,10 @@
 enum G1[T] { Y(T), N }
 enum N1 { Y(String), N }
-fn shg[T](g: G1[T]) { match g { G1.Y(v) => { println(f"  mx {v}") } G1.N => { println("  mx NONE") } } }
-fn shc(g: G1[String]) { match g { G1.Y(v) => { println(f"  cx {v}") } G1.N => { println("  cx NONE") } } }
-fn shn[T](g: G1[T]) -> i64 { match g { G1.Y(v) => { return 1 } G1.N => { return 0 } } }
-fn shnn(g: N1) { match g { N1.Y(v) => { println(f"  nx {v}") } N1.N => { println("  nx NONE") } } }
-fn two[T](a: G1[T], b: G1[T]) { match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } } match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } } }
+fn shg[T](g: own G1[T]) { match g { G1.Y(v) => { println(f"  mx {v}") } G1.N => { println("  mx NONE") } } }
+fn shc(g: own G1[String]) { match g { G1.Y(v) => { println(f"  cx {v}") } G1.N => { println("  cx NONE") } } }
+fn shn[T](g: own G1[T]) -> i64 { match g { G1.Y(v) => { return 1 } G1.N => { return 0 } } }
+fn shnn(g: own N1) { match g { N1.Y(v) => { println(f"  nx {v}") } N1.N => { println("  nx NONE") } } }
+fn two[T](a: own G1[T], b: own G1[T]) { match a { G1.Y(v) => { println(f"  ax {v}") } G1.N => { println("  ax NONE") } } match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } } }
 fn main() {
     println("gen");    { let g: G1[String] = G1.Y(f"pa"); shg(g); shg(g) }
     println("con");    { let g: G1[String] = G1.Y(f"pa"); shc(g); shc(g) }

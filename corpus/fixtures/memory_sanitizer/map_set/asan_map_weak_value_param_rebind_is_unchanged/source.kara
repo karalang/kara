@@ -1,7 +1,7 @@
 
 shared struct N { v: i64 }
 
-fn probe(m: Map[i64, weak N]) -> i64 {
+fn probe(m: own Map[i64, weak N]) -> i64 {
     let work = m;
     match work.get(1) { Some(x) => { x.v } None => { 0 - 1 } }
 }

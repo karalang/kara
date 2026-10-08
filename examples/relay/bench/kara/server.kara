@@ -115,7 +115,7 @@ fn content_length(headers: ref String) -> i64 {
 // response chunk: the offset of the end-of-headers "\r\n\r\n", plus 4, plus the
 // Content-Length. Returns -1 if the headers / Content-Length aren't present in
 // `chunk`. Consumes the chunk bytes.
-fn response_len(chunk: Vec[u8]) -> i64 {
+fn response_len(chunk: own Vec[u8]) -> i64 {
     match String.from_utf8(chunk) {
         Ok(text) => {
             match text.find("\r\n\r\n") {
@@ -156,7 +156,7 @@ fn response_len(chunk: Vec[u8]) -> i64 {
 // in `docs/dogfooding.md`. Until then the proxy keeps both legs inline in the
 // one `handle` coroutine: every `read`/`write_all` park is `handle`'s OWN park,
 // which suspends cleanly to the reactor with no nested block-wait.
-fn handle(client: TcpStream, upstream_addr: String) {
+fn handle(client: TcpStream, upstream_addr: own String) {
     match TcpStream.connect(upstream_addr) {
         Ok(upstream) => {
             let mut buf: Array[u8, 4096] = [0u8; 4096];

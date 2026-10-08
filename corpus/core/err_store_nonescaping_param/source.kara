@@ -1,5 +1,5 @@
 struct Holder { f: Fn() -> i64 }
-fn keep(f: Fn() -> i64) -> Holder { Holder { f: f } }
+fn keep(f: own Fn() -> i64) -> Holder { Holder { f: f } }
 fn main() {
     let h = keep(|| 5);
     println(f"{(h.f)()}");

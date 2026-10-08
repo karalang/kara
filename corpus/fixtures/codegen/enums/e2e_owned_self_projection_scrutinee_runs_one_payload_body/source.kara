@@ -10,13 +10,13 @@ fn consume(x: R) -> i64 { return x.id }
 
 impl H1 {
     #[allow(partial_move_of_drop_enum)]
-    fn take(self) -> i64 { match self.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
-    fn read(self) -> i64 { match self.e { E.A(r) => { return r.id; } E.B => { return 0; } } }
-    fn viacall(self) -> i64 { match self.e { E.A(r) => { return consume(r); } E.B => { return 0; } } }
+    fn take(own self) -> i64 { match self.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
+    fn read(own self) -> i64 { match self.e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn viacall(own self) -> i64 { match self.e { E.A(r) => { return consume(r); } E.B => { return 0; } } }
     #[allow(partial_move_of_drop_enum)]
     fn iflet(self) -> i64 { if let E.A(r) = self.e { let m = r; return m.id; } else { return 0; } }
     #[allow(partial_move_of_drop_enum)]
-    fn letelse(self) -> i64 { let E.A(r) = self.e else { return 0; }; let m = r; return m.id; }
+    fn letelse(own self) -> i64 { let E.A(r) = self.e else { return 0; }; let m = r; return m.id; }
     #[allow(partial_move_of_drop_enum)]
     fn whilelet(self) -> i64 { while let E.A(r) = self.e { let m = r; return m.id; } return 0; }
     #[allow(partial_move_of_drop_enum)]
@@ -24,11 +24,11 @@ impl H1 {
 }
 impl H2 {
     #[allow(partial_move_of_drop_enum)]
-    fn take2(self) -> i64 { match self.s.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
-    fn read2(self) -> i64 { match self.s.e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn take2(own self) -> i64 { match self.s.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
+    fn read2(own self) -> i64 { match self.s.e { E.A(r) => { return r.id; } E.B => { return 0; } } }
 }
 #[allow(partial_move_of_drop_enum)]
-fn p_take(h: H1) -> i64 { match h.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
+fn p_take(h: own H1) -> i64 { match h.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
 #[allow(partial_move_of_drop_enum)]
 fn p_iflet(h: H1) -> i64 { if let E.A(r) = h.e { let m = r; return m.id; } else { return 0; } }
 

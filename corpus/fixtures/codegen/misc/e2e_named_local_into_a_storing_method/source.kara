@@ -6,10 +6,10 @@ impl Drop for S { fn drop(mut ref self) { println(f"  dS{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
 fn mks(i: i64) -> S { return S { id: i, name: f"s{i}" }; }
 struct Box2 { mut xs: Vec[R] }
-impl Box2 { fn push(mut ref self, r: R) { self.xs.push(r); } }
+impl Box2 { fn push(mut ref self, r: own R) { self.xs.push(r); } }
 struct BoxS { mut ys: Vec[S] }
-impl BoxS { fn add(mut ref self, s: S) { self.ys.push(s); } }
-fn take(b: mut ref Box2, r: R) { b.xs.push(r); }
+impl BoxS { fn add(mut ref self, s: own S) { self.ys.push(s); } }
+fn take(b: mut ref Box2, r: own R) { b.xs.push(r); }
 fn main() {
   println("named_method");
   let mut b = Box2 { xs: Vec.new() };
