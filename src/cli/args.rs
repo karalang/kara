@@ -114,6 +114,7 @@ pub fn parse_args(args: &[String]) -> Command {
                     use std::io::Write;
                     print!("{}", r.output);
                     let _ = std::io::stdout().flush();
+                    eprint!("{}", r.stderr);
                     match (&r.outcome, r.exit_code()) {
                         (_, Some(code)) => process::exit(code),
                         (crate::mir::interp::Outcome::Error(e), None) => {

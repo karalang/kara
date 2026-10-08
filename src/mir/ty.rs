@@ -602,7 +602,7 @@ impl TyInterner {
 
     /// An ADT type's name: its definition's, followed by the instance
     /// arguments when it has any.
-    fn adt_name(&self, t: Ty) -> String {
+    pub fn adt_name(&self, t: Ty) -> String {
         let Some((adt, args)) = self.tcx.adt_of(t) else {
             return self.tcx.display(t, &|d| format!("def#{}", d.0));
         };

@@ -32,7 +32,7 @@ use crate::typed_hir::{Callee, ResolvedCall, TypedHir};
 use super::build::BodyBuilder;
 use super::interp;
 use super::syntax::*;
-use super::ty::{AdtId, Ty, TyInterner};
+use super::ty::{AdtId, FloatTy, Ty, TyInterner};
 
 /// The lowered program, or why it could not be lowered.
 pub struct Lowered {
@@ -848,6 +848,21 @@ impl<'a> Lcx<'a> {
             });
         }
         let has_drop_impl = tc.drop_method_keys.contains_key(&name);
+        if is_enum && tc.display_snake_case_enums.contains(&name) {
+            self.program
+                .display_styles
+                .insert(AdtId(def.0), interp::DisplayStyle::SnakeCase);
+        }
+        if name == "Secret"
+            && tc
+                .struct_info
+                .get(&name)
+                .is_some_and(|si| si.defining_stdlib_origin)
+        {
+            self.program
+                .display_styles
+                .insert(AdtId(def.0), interp::DisplayStyle::Redacted);
+        }
         self.tys.tcx().add_adt_def(AdtDef {
             def,
             name: name.clone(),
@@ -2835,7 +2850,16 @@ impl<'l, 'a> Bx<'l, 'a> {
             ExprKind::Bool(b) => scalar(self, *b as u128),
             ExprKind::CharLit(c) => scalar(self, *c as u128),
             ExprKind::ByteLit(b) => scalar(self, *b as u128),
-            ExprKind::Float(f, _) => {
+            ExprKind::Float(f, suffix) => {
+                // A suffixed literal is a value of its suffix's type even
+                // where it widens (`let w: f64 = 0.1f32`).
+                use crate::token::FloatSuffix;
+                let f = match suffix {
+                    Some(FloatSuffix::F32) => FloatTy::F32.round(*f),
+                    Some(FloatSuffix::BF16) => FloatTy::BF16.round(*f),
+                    Some(FloatSuffix::F16) => FloatTy::F16.round(*f),
+                    _ => *f,
+                };
                 let ty = self.expr_ty(e)?;
                 Ok(Some(Const {
                     ty,
@@ -4025,6 +4049,60 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// Method `method` of the user's `impl <tr> for t`, with the impl's
     /// generic arguments when it has any.
+    /// Queue the user `Display` body of every type a printed `t` contains,
+    /// for the interpreter to show it by at any depth (a `Vec[P]`, an
+    /// `Option[P]`, a field of type `P`). A type with its own `Display`
+    /// is shown by that body alone, so its parts are not visited.
+    fn queue_nested_displays(&mut self, t: Ty) {
+        let mut seen = FxHashSet::default();
+        let mut work = vec![t];
+        while let Some(t) = work.pop() {
+            if !seen.insert(t) {
+                continue;
+            }
+            let tcx = self.tys().tcx();
+            match tcx.kind(t) {
+                HK::Ref(x) | HK::MutRef(x) => work.push(x),
+                HK::Tuple(l) => work.extend(tcx.list(l)),
+                HK::Array { elem, .. } | HK::Slice { elem, .. } => work.push(elem),
+                HK::Intrinsic { args, .. } => work.extend(tcx.list(args)),
+                HK::Adt { args, .. } | HK::Shared { args, .. } => {
+                    if let Some((d, args)) = self.user_impl_method(t, "Display", "to_string") {
+                        self.lcx.instance(d, args);
+                        continue;
+                    }
+                    let tcx = self.tys().tcx();
+                    work.extend(tcx.list(args));
+                    if let Some((adt, _)) = tcx.adt_of(t) {
+                        for (k, v) in adt.variants.iter().enumerate() {
+                            let variant = adt.is_enum.then_some(k as u32);
+                            for i in 0..v.fields.len() {
+                                work.extend(tcx.field_ty(t, variant, i as u32));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Queue the user `PartialEq.eq` of a collection's element or key
+    /// type, which the interpreter compares keys and searches by.
+    fn queue_key_eq(&mut self, collection: Ty) {
+        let (_, base) = self.strip_ty_full(collection);
+        let elem = match self.tys().tcx().kind(base) {
+            HK::Intrinsic { args, .. } => self.tys().tcx().list(args).first().copied(),
+            _ => None,
+        };
+        if let Some(e) = elem {
+            let (_, e) = self.strip_ty_full(e);
+            if let Some((d, args)) = self.user_impl_method(e, "PartialEq", "eq") {
+                self.lcx.instance(d, args);
+            }
+        }
+    }
+
     fn user_impl_method(&self, t: Ty, tr: &str, method: &str) -> Option<(DefId, Vec<Ty>)> {
         let (adt, args) = self.tys().tcx().adt_of(t)?;
         let mut path = self.lcx.defs.table.get(adt.def).path.segments.clone();
@@ -6075,6 +6153,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
         }
+        // `Stderr.println(x)` is `eprintln(x)`.
+        let user_def = matches!(callee_kind, Callee::Def(d) if self.lcx.fns.contains_key(&d));
+        if let Some(name) = stderr_print(callee).filter(|_| !user_def) {
+            return self.builtin_call(e, name, args, dest);
+        }
         match callee_kind {
             Callee::Builtin(name) => self.builtin_call(e, &name, args, dest),
             Callee::Value => self.call_value(e, callee, args, dest),
@@ -6645,7 +6728,7 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     fn builtin_call(&mut self, e: &'a Expr, name: &str, args: &'a [CallArg], dest: Place) -> R<()> {
         match name {
-            "println" | "print" => {
+            "println" | "print" | "eprintln" | "eprint" => {
                 let mut ops = Vec::new();
                 for a in args {
                     self.print_operands(&a.value, &mut ops)?;
@@ -6779,8 +6862,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     );
                     ops.push(self.ref_to(Place::local(s), st));
                 } else if self.is_copy(t) {
+                    self.queue_nested_displays(t);
                     ops.push(self.expr_operand(a)?);
                 } else {
+                    self.queue_nested_displays(t);
                     let p = self.expr_place(a, false)?;
                     let rt = self.tys().tcx().reference(t, false);
                     let r = self.temp(rt);
@@ -8163,6 +8248,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                         );
                     self.recv_place(object, mutates)?
                 };
+                if method == "to_string" {
+                    self.queue_nested_displays(base);
+                }
+                self.queue_key_eq(base);
                 let mut rest = Vec::with_capacity(args.len());
                 self.hint_lib_args(base, method, args);
                 // Stored values and closures move in; other non-Copy
@@ -8505,6 +8594,19 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     Ok(lowered)
 }
 
+/// `eprintln` or `eprint` when the callee is `Stderr.println` or
+/// `Stderr.print`.
+fn stderr_print(callee: &Expr) -> Option<&'static str> {
+    let ExprKind::Path { segments, .. } = &callee.kind else {
+        return None;
+    };
+    match segments.as_slice() {
+        [r, m] if r == "Stderr" && m == "println" => Some("eprintln"),
+        [r, m] if r == "Stderr" && m == "print" => Some("eprint"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -8670,6 +8772,88 @@ fn main() {
         assert!(printed.contains("    par#1 for ["), "{printed}");
         assert!(printed.contains("] limit copy _"), "{printed}");
         assert_eq!(run_source(src), Ok(("2 4 3\n".to_string(), Some(0))));
+    }
+
+    /// Kata-triage fixes: a user `Display` at every depth, `Secret` and
+    /// snake_case derives, a user `PartialEq` in table keys and
+    /// `Vec.contains`, `shared` keys by content, stderr, `main`'s `Err`,
+    /// negative `Vec` lengths, a clamped `substring` end, and `f32`
+    /// arithmetic rounded to `f32`.
+    #[test]
+    fn display_keys_stderr_and_narrow_floats() {
+        let src = r#"
+struct P { x: i64 }
+impl Display for P {
+    fn to_string(ref self) -> String { f"<{self.x}>" }
+}
+#[derive(Display(snake_case))]
+enum Mode { FastPath, Slow }
+struct K { id: i64, tag: i64 }
+impl PartialEq for K { fn eq(ref self, other: ref K) -> bool { self.id == other.id } }
+impl Eq for K {}
+impl Hash for K { fn hash[H: Hasher](ref self, hasher: mut ref H) { hasher.write_i64(self.id) } }
+#[derive(Hash, Eq, PartialEq)]
+shared struct S { n: i64 }
+fn main() -> Result[(), String] {
+    let v = vec![P { x: 1 }, P { x: 2 }];
+    let o: Option[P] = Some(P { x: 3 });
+    println(f"{v} {o} {Mode.FastPath} {Mode.Slow}");
+    let mut m: Map[K, i64] = Map.new();
+    m.insert(K { id: 1, tag: 0 }, 10);
+    m.insert(K { id: 1, tag: 5 }, 11);
+    let ks = vec![K { id: 4, tag: 0 }];
+    let mut s: Set[S] = Set.new();
+    s.insert(S { n: 2 });
+    println(f"{m.len()} {ks.contains(K { id: 4, tag: 9 })} {s.contains(S { n: 2 })}");
+    println("hello".substring(2, 100));
+    let a: f32 = 4000000000u32 as f32;
+    println(f"{a + 1 as f32}");
+    eprintln("to stderr");
+    Stderr.println("also stderr");
+    Err("bad".to_string())
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            r.output, "[<1>, <2>] Some(<3>) fast_path slow\n1 true true\nllo\n4000000000\n",
+            "{:?}",
+            r.outcome
+        );
+        assert_eq!(r.stderr, "to stderr\nalso stderr\nError: bad\n");
+        assert_eq!(r.exit_code(), Some(1));
+
+        let neg = "fn main() {\n    let n: i64 = 0 - 1;\n    let v: Vec[i64] = Vec.with_capacity(n);\n    println(f\"{v.len()}\");\n}\n";
+        assert_eq!(run_source(neg).map(|r| r.1), Ok(Some(101)));
+    }
+
+    /// Float math natives compute at the receiver's width, and float
+    /// literals and results round to their type.
+    #[test]
+    fn float_math_at_each_width() {
+        let src = r#"
+fn main() {
+    let b: bf16 = 1.1bf16;
+    println(f"{b.exp()} {b.sqrt()}");
+    let f: f32 = 2.0;
+    println(f"{f.ln()} {f.pow(0.5 as f32)} {f.cbrt()}");
+    let d: f64 = 2.0;
+    println(f"{d.ln()} {d.pow(0.5)} {d.atan2(1.0)}");
+    let c: f32 = 16777217.0;
+    let w: f64 = 0.1f32;
+    println(f"{c} {w}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok((
+                "3.015625 1.046875\n\
+                 0.6931471824645996 1.4142135381698608 1.2599210739135742\n\
+                 0.6931471805599453 1.4142135623730951 1.1071487177940904\n\
+                 16777216 0.10000000149011612\n"
+                    .to_string(),
+                Some(0)
+            ))
+        );
     }
 
     /// `char.try_from`, `String.cmp` (here through `sort_by`) and

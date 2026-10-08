@@ -34,6 +34,17 @@ pub struct Program {
     pub drop_impls: BTreeMap<AdtId, String>,
     /// The `Drop` body of each instance of a generic ADT, by its type.
     pub drop_by_ty: BTreeMap<Ty, String>,
+    /// ADTs whose derived `Display` is not the default shape.
+    pub display_styles: BTreeMap<AdtId, DisplayStyle>,
+}
+
+/// How a derived `Display` departs from the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayStyle {
+    /// `#[derive(Display(snake_case))]`: variant names in snake_case.
+    SnakeCase,
+    /// The library's `Secret[T]`: shown as `<redacted>` at any depth.
+    Redacted,
 }
 
 impl Program {
@@ -195,6 +206,9 @@ pub enum Outcome {
     /// An `Abort` terminator ran: the process exits with 101 and runs no
     /// drops (core semantics §9).
     Aborted(AbortReason),
+    /// `main` returned an `Err`: its error went to stderr and the process
+    /// exits with this code (1).
+    Exited(i32),
     /// The program did something the semantics forbid, or MIR the
     /// interpreter cannot run: a bug in the program or in an earlier pass.
     Error(String),
@@ -203,6 +217,8 @@ pub enum Outcome {
 #[derive(Debug, Clone)]
 pub struct RunResult {
     pub output: String,
+    /// What the program wrote to stderr (`eprintln`, `main`'s `Err`).
+    pub stderr: String,
     pub events: Vec<Event>,
     pub outcome: Outcome,
 }
@@ -212,6 +228,7 @@ impl RunResult {
         match self.outcome {
             Outcome::Returned(_) => Some(0),
             Outcome::Aborted(_) => Some(101),
+            Outcome::Exited(code) => Some(code),
             Outcome::Error(_) => None,
         }
     }
@@ -271,6 +288,7 @@ fn run_with(
         trace,
         needs_drop: Default::default(),
         output: String::new(),
+        stderr: String::new(),
         steps: 0,
         max_steps: std::env::var("KARAC_MIR_MAX_STEPS")
             .ok()
@@ -282,10 +300,10 @@ fn run_with(
     let outcome = if !problems.is_empty() {
         Outcome::Error(format!("invalid MIR:\n{}", problems.join("\n")))
     } else {
-        match it.call(entry, args) {
-            Ok(v) => match it.leaks() {
+        match it.call(entry, args).and_then(|v| it.main_result(entry, v)) {
+            Ok(done) => match it.leaks() {
                 Some(leaks) => Outcome::Error(leaks),
-                None => Outcome::Returned(v),
+                None => done,
             },
             Err(Stop::Abort(r)) => Outcome::Aborted(r),
             Err(Stop::Error(e)) => Outcome::Error(e),
@@ -293,8 +311,70 @@ fn run_with(
     };
     RunResult {
         output: it.output,
+        stderr: it.stderr,
         events: it.events,
         outcome,
+    }
+}
+
+/// The unary float function `method` of `x`, at `f64` when `wide`, else
+/// at `f32`; `None` for a name that is not one.
+fn float_unary(method: &str, x: f64, wide: bool) -> Option<f64> {
+    use crate::float_math as fm;
+    macro_rules! at {
+        ($m:ident) => {
+            if wide {
+                f64::$m(x)
+            } else {
+                f32::$m(x as f32) as f64
+            }
+        };
+    }
+    macro_rules! libm {
+        ($w:path, $n:path) => {
+            if wide {
+                $w(x)
+            } else {
+                $n(x as f32) as f64
+            }
+        };
+    }
+    Some(match method {
+        "sqrt" => at!(sqrt),
+        "sin" => at!(sin),
+        "cos" => at!(cos),
+        "tan" => at!(tan),
+        "exp" => at!(exp),
+        "ln" => at!(ln),
+        "log2" => at!(log2),
+        "log10" => at!(log10),
+        "floor" => at!(floor),
+        "ceil" => at!(ceil),
+        "round" => at!(round),
+        "trunc" => at!(trunc),
+        "asin" => at!(asin),
+        "acos" => at!(acos),
+        "atan" => at!(atan),
+        "sinh" => at!(sinh),
+        "cosh" => at!(cosh),
+        "tanh" => at!(tanh),
+        "exp2" => at!(exp2),
+        "exp_m1" => at!(exp_m1),
+        "ln_1p" => at!(ln_1p),
+        "asinh" => libm!(fm::asinh_f64, fm::asinh_f32),
+        "acosh" => libm!(fm::acosh_f64, fm::acosh_f32),
+        "atanh" => libm!(fm::atanh_f64, fm::atanh_f32),
+        "cbrt" => libm!(fm::cbrt_f64, fm::cbrt_f32),
+        _ => return None,
+    })
+}
+
+/// A float result rounded to its type: the interpreter computes in `f64`,
+/// and every operation on a narrower float rounds, as the hardware does.
+fn narrow_float(v: Value, kind: TyKind) -> Value {
+    match (v, kind) {
+        (Value::Float(f), TyKind::Float(ft)) => Value::Float(ft.round(f)),
+        (v, _) => v,
     }
 }
 
@@ -358,6 +438,7 @@ struct Interp<'a> {
     /// walks the type each time.
     needs_drop: std::cell::RefCell<rustc_hash::FxHashMap<Ty, bool>>,
     output: String,
+    stderr: String,
     steps: u64,
     max_steps: u64,
     /// Read-only copies a library method hands out a view of (the bytes
@@ -435,13 +516,18 @@ impl<'a> Interp<'a> {
                 let text = self.show(&args, arg_tys)?;
                 Ok(self.alloc_box("String", Value::Str(text)))
             }
-            ("println" | "print", "") => {
+            ("println" | "print" | "eprintln" | "eprint", "") => {
                 // The arguments print one after another (an f-string's
                 // parts); a reference prints what it points to.
                 let text = self.show(&args, arg_tys)?;
-                self.output.push_str(&text);
-                if name == "println" {
-                    self.output.push('\n');
+                let out = if name.starts_with('e') {
+                    &mut self.stderr
+                } else {
+                    &mut self.output
+                };
+                out.push_str(&text);
+                if name.ends_with("ln") {
+                    out.push('\n');
                 }
                 Ok(Value::Unit)
             }
@@ -647,6 +733,13 @@ impl<'a> Interp<'a> {
             {
                 self.scalar_method(name, method, &args, ret)
             }
+            (_, m)
+                if matches!(args.first(), Some(Value::Float(_)))
+                    && (float_unary(m, 0.0, true).is_some()
+                        || matches!(m, "atan2" | "hypot" | "copysign")) =>
+            {
+                self.scalar_method(name, method, &args, ret)
+            }
             (_, "clone") if args.len() == 1 => {
                 // No user `Clone` body was found (it would have been
                 // called instead): the structural clone a derive gives.
@@ -674,6 +767,13 @@ impl<'a> Interp<'a> {
         let name = format!("{ty_name}.{method}");
         let is_vec = ty_name.starts_with("Vec");
         match (is_vec, method, args.as_slice()) {
+            (true, "with_capacity" | "filled", [Value::Int(n), ..]) if *n < 0 => {
+                // A negative length panics, as in legacy.
+                if self.trace {
+                    self.events.push(Event::Abort(AbortReason::Panic));
+                }
+                Err(Stop::Abort(AbortReason::Panic))
+            }
             (true, "new" | "with_capacity", _) => Ok(self.alloc_box(ty_name, Value::Agg(vec![]))),
             (false, "new", []) => Ok(self.alloc_box(ty_name, Value::Str(String::new()))),
             (true, "push", [v, val]) => {
@@ -707,7 +807,7 @@ impl<'a> Interp<'a> {
                     _ => return err(format!("{name} into {}", self.tys.display(ret))),
                 };
                 // `val` moves into the first slot and is cloned into the rest.
-                let n = (*n).max(0) as usize;
+                let n = *n as usize;
                 let mut elems = Vec::with_capacity(n);
                 for i in 0..n {
                     if i + 1 == n {
@@ -733,10 +833,16 @@ impl<'a> Interp<'a> {
             }
             (true, "contains", [v, needle]) => {
                 let id = self.box_behind(v)?;
+                let e = self.vec_elem_ty(arg_tys, &name)?;
+                let user_eq = self.user_eq(e);
                 let want = self.key_form(needle)?;
                 let elems = self.vec_elems(id)?.clone();
                 for x in &elems {
-                    if self.key_form(x)? == want {
+                    let equal = match &user_eq {
+                        Some(eq) => self.call_eq(eq, x, needle)?,
+                        None => self.key_form(x)? == want,
+                    };
+                    if equal {
                         return Ok(Value::Bool(true));
                     }
                 }
@@ -1420,7 +1526,7 @@ impl<'a> Interp<'a> {
             ("len", []) => Ok(Value::Int(self.vec_elems(id)?.len() as i128)),
             ("is_empty", []) => Ok(Value::Bool(self.vec_elems(id)?.is_empty())),
             ("get" | "contains_key" | "contains", [key]) => {
-                let found = self.find_key(id, key, is_map)?;
+                let found = self.find_key(id, key, key_ty, is_map)?;
                 if method != "get" {
                     return Ok(Value::Bool(found.is_some()));
                 }
@@ -1435,7 +1541,7 @@ impl<'a> Interp<'a> {
             ("index" | "index_mut", [key]) if is_map => {
                 // `m[k]`: a missing key panics (design.md § Collection
                 // Core Methods).
-                let Some(i) = self.find_key(id, key, true)? else {
+                let Some(i) = self.find_key(id, key, key_ty, true)? else {
                     if self.trace {
                         self.events.push(Event::Abort(AbortReason::Panic));
                     }
@@ -1447,7 +1553,7 @@ impl<'a> Interp<'a> {
                 }))
             }
             ("insert", [key, rest @ ..]) => {
-                let found = self.find_key(id, key, is_map)?;
+                let found = self.find_key(id, key, key_ty, is_map)?;
                 match (is_map, found, rest) {
                     // An existing key is kept and the new one dropped;
                     // the old value is handed back.
@@ -1478,7 +1584,7 @@ impl<'a> Interp<'a> {
                 }
             }
             ("remove", [key]) => {
-                let found = self.find_key(id, key, is_map)?;
+                let found = self.find_key(id, key, key_ty, is_map)?;
                 let Some(i) = found else {
                     return if is_map {
                         self.option(ret, None)
@@ -1511,7 +1617,7 @@ impl<'a> Interp<'a> {
             ("get_or", [key, default]) if is_map => {
                 // A copy of the stored value, or the default (cloned when
                 // it came by reference).
-                let found = self.find_key(id, key, true)?;
+                let found = self.find_key(id, key, key_ty, true)?;
                 let owned_default = !matches!(default, Value::Ref(_));
                 match found {
                     Some(i) => {
@@ -1565,7 +1671,7 @@ impl<'a> Interp<'a> {
                 // `m.entry(k).or_insert(v)`, fused: a reference to the
                 // stored value, inserting `v` (or `f()`) when `k` is new.
                 // A found key drops the new key and the unused value.
-                let found = self.find_key(id, key, true)?;
+                let found = self.find_key(id, key, key_ty, true)?;
                 let i = match found {
                     Some(i) => {
                         self.drop_value(key.clone(), key_ty)?;
@@ -1651,6 +1757,14 @@ impl<'a> Interp<'a> {
     ) -> R<Value> {
         let name = format!("{ty_name}.{method}");
         if matches!(method, "new" | "with_capacity") {
+            if let [Value::Int(n), ..] = args.as_slice() {
+                if *n < 0 {
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::Panic));
+                    }
+                    return Err(Stop::Abort(AbortReason::Panic));
+                }
+            }
             return Ok(self.alloc_box(ty_name, Value::Agg(vec![])));
         }
         let Some(recv) = args.first() else {
@@ -1798,7 +1912,8 @@ impl<'a> Interp<'a> {
     }
 
     /// The index of the entry whose key equals `key`, if any.
-    fn find_key(&mut self, id: AllocId, key: &Value, is_map: bool) -> R<Option<usize>> {
+    fn find_key(&mut self, id: AllocId, key: &Value, key_ty: Ty, is_map: bool) -> R<Option<usize>> {
+        let user_eq = self.user_eq(key_ty);
         let want = self.key_form(key)?;
         let entries = self.vec_elems(id)?.clone();
         for (i, e) in entries.iter().enumerate() {
@@ -1807,11 +1922,62 @@ impl<'a> Interp<'a> {
                 (false, k) => k,
                 _ => return err("a malformed map entry"),
             };
-            if self.key_form(k)? == want {
+            let equal = match &user_eq {
+                Some(eq) => self.call_eq(eq, k, key)?,
+                None => self.key_form(k)? == want,
+            };
+            if equal {
                 return Ok(Some(i));
             }
         }
         Ok(None)
+    }
+
+    /// The lowered body of `ty`'s user `PartialEq.eq`, if it has one.
+    /// Lowering queues it for the keys of every table it calls into and
+    /// the elements of every `Vec` it searches.
+    fn user_eq(&self, ty: Ty) -> Option<String> {
+        let mut ty = ty;
+        while let TyKind::Ref(inner) | TyKind::MutRef(inner) = self.tys.kind(ty) {
+            ty = inner;
+        }
+        if !matches!(self.tys.kind(ty), TyKind::Adt(_) | TyKind::Shared(_)) {
+            return None;
+        }
+        let name = format!("{}.eq", self.tys.adt_name(ty));
+        self.program.bodies.contains_key(&name).then_some(name)
+    }
+
+    /// `a == b` by the user `eq` body `name`, which takes both by
+    /// reference.
+    fn call_eq(&mut self, name: &str, a: &Value, b: &Value) -> R<bool> {
+        let mut scratch = Vec::new();
+        let mut refs = Vec::new();
+        for v in [a, b] {
+            if let Value::Ref(_) = v {
+                refs.push(v.clone());
+                continue;
+            }
+            let slot = self.heap.len();
+            self.heap.push(Some(HeapObj {
+                count: 1,
+                value: v.clone(),
+            }));
+            scratch.push(slot);
+            refs.push(Value::Ref(Addr {
+                root: Root::Heap(AllocId(slot as u32)),
+                path: Vec::new(),
+            }));
+        }
+        let r = self.call(name, refs);
+        // The copies share the values' allocations, so they go undropped.
+        for slot in scratch {
+            self.heap[slot] = None;
+        }
+        match r? {
+            Value::Bool(b) => Ok(b),
+            other => err(format!("{name} returned {other:?}")),
+        }
     }
 
     /// A key's value with references and boxes replaced by what they
@@ -1822,7 +1988,8 @@ impl<'a> Interp<'a> {
                 let inner = self.slot(addr)?;
                 self.key_form(&inner)?
             }
-            Value::Box(id) => {
+            Value::Box(id) | Value::Shared(id) => {
+                // A `shared` key compares by what it holds, as legacy's does.
                 let inner = self.live(*id)?.value.clone();
                 self.key_form(&inner)?
             }
@@ -2048,8 +2215,13 @@ impl<'a> Interp<'a> {
                 // (legacy's rule, B-2026-08-14-19).
                 let len = s.len() as i128;
                 let lo = int(1)?;
-                let hi = if args.len() > 2 { int(2)? } else { len };
-                if lo < 0 || hi > len || lo >= hi {
+                // An end past the text is the text's end.
+                let hi = if args.len() > 2 {
+                    int(2)?.min(len)
+                } else {
+                    len
+                };
+                if lo < 0 || lo >= hi {
                     return new_string(self, String::new());
                 }
                 let (lo, hi) = (lo as usize, hi as usize);
@@ -2129,6 +2301,17 @@ impl<'a> Interp<'a> {
     /// Methods on a scalar receiver (by value): `max`, `min`, `abs`,
     /// `pow`, the wrapping operations, and a few float functions.
     fn scalar_method(&mut self, name: &str, method: &str, args: &[Value], ret: Ty) -> R<Value> {
+        let v = self.scalar_method_wide(name, method, args, ret)?;
+        Ok(narrow_float(v, self.tys.kind(ret)))
+    }
+
+    fn scalar_method_wide(
+        &mut self,
+        name: &str,
+        method: &str,
+        args: &[Value],
+        ret: Ty,
+    ) -> R<Value> {
         let it = match self.tys.kind(ret) {
             TyKind::Int(it) => Some(it),
             _ => None,
@@ -2199,10 +2382,34 @@ impl<'a> Interp<'a> {
             ("div_euclid", [Value::Float(a), Value::Float(b)]) => {
                 Ok(Value::Float(a.div_euclid(*b)))
             }
-            ("sqrt", [Value::Float(a)]) => Ok(Value::Float(a.sqrt())),
-            ("floor", [Value::Float(a)]) => Ok(Value::Float(a.floor())),
-            ("ceil", [Value::Float(a)]) => Ok(Value::Float(a.ceil())),
-            ("round", [Value::Float(a)]) => Ok(Value::Float(a.round())),
+            (_, [Value::Float(a)]) if float_unary(method, *a, true).is_some() => {
+                // Computed at the receiver's width, as legacy and codegen do:
+                // an `f32` (or narrower) goes through the `f32` function.
+                let narrow = !matches!(self.tys.kind(ret), TyKind::Float(super::ty::FloatTy::F64));
+                Ok(Value::Float(float_unary(method, *a, !narrow).unwrap()))
+            }
+            (_, [Value::Float(a), Value::Float(b)])
+                if matches!(method, "pow" | "atan2" | "hypot" | "copysign") =>
+            {
+                let wide = matches!(self.tys.kind(ret), TyKind::Float(super::ty::FloatTy::F64));
+                let (x, y) = (*a, *b);
+                Ok(Value::Float(if wide {
+                    match method {
+                        "pow" => x.powf(y),
+                        "atan2" => x.atan2(y),
+                        "hypot" => x.hypot(y),
+                        _ => x.copysign(y),
+                    }
+                } else {
+                    let (x, y) = (x as f32, y as f32);
+                    (match method {
+                        "pow" => x.powf(y),
+                        "atan2" => x.atan2(y),
+                        "hypot" => x.hypot(y),
+                        _ => x.copysign(y),
+                    }) as f64
+                }))
+            }
             _ => err(format!("call of unknown function {name}")),
         }
     }
@@ -2446,6 +2653,16 @@ impl<'a> Interp<'a> {
                 let tys = vec![e; fs.len()];
                 format!("{{{}}}", list(self, &fs, &tys)?.join(", "))
             }
+            (TyKind::Adt(a) | TyKind::Shared(a), _)
+                if self.program.display_styles.get(&a) == Some(&DisplayStyle::Redacted) =>
+            {
+                "<redacted>".to_string()
+            }
+            (TyKind::Adt(_) | TyKind::Shared(_), _) if self.user_display(ty).is_some() => {
+                // A user `Display` wins at every depth (legacy B-2026-08-26-29).
+                let name = self.user_display(ty).unwrap();
+                self.call_display(&name, v)?
+            }
             (TyKind::Shared(_), Value::Shared(id)) => {
                 // A derived Display shows the value behind the handle.
                 let inner = self.live(*id)?.value.clone();
@@ -2475,7 +2692,12 @@ impl<'a> Interp<'a> {
                 let Some(var) = adt.variants.get(*k as usize) else {
                     return err(format!("{} has no variant {k}", adt.name));
                 };
-                let vname = var.name.clone();
+                let vname = if self.program.display_styles.get(&a) == Some(&DisplayStyle::SnakeCase)
+                {
+                    crate::interpreter::pascal_to_snake(&var.name)
+                } else {
+                    var.name.clone()
+                };
                 if fs.is_empty() {
                     vname
                 } else {
@@ -2491,6 +2713,35 @@ impl<'a> Interp<'a> {
             }
             _ => self.display(v)?,
         })
+    }
+
+    /// The lowered body of `ty`'s user `Display`, if it has one. Lowering
+    /// queues it for every type a printed value contains.
+    fn user_display(&self, ty: Ty) -> Option<String> {
+        let name = format!("{}.to_string", self.tys.adt_name(ty));
+        self.program.bodies.contains_key(&name).then_some(name)
+    }
+
+    /// `v` shown by its type's user `to_string` body, which takes
+    /// it by reference: a scratch slot holds a shallow copy for the call.
+    fn call_display(&mut self, name: &str, v: &Value) -> R<String> {
+        let scratch = self.heap.len();
+        self.heap.push(Some(HeapObj {
+            count: 1,
+            value: v.clone(),
+        }));
+        let at = Addr {
+            root: Root::Heap(AllocId(scratch as u32)),
+            path: Vec::new(),
+        };
+        let shown = self.call(name, vec![Value::Ref(at)]);
+        // The copy shares `v`'s allocations, so it goes without a drop.
+        self.heap[scratch] = None;
+        let shown = shown?;
+        let text = self.string_at(&shown)?;
+        let st = self.program.bodies[name].locals[0].ty;
+        self.drop_value(shown, st)?;
+        Ok(text)
     }
 
     /// A struct, or an enum variant with named fields, as a derived
@@ -2966,7 +3217,9 @@ impl<'a> Interp<'a> {
                 TyKind::Int(it) => Value::Int(from_bits(*v, it)),
                 _ => return err("scalar constant of a non-scalar type"),
             },
-            ConstKind::Float(bits) => Value::Float(f64::from_bits(*bits)),
+            ConstKind::Float(bits) => {
+                narrow_float(Value::Float(f64::from_bits(*bits)), self.tys.kind(c.ty))
+            }
             ConstKind::Str(s) => Value::Str(s.clone()),
             ConstKind::Unit | ConstKind::ZeroSized => Value::Unit,
             ConstKind::FnDef(inst) => Value::Fn(inst.clone()),
@@ -3181,11 +3434,16 @@ impl<'a> Interp<'a> {
             (Value::Char(a), Value::Char(b)) if op.is_comparison() => Ok((cmp(a.cmp(&b)), false)),
             (Value::Float(a), Value::Float(b)) => Ok((
                 match op {
-                    Add => Value::Float(a + b),
-                    Sub => Value::Float(a - b),
-                    Mul => Value::Float(a * b),
-                    Div => Value::Float(a / b),
-                    Rem => Value::Float(a % b),
+                    Add | Sub | Mul | Div | Rem => {
+                        let r = match op {
+                            Add => a + b,
+                            Sub => a - b,
+                            Mul => a * b,
+                            Div => a / b,
+                            _ => a % b,
+                        };
+                        narrow_float(Value::Float(r), self.tys.kind(ty))
+                    }
                     _ if op.is_comparison() => match a.partial_cmp(&b) {
                         Some(o) => cmp(o),
                         None => Value::Bool(op == Ne),
@@ -3528,6 +3786,40 @@ impl<'a> Interp<'a> {
             }
         }
         Ok(())
+    }
+
+    /// What `main` returning `v` means: an `Err` goes to stderr as
+    /// `Error: {e}` and exits 1, as legacy and the compiled binary do.
+    /// A returned `Result` is dropped here, since nothing else owns it.
+    fn main_result(&mut self, entry: &str, v: Value) -> R<Outcome> {
+        let ret = match self.program.bodies.get(entry) {
+            Some(b) if entry == "main" => b.locals[0].ty,
+            _ => return Ok(Outcome::Returned(v)),
+        };
+        let TyKind::Adt(a) = self.tys.kind(ret) else {
+            return Ok(Outcome::Returned(v));
+        };
+        let adt = self.tys.adt(a);
+        if adt.name != "Result" {
+            return Ok(Outcome::Returned(v));
+        }
+        let mut done = Outcome::Returned(Value::Unit);
+        if let Value::Variant(k, fs) = &v {
+            if adt
+                .variants
+                .get(*k as usize)
+                .is_some_and(|var| var.name == "Err")
+            {
+                let Some(et) = self.tys.field_ty(ret, Some(*k), 0) else {
+                    return err("Result.Err has no payload");
+                };
+                let text = self.display_typed(&fs[0], et)?;
+                self.stderr.push_str(&format!("Error: {text}\n"));
+                done = Outcome::Exited(1);
+            }
+        }
+        self.drop_value(v, ret)?;
+        Ok(done)
     }
 
     fn leaks(&self) -> Option<String> {
