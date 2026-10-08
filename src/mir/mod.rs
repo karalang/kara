@@ -30,7 +30,7 @@ pub use movecheck::check_moves;
 pub use parse::{parse_module, pretty_module, MirModule};
 pub use pretty::pretty_body;
 pub use syntax::*;
-pub use ty::{AdtDef, AdtId, IntTy, Ty, TyInterner, TyKind, VariantDef};
+pub use ty::{AdtDef, AdtId, FnKind, IntTy, Ty, TyInterner, TyKind, VariantDef};
 pub use validate::validate;
 
 #[cfg(test)]
@@ -400,5 +400,95 @@ fn main() -> () {{
             errors_mention(&errs, "BoolToInt cast from char to u32"),
             "{errs:?}"
         );
+    }
+
+    /// Erased function values: the `Erase` cast, calls through `ref`,
+    /// `mut ref` and by value, and what the validator, the borrow check
+    /// and drop elaboration make of them.
+    #[test]
+    fn mir_erased_fn_values() {
+        let src = |locals: &str, body: &str| {
+            format!(
+                "
+fn main() -> () {{
+    let mut _0: ();
+    let _1: i64;
+    let _2: ref i64;
+    let _3: closure#1(ref i64);
+    let _4: Fn(i64) -> i64;
+    let _5: ref Fn(i64) -> i64;
+    let _6: i64;
+{locals}    bb0: {{
+        _1 = const 1_i64;
+        _2 = &_1;
+        _3 = closure#1(ref i64) [copy _2];
+        _4 = move _3 as Fn(i64) -> i64 (Erase);
+{body}    }}
+    bb1: {{
+        _0 = const ();
+        drop(_4) -> bb2;
+    }}
+    bb2: {{
+        return;
+    }}
+}}
+"
+            )
+        };
+        let ok = src(
+            "",
+            "        _5 = &_4;\n        _6 = copy _5(const 2_i64) -> bb1;\n",
+        );
+        let m = parse_module(&ok).unwrap_or_else(|e| panic!("{e}"));
+        let body = &m.bodies[0];
+        assert_eq!(validate(body, &m.tys), Vec::<String>::new());
+        let printed = pretty_body(body, &m.tys);
+        assert!(
+            printed.contains("_4 = move _3 as Fn(i64) -> i64 (Erase);"),
+            "{printed}"
+        );
+        assert!(printed.contains("let _5: ref Fn(i64) -> i64;"), "{printed}");
+        let mut m2 = parse_module(&pretty_module(&m)).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(pretty_body(&m2.bodies[0], &m2.tys), printed);
+        // The erased value is move-only and owns its captures: its drop is
+        // kept, as a whole.
+        assert!(!m.tys.is_copy(body.locals[4].ty));
+        assert!(m.tys.needs_drop(body.locals[4].ty));
+        let b = &mut m2.bodies[0];
+        elaborate_drops(b, &mut m2.tys).unwrap();
+        assert_eq!(validate(b, &m2.tys), Vec::<String>::new());
+        assert!(pretty_body(b, &m2.tys).contains("drop(_4)"));
+
+        // It holds the closure's borrow of `_1`.
+        let tail = ok.replace(
+            "        _0 = const ();\n        drop(_4)",
+            "        _1 = const 3_i64;\n        _0 = const ();\n        drop(_4)",
+        );
+        let m = parse_module(&tail).unwrap_or_else(|e| panic!("{e}"));
+        let errs = check_borrows(&m.bodies[0], &m.tys, &|_| false).unwrap_err();
+        assert!(
+            errors_mention(&errs, "write of _1 while it is borrowed"),
+            "{errs:?}"
+        );
+
+        // A `MutFn` cannot be called through a `ref`; an `OnceFn` is called
+        // by moving it, and a kind widens but never narrows.
+        let locals = "    let _7: MutFn(i64) -> i64;\n    let _8: ref MutFn(i64) -> i64;\n    let _9: OnceFn(i64) -> i64;\n    let _10: Fn(i64) -> i64;\n";
+        let mut errs = Vec::new();
+        for body in [
+            "        _7 = move _4 as MutFn(i64) -> i64 (Erase);\n        _8 = &_7;\n        _6 = copy _8(const 2_i64) -> bb1;\n",
+            "        _9 = move _4 as OnceFn(i64) -> i64 (Erase);\n        _10 = move _9 as Fn(i64) -> i64 (Erase);\n        _6 = copy _10(const 2_i64, const 3_i64) -> bb1;\n",
+        ] {
+            let m = parse_module(&src(locals, body)).unwrap_or_else(|e| panic!("{e}"));
+            errs.extend(validate(&m.bodies[0], &m.tys));
+        }
+        for want in [
+            "a MutFn value is called through a `ref`",
+            "Erase cast from OnceFn(i64) -> i64 to Fn(i64) -> i64",
+            "a call by value through an `OnceFn` must move it",
+            "a Fn(i64) -> i64 takes 1 arguments, given 2",
+        ] {
+            assert!(errors_mention(&errs, want), "{want}: {errs:?}");
+        }
     }
 }

@@ -105,11 +105,13 @@ pub enum TyKind {
     /// handle to a `shared` value. Reading it yields `Option[T]`.
     Weak(Ty),
     /// A function or closure type. `once` marks a closure that may be called
-    /// at most one time.
+    /// at most one time, `mutable` one whose calls may change its captures
+    /// (`OnceFn` and `MutFn`, core semantics §9.6).
     Fn {
         params: TyList,
         ret: Ty,
         once: bool,
+        mutable: bool,
     },
     Ref(Ty),
     MutRef(Ty),
@@ -430,10 +432,16 @@ impl TyCtxt {
                 def,
                 captures: self.subst_list(captures, args, const_args),
             },
-            TyKind::Fn { params, ret, once } => TyKind::Fn {
+            TyKind::Fn {
+                params,
+                ret,
+                once,
+                mutable,
+            } => TyKind::Fn {
                 params: self.subst_list(params, args, const_args),
                 ret: self.subst(ret, args, const_args),
                 once,
+                mutable,
             },
             TyKind::Array { elem, len } => TyKind::Array {
                 elem: self.subst(elem, args, const_args),
@@ -512,9 +520,20 @@ impl TyCtxt {
                 }
             }
             TyKind::Weak(t) => format!("weak {}", self.display(t, def_name)),
-            TyKind::Fn { params, ret, once } => format!(
+            TyKind::Fn {
+                params,
+                ret,
+                once,
+                mutable,
+            } => format!(
                 "{}fn({}) -> {}",
-                if once { "once " } else { "" },
+                if once {
+                    "once "
+                } else if mutable {
+                    "mut "
+                } else {
+                    ""
+                },
                 list(params),
                 self.display(ret, def_name)
             ),
@@ -652,10 +671,12 @@ impl TyCtxt {
         match self.kind(ty) {
             // An opaque value's concrete type is unknown, so it is assumed to
             // need dropping.
+            // An erased function value owns its closure's environment.
             TyKind::Str
             | TyKind::Shared { .. }
             | TyKind::Intrinsic { .. }
             | TyKind::Weak(_)
+            | TyKind::Fn { .. }
             | TyKind::Opaque { .. } => true,
             TyKind::Tuple(l) | TyKind::Closure { captures: l, .. } => self
                 .list(l)
@@ -770,6 +791,7 @@ impl TyCtxt {
                 params: lower_all(params)?,
                 ret: lower(return_type)?,
                 once: false,
+                mutable: false,
             },
             Type::OnceFunction {
                 params,
@@ -778,6 +800,7 @@ impl TyCtxt {
                 params: lower_all(params)?,
                 ret: lower(return_type)?,
                 once: true,
+                mutable: false,
             },
             Type::Ref(inner) => TyKind::Ref(lower(inner)?),
             Type::MutRef(inner) => TyKind::MutRef(lower(inner)?),

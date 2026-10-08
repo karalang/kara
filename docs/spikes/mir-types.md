@@ -129,6 +129,7 @@ pub enum AggregateKind {
 - Arithmetic overflow and division by zero abort (C8). The builder emits `CheckedBinaryOp` and a `SwitchInt` on the overflow flag whose failing edge is an `Abort` terminator. There is no separate `Assert` terminator.
 - Operators on user types never reach MIR as `BinaryOp`: the existing lowering pass already turns them into trait-method calls, which become `Call` terminators.
 - `Aggregate` builds a whole value at once. A partially built value is never observable.
+- **Erased function values.** A closure or function item stored where its exact type cannot be kept (a field, a `Vec` of handlers) is cast with `CastKind::Erase` to the type `Fn(A) -> R`, `MutFn(A) -> R` or `OnceFn(A) -> R`, written `move _3 as Fn(i64) -> i64 (Erase)`. An erased value is move-only and is not counted. It owns its closure's captures, so it needs drop and is dropped as a whole, like a `Vec`. It may hold the borrows its closure captured. An `Fn` value may also be erased into a wider kind (`Fn` into `MutFn` or `OnceFn`, `MutFn` into `OnceFn`), never a narrower one. A call through it is a `Call` whose `func` is `copy r` with `r: ref Fn(..)`, or `r: mut ref MutFn(..)`, or `move f` with `f: OnceFn(..)`, which consumes it. The validator checks the kind, the arguments and the result. A closure's signature is not in its MIR type, so for a closure the interpreter checks the signature at the call.
 
 ### 2.6 Statements
 

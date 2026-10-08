@@ -138,9 +138,37 @@ pub enum TyKind {
     FnDef(DefId),
     /// A closure; its fields are the captures, in capture order.
     Closure(DefId, Vec<Ty>),
+    /// An erased function value (`Fn(A) -> R`, `MutFn`, `OnceFn`): a
+    /// closure or function item whose type is forgotten. It is move-only,
+    /// owns its closure's captures, and has no parts MIR can project.
+    Fn {
+        params: Vec<Ty>,
+        ret: Ty,
+        kind: FnKind,
+    },
     /// A shared kind MIR has no view of (a generic parameter, a function
     /// pointer, a raw pointer, ...): never valid in a MIR body.
     Other,
+}
+
+/// How an erased function value may be called (core semantics §9.6):
+/// through `ref`, through `mut ref`, or once by value. Each kind accepts
+/// the ones before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FnKind {
+    Fn,
+    MutFn,
+    OnceFn,
+}
+
+impl FnKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            FnKind::Fn => "Fn",
+            FnKind::MutFn => "MutFn",
+            FnKind::OnceFn => "OnceFn",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -247,6 +275,12 @@ impl TyInterner {
                 def: d,
                 captures: tcx.intern_list(&caps),
             },
+            TyKind::Fn { params, ret, kind } => SharedKind::Fn {
+                params: tcx.intern_list(&params),
+                ret,
+                once: kind == FnKind::OnceFn,
+                mutable: kind == FnKind::MutFn,
+            },
             TyKind::Other => SharedKind::Error,
         };
         tcx.intern(shared)
@@ -296,6 +330,22 @@ impl TyInterner {
             }
             SharedKind::FnDef { def, .. } => TyKind::FnDef(def),
             SharedKind::Closure { def, captures } => TyKind::Closure(def, tcx.list(captures)),
+            SharedKind::Fn {
+                params,
+                ret,
+                once,
+                mutable,
+            } => TyKind::Fn {
+                params: tcx.list(params),
+                ret,
+                kind: if once {
+                    FnKind::OnceFn
+                } else if mutable {
+                    FnKind::MutFn
+                } else {
+                    FnKind::Fn
+                },
+            },
             _ => TyKind::Other,
         }
     }
@@ -389,6 +439,15 @@ impl TyInterner {
             TyKind::Closure(d, caps) => {
                 let parts: Vec<String> = caps.iter().map(|&t| self.display(t)).collect();
                 format!("closure#{}({})", d.0, parts.join(", "))
+            }
+            TyKind::Fn { params, ret, kind } => {
+                let parts: Vec<String> = params.iter().map(|&t| self.display(t)).collect();
+                format!(
+                    "{}({}) -> {}",
+                    kind.name(),
+                    parts.join(", "),
+                    self.display(ret)
+                )
             }
             TyKind::Other => self.tcx.display(t, &|d| format!("def#{}", d.0)),
         }

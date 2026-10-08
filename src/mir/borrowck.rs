@@ -481,7 +481,12 @@ fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
         }
         seen.push(ty);
         match tys.kind(ty) {
-            TyKind::Ref(_) | TyKind::MutRef(_) | TyKind::Slice(_) | TyKind::Other => true,
+            // An erased function value may hold whatever its closure captured.
+            TyKind::Ref(_)
+            | TyKind::MutRef(_)
+            | TyKind::Slice(_)
+            | TyKind::Fn { .. }
+            | TyKind::Other => true,
             TyKind::Tuple(ts) | TyKind::Closure(_, ts) => ts.iter().any(|t| go(tys, *t, seen)),
             TyKind::Array(t, _) => go(tys, t, seen),
             TyKind::Intrinsic(

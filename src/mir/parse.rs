@@ -28,7 +28,9 @@ use crate::ids::{DefId, NodeId};
 use super::place_ty::place_ty;
 use super::pretty::pretty_body;
 use super::syntax::*;
-use super::ty::{AdtDef, AdtId, FloatTy, IntTy, IntrinsicTy, Ty, TyInterner, TyKind, VariantDef};
+use super::ty::{
+    AdtDef, AdtId, FloatTy, FnKind, IntTy, IntrinsicTy, Ty, TyInterner, TyKind, VariantDef,
+};
 
 /// A parsed module: its types and its bodies, in source order.
 #[derive(Debug)]
@@ -411,6 +413,26 @@ impl Parser {
             return Ok(self.tys.intern(TyKind::Shared(a)));
         }
         let name = c.ident()?;
+        let fn_kind = match name {
+            "Fn" => Some(FnKind::Fn),
+            "MutFn" => Some(FnKind::MutFn),
+            "OnceFn" => Some(FnKind::OnceFn),
+            _ => None,
+        };
+        if let Some(kind) = fn_kind {
+            c.expect("(")?;
+            let mut params = Vec::new();
+            while !c.eat(")") {
+                params.push(self.ty(c)?);
+                if !c.eat(",") {
+                    c.expect(")")?;
+                    break;
+                }
+            }
+            c.expect("->")?;
+            let ret = self.ty(c)?;
+            return Ok(self.tys.intern(TyKind::Fn { params, ret, kind }));
+        }
         if c.eat("#") {
             let n = c.number()? as u32;
             return match name {
@@ -982,6 +1004,7 @@ impl Parser {
                     "IntToChar" => CastKind::IntToChar,
                     "CharToInt" => CastKind::CharToInt,
                     "BoolToInt" => CastKind::BoolToInt,
+                    "Erase" => CastKind::Erase,
                     other => return Err(format!("unknown cast kind `{other}`")),
                 };
                 c.expect(")")?;

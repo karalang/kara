@@ -8,7 +8,7 @@ use super::flags;
 use super::place_ty::{passes_through_shared, place_ty};
 use super::pretty;
 use super::syntax::*;
-use super::ty::{IntTy, Ty, TyInterner, TyKind};
+use super::ty::{FnKind, IntTy, Ty, TyInterner, TyKind};
 
 /// Every structural error in `body`, in block order. Empty means valid.
 pub fn validate(body: &Body, tys: &TyInterner) -> Vec<String> {
@@ -251,6 +251,20 @@ impl Validator<'_> {
                             | (CastKind::IntToChar, TyKind::Int(IntTy::U8), TyKind::Char)
                             | (CastKind::CharToInt, TyKind::Char, TyKind::Int(_))
                             | (CastKind::BoolToInt, TyKind::Bool, TyKind::Int(_))
+                            // A closure's signature is not in its MIR type, so
+                            // the interpreter checks it at the call.
+                            | (
+                                CastKind::Erase,
+                                TyKind::Closure(..) | TyKind::FnDef(_),
+                                TyKind::Fn { .. }
+                            )
+                    ) || matches!(
+                        (kind, self.tys.kind(from), self.tys.kind(*t)),
+                        (
+                            CastKind::Erase,
+                            TyKind::Fn { params: p, ret: r, kind: k },
+                            TyKind::Fn { params: q, ret: s, kind: l },
+                        ) if p == q && r == s && k <= l
                     );
                     if !ok {
                         self.err(format!(
@@ -354,11 +368,12 @@ impl Validator<'_> {
                 target,
                 unwind: UnwindAction::Abort,
             } => {
-                self.operand(func);
-                for a in args {
-                    self.operand(a);
+                let fty = self.operand(func);
+                let arg_tys: Vec<Option<Ty>> = args.iter().map(|a| self.operand(a)).collect();
+                let dest = self.place(destination);
+                if let Some(fty) = fty {
+                    self.call_through_fn(func, fty, &arg_tys, dest);
                 }
-                self.place(destination);
                 if let Some(b) = target {
                     self.target(*b);
                 }
@@ -378,6 +393,59 @@ impl Validator<'_> {
             }
             TerminatorKind::Return | TerminatorKind::Abort { .. } | TerminatorKind::Unreachable => {
             }
+        }
+    }
+}
+
+impl Validator<'_> {
+    /// A call through an erased function value (core semantics §9.6):
+    /// `Fn` is called through a `ref`, `MutFn` through a `mut ref`, and
+    /// `OnceFn` by moving it; the arguments and result match its type.
+    fn call_through_fn(&mut self, func: &Operand, fty: Ty, args: &[Option<Ty>], dest: Option<Ty>) {
+        let (inner, how) = match self.tys.kind(fty) {
+            TyKind::Ref(t) => (t, FnKind::Fn),
+            TyKind::MutRef(t) => (t, FnKind::MutFn),
+            _ => (fty, FnKind::OnceFn),
+        };
+        let TyKind::Fn { params, ret, kind } = self.tys.kind(inner) else {
+            return;
+        };
+        if kind > how {
+            self.err(format!(
+                "a {} value is called through {}",
+                kind.name(),
+                match how {
+                    FnKind::Fn => "a `ref`",
+                    FnKind::MutFn => "a `mut ref`",
+                    FnKind::OnceFn => "a move",
+                }
+            ));
+        }
+        if how == FnKind::OnceFn && !matches!(func, Operand::Move(_)) {
+            self.err("a call by value through an `OnceFn` must move it");
+        }
+        if args.len() != params.len() {
+            self.err(format!(
+                "a {} takes {} arguments, given {}",
+                self.tys.display(inner),
+                params.len(),
+                args.len()
+            ));
+        } else {
+            for (i, (a, p)) in args.iter().zip(&params).enumerate() {
+                if a.is_some_and(|a| a != *p) {
+                    self.err(format!(
+                        "argument {i} of a {} call has the wrong type",
+                        kind.name()
+                    ));
+                }
+            }
+        }
+        if dest.is_some_and(|d| d != ret) {
+            self.err(format!(
+                "the result of a {} call has the wrong type",
+                kind.name()
+            ));
         }
     }
 }

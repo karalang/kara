@@ -323,6 +323,11 @@ pub enum CastKind {
     CharToInt,
     /// `b as i64`: 0 or 1.
     BoolToInt,
+    /// A closure or function item, moved into an erased `Fn` value whose
+    /// type forgets which one it is; or an `Fn` value widened to a kind
+    /// that accepts it (`Fn` into `MutFn` or `OnceFn`, `MutFn` into
+    /// `OnceFn`).
+    Erase,
 }
 
 #[derive(Debug, Clone, PartialEq)]
