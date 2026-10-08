@@ -249,3 +249,74 @@ fn main() {
         other => panic!("want the stored-closure refusal, got {other:?}"),
     }
 }
+
+/// Adaptors that store no closure, written as trait default methods over
+/// generic structs: `Tk[I]` binds `type Item = I.Item`, so the builder
+/// normalizes `Tk[Counter].Item` to `i64` at the instance. The default
+/// method `en` returns `En[Self]`, which is `En[Tk[Counter]]` in one impl's
+/// copy and `En[Counter]` in another's, and `lst` annotates a local with
+/// `Option[Self.Item]`.
+#[test]
+fn closure_free_adaptors_are_generic_structs_over_self() {
+    let src = r#"
+trait It {
+    type Item;
+    fn nxt(mut ref self) -> Option[Self.Item];
+    fn cnt(own self) -> i64 {
+        let mut it = self;
+        let mut n = 0;
+        while let Some(_) = it.nxt() { n = n + 1; }
+        n
+    }
+    fn tk(own self, n: i64) -> Tk[Self] {
+        Tk { it: self, left: n }
+    }
+    fn en(own self) -> En[Self] {
+        En { it: self, i: 0 }
+    }
+    fn lst(own self) -> Option[Self.Item] {
+        let mut it = self;
+        let mut last: Option[Self.Item] = None;
+        while let Some(x) = it.nxt() { last = Some(x); }
+        last
+    }
+}
+struct Tk[I] { it: I, left: i64 }
+impl[I: It] It for Tk[I] {
+    type Item = I.Item;
+    fn nxt(mut ref self) -> Option[I.Item] {
+        if self.left <= 0 { return None; }
+        self.left = self.left - 1;
+        self.it.nxt()
+    }
+}
+struct En[I] { it: I, i: i64 }
+impl[I: It] It for En[I] {
+    type Item = (i64, I.Item);
+    fn nxt(mut ref self) -> Option[(i64, I.Item)] {
+        match self.it.nxt() {
+            Some(x) => { let k = self.i; self.i = self.i + 1; Some((k, x)) }
+            None => None,
+        }
+    }
+}
+struct Counter { n: i64 }
+impl It for Counter {
+    type Item = i64;
+    fn nxt(mut ref self) -> Option[i64] {
+        self.n = self.n + 1;
+        Some(self.n * 10)
+    }
+}
+fn main() {
+    println(Counter { n: 0 }.tk(4).cnt());
+    let mut e = Counter { n: 0 }.tk(3).en();
+    while let Some((i, v)) = e.nxt() { println(f"{i} {v}"); }
+    println(Counter { n: 0 }.tk(5).lst().unwrap());
+    let mut d = Counter { n: 4 }.en();
+    let (i, v) = d.nxt().unwrap();
+    println(f"{i} {v}");
+}
+"#;
+    assert_runs(src, "4\n0 10\n1 20\n2 30\n50\n0 50\n");
+}

@@ -1550,6 +1550,12 @@ pub struct TypeCheckResult {
     pub pointer_method_receiver_pointees: FxHashMap<SpanKey, TypeExpr>,
     pub struct_info: FxHashMap<String, StructInfo>,
     pub enum_info: FxHashMap<String, EnumInfo>,
+    /// Each impl's associated type bindings, keyed by (impl target name,
+    /// associated type name), written in the target's own generic
+    /// parameters (`impl[I: It] It for Tk[I] { type Item = I.Item; }` gives
+    /// `("Tk", "Item") -> I.Item`). Generic associated types are left out.
+    /// The MIR builder normalizes an instance's `Tk[Counter].Item` with it.
+    pub impl_assoc_types: FxHashMap<(String, String), Type>,
     /// FFI union declarations (`union NAME { ... }`). Mirrors
     /// `struct_info` / `enum_info` shape. Consumed by `unsafe_lint`
     /// (slice 2a — `E_UNION_READ_REQUIRES_UNSAFE` field-read gate) and
@@ -2022,16 +2028,21 @@ pub struct TypeCheckResult {
     /// `NodeId`, so the callee's name resolution (keyed by that expression's
     /// own node) can be read per call.
     pub node_call_callees: FxHashMap<crate::ids::NodeId, crate::ids::NodeId>,
-    /// Each function's declared return type (`Self` resolved), keyed by the
-    /// function's span, with the generic frame its parameters are placed in.
-    pub fn_return_types: FxHashMap<SpanKey, (Type, u32)>,
-    /// Each method's `self` type as its body was checked, keyed by the
-    /// method's span, with the generic frame its parameters are placed in.
+    /// Each function's declared return type (`Self` resolved), keyed by its
+    /// impl block's span (`None` outside one) and the function's span, with
+    /// the generic frame its parameters are placed in. The impl is part of
+    /// the key because a trait's default method is copied into every impl
+    /// that does not override it, and the copies share the trait's spans:
+    /// `fn en(own self) -> En[Self]` returns `En[Tk[I]]` in one impl and
+    /// `En[Counter]` in another.
+    pub fn_return_types: FxHashMap<(Option<SpanKey>, SpanKey), (Type, u32)>,
+    /// Each method's `self` type as its body was checked, keyed like
+    /// `fn_return_types`, with the generic frame its parameters are placed in.
     /// A generic impl's target is usually recorded with its args erased
     /// (`Foo` for `impl[T] Foo[T]`); one that nests its params keeps them on
     /// the MIR pipeline (`Option[Option[T]]`), and that is the case a reader
     /// of this table is after.
-    pub fn_self_types: FxHashMap<SpanKey, (Type, u32)>,
+    pub fn_self_types: FxHashMap<(Option<SpanKey>, SpanKey), (Type, u32)>,
     /// Per-call-site generic-param substitutions as ELEMENT-AWARE mono-mangle
     /// TOKENS (`T` → `"Vec_i64"` / `"Vec_String"` / `"String"`), the sibling of
     /// `call_type_subs` (which is head-only: both `Vec[i64]` and `Vec[String]`
@@ -2777,8 +2788,11 @@ pub struct TypeChecker<'a> {
     pub(super) node_generic_frames: Vec<Vec<String>>,
     pub(super) current_generic_frame: u32,
     pub(super) node_call_subs: FxHashMap<crate::ids::NodeId, FxHashMap<String, Type>>,
-    pub(super) fn_return_types: FxHashMap<SpanKey, (Type, u32)>,
-    pub(super) fn_self_types: FxHashMap<SpanKey, (Type, u32)>,
+    pub(super) fn_return_types: FxHashMap<(Option<SpanKey>, SpanKey), (Type, u32)>,
+    pub(super) fn_self_types: FxHashMap<(Option<SpanKey>, SpanKey), (Type, u32)>,
+    /// The span of the impl block whose methods are being checked; part of
+    /// the `fn_return_types` / `fn_self_types` key.
+    pub(super) current_impl_span: Option<SpanKey>,
     /// `(part, whole, how)`: a node whose type is a projection of another's,
     /// in recording order (a whole after its parts). See
     /// `refine_node_types_from_wholes`.
@@ -3157,6 +3171,7 @@ impl<'a> TypeChecker<'a> {
             node_type_links: Vec::new(),
             fn_return_types: FxHashMap::default(),
             fn_self_types: FxHashMap::default(),
+            current_impl_span: None,
             node_method_callees: FxHashMap::default(),
             node_call_callees: FxHashMap::default(),
             current_call_node: None,
@@ -3469,6 +3484,13 @@ impl<'a> TypeChecker<'a> {
             core_escaping_closures,
             vector_method_receivers: self.vector_method_receivers,
             pointer_method_receiver_pointees: self.pointer_method_receiver_pointees,
+            impl_assoc_types: self
+                .env
+                .impl_assoc_types
+                .iter()
+                .filter(|(_, e)| e.gat_params.is_empty())
+                .map(|(k, e)| (k.clone(), e.ty.clone()))
+                .collect(),
             struct_info: self.env.structs,
             enum_info: self.env.enums,
             union_info: self.env.unions,

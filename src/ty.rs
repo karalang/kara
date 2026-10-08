@@ -131,6 +131,13 @@ pub enum TyKind {
         bound: DefId,
         args: TyList,
     },
+    /// The associated type `assoc` of `base` (`I.Item` in a generic body).
+    /// The MIR builder normalizes it once `base` is concrete at an instance,
+    /// through that type's impl binding; it never reaches MIR itself.
+    Proj {
+        base: Ty,
+        assoc: Symbol,
+    },
     /// A type that already failed to check; never reaches MIR.
     Error,
 
@@ -385,6 +392,7 @@ impl TyCtxt {
             TyKind::Ref(t)
             | TyKind::MutRef(t)
             | TyKind::Weak(t)
+            | TyKind::Proj { base: t, .. }
             | TyKind::RawPtr { pointee: t, .. } => self.walk(t, f),
             TyKind::Int(_)
             | TyKind::UInt(_)
@@ -461,6 +469,10 @@ impl TyCtxt {
                 mutable,
                 pointee: self.subst(pointee, args, const_args),
             },
+            TyKind::Proj { base, assoc } => TyKind::Proj {
+                base: self.subst(base, args, const_args),
+                assoc,
+            },
             _ => return ty,
         };
         self.intern(new)
@@ -473,6 +485,56 @@ impl TyCtxt {
             .map(|t| self.subst(t, args, const_args))
             .collect();
         self.intern_list(&tys)
+    }
+
+    /// Write `args` into every `def` that occurs with none. The checker
+    /// records a generic impl's target with its arguments erased (`Tk` for
+    /// `impl[I] It for Tk[I]`), so a local bound to `self` in a method body
+    /// has that type; at an instance the arguments are known.
+    pub fn fill_erased_args(&self, ty: Ty, def: DefId, args: &[Ty]) -> Ty {
+        let go = |t: Ty| self.fill_erased_args(t, def, args);
+        let go_list = |l: TyList| {
+            let tys: Vec<Ty> = self.list(l).into_iter().map(go).collect();
+            self.intern_list(&tys)
+        };
+        let new = match self.kind(ty) {
+            TyKind::Adt { def: d, args: a } if d == def && self.list(a).is_empty() => {
+                return self.adt(def, args)
+            }
+            TyKind::Adt { def: d, args: a } => TyKind::Adt {
+                def: d,
+                args: go_list(a),
+            },
+            TyKind::Tuple(l) => TyKind::Tuple(go_list(l)),
+            TyKind::Fn {
+                params,
+                ret,
+                once,
+                mutable,
+            } => TyKind::Fn {
+                params: go_list(params),
+                ret: go(ret),
+                once,
+                mutable,
+            },
+            TyKind::Array { elem, len } => TyKind::Array {
+                elem: go(elem),
+                len,
+            },
+            TyKind::Slice { elem, mutable } => TyKind::Slice {
+                elem: go(elem),
+                mutable,
+            },
+            TyKind::Ref(t) => TyKind::Ref(go(t)),
+            TyKind::MutRef(t) => TyKind::MutRef(go(t)),
+            TyKind::Weak(t) => TyKind::Weak(go(t)),
+            TyKind::Proj { base, assoc } => TyKind::Proj {
+                base: go(base),
+                assoc,
+            },
+            _ => return ty,
+        };
+        self.intern(new)
     }
 
     /// Render `ty` in source syntax. `def_name` names a definition.
@@ -545,6 +607,13 @@ impl TyCtxt {
                 self.display(pointee, def_name)
             ),
             TyKind::Param(p) => self.resolve_name(p.name).to_string(),
+            TyKind::Proj { base, assoc } => {
+                format!(
+                    "{}.{}",
+                    self.display(base, def_name),
+                    self.resolve_name(assoc)
+                )
+            }
             TyKind::Opaque { bound, args } => {
                 if self.list(args).is_empty() {
                     format!("impl {}", def_name(bound))
@@ -650,6 +719,7 @@ impl TyCtxt {
             | TyKind::Weak(_)
             | TyKind::Fn { .. }
             | TyKind::Param(_)
+            | TyKind::Proj { .. }
             | TyKind::Opaque { .. }
             | TyKind::Error => false,
         }
@@ -815,8 +885,34 @@ impl TyCtxt {
             Type::Weak(inner) => TyKind::Weak(lower(inner)?),
             Type::Vector { .. } => return Err(LowerError::Unsupported("Vector[T, N]")),
             Type::Shape(_) => return Err(LowerError::Unsupported("shape arguments")),
+            // `I.Item` over a parameter in scope, or `Tk[I].Item` over a
+            // nominal type; the builder normalizes it at each instance.
+            Type::AssocProjection {
+                param: base,
+                assoc,
+                args,
+                receiver_args,
+            } if args.is_empty() => {
+                let base = if receiver_args.is_empty() && param(base).is_some() {
+                    self.intern(TyKind::Param(param_ty(base)?))
+                } else {
+                    match lookup(base) {
+                        Some(TypeName::Adt(def)) => self.intern(TyKind::Adt {
+                            def,
+                            args: lower_all(receiver_args)?,
+                        }),
+                        _ => return Err(LowerError::UnknownName(base.clone())),
+                    }
+                };
+                TyKind::Proj {
+                    base,
+                    assoc: self.param_name(assoc),
+                }
+            }
             Type::AssocProjection { .. } => {
-                return Err(LowerError::Unsupported("associated type projection"))
+                return Err(LowerError::Unsupported(
+                    "generic associated type projection",
+                ))
             }
             Type::Existential { .. } => return Err(LowerError::Unsupported("impl Trait")),
             Type::Refinement { .. } => return Err(LowerError::Unsupported("refinement types")),

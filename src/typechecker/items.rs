@@ -1644,6 +1644,24 @@ impl<'a> super::TypeChecker<'a> {
     /// nestings not enumerated here pass through unchanged — the transform
     /// only ever *adds* resolution, so an unhandled shape degrades to the
     /// prior "leave `Self` abstract" behavior rather than miscompiling.
+    /// A type annotation inside a method body. `Self` and `Self.Item` name
+    /// the impl target and its binding there, as they do in the signature;
+    /// a trait's default body (spliced into each impl) needs this to agree
+    /// with the impl's own `next()`.
+    pub(super) fn lower_body_type_expr(
+        &mut self,
+        ty_expr: &crate::ast::TypeExpr,
+        scope: &[String],
+    ) -> Type {
+        let declared = self.lower_type_expr(ty_expr, scope);
+        match self.current_self_type.clone() {
+            Some(st) if !Self::is_self_type(&st) => {
+                self.resolve_assoc_projections(&Self::resolve_self_in_type(declared, &st))
+            }
+            _ => declared,
+        }
+    }
+
     pub(super) fn resolve_self_in_type(ty: Type, concrete: &Type) -> Type {
         if Self::is_self_type(&ty) {
             return concrete.clone();
@@ -1955,7 +1973,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.local_scope.insert("self".to_string(), st.clone());
                 self.current_self_type = Some(st.clone());
                 self.fn_self_types.insert(
-                    SpanKey::from_span(&f.span),
+                    (self.current_impl_span, SpanKey::from_span(&f.span)),
                     (st.clone(), self.current_generic_frame),
                 );
             }
@@ -1984,7 +2002,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         self.current_return_type = Some(return_type.clone());
         self.fn_return_types.insert(
-            SpanKey::from_span(&f.span),
+            (self.current_impl_span, SpanKey::from_span(&f.span)),
             (return_type.clone(), self.current_generic_frame),
         );
 
@@ -3318,6 +3336,14 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     fn check_impl_block(&mut self, imp: &ImplBlock) {
+        let saved_impl_span = self
+            .current_impl_span
+            .replace(SpanKey::from_span(&imp.span));
+        self.check_impl_block_inner(imp);
+        self.current_impl_span = saved_impl_span;
+    }
+
+    fn check_impl_block_inner(&mut self, imp: &ImplBlock) {
         // Variance markers are legal only on stdlib struct/enum
         // declarations (design.md § Variance) — never on impl blocks.
         self.reject_user_variance_markers(&imp.generic_params, false);
@@ -6919,7 +6945,7 @@ impl<'a> super::TypeChecker<'a> {
                     // shape param `let p: Tensor[f32, [D]]` resolves `D`; type
                     // params stay `Named` (B-2026-07-13-5 leg B).
                     let scope = self.current_body_dim_scope.clone();
-                    let declared = self.lower_type_expr(ty_expr, &scope);
+                    let declared = self.lower_body_type_expr(ty_expr, &scope);
                     self.check_expr(value, &declared);
                     self.record_declared_type_for_polymorphic_rhs(value, &declared);
                     declared
@@ -7104,7 +7130,7 @@ impl<'a> super::TypeChecker<'a> {
                 name_span,
                 ty,
             } => {
-                let declared = self.lower_type_expr(ty, &[]);
+                let declared = self.lower_body_type_expr(ty, &[]);
                 // Expose the declared type at the binding's name span so later
                 // phases (ownership) can recover it without reaching into
                 // `local_scope`. The Let arm above stores via bind_pattern_types;
@@ -7124,7 +7150,7 @@ impl<'a> super::TypeChecker<'a> {
                     // shape param `let p: Tensor[f32, [D]]` resolves `D`; type
                     // params stay `Named` (B-2026-07-13-5 leg B).
                     let scope = self.current_body_dim_scope.clone();
-                    let declared = self.lower_type_expr(ty_expr, &scope);
+                    let declared = self.lower_body_type_expr(ty_expr, &scope);
                     self.check_expr(value, &declared);
                     declared
                 } else {

@@ -153,6 +153,10 @@ struct FnItem<'a> {
     impl_params: usize,
     /// The impl's generic parameters, which come before the method's.
     impl_generics: Option<&'a ast::GenericParams>,
+    /// The impl block's span: with the method's own span, the key of the
+    /// checker's per-function tables (a trait default method copied into
+    /// several impls has the same span in each).
+    impl_span: Option<SpanKey>,
 }
 
 struct Lcx<'a> {
@@ -290,6 +294,7 @@ impl<'a> Lcx<'a> {
                                 impl_target: None,
                                 impl_params: 0,
                                 impl_generics: None,
+                                impl_span: None,
                             },
                         );
                     }
@@ -327,6 +332,7 @@ impl<'a> Lcx<'a> {
                                     impl_target: Some(target),
                                     impl_params,
                                     impl_generics: b.generic_params.as_ref(),
+                                    impl_span: Some(SpanKey::from_span(&b.span)),
                                 },
                             );
                         }
@@ -420,7 +426,7 @@ impl<'a> Lcx<'a> {
             args: args.to_vec(),
             name: name.to_string(),
         };
-        let ret = match self.fn_return(f, args, impl_target) {
+        let ret = match self.fn_return(def, args) {
             Ok(t) => t,
             Err(e) => {
                 self.errors.push(format!("{} `{name}`: {e}", at(f.span)));
@@ -475,33 +481,18 @@ impl<'a> Lcx<'a> {
         }
     }
 
+    /// The key of `def` in the checker's per-function tables.
+    fn fn_key(&self, def: DefId) -> (Option<SpanKey>, SpanKey) {
+        let item = &self.fns[&def];
+        (item.impl_span, SpanKey::from_span(&item.f.span))
+    }
+
     /// The declared return type of `f`, instantiated.
-    fn fn_return(
-        &mut self,
-        f: &Function,
-        args: &[Ty],
-        impl_target: Option<(DefId, usize)>,
-    ) -> Result<Ty, String> {
-        let key = SpanKey::from_span(&f.span);
+    fn fn_return(&mut self, def: DefId, args: &[Ty]) -> Result<Ty, String> {
+        let key = self.fn_key(def);
         let Some((ty, frame)) = self.tc.fn_return_types.get(&key) else {
             return Err("its return type was not recorded".into());
         };
-        // `Self` in a generic impl is recorded as the bare type name: the
-        // impl's target at this instance's arguments.
-        if let (
-            Type::Named {
-                name,
-                args: written,
-                ..
-            },
-            Some((t, n)),
-        ) = (ty, impl_target)
-        {
-            if written.is_empty() && n > 0 && n <= args.len() && *name == self.def_name(t) {
-                let target = self.tys.tcx().adt(t, &args[..n]);
-                return self.convert(target);
-            }
-        }
         let params = self
             .tc
             .node_generic_frames
@@ -509,7 +500,25 @@ impl<'a> Lcx<'a> {
             .cloned()
             .unwrap_or_default();
         let hir = self.lower_legacy(ty, &params)?;
+        let hir = self.fill_erased_target(def, hir, args);
         self.mir_ty(hir, args)
+    }
+
+    /// `t` with the instance arguments `args` of `def` written into its
+    /// impl target where the checker recorded the target erased (`Tk` for
+    /// `impl[I] It for Tk[I]`, which is how `self`, a local bound to it, and
+    /// `Self` in a signature are typed).
+    fn fill_erased_target(&self, def: DefId, t: Ty, args: &[Ty]) -> Ty {
+        let Some(item) = self.fns.get(&def) else {
+            return t;
+        };
+        let (Some(target), n) = (item.impl_target, item.impl_params) else {
+            return t;
+        };
+        if n == 0 || n > args.len() {
+            return t;
+        }
+        self.tys.tcx().fill_erased_args(t, target, &args[..n])
     }
 
     /// `self`'s type in `f`, instantiated, when the checker recorded the
@@ -518,8 +527,8 @@ impl<'a> Lcx<'a> {
     /// from the impl's params by position gives `Option[i64]`. `None` when
     /// the recorded target has its args erased, as most generic impls'
     /// targets are.
-    fn fn_self_written(&mut self, f: &Function, args: &[Ty]) -> Option<Result<Ty, String>> {
-        let key = SpanKey::from_span(&f.span);
+    fn fn_self_written(&mut self, def: DefId, args: &[Ty]) -> Option<Result<Ty, String>> {
+        let key = self.fn_key(def);
         let (ty, frame) = self.tc.fn_self_types.get(&key)?;
         if !matches!(ty, Type::Named { args, .. } if !args.is_empty()) {
             return None;
@@ -623,6 +632,7 @@ impl<'a> Lcx<'a> {
             HK::Ref(t) => HK::Ref(self.convert(t)?),
             HK::MutRef(t) => HK::MutRef(self.convert(t)?),
             HK::Opaque { .. } => return Err("an iterator value".into()),
+            HK::Proj { base, assoc } => return self.normalize_proj(base, assoc),
             HK::Error => return Err("a type that failed to check".into()),
             HK::Weak(_) => return Err("a `weak` type".into()),
             HK::Fn {
@@ -643,6 +653,37 @@ impl<'a> Lcx<'a> {
             other => other,
         };
         Ok(self.tys.tcx().intern(new))
+    }
+
+    /// `base.assoc` at an instance: the binding of `assoc` in the impl for
+    /// `base`'s type, instantiated with `base`'s arguments.
+    fn normalize_proj(&mut self, base: Ty, assoc: crate::intern::Symbol) -> Result<Ty, String> {
+        let base = self.convert(base)?;
+        let tcx = self.tys.tcx();
+        let (name, args) = match tcx.kind(base) {
+            HK::Adt { def, args } | HK::Shared { def, args } => (self.def_name(def), args),
+            HK::Intrinsic { kind, args } => (kind.name().to_string(), args),
+            _ => {
+                return Err(format!(
+                    "an associated type of `{}`",
+                    tcx.display(base, &|d| self.def_name(d))
+                ))
+            }
+        };
+        let assoc = tcx.resolve_name(assoc).to_string();
+        let tc = self.tc;
+        let Some(bound) = tc.impl_assoc_types.get(&(name.clone(), assoc.clone())) else {
+            return Err(format!("`{name}.{assoc}`, which no impl binds"));
+        };
+        let params = tc
+            .struct_info
+            .get(&name)
+            .map(|s| s.generic_params.clone())
+            .or_else(|| tc.enum_info.get(&name).map(|e| e.generic_params.clone()))
+            .unwrap_or_default();
+        let hir = self.lower_legacy(bound, &params)?;
+        let args = tcx.list(args);
+        self.mir_ty(hir, &args)
     }
 
     /// Register the definition of the ADT `def` (and its `Drop` body),
@@ -900,30 +941,19 @@ impl<'l, 'a> Bx<'l, 'a> {
             return self.unsupported(span, "an expression with no recorded type");
         };
         let args = self.args.clone();
+        let t = self.fill_erased_target(t);
         match self.lcx.mir_ty(t, &args) {
-            Ok(t) => Ok(self.fill_bare(t)),
+            Ok(t) => Ok(t),
             Err(e) => self.unsupported(span, &e),
         }
     }
 
-    /// The impl's own generic type written bare in its body (`Self`, or
-    /// `G` in `impl[T] G[T]`) is recorded with no arguments: this
-    /// instance's.
-    fn fill_bare(&mut self, t: Ty) -> Ty {
-        let Some((target, n)) = self.impl_target else {
-            return t;
-        };
-        let bare = match self.tys().tcx().kind(t) {
-            HK::Adt { def, args } | HK::Shared { def, args } => {
-                def == target && self.tys().tcx().list(args).is_empty()
-            }
-            _ => false,
-        };
-        if !bare || n == 0 || n > self.args.len() {
-            return t;
-        }
-        let full = self.tys().tcx().adt(target, &self.args[..n]);
-        self.lcx.convert(full).unwrap_or(t)
+    /// `t` with this instance's impl arguments written into its impl
+    /// target where the checker recorded the target erased (a local bound
+    /// to `self` in `impl[I] It for Tk[I]` is typed `Tk`).
+    fn fill_erased_target(&self, t: Ty) -> Ty {
+        self.lcx
+            .fill_erased_target(self.b.instance().def, t, &self.args)
     }
 
     /// The MIR type of `e`'s value. A local reads as the type of its MIR
@@ -1320,7 +1350,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Some(t) => t,
                 None => {
                     let args = self.args.clone();
-                    match self.lcx.fn_self_written(f, &args).filter(|_| n > 0) {
+                    let def = self.b.instance().def;
+                    match self.lcx.fn_self_written(def, &args).filter(|_| n > 0) {
                         Some(Ok(t)) => t,
                         Some(Err(e)) => return self.unsupported(f.span, &e),
                         None => {
@@ -4945,7 +4976,6 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let info = &self.lcx.fns[&d];
         let f = info.f;
-        let target = info.impl_target.map(|t| (t, info.impl_params));
         if info.impl_params != args.len()
             || !f.params.is_empty()
             || f.self_param != Some(SelfParam::MutRef)
@@ -4955,7 +4985,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         {
             return Ok(None);
         }
-        let ret = match self.lcx.fn_return(f, &args, target) {
+        let ret = match self.lcx.fn_return(d, &args) {
             Ok(r) => r,
             Err(err) => return self.unsupported(iterable.span, &err),
         };
