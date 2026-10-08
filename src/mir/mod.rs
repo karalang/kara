@@ -511,6 +511,7 @@ fn main(_1: shared Node) -> () {{
     let _5: weak Node;
     let _6: Option[shared Node];
     let _7: i64;
+    let _8: ref Option[shared Node];
     bb0: {{
         _2 = &_1;
         _3 = copy _2 as weak Node (Downgrade);
@@ -537,6 +538,13 @@ fn main(_1: shared Node) -> () {{
         let ok = src(
             "        _5 = copy _4 as weak Node (Downgrade);\n        _6 = copy _4 as Option[shared Node] (Upgrade);\n",
         );
+        // Downgrade of an `Option[shared T]`: `None` gives an empty weak,
+        // which is how `parent: None` is written into a weak slot.
+        let from_option = src(
+            "        _6 = copy _4 as Option[shared Node] (Upgrade);\n        _8 = &_6;\n        _5 = copy _8 as weak Node (Downgrade);\n",
+        );
+        let m = parse_module(&from_option).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(validate(&m.bodies[0], &m.tys), Vec::<String>::new());
         let m = parse_module(&ok).unwrap_or_else(|e| panic!("{e}"));
         let body = &m.bodies[0];
         assert_eq!(validate(body, &m.tys), Vec::<String>::new());
@@ -570,6 +578,8 @@ fn main(_1: shared Node) -> () {{
             // Downgrade takes a reference, and yields a weak value.
             "        _5 = move _3 as weak Node (Downgrade);\n        _6 = copy _4 as Option[shared Node] (Upgrade);\n",
             "        _5 = copy _4 as weak Node (Downgrade);\n        _7 = copy _4 as i64 (Upgrade);\n        _6 = copy _4 as Option[shared Node] (Upgrade);\n",
+            // Downgrade of an Option yields a weak value, not an Option.
+            "        _5 = copy _4 as weak Node (Downgrade);\n        _6 = copy _4 as Option[shared Node] (Upgrade);\n        _8 = &_6;\n        _6 = copy _8 as Option[shared Node] (Downgrade);\n",
         ] {
             let m = parse_module(&src(body)).unwrap_or_else(|e| panic!("{e}"));
             errs.extend(validate(&m.bodies[0], &m.tys));
@@ -578,6 +588,7 @@ fn main(_1: shared Node) -> () {{
             "Upgrade cast from ref shared Node to Option[shared Node]",
             "Downgrade cast from weak Node to weak Node",
             "Upgrade cast from ref weak Node to i64",
+            "Downgrade cast from ref Option[shared Node] to Option[shared Node]",
         ] {
             assert!(errors_mention(&errs, want), "{want}: {errs:?}");
         }

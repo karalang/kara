@@ -398,7 +398,8 @@ impl Validator<'_> {
 }
 
 impl Validator<'_> {
-    /// §6.5: `Downgrade` takes `ref shared T` or `ref weak T` to `weak T`;
+    /// §6.5: `Downgrade` takes `ref shared T`, `ref weak T` or
+    /// `ref Option[shared T]` to `weak T` (`None` gives an empty weak);
     /// `Upgrade` takes `ref weak T` to `Option[shared T]`.
     fn weak_cast(&self, kind: CastKind, from: Ty, to: Ty) -> bool {
         let TyKind::Ref(inner) = self.tys.kind(from) else {
@@ -407,19 +408,26 @@ impl Validator<'_> {
         match (kind, self.tys.kind(inner), self.tys.kind(to)) {
             (CastKind::Downgrade, TyKind::Shared(_), TyKind::Weak(w)) => w == inner,
             (CastKind::Downgrade, TyKind::Weak(v), TyKind::Weak(w)) => v == w,
-            (CastKind::Upgrade, TyKind::Weak(w), TyKind::Adt(a)) => {
-                // Checked by shape, since MIR text names an instance with
-                // its arguments (`Option[shared Node]`).
-                let adt = self.tys.adt(a);
-                let pos = |n: &str| adt.variants.iter().position(|v| v.name == n);
-                adt.is_enum
-                    && adt.variants.len() == 2
-                    && pos("None").is_some()
-                    && pos("Some")
-                        .is_some_and(|some| self.tys.field_ty(to, Some(some as u32), 0) == Some(w))
-            }
+            (CastKind::Downgrade, TyKind::Adt(_), TyKind::Weak(w)) => self.option_of(inner, w),
+            (CastKind::Upgrade, TyKind::Weak(w), TyKind::Adt(_)) => self.option_of(to, w),
             _ => false,
         }
+    }
+
+    /// Whether `ty` is `Option[shared T]` for the `shared T` that `w`
+    /// names. Checked by shape, since MIR text names an instance with its
+    /// arguments (`Option[shared Node]`).
+    fn option_of(&self, ty: Ty, w: Ty) -> bool {
+        let TyKind::Adt(a) = self.tys.kind(ty) else {
+            return false;
+        };
+        let adt = self.tys.adt(a);
+        let pos = |n: &str| adt.variants.iter().position(|v| v.name == n);
+        adt.is_enum
+            && adt.variants.len() == 2
+            && pos("None").is_some()
+            && pos("Some")
+                .is_some_and(|some| self.tys.field_ty(ty, Some(some as u32), 0) == Some(w))
     }
 
     /// A call through an erased function value (core semantics §9.6):
