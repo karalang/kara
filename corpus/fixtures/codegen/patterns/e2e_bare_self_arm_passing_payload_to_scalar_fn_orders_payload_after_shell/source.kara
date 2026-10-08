@@ -1,9 +1,9 @@
 struct R { id: i64, tag: String }
 impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" } }
-fn eat(r: R) -> i64 { return r.id; }
-fn eatg[T](x: T, k: i64) -> i64 { return k; }
-fn say(r: R) { println(f"  say{r.id}"); }
+fn eat(r: own R) -> i64 { return r.id; }
+fn eatg[T](x: own T, k: i64) -> i64 { return k; }
+fn say(r: own R) { println(f"  say{r.id}"); }
 fn id(r: own R) -> R { return r; }
 fn keep(v: mut ref Vec[R], r: own R) { v.push(r); }
 enum E { A(R), B }
@@ -13,7 +13,7 @@ impl E {
     fn tailc(own self) -> i64 { match self { E.A(r) => eat(r), E.B => 0 } }
     fn gcall(own self) -> i64 { match self { E.A(r) => { return eatg(r, 7); } E.B => { return 0; } } }
     fn stmt(own self) -> i64 { match self { E.A(r) => { say(r); return 1; } E.B => { return 0; } } }
-    fn iflet(self) -> i64 { if let E.A(r) = self { return eat(r); } return 0; }
+    fn iflet(own self) -> i64 { if let E.A(r) = self { return eat(r); } return 0; }
     fn opt(own self) -> Option[R] { match self { E.A(r) => { return Some(r); } E.B => { return None; } } }
     fn cid(own self) -> i64 { match self { E.A(r) => { let q = id(r); return q.id; } E.B => { return 0; } } }
     fn ckeep(own self, v: mut ref Vec[R]) -> i64 { match self { E.A(r) => { keep(v, r); return 1; } E.B => { return 0; } } }

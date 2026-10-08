@@ -8,14 +8,14 @@ fn classify(v: Option[Option[i64]]) -> i64 {
 }
 fn idnest(o: Option[Option[i64]]) -> Option[Option[i64]] { o }
 
-fn classifys(v: Option[Option[String]]) -> i64 {
+fn classifys(v: own Option[Option[String]]) -> i64 {
     match v {
         Option.Some(Option.Some(s)) => { if s.contains("row") { 1 } else { 0 } }
         Option.Some(Option.None) => -1,
         Option.None => -2,
     }
 }
-fn idnests(o: Option[Option[String]]) -> Option[Option[String]] { o }
+fn idnests(o: own Option[Option[String]]) -> Option[Option[String]] { o }
 
 fn main() {
     let n = env.args().len() as i64;

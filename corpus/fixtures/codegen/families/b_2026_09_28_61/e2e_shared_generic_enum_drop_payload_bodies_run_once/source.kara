@@ -5,7 +5,7 @@ struct W { r: R, k: i64 }
 shared enum T2 { Y((R, i64)), N }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(n: i64) -> R { return R { id: n, s: f"s{n}" } }
-fn eat(r: R) -> i64 { return r.id }
+fn eat(r: own R) -> i64 { return r.id }
 fn look(r: ref R) -> i64 { return r.id }
 fn main() {
     { let r: R = mk(1); let g: G[R] = G.Y(r); println("r"); }

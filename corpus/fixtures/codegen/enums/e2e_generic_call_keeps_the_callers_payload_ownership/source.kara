@@ -2,10 +2,10 @@ struct D { id: i64 }
 impl Drop for D { fn drop(mut ref self) { println(f"  dD{self.id}") } }
 struct W { id: i64, s: String }
 impl Drop for W { fn drop(mut ref self) { println(f"  dW{self.id}") } }
-fn idOpt[T](g: Option[T]) -> Option[T] { return g }
-fn idRes[T](g: Result[T, i64]) -> Result[T, i64] { return g }
-fn idOptMono(g: Option[String]) -> Option[String] { return g }
-fn idDMono(g: Option[D]) -> Option[D] { return g }
+fn idOpt[T](g: own Option[T]) -> Option[T] { return g }
+fn idRes[T](g: own Result[T, i64]) -> Result[T, i64] { return g }
+fn idOptMono(g: own Option[String]) -> Option[String] { return g }
+fn idDMono(g: own Option[D]) -> Option[D] { return g }
 
 fn main() {
     println("inline");   { let a: Option[String] = Option.Some(f"aaaaaaaa-1"); let b = idOpt(a); match b { Option.Some(v) => { println(f"  {v.len()}") } Option.None => { println("  none") } } }

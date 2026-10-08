@@ -3,7 +3,7 @@ struct Res { id: i64, name: String }
 impl Drop for Res { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
 struct Hm { r: Result[Res, String], t: i64 }
 struct Hv { r: Result[Vec[String], Res], t: i64 }
-fn take(h: Hm) -> i64 { h.t }
+fn take(h: own Hm) -> i64 { h.t }
 fn main() {
     println("ok-struct:");
     { let h = Hm { r: Result.Ok(Res { id: 1, name: f"aaaa{1}" }), t: 10 }; println(h.t); }

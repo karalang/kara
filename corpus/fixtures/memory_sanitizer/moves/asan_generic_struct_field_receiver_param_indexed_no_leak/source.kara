@@ -5,7 +5,7 @@ struct Box[T] {
 fn show(b: ref Box[String]) -> i64 {
     b.v.len()
 }
-fn sink(b: Box[String]) -> i64 {
+fn sink(b: own Box[String]) -> i64 {
     b.v.len()
 }
 fn main() {

@@ -5,8 +5,8 @@ fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" }
 struct Q { r: R }
 fn mq(i: i64) -> Q { Q { r: R { id: i } } }
 
-fn go(x: Option[S]) { match x { Some(y) => { let z = y; println(f"z{z.r.id}"); println("w") }, None => println("n") }; println("post") }
-fn gr(x: Result[S, i64]) { match x { Ok(y) => { let z = y; println(f"z{z.r.id}"); println("w") }, Err(e) => println("e") }; println("post") }
+fn go(x: own Option[S]) { match x { Some(y) => { let z = y; println(f"z{z.r.id}"); println("w") }, None => println("n") }; println("post") }
+fn gr(x: own Result[S, i64]) { match x { Ok(y) => { let z = y; println(f"z{z.r.id}"); println("w") }, Err(e) => println("e") }; println("post") }
 fn main() {
     go(Some(mk(1)));
     let b = Some(mk(2));

@@ -1,4 +1,4 @@
-fn show[T: Display](x: Option[T]) { println(f"{x}"); }
+fn show[T: Display](x: own Option[T]) { println(f"{x}"); }
 fn main() {
     show(Some(7));
     let v: Vec[i64] = vec![1];

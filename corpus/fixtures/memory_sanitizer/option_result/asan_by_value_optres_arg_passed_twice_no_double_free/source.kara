@@ -2,7 +2,7 @@
 enum E { Missing(String) }
 fn mkv() -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push("x"); return v; }
 fn mk() -> Result[Vec[String], E] { return Ok(mkv()); }
-fn takr(r: Result[Vec[String], E]) -> i64 { match r { Ok(v) => v.len(), Err(_e) => -1 } }
+fn takr(r: own Result[Vec[String], E]) -> i64 { match r { Ok(v) => v.len(), Err(_e) => -1 } }
 fn main() {
     let mut i: i64 = 0;
     let mut acc: i64 = 0;

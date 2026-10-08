@@ -4,14 +4,14 @@ fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } 
 enum G { A(S), B(i64) }
 struct H { k: i64 }
 impl H {
-    fn mp(ref self, t: Option[S], c: bool) -> i64 { if c { let y = match t { Option.Some(v) => v, Option.None => mks(0) }; println(f"m{y.id}") }; return self.k }
-    fn tk(t: Option[S], c: bool) -> i64 { if c { let y = t.unwrap(); println(f"a{y.id}") }; return 1 }
+    fn mp(ref self, t: own Option[S], c: bool) -> i64 { if c { let y = match t { Option.Some(v) => v, Option.None => mks(0) }; println(f"m{y.id}") }; return self.k }
+    fn tk(t: own Option[S], c: bool) -> i64 { if c { let y = t.unwrap(); println(f"a{y.id}") }; return 1 }
 }
-fn cp(t: Option[S], c: bool) -> i64 { if c { let y = match t { Option.Some(v) => v, Option.None => panic("n") }; println(f"p{y.id}") }; return 1 }
+fn cp(t: own Option[S], c: bool) -> i64 { if c { let y = match t { Option.Some(v) => v, Option.None => panic("n") }; println(f"p{y.id}") }; return 1 }
 fn cg(t: own G, c: bool) -> i64 { if c { let y = match t { G.A(v) => v, G.B(n) => mks(n) }; println(f"g{y.id}") }; return 1 }
-fn cl(t: Option[S], c: bool) -> i64 { if c { let y = if let Option.Some(v) = t { v } else { mks(0) }; println(f"l{y.id}") }; return 1 }
-fn cu(t: Option[S], c: bool) -> i64 { if c { let y = t.unwrap(); println(f"u{y.id}") }; return 1 }
-fn cr(t: Result[S, i64], c: bool) -> i64 { if c { let y = match t { Result.Ok(v) => v, Result.Err(e) => mks(e) }; println(f"r{y.id}") } else { println("rn") }; return 1 }
+fn cl(t: own Option[S], c: bool) -> i64 { if c { let y = if let Option.Some(v) = t { v } else { mks(0) }; println(f"l{y.id}") }; return 1 }
+fn cu(t: own Option[S], c: bool) -> i64 { if c { let y = t.unwrap(); println(f"u{y.id}") }; return 1 }
+fn cr(t: own Result[S, i64], c: bool) -> i64 { if c { let y = match t { Result.Ok(v) => v, Result.Err(e) => mks(e) }; println(f"r{y.id}") } else { println("rn") }; return 1 }
 fn main() {
     let a = cp(Option.Some(mks(1)), false) + cp(Option.Some(mks(2)), true);
     println(f"a{a}");

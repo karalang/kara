@@ -5,7 +5,7 @@ fn make() -> Vec[i64] {
     v.push(2i64);
     v
 }
-fn unwrap_or_default(opt: Option[Vec[i64]]) -> Vec[i64] {
+fn unwrap_or_default(opt: own Option[Vec[i64]]) -> Vec[i64] {
     match opt {
         Some(v) => v,
         None => Vec.new(),

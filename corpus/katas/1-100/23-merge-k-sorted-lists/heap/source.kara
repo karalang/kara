@@ -89,7 +89,7 @@ fn heap_pop(heap: mut ref Vec[ListNode]) -> ListNode {
     top
 }
 
-fn merge_k_lists(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
+fn merge_k_lists(lists: own Vec[Option[ListNode]]) -> Option[ListNode] {
     // Seed the frontier: one cursor per non-empty list.
     let k = lists.len();
     let mut heap: Vec[ListNode] = Vec.new();

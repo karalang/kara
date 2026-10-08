@@ -6,7 +6,7 @@ impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.x}{self.y}
 fn mkw(n: i64) -> W { return W { id: n, x: f"x{n}", y: f"y{n}" }; }
 struct HoRes { a: R, b: Result[R, String] }
 struct HoW { a: R, b: Result[W, String] }
-fn eat(x: R) { println(f"  eat{x.id}") }
+fn eat(x: own R) { println(f"  eat{x.id}") }
 
 fn rebind()   { let r: Result[R, String] = Result.Ok(mk(1)); let c = r;
                 match c { Result.Ok(x) => println(f"  ok{x.id}"), Result.Err(e) => println(f"  er{e}") } }

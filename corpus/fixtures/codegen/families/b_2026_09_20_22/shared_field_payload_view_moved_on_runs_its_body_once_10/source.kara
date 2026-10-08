@@ -10,6 +10,6 @@ impl Drop for Wsx { fn drop(mut ref self) { println(f"  dWsx-{self.h.s}-{self.s}
 enum Esx { A(Wsx), B }
 enum E2 { A(Wsh, i64), B }
 fn mk(s: own String) -> Wsh { return Wsh { h: Sh { s: s } } }
-fn eat(w: Wsh) { println(f"  ate:{w.h.s}") }
+fn eat(w: own Wsh) { println(f"  ate:{w.h.s}") }
 fn f(b: own Esh, c: own Esh) -> i64 { let mut out = mk(f"OUT"); match b { Esh.A(w) => { out = w; } Esh.B => { } } match c { Esh.A(v) => { out = v; } Esh.B => { } } return 7; }
 fn main() { println(f"  r:{f(Esh.A(mk(f"P1")), Esh.A(mk(f"P2")))}"); }

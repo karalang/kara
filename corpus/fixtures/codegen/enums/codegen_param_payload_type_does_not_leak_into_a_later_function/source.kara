@@ -1,5 +1,5 @@
-fn other(x: Option[Vec[String]]) -> i64 { return 1 }
-fn otherR(y: Result[Vec[String], String]) -> i64 { return 2 }
+fn other(x: own Option[Vec[String]]) -> i64 { return 1 }
+fn otherR(y: own Result[Vec[String], String]) -> i64 { return 2 }
 fn main() {
     let x: i64 = 7;
     println(f"{x}");

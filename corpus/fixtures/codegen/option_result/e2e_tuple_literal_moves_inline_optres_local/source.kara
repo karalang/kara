@@ -1,11 +1,11 @@
 struct S { t: (Option[String], i64) }
 fn mk(k: i64) -> (Option[String], i64) { let label = Some(f"heap-string-longer-than-sso-{k}"); (label, k) }
 fn mkt(k: i64) -> (Option[String], i64) { let label = Some(f"heap-string-longer-than-sso-{k}"); let t = (label, k); t }
-fn mkp(label: Option[String], k: i64) -> (Option[String], i64) { (label, k) }
+fn mkp(label: own Option[String], k: i64) -> (Option[String], i64) { (label, k) }
 fn mkv(k: i64) -> (Option[Vec[i64]], i64) { let v: Vec[i64] = [k, 2, 3]; let o = Some(v); (o, k) }
 fn mkr(k: i64) -> (Result[String, i64], i64) { let r: Result[String, i64] = Ok(f"heap-string-longer-than-sso-{k}"); (r, k) }
 fn mkc(k: i64) -> (Option[String], i64) { let label = Some(f"heap-string-longer-than-sso-{k}"); if k > 5 { return (label, k); } (None, 0) }
-fn eat(t: (Option[String], i64)) -> i64 { t.1 }
+fn eat(t: own (Option[String], i64)) -> i64 { t.1 }
 fn txt(o: ref Option[String]) -> String { match o { Some(s) => s.clone(), None => "none" } }
 fn main() {
     let a = mk(1); println(f"{txt(a.0)} {a.1}");

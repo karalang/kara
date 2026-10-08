@@ -1,7 +1,7 @@
 struct P[T] { xs: Vec[T] }
 impl[T: Ord] P[T] {
     fn from(v: own Vec[T]) -> P[T] { P { xs: v } }
-    fn pair(a: own Vec[T], b: Vec[T]) -> P[T] { P { xs: a } }
+    fn pair(a: own Vec[T], b: own Vec[T]) -> P[T] { P { xs: a } }
     fn size(ref self) -> i64 { self.xs.len() }
 }
 fn helper() { let g = P.from([]); println("z"); }

@@ -18,7 +18,7 @@ enum Nested {
     List(Vec[Nested]),
 }
 
-fn weight_sum(items: Vec[Nested]) -> i64 {
+fn weight_sum(items: own Vec[Nested]) -> i64 {
     let mut stack: Vec[(Nested, i64)] = Vec.new();
     for item in items.into_iter() {
         stack.push((item, 1));

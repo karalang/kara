@@ -8,7 +8,7 @@ fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
 fn mkh[T](v: own T) -> Ho[T] { return Ho.Full(v); }
 fn mid[T](v: own T, c: bool) -> Option[T] { if c { return Some(v) } return None }
 fn rd(x: ref S2) { println(f"rd{x.id}") }
-fn eat2(s: S2) { println(f"x{s.id}") }
+fn eat2(s: own S2) { println(f"x{s.id}") }
 fn a_unwrap() { let s = mk2(1); let o = mid(s, true); let v = o.unwrap(); println(f"a{v.id}") }
 fn b_unwrap_nodrop() { let s = mk3(2); let o = mid(s, true); let v = o.unwrap(); println(f"b{v.id}") }
 fn c_ho_move() {

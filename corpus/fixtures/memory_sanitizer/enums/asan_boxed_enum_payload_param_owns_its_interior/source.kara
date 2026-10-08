@@ -5,23 +5,23 @@ enum K { A(R2), B }
 fn mkr(i: i64) -> R2 { return R2 { s: f"ssssssss{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" }; }
 fn mkw(i: i64) -> W2 { return W2 { s: f"wwwwwwww{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" }; }
 
-fn nested(x: Option[K]) {
+fn nested(x: own Option[K]) {
     match x { Option.Some(K.A(r)) => { println(f"n:{r.s}"); } Option.Some(K.B) => {} Option.None => {} }
 }
-fn nestedres(x: Result[K, i64]) {
+fn nestedres(x: own Result[K, i64]) {
     match x { Result.Ok(K.A(r)) => { println(f"nr:{r.s}"); } Result.Ok(K.B) => {} Result.Err(e) => {} }
 }
-fn whole(x: Option[K]) {
+fn whole(x: own Option[K]) {
     match x { Option.Some(k) => { match k { K.A(r) => { println(f"w:{r.s}"); } K.B => {} } } Option.None => {} }
 }
-fn wholeres(x: Result[K, i64]) {
+fn wholeres(x: own Result[K, i64]) {
     match x { Result.Ok(k) => { match k { K.A(r) => { println(f"wr:{r.s}"); } K.B => {} } } Result.Err(e) => {} }
 }
-fn wildcard(x: Option[K]) { match x { Option.Some(_) => { println("wc"); } Option.None => {} } }
-fn structpay(x: Option[W2]) { match x { Option.Some(w) => { println(f"s:{w.s}"); } Option.None => {} } }
-fn passthru(x: Option[K]) -> Option[K] { return x; }
+fn wildcard(x: own Option[K]) { match x { Option.Some(_) => { println("wc"); } Option.None => {} } }
+fn structpay(x: own Option[W2]) { match x { Option.Some(w) => { println(f"s:{w.s}"); } Option.None => {} } }
+fn passthru(x: own Option[K]) -> Option[K] { return x; }
 fn eat(r: R2) -> i64 { if r.s.contains("ssss") { return r.s.len(); } return 0; }
-fn handsout(x: Option[K]) {
+fn handsout(x: own Option[K]) {
     match x { Option.Some(K.A(r)) => { println(f"h:{eat(r)}"); } Option.Some(K.B) => {} Option.None => {} }
 }
 

@@ -3,8 +3,8 @@ enum N1 { Y(String), N }
 struct Conc { g: G1[String] }
 fn wrapC(g: own G1[String], c: bool) -> Conc { if c { return Conc { g: g } } return Conc { g: G1.N } }
 fn ident(g: own G1[String]) -> G1[String] { return g }
-fn other(g: G1[String]) -> G1[String] { return G1.Y("zzzzzzzzzzzzzzzzzzzzzzzz") }
-fn pick(a: own G1[String], b: G1[String]) -> G1[String] { return a }
+fn other(g: own G1[String]) -> G1[String] { return G1.Y("zzzzzzzzzzzzzzzzzzzzzzzz") }
+fn pick(a: own G1[String], b: own G1[String]) -> G1[String] { return a }
 fn usz(g: own G1[String]) -> i64 { match g { G1.Y(v) => { return v.len() } G1.N => { return 0 } } }
 fn sink(g: own G1[String]) { match g { G1.Y(v) => { println(f"  s{v.len()}") } G1.N => { println("  s0") } } }
 fn shw(g: own G1[String]) { match g { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } }

@@ -11,7 +11,7 @@ fn eat(r: R2) -> i64 { return r.s.len(); }
 fn field(h: own Holder) {
     match h.k { Option.Some(K.A(r)) => { println(f"f:{r.s}"); } Option.Some(K.B) => {} Option.None => {} }
 }
-fn untouched(h: Holder) { println(f"u:{h.n}"); }
+fn untouched(h: own Holder) { println(f"u:{h.n}"); }
 fn wildcard(h: own Holder) {
     match h.k { Option.Some(_) => { println("wc"); } Option.None => {} }
 }

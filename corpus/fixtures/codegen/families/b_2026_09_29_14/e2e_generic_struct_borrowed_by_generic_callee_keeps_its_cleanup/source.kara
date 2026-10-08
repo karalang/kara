@@ -4,7 +4,7 @@ impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
 struct Q[U] { u: U }
 impl[U] Q[U] {
     fn rd(ref self) -> i64 { return 1 }
-    fn eat(ref self, v: U) -> i64 { return 2 }
+    fn eat(ref self, v: own U) -> i64 { return 2 }
     fn qu(ref self, v: own U, c: bool, w: own U) -> U { if c { return v } return w }
 }
 struct D[U] { u: U, n: i64 }

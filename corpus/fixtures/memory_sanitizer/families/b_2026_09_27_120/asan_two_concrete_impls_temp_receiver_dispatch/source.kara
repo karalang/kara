@@ -1,8 +1,8 @@
 enum G1[T] { Y(T), N }
-impl G1[Vec[i64]] { fn show(self) -> i64 { println("v show"); return 1; } }
+impl G1[Vec[i64]] { fn show(own self) -> i64 { println("v show"); return 1; } }
 impl G1[String] {
-    fn show(self) -> i64 { println("s show"); return 2; }
-    fn shm(self) -> i64 { println("s shm"); return 3; }
+    fn show(own self) -> i64 { println("s show"); return 2; }
+    fn shm(own self) -> i64 { println("s shm"); return 3; }
 }
 fn main() {
     let a = G1.Y([4, 5]).show();

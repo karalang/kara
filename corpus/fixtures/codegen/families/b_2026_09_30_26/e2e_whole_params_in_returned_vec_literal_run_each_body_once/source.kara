@@ -3,14 +3,14 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 struct W3 { q: R, r: R, n: i64 }
 struct K { a: i64 }
-impl K { fn vm(ref self, a: R, b: R) -> Vec[R] { return vec![a, b]; } }
-fn vc(a: R, b: R) -> Vec[R] { return vec![a, b]; }
-fn vt(a: R, b: R) -> Vec[R] { vec![a, b] }
-fn va(a: R, b: R) -> Vec[R] { return [a, b]; }
-fn vcc(a: R, f: bool) -> Vec[R] { if f { return vec![a]; } return vec![mk(90)]; }
-fn vtc(a: R, f: bool) -> Vec[R] { if f { vec![a] } else { vec![mk(91)] } }
-fn vmix(a: R) -> Vec[R] { return vec![a, mk(50)]; }
-fn vf(w: W3) -> Vec[R] { return vec![w.q, w.r]; }
+impl K { fn vm(ref self, a: own R, b: own R) -> Vec[R] { return vec![a, b]; } }
+fn vc(a: own R, b: own R) -> Vec[R] { return vec![a, b]; }
+fn vt(a: own R, b: own R) -> Vec[R] { vec![a, b] }
+fn va(a: own R, b: own R) -> Vec[R] { return [a, b]; }
+fn vcc(a: own R, f: bool) -> Vec[R] { if f { return vec![a]; } return vec![mk(90)]; }
+fn vtc(a: own R, f: bool) -> Vec[R] { if f { vec![a] } else { vec![mk(91)] } }
+fn vmix(a: own R) -> Vec[R] { return vec![a, mk(50)]; }
+fn vf(w: own W3) -> Vec[R] { return vec![w.q, w.r]; }
 fn main() {
   println("-c1"); let c1 = vc(mk(1), mk(2)); println(f"r{c1.len()}{c1[0].id}");
   println("-c2"); let p = mk(3); let q = mk(4); let c2 = vc(p, q); println(f"r{c2[1].id}");

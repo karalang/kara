@@ -4,15 +4,15 @@ struct ShP { i: ShIn, n: i64 }
 fn g(p: ShP) -> i64 { return p.n; }
 fn mk(n: i64) -> ShP { return ShP { i: ShIn { s: f"aaaaaaaaaaaaaaaaaaa{n}" }, n: n }; }
 fn mkOut(c: String) -> ShOut { return ShOut { i: ShIn { s: f"bbbbbbbbbbbbbbbbbbb{c}" } }; }
-fn ign(w: Option[ShP]) -> i64 { return 7; }
-fn ignOut(w: Option[ShOut]) -> i64 { return 8; }
-fn ignRes(w: Result[ShP, i64]) -> i64 { return 9; }
-fn ignResOut(w: Result[ShOut, i64]) -> i64 { return 10; }
-fn toG(w: Option[ShP]) -> i64 { match w { Some(p) => { return g(p); }, None => { return 0; } } }
-fn bind(w: Option[ShP]) -> i64 { let x = w; return 3; }
-fn rebind(w: Option[ShP]) -> i64 { if let Some(p) = w { let q = p; return q.n; } return 0; }
-fn keep(w: Option[ShP], v: mut ref Vec[Option[ShP]]) { v.push(w); }
-fn pass(w: Result[ShP, i64]) -> Result[ShP, i64] { return w; }
+fn ign(w: own Option[ShP]) -> i64 { return 7; }
+fn ignOut(w: own Option[ShOut]) -> i64 { return 8; }
+fn ignRes(w: own Result[ShP, i64]) -> i64 { return 9; }
+fn ignResOut(w: own Result[ShOut, i64]) -> i64 { return 10; }
+fn toG(w: own Option[ShP]) -> i64 { match w { Some(p) => { return g(p); }, None => { return 0; } } }
+fn bind(w: own Option[ShP]) -> i64 { let x = w; return 3; }
+fn rebind(w: own Option[ShP]) -> i64 { if let Some(p) = w { let q = p; return q.n; } return 0; }
+fn keep(w: own Option[ShP], v: mut ref Vec[Option[ShP]]) { v.push(w); }
+fn pass(w: own Result[ShP, i64]) -> Result[ShP, i64] { return w; }
 fn main() {
     let lo = Some(mkOut("a"));
     let lr: Result[ShOut, i64] = Ok(mkOut("b"));

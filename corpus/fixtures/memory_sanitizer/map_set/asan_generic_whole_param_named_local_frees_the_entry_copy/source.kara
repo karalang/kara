@@ -11,7 +11,7 @@ fn mkp(i: i64) -> P { return P { id: i, tag: f"p{i}" }; }
 fn passG[T](x: own T) -> T { println("inP"); return x; }
 fn passN(x: own R) -> R { println("inN"); return x; }
 fn maybeG[T](x: own T, k: bool) -> T { println("inM"); if k { return x; } return x; }
-fn scalarG[T](x: T) -> i64 { println("inS"); return 3; }
+fn scalarG[T](x: own T) -> i64 { println("inS"); return 3; }
 fn round() {
   let g1 = mk(82); let _ = passG(g1);            println("a");
   let g2 = mk(88); let o2 = passG(g2);           println(f"k{o2.id}");

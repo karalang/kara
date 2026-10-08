@@ -6,14 +6,14 @@ fn mky(n: i64) -> Y { Y { h: N { v: n }, k: n } }
 fn nn(n: N) { println(f"n{n.v}"); }
 fn nq(n: N) -> i64 { n.v }
 fn rq(n: ref N) -> i64 { n.v }
-fn yn(y: Y) -> i64 { y.k }
-fn keepn(y: Y) -> N { y.h }
+fn yn(y: own Y) -> i64 { y.k }
+fn keepn(y: own Y) -> N { y.h }
 fn idn(n: own N) -> N { n }
 fn idc(n: own N, c: bool) -> N { if c { n } else { mkn(0) } }
 fn bump(n: N) -> N { N { v: n.v + 100 } }
 fn two(a: N, b: N) -> i64 { a.v + b.v }
 fn put(vs: mut ref Vec[N], n: own N) { vs.push(n); }
-fn gn[T](t: T, n: N) -> i64 { n.v }
+fn gn[T](t: own T, n: N) -> i64 { n.v }
 struct H { c: i64 }
 impl H {
     fn m(ref self, n: N) -> i64 { n.v + self.c }

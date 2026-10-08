@@ -1,8 +1,8 @@
 struct H { id: i64, s: String }
 impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
 fn mk() -> (H, H) { return (H { id: 0, s: "zzzzzzzzzzzz" }, H { id: 1, s: "zzzzzzzzzzzz" }); }
-fn sink(t: (H, H)) -> i64 { return t.0.id + t.1.id }
-fn eat(o: Option[(H, H)]) -> (H, H) { match o { Option.Some(t) => { println(f"saw{t.0.id}"); return mk(); } Option.None => { return mk(); } } }
+fn sink(t: own (H, H)) -> i64 { return t.0.id + t.1.id }
+fn eat(o: own Option[(H, H)]) -> (H, H) { match o { Option.Some(t) => { println(f"saw{t.0.id}"); return mk(); } Option.None => { return mk(); } } }
 fn main() {
     let got = eat(Option.Some((H { id: 5, s: "aaaaaaaaaaaa" }, H { id: 6, s: "bbbbbbbbbbbb" })));
     println(f"got:{got.0.id}");

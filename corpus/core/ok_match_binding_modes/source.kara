@@ -1,7 +1,7 @@
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
 fn show(r: ref R) { println(f"show{r.id}"); }
-fn eat(r: R) { println(f"eat{r.id}"); }
+fn eat(r: own R) { println(f"eat{r.id}"); }
 fn main() {
     let a: Option[R] = Some(R { id: 1 });
     match a {

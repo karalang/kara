@@ -10,12 +10,12 @@ enum E2 { A(R), B(i64) }
 impl Drop for E2 { fn drop(mut ref self) { println("  dE2") } }
 enum E3 { A(R), S { k: i64, r: R } }
 impl Drop for E3 { fn drop(mut ref self) { println("  dE3") } }
-fn consume(x: R) -> i64 { return x.id }
+fn consume(x: own R) -> i64 { return x.id }
 
 fn p_sum(h: own H2) -> i64 { match h { H2 { e, n } => { match e { E.A(r) => { return r.id + n; } E.B => { return n; } } } } }
 fn p_bare(h: own H2) -> i64 { match h { H2 { e, n } => { return n; } } }
 fn p_ren(h: own H2) -> i64 { match h { H2 { e, n: k } => { return k; } } }
-fn p_iflet(h: H2) -> i64 { if let H2 { e, n } = h { return n; } else { return 0; } }
+fn p_iflet(h: own H2) -> i64 { if let H2 { e, n } = h { return n; } else { return 0; } }
 fn p_alias(h: own H2) -> i64 { match h { H2 { e, n } => { let z = n * 2; match e { E.A(r) => { return r.id + z; } E.B => { return 0; } } } } }
 fn p_bf(h: own Hb) -> f64 { match h { Hb { e, b, f } => { if b { return f; } return 0.0; } } }
 fn p_s(h: own Hs) -> String { match h { Hs { e, s } => { return s; } } }

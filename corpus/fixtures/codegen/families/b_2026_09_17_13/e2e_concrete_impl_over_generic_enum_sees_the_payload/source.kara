@@ -11,7 +11,7 @@ impl G1[String] {
     fn shm(own self) { match self { G1.Y(v) => { println(f"mx {v}") } G1.N => { println("mx NONE") } } }
     fn get(own self) -> String { match self { G1.Y(v) => { v } G1.N => { f"none" } } }
     fn peek(ref self) { match self { G1.Y(v) => { println(f"pk {v}") } G1.N => { println("pk none") } } }
-    fn iflet(self) { if let G1.Y(v) = self { println(f"il {v}") } else { println("il none") } }
+    fn iflet(own self) { if let G1.Y(v) = self { println(f"il {v}") } else { println("il none") } }
 }
 fn mks(s: own String) -> G1[String] { return G1.Y(s); }
 fn main() {

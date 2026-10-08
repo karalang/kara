@@ -15,8 +15,8 @@ fn mid3(v: own S3, c: bool) -> Option[S3] { if c { return Some(v) } return None 
 fn ho3(v: own S3) -> Ho[S3] { return Ho.Full(v) }
 fn wrapP(v: own P) -> Option[P] { return Some(v) }
 fn outq(s: own S2) -> Option[S2] { let o = Some(s); return o }
-fn dup(a: own S2, b: S2) -> Option[S2] { return Some(a) }
-fn noret(v: S2) -> Option[S2] { println(f"n{v.id}"); return None }
+fn dup(a: own S2, b: own S2) -> Option[S2] { return Some(a) }
+fn noret(v: own S2) -> Option[S2] { println(f"n{v.id}"); return None }
 fn ca() { let o = wrapS(mk2(1)); println(f"s{o.is_some()}"); }
 fn cb() { let o = wrapS(S2 { h: Sh { k: 2 }, id: 2 }); println(f"s{o.is_some()}"); }
 fn cc() { let o = midS(mk2(3), true); println(f"s{o.is_some()}"); }

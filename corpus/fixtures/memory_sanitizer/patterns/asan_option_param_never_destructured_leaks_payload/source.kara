@@ -1,4 +1,4 @@
 
 fn mkv() -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push("x"); return v; }
-fn take(o: Option[Vec[String]]) { println("got"); }
+fn take(o: own Option[Vec[String]]) { println("got"); }
 fn main() { take(Some(mkv())); println("end"); }

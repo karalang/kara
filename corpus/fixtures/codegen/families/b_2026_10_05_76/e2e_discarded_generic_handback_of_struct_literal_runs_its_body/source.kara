@@ -3,7 +3,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct S { r: R, s: String }
 fn mks(i: i64) -> S { S { r: R { id: i }, s: f"ssssssssssssssssssssssssssss{i}" } }
 fn g[T](o: own T) -> T { o }
-fn g2[T](s: T, o: own T) -> T { o }
+fn g2[T](s: own T, o: own T) -> T { o }
 fn g3[T](o: own T) -> T { let t = o; t }
 fn main() {
     g(R { id: 1 }); println("_a1");

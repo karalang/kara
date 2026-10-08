@@ -4,11 +4,11 @@ fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
 
 struct Mo { m: Map[i64, String], r: R, z: i64 }
 impl Drop for Mo { fn drop(mut ref self) { println(f"dMo{self.z}") } }
-fn moOwn(h: Mo) -> i64 { println("in"); return h.z; }
+fn moOwn(h: own Mo) -> i64 { println("in"); return h.z; }
 
 struct Cs { s: String, r: R, z: i64 }
 impl Drop for Cs { fn drop(mut ref self) { println(f"dCs{self.z}") } }
-fn csOwn(h: Cs) -> i64 { println("in"); return h.z; }
+fn csOwn(h: own Cs) -> i64 { println("in"); return h.z; }
 
 fn moTemp()  { let mut m: Map[i64, String] = Map.new(); m.insert(1, f"v1"); let _ = moOwn(Mo { m: m, r: mk(3), z: 21 }); }
 fn moLocal() { let mut m: Map[i64, String] = Map.new(); m.insert(2, f"v2"); let h = Mo { m: m, r: mk(4), z: 22 }; let _ = moOwn(h); }

@@ -1,19 +1,19 @@
 
-fn interp(x: Option[Option[String]]) { println(f"i:{x}"); }
+fn interp(x: own Option[Option[String]]) { println(f"i:{x}"); }
 
-fn matched(x: Option[Option[String]]) {
+fn matched(x: own Option[Option[String]]) {
     match x { Some(inner) => { println(f"m:{inner}"); } None => { println("mn"); } }
 }
 
-fn unused(x: Option[Option[String]]) { println("u"); }
+fn unused(x: own Option[Option[String]]) { println("u"); }
 
-fn other(x: Option[Result[String, String]]) { println(f"o:{x}"); }
+fn other(x: own Option[Result[String, String]]) { println(f"o:{x}"); }
 
-fn triple(x: Option[Option[Option[String]]]) { println(f"t:{x}"); }
+fn triple(x: own Option[Option[Option[String]]]) { println(f"t:{x}"); }
 
-fn admitted(x: Result[Option[String], String]) { println(f"a:{x}"); }
+fn admitted(x: own Result[Option[String], String]) { println(f"a:{x}"); }
 
-fn ident(x: Option[Option[String]]) -> Option[Option[String]] { return x; }
+fn ident(x: own Option[Option[String]]) -> Option[Option[String]] { return x; }
 
 fn main() {
     let mut n = 0;

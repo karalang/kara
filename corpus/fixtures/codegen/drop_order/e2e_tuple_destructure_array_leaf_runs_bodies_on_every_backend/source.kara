@@ -6,8 +6,8 @@ struct B { t: (Array[R, 2], i64) }
 impl Drop for B { fn drop(mut ref self) { println("dB") } }
 struct V { t: (Vec[R], i64) }
 fn mk(b: i64) -> R { return R { id: b, s: f"pay-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-{b}" }; }
-fn take(x: Array[R, 2]) { println(f"take {x[0].id}") }
-fn take_w(w: W) { println(f"tw {w.t.1}") }
+fn take(x: own Array[R, 2]) { println(f"take {x[0].id}") }
+fn take_w(w: own W) { println(f"tw {w.t.1}") }
 fn round() {
     { let t: (Array[R, 2], i64) = ([mk(1), mk(2)], 7); let (a, j) = t; println(f"c1 {j}") }
     { let t: (Array[R, 2], i64) = ([mk(3), mk(4)], 7); let (a, j) = t; println(f"c2 {j} {a[0].id}") }

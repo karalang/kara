@@ -1,9 +1,9 @@
 struct W { id: i64, name: String }
 impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.name}") } }
 fn mk(i: i64) -> W { return W { id: i, name: f"n{i}" }; }
-fn gd[T](o: Option[(T, i64)]) -> i64 { match o { Some((a, b)) => { return b; } None => { return 0; } } }
-fn e3[T](o: Option[(T, i64)], d: own T) -> T { match o { Some((a, b)) => { return a; } None => { return d; } } }
-fn e1[T](o: Option[(T, i64)]) -> Option[T] { match o { Some((a, b)) => { return Some(a); } None => { return None; } } }
+fn gd[T](o: own Option[(T, i64)]) -> i64 { match o { Some((a, b)) => { return b; } None => { return 0; } } }
+fn e3[T](o: own Option[(T, i64)], d: own T) -> T { match o { Some((a, b)) => { return a; } None => { return d; } } }
+fn e1[T](o: own Option[(T, i64)]) -> Option[T] { match o { Some((a, b)) => { return Some(a); } None => { return None; } } }
 fn main() {
     let r = e1(Some((mk(2), 9))); match r { Some(w) => { println(f"e{w.id}") } None => { println("e-none") } }
     println(e3(Some((f"generic-string-mu", 9)), f"default-string-nu"));

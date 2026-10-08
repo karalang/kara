@@ -9,8 +9,8 @@ impl E {
     fn m_r(own self) -> R { match self { E.A(r) => { return r; } E.B => { return mk(0); } } }
     fn m_none(own self) -> i64 { match self { E.A(_) => { return 1; } E.B => { return 0; } } }
     fn m_print(own self) { match self { E.A(r) => { println(f"  p{r.id}"); } E.B => { } } }
-    fn m_iflet(self) -> i64 { if let E.A(r) = self { return r.id; } else { return 0; } }
-    fn m_whilelet(self) -> i64 { while let E.A(r) = self { return r.id; } return 0; }
+    fn m_iflet(own self) -> i64 { if let E.A(r) = self { return r.id; } else { return 0; } }
+    fn m_whilelet(own self) -> i64 { while let E.A(r) = self { return r.id; } return 0; }
     fn m_guard(own self) -> i64 { match self { E.A(r) if r.id > 100 => { return 1; } E.A(r) => { return r.id + 1; } E.B => { return 0; } } }
 }
 impl P {

@@ -1,9 +1,9 @@
 struct W { id: i64, name: String }
 impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.name}") } }
 fn mk(i: i64) -> W { return W { id: i, name: f"n{i}" }; }
-fn so(o: Option[W]) -> bool { return o.is_some(); }
-fn ro(o: Result[W, i64]) -> bool { return o.is_ok(); }
-fn rt(o: Result[(W, i64), i64]) -> bool { return o.is_ok(); }
-fn dd(o: Option[W]) -> i64 { o; return 1; }
-fn lw(o: Result[W, i64]) -> i64 { let _ = o; return 2; }
+fn so(o: own Option[W]) -> bool { return o.is_some(); }
+fn ro(o: own Result[W, i64]) -> bool { return o.is_ok(); }
+fn rt(o: own Result[(W, i64), i64]) -> bool { return o.is_ok(); }
+fn dd(o: own Option[W]) -> i64 { o; return 1; }
+fn lw(o: own Result[W, i64]) -> i64 { let _ = o; return 2; }
 fn main() { println(f"a{so(Some(mk(1)))}"); println(f"b{ro(Ok(mk(2)))}"); println(f"c{rt(Ok((mk(3), 9)))}"); println(f"d{dd(Some(mk(4)))}"); println(f"e{lw(Ok(mk(5)))}"); let n = Some(mk(6)); println(f"f{so(n)}"); println("end") }

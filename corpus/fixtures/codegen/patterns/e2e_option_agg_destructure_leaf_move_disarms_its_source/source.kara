@@ -3,7 +3,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.x
 struct H { a: R, b: Option[R] }
 fn mk(n: i64) -> R { return R { id: n, s: f"s{n}", xs: [n, n] }; }
 
-fn eat(xa: Option[R]) -> i64 { match xa { Option.Some(ra) => { ra.id }, Option.None => { 0 } } }
+fn eat(xa: own Option[R]) -> i64 { match xa { Option.Some(ra) => { ra.id }, Option.None => { 0 } } }
 fn giveback() -> Option[R] { let tb = (mk(3), Option.Some(mk(103))); let (_, ob) = tb; return ob }
 
 fn rebind()  { let tc = (mk(2), Option.Some(mk(102))); let (_, oc) = tc; let qc = oc; println(f"  q{qc.is_some()}") }

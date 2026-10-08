@@ -15,7 +15,7 @@ fn quad(b: Option[Option[Option[Option[i64]]]]) -> i64 {
 fn duo(b: Option[Option[i64]]) -> i64 {
     match b { Option.Some(Option.Some(x)) => x, _ => 0 }
 }
-fn tristr(b: Option[Option[Option[String]]]) -> i64 {
+fn tristr(b: own Option[Option[Option[String]]]) -> i64 {
     match b { Option.Some(Option.Some(Option.Some(s))) => { if s.contains("envelope-") { 1 } else { 0 } } _ => -1 }
 }
 fn idc(o: Option[Option[Option[i64]]]) -> Option[Option[Option[i64]]] { o }

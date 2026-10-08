@@ -3,7 +3,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
 fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 fn ret(a: own Array[R, 2], c: bool) -> Array[R, 2] { if c { return a }; println("  dies"); return [mkr(8), mkr(9)] }
 fn itail(a: own Array[R, 2], c: bool) -> Array[R, 2] { if c { a } else { [mkr(8), mkr(9)] } }
-fn mtch(a: Array[R, 2], k: i64) -> Array[R, 2] { match k { 1 => a, _ => [mkr(8), mkr(9)] } }
+fn mtch(a: own Array[R, 2], k: i64) -> Array[R, 2] { match k { 1 => a, _ => [mkr(8), mkr(9)] } }
 fn mblk(a: own Array[R, 2], k: i64) -> Array[R, 2] { match k { 1 => { println("  one"); a }, _ => { println("  other"); [mkr(8), mkr(9)] } } }
 fn rebind(a: own Array[R, 2], c: bool) -> Array[R, 2] { let m = a; if c { return m }; println("  dies"); return [mkr(8), mkr(9)] }
 fn letif(a: own Array[R, 2], c: bool) -> Array[R, 2] { let r: Array[R, 2] = if c { a } else { [mkr(8), mkr(9)] }; println("  mid"); r }

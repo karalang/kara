@@ -209,7 +209,7 @@ fn data_lines(text: ref String) -> Vec[(i64, String)] {
 // inside a generic fn returns garbage from `get` (old.stamp() read 16 or a
 // pointer-sized value instead of the stored date), so newest-wins picked the
 // wrong record. Split into two concrete functions.
-fn dedupe_contacts(rows: Vec[Contact]) -> (SortedMap[String, Contact], i64) {
+fn dedupe_contacts(rows: own Vec[Contact]) -> (SortedMap[String, Contact], i64) {
     let mut best: SortedMap[String, Contact] = SortedMap.new();
     let mut merged = 0;
     for row in rows.into_iter() {
@@ -228,7 +228,7 @@ fn dedupe_contacts(rows: Vec[Contact]) -> (SortedMap[String, Contact], i64) {
     (best, merged)
 }
 
-fn dedupe_signups(rows: Vec[Signup]) -> (SortedMap[String, Signup], i64) {
+fn dedupe_signups(rows: own Vec[Signup]) -> (SortedMap[String, Signup], i64) {
     let mut best: SortedMap[String, Signup] = SortedMap.new();
     let mut merged = 0;
     for row in rows.into_iter() {

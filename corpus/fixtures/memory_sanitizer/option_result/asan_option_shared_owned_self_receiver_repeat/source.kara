@@ -1,8 +1,8 @@
 
 shared struct ListNode { val: i64, mut next: Option[ListNode] }
 impl ListNode {
-    fn step(self) -> Option[ListNode] { self.next }
-    fn value(self) -> i64 { self.val }
+    fn step(own self) -> Option[ListNode] { self.next }
+    fn value(own self) -> i64 { self.val }
 }
 fn make(n: i64) -> Option[ListNode] {
     let mut head: Option[ListNode] = None;

@@ -5,7 +5,7 @@ struct HoRes { a: R, b: Result[R, String] }
 struct HoOpt { a: R, b: Option[R] }
 struct WrapR { inner: HoRes }
 struct WrapO { inner: HoOpt }
-fn eat(x: R) { println(f"  eat{x.id}") }
+fn eat(x: own R) { println(f"  eat{x.id}") }
 
 fn rebind(h: own HoRes)    { let HoRes { a, b } = h; let c = b;
                          match c { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }

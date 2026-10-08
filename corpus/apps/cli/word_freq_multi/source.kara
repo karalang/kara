@@ -165,7 +165,7 @@ fn describe_io(e: own IoError) -> String {
     }
 }
 
-fn into_document(path: own String, read: Result[String, IoError]) -> Result[Document, AppError] {
+fn into_document(path: own String, read: own Result[String, IoError]) -> Result[Document, AppError] {
     match read {
         Ok(body) => Ok(Document { name: path, body }),
         Err(e) => Err(AppError.Io { path, reason: describe_io(e) }),

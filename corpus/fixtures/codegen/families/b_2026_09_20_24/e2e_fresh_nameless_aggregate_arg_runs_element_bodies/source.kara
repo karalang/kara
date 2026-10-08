@@ -3,19 +3,19 @@ impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
 fn mkd(n: i64) -> D { return D { id: n, s: f"sssssssssssssssssssssssssssssssssss{n}" } }
 struct H { k: i64 }
 impl H {
-    fn mlen(ref self, x: Vec[D]) -> i64 { return x.len() }
-    fn afirst(x: Array[D, 1]) -> i64 { return x[0].id }
+    fn mlen(ref self, x: own Vec[D]) -> i64 { return x.len() }
+    fn afirst(x: own Array[D, 1]) -> i64 { return x[0].id }
 }
-fn afirst(x: Array[D, 1]) -> i64 { return x[0].id }
-fn apair(x: Array[D, 2]) -> i64 { return x[0].id }
-fn aseven(x: Array[D, 1]) -> i64 { return 7 }
-fn afwd(x: Array[D, 1]) -> i64 { return afirst(x) }
-fn vlen(x: Vec[D]) -> i64 { return x.len() }
-fn glen[T](x: Vec[T]) -> i64 { return x.len() }
-fn tsnd(t: (D, i64)) -> i64 { return t.1 }
-fn tone(t: (D, D)) -> i64 { return 1 }
-fn qv(t: (Vec[D], i64)) -> i64 { return t.1 }
-fn qa(t: (Array[D, 1], i64)) -> i64 { return t.1 }
+fn afirst(x: own Array[D, 1]) -> i64 { return x[0].id }
+fn apair(x: own Array[D, 2]) -> i64 { return x[0].id }
+fn aseven(x: own Array[D, 1]) -> i64 { return 7 }
+fn afwd(x: own Array[D, 1]) -> i64 { return afirst(x) }
+fn vlen(x: own Vec[D]) -> i64 { return x.len() }
+fn glen[T](x: own Vec[T]) -> i64 { return x.len() }
+fn tsnd(t: own (D, i64)) -> i64 { return t.1 }
+fn tone(t: own (D, D)) -> i64 { return 1 }
+fn qv(t: own (Vec[D], i64)) -> i64 { return t.1 }
+fn qa(t: own (Array[D, 1], i64)) -> i64 { return t.1 }
 fn qd(t: own (Vec[D], i64)) -> i64 { let (a, j) = t; return a.len() + j }
 fn tkeep(t: own (D, i64)) -> D { let (w, k) = t; return w }
 fn vkeep(x: own Vec[D]) -> Vec[D] { return x }

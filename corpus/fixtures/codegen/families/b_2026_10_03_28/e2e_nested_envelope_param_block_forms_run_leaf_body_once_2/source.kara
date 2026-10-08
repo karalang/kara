@@ -1,6 +1,6 @@
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
-fn le(x: Option[Option[R]], v: mut ref Vec[R]) -> i64 {
+fn le(x: own Option[Option[R]], v: mut ref Vec[R]) -> i64 {
     let Some(Some(w)) = x else { return 0 };
     v.push(w);
     return 1

@@ -1,5 +1,5 @@
 enum N { P((i32, String)), Q }
-fn f(o: Option[(bool, String)]) -> i64 { match o { Some((b, s)) => { if b { return s.len(); } return 0; } None => { return 0; } } }
+fn f(o: own Option[(bool, String)]) -> i64 { match o { Some((b, s)) => { if b { return s.len(); } return 0; } None => { return 0; } } }
 fn main() {
     let g = Some((3i32, 5));
     if let Some((a, b)) = g { println(f"a{a}{b}"); }

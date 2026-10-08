@@ -2,23 +2,23 @@ struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 struct Hd3 { r: R, n: i64 }
 struct Q { z: i64 }
-fn eat(o: Option[Hd3], k: bool) -> R {
+fn eat(o: own Option[Hd3], k: bool) -> R {
     match o { Some(t) => { if k { t.r } else { R { id: 1 } } } None => { R { id: 0 } } }
 }
-fn bare(o: Option[Hd3], k: bool) -> R {
+fn bare(o: own Option[Hd3], k: bool) -> R {
     match o { Some(t) => if k { t.r } else { R { id: 1 } }, None => R { id: 0 } }
 }
-fn res(o: Result[Hd3, i64], k: bool) -> R {
+fn res(o: own Result[Hd3, i64], k: bool) -> R {
     match o { Ok(t) => { if k { t.r } else { R { id: 1 } } } Err(e) => { R { id: 0 } } }
 }
-fn mixed(o: Option[Hd3], k: i64) -> R {
+fn mixed(o: own Option[Hd3], k: i64) -> R {
     match o {
         Some(t) => { if k == 0 { return t.r; } if k == 1 { t.r } else { R { id: 1 } } }
         None => { R { id: 0 } }
     }
 }
 impl Q {
-    fn take(ref self, o: Option[Hd3], k: bool) -> R {
+    fn take(ref self, o: own Option[Hd3], k: bool) -> R {
         match o { Some(t) => { if k { t.r } else { R { id: 1 } } } None => { R { id: 0 } } }
     }
 }

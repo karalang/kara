@@ -2,43 +2,43 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 fn hs(i: i64) -> String { return f"heap-string-longer-than-sso-{i}" }
-fn take(x: Option[Option[R]]) -> Option[R] {
+fn take(x: own Option[Option[R]]) -> Option[R] {
     match x {
         Some(inner) => inner,
         None => None,
     }
 }
-fn takeg[T](x: Option[Option[T]]) -> Option[T] {
+fn takeg[T](x: own Option[Option[T]]) -> Option[T] {
     match x {
         Some(inner) => inner,
         None => None,
     }
 }
-fn takes(x: Option[Option[String]]) -> Option[String] {
+fn takes(x: own Option[Option[String]]) -> Option[String] {
     match x {
         Some(inner) => inner,
         None => None,
     }
 }
-fn taker(x: Result[Option[String], i64]) -> Option[String] {
+fn taker(x: own Result[Option[String], i64]) -> Option[String] {
     match x {
         Ok(inner) => inner,
         Err(_) => None,
     }
 }
-fn take3(x: Option[Option[Option[String]]]) -> Option[Option[String]] {
+fn take3(x: own Option[Option[Option[String]]]) -> Option[Option[String]] {
     match x {
         Some(inner) => inner,
         None => None,
     }
 }
-fn peeks(x: Option[Option[String]]) -> i64 {
+fn peeks(x: own Option[Option[String]]) -> i64 {
     match x {
         Some(inner) => 7,
         None => 0,
     }
 }
-fn readr(x: Option[Option[R]]) -> i64 {
+fn readr(x: own Option[Option[R]]) -> i64 {
     match x {
         Some(inner) => 8,
         None => 0,

@@ -6,18 +6,18 @@ struct Hs { pe: (R, i64), s: String }
 struct G[T] { pe: (T, i64), z: i64 }
 struct Plain { a: i64, b: i64 }
 
-fn genLocal[T](x: T) -> i64 { let h = Hn { pe: (mk(60), 0), z: 1 }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}/{r.xs.len()}"); return k; }
-fn genFresh[T](x: T) -> i64 { let q = Hn { pe: (mk(61), 0), z: 1 }; let (r, k) = q.pe; println(f"  b{r.id}/{r.tag}/{r.xs.len()}"); return k; }
-fn genStr[T](x: T)   -> i64 { let h = Hs { pe: (mk(62), 0), s: f"s" }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}/{r.xs.len()}"); return k; }
+fn genLocal[T](x: own T) -> i64 { let h = Hn { pe: (mk(60), 0), z: 1 }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}/{r.xs.len()}"); return k; }
+fn genFresh[T](x: own T) -> i64 { let q = Hn { pe: (mk(61), 0), z: 1 }; let (r, k) = q.pe; println(f"  b{r.id}/{r.tag}/{r.xs.len()}"); return k; }
+fn genStr[T](x: own T)   -> i64 { let h = Hs { pe: (mk(62), 0), s: f"s" }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}/{r.xs.len()}"); return k; }
 fn ngLocal(x: i64)   -> i64 { let h = Hn { pe: (mk(63), 0), z: 1 }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}/{r.xs.len()}"); return k; }
-fn genMark[T](x: T)  -> i64 { let h = Hn { pe: (mk(64), 0), z: 9 }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println(f"  z{h.z}"); return k; }
-fn genNoDrop[T](x: T) -> i64 { let h = G[Plain] { pe: (Plain { a: 1, b: 2 }, 0), z: 1 }; let (p, k) = h.pe; println(f"  b{p.a}/{p.b}"); return k; }
+fn genMark[T](x: own T)  -> i64 { let h = Hn { pe: (mk(64), 0), z: 9 }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println(f"  z{h.z}"); return k; }
+fn genNoDrop[T](x: own T) -> i64 { let h = G[Plain] { pe: (Plain { a: 1, b: 2 }, 0), z: 1 }; let (p, k) = h.pe; println(f"  b{p.a}/{p.b}"); return k; }
 
-fn takesH(h: Hn) -> i64 { return genLocal(5); }
-fn takesQ(q: Hn) -> i64 { return genFresh(5); }
-fn takesHs(h: Hs) -> i64 { return genStr(5); }
-fn takesHm(h: Hn) -> i64 { return genMark(5); }
-fn takesHn(h: G[Plain]) -> i64 { return genNoDrop(5); }
+fn takesH(h: own Hn) -> i64 { return genLocal(5); }
+fn takesQ(q: own Hn) -> i64 { return genFresh(5); }
+fn takesHs(h: own Hs) -> i64 { return genStr(5); }
+fn takesHm(h: own Hn) -> i64 { return genMark(5); }
+fn takesHn(h: own G[Plain]) -> i64 { return genNoDrop(5); }
 
 fn plainLocal() -> i64 { return genLocal(5); }
 fn plainFresh() -> i64 { return genFresh(5); }

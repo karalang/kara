@@ -3,7 +3,7 @@ struct Item { id: i64 }
 impl Drop for Item {
     fn drop(mut ref self) { println(f"drop {self.id}") }
 }
-fn look(x: Item) -> i64 { x.id }
+fn look(x: own Item) -> i64 { x.id }
 fn main() {
     let n = look(Item { id: 7 });
     println(n);

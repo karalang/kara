@@ -21,11 +21,11 @@ fn ig_mo(x: Mo) -> i64 { 16 }
 fn ig_ps(x: Ps) -> i64 { 32 }
 fn ig_sh(x: Sh2) -> i64 { 64 }
 fn ig_ref(x: ref Ms) -> i64 { 128 }
-fn ig_gen[T](x: Ms, t: T) -> i64 { 256 }
+fn ig_gen[T](x: Ms, t: own T) -> i64 { 256 }
 fn ig_nest(x: Outer) -> i64 { 512 }
 fn ig_arr(x: Ar) -> i64 { 1024 }
-fn ig_mix_conc(x: Mix[String]) -> i64 { 2048 }
-fn ig_mix_mono[T](x: Mix[T]) -> i64 { 4096 }
+fn ig_mix_conc(x: own Mix[String]) -> i64 { 2048 }
+fn ig_mix_mono[T](x: own Mix[T]) -> i64 { 4096 }
 fn mk_map(k: i64) -> Map[String, i64] {
     let mut m: Map[String, i64] = Map.new();
     m.insert(f"key-padded-out-so-it-heap-allocates-{k}", k);

@@ -5,7 +5,7 @@ struct W { r: D, s: D, b: i64 }
 fn mkw(n: i64) -> W { W { r: mkd(n), s: mkd(n + 100), b: n } }
 struct X { w: W, t: D }
 fn maybew(x: own W, c: bool) -> Option[W] { if c { return Some(x); } None }
-fn eatw(x: W) { println("ew") }
+fn eatw(x: own W) { println("ew") }
 fn backw(x: own W) -> W { return x }
 struct Q { z: i64 }
 impl Q {

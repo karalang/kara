@@ -3,7 +3,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
 struct Go[T] { r: T, z: i64 }
 impl[T] Drop for Go[T] { fn drop(mut ref self) { println(f"dGo{self.z}") } }
-fn gOwn[T](h: Go[T]) -> i64 { println("in"); return h.z; }
+fn gOwn[T](h: own Go[T]) -> i64 { println("in"); return h.z; }
 fn gTemp() { let _ = gOwn(Go[R] { r: mk(3), z: 9 }); }
 fn main() {
     gTemp();

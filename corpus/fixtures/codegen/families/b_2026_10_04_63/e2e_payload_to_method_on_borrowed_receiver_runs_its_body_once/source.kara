@@ -4,25 +4,25 @@ fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
 struct W { r: S, n: i64 }
 struct Q { z: i64, keep: Vec[S] }
 impl Q {
-  fn eat(ref self, s: S) { println("qx") }
+  fn eat(ref self, s: own S) { println("qx") }
   fn add(mut ref self, s: own S) { self.keep.push(s) }
   fn fwd(mut ref self, s: own S) { self.add(s) }
-  fn ofwd(mut ref self, s: S) { self.eat(s) }
-  fn po(ref self, o: Option[S]) { match o { Some(r) => self.eat(r), None => {} } println("po") }
-  fn pi(ref self, o: Option[S]) { if let Some(r) = o { self.eat(r) } println("pi") }
-  fn pr(ref self, o: Result[S, i64]) { match o { Ok(r) => self.eat(r), Err(e) => println(f"e{e}") } println("pr") }
-  fn pw(ref self, w: W) { self.eat(w.r); println("pw") }
-  fn pc(ref self, w: W, c: bool) { if c { self.eat(w.r) } println("pc") }
-  fn sa(mut ref self, o: Option[S]) { match o { Some(r) => self.add(r), None => {} } println("sa") }
-  fn sf(mut ref self, o: Option[S]) { match o { Some(r) => self.fwd(r), None => {} } println("sf") }
-  fn so(mut ref self, o: Option[S]) { match o { Some(r) => self.ofwd(r), None => {} } println("so") }
+  fn ofwd(mut ref self, s: own S) { self.eat(s) }
+  fn po(ref self, o: own Option[S]) { match o { Some(r) => self.eat(r), None => {} } println("po") }
+  fn pi(ref self, o: own Option[S]) { if let Some(r) = o { self.eat(r) } println("pi") }
+  fn pr(ref self, o: own Result[S, i64]) { match o { Ok(r) => self.eat(r), Err(e) => println(f"e{e}") } println("pr") }
+  fn pw(ref self, w: own W) { self.eat(w.r); println("pw") }
+  fn pc(ref self, w: own W, c: bool) { if c { self.eat(w.r) } println("pc") }
+  fn sa(mut ref self, o: own Option[S]) { match o { Some(r) => self.add(r), None => {} } println("sa") }
+  fn sf(mut ref self, o: own Option[S]) { match o { Some(r) => self.fwd(r), None => {} } println("sf") }
+  fn so(mut ref self, o: own Option[S]) { match o { Some(r) => self.ofwd(r), None => {} } println("so") }
   fn sw(mut ref self, w: own W) { self.add(w.r); println("sw") }
-  fn ret(ref self, o: Option[S]) -> Option[S] { match o { Some(r) => { self.eat2(r); return Some(r) }, None => {} } return None }
+  fn ret(ref self, o: own Option[S]) -> Option[S] { match o { Some(r) => { self.eat2(r); return Some(r) }, None => {} } return None }
   fn eat2(ref self, s: ref S) { println("q2") }
 }
-fn fo(q: ref Q, o: Option[S]) { match o { Some(r) => q.eat(r), None => {} } println("fo") }
-fn fa(q: mut ref Q, o: Option[S]) { match o { Some(r) => q.add(r), None => {} } println("fa") }
-fn fw(q: ref Q, w: W) { q.eat(w.r); println("fw") }
+fn fo(q: ref Q, o: own Option[S]) { match o { Some(r) => q.eat(r), None => {} } println("fo") }
+fn fa(q: mut ref Q, o: own Option[S]) { match o { Some(r) => q.add(r), None => {} } println("fa") }
+fn fw(q: ref Q, w: own W) { q.eat(w.r); println("fw") }
 fn main() {
   let mut q = Q { z: 0, keep: Vec.new() };
   q.po(Some(mks(1))); println("a");

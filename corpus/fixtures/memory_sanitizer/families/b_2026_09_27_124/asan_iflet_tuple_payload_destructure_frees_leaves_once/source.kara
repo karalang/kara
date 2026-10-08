@@ -1,6 +1,6 @@
 fn eats(s: String) { println(f"es{s}"); }
 fn mko() -> Option[(String, String)] { return Some((f"x{1}", f"y{2}")); }
-fn prm(o: Option[(String, String)]) { if let Some((a, b)) = o { println(f"p{a}") } }
+fn prm(o: own Option[(String, String)]) { if let Some((a, b)) = o { println(f"p{a}") } }
 fn main() {
     let o1: Option[(String, String)] = Some((f"a{1}", f"b{2}"));
     if let Some((a, b)) = o1 { eats(a); }

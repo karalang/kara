@@ -8,7 +8,7 @@ impl Drop for N { fn drop(mut ref self) { println(f"dN{self.id}") } }
 enum Gen[T] { Y(T), Z }
 enum Mix[T] { W(T), N(i64) }
 fn mkR(i: i64) -> R { return R { id: i, s: f"p{i}" }; }
-fn eat(g: Gen[R]) { println("ate") }
+fn eat(g: own Gen[R]) { println("ate") }
 fn main() {
     { let _ = Gen.Y(R { id: 47, s: f"payload-a" }); }
     { let _ = Gen.Y(mkR(48)); }

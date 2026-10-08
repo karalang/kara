@@ -3,9 +3,9 @@ impl[T] Drop for Box3[T] { fn drop(mut ref self) { println(f"dB{self.tag.len()}"
 struct Pl { v: String, tag: String }
 impl Drop for Pl { fn drop(mut ref self) { println(f"dP{self.tag.len()}") } }
 
-fn take(b: Box3[String]) { println(f"  t{b.v.len()}") }
-fn takei(b: Box3[i64]) { println(f"  ti{b.v}") }
-fn takep(b: Pl) { println(f"  tp{b.v.len()}") }
+fn take(b: own Box3[String]) { println(f"  t{b.v.len()}") }
+fn takei(b: own Box3[i64]) { println(f"  ti{b.v}") }
+fn takep(b: own Pl) { println(f"  tp{b.v.len()}") }
 fn make() -> Box3[String] { return Box3 { v: f"mmmmmmmm", tag: f"rrrrrrr" }; }
 
 fn c_param() { let b: Box3[String] = Box3 { v: f"pppppppp", tag: f"qqqqqq" }; take(b); println("  after") }

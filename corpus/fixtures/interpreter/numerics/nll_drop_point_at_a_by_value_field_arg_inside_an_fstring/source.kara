@@ -10,7 +10,7 @@ fn mk(n: i64) -> Res {
 }
 
 fn hand(r: own Res) -> Res { return r }
-fn readf(r: Res) -> i64 { return r.buf[3] }
+fn readf(r: own Res) -> i64 { return r.buf[3] }
 
 fn main() {
     let b = mk(20);

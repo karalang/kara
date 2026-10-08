@@ -6,17 +6,17 @@ struct H { name: String, id: i64 }
 impl Drop for H { fn drop(mut ref self) { println(f"  dH{self.id}") } }
 struct Ph { h: H, n: i64 }
 
-fn eat(o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
-fn eat_after(o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } println("  after") }
-fn eat_two(o: Option[Q]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
-fn eat_heap(o: Option[Ph]) { match o { Option.Some(t) => { let x = t.h; println("  mid") } Option.None => { println("  n") } } }
-fn eat_tuple(o: Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid") } Option.None => { println("  n") } } }
-fn eat_nomove(o: Option[P]) { match o { Option.Some(t) => { println(f"  peek{t.n}") } Option.None => { println("  n") } } }
+fn eat(o: own Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
+fn eat_after(o: own Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } println("  after") }
+fn eat_two(o: own Option[Q]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
+fn eat_heap(o: own Option[Ph]) { match o { Option.Some(t) => { let x = t.h; println("  mid") } Option.None => { println("  n") } } }
+fn eat_tuple(o: own Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid") } Option.None => { println("  n") } } }
+fn eat_nomove(o: own Option[P]) { match o { Option.Some(t) => { println(f"  peek{t.n}") } Option.None => { println("  n") } } }
 
 struct Sink { tag: i64 }
 impl Sink {
-  fn take(ref self, o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
-  fn grab(o: Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
+  fn take(ref self, o: own Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
+  fn grab(o: own Option[P]) { match o { Option.Some(t) => { let x = t.r; println("  mid") } Option.None => { println("  n") } } }
 }
 
 fn main() {

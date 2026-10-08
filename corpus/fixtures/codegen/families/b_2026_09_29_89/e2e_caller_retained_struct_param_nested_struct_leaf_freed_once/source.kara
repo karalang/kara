@@ -10,7 +10,7 @@ fn mkq(k: i64) -> Q {
 }
 fn keep(h: H) -> i64 { h.t.len() }
 fn f1(q: own Q) -> i64 { match q { Q { h, .. } => h.t.len() + h.w.len() } }
-fn f2(q: Q) -> i64 { if let Q { h, .. } = q { h.t.len() } else { 0 } }
+fn f2(q: own Q) -> i64 { if let Q { h, .. } = q { h.t.len() } else { 0 } }
 fn f3(q: own Q) -> i64 { match q { Q { h, .. } => keep(h) } }
 fn f4(q: own Q) -> i64 { let mut v: Vec[H] = Vec.new(); match q { Q { h, .. } => { v.push(h); } } v.len() }
 fn g5(q: own Q) -> H { match q { Q { h, .. } => h } }

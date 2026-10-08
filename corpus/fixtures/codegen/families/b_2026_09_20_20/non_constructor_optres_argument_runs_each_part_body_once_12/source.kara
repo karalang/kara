@@ -4,7 +4,7 @@ struct Q { r: R, s: R }
 fn mkr(k: i64) -> R { return R { id: k, v: k * 10 } }
 fn mkq() -> Option[Q] { return Option.Some(Q { r: mkr(5), s: mkr(6) }) }
 fn mkn() -> Option[Q] { return Option.None }
-fn take(o: Option[Q]) { match o { Option.Some(t) => { let x = t.r; println(f"  r:{x.v}s:{t.s.v}") } Option.None => { println("  n") } } }
+fn take(o: own Option[Q]) { match o { Option.Some(t) => { let x = t.r; println(f"  r:{x.v}s:{t.s.v}") } Option.None => { println("  n") } } }
 fn mkt() -> Option[(R, R)] { return Option.Some((mkr(5), mkr(6))) }
-fn gt[T](o: Option[(T, T)]) { match o { Option.Some(t) => { let x = t.0; println("  g") } Option.None => { println("  n") } } }
+fn gt[T](o: own Option[(T, T)]) { match o { Option.Some(t) => { let x = t.0; println("  g") } Option.None => { println("  n") } } }
 fn main() { gt(mkt()); println("end") }

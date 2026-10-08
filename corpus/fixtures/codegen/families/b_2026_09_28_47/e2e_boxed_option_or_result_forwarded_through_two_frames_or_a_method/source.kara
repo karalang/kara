@@ -3,13 +3,13 @@ impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
 fn gkeep[T](t: own T, v: mut ref Vec[T]) { v.push(t) }
 fn gfw[T](t: own T, v: mut ref Vec[T]) { gkeep(t, v) }
-fn okeep(t: Option[S], v: mut ref Vec[Option[S]]) { v.push(t) }
-fn ofw(t: Option[S], v: mut ref Vec[Option[S]]) { okeep(t, v) }
-fn f2(t: Option[S], v: mut ref Vec[Option[S]]) { ofw(t, v) }
+fn okeep(t: own Option[S], v: mut ref Vec[Option[S]]) { v.push(t) }
+fn ofw(t: own Option[S], v: mut ref Vec[Option[S]]) { okeep(t, v) }
+fn f2(t: own Option[S], v: mut ref Vec[Option[S]]) { ofw(t, v) }
 struct K { z: i64 }
-impl K { fn mf(ref self, t: Option[S], v: mut ref Vec[Option[S]]) { okeep(t, v) } }
-fn rkeep(t: Result[S, i64], v: mut ref Vec[Result[S, i64]]) { v.push(t) }
-fn rfw(t: Result[S, i64], v: mut ref Vec[Result[S, i64]]) { rkeep(t, v) }
+impl K { fn mf(ref self, t: own Option[S], v: mut ref Vec[Option[S]]) { okeep(t, v) } }
+fn rkeep(t: own Result[S, i64], v: mut ref Vec[Result[S, i64]]) { v.push(t) }
+fn rfw(t: own Result[S, i64], v: mut ref Vec[Result[S, i64]]) { rkeep(t, v) }
 fn main() {
     let k = K { z: 0 };
     let mut u: Vec[Option[S]] = Vec.new();

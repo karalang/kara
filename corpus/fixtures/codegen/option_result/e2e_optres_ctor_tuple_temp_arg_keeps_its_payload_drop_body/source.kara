@@ -3,9 +3,9 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self
 enum W { A(R), N }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
 
-fn optArg(t: (R, Option[R]))       -> i64 { println(f"  rd{t.0.id}"); return 0; }
-fn resArg(t: (R, Result[R, i64]))  -> i64 { println(f"  rd{t.0.id}"); return 0; }
-fn enumArg(t: (R, W))              -> i64 { println(f"  rd{t.0.id}"); return 0; }
+fn optArg(t: own (R, Option[R]))       -> i64 { println(f"  rd{t.0.id}"); return 0; }
+fn resArg(t: own (R, Result[R, i64]))  -> i64 { println(f"  rd{t.0.id}"); return 0; }
+fn enumArg(t: own (R, W))              -> i64 { println(f"  rd{t.0.id}"); return 0; }
 fn destr(t: own (R, Option[R]))        -> i64 { let (r, o) = t; println(f"  rd{r.id}"); return 0; }
 
 fn main() {

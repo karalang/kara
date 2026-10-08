@@ -17,7 +17,7 @@ fn n_str(a: own Array[String, 2]) -> i64 { let b = B6 { v: a }; println(f"  in:{
 fn n_tuple(a: own Array[R, 2]) -> i64 { let b = (a, 1); println("  in"); return 7 }
 fn b_local() -> i64 { let a: Array[R, 2] = [mkr(91), mkr(92)]; let b = B1 { v: a }; println("  in"); return 7 }
 fn b_discard(a: own Array[R, 2]) -> i64 { B1 { v: a }; println("  in"); return 7 }
-fn b_ctl(a: Array[R, 2]) -> i64 { println("  in"); return 7 }
+fn b_ctl(a: own Array[R, 2]) -> i64 { println("  in"); return 7 }
 fn main() {
     println("s/bind");    { let a: Array[R, 2] = [mkr(1), mkr(2)]; let z = s_bind(a); }
     println("s/two");     { let a: Array[R, 2] = [mkr(11), mkr(12)]; let z = s_two(a); }

@@ -4,7 +4,7 @@ enum Ho { P(Option[S1]), Q }
 enum Hq { P(Option[Vec[S1]]), Q }
 enum G[T] { X(T), Y }
 fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
-fn tako(o: Option[S1]) -> i64 { 1 }
+fn tako(o: own Option[S1]) -> i64 { 1 }
 fn main() {
     println("read"); { let h = Ho.P(Option.Some(s(1))); match h { Ho.P(o) => { println(f"  in {o.is_some()}") } Ho.Q => {} } }
     println("unused"); { let h = Ho.P(Option.Some(s(2))); match h { Ho.P(_) => { println("  in") } Ho.Q => {} } }

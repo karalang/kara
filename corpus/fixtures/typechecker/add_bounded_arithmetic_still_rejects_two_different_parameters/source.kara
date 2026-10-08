@@ -1,5 +1,5 @@
 
-fn f[T: Add, U: Add](a: T, b: own U) -> T {
+fn f[T: Add, U: Add](a: own T, b: own U) -> T {
     let mut v: Vec[U] = Vec.new();
     v.push(b);
     return a + v[0];

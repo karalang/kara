@@ -2,16 +2,16 @@ shared struct H { id: i64 }
 impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
 enum E { A(H), B }
 struct K { e: E, n: i64 }
-impl K { fn take(self) { println(f"k{self.n}") } }
+impl K { fn take(own self) { println(f"k{self.n}") } }
 struct X { h: H, n: i64 }
-impl X { fn take(self) { println(f"x{self.n}") } }
+impl X { fn take(own self) { println(f"x{self.n}") } }
 fn mkk(i: i64) -> K { K { e: E.A(H { id: i }), n: i } }
 enum Eb { A(Array[String, 2]), B }
 struct Hb { g: Eb, n: i64 }
 struct Wr { h: Hb }
 struct Wk { k: K }
 fn give(h: Hb) { println(f"g{h.n}") }
-fn ck(k: K) { println(f"c{k.n}") }
+fn ck(k: own K) { println(f"c{k.n}") }
 fn outer(h: Hb) { give(h) }
 fn mk(i: i64) -> Array[String, 2] { return [f"aaaaaaaa-{i}", f"bbbbbbbb-{i}"]; }
 fn mkh(i: i64) -> Hb { return Hb { g: Eb.A(mk(i)), n: i } }

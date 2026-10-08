@@ -5,17 +5,17 @@ fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 struct Q { id: i64, n: Nd }
 impl Drop for Q { fn drop(mut ref self) { println(f"dQ{self.id}") } }
 fn mq(i: i64) -> Q { return Q { id: i, n: Nd { v: i } }; }
-fn f8(x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { v = Vec[mk(8)]; } return v }
-fn g8(x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { v = Vec[mk(8)]; println("re"); } v.push(mk(9)); return v }
-fn h8(x: R, n: i64) -> Vec[R] { let mut v = Vec[x]; let mut i = 0; while i < n { v = Vec[mk(20 + i)]; i = i + 1; } return v }
-fn s8(x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { v = Vec[mk(8)]; return v } println("tail"); return v }
-fn fm(x: R, c: bool) -> Vec[R] { let mut v = Vec[x, mk(30)]; if c { v = Vec[mk(8)]; } return v }
-fn f2(x: R, y: R, c: bool) -> Vec[R] { let mut v = Vec[x, y]; if c { v = Vec[mk(8)]; } return v }
-fn fq(x: Q, c: bool) -> Vec[Q] { let mut v = Vec[x]; if c { v = Vec[mq(8)]; } return v }
-fn fe(x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { v = Vec.new(); } return v }
-fn w8(x: R, c: bool) -> Vec[R] { return f8(x, c) }
+fn f8(x: own R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { v = Vec[mk(8)]; } return v }
+fn g8(x: own R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { v = Vec[mk(8)]; println("re"); } v.push(mk(9)); return v }
+fn h8(x: own R, n: i64) -> Vec[R] { let mut v = Vec[x]; let mut i = 0; while i < n { v = Vec[mk(20 + i)]; i = i + 1; } return v }
+fn s8(x: own R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { v = Vec[mk(8)]; return v } println("tail"); return v }
+fn fm(x: own R, c: bool) -> Vec[R] { let mut v = Vec[x, mk(30)]; if c { v = Vec[mk(8)]; } return v }
+fn f2(x: own R, y: own R, c: bool) -> Vec[R] { let mut v = Vec[x, y]; if c { v = Vec[mk(8)]; } return v }
+fn fq(x: own Q, c: bool) -> Vec[Q] { let mut v = Vec[x]; if c { v = Vec[mq(8)]; } return v }
+fn fe(x: own R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { v = Vec.new(); } return v }
+fn w8(x: own R, c: bool) -> Vec[R] { return f8(x, c) }
 struct S { k: i64 }
-impl S { fn m8(ref self, x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { v = Vec[mk(8)]; } return v } }
+impl S { fn m8(ref self, x: own R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { v = Vec[mk(8)]; } return v } }
 fn main() {
   println("ft"); let a = f8(mk(1), true); println(f"k{a.len()}");
   println("ff"); let b = f8(mk(2), false); println(f"k{b.len()}");

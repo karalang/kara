@@ -11,7 +11,7 @@ impl H1 {
     #[allow(partial_move_of_drop_enum)]
     fn out(own self) -> R { match self.e { E.A(r) => { return r; } E.B => { return mk(0); } } }
     #[allow(partial_move_of_drop_enum)]
-    fn out_iflet(self) -> R { if let E.A(r) = self.e { return r; } else { return mk(0); } }
+    fn out_iflet(own self) -> R { if let E.A(r) = self.e { return r; } else { return mk(0); } }
     #[allow(partial_move_of_drop_enum)]
     fn out_tail(own self) -> R { match self.e { E.A(r) => r, E.B => mk(0) } }
     #[allow(partial_move_of_drop_enum)]

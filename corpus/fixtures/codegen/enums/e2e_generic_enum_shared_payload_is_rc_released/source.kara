@@ -11,8 +11,8 @@ enum Et { A(Sh), B }
 
 fn pg(b: own Box2[Sh]) -> Box2[Sh] { return b }
 fn pc(b: own Et) -> Et { return b }
-fn eg(b: Box2[Sh]) { println("  eaten") }
-fn ec(b: Et) { println("  eaten") }
+fn eg(b: own Box2[Sh]) { println("  eaten") }
+fn ec(b: own Et) { println("  eaten") }
 
 fn main() {
     println("G-bare"); { let ga: Box2[Sh] = Box2.V(Sh { n: 1 }); println("  x") }

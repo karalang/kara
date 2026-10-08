@@ -1,10 +1,10 @@
 
 struct W { o: Option[Option[i64]] }
 struct S { o: Option[Option[String]] }
-fn takw(r: Result[W, i64]) -> i64 {
+fn takw(r: own Result[W, i64]) -> i64 {
     match r { Result.Ok(w) => match w.o { Option.Some(Option.Some(x)) => x, _ => -1 }, Result.Err(e) => e }
 }
-fn idw(r: Result[W, i64]) -> Result[W, i64] { r }
+fn idw(r: own Result[W, i64]) -> Result[W, i64] { r }
 fn mkw(n: i64) -> Result[W, i64] { Result.Ok(W { o: Option.Some(Option.Some(n)) }) }
 fn main() {
     let n = env.args().len() as i64;

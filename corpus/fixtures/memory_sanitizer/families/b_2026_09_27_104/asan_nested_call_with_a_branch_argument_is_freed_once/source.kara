@@ -5,9 +5,9 @@ struct P { a: D, b: i64 }
 struct W { r: D, s: D }
 struct X { w: W, t: D }
 struct Q { k: i64 }
-impl Q { fn see(self, d: D) -> i64 { d.id } }
+impl Q { fn see(self, d: own D) -> i64 { d.id } }
 struct K { v: i64 }
-fn show(d: D) -> i64 { d.id }
+fn show(d: own D) -> i64 { d.id }
 fn fstr(c: bool) { let p = P { a: mkd(10), b: 0 }; println(f"s{show(if c { p.a } else { mkd(19) })}"); }
 fn cond(c: bool) { let p = P { a: mkd(20), b: 0 }; if show(if c { p.a } else { mkd(29) }) > 0 { println("pos") } }
 fn wild(c: bool) { let p = P { a: mkd(30), b: 0 }; let _ = show(if c { p.a } else { mkd(39) }); println("w"); }

@@ -9,17 +9,17 @@ struct Q { r: R, n: i64 }
 fn mkq(i: i64) -> Q { return Q { r: R { id: i }, n: i } }
 struct W { id: i64, s: String }
 fn mkw(i: i64) -> W { return W { id: i, s: f"heap-string-longer-than-sso-{i}" } }
-fn eatr(r: R) -> i64 { return r.id }
-fn cu(t: Option[S]) { println(f"u{t.unwrap().id}") }
-fn ce(t: Option[S]) -> i64 { return t.expect("boom").id }
-fn cx(t: Result[S, i64]) -> i64 { return t.expect("boom").id }
-fn cr(t: Result[i64, S]) { println(f"r{t.unwrap_err().id}") }
-fn cg(t: Option[S]) -> i64 { let k = -t.unwrap().id; return k }
-fn cl(t: Option[S]) { println(f"l{t.unwrap().s.len()}") }
-fn cq(t: Option[Q]) { println(f"q{eatr(t.unwrap().r)}") }
-fn cp(t: Option[P]) { println(f"p{t.unwrap().id}") }
-fn cw(t: Option[W]) { println(f"w{t.unwrap().id}") }
-fn ge[T](t: Option[T]) -> T { return t.unwrap() }
+fn eatr(r: own R) -> i64 { return r.id }
+fn cu(t: own Option[S]) { println(f"u{t.unwrap().id}") }
+fn ce(t: own Option[S]) -> i64 { return t.expect("boom").id }
+fn cx(t: own Result[S, i64]) -> i64 { return t.expect("boom").id }
+fn cr(t: own Result[i64, S]) { println(f"r{t.unwrap_err().id}") }
+fn cg(t: own Option[S]) -> i64 { let k = -t.unwrap().id; return k }
+fn cl(t: own Option[S]) { println(f"l{t.unwrap().s.len()}") }
+fn cq(t: own Option[Q]) { println(f"q{eatr(t.unwrap().r)}") }
+fn cp(t: own Option[P]) { println(f"p{t.unwrap().id}") }
+fn cw(t: own Option[W]) { println(f"w{t.unwrap().id}") }
+fn ge[T](t: own Option[T]) -> T { return t.unwrap() }
 fn main() {
     cu(Option.Some(mks(1)));
     let a = Option.Some(mks(2));

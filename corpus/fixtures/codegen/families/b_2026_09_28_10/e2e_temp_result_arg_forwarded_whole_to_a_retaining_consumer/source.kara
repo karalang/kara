@@ -2,15 +2,15 @@ struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct S { r: R, s: String }
 fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
-fn eat(x: Result[S, i64]) -> i64 { match x { Ok(y) => y.r.id, Err(e) => e } }
-fn f(a: Result[S, i64]) -> i64 { eat(a) }
-fn eatb(x: Result[S, i64]) -> i64 { match x { Ok(y) => 1, Err(e) => e } }
-fn g(a: Result[S, i64]) -> i64 { let r = eatb(a); return r }
-fn keep(s: S) { println(f"k{s.r.id}") }
-fn eatk(x: Result[S, i64]) { match x { Ok(y) => keep(y), Err(e) => println("e") } }
-fn h(a: Result[S, i64]) { eatk(a); println("ah") }
-fn eatp(x: Result[S, i64]) { match x { Ok(y) => println(f"p{y.r.id}"), Err(e) => println("e") } }
-fn c(a: Result[S, i64], t: bool) { if t { eatp(a) } else { eatp(Err(7)) } println("ac") }
+fn eat(x: own Result[S, i64]) -> i64 { match x { Ok(y) => y.r.id, Err(e) => e } }
+fn f(a: own Result[S, i64]) -> i64 { eat(a) }
+fn eatb(x: own Result[S, i64]) -> i64 { match x { Ok(y) => 1, Err(e) => e } }
+fn g(a: own Result[S, i64]) -> i64 { let r = eatb(a); return r }
+fn keep(s: own S) { println(f"k{s.r.id}") }
+fn eatk(x: own Result[S, i64]) { match x { Ok(y) => keep(y), Err(e) => println("e") } }
+fn h(a: own Result[S, i64]) { eatk(a); println("ah") }
+fn eatp(x: own Result[S, i64]) { match x { Ok(y) => println(f"p{y.r.id}"), Err(e) => println("e") } }
+fn c(a: own Result[S, i64], t: bool) { if t { eatp(a) } else { eatp(Err(7)) } println("ac") }
 fn main() {
     let k = f(Ok(mk(1)));
     println(f"k{k}");

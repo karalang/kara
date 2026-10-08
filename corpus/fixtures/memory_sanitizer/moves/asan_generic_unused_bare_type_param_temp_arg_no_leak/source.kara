@@ -1,11 +1,11 @@
 
 fn id[T](v: own T) -> T { return v; }
-fn pick[T](a: own T, b: T) -> T { return id(a); }
-fn keep[T](a: own T, b: T) -> T { return a; }
+fn pick[T](a: own T, b: own T) -> T { return id(a); }
+fn keep[T](a: own T, b: own T) -> T { return a; }
 fn echo[T](x: own T) -> T { return x; }
 fn nest[T](x: own T) -> T { return id(id(x)); }
 fn takeout[T](b: own T) -> T { match b { v => { return v; } } }
-fn three[T](a: T, b: own T, c: T) -> T { return b; }
+fn three[T](a: own T, b: own T, c: own T) -> T { return b; }
 fn mk() -> Vec[i64] { let v: Vec[i64] = [10, 20, 30, 40]; return v; }
 fn main() {
     let x: Vec[i64] = [1, 2, 3, 4, 5, 6, 7, 8];

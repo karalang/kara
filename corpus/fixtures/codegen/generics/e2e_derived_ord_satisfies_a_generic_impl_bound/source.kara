@@ -5,7 +5,7 @@ struct Holder[=T] { v: T }
 impl[T: Ord] Holder[T] {
     fn tag(ref self) -> i64 { 7 }
 }
-fn free[T: Ord](a: T) -> i64 { 9 }
+fn free[T: Ord](a: own T) -> i64 { 9 }
 fn main() {
     let h = Holder { v: Item { id: 1 } };
     println(h.tag());

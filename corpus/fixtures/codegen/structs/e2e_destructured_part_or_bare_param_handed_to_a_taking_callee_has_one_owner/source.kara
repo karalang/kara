@@ -2,7 +2,7 @@ struct R { id: i64, tag: String, xs: Vec[i64] }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 struct W { r: R, n: i64 }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
-fn consume(x: R) -> i64 { return x.id }
+fn consume(x: own R) -> i64 { return x.id }
 fn wrap(x: own R) -> R { return x }
 fn stash(x: own R, v: mut ref Vec[R]) { v.push(x) }
 fn wrapw(x: own R) -> W { return W { r: x, n: 1 } }
@@ -16,7 +16,7 @@ fn s_stash_let(w: own W, v: mut ref Vec[R]) -> i64 { let W { r, n } = w; stash(r
 fn b_stash(x: own R, v: mut ref Vec[R]) { stash(x, v) }
 fn b_stash_ret(x: own R, v: mut ref Vec[R]) -> i64 { stash(x, v); 7 }
 fn b_fwd(x: own R) -> R { wrap(x) }
-fn b_consume(x: R) -> i64 { consume(x) }
+fn b_consume(x: own R) -> i64 { consume(x) }
 fn main() {
     { let a: R = t_fwd_let((mk(1), 0)); println(f"r{a.id}"); println("one") }
     { let a: R = t_fwd_let_ret((mk(2), 0)); println(f"r{a.id}"); println("two") }

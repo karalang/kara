@@ -14,7 +14,7 @@ fn keep(s: own S2) -> S2 { return s }
 fn keepr(s: own S2) -> S2 { let m = s; return m }
 fn keep5(s: own S5) -> S5 { return s }
 fn keep2[T](x: own T) -> T { return x }
-fn eat(s: S2) { println(f"e{s.id}") }
+fn eat(s: own S2) { println(f"e{s.id}") }
 fn f1(q: own W3) -> S2 { return keep(q.u) }
 fn f2(q: own W3) -> S2 { let k = keep(q.u); return k }
 fn f3(q: own W3) -> S2 { let x = q.u; return keep(x) }
@@ -24,7 +24,7 @@ fn f6(q: own W3) -> S2 { return keep2(q.u) }
 fn f7(q: own W3) -> S2 { let x = q.u; return keep2(x) }
 fn f8(q: own W7) -> S5 { return keep5(q.u) }
 fn f9(q: own W3) { let k = keep(q.u); println(f"k{k.id}") }
-fn f10(q: W3) { eat(q.u) }
+fn f10(q: own W3) { eat(q.u) }
 fn f11(q: own W6) -> S4 { let kp = Kp { a: 1 }; return kp.keep4(q.u) }
 fn f12(q: own W6) -> S4 { let kp = Kp { a: 1 }; let x = q.u; return kp.keep4(x) }
 fn main() {

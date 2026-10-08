@@ -11,9 +11,9 @@ fn f2(k: i64) -> Result[i64, E2] { let x = mk(k)?; Result.Ok(x) }
 fn f3(k: i64) -> Result[i64, E3] { let x = mk(k)?; Result.Ok(x) }
 fn f4(k: i64) -> Result[i64, E3] { let r = mk(k); let x = r?; Result.Ok(x) }
 fn f5(n: i64) -> Result[i64, E2] { let mut t = 0; for i in 1..n { let x = mk(i)?; t = t + x; } Result.Ok(t) }
-fn f6(r: Result[i64, Sh]) -> Result[i64, E2] { let x = r?; Result.Ok(x) }
-fn p2(r: Result[i64, E2]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) } }
-fn p3(r: Result[i64, E3]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.k) } }
+fn f6(r: own Result[i64, Sh]) -> Result[i64, E2] { let x = r?; Result.Ok(x) }
+fn p2(r: own Result[i64, E2]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.n) } }
+fn p3(r: own Result[i64, E3]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e.inner.k) } }
 fn main() {
     p2(f1(8));
     p2(f1(2));

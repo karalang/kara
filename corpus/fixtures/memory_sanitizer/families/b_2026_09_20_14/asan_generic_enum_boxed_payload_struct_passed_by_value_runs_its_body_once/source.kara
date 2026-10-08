@@ -6,7 +6,7 @@ struct S[T] { g: G1[T], k: i64 }
 struct Sm { g: G1[W], k: i64 }
 fn mk(n: i64) -> G1[W] { return G1.Y(W { s: f"payload-heap-string-{n}", n: n }) }
 fn takeg(g: own G1[W]) { match g { G1.Y(w) => println(f"took{w.n}"), G1.N => println("n") } }
-fn takesm(s: Sm) { println(f"ts{s.k}") }
+fn takesm(s: own Sm) { println(f"ts{s.k}") }
 fn takesmm(s: own Sm) { match s.g { G1.Y(w) => println(f"tm{w.n}"), G1.N => println("n") } }
 fn mksm(n: i64) -> Sm { return Sm { g: mk(n), k: n } }
 fn main() {

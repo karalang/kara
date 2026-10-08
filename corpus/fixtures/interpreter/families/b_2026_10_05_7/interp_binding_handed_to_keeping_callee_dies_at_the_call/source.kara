@@ -1,7 +1,7 @@
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
-fn eat(r: R) -> i64 { r.id }
+fn eat(r: own R) -> i64 { r.id }
 struct S { r: R, n: i64 }
 enum E { A(R), B }
 fn opt() { let o = Some(mk(1)); match o { Some(r) => { eat(r); println("a") } None => {} } }

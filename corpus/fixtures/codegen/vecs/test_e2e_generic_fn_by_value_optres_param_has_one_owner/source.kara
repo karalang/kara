@@ -1,8 +1,8 @@
-fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
-fn peek[T](a: Option[T]) -> i64 { match a { Some(_) => 1, None => 0 } }
-fn st[T](a: Option[T]) -> Vec[Option[T]] { let mut v = Vec.new(); v.push(a); v }
-fn rb[T](a: Option[T]) -> i64 { let c = a; match c { Some(_) => 1, None => 0 } }
-fn rpick[T](a: Result[T, String], d: T) -> T { match a { Ok(s) => s, Err(_) => d } }
+fn pick[T](a: own Option[T], d: own T) -> T { match a { Some(s) => s, None => d } }
+fn peek[T](a: own Option[T]) -> i64 { match a { Some(_) => 1, None => 0 } }
+fn st[T](a: own Option[T]) -> Vec[Option[T]] { let mut v = Vec.new(); v.push(a); v }
+fn rb[T](a: own Option[T]) -> i64 { let c = a; match c { Some(_) => 1, None => 0 } }
+fn rpick[T](a: own Result[T, String], d: own T) -> T { match a { Ok(s) => s, Err(_) => d } }
 fn main() {
     let a = Some(f"heap-string-longer-than-sso-1"); println(pick(a, f"d"));
     println(pick(Some(f"heap-string-longer-than-sso-2"), f"d"));

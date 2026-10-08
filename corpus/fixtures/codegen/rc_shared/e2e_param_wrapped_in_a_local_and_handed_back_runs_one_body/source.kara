@@ -6,7 +6,7 @@ impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
 struct W2 { o: Option[P] }
 struct H { n: i64 }
 fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
-fn keep(o: Option[S2]) -> Option[S2] { return o }
+fn keep(o: own Option[S2]) -> Option[S2] { return o }
 fn outq(s: own S2) -> Option[S2] { let o = Some(s); return o }
 fn outp(s: own S2) -> Option[S2] { let o = Some(s); let p = keep(o); return p }
 fn outk(s: own S2) -> Option[S2] { let o = Some(s); return keep(o) }

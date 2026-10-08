@@ -2,13 +2,13 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 fn mk(i: i64) -> R { R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 enum E { A(R), B }
-fn eat(r: R) { println(f"eat{r.id}") }
+fn eat(r: own R) { println(f"eat{r.id}") }
 fn gsel[T](a: own T, b: own T, c: bool) -> T { let (v, n) = if c { (a, 1) } else { (b, 2) }; v }
 fn csel(a: own R, b: own R, c: bool) -> R { let (v, n) = if c { (a, 1) } else { (b, 2) }; v }
-fn gtup[T](a: own T, b: T) -> T { let (v, n) = (a, 1); v }
-fn ctup(a: own R, b: R) -> R { let (v, n) = (a, 1); v }
+fn gtup[T](a: own T, b: own T) -> T { let (v, n) = (a, 1); v }
+fn ctup(a: own R, b: own R) -> R { let (v, n) = (a, 1); v }
 fn gif[T](a: own T, b: own T, c: bool) -> T { let v = if c { a } else { b }; v }
-fn gmat[T](a: T, b: T, c: bool) -> T { let v = match c { true => a, false => b }; v }
+fn gmat[T](a: own T, b: own T, c: bool) -> T { let v = match c { true => a, false => b }; v }
 fn both(a: own R, b: own R) -> R { let (v, w) = (a, b); v }
 fn none(a: own R, b: own R) -> i64 { let (v, w) = (a, b); println("in"); 3 }
 fn eatw(a: own R, b: own R) -> R { let (v, w) = (a, b); eat(w); v }

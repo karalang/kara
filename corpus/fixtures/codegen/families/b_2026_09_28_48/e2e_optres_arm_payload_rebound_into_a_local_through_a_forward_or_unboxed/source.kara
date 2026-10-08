@@ -5,10 +5,10 @@ fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" }
 struct Q { r: R }
 fn mq(i: i64) -> Q { Q { r: R { id: i } } }
 
-fn go(x: Option[S]) { match x { Some(y) => { let z = y; println(f"z{z.r.id}") }, None => println("n") }; println("post") }
-fn fw(a: Option[S]) { go(a); println("after") }
-fn qo(x: Option[Q]) { match x { Some(y) => { let z = y; println(f"q{z.r.id}") }, None => println("n") } }
-fn qr(x: Result[Q, i64]) { match x { Ok(y) => { let z = y; println(f"k{z.r.id}") }, Err(e) => println("e") } }
+fn go(x: own Option[S]) { match x { Some(y) => { let z = y; println(f"z{z.r.id}") }, None => println("n") }; println("post") }
+fn fw(a: own Option[S]) { go(a); println("after") }
+fn qo(x: own Option[Q]) { match x { Some(y) => { let z = y; println(f"q{z.r.id}") }, None => println("n") } }
+fn qr(x: own Result[Q, i64]) { match x { Ok(y) => { let z = y; println(f"k{z.r.id}") }, Err(e) => println("e") } }
 fn main() {
     fw(Some(mk(1)));
     qo(Some(mq(2)));

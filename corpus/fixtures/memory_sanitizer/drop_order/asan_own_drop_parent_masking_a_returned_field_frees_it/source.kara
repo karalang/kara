@@ -19,7 +19,7 @@ fn take(w: own W) -> R { let W { r, n } = w; r }
 fn take_field(w: own W) -> R { return w.r; }
 #[allow(partial_move_of_drop_struct)]
 fn take_a(t: own Two) -> R { let Two { a, b } = t; a }
-fn use_n(w: W) -> i64 { return w.n; }
+fn use_n(w: own W) -> i64 { return w.n; }
 fn mk() -> W { return W { r: R { id: 7, name: f"m{7}" }, n: 9 }; }
 
 fn main() {

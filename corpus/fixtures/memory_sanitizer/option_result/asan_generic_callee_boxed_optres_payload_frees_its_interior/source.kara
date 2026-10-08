@@ -1,26 +1,26 @@
 
-fn readsIt[T: Display](x: Option[T]) -> i64 {
+fn readsIt[T: Display](x: own Option[T]) -> i64 {
     match x {
         Some(t) => { println(f"o:{t}"); return 1; }
         None => { return 0; }
     }
 }
 
-fn takesIt[T: Display](x: Option[T]) -> i64 {
+fn takesIt[T: Display](x: own Option[T]) -> i64 {
     match x {
         Some(t) => { let u = t; println("took"); return 1; }
         None => { return 0; }
     }
 }
 
-fn wildArm[T: Display](x: Option[T]) -> i64 {
+fn wildArm[T: Display](x: own Option[T]) -> i64 {
     match x {
         Some(_) => { println("some"); return 1; }
         None => { return 0; }
     }
 }
 
-fn readsRes[T: Display](x: Result[T, i64]) -> i64 {
+fn readsRes[T: Display](x: own Result[T, i64]) -> i64 {
     match x {
         Ok(t) => { println(f"r:{t}"); return 1; }
         Err(e) => { return e; }

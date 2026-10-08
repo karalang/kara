@@ -5,7 +5,7 @@ fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" }
 fn mk2(i: i64) -> Option[S] { Some(mk(i)) }
 fn mk2o(x: own S) -> Option[S] { Some(x) }
 fn wg[T](x: own T) -> Option[T] { Some(x) }
-fn keep(s: S) { println(f"k{s.r.id}") }
+fn keep(s: own S) { println(f"k{s.r.id}") }
 fn c1(x: own S) -> bool { if let None = mk2o(x) { false } else { true } }
 fn c2(x: own S) -> bool { match mk2o(x) { Some(_) => println("m2"), None => println("n") } true }
 fn c3(x: own S) -> bool { while let Some(_) = mk2o(x) { break; } true }

@@ -3,7 +3,7 @@ impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } 
 fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
 enum G { A(D), B }
 fn f(x: own G, c: bool) -> Option[G] { if c { return Some(x); } None }
-fn pick(x: G, k: i64) -> G { match k { 1 => x, _ => G.B } }
+fn pick(x: own G, k: i64) -> G { match k { 1 => x, _ => G.B } }
 fn gf[T](x: own T, c: bool) -> Option[T] { if c { return Some(x); } None }
 fn main() {
     let o1 = f(G.A(mkd(1)), false);

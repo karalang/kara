@@ -3,10 +3,10 @@ impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 struct S1 { r: R }
 struct H  { n: i64 }
 fn mk(n: i64) -> R { return R { id: n }; }
-fn read(x: R) -> i64 { return x.id; }
+fn read(x: own R) -> i64 { return x.id; }
 
 impl H {
-    fn m1(ref self, r: R)        { println("  end") }
+    fn m1(ref self, r: own R)        { println("  end") }
     fn m2(ref self, r: own R)        { let m = r; println("  end") }
     fn m3(ref self, r: own R)        { let m = r; read(m); println("  end") }
     fn m4(ref self, r: own R) -> i64 { let s = S1 { r: r }; let x = s.r; return 7; }

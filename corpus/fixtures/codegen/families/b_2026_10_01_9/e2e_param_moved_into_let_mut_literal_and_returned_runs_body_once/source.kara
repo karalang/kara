@@ -4,25 +4,25 @@ fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 struct P { r: R, n: i64 }
 struct K { a: i64 }
 impl K {
-  fn m(ref self, x: R) -> Vec[R] { let mut v = Vec[x]; return v }
-  fn a(x: R) -> Vec[R] { let mut v = Vec[x]; return v }
+  fn m(ref self, x: own R) -> Vec[R] { let mut v = Vec[x]; return v }
+  fn a(x: own R) -> Vec[R] { let mut v = Vec[x]; return v }
 }
-fn f1(x: R) -> Vec[R] { let mut v = Vec[x]; return v }
-fn f2(x: R) -> Vec[R] { let mut v = Vec[x]; v.push(mk(9)); return v }
-fn f5(x: R) -> Vec[R] { let mut v = [x]; v.push(mk(9)); return v }
-fn f6(x: R) -> Array[R, 1] { let mut v: Array[R, 1] = [x]; return v }
-fn f8(x: R) -> Vec[R] { let mut v = Vec[x]; let o = v.pop(); return v }
-fn f9(x: R) -> Vec[R] { let mut v = Vec[x]; v[0] = mk(7); return v }
-fn f10(x: R) -> Vec[R] { let mut v = Vec[x]; v }
+fn f1(x: own R) -> Vec[R] { let mut v = Vec[x]; return v }
+fn f2(x: own R) -> Vec[R] { let mut v = Vec[x]; v.push(mk(9)); return v }
+fn f5(x: own R) -> Vec[R] { let mut v = [x]; v.push(mk(9)); return v }
+fn f6(x: own R) -> Array[R, 1] { let mut v: Array[R, 1] = [x]; return v }
+fn f8(x: own R) -> Vec[R] { let mut v = Vec[x]; let o = v.pop(); return v }
+fn f9(x: own R) -> Vec[R] { let mut v = Vec[x]; v[0] = mk(7); return v }
+fn f10(x: own R) -> Vec[R] { let mut v = Vec[x]; v }
 fn t1(x: own R) -> (R, i64) { let mut t = (x, 1); t.1 = 5; return t }
 fn s1(x: own R) -> P { let mut p = P { r: x, n: 1 }; p.n = 2; return p }
-fn c2(x: R, y: own R) -> Vec[R] { let mut v = Vec[x]; v.push(y); return v }
-fn gv[T](x: T) -> Vec[T] { let mut v = Vec[x]; return v }
-fn cnd(x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { return v } return Vec[mk(9)] }
-fn nr(x: R) -> i64 { let mut v = Vec[x]; return 3 }
+fn c2(x: own R, y: own R) -> Vec[R] { let mut v = Vec[x]; v.push(y); return v }
+fn gv[T](x: own T) -> Vec[T] { let mut v = Vec[x]; return v }
+fn cnd(x: own R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { return v } return Vec[mk(9)] }
+fn nr(x: own R) -> i64 { let mut v = Vec[x]; return 3 }
 fn ow(x: own R) -> Option[R] { let mut o = Some(x); return o }
-fn rb(x: R) -> Vec[R] { let mut v = Vec[x]; let w = v; return w }
-fn lp(x: R) -> Vec[R] { let mut v = Vec[x]; for i in 0..2 { v.push(mk(30 + i)) } return v }
+fn rb(x: own R) -> Vec[R] { let mut v = Vec[x]; let w = v; return w }
+fn lp(x: own R) -> Vec[R] { let mut v = Vec[x]; for i in 0..2 { v.push(mk(30 + i)) } return v }
 fn main() {
   println("-p1"); let a = f1(mk(1)); println(f"k{a.len()}");
   println("-p2"); let b = f2(mk(2)); println(f"k{b.len()}");

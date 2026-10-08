@@ -5,7 +5,7 @@ fn mk(i: i64) -> R { return R { id: i, name: f"nnnnnnnn{i}" } }
 struct P2 { a: R, b: R }
 enum E2 { T(R, R), N }
 enum E1 { O(R), N1 }
-fn take(r: R) -> i64 { return r.id }
+fn take(r: own R) -> i64 { return r.id }
 fn structs() { let p: P2 = P2 { a: mk(1), b: mk(2) }; println("-structs") }
 fn enums() { let w: E2 = E2.T(mk(1), mk(2)); println("-enums") }
 fn two_locals() -> i64 {

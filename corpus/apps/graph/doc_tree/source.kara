@@ -312,7 +312,7 @@ fn print_outline(doc: ref DocTree, heading: String) {
     println(doc.stats());
 }
 
-fn report(label: String, r: Result[(), TreeError]) {
+fn report(label: String, r: own Result[(), TreeError]) {
     match r {
         Ok(()) => println(f"[ok]   {label}"),
         Err(e) => println(f"[fail] {label}: {e}"),

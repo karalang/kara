@@ -7,7 +7,7 @@ impl H {
     fn mk(ref self, k: i64) -> P { return P { k: k, name: "alpha-padded-out-well-past-any-inline-capacity", xs: [k, k] } }
     fn viaself(ref self, k: i64) -> P { return self.mk(k) }
 }
-fn sink(r: P) { println(f"s{r.k}n{r.name.len()}x{r.xs.len()}") }
+fn sink(r: own P) { println(f"s{r.k}n{r.name.len()}x{r.xs.len()}") }
 
 fn main() {
     let h = H { n: 1 };

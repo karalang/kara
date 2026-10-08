@@ -1,5 +1,5 @@
 struct H { id: i64, s: String }
 impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
 fn mkh(i: i64) -> H { return H { id: i, s: f"s{i}" } }
-fn f(o: Option[(H, i64)]) -> i64 { let Some((_, b)) = o else { return 0 } return b }
+fn f(o: own Option[(H, i64)]) -> i64 { let Some((_, b)) = o else { return 0 } return b }
 fn main() { println(f"n{f(Option.Some((mkh(1), 9)))}") }

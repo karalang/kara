@@ -121,7 +121,7 @@ impl Router {
         self.routes.push(Route { method, pattern: compile_pattern(pattern), handler });
     }
 
-    fn call_at(ref self, index: i64, ctx: RouteCtx, store: mut ref UserStore) -> Result[Reply, ApiError] {
+    fn call_at(ref self, index: i64, ctx: own RouteCtx, store: mut ref UserStore) -> Result[Reply, ApiError] {
         let route = ref self.routes[index];
         (route.handler)(ctx, store)
     }

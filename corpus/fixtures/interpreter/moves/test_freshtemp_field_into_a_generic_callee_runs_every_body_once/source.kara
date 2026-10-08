@@ -5,8 +5,8 @@ struct W { r: D, s: D, b: i64 }
 fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), b: n }; }
 fn gid[T](x: own T) -> T { x }
 fn gst[T](v: mut ref Vec[T], x: own T) { v.push(x); }
-fn gn[T](x: T) -> i64 { 1 }
-fn gw[T](x: T) -> i64 { gn(x) }
+fn gn[T](x: own T) -> i64 { 1 }
+fn gw[T](x: own T) -> i64 { gn(x) }
 fn main() {
     let k = gid(mkw(7).r);
     println(f"k{k.id}");

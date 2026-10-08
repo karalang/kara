@@ -15,7 +15,7 @@ impl Acc {
 }
 
 #[multiversion(baseline, "avx2", "avx512f")]
-fn gadd[T: Add](a: T, b: T) -> T { a + b }
+fn gadd[T: Add](a: own T, b: own T) -> T { a + b }
 
 fn main() {
     let a = Acc { base: 100 };

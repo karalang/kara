@@ -10,7 +10,7 @@ enum Hm { P(Option[S1], i64), Q }
 struct W { h: Ho }
 fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
 fn mk(v: i64) -> Ho { Ho.P(Option.Some(s(v))) }
-fn eat(h: Ho) -> i64 { 1 }
+fn eat(h: own Ho) -> i64 { 1 }
 fn main() {
     println("dvec"); { let mut w: Vec[S1] = []; w.push(s(6)); let h = Hq.P(Option.Some(w)); println("  x") }
     println("darr"); { let h = Ha.P(Option.Some([s(7)])); println("  x") }

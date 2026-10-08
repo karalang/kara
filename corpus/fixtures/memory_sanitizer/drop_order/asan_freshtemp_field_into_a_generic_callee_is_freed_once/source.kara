@@ -12,8 +12,8 @@ struct V { f: F, d: D }
 fn mkv(n: i64) -> V { return V { f: F { id: n, h: Sh { tag: f"shared-tag-longer-than-sso-{n}" }, note: f"note-string-longer-than-sso-{n}" }, d: mkd(n + 50) }; }
 fn gid[T](x: own T) -> T { x }
 fn gst[T](v: mut ref Vec[T], x: own T) { v.push(x); }
-fn gn[T](x: T) -> i64 { 1 }
-fn gw[T](x: T) -> i64 { gn(x) }
+fn gn[T](x: own T) -> i64 { 1 }
+fn gw[T](x: own T) -> i64 { gn(x) }
 fn main() {
     let mut v: Vec[D] = Vec.new();
     let k = gid(mkw(1).r);

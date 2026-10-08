@@ -1,6 +1,6 @@
 #[derive(Hash)]
            struct P { x: i64 }
-           fn use_both[T: Hash + Ord](_x: T) {}
+           fn use_both[T: Hash + Ord](_x: own T) {}
            fn main() {
                let p = P { x: 1 };
                use_both(p);

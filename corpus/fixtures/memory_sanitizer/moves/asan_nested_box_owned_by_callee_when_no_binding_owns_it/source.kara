@@ -6,7 +6,7 @@ fn cls(r: Result[Option[Option[i64]], i64]) -> i64 {
         Result.Err(e) => e,
     }
 }
-fn clsstr(r: Result[Option[Option[String]], i64]) -> i64 {
+fn clsstr(r: own Result[Option[Option[String]], i64]) -> i64 {
     match r {
         Result.Ok(Option.Some(Option.Some(s))) => if s.len() > 0 { 1 } else { 0 },
         Result.Ok(_) => -1,

@@ -2,16 +2,16 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 fn mk(i: i64) -> R { R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 fn mkv(i: i64) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(mk(i)); v.push(mk(i + 1)); v }
-fn f(a: Option[Vec[R]], c: bool) -> Option[Vec[R]] { let r: Option[Vec[R]] = if c { a } else { None }; println("mid"); r }
-fn ft(a: Option[(R, i64)], c: bool) -> Option[(R, i64)] { let r: Option[(R, i64)] = if c { a } else { None }; println("mid"); r }
-fn ftail(a: Option[Vec[R]], c: bool) -> Option[Vec[R]] { println("mid"); if c { a } else { None } }
-fn ov(a: Option[Vec[R]], c: bool) -> Option[Vec[R]] { if c { return a } println("in"); None }
-fn rv(a: Result[Vec[R], i64], c: bool) -> Result[Vec[R], i64] { if c { return a } println("in"); Err(0) }
+fn f(a: own Option[Vec[R]], c: bool) -> Option[Vec[R]] { let r: Option[Vec[R]] = if c { a } else { None }; println("mid"); r }
+fn ft(a: own Option[(R, i64)], c: bool) -> Option[(R, i64)] { let r: Option[(R, i64)] = if c { a } else { None }; println("mid"); r }
+fn ftail(a: own Option[Vec[R]], c: bool) -> Option[Vec[R]] { println("mid"); if c { a } else { None } }
+fn ov(a: own Option[Vec[R]], c: bool) -> Option[Vec[R]] { if c { return a } println("in"); None }
+fn rv(a: own Result[Vec[R], i64], c: bool) -> Result[Vec[R], i64] { if c { return a } println("in"); Err(0) }
 fn tp(a: own (R, i64), c: bool) -> (R, i64) { if c { return a } println("in"); (mk(90), 0) }
 fn th(a: own (R, i64), c: bool) -> (R, i64) { let r: (R, i64) = if c { a } else { (mk(9), 0) }; println("mid"); r }
 fn ta(a: own (Array[R, 2], i64), c: bool) -> (Array[R, 2], i64) { if c { return a } println("in"); ([mk(93), mk(94)], 0) }
-fn showv(r: Option[Vec[R]]) { match r { Some(x) => { println(f"n{x.len()}") } None => { println("none") } } }
-fn tt(a: Option[(R, i64)], c: bool) -> Option[(R, i64)] { println("mid"); if c { a } else { None } }
+fn showv(r: own Option[Vec[R]]) { match r { Some(x) => { println(f"n{x.len()}") } None => { println("none") } } }
+fn tt(a: own Option[(R, i64)], c: bool) -> Option[(R, i64)] { println("mid"); if c { a } else { None } }
 fn main() {
     showv(f(Some(mkv(1)), true)); showv(f(Some(mkv(3)), false));
     let a = Some(mkv(5)); showv(f(a, false));

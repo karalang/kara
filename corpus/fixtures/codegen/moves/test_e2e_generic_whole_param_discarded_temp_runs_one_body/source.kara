@@ -5,9 +5,9 @@ fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
 struct H { r: R, z: i64 }
 fn passG[T](x: own T) -> T { println("inP"); return x; }
 fn passN(x: own R) -> R { println("inN"); return x; }
-fn pickB[T](a: T, b: own T) -> T { println("inB"); return b; }
+fn pickB[T](a: own T, b: own T) -> T { println("inB"); return b; }
 fn wrapG[T](x: own T) -> H { println("inW"); return H { r: x, z: 1 }; }
-fn scalarG[T](x: T) -> i64 { println("inS"); return 3; }
+fn scalarG[T](x: own T) -> i64 { println("inS"); return 3; }
 fn main() {
   let _ = passG(mk(80)); println("a");
   let _ = passN(mk(81)); println("b");

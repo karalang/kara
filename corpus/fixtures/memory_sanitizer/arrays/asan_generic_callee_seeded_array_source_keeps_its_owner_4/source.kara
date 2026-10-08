@@ -1,6 +1,6 @@
 struct Z179 { tag: String }
 impl Drop for Z179 { fn drop(mut ref self) { } }
-fn takesG[T](x: Option[Array[T, 2]]) { println("in") }
+fn takesG[T](x: own Option[Array[T, 2]]) { println("in") }
 fn main() {
     let a: Array[Z179, 2] = [Z179 { tag: f"b179-gggggggg0" }, Z179 { tag: f"b179-hhhhhhhh1" }];
     takesG(Some(a));

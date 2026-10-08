@@ -1,11 +1,11 @@
 #[derive(PartialEq, PartialOrd)]
 struct Po { v: i64 }
 
-fn lt_ord[T: Ord](a: T, b: T) -> bool { return a < b }
-fn lt_po[T: PartialOrd](a: T, b: T) -> bool { return a < b }
-fn le_po[T: PartialOrd](a: T, b: T) -> bool { return a <= b }
-fn gt_po[T: PartialOrd](a: T, b: T) -> bool { return a > b }
-fn ge_po[T: PartialOrd](a: T, b: T) -> bool { return a >= b }
+fn lt_ord[T: Ord](a: own T, b: own T) -> bool { return a < b }
+fn lt_po[T: PartialOrd](a: own T, b: own T) -> bool { return a < b }
+fn le_po[T: PartialOrd](a: own T, b: own T) -> bool { return a <= b }
+fn gt_po[T: PartialOrd](a: own T, b: own T) -> bool { return a > b }
+fn ge_po[T: PartialOrd](a: own T, b: own T) -> bool { return a >= b }
 
 fn main() {
     let n = env.args().len() as i64;

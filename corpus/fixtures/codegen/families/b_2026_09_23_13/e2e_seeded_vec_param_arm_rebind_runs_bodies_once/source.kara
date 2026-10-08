@@ -2,7 +2,7 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
 fn mkv(i: i64) -> Vec[R] { return [mkr(i), mkr(i + 1)] }
-fn take(v: Vec[R]) -> i64 { println(f"t{v.len()}"); return 1 }
+fn take(v: own Vec[R]) -> i64 { println(f"t{v.len()}"); return 1 }
 fn f1(a: own Vec[R]) -> i64 { match Option.Some(a) { Some(v) => { println(f"r{v.len()}"); return 7 }, None => { return 0 } } }
 fn f2(a: own Vec[R]) -> i64 { match Option.Some(a) { Some(v) => { let u = v; println("r1"); return 7 }, None => { return 0 } } }
 fn f3(a: own Vec[R]) -> i64 { if let Some(v) = Option.Some(a) { let u = v; println("r1"); return 7 } return 0 }

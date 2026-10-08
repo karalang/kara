@@ -1,5 +1,5 @@
 
-        fn probe(listener: TcpListener) -> bool {
+        fn probe(listener: own TcpListener) -> bool {
             let _stream = listener.accept().unwrap();
             return false;
         }

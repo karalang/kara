@@ -2,25 +2,25 @@
 struct H { label: String, k: i64 }
 struct Node { hp: Option[H], k: i64 }
 
-fn readk(h: Option[H]) -> i64 {
+fn readk(h: own Option[H]) -> i64 {
     match h {
         Option.Some(x) => { if x.label.contains("row") { x.k } else { 0 - x.k } }
         Option.None => 0,
     }
 }
-fn take_label(h: Option[H]) -> String {
+fn take_label(h: own Option[H]) -> String {
     match h {
         Option.Some(x) => { return x.label; }
         Option.None => { return "none".to_string(); }
     }
 }
-fn take_all(h: Option[H]) -> H {
+fn take_all(h: own Option[H]) -> H {
     match h {
         Option.Some(x) => { return x; }
         Option.None => { return H { label: "none".to_string(), k: 0 }; }
     }
 }
-fn take_destructure(h: Option[H]) -> i64 {
+fn take_destructure(h: own Option[H]) -> i64 {
     match h {
         Option.Some(x) => { let H { label, k } = x; if label.contains("row") { k } else { 0 - k } }
         Option.None => 0,

@@ -1,21 +1,21 @@
 
-fn whole(x: Option[(String, String)]) {
+fn whole(x: own Option[(String, String)]) {
     match x { Some(t) => { println(f"w:{t.0}"); } None => { println("wn"); } }
 }
 
-fn wild(x: Option[(String, String)]) {
+fn wild(x: own Option[(String, String)]) {
     match x { Some(_) => { println("i"); } None => { println("in"); } }
 }
 
-fn consume(x: Option[(String, String)], out: mut ref Vec[String]) {
+fn consume(x: own Option[(String, String)], out: mut ref Vec[String]) {
     match x { Some((a, b)) => { out.push(a); out.push(b); } None => {} }
 }
 
-fn wide(x: Option[(String, i64, i64, i64)]) {
+fn wide(x: own Option[(String, i64, i64, i64)]) {
     match x { Some(t) => { println(f"x:{t.0}"); } None => { println("xn"); } }
 }
 
-fn arr(x: Option[Array[String, 2]]) {
+fn arr(x: own Option[Array[String, 2]]) {
     match x { Some(t) => { println(f"a:{t[0]}"); } None => { println("an"); } }
 }
 

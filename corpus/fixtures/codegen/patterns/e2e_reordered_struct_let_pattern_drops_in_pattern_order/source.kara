@@ -6,7 +6,7 @@ struct S4 { a: R, b: R, c: R }
 struct Mix { a: R, k: i64, c: R }
 struct Inner { p: R }
 struct Outer { i: Inner, z: R }
-fn eat(r: R) -> i64 { return r.id; }
+fn eat(r: own R) -> i64 { return r.id; }
 
 fn in_order() -> i64 { let s: S3 = S3 { a: mk(1), b: mk(2) }; let S3 { a, b } = s; return a.id + b.id; }
 fn swapped() -> i64 { let s: S3 = S3 { a: mk(3), b: mk(4) }; let S3 { b, a } = s; return a.id + b.id; }

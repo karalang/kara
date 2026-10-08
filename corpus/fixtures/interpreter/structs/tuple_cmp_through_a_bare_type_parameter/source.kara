@@ -1,5 +1,5 @@
 
-fn smaller[T: Ord](a: T, b: T) -> bool { return a < b; }
+fn smaller[T: Ord](a: own T, b: own T) -> bool { return a < b; }
 
 fn main() {
     println(f"{smaller((1, 2), (1, 3))}");

@@ -2,15 +2,15 @@ struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
-fn eat(r: R) { println(f"e{r.id}") }
+fn eat(r: own R) { println(f"e{r.id}") }
 struct Ws { r: R, n: i64 }
 impl Ws {
     fn getr(own self) -> R { return self.r }
     fn gett(own self) -> R { self.r }
     fn getl(own self) -> R { let q = self.r; q }
     fn getd(own self) -> R { let Ws { r, n } = self; r }
-    fn none(self) -> i64 { return 5 }
-    fn gete(self) { eat(self.r) }
+    fn none(own self) -> i64 { return 5 }
+    fn gete(own self) { eat(self.r) }
 }
 fn getf(w: own Ws) -> R { return w.r }
 struct Wq { r: R, q: R }

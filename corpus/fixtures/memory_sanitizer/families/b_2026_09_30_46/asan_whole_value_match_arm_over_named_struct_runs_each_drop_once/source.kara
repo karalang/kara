@@ -6,7 +6,7 @@ impl Drop for Rs { fn drop(mut ref self) { println(f"ds{self.id} {self.s.len()}"
 struct H { v: Rs, n: i64 }
 struct P { s: String, n: i64 }
 fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
-fn sink(h: H) -> i64 { h.n }
+fn sink(h: own H) -> i64 { h.n }
 fn b1(g: own H) -> i64 { match g { x => x.n } }
 fn b2(g: own G[R]) -> i64 { match g { x => x.n } }
 fn b3(g: own G[Rs]) -> i64 { match g { x => { let v = x.v; v.id } } }

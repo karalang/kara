@@ -1,6 +1,6 @@
 
 enum Opt[T] { Yes(T), No }
-fn get[T](o: own Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }
+fn get[T](o: own Opt[T], d: own T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }
 fn main() {
     let base: i64 = env.args().len();
     let mut i: i64 = 0i64;

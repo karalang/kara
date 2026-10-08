@@ -1,15 +1,15 @@
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 struct Hd { n: i64 }
-impl Hd { fn eat(ref self, o: Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } } }
+impl Hd { fn eat(ref self, o: own Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } } }
 struct Snk { n: i64 }
-impl Snk { fn eat(o: Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } } }
-fn eat(o: Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } }
-fn eatr(o: Result[(R, i64), i64]) { match o { Result.Ok(t) => { let x = t.0; println("  mid"); } Result.Err(e) => { println("  n"); } } }
-fn eat1(o: Option[(i64, R)]) { match o { Option.Some(t) => { let x = t.1; println("  mid"); } Option.None => { println("  n"); } } }
-fn eat2(o: Option[(R, R)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } }
-fn peek(o: Option[(R, i64)]) { match o { Option.Some(t) => { println(f"  mid{t.1}"); } Option.None => { println("  n"); } } }
-fn hands(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { let y = t.1; println("  mid"); return t.0; } Option.None => { return R { id: 0 }; } } }
+impl Snk { fn eat(o: own Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } } }
+fn eat(o: own Option[(R, i64)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } }
+fn eatr(o: own Result[(R, i64), i64]) { match o { Result.Ok(t) => { let x = t.0; println("  mid"); } Result.Err(e) => { println("  n"); } } }
+fn eat1(o: own Option[(i64, R)]) { match o { Option.Some(t) => { let x = t.1; println("  mid"); } Option.None => { println("  n"); } } }
+fn eat2(o: own Option[(R, R)]) { match o { Option.Some(t) => { let x = t.0; println("  mid"); } Option.None => { println("  n"); } } }
+fn peek(o: own Option[(R, i64)]) { match o { Option.Some(t) => { println(f"  mid{t.1}"); } Option.None => { println("  n"); } } }
+fn hands(o: own Option[(R, R)]) -> R { match o { Option.Some(t) => { let y = t.1; println("  mid"); return t.0; } Option.None => { return R { id: 0 }; } } }
 fn main() {
     println("named");    { let a = Option.Some((R { id: 5 }, 9)); eat(a); } println("  out");
     println("temp");     { eat(Option.Some((R { id: 5 }, 9))); } println("  out");

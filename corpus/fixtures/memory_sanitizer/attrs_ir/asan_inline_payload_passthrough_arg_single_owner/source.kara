@@ -1,7 +1,7 @@
 
-fn idopt(o: Option[String]) -> Option[String] { o }
-fn idres(r: Result[String, i64]) -> Result[String, i64] { r }
-fn peek(o: Option[String]) -> i64 { match o { Option.Some(s) => s.len(), Option.None => -1 } }
+fn idopt(o: own Option[String]) -> Option[String] { o }
+fn idres(r: own Result[String, i64]) -> Result[String, i64] { r }
+fn peek(o: own Option[String]) -> i64 { match o { Option.Some(s) => s.len(), Option.None => -1 } }
 fn mk(n: i64, i: i64) -> String {
     let mut s: String = String.new();
     s.push_str("payload-");

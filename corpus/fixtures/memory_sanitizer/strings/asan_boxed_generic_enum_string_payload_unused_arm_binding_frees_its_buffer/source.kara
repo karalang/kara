@@ -4,7 +4,7 @@ enum G1[T] { Y(T), N }
 // c1 — THE CELL. Generic callee, arm binds `va` and never reads it.
 fn g_unused[T](g: own G1[T]) -> i64 { match g { Y(va) => { return 1i64; } N => { return 0i64; } } }
 // c2 — same callee, WILDCARD arm: binds nothing, so no retraction at all.
-fn g_wild[T](g: G1[T]) -> i64 { match g { Y(_) => { return 2i64; } N => { return 0i64; } } }
+fn g_wild[T](g: own G1[T]) -> i64 { match g { Y(_) => { return 2i64; } N => { return 0i64; } } }
 // c3 — CONTROL that refutes the filed attribution. Concrete callee, same
 // boxed layout, same unused binding, clean before this fix and after it.
 fn c_unused(g: own G1[String]) -> i64 { match g { Y(vc) => { return 3i64; } N => { return 0i64; } } }

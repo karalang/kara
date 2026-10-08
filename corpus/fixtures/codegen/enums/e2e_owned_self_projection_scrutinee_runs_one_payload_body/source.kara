@@ -6,7 +6,7 @@ impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 struct S { e: E }
 struct H1 { e: E }
 struct H2 { s: S }
-fn consume(x: R) -> i64 { return x.id }
+fn consume(x: own R) -> i64 { return x.id }
 
 impl H1 {
     #[allow(partial_move_of_drop_enum)]
@@ -14,11 +14,11 @@ impl H1 {
     fn read(own self) -> i64 { match self.e { E.A(r) => { return r.id; } E.B => { return 0; } } }
     fn viacall(own self) -> i64 { match self.e { E.A(r) => { return consume(r); } E.B => { return 0; } } }
     #[allow(partial_move_of_drop_enum)]
-    fn iflet(self) -> i64 { if let E.A(r) = self.e { let m = r; return m.id; } else { return 0; } }
+    fn iflet(own self) -> i64 { if let E.A(r) = self.e { let m = r; return m.id; } else { return 0; } }
     #[allow(partial_move_of_drop_enum)]
     fn letelse(own self) -> i64 { let E.A(r) = self.e else { return 0; }; let m = r; return m.id; }
     #[allow(partial_move_of_drop_enum)]
-    fn whilelet(self) -> i64 { while let E.A(r) = self.e { let m = r; return m.id; } return 0; }
+    fn whilelet(own self) -> i64 { while let E.A(r) = self.e { let m = r; return m.id; } return 0; }
     #[allow(partial_move_of_drop_enum)]
     fn borrowed(mut ref self) -> i64 { match self.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
 }
@@ -30,7 +30,7 @@ impl H2 {
 #[allow(partial_move_of_drop_enum)]
 fn p_take(h: own H1) -> i64 { match h.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } }
 #[allow(partial_move_of_drop_enum)]
-fn p_iflet(h: H1) -> i64 { if let E.A(r) = h.e { let m = r; return m.id; } else { return 0; } }
+fn p_iflet(h: own H1) -> i64 { if let E.A(r) = h.e { let m = r; return m.id; } else { return 0; } }
 
 fn main() {
     println("take/local"); let a1 = H1 { e: E.A(mk(1)) }; let x1 = a1.take(); println(f"  r{x1}");

@@ -19,7 +19,7 @@ fn mk3(n: i64) -> E3 { return E3.A(f"ba17-inline-cccccccccccccccc-{n}"); }
 
 fn take(a: Array[String, 2]) -> i64 { return a[0].len(); }
 fn takeg(a: Array[i64, 3]) -> i64 { return a[0] + a[2]; }
-fn takeb(a: Array[D, 2]) -> i64 { return a[0].id; }
+fn takeb(a: own Array[D, 2]) -> i64 { return a[0].id; }
 fn take3(s: String) -> i64 { return s.len(); }
 
 fn eat(e: own E) -> i64 {

@@ -8,7 +8,7 @@ fn d2(xs: mut ref Vec[D], c: bool) { let w = mkw(2); let W { r, s, b } = w; if c
 fn d3(xs: mut ref Vec[D], w: own W, c: bool) { let r = w.r; if c { xs.push(r); } }
 fn d4(xs: mut ref Vec[D], w: own W, c: bool) { let W { r, s, b } = w; if c { xs.push(r); } else { println("no"); } }
 fn d5(w: own W, c: bool) -> i64 { let mut xs: Vec[D] = Vec.new(); let W { r, s, b } = w; if c { xs.push(r); } xs.len() }
-fn keep(d: D) { println(f"kept{d.id}"); }
+fn keep(d: own D) { println(f"kept{d.id}"); }
 fn e3(xs: mut ref Vec[D], w: own W, c: bool) { let W { r, s, b } = w; if c { xs.push(r); } else { xs.push(s); } }
 fn e4(m: mut ref Map[i64, D], w: own W, c: bool) { let W { r, s, b } = w; if c { m.insert(b, r); } }
 fn e5(w: own W, c: bool) -> Option[D] { let W { r, s, b } = w; if c { return Option.Some(r); } Option.None }

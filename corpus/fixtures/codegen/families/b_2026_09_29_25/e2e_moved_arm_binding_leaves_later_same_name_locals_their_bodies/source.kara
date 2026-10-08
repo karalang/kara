@@ -1,8 +1,8 @@
 struct S1 { v: i64, s: String }
 impl Drop for S1 { fn drop(mut ref self) { println(f"dS{self.v}") } }
 enum Hr { P(S1), Q }
-fn takr(t: S1) -> i64 { return t.v }
-fn takt(t: (S1, i64)) -> i64 { return t.1 }
+fn takr(t: own S1) -> i64 { return t.v }
+fn takt(t: own (S1, i64)) -> i64 { return t.1 }
 fn f1() -> i64 {
   { let h = Hr.P(S1 { v: 1, s: "a" }); match h { Hr.P(t) => { let u = t; println(f"n{u.v}") } Hr.Q => {} } }
   { let t = S1 { v: 2, s: "b" }; println(f"k{takr(t)}") }

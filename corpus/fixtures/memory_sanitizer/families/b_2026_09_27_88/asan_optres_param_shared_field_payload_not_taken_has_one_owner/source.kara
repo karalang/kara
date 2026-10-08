@@ -6,14 +6,14 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct ShD { r: R, i: ShIn, n: i64 }
 fn mk(n: i64) -> ShP { return ShP { i: ShIn { s: f"shared-heap-string-longer-than-sso-{n}" }, n: n }; }
 fn mkd(n: i64) -> ShD { return ShD { r: R { id: n }, i: ShIn { s: f"shared-heap-string-longer-than-sso-{n}" }, n: n }; }
-fn f1(w: Option[ShP]) -> i64 { match w { Some(p) => p.n, None => 0 } }
-fn f2(w: Option[ShP]) -> i64 { match w { Some(p) => { return p.n; } None => { return 0; } } }
-fn f3(w: Option[ShP]) -> i64 { match w { Some(p) => { let k = p.n; return k; } None => { return 0; } } }
-fn f4(w: Option[ShP]) -> i64 { if w.is_some() { return 1; } return 0; }
-fn f5(w: Option[ShP]) -> i64 { if let Some(p) = w { let t = p.i; return p.n; } return 0; }
-fn pass(w: Option[ShP]) -> Option[ShP] { return w; }
-fn keep(w: Option[ShP]) -> i64 { if let Some(p) = w { return p.n; } return 0; }
-fn passd(w: Option[ShD]) -> Option[ShD] { return w; }
+fn f1(w: own Option[ShP]) -> i64 { match w { Some(p) => p.n, None => 0 } }
+fn f2(w: own Option[ShP]) -> i64 { match w { Some(p) => { return p.n; } None => { return 0; } } }
+fn f3(w: own Option[ShP]) -> i64 { match w { Some(p) => { let k = p.n; return k; } None => { return 0; } } }
+fn f4(w: own Option[ShP]) -> i64 { if w.is_some() { return 1; } return 0; }
+fn f5(w: own Option[ShP]) -> i64 { if let Some(p) = w { let t = p.i; return p.n; } return 0; }
+fn pass(w: own Option[ShP]) -> Option[ShP] { return w; }
+fn keep(w: own Option[ShP]) -> i64 { if let Some(p) = w { return p.n; } return 0; }
+fn passd(w: own Option[ShD]) -> Option[ShD] { return w; }
 fn main() {
     println(f"a{f1(Some(mk(1)))}"); println(f"b{f2(Some(mk(2)))}"); println(f"c{f3(Some(mk(3)))}"); println(f"e{f4(Some(mk(4)))}"); println(f"f{f5(Some(mk(5)))}");
     let a = Some(mk(6)); println(f"a{f1(a)}"); let b = Some(mk(7)); println(f"e{f4(b)}"); let c = Some(mk(8)); println(f"f{f5(c)}");

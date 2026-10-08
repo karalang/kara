@@ -4,8 +4,8 @@ fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
 struct W { id: i64, x: String, y: String }
 impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.x}{self.y}") } }
 fn mkw(n: i64) -> W { return W { id: n, x: f"x{n}", y: f"y{n}" }; }
-fn eat(x: R) { println(f"  eat{x.id}") }
-fn eatw(w: W) { println(f"  eatw{w.id}") }
+fn eat(x: own R) { println(f"  eat{x.id}") }
+fn eatw(w: own W) { println(f"  eatw{w.id}") }
 
 fn read()   { let t: (R, Result[R, String]) = (mk(1), Result.Ok(mk(101))); let (a, b) = t;
               match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }

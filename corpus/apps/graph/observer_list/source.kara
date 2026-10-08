@@ -341,7 +341,7 @@ impl Sheet {
     }
 }
 
-fn report_err(step: String, r: Result[(), SheetError]) {
+fn report_err(step: String, r: own Result[(), SheetError]) {
     match r {
         Ok(()) => {}
         Err(e) => println(f"{step} failed: {e}"),

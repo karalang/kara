@@ -5,13 +5,13 @@ shared struct N { v: i64 }
 impl Drop for N { fn drop(mut ref self) { println(f"dN{self.v}") } }
 struct Z { d: D, h: N }
 fn mkz(n: i64) -> Z { Z { d: mkd(n), h: N { v: n } } }
-fn zn(z: Z) -> i64 { z.h.v }
-fn zz(a: Z, b: Z) -> i64 { a.h.v + b.h.v }
+fn zn(z: own Z) -> i64 { z.h.v }
+fn zz(a: own Z, b: own Z) -> i64 { a.h.v + b.h.v }
 struct Y { h: N, k: i64 }
-fn yn(y: Y) -> i64 { y.k }
+fn yn(y: own Y) -> i64 { y.k }
 struct H { c: i64 }
-impl H { fn m(ref self, z: Z) -> i64 { z.h.v + self.c } }
-fn gz[T](t: T, z: Z) -> i64 { zn(z) }
+impl H { fn m(ref self, z: own Z) -> i64 { z.h.v + self.c } }
+fn gz[T](t: own T, z: own Z) -> i64 { zn(z) }
 fn f1() { if zn(mkz(1)) > 0 { println("t1") } println("f1end"); }
 fn f2() { let x = if zn(mkz(2)) > 0 { 1 } else { 2 }; println(f"t2{x}"); }
 fn f3() { let q = zn(mkz(3)); println(f"q{q}"); }

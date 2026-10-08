@@ -7,12 +7,12 @@ fn z() -> Array[R, 2] { return [mk(0), mk(0)]; }
 fn zs() -> Array[String, 2] { return ["a", "b"]; }
 fn n10(x: own EArr) -> i64 { let k: Array[R, 2] = match x { EArr.A(v) => v, EArr.B => z() }; println("mid"); return k[0].id; }
 fn n11(x: own EStr) -> i64 { let k: Array[String, 2] = match x { EStr.A(v) => v, EStr.B => zs() }; return k[0].len() as i64; }
-fn i10(x: EArr) -> i64 { let k: Array[R, 2] = if let EArr.A(v) = x { v } else { z() }; println("mid"); return k[0].id; }
+fn i10(x: own EArr) -> i64 { let k: Array[R, 2] = if let EArr.A(v) = x { v } else { z() }; println("mid"); return k[0].id; }
 fn r10(x: own EArr) -> i64 { let k: Array[R, 2] = match x { EArr.A(v) => { let u = v; u } EArr.B => z() }; println("mid"); return k[1].id; }
 fn l10() -> i64 { let e = EArr.A([mk(5), mk(6)]); let k: Array[R, 2] = match e { EArr.A(v) => v, EArr.B => z() }; println("mid"); return k[0].id; }
 fn b10(x: own EArr) -> i64 { let k: Array[R, 2] = match x { EArr.A(v) => v, EArr.B => z() }; println("mid"); return k[0].id; }
 fn t10(x: own EArr) -> Array[R, 2] { let k: Array[R, 2] = match x { EArr.A(v) => v, EArr.B => z() }; println("mid"); return k; }
-fn eat(a: Array[R, 2]) -> i64 { return a[1].id; }
+fn eat(a: own Array[R, 2]) -> i64 { return a[1].id; }
 fn c10(x: own EArr) -> i64 { let k = eat(match x { EArr.A(v) => v, EArr.B => z() }); println("mid"); return k; }
 
 fn main() {

@@ -11,7 +11,7 @@ fn nest(a: own Array[R, 2]) -> Ou { println("nest"); Ou { b: B7 { v: a, t: f"n" 
 fn two(a: own Array[R, 2], b: own Array[R, 2]) -> Two { println("two"); Two { p: a, q: b } }
 fn mk() -> (i64, Array[R, 2]) { println("mk"); (5, [mkr(40), mkr(41)]) }
 fn fwd(a: own Array[R, 2]) -> (i64, Array[R, 2]) { println("fwd"); (6, a) }
-fn eat(a: Array[R, 2]) { println(f"eat{a[0].id}") }
+fn eat(a: own Array[R, 2]) { println(f"eat{a[0].id}") }
 struct Hd { k: i64 }
 impl Hd { fn meth(ref self, a: own Array[R, 2]) -> B7 { println("meth"); B7 { v: a, t: f"m" } } }
 fn main() {

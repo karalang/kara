@@ -2,7 +2,7 @@ struct D { n: i64, s: String }
 impl Drop for D { fn drop(mut ref self) { println(f"d{self.n}") } }
 fn d(n: i64) -> D { D { n: n, s: f"heap-string-longer-than-sso-{n}" } }
 fn mk(b: i64) -> Vec[D] { vec![d(b), d(b + 1), d(b + 2)] }
-fn eat(x: D) { println(f"eat{x.n}") }
+fn eat(x: own D) { println(f"eat{x.n}") }
 enum E { One(D), Many(Vec[D]), Nothing }
 fn me() -> Vec[E] { vec![E.One(d(50)), E.Many(vec![d(51), d(52)]), E.Nothing] }
 fn count(xs: ref Vec[D]) -> i64 { xs.len() }

@@ -3,7 +3,7 @@ impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
 fn mkd(n: i64) -> D { return D { id: n, s: f"sssssssssssssssssssssssssssssssssss{n}" } }
 struct W { d: D, k: i64 }
 struct H { xs: Vec[(D, i64)] }
-fn sum(v: Vec[(D, i64)]) -> i64 { let mut s = 0; for pair in v.iter() { let (a, j) = pair; s = s + a.id + j; } return s }
+fn sum(v: own Vec[(D, i64)]) -> i64 { let mut s = 0; for pair in v.iter() { let (a, j) = pair; s = s + a.id + j; } return s }
 fn main() {
     { let v: Vec[(Vec[D], i64)] = [([mkd(1)], 1), ([mkd(2)], 2)]; for pair in v.iter() { let (a, j) = pair; println(f"a {j} {a.len()}") } println(f"a{v.len()}") }
     { let v: Vec[(Vec[D], i64)] = [([mkd(3)], 3)]; println(f"b{v.len()}") }

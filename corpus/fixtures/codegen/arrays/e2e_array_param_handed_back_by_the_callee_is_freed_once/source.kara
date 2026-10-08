@@ -1,7 +1,7 @@
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
 fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
-fn take(x: Array[R, 2]) -> i64 { println("  take"); return 1 }
+fn take(x: own Array[R, 2]) -> i64 { println("  take"); return 1 }
 fn eat(a: own Array[R, 2]) -> Array[R, 2] { println("  in"); return a }
 fn eat_rb(a: own Array[R, 2]) -> Array[R, 2] { let m = a; println("  in"); return m }
 fn via(a: own Array[R, 2]) -> Array[R, 2] { return eat(a) }

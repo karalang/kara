@@ -1,6 +1,6 @@
 enum E { A(String), B(i64) }
 fn mk(n: i64) -> String { f"heap-string-longer-than-sso-{n}" }
-fn tail(doc: Option[String]) -> String { if let Some(s) = doc { f"x {s}" } else { f"none" } }
+fn tail(doc: own Option[String]) -> String { if let Some(s) = doc { f"x {s}" } else { f"none" } }
 fn kind(e: E) -> String { if let E.A(s) = e { f"a {s}" } else { f"b" } }
 fn early(o: Option[i64]) -> String { let r = if let Some(s) = o { f"x {s}" } else { return f"early" }; r }
 fn show(s: String) { println(s) }

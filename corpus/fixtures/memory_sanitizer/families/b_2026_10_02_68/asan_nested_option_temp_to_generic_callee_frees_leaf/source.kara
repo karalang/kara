@@ -1,25 +1,25 @@
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
-fn cls[T](x: Option[Option[T]]) -> i64 {
+fn cls[T](x: own Option[Option[T]]) -> i64 {
     match x {
         Some(inner) => 7,
         None => 0,
     }
 }
-fn clsw[T](x: Option[Option[T]]) -> i64 {
+fn clsw[T](x: own Option[Option[T]]) -> i64 {
     match x {
         Some(_) => 6,
         None => 0,
     }
 }
-fn bare[T](x: Option[T]) -> i64 {
+fn bare[T](x: own Option[T]) -> i64 {
     match x {
         Some(inner) => 5,
         None => 0,
     }
 }
-fn cnt[T](x: Option[(T, i64)]) -> i64 {
+fn cnt[T](x: own Option[(T, i64)]) -> i64 {
     match x {
         Some(t) => t.1,
         None => 0,

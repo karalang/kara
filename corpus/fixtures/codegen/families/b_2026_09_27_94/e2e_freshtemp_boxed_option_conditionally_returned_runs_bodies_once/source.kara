@@ -4,14 +4,14 @@ struct S { r: R, s: String }
 fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
 struct H { n: i64 }
 impl H {
-    fn mf(ref self, a: Option[S], c: bool) -> Option[S] { if c { a } else { None } }
-    fn sf(a: Option[S], c: bool) -> Option[S] { if c { a } else { None } }
+    fn mf(ref self, a: own Option[S], c: bool) -> Option[S] { if c { a } else { None } }
+    fn sf(a: own Option[S], c: bool) -> Option[S] { if c { a } else { None } }
 }
 struct W { o: Option[S], n: i64 }
-fn mf(a: Option[S], c: bool) -> Option[S] { if c { a } else { None } }
-fn me(a: Option[S], c: bool) -> Option[S] { if c { return a } println("in"); None }
-fn mw(a: Option[S], c: bool) -> W { if c { W { o: a, n: 1 } } else { W { o: None, n: 2 } } }
-fn show(o: Option[S]) { match o { Some(v) => println(f"got{v.r.id}"), None => println("none") } }
+fn mf(a: own Option[S], c: bool) -> Option[S] { if c { a } else { None } }
+fn me(a: own Option[S], c: bool) -> Option[S] { if c { return a } println("in"); None }
+fn mw(a: own Option[S], c: bool) -> W { if c { W { o: a, n: 1 } } else { W { o: None, n: 2 } } }
+fn show(o: own Option[S]) { match o { Some(v) => println(f"got{v.r.id}"), None => println("none") } }
 fn main() {
     let h = H { n: 0 };
     show(mf(Some(mk(1)), true));

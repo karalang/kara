@@ -4,7 +4,7 @@ struct W { o: Option[H], n: i64 }
 impl W { fn r(ref self) { println(f"r{self.o.unwrap().id}") } }
 fn ch(t: Option[H]) { println(f"h{t.unwrap().id}") }
 fn chx(t: Option[H]) { println(f"x{t.expect("none").id}") }
-fn cw(w: W) { println(f"w{w.o.unwrap().id} {w.n}") }
+fn cw(w: own W) { println(f"w{w.o.unwrap().id} {w.n}") }
 fn cu(t: Option[H]) { let u = t.unwrap(); println(f"u{u.id}") }
 fn cm(t: Option[H]) { match t { Some(h) => println(f"m{h.id}"), None => {} } }
 fn main() {

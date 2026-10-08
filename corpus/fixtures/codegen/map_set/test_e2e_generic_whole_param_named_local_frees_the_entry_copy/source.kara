@@ -9,7 +9,7 @@ fn mkd(i: i64) -> D { return D { s: Sh { v: i }, tag: f"x{i}" }; }
 fn passG[T](x: own T) -> T { println("inP"); return x; }
 fn passN(x: own R) -> R { println("inN"); return x; }
 fn maybeG[T](x: own T, k: bool) -> T { println("inM"); if k { return x; } return x; }
-fn scalarG[T](x: T) -> i64 { println("inS"); return 3; }
+fn scalarG[T](x: own T) -> i64 { println("inS"); return 3; }
 fn main() {
   let g1 = mk(82); let _ = passG(g1);          println("a");
   let g2 = mk(88); let o2 = passG(g2);         println(f"k{o2.id}");

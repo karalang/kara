@@ -3,18 +3,18 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 struct P { r: R, n: i64 }
 struct H { a: i64 }
-impl H { fn m(a: R, b: R) -> Vec[R] { let v = [a, b]; return v; } }
-fn vl(a: R, b: R) -> Vec[R] { let v: Vec[R] = [a, b]; return v; }
-fn al(a: R, b: R) -> Array[R, 2] { let x: Array[R, 2] = [a, b]; return x; }
-fn vm(a: R, b: R) -> Vec[R] { let v = vec![a, b]; return v; }
-fn vu(a: R, b: R) -> Vec[R] { let v = [a, b]; return v; }
-fn vr(a: R, b: R) -> Vec[R] { let v = [a, b]; let w = v; return w; }
+impl H { fn m(a: own R, b: own R) -> Vec[R] { let v = [a, b]; return v; } }
+fn vl(a: own R, b: own R) -> Vec[R] { let v: Vec[R] = [a, b]; return v; }
+fn al(a: own R, b: own R) -> Array[R, 2] { let x: Array[R, 2] = [a, b]; return x; }
+fn vm(a: own R, b: own R) -> Vec[R] { let v = vec![a, b]; return v; }
+fn vu(a: own R, b: own R) -> Vec[R] { let v = [a, b]; return v; }
+fn vr(a: own R, b: own R) -> Vec[R] { let v = [a, b]; let w = v; return w; }
 fn vn(a: own R) -> Vec[P] { let v: Vec[P] = [P { r: a, n: 1 }]; return v; }
-fn vf(a: R) -> Vec[R] { let v = [a, mk(30)]; return v; }
-fn vt(a: R, b: R) -> Vec[R] { let v = [a, b]; v }
-fn cvl(a: R, f: bool) -> Vec[R] { let v = [a]; if f { return v; } return [mk(90)]; }
-fn vp(a: R) -> Vec[R] { let v = Vec[a]; v }
-fn gl[T](a: T, b: T) -> Vec[T] { let v = [a, b]; return v; }
+fn vf(a: own R) -> Vec[R] { let v = [a, mk(30)]; return v; }
+fn vt(a: own R, b: own R) -> Vec[R] { let v = [a, b]; v }
+fn cvl(a: own R, f: bool) -> Vec[R] { let v = [a]; if f { return v; } return [mk(90)]; }
+fn vp(a: own R) -> Vec[R] { let v = Vec[a]; v }
+fn gl[T](a: own T, b: own T) -> Vec[T] { let v = [a, b]; return v; }
 fn main() {
   println("-c1"); let v1 = vl(mk(1), mk(2)); println(f"r{v1.len()}");
   println("-c2"); let v2 = al(mk(3), mk(4)); println(f"r{v2[0].id}");

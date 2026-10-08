@@ -22,8 +22,8 @@ fn mksp(n: i64) -> Sp {
     return Sp.A(a);
 }
 
-fn takehd(a: Array[D, 2]) -> i64 { return a[0].id; }
-fn takenp(a: Array[P, 2]) -> i64 { return a[0].id; }
+fn takehd(a: own Array[D, 2]) -> i64 { return a[0].id; }
+fn takenp(a: own Array[P, 2]) -> i64 { return a[0].id; }
 fn takesp(a: Array[String, 2]) -> i64 { return a[0].len(); }
 
 fn main() {

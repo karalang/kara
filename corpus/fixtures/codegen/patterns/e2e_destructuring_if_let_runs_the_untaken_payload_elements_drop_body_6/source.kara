@@ -1,7 +1,7 @@
 struct H { id: i64, s: String }
 impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
 fn mkh(i: i64) -> H { return H { id: i, s: f"s{i}" } }
-fn f(o: Option[(H, i64)]) -> i64 {
+fn f(o: own Option[(H, i64)]) -> i64 {
     if let Some((h, b)) = o {
         let g = h;
         return b;

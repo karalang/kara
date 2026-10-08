@@ -4,9 +4,9 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.s}") } }
 struct P { a: R, b: R }
 struct Q { p: P, c: R }
 struct Hh { n: i64 }
-impl Hh { fn take(ref self, r: R) { println(f"  take:{r.s}"); } }
+impl Hh { fn take(ref self, r: own R) { println(f"  take:{r.s}"); } }
 fn mk(s: String) -> R { R { s: f"{s}-heap" } }
-fn show(r: R) { println(f"  show:{r.s}"); }
+fn show(r: own R) { println(f"  show:{r.s}"); }
 fn disc_field(k: bool) {
     let p = P { a: mk("a"), b: mk("b") };
     if k { p.a } else { mk("z") };

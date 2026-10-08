@@ -7,10 +7,10 @@ struct W { id: i64, a: String, b: String }
 impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}") } }
 fn mkw(i: i64) -> W { return W { id: i, a: f"a-heap-string-longer-than-sso-{i}", b: f"b-heap-string-{i}" } }
 
-fn cp(t: Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { v.push(t) } }
-fn cpr(t: Option[R], v: mut ref Vec[Option[R]], c: bool) { if c { v.push(t) } }
-fn cw(t: Result[W, i64], v: mut ref Vec[Result[W, i64]], c: bool) { if c { v.push(t) } }
-fn cps2(t: Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { v.push(t); println("pushed") } else { println("kept") } }
+fn cp(t: own Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { v.push(t) } }
+fn cpr(t: own Option[R], v: mut ref Vec[Option[R]], c: bool) { if c { v.push(t) } }
+fn cw(t: own Result[W, i64], v: mut ref Vec[Result[W, i64]], c: bool) { if c { v.push(t) } }
+fn cps2(t: own Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { v.push(t); println("pushed") } else { println("kept") } }
 
 fn main() {
     let mut u: Vec[Option[S]] = Vec.new();

@@ -1,12 +1,12 @@
-fn id(a: Option[String]) -> Option[String] { a }
+fn id(a: own Option[String]) -> Option[String] { a }
 struct H { k: i64 }
 impl H {
-    fn peek(ref self, a: Option[String]) -> i64 { match id(a) { Some(s) => s.len() + self.k, None => 0 } }
-    fn pick(ref self, a: Option[String]) -> String { match id(a) { Some(s) => s, None => f"none" } }
-    fn reb(ref self, a: Option[String]) -> i64 { let c = a; match c { Some(s) => s.len(), None => 0 } }
-    fn st(ref self, a: Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
-    fn sto(self, a: Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
-    fn mk(a: Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
+    fn peek(ref self, a: own Option[String]) -> i64 { match id(a) { Some(s) => s.len() + self.k, None => 0 } }
+    fn pick(ref self, a: own Option[String]) -> String { match id(a) { Some(s) => s, None => f"none" } }
+    fn reb(ref self, a: own Option[String]) -> i64 { let c = a; match c { Some(s) => s.len(), None => 0 } }
+    fn st(ref self, a: own Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
+    fn sto(self, a: own Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
+    fn mk(a: own Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
 }
 fn main() {
     let h = H { k: 1 };

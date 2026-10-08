@@ -1,5 +1,5 @@
 
-fn pick[T: Ord](a: (T, i64), b: (T, i64)) -> bool { return a.cmp(b).is_lt(); }
+fn pick[T: Ord](a: own (T, i64), b: own (T, i64)) -> bool { return a.cmp(b).is_lt(); }
 
 fn main() {
     println(f"{pick((1, 2), (1, 3))}");

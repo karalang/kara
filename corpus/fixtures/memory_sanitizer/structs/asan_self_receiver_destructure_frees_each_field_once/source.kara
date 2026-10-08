@@ -3,7 +3,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
 fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
 struct HoRes { a: R, b: Result[R, String] }
 struct WrapR { inner: HoRes }
-fn eat(x: R) { println(f"  eat{x.id}") }
+fn eat(x: own R) { println(f"  eat{x.id}") }
 impl HoRes {
     fn s_match(own self)  { let HoRes { a, b } = self; println(f"  rd{a.id}");
                         match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }

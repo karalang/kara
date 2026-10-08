@@ -4,11 +4,11 @@ struct S { r: R, s: String }
 fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
 fn mk2(i: i64) -> Option[S] { Some(mk(i)) }
 fn mk2o(x: own S) -> Option[S] { Some(x) }
-fn eat(o: Option[S]) { println("eat") }
+fn eat(o: own Option[S]) { println("eat") }
 struct E { n: i64 }
 impl E {
-    fn eat(ref self, o: Option[S]) { println("meat") }
-    fn aeat(o: Option[S]) { println("aeat") }
+    fn eat(ref self, o: own Option[S]) { println("meat") }
+    fn aeat(o: own Option[S]) { println("aeat") }
 }
 impl S {
     fn wrap(own self) -> Option[S] { Some(self) }
@@ -22,7 +22,7 @@ fn c5(x: own S) { let e = E { n: 0 }; e.eat(mk2o(x)); println("in5") }
 fn c6(x: own S) { E.aeat(mk2o(x)); println("in6") }
 fn c7(x: own S) -> bool { mk2o(x).is_some() }
 fn c8(x: own S) -> bool { let y = x; mk2o(y).is_some() }
-fn c9(x: S) -> bool { mk2(x.r.id + 100).is_some() }
+fn c9(x: own S) -> bool { mk2(x.r.id + 100).is_some() }
 fn main() {
     c1(mk(1));
     println("o1");

@@ -2,7 +2,7 @@ struct Q { a: i64 }
 struct P { s: String, n: i64 }
 struct R { q: Q, s: String }
 struct W[T] { v: T, k: i64 }
-fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
+fn pick[T](a: own Option[T], d: own T) -> T { match a { Some(s) => s, None => d } }
 fn id2[T](d: own T) -> T { d }
 fn get[U](u: own U) -> U { id2(u) }
 fn inner(p: own P) -> i64 { id2(p).n }

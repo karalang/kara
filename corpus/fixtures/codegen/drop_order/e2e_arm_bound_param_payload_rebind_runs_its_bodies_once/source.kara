@@ -6,21 +6,21 @@ fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 enum EVec { V(Vec[R]), W }
 enum EArr { A(Array[R, 2]), B }
 enum G[T] { X(T), Y }
-fn fwd(a: Array[R, 2]) { println(f"f{a[0].id}"); }
-fn optArr(x: Option[Array[S, 2]]) {
+fn fwd(a: own Array[R, 2]) { println(f"f{a[0].id}"); }
+fn optArr(x: own Option[Array[S, 2]]) {
     match x { Some(t) => { let u: Array[S, 2] = t; println(f"s{u[0].tag}") } None => { println("n") } }
     println("post");
 }
-fn resChain(x: Result[Array[R, 2], i64]) {
+fn resChain(x: own Result[Array[R, 2], i64]) {
     match x { Ok(t) => { let u = t; let w = u; println(f"r{w[1].id}") } Err(_) => { } }
     println("post");
 }
-fn optVec(x: Option[Vec[R]]) { match x { Some(t) => { let u = t; println(f"v{u.len()}") } None => { } } }
+fn optVec(x: own Option[Vec[R]]) { match x { Some(t) => { let u = t; println(f"v{u.len()}") } None => { } } }
 fn enumVec(e: own EVec) { match e { EVec.V(v) => { let u = v; let w = u; println(f"ev{w.len()}") } EVec.W => { } } println("post"); }
 fn enumArr(e: own EArr) { match e { EArr.A(v) => { let u = v; println(f"ea{u[0].id}") } EArr.B => { } } println("post"); }
 fn enumFwd(e: own EArr) { match e { EArr.A(v) => { let u = v; fwd(u); println("back") } EArr.B => { } } println("post"); }
 fn genVec(e: own G[Vec[R]]) { match e { G.X(v) => { let u = v; println(f"gv{u.len()}") } G.Y => { } } }
-fn reuse(x: Option[Array[R, 2]]) {
+fn reuse(x: own Option[Array[R, 2]]) {
     match x { Some(t) => { println(f"t{t[0].id}") } None => { } }
     let t: Array[R, 2] = [mk(20), mk(21)];
     let u = t;

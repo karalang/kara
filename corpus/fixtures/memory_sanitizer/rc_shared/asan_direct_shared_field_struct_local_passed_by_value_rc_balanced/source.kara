@@ -10,7 +10,7 @@ fn use_dir(h: DirH) -> i64 {
         Val.Nothing => 0i64,
     }
 }
-fn use_opt(h: OptH) -> i64 {
+fn use_opt(h: own OptH) -> i64 {
     match h.value { Some(_) => 1i64, None => 0i64 }
 }
 fn main() {

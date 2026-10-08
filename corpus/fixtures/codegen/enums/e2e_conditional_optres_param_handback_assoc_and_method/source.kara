@@ -5,12 +5,12 @@ fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } 
 fn mkn(i: i64) -> N { return N { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 struct H { k: i64 }
 impl H {
-    fn sf(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
-    fn mf(ref self, a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
-    fn rf(a: Result[R, String], c: bool) -> Result[R, String] { if c { a } else { Err("no") } }
-    fn nf(ref self, a: Option[N], c: bool) -> Option[N] { if c { a } else { None } }
+    fn sf(a: own Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+    fn mf(ref self, a: own Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+    fn rf(a: own Result[R, String], c: bool) -> Result[R, String] { if c { a } else { Err("no") } }
+    fn nf(ref self, a: own Option[N], c: bool) -> Option[N] { if c { a } else { None } }
 }
-fn show(o: Option[R]) { match o { Some(x) => println(f"y{x.id}"), None => println("none") } }
+fn show(o: own Option[R]) { match o { Some(x) => println(f"y{x.id}"), None => println("none") } }
 fn run(c: bool, base: i64) {
     let h = H { k: 1 };
     let a = Some(mkr(base + 1));

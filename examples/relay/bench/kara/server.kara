@@ -156,7 +156,7 @@ fn response_len(chunk: own Vec[u8]) -> i64 {
 // in `docs/dogfooding.md`. Until then the proxy keeps both legs inline in the
 // one `handle` coroutine: every `read`/`write_all` park is `handle`'s OWN park,
 // which suspends cleanly to the reactor with no nested block-wait.
-fn handle(client: TcpStream, upstream_addr: own String) {
+fn handle(client: own TcpStream, upstream_addr: own String) {
     match TcpStream.connect(upstream_addr) {
         Ok(upstream) => {
             let mut buf: Array[u8, 4096] = [0u8; 4096];

@@ -7,7 +7,7 @@ impl Drop for S4 { fn drop(mut ref self) { println(f"dS4_{self.v}") } }
 struct S1 { tag: String }
 impl Drop for S1 { fn drop(mut ref self) { println(f"dS1_{self.tag}") } }
 struct H { n: i64 }
-impl H { fn m(self, o: Option[Array[W1, 1]]) -> i64 { match o { Some(x) => { return x[0].v + self.n } None => { return 0 } } }
-         fn a(o: Option[Array[W1, 1]]) -> i64 { match o { Some(x) => { return x[0].v } None => { return 0 } } } }
-fn take(o: Result[Array[S4, 1], i64]) -> i64 { match o { Ok(x) => { return x[0].v } Err(e) => { return e } } }
+impl H { fn m(self, o: own Option[Array[W1, 1]]) -> i64 { match o { Some(x) => { return x[0].v + self.n } None => { return 0 } } }
+         fn a(o: own Option[Array[W1, 1]]) -> i64 { match o { Some(x) => { return x[0].v } None => { return 0 } } } }
+fn take(o: own Result[Array[S4, 1], i64]) -> i64 { match o { Ok(x) => { return x[0].v } Err(e) => { return e } } }
 fn main() { let r = take(Ok([S4 { v: 42, tag: f"t{1}" }])); println(f"r:{r}"); println("end") }

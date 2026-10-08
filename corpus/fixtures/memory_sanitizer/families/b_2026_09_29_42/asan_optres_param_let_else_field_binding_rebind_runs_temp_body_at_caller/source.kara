@@ -3,5 +3,5 @@ struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct S { r: R, s: String }
 fn mks(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
-fn f(a: Option[S]) -> i64 { let Some(S { r, s }) = a else { return 0 }; let y = r; y.id }
+fn f(a: own Option[S]) -> i64 { let Some(S { r, s }) = a else { return 0 }; let y = r; y.id }
 fn main() { println(f"a{f(Some(mks(1)))}"); let x = Some(mks(2)); println(f"b{f(x)}"); println("end") }

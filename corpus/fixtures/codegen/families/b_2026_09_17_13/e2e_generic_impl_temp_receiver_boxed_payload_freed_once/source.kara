@@ -1,7 +1,7 @@
 enum G1[T] { Y(T), N }
 impl[T] G1[T] {
     fn shm(own self) { match self { G1.Y(v) => { println(f"mx {v}") } G1.N => { println("mx NONE") } } }
-    fn iflet(self) { if let G1.Y(v) = self { println(f"il {v}") } else { println("il none") } }
+    fn iflet(own self) { if let G1.Y(v) = self { println(f"il {v}") } else { println("il none") } }
 }
 fn mks(s: own String) -> G1[String] { return G1.Y(s); }
 fn main() {

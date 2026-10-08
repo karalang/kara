@@ -6,15 +6,15 @@ fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" }
 enum E { A(R), B }
 struct H { n: i64 }
 impl H { fn rb(ref self, a: own R) -> R { let mut c = a; c } }
-fn ro(a: Option[S]) -> Option[S] { let mut c = a; c }
-fn rp(a: Option[S]) -> i64 { let mut c = a; let mut v: Vec[Option[S]] = Vec.new(); v.push(c); println("in"); 5 }
+fn ro(a: own Option[S]) -> Option[S] { let mut c = a; c }
+fn rp(a: own Option[S]) -> i64 { let mut c = a; let mut v: Vec[Option[S]] = Vec.new(); v.push(c); println("in"); 5 }
 fn rr(a: own R) -> R { let mut c = a; c }
 fn rs(a: own S) -> S { let mut c = a; c }
 fn rv(a: own Vec[R]) -> Vec[R] { let mut c = a; c }
 fn rt(a: own (R, i64)) -> (R, i64) { let mut c = a; c }
 fn re(a: own E) -> E { let mut c = a; c }
 fn rg[T](a: own T) -> T { let mut c = a; c }
-fn rq(a: Result[S, i64]) -> Result[S, i64] { let mut c = a; c }
+fn rq(a: own Result[S, i64]) -> Result[S, i64] { let mut c = a; c }
 fn rk(a: own R, k: bool) -> R { let mut c = a; if k { return c; }; R { id: 0 } }
 fn main() {
     let a: Option[S] = Some(mk(1));

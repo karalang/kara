@@ -1,14 +1,14 @@
 struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
-fn eat2(o: Option[S]) { println("x") }
-fn eatp(o: Option[S], v: mut ref Vec[S]) { match o { Option.Some(s) => v.push(s), Option.None => println("n") } }
-fn fw(h: Option[S]) { eat2(h); println("after") }
-fn fw2(h: Option[S]) { fw(h) }
-fn fc(h: Option[S], c: bool) { if c { eat2(h) } else { match h { Option.Some(s) => println(f"m{s.id}"), Option.None => println("n") } } println("afc") }
-fn rec(h: Option[S], n: i64) { if n > 0 { rec(h, n - 1) } else { eat2(h) } }
-fn reb(h: Option[S]) { let m = h; eat2(m); println("arb") }
-fn fp(h: Option[S], v: mut ref Vec[S]) { eatp(h, v); println("afp") }
+fn eat2(o: own Option[S]) { println("x") }
+fn eatp(o: own Option[S], v: mut ref Vec[S]) { match o { Option.Some(s) => v.push(s), Option.None => println("n") } }
+fn fw(h: own Option[S]) { eat2(h); println("after") }
+fn fw2(h: own Option[S]) { fw(h) }
+fn fc(h: own Option[S], c: bool) { if c { eat2(h) } else { match h { Option.Some(s) => println(f"m{s.id}"), Option.None => println("n") } } println("afc") }
+fn rec(h: own Option[S], n: i64) { if n > 0 { rec(h, n - 1) } else { eat2(h) } }
+fn reb(h: own Option[S]) { let m = h; eat2(m); println("arb") }
+fn fp(h: own Option[S], v: mut ref Vec[S]) { eatp(h, v); println("afp") }
 fn main() {
     fw(Option.Some(mks(1)));
     let o = Option.Some(mks(2));

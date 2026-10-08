@@ -16,9 +16,9 @@ fn score(x: Node) -> i64 {
     return r;
 }
 
-fn consume(b: Box[Node]) -> i64 { let x = b.v; return score(x); }
+fn consume(b: own Box[Node]) -> i64 { let x = b.v; return score(x); }
 fn peek(b: ref Box[Node]) -> i64 { let x = b.v; return score(x); }
-fn mid(t: Trip[Node]) -> i64 {
+fn mid(t: own Trip[Node]) -> i64 {
     let x = t.v;
     let mut r: i64 = score(x) + t.n;
     if t.a.contains("padding") { r = r + 1i64; }

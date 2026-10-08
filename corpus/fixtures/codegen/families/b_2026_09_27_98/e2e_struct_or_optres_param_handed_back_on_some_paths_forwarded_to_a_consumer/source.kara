@@ -1,16 +1,16 @@
 struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
-fn eat(s: S) { println("x") }
-fn eat2(o: Option[S]) { println("x") }
-fn eatr(o: Result[S, i64]) { println("x") }
-fn eat3(o: Option[S]) { match o { Option.Some(s) => println(f"m{s.id}"), Option.None => println("n") } }
+fn eat(s: own S) { println("x") }
+fn eat2(o: own Option[S]) { println("x") }
+fn eatr(o: own Result[S, i64]) { println("x") }
+fn eat3(o: own Option[S]) { match o { Option.Some(s) => println(f"m{s.id}"), Option.None => println("n") } }
 fn pk(s: own S, k: bool) -> S { if k { return s } eat(s); return mks(0) }
 fn pa(s: own S, k: bool) -> S { if k { return s } eat(s); println("after"); return mks(0) }
 fn pw(s: own S, k: bool) -> Option[S] { if k { return Option.Some(s) } eat(s); return Option.None }
-fn po(h: Option[S], k: bool) -> Option[S] { if k { return h } eat2(h); return Option.None }
-fn pr(h: Result[S, i64], k: bool) -> Result[S, i64] { if k { return h } eatr(h); return Result.Err(0) }
-fn pm(h: Option[S], k: bool) -> Option[S] { if k { return h } eat3(h); return Option.None }
+fn po(h: own Option[S], k: bool) -> Option[S] { if k { return h } eat2(h); return Option.None }
+fn pr(h: own Result[S, i64], k: bool) -> Result[S, i64] { if k { return h } eatr(h); return Result.Err(0) }
+fn pm(h: own Option[S], k: bool) -> Option[S] { if k { return h } eat3(h); return Option.None }
 fn pv(s: own S, k: bool) -> S { if k { eat(s); return mks(0) } return s }
 fn pe(s: own S, k: bool) -> S { if k { return s } else { eat(s); return mks(0) } }
 fn main() {

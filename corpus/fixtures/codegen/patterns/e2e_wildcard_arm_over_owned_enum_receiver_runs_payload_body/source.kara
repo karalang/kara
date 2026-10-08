@@ -9,7 +9,7 @@ impl Drop for T { fn drop(mut ref self) { println("  dT") } }
 impl E {
     fn m_wild(own self) -> i64 { match self { E.A(_) => { return 1; } E.B => { return 0; } } }
     fn m_unit(own self) -> i64 { match self { E.A(ref r) => { return r.id; } E.B => { return 0; } } }
-    fn m_ifwild(self) -> i64 { if let E.A(_) = self { return 1; } else { return 0; } }
+    fn m_ifwild(own self) -> i64 { if let E.A(_) = self { return 1; } else { return 0; } }
 }
 impl P { fn m_wild(own self) -> i64 { match self { P.A(_) => { return 1; } P.B => { return 0; } } } }
 impl T {

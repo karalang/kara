@@ -5,10 +5,10 @@ struct Hs { m: SMono }
 enum H3 { P(SMono), Q }
 fn mkr(n: i64) -> R2 { R2 { s: "abcdefghi", t: "x", u: "y" } }
 fn mk() -> SMono { SMono.P(mkr(1)) }
-fn f(h: Hs) { println("  in"); println("  in2") }
+fn f(h: own Hs) { println("  in"); println("  in2") }
 fn g(s: SMono) { println("  gin") }
 fn keep(h: own Hs) -> Hs { println("  k"); h }
-fn fu(h: Hs) { match h.m { SMono.P(r) => println(f"  r{r.t}"), SMono.Q => println("  q") }; println("  in2") }
+fn fu(h: own Hs) { match h.m { SMono.P(r) => println(f"  r{r.t}"), SMono.Q => println("  q") }; println("  in2") }
 fn main() {
     println("field"); { let s: SMono = mk(); println("  A"); let a: Hs = Hs { m: s }; let b: Hs = Hs { m: s }; println("  ok") }
     println("three"); { let s: SMono = mk(); let a: Hs = Hs { m: s }; let b: Hs = Hs { m: s }; let c: Hs = Hs { m: s }; println("  ok") }

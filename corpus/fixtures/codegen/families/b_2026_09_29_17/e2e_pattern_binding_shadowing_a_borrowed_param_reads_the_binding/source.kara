@@ -1,6 +1,6 @@
 fn cm(t: Option[i64], v: mut ref i64) -> i64 { let y = match t { Option.Some(v) => v + 1, Option.None => 0 }; v = v + y; return y }
 fn cl(t: Option[i64], v: ref i64) -> i64 { let y = if let Option.Some(v) = t { v } else { 0 }; return y + v }
-fn cs(t: Option[String], v: ref String) -> i64 { let y = match t { Option.Some(v) => v.len(), Option.None => 0 }; return y + v.len() }
+fn cs(t: own Option[String], v: ref String) -> i64 { let y = match t { Option.Some(v) => v.len(), Option.None => 0 }; return y + v.len() }
 fn cw(t: Option[i64], v: mut ref i64) -> i64 { let mut o = t; let mut s = 0; while let Option.Some(v) = o { s = s + v; o = Option.None; }; return s + v }
 fn ce(t: Option[i64], v: ref i64) -> i64 { let Option.Some(v) = t else { return 0 }; return v }
 fn cv(t: Option[i64], v: mut ref Vec[i64]) -> i64 { let y = match t { Option.Some(v) => v, Option.None => 0 }; v.push(y); return v.len() }

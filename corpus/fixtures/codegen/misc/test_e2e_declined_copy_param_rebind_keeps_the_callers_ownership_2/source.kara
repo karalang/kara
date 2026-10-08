@@ -26,7 +26,7 @@ fn br(r: own R, keep: bool) -> i64 { if keep { let m = r; return m.inner.v; } re
 fn two(r: own R) -> i64 { let m = r; let n = m; return n.inner.v; }
 fn keeps(x: own R) -> R { return x; }
 fn call(r: own R) -> i64 { let w = keeps(r); return w.inner.v; }
-fn pair(a: R, b: own R) -> i64 { let m = b; return m.inner.v + a.id; }
+fn pair(a: own R, b: own R) -> i64 { let m = b; return m.inner.v + a.id; }
 fn rdmove(r: own R) -> String { let m = r; return f"{m.name}/{r.name}"; }
 fn deep(s: own S) -> i64 { let m = s; return m.mid.d.v; }
 fn nodrop(n: own N) -> i64 { let m = n; return m.inner.v; }

@@ -2,18 +2,18 @@ struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 enum EArr { A(Array[R, 2]), B }
-fn ek(e: EArr) { println("ek") }
+fn ek(e: own EArr) { println("ek") }
 fn e1(e: own EArr) { let h = e; println("e1"); }
 fn e2(e: own EArr) { let h = e; let h2 = h; println("e2"); }
 fn e3(e: own EArr) { let h = e; match h { EArr.A(a) => println(f"e3 {a[0].id}"), EArr.B => println("e3b") } println("e3x"); }
 fn e4(e: own EArr) { let h = e; ek(h); println("e4"); }
 fn e5(e: own EArr) -> EArr { let h = e; println("e5"); return h; }
 fn e6(e: own EArr) { let mut h = e; h = EArr.B; println("e6"); }
-fn o1(x: Option[Array[R, 2]]) { let h = x; println("o1"); }
-fn o2(x: Option[Array[R, 2]]) { let h = x; let h2 = h; println("o2"); }
-fn o3(x: Option[Array[R, 2]]) { let h = x; match h { Some(a) => println(f"o3 {a[1].id}"), None => println("o3n") } println("o3x"); }
-fn t1(x: Option[(R, R)]) { let h = x; println("t1"); }
-fn t2(x: Option[(R, R)]) { let h = x; let h2 = h; println("t2"); }
+fn o1(x: own Option[Array[R, 2]]) { let h = x; println("o1"); }
+fn o2(x: own Option[Array[R, 2]]) { let h = x; let h2 = h; println("o2"); }
+fn o3(x: own Option[Array[R, 2]]) { let h = x; match h { Some(a) => println(f"o3 {a[1].id}"), None => println("o3n") } println("o3x"); }
+fn t1(x: own Option[(R, R)]) { let h = x; println("t1"); }
+fn t2(x: own Option[(R, R)]) { let h = x; let h2 = h; println("t2"); }
 fn main() {
   e1(EArr.A([mk(1), mk(2)])); println("a");
   e2(EArr.A([mk(3), mk(4)])); println("b");

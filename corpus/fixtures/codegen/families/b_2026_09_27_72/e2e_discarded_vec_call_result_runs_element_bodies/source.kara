@@ -9,8 +9,8 @@ struct H { a: i64 }
 impl H { fn mv(i: i64) -> Vec[R] { return [mk(i), mk(i + 1)]; } }
 fn mv(i: i64) -> Vec[R] { return [mk(i), mk(i + 1)]; }
 fn pv(v: own Vec[R]) -> Vec[R] { return v; }
-fn vc(a: R, b: R) -> Vec[R] { return vec![a, b]; }
-fn vl(a: R, b: R) -> Vec[R] { let v: Vec[R] = [a, b]; return v; }
+fn vc(a: own R, b: own R) -> Vec[R] { return vec![a, b]; }
+fn vl(a: own R, b: own R) -> Vec[R] { let v: Vec[R] = [a, b]; return v; }
 fn mkw() -> Vec[W1] { return [W1 { v: 41 }] }
 fn mp(i: i64) -> Vec[P] { return [P { r: mk(i), n: 1 }]; }
 fn me(i: i64) -> Vec[E] { return [E.A(mk(i)), E.B]; }

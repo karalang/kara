@@ -1,25 +1,25 @@
 struct S { tag: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.tag}") } }
 fn mk(a: own String, b: own String) -> Array[S, 2] { return [S { tag: a }, S { tag: b }]; }
-fn pa(x: Option[Array[S, 2]]) {
+fn pa(x: own Option[Array[S, 2]]) {
     match x { Some(t) => { let u = t; println(f"s{u[0].tag}") } None => { println("n") } }
     println("post");
 }
-fn pb(x: Option[Array[S, 2]]) -> Array[S, 2] {
+fn pb(x: own Option[Array[S, 2]]) -> Array[S, 2] {
     match x { Some(t) => { let u = t; return u; } None => { return mk(f"q", f"r"); } }
 }
-fn pc(x: Option[Array[S, 2]]) {
+fn pc(x: own Option[Array[S, 2]]) {
     match x { Some(t) => { let u = t; let w = u; println(f"s{w[1].tag}") } None => { } }
     println("post");
 }
-fn pd(x: Option[Array[S, 2]]) -> Array[S, 2] {
+fn pd(x: own Option[Array[S, 2]]) -> Array[S, 2] {
     match x { Some(t) => { let u = t; let w = u; return w; } None => { return mk(f"q", f"r"); } }
 }
-fn pe(x: Result[Array[S, 2], i64]) {
+fn pe(x: own Result[Array[S, 2], i64]) {
     match x { Ok(t) => { let u: Array[S, 2] = t; println(f"s{u[0].tag}") } Err(_) => { } }
     println("post");
 }
-fn pf(x: Option[Array[S, 2]], c: bool) -> Array[S, 2] {
+fn pf(x: own Option[Array[S, 2]], c: bool) -> Array[S, 2] {
     match x { Some(t) => { let u = t; if c { return u; } println("kept"); return mk(f"q", f"r"); } None => { return mk(f"q", f"r"); } }
 }
 fn la() {

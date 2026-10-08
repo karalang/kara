@@ -1,7 +1,7 @@
 
 struct Mk { n: i64 }
 impl Mk {
-    fn sink(ref self, acc: mut ref Vec[Option[String]], x: Option[String]) { acc.push(x); }
+    fn sink(ref self, acc: mut ref Vec[Option[String]], x: own Option[String]) { acc.push(x); }
 }
 fn mks(n: i64) -> String { return f"payloadpayload{n}"; }
 fn main() {

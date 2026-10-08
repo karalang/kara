@@ -1,7 +1,7 @@
 
 struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
-fn take(r: R, q: R) -> i64 { 7 }
+fn take(r: own R, q: own R) -> i64 { 7 }
 fn main() {
     let b = R { id: 2, name: f"heap-two" };
     let v = take(R { id: 1, name: f"heap-one" }, b);

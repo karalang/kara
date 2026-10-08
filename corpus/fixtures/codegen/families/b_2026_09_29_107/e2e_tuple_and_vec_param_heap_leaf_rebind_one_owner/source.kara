@@ -1,7 +1,7 @@
 struct D { id: i64, s: String }
 impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
 fn mkd(n: i64) -> D { return D { id: n, s: f"sssssssssssssssssssssssssssssssssss{n}" } }
-fn take(v: Vec[D]) -> i64 { return v.len() }
+fn take(v: own Vec[D]) -> i64 { return v.len() }
 fn pv(t: own (Vec[D], i64)) -> i64 { let (a, j) = t; let b = a; return b.len() + j }
 fn pi(t: own (Vec[i64], i64)) -> i64 { let (a, j) = t; let b = a; return b.len() + j }
 fn ps(t: own (String, i64)) -> i64 { let (a, j) = t; let b = a; return b.len() + j }

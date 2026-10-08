@@ -3,7 +3,7 @@ struct R2 { id: i64, name: String }
 impl Drop for R2 { fn drop(mut ref self) { println(f"d{self.name.contains("row")}") } }
 enum K { A(R2), B }
 
-fn take(o: Option[K]) -> i64 { 1 }
+fn take(o: own Option[K]) -> i64 { 1 }
 
 fn main() {
     let n = env.args().len() as i64;

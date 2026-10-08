@@ -5,7 +5,7 @@ struct H { pe: (Vec[D], i64), n: i64 }
 fn mkd(n: i64) -> D { return D { id: n, s: f"{n}-heap-string-longer-than-sso" } }
 fn mkt(n: i64) -> (Vec[D], i64) { return ([mkd(n), mkd(n + 1)], 7) }
 fn mk2(n: i64) -> (Vec[D], Vec[D]) { return ([mkd(n)], [mkd(n + 1)]) }
-fn take(v: Vec[D]) -> i64 { return v.len() }
+fn take(v: own Vec[D]) -> i64 { return v.len() }
 fn ret() -> Vec[D] { let t: (Vec[D], i64) = ([mkd(80), mkd(81)], 7); let (a, j) = t; println(f"r{j}"); return a }
 fn main() {
     { let t: (String, i64) = (f"string-that-is-longer-than-sso", 7); let (a, j) = t; let b = a; println(f"k1 {j} {b.len()}") }

@@ -30,7 +30,7 @@ impl Drop for Tracked {
     }
 }
 
-fn consume(t: Tracked) -> i64 {
+fn consume(t: own Tracked) -> i64 {
     println(f"  consume sees: [{t.s}] len={t.s.len()}");
     return t.s.len();
 }

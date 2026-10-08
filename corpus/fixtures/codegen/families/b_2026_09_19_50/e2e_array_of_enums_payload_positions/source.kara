@@ -6,8 +6,8 @@ enum Hb { P(Array[Mono, 2]), Q }
 enum Hc { P(Array[Mono, 1], i64), Q }
 enum Hs { P(Array[R, 2]), Q }
 struct Ga { h: Ha }
-fn eata(h: Ha) -> i64 { return 1 }
-fn eatb(h: Hb) -> i64 { return 1 }
+fn eata(h: own Ha) -> i64 { return 1 }
+fn eatb(h: own Hb) -> i64 { return 1 }
 fn r(i: i64) -> R { R { id: i, s: f"ssssssss{i}" } }
 fn main() {
     println("let"); { let h = Ha.P([Mono.P(r(1))]); println("  x") }

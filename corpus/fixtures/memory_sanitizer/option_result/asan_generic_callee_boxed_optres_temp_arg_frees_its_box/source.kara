@@ -2,7 +2,7 @@
 struct H { id: i64 }
 
 impl H {
-    fn show[T: Display](ref self, x: Option[T]) -> i64 {
+    fn show[T: Display](ref self, x: own Option[T]) -> i64 {
         match x {
             Some(t) => { println(f"m{self.id}:{t}"); return 1; }
             None => { return 0; }
@@ -10,21 +10,21 @@ impl H {
     }
 }
 
-fn takesOpt[T: Display](x: Option[T]) -> i64 {
+fn takesOpt[T: Display](x: own Option[T]) -> i64 {
     match x {
         Some(t) => { println(f"o:{t}"); return 1; }
         None => { return 0; }
     }
 }
 
-fn takesRes[T: Display](x: Result[T, i64]) -> i64 {
+fn takesRes[T: Display](x: own Result[T, i64]) -> i64 {
     match x {
         Ok(t) => { println(f"r:{t}"); return 1; }
         Err(e) => { return e; }
     }
 }
 
-fn passthru[T](x: Option[T]) -> Option[T] { return x; }
+fn passthru[T](x: own Option[T]) -> Option[T] { return x; }
 
 fn main() {
     let n = env.args().len();

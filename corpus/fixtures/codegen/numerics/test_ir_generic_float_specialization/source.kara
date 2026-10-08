@@ -1,5 +1,5 @@
 
-fn double_val[T](x: T) -> T { x + x }
+fn double_val[T](x: own T) -> T { x + x }
 fn main() {
     let y = double_val(2.5);
     println(y);

@@ -2,13 +2,13 @@
 shared struct ShIn { s: String }
 struct ShP { i: ShIn, n: i64 }
 fn mk(n: i64) -> ShP { return ShP { i: ShIn { s: f"shared-heap-string-longer-than-sso-{n}" }, n: n }; }
-fn g1(w: Option[ShP]) -> i64 { if let Some(p) = w { let q = p; return q.n; } return 0; }
-fn g2(w: Option[ShP]) -> i64 { return w.unwrap_or(mk(0)).n; }
-fn g3(w: Option[ShP]) -> i64 { let Some(p) = w else { return 0; }; let q = p; q.n }
-fn g4(w: Option[ShP]) -> i64 { match w { Some(p) => { let q = p; q.n } None => 0 } }
-fn g5(w: Option[ShP]) -> i64 { let p = w.unwrap(); p.n }
-fn g6(v: mut ref Vec[Option[ShP]], w: Option[ShP]) -> i64 { v.push(w); return v.len(); }
-fn g7(w: Option[ShP]) -> i64 { return w.unwrap().n; }
+fn g1(w: own Option[ShP]) -> i64 { if let Some(p) = w { let q = p; return q.n; } return 0; }
+fn g2(w: own Option[ShP]) -> i64 { return w.unwrap_or(mk(0)).n; }
+fn g3(w: own Option[ShP]) -> i64 { let Some(p) = w else { return 0; }; let q = p; q.n }
+fn g4(w: own Option[ShP]) -> i64 { match w { Some(p) => { let q = p; q.n } None => 0 } }
+fn g5(w: own Option[ShP]) -> i64 { let p = w.unwrap(); p.n }
+fn g6(v: mut ref Vec[Option[ShP]], w: own Option[ShP]) -> i64 { v.push(w); return v.len(); }
+fn g7(w: own Option[ShP]) -> i64 { return w.unwrap().n; }
 fn main() {
     let a1 = Some(mk(1)); println(f"j{g1(a1)}"); println(f"k{g1(Some(mk(2)))}"); let z: Option[ShP] = None; println(f"z{g1(z)}");
     let a2 = Some(mk(3)); println(f"j{g2(a2)}"); println(f"k{g2(Some(mk(4)))}");

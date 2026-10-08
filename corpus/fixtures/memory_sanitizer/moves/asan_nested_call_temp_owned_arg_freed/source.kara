@@ -5,7 +5,7 @@ impl Drop for Res {
 }
 struct Holder { xs: Vec[Res], tag: i64 }
 fn mk(v: own Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }
-fn use_it(h: Holder) -> i64 { h.tag }
+fn use_it(h: own Holder) -> i64 { h.tag }
 fn main() {
     println("bound:");
     {

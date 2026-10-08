@@ -4,8 +4,8 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct Rs { id: i64, s: String }
 impl Drop for Rs { fn drop(mut ref self) { println(f"ds{self.id} {self.s.len()}") } }
 fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
-fn eat(r: Rs) -> i64 { r.id }
-fn giveg(g: G[Rs]) -> i64 { g.n }
+fn eat(r: own Rs) -> i64 { r.id }
+fn giveg(g: own G[Rs]) -> i64 { g.n }
 fn a1(g: own G[Rs]) -> i64 { let w = g.v; println(w.s.len()); g.n }
 fn a2(g: own G[Rs]) -> i64 { let w = g.v; eat(w) + g.n }
 fn a3(g: own G[Rs]) -> Rs { let w = g.v; w }

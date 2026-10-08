@@ -12,14 +12,14 @@ fn local_some(i: i64) -> Option[R] { let a: Array[R, 2] = [mk(1), mk(2)]; return
 fn local_push(i: i64) -> Vec[R] { let a: Array[R, 2] = [mk(1), mk(2)]; let mut v: Vec[R] = Vec.new(); v.push(a[0]); v.push(a[i]); return v; }
 fn local_fld(i: i64) -> W { let a: Array[R, 2] = [mk(1), mk(2)]; return W { a: a[0] }; }
 fn local_fldi(i: i64) -> W { let a: Array[R, 2] = [mk(1), mk(2)]; return W { a: a[i] }; }
-fn own_ret0(p: Array[R, 2], i: i64) -> R { return p[0]; }
-fn own_reti(p: Array[R, 2], i: i64) -> R { return p[i]; }
-fn own_tail(p: Array[R, 2], i: i64) -> R { p[1] }
-fn own_tup(p: Array[R, 2], i: i64) -> (R, i64) { return (p[0], 3); }
-fn own_some(p: Array[R, 2], i: i64) -> Option[R] { return Some(p[i]); }
-fn own_push(p: Array[R, 2], i: i64) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(p[0]); v.push(p[i]); return v; }
-fn own_fld(p: Array[R, 2], i: i64) -> W { return W { a: p[0] }; }
-fn own_fldi(p: Array[R, 2], i: i64) -> W { return W { a: p[i] }; }
+fn own_ret0(p: own Array[R, 2], i: i64) -> R { return p[0]; }
+fn own_reti(p: own Array[R, 2], i: i64) -> R { return p[i]; }
+fn own_tail(p: own Array[R, 2], i: i64) -> R { p[1] }
+fn own_tup(p: own Array[R, 2], i: i64) -> (R, i64) { return (p[0], 3); }
+fn own_some(p: own Array[R, 2], i: i64) -> Option[R] { return Some(p[i]); }
+fn own_push(p: own Array[R, 2], i: i64) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(p[0]); v.push(p[i]); return v; }
+fn own_fld(p: own Array[R, 2], i: i64) -> W { return W { a: p[0] }; }
+fn own_fldi(p: own Array[R, 2], i: i64) -> W { return W { a: p[i] }; }
 fn ref_ret0(p: ref Array[R, 2], i: i64) -> R { return p[0]; }
 fn ref_reti(p: ref Array[R, 2], i: i64) -> R { return p[i]; }
 fn ref_tail(p: ref Array[R, 2], i: i64) -> R { p[1] }

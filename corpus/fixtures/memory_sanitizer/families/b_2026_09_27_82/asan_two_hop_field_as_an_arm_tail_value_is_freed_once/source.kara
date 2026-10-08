@@ -5,7 +5,7 @@ struct W { r: D, s: D }
 struct X { w: W, t: D }
 struct Y { x: X, u: D }
 fn mkx(n: i64) -> X { X { w: W { r: mkd(n), s: mkd(n + 1) }, t: mkd(n + 2) } }
-fn show(d: D) { println(f"s{d.id}"); }
+fn show(d: own D) { println(f"s{d.id}"); }
 fn let_if(c: bool) { let x = mkx(10); let y = if c { x.w.r } else { mkd(9) }; println(f"y{y.id}"); }
 fn let_match(c: bool) { let x = mkx(20); let y = match c { true => x.w.r, false => mkd(9) }; println(f"y{y.id}"); }
 fn both_legs(c: bool) { let x = mkx(30); let y = if c { x.w.r } else { x.w.s }; println(f"y{y.id}"); }

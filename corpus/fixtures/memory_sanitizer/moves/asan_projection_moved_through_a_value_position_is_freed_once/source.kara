@@ -3,7 +3,7 @@ struct R { s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.s}") } }
 struct P { a: R, b: R }
 fn mk(s: String) -> R { R { s: f"{s}-heap" } }
-fn show(r: R) { println(f"  show:{r.s}"); }
+fn show(r: own R) { println(f"  show:{r.s}"); }
 fn if_field(k: bool) -> R {
     let p = P { a: mk("a"), b: mk("b") };
     let x = if k { p.a } else { mk("z") };

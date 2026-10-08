@@ -5,9 +5,9 @@ fn gid[T](x: own T) -> T { x }
 enum G1[T] { Y(T), N }
 enum Ea { A(Array[R, 2]), B }
 fn eats(s: String) -> i64 { s.len() }
-fn eatr(r: R) -> i64 { r.id }
-fn eato(o: Option[R]) -> i64 { match o { Some(r) => r.id, None => 0 } }
-fn eatres(o: Result[R, i64]) -> i64 { match o { Ok(r) => r.id, Err(e) => e } }
+fn eatr(r: own R) -> i64 { r.id }
+fn eato(o: own Option[R]) -> i64 { match o { Some(r) => r.id, None => 0 } }
+fn eatres(o: own Result[R, i64]) -> i64 { match o { Ok(r) => r.id, Err(e) => e } }
 fn f_c01() -> i64 { let o: Option[String] = Some(f"aaaaaaaa-1"); let k = gid(5); match o { Some(s) => eats(s) + k, None => 0 } }
 fn f_c02() -> i64 { let o: Option[R] = Some(mk(2)); let k = gid(5); match o { Some(r) => eatr(r) + k, None => 0 } }
 fn f_c03() -> i64 { let o: Option[R] = Some(mk(3)); let k = gid(5); eato(o) + k }

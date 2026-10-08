@@ -11,7 +11,7 @@ impl E {
     fn m_r(own self) -> R { match self { E.A(r) => { return r; } E.B => { return mk(0); } } }
     fn m_print(own self) { match self { E.A(r) => { println(f"  p{r.id}"); } E.B => { println("  pB"); } } }
     fn m_ref(ref self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
-    fn m_iflet(self) -> i64 { if let E.A(r) = self { return r.id; } else { return 0; } }
+    fn m_iflet(own self) -> i64 { if let E.A(r) = self { return r.id; } else { return 0; } }
     fn me(own self) -> E { return self; }
     fn wrap(own self) -> W { return W { e: self }; }
     fn m_opt(own self) -> Option[R] { match self { E.A(r) => { return Some(r); } E.B => { return None; } } }

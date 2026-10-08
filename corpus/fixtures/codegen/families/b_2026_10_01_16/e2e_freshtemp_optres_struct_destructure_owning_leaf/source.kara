@@ -5,7 +5,7 @@ struct H2 { v: R, r: R, n: i64 }
 fn mk(k: i64) -> R { R { id: k, s: f"a-heap-string-longer-than-sso-{k}" } }
 fn mo(k: i64) -> Option[H2] { if k > 0 { Option.Some(H2 { v: mk(k), r: mk(k * 10), n: 1 }) } else { Option.None } }
 fn rs(k: i64) -> Result[H2, i64] { if k > 0 { Result.Ok(H2 { v: mk(k), r: mk(k * 10), n: 1 }) } else { Result.Err(k) } }
-fn take(x: R) -> i64 { x.id }
+fn take(x: own R) -> i64 { x.id }
 fn b1(k: i64) -> i64 { match mo(k) { Option.Some(H2 { v, .. }) => take(v), Option.None => 0 } }
 fn b2(k: i64) -> i64 { match mo(k) { Option.Some(H2 { v, .. }) => { let w = v; w.id }, Option.None => 0 } }
 fn b3(k: i64) -> i64 { match rs(k) { Result.Ok(H2 { v, .. }) => take(v), Result.Err(e) => e } }

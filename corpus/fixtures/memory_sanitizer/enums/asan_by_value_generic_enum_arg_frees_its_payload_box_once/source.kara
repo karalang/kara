@@ -3,16 +3,16 @@ enum G1[T] { Y(T), N }
 enum G2[T] { Y(T) }
 struct S1[T] { v: T }
 
-fn gplain[T](g: G1[T]) -> i64 { return 7; }
-fn g2len[T](g: G2[T]) -> i64 { return 7; }
+fn gplain[T](g: own G1[T]) -> i64 { return 7; }
+fn g2len[T](g: own G2[T]) -> i64 { return 7; }
 fn gints[T](g: own G1[T]) -> i64 {
     match g { G1.Y(v) => { return 1; } G1.N => { return 0; } }
 }
 fn gref[T](g: ref G1[T]) -> i64 { return 7; }
-fn slen[T](s: S1[T]) -> i64 { return 7; }
-fn bare[T](x: T) -> i64 { return 7; }
-fn optlen[T](o: Option[T]) -> i64 { return 7; }
-fn monolen(g: G1[String]) -> i64 { return 7; }
+fn slen[T](s: own S1[T]) -> i64 { return 7; }
+fn bare[T](x: own T) -> i64 { return 7; }
+fn optlen[T](o: own Option[T]) -> i64 { return 7; }
+fn monolen(g: own G1[String]) -> i64 { return 7; }
 fn mkg(n: i64) -> G1[String] { return G1.Y(f"b1610-fresh-aaaaaaaaaaaa-{n}"); }
 
 fn main() {

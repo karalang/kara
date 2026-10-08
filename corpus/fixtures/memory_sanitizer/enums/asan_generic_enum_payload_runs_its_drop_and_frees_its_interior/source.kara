@@ -9,8 +9,8 @@ enum Two[T] { A(T), B(T), C }
 enum Mono { P(R2), Q }
 
 fn mkr(n: i64) -> R2 { return R2 { s: f"aaaaaaaa{n}", t: f"bbbbbbbb{n}", u: f"cccccccc{n}" }; }
-fn holdgen(g: G[R2]) { println("hg"); }
-fn holdmono(m: Mono) { println("hm"); }
+fn holdgen(g: own G[R2]) { println("hg"); }
+fn holdmono(m: own Mono) { println("hm"); }
 
 fn main() {
     let p = G.X(mkr(1));                    println("c1");

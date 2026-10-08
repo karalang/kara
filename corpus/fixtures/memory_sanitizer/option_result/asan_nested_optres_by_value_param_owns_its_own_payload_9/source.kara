@@ -1,5 +1,5 @@
 
-fn show(x: Result[Option[String], String]) { println(f"{x}"); }
+fn show(x: own Result[Option[String], String]) { println(f"{x}"); }
 fn main() {
     let mut i = 0;
     while i < 3 { let e = f"errerrerrerrerr{i}"; show(Err(e)); i = i + 1; }

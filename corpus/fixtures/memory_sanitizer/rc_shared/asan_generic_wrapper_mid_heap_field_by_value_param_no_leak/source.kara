@@ -1,7 +1,7 @@
 
 struct Multi[T] { a: i64, v: T, w: Vec[i64] }
 
-fn sink(m: Multi[String]) -> i64 { m.a + m.v.len() + m.w.len() }
+fn sink(m: own Multi[String]) -> i64 { m.a + m.v.len() + m.w.len() }
 
 fn main() {
     let n = env.args().len() as i64;

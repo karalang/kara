@@ -1,10 +1,10 @@
 
 struct H { n: i64 }
 struct W { f: Vec[String] }
-impl H { fn show(ref self, x: Option[String]) { println(f"{self.n} {x}"); } }
+impl H { fn show(ref self, x: own Option[String]) { println(f"{self.n} {x}"); } }
 fn mkv(n: i64) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(f"payloadpayload{n}"); return v; }
-fn show(x: Option[Vec[String]]) { println(f"{x}"); }
-fn showr(x: Result[i64, Vec[String]]) { println(f"{x}"); }
+fn show(x: own Option[Vec[String]]) { println(f"{x}"); }
+fn showr(x: own Result[i64, Vec[String]]) { println(f"{x}"); }
 fn main() {
     let h = H { n: 7 };
     let mut i = 0;

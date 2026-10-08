@@ -23,7 +23,7 @@ impl Drop for Tracked {
     }
 }
 
-fn consume(t: Tracked) -> i64 {
+fn consume(t: own Tracked) -> i64 {
     return t.s.len();
 }
 

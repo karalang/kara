@@ -2,7 +2,7 @@ struct R { id: i64, s: String, xs: Vec[i64] }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
 struct W { p: Option[R] }
 fn mk(n: i64) -> R { return R { id: n, s: f"s{n}", xs: [n, n] }; }
-fn eat(xa: Option[R]) -> i64 { match xa { Option.Some(ra) => { ra.id }, Option.None => { 0 } } }
+fn eat(xa: own Option[R]) -> i64 { match xa { Option.Some(ra) => { ra.id }, Option.None => { 0 } } }
 fn give() -> Option[R] { let (_, ob) = (mk(56), Option.Some(mk(156))); return ob }
 
 fn bind()   { let (_, oc) = (mk(32), Option.Some(mk(132))); println("  b") }

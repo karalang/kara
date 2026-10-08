@@ -1,8 +1,8 @@
 struct P { s: String, n: i64 }
 enum W { A(Array[String, 2]), B }
 fn takeP(p: ref P) -> i64 { println(f"{p.s} {p.n}"); return p.n }
-fn viaCall(x: Option[Array[String, 2]]) { match x { Some(t) => { println(f"{t}") } None => { println("n") } } }
-fn generic[T: Display](x: Option[T]) { match x { Some(t) => { println(f"g:{t}") } None => { println("n") } } }
+fn viaCall(x: own Option[Array[String, 2]]) { match x { Some(t) => { println(f"{t}") } None => { println("n") } } }
+fn generic[T: Display](x: own Option[T]) { match x { Some(t) => { println(f"g:{t}") } None => { println("n") } } }
 fn main() {
     let ctl: Array[String, 2] = ["ab", "cd"];
     println(f"{ctl}");

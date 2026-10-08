@@ -4,7 +4,7 @@ struct H { s: String }
 impl Drop for H { fn drop(mut ref self) { println(f"dH{self.s}") } }
 enum E { A(R), B }
 
-fn sink(r: R) -> i64 { r.id }
+fn sink(r: own R) -> i64 { r.id }
 
 fn p6()  { let t = (R { id: 6 }, 0); match t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
 fn e6()  { let t = E.A(R { id: 16 }); match t { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => {} } }

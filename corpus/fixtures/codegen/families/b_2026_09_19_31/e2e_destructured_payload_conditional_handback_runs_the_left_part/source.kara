@@ -1,37 +1,37 @@
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 
-fn eat(o: Option[(R, R)], k: bool) -> R {
+fn eat(o: own Option[(R, R)], k: bool) -> R {
     match o {
         Option.Some((a, b)) => { if k { return a; } return b; }
         Option.None => { return R { id: 0 }; }
     }
 }
-fn eatT(o: Option[(R, R)], k: bool) -> R {
+fn eatT(o: own Option[(R, R)], k: bool) -> R {
     match o {
         Option.Some((a, b)) => if k { a } else { b },
         Option.None => R { id: 0 },
     }
 }
-fn eatRes(o: Result[(R, R), i64], k: bool) -> R {
+fn eatRes(o: own Result[(R, R), i64], k: bool) -> R {
     match o {
         Result.Ok((a, b)) => { if k { return a; } return b; }
         Result.Err(_) => { return R { id: 0 }; }
     }
 }
-fn cs(o: Option[(R, i64)], k: bool) -> R {
+fn cs(o: own Option[(R, i64)], k: bool) -> R {
     match o {
         Option.Some((a, n)) => { if k { return a; } return R { id: n }; }
         Option.None => { return R { id: 0 }; }
     }
 }
-fn cs3(o: Option[(R, R, i64)], k: bool) -> R {
+fn cs3(o: own Option[(R, R, i64)], k: bool) -> R {
     match o {
         Option.Some((a, b, n)) => { if k { return a; } if n > 0 { return b; } return R { id: n }; }
         Option.None => { return R { id: 0 }; }
     }
 }
-fn nested(o: Option[(R, R)], k: i64) -> R {
+fn nested(o: own Option[(R, R)], k: i64) -> R {
     match o {
         Option.Some((a, b)) => { match k { 0 => { return a; } _ => { return b; } } }
         Option.None => { return R { id: 0 }; }

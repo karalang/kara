@@ -11,7 +11,7 @@ impl H {
   fn keep[T](ref self, x: own T) -> T { println("inK"); return x; }
   fn keepN(ref self, x: own R) -> R { println("inN"); return x; }
   fn maybe[T](ref self, x: own T, k: bool) -> T { println("inM"); if k { return x; } return x; }
-  fn scalar[T](ref self, x: T) -> i64 { println("inS"); return 3; }
+  fn scalar[T](ref self, x: own T) -> i64 { println("inS"); return 3; }
 }
 fn round() {
   let h = H { n: 1 };

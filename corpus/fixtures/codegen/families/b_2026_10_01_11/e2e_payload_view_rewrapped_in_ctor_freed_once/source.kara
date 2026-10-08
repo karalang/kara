@@ -3,10 +3,10 @@ impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
 fn mk(n: i64) -> W1 { return W1 { v: n, s: f"ssssssssssssssssssssssssssssss{n}" } }
 enum E { A(W1), B }
 struct H { o: Option[W1], k: i64 }
-fn eat(o: Option[W1]) { println("eat") }
+fn eat(o: own Option[W1]) { println("eat") }
 fn peek(o: ref Option[W1]) { println("peek") }
-fn pass(o: Option[W1]) -> Option[W1] { return o }
-fn ate(e: E) { println("ate") }
+fn pass(o: own Option[W1]) -> Option[W1] { return o }
+fn ate(e: own E) { println("ate") }
 fn let_some(n: i64) {
     let o = Some(mk(n));
     match o { Some(w) => { let q = Some(w); println("ls") }, None => {} }

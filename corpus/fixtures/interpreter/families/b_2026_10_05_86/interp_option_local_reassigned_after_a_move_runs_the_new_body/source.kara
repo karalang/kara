@@ -4,7 +4,7 @@ fn mk(i: i64) -> R { R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 fn mat() { let mut h: Option[R] = Some(mk(31)); match h { Some(a) => println(f"m{a.id}"), None => println("n") } h = Some(mk(37)); println("w1") }
 fn iflet() { let mut h: Option[R] = Some(mk(40)); if let Some(a) = h { println(f"m{a.id}") } h = Some(mk(41)); println(f"w2 {h.is_some()}") }
 fn arr() { let mut h: Option[Array[R, 2]] = Some([mk(27), mk(28)]); match h { Some(a) => println(f"m{a[0].id}"), None => println("n") } h = Some([mk(29), mk(30)]); println("w3") }
-fn param(x: Option[Array[R, 2]]) { let mut h = x; match h { Some(a) => println(f"m{a[0].id}"), None => println("n") } h = Some([mk(7), mk(8)]); println("w4") }
+fn param(x: own Option[Array[R, 2]]) { let mut h = x; match h { Some(a) => println(f"m{a[0].id}"), None => println("n") } h = Some([mk(7), mk(8)]); println("w4") }
 fn looped() { let mut h: Option[R] = Some(mk(32)); let mut i = 0; while i < 2 { match h { Some(a) => println(f"m{a.id}"), None => println("n") } h = Some(mk(60 + i)); i = i + 1; } println("w5") }
 fn guarded() { let mut h: Option[R] = Some(mk(5)); match h { Some(a) if a.id > 100 => println(f"m{a.id}"), _ => println("miss") } h = Some(mk(6)); println("w6") }
 fn some_paths(c: bool) { let mut h: Option[R] = Some(mk(10)); if c { match h { Some(a) => println(f"m{a.id}"), None => println("n") } } h = Some(mk(11)); println(f"w7 {c}") }

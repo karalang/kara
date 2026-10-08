@@ -5,8 +5,8 @@ struct Q { r: R, s: R }
 
 fn mkr(k: i64) -> R { return R { id: k, tag: f"tag-{k}-padded-out-well-past-any-inline-capacity", xs: [k, k, k] } }
 
-fn peek(o: Option[Q]) -> i64 { match o { Option.Some(t) => { return t.r.id + 100; } Option.None => { return 0; } } }
-fn take(o: Option[Q]) -> i64 { match o { Option.Some(t) => { let x = t.r; return x.tag.len(); } Option.None => { return 0; } } }
+fn peek(o: own Option[Q]) -> i64 { match o { Option.Some(t) => { return t.r.id + 100; } Option.None => { return 0; } } }
+fn take(o: own Option[Q]) -> i64 { match o { Option.Some(t) => { let x = t.r; return x.tag.len(); } Option.None => { return 0; } } }
 
 fn main() {
     let mut n = 0;

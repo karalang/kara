@@ -1,10 +1,10 @@
 struct Wide { a: String, b: String, c: i64, d: i64 }
 shared struct Node { s: String }
-fn idopt(o: Option[String]) -> Option[String] { o }
-fn idres(r: Result[String, i64]) -> Result[String, i64] { r }
-fn idbox(o: Option[Wide]) -> Option[Wide] { o }
+fn idopt(o: own Option[String]) -> Option[String] { o }
+fn idres(r: own Result[String, i64]) -> Result[String, i64] { r }
+fn idbox(o: own Option[Wide]) -> Option[Wide] { o }
 fn idsh(o: Option[Node]) -> Option[Node] { o }
-fn peek(o: Option[String]) -> i64 {
+fn peek(o: own Option[String]) -> i64 {
     match o { Option.Some(s) => s.len(), Option.None => 0 }
 }
 fn mk(n: i64) -> String {

@@ -4,7 +4,7 @@ struct H { o: Option[String], n: i64 }
 struct Hr { r: Result[String, i64], e: Result[String, String] }
 struct Hp { p: Option[P], k: Option[K], q: Result[P, i64] }
 fn mk(i: i64) -> H { H { o: Some(f"heap-string-longer-than-sso-{i}"), n: i } }
-fn take(h: H) -> String { h.o.unwrap() }
+fn take(h: own H) -> String { h.o.unwrap() }
 fn main() {
     let h1 = mk(1);
     println(h1.o.unwrap());

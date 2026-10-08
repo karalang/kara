@@ -3,7 +3,7 @@ struct Res { id: i64, name: String }
 impl Drop for Res {
     fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
 }
-fn take(t: (Option[Res], i64)) -> i64 { t.1 }
+fn take(t: own (Option[Res], i64)) -> i64 { t.1 }
 fn mk() -> (Option[Res], i64) { (Option.Some(Res { id: 3, name: f"c{3}" }), 30) }
 fn main() {
     { let t = (Option.Some(Res { id: 1, name: f"a{1}" }), 10); println(t.1); }

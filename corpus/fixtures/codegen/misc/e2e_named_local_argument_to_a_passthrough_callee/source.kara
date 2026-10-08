@@ -8,7 +8,7 @@ fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}", xs: [i] }; }
 fn pass(r: own R) -> R { return r; }
 fn rebpass(r: own R) -> R { let m = r; return m; }
 fn ppass(p: own P) -> P { return p; }
-fn dies(r: R) -> i64 { return r.id; }
+fn dies(r: own R) -> i64 { return r.id; }
 fn main() {
   println("named"); let a = mk(1); let z = pass(a); println(f"  v={z.inner.v}");
   println("named_rebind"); let b = mk(2); let y = rebpass(b); println(f"  v={y.inner.v}");

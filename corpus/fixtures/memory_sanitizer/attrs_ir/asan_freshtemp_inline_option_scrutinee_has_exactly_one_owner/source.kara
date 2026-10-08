@@ -28,7 +28,7 @@ fn mknode(n: i64) -> Option[Node] {
     if n < 0 { return None; }
     return Some(Node { name: f"nod-eeeeeeeeeeeeeeee-{n}" });
 }
-fn passthru(o: Option[String]) -> Option[String] { return o; }
+fn passthru(o: own Option[String]) -> Option[String] { return o; }
 
 fn main() {
     let mut n: i64 = 0;

@@ -2,9 +2,9 @@ fn make() -> Tensor[f64, [2, 2]] {
     let t: Tensor[f64, [2, 2]] = Tensor.full([2, 2], 9.0);
     t
 }
-fn eat[T](t: T) -> i64 { 1 }
-fn first[T](t: Tensor[f64, [2, 2]], u: T) -> f64 { t[0, 0] }
-fn peek[U](t: ref Tensor[f64, [2, 2]], u: U) -> f64 { t[0, 0] }
+fn eat[T](t: own T) -> i64 { 1 }
+fn first[T](t: Tensor[f64, [2, 2]], u: own T) -> f64 { t[0, 0] }
+fn peek[U](t: ref Tensor[f64, [2, 2]], u: own U) -> f64 { t[0, 0] }
 fn id[T](t: own T) -> T { t }
 fn keepv[T](t: own T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(t); v }
 fn main() {

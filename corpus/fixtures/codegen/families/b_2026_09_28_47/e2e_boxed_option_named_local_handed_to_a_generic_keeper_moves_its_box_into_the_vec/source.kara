@@ -3,8 +3,8 @@ impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
 fn gkeep[T](t: own T, v: mut ref Vec[T]) { v.push(t) }
 fn gfw[T](t: own T, v: mut ref Vec[T]) { gkeep(t, v) }
-fn okeep(t: Option[S], v: mut ref Vec[Option[S]]) { v.push(t) }
-fn ofw(t: Option[S], v: mut ref Vec[Option[S]]) { okeep(t, v) }
+fn okeep(t: own Option[S], v: mut ref Vec[Option[S]]) { v.push(t) }
+fn ofw(t: own Option[S], v: mut ref Vec[Option[S]]) { okeep(t, v) }
 fn main() {
     let mut u: Vec[Option[S]] = Vec.new();
     let a = Option.Some(mks(1));

@@ -3,7 +3,7 @@ impl[T] Bx[T] {
     fn count(ref self) -> i64 { return self.n; }
 }
 impl Bx[i64] {
-    fn get(self) -> i64 { return self.v + self.n; }
+    fn get(own self) -> i64 { return self.v + self.n; }
     fn bump(mut ref self) { self.v = self.v + 1; self.v += self.n; }
 }
 struct W[T] { inner: Bx[T], tag: T }

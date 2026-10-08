@@ -8,7 +8,7 @@ impl Drop for Res {
 }
 struct Holder { label: String, r: Res }
 
-fn consume(h: Holder) -> i64 { h.r.tag + h.label.len() }
+fn consume(h: own Holder) -> i64 { h.r.tag + h.label.len() }
 fn pass(h: own Holder) -> Holder { h }
 
 fn main() {

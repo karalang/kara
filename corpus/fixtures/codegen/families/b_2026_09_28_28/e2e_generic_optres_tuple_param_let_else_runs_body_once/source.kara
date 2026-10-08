@@ -1,6 +1,6 @@
 struct W { id: i64, name: String }
 impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.name}") } }
 fn mk(i: i64) -> W { return W { id: i, name: f"n{i}" }; }
-fn gl[T](o: Option[(T, i64)]) -> i64 { let Some(t) = o else { return 0; }; return t.1; }
-fn cl(o: Option[(W, i64)]) -> i64 { let Some(t) = o else { return 0; }; return t.1; }
+fn gl[T](o: own Option[(T, i64)]) -> i64 { let Some(t) = o else { return 0; }; return t.1; }
+fn cl(o: own Option[(W, i64)]) -> i64 { let Some(t) = o else { return 0; }; return t.1; }
 fn main() { println(f"g{gl(Some((mk(1), 9)))}"); println(f"c{cl(Some((mk(2), 9)))}"); let a = Some((mk(3), 8)); println(f"g{gl(a)}"); println("end") }

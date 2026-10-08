@@ -2,7 +2,7 @@
 enum E { S((Array[String, 2], Option[String])), N }
 fn mkt(t: String) -> (Array[String, 2], Option[String]) { let a: Array[String, 2] = [f"a-{t}-bbbbbbbbbbbbbbbbbbbbbbbb", f"a-{t}-cc"]; return (a, Option.Some(f"q-{t}-gggggggggggggggggggggg")); }
 fn ostr(o: ref Option[String]) -> String { match o { Some(v) => v.clone(), None => "none" } }
-fn eat(t: (Array[String, 2], Option[String])) -> String { return ostr(t.1); }
+fn eat(t: own (Array[String, 2], Option[String])) -> String { return ostr(t.1); }
 fn main() {
     { let t = mkt("c"); let e = E.S(t); match e { E.S(x) => { println(f"ctor {x.0[1]}/{ostr(x.1)}"); } E.N => { println("n"); } } }
     { let t = mkt("f"); let k = eat(t); println(f"call {k}"); }

@@ -2,19 +2,19 @@ struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 fn z() -> Array[R, 2] { return [mk(0), mk(0)]; }
-fn o1(x: Option[Array[R, 2]]) -> i64 { let k: Array[R, 2] = match x { Some(v) => v, None => z() }; println("mid"); return k[0].id; }
-fn o2(x: Option[Array[R, 2]]) -> i64 { let k: Array[R, 2] = if let Some(v) = x { v } else { z() }; println("mid"); return k[0].id; }
-fn o3(x: Option[Array[R, 2]]) -> i64 { let k: Array[R, 2] = match x { Some(v) => { println("in"); v }, None => z() }; println("mid"); return k[0].id; }
-fn o4(x: Option[Array[R, 2]]) -> Array[R, 2] { let k: Array[R, 2] = match x { Some(v) => v, None => z() }; println("mid"); return k; }
-fn o5(x: Option[(R, R)]) -> i64 { let k: (R, R) = match x { Some(v) => v, None => (mk(0), mk(0)) }; println("mid"); return k.0.id; }
-fn o6(x: Result[Array[R, 2], String]) -> i64 { let k: Array[R, 2] = match x { Ok(v) => v, Err(_) => z() }; println("mid"); return k[0].id; }
-fn o7(x: Option[Array[R, 2]], c: bool) -> i64 { let k: Array[R, 2] = match x { Some(v) => if c { v } else { z() }, None => z() }; println("mid"); return k[0].id; }
-fn o8(x: Option[Array[R, 2]]) -> i64 { let k: Array[R, 2] = match x { Some(v) => { let u = v; u }, None => z() }; println("mid"); return k[0].id; }
-fn o9(x: Option[Array[R, 2]], c: bool) -> i64 { let k: Array[R, 2] = if let Some(v) = x { if c { v } else { z() } } else { z() }; println("mid"); return k[0].id; }
-fn o10(x: Option[Array[R, 2]], y: Option[Array[R, 2]]) -> i64 { let k: Array[R, 2] = match x { Some(v) => v, None => match y { Some(w) => w, None => z() } }; println("mid"); return k[0].id; }
-fn o11(x: Option[(R, i64)]) -> i64 { let k: (R, i64) = match x { Some(v) => v, None => (mk(0), 0) }; println("mid"); return k.1; }
-fn o12(x: Option[Array[R, 2]]) -> i64 { let k: Array[R, 2] = match x { Some(v) => v, None => z() }; let m = k; println("mid"); return m[1].id; }
-fn eat(a: Array[R, 2]) -> i64 { return a[1].id; }
+fn o1(x: own Option[Array[R, 2]]) -> i64 { let k: Array[R, 2] = match x { Some(v) => v, None => z() }; println("mid"); return k[0].id; }
+fn o2(x: own Option[Array[R, 2]]) -> i64 { let k: Array[R, 2] = if let Some(v) = x { v } else { z() }; println("mid"); return k[0].id; }
+fn o3(x: own Option[Array[R, 2]]) -> i64 { let k: Array[R, 2] = match x { Some(v) => { println("in"); v }, None => z() }; println("mid"); return k[0].id; }
+fn o4(x: own Option[Array[R, 2]]) -> Array[R, 2] { let k: Array[R, 2] = match x { Some(v) => v, None => z() }; println("mid"); return k; }
+fn o5(x: own Option[(R, R)]) -> i64 { let k: (R, R) = match x { Some(v) => v, None => (mk(0), mk(0)) }; println("mid"); return k.0.id; }
+fn o6(x: own Result[Array[R, 2], String]) -> i64 { let k: Array[R, 2] = match x { Ok(v) => v, Err(_) => z() }; println("mid"); return k[0].id; }
+fn o7(x: own Option[Array[R, 2]], c: bool) -> i64 { let k: Array[R, 2] = match x { Some(v) => if c { v } else { z() }, None => z() }; println("mid"); return k[0].id; }
+fn o8(x: own Option[Array[R, 2]]) -> i64 { let k: Array[R, 2] = match x { Some(v) => { let u = v; u }, None => z() }; println("mid"); return k[0].id; }
+fn o9(x: own Option[Array[R, 2]], c: bool) -> i64 { let k: Array[R, 2] = if let Some(v) = x { if c { v } else { z() } } else { z() }; println("mid"); return k[0].id; }
+fn o10(x: own Option[Array[R, 2]], y: own Option[Array[R, 2]]) -> i64 { let k: Array[R, 2] = match x { Some(v) => v, None => match y { Some(w) => w, None => z() } }; println("mid"); return k[0].id; }
+fn o11(x: own Option[(R, i64)]) -> i64 { let k: (R, i64) = match x { Some(v) => v, None => (mk(0), 0) }; println("mid"); return k.1; }
+fn o12(x: own Option[Array[R, 2]]) -> i64 { let k: Array[R, 2] = match x { Some(v) => v, None => z() }; let m = k; println("mid"); return m[1].id; }
+fn eat(a: own Array[R, 2]) -> i64 { return a[1].id; }
 fn main() {
   println(f"a{o1(Some([mk(1), mk(2)]))}");
   println(f"b{o2(Some([mk(3), mk(4)]))}");

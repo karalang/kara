@@ -1,8 +1,8 @@
 
 struct P { x: i64, y: i64 }
 impl Display for P { fn to_string(ref self) -> String { f"({self.x}, {self.y})" } }
-fn describe[T: Display](item: T) -> String { f"item is {item} padded padded padded" }
-fn tag[T](item: T) -> String { f"constant tail padded padded padded" }
+fn describe[T: Display](item: own T) -> String { f"item is {item} padded padded padded" }
+fn tag[T](item: own T) -> String { f"constant tail padded padded padded" }
 fn main() {
     let mut i: i64 = 0i64;
     while i < 2i64 {

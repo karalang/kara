@@ -3,7 +3,7 @@ enum Val { Nothing, Ident(String), Num(i64) }
 #[derive(Clone)]
 struct A { value: Option[Val] }
 fn ident_len(v: own Val) -> i64 { match v { Val.Ident(s) => s.len(), Val.Num(n) => n, Val.Nothing => 0 } }
-fn count(a: A) -> i64 { match a.value { Some(_) => 1, None => 0 } }
+fn count(a: own A) -> i64 { match a.value { Some(_) => 1, None => 0 } }
 fn get_len(a: own A) -> i64 { match a.value { Some(v) => ident_len(v), None => 0 } }
 fn use_wild(a: own A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
 fn via_match(a: own A) -> i64 { let A { value } = a; match value { Some(v) => ident_len(v), None => 0 } }

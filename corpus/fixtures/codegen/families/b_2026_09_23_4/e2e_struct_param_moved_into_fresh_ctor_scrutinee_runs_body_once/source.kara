@@ -3,7 +3,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 fn mkr(i: i64) -> R { return R { id: i, s: f"aaa" } }
 struct W { r: R, n: i64 }
 enum E { A(R), B }
-fn eat(r: R) { println(f"e{r.id}") }
+fn eat(r: own R) { println(f"e{r.id}") }
 fn t1(a: own R) -> i64 { match Option.Some(a) { Option.Some(v) => { return 7 }, Option.None => { return 0 } } }
 fn t2(a: own R) -> i64 { match Some(a) { Some(v) => { return v.id }, None => { return 0 } } }
 fn t3(a: own R) -> i64 { if let Some(v) = Some(a) { return v.id } return 0 }
@@ -12,7 +12,7 @@ fn t6(a: own R) -> i64 { match Some(a) { Some(v) => { eat(v); return 6 }, None =
 fn t7(a: own W) -> i64 { match Some(a) { Some(v) => { return v.n }, None => { return 0 } } }
 fn t9(a: own R) -> i64 { match E.A(a) { E.A(v) => { return v.id }, E.B => { return 0 } } }
 fn t10(a: own R) -> i64 { match Some(a) { Some(v) => { let m = v; return m.id }, None => { return 0 } } }
-fn t11(a: own R, b: R) -> i64 { match Some(a) { Some(v) => { return v.id + b.id }, None => { return 0 } } }
+fn t11(a: own R, b: own R) -> i64 { match Some(a) { Some(v) => { return v.id + b.id }, None => { return 0 } } }
 fn t12(a: own R) -> i64 { match Some(a) { Some(v) if v.id > 100 => { return 1 }, Some(w) => { return w.id }, None => { return 0 } } }
 fn h2(a: own R, c: bool) -> R { match Some(a) { Some(v) => { if c { return v } return mkr(0) } None => { return mkr(0) } } }
 fn h3(a: own R) -> W { match Some(a) { Some(v) => { return W { r: v, n: 1 } } None => { return W { r: mkr(0), n: 0 } } } }

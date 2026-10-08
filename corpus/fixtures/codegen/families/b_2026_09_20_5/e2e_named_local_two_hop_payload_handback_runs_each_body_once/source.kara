@@ -3,29 +3,29 @@ impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 struct W { a: R, b: R }
 struct H { k: i64 }
 
-fn m1(o: Option[(R, R)]) -> R {
+fn m1(o: own Option[(R, R)]) -> R {
     match o { Option.Some(t) => { return t.0; } Option.None => { return R { id: 0 }; } }
 }
-fn m01(o: Option[((R, R), i64)]) -> R {
+fn m01(o: own Option[((R, R), i64)]) -> R {
     match o { Option.Some(t) => { return t.0.1; } Option.None => { return R { id: 0 }; } }
 }
-fn m00(o: Option[((R, R), i64)]) -> R {
+fn m00(o: own Option[((R, R), i64)]) -> R {
     match o { Option.Some(t) => { return t.0.0; } Option.None => { return R { id: 0 }; } }
 }
-fn m3(o: Option[(((R, R), R), i64)]) -> R {
+fn m3(o: own Option[(((R, R), R), i64)]) -> R {
     match o { Option.Some(t) => { return t.0.0.1; } Option.None => { return R { id: 0 }; } }
 }
-fn viaW(o: Option[((W, R), i64)]) -> R {
+fn viaW(o: own Option[((W, R), i64)]) -> R {
     match o { Option.Some(t) => { return t.0.0.a; } Option.None => { return R { id: 0 }; } }
 }
-fn peek(o: Option[((R, R), i64)]) -> i64 {
+fn peek(o: own Option[((R, R), i64)]) -> i64 {
     match o { Option.Some(t) => { return t.0.1.id; } Option.None => { return 0; } }
 }
 impl H {
-    fn take(self, o: Option[((R, R), i64)]) -> R {
+    fn take(self, o: own Option[((R, R), i64)]) -> R {
         match o { Option.Some(t) => { return t.0.1; } Option.None => { return R { id: 0 }; } }
     }
-    fn assoc(o: Option[((R, R), i64)]) -> R {
+    fn assoc(o: own Option[((R, R), i64)]) -> R {
         match o { Option.Some(t) => { return t.0.0; } Option.None => { return R { id: 0 }; } }
     }
 }

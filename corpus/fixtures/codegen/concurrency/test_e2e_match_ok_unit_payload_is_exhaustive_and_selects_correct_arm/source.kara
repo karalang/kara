@@ -1,5 +1,5 @@
 
-fn classify(r: Result[(), String]) -> i64 {
+fn classify(r: own Result[(), String]) -> i64 {
     match r {
         Ok(()) => 10,
         Err(e) => 20,

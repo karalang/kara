@@ -1,4 +1,4 @@
-fn use_hash[T: Hash](_x: T) {}
+fn use_hash[T: Hash](_x: own T) {}
            fn main() {
                use_hash(42_i64);
            }

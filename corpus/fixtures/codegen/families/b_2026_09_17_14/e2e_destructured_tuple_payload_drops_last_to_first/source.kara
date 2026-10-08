@@ -39,7 +39,7 @@ fn reb() {
     if let Some((a, b)) = o { println(f"b{a.id}"); o = Some((mk(24), mk(25))); }
     println("kept");
 }
-fn prm(o: Option[(R, R)]) {
+fn prm(o: own Option[(R, R)]) {
     match o { Some((a, b)) => { println(f"q{a.id}") } None => { println("n") } }
 }
 fn main() {

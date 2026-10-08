@@ -19,7 +19,7 @@ fn mkg(n: i64) -> Guard {
 
 fn readf(r: Res) -> i64 { return r.buf[3]; }
 fn peek(r: Res) -> i64 { return r.buf[4]; }
-fn guard_eat(g: Guard) -> i64 { return g.buf[1]; }
+fn guard_eat(g: own Guard) -> i64 { return g.buf[1]; }
 
 fn main() {
     let h = Holder { r: mk(40) };

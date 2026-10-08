@@ -11,7 +11,7 @@ fn none_first(n: i64) {
     let t = match o { None => (mk(0), 0), Some(w) => (w, 1) };
     println(f"nf{t.0.v} {t.1}")
 }
-fn param(o: Option[W1]) {
+fn param(o: own Option[W1]) {
     let t = match o { Some(w) => (w, 1), None => (mk(0), 0) };
     println(f"pa{t.0.v} {t.1}")
 }

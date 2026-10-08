@@ -7,11 +7,11 @@ fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
 fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}", xs: [i] }; }
 fn f(r: own R) -> R { return r; }
 fn ppass(p: own P) -> P { return p; }
-fn dies(r: R) -> i64 { return r.id; }
+fn dies(r: own R) -> i64 { return r.id; }
 fn via(r: own R) -> R { return f(r); }
 fn via2(r: own R) -> R { let m = r; return f(m); }
 fn pvia(p: own P) -> P { return ppass(p); }
-fn dvia(r: R) -> i64 { return dies(r); }
+fn dvia(r: own R) -> i64 { return dies(r); }
 fn mvia(r: own R, c: bool) -> R { if c { return f(r); } return mk(99); }
 fn main() {
   println("named_hop"); let a = mk(1); let z = via(a); println(f"  v={z.inner.v}");

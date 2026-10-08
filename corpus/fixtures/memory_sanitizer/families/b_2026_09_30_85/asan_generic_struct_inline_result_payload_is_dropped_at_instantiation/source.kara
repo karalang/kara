@@ -2,8 +2,8 @@ struct G[T] { v: T, n: i64 }
 fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
 fn mkr(k: i64) -> Result[G[String], i64] { Result.Ok(G { v: mk(k), n: k }) }
 fn mke(k: i64) -> Result[i64, G[String]] { Result.Err(G { v: mk(k), n: k }) }
-fn take(g: G[String]) -> i64 { g.v.len() }
-fn eat(r: Result[G[String], i64]) -> i64 { match r { Result.Ok(g) => g.n, Result.Err(e) => e } }
+fn take(g: own G[String]) -> i64 { g.v.len() }
+fn eat(r: own Result[G[String], i64]) -> i64 { match r { Result.Ok(g) => g.n, Result.Err(e) => e } }
 fn c1() -> i64 { let r: Result[G[String], i64] = Result.Ok(G { v: mk(1), n: 10 }); 1 }
 fn c2() -> i64 { let r: Result[i64, G[String]] = Result.Err(G { v: mk(2), n: 20 }); 2 }
 fn c3() -> i64 { let r: Result[i64, G[Vec[String]]] = Result.Err(G { v: [mk(3), mk(33)], n: 30 }); 3 }

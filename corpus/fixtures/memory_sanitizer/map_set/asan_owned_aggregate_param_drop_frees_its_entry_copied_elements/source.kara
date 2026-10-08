@@ -3,7 +3,7 @@ struct Heap[T] { xs: Vec[T] }
 impl[T] Heap[T] {
     // Takes `self` by value and transfers NOTHING out. The entry deep-copy's
     // element buffers are the ones that leaked.
-    fn count(self) -> i64 { self.xs.len() }
+    fn count(own self) -> i64 { self.xs.len() }
 }
 struct PlainHeap { xs: Vec[Vec[i64]] }
 impl PlainHeap {

@@ -1,6 +1,6 @@
 
 shared struct Node { val: i64, id: i64, mut next: Option[Node], mut random: weak Node }
-fn deep_copy(orig: Vec[Node]) -> Vec[Node] {
+fn deep_copy(orig: own Vec[Node]) -> Vec[Node] {
     let n: i64 = orig.len();
     let mut copies: Vec[Node] = Vec.new();
     let mut i: i64 = 0i64;

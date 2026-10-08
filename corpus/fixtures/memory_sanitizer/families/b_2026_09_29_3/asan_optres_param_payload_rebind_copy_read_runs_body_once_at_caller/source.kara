@@ -3,14 +3,14 @@ struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct S { r: R, s: String }
 fn mks(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
-fn id(a: Option[S]) -> Option[S] { a }
-fn f1(a: Option[S]) -> i64 { if let Some(x) = a { let y = x; y.r.id } else { 0 } }
-fn f2(a: Option[S]) -> i64 { match a { Some(x) => { let y = x; y.r.id } None => 0 } }
-fn f3(a: Option[S]) -> i64 { let Some(x) = a else { return 0 }; let y = x; y.r.id }
-fn f4(a: Option[S]) -> i64 { let r = match a { Some(x) => { let y = x; println("mid"); y.r.id } None => 0 }; println("post"); r }
-fn f5(a: Option[S]) -> i64 { match a { Some(x) => { let y = x; let n = y.r.id; println("mid"); n } None => 0 } }
-fn f6(a: Option[S]) -> i64 { match a { Some(x) => { let y = x; let z = y; z.r.id } None => 0 } }
-fn f7(a: Option[S]) -> i64 { if let Some(x) = id(a) { let y = x; y.r.id } else { 0 } }
+fn id(a: own Option[S]) -> Option[S] { a }
+fn f1(a: own Option[S]) -> i64 { if let Some(x) = a { let y = x; y.r.id } else { 0 } }
+fn f2(a: own Option[S]) -> i64 { match a { Some(x) => { let y = x; y.r.id } None => 0 } }
+fn f3(a: own Option[S]) -> i64 { let Some(x) = a else { return 0 }; let y = x; y.r.id }
+fn f4(a: own Option[S]) -> i64 { let r = match a { Some(x) => { let y = x; println("mid"); y.r.id } None => 0 }; println("post"); r }
+fn f5(a: own Option[S]) -> i64 { match a { Some(x) => { let y = x; let n = y.r.id; println("mid"); n } None => 0 } }
+fn f6(a: own Option[S]) -> i64 { match a { Some(x) => { let y = x; let z = y; z.r.id } None => 0 } }
+fn f7(a: own Option[S]) -> i64 { if let Some(x) = id(a) { let y = x; y.r.id } else { 0 } }
 fn main() {
     println(f"k{f1(Some(mks(1)))}"); let a1 = Some(mks(2)); println(f"j{f1(a1)}");
     println(f"k{f2(Some(mks(3)))}"); let a2 = Some(mks(4)); println(f"j{f2(a2)}");

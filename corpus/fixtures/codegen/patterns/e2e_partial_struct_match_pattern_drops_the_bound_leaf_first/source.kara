@@ -6,7 +6,7 @@ struct S4 { a: R, b: R, c: R }
 struct Mix { a: R, k: i64, c: R }
 struct Inner { p: R }
 struct Outer { i: Inner, z: R }
-fn eat(r: R) -> i64 { return r.id; }
+fn eat(r: own R) -> i64 { return r.id; }
 
 fn bind_first() -> i64 { let s: S3 = S3 { a: mk(1), b: mk(2) }; match s { S3 { a, .. } => { return a.id; } } }
 fn bind_last() -> i64 { let s: S3 = S3 { a: mk(3), b: mk(4) }; match s { S3 { b, .. } => { return b.id; } } }

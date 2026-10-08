@@ -6,39 +6,39 @@ struct J { u: String, v: String }
 struct Inner { j: J, t: String }
 struct N { i: Inner, b: String, c: i64, d: i64 }
 
-fn partial(x: Option[P]) {
+fn partial(x: own Option[P]) {
     match x { Some(P { a, b, .. }) => { println(f"p:{a}:{b}"); } None => { println("pn"); } }
 }
 
-fn allbound(x: Option[P]) {
+fn allbound(x: own Option[P]) {
     match x { Some(P { a, b, c, d }) => { println(f"f:{a}:{b}:{c}{d}"); } None => { println("fn"); } }
 }
 
-fn tested(x: Option[P]) {
+fn tested(x: own Option[P]) {
     match x { Some(P { a: _, b, .. }) => { println(f"t:{b}"); } None => { println("tn"); } }
 }
 
-fn moveout(x: Option[P]) -> String {
+fn moveout(x: own Option[P]) -> String {
     match x { Some(P { a, .. }) => a, None => f"none" }
 }
 
-fn whole(x: Option[P]) {
+fn whole(x: own Option[P]) {
     match x { Some(t) => { println(f"w:{t.a}"); } None => { println("wn"); } }
 }
 
-fn onefield(x: Option[Q]) {
+fn onefield(x: own Option[Q]) {
     match x { Some(Q { a, .. }) => { println(f"o:{a}"); } None => { println("on"); } }
 }
 
-fn vecfield(x: Option[V]) {
+fn vecfield(x: own Option[V]) {
     match x { Some(V { a, b, .. }) => { println(f"v:{a.len()}:{b}"); } None => { println("vn"); } }
 }
 
-fn nested(x: Option[N]) {
+fn nested(x: own Option[N]) {
     match x { Some(N { i: Inner { t, .. }, b, .. }) => { println(f"n:{t}:{b}"); } None => { println("nn"); } }
 }
 
-fn deep(x: Option[N]) {
+fn deep(x: own Option[N]) {
     match x { Some(N { i: Inner { j: J { u, .. }, .. }, b, .. }) => { println(f"d:{u}:{b}"); } None => { println("dn"); } }
 }
 

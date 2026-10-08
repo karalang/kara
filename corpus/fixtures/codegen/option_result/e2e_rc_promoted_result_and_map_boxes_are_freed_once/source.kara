@@ -1,28 +1,28 @@
-fn take_c0(doc: Result[(String, i64), i64]) -> i64 { match doc { Ok((s, k)) => s.len() + k, Err(e) => e } }
+fn take_c0(doc: own Result[(String, i64), i64]) -> i64 { match doc { Ok((s, k)) => s.len() + k, Err(e) => e } }
 fn item_c0(t: i64) -> i64 { let doc: Result[(String, i64), i64] = Ok((f"heap-string-longer-than-sso-{t}", t)); let a = match t { 0 => take_c0(doc), _ => 5 }; let b = match doc { Ok((s, k)) => s.len() + k, Err(e) => e }; a + b }
-fn take_c1(doc: Result[i64, (String, i64)]) -> i64 { match doc { Ok(k) => k, Err((s, k)) => s.len() + k } }
+fn take_c1(doc: own Result[i64, (String, i64)]) -> i64 { match doc { Ok(k) => k, Err((s, k)) => s.len() + k } }
 fn item_c1(t: i64) -> i64 { let doc: Result[i64, (String, i64)] = Err((f"heap-string-longer-than-sso-{t}", t)); let a = match t { 0 => take_c1(doc), _ => 5 }; let b = match doc { Ok(k) => k, Err((s, k)) => s.len() + k }; a + b }
-fn take_c2(doc: Result[Array[String, 2], i64]) -> i64 { match doc { Ok(a) => a[0].len() + a[1].len(), Err(e) => e } }
+fn take_c2(doc: own Result[Array[String, 2], i64]) -> i64 { match doc { Ok(a) => a[0].len() + a[1].len(), Err(e) => e } }
 fn item_c2(t: i64) -> i64 { let doc: Result[Array[String, 2], i64] = Ok([f"heap-string-longer-than-sso-{t}", f"x{t}"]); let a = match t { 0 => take_c2(doc), _ => 5 }; let b = match doc { Ok(a) => a[0].len(), Err(e) => e }; a + b }
-fn take_c3(doc: Result[(String, String, i64), i64]) -> i64 { match doc { Ok((s, u, k)) => s.len() + u.len() + k, Err(e) => e } }
+fn take_c3(doc: own Result[(String, String, i64), i64]) -> i64 { match doc { Ok((s, u, k)) => s.len() + u.len() + k, Err(e) => e } }
 fn item_c3(t: i64) -> i64 { let doc: Result[(String, String, i64), i64] = Ok((f"heap-string-longer-than-sso-{t}", f"second-heap-string-longer-than-sso", t)); let a = match t { 0 => take_c3(doc), _ => 5 }; let b = match doc { Ok((s, u, k)) => s.len() + k, Err(e) => e }; a + b }
-fn take_c4(doc: Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
+fn take_c4(doc: own Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
 fn item_c4(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let a = match t { 0 => take_c4(doc), _ => 5 }; let b = match doc { Some(m) => m.len(), None => 0 }; a + b }
-fn take_c5(doc: Option[Set[i64]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
+fn take_c5(doc: own Option[Set[i64]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
 fn item_c5(t: i64) -> i64 { let mut m: Set[i64] = Set.new(); m.insert(t); m.insert(t + 1); let doc = Some(m); let a = match t { 0 => take_c5(doc), _ => 5 }; let b = match doc { Some(m) => m.len(), None => 0 }; a + b }
-fn back_c6(doc: Option[Map[i64, String]]) -> Option[Map[i64, String]] { doc }
+fn back_c6(doc: own Option[Map[i64, String]]) -> Option[Map[i64, String]] { doc }
 fn item_c6(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let a = match t { 0 => match back_c6(doc) { Some(x) => x.len(), None => 0 }, _ => 5 }; let b = match doc { Some(m) => m.len(), None => 0 }; a + b }
-fn take_c7(doc: Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
+fn take_c7(doc: own Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
 fn item_c7(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc = Some(m); let a = match t { 0 => take_c7(doc), _ => 5 }; let b = match doc { Some(m) => { let mut v: Vec[Map[i64, String]] = Vec.new(); v.push(m); v.len() }, None => 0 }; a + b }
-fn take_c8(doc: Result[Map[i64, String], i64]) -> i64 { match doc { Ok(m) => m.len(), Err(e) => e } }
+fn take_c8(doc: own Result[Map[i64, String], i64]) -> i64 { match doc { Ok(m) => m.len(), Err(e) => e } }
 fn item_c8(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc: Result[Map[i64, String], i64] = Ok(m); let a = match t { 0 => take_c8(doc), _ => 5 }; let b = match doc { Ok(m) => m.len(), Err(e) => e }; a + b }
-fn take_c9(doc: Result[i64, Map[i64, String]]) -> i64 { match doc { Ok(e) => e, Err(m) => m.len() } }
+fn take_c9(doc: own Result[i64, Map[i64, String]]) -> i64 { match doc { Ok(e) => e, Err(m) => m.len() } }
 fn item_c9(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc: Result[i64, Map[i64, String]] = Err(m); let a = match t { 0 => take_c9(doc), _ => 5 }; let b = match doc { Ok(e) => e, Err(m) => m.len() }; a + b }
-fn take_c10(doc: Result[Map[i64, String], i64]) -> i64 { match doc { Ok(m) => m.len(), Err(e) => e } }
+fn take_c10(doc: own Result[Map[i64, String], i64]) -> i64 { match doc { Ok(m) => m.len(), Err(e) => e } }
 fn item_c10(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc: Result[Map[i64, String], i64] = Ok(m); let a = match t { 0 => take_c10(doc), _ => 5 }; let b = match doc { Ok(m) => { let mut v: Vec[Map[i64, String]] = Vec.new(); v.push(m); v.len() }, Err(e) => e }; a + b }
-fn keep_c11(doc: Result[Map[i64, String], i64]) -> Result[Map[i64, String], i64] { doc }
+fn keep_c11(doc: own Result[Map[i64, String], i64]) -> Result[Map[i64, String], i64] { doc }
 fn item_c11(t: i64) -> i64 { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); let doc: Result[Map[i64, String], i64] = Ok(m); let a = match t { 0 => { let d = keep_c11(doc); match d { Ok(m) => m.len(), Err(e) => e } }, _ => 5 }; let b = match doc { Ok(m) => m.len(), Err(e) => e }; a + b }
-fn take_c12(doc: Option[Option[String]]) -> i64 { match doc { Some(Some(s)) => s.len(), _ => 0 } }
+fn take_c12(doc: own Option[Option[String]]) -> i64 { match doc { Some(Some(s)) => s.len(), _ => 0 } }
 fn item_c12(t: i64) -> String { let doc = Some(Some(f"heap-string-longer-than-sso-{t}")); let a = match t { 0 => take_c12(doc), _ => 5 }; let b = match doc { Some(Some(s)) => s, _ => f"none" }; f"{a} {b}" }
 fn main() {
     println(f"{item_c0(0)} {item_c0(1)}");

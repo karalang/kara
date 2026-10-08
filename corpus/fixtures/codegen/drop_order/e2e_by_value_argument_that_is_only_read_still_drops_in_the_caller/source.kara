@@ -5,7 +5,7 @@ impl Drop for Item {
 }
 struct Bag { n: i64 }
 impl Bag {
-    fn look(mut ref self, x: Item) { self.n = self.n + x.id; }
+    fn look(mut ref self, x: own Item) { self.n = self.n + x.id; }
 }
 fn main() {
     let mut b = Bag { n: 0 };

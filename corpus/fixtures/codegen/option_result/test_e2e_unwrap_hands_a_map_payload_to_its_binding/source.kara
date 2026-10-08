@@ -1,7 +1,7 @@
 struct H { m: Option[Map[i64, String]], n: i64 }
 fn mk(i: i64) -> Option[Map[i64, String]] { let mut mm: Map[i64, String] = Map.new(); mm.insert(i, f"vvv-string-longer-than-sso-{i}"); Some(mm) }
 fn mkr(i: i64) -> Result[Map[i64, String], i64] { let mut mm: Map[i64, String] = Map.new(); mm.insert(i, f"rrr-string-longer-than-sso-{i}"); Ok(mm) }
-fn take(o: Option[Map[i64, String]]) -> i64 { let q = o.unwrap(); q.len() }
+fn take(o: own Option[Map[i64, String]]) -> i64 { let q = o.unwrap(); q.len() }
 fn main() {
     let o1 = mk(1); let q1 = o1.unwrap(); println(q1.len());
     let q2 = mk(2).unwrap(); println(q2.len());

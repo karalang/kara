@@ -5,7 +5,7 @@ impl[T] W[T] {
     fn add(mut ref self, x: own T) { self.v.push(x); }
 }
 
-fn pick[T](a: own T, b: T) -> T { return a; }
+fn pick[T](a: own T, b: own T) -> T { return a; }
 
 fn main() {
     let mut w: W[(i64, i64)] = W { v: Vec.new() };

@@ -1,6 +1,6 @@
 
 struct S { o: Option[Option[String]] }
-fn cls(r: Result[S, i64]) -> i64 {
+fn cls(r: own Result[S, i64]) -> i64 {
     match r { Result.Ok(s) => match s.o { Option.Some(Option.Some(t)) => t.len() as i64, _ => -1 }, Result.Err(e) => e }
 }
 fn main() {

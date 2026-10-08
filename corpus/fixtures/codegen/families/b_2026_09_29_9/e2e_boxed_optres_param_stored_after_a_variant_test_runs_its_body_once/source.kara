@@ -4,9 +4,9 @@ fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } 
 struct W { id: i64, a: String, b: String }
 impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}") } }
 fn mkw(i: i64) -> W { return W { id: i, a: f"a-heap-string-longer-than-sso-{i}", b: f"b-heap-string-{i}" } }
-fn crd(t: Option[S], v: mut ref Vec[Option[S]]) { if t.is_some() { v.push(t) } }
-fn cnn(t: Option[S], v: mut ref Vec[Option[S]], c: bool) { if c and not t.is_none() { v.push(t) } else { println(f"skip {t.is_some()}") } }
-fn crs(t: Result[W, i64], v: mut ref Vec[Result[W, i64]]) { if t.is_ok() { v.push(t) } else { println("err") } }
+fn crd(t: own Option[S], v: mut ref Vec[Option[S]]) { if t.is_some() { v.push(t) } }
+fn cnn(t: own Option[S], v: mut ref Vec[Option[S]], c: bool) { if c and not t.is_none() { v.push(t) } else { println(f"skip {t.is_some()}") } }
+fn crs(t: own Result[W, i64], v: mut ref Vec[Result[W, i64]]) { if t.is_ok() { v.push(t) } else { println("err") } }
 fn main() {
     let mut u: Vec[Option[S]] = Vec.new();
     crd(Option.Some(mks(1)), mut u);

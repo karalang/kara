@@ -1,7 +1,7 @@
 
 struct Box[T] { v: T }
 
-fn sink(b: Box[String]) -> i64 { b.v.len() }
+fn sink(b: own Box[String]) -> i64 { b.v.len() }
 
 fn main() {
     let n = env.args().len() as i64;

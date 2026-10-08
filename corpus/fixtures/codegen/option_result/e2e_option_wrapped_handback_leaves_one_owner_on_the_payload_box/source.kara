@@ -8,8 +8,8 @@ fn resW[T](g: own G1[T], c: bool) -> Hr[T] { if c { return Hr { g: Result.Ok(g) 
 fn optBare[T](g: own G1[T], c: bool) -> Option[G1[T]] { if c { return Option.Some(g) } return Option.None; }
 fn eats[T](g: own G1[T], c: bool) -> i64 { match g { G1.Y(v) => { return 1; } G1.N => { return 0; } } }
 
-fn shwO(o: Option[G1[String]]) { match o { Option.Some(i) => { match i { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } } Option.None => { println("  none") } } }
-fn shwR(r: Result[G1[String], i64]) { match r { Result.Ok(i) => { match i { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } } Result.Err(e) => { println("  err") } } }
+fn shwO(o: own Option[G1[String]]) { match o { Option.Some(i) => { match i { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } } Option.None => { println("  none") } } }
+fn shwR(r: own Result[G1[String], i64]) { match r { Result.Ok(i) => { match i { G1.Y(v) => { println(f"  mx {v.len()}") } G1.N => { println("  mx 0") } } } Result.Err(e) => { println("  err") } } }
 
 fn main() {
     println("optT");     { let g: G1[String] = G1.Y(f"aaaaaaaa-1"); let h = optW(g, true); shwO(h.g) }

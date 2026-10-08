@@ -97,7 +97,7 @@ fn upstream_for(tier: i64) -> String {
 // Service one connection: peek the request line, classify + record the tier,
 // connect to it, forward the bytes already read, and stream the response back.
 // `metrics` is the shared `par struct` — `record` fetch_adds the counters.
-fn handle(client: TcpStream, metrics: Metrics) {
+fn handle(client: own TcpStream, metrics: Metrics) {
     let mut buf: Array[u8, 4096] = [0u8; 4096];
     match client.read(mut buf) {
         Result.Ok(n) => {

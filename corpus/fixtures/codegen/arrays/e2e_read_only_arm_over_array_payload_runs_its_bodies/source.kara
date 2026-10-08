@@ -3,7 +3,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
 fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 fn mka(k: i64) -> Array[R, 2] { return [mkr(k), mkr(k + 1)] }
 fn some_arr(k: i64) -> Option[Array[R, 2]] { let x = mka(k); return Some(x) }
-fn consume(a: Array[R, 2]) { println(f"  c{a[0].id}") }
+fn consume(a: own Array[R, 2]) { println(f"  c{a[0].id}") }
 enum E { A(Array[R, 2]), B }
 fn main() {
     println("lit");   { let b: Option[Array[R, 2]] = Some([mkr(1), mkr(2)]); match b { Some(a) => println(f"  y{a[0].id}"), None => println("  n") }; println("  after") }

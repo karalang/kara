@@ -1,5 +1,5 @@
 enum G[T] { Y(T), N }
-fn glen[T](g: G[T]) -> i64 { return 1 }
+fn glen[T](g: own G[T]) -> i64 { return 1 }
 fn gid[T](g: own G[T]) -> G[T] { return g }
 fn gvia[T](g: own G[T]) -> i64 { let h = gid(g); return glen(h) }
 fn gviac[T](g: own G[T], c: bool) -> i64 { let h = gid(g); if c { return glen(h) } println("keep"); return 0 }

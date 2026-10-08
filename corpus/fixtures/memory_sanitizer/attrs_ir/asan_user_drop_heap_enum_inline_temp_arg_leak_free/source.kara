@@ -5,7 +5,7 @@ impl Drop for Msg {
         println(1);
     }
 }
-fn consume(m: Msg) {}
+fn consume(m: own Msg) {}
 fn main() {
     consume(Msg.Text("this is a long heap string payload over 36 bytes"));
     consume(Msg.Nil);

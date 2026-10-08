@@ -13,7 +13,7 @@ impl Ws {
 }
 fn optp(w: own Ws) -> Option[R] { return Some(w.r) }
 fn opth(w: own Hs) -> Option[S] { Some(w.s) }
-fn show(o: Option[R]) { match o { Some(x) => println(f"x{x.id}"), None => println("n") } }
+fn show(o: own Option[R]) { match o { Some(x) => println(f"x{x.id}"), None => println("n") } }
 fn main() {
     let a = Ws { r: R { id: 1 }, n: 0 };
     show(a.opt());

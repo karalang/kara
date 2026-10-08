@@ -2,13 +2,13 @@ struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct S { r: R, s: String }
 fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
-fn eat(o: Option[R]) -> i64 { match o { Some(r) => r.id, None => 0 } }
-fn keep(a: Option[R]) -> i64 { let c = a; 5 }
-fn look(a: Option[R]) -> i64 { let c = a; match c { Some(r) => r.id, None => 0 } }
-fn fwd(a: Option[R]) -> i64 { let c = a; eat(c) }
-fn tag(a: Option[R]) -> i64 { let c = a; match c { Some(_) => 1, None => 0 } }
-fn rkeep(a: Result[S, i64]) -> i64 { let c = a; 5 }
-fn rtag(a: Result[S, i64]) -> i64 { let c = a; match c { Ok(_) => 1, Err(e) => e } }
+fn eat(o: own Option[R]) -> i64 { match o { Some(r) => r.id, None => 0 } }
+fn keep(a: own Option[R]) -> i64 { let c = a; 5 }
+fn look(a: own Option[R]) -> i64 { let c = a; match c { Some(r) => r.id, None => 0 } }
+fn fwd(a: own Option[R]) -> i64 { let c = a; eat(c) }
+fn tag(a: own Option[R]) -> i64 { let c = a; match c { Some(_) => 1, None => 0 } }
+fn rkeep(a: own Result[S, i64]) -> i64 { let c = a; 5 }
+fn rtag(a: own Result[S, i64]) -> i64 { let c = a; match c { Ok(_) => 1, Err(e) => e } }
 fn main() {
     { let a = Some(R { id: 1 }); println(f"k{keep(a)}"); }
     println(f"k{keep(Some(R { id: 2 }))}");

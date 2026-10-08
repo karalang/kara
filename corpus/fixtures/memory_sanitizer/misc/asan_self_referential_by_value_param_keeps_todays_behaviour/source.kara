@@ -2,7 +2,7 @@
 struct Plain { id: i64, next: Option[Plain], tag: String }
 
 fn mkp(i: i64) -> Plain { return Plain { id: i, next: Option.None, tag: f"p{i}" }; }
-fn read(p: Plain) -> i64 { return p.id; }
+fn read(p: own Plain) -> i64 { return p.id; }
 
 fn main() {
     println(read(mkp(4)));

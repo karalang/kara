@@ -1,8 +1,8 @@
 struct D { n: i64, s: String }
 impl Drop for D { fn drop(mut ref self) { println(f"d{self.n}") } }
 fn d(n: i64) -> D { D { n: n, s: f"heap-string-longer-than-sso-{n}" } }
-fn eat(x: D) { println(f"eat{x.n}") }
-fn eatv(x: Vec[D]) { println(f"eatv{x.len()}") }
+fn eat(x: own D) { println(f"eat{x.n}") }
+fn eatv(x: own Vec[D]) { println(f"eatv{x.len()}") }
 enum E { One(D), Many(Vec[D]), No }
 enum F { One(D), Many(Vec[D]) }
 impl Drop for F { fn drop(mut ref self) { println("dF") } }

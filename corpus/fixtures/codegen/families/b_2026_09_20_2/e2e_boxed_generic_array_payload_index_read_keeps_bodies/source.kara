@@ -8,7 +8,7 @@ fn hr(g: own G1[Array[R, 1]]) -> i64 { match g { G1.Y(x) => { return x[0].id; } 
 fn ha(g: own G1[Array[R, 2]]) -> i64 { match g { G1.Y(x) => { let k = x[1].id; return k; } G1.N => { return 0; } } }
 fn hc(g: own G1[Array[R, 1]]) -> i64 { match g { G1.Y(x) => { x[0].id } G1.N => { 0 } } }
 fn hi(g: own G1[Array[R, 2]], i: i64) -> i64 { match g { G1.Y(x) => { x[i].id + x[1].id } G1.N => { 0 } } }
-fn hl(g: G1[Array[R, 1]]) -> i64 { if let G1.Y(x) = g { return x[0].id; }; return 0 }
+fn hl(g: own G1[Array[R, 1]]) -> i64 { if let G1.Y(x) = g { return x[0].id; }; return 0 }
 fn hs(g: own G1[Array[Sd, 2]]) -> i64 { match g { G1.Y(x) => { return x[0].v; } G1.N => { return 0; } } }
 fn main() {
     { let a: Array[R, 1] = [mkr(1)]; let g: G1[Array[R, 1]] = G1.Y(a); println(f"r:{hr(g)}"); }

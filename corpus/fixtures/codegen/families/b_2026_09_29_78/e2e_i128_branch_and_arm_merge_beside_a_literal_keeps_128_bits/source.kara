@@ -1,4 +1,4 @@
-fn pick(b: i128, k: i64) -> i128 {
+fn pick(b: own i128, k: i64) -> i128 {
     match k {
         0 => 0,
         1 => b + 1,

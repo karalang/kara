@@ -22,7 +22,7 @@ fn ret_ref(b: ref Holder) -> Node { return b.v; }
 // OWNED-BY-TRANSFER regime, the control an over-inc would turn into a leak:
 // `Box[Node]`'s gate is name-only, so it is owned by transfer and neutralized
 // via the source null-store instead.
-fn ret_generic(b: Box[Node]) -> Node { return b.v; }
+fn ret_generic(b: own Box[Node]) -> Node { return b.v; }
 
 // A no-shared struct on the transfer path, unrelated to rc accounting.
 fn ret_plain(p: own Plain) -> String { return p.t; }

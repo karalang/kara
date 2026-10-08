@@ -3,15 +3,15 @@ impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct N { id: i64, s: String }
 fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 fn mkn(i: i64) -> N { return N { id: i, s: f"heap-string-longer-than-sso-{i}" } }
-fn f(a: Option[R]) -> Option[R] { a }
-fn fc(a: Option[R], c: bool) -> Option[R] { if c { a } else { None } }
-fn fn_(a: Option[N]) -> Option[N] { a }
-fn fs(a: Option[String]) -> Option[String] { a }
-fn fr(a: Result[String, i64]) -> Result[String, i64] { a }
+fn f(a: own Option[R]) -> Option[R] { a }
+fn fc(a: own Option[R], c: bool) -> Option[R] { if c { a } else { None } }
+fn fn_(a: own Option[N]) -> Option[N] { a }
+fn fs(a: own Option[String]) -> Option[String] { a }
+fn fr(a: own Result[String, i64]) -> Result[String, i64] { a }
 struct H { k: i64 }
-impl H { fn g(ref self, a: Option[R]) -> Option[R] { a } fn s(a: Option[R]) -> Option[R] { a } }
-fn eat(o: Option[R]) { match o { Some(x) => println(f"eat{x.id}"), None => println("none") } }
-fn show(o: Option[R]) { match o { Some(x) => println(f"y{x.id}"), None => println("none") } }
+impl H { fn g(ref self, a: own Option[R]) -> Option[R] { a } fn s(a: own Option[R]) -> Option[R] { a } }
+fn eat(o: own Option[R]) { match o { Some(x) => println(f"eat{x.id}"), None => println("none") } }
+fn show(o: own Option[R]) { match o { Some(x) => println(f"y{x.id}"), None => println("none") } }
 fn main() {
     let h = H { k: 1 };
     { let a = Some(mkr(1)); let b = f(a); let e = f(b); show(e); }

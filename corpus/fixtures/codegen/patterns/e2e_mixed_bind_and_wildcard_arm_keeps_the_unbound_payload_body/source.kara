@@ -3,7 +3,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" } }
 enum W2 { Two(R, R), None2 }
 enum W3 { A(R, R), B(R), None3 }
-fn take(r: R) -> i64 { return r.id; }
+fn take(r: own R) -> i64 { return r.id; }
 fn first_bound() -> i64 { let w: W2 = W2.Two(mk(1), mk(2)); match w { W2.Two(a, _) => { return a.id; } W2.None2 => { return 0; } } }
 fn second_bound() -> i64 { let w: W2 = W2.Two(mk(3), mk(4)); match w { W2.Two(_, b) => { return b.id; } W2.None2 => { return 0; } } }
 fn moved_out() -> i64 { let w: W2 = W2.Two(mk(5), mk(6)); match w { W2.Two(a, _) => { return take(a); } W2.None2 => { return 0; } } }

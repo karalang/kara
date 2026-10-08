@@ -3,12 +3,12 @@ impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
 struct W { o: Option[H], n: i64 }
 struct X { h: H, n: i64 }
 enum E { A(H), B }
-fn cw(w: W) { println(f"w{w.n}") }
-fn cx(x: X) { println(f"x{x.n}") }
+fn cw(w: own W) { println(f"w{w.n}") }
+fn cx(x: own X) { println(f"x{x.n}") }
 fn co(o: Option[H]) { println("o") }
 fn ct(t: (H, i64)) { println(f"t{t.1}") }
-fn ce(e: E) { println("e") }
-fn cv(v: Vec[H]) { println(f"v{v.len()}") }
+fn ce(e: own E) { println("e") }
+fn cv(v: own Vec[H]) { println(f"v{v.len()}") }
 fn keepw(w: own W) -> W { w }
 fn main() {
     let w = W { o: Some(H { id: 1 }), n: 7 }; cw(w); println("_1");

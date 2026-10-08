@@ -1,15 +1,15 @@
 struct R { id: i64, tag: String }
 impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, tag: f"tag-string-longer-than-sso-{i}" } }
-fn two(a: R, b: R) -> i64 { return a.id + b.id; }
-fn one(b: R) -> i64 { return b.id; }
+fn two(a: own R, b: own R) -> i64 { return a.id + b.id; }
+fn one(b: own R) -> i64 { return b.id; }
 enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 impl E {
-  fn both(own self, o: R) -> i64    { match self { E.A(r) => { return two(r, o); } E.B => { return 0; } } }
-  fn onlyo(own self, o: R) -> i64   { match self { E.A(r) => { return one(o); } E.B => { return 0; } } }
-  fn nomatch(self, o: R) -> i64 { return one(o); }
-  fn fresh(own self, o: R) -> i64   { match self { E.A(r) => { return two(mk(7), o); } E.B => { return 0; } } }
+  fn both(own self, o: own R) -> i64    { match self { E.A(r) => { return two(r, o); } E.B => { return 0; } } }
+  fn onlyo(own self, o: own R) -> i64   { match self { E.A(r) => { return one(o); } E.B => { return 0; } } }
+  fn nomatch(own self, o: own R) -> i64 { return one(o); }
+  fn fresh(own self, o: own R) -> i64   { match self { E.A(r) => { return two(mk(7), o); } E.B => { return 0; } } }
 }
 fn main() {
     { let a: E = E.A(mk(6)); println(f"  x{a.both(mk(60))}") }

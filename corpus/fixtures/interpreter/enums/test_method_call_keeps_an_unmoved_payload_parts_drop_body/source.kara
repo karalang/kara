@@ -3,18 +3,18 @@ impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 struct Q { r: R, s: R }
 struct H { n: i64 }
 impl H {
-  fn mref(ref self, o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } }
-  fn mown(self, o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } }
-  fn mres(ref self, o: Result[(R, R), i64]) -> R { match o { Result.Ok(t) => { return t.0 } Result.Err(e) => { return R { id: 0 } } } }
-  fn msnd(ref self, o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.1 } Option.None => { return R { id: 0 } } } }
-  fn mstr(ref self, o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } }
-  fn mdes(ref self, o: Option[(R, R)]) -> R { match o { Option.Some((a, b)) => { return a } Option.None => { return R { id: 0 } } } }
-  fn mnom(ref self, o: Option[(R, R)]) { match o { Option.Some(t) => { println("  mid") } Option.None => { println("  n") } } }
-  fn mwho(ref self, o: Option[(R, R)]) -> Option[(R, R)] { return o }
+  fn mref(ref self, o: own Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } }
+  fn mown(self, o: own Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } }
+  fn mres(ref self, o: own Result[(R, R), i64]) -> R { match o { Result.Ok(t) => { return t.0 } Result.Err(e) => { return R { id: 0 } } } }
+  fn msnd(ref self, o: own Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.1 } Option.None => { return R { id: 0 } } } }
+  fn mstr(ref self, o: own Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } }
+  fn mdes(ref self, o: own Option[(R, R)]) -> R { match o { Option.Some((a, b)) => { return a } Option.None => { return R { id: 0 } } } }
+  fn mnom(ref self, o: own Option[(R, R)]) { match o { Option.Some(t) => { println("  mid") } Option.None => { println("  n") } } }
+  fn mwho(ref self, o: own Option[(R, R)]) -> Option[(R, R)] { return o }
 }
 struct A {}
-impl A { fn atup(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } } }
-fn ffn(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } }
+impl A { fn atup(o: own Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } } }
+fn ffn(o: own Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } }
 
 fn main() {
   println("free-fn");       { let g = ffn(Option.Some((R { id: 5 }, R { id: 6 }))); println(f"  got{g.id}") } println("  out");

@@ -4,22 +4,22 @@ struct S { r: R, s: String }
 struct T { a: R, b: R }
 fn mks(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
 fn mkt(i: i64) -> T { T { a: R { id: i }, b: R { id: i + 100 } } }
-fn keep(x: R) { println(f"kp{x.id}") }
+fn keep(x: own R) { println(f"kp{x.id}") }
 fn eats(x: String) { println("es") }
-fn f1(o: Option[S]) -> i64 { match o { Some(S { r, s }) => r.id, None => 0 } }
-fn f2(o: Option[S]) -> i64 { match o { Some(S { r, .. }) => r.id, None => 0 } }
-fn f3(o: Option[S]) -> i64 { if let Some(S { r, s }) = o { r.id } else { 0 } }
-fn f4(o: Option[S]) -> i64 { if let Some(S { r: q, s: _ }) = o { q.id } else { 0 } }
-fn f5(o: Option[S]) -> i64 { let Some(S { r, s }) = o else { return 0 }; println("mid"); r.id }
-fn f6(o: Option[S]) -> i64 { match o { Some(S { r, s }) => { eats(s); r.id } None => 0 } }
-fn f7(o: Option[S]) -> i64 { if let Some(S { r, s }) = o { if r.id > 5 { keep(r); return 5; } return r.id; } 0 }
-fn f8(o: Option[T]) -> i64 { match o { Some(T { a, b }) => { keep(b); a.id } None => 0 } }
-fn f9(o: Option[T]) -> i64 { match o { Some(T { a: x, .. }) => x.id, None => 0 } }
-fn f10(o: Option[S]) -> i64 { let mut t = 0; while let Some(S { r, s }) = o { t = r.id; break; } t }
-fn f11(o: Option[S]) -> i64 { match o { Some(S { r, s }) if r.id > 3 => r.id, Some(S { r, s }) => 0 - r.id, None => 0 } }
-fn f12(o: Option[S]) -> i64 { match o { Some(S { r: s, s: r }) => s.id, None => 0 } }
-fn f13(o: Result[S, i64]) -> i64 { match o { Ok(S { r, s }) => r.id, Err(e) => e } }
-fn f14(o: Option[S]) -> i64 { let v = match o { Some(S { r, s }) => r.id, None => 0 }; println("post"); v }
+fn f1(o: own Option[S]) -> i64 { match o { Some(S { r, s }) => r.id, None => 0 } }
+fn f2(o: own Option[S]) -> i64 { match o { Some(S { r, .. }) => r.id, None => 0 } }
+fn f3(o: own Option[S]) -> i64 { if let Some(S { r, s }) = o { r.id } else { 0 } }
+fn f4(o: own Option[S]) -> i64 { if let Some(S { r: q, s: _ }) = o { q.id } else { 0 } }
+fn f5(o: own Option[S]) -> i64 { let Some(S { r, s }) = o else { return 0 }; println("mid"); r.id }
+fn f6(o: own Option[S]) -> i64 { match o { Some(S { r, s }) => { eats(s); r.id } None => 0 } }
+fn f7(o: own Option[S]) -> i64 { if let Some(S { r, s }) = o { if r.id > 5 { keep(r); return 5; } return r.id; } 0 }
+fn f8(o: own Option[T]) -> i64 { match o { Some(T { a, b }) => { keep(b); a.id } None => 0 } }
+fn f9(o: own Option[T]) -> i64 { match o { Some(T { a: x, .. }) => x.id, None => 0 } }
+fn f10(o: own Option[S]) -> i64 { let mut t = 0; while let Some(S { r, s }) = o { t = r.id; break; } t }
+fn f11(o: own Option[S]) -> i64 { match o { Some(S { r, s }) if r.id > 3 => r.id, Some(S { r, s }) => 0 - r.id, None => 0 } }
+fn f12(o: own Option[S]) -> i64 { match o { Some(S { r: s, s: r }) => s.id, None => 0 } }
+fn f13(o: own Result[S, i64]) -> i64 { match o { Ok(S { r, s }) => r.id, Err(e) => e } }
+fn f14(o: own Option[S]) -> i64 { let v = match o { Some(S { r, s }) => r.id, None => 0 }; println("post"); v }
 fn main() {
     println(f"a{f1(Some(mks(1)))}"); let x1 = Some(mks(2)); println(f"b{f1(x1)}");
     println(f"a{f2(Some(mks(3)))}"); let x2 = Some(mks(4)); println(f"b{f2(x2)}");

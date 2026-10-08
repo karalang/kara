@@ -5,7 +5,7 @@ struct S { tag: String, items: Vec[String] }
 #[derive(Clone)]
 enum E { Empty, Payload(String) }
 
-fn dup[T: Clone](x: T) -> T { x.clone() }
+fn dup[T: Clone](x: own T) -> T { x.clone() }
 
 fn main() {
     let mut n = 0i64;

@@ -8,7 +8,7 @@ fn keep(d: own D) -> D { d }
 fn retr(w: own W) -> D { w.r }
 struct H { k: i64 }
 impl H { fn f(ref self, w: own W) -> i64 { let k = keep(w.r); k.id } }
-fn gk[T](w: own W, t: T) -> i64 { let k = keep(w.r); k.id }
+fn gk[T](w: own W, t: own T) -> i64 { let k = keep(w.r); k.id }
 fn keepf(w: own W) -> i64 { let k = keep(w.r); k.id }
 fn keeps(w: own W) -> i64 { keep(w.s); w.b }
 fn tup(w: own W) -> i64 { let t = (keep(w.r), 5); t.1 }

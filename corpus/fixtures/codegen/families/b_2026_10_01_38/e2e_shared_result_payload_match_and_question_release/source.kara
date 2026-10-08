@@ -4,7 +4,7 @@ fn hs(k: i64) -> String { f"heap-string-long-enough-{k}" }
 fn mk(k: i64) -> Result[Sh, String] { if k > 5 { Result.Ok(Sh { k: k, s: hs(k) }) } else { Result.Err(hs(k)) } }
 fn mi(k: i64) -> Result[Sh, i64] { if k > 5 { Result.Ok(Sh { k: k, s: hs(k) }) } else { Result.Err(k) } }
 fn mo(k: i64) -> Option[Sh] { if k > 5 { Option.Some(Sh { k: k, s: hs(k) }) } else { Option.None } }
-fn pr(r: Result[i64, String]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e) } }
+fn pr(r: own Result[i64, String]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e) } }
 fn pi(r: Result[i64, i64]) { match r { Result.Ok(v) => println(v), Result.Err(e) => println(e) } }
 fn po(r: Option[i64]) { match r { Option.Some(v) => println(v), Option.None => println(0) } }
 fn m1(k: i64) -> Result[i64, String] { let r = mk(k); match r { Result.Ok(x) => Result.Ok(x.k), Result.Err(e) => Result.Err(e) } }
@@ -17,8 +17,8 @@ fn q4(k: i64) -> Result[i64, i64] { let r = mi(k); let x = r?; Result.Ok(x.k) }
 fn q5(k: i64) -> Result[Sh, String] { let r = mk(k); let x = r?; Result.Ok(x) }
 fn q6(k: i64, v: mut ref Vec[Sh]) -> Result[i64, String] { let r = mk(k); let x = r?; v.push(x); Result.Ok(v.len()) }
 fn q7(n: i64) -> Result[i64, String] { let mut t = 0; for i in 6..n { let r = mk(i); let x = r?; t = t + x.k; } Result.Ok(t) }
-fn q8(r: Result[Sh, String]) -> Result[i64, String] { let x = r?; Result.Ok(x.k) }
-fn q9(r: Result[Sh, i64]) -> Result[i64, i64] { let x = r?; Result.Ok(x.k) }
+fn q8(r: own Result[Sh, String]) -> Result[i64, String] { let x = r?; Result.Ok(x.k) }
+fn q9(r: own Result[Sh, i64]) -> Result[i64, i64] { let x = r?; Result.Ok(x.k) }
 fn q10(k: i64) -> Option[i64] { let r = mo(k); let x = r?; Option.Some(x.k) }
 fn main() {
     pr(m1(8));

@@ -20,7 +20,7 @@ fn duo(r: Result[Option[Option[i64]], i64]) -> i64 {
         Result.Err(e) => e,
     }
 }
-fn tristr(r: Result[Option[Option[Option[String]]], i64]) -> i64 {
+fn tristr(r: own Result[Option[Option[Option[String]]], i64]) -> i64 {
     match r {
         Result.Ok(Option.Some(Option.Some(Option.Some(s)))) => if s.len() > 0 { 1 } else { 0 },
         Result.Ok(_) => -1,

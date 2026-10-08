@@ -15,7 +15,7 @@ fn b_noheap(a: own Array[N, 2]) -> i64 { let o = Option.Some(a); match o { Optio
 fn b_str(a: own Array[String, 2]) -> i64 { let o = Option.Some(a); match o { Option.Some(v) => { println(f"  r:{v[0]}"); return 1 }, Option.None => { println("  n"); return 0 } } }
 fn b_local() -> i64 { let a: Array[S, 2] = [S { tag: f"llllllll0" }, S { tag: f"llllllll1" }]; let o = Option.Some(a); match o { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
 fn b_freshtemp(a: own Array[S, 2]) -> i64 { match Option.Some(a) { Option.Some(v) => { println("  r"); return 1 }, Option.None => { println("  n"); return 0 } } }
-fn b_ctl(a: Array[S, 2]) -> i64 { println("  r"); return 1 }
+fn b_ctl(a: own Array[S, 2]) -> i64 { println("  r"); return 1 }
 fn main() {
     println("s/bind");     { let a: Array[S, 2] = [S { tag: f"aaaaaaaa0" }, S { tag: f"aaaaaaaa1" }]; let z = s_bind(a); }
     println("s/wild");     { let a: Array[S, 2] = [S { tag: f"bbbbbbbb0" }, S { tag: f"bbbbbbbb1" }]; let z = s_wild(a); }

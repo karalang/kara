@@ -1,14 +1,14 @@
 struct W { id: i64 }
 impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}") } }
 
-fn g1[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }
-fn g2(o: Option[(W, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }
-fn g3[T](o: Result[(T, i64), i64]) -> i64 { match o { Ok(t) => { return t.1; } Err(e) => { return e; } } }
-fn g4[T](o: Option[(T, i64)]) -> i64 { match o { Some(_) => { return 5; } None => { return 0; } } }
-fn g5[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) => { println(f"    p{t.1}"); return 0; } None => { return 0; } } }
-fn g6[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) => { let x = t.1; return x; } None => { return 0; } } }
-fn g7[T](o: Option[T]) -> i64 { match o { Some(t) => { return 1; } None => { return 0; } } }
-fn g8[T](o: Option[(T, i64)], d: own T) -> T { match o { Some(t) => { return t.0; } None => { return d; } } }
+fn g1[T](o: own Option[(T, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }
+fn g2(o: own Option[(W, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }
+fn g3[T](o: own Result[(T, i64), i64]) -> i64 { match o { Ok(t) => { return t.1; } Err(e) => { return e; } } }
+fn g4[T](o: own Option[(T, i64)]) -> i64 { match o { Some(_) => { return 5; } None => { return 0; } } }
+fn g5[T](o: own Option[(T, i64)]) -> i64 { match o { Some(t) => { println(f"    p{t.1}"); return 0; } None => { return 0; } } }
+fn g6[T](o: own Option[(T, i64)]) -> i64 { match o { Some(t) => { let x = t.1; return x; } None => { return 0; } } }
+fn g7[T](o: own Option[T]) -> i64 { match o { Some(t) => { return 1; } None => { return 0; } } }
+fn g8[T](o: own Option[(T, i64)], d: own T) -> T { match o { Some(t) => { return t.0; } None => { return d; } } }
 
 fn main() {
   println("g1"); println(f"  {g1(Some((W { id: 1 }, 9)))}");

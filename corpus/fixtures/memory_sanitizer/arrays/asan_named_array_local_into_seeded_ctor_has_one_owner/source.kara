@@ -4,9 +4,9 @@ struct N { id: i64 }
 impl Drop for N { fn drop(mut ref self) { println(f"  dN{self.id}") } }
 struct P { tag: String }
 enum W { P(Array[S, 2]), N }
-fn takes(x: Option[Array[S, 2]]) { println("  in") }
-fn takesP(x: Option[Array[P, 2]]) { println("  in") }
-fn readsIt(x: Option[Array[S, 2]]) {
+fn takes(x: own Option[Array[S, 2]]) { println("  in") }
+fn takesP(x: own Option[Array[P, 2]]) { println("  in") }
+fn readsIt(x: own Option[Array[S, 2]]) {
     match x { Some(t) => { println(f"  r:{t[0].tag}") } None => { println("  n") } }
 }
 fn main() {

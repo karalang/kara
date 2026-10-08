@@ -6,9 +6,9 @@ struct Q { r: R }
 fn mq(i: i64) -> Q { Q { r: R { id: i } } }
 
 struct H { v: i64 }
-impl H { fn ga(x: Option[S]) { match x { Some(y) => { let z = y; println(f"a{z.r.id}") }, None => println("n") }; println("post") } }
-fn io(x: Option[S]) { if let Some(y) = x { let z = y; println(f"i{z.r.id}") }; println("post") }
-fn ir(x: Result[S, i64]) { if let Ok(y) = x { let z = y; println(f"r{z.r.id}") }; println("post") }
+impl H { fn ga(x: own Option[S]) { match x { Some(y) => { let z = y; println(f"a{z.r.id}") }, None => println("n") }; println("post") } }
+fn io(x: own Option[S]) { if let Some(y) = x { let z = y; println(f"i{z.r.id}") }; println("post") }
+fn ir(x: own Result[S, i64]) { if let Ok(y) = x { let z = y; println(f"r{z.r.id}") }; println("post") }
 fn main() {
     io(Some(mk(1)));
     let b = Some(mk(2));

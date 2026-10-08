@@ -6,10 +6,10 @@ struct W { p: Option[S2] }
 fn mk2(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
 fn mk3(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }
 fn wrapS(v: own S2) -> Option[S2] { return Some(v) }
-fn keep(o: Option[S2]) -> Option[S2] { return o }
-fn keepg[T](o: Option[T]) -> Option[T] { return o }
-fn keep3(o: Option[S3]) -> Option[S3] { return o }
-fn maybe(o: Option[S2], c: bool) -> Option[S2] { if c { return o } return None }
+fn keep(o: own Option[S2]) -> Option[S2] { return o }
+fn keepg[T](o: own Option[T]) -> Option[T] { return o }
+fn keep3(o: own Option[S3]) -> Option[S3] { return o }
+fn maybe(o: own Option[S2], c: bool) -> Option[S2] { if c { return o } return None }
 fn rk(i: i64) -> Option[S2] { let o = Some(mk2(i)); return keep(o) }
 fn a_unwrap() { let o = Some(mk2(1)); let p = keep(o); let v = p.unwrap(); println(f"a{v.id}") }
 fn b_match_move() { let o = Some(mk2(2)); let p = keep(o); match p { Some(x) => { let y = x; println(f"b{y.id}") }, None => println("bn") } }

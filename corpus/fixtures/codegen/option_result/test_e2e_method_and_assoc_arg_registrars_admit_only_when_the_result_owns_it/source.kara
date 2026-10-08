@@ -9,7 +9,7 @@ fn mkP(i: i64) -> P { return P { id: i, name: f"p{i}" }; }
 struct Hold { n: i64 }
 impl R {
   fn passa(r: own R) -> R { return r; }
-  fn eata(r: R) -> i64 { return r.id; }
+  fn eata(r: own R) -> i64 { return r.id; }
   fn mka() -> R { return mk(31); }
 }
 impl P { fn passp(p: own P) -> P { return p; } }
@@ -17,7 +17,7 @@ impl Hold {
   fn thru(ref self, r: own R) -> R { return r; }
   fn reb(ref self, r: own R) -> R { let m = r; return m; }
   fn thrup(ref self, p: own P) -> P { return p; }
-  fn eat(ref self, r: R) -> i64 { return r.id; }
+  fn eat(ref self, r: own R) -> i64 { return r.id; }
 }
 fn main() {
   let h = Hold { n: 0 };

@@ -1,14 +1,14 @@
 struct H { id: i64, s: String }
 impl Drop for H { fn drop(mut ref self) { println(f"  dH{self.id}") } }
 
-fn scalarOut(o: Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }
-fn readAndScalarOut(o: Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { println(f"  in{a.id}"); return b; } Option.None => { return 0; } } }
-fn firstOut(o: Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { return a; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
-fn secondOut(o: Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { return b; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
-fn middleOut(o: Option[(H, H, H)]) -> H { match o { Option.Some((a, b, c)) => { return b; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
-fn bothOut(o: Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { println(f"  keep{b.id}"); return a; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
-fn noneOut(o: Option[(H, H)]) -> i64 { match o { Option.Some((a, b)) => { return a.id + b.id; } Option.None => { return 0; } } }
-fn resultOut(r: Result[(H, i64), i64]) -> i64 { match r { Result.Ok((a, b)) => { return b; } Result.Err(e) => { return e; } } }
+fn scalarOut(o: own Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }
+fn readAndScalarOut(o: own Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { println(f"  in{a.id}"); return b; } Option.None => { return 0; } } }
+fn firstOut(o: own Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { return a; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
+fn secondOut(o: own Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { return b; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
+fn middleOut(o: own Option[(H, H, H)]) -> H { match o { Option.Some((a, b, c)) => { return b; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
+fn bothOut(o: own Option[(H, H)]) -> H { match o { Option.Some((a, b)) => { println(f"  keep{b.id}"); return a; } Option.None => { return H { id: 0, s: "zzzzzzzzzzzz" }; } } }
+fn noneOut(o: own Option[(H, H)]) -> i64 { match o { Option.Some((a, b)) => { return a.id + b.id; } Option.None => { return 0; } } }
+fn resultOut(r: own Result[(H, i64), i64]) -> i64 { match r { Result.Ok((a, b)) => { return b; } Result.Err(e) => { return e; } } }
 
 fn main() {
     println("scalar");

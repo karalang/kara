@@ -6,7 +6,7 @@ impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 struct H1 { e: E }
 struct H2 { e: E, n: i64 }
 struct Hs { e: E, s: String }
-fn consume(x: R) -> i64 { return x.id }
+fn consume(x: own R) -> i64 { return x.id }
 
 impl H1 {
     #[allow(partial_move_of_drop_enum)]

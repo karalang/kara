@@ -5,8 +5,8 @@ struct W { s: S }
 struct H { s: S }
 shared struct Sh { s: S }
 struct G { w: W }
-fn pick(w: W) -> S { return w.s }
-fn pick2(w: W) -> S { w.s }
+fn pick(w: own W) -> S { return w.s }
+fn pick2(w: own W) -> S { w.s }
 fn pickr(w: ref W) -> S { return w.s }
 fn main() {
     { let w: W = W { s: S { id: 1, tag: "a" } }; let h: H = H { s: w.s }; println(f"v{h.s.id}{w.s.id}"); }

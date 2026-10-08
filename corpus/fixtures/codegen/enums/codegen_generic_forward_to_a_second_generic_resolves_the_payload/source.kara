@@ -1,13 +1,13 @@
-fn sink[T: Display](x: Option[T]) { match x { Some(t) => { println(f"s:{t}") } None => { println("n") } } }
-fn fwd[T: Display](x: Option[T]) { sink(x) }
-fn mid[T: Display](x: Option[T]) { sink(x) }
-fn outer[T: Display](x: Option[T]) { mid(x) }
-fn fwdU[U: Display](x: Option[U]) { sink(x) }
+fn sink[T: Display](x: own Option[T]) { match x { Some(t) => { println(f"s:{t}") } None => { println("n") } } }
+fn fwd[T: Display](x: own Option[T]) { sink(x) }
+fn mid[T: Display](x: own Option[T]) { sink(x) }
+fn outer[T: Display](x: own Option[T]) { mid(x) }
+fn fwdU[U: Display](x: own Option[U]) { sink(x) }
 struct H { }
 impl H {
-    fn m[T: Display](ref self, x: Option[T]) { match x { Some(t) => { println(f"m:{t}") } None => { println("n") } } }
+    fn m[T: Display](ref self, x: own Option[T]) { match x { Some(t) => { println(f"m:{t}") } None => { println("n") } } }
 }
-fn fwdm[T: Display](h: ref H, x: Option[T]) { h.m(x) }
+fn fwdm[T: Display](h: ref H, x: own Option[T]) { h.m(x) }
 fn main() {
     let a: Array[String, 2] = ["uv", "wx"];
     fwd(Some(a));

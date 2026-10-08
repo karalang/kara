@@ -3,19 +3,19 @@ impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id} {self.name}") } 
 fn mkd(n: i64) -> D { return D { id: n, name: f"name-string-longer-than-sso-{n}" }; }
 struct W { r: D, s: D, name: String, b: i64 }
 fn mkw(n: i64) -> W { return W { r: mkd(n), s: mkd(n + 100), name: f"w-string-longer-than-sso-{n}", b: n }; }
-fn eat(d: D) -> i64 { return d.id; }
+fn eat(d: own D) -> i64 { return d.id; }
 struct G[T] { v: T, k: i64 }
 fn wrap[T](x: own T) -> G[T] { return G { v: x, k: 7 }; }
 struct H { k: i64 }
-impl H { fn take(self, d: D) -> i64 { d.id } fn tk(d: D) -> i64 { d.id } }
+impl H { fn take(self, d: own D) -> i64 { d.id } fn tk(d: own D) -> i64 { d.id } }
 enum E { A(D), B }
 struct Wx { e: E, s: D }
 fn mkwx(n: i64) -> Wx { return Wx { e: E.A(mkd(n)), s: mkd(n + 200) }; }
 fn eate(e: own E) -> i64 { match e { E.A(d) => d.id, E.B => 0 } }
 struct X { w: W, t: D }
 fn mkx(n: i64) -> X { return X { w: mkw(n), t: mkd(n + 300) }; }
-fn two(a: D, b: D) -> i64 { a.id + b.id }
-fn eatw(w: W) -> i64 { w.b }
+fn two(a: own D, b: own D) -> i64 { a.id + b.id }
+fn eatw(w: own W) -> i64 { w.b }
 fn main() {
     println(f"a{eat(mkw(1).r)}");
     println(f"b{eat(wrap(mkd(2)).v)}");

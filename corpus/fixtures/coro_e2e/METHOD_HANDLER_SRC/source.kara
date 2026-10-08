@@ -1,7 +1,7 @@
 
         struct Acceptor { listener: TcpListener }
         impl Acceptor {
-            fn run(self) {
+            fn run(own self) {
                 let _stream = self.listener.accept().unwrap();
                 println(1);
             }

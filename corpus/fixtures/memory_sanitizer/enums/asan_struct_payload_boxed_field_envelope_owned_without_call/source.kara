@@ -2,10 +2,10 @@
 struct W { o: Option[Option[i64]] }
 struct V { a: i64, o: Option[Option[i64]] }
 struct S { o: Option[Option[String]] }
-fn cls(r: Result[W, i64]) -> i64 {
+fn cls(r: own Result[W, i64]) -> i64 {
     match r { Result.Ok(w) => match w.o { Option.Some(Option.Some(x)) => x, _ => -1 }, Result.Err(e) => e }
 }
-fn idr(r: Result[W, i64]) -> Result[W, i64] { r }
+fn idr(r: own Result[W, i64]) -> Result[W, i64] { r }
 fn main() {
     let n = env.args().len() as i64;
     let mut i: i64 = 0;

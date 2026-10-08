@@ -10,7 +10,7 @@ fn asg(b: own E) -> i64 {
     match b { E.A(r) => { out = r; } E.B => { } }
     return out.id;
 }
-fn iflet(b: E) -> i64 {
+fn iflet(b: own E) -> i64 {
     let mut out: R = R { id: 0, tag: f"b1521-out-aaaaaaaaaaaaaaaa" };
     if let E.A(r) = b { out = r; }
     return out.id;

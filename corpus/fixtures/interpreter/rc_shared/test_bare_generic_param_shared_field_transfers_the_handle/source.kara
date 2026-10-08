@@ -2,7 +2,7 @@ shared struct Node { s: String }
 struct Box[T] { v: T }
 struct Holder { v: Node }
 
-fn consume(b: Box[Node]) -> i64 { let x = b.v; return x.s.len(); }
+fn consume(b: own Box[Node]) -> i64 { let x = b.v; return x.s.len(); }
 
 fn main() {
     let mut acc: i64 = 0;

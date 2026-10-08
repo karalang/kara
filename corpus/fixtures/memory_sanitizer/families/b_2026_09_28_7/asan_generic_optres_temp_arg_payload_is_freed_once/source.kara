@@ -5,14 +5,14 @@ struct S { r: R, s: String }
 enum K { A(S), B }
 struct W { a: S, b: S }
 fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
-fn mh[T](a: Option[T], c: bool) -> i64 { if c { 1 } else { 2 } }
-fn mr[T](a: Result[T, i64], c: bool) -> i64 { if c { 1 } else { 2 } }
-fn mb[T](a: Result[T, i64], c: bool) -> Result[T, i64] { if c { a } else { Err(7) } }
-fn ma[T](a: Option[T]) -> i64 { match a { Some(_) => 3, None => 0 } }
-fn mo[T](a: Result[T, i64]) -> i64 { match a { Ok(_) => 4, Err(e) => e } }
-fn ms[T](a: Option[T]) -> i64 { match a { Some(s) => { let t = s; 5 }, None => 0 } }
-fn take[T](x: T) -> i64 { 6 }
-fn mt[T](a: Option[T]) -> i64 { match a { Some(s) => take(s), None => 0 } }
+fn mh[T](a: own Option[T], c: bool) -> i64 { if c { 1 } else { 2 } }
+fn mr[T](a: own Result[T, i64], c: bool) -> i64 { if c { 1 } else { 2 } }
+fn mb[T](a: own Result[T, i64], c: bool) -> Result[T, i64] { if c { a } else { Err(7) } }
+fn ma[T](a: own Option[T]) -> i64 { match a { Some(_) => 3, None => 0 } }
+fn mo[T](a: own Result[T, i64]) -> i64 { match a { Ok(_) => 4, Err(e) => e } }
+fn ms[T](a: own Option[T]) -> i64 { match a { Some(s) => { let t = s; 5 }, None => 0 } }
+fn take[T](x: own T) -> i64 { 6 }
+fn mt[T](a: own Option[T]) -> i64 { match a { Some(s) => take(s), None => 0 } }
 fn main() {
     println(f"a{mh(Some(mk(1)), false)}");
     println(f"b{mr(Ok(mk(2)), false)}");

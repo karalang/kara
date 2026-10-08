@@ -2,8 +2,8 @@
 struct Om { s: Option[Map[i64, String]] }
 struct Os { s: Option[Set[i64]] }
 struct Sib { p: Option[String], m: Option[Map[i64, String]] }
-fn ignore_om(x: Om) -> i64 { 1 }
-fn consume_opt(o: Option[Map[i64, String]]) -> i64 {
+fn ignore_om(x: own Om) -> i64 { 1 }
+fn consume_opt(o: own Option[Map[i64, String]]) -> i64 {
     match o {
         Option.Some(inner) => { inner.len() }
         Option.None => { 0 }

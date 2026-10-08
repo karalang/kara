@@ -5,35 +5,35 @@ struct W { g: String, h: i64, i: i64, j: i64, k: i64, l: i64 }
 struct Inner { s: String, t: String }
 struct N { i: Inner, u: String, v: i64, w: i64, x: i64 }
 
-fn partial(x: Result[P, i64]) {
+fn partial(x: own Result[P, i64]) {
     match x { Ok(P { a, b, .. }) => { println(f"p:{a}:{b}"); } Err(e) => { println(f"pe:{e}"); } }
 }
 
-fn unbound(x: Result[P, i64]) {
+fn unbound(x: own Result[P, i64]) {
     match x { Ok(P { a, .. }) => { println(f"u:{a}"); } Err(e) => { println(f"ue:{e}"); } }
 }
 
-fn tested(x: Result[P, i64]) {
+fn tested(x: own Result[P, i64]) {
     match x { Ok(P { a: _, b, .. }) => { println(f"t:{b}"); } Err(e) => { println(f"te:{e}"); } }
 }
 
-fn whole(x: Result[P, i64]) {
+fn whole(x: own Result[P, i64]) {
     match x { Ok(r) => { println(f"w:{r.a}"); } Err(e) => { println(f"we:{e}"); } }
 }
 
-fn errside(x: Result[i64, P]) {
+fn errside(x: own Result[i64, P]) {
     match x { Ok(v) => { println(f"k:{v}"); } Err(P { a, b, .. }) => { println(f"r:{a}:{b}"); } }
 }
 
-fn bothsides(x: Result[P, Q]) {
+fn bothsides(x: own Result[P, Q]) {
     match x { Ok(P { a, b, .. }) => { println(f"b:{a}:{b}"); } Err(Q { m, n, .. }) => { println(f"c:{m}:{n}"); } }
 }
 
-fn onefield(x: Result[W, i64]) {
+fn onefield(x: own Result[W, i64]) {
     match x { Ok(W { g, .. }) => { println(f"o:{g}"); } Err(e) => { println(f"oe:{e}"); } }
 }
 
-fn nested(x: Result[N, i64]) {
+fn nested(x: own Result[N, i64]) {
     match x { Ok(N { i: Inner { s, .. }, u, .. }) => { println(f"n:{s}:{u}"); } Err(e) => { println(f"ne:{e}"); } }
 }
 

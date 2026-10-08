@@ -6,11 +6,11 @@ struct G2[T] { v: T, r: R }
 struct H2 { v: R, r: R }
 fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
 fn mr(k: i64) -> R { R { id: k, s: mk(k) } }
-fn take(g: G[String]) -> i64 { g.v.len() + g.n }
-fn takeg[T](g: G[T]) -> i64 { g.n }
-fn take2(g: G2[R]) -> i64 { g.v.id + g.r.id }
-fn takeh(g: H2) -> i64 { g.v.id + g.r.id }
-fn taker(g: G[R]) -> i64 { g.v.id + g.n }
+fn take(g: own G[String]) -> i64 { g.v.len() + g.n }
+fn takeg[T](g: own G[T]) -> i64 { g.n }
+fn take2(g: own G2[R]) -> i64 { g.v.id + g.r.id }
+fn takeh(g: own H2) -> i64 { g.v.id + g.r.id }
+fn taker(g: own G[R]) -> i64 { g.v.id + g.n }
 fn mo(k: i64) -> Option[G[String]] { Option.Some(G { v: mk(k), n: k }) }
 fn t1() -> i64 { let o = Option.Some(G { v: mk(1), n: 1 }); match o { Option.Some(g) => take(g), Option.None => 0 } }
 fn t2() -> i64 { let o = Option.Some(G2 { v: mr(2), r: mr(22) }); match o { Option.Some(g) => take2(g), Option.None => 0 } }

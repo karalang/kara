@@ -1,9 +1,9 @@
 
 struct S { o: Option[Option[String]] }
-fn wild(r: Result[S, i64]) -> i64 { match r { Result.Ok(_) => 1, Result.Err(e) => e } }
-fn nomatch(r: Result[S, i64]) -> i64 { return 3; }
-fn sbind(r: Result[S, i64]) -> i64 { match r { Result.Ok(s) => 2, Result.Err(e) => e } }
-fn deep(r: Result[S, i64]) -> i64 {
+fn wild(r: own Result[S, i64]) -> i64 { match r { Result.Ok(_) => 1, Result.Err(e) => e } }
+fn nomatch(r: own Result[S, i64]) -> i64 { return 3; }
+fn sbind(r: own Result[S, i64]) -> i64 { match r { Result.Ok(s) => 2, Result.Err(e) => e } }
+fn deep(r: own Result[S, i64]) -> i64 {
     match r { Result.Ok(s) => match s.o { Option.Some(Option.Some(t)) => t.len() as i64, _ => -1 }, Result.Err(e) => e }
 }
 fn main() {

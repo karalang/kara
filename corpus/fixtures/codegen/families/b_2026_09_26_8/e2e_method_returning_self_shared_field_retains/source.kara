@@ -8,7 +8,7 @@ impl Hold {
     fn get(ref self) -> Sh { self.s }
     fn getr(ref self) -> Sh { return self.s }
     fn getm(mut ref self) -> Sh { self.s }
-    fn take(self) -> Sh { self.s }
+    fn take(own self) -> Sh { self.s }
 }
 fn main() {
     let mut h = Hold { s: mksh(3), t: 0 };

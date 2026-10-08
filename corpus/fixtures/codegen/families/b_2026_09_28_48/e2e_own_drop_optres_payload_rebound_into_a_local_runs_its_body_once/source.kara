@@ -1,9 +1,9 @@
 struct W { a: String, b: String }
 impl Drop for W { fn drop(mut ref self) { println(f"dW{self.a.len()}") } }
 fn mkw(i: i64) -> W { W { a: f"a{i}", b: f"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb{i}" } }
-fn n4(x: Option[W]) { match x { Some(r) => { let z = r; println("n4") }, None => {} } }
-fn nr(x: Result[W, i64]) { match x { Ok(r) => { let z = r; println(f"r{z.b.len()}") }, Err(e) => {} } }
-fn io(x: Option[W]) { if let Some(r) = x { let z = r; println("io") } }
+fn n4(x: own Option[W]) { match x { Some(r) => { let z = r; println("n4") }, None => {} } }
+fn nr(x: own Result[W, i64]) { match x { Ok(r) => { let z = r; println(f"r{z.b.len()}") }, Err(e) => {} } }
+fn io(x: own Option[W]) { if let Some(r) = x { let z = r; println("io") } }
 fn t1() { n4(Option.Some(mkw(1))) }
 fn t2() { nr(Ok(mkw(22))) }
 fn t3() { io(Some(mkw(333))) }

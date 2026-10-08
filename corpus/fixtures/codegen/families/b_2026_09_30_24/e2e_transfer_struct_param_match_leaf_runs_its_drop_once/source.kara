@@ -6,7 +6,7 @@ struct Rs { id: i64, s: String }
 impl Drop for Rs { fn drop(mut ref self) { println(f"ds{self.id} {self.s.len()}") } }
 enum E { A(R), B }
 fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
-fn eat(r: R) -> i64 { r.id }
+fn eat(r: own R) -> i64 { r.id }
 fn a1[T](g: own G[T]) -> i64 { match g { G { v, n } => { let w = v; n } } }
 fn a2(g: own G[R]) -> i64 { match g { G { v, n } => n } }
 fn a3(g: own G[R]) -> i64 { match g { G { v, n } => { println(f"r{v.id}"); n } } }

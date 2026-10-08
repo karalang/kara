@@ -9,7 +9,7 @@ fn s_rebind(r: own R) -> i64 { let s: S3 = S3 { a: r, b: mk(8) }; let s2: S3 = s
 fn s_iflet(r: own R) -> i64 { let s: S3 = S3 { a: r, b: mk(10) }; if let S3 { a, b } = s { return b.id; } return 0; }
 fn s_rebind_in_arm(r: own R) -> i64 { let s: S3 = S3 { a: r, b: mk(12) }; match s { S3 { a, b } => { let m: R = a; return m.id; } } }
 fn s_swap(r: own R) -> i64 { let s: S3 = S3 { a: mk(14), b: r }; match s { S3 { a, b } => { return a.id; } } }
-fn s_fresh(r: R) -> i64 { let s: S3 = S3 { a: mk(16), b: mk(17) }; match s { S3 { a, b } => { return a.id; } } }
+fn s_fresh(r: own R) -> i64 { let s: S3 = S3 { a: mk(16), b: mk(17) }; match s { S3 { a, b } => { return a.id; } } }
 fn s_partial(r: own R) -> i64 { let s: S3 = S3 { a: r, b: mk(21) }; match s { S3 { b, .. } => { return b.id; } } }
 fn main() {
     { let v: i64 = s_direct(mk(1)); println(f"v={v}"); println("one") }

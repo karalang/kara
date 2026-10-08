@@ -7,7 +7,7 @@ struct HolderS { k: Result[String, i64], n: i64 }
 struct HolderO { k: Option[K], n: i64 }
 
 fn mkr(i: i64) -> R2 { return R2 { s: f"ssssssss{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" }; }
-fn eat(x: Result[K, i64]) -> i64 {
+fn eat(x: own Result[K, i64]) -> i64 {
     match x { Result.Ok(K.A(r)) => { return r.s.len(); } Result.Ok(K.B) => { return 0; } Result.Err(e) => { return e; } }
 }
 

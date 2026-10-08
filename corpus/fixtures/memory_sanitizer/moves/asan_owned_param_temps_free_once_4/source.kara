@@ -2,7 +2,7 @@
 struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
 struct H { n: i64 }
-impl H { fn s2(a: R, b: R) -> i64 { 7 } }
+impl H { fn s2(a: own R, b: own R) -> i64 { 7 } }
 fn main() {
     let v = H.s2(R { id: 1, name: f"heap-one" }, R { id: 2, name: f"heap-two" });
     println(f"v={v}");

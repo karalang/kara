@@ -10,7 +10,7 @@ struct G[T] { xs: Option[Vec[T]] }
 struct Hb { xs: Option[Vec[D]] }
 impl Drop for Hb { fn drop(mut ref self) { println("dHb") } }
 fn mkd(n: i64) -> D { return D { id: n, s: f"heap-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa{n}" }; }
-fn eat(h: Ho) -> i64 { return 1; }
+fn eat(h: own Ho) -> i64 { return 1; }
 fn round() {
     { let h = Ho { xs: Some([mkd(1), mkd(2)]) }; println(f"c1 {h.xs.is_some()}") }
     { let mut m: Map[i64, Vec[D]] = Map.new(); m.insert(1, [mkd(3)]); let h = Hm { xs: m }; println(f"c2 {h.xs.len()}") }

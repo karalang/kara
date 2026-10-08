@@ -8,13 +8,13 @@ fn take() -> Result[Node, i64] {
         Some(n) => Ok(n),
     }
 }
-fn eat2(r: Result[Node, i64]) -> i64 {
+fn eat2(r: own Result[Node, i64]) -> i64 {
     match r {
         Err(e) => e,
         Ok(n) => n.val,
     }
 }
-fn eat(r: Result[Node, i64]) -> i64 {
+fn eat(r: own Result[Node, i64]) -> i64 {
     eat2(r)
 }
 fn caller() -> i64 {

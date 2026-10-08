@@ -4,7 +4,7 @@ impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == 
 impl Eq for Item {}
 impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(other.id.cmp(self.id)) } }
 impl Ord for Item { fn cmp(ref self, other: ref Item) -> Ordering { other.id.cmp(self.id) } }
-fn smaller[T: Ord](a: T, b: T) -> bool { a < b }
+fn smaller[T: Ord](a: own T, b: own T) -> bool { a < b }
 fn main() {
     println(smaller(Item { id: 1 }, Item { id: 5 }));
 }

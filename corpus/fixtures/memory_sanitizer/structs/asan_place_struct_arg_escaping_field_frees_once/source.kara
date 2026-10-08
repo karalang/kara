@@ -4,7 +4,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
 struct Cd { r: R, z: i64 }
 fn cEsc(h: own Cd) -> R { let Cd { r, z } = h; println("in"); return r; }
-fn zEsc(h: Cd) -> i64 { println("in5"); return h.z; }
+fn zEsc(h: own Cd) -> i64 { println("in5"); return h.z; }
 struct Dd { a: R, b: R }
 fn dEsc(h: own Dd) -> R { let Dd { a, b } = h; println("in2"); return a; }
 fn pEsc(h: own Cd) -> R { println("in3"); return h.r; }

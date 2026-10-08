@@ -1,8 +1,8 @@
 struct R { id: i64, tag: String, xs: Vec[i64] }
 impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 shared enum Sh { A(R), B }
-impl Sh { fn read(self) -> i64 { match self { Sh.A(r) => { return r.id; } Sh.B => { return 0; } } }
-          fn none(self) -> i64 { return 5; } }
+impl Sh { fn read(own self) -> i64 { match self { Sh.A(r) => { return r.id; } Sh.B => { return 0; } } }
+          fn none(own self) -> i64 { return 5; } }
 fn mk(n: i64) -> R { return R { id: n, tag: "t", xs: [1] } }
 fn rd(s: Sh) -> i64 { match s { Sh.A(r) => { return r.id; } Sh.B => { return 0; } } }
 fn main() {

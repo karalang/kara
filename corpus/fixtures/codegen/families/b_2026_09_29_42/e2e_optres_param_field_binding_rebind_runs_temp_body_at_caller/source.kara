@@ -2,15 +2,15 @@ struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct S { r: R, s: String }
 fn mks(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
-fn keep(x: R) { println(f"kp{x.id}") }
-fn f1(a: Option[S]) -> i64 { match a { Some(S { r, s }) => { let y = r; y.id } None => 0 } }
-fn f2(a: Option[S]) -> i64 { if let Some(S { r, s }) = a { let y = r; y.id } else { 0 } }
-fn f3(a: Option[S]) -> i64 { match a { Some(S { r, s }) => { let y = r; let z = y; z.id } None => 0 } }
-fn f4(a: Option[S]) -> i64 { match a { Some(S { r, s }) => { let y = r; let n = y.id; keep(y); n } None => 0 } }
-fn f5(a: Option[S]) -> i64 { match a { Some(S { r: q, s }) => { let y = q; y.id } None => 0 } }
-fn f6(a: Result[S, i64]) -> i64 { match a { Ok(S { r, s }) => { let y = r; y.id } Err(e) => e } }
-fn f7(a: Option[S]) -> i64 { match a { Some(S { r, s }) => { let y = r; if y.id > 13 { keep(y); return 5 } y.id } None => 0 } }
-fn f8(a: Option[S]) -> i64 { let mut t = 0; while let Some(S { r, s }) = a { let y = r; t = y.id; break; } t }
+fn keep(x: own R) { println(f"kp{x.id}") }
+fn f1(a: own Option[S]) -> i64 { match a { Some(S { r, s }) => { let y = r; y.id } None => 0 } }
+fn f2(a: own Option[S]) -> i64 { if let Some(S { r, s }) = a { let y = r; y.id } else { 0 } }
+fn f3(a: own Option[S]) -> i64 { match a { Some(S { r, s }) => { let y = r; let z = y; z.id } None => 0 } }
+fn f4(a: own Option[S]) -> i64 { match a { Some(S { r, s }) => { let y = r; let n = y.id; keep(y); n } None => 0 } }
+fn f5(a: own Option[S]) -> i64 { match a { Some(S { r: q, s }) => { let y = q; y.id } None => 0 } }
+fn f6(a: own Result[S, i64]) -> i64 { match a { Ok(S { r, s }) => { let y = r; y.id } Err(e) => e } }
+fn f7(a: own Option[S]) -> i64 { match a { Some(S { r, s }) => { let y = r; if y.id > 13 { keep(y); return 5 } y.id } None => 0 } }
+fn f8(a: own Option[S]) -> i64 { let mut t = 0; while let Some(S { r, s }) = a { let y = r; t = y.id; break; } t }
 fn main() {
     println(f"a{f1(Some(mks(1)))}"); let x1 = Some(mks(2)); println(f"b{f1(x1)}");
     println(f"a{f2(Some(mks(3)))}"); let x2 = Some(mks(4)); println(f"b{f2(x2)}");

@@ -11,7 +11,7 @@ struct Pn { r: R, z: i64 }
 impl Drop for Pn { fn drop(mut ref self) { println(f"dPn{self.z}") } }
 struct Pouter { inner: Pn, z: i64 }
 impl Drop for Pouter { fn drop(mut ref self) { println(f"dPo{self.z}") } }
-fn oOwn[T](h: Gouter[T]) -> i64 { println("  in"); return h.z; }
+fn oOwn[T](h: own Gouter[T]) -> i64 { println("  in"); return h.z; }
 fn main() {
     println("gen_parent");  let _ = oOwn(Gouter[R] { inner: Go[R] { r: mk(1), z: 51 }, z: 52 });
     println("plain_parent"); let nb = Nouter { inner: Go[R] { r: mk(2), z: 55 }, z: 56 }; println(f"  b{nb.z}");

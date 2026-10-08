@@ -1,13 +1,13 @@
 struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
-fn q1(x: Option[Array[R, 2]]) { let mut h = x; match h { Some(a) => println(f"m{a[0].id}"), None => println("n") } h = None; println("q1"); }
-fn q2(x: Option[Array[R, 2]]) { let h = x; match h { Some(a) => println(f"m{a[0].id}"), None => println("n") } println("q2"); }
+fn q1(x: own Option[Array[R, 2]]) { let mut h = x; match h { Some(a) => println(f"m{a[0].id}"), None => println("n") } h = None; println("q1"); }
+fn q2(x: own Option[Array[R, 2]]) { let h = x; match h { Some(a) => println(f"m{a[0].id}"), None => println("n") } println("q2"); }
 fn q3() { let mut h: Option[Array[R, 2]] = Some([mk(1), mk(2)]); match h { Some(a) => println(f"m{a[0].id}"), None => println("n") } h = None; println("q3"); }
-fn q4(x: Option[R]) { let mut h = x; match h { Some(a) => println(f"m{a.id}"), None => println("n") } h = None; println("q4"); }
-fn q6(x: Option[R], c: bool) { let mut h = x; if c { match h { Some(a) => println(f"m{a.id}"), None => println("n") } } h = None; println("q6"); }
-fn q7(x: Option[R]) { let mut h = x; match h { Some(a) if a.id > 3 => println(f"g{a.id}"), _ => println("o") } h = None; println("q7"); }
-fn q8(x: Option[R], c: bool) { let mut h = x; match h { Some(a) => println(f"m{a.id}"), None => println("n") } if c { h = None; } println("q8"); }
+fn q4(x: own Option[R]) { let mut h = x; match h { Some(a) => println(f"m{a.id}"), None => println("n") } h = None; println("q4"); }
+fn q6(x: own Option[R], c: bool) { let mut h = x; if c { match h { Some(a) => println(f"m{a.id}"), None => println("n") } } h = None; println("q6"); }
+fn q7(x: own Option[R]) { let mut h = x; match h { Some(a) if a.id > 3 => println(f"g{a.id}"), _ => println("o") } h = None; println("q7"); }
+fn q8(x: own Option[R], c: bool) { let mut h = x; match h { Some(a) => println(f"m{a.id}"), None => println("n") } if c { h = None; } println("q8"); }
 fn main() {
     q1(Some([mk(11), mk(12)])); println("_a1");
     q2(Some([mk(21), mk(22)])); println("_a2");

@@ -1,11 +1,11 @@
 struct W1 { v: i64, s: String }
 impl Drop for W1 { fn drop(mut ref self) { println(f"dW1_{self.v}") } }
-fn take2(x: Array[W1, 2]) -> i64 { return x[0].v + x[1].v }
-fn take3(x: Array[W1, 3]) -> i64 { return x[1].v }
-fn takev(x: Vec[W1]) -> i64 { return x[0].v }
+fn take2(x: own Array[W1, 2]) -> i64 { return x[0].v + x[1].v }
+fn take3(x: own Array[W1, 3]) -> i64 { return x[1].v }
+fn takev(x: own Vec[W1]) -> i64 { return x[0].v }
 fn pass2(x: own Array[W1, 2]) -> Array[W1, 2] { return x }
 struct K { n: i64 }
-impl K { fn take(ref self, x: Array[W1, 2]) -> i64 { return x[0].v + x[1].v } }
+impl K { fn take(ref self, x: own Array[W1, 2]) -> i64 { return x[0].v + x[1].v } }
 fn s(n: i64) -> String { return f"ssssssssssssssssssssssssssssss{n}" }
 fn main() {
     let a = W1 { v: 1, s: s(1) };

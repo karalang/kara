@@ -14,7 +14,7 @@ fn p8(r: own R, f: bool) -> R { if f { return r } return R { name: f"v", id: r.p
 fn p9(r: own R, f: bool) -> R { look(r); if f { return r } return mk(9, f"u") }
 fn c1(r: own R, f: bool) -> R { if f { return r } poke(mut r); return mk(r.id, f"t") }
 fn c2(r: own R, f: bool) -> R { if f { return r } r.bump(); return mk(1, f"s") }
-fn c3(o: Option[R], f: bool) -> Option[R] { if f { return o } return Some(mk(lenr(o), f"o")) }
+fn c3(o: own Option[R], f: bool) -> Option[R] { if f { return o } return Some(mk(lenr(o), f"o")) }
 struct Q { z: i64 }
 impl Q {
     fn m4(ref self, r: own R, f: bool) -> R { if f { return r } return mk(peek(r), f"q") }

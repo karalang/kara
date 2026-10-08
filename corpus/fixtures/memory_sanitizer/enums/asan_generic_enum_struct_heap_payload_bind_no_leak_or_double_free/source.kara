@@ -1,7 +1,7 @@
 
 struct Box { s: String }
 enum Opt[T] { Yes(T), No }
-fn get[T](o: own Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }
+fn get[T](o: own Opt[T], d: own T) -> T { match o { Opt.Yes(v) => v, Opt.No => d } }
 fn main() {
     let mut i: i64 = 0;
     let mut total: i64 = 0;

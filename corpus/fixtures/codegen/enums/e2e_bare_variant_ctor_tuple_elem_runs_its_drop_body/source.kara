@@ -3,13 +3,13 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
 enum W { A(R), N }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
 
-fn optArg(t: (Option[R], i64)) -> i64 { println(f"  in{t.1}"); return 0; }
-fn twoArg(t: (Option[R], Option[R])) -> i64 { println("  in2"); return 0; }
-fn sndArg(t: (i64, Option[R])) -> i64 { println(f"  in{t.0}"); return 0; }
-fn uvArg(t: (W, i64)) -> i64 { println(f"  in{t.1}"); return 0; }
-fn mixArg(t: (Option[R], R)) -> i64 { println(f"  in{t.1.id}"); return 0; }
-fn nestArg(t: ((Option[R], i64), i64)) -> i64 { println(f"  in{t.1}"); return 0; }
-fn resArg(t: (Result[R, i64], i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn optArg(t: own (Option[R], i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn twoArg(t: own (Option[R], Option[R])) -> i64 { println("  in2"); return 0; }
+fn sndArg(t: own (i64, Option[R])) -> i64 { println(f"  in{t.0}"); return 0; }
+fn uvArg(t: own (W, i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn mixArg(t: own (Option[R], R)) -> i64 { println(f"  in{t.1.id}"); return 0; }
+fn nestArg(t: own ((Option[R], i64), i64)) -> i64 { println(f"  in{t.1}"); return 0; }
+fn resArg(t: own (Result[R, i64], i64)) -> i64 { println(f"  in{t.1}"); return 0; }
 
 fn main() {
     println("baretemp");   let _ = optArg((Some(mk(11)), 7));                println("baretemp end");

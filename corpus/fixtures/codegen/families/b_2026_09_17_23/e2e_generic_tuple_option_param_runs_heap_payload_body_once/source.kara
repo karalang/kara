@@ -1,16 +1,16 @@
 struct W { id: i64, name: String }
 impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.name}") } }
 fn mk(i: i64) -> W { return W { id: i, name: f"n{i}" }; }
-fn eat[T](t: (T, i64)) -> i64 { return t.1 }
-fn gh[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }
-fn gr[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) => { println("  r"); t.1 } None => { 0 } } }
-fn gn[T](o: Option[(T, i64)]) -> i64 { match o { Some(_) => { return 1; } None => { return 0; } } }
-fn gx[T](o: Option[(T, i64)]) -> i64 { println("  x"); return 5 }
-fn ge[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) => { return eat(t); } None => { return 0; } } }
-fn gi[T](o: Option[(T, i64)]) -> i64 { if let Some(t) = o { return t.1; } return 0 }
-fn gg[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) if t.1 > 5 => { return t.1; } Some(t) => { return 1; } None => { return 0; } } }
-fn gs[T](o: Option[(T, i64)]) -> i64 { match o { Some(t) => { let x = t.0; return 3; } None => { return 0; } } }
-fn gret[T](o: Option[(T, i64)]) -> Option[(T, i64)] { return o }
+fn eat[T](t: own (T, i64)) -> i64 { return t.1 }
+fn gh[T](o: own Option[(T, i64)]) -> i64 { match o { Some(t) => { return t.1; } None => { return 0; } } }
+fn gr[T](o: own Option[(T, i64)]) -> i64 { match o { Some(t) => { println("  r"); t.1 } None => { 0 } } }
+fn gn[T](o: own Option[(T, i64)]) -> i64 { match o { Some(_) => { return 1; } None => { return 0; } } }
+fn gx[T](o: own Option[(T, i64)]) -> i64 { println("  x"); return 5 }
+fn ge[T](o: own Option[(T, i64)]) -> i64 { match o { Some(t) => { return eat(t); } None => { return 0; } } }
+fn gi[T](o: own Option[(T, i64)]) -> i64 { if let Some(t) = o { return t.1; } return 0 }
+fn gg[T](o: own Option[(T, i64)]) -> i64 { match o { Some(t) if t.1 > 5 => { return t.1; } Some(t) => { return 1; } None => { return 0; } } }
+fn gs[T](o: own Option[(T, i64)]) -> i64 { match o { Some(t) => { let x = t.0; return 3; } None => { return 0; } } }
+fn gret[T](o: own Option[(T, i64)]) -> Option[(T, i64)] { return o }
 fn main() {
     println(f"gh{gh(Some((mk(1), 9)))}");
     println(f"gr{gr(Some((mk(2), 9)))}");

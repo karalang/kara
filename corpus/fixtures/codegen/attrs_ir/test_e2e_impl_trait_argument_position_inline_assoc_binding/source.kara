@@ -11,7 +11,7 @@ impl Src for S {
     fn get(ref self) -> i64 { self.v }
 }
 
-fn take(s: impl Src[Item = i64]) -> i64 { s.get() }
+fn take(s: own impl Src[Item = i64]) -> i64 { s.get() }
 
 fn main() {
     println(take(S { v: 5 }));

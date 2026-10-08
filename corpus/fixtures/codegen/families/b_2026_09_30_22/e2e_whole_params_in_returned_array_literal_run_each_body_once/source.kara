@@ -4,18 +4,18 @@ fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 struct Hb { xs: Array[R, 2], n: i64 }
 struct K { a: i64 }
 impl K {
-  fn am(ref self, a: R, b: R) -> Array[R, 2] { return [a, b]; }
-  fn st(a: R) -> Array[R, 1] { return [a]; }
+  fn am(ref self, a: own R, b: own R) -> Array[R, 2] { return [a, b]; }
+  fn st(a: own R) -> Array[R, 1] { return [a]; }
 }
-fn arrc(a: R, b: R) -> Array[R, 2] { return [a, b]; }
-fn cnd(a: R, b: R, f: bool) -> Array[R, 2] { if f { return [a, b]; } return [mk(90), mk(91)]; }
-fn cndt(a: R, f: bool) -> Array[R, 1] { if f { [a] } else { [mk(92)] } }
-fn mix(a: R) -> Array[R, 2] { return [a, mk(50)]; }
-fn inst(a: R, b: R) -> Hb { return Hb { xs: [a, b], n: 1 }; }
-fn intup(a: R, b: R) -> (Array[R, 2], i64) { return ([a, b], 3); }
-fn nest(a: R, b: R, c: R, d: R) -> Array[Array[R, 2], 2] { return [[a, b], [c, d]]; }
-fn rb(a: own R, b: R) -> Array[R, 2] { let x = a; return [x, b]; }
-fn tail(a: R, b: R) -> Array[R, 2] { [a, b] }
+fn arrc(a: own R, b: own R) -> Array[R, 2] { return [a, b]; }
+fn cnd(a: own R, b: own R, f: bool) -> Array[R, 2] { if f { return [a, b]; } return [mk(90), mk(91)]; }
+fn cndt(a: own R, f: bool) -> Array[R, 1] { if f { [a] } else { [mk(92)] } }
+fn mix(a: own R) -> Array[R, 2] { return [a, mk(50)]; }
+fn inst(a: own R, b: own R) -> Hb { return Hb { xs: [a, b], n: 1 }; }
+fn intup(a: own R, b: own R) -> (Array[R, 2], i64) { return ([a, b], 3); }
+fn nest(a: own R, b: own R, c: own R, d: own R) -> Array[Array[R, 2], 2] { return [[a, b], [c, d]]; }
+fn rb(a: own R, b: own R) -> Array[R, 2] { let x = a; return [x, b]; }
+fn tail(a: own R, b: own R) -> Array[R, 2] { [a, b] }
 fn main() {
   println("-c1"); let c1 = arrc(mk(1), mk(2)); println(f"r{c1[0].id}{c1[1].id}");
   println("-c2"); let p = mk(3); let q = mk(4); let c2 = arrc(p, q); println(f"r{c2[1].id}");

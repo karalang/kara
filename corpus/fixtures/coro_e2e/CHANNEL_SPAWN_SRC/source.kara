@@ -1,5 +1,5 @@
 
-        fn serve_one(listener: TcpListener, tx: Sender[i64]) {
+        fn serve_one(listener: own TcpListener, tx: Sender[i64]) {
             let _stream = listener.accept().unwrap();
             tx.send(7);
         }

@@ -2,16 +2,16 @@ struct H { id: i64, s: String }
 impl Drop for H { fn drop(mut ref self) { println(f"  dH{self.id}") } }
 struct R { id: i64 }
 
-fn second(o: Option[(H, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 77; } } }
-fn first(o: Option[(i64, H)]) -> i64 { match o { Option.Some((b, _)) => { return b; } Option.None => { return 77; } } }
-fn named(o: Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 77; } } }
-fn twoOfThree(o: Option[(H, i64, i64)]) -> i64 { match o { Option.Some((_, b, c)) => { return b + c; } Option.None => { return 77; } } }
-fn allWild(o: Option[(H, i64)]) -> i64 { match o { Option.Some((_, _)) => { return 55; } Option.None => { return 77; } } }
-fn twoWild(o: Option[(H, H, i64)]) -> i64 { match o { Option.Some((_, _, c)) => { return c; } Option.None => { return 77; } } }
-fn strWild(o: Option[(String, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 77; } } }
-fn narrow(o: Option[(R, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 77; } } }
-fn okSide(r: Result[(H, i64), i64]) -> i64 { match r { Result.Ok((_, b)) => { return b; } Result.Err(e) => { return e; } } }
-fn errSide(r: Result[i64, (H, i64)]) -> i64 { match r { Result.Ok(v) => { return v; } Result.Err((_, b)) => { return b; } } }
+fn second(o: own Option[(H, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 77; } } }
+fn first(o: own Option[(i64, H)]) -> i64 { match o { Option.Some((b, _)) => { return b; } Option.None => { return 77; } } }
+fn named(o: own Option[(H, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 77; } } }
+fn twoOfThree(o: own Option[(H, i64, i64)]) -> i64 { match o { Option.Some((_, b, c)) => { return b + c; } Option.None => { return 77; } } }
+fn allWild(o: own Option[(H, i64)]) -> i64 { match o { Option.Some((_, _)) => { return 55; } Option.None => { return 77; } } }
+fn twoWild(o: own Option[(H, H, i64)]) -> i64 { match o { Option.Some((_, _, c)) => { return c; } Option.None => { return 77; } } }
+fn strWild(o: own Option[(String, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 77; } } }
+fn narrow(o: own Option[(R, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 77; } } }
+fn okSide(r: own Result[(H, i64), i64]) -> i64 { match r { Result.Ok((_, b)) => { return b; } Result.Err(e) => { return e; } } }
+fn errSide(r: own Result[i64, (H, i64)]) -> i64 { match r { Result.Ok(v) => { return v; } Result.Err((_, b)) => { return b; } } }
 
 fn main() {
     println("second");  { let g = second(Option.Some((H { id: 1, s: "aaaaaaaaaaaa" }, 9))); println(f"  n{g}") }

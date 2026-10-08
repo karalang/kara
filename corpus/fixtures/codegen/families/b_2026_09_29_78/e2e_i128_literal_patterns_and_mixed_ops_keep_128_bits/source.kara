@@ -1,4 +1,4 @@
-fn cls(x: i128) -> String {
+fn cls(x: own i128) -> String {
     match x {
         0 => "zero".to_string(),
         1..=9 => "small".to_string(),
@@ -7,7 +7,7 @@ fn cls(x: i128) -> String {
     }
 }
 
-fn clu(x: u128) -> String {
+fn clu(x: own u128) -> String {
     match x {
         0 => "zero".to_string(),
         340282366920938463463374607431768211455u128 => "max".to_string(),

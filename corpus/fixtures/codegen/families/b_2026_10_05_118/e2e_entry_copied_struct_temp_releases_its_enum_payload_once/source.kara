@@ -10,13 +10,13 @@ impl Drop for Kd { fn drop(mut ref self) { let _ = self.n; } }
 struct Km { m: M, n: i64 }
 struct Hb { g: Eb, n: i64 }
 fn mk(i: i64) -> K { K { e: E.A(H { id: i }), n: i } }
-fn ck(k: K) { println(f"k{k.n}") }
-fn ck2(k: K2) { println("k2") }
-fn ckd(k: Kd) { println("kd") }
-fn ckm(k: Km) { println("km") }
+fn ck(k: own K) { println(f"k{k.n}") }
+fn ck2(k: own K2) { println("k2") }
+fn ckd(k: own Kd) { println("kd") }
+fn ckm(k: own Km) { println("km") }
 fn give(h: Hb) { println("g") }
 struct G { z: i64 }
-impl G { fn m(ref self, k: K) { println("m") } }
+impl G { fn m(ref self, k: own K) { println("m") } }
 fn main() {
     ck(K { e: E.A(H { id: 1 }), n: 1 }); println("_1");
     ck(mk(2)); println("_2");

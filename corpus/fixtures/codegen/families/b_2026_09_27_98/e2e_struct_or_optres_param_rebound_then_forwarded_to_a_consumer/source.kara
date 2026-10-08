@@ -1,12 +1,12 @@
 struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
-fn eat(s: S) { println("x") }
-fn eat2(o: Option[S]) { println("x") }
-fn eatr(o: Result[S, i64]) { println("x") }
+fn eat(s: own S) { println("x") }
+fn eat2(o: own Option[S]) { println("x") }
+fn eatr(o: own Result[S, i64]) { println("x") }
 fn rs(s: own S, k: bool) -> S { let m = s; if k { return m } eat(m); return mks(0) }
-fn ro(h: Option[S], k: bool) -> Option[S] { let m = h; if k { return m } eat2(m); return Option.None }
-fn rt(h: Result[S, i64], k: bool) -> Result[S, i64] { let m = h; if k { return m } eatr(m); return Result.Err(0) }
+fn ro(h: own Option[S], k: bool) -> Option[S] { let m = h; if k { return m } eat2(m); return Option.None }
+fn rt(h: own Result[S, i64], k: bool) -> Result[S, i64] { let m = h; if k { return m } eatr(m); return Result.Err(0) }
 fn ra(s: own S, k: bool) -> S { if k { return s } let g = s; eat(g); return mks(0) }
 fn main() {
     let a1 = rs(mks(1), false); println(f"a{a1.id}");

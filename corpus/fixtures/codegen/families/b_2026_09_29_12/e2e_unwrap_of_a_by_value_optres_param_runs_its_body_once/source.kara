@@ -7,14 +7,14 @@ struct W { id: i64, s: String }
 fn mkw(i: i64) -> W { return W { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 struct H { k: i64 }
 impl H {
-    fn take(self, t: Option[S]) -> i64 { let x = t.expect("boom"); return x.id + self.k }
-    fn back(t: Result[i64, S]) -> S { t.unwrap_err() }
+    fn take(self, t: own Option[S]) -> i64 { let x = t.expect("boom"); return x.id + self.k }
+    fn back(t: own Result[i64, S]) -> S { t.unwrap_err() }
 }
-fn cu(t: Option[S]) { let x = t.unwrap(); println(f"u{x.id}") }
-fn cr(t: Option[S]) -> S { return t.unwrap() }
-fn cp(t: Option[P]) { let x = t.unwrap(); println(f"p{x.id}") }
-fn ck(t: Result[S, i64]) { let x = t.unwrap(); println(f"k{x.id}") }
-fn cw(t: Option[W]) -> i64 { let x = t.unwrap(); return x.id + x.s.len() }
+fn cu(t: own Option[S]) { let x = t.unwrap(); println(f"u{x.id}") }
+fn cr(t: own Option[S]) -> S { return t.unwrap() }
+fn cp(t: own Option[P]) { let x = t.unwrap(); println(f"p{x.id}") }
+fn ck(t: own Result[S, i64]) { let x = t.unwrap(); println(f"k{x.id}") }
+fn cw(t: own Option[W]) -> i64 { let x = t.unwrap(); return x.id + x.s.len() }
 fn main() {
     cu(Option.Some(mks(1)));
     let a = Option.Some(mks(2));

@@ -7,13 +7,13 @@ struct Wb { p: (R, R), n: i64, pad: i64 }
 struct W2b { p: P, n: i64, pad: i64 }
 struct W1 { r: R, s: R }
 
-fn one(o: Option[W1]) -> R { match o { Option.Some(w) => { return w.s; } Option.None => { return R { id: 0 }; } } }
-fn v3(o: Option[W]) -> R { match o { Option.Some(w) => { return w.p.1; } Option.None => { return R { id: 0 }; } } }
-fn v4(o: Option[W2]) -> R { match o { Option.Some(w) => { return w.p.s; } Option.None => { return R { id: 0 }; } } }
-fn v9(o: Option[Wb]) -> R { match o { Option.Some(w) => { return w.p.1; } Option.None => { return R { id: 0 }; } } }
-fn v10(o: Option[W2b]) -> R { match o { Option.Some(w) => { return w.p.s; } Option.None => { return R { id: 0 }; } } }
-fn r3(o: Result[W, i64]) -> R { match o { Result.Ok(w) => { return w.p.1; } Result.Err(e) => { return R { id: e }; } } }
-fn peek(o: Option[W]) -> i64 { match o { Option.Some(w) => { return w.p.1.id; } Option.None => { return 0; } } }
+fn one(o: own Option[W1]) -> R { match o { Option.Some(w) => { return w.s; } Option.None => { return R { id: 0 }; } } }
+fn v3(o: own Option[W]) -> R { match o { Option.Some(w) => { return w.p.1; } Option.None => { return R { id: 0 }; } } }
+fn v4(o: own Option[W2]) -> R { match o { Option.Some(w) => { return w.p.s; } Option.None => { return R { id: 0 }; } } }
+fn v9(o: own Option[Wb]) -> R { match o { Option.Some(w) => { return w.p.1; } Option.None => { return R { id: 0 }; } } }
+fn v10(o: own Option[W2b]) -> R { match o { Option.Some(w) => { return w.p.s; } Option.None => { return R { id: 0 }; } } }
+fn r3(o: own Result[W, i64]) -> R { match o { Result.Ok(w) => { return w.p.1; } Result.Err(e) => { return R { id: e }; } } }
+fn peek(o: own Option[W]) -> i64 { match o { Option.Some(w) => { return w.p.1.id; } Option.None => { return 0; } } }
 fn main() {
     println("one"); { let a = Option.Some(W1 { r: R { id: 1 }, s: R { id: 2 } }); let g = one(a); println(f"  got:{g.id}") }
     println("v3 temp"); { let g = v3(Option.Some(W { p: (R { id: 31 }, R { id: 32 }), n: 1 })); println(f"  got:{g.id}") }

@@ -7,11 +7,11 @@ struct W { r: R, s: String, t: String }
 fn mw(i: i64) -> W { W { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}", t: f"another-long-heap-string-{i}" } }
 struct H { n: i64 }
 impl H {
-    fn look(ref self, a: Option[S]) -> i64 { println("in"); self.n }
-    fn eat(self, a: Option[S]) -> i64 { println("in"); self.n }
-    fn take(ref self, a: Option[S]) -> i64 { match a { Some(s) => s.r.id, None => 0 } }
-    fn res(ref self, a: Result[W, i64]) -> i64 { match a { Ok(w) => w.r.id, Err(e) => e } }
-    fn assoc(a: Option[S]) -> i64 { match a { Some(s) => s.r.id, None => 0 } }
+    fn look(ref self, a: own Option[S]) -> i64 { println("in"); self.n }
+    fn eat(self, a: own Option[S]) -> i64 { println("in"); self.n }
+    fn take(ref self, a: own Option[S]) -> i64 { match a { Some(s) => s.r.id, None => 0 } }
+    fn res(ref self, a: own Result[W, i64]) -> i64 { match a { Ok(w) => w.r.id, Err(e) => e } }
+    fn assoc(a: own Option[S]) -> i64 { match a { Some(s) => s.r.id, None => 0 } }
 }
 fn main() {
     let h = H { n: 5 };

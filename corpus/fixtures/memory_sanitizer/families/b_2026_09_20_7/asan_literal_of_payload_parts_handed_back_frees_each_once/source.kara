@@ -3,11 +3,11 @@ struct R { id: i64, t: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 struct P { a: R, b: R }
 fn mk(i: i64) -> R { return R { id: i, t: f"payloadpayload{i}" }; }
-fn v8(o: Option[((R, R), i64)]) -> (R, R) { match o { Option.Some(t) => { return (t.0.0, t.0.1); } Option.None => { return (mk(0), mk(0)); } } }
-fn h1(o: Option[(R, R)]) -> (R, R) { match o { Option.Some(t) => { return (t.0, t.1); } Option.None => { return (mk(0), mk(0)); } } }
-fn sl(o: Option[(R, R)]) -> P { match o { Option.Some(t) => { return P { a: t.1, b: t.0 }; } Option.None => { return P { a: mk(0), b: mk(0) }; } } }
-fn r0(o: Result[(R, R), i64]) -> R { match o { Result.Ok(t) => { return t.1; } Result.Err(e) => { return R { id: e, t: f"e{e}" }; } } }
-fn rs(o: Result[((R, R), i64), i64]) -> (R, R) { match o { Result.Ok(t) => { return (t.0.0, t.0.1); } Result.Err(e) => { return (mk(e), mk(e)); } } }
+fn v8(o: own Option[((R, R), i64)]) -> (R, R) { match o { Option.Some(t) => { return (t.0.0, t.0.1); } Option.None => { return (mk(0), mk(0)); } } }
+fn h1(o: own Option[(R, R)]) -> (R, R) { match o { Option.Some(t) => { return (t.0, t.1); } Option.None => { return (mk(0), mk(0)); } } }
+fn sl(o: own Option[(R, R)]) -> P { match o { Option.Some(t) => { return P { a: t.1, b: t.0 }; } Option.None => { return P { a: mk(0), b: mk(0) }; } } }
+fn r0(o: own Result[(R, R), i64]) -> R { match o { Result.Ok(t) => { return t.1; } Result.Err(e) => { return R { id: e, t: f"e{e}" }; } } }
+fn rs(o: own Result[((R, R), i64), i64]) -> (R, R) { match o { Result.Ok(t) => { return (t.0.0, t.0.1); } Result.Err(e) => { return (mk(e), mk(e)); } } }
 fn main() {
     { let g = v8(Option.Some(((mk(1), mk(2)), 3))); println(f"v8t {g.0.t}{g.1.t}") }
     { let a = Option.Some(((mk(3), mk(4)), 3)); let g = v8(a); println(f"v8n {g.0.t}{g.1.t}") }

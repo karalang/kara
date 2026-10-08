@@ -3,7 +3,7 @@ struct Guard { id: i64 }
 impl Drop for Guard {
     fn drop(mut ref self) {}
 }
-fn consume(g: Guard) {}
+fn consume(g: own Guard) {}
 fn main() {
     consume(Guard { id: 1 });
 }

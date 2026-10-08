@@ -2,11 +2,11 @@ struct In { s: String }
 struct W { a: String, b: String, i: In }
 impl Drop for W { fn drop(mut ref self) { println(f"dW{self.a.len()}:{self.i.s}") } }
 fn mkw(i: i64) -> W { W { a: f"a{i}", b: f"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb{i}", i: In { s: f"in{i}" } } }
-fn chain(x: Option[W]) { match x { Some(r) => { let z = r; let y = z; println(f"c{y.b.len()}") }, None => {} }; println("cpost") }
-fn gives(x: Option[W]) -> String { match x { Some(r) => { let z = r; z.b.clone() }, None => "none" } }
-fn keep(x: Option[W]) -> W { match x { Some(r) => { let z = r; z }, None => mkw(0) } }
+fn chain(x: own Option[W]) { match x { Some(r) => { let z = r; let y = z; println(f"c{y.b.len()}") }, None => {} }; println("cpost") }
+fn gives(x: own Option[W]) -> String { match x { Some(r) => { let z = r; z.b.clone() }, None => "none" } }
+fn keep(x: own Option[W]) -> W { match x { Some(r) => { let z = r; z }, None => mkw(0) } }
 struct H { v: i64 }
-impl H { fn m(x: Option[W]) { match x { Some(r) => { let z = r; println("hm") }, None => {} } } }
+impl H { fn m(x: own Option[W]) { match x { Some(r) => { let z = r; println("hm") }, None => {} } } }
 fn lp(n: i64) { let mut i = 0; while i < n { match Option.Some(mkw(i)) { Some(r) => { let z = r; println("lp") }, None => {} }; i = i + 1; } }
 fn t1() { chain(Some(mkw(1))) }
 fn t2() { let s = gives(Some(mkw(22))); println(s.len()) }

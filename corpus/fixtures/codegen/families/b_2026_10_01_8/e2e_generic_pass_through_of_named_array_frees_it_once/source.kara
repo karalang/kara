@@ -3,7 +3,7 @@ impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 fn pg[T](x: own T) -> T { return x; }
 fn pt[T](x: own T) -> (T, i64) { return (x, 1); }
-fn gk[T](x: T) -> i64 { return 5; }
+fn gk[T](x: own T) -> i64 { return 5; }
 fn pc[T](x: own T, c: bool) -> T { if c { return x; } return x; }
 fn pv[T](x: own T) -> T { let y = x; return y; }
 struct H { n: i64 }

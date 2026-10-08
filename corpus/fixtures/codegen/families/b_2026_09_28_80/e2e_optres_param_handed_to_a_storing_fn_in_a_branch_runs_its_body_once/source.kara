@@ -3,12 +3,12 @@ impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
-fn okeep(t: Option[S], v: mut ref Vec[Option[S]]) { v.push(t) }
-fn cp(t: Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { v.push(t) } }
-fn cf(t: Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { okeep(t, v) } }
-fn cfc(t: Option[S], v: mut ref Vec[Option[S]], c: bool, d: bool) { if c { cp(t, v, d) } }
-fn rk(t: Option[R], v: mut ref Vec[Option[R]]) { v.push(t) }
-fn crk(t: Option[R], v: mut ref Vec[Option[R]], c: bool) { if c { rk(t, v) } else { println("no") } }
+fn okeep(t: own Option[S], v: mut ref Vec[Option[S]]) { v.push(t) }
+fn cp(t: own Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { v.push(t) } }
+fn cf(t: own Option[S], v: mut ref Vec[Option[S]], c: bool) { if c { okeep(t, v) } }
+fn cfc(t: own Option[S], v: mut ref Vec[Option[S]], c: bool, d: bool) { if c { cp(t, v, d) } }
+fn rk(t: own Option[R], v: mut ref Vec[Option[R]]) { v.push(t) }
+fn crk(t: own Option[R], v: mut ref Vec[Option[R]], c: bool) { if c { rk(t, v) } else { println("no") } }
 fn main() {
     let mut u: Vec[Option[S]] = Vec.new();
     cf(Option.Some(mks(1)), mut u, false);

@@ -6,12 +6,12 @@ struct W { r: R, s: String, t: String }
 fn mw(i: i64) -> W { W { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}", t: f"another-long-heap-string-{i}" } }
 enum K { A(W), B }
 struct H { v: Vec[Option[S]] }
-impl H { fn put(mut ref self, a: Option[S]) { self.v.push(a) } }
-fn opt(a: Option[S]) -> i64 { let mut v: Vec[Option[S]] = Vec.new(); v.push(a); println("in"); 1 }
-fn rebound(a: Option[S]) -> i64 { let c = a; let mut v: Vec[Option[S]] = Vec.new(); v.push(c); println("in"); 2 }
-fn res(a: Result[W, i64]) -> i64 { let mut v: Vec[Result[W, i64]] = Vec.new(); v.push(a); println("in"); 3 }
-fn en(a: Option[K]) -> i64 { let mut v: Vec[Option[K]] = Vec.new(); v.push(a); println("in"); 4 }
-fn outer(a: Option[S], v: mut ref Vec[Option[S]]) { v.push(a) }
+impl H { fn put(mut ref self, a: own Option[S]) { self.v.push(a) } }
+fn opt(a: own Option[S]) -> i64 { let mut v: Vec[Option[S]] = Vec.new(); v.push(a); println("in"); 1 }
+fn rebound(a: own Option[S]) -> i64 { let c = a; let mut v: Vec[Option[S]] = Vec.new(); v.push(c); println("in"); 2 }
+fn res(a: own Result[W, i64]) -> i64 { let mut v: Vec[Result[W, i64]] = Vec.new(); v.push(a); println("in"); 3 }
+fn en(a: own Option[K]) -> i64 { let mut v: Vec[Option[K]] = Vec.new(); v.push(a); println("in"); 4 }
+fn outer(a: own Option[S], v: mut ref Vec[Option[S]]) { v.push(a) }
 fn main() {
     let a: Option[S] = Some(mk(1));
     println(f"k{opt(a)}");

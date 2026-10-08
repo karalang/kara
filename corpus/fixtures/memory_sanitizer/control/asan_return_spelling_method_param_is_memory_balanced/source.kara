@@ -7,9 +7,9 @@ impl T1 {
     fn take(ref self, ra: own R) -> R { return ra; }
     fn keep(ref self, rb: own R) -> R { rb }
     fn wrap(ref self, rc: own R) -> Hh { return Hh { r: rc }; }
-    fn gtake[X](ref self, rd: own R, x: X) -> R { return rd; }
-    fn swapout(ref self, re: R) -> R { println(f"saw {re.name}"); return R { id: 99, name: f"z9" }; }
-    fn eat(ref self, rf: R, k: bool) { if k { return; } println(f"kept {rf.name}"); }
+    fn gtake[X](ref self, rd: own R, x: own X) -> R { return rd; }
+    fn swapout(ref self, re: own R) -> R { println(f"saw {re.name}"); return R { id: 99, name: f"z9" }; }
+    fn eat(ref self, rf: own R, k: bool) { if k { return; } println(f"kept {rf.name}"); }
 }
 fn take_free(rg: own R) -> R { return rg; }
 fn main() {

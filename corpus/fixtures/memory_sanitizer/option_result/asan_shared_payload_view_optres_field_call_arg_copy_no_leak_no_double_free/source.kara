@@ -2,7 +2,7 @@
 struct H { label: String, k: i64 }
 struct Node { hp: Option[H], k: i64 }
 shared enum E { V(Node) }
-fn hname(h: Option[H]) -> String {
+fn hname(h: own Option[H]) -> String {
     match h {
         None => "none".to_string(),
         Some(x) => x.label,

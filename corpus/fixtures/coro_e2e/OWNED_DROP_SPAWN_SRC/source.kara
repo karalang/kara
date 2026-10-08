@@ -3,7 +3,7 @@
         impl Drop for Conn {
             fn drop(mut ref self) { println(7); }
         }
-        fn serve_one(listener: TcpListener, c: Conn) {
+        fn serve_one(listener: own TcpListener, c: own Conn) {
             let _stream = listener.accept().unwrap();
             println(1);
         }

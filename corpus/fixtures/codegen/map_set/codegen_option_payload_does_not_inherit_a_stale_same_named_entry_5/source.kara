@@ -1,6 +1,6 @@
 fn mk1() -> Result[i64, i64] { return Ok(7); }
 fn mk2() -> Result[Vec[i64], i64] { return Ok(vec![1]); }
-fn showr[T: Display, E: Display](x: Result[T, E]) { println(f"{x}"); }
+fn showr[T: Display, E: Display](x: own Result[T, E]) { println(f"{x}"); }
 fn main() {
     showr(mk1());
     showr(mk2());

@@ -2,9 +2,9 @@ struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct S { r: R, s: String }
 fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
-fn id(a: Result[S, i64]) -> Result[S, i64] { a }
-fn ido(a: Option[S]) -> Option[S] { a }
-fn peek(a: Result[S, i64]) -> i64 { match id(a) { Ok(x) => x.r.id + x.s.len(), Err(e) => 0 } }
+fn id(a: own Result[S, i64]) -> Result[S, i64] { a }
+fn ido(a: own Option[S]) -> Option[S] { a }
+fn peek(a: own Result[S, i64]) -> i64 { match id(a) { Ok(x) => x.r.id + x.s.len(), Err(e) => 0 } }
 fn main() {
     let a: Result[S, i64] = Ok(mk(1)); let k = peek(a); println(f"k{k}");
     println("end")

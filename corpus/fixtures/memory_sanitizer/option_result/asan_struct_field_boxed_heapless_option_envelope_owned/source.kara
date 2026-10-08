@@ -4,10 +4,10 @@ struct W2 { o: Option[Option[String]] }
 struct Wide { a: i64, b: i64, c: i64, d: i64 }
 struct H { o: Option[Wide] }
 struct Outer { w: W, tag: i64 }
-fn cls(r: Result[W, i64]) -> i64 {
+fn cls(r: own Result[W, i64]) -> i64 {
     match r { Result.Ok(w) => match w.o { Option.Some(Option.Some(_)) => 1, _ => -1 }, Result.Err(e) => e }
 }
-fn cls_moved(r: Result[W, i64]) -> i64 {
+fn cls_moved(r: own Result[W, i64]) -> i64 {
     match r {
         Result.Ok(w) => {
             let inner: Option[Option[i64]] = w.o;

@@ -10,7 +10,7 @@ fn letelse() -> i64 { let o = mko(5); let Some(t) = o else { return 0 }; println
 fn letelse_rebind() -> i64 { let o = mko(7); let Some(t) = o else { return 0 }; let u = t; println(f"k{u.0.id}"); return 1 }
 fn letelse_mixed() -> i64 { let o: Option[(R, i64)] = Some((mk(9), 4)); let Some(t) = o else { return 0 }; println(f"m{t.1}"); return 1 }
 fn letelse_plain() -> i64 { let o: Option[(W, i64)] = Some((W { id: 10 }, 5)); let Some(t) = o else { return 0 }; println(f"p{t.1}"); return 1 }
-fn letelse_param(o: Option[(R, R)]) -> i64 { let Some(t) = o else { return 0 }; println(f"q{t.1.id}"); return 1 }
+fn letelse_param(o: own Option[(R, R)]) -> i64 { let Some(t) = o else { return 0 }; println(f"q{t.1.id}"); return 1 }
 fn res() -> i64 { let r: Result[i64, (R, R)] = Err((mk(13), mk(14))); let Err(t) = r else { return 0 }; println(f"e{t.0.id}"); return 1 }
 fn res_match() { let r: Result[(R, R), i64] = Ok((mk(15), mk(16))); match r { Ok(t) => { let u = t; println(f"o{u.1.id}") } Err(e) => {} } }
 fn looped() { for i in 0..2 { let o = mko(20 + i * 2); match o { Some(t) => { let u = t; println(f"l{u.1.id}") } None => {} } } }

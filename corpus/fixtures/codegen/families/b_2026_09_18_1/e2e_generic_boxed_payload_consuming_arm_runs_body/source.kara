@@ -15,7 +15,7 @@ fn c5(x: own P2[W, i64]) { match x { Two(r, n) => { let z = r; println(f"c5:{z.a
 fn c6(x: own Ho[W]) { match x { Full(r) => { println(f"c6:{r.a.len()}") } Empty => { println("e") } } }
 fn c7(x: own HoW) { match x { Full(r) => { let z = r; println(f"c7:{z.a.len()}") } Empty => { println("e") } } }
 fn c8(x: own Ho[V]) { match x { Full(r) => { let z = r; println(f"c8:{z.id}") } Empty => { println("e") } } }
-fn sink(w: W) { println(f"sink{w.a.len()}") }
+fn sink(w: own W) { println(f"sink{w.a.len()}") }
 fn c9(x: own Ho[W]) { match x { Full(r) => { sink(r); println("c9") } Empty => { println("e") } } }
 fn c10(x: own Ho[W]) { match x { Full(r) => { let z = r; println("c10") } Empty => { println("e") } } }
 

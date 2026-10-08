@@ -12,16 +12,16 @@ enum Y { T(M), U(i64) }
 enum D { T(Xd), U(i64) }
 enum C { T(Ctl), U(i64) }
 struct H { n: i64 }
-fn sink(w: W) {}
+fn sink(w: own W) {}
 fn eat(w: own W) -> i64 { return match w { W.T(x) => x.a.unwrap_or(0), W.U(n) => n } }
 fn hand(w: own W) -> W { return w; }
-fn hop(w: W) { sink(w); }
-fn sinkv(v: V) {}
+fn hop(w: own W) { sink(w); }
+fn sinkv(v: own V) {}
 fn sinky(y: Y) {}
-fn sinkd(d: D) {}
-fn sinkc(c: C) {}
-impl H { fn pv(ref self, w: W) {} }
-impl W { fn av(w: W) {} }
+fn sinkd(d: own D) {}
+fn sinkc(c: own C) {}
+impl H { fn pv(ref self, w: own W) {} }
+impl W { fn av(w: own W) {} }
 fn mkx(i: i64) -> X1 { return X1 { a: Option.Some(i), s: f"s{i}" }; }
 fn mkm(i: i64) -> Map[i64, String] { let mut m: Map[i64, String] = Map.new(); m.insert(i, f"v{i}"); return m; }
 fn main() {

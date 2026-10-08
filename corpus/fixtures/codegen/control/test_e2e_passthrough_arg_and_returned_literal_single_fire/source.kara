@@ -6,7 +6,7 @@ impl Drop for Res {
 struct Holder { xs: Vec[Res], tag: i64 }
 fn passthru(v: own Vec[Res]) -> Vec[Res] { v }
 fn mk(v: own Vec[Res]) -> Holder { Holder { xs: v, tag: 9 } }
-fn consume(v: Vec[Res]) -> i64 { v.len() }
+fn consume(v: own Vec[Res]) -> i64 { v.len() }
 fn main() {
     println("a");
     {

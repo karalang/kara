@@ -1,5 +1,5 @@
 
-        fn serve_if(listener: TcpListener, doit: bool) {
+        fn serve_if(listener: own TcpListener, doit: bool) {
             if doit {
                 let _stream = listener.accept().unwrap();
                 println(1);

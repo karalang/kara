@@ -1,15 +1,15 @@
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
-fn keep(x: R) -> i64 { println(f"k{x.id}"); 0 }
-fn qu(a: Option[R], b: Option[R], c: bool) -> i64 { let r = if c { a } else { b }; println(f"m{r.is_some()}"); 0 }
-fn qm(a: Option[R], b: Option[R], c: bool) -> i64 { let r = if c { a } else { b }; match r { Some(x) => println(f"r{x.id}"), None => println("rn") }; 0 }
-fn qr(a: Option[R], b: Option[R], c: bool) -> Option[R] { let r = if c { a } else { b }; r }
-fn qt(a: Option[R], b: Option[R], c: bool) -> i64 { let r = if c { a } else { b }; match r { Some(x) => keep(x), None => 0 } }
-fn q3(a: Option[R], b: Option[R], k: i64) -> i64 { let r = match k { 0 => a, 1 => b, _ => Some(mkr(9)) }; match r { Some(x) => println(f"r{x.id}"), None => println("rn") }; 0 }
-fn qn(a: Option[R], b: Option[R], c: bool) -> i64 { let r = if c { a } else { b }; let q = r; println(f"m{q.is_some()}"); 0 }
-fn ql(a: Option[R], b: Option[R], c: bool) -> i64 { let r = if c { a } else { b }; if let Some(x) = r { println(f"l{x.id}") }; 0 }
-fn qx(a: Result[R, i64], b: Result[R, i64], c: bool) -> i64 { let r = if c { a } else { b }; match r { Ok(x) => println(f"r{x.id}"), Err(e) => println(f"e{e}") }; 0 }
+fn keep(x: own R) -> i64 { println(f"k{x.id}"); 0 }
+fn qu(a: own Option[R], b: own Option[R], c: bool) -> i64 { let r = if c { a } else { b }; println(f"m{r.is_some()}"); 0 }
+fn qm(a: own Option[R], b: own Option[R], c: bool) -> i64 { let r = if c { a } else { b }; match r { Some(x) => println(f"r{x.id}"), None => println("rn") }; 0 }
+fn qr(a: own Option[R], b: own Option[R], c: bool) -> Option[R] { let r = if c { a } else { b }; r }
+fn qt(a: own Option[R], b: own Option[R], c: bool) -> i64 { let r = if c { a } else { b }; match r { Some(x) => keep(x), None => 0 } }
+fn q3(a: own Option[R], b: own Option[R], k: i64) -> i64 { let r = match k { 0 => a, 1 => b, _ => Some(mkr(9)) }; match r { Some(x) => println(f"r{x.id}"), None => println("rn") }; 0 }
+fn qn(a: own Option[R], b: own Option[R], c: bool) -> i64 { let r = if c { a } else { b }; let q = r; println(f"m{q.is_some()}"); 0 }
+fn ql(a: own Option[R], b: own Option[R], c: bool) -> i64 { let r = if c { a } else { b }; if let Some(x) = r { println(f"l{x.id}") }; 0 }
+fn qx(a: own Result[R, i64], b: own Result[R, i64], c: bool) -> i64 { let r = if c { a } else { b }; match r { Ok(x) => println(f"r{x.id}"), Err(e) => println(f"e{e}") }; 0 }
 fn main() {
   println("-h"); qu(Some(mkr(1)), Some(mkr(2)), true); qu(Some(mkr(3)), Some(mkr(4)), false);
   println("-m"); qm(Some(mkr(1)), Some(mkr(2)), true); qm(Some(mkr(3)), None, false);

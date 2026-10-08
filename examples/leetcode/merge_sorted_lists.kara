@@ -11,7 +11,7 @@ enum ListNode {
     Nil,
 }
 
-fn merge(list1: Option[ListNode], list2: Option[ListNode]) -> Option[ListNode] {
+fn merge(list1: own Option[ListNode], list2: own Option[ListNode]) -> Option[ListNode] {
     match (list1, list2) {
         (None, other) | (other, None) => other,
         (Some(n1), Some(n2)) => {
@@ -31,7 +31,7 @@ fn merge(list1: Option[ListNode], list2: Option[ListNode]) -> Option[ListNode] {
 }
 
 // Iterative approach: build result by appending to a dummy head
-fn merge_iterative(list1: Option[ListNode], list2: Option[ListNode]) -> Option[ListNode] {
+fn merge_iterative(list1: own Option[ListNode], list2: own Option[ListNode]) -> Option[ListNode] {
     let dummy = ListNode.Cons { val: 0, next: None };
     let tail_val = 0;
     let tail_next = None;

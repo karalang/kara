@@ -14,7 +14,7 @@ impl Ha {
     fn peek(ref self) -> i64 { return self.g[1].len() }
 }
 impl Hn { fn give(self) { println(f"  held {self.n}") } }
-impl Hd { fn give(self) { println("  held") } }
+impl Hd { fn give(own self) { println("  held") } }
 fn pass(h: Ha) { h.give() }
 fn main() {
     let a = Ha { g: mka() };

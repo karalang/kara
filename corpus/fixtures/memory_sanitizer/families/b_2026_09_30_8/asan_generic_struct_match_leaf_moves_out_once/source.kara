@@ -7,7 +7,7 @@ fn rd(s: ref String) -> i64 { if s.contains("-heap-") { s.len() } else { 0 } }
 fn a1(g: own G[String]) -> i64 { match g { G { v, n } => rd(v) + n } }
 fn a2(g: own G2[String]) -> i64 { match g { G2 { s, .. } => rd(s) } }
 fn a3(g: own G2[String]) -> i64 { match g { G2 { v, s } => rd(v) + rd(s) } }
-fn a4(g: G2[Vec[i64]]) -> i64 { if let G2 { v, s } = g { v.len() + rd(s) } else { 0 } }
+fn a4(g: own G2[Vec[i64]]) -> i64 { if let G2 { v, s } = g { v.len() + rd(s) } else { 0 } }
 fn a5(g: own G[String]) -> String { match g { G { v, .. } => v } }
 fn a6[T](g: own G2[T]) -> i64 { match g { G2 { s, .. } => rd(s) } }
 fn a7[T](g: own G[T]) -> i64 { match g { G { v, n } => { let w = v; n } } }

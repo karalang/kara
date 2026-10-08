@@ -3,15 +3,15 @@ impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
 struct Q { z: i64 }
 impl Q {
-  fn eat(ref self, s: S) { println("qx") }
-  fn meat(mut ref self, s: S) { println("mx") }
-  fn eat2(ref self, n: i64, s: S) { println(f"q2x{n}") }
+  fn eat(ref self, s: own S) { println("qx") }
+  fn meat(mut ref self, s: own S) { println("mx") }
+  fn eat2(ref self, n: i64, s: own S) { println(f"q2x{n}") }
   fn back(ref self, s: own S) -> S { return s }
-  fn only(ref self, s: S) { self.eat(s); println("o") }
-  fn monly(mut ref self, s: S) { self.meat(s); println("mo") }
-  fn two(ref self, s: S) { self.eat2(3, s); println("t") }
+  fn only(ref self, s: own S) { self.eat(s); println("o") }
+  fn monly(mut ref self, s: own S) { self.meat(s); println("mo") }
+  fn two(ref self, s: own S) { self.eat2(3, s); println("t") }
   fn viab(ref self, s: own S) { let t = self.back(s); println(f"vb{t.id}") }
-  fn cond(ref self, s: S, k: bool) { if k { self.eat(s); } println("c") }
+  fn cond(ref self, s: own S, k: bool) { if k { self.eat(s); } println("c") }
   fn pq(ref self, s: own S, k: bool) -> S { if k { return s } self.eat(s); return mks(0) }
 }
 struct B { xs: Vec[S] }
@@ -20,7 +20,7 @@ impl B {
   fn fwd(mut ref self, s: own S) { self.add(s); println("fw") }
   fn cfwd(mut ref self, s: own S, k: bool) { if k { self.add(s); } println("cf") }
 }
-fn feat(q: ref Q, s: S) { q.eat(s); println("f") }
+fn feat(q: ref Q, s: own S) { q.eat(s); println("f") }
 fn pv(v: mut ref Vec[S], s: own S) { v.push(s); println("pv") }
 fn bf(b: mut ref B, s: own S) { b.add(s); println("bf") }
 fn main() {

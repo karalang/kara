@@ -4,13 +4,13 @@ impl[T] G[T] {
     fn id2(own self) -> G[T] { return self; }
     fn tail(own self) -> G[T] { self }
     fn pick(own self, c: bool, o: own Self) -> Self { if c { return self; } return o; }
-    fn fresh(self) -> Self { return G.Y; }
-    fn fresh2(self) -> G[T] { return G.Y; }
+    fn fresh(own self) -> Self { return G.Y; }
+    fn fresh2(own self) -> G[T] { return G.Y; }
 }
 struct W[T] { v: T }
 impl[T] W[T] {
     fn back(own self) -> W[T] { return self; }
-    fn other(self, o: own Self) -> Self { o }
+    fn other(own self, o: own Self) -> Self { o }
 }
 fn show(g: own G[i64]) {
     match g { G.X(v) => println(f"x{v}"), G.Y => println("y") }

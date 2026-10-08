@@ -6,18 +6,18 @@ struct Pair { a: R, b: R }
 struct OwnD { a: R, n: i64 }
 impl Drop for OwnD { fn drop(mut ref self) { println(f"dOwnD{self.n}") } }
 
-impl HoRes { fn plain(self) { println(f"  rd{self.a.id}") } }
-impl Pair { fn eat(self) { println(f"  pr{self.a.id}") } fn peek(ref self) { println(f"  bo{self.a.id}") } }
-impl OwnD { fn eat(self) { println(f"  od{self.n}") } }
+impl HoRes { fn plain(own self) { println(f"  rd{self.a.id}") } }
+impl Pair { fn eat(own self) { println(f"  pr{self.a.id}") } fn peek(ref self) { println(f"  bo{self.a.id}") } }
+impl OwnD { fn eat(own self) { println(f"  od{self.n}") } }
 impl R {
-  fn ident(self) { println(f"  id{self.id}") }
-  fn area(self) -> i64 { return self.id * 2; }
+  fn ident(own self) { println(f"  id{self.id}") }
+  fn area(own self) -> i64 { return self.id * 2; }
   fn me(own self) -> R { return self; }
 }
 struct W { a: R }
 impl W { fn unwrap_a(own self) -> R { return self.a; } fn opt(own self) -> Option[R] { return Option.Some(self.a); } }
 
-fn p_plain(h: HoRes) { println(f"  pd{h.a.id}") }
+fn p_plain(h: own HoRes) { println(f"  pd{h.a.id}") }
 
 fn main() {
   println("temp-recv-fields");  HoRes { a: mk(1), b: Result.Ok(mk(101)) }.plain();

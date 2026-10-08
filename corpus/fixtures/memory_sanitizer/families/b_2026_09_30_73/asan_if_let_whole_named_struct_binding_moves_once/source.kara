@@ -4,9 +4,9 @@ struct H { v: Rs, n: i64 }
 struct P { s: String, n: i64 }
 fn mk(k: i64) -> String { f"heap-string-long-enough-for-heap-{k}" }
 fn hh(id: i64, n: i64) -> H { H { v: Rs { id: id, s: mk(id) }, n: n } }
-fn byval(h: H) { if let x = h { println(x.n) } }
+fn byval(h: own H) { if let x = h { println(x.n) } }
 fn byref(h: ref H) { if let x = h { println(x.n) } }
-fn tailv(g: H) -> i64 { if let x = g { x.n } else { 0 } }
+fn tailv(g: own H) -> i64 { if let x = g { x.n } else { 0 } }
 fn lebyval(h: own H) { let x = h else { return }; println(x.n) }
 fn c1() { let g = hh(4, 1); if let x = g { println(x.n) } }
 fn c2() { let g = P { s: mk(5), n: 2 }; if let x = g { println(x.n) } }

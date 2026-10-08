@@ -5,8 +5,8 @@ enum E { A(R), N }
 impl Drop for E { fn drop(mut ref self) { println("dE") } }
 fn f1(a: own R, b: bool) { let mut c = a; if b { c = mk(9); } println("in"); }
 fn f2(a: own E, b: bool) { let mut c = a; if b { c = E.N; } println("in"); }
-fn f3(a: Option[R], b: bool) { let mut c = a; if b { c = None; } println("in"); }
-fn f4(a: Option[Array[R, 2]], b: bool) { let mut c = a; if b { c = None; } println("in"); }
+fn f3(a: own Option[R], b: bool) { let mut c = a; if b { c = None; } println("in"); }
+fn f4(a: own Option[Array[R, 2]], b: bool) { let mut c = a; if b { c = None; } println("in"); }
 fn f5(a: own R, b: bool) { let mut c = a; if b { c = mk(8); } else { c = mk(9); } println("in"); }
 fn f6(a: own R) { let mut c = a; for i in 0..2 { c = mk(10 + i); } println("in"); }
 fn f7(a: own R, b: bool) -> R { let mut c = a; if b { c = mk(9); } println("in"); return c; }

@@ -1,6 +1,6 @@
 
-fn pick[T](a: own T, b: T) -> T { return a; }
-fn outer[U](a: own U, b: U) -> U { return pick(a, b); }
+fn pick[T](a: own T, b: own T) -> T { return a; }
+fn outer[U](a: own U, b: own U) -> U { return pick(a, b); }
 
 fn main() {
     let x = outer((1, 2), (3, 4));

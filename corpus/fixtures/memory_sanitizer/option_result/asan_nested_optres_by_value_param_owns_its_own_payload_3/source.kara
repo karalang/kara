@@ -1,5 +1,5 @@
 
-fn show(x: Result[Option[String], String]) { println("in"); }
+fn show(x: own Result[Option[String], String]) { println("in"); }
 fn main() {
     let mut i = 0;
     while i < 3 { let s = f"payloadpayload{i}"; show(Ok(Some(s))); i = i + 1; }

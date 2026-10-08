@@ -5,8 +5,8 @@ enum Hm { P((S1, i64)), Q }
 enum Hw { P((S1, S1, S1)), Q }
 enum G[T] { X(T), Y }
 struct Wt { h: Ht }
-fn eat(h: Ht) -> i64 { 1 }
-fn eatg(g: G[(S1, S1)]) -> i64 { 1 }
+fn eat(h: own Ht) -> i64 { 1 }
+fn eatg(g: own G[(S1, S1)]) -> i64 { 1 }
 fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
 fn main() {
     println("let"); { let h = Ht.P((s(1), s(2))); println("  x") }

@@ -4,7 +4,7 @@ fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 enum EArr { A(Array[R, 2]), B }
 fn z() -> Array[R, 2] { return [mk(0), mk(0)]; }
 fn fr(i: i64) -> Array[R, 1] { return [mk(i)]; }
-fn n12(x: Option[Array[R, 2]]) -> i64 { let k = match x { Some(t) => t, None => z() }; return k[1].id; }
+fn n12(x: own Option[Array[R, 2]]) -> i64 { let k = match x { Some(t) => t, None => z() }; return k[1].id; }
 fn e1(x: own EArr) -> i64 { let k = match x { EArr.A(v) => v, EArr.B => z() }; return k[0].id + k[1].id; }
 fn main() {
     println(f"got{n12(Some([mk(1), mk(2)]))}");

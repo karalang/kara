@@ -2,15 +2,15 @@ struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 enum E { A(R), B }
 fn mkr(i: i64) -> R { R { id: i } }
-fn id(a: Option[R]) -> Option[R] { a }
-fn idr(a: Result[R, i64]) -> Result[R, i64] { a }
+fn id(a: own Option[R]) -> Option[R] { a }
+fn idr(a: own Result[R, i64]) -> Result[R, i64] { a }
 fn ide(a: own E) -> E { a }
-fn pick(a: Option[R]) -> R { match id(a) { Some(x) => x, None => mkr(99) } }
-fn pickk(a: Option[R]) -> R { let k = match id(a) { Some(x) => x, None => mkr(99) }; k }
-fn peek(a: Option[R]) -> i64 { match id(a) { Some(x) => x.id, None => 0 } }
-fn peek2(a: Option[R]) -> i64 { let n = match id(a) { Some(x) => x.id, None => 0 }; println("mid"); n }
-fn peekl(a: Option[R]) -> i64 { if let Some(x) = id(a) { x.id } else { 0 } }
-fn peekr(a: Result[R, i64]) -> i64 { match idr(a) { Ok(x) => x.id, Err(e) => e } }
+fn pick(a: own Option[R]) -> R { match id(a) { Some(x) => x, None => mkr(99) } }
+fn pickk(a: own Option[R]) -> R { let k = match id(a) { Some(x) => x, None => mkr(99) }; k }
+fn peek(a: own Option[R]) -> i64 { match id(a) { Some(x) => x.id, None => 0 } }
+fn peek2(a: own Option[R]) -> i64 { let n = match id(a) { Some(x) => x.id, None => 0 }; println("mid"); n }
+fn peekl(a: own Option[R]) -> i64 { if let Some(x) = id(a) { x.id } else { 0 } }
+fn peekr(a: own Result[R, i64]) -> i64 { match idr(a) { Ok(x) => x.id, Err(e) => e } }
 fn peeke(a: own E) -> i64 { match ide(a) { E.A(x) => x.id, E.B => 0 } }
 fn main() {
     let k1 = pick(Some(mkr(1)));

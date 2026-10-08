@@ -1,10 +1,10 @@
 struct H { n: i64 }
 impl H {
-    fn show[T: Display](ref self, x: Option[T]) { println(f"m {self.n} {x}"); }
+    fn show[T: Display](ref self, x: own Option[T]) { println(f"m {self.n} {x}"); }
 }
 
-fn show[T: Display](x: Option[T]) { println(f"{x}"); }
-fn showr[T: Display](x: Result[T, String]) { println(f"{x}"); }
+fn show[T: Display](x: own Option[T]) { println(f"{x}"); }
+fn showr[T: Display](x: own Result[T, String]) { println(f"{x}"); }
 
 fn main() {
     show(Some(7));

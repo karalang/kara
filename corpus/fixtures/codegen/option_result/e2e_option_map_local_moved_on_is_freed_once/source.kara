@@ -1,9 +1,9 @@
 struct H { d: Option[Map[i64, String]] }
-impl H { fn eat(self, doc: Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } } }
+impl H { fn eat(own self, doc: own Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } } }
 fn mk(t: i64) -> Map[i64, String] { let mut m: Map[i64, String] = Map.new(); m.insert(t, f"heap-string-longer-than-sso-{t}"); m }
-fn take(doc: Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
-fn takes(doc: Option[Set[i64]]) -> i64 { match doc { Some(s) => s.len(), None => 0 } }
-fn keep(doc: Option[Map[i64, String]]) -> Option[Map[i64, String]] { doc }
+fn take(doc: own Option[Map[i64, String]]) -> i64 { match doc { Some(m) => m.len(), None => 0 } }
+fn takes(doc: own Option[Set[i64]]) -> i64 { match doc { Some(s) => s.len(), None => 0 } }
+fn keep(doc: own Option[Map[i64, String]]) -> Option[Map[i64, String]] { doc }
 fn ret(t: i64) -> Option[Map[i64, String]] { let d = Some(mk(t)); d }
 fn cond(t: i64) -> i64 { let d = Some(mk(t)); if t == 0 { take(d) } else { 7 } }
 fn main() {

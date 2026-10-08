@@ -7,13 +7,13 @@ fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
 fn mkp(i: i64) -> P { return P { id: i, name: f"p{i}", xs: [i] }; }
 fn fwd(r: own R) -> R { return r; }
 fn pfwd(p: own P) -> P { return p; }
-fn dies(r: R) -> i64 { return r.id; }
+fn dies(r: own R) -> i64 { return r.id; }
 struct Hold { n: i64 }
 impl R { fn passb(r: own R) -> R { return fwd(r); } }
 impl R { fn passa(r: own R) -> R { return r; } }
 impl P { fn ppassb(p: own P) -> P { return pfwd(p); } }
 impl Hold { fn thruv(ref self, r: own R) -> R { return fwd(r); } }
-impl Hold { fn eats(ref self, r: R) -> i64 { return dies(r); } }
+impl Hold { fn eats(ref self, r: own R) -> i64 { return dies(r); } }
 fn main() {
   let h = Hold { n: 0 };
   println("assoc_hop"); let z = R.passb(mk(1)); println(f"  v={z.inner.v}");

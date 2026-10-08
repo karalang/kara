@@ -40,7 +40,7 @@ fn build(vals: Vec[i64], rnd: Vec[i64]) -> Vec[Node] {
 
 // Deep-copy: clone every node, then re-wire `next` (strong) and `random`
 // (weak, resolved through the read-upgrade) against the FRESH copies.
-fn deep_copy(orig: Vec[Node]) -> Vec[Node] {
+fn deep_copy(orig: own Vec[Node]) -> Vec[Node] {
     let n: i64 = orig.len();
     let mut copies: Vec[Node] = Vec.new();
     let mut i: i64 = 0;

@@ -1,5 +1,5 @@
 
-fn show(x: Result[Option[String], String]) { println(f"{x}"); }
+fn show(x: own Result[Option[String], String]) { println(f"{x}"); }
 fn main() {
     let e = f"errerrerrerrerr0";
     show(Err(e));

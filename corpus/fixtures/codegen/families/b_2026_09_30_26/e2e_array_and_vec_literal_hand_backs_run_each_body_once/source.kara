@@ -2,16 +2,16 @@ struct D { id: i64, s: String }
 impl Drop for D { fn drop(mut ref self) { println(f"dD{self.id}") } }
 fn mkd(n: i64) -> D { return D { id: n, s: f"sssssssssssssssssssssssssssssssssss{n}" } }
 struct K { n: i64 }
-impl K { fn vpair(ref self, a: D, b: D) -> Vec[D] { Vec[a, b] } }
-fn tail(a: D, b: D) -> Array[D, 2] { [a, b] }
-fn usea(xs: Array[D, 2]) -> i64 { return xs[0].id + xs[1].id }
-fn vtail(a: D, b: D) -> Vec[D] { Vec[a, b] }
-fn keep1(a: D, b: D) -> Array[D, 1] { [a] }
-fn condv(a: D, k: bool) -> Vec[D] { if k { return Vec[a]; } Vec[mkd(90)] }
-fn witha(a: D) -> Array[D, 2] { return Array[a, mkd(91)]; }
-fn nest(a: D, b: own D) -> (Array[D, 1], D) { ([a], b) }
-fn fwd(a: D) -> Array[D, 1] { keep1(a, mkd(92)) }
-fn condt(a: D, k: bool) -> Array[D, 1] { if k { [a] } else { [mkd(93)] } }
+impl K { fn vpair(ref self, a: own D, b: own D) -> Vec[D] { Vec[a, b] } }
+fn tail(a: own D, b: own D) -> Array[D, 2] { [a, b] }
+fn usea(xs: own Array[D, 2]) -> i64 { return xs[0].id + xs[1].id }
+fn vtail(a: own D, b: own D) -> Vec[D] { Vec[a, b] }
+fn keep1(a: own D, b: own D) -> Array[D, 1] { [a] }
+fn condv(a: own D, k: bool) -> Vec[D] { if k { return Vec[a]; } Vec[mkd(90)] }
+fn witha(a: own D) -> Array[D, 2] { return Array[a, mkd(91)]; }
+fn nest(a: own D, b: own D) -> (Array[D, 1], D) { ([a], b) }
+fn fwd(a: own D) -> Array[D, 1] { keep1(a, mkd(92)) }
+fn condt(a: own D, k: bool) -> Array[D, 1] { if k { [a] } else { [mkd(93)] } }
 fn tup(a: own D, b: own D) -> (D, D) { (a, b) }
 fn main() {
     println(f"a {usea(tail(mkd(1), mkd(2)))}");

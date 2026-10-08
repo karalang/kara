@@ -1,6 +1,6 @@
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}"); } }
 enum G[T] { X(T), Y }
-impl G[R] { fn cself(self, o: Self) -> i64 { 1 } }
+impl G[R] { fn cself(own self, o: own Self) -> i64 { 1 } }
 fn mk(i: i64) -> G[R] { G.X(R { id: i, s: f"s{i}" }) }
 fn main() { let d = mk(4); println(f"{d.cself(mk(5))}"); println("end") }

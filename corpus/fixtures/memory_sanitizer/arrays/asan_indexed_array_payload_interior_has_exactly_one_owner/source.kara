@@ -1,10 +1,10 @@
 enum E { A(Array[Vec[String], 2]), B }
-fn p1(x: Option[Array[String, 2]]) { match x { Some(t) => { println(f"1:{t[0]}|{t[1]}") } None => { println("n") } } }
-fn p1b(x: Option[Array[String, 2]]) { match x { Some(t) => { println(f"1b:{t[0]}") } None => { println("n") } } }
-fn p3(x: Option[Array[String, 3]]) { match x { Some(t) => { println(f"3:{t[0]}|{t[2]}") } None => { println("n") } } }
+fn p1(x: own Option[Array[String, 2]]) { match x { Some(t) => { println(f"1:{t[0]}|{t[1]}") } None => { println("n") } } }
+fn p1b(x: own Option[Array[String, 2]]) { match x { Some(t) => { println(f"1b:{t[0]}") } None => { println("n") } } }
+fn p3(x: own Option[Array[String, 3]]) { match x { Some(t) => { println(f"3:{t[0]}|{t[2]}") } None => { println("n") } } }
 fn pe(x: own E) { match x { E.A(t) => { println(f"e:{t[1][0]}") } E.B => { println("n") } } }
-fn pov(x: Option[Array[Vec[String], 2]]) { match x { Some(t) => { println(f"ov:{t[1][0]}") } None => { println("n") } } }
-fn pnoidx(x: Option[Array[String, 2]]) { match x { Some(t) => { println(f"ni:{t}") } None => { println("n") } } }
+fn pov(x: own Option[Array[Vec[String], 2]]) { match x { Some(t) => { println(f"ov:{t[1][0]}") } None => { println("n") } } }
+fn pnoidx(x: own Option[Array[String, 2]]) { match x { Some(t) => { println(f"ni:{t}") } None => { println("n") } } }
 fn main() {
     p1(Some([f"aaaaaaaa0", f"bbbbbbbb1"]));
     p1b(Some([f"cccccccc0", f"dddddddd1"]));

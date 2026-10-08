@@ -1,5 +1,5 @@
-fn pick[T](a: Option[T], d: T) -> T { match a { Some(x) => x, None => d } }
-fn pickr[T](a: Option[T], d: T) -> T { return match a { Some(x) => x, None => d } }
+fn pick[T](a: own Option[T], d: own T) -> T { match a { Some(x) => x, None => d } }
+fn pickr[T](a: own Option[T], d: own T) -> T { return match a { Some(x) => x, None => d } }
 fn main() {
     let a: Option[Array[i64, 2]] = None;
     let r = pick(a, Array[3, 4]); println(f"a{r[0]}{r[1]}");

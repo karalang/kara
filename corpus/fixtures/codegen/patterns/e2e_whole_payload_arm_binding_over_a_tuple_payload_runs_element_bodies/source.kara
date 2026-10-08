@@ -3,7 +3,7 @@ struct R { id: i64, name: String }
     struct W { r: R, n: i64 }
     impl Drop for W { fn drop(mut ref self) { println(f"  dW{self.n}") } }
     fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" } }
-    fn eat(t: (R, R)) -> i64 { println("  eat"); return 7 }
+    fn eat(t: own (R, R)) -> i64 { println("  eat"); return 7 }
     fn giveback() -> (R, R) {
         let o: Option[(R, R)] = Some((mk(30), mk(31)));
         match o { Some(t) => { return t } None => { return (mk(90), mk(91)) } }

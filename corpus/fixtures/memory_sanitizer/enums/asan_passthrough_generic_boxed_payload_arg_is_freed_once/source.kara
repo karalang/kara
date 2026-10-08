@@ -8,7 +8,7 @@ enum M1 { Y(String), N }
 fn idG[T](g: own G1[T]) -> G1[T] { return g; }
 fn idM(g: own M1) -> M1 { return g; }
 fn mk[T](x: own T) -> G1[T] { return G1.Y(x); }
-fn eat[T](g: G1[T]) -> i64 { return 1; }
+fn eat[T](g: own G1[T]) -> i64 { return 1; }
 
 fn main() {
     let a: G1[String] = G1.Y(f"b1616-esc-aaaaaaaaaa");

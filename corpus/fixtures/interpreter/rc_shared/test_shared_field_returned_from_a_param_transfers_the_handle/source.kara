@@ -7,7 +7,7 @@ fn mk(i: i64) -> Node { return Node { s: f"crp-{i}-padded-out-to-force-a-real-he
 fn ret_byval(b: Holder) -> Node { return b.v; }
 fn tail_byval(b: Holder) -> Node { b.v }
 fn ret_ref(b: ref Holder) -> Node { return b.v; }
-fn ret_generic(b: Box[Node]) -> Node { return b.v; }
+fn ret_generic(b: own Box[Node]) -> Node { return b.v; }
 
 fn main() {
     let mut acc: i64 = 0;

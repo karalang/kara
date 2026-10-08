@@ -6,12 +6,12 @@ struct Lone[T] { v: T }
 struct Pr[T] { a: T, b: T }
 struct PrC[T] { a: T, b: T }
 
-fn diverge[U](x: Mix[U]) -> i64 { 1 }
-fn same[T](x: MixC[T]) -> i64 { 1 }
-fn scal[U](x: Scal[U]) -> i64 { 1 }
-fn lone[U](x: Lone[U]) -> i64 { 1 }
-fn pair[U](x: Pr[U]) -> i64 { 1 }
-fn pair_same[T](x: PrC[T]) -> i64 { 1 }
+fn diverge[U](x: own Mix[U]) -> i64 { 1 }
+fn same[T](x: own MixC[T]) -> i64 { 1 }
+fn scal[U](x: own Scal[U]) -> i64 { 1 }
+fn lone[U](x: own Lone[U]) -> i64 { 1 }
+fn pair[U](x: own Pr[U]) -> i64 { 1 }
+fn pair_same[T](x: own PrC[T]) -> i64 { 1 }
 
 fn main() {
     // Runtime-derived payload: a constant-folded one is a dead allocation the

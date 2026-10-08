@@ -6,7 +6,7 @@ impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 struct S { e: E }
 struct H { e: E }
 struct H2 { s: S }
-fn consume(x: R) -> i64 { return x.id }
+fn consume(x: own R) -> i64 { return x.id }
 
 fn p_iflet(h: ref H) -> i64 { if let E.A(r) = h.e { return r.id; } else { return 0; } }
 fn p_iflet_mut(h: mut ref H) -> i64 { if let E.A(r) = h.e { return r.id; } else { return 0; } }

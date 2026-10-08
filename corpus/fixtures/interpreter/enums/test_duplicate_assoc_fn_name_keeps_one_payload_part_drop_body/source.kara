@@ -7,19 +7,19 @@ struct B {}
 struct C {}
 struct Z {}
 struct H { n: i64 }
-impl A { fn dup(o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } } }
-impl B { fn dup(o: Option[Q]) -> R { match o { Option.Some(t) => { return t.s } Option.None => { return R { id: 0 } } } } }
-impl C { fn dup(o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } } }
-impl A { fn tdup(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } } }
-impl B { fn tdup(o: Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } } }
-impl A { fn rdup(o: Result[Q, i64]) -> R { match o { Result.Ok(t) => { return t.r } Result.Err(e) => { return R { id: 0 } } } } }
-impl B { fn rdup(o: Result[Q, i64]) -> R { match o { Result.Ok(t) => { return t.r } Result.Err(e) => { return R { id: 0 } } } } }
-impl A { fn whole(o: Option[Q]) -> Option[Q] { o } }
-impl B { fn whole(o: Option[Q]) -> Option[Q] { o } }
-impl H { fn dup(ref self, o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } } }
-impl Z { fn zdup(o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } } }
-fn dup(o: Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } }
-fn sink(r: R) { println(f"  sank{r.id}") }
+impl A { fn dup(o: own Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } } }
+impl B { fn dup(o: own Option[Q]) -> R { match o { Option.Some(t) => { return t.s } Option.None => { return R { id: 0 } } } } }
+impl C { fn dup(o: own Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } } }
+impl A { fn tdup(o: own Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } } }
+impl B { fn tdup(o: own Option[(R, R)]) -> R { match o { Option.Some(t) => { return t.0 } Option.None => { return R { id: 0 } } } } }
+impl A { fn rdup(o: own Result[Q, i64]) -> R { match o { Result.Ok(t) => { return t.r } Result.Err(e) => { return R { id: 0 } } } } }
+impl B { fn rdup(o: own Result[Q, i64]) -> R { match o { Result.Ok(t) => { return t.r } Result.Err(e) => { return R { id: 0 } } } } }
+impl A { fn whole(o: own Option[Q]) -> Option[Q] { o } }
+impl B { fn whole(o: own Option[Q]) -> Option[Q] { o } }
+impl H { fn dup(ref self, o: own Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } } }
+impl Z { fn zdup(o: own Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } } }
+fn dup(o: own Option[Q]) -> R { match o { Option.Some(t) => { return t.r } Option.None => { return R { id: 0 } } } }
+fn sink(r: own R) { println(f"  sank{r.id}") }
 fn main() {
   println("dup-a");      { let g = A.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out");
   println("dup-c");      { let g = C.dup(Option.Some(Q { r: R { id: 5 }, s: R { id: 6 } })); println(f"  got{g.id}") } println("  out");

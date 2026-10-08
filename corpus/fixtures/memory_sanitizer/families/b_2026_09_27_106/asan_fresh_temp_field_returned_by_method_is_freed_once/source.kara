@@ -10,7 +10,7 @@ impl H { fn g(ref self, w: own W) -> D { w.r } }
 impl W {
     fn getr(own self) -> D { self.r }
     fn gets(own self) -> D { return self.s; }
-    fn getb(self) -> i64 { self.b }
+    fn getb(own self) -> i64 { self.b }
     fn dest(own self) -> D { let W { r, s, b } = self; r }
 }
 impl T {

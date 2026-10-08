@@ -1,7 +1,7 @@
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 fn mk(i: i64) -> R { R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
-fn eat(r: R) { println(f"eat{r.id}") }
+fn eat(r: own R) { println(f"eat{r.id}") }
 struct S3 { a: R, b: R, k: i64 }
 enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("dE") } }

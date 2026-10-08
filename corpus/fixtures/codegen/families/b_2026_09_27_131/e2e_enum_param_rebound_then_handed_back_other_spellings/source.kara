@@ -4,7 +4,7 @@ fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
 enum Ho[T] { Full(T), Empty }
 fn shows(h: own Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
 enum Hc { Full(S), Empty }
-fn eat(h: Hc) { println("x") }
+fn eat(h: own Hc) { println("x") }
 fn shc(h: own Hc) { match h { Hc.Full(r) => println(f"s{r.id}"), Hc.Empty => println("e") } }
 struct K { z: i64 }
 impl K {
@@ -14,7 +14,7 @@ impl K {
 fn nest(h: own Hc, k: bool) -> Hc { if k { let m = h; return m } println("nd"); return Hc.Empty }
 fn two(h: own Hc, k: bool) -> Hc { let m = h; let n = m; if k { return n } eat(n); return Hc.Empty }
 fn wrap(h: own Hc, k: bool) -> Option[Hc] { let m = h; if k { return Option.Some(m) } println("wd"); return Option.None }
-fn rr(h: Result[S, i64], k: bool) -> Result[S, i64] { let m = h; if k { return m } println("rd"); return Result.Err(0) }
+fn rr(h: own Result[S, i64], k: bool) -> Result[S, i64] { let m = h; if k { return m } println("rd"); return Result.Err(0) }
 fn gn[T](h: own Ho[T], k: bool) -> Ho[T] { let m = h; if k { return m } println("gd"); return Ho.Empty }
 fn main() {
     let kk = K { z: 0 };

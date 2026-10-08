@@ -1,16 +1,16 @@
 struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
-fn geat[T](t: T) { println("gx") }
-fn geo[T](o: Option[T]) { println("go") }
+fn geat[T](t: own T) { println("gx") }
+fn geo[T](o: own Option[T]) { println("go") }
 struct K { k: i64 }
 impl K {
-    fn eato(ref self, o: Option[S]) { println("mo") }
-    fn reado(ref self, o: Option[S]) { match o { Option.Some(s) => println(f"r{s.id}"), Option.None => println("n") } }
-    fn takeo(ref self, o: Option[S], v: mut ref Vec[S]) { match o { Option.Some(s) => v.push(s), Option.None => println("n") } }
-    fn aeo(o: Option[S]) { println("ao") }
+    fn eato(ref self, o: own Option[S]) { println("mo") }
+    fn reado(ref self, o: own Option[S]) { match o { Option.Some(s) => println(f"r{s.id}"), Option.None => println("n") } }
+    fn takeo(ref self, o: own Option[S], v: mut ref Vec[S]) { match o { Option.Some(s) => v.push(s), Option.None => println("n") } }
+    fn aeo(o: own Option[S]) { println("ao") }
 }
-fn g1(h: Option[S], q: K, v: mut ref Vec[S]) { q.takeo(h, v); println("after") }
+fn g1(h: own Option[S], q: K, v: mut ref Vec[S]) { q.takeo(h, v); println("after") }
 fn main() {
     let mut v: Vec[S] = Vec.new(); g1(Option.Some(mks(1)), K { k: 0 }, mut v); g1(Option.None, K { k: 0 }, mut v); println(f"n{v.len()}");
     println("end")

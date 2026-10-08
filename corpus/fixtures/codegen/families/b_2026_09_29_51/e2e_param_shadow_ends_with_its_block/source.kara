@@ -1,14 +1,14 @@
 struct R { name: String, id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.name}") } }
 fn mk(n: i64, s: own String) -> R { R { name: s, id: n } }
-fn k1(x: Option[R]) -> i64 { if true { let x = Some(mk(21, f"a")); match x { Some(r) => println(f"in{r.id}"), None => {} } } match x { Some(r) => r.id, None => 0 } }
-fn k2(x: Option[R]) -> i64 { let x = x; match x { Some(r) => r.id, None => 0 } }
-fn pass(o: Option[R]) -> Option[R] { o }
-fn k3(x: Option[R]) -> i64 { let x = pass(x); match x { Some(r) => r.id, None => 0 } }
-fn k4(x: R) -> i64 { let x = mk(24, f"d"); let y = x; y.id }
-fn k5(x: Option[R], c: bool) -> i64 { if c { let x = Some(mk(25, f"e")); if let Some(r) = x { return r.id } } match x { Some(r) => r.id, None => 0 } }
+fn k1(x: own Option[R]) -> i64 { if true { let x = Some(mk(21, f"a")); match x { Some(r) => println(f"in{r.id}"), None => {} } } match x { Some(r) => r.id, None => 0 } }
+fn k2(x: own Option[R]) -> i64 { let x = x; match x { Some(r) => r.id, None => 0 } }
+fn pass(o: own Option[R]) -> Option[R] { o }
+fn k3(x: own Option[R]) -> i64 { let x = pass(x); match x { Some(r) => r.id, None => 0 } }
+fn k4(x: own R) -> i64 { let x = mk(24, f"d"); let y = x; y.id }
+fn k5(x: own Option[R], c: bool) -> i64 { if c { let x = Some(mk(25, f"e")); if let Some(r) = x { return r.id } } match x { Some(r) => r.id, None => 0 } }
 fn k6(x: mut ref Option[R]) -> i64 { let x = Some(mk(26, f"f")); match x { Some(r) => r.id, None => 0 } }
-fn k7(x: Option[R]) -> Option[R] { let x = Some(mk(27, f"g")); x }
+fn k7(x: own Option[R]) -> Option[R] { let x = Some(mk(27, f"g")); x }
 fn main() {
     println(f"n{k1(Some(mk(1, f"p")))}");
     println(f"n{k2(Some(mk(2, f"q")))}");

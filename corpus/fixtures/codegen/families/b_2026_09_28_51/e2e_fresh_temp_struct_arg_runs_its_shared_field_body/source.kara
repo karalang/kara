@@ -10,17 +10,17 @@ impl Drop for W { fn drop(mut ref self) { println(f"dW{self.k}") } }
 struct Q { z: Z, t: i64 }
 struct P { a: N, b: N }
 struct H { k: i64 }
-impl H { fn m(ref self, z: Z) -> i64 { z.h.v } }
+impl H { fn m(ref self, z: own Z) -> i64 { z.h.v } }
 fn mkz(n: i64) -> Z { Z { d: mkd(n), h: N { v: n } } }
 fn mkw(n: i64) -> W { W { h: N { v: n }, k: n } }
 fn mky(n: i64) -> Y { Y { h: N { v: n }, k: n } }
-fn zn(z: Z) -> i64 { z.h.v }
-fn yn(y: Y) -> i64 { y.k }
-fn wn(w: W) -> i64 { w.k }
+fn zn(z: own Z) -> i64 { z.h.v }
+fn yn(y: own Y) -> i64 { y.k }
+fn wn(w: own W) -> i64 { w.k }
 fn back(z: own Z) -> Z { z }
 fn keep(zs: mut ref Vec[Z], z: own Z) { zs.push(z); }
-fn qn(q: Q) -> i64 { q.t }
-fn pn(p: P) -> i64 { p.a.v + p.b.v }
+fn qn(q: own Q) -> i64 { q.t }
+fn pn(p: own P) -> i64 { p.a.v + p.b.v }
 fn main() {
     println(f"a{zn(mkz(1))}");
     println(f"b{zn(Z { d: mkd(2), h: N { v: 2 } })}");

@@ -16,16 +16,16 @@ fn mkw(n: i64) -> W { return W { a: f"b1613-payload-aaaaaaaaaaaaaaaa-{n}" }; }
 fn mko(n: i64) -> Option[String] { return Option.Some(f"b1613-payload-aaaaaaaaaaaaaaaa-{n}"); }
 
 fn eats(e: Ts) -> i64 { return 7; }
-fn eatr(e: Tr) -> i64 { return 7; }
+fn eatr(e: own Tr) -> i64 { return 7; }
 fn eatv(e: Tv) -> i64 { return 7; }
-fn eatd(e: Td) -> i64 { return 7; }
+fn eatd(e: own Td) -> i64 { return 7; }
 fn eatw(e: W) -> i64 { return 7; }
-fn eato(e: Option[String]) -> i64 { return 7; }
+fn eato(e: own Option[String]) -> i64 { return 7; }
 fn takes(e: own Ts) -> i64 { match e { Ts.A(s) => { return 1 }, Ts.B => { return 0 } } }
 struct H { n: i64 }
 impl H {
     fn meth(ref self, e: Ts) -> i64 { return 7; }
-    fn methr(ref self, e: Tr) -> i64 { return 7; }
+    fn methr(ref self, e: own Tr) -> i64 { return 7; }
     fn assoc(e: Ts) -> i64 { return 7; }
 }
 

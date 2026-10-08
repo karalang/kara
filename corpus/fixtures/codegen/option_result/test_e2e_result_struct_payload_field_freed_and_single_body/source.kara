@@ -3,7 +3,7 @@ struct Res { id: i64, name: String }
 impl Drop for Res { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
 struct H { r: Result[Res, i64], t: i64 }
 struct Hm { r: Result[Res, String], t: i64 }
-fn take(h: H) -> i64 { h.t }
+fn take(h: own H) -> i64 { h.t }
 fn mk() -> H { H { r: Result.Ok(Res { id: 2, name: f"bb{2}" }), t: 20 } }
 fn consume(h: own H) -> i64 { match h.r { Result.Ok(x) => x.id, Result.Err(e) => e } }
 fn main() {

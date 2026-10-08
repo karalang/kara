@@ -1,12 +1,12 @@
 
 struct Bx { n: i64 }
 impl Bx {
-    fn take(ref self, o: Option[String]) -> Option[String] { o }
-    fn take_mut(mut ref self, o: Option[String]) -> Option[String] { self.n = self.n + 1; o }
-    fn take_res(ref self, o: Result[String, i64]) -> Result[String, i64] { o }
-    fn second(ref self, a: Option[String], b: Option[String]) -> Option[String] { b }
-    fn first(ref self, a: Option[String], b: Option[String]) -> Option[String] { a }
-    fn fresh(ref self, o: Option[String]) -> Option[String] { Option.Some(f"fresh-{self.n}") }
+    fn take(ref self, o: own Option[String]) -> Option[String] { o }
+    fn take_mut(mut ref self, o: own Option[String]) -> Option[String] { self.n = self.n + 1; o }
+    fn take_res(ref self, o: own Result[String, i64]) -> Result[String, i64] { o }
+    fn second(ref self, a: own Option[String], b: own Option[String]) -> Option[String] { b }
+    fn first(ref self, a: own Option[String], b: own Option[String]) -> Option[String] { a }
+    fn fresh(ref self, o: own Option[String]) -> Option[String] { Option.Some(f"fresh-{self.n}") }
 }
 fn main() {
     let base: i64 = env.args().len();

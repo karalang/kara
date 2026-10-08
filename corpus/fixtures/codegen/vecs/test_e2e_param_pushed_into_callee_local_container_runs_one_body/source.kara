@@ -6,7 +6,7 @@ struct B { n: i64 }
 impl B { fn st(ref self, a: own R) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(a); v } }
 fn st(a: own R) -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(a); v }
 fn stl(a: own R) -> i64 { let mut v: Vec[R] = Vec.new(); v.push(a); 9 }
-fn sto(a: Option[R]) -> Vec[Option[R]] { let mut v: Vec[Option[R]] = Vec.new(); v.push(a); v }
+fn sto(a: own Option[R]) -> Vec[Option[R]] { let mut v: Vec[Option[R]] = Vec.new(); v.push(a); v }
 fn stg[T](a: own T) -> Vec[T] { let mut v: Vec[T] = Vec.new(); v.push(a); v }
 fn stm(a: own R) -> Map[i64, R] { let mut m: Map[i64, R] = Map.new(); m.insert(1, a); m }
 fn st2(a: own R2) -> Vec[R2] { let mut v: Vec[R2] = Vec.new(); v.push(a); v }

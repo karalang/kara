@@ -9,7 +9,7 @@
 // the par-runtime pool / IOCP reactors, so it actually exercises *connection-
 // level* concurrency on the Windows event loop — the thing the serial example
 // does not. Mirrors the spawn shape of examples/ws_idle_holder/src/main.kara.
-fn echo(ws: WebSocket) {
+fn echo(ws: own WebSocket) {
     let mut buf: Array[u8, 1024] = [0u8; 1024];
     loop {
         match ws.recv_text(mut buf) {

@@ -1,4 +1,4 @@
-fn pick[T](a: Option[T], d: T) -> T { match a { Some(x) => x, None => d } }
+fn pick[T](a: own Option[T], d: own T) -> T { match a { Some(x) => x, None => d } }
 fn main() {
     let s = f"heap-string-longer-than-sso-{1}";
     let a: Option[Array[i64, 2]] = None;

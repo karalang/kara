@@ -1,19 +1,19 @@
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
-fn keep(x: Option[Option[R]], v: mut ref Vec[R]) -> i64 {
+fn keep(x: own Option[Option[R]], v: mut ref Vec[R]) -> i64 {
     if let Some(Some(w)) = x { v.push(w); return 1 }
     return 0
 }
-fn rkeep(x: Result[Option[R], i64], v: mut ref Vec[R]) -> i64 {
+fn rkeep(x: own Result[Option[R], i64], v: mut ref Vec[R]) -> i64 {
     if let Ok(Some(w)) = x { v.push(w); return 1 }
     return 0
 }
-fn rd(x: Result[Option[R], i64]) -> i64 {
+fn rd(x: own Result[Option[R], i64]) -> i64 {
     if let Ok(Some(w)) = x { return w.id }
     return 0
 }
-fn lr(x: Option[Option[R]]) -> i64 {
+fn lr(x: own Option[Option[R]]) -> i64 {
     let Some(Some(w)) = x else { return 0 };
     return w.id
 }

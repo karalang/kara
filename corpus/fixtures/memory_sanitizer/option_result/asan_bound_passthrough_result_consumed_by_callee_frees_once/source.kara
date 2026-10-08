@@ -1,14 +1,14 @@
 struct Wide { a: String, b: String, c: i64, d: i64 }
-fn idopt(o: Option[String]) -> Option[String] { o }
-fn idres(r: Result[String, i64]) -> Result[String, i64] { r }
-fn idbox(o: Option[Wide]) -> Option[Wide] { o }
-fn peek(o: Option[String]) -> i64 {
+fn idopt(o: own Option[String]) -> Option[String] { o }
+fn idres(r: own Result[String, i64]) -> Result[String, i64] { r }
+fn idbox(o: own Option[Wide]) -> Option[Wide] { o }
+fn peek(o: own Option[String]) -> i64 {
     match o { Option.Some(s) => s.len(), Option.None => 0 }
 }
-fn peekr(r: Result[String, i64]) -> i64 {
+fn peekr(r: own Result[String, i64]) -> i64 {
     match r { Result.Ok(s) => s.len(), Result.Err(e) => e }
 }
-fn peekb(o: Option[Wide]) -> i64 {
+fn peekb(o: own Option[Wide]) -> i64 {
     match o { Option.Some(w) => w.a.len() + w.c, Option.None => 0 }
 }
 fn mk(n: i64) -> String {

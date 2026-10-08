@@ -1,6 +1,6 @@
 struct S179b { tag: String }
 impl Drop for S179b { fn drop(mut ref self) { println(f"drop:{self.tag}") } }
-fn takesOpt(o: Option[Array[S179b, 2]]) {
+fn takesOpt(o: own Option[Array[S179b, 2]]) {
     match o { Some(v) => { println(f"v:{v[0].tag}") } None => { println("n") } }
 }
 fn main() {

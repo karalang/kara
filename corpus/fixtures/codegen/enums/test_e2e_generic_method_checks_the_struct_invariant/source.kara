@@ -5,7 +5,7 @@ struct Holder {
     invariant self.items.len() < 4
 }
 impl Holder {
-    pub fn add[T](mut ref self, x: T) -> i64 where T: Ord {
+    pub fn add[T](mut ref self, x: own T) -> i64 where T: Ord {
         self.items.push(1);
         self.items.len()
     }

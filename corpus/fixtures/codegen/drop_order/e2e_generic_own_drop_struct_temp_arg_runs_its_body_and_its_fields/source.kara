@@ -5,8 +5,8 @@ struct Go[T] { r: T, z: i64 }
 impl[T] Drop for Go[T] { fn drop(mut ref self) { println(f"dGo{self.z}") } }
 struct Gn { r: R, z: i64 }
 impl Drop for Gn { fn drop(mut ref self) { println(f"dGn{self.z}") } }
-fn gOwn[T](h: Go[T]) -> i64 { println("  in"); return h.z; }
-fn nOwn(h: Gn) -> i64 { println("  in"); return h.z; }
+fn gOwn[T](h: own Go[T]) -> i64 { println("  in"); return h.z; }
+fn nOwn(h: own Gn) -> i64 { println("  in"); return h.z; }
 fn gTemp()  { let _ = gOwn(Go[R] { r: mk(3), z: 9 }); }
 fn gLocal() { let h = Go[R] { r: mk(4), z: 10 }; let _ = gOwn(h); }
 fn nTemp()  { let _ = nOwn(Gn { r: mk(5), z: 11 }); }

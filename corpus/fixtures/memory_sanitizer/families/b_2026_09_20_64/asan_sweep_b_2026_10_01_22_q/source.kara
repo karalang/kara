@@ -1,10 +1,10 @@
 struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
-fn cm(x: R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { return v } return Vec[mk(9)] }
-fn ci(x: R, c: bool) -> Vec[R] { let v = Vec[x]; if c { return v } return Vec[mk(9)] }
-fn f7(x: R) -> Vec[R] { let mut v = Vec[x]; v = Vec[mk(8)]; return v }
-fn g7(x: R) { let mut v = Vec[x]; v = Vec[mk(8)]; println("in") }
+fn cm(x: own R, c: bool) -> Vec[R] { let mut v = Vec[x]; if c { return v } return Vec[mk(9)] }
+fn ci(x: own R, c: bool) -> Vec[R] { let v = Vec[x]; if c { return v } return Vec[mk(9)] }
+fn f7(x: own R) -> Vec[R] { let mut v = Vec[x]; v = Vec[mk(8)]; return v }
+fn g7(x: own R) { let mut v = Vec[x]; v = Vec[mk(8)]; println("in") }
 fn h7() { let w = mk(3); let mut v = Vec[w]; v = Vec[mk(8)]; println("in") }
 fn main() {
   println("-ct"); let a = cm(mk(1), true); println(f"k{a.len()}");

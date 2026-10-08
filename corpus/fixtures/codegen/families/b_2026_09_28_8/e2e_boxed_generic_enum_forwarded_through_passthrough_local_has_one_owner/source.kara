@@ -2,7 +2,7 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 enum G[T] { Y(T), N }
 fn mk(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
-fn glen[T](g: G[T]) -> i64 { return 1 }
+fn glen[T](g: own G[T]) -> i64 { return 1 }
 fn gid[T](g: own G[T]) -> G[T] { return g }
 fn gvia[T](g: own G[T]) -> i64 { let h = gid(g); return glen(h) }
 fn gviam[T](g: own G[T]) -> i64 { let h = gid(g); match h { G.Y(x) => { return 5 }, G.N => { return 0 } } }

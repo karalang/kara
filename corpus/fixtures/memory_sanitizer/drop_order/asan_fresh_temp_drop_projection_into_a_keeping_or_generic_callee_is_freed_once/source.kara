@@ -9,7 +9,7 @@ fn maybe(d: own D, c: bool) -> Option[D] { if c { return Some(d); } None }
 struct H { k: i64 }
 impl H { fn kp(self, d: own D) -> D { d } }
 fn gp[T](x: ref T) -> i64 { 2 }
-fn gn[T](x: T) -> i64 { 1 }
+fn gn[T](x: own T) -> i64 { 1 }
 fn main() {
     let k = keep(mkw(1).r);
     println(f"a{k.id}");

@@ -2,7 +2,7 @@ struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"  d{self.id}") } }
 fn mkr(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
 fn mka(k: i64) -> Array[R, 2] { return [mkr(k), mkr(k + 1)] }
-fn consume(a: Array[R, 2]) { println(f"  c{a[0].id}") }
+fn consume(a: own Array[R, 2]) { println(f"  c{a[0].id}") }
 fn loc(c: bool) -> Array[R, 2] { let x: Array[R, 2] = [mkr(1), mkr(2)]; let m = x; if c { return m }; println("  dies"); return mka(8) }
 fn tailif(c: bool) -> Array[R, 2] { let x: Array[R, 2] = mka(3); if c { x } else { mka(8) } }
 fn inloop(c: bool) -> Array[R, 2] { let x: Array[R, 2] = mka(5); for i in 0..3 { if c and i == 1 { return x } }; println("  dies"); return mka(8) }

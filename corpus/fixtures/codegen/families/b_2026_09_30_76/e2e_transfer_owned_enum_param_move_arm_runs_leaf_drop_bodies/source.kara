@@ -6,7 +6,7 @@ enum F { A(R, H), B }
 enum Fh { A(H, i64), B }
 enum Fs { A { x: H, k: i64 }, B }
 fn mk(k: i64) -> String { f"a-heap-string-longer-than-sso-{k}" }
-fn eat(h: H) -> i64 { h.n }
+fn eat(h: own H) -> i64 { h.n }
 fn c1(e: own Fh) -> i64 { match e { Fh.A(H { v, n }, k) => v.id + n + k, Fh.B => 0 } }
 fn c2(e: own Fs) -> i64 { match e { Fs.A { x: H { v, n }, k } => v.id + n + k, Fs.B => 0 } }
 fn c3(e: own F) -> i64 { match e { F.A(r, H { v, n }) => r.id + v.id + n, F.B => 0 } }

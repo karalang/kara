@@ -2,18 +2,18 @@ struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
 struct W { o: Option[R], n: i64 }
-fn ov(x: Option[R]) -> Vec[Option[R]] { return Vec[x] }
-fn oa(x: Option[R]) -> Vec[Option[R]] { return [x] }
-fn ow(x: Option[R]) -> W { return W { o: x, n: 1 } }
-fn ot(x: Option[R]) -> (Option[R], i64) { return (x, 1) }
-fn oc(x: Option[R], c: bool) -> Vec[Option[R]] { if c { return Vec[x] } return Vec.new() }
-fn id(x: Option[R]) -> Option[R] { return x }
-fn rv(x: Result[R, i64]) -> Vec[Result[R, i64]] { return Vec[x] }
-fn gv[T](x: T) -> Vec[T] { return Vec[x] }
+fn ov(x: own Option[R]) -> Vec[Option[R]] { return Vec[x] }
+fn oa(x: own Option[R]) -> Vec[Option[R]] { return [x] }
+fn ow(x: own Option[R]) -> W { return W { o: x, n: 1 } }
+fn ot(x: own Option[R]) -> (Option[R], i64) { return (x, 1) }
+fn oc(x: own Option[R], c: bool) -> Vec[Option[R]] { if c { return Vec[x] } return Vec.new() }
+fn id(x: own Option[R]) -> Option[R] { return x }
+fn rv(x: own Result[R, i64]) -> Vec[Result[R, i64]] { return Vec[x] }
+fn gv[T](x: own T) -> Vec[T] { return Vec[x] }
 struct H { k: i64 }
 impl H {
-  fn wv(self, x: Option[R]) -> Vec[Option[R]] { return Vec[x] }
-  fn mkv(x: Option[R]) -> Vec[Option[R]] { return Vec[x] }
+  fn wv(self, x: own Option[R]) -> Vec[Option[R]] { return Vec[x] }
+  fn mkv(x: own Option[R]) -> Vec[Option[R]] { return Vec[x] }
 }
 fn main() {
   println("-q1"); let a = ov(Some(mk(1))); println(f"k{a.len()}");

@@ -6,21 +6,21 @@ impl Drop for D { fn drop(mut ref self) { println(f"dD{self.n}") } }
 struct T { h: (H, i64) }
 struct G { n: i64, keep: Option[H] }
 struct G2 { n: i64 }
-trait Eat { fn eat(self); }
+trait Eat { fn eat(own self); }
 impl W {
-    fn g2(self) { println(f"g{self.n}") }
+    fn g2(own self) { println(f"g{self.n}") }
     fn me(own self) -> W { self }
-    fn into_g(self) -> G { G { n: 1, keep: self.o } }
+    fn into_g(own self) -> G { G { n: 1, keep: self.o } }
 }
-impl D { fn g2(self) { println(f"gd{self.n}") } }
-impl T { fn g2(self) { println("gt") } }
-impl Eat for W { fn eat(self) { println("eat") } }
+impl D { fn g2(own self) { println(f"gd{self.n}") } }
+impl T { fn g2(own self) { println("gt") } }
+impl Eat for W { fn eat(own self) { println("eat") } }
 impl G {
     fn m(ref self, o: Option[H]) { println("m") }
-    fn mw(ref self, w: W) { println("mw") }
+    fn mw(ref self, w: own W) { println("mw") }
     fn put(mut ref self, o: Option[H]) { self.keep = o; println("put") }
     fn pass(ref self, o: Option[H]) -> Option[H] { o }
-    fn md(ref self, d: D) { println("md") }
+    fn md(ref self, d: own D) { println("md") }
     fn mh(ref self, h: H) { println("mh") }
 }
 impl G2 { fn m(ref self, o: Option[H]) { println("m2") } }

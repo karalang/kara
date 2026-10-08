@@ -1,6 +1,6 @@
 
         #[require_simd]
-        fn wide(a: Vector[i128, 4], b: Vector[i128, 4]) -> Vector[i128, 4] {
+        fn wide(a: own Vector[i128, 4], b: own Vector[i128, 4]) -> Vector[i128, 4] {
             a + b
         }
         fn main() {}

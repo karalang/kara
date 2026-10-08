@@ -1,13 +1,13 @@
 struct W { a: Array[String, 2] }
-fn pick[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
-fn orelse[T](a: Option[T], d: T) -> T { match a { Some(s) => s, None => d } }
-fn one(a: Option[Array[String, 1]]) -> Array[String, 1] { match a { Some(s) => s, None => panic("n") } }
-fn two(a: Option[Array[String, 2]]) -> Array[String, 2] { match a { Some(s) => { s }, None => [f"d", f"e"] } }
-fn three(a: Option[Array[String, 3]]) -> Array[String, 3] { match a { Some(s) => s, None => panic("n") } }
-fn early(a: Option[Array[String, 2]], c: bool) -> Array[String, 2] { if let Some(s) = a { if c { return s; } println(f"kept {s[1]}") } [f"d", f"e"] }
-fn held(a: Option[Array[String, 1]]) -> i64 { let r: Array[String, 1] = match a { Some(s) => s, None => panic("n") }; r[0].len() }
-fn rebind(a: Option[Array[String, 2]]) -> Array[String, 2] { match a { Some(s) => { let t = s; t }, None => panic("n") } }
-fn rewrap(a: Option[Array[String, 2]]) -> Option[Array[String, 2]] { match a { Some(s) => Some(s), None => None } }
+fn pick[T](a: own Option[T], d: own T) -> T { match a { Some(s) => s, None => d } }
+fn orelse[T](a: own Option[T], d: own T) -> T { match a { Some(s) => s, None => d } }
+fn one(a: own Option[Array[String, 1]]) -> Array[String, 1] { match a { Some(s) => s, None => panic("n") } }
+fn two(a: own Option[Array[String, 2]]) -> Array[String, 2] { match a { Some(s) => { s }, None => [f"d", f"e"] } }
+fn three(a: own Option[Array[String, 3]]) -> Array[String, 3] { match a { Some(s) => s, None => panic("n") } }
+fn early(a: own Option[Array[String, 2]], c: bool) -> Array[String, 2] { if let Some(s) = a { if c { return s; } println(f"kept {s[1]}") } [f"d", f"e"] }
+fn held(a: own Option[Array[String, 1]]) -> i64 { let r: Array[String, 1] = match a { Some(s) => s, None => panic("n") }; r[0].len() }
+fn rebind(a: own Option[Array[String, 2]]) -> Array[String, 2] { match a { Some(s) => { let t = s; t }, None => panic("n") } }
+fn rewrap(a: own Option[Array[String, 2]]) -> Option[Array[String, 2]] { match a { Some(s) => Some(s), None => None } }
 fn mk(i: i64) -> Option[Array[String, 2]] { Some([f"heap-string-longer-than-sso-{i}", f"r{i}"]) }
 fn main() {
     let a = Some([f"heap-string-longer-than-sso-1", f"x"]);

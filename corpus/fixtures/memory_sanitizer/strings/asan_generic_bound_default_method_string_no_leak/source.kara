@@ -7,7 +7,7 @@ struct Person { id: i64 }
 impl Greeter for Person {
     fn name(self) -> String { "a sufficiently long greeter name payload" }
 }
-fn describe[G: Greeter](g: G) -> String { g.greeting() }
+fn describe[G: Greeter](g: own G) -> String { g.greeting() }
 fn main() {
     let mut i = 0i64;
     let mut acc = 0i64;

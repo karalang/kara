@@ -12,8 +12,8 @@ fn mkgw(v: own W) -> Ho[W] { return Ho.Full(v) }
 fn idh(h: own Ho[R]) -> Ho[R] { h }
 fn takeit(x: own Ho[R]) { match x { Full(r) => { println(f"f:{r.id}") } Empty => { println("e") } } }
 fn takew(x: own Ho[W]) { match x { Full(w) => { println(f"w:{w.a.len()}") } Empty => { println("e") } } }
-fn hold(x: Ho[R]) { println("h") }
-fn holdw(x: Ho[W]) { println("hw") }
+fn hold(x: own Ho[R]) { println("h") }
+fn holdw(x: own Ho[W]) { println("hw") }
 fn main() {
     { takeit(mkg(mkr(9))); println("k1") }
     { takeit(mkf()); println("k2") }

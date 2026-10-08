@@ -1,7 +1,7 @@
 
 struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, s: String }
 fn idnest(o: Option[Option[i64]]) -> Option[Option[i64]] { o }
-fn idwide(o: Option[Wide]) -> Option[Wide] { o }
+fn idwide(o: own Option[Wide]) -> Option[Wide] { o }
 fn mk(n: i64, i: i64) -> String {
     let mut s: String = String.new();
     s.push_str("payload-");

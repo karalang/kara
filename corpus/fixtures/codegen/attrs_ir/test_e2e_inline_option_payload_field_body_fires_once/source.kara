@@ -6,7 +6,7 @@ impl Drop for Big { fn drop(mut ref self) { println(f"drop {self.id} {self.name}
 struct Hsm { o: Option[Small], t: i64 }
 struct Hb { o: Option[Big], t: i64 }
 struct Hr { r: Result[Small, i64], t: i64 }
-fn take(h: Hsm) -> i64 { h.t }
+fn take(h: own Hsm) -> i64 { h.t }
 fn main() {
     println("inline-field:");
     { let h = Hsm { o: Option.Some(Small { id: 1 }), t: 10 }; println(h.t); }

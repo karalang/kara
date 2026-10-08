@@ -7,9 +7,9 @@ fn mk(n: i64, i: i64) -> String {
     s.push_str("-padding-to-force-heap");
     s
 }
-fn idres(r: Result[Wide, i64]) -> Result[Wide, i64] { r }
-fn iderr(r: Result[i64, Wide]) -> Result[i64, Wide] { r }
-fn idmix(r: Result[Wide, String]) -> Result[Wide, String] { r }
+fn idres(r: own Result[Wide, i64]) -> Result[Wide, i64] { r }
+fn iderr(r: own Result[i64, Wide]) -> Result[i64, Wide] { r }
+fn idmix(r: own Result[Wide, String]) -> Result[Wide, String] { r }
 fn main() {
     let n = env.args().len() as i64;
     let mut acc: i64 = 0;

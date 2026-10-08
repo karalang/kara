@@ -1,7 +1,7 @@
 
 struct H3 { res: Result[String, i64], n: i64 }
 struct P2 { r: Result[String, String], n: i64 }
-fn take_n(h: H3) -> i64 { return h.n; }
+fn take_n(h: own H3) -> i64 { return h.n; }
 fn take_s(h: own H3) -> i64 {
     match h.res {
         Ok(s) => { return s.len(); }

@@ -2,7 +2,7 @@ struct S1 { v: i64, s: String }
 impl Drop for S1 { fn drop(mut ref self) { println(f"dS{self.v}") } }
 enum Hr { P(S1), Q }
 fn mk(v: i64) -> S1 { return S1 { v: v, s: f"h{v}" } }
-fn take(s: S1) -> i64 { return s.v }
+fn take(s: own S1) -> i64 { return s.v }
 fn c1(c: bool, d: bool) -> i64 {
   let t = mk(1);
   match Hr.P(mk(2)) { Hr.P(t) => { if d { let u = t; println(f"u{u.v}") } } Hr.Q => {} }

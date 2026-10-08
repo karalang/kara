@@ -1,5 +1,5 @@
 
-fn first[A, B](a: own A, b: B) -> A { a }
+fn first[A, B](a: own A, b: own B) -> A { a }
 fn main() {
     let x = first(10, 3.14);
     println(x);

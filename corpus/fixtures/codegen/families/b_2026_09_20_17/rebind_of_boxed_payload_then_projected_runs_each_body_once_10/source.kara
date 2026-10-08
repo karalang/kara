@@ -1,7 +1,7 @@
 struct H { id: i64, s: String }
 impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}") } }
 fn mkh(i: i64) -> H { return H { id: i, s: "zzzzzzzzzzzz" } }
-fn eat(o: Option[(H, H)], c: bool) -> H { match o { Option.Some(t) => { let u = t; if c { return u.0; } return mkh(9); } Option.None => { return mkh(0); } } }
+fn eat(o: own Option[(H, H)], c: bool) -> H { match o { Option.Some(t) => { let u = t; if c { return u.0; } return mkh(9); } Option.None => { return mkh(0); } } }
 fn main() {
     let got = eat(Option.Some((H { id: 5, s: "aaaaaaaaaaaa" }, H { id: 6, s: "bbbbbbbbbbbb" })), false); println(f"got:{got.id}");
     println("end");

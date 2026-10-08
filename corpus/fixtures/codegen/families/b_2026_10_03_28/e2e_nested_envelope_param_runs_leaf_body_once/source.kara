@@ -1,33 +1,33 @@
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
-fn rr(x: Result[Option[R], i64]) -> i64 {
+fn rr(x: own Result[Option[R], i64]) -> i64 {
     match x {
         Ok(Some(w)) => w.id,
         Ok(None) => 2,
         Err(e) => e,
     }
 }
-fn keep(x: Result[Option[R], i64], v: mut ref Vec[R]) -> i64 {
+fn keep(x: own Result[Option[R], i64], v: mut ref Vec[R]) -> i64 {
     match x {
         Ok(Some(w)) => { v.push(w); return 1 }
         _ => 0,
     }
 }
-fn eat(r: R) { println(f"e{r.id}") }
-fn re(x: Result[Option[R], i64]) -> i64 {
+fn eat(r: own R) { println(f"e{r.id}") }
+fn re(x: own Result[Option[R], i64]) -> i64 {
     match x {
         Ok(Some(w)) => { eat(w); return 1 }
         _ => 0,
     }
 }
-fn okeep(x: Option[Option[R]], v: mut ref Vec[R]) -> i64 {
+fn okeep(x: own Option[Option[R]], v: mut ref Vec[R]) -> i64 {
     match x {
         Some(Some(w)) => { v.push(w); return 1 }
         _ => 0,
     }
 }
-fn take(x: Option[Option[R]]) -> Option[R] {
+fn take(x: own Option[Option[R]]) -> Option[R] {
     match x {
         Some(Some(r)) => Some(r),
         _ => None,

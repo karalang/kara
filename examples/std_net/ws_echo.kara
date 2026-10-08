@@ -8,7 +8,7 @@
 // `WebSocket.accept_tls` (see examples/ws_idle_holder).
 //
 // Build & run:  karac run examples/std_net/ws_echo.kara
-fn echo(ws: WebSocket) {
+fn echo(ws: own WebSocket) {
     let mut buf: Array[u8, 1024] = [0u8; 1024];
     loop {
         match ws.recv_text(mut buf) {

@@ -10,7 +10,7 @@ impl W {
     fn take(own self) -> i64 { let k = keep(self.r); k.id }
     fn pushr(own self) -> i64 { let mut xs: Vec[D] = Vec.new(); xs.push(self.r); xs.len() }
     fn both(own self) -> D { let k = keep(self.r); println(f"k{k.id}"); self.s }
-    fn getb(self) -> i64 { self.b }
+    fn getb(own self) -> i64 { self.b }
 }
 impl T {
     fn deep(own self) -> i64 { let k = keep(self.w.r); k.id }

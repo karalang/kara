@@ -10,7 +10,7 @@ fn mkh() -> Holder {
     v.push(Res { id: 7, name: f"g{7}" });
     Holder { xs: v, tag: 3 }
 }
-fn use_it(h: Holder) -> i64 { h.tag }
+fn use_it(h: own Holder) -> i64 { h.tag }
 fn main() {
     println("a");
     {

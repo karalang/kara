@@ -7,16 +7,16 @@ enum Kn { A { r: R1 }, B }
 
 fn mk3(i: i64) -> R3 { return R3 { s: f"ssssssss{i}", t: f"tttttttt{i}", u: f"uuuuuuuu{i}" }; }
 
-fn nested(x: Option[Kws]) {
+fn nested(x: own Option[Kws]) {
     match x { Option.Some(Kws.A { r }) => { println(f"n:{r.s}"); } Option.Some(Kws.B) => {} Option.None => {} }
 }
-fn tup(x: Option[Kws2]) {
+fn tup(x: own Option[Kws2]) {
     match x { Option.Some(Kws2.A(r)) => { println(f"t:{r.s}"); } Option.Some(Kws2.B) => {} Option.None => {} }
 }
-fn moved(x: Option[Kws], acc: mut ref Vec[R3]) {
+fn moved(x: own Option[Kws], acc: mut ref Vec[R3]) {
     match x { Option.Some(Kws.A { r }) => { acc.push(r); } Option.Some(Kws.B) => {} Option.None => {} }
 }
-fn narrow(x: Option[Kn]) {
+fn narrow(x: own Option[Kn]) {
     match x { Option.Some(Kn.A { r }) => { println(f"w:{r.s}"); } Option.Some(Kn.B) => {} Option.None => {} }
 }
 

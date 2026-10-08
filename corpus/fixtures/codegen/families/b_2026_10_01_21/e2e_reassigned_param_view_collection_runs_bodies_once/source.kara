@@ -1,17 +1,17 @@
 struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
-fn g7(x: R) { let mut v = Vec[x]; v = Vec[mk(8)]; println("in") }
-fn g8(x: R) { let mut v = [x]; v = [mk(8)]; println("in") }
-fn f7(x: R) -> Vec[R] { let mut v = Vec[x]; v = Vec[mk(8)]; return v }
+fn g7(x: own R) { let mut v = Vec[x]; v = Vec[mk(8)]; println("in") }
+fn g8(x: own R) { let mut v = [x]; v = [mk(8)]; println("in") }
+fn f7(x: own R) -> Vec[R] { let mut v = Vec[x]; v = Vec[mk(8)]; return v }
 fn h7() { let w = mk(3); let mut v = Vec[w]; v = Vec[mk(8)]; println("in") }
-fn c1(x: R, c: bool) { let mut v = Vec[x]; if c { v = Vec[mk(8)]; } println(f"in{v.len()}") }
-fn c3(x: R) { let mut v = Vec[x]; v = Vec[mk(8)]; v = Vec[mk(9)]; println(f"in{v.len()}") }
-fn c4(x: R) { let mut v = Vec[x]; v = Vec[mk(8)]; v.push(mk(9)); println(f"in{v.len()}") }
-fn c7(x: R) { let mut a = [x]; if x_ok() { a = [mk(8)]; } println(f"in{a.len()}") }
+fn c1(x: own R, c: bool) { let mut v = Vec[x]; if c { v = Vec[mk(8)]; } println(f"in{v.len()}") }
+fn c3(x: own R) { let mut v = Vec[x]; v = Vec[mk(8)]; v = Vec[mk(9)]; println(f"in{v.len()}") }
+fn c4(x: own R) { let mut v = Vec[x]; v = Vec[mk(8)]; v.push(mk(9)); println(f"in{v.len()}") }
+fn c7(x: own R) { let mut a = [x]; if x_ok() { a = [mk(8)]; } println(f"in{a.len()}") }
 fn x_ok() -> bool { return true }
-fn c8(x: R, c: bool) { let mut v = Vec[x]; while c { v = Vec[mk(8)]; break } println(f"in{v.len()}") }
-fn c9(x: R) { let mut v = Vec[x]; println(f"pre{v.len()}"); v = Vec[mk(8)]; println(f"in{v.len()}") }
+fn c8(x: own R, c: bool) { let mut v = Vec[x]; while c { v = Vec[mk(8)]; break } println(f"in{v.len()}") }
+fn c9(x: own R) { let mut v = Vec[x]; println(f"pre{v.len()}"); v = Vec[mk(8)]; println(f"in{v.len()}") }
 fn main() {
   println("-r3"); g7(mk(6)); println("k");
   println("-a8"); g8(mk(9)); println("k");

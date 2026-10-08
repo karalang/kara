@@ -5,14 +5,14 @@ impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
 enum Ho[T] { Full(T), Empty }
 struct Wr { h: Ho[R] }
 impl Wr { fn get(own self) -> Ho[R] { return self.h } }
-fn hold(x: Ho[R]) { println("h") }
-fn holds(x: Ho[S]) { println("hs") }
-fn holdm(x: Ho[R]) { match x { Full(_) => { println("m") } Empty => { println("e") } } }
-fn outer(x: Ho[R]) { println("o"); hold(x) }
+fn hold(x: own Ho[R]) { println("h") }
+fn holds(x: own Ho[S]) { println("hs") }
+fn holdm(x: own Ho[R]) { match x { Full(_) => { println("m") } Empty => { println("e") } } }
+fn outer(x: own Ho[R]) { println("o"); hold(x) }
 fn mkg(r: own R) -> Ho[R] { return Ho.Full(r) }
 fn idg[T](v: own T) -> T { return v }
-fn gh[T](x: Ho[T]) { println("gh") }
-fn gm[T](x: Ho[T]) { match x { Full(_) => { println("gm") } Empty => { println("e") } } }
+fn gh[T](x: own Ho[T]) { println("gh") }
+fn gm[T](x: own Ho[T]) { match x { Full(_) => { println("gm") } Empty => { println("e") } } }
 fn main() {
     hold(Ho.Full(R { id: 1 }));
     hold(mkg(R { id: 2 }));

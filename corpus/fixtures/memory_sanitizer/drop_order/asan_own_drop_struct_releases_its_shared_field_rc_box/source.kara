@@ -18,7 +18,7 @@ fn one(k: i64) -> i64 { let h: H = H { id: k, s: mk(10 * k), tag: tg(k) }; retur
 fn two_owners(k: i64) -> i64 { let g: Sd = mk(20 * k); let a: H = H { id: 2 * k, s: g, tag: tg(2) }; let b: H = H { id: 3 * k, s: g, tag: tg(3) }; return a.tag.len() + b.tag.len() }
 fn opt(k: i64) -> i64 { let q: G = G { id: 4 * k, s: Option.Some(mk(30 * k)), tag: tg(4) }; return q.tag.len() }
 fn two_fields(k: i64) -> i64 { let t: T2 = T2 { id: 5 * k, a: mk(40 * k), b: mk(41 * k) }; return t.id }
-fn eat(x: H) -> i64 { return x.tag.len() }
+fn eat(x: own H) -> i64 { return x.tag.len() }
 
 fn main() {
     let k: i64 = env.args().len();

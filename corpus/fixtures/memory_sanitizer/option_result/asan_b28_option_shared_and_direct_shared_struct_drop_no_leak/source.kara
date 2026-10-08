@@ -3,7 +3,7 @@ shared enum Val { Nothing, Ident(String), Num(i64) }
 struct OptH { value: Option[Val] }
 struct DirH { value: Val }
 
-fn borrow_opt(h: OptH) -> i64 {
+fn borrow_opt(h: own OptH) -> i64 {
     let mut r = 0;
     match h.value { Some(_) => { r = 1; } None => {} }
     r

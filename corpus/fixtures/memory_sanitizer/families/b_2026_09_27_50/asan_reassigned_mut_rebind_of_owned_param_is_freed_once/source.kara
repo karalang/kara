@@ -6,11 +6,11 @@ fn mk(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" }
 enum E { A(R), B }
 struct H { k: i64 }
 impl H { fn rb(ref self, a: own S) -> i64 { let mut c = a; c = mk(90); println("im"); self.k } }
-fn ro(a: Option[S]) -> i64 { let mut c = a; c = Some(mk(91)); println("io"); 1 }
+fn ro(a: own Option[S]) -> i64 { let mut c = a; c = Some(mk(91)); println("io"); 1 }
 fn rr(a: own R) -> i64 { let mut c = a; c = R { id: 92 }; println("ir"); 2 }
 fn rs(a: own S) -> i64 { let mut c = a; println("mid"); c = mk(93); println("is"); 3 }
 fn re(a: own E) -> i64 { let mut c = a; c = E.A(R { id: 94 }); println("ie"); 4 }
-fn rq(a: Result[S, i64]) -> i64 { let mut c = a; c = Ok(mk(95)); println("iq"); 6 }
+fn rq(a: own Result[S, i64]) -> i64 { let mut c = a; c = Ok(mk(95)); println("iq"); 6 }
 fn rv(a: own Vec[R]) -> i64 { let mut c = a; c = vec![R { id: 96 }]; println("iv"); c.len() }
 fn rg[T](a: own T, b: own T) -> i64 { let mut c = a; c = b; println("ig"); 7 }
 fn rp(a: own S) -> i64 { let mut v: Vec[S] = Vec.new(); v.push(a); 8 }

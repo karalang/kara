@@ -1,7 +1,7 @@
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"drop{self.id}") } }
 fn mk(i: i64) -> R { R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
-fn eat(r: R) { println(f"eat{r.id}") }
+fn eat(r: own R) { println(f"eat{r.id}") }
 fn strs(x: ref String) -> String { let (v, n) = match 1 { 1 => (x.clone(), 1), _ => (x.clone(), 2) }; v.clone() }
 fn iff(x: ref String) { let (v, n) = if x.len() > 1 { (x.clone(), 1) } else { (x.clone(), 2) }; println(f"{v} {n}") }
 fn mat() { let (r, n) = match 1 { 1 => (mk(1), 1), _ => (mk(2), 2) }; println(f"{r.id} {n}") }

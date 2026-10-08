@@ -2,7 +2,7 @@ struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 struct W { t: (R, i64) }
 
-fn sink(x: R) { println(f"  sank{x.id}") }
+fn sink(x: own R) { println(f"  sank{x.id}") }
 
 fn s1(t: own (R, i64))       { match t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
 fn s1b(t: own (R, i64))      { match t { (r, k) => { println(f"  b{r.id}"); } } }

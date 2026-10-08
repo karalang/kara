@@ -1,4 +1,4 @@
-fn show[T: Display](x: Option[T]) {
+fn show[T: Display](x: own Option[T]) {
     match x { Some(t) => { println(f"{t}") } None => { println("n") } }
     let t: i64 = 42;
     println(f"{t}")

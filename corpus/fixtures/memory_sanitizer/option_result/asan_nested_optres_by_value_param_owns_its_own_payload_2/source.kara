@@ -1,5 +1,5 @@
 
-fn show(x: Result[Option[Vec[i64]], String]) { println(f"{x}"); }
+fn show(x: own Result[Option[Vec[i64]], String]) { println(f"{x}"); }
 fn main() {
     let mut i = 0;
     while i < 3 { let v: Vec[i64] = [i, i + 1]; show(Ok(Some(v))); i = i + 1; }

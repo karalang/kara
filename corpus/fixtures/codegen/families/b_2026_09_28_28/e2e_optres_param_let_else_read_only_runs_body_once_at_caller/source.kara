@@ -2,16 +2,16 @@ struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 struct S { r: R, s: String }
 fn mks(i: i64) -> S { S { r: R { id: i }, s: f"heap-string-longer-than-sso-{i}" } }
-fn id(a: Option[S]) -> Option[S] { a }
-fn keep(x: S) { println("kp") }
-fn f1(a: Option[S]) -> i64 { let Some(x) = a else { return 0 }; x.r.id }
-fn f2(a: Result[S, i64]) -> i64 { let Ok(x) = a else { return 0 }; x.r.id }
-fn f3(a: Option[(R, i64)]) -> i64 { let Some(t) = a else { return 0 }; t.1 }
-fn f4(a: Option[S]) -> i64 { let Some(x) = a else { return 0 }; if x.r.id > 7 { keep(x); 1 } else { 2 } }
-fn f5(a: Option[S]) -> i64 { let Some(x) = id(a) else { return 0 }; x.r.id }
-fn f6(a: Option[R]) -> i64 { let Some(x) = a else { return 0 }; x.id }
-fn f7(a: Option[S]) -> i64 { let Some(x) = a else { return 0 }; println("mid"); let n = x.r.id; n }
-fn f8(a: Option[S]) -> i64 { let Some(x) = a else { return 0 }; keep(x); 1 }
+fn id(a: own Option[S]) -> Option[S] { a }
+fn keep(x: own S) { println("kp") }
+fn f1(a: own Option[S]) -> i64 { let Some(x) = a else { return 0 }; x.r.id }
+fn f2(a: own Result[S, i64]) -> i64 { let Ok(x) = a else { return 0 }; x.r.id }
+fn f3(a: own Option[(R, i64)]) -> i64 { let Some(t) = a else { return 0 }; t.1 }
+fn f4(a: own Option[S]) -> i64 { let Some(x) = a else { return 0 }; if x.r.id > 7 { keep(x); 1 } else { 2 } }
+fn f5(a: own Option[S]) -> i64 { let Some(x) = id(a) else { return 0 }; x.r.id }
+fn f6(a: own Option[R]) -> i64 { let Some(x) = a else { return 0 }; x.id }
+fn f7(a: own Option[S]) -> i64 { let Some(x) = a else { return 0 }; println("mid"); let n = x.r.id; n }
+fn f8(a: own Option[S]) -> i64 { let Some(x) = a else { return 0 }; keep(x); 1 }
 fn main() {
     println(f"k{f1(Some(mks(1)))}"); let a1 = Some(mks(2)); println(f"j{f1(a1)}");
     println(f"k{f2(Ok(mks(3)))}"); let a2: Result[S, i64] = Ok(mks(4)); println(f"j{f2(a2)}");

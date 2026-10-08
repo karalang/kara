@@ -11,7 +11,7 @@ fn c5(x: own S, k: bool) -> Option[Option[S]] { let o = Some(Some(x)); let p = o
 fn c6(x: own S) -> Option[Option[S]] { let o = Some(x); let p = Some(o); p }
 fn c7(x: own S) -> Option[S] { let o = Some(x); o }
 
-fn show(t: String, v: Option[Option[S]]) {
+fn show(t: String, v: own Option[Option[S]]) {
     match v { Some(Some(s)) => println(f"{t}:{s.r.id}"), Some(None) => println(f"{t}:sn"), None => println(f"{t}:none") }
 }
 

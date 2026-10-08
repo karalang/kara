@@ -9,7 +9,7 @@ struct H2 { s: S }
 
 impl H1 {
     fn out(own self) -> R { match self.e { E.A(r) => { return r; } E.B => { return mk(0); } } }
-    fn out_iflet(self) -> R { if let E.A(r) = self.e { return r; } else { return mk(0); } }
+    fn out_iflet(own self) -> R { if let E.A(r) = self.e { return r; } else { return mk(0); } }
     fn out_tail(own self) -> R { match self.e { E.A(r) => r, E.B => mk(0) } }
     fn out_some(own self, k: bool) -> R { match self.e { E.A(r) => { if k { return r; } return mk(1); } E.B => { return mk(0); } } }
     fn read(own self) -> i64 { match self.e { E.A(r) => { return r.id; } E.B => { return 0; } } }

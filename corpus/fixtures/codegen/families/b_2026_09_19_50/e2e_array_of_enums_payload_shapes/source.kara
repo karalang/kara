@@ -10,7 +10,7 @@ struct Ga { h: Ha }
 struct Gb { g: Ga, k: i64 }
 fn r(i: i64) -> R { R { id: i, s: f"ssssssss{i}" } }
 fn mk(i: i64) -> Ha { Ha.P([Mono.P(r(i))]) }
-fn taka(a: Array[Mono, 1]) -> i64 { 1 }
+fn taka(a: own Array[Mono, 1]) -> i64 { 1 }
 fn main() {
     println("stmt"); { Ha.P([Mono.P(r(1))]); println("  x") }
     println("unit"); { let h = Ha.P([Mono.Q]); println("  x") }

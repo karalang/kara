@@ -1,15 +1,15 @@
 struct P { pos: i64 }
 struct S { s: String, k: i64 }
 impl P {
-    fn take(mut ref self, doc: Option[String]) -> i64 { self.pos = self.pos + 1; match doc { Some(s) => s.len(), None => 0 } }
+    fn take(mut ref self, doc: own Option[String]) -> i64 { self.pos = self.pos + 1; match doc { Some(s) => s.len(), None => 0 } }
     fn item(mut ref self, t: i64) -> i64 { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => self.take(doc), _ => 5 }; let b = match doc { Some(s) => s.len(), None => 0 }; a + b }
 }
-fn take(doc: Option[String]) -> i64 { match doc { Some(s) => s.len(), None => 0 } }
-fn takev(doc: Option[Vec[i64]]) -> i64 { match doc { Some(s) => s.len(), None => 0 } }
-fn takes(doc: Option[S]) -> i64 { match doc { Some(s) => s.s.len(), None => 0 } }
-fn taker(doc: Result[String, i64]) -> i64 { match doc { Ok(s) => s.len(), Err(e) => e } }
-fn takee(doc: Result[i64, String]) -> i64 { match doc { Ok(v) => v, Err(e) => e.len() } }
-fn back(doc: Option[String]) -> Option[String] { doc }
+fn take(doc: own Option[String]) -> i64 { match doc { Some(s) => s.len(), None => 0 } }
+fn takev(doc: own Option[Vec[i64]]) -> i64 { match doc { Some(s) => s.len(), None => 0 } }
+fn takes(doc: own Option[S]) -> i64 { match doc { Some(s) => s.s.len(), None => 0 } }
+fn taker(doc: own Result[String, i64]) -> i64 { match doc { Ok(s) => s.len(), Err(e) => e } }
+fn takee(doc: own Result[i64, String]) -> i64 { match doc { Ok(v) => v, Err(e) => e.len() } }
+fn back(doc: own Option[String]) -> Option[String] { doc }
 fn read(t: i64) -> i64 { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => take(doc), _ => 5 }; let b = match doc { Some(s) => s.len(), None => 0 }; a + b }
 fn armmove(t: i64) -> String { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => take(doc), _ => 5 }; let b = match doc { Some(s) => s, None => f"none" }; f"{a} {b}" }
 fn handback(t: i64) -> i64 { let doc = Some(f"heap-string-longer-than-sso-{t}"); let a = match t { 0 => match back(doc) { Some(s) => s.len(), None => 0 }, _ => 5 }; let b = match doc { Some(s) => s.len(), None => 0 }; a + b }

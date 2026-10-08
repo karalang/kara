@@ -6,16 +6,16 @@ impl Drop for Q { fn drop(mut ref self) { println(f"dQ{self.qid}") } }
 fn mq(i: i64) -> Q { return Q { qid: i, s: f"q{i}" }; }
 struct Go[T] { r: T, z: i64 }
 impl[T] Drop for Go[T] { fn drop(mut ref self) { println(f"dGo{self.z}") } }
-fn gOwn[T](h: Go[T]) -> i64 { return h.z; }
+fn gOwn[T](h: own Go[T]) -> i64 { return h.z; }
 struct Gp[T] { v: T, z: i64 }
 impl[T] Drop for Gp[T] { fn drop(mut ref self) { println(f"dGp{self.z}") } }
-fn pOwn[T](h: Gp[T]) -> i64 { return h.z; }
+fn pOwn[T](h: own Gp[T]) -> i64 { return h.z; }
 struct Gt[T] { a: T, b: Q, z: i64 }
 impl[T] Drop for Gt[T] { fn drop(mut ref self) { println(f"dGt{self.z}") } }
-fn tOwn[T](h: Gt[T]) -> i64 { return h.z; }
+fn tOwn[T](h: own Gt[T]) -> i64 { return h.z; }
 struct Gd[A, B] { a: A, b: B, z: i64 }
 impl[A, B] Drop for Gd[A, B] { fn drop(mut ref self) { println(f"dGd{self.z}") } }
-fn dOwn[A, B](h: Gd[A, B]) -> i64 { return h.z; }
+fn dOwn[A, B](h: own Gd[A, B]) -> i64 { return h.z; }
 fn main() {
     println("a1"); let _ = gOwn(Go[R] { r: mk(1), z: 41 });
     println("a2"); let _ = gOwn(Go[Q] { r: mq(2), z: 42 });

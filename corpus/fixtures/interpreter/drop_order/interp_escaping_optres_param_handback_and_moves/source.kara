@@ -1,17 +1,17 @@
-fn id(a: Option[String]) -> Option[String] { a }
-fn idr(a: Result[String, i64]) -> Result[String, i64] { a }
-fn idv(a: Option[Vec[String]]) -> Option[Vec[String]] { a }
-fn peek(a: Option[String]) -> i64 { match id(a) { Some(s) => s.len(), None => 0 } }
-fn pick(a: Option[String]) -> String { match id(a) { Some(s) => s, None => f"none" } }
-fn pickr(a: Result[String, i64]) -> String { match idr(a) { Ok(s) => s, Err(e) => f"e{e}" } }
-fn pickl(a: Option[String]) -> String { if let Some(s) = id(a) { s } else { f"none" } }
-fn pickc(a: Option[String], c: bool) -> String { match id(a) { Some(s) if c => s, Some(s) => f"n{s.len()}", None => f"none" } }
-fn pickv(a: Option[Vec[String]]) -> Vec[String] { match idv(a) { Some(v) => v, None => Vec.new() } }
-fn letb(a: Option[String]) -> String { let c = id(a); match c { Some(s) => s, None => f"none" } }
-fn rebind(a: Option[String]) -> i64 { let c = a; match c { Some(s) => s.len(), None => 0 } }
-fn store(a: Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
-fn eat(a: Option[String]) -> i64 { match a { Some(s) => s.len(), None => 0 } }
-fn fwd(a: Option[String]) -> i64 { eat(a) }
+fn id(a: own Option[String]) -> Option[String] { a }
+fn idr(a: own Result[String, i64]) -> Result[String, i64] { a }
+fn idv(a: own Option[Vec[String]]) -> Option[Vec[String]] { a }
+fn peek(a: own Option[String]) -> i64 { match id(a) { Some(s) => s.len(), None => 0 } }
+fn pick(a: own Option[String]) -> String { match id(a) { Some(s) => s, None => f"none" } }
+fn pickr(a: own Result[String, i64]) -> String { match idr(a) { Ok(s) => s, Err(e) => f"e{e}" } }
+fn pickl(a: own Option[String]) -> String { if let Some(s) = id(a) { s } else { f"none" } }
+fn pickc(a: own Option[String], c: bool) -> String { match id(a) { Some(s) if c => s, Some(s) => f"n{s.len()}", None => f"none" } }
+fn pickv(a: own Option[Vec[String]]) -> Vec[String] { match idv(a) { Some(v) => v, None => Vec.new() } }
+fn letb(a: own Option[String]) -> String { let c = id(a); match c { Some(s) => s, None => f"none" } }
+fn rebind(a: own Option[String]) -> i64 { let c = a; match c { Some(s) => s.len(), None => 0 } }
+fn store(a: own Option[String]) -> Vec[Option[String]] { let mut v: Vec[Option[String]] = Vec.new(); v.push(a); v }
+fn eat(a: own Option[String]) -> i64 { match a { Some(s) => s.len(), None => 0 } }
+fn fwd(a: own Option[String]) -> i64 { eat(a) }
 fn main() {
     let a1 = Some(f"heap-string-longer-than-sso-01");
     println(f"k{peek(a1)}");

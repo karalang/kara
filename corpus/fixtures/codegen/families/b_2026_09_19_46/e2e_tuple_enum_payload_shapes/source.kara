@@ -8,7 +8,7 @@ enum Ho { P((Option[S1], i64)), Q }
 enum Hs { P { t: (S1, S1), n: i64 }, Q }
 enum Hd { P((S1, S1)), Q }
 impl Drop for Hd { fn drop(mut ref self) { println("  dHd") } }
-fn takt(t: (S1, S1)) -> i64 { t.0.v }
+fn takt(t: own (S1, S1)) -> i64 { t.0.v }
 fn s(v: i64) -> S1 { S1 { v: v, s: f"ssssssss{v}" } }
 fn mk(v: i64) -> Ht { Ht.P((s(v), s(v + 1))) }
 fn main() {

@@ -3,19 +3,19 @@ impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 
 struct Sink { n: i64 }
 impl Sink {
-    fn eat(ref self, o: Option[(R, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }
+    fn eat(ref self, o: own Option[(R, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }
 }
 
-fn scalarOut(o: Option[(R, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }
-fn dropOut(o: Option[(R, R)]) -> R { match o { Option.Some((a, b)) => { return a; } Option.None => { return R { id: 0 }; } } }
-fn resultOut(o: Result[(R, i64), i64]) -> i64 { match o { Result.Ok((a, b)) => { return b; } Result.Err(e) => { return 0; } } }
-fn wildKept(o: Option[(R, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 0; } } }
-fn middleOut(o: Option[(R, R, R)]) -> R { match o { Option.Some((a, b, c)) => { return b; } Option.None => { return R { id: 0 }; } } }
-fn bothOut(o: Option[(R, R)]) -> (R, R) { match o { Option.Some((a, b)) => { return (a, b); } Option.None => { return (R { id: 0 }, R { id: 0 }); } } }
-fn readOnly(o: Option[(R, R)]) -> i64 { match o { Option.Some((a, b)) => { return a.id + b.id; } Option.None => { return 0; } } }
-fn wholeOut(o: Option[(R, i64)]) -> (R, i64) { match o { Option.Some(t) => { return t; } Option.None => { return (R { id: 0 }, 0); } } }
-fn condOut(o: Option[(R, R)], k: bool) -> R { match o { Option.Some((a, b)) => { if k { return a; } return b; } Option.None => { return R { id: 0 }; } } }
-fn genOut[T](o: Option[(R, T)], d: own T) -> T { match o { Option.Some((a, b)) => { return b; } Option.None => { return d; } } }
+fn scalarOut(o: own Option[(R, i64)]) -> i64 { match o { Option.Some((a, b)) => { return b; } Option.None => { return 0; } } }
+fn dropOut(o: own Option[(R, R)]) -> R { match o { Option.Some((a, b)) => { return a; } Option.None => { return R { id: 0 }; } } }
+fn resultOut(o: own Result[(R, i64), i64]) -> i64 { match o { Result.Ok((a, b)) => { return b; } Result.Err(e) => { return 0; } } }
+fn wildKept(o: own Option[(R, i64)]) -> i64 { match o { Option.Some((_, b)) => { return b; } Option.None => { return 0; } } }
+fn middleOut(o: own Option[(R, R, R)]) -> R { match o { Option.Some((a, b, c)) => { return b; } Option.None => { return R { id: 0 }; } } }
+fn bothOut(o: own Option[(R, R)]) -> (R, R) { match o { Option.Some((a, b)) => { return (a, b); } Option.None => { return (R { id: 0 }, R { id: 0 }); } } }
+fn readOnly(o: own Option[(R, R)]) -> i64 { match o { Option.Some((a, b)) => { return a.id + b.id; } Option.None => { return 0; } } }
+fn wholeOut(o: own Option[(R, i64)]) -> (R, i64) { match o { Option.Some(t) => { return t; } Option.None => { return (R { id: 0 }, 0); } } }
+fn condOut(o: own Option[(R, R)], k: bool) -> R { match o { Option.Some((a, b)) => { if k { return a; } return b; } Option.None => { return R { id: 0 }; } } }
+fn genOut[T](o: own Option[(R, T)], d: own T) -> T { match o { Option.Some((a, b)) => { return b; } Option.None => { return d; } } }
 
 fn main() {
     println("scalarout");  { let got: i64 = scalarOut(Option.Some((R { id: 5 }, 9))); println(f"  got:{got}") }

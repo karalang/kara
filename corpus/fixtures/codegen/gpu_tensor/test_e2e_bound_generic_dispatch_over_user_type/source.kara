@@ -22,7 +22,7 @@ impl Reduce[i64] for Pair {
 }
 
 fn dref[C: Doubler[i64]](c: ref C) -> i64 { c.dbl() }
-fn towned[C: Owned[i64]](c: C) -> i64 { c.triple() }
+fn towned[C: Owned[i64]](c: own C) -> i64 { c.triple() }
 fn twice[C: Bump](c: mut ref C) -> i64 { c.bump() + c.bump() }
 fn total[C: Reduce[i64]](c: ref C) -> i64 { c.sum() + c.max() }
 

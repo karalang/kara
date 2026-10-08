@@ -6,7 +6,7 @@ struct HoOpt { a: R, b: Option[R] }
 struct WrapR { inner: HoRes }
 struct WrapO { inner: HoOpt }
 struct Outer { h: WrapR }
-fn eat(x: R) { println(f"  eat{x.id}") }
+fn eat(x: own R) { println(f"  eat{x.id}") }
 
 fn unused()  { let w = WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}") }
 fn rmatch()  { let w = WrapR { inner: HoRes { a: mk(2), b: Result.Ok(mk(102)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}");

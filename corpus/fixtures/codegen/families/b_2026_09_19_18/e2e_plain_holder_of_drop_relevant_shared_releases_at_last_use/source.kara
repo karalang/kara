@@ -4,7 +4,7 @@ shared enum SMono { P(R2), Q }
 fn mkr(n: i64) -> R2 { R2 { s: f"aaaaaaaa-{n}", t: f"t{n}", u: f"u{n}" } }
 struct W { e: SMono, n: i64 }
 enum H3 { P(SMono), Q }
-fn eat(w: W) { println("  eat") }
+fn eat(w: own W) { println("  eat") }
 fn mkw(n: i64) -> W { let w = W { e: SMono.P(mkr(n)), n: n }; println("  built"); w }
 
 fn main() {

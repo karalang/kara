@@ -4,7 +4,7 @@ struct P { v: i64 }
 impl Drop for P { fn drop(mut ref self) { println(f"dP{self.v}") } }
 fn pass(x: own Array[W1, 1]) -> Array[W1, 1] { return x }
 fn passv(x: own Vec[W1]) -> Vec[W1] { return x }
-fn take(x: Array[W1, 1]) -> i64 { return x[0].v }
+fn take(x: own Array[W1, 1]) -> i64 { return x[0].v }
 fn p2(x: own Array[W1, 2]) -> Array[W1, 2] { return x }
 fn pc(x: own Array[W1, 1], c: bool) -> Option[Array[W1, 1]] { if c { return Some(x) } return None }
 fn keep(v: mut ref Vec[Array[W1, 1]], x: own Array[W1, 1]) { v.push(x) }

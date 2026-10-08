@@ -11,7 +11,7 @@ fn v1() { let o: Option[(Vec[W], i64)] = Some(([mk(4), mk(104)], 4)); match o { 
 fn o1() { let o: Option[(Option[W], i64)] = Some((Some(mk(5)), 5)); match o { Some(t) => { println(f"  o{t.1}") } None => {} } }
 fn n1() { let o: Option[(((W, i64), W), i64)] = Some((((mk(6), 6), mk(106)), 6)); match o { Some(t) => { println(f"  n{t.1}") } None => {} } }
 fn i1() { let o: Option[((W, W), i64)] = Some(((mk(7), mk(107)), 7)); if let Some(t) = o { println(f"  i{t.1}") } }
-fn p1(o: Option[((W, W), i64)]) { match o { Some(t) => { println(f"  p{t.1}") } None => {} } }
+fn p1(o: own Option[((W, W), i64)]) { match o { Some(t) => { println(f"  p{t.1}") } None => {} } }
 fn r1() { let r: Result[((W, W), i64), i64] = Ok(((mk(9), mk(109)), 9)); match r { Ok(t) => { println(f"  r{t.1}") } Err(e) => {} } }
 fn u1() { let o: Option[(U, i64)] = Some((U.P(mk(10)), 10)); match o { Some(t) => { println(f"  u{t.1}") } None => {} } }
 fn k1() { let o: Option[(K, i64)] = Some((K.A, 11)); match o { Some(t) => { println(f"  k{t.1}") } None => {} } }

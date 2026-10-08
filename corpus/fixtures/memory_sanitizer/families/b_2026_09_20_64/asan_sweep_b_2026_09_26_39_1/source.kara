@@ -1,5 +1,5 @@
 enum Gh[T] { Y(T, String), N }
-fn gh(g: Gh[Array[String, 2]]) { println("  in") }
+fn gh(g: own Gh[Array[String, 2]]) { println("  in") }
 fn main() {
     { let a: Array[String, 2] = [f"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", f"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"];
       let w: Gh[Array[String, 2]] = Gh.Y(a, f"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"); gh(w); println("  mid") }

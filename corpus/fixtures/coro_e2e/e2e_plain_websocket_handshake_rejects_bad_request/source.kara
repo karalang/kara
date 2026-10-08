@@ -1,5 +1,5 @@
 
-            fn handle_ws(ws: WebSocket) {
+            fn handle_ws(ws: own WebSocket) {
                 let mut buf: Array[u8, 1024] = [0u8; 1024];
                 let _r = ws.recv_text(mut buf);
             }
