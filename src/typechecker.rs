@@ -2675,6 +2675,11 @@ pub struct TypeChecker<'a> {
     /// the full rationale.
     pub(super) fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
     pub(super) fn_value_param_types: FxHashMap<SpanKey, Vec<Type>>,
+    /// While a method call's arguments are checked: the receiver's
+    /// substitution (`Self` and the impl's parameters), which a
+    /// function-trait bound on the method (`F: MutFn(own Self.Item) -> U`)
+    /// is read under.
+    pub(super) call_bound_receiver_subs: Option<std::collections::HashMap<String, SubstValue>>,
     pub(super) dbg_arg_types: FxHashMap<SpanKey, Type>,
     /// Per-existential capture sets, keyed by the SpanKey of the
     /// `TypeKind::ImplTrait` AST node. See the public copy on
@@ -3156,6 +3161,7 @@ impl<'a> TypeChecker<'a> {
             method_typeparam_trait_key: FxHashMap::default(),
             fn_value_callee_types: FxHashMap::default(),
             fn_value_param_types: FxHashMap::default(),
+            call_bound_receiver_subs: None,
             dbg_arg_types: FxHashMap::default(),
             impl_trait_captures: FxHashMap::default(),
             method_unwrap_inner_types: FxHashMap::default(),

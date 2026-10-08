@@ -137,6 +137,7 @@ impl<'a> super::TypeChecker<'a> {
         param: &str,
         where_clause: Option<&WhereClause>,
         name_to_id: &std::collections::HashMap<String, super::types::TypeVarId>,
+        formal_generic_params: Option<&[String]>,
     ) -> Option<Type> {
         let bound = where_clause?.constraints.iter().find_map(|c| match c {
             WhereConstraint::TypeBound {
@@ -152,8 +153,20 @@ impl<'a> super::TypeChecker<'a> {
         }
         // Projections on the callee's parameters (`I.Item`) stay unresolved
         // here: they resolve once the substitution has solved `I`.
-        let scope: Vec<String> = name_to_id.keys().cloned().collect();
-        let t = self.lower_type_expr(bound.fn_sig.as_ref()?, &scope);
+        // A parameter that only the bound mentions (`U` in `F: MutFn(T) -> U`
+        // when `U` is in no parameter or return type) has no metavariable of
+        // the call's. It stays a type parameter, the shape an unsolved
+        // metavariable resolves to, and the closure's own type fixes `F`.
+        let mut scope: Vec<String> = name_to_id.keys().cloned().collect();
+        for p in formal_generic_params.unwrap_or(&[]) {
+            if !name_to_id.contains_key(p) {
+                scope.push(p.clone());
+            }
+        }
+        let mut t = self.lower_type_expr(bound.fn_sig.as_ref()?, &scope);
+        if let Some(receiver_subs) = self.call_bound_receiver_subs.clone() {
+            t = super::inference::substitute_type_params(&t, &receiver_subs);
+        }
         let subs: std::collections::HashMap<String, super::types::SubstValue> = name_to_id
             .iter()
             .map(|(n, id)| {

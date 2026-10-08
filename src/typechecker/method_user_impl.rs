@@ -913,7 +913,10 @@ impl<'a> super::TypeChecker<'a> {
                 // call-site `mut` marker rule applies only to free-function
                 // calls. `explicit_generic_args` stays `None` — this dispatch
                 // has no turbofish surface to pass along.
-                self.check_call_args_with_substitution_full(
+                let mut receiver_subs = recv_subs.clone();
+                receiver_subs.extend(self_subs);
+                let saved = self.call_bound_receiver_subs.replace(receiver_subs);
+                let ret = self.check_call_args_with_substitution_full(
                     args,
                     &params,
                     &return_type,
@@ -923,7 +926,9 @@ impl<'a> super::TypeChecker<'a> {
                     Some(&sig.generic_params),
                     sig.where_clause.as_ref(),
                     span,
-                )
+                );
+                self.call_bound_receiver_subs = saved;
+                ret
             }
             None => {
                 for arg in args {

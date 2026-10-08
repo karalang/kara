@@ -2719,9 +2719,12 @@ impl<'a> super::TypeChecker<'a> {
             // A closure for a parameter typed by a type parameter with a
             // function-trait bound is checked against the bound's signature.
             let bound_sig = match (arg_ty_opt, formal) {
-                (None, Type::TypeParam(p)) => {
-                    self.call_fn_bound_expectation(p, where_clause, &name_to_id)
-                }
+                (None, Type::TypeParam(p)) => self.call_fn_bound_expectation(
+                    p,
+                    where_clause,
+                    &name_to_id,
+                    formal_generic_params,
+                ),
                 _ => None,
             };
             let resolved = resolve_type_vars(
@@ -2875,6 +2878,17 @@ impl<'a> super::TypeChecker<'a> {
                         &mut self.env.substitutions,
                         &mut self.env.const_substitutions,
                     );
+                    // The same for a parameter that a function-trait bound
+                    // ties to the closure: `U` in `F: MutFn(T) -> U` is
+                    // solved by the closure's return type.
+                    if let Some(sig) = &bound_sig {
+                        unify_types(
+                            sig,
+                            &arg_ty,
+                            &mut self.env.substitutions,
+                            &mut self.env.const_substitutions,
+                        );
+                    }
                     if apply_call_site_marker {
                         self.check_call_site_marker(arg, &resolved, &arg_ty);
                     }
@@ -3889,11 +3903,9 @@ impl<'a> super::TypeChecker<'a> {
         // `derived_traits` directly, matching the pattern used for
         // Hash / Display / Eq above.
         match trait_name {
-            // A function-trait bound is met by a function value; its
-            // signature was checked against the argument where it was
-            // passed. An `OnceFn` bound also takes a once-callable closure.
-            "Fn" | "MutFn" => return matches!(ty, Type::Function { .. }),
-            "OnceFn" => return matches!(ty, Type::Function { .. } | Type::OnceFunction { .. }),
+            "Fn" | "MutFn" | "OnceFn" => {
+                return super::env::TypeEnv::type_supports_fn_trait(ty, trait_name)
+            }
             "Hash" => return self.type_supports_hash(ty),
             "Eq" => return self.type_supports_eq(ty),
             "PartialEq" => return self.type_supports_partial_eq(ty),

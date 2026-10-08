@@ -998,6 +998,17 @@ impl TypeEnv {
 
     /// Discharge `bound` against `ty`. The bound's last path segment names
     /// the trait. Walks the supertrait graph via [`Self::type_satisfies_trait`].
+    /// Whether `ty` meets a function-trait bound of kind `kind` (`Fn`,
+    /// `MutFn` or `OnceFn`): any function value meets the first two, and a
+    /// once-callable closure meets `OnceFn` too. The bound's signature is
+    /// checked against the value where it is passed, not here.
+    pub(super) fn type_supports_fn_trait(ty: &Type, kind: &str) -> bool {
+        match kind {
+            "OnceFn" => matches!(ty, Type::Function { .. } | Type::OnceFunction { .. }),
+            _ => matches!(ty, Type::Function { .. }),
+        }
+    }
+
     fn bound_satisfied(&self, ty: &Type, bound: &TraitBound) -> bool {
         let Some(trait_name) = bound.path.last() else {
             return false;
@@ -1039,6 +1050,7 @@ impl TypeEnv {
             "Ord" => return self.type_supports_ord(ty),
             "Hash" => return self.type_supports_hash(ty),
             "Default" => return self.type_supports_default(ty),
+            "Fn" | "MutFn" | "OnceFn" => return Self::type_supports_fn_trait(ty, trait_name),
             _ => {}
         }
         let Some((ty_name, ty_args)) = impl_table_key(ty) else {

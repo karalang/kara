@@ -2157,6 +2157,17 @@ impl<'a> super::TypeChecker<'a> {
             _ => None,
         };
 
+        // The free fn's own generic parameters, for a function-trait bound
+        // that mentions one no parameter or return type does (`U` in
+        // `fn map[U, F: MutFn(T) -> U](f: own F) -> M[F]`).
+        let callee_generic_params: Option<Vec<String>> = match &callee.kind {
+            ExprKind::Identifier(name) => self
+                .env
+                .functions
+                .get(name)
+                .map(|sig| sig.generic_params.clone()),
+            _ => None,
+        };
         let callee_where_clause: Option<WhereClause> = match &callee.kind {
             ExprKind::Identifier(name) => self
                 .env
@@ -2493,7 +2504,7 @@ impl<'a> super::TypeChecker<'a> {
                     span,
                     /* apply_call_site_marker = */ true,
                     None,
-                    None,
+                    callee_generic_params.as_deref(),
                     callee_where_clause.as_ref(),
                     span,
                 );

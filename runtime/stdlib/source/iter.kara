@@ -8,10 +8,10 @@
 //
 // Each adaptor is a struct holding the iterator it wraps. The adaptors that
 // store a function (`map`, `filter`, ...) take it as a type parameter with a
-// function-trait bound (`F: MutFn(own Self.Item) -> U`), so its captures are
-// borrowed as core semantics §9.1 says; they follow once the checker and the
-// MIR builder support those bounds. The methods that only call a function
-// (`fold`, `any`, ...) are here.
+// function-trait bound (`F: MutFn(own Self.Item) -> U`), so the adaptor is a
+// view and the function's captures follow core semantics §9.1. An adaptor
+// whose items are the function's results carries their type `U` as a struct
+// parameter too, so the `impl` can name it.
 
 trait Iterator {
     type Item;
@@ -79,6 +79,36 @@ trait Iterator {
     /// Pairs of items, one from each, until either runs out.
     fn zip[J: Iterator](own self, other: own J) -> Zip[Self, J] {
         Zip { a: self, b: other }
+    }
+
+    /// `f` applied to each item.
+    fn map[U, F: MutFn(own Self.Item) -> U](own self, f: own F) -> IterMap[Self, F, U] {
+        IterMap { it: self, f: f }
+    }
+
+    /// The items `pred` holds for.
+    fn filter[F: MutFn(ref Self.Item) -> bool](own self, pred: own F) -> IterFilter[Self, F] {
+        IterFilter { it: self, pred: pred }
+    }
+
+    /// The `Some` results of `f` applied to each item.
+    fn filter_map[U, F: MutFn(own Self.Item) -> Option[U]](own self, f: own F) -> IterFilterMap[Self, F, U] {
+        IterFilterMap { it: self, f: f }
+    }
+
+    /// The items up to the first one `pred` does not hold for.
+    fn take_while[F: MutFn(ref Self.Item) -> bool](own self, pred: own F) -> IterTakeWhile[Self, F] {
+        IterTakeWhile { it: self, pred: pred, done: false }
+    }
+
+    /// The items from the first one `pred` does not hold for.
+    fn skip_while[F: MutFn(ref Self.Item) -> bool](own self, pred: own F) -> IterSkipWhile[Self, F] {
+        IterSkipWhile { it: self, pred: pred, skipping: true }
+    }
+
+    /// The items, calling `f` on each as it passes.
+    fn inspect[F: MutFn(ref Self.Item)](own self, f: own F) -> IterInspect[Self, F] {
+        IterInspect { it: self, f: f }
     }
 
     /// Folds every item into an accumulator, front to back.
@@ -257,6 +287,125 @@ impl[A: Iterator, B: Iterator] Iterator for Zip[A, B] {
                 Some(y) => Some((x, y)),
                 None => None,
             },
+            None => None,
+        }
+    }
+}
+
+struct IterMap[I, F, U] {
+    it: I,
+    f: F,
+}
+
+impl[I: Iterator, F: MutFn(own I.Item) -> U, U] Iterator for IterMap[I, F, U] {
+    type Item = U;
+
+    fn next(mut ref self) -> Option[U] {
+        match self.it.next() {
+            Some(x) => Some((self.f)(x)),
+            None => None,
+        }
+    }
+}
+
+struct IterFilter[I, F] {
+    it: I,
+    pred: F,
+}
+
+impl[I: Iterator, F: MutFn(ref I.Item) -> bool] Iterator for IterFilter[I, F] {
+    type Item = I.Item;
+
+    fn next(mut ref self) -> Option[I.Item] {
+        while let Some(x) = self.it.next() {
+            if (self.pred)(x) {
+                return Some(x);
+            }
+        }
+        None
+    }
+}
+
+struct IterFilterMap[I, F, U] {
+    it: I,
+    f: F,
+}
+
+impl[I: Iterator, F: MutFn(own I.Item) -> Option[U], U] Iterator for IterFilterMap[I, F, U] {
+    type Item = U;
+
+    fn next(mut ref self) -> Option[U] {
+        while let Some(x) = self.it.next() {
+            match (self.f)(x) {
+                Some(y) => return Some(y),
+                None => {}
+            }
+        }
+        None
+    }
+}
+
+struct IterTakeWhile[I, F] {
+    it: I,
+    pred: F,
+    done: bool,
+}
+
+impl[I: Iterator, F: MutFn(ref I.Item) -> bool] Iterator for IterTakeWhile[I, F] {
+    type Item = I.Item;
+
+    fn next(mut ref self) -> Option[I.Item] {
+        if self.done {
+            return None;
+        }
+        match self.it.next() {
+            Some(x) => {
+                if (self.pred)(x) {
+                    return Some(x);
+                }
+                self.done = true;
+                None
+            }
+            None => None,
+        }
+    }
+}
+
+struct IterSkipWhile[I, F] {
+    it: I,
+    pred: F,
+    skipping: bool,
+}
+
+impl[I: Iterator, F: MutFn(ref I.Item) -> bool] Iterator for IterSkipWhile[I, F] {
+    type Item = I.Item;
+
+    fn next(mut ref self) -> Option[I.Item] {
+        while let Some(x) = self.it.next() {
+            if self.skipping and (self.pred)(x) {
+                continue;
+            }
+            self.skipping = false;
+            return Some(x);
+        }
+        None
+    }
+}
+
+struct IterInspect[I, F] {
+    it: I,
+    f: F,
+}
+
+impl[I: Iterator, F: MutFn(ref I.Item)] Iterator for IterInspect[I, F] {
+    type Item = I.Item;
+
+    fn next(mut ref self) -> Option[I.Item] {
+        match self.it.next() {
+            Some(x) => {
+                (self.f)(x);
+                Some(x)
+            }
             None => None,
         }
     }

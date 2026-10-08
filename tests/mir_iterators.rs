@@ -470,3 +470,30 @@ fn main() {
         "<1>\n<2>\n10\n20\n6\n",
     );
 }
+
+/// The library's adaptors that store a function: `map`, `filter`,
+/// `filter_map`, `take_while`, `skip_while` and `inspect`, each generic over
+/// its function with a function-trait bound. `map`'s result type is fixed by
+/// the closure alone.
+#[test]
+fn the_library_adaptors_that_store_a_function() {
+    assert_runs(
+        r#"
+struct Counter { n: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] { self.n = self.n + 1; Some(self.n) }
+}
+fn main() {
+    let k = 10;
+    for s in Counter { n: 0 }.map(|x| f"<{x * k}>").take(3) { println(s); }
+    println(Counter { n: 0 }.filter(|x| x % 3 == 0).take(4).fold(0, |a, x| a + x));
+    for y in Counter { n: 0 }.filter_map(|x| if x % 2 == 0 { Some(x * x) } else { None }).take(3) { println(y); }
+    for x in Counter { n: 0 }.skip_while(|x| x < 5).take_while(|x| x < 8) { println(x); }
+    let t = Counter { n: 0 }.take(3).inspect(|x| println(f"saw {x}")).fold(0, |a, x| a + x);
+    println(t);
+}
+"#,
+        "<10>\n<20>\n<30>\n30\n4\n16\n36\n5\n6\n7\nsaw 1\nsaw 2\nsaw 3\n6\n",
+    );
+}
