@@ -8841,6 +8841,33 @@ fn main() -> Result[(), String] {
     /// Float math natives compute at the receiver's width, and float
     /// literals and results round to their type.
     #[test]
+    fn i128_arithmetic_keeps_128_bits_and_narrow_floats_round() {
+        let src = r#"
+fn half(x: f16) -> f16 { x / 2.0 }
+fn main() {
+    let big: i128 = 9223372036854775807 as i128 * 4;
+    println(f"{big:+}");
+    let m: i128 = i128.MAX;
+    let w = m.wrapping_add(1);
+    println(f"{w}");
+    let a: f16 = 65500.0;
+    let b: bf16 = 1.1;
+    println(f"{a} {half(a) * 2.0 + half(a) * 2.0} {b}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok((
+                "+36893488147419103228\n\
+                 -170141183460469231731687303715884105728\n\
+                 65504 inf 1.1015625\n"
+                    .to_string(),
+                Some(0)
+            ))
+        );
+    }
+
+    #[test]
     fn float_math_at_each_width() {
         let src = r#"
 fn main() {

@@ -3303,8 +3303,8 @@ impl<'a> Interp<'a> {
                     (UnOp::Not, Value::Bool(b), _) => Ok(Value::Bool(!b)),
                     (UnOp::Not, Value::Int(i), TyKind::Int(it)) => Ok(Value::Int(wrap(!i, it))),
                     (UnOp::Neg, Value::Int(i), TyKind::Int(it)) => {
-                        let r = -i;
-                        if wrap(r, it) != r {
+                        let (r, of) = i.overflowing_neg();
+                        if of || wrap(r, it) != r {
                             // `-MIN` overflows, and C8 traps it.
                             if self.trace {
                                 self.events.push(Event::Abort(AbortReason::Overflow));
@@ -3450,24 +3450,27 @@ impl<'a> Interp<'a> {
                 let TyKind::Int(it) = self.tys.kind(ty) else {
                     return err("integer operands of a non-integer type");
                 };
-                let exact = match op {
-                    Add => a + b,
-                    Sub => a - b,
-                    Mul => a.checked_mul(b).unwrap_or(i128::MAX),
+                // In 128 bits, with the 128-bit overflow kept: a narrower
+                // type's result then wraps to the right value, and an
+                // `i128` one is flagged.
+                let (exact, of) = match op {
+                    Add => a.overflowing_add(b),
+                    Sub => a.overflowing_sub(b),
+                    Mul => a.overflowing_mul(b),
                     Div | Rem if b == 0 => {
                         return err("division by zero; the builder must guard it")
                     }
-                    Div => a / b,
+                    Div => a.overflowing_div(b),
                     // `MIN % -1` is 0 mathematically, but it overflows on
                     // the machine exactly as `MIN / -1` does, and C8 traps
                     // both (Rust's `overflowing_rem`).
                     Rem if it.signed() && b == -1 && a == wrap(1 << (it.bits() - 1), it) => {
                         return Ok((Value::Int(0), true));
                     }
-                    Rem => a % b,
-                    BitAnd => a & b,
-                    BitOr => a | b,
-                    BitXor => a ^ b,
+                    Rem => a.overflowing_rem(b),
+                    BitAnd => (a & b, false),
+                    BitOr => (a | b, false),
+                    BitXor => (a ^ b, false),
                     Shl | Shr => {
                         if b < 0 || b >= it.bits() as i128 {
                             return Ok((Value::Int(0), true));
@@ -3478,7 +3481,7 @@ impl<'a> Interp<'a> {
                     _ => unreachable!(),
                 };
                 let wrapped = wrap(exact, it);
-                Ok((Value::Int(wrapped), wrapped != exact))
+                Ok((Value::Int(wrapped), of || wrapped != exact))
             }
             (Value::Bool(a), Value::Bool(b)) => Ok((
                 match op {
