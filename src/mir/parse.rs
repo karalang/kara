@@ -662,6 +662,34 @@ impl Parser {
             c.expect("=")?;
             let v = variant_of(body, &self.tys, &p, c.ident()?)?;
             StatementKind::SetDiscriminant(p, v)
+        } else if c.eat("flag_acquire(") {
+            c.expect("&")?;
+            let kind = if c.eat_kw("mut") {
+                BorrowKind::Mut
+            } else {
+                BorrowKind::Shared
+            };
+            let place = self.place(body, &mut c)?;
+            c.expect(",")?;
+            c.expect("L")?;
+            let loan = c.number()? as u32;
+            c.expect(")")?;
+            StatementKind::BorrowFlag(FlagOp::Acquire { place, kind, loan })
+        } else if c.eat("flag_release(") {
+            c.expect("L")?;
+            let loan = c.number()? as u32;
+            c.expect(")")?;
+            StatementKind::BorrowFlag(FlagOp::Release { loan })
+        } else if c.eat("flag_check(") {
+            c.expect("&")?;
+            let kind = if c.eat_kw("mut") {
+                BorrowKind::Mut
+            } else {
+                BorrowKind::Shared
+            };
+            let place = self.place(body, &mut c)?;
+            c.expect(")")?;
+            StatementKind::BorrowFlag(FlagOp::Check { place, kind })
         } else {
             let p = self.place(body, &mut c)?;
             c.expect("=")?;

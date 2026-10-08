@@ -376,7 +376,33 @@ pub enum StatementKind {
     StorageLive(Local),
     StorageDead(Local),
     SetDiscriminant(Place, VariantIdx),
+    /// A run-time borrow flag on a `mut` field of a `shared` value (core
+    /// semantics §6.2). Only the flag pass inserts these, after drop
+    /// elaboration; the builder never does.
+    BorrowFlag(FlagOp),
     Nop,
+}
+
+/// One borrow-flag operation. The flagged place is a `mut` field of a
+/// `shared` value whose type is neither `Copy` nor a handle aggregate;
+/// the flag belongs to the object, so two handles to it share one flag.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FlagOp {
+    /// Takes the flag for the loan made by the `Ref` at site `loan`:
+    /// panics if `kind` is `Mut` and the flag is held at all, or if it is
+    /// `Shared` and the flag is held mutably.
+    Acquire {
+        place: Place,
+        kind: BorrowKind,
+        loan: u32,
+    },
+    /// Gives back every flag the loan site `loan` holds in this frame, if
+    /// any; the pass puts it where no local can hold the loan any more.
+    Release { loan: u32 },
+    /// An access that takes no borrow: a write or drop (`Mut`) panics if
+    /// the flag is held at all, a read through the field (`Shared`) if it
+    /// is held mutably.
+    Check { place: Place, kind: BorrowKind },
 }
 
 #[derive(Debug, Clone, PartialEq)]

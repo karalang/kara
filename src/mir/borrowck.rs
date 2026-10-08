@@ -44,7 +44,7 @@ use super::syntax::*;
 use super::ty::{IntrinsicTy, Ty, TyInterner, TyKind};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Access {
+pub(super) enum Access {
     Read,
     Write,
     Move,
@@ -155,6 +155,59 @@ pub fn check_borrows(
     } else {
         Err(errs)
     }
+}
+
+/// A loan as the flag pass sees it: kind, place and `Ref` site.
+pub(super) type LoanSite = (BorrowKind, Place, (usize, usize));
+
+/// The loans of `body`, by `Ref` site in block order, and for each block
+/// and each point in it (every statement, then the terminator) the loans
+/// live just before that point: those some live local may hold. The flag
+/// pass releases a run-time borrow flag where its loan stops being live.
+pub(super) fn loan_liveness(
+    body: &Body,
+    tys: &TyInterner,
+    has_receiver: &dyn Fn(&InstanceId) -> bool,
+) -> (Vec<LoanSite>, Vec<Vec<Vec<bool>>>) {
+    let loans = collect_loans(body);
+    let n_locals = body.locals.len();
+    let entry: Origins = vec![vec![false; loans.len()]; n_locals];
+    let cx = Cx {
+        body,
+        tys,
+        loans: &loans,
+        has_receiver,
+    };
+    let origins = origins_dataflow(&cx, entry);
+    let live_out = liveness(body);
+    let mut out = Vec::with_capacity(body.blocks.len());
+    for (bi, block) in body.blocks.iter().enumerate() {
+        let n = block.statements.len();
+        let Some(mut o) = origins[bi].clone() else {
+            out.push(vec![vec![false; loans.len()]; n + 1]); // unreachable
+            continue;
+        };
+        let mut live_before = vec![Vec::new(); n + 1];
+        let mut live = live_out[bi].clone();
+        let (u, d) = terminator_use_def(&block.terminator.kind);
+        transfer_live(&mut live, &u, &d);
+        live_before[n] = live.clone();
+        for si in (0..n).rev() {
+            let (u, d) = statement_use_def(&block.statements[si].kind);
+            transfer_live(&mut live, &u, &d);
+            live_before[si] = live.clone();
+        }
+        let mut points = Vec::with_capacity(n + 1);
+        for (si, live) in live_before.iter().enumerate() {
+            points.push((0..loans.len()).map(|li| loan_live(&o, li, live)).collect());
+            if si < n {
+                cx.transfer(&mut o, &block.statements[si].kind, (bi, si));
+            }
+        }
+        out.push(points);
+    }
+    let loans = loans.into_iter().map(|l| (l.kind, l.place, l.at)).collect();
+    (loans, out)
 }
 
 /// §5.9: nothing is written through a `ref`. A write, a mutable borrow
@@ -655,7 +708,7 @@ fn operand_access(o: &Operand) -> Option<(Place, Access)> {
     }
 }
 
-fn statement_accesses(s: &StatementKind) -> Vec<(Place, Access)> {
+pub(super) fn statement_accesses(s: &StatementKind) -> Vec<(Place, Access)> {
     match s {
         StatementKind::Assign(dest, rv) => {
             let mut v: Vec<(Place, Access)> = match rv {
@@ -676,11 +729,13 @@ fn statement_accesses(s: &StatementKind) -> Vec<(Place, Access)> {
         }
         StatementKind::SetDiscriminant(p, _) => vec![(p.clone(), Access::Write)],
         StatementKind::StorageDead(l) => vec![(Place::local(*l), Access::StorageDead)],
-        StatementKind::StorageLive(_) | StatementKind::Nop => Vec::new(),
+        StatementKind::StorageLive(_) | StatementKind::BorrowFlag(_) | StatementKind::Nop => {
+            Vec::new()
+        }
     }
 }
 
-fn terminator_accesses(t: &TerminatorKind) -> Vec<(Place, Access)> {
+pub(super) fn terminator_accesses(t: &TerminatorKind) -> Vec<(Place, Access)> {
     match t {
         TerminatorKind::Call {
             func,

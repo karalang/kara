@@ -68,7 +68,29 @@ pub fn statement(body: &Body, tys: &TyInterner, s: &StatementKind) -> String {
                 variant_name(body, tys, p, v.0)
             )
         }
+        StatementKind::BorrowFlag(FlagOp::Acquire {
+            place: p,
+            kind,
+            loan,
+        }) => {
+            format!(
+                "flag_acquire({}{}, L{loan})",
+                ref_sigil(*kind),
+                place(body, tys, p)
+            )
+        }
+        StatementKind::BorrowFlag(FlagOp::Release { loan }) => format!("flag_release(L{loan})"),
+        StatementKind::BorrowFlag(FlagOp::Check { place: p, kind }) => {
+            format!("flag_check({}{})", ref_sigil(*kind), place(body, tys, p))
+        }
         StatementKind::Nop => "nop".to_string(),
+    }
+}
+
+fn ref_sigil(kind: BorrowKind) -> &'static str {
+    match kind {
+        BorrowKind::Shared => "&",
+        BorrowKind::Mut => "&mut ",
     }
 }
 

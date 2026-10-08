@@ -4,6 +4,7 @@
 //! dataflow invariants of `Checked` and `DropsElaborated` belong to the
 //! passes that establish them.
 
+use super::flags;
 use super::place_ty::{passes_through_shared, place_ty};
 use super::pretty;
 use super::syntax::*;
@@ -85,17 +86,24 @@ impl Validator<'_> {
 
     /// The type of `p`, reporting an ill-typed path.
     /// Does `p` go through a `Deref` of a shared (`ref`) reference?
+    /// Is `p` reached through a `ref` with no `shared` handle projected
+    /// after it? A `mut` field of a shared value is writable through any
+    /// handle (core semantics §6.2), so the drop before its assignment is
+    /// fine.
     fn behind_shared_ref(&self, p: &Place) -> bool {
-        (0..p.projection.len()).any(|i| {
-            p.projection[i] == ProjElem::Deref && {
-                let prefix = Place {
-                    local: p.local,
-                    projection: p.projection[..i].to_vec(),
-                };
-                place_ty(self.body, self.tys, &prefix)
-                    .is_ok_and(|pt| matches!(self.tys.kind(pt.ty), TyKind::Ref(_)))
+        let mut behind = false;
+        for i in 0..p.projection.len() {
+            let prefix = Place {
+                local: p.local,
+                projection: p.projection[..i].to_vec(),
+            };
+            match place_ty(self.body, self.tys, &prefix).map(|pt| self.tys.kind(pt.ty)) {
+                Ok(TyKind::Ref(_)) if p.projection[i] == ProjElem::Deref => behind = true,
+                Ok(TyKind::Shared(_)) => behind = false,
+                _ => {}
             }
-        })
+        }
+        behind
     }
 
     fn place(&mut self, p: &Place) -> Option<Ty> {
@@ -180,7 +188,20 @@ impl Validator<'_> {
                     }
                 }
             }
-            StatementKind::Nop => {}
+            StatementKind::BorrowFlag(
+                FlagOp::Acquire { place, .. } | FlagOp::Check { place, .. },
+            ) => {
+                if let Some(ty) = self.place(place) {
+                    if !flags::is_flagged_place(self.body, self.tys, place) {
+                        self.err(format!(
+                            "borrow flag on {}, of type {}, which is not a mut field of a shared value",
+                            pretty::place(self.body, self.tys, place),
+                            self.tys.display(ty)
+                        ));
+                    }
+                }
+            }
+            StatementKind::BorrowFlag(FlagOp::Release { .. }) | StatementKind::Nop => {}
         }
     }
 

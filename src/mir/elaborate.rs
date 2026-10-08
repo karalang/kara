@@ -341,7 +341,9 @@ pub(super) fn statement_effects(paths: &MovePaths, s: &StatementKind) -> Vec<Eff
             .map(Effect::Uninit)
             .into_iter()
             .collect(),
-        StatementKind::SetDiscriminant(..) | StatementKind::Nop => Vec::new(),
+        StatementKind::SetDiscriminant(..) | StatementKind::BorrowFlag(_) | StatementKind::Nop => {
+            Vec::new()
+        }
     }
 }
 

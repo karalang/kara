@@ -140,12 +140,14 @@ pub enum StatementKind {
     StorageLive(Local),
     StorageDead(Local),
     SetDiscriminant(Place, VariantIdx),
+    BorrowFlag(FlagOp),   // Acquire { place, kind, loan } | Release { loan } | Check { place, kind }
     Nop,
 }
 ```
 
 - `Assign` does not drop the destination's old value. The builder emits an explicit `Drop(place)` terminator before an assignment to a place that may hold a value (core semantics D4: evaluate the right side, drop the old value, then store), and drop elaboration makes that drop conditional where the place may be uninitialized.
 - `StorageLive` / `StorageDead` mark where a local's memory exists. They neither initialize nor drop. A local is dead before its `StorageLive` and after its `StorageDead`, and reading it there is undefined, which the MIR interpreter reports.
+- `BorrowFlag` is core semantics §6.2's run-time check on a field of a `shared` value whose type is neither `Copy` nor a handle aggregate. The builder never emits it. A pass after drop elaboration (`src/mir/flags.rs`) inserts an `Acquire` after each `Ref` of such a field, a `Release` of that loan site where the borrow checker's liveness says no local can hold it, and a `Check` before each write, drop or read of such a field. A conflicting `Acquire` or `Check` panics; a frame releases what it still holds when it returns. Text form: `flag_acquire(&mut _1.0, L3)`, `flag_release(L3)`, `flag_check(&_1.0)`.
 
 ### 2.7 Terminators
 

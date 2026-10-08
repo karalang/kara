@@ -245,6 +245,7 @@ pub fn run(program: &Program, tys: &TyInterner, entry: &str, args: Vec<Value>) -
             .and_then(|v| v.parse().ok())
             .unwrap_or(MAX_STEPS),
         snapshots: Vec::new(),
+        flags: Vec::new(),
     };
     let outcome = if !problems.is_empty() {
         Outcome::Error(format!("invalid MIR:\n{}", problems.join("\n")))
@@ -285,6 +286,16 @@ fn err<T>(msg: impl Into<String>) -> R<T> {
 struct Frame {
     id: u64,
     locals: Vec<Value>,
+    /// The §6.2 borrow flags this frame holds, by loan site: each flag's
+    /// field address and how it is held.
+    held: Vec<(u32, Vec<(Addr, BorrowKind)>)>,
+}
+
+/// A §6.2 borrow flag: how many readers hold it, or whether a writer does.
+#[derive(Default)]
+struct Flag {
+    readers: u32,
+    writer: bool,
 }
 
 struct HeapObj {
@@ -313,6 +324,8 @@ struct Interp<'a> {
     /// Read-only copies a library method hands out a view of (the bytes
     /// of a `String`): live until exit, and not leaks.
     snapshots: Vec<AllocId>,
+    /// The borrow flags currently held, by field address.
+    flags: Vec<(Addr, Flag)>,
 }
 
 impl<'a> Interp<'a> {
@@ -339,10 +352,14 @@ impl<'a> Interp<'a> {
         self.frames.push(Frame {
             id: self.next_frame_id,
             locals,
+            held: Vec::new(),
         });
         self.events.push(Event::Enter(name.to_string()));
         let result = self.run_body(body);
-        self.frames.pop();
+        let frame = self.frames.pop().expect("frame");
+        for (_, flags) in frame.held {
+            self.release_flags(flags);
+        }
         if result.is_ok() {
             self.events.push(Event::Exit(name.to_string()));
         }
@@ -2572,7 +2589,95 @@ impl<'a> Interp<'a> {
                 }
                 Ok(())
             }
+            StatementKind::BorrowFlag(op) => self.borrow_flag(body, op),
             StatementKind::Nop => Ok(()),
+        }
+    }
+
+    /// §6.2: a conflicting access through another handle panics.
+    fn borrow_flag(&mut self, body: &Body, op: &FlagOp) -> R<()> {
+        match op {
+            FlagOp::Acquire { place, kind, loan } => {
+                let (addr, _) = self.resolve_read(body, place)?;
+                // A loan made again while it is held, as in a loop, gives
+                // back what it held first.
+                let again = self
+                    .frames
+                    .last_mut()
+                    .expect("frame")
+                    .held
+                    .iter_mut()
+                    .find(|(l, _)| l == loan)
+                    .and_then(|(_, h)| h.iter().position(|(a, _)| *a == addr).map(|j| h.remove(j)));
+                if let Some(old) = again {
+                    self.release_flags(vec![old]);
+                }
+                self.flag_conflict(&addr, *kind)?;
+                let flag = match self.flags.iter().position(|(a, _)| *a == addr) {
+                    Some(i) => &mut self.flags[i].1,
+                    None => {
+                        self.flags.push((addr.clone(), Flag::default()));
+                        &mut self.flags.last_mut().expect("pushed").1
+                    }
+                };
+                match kind {
+                    BorrowKind::Shared => flag.readers += 1,
+                    BorrowKind::Mut => flag.writer = true,
+                }
+                let frame = self.frames.last_mut().expect("frame");
+                match frame.held.iter_mut().find(|(l, _)| l == loan) {
+                    Some((_, v)) => v.push((addr, *kind)),
+                    None => frame.held.push((*loan, vec![(addr, *kind)])),
+                }
+                Ok(())
+            }
+            FlagOp::Release { loan } => {
+                let frame = self.frames.last_mut().expect("frame");
+                if let Some(i) = frame.held.iter().position(|(l, _)| l == loan) {
+                    let (_, flags) = frame.held.remove(i);
+                    self.release_flags(flags);
+                }
+                Ok(())
+            }
+            FlagOp::Check { place, kind } => {
+                // A drop of a field already moved or never set touches no
+                // flag.
+                let Some((addr, _)) = self.resolve(body, place, Mode::Probe)? else {
+                    return Ok(());
+                };
+                self.flag_conflict(&addr, *kind)
+            }
+        }
+    }
+
+    /// Panics when the flag at `addr` is held in a way `kind` conflicts with.
+    fn flag_conflict(&mut self, addr: &Addr, kind: BorrowKind) -> R<()> {
+        let Some((_, f)) = self.flags.iter().find(|(a, _)| a == addr) else {
+            return Ok(());
+        };
+        let conflict = match kind {
+            BorrowKind::Shared => f.writer,
+            BorrowKind::Mut => f.writer || f.readers > 0,
+        };
+        if conflict {
+            self.events.push(Event::Abort(AbortReason::Panic));
+            return Err(Stop::Abort(AbortReason::Panic));
+        }
+        Ok(())
+    }
+
+    fn release_flags(&mut self, flags: Vec<(Addr, BorrowKind)>) {
+        for (addr, kind) in flags {
+            if let Some(i) = self.flags.iter().position(|(a, _)| *a == addr) {
+                let f = &mut self.flags[i].1;
+                match kind {
+                    BorrowKind::Shared => f.readers = f.readers.saturating_sub(1),
+                    BorrowKind::Mut => f.writer = false,
+                }
+                if f.readers == 0 && !f.writer {
+                    self.flags.remove(i);
+                }
+            }
         }
     }
 

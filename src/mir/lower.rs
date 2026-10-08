@@ -6321,15 +6321,17 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
         // A library native's result borrows from its first argument, the
         // collection, when it borrows at all. `KARAC_MIR_BORROWCK=0` skips
         // the check.
+        let receivers = &lowered.receivers;
+        let has_receiver =
+            |i: &InstanceId| !names.contains(i.name.as_str()) || receivers.contains(&i.name);
         if borrowck {
-            let has_receiver = |i: &InstanceId| {
-                !names.contains(i.name.as_str()) || lowered.receivers.contains(&i.name)
-            };
             crate::mir::check_borrows(body, &lowered.tys, &has_receiver)
                 .map_err(|e| format!("borrow check {}: {}", body.instance.name, e.join("; ")))?;
         }
         crate::mir::elaborate_drops(body, &mut lowered.tys)
             .map_err(|e| format!("elaborate {}: {e}", body.instance.name))?;
+        // §6.2's run-time borrow flags, on the elaborated body.
+        crate::mir::insert_borrow_flags(body, &lowered.tys, &has_receiver);
         if dump.as_deref() == Some("elaborated") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
         }
