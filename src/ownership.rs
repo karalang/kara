@@ -3159,12 +3159,47 @@ impl<'a> OwnershipChecker<'a> {
                     "f64" => Type::Float(FloatSize::F64),
                     "bool" => Type::Bool,
                     "char" => Type::Char,
+                    // The D5 migration keeps the arguments: `Option[R]` is
+                    // `Copy` only when `R` is, and with none written it read
+                    // as `Copy`, so a returned `Option[R]` parameter was never
+                    // a move. The legacy checker keeps its reading.
+                    // A `shared` struct is a counted handle, `Copy` like the
+                    // checker's own `Type::Shared` (core semantics §6.1).
+                    _ if self.d5.is_some()
+                        && self
+                            .typecheck_result
+                            .struct_info
+                            .get(name.as_str())
+                            .is_some_and(|i| i.is_shared) =>
+                    {
+                        Type::Shared(name.clone())
+                    }
+                    _ if self.d5.is_some() => Type::Named {
+                        name: name.clone(),
+                        args: path
+                            .generic_args
+                            .iter()
+                            .flatten()
+                            .filter_map(|a| match a {
+                                crate::ast::GenericArg::Type(t) => {
+                                    Some(self.lower_type_for_ownership(t))
+                                }
+                                _ => None,
+                            })
+                            .collect(),
+                    },
                     _ => Type::Named {
                         name: name.clone(),
                         args: Vec::new(),
                     },
                 }
             }
+            TypeKind::Tuple(elems) if self.d5.is_some() => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|t| self.lower_type_for_ownership(t))
+                    .collect(),
+            ),
             TypeKind::Unit => Type::Unit,
             TypeKind::Ref(inner) => Type::Ref(Box::new(self.lower_type_for_ownership(inner))),
             TypeKind::MutRef(inner) => Type::MutRef(Box::new(self.lower_type_for_ownership(inner))),

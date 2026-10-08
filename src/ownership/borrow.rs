@@ -720,9 +720,12 @@ impl<'a> super::OwnershipChecker<'a> {
             return false;
         }
         let Some(key) = self.resolved_method_mode_key(method_call) else {
-            return false;
+            return self.d5.is_some() && d5_library_method_consumes(method_call);
         };
-        matches!(self.method_self_modes.get(key), Some(SelfParam::Owned))
+        match self.method_self_modes.get(key) {
+            Some(mode) => matches!(mode, SelfParam::Owned),
+            None => self.d5.is_some() && d5_library_method_consumes(method_call),
+        }
     }
 
     /// Slice 2 — the receiver-side `BorrowKind` for a `MethodCall`. Drives
@@ -948,4 +951,19 @@ fn render_place(p: &PlaceExpr) -> String {
         }
     }
     s
+}
+
+/// The D5 migration only: a library method whose receiver is `own self`
+/// though the checker has no declaration for it (`Vec.into_iter` and the
+/// other built-in collections' methods are typed in code). Without it,
+/// `fn f(rows: Vec[S]) { for r in rows.into_iter() { .. } }` kept a bare
+/// `rows`, which borrows once bare parameters flip.
+fn d5_library_method_consumes(method_call: &Expr) -> bool {
+    let ExprKind::MethodCall { method, .. } = &method_call.kind else {
+        return false;
+    };
+    matches!(
+        method.as_str(),
+        "into_iter" | "into_keys" | "into_values" | "into_bytes" | "into_string" | "into_inner"
+    )
 }

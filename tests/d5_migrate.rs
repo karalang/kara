@@ -156,3 +156,66 @@ fn main() { println(S { n: 1 }.take(\"a\", 2)); }
     );
     assert!(text.contains("fn look(ref self, s: own String)"), "{text}");
 }
+
+/// A returned `Option[R]` or `Result[R, E]` parameter is a move when `R`
+/// is not `Copy`; one over Copy parts is not. The migration used to read
+/// every `Option[..]` parameter as `Copy`, since it dropped the arguments.
+#[test]
+fn a_returned_option_of_a_drop_type_gets_own() {
+    let src = "\
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f\"d{self.id}\"); } }
+fn pass(x: Option[R]) -> Option[R] { x }
+fn res(x: Result[R, String]) -> Result[R, String] { x }
+fn num(x: Option[i64]) -> Option[i64] { x }
+fn pair(x: (i64, i64)) -> (i64, i64) { x }
+fn main() { let _a = pass(None); let _b = res(Err(\"e\")); println(num(None).is_none()); println(pair((1, 2)).0); }
+";
+    let out = migrate(src);
+    assert!(out.contains("fn pass(x: own Option[R])"), "{out}");
+    assert!(out.contains("fn res(x: own Result[R, String])"), "{out}");
+    assert!(out.contains("fn num(x: Option[i64])"), "{out}");
+    assert!(out.contains("fn pair(x: (i64, i64))"), "{out}");
+}
+
+/// A receiver a built-in collection's method consumes (`into_iter`) is a
+/// move; one `iter` borrows is not.
+#[test]
+fn a_parameter_consumed_by_into_iter_gets_own() {
+    let src = "\
+struct S { s: String }
+fn f(rows: Vec[S]) -> i64 { let mut n = 0; for r in rows.into_iter() { n = n + r.s.len(); } n }
+fn r(rows: Vec[S]) -> i64 { let mut n = 0; for x in rows.iter() { n = n + x.s.len(); } n }
+fn main() { println(f(Vec.new())); println(r(Vec.new())); }
+";
+    let out = migrate(src);
+    assert!(out.contains("fn f(rows: own Vec[S])"), "{out}");
+    assert!(out.contains("fn r(rows: Vec[S])"), "{out}");
+}
+
+/// A parameter whose value runs a `Drop` body when it dies keeps `own` even
+/// when the body only reads it: as a borrow it would be dropped at the
+/// caller's scope end instead, and the program would print differently.
+/// A type with no `Drop` body anywhere inside still becomes a borrow.
+#[test]
+fn a_parameter_that_runs_a_drop_body_keeps_its_drop_in_the_callee() {
+    let src = "\
+struct W { id: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f\"d{self.id}\"); } }
+struct Plain { s: String }
+struct Holder { w: W }
+fn consume(x: W) { println(\"in\"); }
+fn look(x: Plain) -> i64 { x.s.len() }
+fn hold(h: Holder) -> i64 { h.w.id }
+fn many(v: Vec[W]) -> i64 { v.len() }
+impl W { fn show(self) { println(f\"{self.id}\"); } fn peek(ref self) -> i64 { self.id } }
+fn main() { consume(W { id: 1 }); println(look(Plain { s: \"a\" })); }
+";
+    let out = migrate(src);
+    assert!(out.contains("fn consume(x: own W)"), "{out}");
+    assert!(out.contains("fn look(x: Plain)"), "{out}");
+    assert!(out.contains("fn hold(h: own Holder)"), "{out}");
+    assert!(out.contains("fn many(v: own Vec[W])"), "{out}");
+    assert!(out.contains("fn show(own self)"), "{out}");
+    assert!(out.contains("fn peek(ref self)"), "{out}");
+}

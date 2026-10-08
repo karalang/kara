@@ -200,16 +200,39 @@ impl<'a> OwnershipChecker<'a> {
                 _ => false,
             };
             let moved = p.pattern.binding_names().iter().any(|n| {
+                let Some(t) = param_types.get(n) else {
+                    return false;
+                };
+                if self.is_copy_type(t) {
+                    return false;
+                }
+                // A value with a `Drop` body anywhere inside is dropped in
+                // the callee today; as a borrow it would be dropped at the
+                // caller's scope end, which prints differently. Keep it owned.
                 matches!(
                     param_usage.get(n),
                     Some(ParamUsage::Consumed | ParamUsage::Mutated)
-                ) && !param_types.get(n).is_some_and(|t| self.is_copy_type(t))
+                ) || self.d5_runs_user_drop(t, &mut Vec::new())
             });
             if unique_fn || moved {
                 needs.push((fn_key.to_string(), i));
             }
         }
-        if matches!(param_usage.get("self"), Some(ParamUsage::Consumed)) {
+        let self_drops = || {
+            let target = fn_key.split('.').next().unwrap_or_default();
+            !target.is_empty()
+                && self.d5_runs_user_drop(
+                    &Type::Named {
+                        name: target.to_string(),
+                        args: Vec::new(),
+                    },
+                    &mut Vec::new(),
+                )
+        };
+        if param_usage.get("self").is_some_and(|u| {
+            matches!(u, ParamUsage::Consumed)
+                || (f.self_param == Some(SelfParam::Owned) && self_drops())
+        }) {
             needs.push((fn_key.to_string(), SELF_IDX));
         }
         if let Some(d5) = self.d5.as_mut() {
@@ -217,6 +240,74 @@ impl<'a> OwnershipChecker<'a> {
             d5.needs.extend(needs);
         }
     }
+}
+
+impl OwnershipChecker<'_> {
+    /// Does a value of `ty` run a user `Drop` body when it dies: its own, a
+    /// field's, a payload's or an element's. A `shared` value counts, since
+    /// the handle a callee owns may be the last one. A generic parameter
+    /// counts when the program declares any `Drop` body, since it may be
+    /// instantiated with that type.
+    fn d5_runs_user_drop(&self, ty: &Type, seen: &mut Vec<String>) -> bool {
+        match ty {
+            Type::Named { name, args } => {
+                if args.iter().any(|a| self.d5_runs_user_drop(a, seen)) {
+                    return true;
+                }
+                if args.is_empty() && self.d5_program_has_drop() && is_generic_name(self, name) {
+                    return true;
+                }
+                self.d5_named_runs_user_drop(name, seen)
+            }
+            Type::Shared(name) => self.d5_named_runs_user_drop(name, seen),
+            Type::TypeParam(_) => self.d5_program_has_drop(),
+            Type::Tuple(elems) => elems.iter().any(|e| self.d5_runs_user_drop(e, seen)),
+            Type::Array { element, .. } => self.d5_runs_user_drop(element, seen),
+            _ => false,
+        }
+    }
+
+    fn d5_named_runs_user_drop(&self, name: &str, seen: &mut Vec<String>) -> bool {
+        use crate::typechecker::VariantTypeInfo;
+        let tc = self.typecheck_result;
+        if tc.drop_method_keys.contains_key(name) {
+            return true;
+        }
+        if seen.iter().any(|s| s == name) {
+            return false;
+        }
+        seen.push(name.to_string());
+        if let Some(info) = tc.struct_info.get(name) {
+            return info
+                .fields
+                .iter()
+                .any(|(_, t, _)| self.d5_runs_user_drop(t, seen));
+        }
+        if let Some(info) = tc.enum_info.get(name) {
+            return info.variants.iter().any(|(_, v)| match v {
+                VariantTypeInfo::Unit => false,
+                VariantTypeInfo::Tuple(ts) => ts.iter().any(|t| self.d5_runs_user_drop(t, seen)),
+                VariantTypeInfo::Struct(fs) => {
+                    fs.iter().any(|(_, t)| self.d5_runs_user_drop(t, seen))
+                }
+            });
+        }
+        false
+    }
+
+    fn d5_program_has_drop(&self) -> bool {
+        !self.typecheck_result.drop_method_keys.is_empty()
+    }
+}
+
+/// Whether `name`, spelled bare by the D5 lowering, is a generic parameter
+/// rather than a type: it names no struct, enum or distinct type.
+fn is_generic_name(checker: &OwnershipChecker<'_>, name: &str) -> bool {
+    let tc = checker.typecheck_result;
+    !tc.struct_info.contains_key(name)
+        && !tc.enum_info.contains_key(name)
+        && !tc.distinct_type_traits.contains_key(name)
+        && !matches!(name, "String" | "Str" | "unknown")
 }
 
 /// The `own ` insertions that keep `program`'s meaning across D5.
