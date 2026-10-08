@@ -760,6 +760,85 @@ fn main() -> () {
         assert!(free_at > last_release, "{trace}");
     }
 
+    /// Downgrade of a `ref Option[shared T]`: `None` gives an empty weak
+    /// that upgrades to `None`, and `Some` a weak to its referent.
+    #[test]
+    fn mir_interp_downgrade_from_option() {
+        let text = "
+struct Node { id: i64 }
+enum Option[shared Node] { None, Some(shared Node) }
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: Option[shared Node];
+    let _2: ref Option[shared Node];
+    let _3: weak Node;
+    let _4: ref weak Node;
+    let _5: Option[shared Node];
+    let _6: isize;
+    let _7: ();
+    let _8: shared Node;
+    let _9: Option[shared Node];
+    let _10: ref Option[shared Node];
+    let _11: weak Node;
+    let _12: ref weak Node;
+    let _13: Option[shared Node];
+    let _14: isize;
+    bb0: {
+        _1 = Option[shared Node].None {  };
+        _2 = &_1;
+        _3 = copy _2 as weak Node (Downgrade);
+        _4 = &_3;
+        _5 = copy _4 as Option[shared Node] (Upgrade);
+        _6 = discriminant(_5);
+        _7 = println(copy _6) -> bb1;
+    }
+    bb1: {
+        drop(_5) -> bb2;
+    }
+    bb2: {
+        drop(_3) -> bb3;
+    }
+    bb3: {
+        drop(_1) -> bb4;
+    }
+    bb4: {
+        _8 = shared Node { const 1_i64 };
+        _9 = Option[shared Node].Some { move _8 };
+        _10 = &_9;
+        _11 = copy _10 as weak Node (Downgrade);
+        _12 = &_11;
+        _13 = copy _12 as Option[shared Node] (Upgrade);
+        _14 = discriminant(_13);
+        _7 = println(copy _14) -> bb5;
+    }
+    bb5: {
+        drop(_13) -> bb6;
+    }
+    bb6: {
+        drop(_11) -> bb7;
+    }
+    bb7: {
+        drop(_9) -> bb8;
+    }
+    bb8: {
+        _0 = const ();
+        return;
+    }
+}
+";
+        let m = parse_module(text).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(validate(&m.bodies[0], &m.tys), Vec::<String>::new());
+        let prog = interp::Program::from_module(&m);
+        let r = interp::run(&prog, &m.tys, "main", vec![]);
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        // `None` is variant 0, `Some` variant 1.
+        assert_eq!(r.output, "0\n1\n");
+        let trace = r.trace();
+        let frees: Vec<&str> = trace.lines().filter(|l| l.starts_with("free")).collect();
+        assert_eq!(frees, ["free a0"], "{trace}");
+    }
+
     /// `f16`, `bf16`, `i128` and `isize` are MIR types, and a cast into
     /// a narrow float rounds to its precision.
     #[test]
