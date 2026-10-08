@@ -13,9 +13,9 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ast::{
-    self, BinOp as AstBinOp, Block, CallArg, CompoundOp, Expr, ExprKind, Function, ImplItem, Item,
-    LiteralPattern, ParLoop, ParsedInterpolationPart, Pattern, PatternKind, SelfParam, Stmt,
-    StmtKind, UnaryOp,
+    self, BinOp as AstBinOp, Block, CallArg, CompoundOp, EnsuresClause, Expr, ExprKind, Function,
+    ImplItem, Item, LiteralPattern, ParLoop, ParsedInterpolationPart, Pattern, PatternKind,
+    SelfParam, Stmt, StmtKind, UnaryOp,
 };
 use crate::def_path::DefPath;
 use crate::def_table::ProgramDefs;
@@ -73,6 +73,17 @@ pub fn lower_program(
             .binding_nodes
             .iter()
             .map(|(&s, &n)| ((n, rr.symbol_table.get_symbol(s).name.clone()), s))
+            .collect(),
+        par_joins: par_joins(rr),
+        unbound_vars: rr
+            .symbol_table
+            .all_symbols()
+            .iter()
+            .filter(|s| {
+                matches!(s.kind, crate::resolver::SymbolKind::Variable { .. })
+                    && !rr.binding_nodes.contains_key(&s.id)
+            })
+            .map(|s| ((s.name.clone(), s.span.offset, s.span.length), s.id))
             .collect(),
         fns: FxHashMap::default(),
         consts: FxHashMap::default(),
@@ -156,6 +167,13 @@ struct Lcx<'a> {
     /// The symbol a pattern node binds under a name (a struct pattern's
     /// shorthand fields all bind through that pattern's node).
     binding_syms: FxHashMap<(NodeId, String), SymbolId>,
+    /// A `par {}` branch's binding and the symbols its join re-defines
+    /// it under in the enclosing scope (the tail and the code after the
+    /// block read those).
+    par_joins: FxHashMap<SymbolId, Vec<SymbolId>>,
+    /// Variables the resolver defined with no binding pattern (an
+    /// `ensures(result)` binding), by name and span.
+    unbound_vars: FxHashMap<(String, usize, usize), SymbolId>,
     fns: FxHashMap<DefId, FnItem<'a>>,
     /// Module-level constants and immutable `let` bindings, by
     /// definition, with their initializers.
@@ -240,6 +258,10 @@ fn retype_const(o: Operand, t: Ty) -> Operand {
 /// D5's bare-parameter borrow, on while `KARAC_D5=1` (until the corpus is
 /// migrated to `own T` where a parameter is moved).
 fn d5_params() -> bool {
+    #[cfg(test)]
+    if let Some(on) = tests::D5.with(|c| c.get()) {
+        return on;
+    }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("KARAC_D5").is_ok_and(|v| v == "1"))
 }
@@ -398,7 +420,7 @@ impl<'a> Lcx<'a> {
             args: args.to_vec(),
             name: name.to_string(),
         };
-        let ret = match self.fn_return(f, args) {
+        let ret = match self.fn_return(f, args, impl_target) {
             Ok(t) => t,
             Err(e) => {
                 self.errors.push(format!("{} `{name}`: {e}", at(f.span)));
@@ -454,11 +476,32 @@ impl<'a> Lcx<'a> {
     }
 
     /// The declared return type of `f`, instantiated.
-    fn fn_return(&mut self, f: &Function, args: &[Ty]) -> Result<Ty, String> {
+    fn fn_return(
+        &mut self,
+        f: &Function,
+        args: &[Ty],
+        impl_target: Option<(DefId, usize)>,
+    ) -> Result<Ty, String> {
         let key = SpanKey::from_span(&f.span);
         let Some((ty, frame)) = self.tc.fn_return_types.get(&key) else {
             return Err("its return type was not recorded".into());
         };
+        // `Self` in a generic impl is recorded as the bare type name: the
+        // impl's target at this instance's arguments.
+        if let (
+            Type::Named {
+                name,
+                args: written,
+                ..
+            },
+            Some((t, n)),
+        ) = (ty, impl_target)
+        {
+            if written.is_empty() && n > 0 && n <= args.len() && *name == self.def_name(t) {
+                let target = self.tys.tcx().adt(t, &args[..n]);
+                return self.convert(target);
+            }
+        }
         let params = self
             .tc
             .node_generic_frames
@@ -701,6 +744,32 @@ impl<'a> Lcx<'a> {
     }
 }
 
+/// Each `par {}` branch binding's join symbols: a variable the resolver
+/// defined at a binding's name and span with no binding node of its own.
+fn par_joins(rr: &ResolveResult) -> FxHashMap<SymbolId, Vec<SymbolId>> {
+    let table = &rr.symbol_table;
+    let bound: FxHashMap<(&str, usize, usize), SymbolId> = rr
+        .binding_nodes
+        .keys()
+        .map(|&s| {
+            let sym = table.get_symbol(s);
+            ((sym.name.as_str(), sym.span.offset, sym.span.length), s)
+        })
+        .collect();
+    let mut out: FxHashMap<SymbolId, Vec<SymbolId>> = FxHashMap::default();
+    for sym in table.all_symbols() {
+        if !matches!(sym.kind, crate::resolver::SymbolKind::Variable { .. })
+            || rr.binding_nodes.contains_key(&sym.id)
+        {
+            continue;
+        }
+        if let Some(&b) = bound.get(&(sym.name.as_str(), sym.span.offset, sym.span.length)) {
+            out.entry(b).or_default().push(sym.id);
+        }
+    }
+    out
+}
+
 // ── bodies ──────────────────────────────────────────────────────────
 
 enum ScopeEntry<'a> {
@@ -750,6 +819,15 @@ struct Bx<'l, 'a> {
     /// The `par for` whose body is lowered next: its body, the `Vec` local
     /// that collects the bodies' values, and that `Vec`'s type.
     par_acc: Option<(*const Block, Local, Ty)>,
+    /// Each `old(e)` of this function's `ensures` clauses: `e`'s value,
+    /// taken on entry.
+    old_vals: FxHashMap<NodeId, Local>,
+    /// This function's `ensures` clauses, checked at every return.
+    ensures: &'a [EnsuresClause],
+    /// The impl this function belongs to and its generic parameter count.
+    impl_target: Option<(DefId, usize)>,
+    /// Subscripts of an assignment's target, evaluated before its value.
+    pre_indices: FxHashMap<NodeId, Operand>,
 }
 
 type R<T> = Result<T, ()>;
@@ -776,6 +854,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_escapes: false,
             ty_hints: FxHashMap::default(),
             par_acc: None,
+            old_vals: FxHashMap::default(),
+            ensures: &[],
+            impl_target: None,
+            pre_indices: FxHashMap::default(),
         }
     }
 
@@ -808,6 +890,9 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// The MIR type of the node `id` in this instance.
     fn node_ty(&mut self, id: NodeId, span: Span) -> R<Ty> {
+        if let Some(&l) = self.old_vals.get(&id) {
+            return Ok(self.b.local_ty(l));
+        }
         let Some(&t) = self.lcx.node_types.get(&id) else {
             if let Some(&t) = self.ty_hints.get(&id) {
                 return Ok(t);
@@ -816,9 +901,29 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let args = self.args.clone();
         match self.lcx.mir_ty(t, &args) {
-            Ok(t) => Ok(t),
+            Ok(t) => Ok(self.fill_bare(t)),
             Err(e) => self.unsupported(span, &e),
         }
+    }
+
+    /// The impl's own generic type written bare in its body (`Self`, or
+    /// `G` in `impl[T] G[T]`) is recorded with no arguments: this
+    /// instance's.
+    fn fill_bare(&mut self, t: Ty) -> Ty {
+        let Some((target, n)) = self.impl_target else {
+            return t;
+        };
+        let bare = match self.tys().tcx().kind(t) {
+            HK::Adt { def, args } | HK::Shared { def, args } => {
+                def == target && self.tys().tcx().list(args).is_empty()
+            }
+            _ => false,
+        };
+        if !bare || n == 0 || n > self.args.len() {
+            return t;
+        }
+        let full = self.tys().tcx().adt(target, &self.args[..n]);
+        self.lcx.convert(full).unwrap_or(t)
     }
 
     /// The MIR type of `e`'s value. A local reads as the type of its MIR
@@ -873,6 +978,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Rvalue::Cast(CastKind::Erase, self.erase_source(op), pt)
             }
             Rvalue::Aggregate(kind, ops) => {
+                // A variant of a generic type named bare in its own impl
+                // (`self = Cnt.Done`) is recorded without its arguments:
+                // it builds the type of the place it goes to.
+                let kind = match kind {
+                    AggregateKind::Adt { ty, variant } if self.bare_of(ty, pt) => {
+                        AggregateKind::Adt { ty: pt, variant }
+                    }
+                    AggregateKind::Shared { ty, variant } if self.bare_of(ty, pt) => {
+                        AggregateKind::Shared { ty: pt, variant }
+                    }
+                    k => k,
+                };
                 let ops = self.erase_parts(&place, &kind, ops);
                 Rvalue::Aggregate(kind, ops)
             }
@@ -890,6 +1007,19 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let bb = self.cur;
         self.b.assign(bb, place, rv);
+    }
+
+    /// Whether `t` is the generic type `full` names, written with no
+    /// arguments.
+    fn bare_of(&self, t: Ty, full: Ty) -> bool {
+        let tcx = self.tys().tcx();
+        match (tcx.kind(t), tcx.kind(full)) {
+            (HK::Adt { def, args }, HK::Adt { def: d2, args: a2 })
+            | (HK::Shared { def, args }, HK::Shared { def: d2, args: a2 }) => {
+                def == d2 && tcx.list(args).is_empty() && !tcx.list(a2).is_empty()
+            }
+            _ => false,
+        }
     }
 
     /// The type of an operand's value.
@@ -1035,6 +1165,59 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// A temporary that is dropped at the end of the innermost scope (the
     /// statement's, for a statement's temporaries).
+    /// A temporary holding `e`'s value, dropped at the end of the scope.
+    /// Its drop is scheduled once the value exists, so it drops before
+    /// the temporaries made while computing it (core semantics §7.4).
+    fn temp_of(&mut self, e: &'a Expr, t: Ty) -> R<Local> {
+        let l = self.temp(t);
+        self.expr_into(e, Place::local(l))?;
+        if self.needs_drop(t) {
+            self.schedule(ScopeEntry::Drop(Place::local(l)));
+        }
+        Ok(l)
+    }
+
+    /// The place `e` names when it is an owned local's (or a part of one
+    /// reached without a reference), and holds no `shared` handle.
+    fn owned_place(&mut self, e: &'a Expr) -> R<Option<Place>> {
+        if !is_place_expr(e) {
+            return Ok(None);
+        }
+        if let ExprKind::Identifier(_) = &e.kind {
+            let local = matches!(self.lcx.res.get(&e.id), Some(Res::Local(s)) if self.locals.contains_key(s));
+            if !local {
+                return Ok(None);
+            }
+        }
+        let p = self.expr_place(e, false)?;
+        let t = self.place_type(&p);
+        let through_handle = (0..p.projection.len()).any(|i| {
+            let prefix = Place {
+                local: p.local,
+                projection: p.projection[..i].to_vec(),
+            };
+            let pt = self.place_type(&prefix);
+            self.is_handle(pt)
+                || self
+                    .tys()
+                    .tcx()
+                    .adt_of(pt)
+                    .is_some_and(|(a, _)| a.has_drop_impl)
+        });
+        let owned = !through_handle
+            && !p.projection.contains(&ProjElem::Deref)
+            && match self.tys().tcx().kind(t) {
+                HK::Adt { .. } => !self
+                    .tys()
+                    .tcx()
+                    .adt_of(t)
+                    .is_some_and(|(a, _)| a.has_drop_impl),
+                HK::Tuple(_) | HK::Array { .. } => true,
+                _ => false,
+            };
+        Ok(owned.then_some(p))
+    }
+
     fn scoped_temp(&mut self, t: Ty) -> Local {
         let l = self.temp(t);
         if self.needs_drop(t) {
@@ -1124,9 +1307,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         impl_target: Option<(DefId, usize)>,
         fn_params: &[Option<Ty>],
     ) -> R<()> {
-        if !f.requires.is_empty() || !f.ensures.is_empty() {
-            return self.unsupported(f.span, "a `requires`/`ensures` contract");
-        }
+        self.impl_target = impl_target;
         self.push_scope();
         if let Some(mode) = &f.self_param {
             let Some((target, n)) = impl_target else {
@@ -1184,6 +1365,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.schedule(ScopeEntry::Drop(Place::local(l)));
             }
         }
+        self.contracts_on_entry(f)?;
         // The body's own scope sits inside the parameters' (D6). Falling
         // off the end is a return like any other, so a tail `Err(..)` runs
         // the `errdefer` bodies too.
@@ -1205,6 +1387,70 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
+    /// A function's contracts on entry (design.md § Contracts): each
+    /// `requires` must hold, and each `old(e)` its `ensures` clauses read
+    /// is evaluated now. An `ensures(result)` clause reads the return place.
+    fn contracts_on_entry(&mut self, f: &'a Function) -> R<()> {
+        for r in &f.requires {
+            self.contract_check(r)?;
+        }
+        let mut olds = Vec::new();
+        for clause in &f.ensures {
+            old_calls(&clause.body, &mut olds);
+            if let Some(name) = &clause.param {
+                let key = (name.clone(), clause.span.offset, clause.span.length);
+                if let Some(&sym) = self.lcx.unbound_vars.get(&key) {
+                    self.locals.insert(sym, Local::RETURN_PLACE);
+                }
+            }
+        }
+        for o in olds {
+            let ExprKind::Call { args, .. } = &o.kind else {
+                continue;
+            };
+            let [arg] = args.as_slice() else {
+                return self.unsupported(o.span, "this `old`");
+            };
+            let t = self.expr_ty(&arg.value)?;
+            let l = self.temp(t);
+            let bb = self.cur;
+            self.b.push(bb, StatementKind::StorageLive(l));
+            if self.is_copy(t) || !is_place_expr(&arg.value) {
+                self.expr_into(&arg.value, Place::local(l))?;
+            } else {
+                let p = self.expr_place(&arg.value, false)?;
+                self.clone_into(p, t, Place::local(l));
+            }
+            self.declare(l, t);
+            self.old_vals.insert(o.id, l);
+        }
+        self.ensures = &f.ensures;
+        Ok(())
+    }
+
+    /// Aborts unless the contract condition `c` holds (a panic: exit 101).
+    fn contract_check(&mut self, c: &'a Expr) -> R<()> {
+        let bool_t = self.tys().bool();
+        let v = self.temp(bool_t);
+        self.push_scope();
+        self.expr_into(c, Place::local(v))?;
+        self.pop_scope()?;
+        let bad = self.b.new_block();
+        let ok = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(v)),
+                targets: SwitchTargets::if_else(ok, bad),
+            },
+            bad,
+        );
+        self.diverge(TerminatorKind::Abort {
+            reason: AbortReason::Panic,
+        });
+        self.cur = ok;
+        Ok(())
+    }
+
     // ── blocks and statements ───────────────────────────────────────
 
     fn block_into(&mut self, block: &'a Block, dest: Place) -> R<()> {
@@ -1221,6 +1467,25 @@ impl<'l, 'a> Bx<'l, 'a> {
             None => self.assign(dest, Rvalue::Use(unit_const(self.unit()))),
         }
         self.pop_scope()
+    }
+
+    /// `par { .. }`, run in order: its branches' bindings join the
+    /// enclosing scope, so they live on past the block.
+    fn par_into(&mut self, block: &'a Block, dest: Place) -> R<()> {
+        for s in &block.stmts {
+            self.stmt(s)?;
+        }
+        match &block.final_expr {
+            Some(e) => {
+                self.push_scope();
+                self.expr_into(e, dest)?;
+                self.pop_scope()
+            }
+            None => {
+                self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+                Ok(())
+            }
+        }
     }
 
     fn stmt(&mut self, s: &'a Stmt) -> R<()> {
@@ -1258,11 +1523,21 @@ impl<'l, 'a> Bx<'l, 'a> {
                     return Ok(());
                 }
                 self.push_scope();
-                let t = self.expr_ty(value)?;
-                let tmp = self.scoped_temp(t);
-                self.expr_into(value, Place::local(tmp))?;
+                // An owned place is destructured where it is (§4.6): the
+                // parts it keeps live on in it. Anything else is evaluated
+                // into a temporary that dies with the statement.
+                let (src, t) = match self.owned_place(value)? {
+                    Some(p) => {
+                        let t = self.place_type(&p);
+                        (p, t)
+                    }
+                    None => {
+                        let t = self.expr_ty(value)?;
+                        (Place::local(self.temp_of(value, t)?), t)
+                    }
+                };
                 let mut binds = Vec::new();
-                self.bind_irrefutable(pattern, Place::local(tmp), t, &mut binds)?;
+                self.bind_irrefutable(pattern, src, t, &mut binds)?;
                 self.pop_scope()?;
                 for (l, t) in binds {
                     self.declare(l, t);
@@ -1272,8 +1547,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             StmtKind::Expr(e) => {
                 self.push_scope();
                 let t = self.expr_ty(e)?;
-                let tmp = self.scoped_temp(t);
-                self.expr_into(e, Place::local(tmp))?;
+                self.temp_of(e, t)?;
                 self.pop_scope()
             }
             StmtKind::Assign { target, value } => {
@@ -1329,6 +1603,41 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.schedule(ScopeEntry::ErrDefer(body));
                 Ok(())
             }
+            // `let x: T;`: storage now, a value at its first assignment
+            // (definite assignment is the move check's).
+            StmtKind::LetUninit {
+                name, name_span, ..
+            } => {
+                let key = SpanKey::from_span(name_span);
+                let Some(ty) = self.lcx.tc.expr_types.get(&key) else {
+                    return self.unsupported(s.span, "this statement");
+                };
+                let args = self.args.clone();
+                let t = match self
+                    .lcx
+                    .lower_legacy(ty, &[])
+                    .and_then(|h| self.lcx.mir_ty(h, &args))
+                {
+                    Ok(t) => t,
+                    Err(e) => return self.unsupported(s.span, &e),
+                };
+                let l = self.b.push_local(
+                    t,
+                    Mutability::Mut,
+                    LocalKind::User {
+                        name: name.clone(),
+                        node: s.id,
+                    },
+                );
+                let key = (name.clone(), name_span.offset, name_span.length);
+                if let Some(&sym) = self.lcx.unbound_vars.get(&key) {
+                    self.locals.insert(sym, l);
+                }
+                let bb = self.cur;
+                self.b.push(bb, StatementKind::StorageLive(l));
+                self.declare(l, t);
+                Ok(())
+            }
             _ => self.unsupported(s.span, "this statement"),
         }
     }
@@ -1344,6 +1653,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         );
         if let Some(&sym) = self.lcx.binding_syms.get(&(node, name.to_string())) {
             self.locals.insert(sym, l);
+            for &j in self.lcx.par_joins.get(&sym).into_iter().flatten() {
+                self.locals.insert(j, l);
+            }
         }
         let bb = self.cur;
         self.b.push(bb, StatementKind::StorageLive(l));
@@ -1730,20 +2042,43 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// Evaluate the parts of a place expression that compute values (an
     /// index), leaving the place itself to `finish_place`.
+    /// Every subscript along the place is evaluated now, outermost
+    /// object first (`hs[idx(1)].t.1[idx(0)]` calls `idx(1)` then
+    /// `idx(0)`), before the value it is assigned (core semantics §8).
     fn prepare_place(&mut self, e: &'a Expr) -> R<PendingPlace<'a>> {
+        self.pre_index(e)?;
+        Ok(PendingPlace::Plain(e))
+    }
+
+    fn pre_index(&mut self, e: &'a Expr) -> R<()> {
         match &e.kind {
             ExprKind::Index { object, index } => {
-                let idx = self.index_operand(object, index)?;
-                Ok(PendingPlace::Index(object, idx, e))
+                self.pre_index(object)?;
+                if !matches!(index.kind, ExprKind::Range { .. }) {
+                    let idx = match self.index_operand(object, index)? {
+                        // Read now: the value may assign the variable.
+                        Operand::Copy(p) => {
+                            let t = self.place_type(&p);
+                            let l = self.temp(t);
+                            self.assign(l, Rvalue::Use(Operand::Copy(p)));
+                            Operand::Copy(Place::local(l))
+                        }
+                        op => op,
+                    };
+                    self.pre_indices.insert(index.id, idx);
+                }
+                Ok(())
             }
-            _ => Ok(PendingPlace::Plain(e)),
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.pre_index(object)
+            }
+            _ => Ok(()),
         }
     }
 
     fn finish_place(&mut self, p: PendingPlace<'a>, mutable: bool) -> R<Place> {
         match p {
             PendingPlace::Plain(e) => self.expr_place(e, mutable),
-            PendingPlace::Index(object, idx, e) => self.index_place(object, idx, e, mutable),
         }
     }
 
@@ -1841,6 +2176,9 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// The index of `object[index]`: a `Map` key that is not `Copy` is
     /// borrowed, anything else is a value.
     fn index_operand(&mut self, object: &'a Expr, index: &'a Expr) -> R<Operand> {
+        if let Some(op) = self.pre_indices.remove(&index.id) {
+            return Ok(op);
+        }
         let mut t = self.expr_ty(object)?;
         while let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(t) {
             t = inner;
@@ -2038,8 +2376,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// A value expression evaluated into a fresh temporary, as a place.
     fn temp_place(&mut self, e: &'a Expr) -> R<Place> {
         let t = self.expr_ty(e)?;
-        let l = self.scoped_temp(t);
-        self.expr_into(e, Place::local(l))?;
+        let l = self.temp_of(e, t)?;
         Ok(Place::local(l))
     }
 
@@ -2085,6 +2422,29 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     // ── expressions ─────────────────────────────────────────────────
 
+    /// `e` taken as an owned value of type `want`. A borrowed place (a
+    /// `ref` or `mut ref` parameter, which every bare parameter is under
+    /// D5) is read through its reference: a `Copy` value copies, a handle
+    /// counts, and anything else moves out of the borrow, which the borrow
+    /// check refuses (core semantics §3.7).
+    fn owned_operand(&mut self, e: &'a Expr, want: Ty) -> R<Operand> {
+        let at = self.expr_ty(e)?;
+        let inner = match self.tys().tcx().kind(at) {
+            HK::Ref(t) | HK::MutRef(t) => t,
+            _ => return self.expr_operand(e),
+        };
+        if inner != want || !self.is_place(e) {
+            return self.expr_operand(e);
+        }
+        let p = self.expr_place(e, false)?.project(ProjElem::Deref);
+        if self.is_handle(inner) || self.is_handle_aggregate(inner) {
+            let l = self.temp(inner);
+            self.count_copy(p, inner, Place::local(l));
+            return Ok(Operand::Move(Place::local(l)));
+        }
+        Ok(self.use_place(p, inner))
+    }
+
     fn expr_operand(&mut self, e: &'a Expr) -> R<Operand> {
         if let Some(c) = self.constant(e)? {
             return Ok(Operand::Const(c));
@@ -2106,8 +2466,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(self.use_place(p, t));
         }
         let t = self.expr_ty(e)?;
-        let l = self.scoped_temp(t);
-        self.expr_into(e, Place::local(l))?;
+        let l = self.temp_of(e, t)?;
         Ok(self.use_place(Place::local(l), t))
     }
 
@@ -2420,7 +2779,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             // The branches of a `par` block run one after another, in source
             // order: one of the schedules the block allows (the sequential
             // scheduler's).
-            ExprKind::Par(b) => self.block_into(b, dest),
+            ExprKind::Par(b) => self.par_into(b, dest),
             ExprKind::RepeatLiteral { value, count, .. } => {
                 self.repeat_literal(e, value, count, dest)
             }
@@ -2891,6 +3250,24 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.assign(dest, Rvalue::Aggregate(AggregateKind::Tuple, ops));
             return;
         }
+        if let HK::Array {
+            elem,
+            len: crate::ty::ArrayLen::Known(n),
+        } = self.tys().tcx().kind(t)
+        {
+            let mut ops = Vec::new();
+            for i in 0..n {
+                let l = self.temp(elem);
+                self.clone_into(
+                    p.clone().project(ProjElem::ConstIndex(i)),
+                    elem,
+                    Place::local(l),
+                );
+                ops.push(Operand::Move(Place::local(l)));
+            }
+            self.assign(dest, Rvalue::Aggregate(AggregateKind::Array(elem), ops));
+            return;
+        }
         let r = self.ref_to(p, t);
         let name = format!("{}.clone", self.tys().display(t));
         self.call_native(&name, vec![r], dest);
@@ -2944,7 +3321,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                     .collect();
                 self.all_eq(span, parts, dest)
             }
-            HK::Adt { .. } => {
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => {
+                let elem = self.tys().tcx().list(args)[0];
+                self.seq_eq(span, l, r, t, elem, dest)
+            }
+            HK::Slice { elem, .. } => self.seq_eq(span, l, r, t, elem, dest),
+            HK::Adt { .. } | HK::Shared { .. } => {
                 if let Some((d, args)) = self.user_eq(t) {
                     let lo = self.ref_to(l, t);
                     let ro = self.ref_to(r, t);
@@ -3059,6 +3444,134 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// `dest = true` when every pair is equal, stopping at the first that
     /// is not.
+    /// `dest = l == r` for two `Vec`s or slices of `elem`: the same length
+    /// and equal elements, compared in order until one differs.
+    fn seq_eq(&mut self, span: Span, l: Place, r: Place, t: Ty, elem: Ty, dest: Place) -> R<()> {
+        let (bool_t, usize_t, rt, et) = {
+            let tcx = self.tys().tcx();
+            (
+                tcx.intern(HK::Bool),
+                tcx.intern(HK::UInt(UIntSize::Usize)),
+                tcx.reference(t, false),
+                tcx.reference(elem, false),
+            )
+        };
+        let ty_name = self.tys().display(t);
+        let (lr, rr) = (self.temp(rt), self.temp(rt));
+        self.assign(lr, Rvalue::Ref(BorrowKind::Shared, l));
+        self.assign(rr, Rvalue::Ref(BorrowKind::Shared, r));
+        let (nl, nr) = (self.temp(usize_t), self.temp(usize_t));
+        let len = format!("{ty_name}.len");
+        self.call_native(
+            &len,
+            vec![Operand::Copy(Place::local(lr))],
+            Place::local(nl),
+        );
+        self.call_native(
+            &len,
+            vec![Operand::Copy(Place::local(rr))],
+            Place::local(nr),
+        );
+        let c = self.temp(bool_t);
+        self.assign(
+            c,
+            Rvalue::BinaryOp(
+                BinOp::Eq,
+                Operand::Copy(Place::local(nl)),
+                Operand::Copy(Place::local(nr)),
+            ),
+        );
+        let (differ, join, head, body, step, same) = (
+            self.b.new_block(),
+            self.b.new_block(),
+            self.b.new_block(),
+            self.b.new_block(),
+            self.b.new_block(),
+            self.b.new_block(),
+        );
+        let i = self.temp(usize_t);
+        self.assign(
+            i,
+            Rvalue::Use(Operand::Const(Const {
+                ty: usize_t,
+                kind: ConstKind::Scalar(0),
+            })),
+        );
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(c)),
+                targets: SwitchTargets::if_else(head, differ),
+            },
+            head,
+        );
+        let more = self.temp(bool_t);
+        self.assign(
+            more,
+            Rvalue::BinaryOp(
+                BinOp::Lt,
+                Operand::Copy(Place::local(i)),
+                Operand::Copy(Place::local(nl)),
+            ),
+        );
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(more)),
+                targets: SwitchTargets::if_else(body, same),
+            },
+            body,
+        );
+        let index = format!("{ty_name}.index");
+        let (el, er) = (self.temp(et), self.temp(et));
+        self.call_native(
+            &index,
+            vec![
+                Operand::Copy(Place::local(lr)),
+                Operand::Copy(Place::local(i)),
+            ],
+            Place::local(el),
+        );
+        self.call_native(
+            &index,
+            vec![
+                Operand::Copy(Place::local(rr)),
+                Operand::Copy(Place::local(i)),
+            ],
+            Place::local(er),
+        );
+        let e = self.temp(bool_t);
+        self.eq_places(
+            span,
+            Place::local(el).project(ProjElem::Deref),
+            Place::local(er).project(ProjElem::Deref),
+            elem,
+            Place::local(e),
+        )?;
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(e)),
+                targets: SwitchTargets::if_else(step, differ),
+            },
+            step,
+        );
+        let one = Operand::Const(Const {
+            ty: usize_t,
+            kind: ConstKind::Scalar(1),
+        });
+        self.assign(
+            i,
+            Rvalue::BinaryOp(BinOp::Add, Operand::Copy(Place::local(i)), one),
+        );
+        self.goto(head);
+        self.cur = same;
+        self.assign(dest.clone(), Rvalue::Use(bool_const(bool_t, true)));
+        self.goto(join);
+        self.cur = differ;
+        self.assign(dest, Rvalue::Use(bool_const(bool_t, false)));
+        self.goto(join);
+        self.cur = join;
+        Ok(())
+    }
+
     fn all_eq(&mut self, span: Span, parts: Vec<(Place, Place, Ty)>, dest: Place) -> R<()> {
         let bool_t = self.tys().bool();
         let differ = self.b.new_block();
@@ -3536,11 +4049,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         // The loop's scope holds the collection (or the borrow of it).
         self.push_scope();
         let handle = match mode {
-            Mode::Owned => {
-                let l = self.scoped_temp(coll);
-                self.expr_into(src, Place::local(l))?;
-                l
-            }
+            Mode::Owned => self.temp_of(src, coll)?,
             Mode::Ref | Mode::Mut => {
                 let mutable = mode == Mode::Mut;
                 let ht = if mutable { mut_coll } else { ref_coll };
@@ -4057,6 +4566,9 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// The return place holds the value: run every scope's exit sequence,
     /// with the `errdefer` bodies when the value is an error, and return.
     fn return_exit(&mut self) -> R<()> {
+        for clause in self.ensures {
+            self.contract_check(&clause.body)?;
+        }
         let has_errdefer = self
             .scopes
             .iter()
@@ -4120,8 +4632,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let p = if self.is_place(inner) {
             self.expr_place(inner, false)?
         } else {
-            let l = self.scoped_temp(it);
-            self.expr_into(inner, Place::local(l))?;
+            let l = self.temp_of(inner, it)?;
             Place::local(l)
         };
         let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
@@ -4351,8 +4862,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let place = if self.is_place(scrutinee) && (element || self.is_local_rooted(scrutinee)) {
             self.expr_place(scrutinee, false)?
         } else {
-            let l = self.scoped_temp(st);
-            self.expr_into(scrutinee, Place::local(l))?;
+            let l = self.temp_of(scrutinee, st)?;
             Place::local(l)
         };
         // Matching through a reference binds by reference.
@@ -4435,6 +4945,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let info = &self.lcx.fns[&d];
         let f = info.f;
+        let target = info.impl_target.map(|t| (t, info.impl_params));
         if info.impl_params != args.len()
             || !f.params.is_empty()
             || f.self_param != Some(SelfParam::MutRef)
@@ -4444,7 +4955,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         {
             return Ok(None);
         }
-        let ret = match self.lcx.fn_return(f, &args) {
+        let ret = match self.lcx.fn_return(f, &args, target) {
             Ok(r) => r,
             Err(err) => return self.unsupported(iterable.span, &err),
         };
@@ -4481,8 +4992,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let it_t = self.expr_ty(iterable)?;
         self.push_scope();
-        let it = self.scoped_temp(it_t);
-        self.expr_into(iterable, Place::local(it))?;
+        let it = self.temp_of(iterable, it_t)?;
         let head = self.b.new_block();
         let exit = self.b.new_block();
         self.goto(head);
@@ -5024,6 +5534,11 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     fn call(&mut self, e: &'a Expr, callee: &'a Expr, args: &'a [CallArg], dest: Place) -> R<()> {
+        if let Some(&l) = self.old_vals.get(&e.id) {
+            let t = self.b.local_ty(l);
+            self.clone_into(Place::local(l), t, dest);
+            return Ok(());
+        }
         let Some(rc) = self.lcx.calls.get(&e.id) else {
             if let ExprKind::Path { segments, .. } = &callee.kind {
                 if let [tp, m] = segments.as_slice() {
@@ -5047,8 +5562,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     .and_then(|d| self.lcx.consts.get(&d).copied());
                 if let Some(value) = value {
                     let vt = self.expr_ty(value)?;
-                    let tmp = self.scoped_temp(vt);
-                    self.expr_into(value, Place::local(tmp))?;
+                    let tmp = self.temp_of(value, vt)?;
                     let mut ops = vec![self.ref_to(Place::local(tmp), vt)];
                     for a in args {
                         let t = self.expr_ty(&a.value)?;
@@ -5085,16 +5599,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                     if self.scalar_min_max(e, &name, args, dest.clone())? {
                         return Ok(());
                     }
-                    if !inst_args.is_empty() || name.contains('.') {
-                        return self.unsupported(e.span, "a call to this function");
-                    }
                     // A library function with no Kāra body (`sleep_ms(2)`,
-                    // `Command.new("ls")`): the interpreter's, by its name
-                    // qualified with the owning type. Copy arguments go by
+                    // `Command.new("ls")`, `Arena[i64].new()`): the
+                    // interpreter's, by its name qualified with the owning
+                    // type and that type's arguments. Copy arguments go by
                     // value, the rest by reference.
-                    let name = match self.lcx.def_owner(d) {
-                        Some(owner) => format!("{owner}.{name}"),
-                        None => name,
+                    let name = match (self.lcx.def_owner(d), inst_args.is_empty()) {
+                        (Some(owner), true) => format!("{owner}.{name}"),
+                        (Some(owner), false) => {
+                            let tys = self.tys();
+                            let shown: Vec<String> =
+                                inst_args.iter().map(|&t| tys.display(t)).collect();
+                            format!("{owner}[{}].{name}", shown.join(", "))
+                        }
+                        (None, true) => name,
+                        (None, false) => {
+                            return self.unsupported(e.span, "a call to this function");
+                        }
                     };
                     let mut ops = Vec::new();
                     for a in args {
@@ -5295,6 +5816,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.assign(r, Rvalue::Ref(kind, p));
                 Ok(Operand::Move(Place::local(r)))
             }
+            None => self.owned_operand(a, pt),
             _ => self.expr_operand(a),
         }
     }
@@ -5556,6 +6078,23 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             // `Vec.new()`, `String.new()`, `Map.new()`, `Vec.with_capacity(n)`:
             // a library constructor, named after the type it builds.
+            // `String.from(x)`: a literal is passed as the constant; a
+            // `String` value is already the result.
+            "String.from"
+                if args.len() == 1
+                    && (matches!(args[0].value.kind, ExprKind::StringLit(_))
+                        || self.lcx.node_types.get(&args[0].value.id)
+                            == Some(&self.place_type(&dest))) =>
+            {
+                match &args[0].value.kind {
+                    ExprKind::StringLit(s) => {
+                        let c = self.static_str(s);
+                        self.call_native(name, vec![c], dest);
+                        Ok(())
+                    }
+                    _ => self.expr_into(&args[0].value, dest),
+                }
+            }
             _ if name.contains('.') => {
                 let (owner, m) = name.rsplit_once('.').unwrap();
                 // `x.unwrap_or(Vec.new())`: a constructor whose type the
@@ -5568,6 +6107,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.place_type(&dest)
                 };
                 let mut ty_name = self.tys().display(t);
+                // `Channel.new()` builds a `(Sender[T], Receiver[T])` pair:
+                // named `Channel[T].new`.
+                if owner == "Channel" {
+                    if let HK::Tuple(parts) = self.tys().tcx().kind(t) {
+                        let parts = self.tys().tcx().list(parts);
+                        if let Some(&s) = parts.first() {
+                            let shown = self.tys().display(s);
+                            if let Some(args) = shown.strip_prefix("Sender") {
+                                ty_name = format!("Channel{args}");
+                            }
+                        }
+                    }
+                }
                 if ty_name.split('[').next() != Some(owner) {
                     // A library function that builds something else
                     // (`String.from_utf8` returns a `Result`): named by
@@ -5801,7 +6353,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.lcx.self_tys.entry(d).or_insert(base);
                 }
                 let recv = match mode {
-                    Some(SelfParam::Owned) => PendingRecv::Ready(self.expr_operand(object)?),
+                    Some(SelfParam::Owned) => {
+                        let st = self.expr_ty(object)?;
+                        let (_, st) = self.strip_ty_full(st);
+                        PendingRecv::Ready(self.owned_operand(object, st)?)
+                    }
                     Some(SelfParam::Ref) => self.recv_place(object, false)?,
                     Some(SelfParam::MutRef) => self.recv_place(object, true)?,
                     None => return self.unsupported(e.span, "an associated function as a method"),
@@ -5822,7 +6378,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     rest.push(self.arg_operand(&a.value, pt)?);
                     fn_tys.push(None);
                 }
-                let mut ops = vec![self.recv_borrow_after(recv, &mut rest)];
+                let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
                 ops.extend(rest);
                 let name = if fn_tys.iter().any(Option::is_some) {
                     self.lcx.instance_with_fns(d, inst_args.clone(), fn_tys)
@@ -5911,14 +6467,19 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// A reference to the receiver, unless it already is one.
     fn recv_ref(&mut self, object: &'a Expr, mutable: bool) -> R<Operand> {
         let pending = self.recv_place(object, mutable)?;
-        Ok(self.recv_borrow(pending))
+        self.recv_borrow(pending)
     }
 
     /// The first half of a receiver borrow: evaluate the receiver's place,
     /// leaving the borrow itself to `recv_borrow`, which the caller emits
     /// after the arguments (core semantics §5.6, two-phase borrows).
-    fn recv_place(&mut self, object: &'a Expr, mutable: bool) -> R<PendingRecv> {
+    fn recv_place(&mut self, object: &'a Expr, mutable: bool) -> R<PendingRecv<'a>> {
         let t = self.expr_ty(object)?;
+        if !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_)) && through_index(object)
+        {
+            self.pre_index(object)?;
+            return Ok(PendingRecv::Deferred(object, mutable));
+        }
         if let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(t) {
             // A receiver that is already a reference is reborrowed, so a
             // `mut ref self` call through a `ref` reaches the borrow check
@@ -5937,8 +6498,11 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// evaluated (core semantics §5.6, two-phase borrows): an argument that
     /// still names a place (`doc.move_subtree(a, doc.root, 9)`) is read
     /// into a temporary first, so `&mut doc` does not cover the read.
-    fn recv_borrow_after(&mut self, pending: PendingRecv, rest: &mut [Operand]) -> Operand {
-        if matches!(pending, PendingRecv::Borrow(_, _, true)) {
+    fn recv_borrow_after(&mut self, pending: PendingRecv<'a>, rest: &mut [Operand]) -> R<Operand> {
+        if matches!(
+            pending,
+            PendingRecv::Borrow(_, _, true) | PendingRecv::Deferred(_, true)
+        ) {
             for op in rest.iter_mut() {
                 let (Operand::Copy(p) | Operand::Move(p)) = op else {
                     continue;
@@ -5955,10 +6519,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.recv_borrow(pending)
     }
 
-    fn recv_borrow(&mut self, pending: PendingRecv) -> Operand {
+    fn recv_borrow(&mut self, pending: PendingRecv<'a>) -> R<Operand> {
         let (p, t, mutable) = match pending {
-            PendingRecv::Ready(op) => return op,
+            PendingRecv::Ready(op) => return Ok(op),
             PendingRecv::Borrow(p, t, m) => (p, t, m),
+            PendingRecv::Deferred(object, m) => {
+                let p = self.expr_place(object, m)?;
+                let t = self.place_type(&p);
+                (p, t, m)
+            }
         };
         let rt = self.tys().tcx().reference(t, mutable);
         let r = self.temp(rt);
@@ -5968,7 +6537,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             BorrowKind::Shared
         };
         self.assign(r, Rvalue::Ref(kind, p));
-        Operand::Move(Place::local(r))
+        Ok(Operand::Move(Place::local(r)))
     }
 
     // ── function values ─────────────────────────────────────────────
@@ -6726,8 +7295,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             if self.is_place(object) && self.is_local_rooted(object) {
                 self.expr_place(object, false)?
             } else {
-                let l = self.scoped_temp(base);
-                self.expr_into(object, Place::local(l))?;
+                let l = self.temp_of(object, base)?;
                 Place::local(l)
             }
         } else {
@@ -6737,8 +7305,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         // at the statement's end when the payload is taken instead.
         let default = match (method, args) {
             ("unwrap_or", [a]) => {
-                let l = self.scoped_temp(base_payload_or(self, base, ok));
-                self.expr_into(&a.value, Place::local(l))?;
+                let l = self.temp_of(&a.value, base_payload_or(self, base, ok))?;
                 Some(l)
             }
             _ => None,
@@ -6824,8 +7391,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         let p = if self.is_place(left) && self.is_local_rooted(left) {
             self.expr_place(left, false)?
         } else {
-            let l = self.scoped_temp(lt);
-            self.expr_into(left, Place::local(l))?;
+            let l = self.temp_of(left, lt)?;
             Place::local(l)
         };
         let i64_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
@@ -6920,7 +7486,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         rest.push(self.expr_operand(&a.value)?);
                     }
                 }
-                let mut ops = vec![self.recv_borrow_after(recv, &mut rest)];
+                let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
                 ops.extend(rest);
                 let name = format!("{}.entry_{method}", self.tys().display(mbase));
                 self.call_native(&name, ops, dest);
@@ -6969,11 +7535,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                         }
                         _ => op,
                     })
+                } else if self.tys().display(base).starts_with("Entry[")
+                    && matches!(
+                        method,
+                        "and_modify" | "or_insert" | "or_insert_with" | "or_default"
+                    )
+                {
+                    // An `Entry` is consumed by each step of its chain
+                    // (docs/library/collections.md).
+                    PendingRecv::Ready(self.expr_operand(object)?)
                 } else {
                     let mutates = crate::ast::is_mutating_collection_method(method)
                         || matches!(
                             method,
-                            "push_str" | "set" | "sort_unstable" | "sort_unstable_by"
+                            "push_str" | "set" | "sort_unstable" | "sort_unstable_by" | "entry"
                         );
                     self.recv_place(object, mutates)?
                 };
@@ -6992,6 +7567,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         | "resize"
                         | "fill"
                         | "set"
+                        | "entry"
                 );
                 for a in args {
                     if self.is_fn_typed(a.value.id)
@@ -7025,6 +7601,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                                 }
                                 _ => true,
                             };
+                            if !holds_refs
+                                && (self.is_handle(inner) || self.is_handle_aggregate(inner))
+                            {
+                                // A borrowed handle stored is a counted copy (§6.1).
+                                let p = self.expr_place(&a.value, false)?;
+                                let l = self.temp(inner);
+                                self.count_copy(p.project(ProjElem::Deref), inner, Place::local(l));
+                                rest.push(Operand::Move(Place::local(l)));
+                                continue;
+                            }
                             if !holds_refs && !self.is_copy(inner) {
                                 let p = self.expr_place(&a.value, false)?;
                                 rest.push(Operand::Move(p.project(ProjElem::Deref)));
@@ -7034,7 +7620,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     rest.push(self.lib_arg(&a.value, by_ref)?);
                 }
-                let mut ops = vec![self.recv_borrow_after(recv, &mut rest)];
+                let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
                 ops.extend(rest);
                 let name = format!("{}.{method}", self.tys().display(base));
                 self.call_native(&name, ops, dest);
@@ -7046,14 +7632,17 @@ impl<'l, 'a> Bx<'l, 'a> {
 
 /// A method receiver whose borrow is not taken yet: an operand already in
 /// hand, or the place to borrow, its type and whether mutably.
-enum PendingRecv {
+enum PendingRecv<'a> {
     Ready(Operand),
     Borrow(Place, Ty, bool),
+    /// A receiver reached through a subscript (`nodes[i].kids`): its
+    /// subscripts are evaluated, and its place is formed after the
+    /// arguments, so the container's borrow starts after them too.
+    Deferred(&'a Expr, bool),
 }
 
 enum PendingPlace<'a> {
     Plain(&'a Expr),
-    Index(&'a Expr, Operand, &'a Expr),
 }
 
 /// Empty every block control cannot reach: the code a builder emits after
@@ -7131,6 +7720,73 @@ fn base_payload_or(bx: &Bx<'_, '_>, base: Ty, ok: u32) -> Ty {
 }
 
 /// Whether `e` names an existing place rather than producing a value.
+/// The `old(e)` calls in a contract condition, outermost first.
+fn old_calls<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+    let block = |b: &'a Block, out: &mut Vec<&'a Expr>| {
+        for s in &b.stmts {
+            if let StmtKind::Expr(x) | StmtKind::Let { value: x, .. } = &s.kind {
+                old_calls(x, out);
+            }
+        }
+        if let Some(x) = &b.final_expr {
+            old_calls(x, out);
+        }
+    };
+    match &e.kind {
+        ExprKind::Call { callee, args } => {
+            if matches!(&callee.kind, ExprKind::Identifier(n) if n == "old") {
+                out.push(e);
+                return;
+            }
+            old_calls(callee, out);
+            for a in args {
+                old_calls(&a.value, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            old_calls(object, out);
+            for a in args {
+                old_calls(&a.value, out);
+            }
+        }
+        ExprKind::Binary { left, right, .. } | ExprKind::NilCoalesce { left, right } => {
+            old_calls(left, out);
+            old_calls(right, out);
+        }
+        ExprKind::Index { object, index } => {
+            old_calls(object, out);
+            old_calls(index, out);
+        }
+        ExprKind::Unary { operand: x, .. }
+        | ExprKind::FieldAccess { object: x, .. }
+        | ExprKind::TupleIndex { object: x, .. } => old_calls(x, out),
+        ExprKind::Block(b) => block(b, out),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            old_calls(condition, out);
+            block(then_block, out);
+            if let Some(x) = else_branch {
+                old_calls(x, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether the place `e` names is reached through a subscript.
+fn through_index(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Index { index, .. } => !matches!(index.kind, ExprKind::Range { .. }),
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            through_index(object)
+        }
+        _ => false,
+    }
+}
+
 fn is_place_expr(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Identifier(_) | ExprKind::SelfValue => true,
@@ -7556,6 +8212,103 @@ fn main() {
         assert_eq!(
             run_source(src),
             Ok(("5 3 7 40 2 5 7 200 4 9 2 true\n".to_string(), Some(0)))
+        );
+    }
+
+    /// `par {}` branch bindings read after the block; `let x: T;`;
+    /// `==` on `Vec`s; an array `clone`; `String.from` of a literal and of
+    /// a `String`; `Self` and the bare type name in a generic impl; a
+    /// store's subscripts before its value; an owned place destructured
+    /// in place, its other parts dropped with it at scope end.
+    #[test]
+    fn par_joins_seq_eq_bare_self_and_store_order() {
+        let src = r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"drop{self.id}"); } }
+struct S3 { a: R, b: R }
+enum G[T] { X(T), Y }
+impl[T] G[T] {
+    fn id(self) -> Self { return self; }
+    fn alt(self, o: Self) -> Self { match self { G.Y => o, _ => self } }
+}
+fn idx(k: i64) -> i64 { print(f"i{k} "); k }
+fn val(v: i64) -> i64 { print(f"v{v} "); v }
+fn main() {
+    let total = par {
+        let a = idx(1);
+        let b = 2;
+        a + b
+    };
+    let x: i64;
+    x = total * 10;
+    let v = [1, 2, 3];
+    let w: Vec[i64] = [1, 2, 3];
+    let u: Vec[i64] = [1, 2];
+    let w2: Vec[i64] = [1, 2, 3];
+    let names = ["ab".to_string(), "cd".to_string()];
+    let copy = names.clone();
+    let s = String.from("lit");
+    let t = String.from(s);
+    let g: G[i64] = G.Y;
+    let h = g.alt(G.X(4)).id();
+    let mut m: Vec[Vec[i64]] = [[0, 0], [0, 0]];
+    m[idx(1)][idx(0)] = val(9);
+    println("");
+    println(f"{total} {x} {w == w2} {w == u} {v[1]} {copy[1]} {t} {m[1][0]}");
+    match h { G.X(n) => println(f"x{n}"), G.Y => println("y") }
+    let p = S3 { a: R { id: 1 }, b: R { id: 2 } };
+    let S3 { b, .. } = p;
+    println(f"got{b.id}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok((
+                "i1 i1 i0 v9 \n3 30 true false 2 cd lit 9\nx4\ngot2\ndrop2\ndrop1\n".to_string(),
+                Some(0)
+            ))
+        );
+    }
+
+    thread_local! {
+        /// `KARAC_D5` for the test on this thread, which the process-wide
+        /// flag cannot give.
+        pub(super) static D5: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// Under D5 a bare parameter is borrowed, so passing it where an owned
+    /// value is expected reads through the borrow: a `Copy` value copies, a
+    /// handle counts, and anything else is a move out of the borrow, which
+    /// the borrow check refuses. `own` keeps the old meaning.
+    #[test]
+    fn d5_borrowed_param_passed_as_owned() {
+        D5.with(|c| c.set(Some(true)));
+        let ok = r#"
+#[derive(Copy, Clone)]
+struct P { v: i64 }
+impl P { fn twice(own self) -> i64 { self.v * 2 } }
+shared struct H { v: i64 }
+struct S { v: i64 }
+impl S { fn triple(own self) -> i64 { self.v * 3 } }
+fn take_p(p: own P) -> i64 { p.v }
+fn take_h(h: own H) -> i64 { h.v }
+fn f(p: P, h: H, s: own S) -> i64 { take_p(p) + p.twice() + take_h(h) + s.triple() }
+fn main() { let h = H { v: 5 }; println(f"{f(P { v: 1 }, h, S { v: 2 })} {h.v}"); }
+"#;
+        assert_eq!(run_source(ok), Ok(("14 5\n".to_string(), Some(0))));
+        let moved = r#"
+struct S { v: i64 }
+impl S { fn triple(own self) -> i64 { self.v * 3 } }
+fn take(s: own S) -> i64 { s.v }
+fn f(s: S) -> i64 { s.triple() }
+fn g(s: S) -> i64 { take(s) }
+fn main() { println(f"{f(S { v: 1 })} {g(S { v: 2 })}"); }
+"#;
+        let err = run_source(moved).unwrap_err();
+        D5.with(|c| c.set(None));
+        assert!(
+            err.contains("move of (*_1) through a shared reference"),
+            "{err}"
         );
     }
 
