@@ -68,6 +68,21 @@ fn fold_int(e: &Expr) -> Option<i128> {
     }
 }
 
+/// An `if`/`if let` with an `else`, or a `match`: a value one of several
+/// arms computes.
+fn is_branching(e: &Expr) -> bool {
+    matches!(
+        e.kind,
+        ExprKind::If {
+            else_branch: Some(_),
+            ..
+        } | ExprKind::IfLet {
+            else_branch: Some(_),
+            ..
+        } | ExprKind::Match { .. }
+    )
+}
+
 /// The lowered program, or why it could not be lowered.
 pub struct Lowered {
     pub program: interp::Program,
@@ -1219,6 +1234,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     return Ok(t);
                 }
             }
+            _ if is_branching(e) => {
+                let t = self.node_ty(e.id, e.span)?;
+                return Ok(self.arm_width(e, t));
+            }
             _ => {}
         }
         self.node_ty(e.id, e.span)
@@ -1375,6 +1394,49 @@ impl<'l, 'a> Bx<'l, 'a> {
             ('u', 'f') => fb <= tb,
             ('f', 'f') => fb < tb,
             _ => false,
+        }
+    }
+
+    /// The type of a branching value recorded at numeric type `t`: its
+    /// widest arm. The checker's branch join keeps the first arm's type when
+    /// the other only widens to it, so `if c { 0 } else { big }` is recorded
+    /// at the literal's `i64` though `big` is an `i128`. An unsuffixed
+    /// literal arm takes whatever type the value has.
+    fn arm_width(&mut self, e: &Expr, t: Ty) -> Ty {
+        match &e.kind {
+            ExprKind::If {
+                then_block,
+                else_branch: Some(els),
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch: Some(els),
+                ..
+            } => {
+                let t = match &then_block.final_expr {
+                    Some(x) => self.arm_width(x, t),
+                    None => t,
+                };
+                self.arm_width(els, t)
+            }
+            ExprKind::Match { arms, .. } => {
+                let mut t = t;
+                for a in arms {
+                    t = self.arm_width(&a.body, t);
+                }
+                t
+            }
+            ExprKind::Block(b) => match &b.final_expr {
+                Some(x) => self.arm_width(x, t),
+                None => t,
+            },
+            ExprKind::Integer(_, None) | ExprKind::Float(_, None) => t,
+            _ if fold_int(e).is_some() => t,
+            _ => match self.expr_ty(e) {
+                Ok(at) if self.lossless(t, at) => at,
+                _ => t,
+            },
         }
     }
 
@@ -1986,6 +2048,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                     if ty.is_none() {
                         if let Some(rt) = self.ref_rebind(value, t)? {
                             t = rt;
+                        }
+                        if is_branching(value) {
+                            t = self.arm_width(value, t);
                         }
                     }
                     let l = self.user_local(name, t, pattern.id);
@@ -9784,6 +9849,36 @@ fn main() {
             run_source(src),
             Ok((
                 "2 7
+"
+                .to_string(),
+                Some(0)
+            ))
+        );
+    }
+
+    /// A branch value takes its widest arm: a literal first arm does not
+    /// narrow an `i128` second arm to the literal's `i64`.
+    #[test]
+    fn branch_value_takes_its_widest_arm() {
+        let src = r#"
+fn pick(n: i64) -> i128 {
+    let b: i128 = 100000000000000000000i128;
+    let c = if b > 0 { b - 3 } else { 0 };
+    let d = if b < 0 { 0 } else { b - 3 };
+    let e = match n { 0 => 1, 1 => b * 2, _ => -1 };
+    println(f"{c} {d} {e}");
+    d
+}
+fn main() {
+    let r = pick(1);
+    println(f"{r}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok((
+                "99999999999999999997 99999999999999999997 200000000000000000000
+99999999999999999997
 "
                 .to_string(),
                 Some(0)
