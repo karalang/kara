@@ -182,7 +182,7 @@ fn main() -> () {
         _1 = println(move _26) -> bb38;
     }
     bb38: {
-        _27 = String.from(const "/tmp/karac_mir_fs_natives.txt") -> bb39;
+        _27 = String.from(const "target/karac_mir_fs_natives.txt") -> bb39;
     }
     bb39: {
         _28 = String.from(const "hello file") -> bb40;
@@ -208,7 +208,7 @@ fn main() -> () {
         drop(_32) -> bb45;
     }
     bb45: {
-        _32 = FileSystem.read_to_string(const "/tmp/karac_mir_no_such_dir/x.txt") -> bb46;
+        _32 = FileSystem.read_to_string(const "target/karac_mir_no_such_dir/x.txt") -> bb46;
     }
     bb46: {
         _35 = &_32;
