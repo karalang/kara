@@ -2,406 +2,392 @@
   "note": "Non-conforming design.md blocks. Shrink me. `reason` says why a block is here; UNTRIAGED means nobody has decided yet.",
   "blocks": {
     "84bce9eaffdf": {
-      "line": 416,
+      "line": 418,
       "heading": "3. Lexical structure > String literals",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): raw string literals",
       "first_diagnostic": "Expected expression, found Error(\"string prefix 'r\\\"...\\\"' is reserved for future use; only `f\\\"...\\\"` and `c\\\"...\\\"` are recognized in v1\")"
     },
     "abde1163d62c": {
-      "line": 584,
+      "line": 586,
       "heading": "4. Modules and packages > Imports",
       "outcome": "REJECTED",
       "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
       "first_diagnostic": "'Connection' is already defined in this scope (first defined at 1:22)"
     },
     "84325494409a": {
-      "line": 605,
+      "line": 607,
       "heading": "4. Modules and packages > Imports",
       "outcome": "REJECTED",
       "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
       "first_diagnostic": "'Connection' is already defined in this scope (first defined at 2:26)"
     },
     "49207ec131b0": {
-      "line": 873,
+      "line": 875,
       "heading": "4. Modules and packages > Constants",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "ede115d37f80": {
-      "line": 1232,
+      "line": 1234,
       "heading": "5. Types > Collection literals",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): map literals (`[k: v]`, `[:]`)",
       "first_diagnostic": "Expected expression, found Colon"
     },
     "7e45c90d86e0": {
-      "line": 1246,
+      "line": 1248,
       "heading": "5. Types > Structs",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "e1ea9ff4c444": {
-      "line": 2173,
+      "line": 2175,
       "heading": "6. Expressions and statements > Loops and labels",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): the label sigil (`'outer`)",
       "first_diagnostic": "Expected expression, found Error(\"Unterminated character literal\")"
     },
     "cd0a18752d23": {
-      "line": 2187,
+      "line": 2189,
       "heading": "6. Expressions and statements > Loops and labels",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): the label sigil (`'outer`)",
       "first_diagnostic": "Expected expression, found Error(\"Unterminated character literal\")"
     },
     "f62795923221": {
-      "line": 2311,
+      "line": 2313,
       "heading": "7. Functions and closures > Declarations",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "028b6417a8c2": {
-      "line": 2359,
+      "line": 2361,
       "heading": "7. Functions and closures > Parameter modes",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "805303f52550": {
-      "line": 2399,
+      "line": 2401,
       "heading": "7. Functions and closures > Binding modes in patterns",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "319695619eff": {
-      "line": 2502,
+      "line": 2504,
       "heading": "7. Functions and closures > Destructuring parameters",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "431ccfb7bbf6": {
-      "line": 2522,
+      "line": 2524,
       "heading": "7. Functions and closures > Returns, `ref` returns and views",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "00241a981001": {
-      "line": 2530,
+      "line": 2532,
       "heading": "7. Functions and closures > Returns, `ref` returns and views",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `ref` of a named place as an expression (core-semantics §5.1)",
       "first_diagnostic": "`ref` is not written at call sites. The parameter's mode is declared on the callee's signature. Remove the `ref` keyword."
     },
     "6fd07d936666": {
-      "line": 2593,
+      "line": 2595,
       "heading": "7. Functions and closures > `*` and `ref` in expressions",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `get_unchecked` returns a `ref T`, and reads through a `ref` to a `Copy` value (core-semantics §5.10)",
       "first_diagnostic": "cannot move a non-`Copy` value out of a borrow with `*`: the binding already reads the value in place, so drop the `*` (or write `.clone()` for a copy)"
     },
     "015615ccef36": {
-      "line": 2614,
+      "line": 2616,
       "heading": "7. Functions and closures > `*` and `ref` in expressions",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `ref` of a named place as an expression (core-semantics §5.1)",
       "first_diagnostic": "`ref` is not written at call sites. The parameter's mode is declared on the callee's signature. Remove the `ref` keyword."
     },
     "fb3d4f923c49": {
-      "line": 2656,
+      "line": 2658,
       "heading": "7. Functions and closures > Closures",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): typed closure parameters",
       "first_diagnostic": "Expected Equal, found Colon"
     },
     "32f75a25e669": {
-      "line": 2694,
+      "line": 2696,
       "heading": "7. Functions and closures > Function types and kinds",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "8811f00f434a": {
-      "line": 2728,
+      "line": 2730,
       "heading": "7. Functions and closures > Captures",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "bb54f449488e": {
-      "line": 2864,
+      "line": 2866,
       "heading": "8. Type inference and generics > Type inference",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "3a3c5cf7994c": {
-      "line": 2876,
+      "line": 2878,
       "heading": "8. Type inference and generics > Type inference",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "74aa69cb82d0": {
-      "line": 3153,
+      "line": 3155,
       "heading": "Declarations and impls > Associated functions",
       "outcome": "UNDECLARED-NAME",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): the `Str` type (legacy spells it `StringSlice`)",
       "first_diagnostic": "undefined type 'Str', did you mean 'CStr'?"
     },
     "69aa1b4cb1ed": {
-      "line": 3496,
+      "line": 3498,
       "heading": "`impl Trait` > Return-position `impl Trait`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): the library method `RangeFrom.into_iter`",
       "first_diagnostic": "no method 'into_iter' on type 'RangeFrom'"
     },
     "a4d2ea004a24": {
-      "line": 3516,
+      "line": 3518,
       "heading": "`impl Trait` > Return-position `impl Trait`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "34ce18c4a7ec": {
-      "line": 3539,
+      "line": 3541,
       "heading": "`impl Trait` > Return-position `impl Trait`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "2bc5da29b2b2": {
-      "line": 3687,
+      "line": 3689,
       "heading": "9. Traits > Operator traits",
       "outcome": "REJECTED",
       "reason": "standard-library definition shown for reference; the compiler provides it built in",
       "first_diagnostic": "conflicting impl: `impl Option[Ordering]` redefines methods `is_eq`, `is_ge`, `is_gt`, `is_le`, `is_lt` already provided by an existing `impl Option`; a specialized inherent impl may only ADD new methods, not redefine or specialize an existing one (v1 has no method specialization)"
     },
     "fa98d5d72506": {
-      "line": 3839,
+      "line": 3841,
       "heading": "9. Traits > Conversion traits",
       "outcome": "SIGNATURE-MISSING",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "e17f7f14296c": {
-      "line": 3851,
+      "line": 3853,
       "heading": "9. Traits > Conversion traits",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "`own self` is not a valid receiver form. Bare `self` is the owned/consuming receiver; `ref self` and `mut ref self` are the two borrow forms."
     },
     "14949b359ecd": {
-      "line": 3863,
+      "line": 3865,
       "heading": "9. Traits > Conversion traits",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "e2bb4f8ea0a9": {
-      "line": 3880,
+      "line": 3882,
       "heading": "9. Traits > Conversion traits",
       "outcome": "SIGNATURE-MISSING",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "65db8574ba30": {
-      "line": 4136,
+      "line": 4138,
       "heading": "9. Traits > `Iterator` and `Iterable`",
       "outcome": "SIGNATURE-MISSING",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "`own self` is not a valid receiver form. Bare `self` is the owned/consuming receiver; `ref self` and `mut ref self` are the two borrow forms."
     },
     "6bf78b2dea1b": {
-      "line": 4334,
+      "line": 4336,
       "heading": "Derive > `Serialize` and `Deserialize`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): the `#[serde(...)]` derive helper",
       "first_diagnostic": "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `serde` — the compiler does not recognise this bare-name attribute. If you intended a diagnostic hint, write `#[diagnostic::serde]`; if you intended a tool attribute, use a namespaced form like `#[your_tool::serde]`."
     },
-    "87670d35f410": {
-      "line": 4615,
-      "heading": "11. Ownership and sharing > Shared types",
-      "outcome": "REJECTED",
-      "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `alias` is no longer reserved",
-      "first_diagnostic": "'alias' is a reserved keyword and cannot be used as an identifier; write `r#alias` to use it as an ordinary identifier"
-    },
     "24642faa9a80": {
-      "line": 4732,
+      "line": 4734,
       "heading": "11. Ownership and sharing > Cycles and `weak`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "67eec6e870f8": {
-      "line": 4790,
+      "line": 4792,
       "heading": "11. Ownership and sharing > `sync` types",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `sync enum`",
       "first_diagnostic": "'enum' is a reserved keyword and cannot be used as an identifier; write `r#enum` to use it as an ordinary identifier"
     },
     "ba31bf9dbb51": {
-      "line": 4815,
+      "line": 4817,
       "heading": "11. Ownership and sharing > `sync` types",
       "outcome": "REJECTED",
       "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
       "first_diagnostic": "'Session' is already defined in this scope (first defined at 2:8)"
     },
     "7d184dfa92e7": {
-      "line": 4862,
+      "line": 4864,
       "heading": "11. Ownership and sharing > Frozen handles",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): tuple-valued `par { e1, e2 }` (core-semantics amendment 6)",
       "first_diagnostic": "Expected Equal, found RightBrace"
     },
     "3a362b932e2c": {
-      "line": 4957,
+      "line": 4959,
       "heading": "11. Ownership and sharing > `#[must_use]`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "2836e0a100d5": {
-      "line": 5134,
+      "line": 5136,
       "heading": "Resources > Value-rooted resources",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): tuple-valued `par { e1, e2 }` (core-semantics amendment 6)",
       "first_diagnostic": "Expected Equal, found RightBrace"
     },
     "085b3c9ce589": {
-      "line": 5201,
+      "line": 5203,
       "heading": "12. Effects > Inference and declarations",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): a closure argument's effects are charged to the caller, not checked against a pure `Fn` slot (§12); `Row` is the reader's type",
       "first_diagnostic": "undefined type 'Row', did you mean 'rows'?"
     },
     "639e8544f124": {
-      "line": 5339,
+      "line": 5341,
       "heading": "Effect lattice > `#[no_effect]`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `panics` needs no declaration on a public function (§12)",
       "first_diagnostic": "public function 'render_frame' performs effects [panics] but has no effect declaration. Add: with panics to the function signature"
     },
     "ffeae214ca1e": {
-      "line": 5552,
+      "line": 5554,
       "heading": "13. Concurrency > `par` blocks",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): tuple-valued `par { e1, e2 }` (core-semantics amendment 6)",
       "first_diagnostic": "Expected Equal, found RightBrace"
     },
     "9e3272ebb0be": {
-      "line": 5576,
+      "line": 5578,
       "heading": "13. Concurrency > `par` blocks",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): tuple-valued `par { e1, e2 }` (core-semantics amendment 6)",
       "first_diagnostic": "Expected Equal, found RightBrace"
     },
     "e77c3bdf3dea": {
-      "line": 5592,
+      "line": 5594,
       "heading": "13. Concurrency > `par` blocks",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): tuple-valued `par { e1, e2 }` (core-semantics amendment 6)",
       "first_diagnostic": "Expected Equal, found RightBrace"
     },
     "daa28a0c3490": {
-      "line": 5616,
+      "line": 5618,
       "heading": "13. Concurrency > `par` blocks",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): tuple-valued `par { e1, e2 }` (core-semantics amendment 6)",
       "first_diagnostic": "Expected Equal, found RightBrace"
     },
-    "e830a8dc160c": {
-      "line": 5626,
-      "heading": "13. Concurrency > `par for`",
-      "outcome": "REJECTED",
-      "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `par(limit: n)`",
-      "first_diagnostic": "expected `{` after `par` — the `par` expression form is `par { ... }`; if you meant an identifier named `par`, write `r#par`"
-    },
     "ee9c19e0b207": {
-      "line": 5638,
+      "line": 5640,
       "heading": "13. Concurrency > `par for`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `par(limit: n)`",
-      "first_diagnostic": "expected `{` after `par` — the `par` expression form is `par { ... }`; if you meant an identifier named `par`, write `r#par`"
+      "first_diagnostic": "`par for` is not supported by this compiler yet; write a plain `for`, or a `par { ... }` block"
     },
     "9ae39970664b": {
-      "line": 5647,
+      "line": 5649,
       "heading": "13. Concurrency > `par for`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `par(limit: n)`",
-      "first_diagnostic": "expected `{` after `par` — the `par` expression form is `par { ... }`; if you meant an identifier named `par`, write `r#par`"
+      "first_diagnostic": "`par for` is not supported by this compiler yet; write a plain `for`, or a `par { ... }` block"
     },
     "2a1cfb01fa3d": {
-      "line": 5668,
+      "line": 5670,
       "heading": "13. Concurrency > `TaskGroup`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected type, found Own"
     },
     "5a485a6c0269": {
-      "line": 5745,
+      "line": 5747,
       "heading": "13. Concurrency > Locks and atomics",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `MutexGuard.value`",
-      "first_diagnostic": "Expected field name or tuple index after '.'"
+      "first_diagnostic": "no method 'lock' on type 'Mutex'"
     },
     "23afca846c63": {
-      "line": 5783,
+      "line": 5785,
       "heading": "13. Concurrency > Failure",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): tuple-valued `par { e1, e2 }` (core-semantics amendment 6)",
       "first_diagnostic": "Expected Equal, found RightBrace"
     },
     "11755d38072b": {
-      "line": 5953,
+      "line": 5955,
       "heading": "`unsafe` > `undocumented_unsafe` lint",
       "outcome": "REJECTED",
       "reason": "statement fragment (an `unsafe` block) shown on its own",
       "first_diagnostic": "expected `extern` or `fn` after `unsafe` at module scope — `unsafe` may only prefix an `unsafe extern \"ABI\" { ... }` block or an `unsafe fn` declaration."
     },
     "6068a14e526a": {
-      "line": 5998,
+      "line": 6000,
       "heading": "`unsafe` > `unsafe_op_in_unsafe_fn` rule",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): the library method `Slice.as_ptr`",
       "first_diagnostic": "no method 'as_ptr' on type 'Slice'"
     },
     "d3d59f3e7198": {
-      "line": 6144,
+      "line": 6146,
       "heading": "15. Unsafe, FFI and layout control > Uninitialised memory: `MaybeUninit[T]`",
       "outcome": "SIGNATURE-MISSING",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "`own self` is not a valid receiver form. Bare `self` is the owned/consuming receiver; `ref self` and `mut ref self` are the two borrow forms."
     },
     "f6242c87d0ad": {
-      "line": 6423,
+      "line": 6425,
       "heading": "`extern \"C\"` > Effects of `extern` functions",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `pure fn` in an `extern` block",
       "first_diagnostic": "expected `fn` or `type` inside `unsafe extern { ... }` block — only foreign function declarations (`fn name(...) -> T;`) and opaque foreign type declarations (`type Name;`) are legal here. See design.md § FFI > `unsafe extern { ... }` block requirement."
     },
     "bfc864dc4a9e": {
-      "line": 6471,
+      "line": 6473,
       "heading": "`extern \"C\"` > Opaque foreign types",
       "outcome": "SIGNATURE-MISSING",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `#[kara_name]` renaming an opaque foreign type (CN-8)",
       "first_diagnostic": "`FILE` is Const-class but struct names must be Type-class (PascalCase); consider renaming to `File`"
     },
     "fcac7ba4a8d6": {
-      "line": 6850,
+      "line": 6852,
       "heading": "Execution model > Bounds checks and `get_unchecked`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `get_unchecked` returns a `ref T`, and reads through a `ref` to a `Copy` value (core-semantics §5.10)",
       "first_diagnostic": "unary '*' requires 'ref T', 'mut ref T', or a raw pointer ('*const T' / '*mut T'), found 'i64'"
     },
     "b5e5366b045f": {
-      "line": 6879,
+      "line": 6881,
       "heading": "16. Targets and compilation > Panic handler",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): the `#[panic_handler]` attribute",
