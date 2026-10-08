@@ -9213,6 +9213,66 @@ fn main() -> Result[(), String] {
         assert_eq!(run_source(neg).map(|r| r.1), Ok(Some(101)));
     }
 
+    /// The library cells run as interpreter natives: `Atomic` writes its
+    /// cell through a shared reference, `OnceLock` keeps its first value
+    /// and hands a rejected one back, and `Arena` drops what a rewind cuts
+    /// off (a leak would fail the run). A `bool` atomic's `fetch_xor`
+    /// stores the xor (legacy leaves the value unchanged).
+    #[test]
+    fn library_cells_run_as_natives() {
+        let src = r#"
+fn main() {
+    let a = Atomic.new(5);
+    a.store(12, MemoryOrdering.SeqCst);
+    let p = a.fetch_add(3, MemoryOrdering.SeqCst);
+    let q = a.fetch_and(6, MemoryOrdering.SeqCst);
+    let r = a.fetch_or(9, MemoryOrdering.SeqCst);
+    let s = a.fetch_xor(1, MemoryOrdering.SeqCst);
+    let t = a.swap(40, MemoryOrdering.SeqCst);
+    println(f"{p} {q} {r} {s} {t} {a.load(MemoryOrdering.SeqCst)}");
+    match a.compare_exchange(40, 41, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst) {
+        Ok(v) => println(f"ok {v}"),
+        Err(v) => println(f"err {v}"),
+    }
+    match a.compare_exchange(40, 42, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst) {
+        Ok(v) => println(f"ok {v}"),
+        Err(v) => println(f"err {v}"),
+    }
+    let b = Atomic.new(false);
+    let b1 = b.swap(true, MemoryOrdering.SeqCst);
+    let b2 = b.fetch_xor(true, MemoryOrdering.SeqCst);
+    println(f"{b1} {b2} {b.load(MemoryOrdering.SeqCst)}");
+    let c: OnceLock[String] = OnceLock.new();
+    println(c.is_set());
+    match c.set(String.from("a")) {
+        Ok(_) => println("set"),
+        Err(e) => println(f"rejected {e.rejected}"),
+    }
+    match c.set(String.from("b")) {
+        Ok(_) => println("set"),
+        Err(e) => println(f"rejected {e.rejected}"),
+    }
+    match c.get() {
+        Some(s) => println(s),
+        None => println("none"),
+    }
+    let d: OnceLock[String] = OnceLock.new();
+    println(d.get_or_init(|| String.from("init")));
+    println(d.get_or_init(|| String.from("again")));
+    let ar: Arena[String] = Arena.new();
+    let r1 = ar.push(String.from("x"));
+    let cp = ar.high_water_mark();
+    let r2 = ar.push(String.from("y"));
+    println(f"{ar.get(r1)} {ar.get(r2)} {ar.len()}");
+    ar.rewind_to(cp);
+    println(ar.len());
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(r.output, "12 15 6 15 14 40\nok 40\nerr 41\nfalse true false\nfalse\nset\nrejected b\na\ninit\ninit\nx y 2\n1\n");
+    }
+
     /// Float math natives compute at the receiver's width, and float
     /// literals and results round to their type.
     #[test]

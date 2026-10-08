@@ -200,6 +200,11 @@ impl IntrinsicKind {
     }
 }
 
+/// Library structs whose values hold values of their one type argument
+/// that the struct's declared fields do not show (`OnceLock[T]` declares
+/// only a handle): they need dropping exactly when the argument does.
+pub const LIBRARY_CELLS: &[&str] = &["OnceLock", "OnceCell", "Arena"];
+
 /// A struct or enum definition as the middle end needs it. Field types are
 /// written in the definition's own generic parameters ([`TyKind::Param`] by
 /// position); [`TyCtxt::field_ty`] instantiates them. A struct is a
@@ -759,6 +764,12 @@ impl TyCtxt {
                 };
                 if adt.has_drop_impl {
                     return true;
+                }
+                // A library cell keeps values of its type argument in place
+                // of its fields (the MIR interpreter's `once_method` and
+                // `arena_method`).
+                if LIBRARY_CELLS.contains(&adt.name.as_str()) {
+                    return args.first().is_some_and(|&t| self.needs_drop_in(t, outer));
                 }
                 outer.push(ty);
                 let r = adt.variants.iter().any(|v| {

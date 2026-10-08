@@ -317,6 +317,7 @@ fn run_with(
             .and_then(|v| v.parse().ok())
             .unwrap_or(MAX_STEPS),
         snapshots: Vec::new(),
+        arenas: 0,
         flags: Vec::new(),
     };
     let outcome = if !problems.is_empty() {
@@ -479,6 +480,8 @@ struct Interp<'a> {
     /// Read-only copies a library method hands out a view of (the bytes
     /// of a `String`): live until exit, and not leaks.
     snapshots: Vec<AllocId>,
+    /// The last `Arena` id handed out.
+    arenas: i128,
     /// The borrow flags currently held, by field address.
     flags: Vec<(Addr, Flag)>,
 }
@@ -578,6 +581,9 @@ impl<'a> Interp<'a> {
                 };
                 Ok(self.alloc_box(ty_name, Value::Str(s.clone())))
             }
+            ("Atomic", _) => self.atomic_method(name, method, args, ret),
+            ("OnceLock" | "OnceCell", _) => self.once_method(name, method, args, arg_tys, ret),
+            ("Arena", _) => self.arena_method(name, method, args, arg_tys),
             ("Vec", "from_array") => {
                 let [Value::Agg(elems)] = args.as_slice() else {
                     return err(format!("{name} takes an array"));
@@ -1480,6 +1486,256 @@ impl<'a> Interp<'a> {
     /// `as_mut_slice`, `slice(lo, hi)` and `slice_mut(lo, hi)`, plus
     /// `len`, `index` and `index_mut` on a slice (or an array). A view
     /// borrows its elements; nothing is copied or dropped.
+    /// `Atomic[T]` (design.md § Atomics). The value is the struct with its
+    /// one cell, `Agg([v])`; every operation after `new` takes the atomic
+    /// by shared reference (core §6.3) and writes the cell through it. The
+    /// interpreter runs one task at a time, so each operation is atomic by
+    /// construction and the `MemoryOrdering` arguments are not read.
+    fn atomic_method(&mut self, name: &str, method: &str, args: Vec<Value>, ret: Ty) -> R<Value> {
+        if method == "new" {
+            let [v] = args.as_slice() else {
+                return err(format!("{name} takes one value"));
+            };
+            return Ok(Value::Agg(vec![v.clone()]));
+        }
+        let Some(recv) = args.first() else {
+            return err(format!("{name} needs its receiver"));
+        };
+        let cell = self.atomic_cell(recv, name)?;
+        let old = self.slot(&cell)?;
+        let operand = |i: usize| -> R<Value> {
+            args.get(i)
+                .cloned()
+                .ok_or_else(|| Stop::Error(format!("{name}: missing argument {i}")))
+        };
+        let new = match method {
+            "load" => return Ok(old),
+            "get_mut" => return Ok(Value::Ref(cell)),
+            "into_inner" => return Ok(old),
+            "store" => {
+                *self.slot_mut(&cell)? = operand(1)?;
+                return Ok(Value::Unit);
+            }
+            "swap" => operand(1)?,
+            "compare_exchange" | "compare_exchange_weak" => {
+                let (expected, new) = (operand(1)?, operand(2)?);
+                if old == expected {
+                    *self.slot_mut(&cell)? = new;
+                    return self.variant_named(ret, None, "Ok", vec![old]);
+                }
+                return self.variant_named(ret, None, "Err", vec![old]);
+            }
+            _ => {
+                let rhs = operand(1)?;
+                match (&old, &rhs) {
+                    (Value::Int(a), Value::Int(b)) => {
+                        let TyKind::Int(it) = self.tys.kind(ret) else {
+                            return err(format!("{name} returns {}", self.tys.display(ret)));
+                        };
+                        let (a, b) = (*a, *b);
+                        Value::Int(wrap(
+                            match method {
+                                "fetch_add" => a.wrapping_add(b),
+                                "fetch_sub" => a.wrapping_sub(b),
+                                "fetch_and" => a & b,
+                                "fetch_or" => a | b,
+                                "fetch_xor" => a ^ b,
+                                "fetch_nand" => !(a & b),
+                                "fetch_max" => a.max(b),
+                                "fetch_min" => a.min(b),
+                                _ => return err(format!("call of unknown function {name}")),
+                            },
+                            it,
+                        ))
+                    }
+                    (Value::Bool(a), Value::Bool(b)) => Value::Bool(match method {
+                        "fetch_and" => a & b,
+                        "fetch_or" => a | b,
+                        "fetch_xor" => a ^ b,
+                        "fetch_nand" => !(a & b),
+                        _ => return err(format!("call of unknown function {name}")),
+                    }),
+                    _ => return err(format!("{name} of {old:?} and {rhs:?}")),
+                }
+            }
+        };
+        *self.slot_mut(&cell)? = new;
+        Ok(old)
+    }
+
+    /// `OnceLock[T]` and `OnceCell[T]`: the struct holds its value, once
+    /// set, as its one part (`Agg([])` empty, `Agg([v])` set).
+    fn once_method(
+        &mut self,
+        name: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
+        if method == "new" {
+            return Ok(Value::Agg(Vec::new()));
+        }
+        let Some(recv) = args.first() else {
+            return err(format!("{name} needs its receiver"));
+        };
+        let at = self.cell_struct(recv, name)?;
+        let set = match self.slot(&at)? {
+            Value::Agg(fs) => !fs.is_empty(),
+            other => return err(format!("{name} of {other:?}")),
+        };
+        match (method, &args[1..]) {
+            ("is_set", []) => Ok(Value::Bool(set)),
+            ("get", []) => {
+                let v = set.then(|| Value::Ref(at.child(0)));
+                self.option(ret, v)
+            }
+            ("set", [v]) if !set => {
+                *self.slot_mut(&at)? = Value::Agg(vec![v.clone()]);
+                self.variant_named(ret, None, "Ok", vec![Value::Unit])
+            }
+            ("set", [v]) => {
+                // The rejected value goes back in `AlreadySetError`.
+                let rejected = Value::Agg(vec![v.clone()]);
+                self.variant_named(ret, None, "Err", vec![rejected])
+            }
+            ("get_or_init", [f]) => {
+                if !set {
+                    let fty = arg_tys
+                        .get(1)
+                        .copied()
+                        .ok_or_else(|| Stop::Error(format!("{name} needs its closure's type")))?;
+                    let mut callee = self.hold_callee(f.clone(), fty, name)?;
+                    let v = self.call_callee(&mut callee, Vec::new());
+                    self.release_callee(callee, fty)?;
+                    *self.slot_mut(&at)? = Value::Agg(vec![v?]);
+                }
+                Ok(Value::Ref(at.child(0)))
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// `Arena[T]`: the struct holds the arena's id, then its items in push
+    /// order (`Agg([id, item0, item1, ...])`). A handle is the arena's id
+    /// and the item's index; a checkpoint the id and the length.
+    fn arena_method(
+        &mut self,
+        name: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+    ) -> R<Value> {
+        if method == "new" {
+            self.arenas += 1;
+            return Ok(Value::Agg(vec![Value::Int(self.arenas)]));
+        }
+        let Some(recv) = args.first() else {
+            return err(format!("{name} needs its receiver"));
+        };
+        let at = self.cell_struct(recv, name)?;
+        let (id, len) = match self.slot(&at)? {
+            Value::Agg(fs) => match fs.first() {
+                Some(Value::Int(id)) => (*id, fs.len() as i128 - 1),
+                _ => return err(format!("{name} of an arena with no id")),
+            },
+            other => return err(format!("{name} of {other:?}")),
+        };
+        // A handle or checkpoint argument, by value or by reference: its
+        // arena's id and its index or mark.
+        let pair = |me: &mut Self, v: &Value| -> R<(i128, i128)> {
+            let mut v = v.clone();
+            while let Value::Ref(a) = &v {
+                v = me.slot(a)?;
+            }
+            match v {
+                Value::Agg(fs) => match fs.as_slice() {
+                    [Value::Int(a), Value::Int(b)] => Ok((*a, *b)),
+                    _ => err(format!("{name}: a malformed handle")),
+                },
+                other => err(format!("{name}: a handle, found {other:?}")),
+            }
+        };
+        match (method, &args[1..]) {
+            ("len", []) => Ok(Value::Int(len)),
+            ("push", [v]) => {
+                let Value::Agg(fs) = self.slot_mut(&at)? else {
+                    unreachable!("checked above");
+                };
+                fs.push(v.clone());
+                Ok(Value::Agg(vec![Value::Int(id), Value::Int(len)]))
+            }
+            ("get", [r]) => {
+                let (owner, index) = pair(self, r)?;
+                if owner != id || index < 0 || index >= len {
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    }
+                    return Err(Stop::Abort(AbortReason::BoundsCheck));
+                }
+                Ok(Value::Ref(at.child(index as u64 + 1)))
+            }
+            ("high_water_mark", []) => Ok(Value::Agg(vec![Value::Int(id), Value::Int(len)])),
+            ("rewind_to", [cp]) => {
+                // A checkpoint from another arena is ignored; the items past
+                // the mark drop, last pushed first.
+                let (owner, mark) = pair(self, cp)?;
+                if owner == id && (0..len).contains(&mark) {
+                    let arena = self.deref_ty(arg_tys.first().copied(), name)?;
+                    let held = self
+                        .tys
+                        .tcx()
+                        .adt_of(arena)
+                        .and_then(|(_, a)| a.first().copied())
+                        .ok_or_else(|| Stop::Error(format!("{name} needs its item type")))?;
+                    for i in (mark..len).rev() {
+                        self.drop_at(&at.child(i as u64 + 1), held)?;
+                    }
+                    let Value::Agg(fs) = self.slot_mut(&at)? else {
+                        unreachable!("checked above");
+                    };
+                    fs.truncate(mark as usize + 1);
+                }
+                Ok(Value::Unit)
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// The struct a (possibly doubly) referenced library cell points at.
+    fn cell_struct(&mut self, v: &Value, name: &str) -> R<Addr> {
+        let mut v = v.clone();
+        loop {
+            let Value::Ref(addr) = v else {
+                return err(format!(
+                    "{name} needs a reference to its receiver, found {v:?}"
+                ));
+            };
+            match self.slot(&addr)? {
+                inner @ Value::Ref(_) => v = inner,
+                _ => return Ok(addr),
+            }
+        }
+    }
+
+    /// The cell inside the atomic a (possibly doubly) referenced value
+    /// points at.
+    fn atomic_cell(&mut self, v: &Value, name: &str) -> R<Addr> {
+        let mut v = v.clone();
+        loop {
+            let Value::Ref(addr) = v else {
+                return err(format!(
+                    "{name} needs a reference to the atomic, found {v:?}"
+                ));
+            };
+            match self.slot(&addr)? {
+                inner @ Value::Ref(_) => v = inner,
+                Value::Agg(_) => return Ok(addr.child(0)),
+                other => return err(format!("{name} of {other:?}")),
+            }
+        }
+    }
+
     fn view_method(&mut self, name: &str, method: &str, args: Vec<Value>) -> R<Value> {
         let Some(recv) = args.first() else {
             return err(format!("{name} needs a receiver"));
@@ -3935,6 +4191,30 @@ impl<'a> Interp<'a> {
                     self.call(&f, vec![Value::Ref(addr.clone())])?;
                 }
             }
+        }
+        // The library cells keep their contents where the type's fields
+        // would be (`atomic_method`, `once_method`, `arena_method`).
+        let first = match adt.name.as_str() {
+            "Atomic" => return Ok(()),
+            "OnceLock" | "OnceCell" => Some(0),
+            "Arena" => Some(1),
+            _ => None,
+        };
+        if let Some(first) = first {
+            let held = self
+                .tys
+                .tcx()
+                .adt_of(ty)
+                .and_then(|(_, args)| args.first().copied())
+                .ok_or_else(|| Stop::Error(format!("{} has no type argument", adt.name)))?;
+            let n = match self.slot(addr)? {
+                Value::Agg(fs) => fs.len(),
+                other => return err(format!("{} holds {other:?}", adt.name)),
+            };
+            for i in (first..n).rev() {
+                self.drop_at(&addr.child(i as u64), held)?;
+            }
+            return Ok(());
         }
         let (variant, n) = match self.slot(addr)? {
             Value::Variant(k, fs) => (Some(k), fs.len()),
