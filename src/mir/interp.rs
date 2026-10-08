@@ -32,6 +32,8 @@ pub struct Program {
     /// The instance name of each ADT's `Drop` body, which takes the value
     /// as its single `mut ref` parameter.
     pub drop_impls: BTreeMap<AdtId, String>,
+    /// The `Drop` body of each instance of a generic ADT, by its type.
+    pub drop_by_ty: BTreeMap<Ty, String>,
 }
 
 impl Program {
@@ -3449,7 +3451,12 @@ impl<'a> Interp<'a> {
                     adt.name
                 ));
             }
-            let Some(f) = self.program.drop_impls.get(&a) else {
+            let Some(f) = self
+                .program
+                .drop_impls
+                .get(&a)
+                .or_else(|| self.program.drop_by_ty.get(&ty))
+            else {
                 return err(format!("no Drop body registered for {}", adt.name));
             };
             if self.trace {

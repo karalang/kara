@@ -93,6 +93,7 @@ pub fn lower_program(
         program: interp::Program::default(),
         errors: Vec::new(),
         variants: FxHashMap::default(),
+        generic_drops: FxHashMap::default(),
         registered: FxHashSet::default(),
         capture_modes,
         next_closure: defs.table.len() as u32,
@@ -194,6 +195,9 @@ struct Lcx<'a> {
     variants: FxHashMap<DefId, (DefId, u32)>,
     /// ADTs whose definition (and `Drop` body) has been registered.
     registered: FxHashSet<DefId>,
+    /// The `drop` method of each generic ADT with a `Drop` body, which is
+    /// instantiated for each instance of the type.
+    generic_drops: FxHashMap<DefId, DefId>,
     /// The ownership checker's capture modes, by the closure's span.
     capture_modes: &'a FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     /// Closures get DefIds past the definition table's.
@@ -609,12 +613,25 @@ impl<'a> Lcx<'a> {
                     HK::Intrinsic { kind, args }
                 } else {
                     let shared = self.register_adt(def)?;
+                    let targs = args.clone();
                     let args = self.tys.tcx().intern_list(&args);
-                    if shared {
+                    let new = if shared {
                         HK::Shared { def, args }
                     } else {
                         HK::Adt { def, args }
+                    };
+                    // A generic type's `Drop` body, for this instance.
+                    if let Some(&d) = self.generic_drops.get(&def) {
+                        let concrete = !targs.iter().any(|&t| has_param(&self.tys, t));
+                        if concrete {
+                            let ty = self.tys.tcx().intern(new);
+                            if !self.program.drop_by_ty.contains_key(&ty) {
+                                let inst = self.instance(d, targs);
+                                self.program.drop_by_ty.insert(ty, inst);
+                            }
+                        }
                     }
+                    new
                 }
             }
             HK::Tuple(l) => {
@@ -634,7 +651,7 @@ impl<'a> Lcx<'a> {
             HK::Opaque { .. } => return Err("an iterator value".into()),
             HK::Proj { base, assoc } => return self.normalize_proj(base, assoc),
             HK::Error => return Err("a type that failed to check".into()),
-            HK::Weak(_) => return Err("a `weak` type".into()),
+            HK::Weak(t) => HK::Weak(self.convert(t)?),
             HK::Fn {
                 params,
                 ret,
@@ -768,7 +785,9 @@ impl<'a> Lcx<'a> {
                     let inst = self.instance(d, Vec::new());
                     self.program.drop_impls.insert(AdtId(def.0), inst);
                 }
-                Some(_) => return Err(format!("the `Drop` body of generic type `{name}`")),
+                Some(d) => {
+                    self.generic_drops.insert(def, d);
+                }
                 None => return Err(format!("no `drop` method found for `{name}`")),
             }
         }
@@ -782,6 +801,21 @@ impl<'a> Lcx<'a> {
         let enum_def = *self.defs.parent.get(&v)?;
         self.register_adt(enum_def).ok()?;
         self.variants.get(&v).copied()
+    }
+}
+
+/// Whether `t` still names a generic parameter.
+fn has_param(tys: &TyInterner, t: Ty) -> bool {
+    let tcx = tys.tcx();
+    match tcx.kind(t) {
+        HK::Param(_) => true,
+        HK::Adt { args, .. } | HK::Shared { args, .. } | HK::Intrinsic { args, .. } => {
+            tcx.list(args).into_iter().any(|a| has_param(tys, a))
+        }
+        HK::Tuple(l) => tcx.list(l).into_iter().any(|a| has_param(tys, a)),
+        HK::Ref(i) | HK::MutRef(i) | HK::Weak(i) => has_param(tys, i),
+        HK::Array { elem, .. } | HK::Slice { elem, .. } => has_param(tys, elem),
+        _ => false,
     }
 }
 
@@ -1007,6 +1041,13 @@ impl<'l, 'a> Bx<'l, 'a> {
             Rvalue::Use(op) if self.erases(&op, pt) => {
                 Rvalue::Cast(CastKind::Erase, self.erase_source(op), pt)
             }
+            Rvalue::Use(op) if self.downgrades(&op, pt) => Rvalue::Use(self.downgrade(op, pt)),
+            Rvalue::Use(op @ (Operand::Copy(_) | Operand::Move(_)))
+                if self.widening(self.operand_ty(&op), pt).is_some() =>
+            {
+                let kind = self.widening(self.operand_ty(&op), pt).unwrap();
+                Rvalue::Cast(kind, op, pt)
+            }
             Rvalue::Aggregate(kind, ops) => {
                 // A variant of a generic type named bare in its own impl
                 // (`self = Cnt.Done`) is recorded without its arguments:
@@ -1058,6 +1099,105 @@ impl<'l, 'a> Bx<'l, 'a> {
             Operand::Copy(p) | Operand::Move(p) => self.place_type(p),
             Operand::Const(c) => c.ty,
         }
+    }
+
+    /// The cast that widens a value of numeric type `from` into the
+    /// numeric slot `to`, when they differ (design.md §5, lossless widening
+    /// is implicit at a binding, an argument, a field or a return).
+    fn widening(&self, from: Ty, to: Ty) -> Option<CastKind> {
+        if from == to {
+            return None;
+        }
+        let tcx = self.tys().tcx();
+        let int = |k| matches!(k, HK::Int(_) | HK::UInt(_));
+        let float = |k| matches!(k, HK::Float(_));
+        let (f, t) = (tcx.kind(from), tcx.kind(to));
+        if int(f) && int(t) {
+            Some(CastKind::IntToInt)
+        } else if int(f) && float(t) {
+            Some(CastKind::IntToFloat)
+        } else if float(f) && float(t) {
+            Some(CastKind::FloatToFloat)
+        } else {
+            None
+        }
+    }
+
+    /// `op` widened into the numeric slot `t`, if it needs it.
+    fn widen(&mut self, op: Operand, t: Ty) -> Operand {
+        if let Operand::Const(_) = op {
+            return self.fit_const(op, t);
+        }
+        let Some(kind) = self.widening(self.operand_ty(&op), t) else {
+            return op;
+        };
+        let l = self.temp(t);
+        let bb = self.cur;
+        self.b
+            .assign(bb, Place::local(l), Rvalue::Cast(kind, op, t));
+        Operand::Copy(Place::local(l))
+    }
+
+    /// Whether `op` is a strong handle going into the `weak` slot `t`.
+    fn downgrades(&self, op: &Operand, t: Ty) -> bool {
+        let tcx = self.tys().tcx();
+        matches!(tcx.kind(t), HK::Weak(_)) && !matches!(tcx.kind(self.operand_ty(op)), HK::Weak(_))
+    }
+
+    /// A strong handle stored into the `weak` slot `t` is downgraded:
+    /// moved into a temporary, read through a borrow into a new weak
+    /// reference, and the strong handle released (design.md, "strong to
+    /// weak is implicit").
+    fn downgrade(&mut self, op: Operand, t: Ty) -> Operand {
+        let st = self.operand_ty(&op);
+        let (strong, rt) = {
+            let tcx = self.tys().tcx();
+            let st = match tcx.kind(st) {
+                HK::Ref(i) | HK::MutRef(i) => i,
+                _ => st,
+            };
+            (st, tcx.reference(st, false))
+        };
+        let src = match op {
+            Operand::Copy(p) | Operand::Move(p)
+                if self.operand_ty(&Operand::Copy(p.clone())) != strong =>
+            {
+                // A reference to the handle: borrow through it.
+                p.project(ProjElem::Deref)
+            }
+            op => {
+                let h = self.temp(strong);
+                let bb = self.cur;
+                self.b.assign(bb, Place::local(h), Rvalue::Use(op));
+                Place::local(h)
+            }
+        };
+        let owned = src.projection.is_empty();
+        let r = self.temp(rt);
+        let w = self.temp(t);
+        let bb = self.cur;
+        self.b.assign(
+            bb,
+            Place::local(r),
+            Rvalue::Ref(BorrowKind::Shared, src.clone()),
+        );
+        self.b.assign(
+            bb,
+            Place::local(w),
+            Rvalue::Cast(CastKind::Downgrade, Operand::Move(Place::local(r)), t),
+        );
+        if owned {
+            let next = self.b.new_block();
+            self.goto_with(
+                TerminatorKind::Drop {
+                    place: src,
+                    target: next,
+                    unwind: UnwindAction::Abort,
+                },
+                next,
+            );
+        }
+        Operand::Move(Place::local(w))
     }
 
     /// Whether `op` is a closure, function item or function value of
@@ -1120,6 +1260,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.b.assign(bb, l, Rvalue::Cast(CastKind::Erase, o, t));
                     out.push(Operand::Move(Place::local(l)));
                 }
+                Some(t) if self.downgrades(&o, t) => out.push(self.downgrade(o, t)),
+                Some(t) if !matches!(o, Operand::Const(_)) => out.push(self.widen(o, t)),
                 _ => out.push(o),
             }
         }
@@ -1773,6 +1915,23 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     fn assign_stmt(&mut self, target: &'a Expr, value: &'a Expr) -> R<()> {
+        // `m[k] = v` on a map inserts (`IndexSet`, design.md §9): the
+        // entry is created when the key is missing, and an old value is
+        // handed back and dropped.
+        if let ExprKind::Index { object, index } = &target.kind {
+            if !matches!(index.kind, ExprKind::Range { .. }) {
+                let ot = self.expr_ty(object)?;
+                let (k, base) = self.strip_ty_full(ot);
+                if let HK::Intrinsic {
+                    kind: IntrinsicKind::Map | IntrinsicKind::SortedMap,
+                    args,
+                } = k
+                {
+                    let targs = self.tys().tcx().list(args);
+                    return self.index_set(target, object, index, value, base, &targs);
+                }
+            }
+        }
         // Left to right: the target's own subexpressions, then the value,
         // then the old value is dropped and the new one stored (D4).
         let pending = self.prepare_place(target)?;
@@ -1793,6 +1952,62 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         self.assign(place, Rvalue::Use(op));
         Ok(())
+    }
+
+    /// `m[k] = v` on a map: `insert(&mut m, k, v)`, with the key, then
+    /// the value, evaluated before the map's borrow starts (§5.6).
+    fn index_set(
+        &mut self,
+        target: &'a Expr,
+        object: &'a Expr,
+        index: &'a Expr,
+        value: &'a Expr,
+        base: Ty,
+        targs: &[Ty],
+    ) -> R<()> {
+        let (Some(&kt), Some(&vt)) = (targs.first(), targs.get(1)) else {
+            return self.unsupported(target.span, "an index assignment to this map");
+        };
+        let Some(ret) = self.option_of(vt) else {
+            return self.unsupported(target.span, "an index assignment without `Option`");
+        };
+        let recv = self.recv_place(object, true)?;
+        let key = self.owned_operand(index, kt)?;
+        let mut val = self.owned_operand(value, vt)?;
+        val = if self.downgrades(&val, vt) {
+            self.downgrade(val, vt)
+        } else {
+            self.widen(val, vt)
+        };
+        let mut rest = vec![key, val];
+        let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
+        ops.extend(rest);
+        let old = self.temp(ret);
+        let name = format!("{}.insert", self.tys().display(base));
+        self.call_native(&name, ops, Place::local(old));
+        if self.needs_drop(ret) {
+            let next = self.b.new_block();
+            self.goto_with(
+                TerminatorKind::Drop {
+                    place: Place::local(old),
+                    target: next,
+                    unwind: UnwindAction::Abort,
+                },
+                next,
+            );
+        }
+        Ok(())
+    }
+
+    /// `Option[t]`.
+    fn option_of(&mut self, t: Ty) -> Option<Ty> {
+        let table = &self.lcx.defs.table;
+        let d = (0..table.len() as u32).map(DefId).find(|&d| {
+            let e = table.get(d);
+            e.kind == DefKind::Enum && e.path.segments.last().is_some_and(|s| s == "Option")
+        })?;
+        self.lcx.register_adt(d).ok()?;
+        Some(self.tys().tcx().adt(d, &[t]))
     }
 
     /// An operand that reads through a projection (`copy (*_r)`, where `_r`
@@ -2115,6 +2330,37 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// The place `e` names. Field access through a reference derefs it.
     fn expr_place(&mut self, e: &'a Expr, mutable: bool) -> R<Place> {
+        let p = self.expr_place_of(e, mutable)?;
+        if mutable {
+            return Ok(p);
+        }
+        // Reading a `weak` slot upgrades it: `Some` of a counted handle
+        // while the object lives, else `None` (design.md, Cycles and
+        // `weak`).
+        let pt = self.place_type(&p);
+        let HK::Weak(inner) = self.tys().tcx().kind(pt) else {
+            return Ok(p);
+        };
+        let ot = self.expr_ty(e)?;
+        if matches!(self.tys().tcx().kind(ot), HK::Weak(_)) {
+            return Ok(p);
+        }
+        let rt = self.tys().tcx().reference(pt, false);
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Shared, p));
+        let _ = inner;
+        let l = self.temp(ot);
+        self.assign(
+            l,
+            Rvalue::Cast(CastKind::Upgrade, Operand::Move(Place::local(r)), ot),
+        );
+        if self.needs_drop(ot) {
+            self.schedule(ScopeEntry::Drop(Place::local(l)));
+        }
+        Ok(Place::local(l))
+    }
+
+    fn expr_place_of(&mut self, e: &'a Expr, mutable: bool) -> R<Place> {
         match &e.kind {
             ExprKind::Identifier(name) => match self.lcx.res.get(&e.id) {
                 Some(Res::Local(sym)) => match self.locals.get(sym) {
@@ -2215,7 +2461,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             t = inner;
         }
         if let HK::Intrinsic {
-            kind: IntrinsicKind::Map,
+            kind: IntrinsicKind::Map | IntrinsicKind::SortedMap,
             ..
         } = self.tys().tcx().kind(t)
         {
@@ -2244,7 +2490,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 args,
             } => (self.tys().tcx().list(args)[0], true),
             HK::Intrinsic {
-                kind: IntrinsicKind::Map,
+                kind: IntrinsicKind::Map | IntrinsicKind::SortedMap,
                 args,
             } => (self.tys().tcx().list(args)[1], false),
             HK::Slice { elem, .. } => (elem, true),
@@ -2482,7 +2728,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         if self.is_place(e) {
             let p = self.expr_place(e, false)?;
-            let t = self.expr_ty(e)?;
+            let mut t = self.expr_ty(e)?;
+            if let HK::Weak(_) = self.tys().tcx().kind(t) {
+                // A strong handle the checker typed as the `weak` slot it
+                // goes to: read it as the handle it is.
+                t = self.place_type(&p);
+            }
             if self.is_handle(t) || self.is_handle_aggregate(t) {
                 let l = self.temp(t);
                 self.count_copy(p, t, Place::local(l));
@@ -2694,6 +2945,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             ExprKind::ArrayLiteral(es) => self.array_literal(e, es, dest),
+            ExprKind::MapLiteral { entries, .. } => self.map_literal(e, entries, dest),
             ExprKind::PrefixCollectionLiteral { type_name, items }
                 if type_name == "Vec" || type_name == "Array" =>
             {
@@ -3068,6 +3320,56 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.assign(arr, agg);
         let name = format!("{}.from_array", self.tys().display(t));
         self.call_native(&name, vec![Operand::Move(Place::local(arr))], dest);
+        Ok(())
+    }
+
+    /// `{k: v, ..}`: a new map, and each entry inserted in order, a later
+    /// duplicate key replacing the earlier value.
+    fn map_literal(&mut self, e: &'a Expr, entries: &'a [(Expr, Expr)], dest: Place) -> R<()> {
+        let t = self.expr_ty(e)?;
+        let targs = match self.tys().tcx().kind(t) {
+            HK::Intrinsic {
+                kind: IntrinsicKind::Map | IntrinsicKind::SortedMap,
+                args,
+            } => self.tys().tcx().list(args),
+            _ => return self.unsupported(e.span, "this map literal"),
+        };
+        let (kt, vt) = (targs[0], targs[1]);
+        let Some(ret) = self.option_of(vt) else {
+            return self.unsupported(e.span, "a map literal without `Option`");
+        };
+        let name = self.tys().display(t);
+        self.call_native(&format!("{name}.new"), Vec::new(), dest.clone());
+        for (k, v) in entries {
+            let key = self.owned_operand(k, kt)?;
+            let key = self.widen(key, kt);
+            let val = self.owned_operand(v, vt)?;
+            let val = if self.downgrades(&val, vt) {
+                self.downgrade(val, vt)
+            } else {
+                self.widen(val, vt)
+            };
+            let rt = self.tys().tcx().reference(t, true);
+            let r = self.temp(rt);
+            self.assign(r, Rvalue::Ref(BorrowKind::Mut, dest.clone()));
+            let old = self.temp(ret);
+            self.call_native(
+                &format!("{name}.insert"),
+                vec![Operand::Move(Place::local(r)), key, val],
+                Place::local(old),
+            );
+            if self.needs_drop(ret) {
+                let next = self.b.new_block();
+                self.goto_with(
+                    TerminatorKind::Drop {
+                        place: Place::local(old),
+                        target: next,
+                        unwind: UnwindAction::Abort,
+                    },
+                    next,
+                );
+            }
+        }
         Ok(())
     }
 
@@ -5727,14 +6029,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         for (a, p) in args.iter().zip(&f.params) {
             if self.is_fn_typed(p.pattern.id) {
                 let (op, t) = self.fn_arg(&a.value)?;
-                ops.push(op);
+                ops.push(PendingRecv::Ready(op));
                 fn_tys.push(Some(t));
                 continue;
             }
             let pt = self.callee_param_ty(p, &inst_args)?;
-            ops.push(self.arg_operand(&a.value, pt)?);
+            ops.push(self.arg_pending(&a.value, pt)?);
             fn_tys.push(None);
         }
+        let ops = self.finish_args(ops)?;
         let name = if fn_tys.iter().any(Option::is_some) {
             self.lcx.instance_with_fns(d, inst_args.clone(), fn_tys)
         } else {
@@ -5798,6 +6101,68 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
+    /// An argument for a `mut ref` parameter whose borrow waits until every
+    /// argument is evaluated (core semantics §5.6, two-phase borrows):
+    /// `insert(nodes, nodes[root].left, v)` reads `nodes` before lending it.
+    /// Any other argument is evaluated now.
+    fn arg_pending(&mut self, a: &'a Expr, pt: Ty) -> R<PendingRecv<'a>> {
+        if let HK::MutRef(inner) = self.tys().tcx().kind(pt) {
+            let slice = matches!(self.tys().tcx().kind(inner), HK::Slice { .. });
+            if !slice && self.is_place(a) {
+                let at = self.expr_ty(a)?;
+                match self.tys().tcx().kind(at) {
+                    HK::MutRef(_) => {
+                        let p = self.expr_place(a, true)?.project(ProjElem::Deref);
+                        let t = self.place_type(&p);
+                        return Ok(PendingRecv::Borrow(p, t, true));
+                    }
+                    HK::Ref(_) => {}
+                    _ => return self.recv_place(a, true),
+                }
+            }
+        }
+        Ok(PendingRecv::Ready(self.arg_operand(a, pt)?))
+    }
+
+    /// The arguments, with each waiting `mut ref` borrow taken last. An
+    /// argument that still names a place is read into a temporary first,
+    /// so the borrow does not cover the read.
+    fn finish_args(&mut self, pending: Vec<PendingRecv<'a>>) -> R<Vec<Operand>> {
+        let mut ops = Vec::with_capacity(pending.len());
+        let mut later = Vec::new();
+        for (i, p) in pending.into_iter().enumerate() {
+            match p {
+                PendingRecv::Ready(op) => ops.push(op),
+                p => {
+                    ops.push(unit_const(self.unit()));
+                    later.push((i, p));
+                }
+            }
+        }
+        if later.is_empty() {
+            return Ok(ops);
+        }
+        for (i, op) in ops.iter_mut().enumerate() {
+            if later.iter().any(|(j, _)| *j == i) {
+                continue;
+            }
+            let (Operand::Copy(p) | Operand::Move(p)) = op else {
+                continue;
+            };
+            if p.projection.is_empty() && self.b.is_temp(p.local) {
+                continue;
+            }
+            let t = self.place_type(p);
+            let l = self.temp(t);
+            let read = std::mem::replace(op, Operand::Move(Place::local(l)));
+            self.assign(l, Rvalue::Use(read));
+        }
+        for (i, p) in later {
+            ops[i] = self.recv_borrow(p)?;
+        }
+        Ok(ops)
+    }
+
     /// An argument for a parameter of type `pt`: borrowed when the
     /// parameter is a reference and the argument is not.
     fn arg_operand(&mut self, a: &'a Expr, pt: Ty) -> R<Operand> {
@@ -5846,7 +6211,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.assign(r, Rvalue::Ref(kind, p));
                 Ok(Operand::Move(Place::local(r)))
             }
-            None => self.owned_operand(a, pt),
+            None => {
+                let op = self.owned_operand(a, pt)?;
+                Ok(self.widen(op, pt))
+            }
             _ => self.expr_operand(a),
         }
     }
@@ -6400,14 +6768,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // for a free function's call.
                     if self.is_fn_typed(p.pattern.id) {
                         let (op, t) = self.fn_arg(&a.value)?;
-                        rest.push(op);
+                        rest.push(PendingRecv::Ready(op));
                         fn_tys.push(Some(t));
                         continue;
                     }
                     let pt = self.callee_param_ty(p, &inst_args)?;
-                    rest.push(self.arg_operand(&a.value, pt)?);
+                    rest.push(self.arg_pending(&a.value, pt)?);
                     fn_tys.push(None);
                 }
+                let mut rest = self.finish_args(rest)?;
                 let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
                 ops.extend(rest);
                 let name = if fn_tys.iter().any(Option::is_some) {
@@ -6434,19 +6803,27 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// Give the untyped arguments of a library method (`v.push(None)`)
     /// the parameter type the receiver implies.
-    fn hint_lib_args(&mut self, recv: Ty, method: &str, args: &[CallArg]) {
+    /// The parameter types of a library collection method, where known.
+    fn lib_param_tys(&self, recv: Ty, method: &str) -> Option<Vec<Ty>> {
         let HK::Intrinsic { kind, args: targs } = self.tys().tcx().kind(recv) else {
-            return;
+            return None;
         };
         let targs = self.tys().tcx().list(targs);
         let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
-        let params: Vec<Ty> = match (kind, method) {
+        Some(match (kind, method) {
             (IntrinsicKind::Vec, "push" | "contains") => vec![targs[0]],
+            (IntrinsicKind::VecDeque, "push_back" | "push_front") => vec![targs[0]],
             (IntrinsicKind::Vec, "insert") => vec![usize_t, targs[0]],
-            (IntrinsicKind::Map, "insert") => vec![targs[0], targs[1]],
+            (IntrinsicKind::Map | IntrinsicKind::SortedMap, "insert") => vec![targs[0], targs[1]],
             (IntrinsicKind::Map, "get" | "contains_key" | "remove") => vec![targs[0]],
             (IntrinsicKind::Set, "insert" | "contains" | "remove") => vec![targs[0]],
-            _ => return,
+            _ => return None,
+        })
+    }
+
+    fn hint_lib_args(&mut self, recv: Ty, method: &str, args: &[CallArg]) {
+        let Some(params) = self.lib_param_tys(recv, method) else {
+            return;
         };
         for (a, p) in args.iter().zip(params) {
             if !self.lcx.node_types.contains_key(&a.value.id) {
@@ -7154,9 +7531,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         if param_tys.len() != args.len() {
             return self.unsupported(e.span, "a call through a value with the wrong arity");
         }
+        let mut pending = Vec::with_capacity(args.len());
         for (a, pt) in args.iter().zip(param_tys) {
-            ops.push(self.arg_operand(&a.value, pt)?);
+            pending.push(self.arg_pending(&a.value, pt)?);
         }
+        ops.extend(self.finish_args(pending)?);
         let next = self.b.new_block();
         self.goto_with(
             TerminatorKind::Call {
@@ -7649,6 +8028,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                         }
                     }
                     rest.push(self.lib_arg(&a.value, by_ref)?);
+                }
+                // A strong handle stored into a `weak` slot is downgraded,
+                // and a narrower number widened.
+                if let Some(slots) = self.lib_param_tys(base, method).filter(|_| stores) {
+                    for (op, t) in rest.iter_mut().zip(slots) {
+                        let o = std::mem::replace(op, unit_const(self.unit()));
+                        *op = if self.downgrades(&o, t) {
+                            self.downgrade(o, t)
+                        } else {
+                            self.widen(o, t)
+                        };
+                    }
                 }
                 let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
                 ops.extend(rest);
@@ -8340,6 +8731,130 @@ fn main() { println(f"{f(S { v: 1 })} {g(S { v: 2 })}"); }
             err.contains("move of (*_1) through a shared reference"),
             "{err}"
         );
+    }
+
+    /// `m[k] = v` on a map inserts, dropping any old value (design.md §9,
+    /// `IndexSet`); a `SortedMap` reads by key like a `Map`. A `mut ref`
+    /// argument is lent after the other arguments are evaluated (§5.6), so
+    /// a later argument may read the same collection.
+    #[test]
+    fn map_index_set_and_two_phase_arguments() {
+        let src = r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+struct Node { left: i64, v: i64 }
+fn insert(nodes: mut ref Vec[Node], at: i64, v: i64) -> i64 {
+    nodes.push(Node { left: at, v });
+    nodes.len() as i64 - 1
+}
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m["a"] = 1;
+    m["a"] = 2;
+    m[f"b"] = 3;
+    m["b"] += 10;
+    println(f"{m["a"]} {m["b"]} {m.len()}");
+    let mut s: SortedMap[i64, R] = SortedMap.new();
+    s[1] = R { id: 1 };
+    s[1] = R { id: 2 };
+    s[0] = R { id: 0 };
+    println(f"{s[0].id} {s[1].id}");
+    let mut nodes: Vec[Node] = Vec.new();
+    nodes.push(Node { left: 7, v: 0 });
+    let k = insert(mut nodes, nodes[0].left, 5);
+    println(f"{k} {nodes[1].left} {nodes[1].v}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("2 13 2\nd1\n0 2\n1 7 5\nd0\nd2\n".to_string(), Some(0)))
+        );
+    }
+
+    /// A generic type's `Drop` body runs for each instance of the type, at
+    /// the instance's own argument types.
+    #[test]
+    fn generic_drop_body_per_instance() {
+        let src = r#"
+struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println(f"dB{self.tag.len()}"); } }
+fn main() {
+    let a: Box3[String] = Box3 { v: f"aaaa", tag: f"ttt" };
+    let b: Box3[i64] = Box3 { v: 7, tag: f"uuuuu" };
+    println(f"{a.v.len()} {b.v}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("4 7\ndB5\ndB3\n".to_string(), Some(0)))
+        );
+    }
+
+    /// Lossless widening is implicit wherever the destination type is
+    /// known: a binding, an argument, a field and a stored element
+    /// (design.md §5, mixed-width operands).
+    #[test]
+    fn implicit_widening_at_known_destinations() {
+        let src = r#"
+fn takef(x: f64) -> f64 { x }
+fn takel(x: i64) -> i64 { x }
+struct S { f: f64, l: i64 }
+fn main() {
+    let a: i32 = 3;
+    let u: u32 = 4000000000;
+    let f: f64 = a;
+    let g: f64 = u;
+    let l: i64 = a;
+    let s = S { f: a, l: u };
+    let mut v: Vec[f64] = Vec.new();
+    v.push(a);
+    let h: f32 = 1.5;
+    let d: f64 = h;
+    println(f"{f} {g} {l} {takef(a)} {takel(a)} {s.f} {s.l} {v[0]} {d}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok((
+                "3 4000000000 3 3 3 3 4000000000 3 1.5\n".to_string(),
+                Some(0)
+            ))
+        );
+    }
+
+    /// A `weak` slot read as a value is upgraded to an `Option` of a
+    /// counted handle, and a strong handle stored into one is downgraded,
+    /// in a field, a literal and a collection element alike.
+    #[test]
+    fn weak_slots_upgrade_on_read_and_downgrade_on_store() {
+        let src = r#"
+shared struct P { id: i64 }
+shared struct N { id: i64, mut r: weak P }
+fn main() {
+    let z = P { id: 0 };
+    let mut v: Vec[N] = Vec.new();
+    v.push(N { id: 1, r: z });
+    let ps: Vec[P] = vec![P { id: 5 }];
+    v[0].r = ps[0];
+    let mut w: Vec[weak P] = Vec.new();
+    w.push(z);
+    match v[0].r { Some(p) => println(f"{p.id}"), None => println("gone") }
+    match w[0] { Some(p) => println(f"{p.id}"), None => println("gone") }
+}
+"#;
+        let lowered = build_source(src).expect("builds");
+        let text: String = lowered
+            .program
+            .bodies
+            .values()
+            .map(|b| crate::mir::pretty::pretty_body(b, &lowered.tys))
+            .collect();
+        for b in lowered.program.bodies.values() {
+            let errs = crate::mir::validate::validate(b, &lowered.tys);
+            assert!(errs.is_empty(), "{errs:?}");
+        }
+        assert_eq!(text.matches("(Downgrade)").count(), 3, "{text}");
+        assert_eq!(text.matches("(Upgrade)").count(), 2, "{text}");
     }
 
     /// A method of an impl whose target nests its params: `self` in
