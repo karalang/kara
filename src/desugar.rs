@@ -2617,6 +2617,7 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
             // Drained into `hoisted` above, in the one form the rest of the
             // compiler understands.
             assoc_bindings: Vec::new(),
+            fn_sig: None,
             span: *impl_trait_span,
         };
         synthetic_params.push(GenericParam {

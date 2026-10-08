@@ -16221,3 +16221,52 @@ fn keywords_name_members_after_dot_and_in_impls() {
     let free = parse("fn or() {}\n");
     assert!(!free.errors.is_empty(), "a free function still needs r#");
 }
+
+/// `F: MutFn(own T) -> U` is a function-trait bound, inline and in a
+/// `where` clause: the bound keeps the function type it names in `fn_sig`
+/// (docs/library/iterators.md writes adaptors this way).
+#[test]
+fn function_trait_bounds_inline_and_in_where() {
+    let src = "fn ap[F: MutFn(own i64) -> i64 + Clone](f: own F, x: i64) -> i64 { f(x) }\n\
+               fn bp[U, F](f: own F) -> U where F: OnceFn() -> U { f() }\n\
+               fn cp[G: Fn(i64)](g: own G) {}\n";
+    let r = parse(src);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let fns: Vec<&Function> = r
+        .program
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Function(f) => Some(f),
+            _ => None,
+        })
+        .collect();
+    let sig = |b: &TraitBound| match b.fn_sig.as_deref().map(|t| &t.kind) {
+        Some(TypeKind::FnType {
+            params,
+            return_type,
+            is_once,
+            ..
+        }) => (params.len(), return_type.is_some(), *is_once),
+        other => panic!("not a function-trait bound: {other:?}"),
+    };
+    let f = &fns[0].generic_params.as_ref().unwrap().params[0];
+    assert_eq!(f.bounds[0].path, ["MutFn"]);
+    assert_eq!(sig(&f.bounds[0]), (1, true, false));
+    assert_eq!(f.bounds[1].path, ["Clone"]);
+    assert!(f.bounds[1].fn_sig.is_none());
+    match &fns[1].where_clause.as_ref().unwrap().constraints[0] {
+        WhereConstraint::TypeBound { bounds, .. } => {
+            assert_eq!(bounds[0].path, ["OnceFn"]);
+            assert_eq!(sig(&bounds[0]), (0, true, true));
+        }
+        other => panic!("{other:?}"),
+    }
+    let g = &fns[2].generic_params.as_ref().unwrap().params[0];
+    assert_eq!(sig(&g.bounds[0]), (1, false, false));
+    let out = karac::formatter::format_program(&r.program);
+    assert!(out.contains("F: MutFn(own i64) -> i64 + Clone"), "{out}");
+    assert!(out.contains("F: OnceFn() -> U"), "{out}");
+    assert!(out.contains("G: Fn(i64)"), "{out}");
+    assert!(parse(&out).errors.is_empty(), "{out}");
+}

@@ -2248,6 +2248,11 @@ GENERIC_ARG_LIST = GENERIC_ARG { "," GENERIC_ARG }
 GENERIC_ARG      = TYPE | EXPR | SHAPE_LIT   // type arg, const expression, or shape literal
 
 TRAIT_BOUND = PATH [ "[" BOUND_ARG { "," BOUND_ARG } "]" ]
+            | FUNCTION_TYPE
+              // A function-trait bound — `F: MutFn(own Self.Item) -> U`,
+              // `where F: OnceFn() -> T`. FUNCTION_TYPE's keyword may be
+              // `Fn`, `MutFn` or `OnceFn` (core-semantics.md §9.6); the
+              // bound names that kind with that signature.
 BOUND_ARG   = GENERIC_ARG | ASSOC_BINDING
 ASSOC_BINDING = IDENT "=" TYPE
               // Inline associated-type binding — `Iterator[Item = T]`.

@@ -108,6 +108,10 @@ impl super::Formatter {
     /// promises (B-2026-08-22-11). Same class as the dropped provider-bound
     /// generic args below.
     pub(super) fn format_trait_bound(&mut self, b: &TraitBound) {
+        if let Some(sig) = &b.fn_sig {
+            self.format_type_expr(sig);
+            return;
+        }
         self.write_path(&b.path);
         let args = b.generic_args.clone().unwrap_or_default();
         self.format_bracket_args(&args, &b.assoc_bindings);

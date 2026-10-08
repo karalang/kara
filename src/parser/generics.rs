@@ -233,6 +233,23 @@ impl super::Parser {
 
     pub(crate) fn parse_trait_bound(&mut self) -> Option<TraitBound> {
         let start = self.current_span();
+        // `Fn(...) -> R`, `MutFn(...)`, `OnceFn(...)`: a function-trait
+        // bound, parsed as the function type it names.
+        if let Token::Identifier { name, .. } = self.peek_token_ref() {
+            if matches!(name.as_str(), "Fn" | "MutFn" | "OnceFn")
+                && *self.peek_token_ref_at(1) == Token::LeftParen
+            {
+                let name = name.to_string();
+                let sig = self.parse_type()?;
+                return Some(TraitBound {
+                    path: vec![name],
+                    generic_args: None,
+                    assoc_bindings: Vec::new(),
+                    fn_sig: Some(Box::new(sig)),
+                    span: self.span_from(&start),
+                });
+            }
+        }
         let path = self.parse_path_segments()?;
         // A trait bound's bracket list is the ONE position where `IDENT =
         // TYPE` is an associated-type binding rather than a positional type
@@ -256,6 +273,7 @@ impl super::Parser {
             path,
             generic_args,
             assoc_bindings,
+            fn_sig: None,
             span: self.span_from(&start),
         })
     }

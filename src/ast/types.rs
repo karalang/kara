@@ -320,6 +320,11 @@ pub struct TraitBound {
     /// form the rest of the compiler already understands, so nothing
     /// downstream of `desugar_program` ever sees this field non-empty.
     pub assoc_bindings: Vec<AssocBinding>,
+    /// A function-trait bound's signature: `F: MutFn(own Self.Item) -> U`
+    /// has `path = ["MutFn"]`, no `generic_args`, and here the same
+    /// `TypeKind::FnType` the type `MutFn(own Self.Item) -> U` parses to.
+    /// `None` for every other bound.
+    pub fn_sig: Option<Box<TypeExpr>>,
     pub span: Span,
 }
 
