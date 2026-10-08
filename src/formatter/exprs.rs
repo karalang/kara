@@ -200,7 +200,8 @@ impl super::Formatter {
             } => {
                 self.format_expr(object);
                 self.write_str(".");
-                self.write_ident(method);
+                // Any keyword is a member name after `.`; no `r#` needed.
+                self.write_str(method);
                 if let Some(ref tf) = turbofish {
                     self.write_str("[");
                     for (i, t) in tf.iter().enumerate() {
@@ -218,7 +219,7 @@ impl super::Formatter {
             ExprKind::FieldAccess { object, field } => {
                 self.format_expr(object);
                 self.write_str(".");
-                self.write_ident(field);
+                self.write_str(field);
             }
             ExprKind::TupleIndex { object, index } => {
                 self.format_expr(object);

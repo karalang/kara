@@ -373,35 +373,14 @@ impl super::Parser {
                                 },
                             };
                         }
-                        Token::Identifier { .. }
-                        | Token::Const
-                        | Token::Mut
-                        | Token::Or
-                        | Token::And => {
-                            // `const`, `mut`, `or`, and `and` are keywords at
-                            // item / type / parameter / operator position only —
-                            // in field- or method-name position they're
-                            // accepted as plain identifiers so surfaces like
-                            // `ptr.const(x)`, `ptr.mut(x)` (raw-pointer
-                            // construction — design.md § Raw Pointer
-                            // Construction), and the Option/Result combinators
-                            // `opt.or(alt)` / `opt.and(other)` (B-2026-07-14-6)
-                            // keep working. Standard "weak keyword" treatment.
-                            let method = if self.check(&Token::Const) {
-                                self.advance();
-                                "const".to_string()
-                            } else if self.check(&Token::Mut) {
-                                self.advance();
-                                "mut".to_string()
-                            } else if self.check(&Token::Or) {
-                                self.advance();
-                                "or".to_string()
-                            } else if self.check(&Token::And) {
-                                self.advance();
-                                "and".to_string()
-                            } else {
-                                self.expect_identifier()?
-                            };
+                        t if matches!(t, Token::Identifier { .. })
+                            || t.keyword_spelling().is_some() =>
+                        {
+                            // Any keyword, hard or reserved, is a member name
+                            // directly after `.` (design.md §3): `ptr.const(x)`,
+                            // `ptr.mut(x)`, `opt.or(alt)` (B-2026-07-14-6),
+                            // `handle.await`.
+                            let method = self.expect_method_name()?;
                             self.reject_method_turbofish();
                             let turbofish = None;
                             if self.check(&Token::LeftParen) {

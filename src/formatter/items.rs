@@ -196,6 +196,12 @@ impl super::Formatter {
     // ── Functions ───────────────────────────────────────────────
 
     pub(super) fn format_function(&mut self, f: &Function) {
+        self.format_function_as(f, false);
+    }
+
+    /// `member`: an `impl` method or associated function, whose name may be
+    /// any keyword without `r#` (design.md §3).
+    pub(super) fn format_function_as(&mut self, f: &Function, member: bool) {
         self.format_attributes(&f.attributes);
         self.write_indent();
         self.write_visibility(f.visibility());
@@ -210,7 +216,11 @@ impl super::Formatter {
             self.write_str("unsafe ");
         }
         self.write_str("fn ");
-        self.write_ident(&f.name);
+        if member {
+            self.write_str(&f.name);
+        } else {
+            self.write_ident(&f.name);
+        }
         self.format_generic_params(&f.generic_params);
         self.write_str("(");
         self.format_fn_params_with_receiver(
@@ -641,7 +651,7 @@ impl super::Formatter {
             self.write_str("unsafe ");
         }
         self.write_str("fn ");
-        self.write_ident(&m.name);
+        self.write_str(&m.name);
         self.format_generic_params(&m.generic_params);
         self.write_str("(");
         self.format_fn_params(&m.self_param, m.self_is_own, &m.params);
@@ -696,7 +706,7 @@ impl super::Formatter {
             }
             first = false;
             match item {
-                ImplItem::Method(m) => self.format_function(m),
+                ImplItem::Method(m) => self.format_function_as(m, true),
                 ImplItem::AssocType(a) => {
                     self.write_indent();
                     self.write_str("type ");

@@ -240,6 +240,10 @@ pub struct Parser {
     /// `impl` return with its own clause is parenthesized
     /// (`-> (Fn(Str) with writes(Log)) with allocates(Heap)`).
     pub(crate) return_tail: bool,
+    /// Set by an `impl` body just before it parses a method: the next
+    /// `parse_function` reads its name as a member name, which any keyword
+    /// may be (design.md §3). Taken one-shot, like `return_tail`.
+    pub(crate) member_fn_name: bool,
     /// `freeze <place>` initializer spans collected during the parse, moved
     /// onto [`crate::ast::Program::freeze_spans`] at the end. B-2026-08-01-33
     /// stage 3.
@@ -402,6 +406,7 @@ impl Parser {
             frozen_self_consumed: false,
             own_self_consumed: false,
             return_tail: false,
+            member_fn_name: false,
             freeze_spans: rustc_hash::FxHashSet::default(),
             ref_binding_spans: rustc_hash::FxHashSet::default(),
             mut_ref_binding_spans: rustc_hash::FxHashSet::default(),
@@ -1072,24 +1077,20 @@ impl Parser {
     /// `Token::And` / `Token::Or` regardless of context, so a
     /// targeted post-parse escape is the cleanest fix. Mirrors
     /// `expect_attr_arg_name`'s treatment of `requires` / `ensures`.
+    /// A member name: after `.`, or the name of a method or associated
+    /// function declared in an `impl` or `trait`. Any keyword, hard or
+    /// reserved, is a member name here without `r#` (design.md §3), so
+    /// `opt.or(x)`, `handle.await` and `fn not(own self)` all parse.
     fn expect_method_name(&mut self) -> Option<String> {
+        if let Some(kw) = self.peek_token_ref().keyword_spelling() {
+            self.advance();
+            return Some(kw.to_string());
+        }
         match self.peek_token_ref() {
             Token::Identifier { name, .. } => {
                 let name = name.clone();
                 self.advance();
                 Some(name)
-            }
-            Token::Not => {
-                self.advance();
-                Some("not".to_string())
-            }
-            Token::And => {
-                self.advance();
-                Some("and".to_string())
-            }
-            Token::Or => {
-                self.advance();
-                Some("or".to_string())
             }
             _ => {
                 self.error(&format!(

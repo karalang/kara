@@ -448,8 +448,13 @@ impl super::Parser {
         is_comptime: bool,
     ) -> Option<Function> {
         let start = self.current_span();
+        let member = std::mem::replace(&mut self.member_fn_name, false);
         self.expect(&Token::Fn)?;
-        let name = self.expect_identifier()?;
+        let name = if member {
+            self.expect_method_name()?
+        } else {
+            self.expect_identifier()?
+        };
         let name_span = self.span_from(&start);
         self.check_ident_class(&name, IdentClass::Value, "fn", name_span);
         // Take the item-level doc *before* descending into the param list —

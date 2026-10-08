@@ -9826,7 +9826,8 @@ fn raw_ident_roundtrip_in_function_name_and_field() {
     let prog = parse_ok(src);
     let formatted = karac::formatter::format_program(&prog);
     assert!(formatted.contains("fn r#try"), "formatted:\n{formatted}");
-    assert!(formatted.contains(".r#await"), "formatted:\n{formatted}");
+    // After `.` any keyword is a member name, so the formatter drops `r#`.
+    assert!(formatted.contains("obj.await"), "formatted:\n{formatted}");
 }
 
 // ── Anonymous-parameter focused diagnostic ──────────────────────────
@@ -16182,4 +16183,41 @@ fn par_block_branches_are_comma_separated_and_give_a_tuple() {
     let again = parse(&out);
     assert!(again.errors.is_empty(), "{:?}", again.errors);
     assert_eq!(karac::formatter::format_program(&again.program), out);
+}
+
+/// Design.md §3: any keyword, hard or reserved, names a member without `r#`
+/// directly after `.` and as a method declared in an `impl` or `trait`. Free
+/// functions still need `r#`.
+#[test]
+fn keywords_name_members_after_dot_and_in_impls() {
+    let src = "struct W { n: i64 }\n\
+               trait Neg { fn not(own self) -> i64; fn match(ref self) -> i64 { 1 } }\n\
+               impl W {\n    fn or(own self, other: own W) -> W { other }\n    fn await(ref self) -> i64 { self.n }\n    fn r#type(ref self) -> i64 { 2 }\n}\n\
+               fn main() { let w = W { n: 1 }; let a = w.await(); let b = w.or(W { n: 2 }).match(); let c = w.type; }\n";
+    let r = parse(src);
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let methods: Vec<&str> = r
+        .program
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            Item::ImplBlock(b) => Some(&b.items),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|it| match it {
+            ImplItem::Method(m) => Some(m.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(methods, ["or", "await", "type"]);
+    let out = karac::formatter::format_program(&r.program);
+    assert!(out.contains("w.await()"), "{out}");
+    assert!(out.contains(".match()"), "{out}");
+    assert!(out.contains("fn await(ref self)"), "{out}");
+    assert!(out.contains("fn not(own self)"), "{out}");
+    assert!(out.contains("fn type(ref self)"), "{out}");
+    assert!(parse(&out).errors.is_empty(), "{out}");
+    let free = parse("fn or() {}\n");
+    assert!(!free.errors.is_empty(), "a free function still needs r#");
 }

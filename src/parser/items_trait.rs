@@ -640,6 +640,8 @@ impl super::Parser {
                 } else {
                     false
                 };
+                // A method or associated function may be named by any keyword.
+                self.member_fn_name = true;
                 let method =
                     self.parse_function(attrs, is_pub, is_private, is_unsafe, is_comptime)?;
                 // `#[multiversion]` dispatch on an impl item is supported only on

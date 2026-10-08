@@ -144,6 +144,8 @@ those positions. `r#` on one of them is redundant but still accepted.
 `use` is no longer syntax: `use a.b.C;` is an error whose machine-applicable fix
 rewrites it to `import a.b.C;` (§ Module System). `use` is an ordinary name.
 
+**Member names are the exception.** Any keyword, hard or reserved, is a member name without `r#` directly after `.` (`opt.or(x)`, `ptr.const(p)`, `obj.type`) and as the name of a method or associated function declared in an `impl` or `trait` (`fn not(own self)`, `fn match(ref self)`). Free functions, locals, fields and types still need `r#`, and the formatter writes member names bare.
+
 All keywords are reserved — they cannot be used as identifiers without the `r#` raw-identifier escape (§1.3 IDENTIFIER, design.md § Raw Identifiers). `r#NAME` parses as the identifier `NAME` even when `NAME` is a reserved keyword (`r#async`, `r#try`, `r#move`, `r#comptime`, etc.). Structural markers — `self`, `Self`, `_`, `super`, `crate`, `pub`, `priv`, `private`, `mut`, `ref`, `own` — cannot be raw-escaped (`error[E_RAW_IDENT_NOT_ALLOWED]`, emitted as `E0004`; the canonical list is `token::UNESCAPABLE_MARKERS`, which the lexer's rejection and the parser's decision to suggest `r#` at all both read).
 
 **Reserved identifiers** (not keywords, but cannot be used as user-defined identifiers):
