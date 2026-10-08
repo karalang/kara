@@ -125,14 +125,19 @@ pub fn lower_program(
     let mut receivers = FxHashSet::default();
     loop {
         if let Some((def, args, name)) = lcx.queue.pop() {
-            if lcx
-                .fns
-                .get(&def)
-                .is_some_and(|i| matches!(i.f.self_param, Some(SelfParam::Ref | SelfParam::MutRef)))
-            {
+            let has_self = lcx.fns.get(&def).is_some_and(|i| i.f.self_param.is_some());
+            lcx.lower_instance(def, &args, &name);
+            // A receiver the body borrows, written or (D5) a bare `self`.
+            let borrows = lcx.program.bodies.get(&name).is_some_and(|b| {
+                b.arg_count > 0
+                    && matches!(
+                        lcx.tys.tcx().kind(b.locals[1].ty),
+                        HK::Ref(_) | HK::MutRef(_)
+                    )
+            });
+            if has_self && borrows {
                 receivers.insert(name.clone());
             }
-            lcx.lower_instance(def, &args, &name);
         } else if let Some(job) = lcx.closure_queue.pop() {
             lcx.lower_closure(job);
         } else {
@@ -1635,7 +1640,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                 }
             };
-            let t = match mode {
+            let t = match self.self_mode(f, mode.clone(), t) {
                 SelfParam::Owned => t,
                 SelfParam::Ref => self.tys().tcx().reference(t, false),
                 SelfParam::MutRef => self.tys().tcx().reference(t, true),
@@ -6402,6 +6407,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
+    /// The receiver mode a body takes: under D5 a bare `self` of a
+    /// non-`Copy` type borrows (core semantics §8), and `own self` is owned.
+    fn self_mode(&self, f: &ast::Function, mode: SelfParam, t: Ty) -> SelfParam {
+        if mode == SelfParam::Owned && d5_params() && !f.self_is_own && !self.is_copy(t) {
+            return SelfParam::Ref;
+        }
+        mode
+    }
+
     /// Whether a function-typed parameter takes its function by value
     /// (`escaping Fn(..)`, core semantics §9.3): the callee may store it,
     /// so it is not specialised to the argument's closure.
@@ -7098,6 +7112,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let (_, base) = self.strip_ty_full(rt);
                     self.lcx.self_tys.entry(d).or_insert(base);
                 }
+                let mode = match mode {
+                    Some(m) => {
+                        let st = self.expr_ty(object)?;
+                        let (_, st) = self.strip_ty_full(st);
+                        Some(self.self_mode(f, m, st))
+                    }
+                    None => None,
+                };
                 let recv = match mode {
                     Some(SelfParam::Owned) => {
                         let st = self.expr_ty(object)?;
@@ -7468,9 +7490,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                     Some(Callee::Def(d)) if self.lcx.fns.contains_key(d) => Some(*d),
                     _ => None,
                 };
-                let recv_owned = def.is_some_and(|d| {
-                    matches!(self.lcx.fns[&d].f.self_param, Some(SelfParam::Owned))
-                });
+                let recv_owned = match def {
+                    Some(d) => {
+                        let f = self.lcx.fns[&d].f;
+                        let st = self.lcx.node_types.get(&object.id).copied();
+                        match (&f.self_param, st) {
+                            (Some(m), Some(st)) => {
+                                let (_, st) = self.strip_ty_full(st);
+                                self.self_mode(f, m.clone(), st) == SelfParam::Owned
+                            }
+                            _ => false,
+                        }
+                    }
+                    None => false,
+                };
                 go(object, recv_owned, out);
                 let stores = matches!(
                     method.as_str(),
@@ -9311,6 +9344,40 @@ fn main() {
         let out = run_source(src);
         D5.with(|c| c.set(None));
         assert_eq!(out, Ok(("2 1\n1\ndrop 7\nerr 70\n".to_string(), Some(0))));
+    }
+
+    /// Under D5 a bare `self` of a non-`Copy` type borrows (core semantics
+    /// §8): the caller keeps the receiver; `own self` still takes it.
+    #[test]
+    fn d5_bare_self_borrows() {
+        D5.with(|c| c.set(Some(true)));
+        let src = r#"
+struct Ha { g: Array[String, 2] }
+impl Ha { fn give(self) { println("held") } fn take(own self) -> Array[String, 2] { self.g } fn n(self) -> i64 { self.g[0].len() as i64 } }
+#[derive(Copy, Clone)]
+struct P { v: i64 }
+impl P { fn twice(self) -> i64 { self.v * 2 } }
+fn pass(h: Ha) { h.give() }
+fn main() {
+    let h = Ha { g: ["a".to_string(), "b".to_string()] };
+    pass(h); h.give(); println(f"{h.n()} {P { v: 4 }.twice()}");
+    println(h.take()[1]);
+}
+"#;
+        let out = run_source(src);
+        D5.with(|c| c.set(None));
+        assert_eq!(
+            out,
+            Ok((
+                "held
+held
+1 8
+b
+"
+                .to_string(),
+                Some(0)
+            ))
+        );
     }
 
     /// `m[k] = v` on a map inserts, dropping any old value (design.md §9,
