@@ -184,12 +184,17 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
             // `#[non_exhaustive]` cross-package wildcard) use FixIt{span,
             // replacement}; convert to the TextEdit offset/length form.
             fixes.singles(t.errors.iter().filter_map(|e| {
-                e.fix_it.as_ref().map(|f| crate::resolver::TextEdit {
-                    offset: f.span.offset,
-                    length: f.span.length,
-                    replacement: f.replacement.clone(),
+                e.fix_it.as_ref().map(|f| {
+                    let mut edit = crate::resolver::TextEdit {
+                        offset: f.span.offset,
+                        length: f.span.length,
+                        replacement: f.replacement.clone(),
+                    };
+                    absorb_separator_before_semicolon(&source, &mut edit);
+                    edit
                 })
             }));
+            fixes.groups(t.error_fix_diffs.values());
             // WARNINGS carry fix-its too, and until B-2026-08-03-9's
             // `map_value_clone_reinsert` there was no producer, so this channel
             // went unread — a warning could advertise a machine-applicable fix
@@ -991,6 +996,24 @@ pub(super) fn workspace_has_uncommitted_changes(filename: &str) -> bool {
         return false;
     }
     !output.stdout.is_empty()
+}
+
+/// A `;` inserted to start a parameter list's named parameters, right after
+/// a `,` (the receiver case, whose span the typechecker does not have),
+/// takes that comma's place: `ref self, port` becomes `ref self; port`.
+fn absorb_separator_before_semicolon(source: &str, edit: &mut crate::resolver::TextEdit) {
+    if edit.length != 0 || !edit.replacement.starts_with(';') {
+        return;
+    }
+    let Some(before) = source.get(..edit.offset) else {
+        return;
+    };
+    let trimmed = before.trim_end();
+    if let Some(comma) = trimmed.strip_suffix(',') {
+        let start = comma.len();
+        edit.length = edit.offset - start;
+        edit.offset = start;
+    }
 }
 
 #[cfg(test)]

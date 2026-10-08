@@ -902,6 +902,63 @@ pub(crate) fn diagnose_named(
     None
 }
 
+/// The machine-applicable repair for a call [`diagnose_named`] declines, when
+/// there is one: label the positional arguments that now pass named
+/// parameters (`f(x, 9090)` to `f(x, port: 9090)` once `port` is named), or
+/// drop a label from an argument that is the positional parameter it names,
+/// in its own position. Empty when the call needs a human.
+pub(crate) fn named_call_fix(
+    args: &[CallArg],
+    info: &FnDefaultInfo,
+) -> Vec<crate::resolver::TextEdit> {
+    let n = info.defaults.len();
+    let positional = args.iter().take_while(|a| a.label.is_none()).count();
+    if positional > info.named_from {
+        // Each extra positional argument takes the name of the parameter in
+        // its position. Only when every one of them has a parameter, and no
+        // later argument already passes that name by label.
+        if positional > n {
+            return vec![];
+        }
+        let names: Option<Vec<&str>> = (info.named_from..positional)
+            .map(|k| info.names[k].as_deref())
+            .collect();
+        let Some(names) = names else { return vec![] };
+        if args[positional..]
+            .iter()
+            .any(|a| a.label.as_deref().is_some_and(|l| names.contains(&l)))
+        {
+            return vec![];
+        }
+        return args[info.named_from..positional]
+            .iter()
+            .zip(names)
+            .map(|(a, name)| crate::resolver::TextEdit {
+                offset: a.span.offset,
+                length: 0,
+                replacement: format!("{name}: "),
+            })
+            .collect();
+    }
+    if positional < info.named_from {
+        let a = &args[positional];
+        if a.label.is_some() && a.label.as_deref() == info.names[positional].as_deref() {
+            let end = a
+                .mut_marker_span
+                .map(|m| m.offset)
+                .unwrap_or(a.value.span.offset);
+            if end > a.span.offset {
+                return vec![crate::resolver::TextEdit {
+                    offset: a.span.offset,
+                    length: end - a.span.offset,
+                    replacement: String::new(),
+                }];
+            }
+        }
+    }
+    vec![]
+}
+
 /// Free and associated functions with named parameters, keyed `"name"` and
 /// `"Type.name"`, for the typechecker's call diagnostics ([`diagnose_named`]).
 pub(crate) fn named_param_table(program: &Program) -> HashMap<String, FnDefaultInfo> {

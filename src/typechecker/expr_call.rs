@@ -2129,12 +2129,20 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => None,
         };
-        let named_diag = named_key
-            .and_then(|k| self.named_fns.get(&k))
-            .and_then(|info| crate::default_args::diagnose_named(args, info));
+        let named_info = named_key.and_then(|k| self.named_fns.get(&k));
+        let named_diag = named_info
+            .and_then(|info| crate::default_args::diagnose_named(args, info))
+            .map(|(msg, at)| {
+                let fix = crate::default_args::named_call_fix(args, named_info.unwrap());
+                (msg, at, fix)
+            });
         let named_reported = named_diag.is_some();
-        if let Some((msg, at)) = named_diag {
-            self.type_error(msg, at.unwrap_or(*span), TypeErrorKind::LabelMismatch);
+        if let Some((msg, at, fix)) = named_diag {
+            let at = at.unwrap_or(*span);
+            if !fix.is_empty() {
+                self.error_fix_diffs.insert(SpanKey::from_span(&at), fix);
+            }
+            self.type_error(msg, at, TypeErrorKind::LabelMismatch);
         } else if let Some(ref names) = param_names {
             self.validate_labels(args, names, span);
         }

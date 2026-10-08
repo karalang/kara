@@ -1980,3 +1980,32 @@ fn main() {
         2,
     );
 }
+
+/// A default on a positional parameter: `fix` writes the `;` that makes it
+/// and the parameters after it named (after the receiver, in place of the
+/// comma; at the front, opening the list), then labels each call that passed
+/// one of them positionally.
+#[test]
+fn a_positional_default_is_fixed_by_naming_it_and_labeling_its_calls() {
+    rejected_then_fixed_in(
+        "positional-default",
+        r#"
+struct S { id: i64 }
+impl S {
+    fn m(ref self, port: i64 = 8080) -> i64 { self.id + port }
+    fn make(host: i64, port: i64 = 1, n: i64 = 2) -> i64 { host + port + n }
+}
+fn g(port: i64 = 1, n: i64 = 2) -> i64 { port + n }
+fn main() {
+    let s = S { id: 1 };
+    println(s.m(2));
+    println(S.make(1, 5, n: 3));
+    println(g(5, 6));
+    println(g());
+}
+"#,
+        "only a named parameter can have a default",
+        "fn m(ref self; port: i64 = 8080)",
+        3,
+    );
+}

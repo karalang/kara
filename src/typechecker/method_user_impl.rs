@@ -716,14 +716,22 @@ impl<'a> super::TypeChecker<'a> {
                     self.method_defaults
                         .get(&format!("{type_name}.{method}"))
                         .filter(|i| i.named_from < i.names.len())
-                        .and_then(|i| crate::default_args::diagnose_named(args, i))
+                        .and_then(|i| {
+                            crate::default_args::diagnose_named(args, i).map(|(msg, at)| {
+                                (msg, at, crate::default_args::named_call_fix(args, i))
+                            })
+                        })
                 } else {
                     None
                 };
                 let named_reported = named_diag.is_some();
                 let args: &[CallArg] = default_filled.as_deref().unwrap_or(args);
-                if let Some((msg, at)) = named_diag {
-                    self.type_error(msg, at.unwrap_or(*span), TypeErrorKind::LabelMismatch);
+                if let Some((msg, at, fix)) = named_diag {
+                    let at = at.unwrap_or(*span);
+                    if !fix.is_empty() {
+                        self.error_fix_diffs.insert(SpanKey::from_span(&at), fix);
+                    }
+                    self.type_error(msg, at, TypeErrorKind::LabelMismatch);
                 } else {
                     // Validate labels against method parameter names
                     self.validate_labels(args, &sig.param_names, span);

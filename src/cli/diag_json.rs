@@ -1865,6 +1865,27 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                     json_string(&f.replacement),
                 )
             });
+            // A multi-edit repair (`error_fix_diffs`), rendered as the other
+            // phases render theirs: `"fix_diff":[{...},{...}]`.
+            let replacement_json = replacement_json.or_else(|| {
+                t.error_fix_diffs
+                    .get(&crate::resolver::SpanKey::from_span(&err.span))
+                    .filter(|v| !v.is_empty())
+                    .map(|edits| {
+                        let items: Vec<String> = edits
+                            .iter()
+                            .map(|e| {
+                                format!(
+                                    "{{\"offset\":{},\"length\":{},\"text\":{}}}",
+                                    e.offset,
+                                    e.length,
+                                    json_string(&e.replacement),
+                                )
+                            })
+                            .collect();
+                        format!("\"fix_diff\":[{}]", items.join(","))
+                    })
+            });
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
                 severity: "error",

@@ -1758,6 +1758,10 @@ pub struct TypeCheckResult {
     /// it. The first argument's span is unique to its call, where the
     /// callee's span is shared with the call and any call it is the callee of.
     pub fn_value_param_types: FxHashMap<SpanKey, Vec<Type>>,
+    /// Multi-edit repairs for type errors, keyed by the error's span, as the
+    /// resolver's and ownership checker's `error_fix_diffs` are: `karac fix`
+    /// applies each, and `--output=json` renders it as `fix_diff`.
+    pub error_fix_diffs: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// The STATIC TYPE of each `dbg(x)` argument, keyed by the ARGUMENT's span
     /// (B-2026-08-23-18).
     ///
@@ -2675,6 +2679,7 @@ pub struct TypeChecker<'a> {
     /// the full rationale.
     pub(super) fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
     pub(super) fn_value_param_types: FxHashMap<SpanKey, Vec<Type>>,
+    pub(super) error_fix_diffs: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// While a method call's arguments are checked: the receiver's
     /// substitution (`Self` and the impl's parameters), which a
     /// function-trait bound on the method (`F: MutFn(own Self.Item) -> U`)
@@ -3161,6 +3166,7 @@ impl<'a> TypeChecker<'a> {
             method_typeparam_trait_key: FxHashMap::default(),
             fn_value_callee_types: FxHashMap::default(),
             fn_value_param_types: FxHashMap::default(),
+            error_fix_diffs: FxHashMap::default(),
             call_bound_receiver_subs: None,
             dbg_arg_types: FxHashMap::default(),
             impl_trait_captures: FxHashMap::default(),
@@ -3541,6 +3547,7 @@ impl<'a> TypeChecker<'a> {
             method_typeparam_trait_key: self.method_typeparam_trait_key,
             fn_value_callee_types: self.fn_value_callee_types,
             fn_value_param_types: self.fn_value_param_types,
+            error_fix_diffs: self.error_fix_diffs,
             dbg_arg_types: self.dbg_arg_types,
             impl_trait_captures: self.impl_trait_captures,
             method_unwrap_inner_types: self.method_unwrap_inner_types,

@@ -578,7 +578,7 @@ impl<'a> super::TypeChecker<'a> {
             .collect();
 
         let mut seen_default = false;
-        for param in params {
+        for (k, param) in params.iter().enumerate() {
             // Once per signature, at the first such parameter.
             //
             // design.md § Named and default parameters: only a named
@@ -590,7 +590,26 @@ impl<'a> super::TypeChecker<'a> {
                 && !seen_default
                 && self.cli_lint_overrides.strict_core
             {
-                self.type_error(
+                // The repair is the `;`: it replaces the `, ` between this
+                // parameter and the one before it, or opens the list. After
+                // a receiver, whose span the AST does not keep, it is
+                // inserted, and `karac fix` absorbs the comma before it.
+                let fix_span = match k.checked_sub(1).map(|j| &params[j]) {
+                    Some(prev) if prev.span.offset + prev.span.length <= param.span.offset => {
+                        let end = prev.span.offset + prev.span.length;
+                        Span {
+                            line: prev.span.line,
+                            column: prev.span.column + prev.span.length,
+                            offset: end,
+                            length: param.span.offset - end,
+                        }
+                    }
+                    _ => Span {
+                        length: 0,
+                        ..param.span
+                    },
+                };
+                self.type_error_with_fix_it(
                     format!(
                         "only a named parameter can have a default; write `;` before \
                          `{}` to make it and the parameters after it named",
@@ -598,6 +617,10 @@ impl<'a> super::TypeChecker<'a> {
                     ),
                     param.span,
                     TypeErrorKind::TypeMismatch,
+                    super::FixIt {
+                        span: fix_span,
+                        replacement: "; ".to_string(),
+                    },
                 );
             }
             if let Some(ref default_expr) = param.default_value {
