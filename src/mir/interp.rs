@@ -404,6 +404,17 @@ impl<'a> Interp<'a> {
                 }
                 Ok(Value::Unit)
             }
+            ("sleep_ms", "") => {
+                // `std.time::sleep_ms`, bodyless: a real pause, as legacy's
+                // sequential interpreter does; a negative count is a no-op.
+                if let [Value::Int(ms)] = args.as_slice() {
+                    if *ms > 0 {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        std::thread::sleep(std::time::Duration::from_millis(*ms as u64));
+                    }
+                }
+                Ok(Value::Unit)
+            }
             ("String", "from") => {
                 let [Value::Str(s)] = args.as_slice() else {
                     return err("String.from takes a string constant");
@@ -575,7 +586,8 @@ impl<'a> Interp<'a> {
             (
                 _,
                 "max" | "min" | "abs" | "pow" | "wrapping_add" | "wrapping_sub" | "wrapping_mul"
-                | "count_ones" | "signum" | "sqrt" | "floor" | "ceil" | "round",
+                | "count_ones" | "signum" | "sqrt" | "floor" | "ceil" | "round" | "rem_euclid"
+                | "div_euclid",
             ) if args
                 .first()
                 .is_some_and(|a| matches!(a, Value::Int(_) | Value::Float(_))) =>
@@ -946,15 +958,17 @@ impl<'a> Interp<'a> {
                 Ok(Value::Unit)
             }
             ("extend" | "append", [other]) => {
-                // `extend` consumes the other `Vec`, which is freed;
-                // `append` empties one it borrows.
+                // The other `Vec` is drained. Passed by value (`extend`
+                // always, and `append`, whose parameter the typechecker
+                // makes owned) it is consumed and freed; an `append` through
+                // a borrow leaves it empty.
                 let from = self.box_behind(other)?;
                 let moved = std::mem::take(self.vec_elems(from)?);
                 self.vec_elems(id)?.extend(moved);
-                if method == "extend" {
-                    if !matches!(other, Value::Box(_)) {
-                        return err(format!("{name} takes the other Vec by value"));
-                    }
+                if method == "extend" && !matches!(other, Value::Box(_)) {
+                    return err(format!("{name} takes the other Vec by value"));
+                }
+                if matches!(other, Value::Box(_)) {
                     self.heap[from.0 as usize] = None;
                     self.events.push(Event::Free(from));
                 }
@@ -1782,6 +1796,7 @@ impl<'a> Interp<'a> {
         for a in &args {
             texts.push(match a {
                 Value::Int(_) => None,
+                Value::Char(c) => Some(c.to_string()),
                 a => Some(self.string_at(a)?),
             });
         }
@@ -1801,6 +1816,21 @@ impl<'a> Interp<'a> {
         let s = text(0)?;
         match method {
             "lt" => Ok(Value::Bool(s < text(1)?)),
+            "find" => {
+                // The byte offset of the first occurrence of a String or
+                // char needle (legacy's `str::find`).
+                let at = s.find(text(1)?).map(|b| Value::Int(b as i128));
+                self.option(ret, at)
+            }
+            "char_at" => {
+                // The i-th char, `None` past the end or below zero.
+                let i = int(1)?;
+                let c = usize::try_from(i)
+                    .ok()
+                    .and_then(|i| s.chars().nth(i))
+                    .map(Value::Char);
+                self.option(ret, c)
+            }
             "contains" => Ok(Value::Bool(s.contains(text(1)?))),
             "starts_with" => Ok(Value::Bool(s.starts_with(text(1)?))),
             "ends_with" => Ok(Value::Bool(s.ends_with(text(1)?))),
@@ -1952,6 +1982,23 @@ impl<'a> Interp<'a> {
                     _ => (*a as u128).count_ones(),
                 };
                 Ok(Value::Int(bits as i128))
+            }
+            ("rem_euclid" | "div_euclid", [Value::Int(a), Value::Int(b)]) => {
+                if *b == 0 {
+                    self.events.push(Event::Abort(AbortReason::DivByZero));
+                    return Err(Stop::Abort(AbortReason::DivByZero));
+                }
+                if method == "rem_euclid" {
+                    Ok(Value::Int(a.rem_euclid(*b)))
+                } else {
+                    fit(self, a.div_euclid(*b))
+                }
+            }
+            ("rem_euclid", [Value::Float(a), Value::Float(b)]) => {
+                Ok(Value::Float(a.rem_euclid(*b)))
+            }
+            ("div_euclid", [Value::Float(a), Value::Float(b)]) => {
+                Ok(Value::Float(a.div_euclid(*b)))
             }
             ("sqrt", [Value::Float(a)]) => Ok(Value::Float(a.sqrt())),
             ("floor", [Value::Float(a)]) => Ok(Value::Float(a.floor())),
@@ -3251,6 +3298,8 @@ impl<'a> Interp<'a> {
 
 /// `String` methods [`Interp::string_text_method`] implements.
 const STRING_TEXT_METHODS: &[&str] = &[
+    "find",
+    "char_at",
     "contains",
     "starts_with",
     "ends_with",
@@ -4116,7 +4165,7 @@ fn main() -> () {
             (std::fs::read_to_string(out).unwrap(), 0)
         };
         let ran = run_pin_files("tests/mir/lib", MirPhase::DropsElaborated, &want);
-        assert_eq!(ran, 9);
+        assert_eq!(ran, 10);
     }
 
     /// A strict drop of a fieldless variant, a fieldless variant left in

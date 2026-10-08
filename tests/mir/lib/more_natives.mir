@@ -1,0 +1,151 @@
+enum Option[i64] { None, Some(i64) }
+enum Option[char] { None, Some(char) }
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: ();
+    let _2: String;
+    let _3: ref String;
+    let _4: Option[i64];
+    let _5: Option[char];
+    let _6: i64;
+    let _7: ref Option[i64];
+    let _8: ref Option[i64];
+    let _9: ref Option[i64];
+    let _10: ref Option[char];
+    let _11: ref Option[char];
+    let _12: ref Option[char];
+    let _13: Vec[i64];
+    let _14: Vec[i64];
+    let _15: mut ref Vec[i64];
+    let _16: ref Vec[i64];
+    bb0: {
+        _2 = String.from(const "héllo world") -> bb1;
+    }
+    bb1: {
+        _3 = &_2;
+        _4 = String.find(move _3, const "lo") -> bb2;
+    }
+    bb2: {
+        _7 = &_4;
+        _1 = println(move _7) -> bb3;
+    }
+    bb3: {
+        _3 = &_2;
+        _4 = String.find(move _3, const 'w') -> bb4;
+    }
+    bb4: {
+        _8 = &_4;
+        _1 = println(move _8) -> bb5;
+    }
+    bb5: {
+        _3 = &_2;
+        _4 = String.find(move _3, const "zz") -> bb6;
+    }
+    bb6: {
+        _9 = &_4;
+        _1 = println(move _9) -> bb7;
+    }
+    bb7: {
+        _3 = &_2;
+        _5 = String.char_at(move _3, const 1_i64) -> bb8;
+    }
+    bb8: {
+        _10 = &_5;
+        _1 = println(move _10) -> bb9;
+    }
+    bb9: {
+        _3 = &_2;
+        _5 = String.char_at(move _3, const 10_i64) -> bb10;
+    }
+    bb10: {
+        _11 = &_5;
+        _1 = println(move _11) -> bb11;
+    }
+    bb11: {
+        _3 = &_2;
+        _5 = String.char_at(move _3, const -1_i64) -> bb12;
+    }
+    bb12: {
+        _12 = &_5;
+        _1 = println(move _12) -> bb13;
+    }
+    bb13: {
+        drop(_2) -> bb14;
+    }
+    bb14: {
+        _6 = i64.rem_euclid(const -7_i64, const 3_i64) -> bb15;
+    }
+    bb15: {
+        _1 = println(copy _6) -> bb16;
+    }
+    bb16: {
+        _6 = i64.div_euclid(const -7_i64, const 3_i64) -> bb17;
+    }
+    bb17: {
+        _1 = println(copy _6) -> bb18;
+    }
+    bb18: {
+        _6 = i64.rem_euclid(const 7_i64, const -3_i64) -> bb19;
+    }
+    bb19: {
+        _1 = println(copy _6) -> bb20;
+    }
+    bb20: {
+        _6 = i64.div_euclid(const 7_i64, const -3_i64) -> bb21;
+    }
+    bb21: {
+        _1 = println(copy _6) -> bb22;
+    }
+    bb22: {
+        _6 = i64.rem_euclid(const 7_i64, const 3_i64) -> bb23;
+    }
+    bb23: {
+        _1 = println(copy _6) -> bb24;
+    }
+    bb24: {
+        _6 = i64.div_euclid(const 7_i64, const 3_i64) -> bb25;
+    }
+    bb25: {
+        _1 = println(copy _6) -> bb26;
+    }
+    bb26: {
+        _13 = Vec[i64].new() -> bb27;
+    }
+    bb27: {
+        _14 = Vec[i64].new() -> bb28;
+    }
+    bb28: {
+        _15 = &mut _13;
+        _1 = Vec[i64].push(move _15, const 1_i64) -> bb29;
+    }
+    bb29: {
+        _15 = &mut _14;
+        _1 = Vec[i64].push(move _15, const 2_i64) -> bb30;
+    }
+    bb30: {
+        _15 = &mut _14;
+        _1 = Vec[i64].push(move _15, const 3_i64) -> bb31;
+    }
+    bb31: {
+        _15 = &mut _13;
+        _1 = Vec[i64].append(move _15, move _14) -> bb32;
+    }
+    bb32: {
+        _16 = &_13;
+        _1 = println(move _16) -> bb33;
+    }
+    bb33: {
+        drop(_13) -> bb34;
+    }
+    bb34: {
+        _1 = sleep_ms(const 1_i64) -> bb35;
+    }
+    bb35: {
+        _1 = println(const "slept") -> bb36;
+    }
+    bb36: {
+        _0 = ();
+        return;
+    }
+}
