@@ -867,10 +867,44 @@ impl<'a> super::TypeChecker<'a> {
         // ambiguous against identical candidates. Only the verification pass
         // sets this; the lowering pass leaves it `None` and is unaffected.
         let self_module = self.stdlib_self_module.as_deref();
+        // A library source (`crate::prelude::LIBRARY_SOURCES`) that re-states
+        // a baked inherent impl's every method on the same target
+        // (`impl Option[Ordering]`) replaces it, as a redefined type replaces
+        // its baked copy above; both kept would be a conflicting impl.
+        fn method_names(imp: &ImplBlock) -> impl Iterator<Item = &str> {
+            imp.items.iter().filter_map(|it| match it {
+                ImplItem::Method(f) => Some(f.name.as_str()),
+                ImplItem::AssocType(_) => None,
+            })
+        }
+        let restated: HashMap<String, HashSet<&str>> = if self.library_methods_from_source {
+            let mut m: HashMap<_, HashSet<&str>> = HashMap::new();
+            for it in &self.program.items {
+                if let Item::ImplBlock(i) = it {
+                    if i.trait_name.is_none() {
+                        m.entry(crate::formatter::render_type_expr(&i.target_type))
+                            .or_default()
+                            .extend(method_names(i));
+                    }
+                }
+            }
+            m
+        } else {
+            HashMap::new()
+        };
         let baked: Vec<Item> = crate::prelude::STDLIB_PROGRAMS
             .iter()
             .filter(|(name, _)| Some(*name) != self_module)
             .flat_map(|(_, p)| p.items.iter())
+            .filter(|it| match it {
+                Item::ImplBlock(i) if i.trait_name.is_none() && !restated.is_empty() => {
+                    let target = crate::formatter::render_type_expr(&i.target_type);
+                    !restated
+                        .get(&target)
+                        .is_some_and(|ms| method_names(i).all(|n| ms.contains(n)))
+                }
+                _ => true,
+            })
             .filter(|it| {
                 if user_types.is_empty() {
                     return true;

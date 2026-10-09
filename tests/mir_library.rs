@@ -195,3 +195,112 @@ fn main() {
         "capacity overflow\nout of memory: 64 bytes\nout of memory: 64 bytes\n",
     );
 }
+
+/// `Ordering`'s predicates run from their library bodies, on a computed
+/// ordering and on a unit variant named as the receiver
+/// (`Ordering.Less.is_lt()` parses as a path call).
+#[test]
+fn ordering_predicates_run_from_their_library_bodies() {
+    let src = r#"
+fn main() {
+    let o = 3.cmp(5);
+    println(f"{o.is_lt()} {o.is_ge()} {5.cmp(5).is_le()} {5.cmp(5).is_eq()}");
+    println(f"{Ordering.Less.is_lt()} {Ordering.Greater.is_le()} {Ordering.Equal.is_ge()}");
+}
+"#;
+    assert_runs(src, "true false true true\ntrue false true\n");
+}
+
+/// `PriorityQueue` is already Kāra, so its baked file is the library
+/// source: smallest first by default, largest first from `max_first`, and
+/// `from` heapifies.
+#[test]
+fn priority_queue_runs_from_its_library_body() {
+    let src = r#"
+fn main() {
+    let mut q: PriorityQueue[i64] = PriorityQueue.new();
+    q.push(5);
+    q.push(1);
+    q.push(3);
+    println(f"{q.len()} {q.peek().unwrap()}");
+    while let Some(x) = q.pop() {
+        print(f"{x} ");
+    }
+    println("");
+    let mut m: PriorityQueue[String] = PriorityQueue.max_first();
+    m.push("b".to_string());
+    m.push("c".to_string());
+    m.push("a".to_string());
+    println(f"{m.len()} {m.pop().unwrap()} {m.pop().unwrap()}");
+    let h = PriorityQueue.from([4, 9, 2, 7]);
+    println(f"{h.into_sorted_vec()}");
+}
+"#;
+    assert_runs(src, "3 1\n1 3 5 \n3 c b\n[2, 4, 7, 9]\n");
+}
+
+/// The ordering operators on an `Ord` type call its `cmp`: a hand-written
+/// body, or the order a derive gives (fields in declaration order, enum
+/// variants by declaration order and then their payloads, tuples part by
+/// part). A `PriorityQueue` of a derived-`Ord` struct pops in that order.
+#[test]
+fn ordering_operators_on_ord_types_compare_through_cmp() {
+    let src = r#"
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
+struct Task { pri: i64, name: String }
+
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
+enum Shape { Dot, Line(i64), Box(i64, String) }
+
+struct Rev { k: i64 }
+impl PartialEq for Rev { fn eq(ref self, other: ref Rev) -> bool { self.k == other.k } }
+impl Eq for Rev {}
+impl PartialOrd for Rev { fn partial_cmp(ref self, other: ref Rev) -> Option[Ordering] { Some(self.cmp(other)) } }
+impl Ord for Rev { fn cmp(ref self, other: ref Rev) -> Ordering { other.k.cmp(self.k) } }
+
+fn main() {
+    let a = Task { pri: 1, name: "a".to_string() };
+    let b = Task { pri: 1, name: "b".to_string() };
+    let c = Task { pri: 0, name: "z".to_string() };
+    println(f"{a < b} {a > b} {a <= b} {a.cmp(b).is_lt()} {c < a} {a >= a}");
+    let s1 = Shape.Line(3);
+    let s2 = Shape.Box(1, "x".to_string());
+    let s3 = Shape.Box(1, "y".to_string());
+    println(f"{Shape.Dot < s1} {s1 < s2} {s2 < s3} {s3 > s2} {s1 <= Shape.Line(3)}");
+    let t1 = (1, "b".to_string());
+    let t2 = (1, "a".to_string());
+    println(f"{t1.cmp(t2).is_gt()} {t1 > t2}");
+    println(f"{Rev { k: 1 } < Rev { k: 2 }} {Rev { k: 1 } >= Rev { k: 2 }}");
+    let mut q: PriorityQueue[Task] = PriorityQueue.new();
+    q.push(b);
+    q.push(c);
+    q.push(a);
+    while let Some(t) = q.pop() {
+        print(f"{t.pri}{t.name} ");
+    }
+    println("");
+}
+"#;
+    assert_runs(
+        src,
+        "true false true true true true\ntrue true true true true\ntrue true\nfalse true\n0z 1a 1b \n",
+    );
+}
+
+/// `Option[Ordering]`'s predicates (what `partial_cmp` returns) run from
+/// the library source that re-states the baked impl.
+#[test]
+fn option_ordering_predicates_run_from_their_library_bodies() {
+    let src = r#"
+fn main() {
+    let a: Option[Ordering] = Some(Ordering.Less);
+    let n: Option[Ordering] = None;
+    println(f"{a.is_lt()} {a.is_le()} {a.is_gt()} {a.is_ge()} {a.is_eq()}");
+    println(f"{n.is_lt()} {n.is_le()} {n.is_ge()} {n.is_eq()}");
+}
+"#;
+    assert_runs(
+        src,
+        "true true false false false\nfalse false false false\n",
+    );
+}

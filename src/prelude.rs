@@ -786,6 +786,17 @@ pub const LIBRARY_SOURCES: &[(&str, &str)] = &[
         "source/alloc_error.kara",
         include_str!("../runtime/stdlib/source/alloc_error.kara"),
     ),
+    (
+        "source/ordering.kara",
+        include_str!("../runtime/stdlib/source/ordering.kara"),
+    ),
+    // Already all Kāra (a `Vec`-backed heap), so the baked file itself is
+    // appended: the checker then skips the baked copy of the struct and its
+    // `impl`, and the program's copy is the one MIR lowers.
+    (
+        "priority_queue.kara",
+        include_str!("../runtime/stdlib/priority_queue.kara"),
+    ),
 ];
 
 /// Embedded stdlib sources, keyed by their on-disk basename (relative to

@@ -3959,6 +3959,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         if !scalar(self.tys().tcx().kind(lbase)) && matches!(bin, BinOp::Eq | BinOp::Ne) {
             return self.eq_exprs(left, right, bin == BinOp::Ne, dest);
         }
+        if !scalar(self.tys().tcx().kind(lbase))
+            && matches!(bin, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
+        {
+            return self.ordered_exprs(left, bin, right, dest);
+        }
         let (l, lt) = self.scalar_operand(left)?;
         if !self.is_copy(lt) {
             return self.unsupported(left.span, "an operator on a non-scalar");
@@ -4006,6 +4011,305 @@ impl<'l, 'a> Bx<'l, 'a> {
             dest,
             Rvalue::UnaryOp(UnOp::Not, Operand::Move(Place::local(t))),
         );
+        Ok(())
+    }
+
+    /// `a < b` on a type ordered by `Ord`: `a.cmp(b)`, and a test of the
+    /// `Ordering` it returns. `<` and `>` require `Less` and `Greater`; `<=`
+    /// and `>=` rule out `Greater` and `Less`.
+    fn ordered_exprs(&mut self, left: &'a Expr, bin: BinOp, right: &'a Expr, dest: Place) -> R<()> {
+        let lp = self.expr_place(left, false)?;
+        let rp = self.expr_place(right, false)?;
+        let (lp, lt) = self.strip_refs(lp);
+        let (rp, _) = self.strip_refs(rp);
+        let (ot, [less, _, greater]) = self.ordering_ty(left.span)?;
+        let (want, eq) = match bin {
+            BinOp::Lt => (less, true),
+            BinOp::Gt => (greater, true),
+            BinOp::Le => (greater, false),
+            _ => (less, false),
+        };
+        let o = self.temp(ot);
+        self.cmp_places(left.span, lp, rp, lt, Place::local(o))?;
+        let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+        let disc = self.temp(isize_t);
+        self.assign(disc, Rvalue::Discriminant(Place::local(o)));
+        let want = Operand::Const(Const {
+            ty: isize_t,
+            kind: ConstKind::Scalar(want as u128),
+        });
+        let op = if eq { BinOp::Eq } else { BinOp::Ne };
+        self.assign(
+            dest,
+            Rvalue::BinaryOp(op, Operand::Copy(Place::local(disc)), want),
+        );
+        Ok(())
+    }
+
+    /// The `Ordering` type, with the indices of `Less`, `Equal` and
+    /// `Greater`.
+    fn ordering_ty(&mut self, span: Span) -> R<(Ty, [u32; 3])> {
+        let Some(ord) = self.lcx.defs.lookup(0, "Ordering") else {
+            return self.unsupported(span, "an ordering with no `Ordering`");
+        };
+        let ot = self.tys().tcx().adt(ord, &[]);
+        let ot = match self.lcx.mir_ty(ot, &[]) {
+            Ok(t) => t,
+            Err(err) => return self.unsupported(span, &err),
+        };
+        let Some((adt, _)) = self.tys().tcx().adt_of(ot) else {
+            return self.unsupported(span, "an ordering with no `Ordering`");
+        };
+        let variant = |name: &str| {
+            adt.variants
+                .iter()
+                .position(|v| v.name == name)
+                .map(|i| i as u32)
+        };
+        match (variant("Less"), variant("Equal"), variant("Greater")) {
+            (Some(l), Some(e), Some(g)) => Ok((ot, [l, e, g])),
+            _ => self.unsupported(span, "an ordering with no `Ordering`"),
+        }
+    }
+
+    /// `dest = l.cmp(r)` for two places of type `t`: the user's `Ord` body
+    /// when the type has one; otherwise the order a derive gives, scalars
+    /// by value, `String`s by the library, and aggregates field by field.
+    fn cmp_places(&mut self, span: Span, l: Place, r: Place, t: Ty, dest: Place) -> R<()> {
+        let (ot, [less, equal, greater]) = self.ordering_ty(span)?;
+        match self.tys().tcx().kind(t) {
+            HK::Int(_) | HK::UInt(_) | HK::Float(_) | HK::Bool | HK::Char => {
+                let bool_t = self.tys().bool();
+                let join = self.b.new_block();
+                for (op, variant) in [(BinOp::Lt, less), (BinOp::Gt, greater)] {
+                    let c = self.temp(bool_t);
+                    self.assign(
+                        c,
+                        Rvalue::BinaryOp(op, Operand::Copy(l.clone()), Operand::Copy(r.clone())),
+                    );
+                    let yes = self.b.new_block();
+                    let no = self.b.new_block();
+                    self.goto_with(
+                        TerminatorKind::SwitchInt {
+                            discr: Operand::Copy(Place::local(c)),
+                            targets: SwitchTargets::if_else(yes, no),
+                        },
+                        yes,
+                    );
+                    let kind = self.adt_aggregate(ot, variant);
+                    self.assign(dest.clone(), Rvalue::Aggregate(kind, Vec::new()));
+                    self.goto(join);
+                    self.cur = no;
+                }
+                let kind = self.adt_aggregate(ot, equal);
+                self.assign(dest, Rvalue::Aggregate(kind, Vec::new()));
+                self.goto(join);
+                self.cur = join;
+                Ok(())
+            }
+            HK::Ref(inner) | HK::MutRef(inner) => self.cmp_places(
+                span,
+                l.project(ProjElem::Deref),
+                r.project(ProjElem::Deref),
+                inner,
+                dest,
+            ),
+            HK::Str => {
+                let lo = self.ref_to(l, t);
+                let ro = self.ref_to(r, t);
+                self.call_native("String.cmp", vec![lo, ro], dest);
+                Ok(())
+            }
+            HK::Tuple(list) => {
+                let tys = self.tys().tcx().list(list);
+                let parts = tys
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &ft)| (l.field(i as u32, ft), r.field(i as u32, ft), ft))
+                    .collect();
+                self.lex_cmp(span, parts, dest)
+            }
+            HK::Array {
+                elem,
+                len: crate::ty::ArrayLen::Known(n),
+            } => {
+                let parts = (0..n)
+                    .map(|i| {
+                        (
+                            l.project(ProjElem::ConstIndex(i)),
+                            r.project(ProjElem::ConstIndex(i)),
+                            elem,
+                        )
+                    })
+                    .collect();
+                self.lex_cmp(span, parts, dest)
+            }
+            HK::Adt { .. } | HK::Shared { .. } => {
+                if let Some((d, args)) = self.user_impl_method(t, "Ord", "cmp") {
+                    let lo = self.ref_to(l, t);
+                    let ro = self.ref_to(r, t);
+                    let name = self.lcx.instance(d, args.clone());
+                    let func = self.fn_operand(&name, d, args);
+                    let next = self.b.new_block();
+                    self.goto_with(
+                        TerminatorKind::Call {
+                            func,
+                            args: vec![lo, ro],
+                            destination: dest,
+                            target: Some(next),
+                            unwind: UnwindAction::Abort,
+                        },
+                        next,
+                    );
+                    return Ok(());
+                }
+                let (adt, _) = self.tys().tcx().adt_of(t).expect("an ADT");
+                if !adt.is_enum {
+                    let n = adt.variants.first().map_or(0, |v| v.fields.len());
+                    let mut parts = Vec::new();
+                    for i in 0..n as u32 {
+                        let Some(ft) = self.tys().tcx().field_ty(t, None, i) else {
+                            return self.unsupported(span, "ordering this type");
+                        };
+                        parts.push((l.clone().field(i, ft), r.clone().field(i, ft), ft));
+                    }
+                    return self.lex_cmp(span, parts, dest);
+                }
+                self.enum_cmp(span, l, r, t, &adt, dest)
+            }
+            _ => self.unsupported(span, "ordering this type"),
+        }
+    }
+
+    /// `dest` is the first pair's ordering that is not `Equal`, else `Equal`.
+    fn lex_cmp(&mut self, span: Span, parts: Vec<(Place, Place, Ty)>, dest: Place) -> R<()> {
+        let (ot, [_, equal, _]) = self.ordering_ty(span)?;
+        let (isize_t, bool_t) = {
+            let tcx = self.tys().tcx();
+            (tcx.intern(HK::Int(IntSize::I64)), tcx.intern(HK::Bool))
+        };
+        let join = self.b.new_block();
+        for (lp, rp, ft) in parts {
+            let o = self.temp(ot);
+            self.cmp_places(span, lp, rp, ft, Place::local(o))?;
+            let disc = self.temp(isize_t);
+            self.assign(disc, Rvalue::Discriminant(Place::local(o)));
+            let same = self.temp(bool_t);
+            self.assign(
+                same,
+                Rvalue::BinaryOp(
+                    BinOp::Eq,
+                    Operand::Copy(Place::local(disc)),
+                    Operand::Const(Const {
+                        ty: isize_t,
+                        kind: ConstKind::Scalar(equal as u128),
+                    }),
+                ),
+            );
+            let next = self.b.new_block();
+            let differ = self.b.new_block();
+            self.goto_with(
+                TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(Place::local(same)),
+                    targets: SwitchTargets::if_else(next, differ),
+                },
+                differ,
+            );
+            self.assign(dest.clone(), Rvalue::Use(Operand::Copy(Place::local(o))));
+            self.goto(join);
+            self.cur = next;
+        }
+        let kind = self.adt_aggregate(ot, equal);
+        self.assign(dest, Rvalue::Aggregate(kind, Vec::new()));
+        self.goto(join);
+        self.cur = join;
+        Ok(())
+    }
+
+    /// Enum values order by variant, in declaration order, and then by
+    /// their payloads.
+    fn enum_cmp(
+        &mut self,
+        span: Span,
+        l: Place,
+        r: Place,
+        t: Ty,
+        adt: &crate::ty::AdtDef,
+        dest: Place,
+    ) -> R<()> {
+        let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+        let dl = self.temp(isize_t);
+        self.assign(dl, Rvalue::Discriminant(l.clone()));
+        let dr = self.temp(isize_t);
+        self.assign(dr, Rvalue::Discriminant(r.clone()));
+        let join = self.b.new_block();
+        let switch = self.b.new_block();
+        // The variants' order is their indices' order.
+        self.cmp_places(
+            span,
+            Place::local(dl),
+            Place::local(dr),
+            isize_t,
+            dest.clone(),
+        )?;
+        let (_, [_, equal, _]) = self.ordering_ty(span)?;
+        let bool_t = self.tys().bool();
+        let disc = self.temp(isize_t);
+        self.assign(disc, Rvalue::Discriminant(dest.clone()));
+        let same = self.temp(bool_t);
+        self.assign(
+            same,
+            Rvalue::BinaryOp(
+                BinOp::Eq,
+                Operand::Copy(Place::local(disc)),
+                Operand::Const(Const {
+                    ty: isize_t,
+                    kind: ConstKind::Scalar(equal as u128),
+                }),
+            ),
+        );
+        let differ = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(same)),
+                targets: SwitchTargets::if_else(switch, differ),
+            },
+            differ,
+        );
+        self.goto(join);
+        self.cur = switch;
+        let arms: Vec<BasicBlock> = adt.variants.iter().map(|_| self.b.new_block()).collect();
+        let unreachable = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(dl)),
+                targets: SwitchTargets {
+                    values: arms
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &b)| (i as u128, b))
+                        .collect(),
+                    otherwise: unreachable,
+                },
+            },
+            unreachable,
+        );
+        self.diverge(TerminatorKind::Unreachable);
+        for (vi, v) in adt.variants.iter().enumerate() {
+            self.cur = arms[vi];
+            let vi = vi as u32;
+            let mut parts = Vec::new();
+            for fi in 0..v.fields.len() as u32 {
+                let Some(ft) = self.tys().tcx().field_ty(t, Some(vi), fi) else {
+                    return self.unsupported(span, "ordering this type");
+                };
+                let down = |p: &Place| p.project(ProjElem::Downcast(VariantIdx(vi))).field(fi, ft);
+                parts.push((down(&l), down(&r), ft));
+            }
+            self.lex_cmp(span, parts, dest.clone())?;
+            self.goto(join);
+        }
+        self.cur = join;
         Ok(())
     }
 
@@ -6608,9 +6912,64 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.call_native(&name, ops, dest);
                     return Ok(());
                 };
-                self.def_call(e, d, f, inst_args, args, dest)
+                let recv = self.variant_receiver(callee, d, f, &inst_args)?;
+                self.def_call(e, d, f, inst_args, recv, args, dest)
             }
         }
+    }
+
+    /// `Ordering.Less.is_lt()` parses as a call of the path
+    /// `Ordering.Less.is_lt`: the unit variant its first two segments name
+    /// is the receiver of the method the last one names.
+    fn variant_receiver(
+        &mut self,
+        callee: &'a Expr,
+        d: DefId,
+        f: &'a Function,
+        inst_args: &[Ty],
+    ) -> R<Option<Operand>> {
+        let Some(mode) = f.self_param.clone() else {
+            return Ok(None);
+        };
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return Ok(None);
+        };
+        let [ty, var, _] = segments.as_slice() else {
+            return Ok(None);
+        };
+        let Some(def) = self.lcx.defs.lookup(0, ty) else {
+            return Ok(None);
+        };
+        let n = self.lcx.fns[&d].impl_params;
+        let targs = inst_args.get(..n).unwrap_or(&[]);
+        let t = self.tys().tcx().adt(def, targs);
+        let t = match self.lcx.mir_ty(t, &[]) {
+            Ok(t) => t,
+            Err(err) => return self.unsupported(callee.span, &err),
+        };
+        let Some((adt, _)) = self.tys().tcx().adt_of(t) else {
+            return Ok(None);
+        };
+        let Some(idx) = adt
+            .variants
+            .iter()
+            .position(|v| v.name == *var && v.fields.is_empty())
+        else {
+            return Ok(None);
+        };
+        let l = self.temp(t);
+        let kind = self.adt_aggregate(t, idx as u32);
+        self.assign(l, Rvalue::Aggregate(kind, Vec::new()));
+        Ok(Some(match self.self_mode(f, mode, t) {
+            SelfParam::Owned => Operand::Move(Place::local(l)),
+            SelfParam::Ref => self.ref_to(Place::local(l), t),
+            SelfParam::MutRef => {
+                let rt = self.tys().tcx().reference(t, true);
+                let r = self.temp(rt);
+                self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(l)));
+                Operand::Move(Place::local(r))
+            }
+        }))
     }
 
     /// The type a generic parameter named `name` has in this instance.
@@ -6638,7 +6997,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<()> {
         if let Some((d, inst_args)) = self.method_by_receiver(t, m) {
             let f = self.lcx.fns[&d].f;
-            return self.def_call(e, d, f, inst_args, args, dest);
+            return self.def_call(e, d, f, inst_args, None, args, dest);
         }
         let tcx = self.tys().tcx();
         let zero = match tcx.kind(t) {
@@ -6661,13 +7020,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(())
     }
 
-    /// A call of the program's function `d` (`f`) in instance `inst_args`.
+    /// A call of the program's function `d` (`f`) in instance `inst_args`,
+    /// with `recv` before the arguments when a path names the receiver.
+    #[allow(clippy::too_many_arguments)]
     fn def_call(
         &mut self,
         e: &'a Expr,
         d: DefId,
         f: &'a Function,
         inst_args: Vec<Ty>,
+        recv: Option<Operand>,
         args: &'a [CallArg],
         dest: Place,
     ) -> R<()> {
@@ -6692,7 +7054,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             ops.push(self.arg_pending(&a.value, pt)?);
             fn_tys.push(None);
         }
-        let ops = self.finish_args(ops)?;
+        let mut ops = self.finish_args(ops)?;
+        if let Some(r) = recv {
+            ops.insert(0, r);
+        }
         let name = if fn_tys.iter().any(Option::is_some) {
             self.lcx.instance_with_fns(d, inst_args.clone(), fn_tys)
         } else {
@@ -7366,6 +7731,18 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         if method == "cmp" && self.scalar_cmp(e, object, args, dest.clone())? {
             return Ok(());
+        }
+        if let ("cmp", [other], false) = (method, args, self.lcx.calls.contains_key(&e.id)) {
+            // A tuple's `cmp` (the checker records no callee for it).
+            let ot = self.expr_ty(object)?;
+            let (_, base) = self.strip_ty_full(ot);
+            if matches!(self.tys().tcx().kind(base), HK::Tuple(_)) {
+                let lp = self.expr_place(object, false)?;
+                let rp = self.expr_place(&other.value, false)?;
+                let (lp, lt) = self.strip_refs(lp);
+                let (rp, _) = self.strip_refs(rp);
+                return self.cmp_places(e.span, lp, rp, lt, dest);
+            }
         }
         if method == "clone" && args.is_empty() && !self.lcx.calls.contains_key(&e.id) {
             // A tuple's `clone` (the checker records no callee for it).
@@ -8680,6 +9057,19 @@ impl<'l, 'a> Bx<'l, 'a> {
             HK::Ref(t) | HK::MutRef(t) => t,
             _ => ot,
         };
+        if let ("cmp", [other]) = (method, args) {
+            if matches!(
+                self.tys().tcx().kind(base),
+                HK::Adt { .. } | HK::Shared { .. } | HK::Tuple(_)
+            ) {
+                // A derived `Ord`: field by field.
+                let lp = self.expr_place(object, false)?;
+                let rp = self.expr_place(&other.value, false)?;
+                let (lp, lt) = self.strip_refs(lp);
+                let (rp, _) = self.strip_refs(rp);
+                return self.cmp_places(e.span, lp, rp, lt, dest);
+            }
+        }
         match (key, method) {
             (_, "as_slice" | "as_mut_slice")
                 if matches!(

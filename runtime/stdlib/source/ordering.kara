@@ -1,0 +1,90 @@
+// `Ordering` and its predicates, as Kāra (redesign A2).
+//
+// The MIR pipeline appends this file to the program, so these bodies are
+// what `a.cmp(b).is_lt()` runs there. The type and methods are a copy of
+// the ones in `../ordering.kara`, whose free functions (`min`, `max`,
+// `clamp`) and `Option[Ordering]` predicates stay there: appending the
+// enum makes the checker skip the baked enum and its `impl` only, so the
+// rest of that module is still in scope and must not be declared twice.
+// The two copies become one file when the legacy pipeline is deleted (M3).
+
+#[derive(Eq, Copy)]
+enum Ordering {
+    Less,
+    Equal,
+    Greater,
+}
+
+impl Ordering {
+    fn is_lt(ref self) -> bool {
+        match self {
+            Ordering.Less => true,
+            _ => false,
+        }
+    }
+
+    fn is_le(ref self) -> bool {
+        match self {
+            Ordering.Greater => false,
+            _ => true,
+        }
+    }
+
+    fn is_gt(ref self) -> bool {
+        match self {
+            Ordering.Greater => true,
+            _ => false,
+        }
+    }
+
+    fn is_ge(ref self) -> bool {
+        match self {
+            Ordering.Less => false,
+            _ => true,
+        }
+    }
+
+    fn is_eq(ref self) -> bool {
+        match self {
+            Ordering.Equal => true,
+            _ => false,
+        }
+    }
+}
+
+impl Option[Ordering] {
+    fn is_lt(ref self) -> bool {
+        match self {
+            Some(Ordering.Less) => true,
+            _ => false,
+        }
+    }
+
+    fn is_le(ref self) -> bool {
+        match self {
+            Some(Ordering.Less) | Some(Ordering.Equal) => true,
+            _ => false,
+        }
+    }
+
+    fn is_gt(ref self) -> bool {
+        match self {
+            Some(Ordering.Greater) => true,
+            _ => false,
+        }
+    }
+
+    fn is_ge(ref self) -> bool {
+        match self {
+            Some(Ordering.Greater) | Some(Ordering.Equal) => true,
+            _ => false,
+        }
+    }
+
+    fn is_eq(ref self) -> bool {
+        match self {
+            Some(Ordering.Equal) => true,
+            _ => false,
+        }
+    }
+}
