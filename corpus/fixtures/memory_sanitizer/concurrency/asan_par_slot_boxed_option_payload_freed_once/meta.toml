@@ -13,4 +13,4 @@ env = {}
 bucket = "mir-gap:the expression kind `OptionalChain`"
 classified_with = "d43d40485"
 fixed_by_classify = true
-model_rev = "f3a17c7c"
+model_rev = "629c2395"

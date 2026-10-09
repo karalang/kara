@@ -13,4 +13,4 @@ env = {}
 note = "legacy_backend is legacy-interp: legacy build refuses LOG_PATH.clone() on a const String (codegen: Vec/String method 'clone' is not yet supported), the clone karac fix added at L365 (see notes.md); frozen legacy bug"
 bucket = "a"
 classified_with = "9c612aba2+local"
-model_rev = "f3a17c7c"
+model_rev = "629c2395"

@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9c612aba2+local"
 model_note = "borrow of a partially moved value (C4)"
-model_rev = "f3a17c7c"
+model_rev = "629c2395"
 model_verdict = "V2-REJECT"
 v2_reject = "core-semantics §5.6: a mut use while a ref binding is live (karac check refuses it since Thread A's df8f08ee55/df2e4cabe9, 2026-10-09)"

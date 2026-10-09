@@ -14,5 +14,5 @@ note = "`m[k] = v` on a missing Map key inserts (Gowtham, decision card 2026-10-
 bucket = "a"
 classified_with = "9c612aba2+local"
 model_exit = 0
-model_rev = "f3a17c7c"
+model_rev = "629c2395"
 model_verdict = "SAME"

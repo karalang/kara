@@ -13,4 +13,4 @@ env = {}
 note = "§7.3: every block's bindings drop at its end (G-alias's `gf`, `lz`, `ez`); legacy leaks Sh6 and Pl14 and drops Pl13 before the block's last statement. (kata thread, 2026-10-09) e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
 classified_with = "d43d40485"
-model_rev = "f3a17c7c"
+model_rev = "629c2395"

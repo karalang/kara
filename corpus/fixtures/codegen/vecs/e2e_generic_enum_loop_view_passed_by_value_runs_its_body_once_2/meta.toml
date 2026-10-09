@@ -14,5 +14,5 @@ bucket = "mir-gap:runtime: in main at bbN[term]: clone of S needs its Clone body
 classified_with = "d43d40485"
 fixed_by_classify = true
 model_exit = 0
-model_rev = "f3a17c7c"
+model_rev = "629c2395"
 model_verdict = "DIFF"

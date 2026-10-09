@@ -12,5 +12,5 @@ backends = []
 env = {}
 bucket = "b-fix-incomplete:E0520"
 classified_with = "d43d40485"
-model_rev = "f3a17c7c"
+model_rev = "629c2395"
 v2_reject = "core-semantics §11.7 (D4): `collect_all` / `collect_all_vec` are removed (kata thread, 2026-10-09)"

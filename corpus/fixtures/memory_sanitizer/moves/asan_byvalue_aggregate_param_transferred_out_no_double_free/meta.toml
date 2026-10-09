@@ -13,5 +13,5 @@ env = {}
 bucket = "a:refused"
 classified_with = "9c612aba2+local"
 model_note = "use of moved place y"
-model_rev = "f3a17c7c"
+model_rev = "629c2395"
 model_verdict = "V2-REJECT"

@@ -14,4 +14,4 @@ note = "first literal of the holding test: 'pair_sum'"
 bucket = "mir-gap:an expression with no recorded type is not lowered yet; 3:9 in `pair_sum`: an ex"
 classified_with = "d43d40485"
 fixed_by_classify = true
-model_rev = "f3a17c7c"
+model_rev = "629c2395"

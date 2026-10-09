@@ -13,4 +13,4 @@ env = {}
 note = "source edited: `.cloned()` after `Map.get` at line(s) 33, 40, since `Map.get` returns `Option[ref V]` (docs/library/collections.md; Thread A's 7902786668). Legacy has no `Option.cloned`, so legacy.out stays the oracle. (kata thread, 2026-10-09)"
 bucket = "mir-gap:runtime: leaked at exit: aN (count N), aN (count N), aN (count N), aN (count N)"
 classified_with = "d43d40485"
-model_rev = "f3a17c7c"
+model_rev = "629c2395"

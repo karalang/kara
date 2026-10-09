@@ -14,6 +14,6 @@ note = "first literal of the holding test: 'main'"
 bucket = "a:refused"
 classified_with = "d43d40485"
 model_exit = 0
-model_rev = "f3a17c7c"
+model_rev = "629c2395"
 model_verdict = "SAME"
 v2_reject = "core-semantics §4.3: a shared type's methods take a borrowed `self` only; this one declares `mut ref self` (kata thread, 2026-10-09)"

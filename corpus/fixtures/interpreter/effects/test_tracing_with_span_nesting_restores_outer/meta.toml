@@ -14,4 +14,4 @@ note = "v2 accepts: core-semantics §9.3, an escaping closure captures by move a
 bucket = "mir-gap:a call to this function"
 classified_with = "d43d40485"
 legacy_expect = "error:E0508"
-model_rev = "f3a17c7c"
+model_rev = "629c2395"

@@ -14,5 +14,5 @@ note = "§7.5: an assignment evaluates the place's subscripts once, before the v
 bucket = "e-spec"
 classified_with = "d43d40485"
 model_exit = 0
-model_rev = "f3a17c7c"
+model_rev = "629c2395"
 model_verdict = "DIFF"

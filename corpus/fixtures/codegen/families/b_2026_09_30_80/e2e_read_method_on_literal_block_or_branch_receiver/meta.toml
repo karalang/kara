@@ -13,5 +13,5 @@ env = {}
 bucket = "check-refuses:E0200"
 classified_with = "d43d40485"
 model_note = "a reference to a temporary outlives its statement (§5.5)"
-model_rev = "f3a17c7c"
+model_rev = "629c2395"
 model_verdict = "V2-REJECT"

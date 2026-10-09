@@ -12,5 +12,5 @@ backends = []
 env = {}
 bucket = "a:refused"
 classified_with = "9c612aba2+local"
-model_rev = "f3a17c7c"
+model_rev = "629c2395"
 v2_reject = "core-semantics §11.2: two par branches that both print conflict, writes(Stdout) (kata thread, 2026-10-08)"

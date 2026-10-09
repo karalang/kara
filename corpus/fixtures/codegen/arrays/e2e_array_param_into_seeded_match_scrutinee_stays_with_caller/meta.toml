@@ -13,5 +13,5 @@ env = {}
 bucket = "mir-gap:an expression with no recorded type"
 classified_with = "d43d40485"
 model_exit = 0
-model_rev = "f3a17c7c"
+model_rev = "629c2395"
 model_verdict = "SAME"

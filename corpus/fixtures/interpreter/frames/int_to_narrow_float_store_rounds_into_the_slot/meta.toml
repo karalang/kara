@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "9c612aba2+local"
 model_exit = 0
-model_rev = "f3a17c7c"
+model_rev = "629c2395"
 model_verdict = "DIFF"
 v2_reject = "design.md §5 widening: an integer that can round needs `as` to become a float (karac check refuses it since Thread A's 1f4238be65, 2026-10-09)"
