@@ -4847,6 +4847,30 @@ impl<'a> super::TypeChecker<'a> {
     /// unresolved type with the resolved one the annotation already committed
     /// to. A generic annotation (`let v: Vec[T] = Vec.new()` inside `fn f[T]`)
     /// is left exactly as it was.
+    /// Whether `e` builds an enum variant: `None`, `Some(x)`, `Err(e)`,
+    /// `Shape.Circle`, `Shape.Circle(r)`. Such a value is never a reference.
+    fn is_variant_constructor(&self, e: &Expr) -> bool {
+        let builtin = |n: &str| matches!(n, "Some" | "None" | "Ok" | "Err");
+        let path = |segments: &[String]| match segments {
+            [n] => builtin(n),
+            [en, v] => self
+                .env
+                .enums
+                .get(en)
+                .is_some_and(|info| info.variants.iter().any(|(n, _)| n == v)),
+            _ => false,
+        };
+        let names = |c: &Expr| match &c.kind {
+            ExprKind::Identifier(n) => builtin(n),
+            ExprKind::Path { segments, .. } => path(segments),
+            _ => false,
+        };
+        match &e.kind {
+            ExprKind::Call { callee, .. } => names(callee),
+            _ => names(e),
+        }
+    }
+
     fn record_declared_type_for_polymorphic_rhs(&mut self, value: &Expr, declared: &Type) {
         if !type_is_fully_concrete(declared) {
             return;
@@ -7377,7 +7401,19 @@ impl<'a> super::TypeChecker<'a> {
                 // the first: the mismatch against the target is new
                 // information, a second copy of the operand error is not.
                 let errors_before_check = self.errors.len();
-                self.check_expr(value, &target_ty);
+                // Through a `mut ref` binding the store writes the referent,
+                // so a variant constructor (`x = Err(7)` with `x: mut ref
+                // Result[R, i64]`) is checked against it: against the
+                // reference type its own parameters stayed unsolved.
+                let slot_ty = match &target_ty {
+                    Type::MutRef(inner) | Type::Ref(inner)
+                        if self.is_variant_constructor(value) =>
+                    {
+                        inner.as_ref().clone()
+                    }
+                    _ => target_ty.clone(),
+                };
+                self.check_expr(value, &slot_ty);
                 self.drop_repeated_errors(errors_before_rhs, errors_before_check);
             }
             StmtKind::CompoundAssign { target, value, op } => {

@@ -992,7 +992,13 @@ impl<'a> Lcx<'a> {
                         if concrete {
                             let ty = self.tys.tcx().intern(new);
                             if !self.program.drop_by_ty.contains_key(&ty) {
-                                let inst = self.instance(d, targs);
+                                let inst = if self.fns.contains_key(&d) {
+                                    self.instance(d, targs)
+                                } else {
+                                    // A `#[compiler_builtin]` drop: the
+                                    // interpreter's, by the type's name.
+                                    format!("{}.drop", self.tys.display(ty))
+                                };
                                 self.program.drop_by_ty.insert(ty, inst);
                             }
                         }
@@ -1168,7 +1174,13 @@ impl<'a> Lcx<'a> {
                 .and_then(|c| c.first().copied());
             match drop_fn {
                 Some(d) if generics.is_empty() => {
-                    let inst = self.instance(d, Vec::new());
+                    // A `#[compiler_builtin]` drop (`TaskGroup`'s) has no
+                    // Kāra body: it is the interpreter's `TaskGroup.drop`.
+                    let inst = if self.fns.contains_key(&d) {
+                        self.instance(d, Vec::new())
+                    } else {
+                        format!("{name}.drop")
+                    };
                     self.program.drop_impls.insert(AdtId(def.0), inst);
                 }
                 Some(d) => {
@@ -10336,9 +10348,25 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     // The library's Kāra methods go after the program, so the program's own
     // line numbers and spans are unchanged (redesign A2).
     let mut src = src.to_string();
+    // `std.protobuf`'s wire codec is all Kāra; a program that names it (or
+    // derives `Message`, whose `encode` / `decode` call it) gets the baked
+    // file, as `PriorityQueue`'s is appended. Most programs do not, and it
+    // is long.
+    let protobuf = ["ProtoBuf", "ProtoReader", "Message", "proto_schema"]
+        .iter()
+        .any(|w| src.contains(w));
     for (_, lib) in crate::prelude::LIBRARY_SOURCES {
         src.push('\n');
         src.push_str(lib);
+    }
+    if protobuf {
+        // Its `//!` header is a module doc comment, legal only at the top.
+        for line in include_str!("../../runtime/stdlib/protobuf.kara").lines() {
+            src.push('\n');
+            if !line.starts_with("//!") {
+                src.push_str(line);
+            }
+        }
     }
     let parsed = crate::parse(&src);
     if !parsed.errors.is_empty() {
@@ -10352,9 +10380,28 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     if !r.errors.is_empty() {
         return Err(format!("resolve: {:?}", r.errors[0]));
     }
-    let tc = crate::typecheck_with_library_source(&program, &r);
+    let mut r = r;
+    let mut tc = crate::typecheck_with_library_source(&program, &r);
     if !tc.errors.is_empty() {
         return Err(format!("typecheck: {}", tc.errors[0].message));
+    }
+    // A `#[derive(X)]` backed by a `comptime fn derive_x` (`Message`'s
+    // `encode` / `decode`) splices its items into the program; they are
+    // resolved and checked like the rest, as the CLI's pipeline does.
+    if crate::comptime::has_derives_to_expand(&program) {
+        let errs = crate::comptime::evaluate(&mut program, &tc);
+        if let Some(e) = errs.first() {
+            return Err(format!("comptime: {e:?}"));
+        }
+        crate::node_ids::assign_node_ids(&mut program);
+        r = crate::resolve(&program);
+        if !r.errors.is_empty() {
+            return Err(format!("resolve: {:?}", r.errors[0]));
+        }
+        tc = crate::typecheck_with_library_source(&program, &r);
+        if !tc.errors.is_empty() {
+            return Err(format!("typecheck: {}", tc.errors[0].message));
+        }
     }
     let defs = ProgramDefs::build_for_program(&program);
     let res = crate::node_res::node_res(&r, &defs, 0, None);
@@ -12098,5 +12145,53 @@ fn main() {
 }
 "#;
         assert_eq!(run_source(src), Ok(("7 3 6\n".to_string(), Some(0))));
+    }
+
+    #[test]
+    fn derived_message_round_trips() {
+        let src = r#"
+#[derive(Message)]
+struct Pair { x: i64, name: String, ok: bool }
+
+fn main() {
+    let p = Pair { x: 150, name: "ab", ok: true };
+    let bytes = p.encode();
+    let q = Pair.decode(bytes);
+    println(f"{q.x} {q.name} {q.ok}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("150 ab true\n".to_string(), Some(0))));
+    }
+
+    #[test]
+    fn variant_constructors_stored_through_mut_ref() {
+        let src = r#"
+fn gr(x: mut ref Result[String, i64]) { x = Err(7); }
+fn gn(x: mut ref Option[String]) { x = None; }
+fn main() {
+    let mut r: Result[String, i64] = Ok("a");
+    gr(mut r);
+    let mut o: Option[String] = Some("b");
+    gn(mut o);
+    println(f"{r.is_err()} {o.is_none()}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("true true\n".to_string(), Some(0))));
+    }
+
+    #[test]
+    fn a_generic_call_takes_its_type_from_the_enclosing_return() {
+        let src = r#"
+trait Mk { fn mk() -> Self; }
+struct B { v: i64 }
+impl Mk for B { fn mk() -> B { B { v: 100 } } }
+fn make[T: Mk]() -> T { T.mk() }
+fn outer[T: Mk]() -> T { make() }
+fn main() {
+    let b: B = outer();
+    println(b.v);
+}
+"#;
+        assert_eq!(run_source(src), Ok(("100\n".to_string(), Some(0))));
     }
 }

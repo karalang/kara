@@ -1956,7 +1956,14 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => false,
         };
-        if seedable_call && *expected != Type::Error && expectation_is_concrete(expected) {
+        // The enclosing function's own type parameters are as fixed as a
+        // concrete type inside its body: `make()` checked against `-> T`
+        // solves `make`'s parameter to that `T`.
+        let rigid = |t: &Type| !contains_type_var(t) && !self.mentions_foreign_param(t);
+        if seedable_call
+            && *expected != Type::Error
+            && (expectation_is_concrete(expected) || rigid(expected))
+        {
             self.pending_expected_call_return = Some(expected.clone());
         }
         let actual = self.infer_expr(expr);
