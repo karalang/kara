@@ -2499,16 +2499,24 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.schedule(ScopeEntry::Drop(Place::local(l)));
             }
         }
+        // A destructuring parameter is an argument of its own; its names
+        // bind once every argument is declared, as a `let` would.
+        let mut destructured = Vec::new();
         for (i, p) in f.params.iter().enumerate() {
-            let PatternKind::Binding(name) = &p.pattern.kind else {
-                return self.unsupported(p.span, "a destructuring parameter");
-            };
             let t = match fn_params.get(i).copied().flatten() {
                 Some(t) => t,
                 None => {
                     let t = self.node_ty(p.pattern.id, p.span)?;
                     self.param_mode_ty(p, t)
                 }
+            };
+            let PatternKind::Binding(name) = &p.pattern.kind else {
+                let l = self.b.arg("arg", t);
+                if self.needs_drop(t) {
+                    self.schedule(ScopeEntry::Drop(Place::local(l)));
+                }
+                destructured.push((&p.pattern, l, t));
+                continue;
             };
             let l = self.b.arg(name, t);
             if let Some(&sym) = self.lcx.binding_syms.get(&(p.pattern.id, name.clone())) {
@@ -2518,6 +2526,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.schedule(ScopeEntry::Drop(Place::local(l)));
             }
         }
+        self.bind_destructured(destructured)?;
         self.contracts_on_entry(f)?;
         // The body's own scope sits inside the parameters' (D6). Falling
         // off the end is a return like any other, so a tail `Err(..)` runs
@@ -2537,6 +2546,18 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         self.return_exit()?;
         self.scopes.clear();
+        Ok(())
+    }
+
+    /// Bind the names of each destructuring parameter from its argument.
+    fn bind_destructured(&mut self, params: Vec<(&'a Pattern, Local, Ty)>) -> R<()> {
+        for (pat, l, t) in params {
+            let mut binds = Vec::new();
+            self.bind_irrefutable(pat, Place::local(l), t, &mut binds)?;
+            for (l, t) in binds {
+                self.declare(l, t);
+            }
+        }
         Ok(())
     }
 
@@ -8250,6 +8271,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                         return Ok(());
                     }
                     if self.lcx.def_owner(d).is_none()
+                        && self.ord_min_max(e, &name, args, dest.clone())?
+                    {
+                        return Ok(());
+                    }
+                    if self.lcx.def_owner(d).is_none()
                         && self.mem_call(e, &name, args, dest.clone())?
                     {
                         return Ok(());
@@ -9051,6 +9077,99 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.goto(join);
         self.cur = join;
         Ok(true)
+    }
+
+    /// The library's `min`, `max` and `clamp` on any other `Ord` type, as
+    /// their bodies in `ordering.kara` are: `min` keeps `a` unless `a > b`,
+    /// `max` keeps `a` unless `a < b`, and `clamp` takes `low` below it and
+    /// `high` above it. The argument not returned is dropped.
+    fn ord_min_max(
+        &mut self,
+        e: &'a Expr,
+        name: &str,
+        args: &'a [CallArg],
+        dest: Place,
+    ) -> R<bool> {
+        let t = self.expr_ty(e)?;
+        if matches!(
+            self.tys().tcx().kind(t),
+            HK::Int(_) | HK::UInt(_) | HK::Char | HK::Float(_) | HK::Bool
+        ) {
+            return Ok(false);
+        }
+        let (_, [less, _, greater]) = match (name, args) {
+            ("min" | "max", [_, _]) | ("clamp", [_, _, _]) => self.ordering_ty(e.span)?,
+            _ => return Ok(false),
+        };
+        let join = self.b.new_block();
+        match args {
+            [a, b] => {
+                let x = self.temp_of(&a.value, t)?;
+                let y = self.temp_of(&b.value, t)?;
+                let swap = if name == "min" { greater } else { less };
+                let c = self.ord_is(e.span, x, y, t, swap)?;
+                self.pick(c, y, x, &dest, join);
+            }
+            [v, lo, hi] => {
+                let x = self.temp_of(&v.value, t)?;
+                let l = self.temp_of(&lo.value, t)?;
+                let h = self.temp_of(&hi.value, t)?;
+                let below = self.ord_is(e.span, x, l, t, less)?;
+                let (yes, no) = (self.b.new_block(), self.b.new_block());
+                self.goto_with(
+                    TerminatorKind::SwitchInt {
+                        discr: Operand::Copy(Place::local(below)),
+                        targets: SwitchTargets::if_else(yes, no),
+                    },
+                    yes,
+                );
+                self.assign(dest.clone(), Rvalue::Use(Operand::Move(Place::local(l))));
+                self.goto(join);
+                self.cur = no;
+                let above = self.ord_is(e.span, x, h, t, greater)?;
+                self.pick(above, h, x, &dest, join);
+            }
+            _ => unreachable!(),
+        }
+        self.cur = join;
+        Ok(true)
+    }
+
+    /// Whether `x.cmp(y)` is the `Ordering` variant `variant`.
+    fn ord_is(&mut self, span: Span, x: Local, y: Local, t: Ty, variant: u32) -> R<Local> {
+        let (ot, _) = self.ordering_ty(span)?;
+        let o = self.temp(ot);
+        self.cmp_places(span, Place::local(x), Place::local(y), t, Place::local(o))?;
+        let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+        let disc = self.temp(isize_t);
+        self.assign(disc, Rvalue::Discriminant(Place::local(o)));
+        let c = self.temp(self.tys().bool());
+        let want = Operand::Const(Const {
+            ty: isize_t,
+            kind: ConstKind::Scalar(variant as u128),
+        });
+        self.assign(
+            c,
+            Rvalue::BinaryOp(BinOp::Eq, Operand::Copy(Place::local(disc)), want),
+        );
+        Ok(c)
+    }
+
+    /// `dest = if c { yes } else { no }`, moving the one chosen; then `join`.
+    fn pick(&mut self, c: Local, yes: Local, no: Local, dest: &Place, join: BasicBlock) {
+        let (then_bb, else_bb) = (self.b.new_block(), self.b.new_block());
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(c)),
+                targets: SwitchTargets::if_else(then_bb, else_bb),
+            },
+            then_bb,
+        );
+        self.assign(dest.clone(), Rvalue::Use(Operand::Move(Place::local(yes))));
+        self.goto(join);
+        self.cur = else_bb;
+        self.assign(dest.clone(), Rvalue::Use(Operand::Move(Place::local(no))));
+        self.goto(join);
     }
 
     /// `a.cmp(b)` on integers, `char` or `bool`: two comparisons choosing
@@ -10254,7 +10373,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let t = self.place_type(&p);
                 Ok((self.use_place(p, t), t))
             }
-            _ => self.unsupported(e.span, "this function value"),
+            // Any other expression (a call's result, an element, a field)
+            // already has an erased `Fn` type: its value is the function.
+            _ => {
+                let t = self.expr_ty(e)?;
+                Ok((self.expr_operand(e)?, t))
+            }
         }
     }
 
@@ -10677,11 +10801,25 @@ impl<'l, 'a> Bx<'l, 'a> {
         // The arguments come first (`_2..`); a borrowed one binds its name
         // after all of them are declared.
         let mut through = Vec::new();
+        let mut destructured = Vec::new();
         for p in params {
-            let PatternKind::Binding(name) = &p.pattern.kind else {
-                return self.unsupported(p.span, "a destructuring closure parameter");
-            };
             let t = self.node_ty(p.pattern.id, p.span)?;
+            let PatternKind::Binding(name) = &p.pattern.kind else {
+                // Lent: the parts bind through the reference.
+                if job.ref_params && !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
+                {
+                    let rt = self.tys().tcx().reference(t, false);
+                    let arg = self.b.arg("arg", rt);
+                    destructured.push((&p.pattern, arg, rt));
+                    continue;
+                }
+                let l = self.b.arg("arg", t);
+                if self.needs_drop(t) {
+                    self.schedule(ScopeEntry::Drop(Place::local(l)));
+                }
+                destructured.push((&p.pattern, l, t));
+                continue;
+            };
             let sym = self
                 .lcx
                 .binding_syms
@@ -10715,6 +10853,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.declare(l, lt);
             }
         }
+        self.bind_destructured(destructured)?;
         let ret = Place::local(Local::RETURN_PLACE);
         self.push_scope();
         self.expr_into(body, ret)?;
@@ -10899,7 +11038,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => t,
         };
         match tcx.kind(inner) {
-            HK::FnDef { .. } => Ok((self.use_place(op, t), t)),
+            // A function item, or an erased `Fn` value: passed as it is.
+            HK::FnDef { .. } | HK::Fn { .. } => Ok((self.use_place(op, t), t)),
             HK::Closure { def, .. } => {
                 let env = self.lcx.closures.get(&def).map(|c| c.1);
                 match (env, tcx.kind(t)) {
@@ -13917,6 +14057,57 @@ fn main() {
 }
 "#;
         let out = "false\ntrue\ninside\n42\n";
+        assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
+    }
+
+    #[test]
+    fn destructuring_function_and_closure_parameters() {
+        let src = r#"
+struct P { a: String, b: i64 }
+fn take(P { a, b }: P) -> i64 { a.len() + b }
+fn pair((x, y): (i64, String)) -> String { f"{x}{y}" }
+fn main() {
+    println(f"{take(P { a: f"abc", b: 4 })}");
+    println(pair((1, f"z")));
+    let v = Vec[f"aa", f"bbb"];
+    let n: Vec[i64] = v.iter().enumerate().map(|(i, s)| i + s.len()).collect();
+    println(f"{n[0]} {n[1]}");
+    let ps = Vec[(1, 2), (3, 4)];
+    let mut t = 0;
+    ps.iter().for_each(|(a, b)| { t += a * b; });
+    println(f"{t}");
+}
+"#;
+        let out = "7\n1z\n2 4\n14\n";
+        assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
+    }
+
+    #[test]
+    fn min_max_clamp_on_ord_types_and_function_values() {
+        let src = r#"
+#[derive(Ord, Eq, PartialEq, PartialOrd)]
+struct Rec { name: String, age: i64 }
+struct Name { s: String }
+impl PartialEq for Name { fn eq(ref self, other: ref Name) -> bool { self.s == other.s } }
+impl Eq for Name {}
+impl PartialOrd for Name { fn partial_cmp(ref self, other: ref Name) -> Option[Ordering] { Some(self.s.cmp(other.s)) } }
+impl Ord for Name { fn cmp(ref self, other: ref Name) -> Ordering { self.s.cmp(other.s) } }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let r1 = Rec { name: "a".to_string(), age: 30 };
+    let r3 = Rec { name: "b".to_string(), age: 10 };
+    println(max(r1, r3).name);
+    let lo = min(Name { s: f"beta" }, Name { s: f"alpha" });
+    let cl = clamp(Name { s: f"mid" }, Name { s: f"aaa" }, Name { s: f"lll" });
+    let eq = max(Name { s: f"x" }, Name { s: f"x" });
+    println(f"{lo.s} {cl.s} {eq.s}");
+    let mut fs: Vec[Fn(i64) -> i64] = Vec.new();
+    fs.push(make(1));
+    fs.push(make(2));
+    println(f"{fs[1](10)}");
+}
+"#;
+        let out = "b\nalpha lll x\n12\n";
         assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
     }
 
