@@ -15,3 +15,4 @@ classified_with = "30baabfe7"
 model_exit = 0
 model_rev = "7b8ab2eb"
 model_verdict = "DIFF"
+v2_reject = "design.md §5 widening: an integer that can round needs `as` to become a float (karac check refuses it since Thread A's 1f4238be65, 2026-10-09)"

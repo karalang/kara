@@ -1,1 +1,1 @@
-fn main() { println(f"{size_of[i64]()}"); }
+fn main() { println(f"{i64.size_of()}"); }

@@ -1,6 +1,6 @@
 source = "tests/par_codegen.rs::test_e2e_par_block_cancelled_branch_err_not_recorded"
 dedup_of = []
-expect = "stdout"
+expect = "skip"
 exit = 0
 tags = ["par", "shared", "post-m1:par"]
 class = "e"
@@ -10,6 +10,7 @@ legacy_exit = 0
 rules = []
 backends = []
 env = {}
+note = "depends on branch cancellation, which v2 drops (design.md Failure: no branch is cancelled), so the gated branch spins forever (Thread B, 2026-10-09)"
 bucket = "mir-gap:a call with no resolved callee"
 classified_with = "30baabfe7"
 model_rev = "7b8ab2eb"
