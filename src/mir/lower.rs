@@ -526,6 +526,12 @@ impl<'a> Lcx<'a> {
         for item in &program.items {
             match item {
                 Item::Function(f) => {
+                    // An appended library's `#[compiler_builtin]` function
+                    // (`mark_library_builtins`) is the interpreter's.
+                    if f.stdlib_origin && f.attributes.iter().any(|a| a.is_bare("compiler_builtin"))
+                    {
+                        continue;
+                    }
                     if let Some(d) = self.defs.lookup(0, &f.name) {
                         self.fns.insert(
                             d,
@@ -7661,7 +7667,22 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     // ── calls ───────────────────────────────────────────────────────
 
+    /// The user bodies a native calls back into: the exporter
+    /// `Log.set_exporter` registers receives each later event through its
+    /// `export_event`.
+    fn queue_for_native(&mut self, name: &str, args: &[Operand]) {
+        if name.starts_with("Log[") && name.ends_with(".set_exporter") {
+            if let Some(op) = args.first() {
+                let (_, t) = self.strip_ty_full(self.operand_ty(op));
+                if let Some((d, inst)) = self.user_impl_method(t, "Exporter", "export_event") {
+                    self.lcx.instance(d, inst);
+                }
+            }
+        }
+    }
+
     fn call_native(&mut self, name: &str, args: Vec<Operand>, dest: Place) {
+        self.queue_for_native(name, &args);
         let func = self.fn_operand(name, DefId(u32::MAX), Vec::new());
         let next = self.b.new_block();
         self.goto_with(
@@ -7904,8 +7925,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // A library function with no Kāra body (`sleep_ms(2)`,
                     // `Command.new("ls")`, `Arena[i64].new()`): the
                     // interpreter's, by its name qualified with the owning
-                    // type and that type's arguments. Copy arguments go by
-                    // value, the rest by reference.
+                    // type and that type's arguments. Copy arguments and a
+                    // stored value (`Log.set_exporter(e)`) go by value, the
+                    // rest by reference.
+                    let stores = stores_argument(&name);
                     let name = match (self.lcx.def_owner(d), inst_args.is_empty()) {
                         (Some(owner), true) => format!("{owner}.{name}"),
                         (Some(owner), false) => {
@@ -7914,15 +7937,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                                 inst_args.iter().map(|&t| tys.display(t)).collect();
                             format!("{owner}[{}].{name}", shown.join(", "))
                         }
-                        (None, true) => name,
-                        (None, false) => {
-                            return self.unsupported(e.span, "a call to this function");
-                        }
+                        // `with_span(span, || body)`: a generic library
+                        // function needs no type argument to run.
+                        (None, _) => name,
                     };
                     let mut ops = Vec::new();
                     for a in args {
                         let t = self.expr_ty(&a.value)?;
-                        let by_ref = !self.is_copy(t);
+                        // A closure moves in, as into a library method.
+                        let moves = stores
+                            || self.is_fn_typed(a.value.id)
+                            || matches!(a.value.kind, ExprKind::Closure { .. });
+                        let by_ref = !moves && !self.is_copy(t);
                         ops.push(self.lib_arg(&a.value, by_ref)?);
                     }
                     self.call_native(&name, ops, dest);
@@ -8140,6 +8166,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         } else {
             self.lcx.instance(d, inst_args.clone())
         };
+        if !self.lcx.fns.contains_key(&d) {
+            self.queue_for_native(&name, &ops);
+        }
         let func = self.fn_operand(&name, d, inst_args);
         let next = self.b.new_block();
         self.goto_with(
@@ -11155,6 +11184,14 @@ const BAKED_SOURCES: &[(&str, &[&str])] = &[
         include_str!("../../runtime/stdlib/process.kara"),
         &["Command", "Child", "ExitStatus"],
     ),
+    (
+        include_str!("../../runtime/stdlib/tracing.kara"),
+        &["Log", "Span", "Exporter", "with_span"],
+    ),
+    (
+        include_str!("../../runtime/stdlib/cli.kara"),
+        &["Parser", "Arg"],
+    ),
 ];
 
 /// A library method that keeps its argument (`v.push(x)`, `m.insert(k, v)`,
@@ -11180,6 +11217,7 @@ fn stores_argument(method: &str) -> bool {
             | "try_push_back"
             | "try_push_front"
             | "try_insert"
+            | "set_exporter"
     )
 }
 
@@ -11190,11 +11228,17 @@ fn defines_a_baked_type(src: &str, baked: &str) -> bool {
     let declared = |text: &str| -> Vec<String> {
         let mut names = Vec::new();
         for line in text.lines() {
+            // A top-level function counts too (`tracing.kara`'s `with_span`),
+            // where a method's name does not.
+            let top = !line.starts_with(char::is_whitespace);
             let line = line
                 .trim_start()
                 .trim_start_matches("pub ")
-                .trim_start_matches("shared ");
-            for kw in ["struct ", "enum ", "trait ", "type "] {
+                .trim_start_matches("shared ")
+                .trim_start_matches("effect ");
+            let fun = ["fn "];
+            let kinds = ["struct ", "enum ", "trait ", "type ", "resource "];
+            for kw in kinds.iter().chain(if top { &fun[..] } else { &[] }) {
                 if let Some(rest) = line.strip_prefix(kw) {
                     let name: String = rest
                         .chars()
@@ -11814,6 +11858,46 @@ fn main() {
         let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
         assert_eq!(r.output, "2 7 2 20\n");
+    }
+
+    /// `std.tracing`: the active span `with_span` sets, the minimum level,
+    /// a registered exporter and the default `StdoutExporter`, as legacy
+    /// prints them.
+    #[test]
+    fn tracing_levels_spans_and_exporters_match_legacy() {
+        let src = r#"
+struct Tagging { }
+impl Exporter for Tagging {
+    fn export_span(ref self, span: Span) { }
+    fn export_event(ref self, event: LogEvent) {
+        println(f"CUSTOM<{event.level}>: {event.message} {event.span_id}");
+    }
+}
+fn main() {
+    let outer = Span.root("o", 1);
+    with_span(outer, || {
+        Log.info("a");
+        Log.warn("b");
+        Log.info("c");
+    });
+    StdoutExporter {}.export_event(LogEvent.info("x").with_field("k", "v").in_span(7));
+    Log.set_min_level("warn");
+    Log.info("dropped");
+    Log.set_exporter(Tagging {});
+    Log.error("bye");
+    with_span(Span.root("s", 3), || { Log.warn("w") });
+    Log.reset();
+    Log.debug("back");
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(
+            r.output,
+            "[info] a span_id=1\n[warn] b span_id=1\n[info] c span_id=1\n\
+             [info] x k=v span_id=7\nCUSTOM<error>: bye 0\nCUSTOM<warn>: w 3\n\
+             [debug] back\n"
+        );
     }
 
     /// Numeric conversions, `clamp` on a reversed range, char predicates,

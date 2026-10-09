@@ -318,6 +318,7 @@ impl Log {
     // both backends intercept the `Log.set_exporter` call directly (codegen
     // at the call site, so the concrete exporter type is known from the
     // argument; interpreter in `try_eval_log_call`), so this never runs.
+    #[compiler_builtin]
     fn set_exporter[E: Exporter](exporter: own E) { }
 
     // Restore defaults: minimum level `trace` (emit everything) and the

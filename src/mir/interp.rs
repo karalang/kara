@@ -420,6 +420,9 @@ fn run_with(
         flags: Vec::new(),
         resumes: 0,
         parked_flags: Vec::new(),
+        tracing_min: 0,
+        tracing_sink: None,
+        active_spans: Vec::new(),
         cancel_after: match tasks {
             Tasks::CancelAfter(n) => Some(n),
             _ => None,
@@ -626,6 +629,13 @@ struct Interp<'a> {
     cancel_after: Option<u64>,
     /// The borrow flags each suspended coroutine frame holds, by its address.
     parked_flags: Vec<(Addr, Held)>,
+    /// `std.tracing`'s minimum level, by rank (trace 0 .. error 4).
+    tracing_min: i128,
+    /// The exporter `Log.set_exporter` registered, and its type; `None`
+    /// sends events to the default `StdoutExporter`.
+    tracing_sink: Option<(Value, Ty)>,
+    /// The ids of the spans `with_span` made active, innermost last.
+    active_spans: Vec<i128>,
 }
 
 impl<'a> Interp<'a> {
@@ -835,6 +845,65 @@ impl<'a> Interp<'a> {
                 Ok(self.alloc_box(ty_name, Value::Agg(vec![prog])))
             }
             ("__yield_now", "") => Ok(Value::Unit),
+            ("tracing_active_span", "") => {
+                Ok(Value::Int(self.active_spans.last().copied().unwrap_or(0)))
+            }
+            ("tracing_level_enabled", "") => match args.as_slice() {
+                [Value::Int(rank)] => Ok(Value::Bool(*rank >= self.tracing_min)),
+                _ => err(format!("{name} takes a rank")),
+            },
+            ("tracing_set_min_level", "") => {
+                if let [Value::Int(rank)] = args.as_slice() {
+                    self.tracing_min = *rank;
+                }
+                Ok(Value::Unit)
+            }
+            ("tracing_reset", "") => {
+                self.tracing_min = 0;
+                if let Some((v, t)) = self.tracing_sink.take() {
+                    self.drop_value(v, t)?;
+                }
+                Ok(Value::Unit)
+            }
+            ("Log", "set_exporter") => {
+                let (Some(v), Some(&t)) = (args.into_iter().next(), arg_tys.first()) else {
+                    return err(format!("{name} takes an exporter"));
+                };
+                if let Some((old, ot)) = self.tracing_sink.replace((v, t)) {
+                    self.drop_value(old, ot)?;
+                }
+                Ok(Value::Unit)
+            }
+            ("tracing_emit_event", "") => {
+                let (Some(event), Some(&t)) = (args.into_iter().next(), arg_tys.first()) else {
+                    return err(format!("{name} takes an event"));
+                };
+                self.emit_event(event, t)?;
+                Ok(Value::Unit)
+            }
+            ("with_span", "") => {
+                // The body runs with the span's id active; `LogEvent`'s
+                // constructors stamp it.
+                let mut it = args.into_iter();
+                let (Some(span), Some(body)) = (it.next(), it.next()) else {
+                    return err(format!("{name} takes a span and a body"));
+                };
+                let span = match span {
+                    Value::Ref(at) => self.slot(&at)?,
+                    v => v,
+                };
+                let id = match &span {
+                    Value::Agg(fs) => match fs.get(1) {
+                        Some(Value::Int(id)) => *id,
+                        _ => 0,
+                    },
+                    _ => 0,
+                };
+                self.active_spans.push(id);
+                let r = self.call_erased(body, Vec::new());
+                self.active_spans.pop();
+                r
+            }
             ("format", "") => {
                 // An f-string used as a value: print's convention, into a
                 // new String.
@@ -6195,10 +6264,99 @@ impl<'a> Interp<'a> {
         Ok(())
     }
 
+    /// `tracing_emit_event`: the registered exporter's `export_event`
+    /// receives the event, or the default `StdoutExporter` prints it as its
+    /// body does: `[level] message`, each ` key=value`, then a non-zero
+    /// ` span_id=`.
+    fn emit_event(&mut self, event: Value, ety: Ty) -> R<()> {
+        let event_ty = match self.tys.kind(ety) {
+            TyKind::Ref(t) | TyKind::MutRef(t) => t,
+            _ => ety,
+        };
+        let by_ref = matches!(event, Value::Ref(_));
+        let owned = match &event {
+            Value::Ref(at) => self.slot(at)?,
+            v => v.clone(),
+        };
+        if let Some((sink, sink_ty)) = self.tracing_sink.clone() {
+            let name = format!("{}.export_event", self.tys.adt_name(sink_ty));
+            if let Some(body) = self.program.bodies.get(&name) {
+                let takes_ref = matches!(
+                    self.tys.kind(body.locals[2].ty),
+                    TyKind::Ref(_) | TyKind::MutRef(_)
+                );
+                let recv = self.scratch_ref(sink);
+                let mut scratch = vec![recv.1];
+                let arg = if takes_ref {
+                    let (r, id) = self.scratch_ref(owned);
+                    scratch.push(id);
+                    r
+                } else if by_ref {
+                    self.clone_value(&owned, event_ty)?
+                } else {
+                    owned
+                };
+                let out = self.call(&name, vec![recv.0, arg]);
+                for id in scratch {
+                    self.free_slot(id);
+                }
+                out?;
+                if takes_ref && !by_ref {
+                    self.drop_value(event, event_ty)?;
+                }
+                return Ok(());
+            }
+        }
+        let Value::Agg(fs) = &owned else {
+            return err(format!("a LogEvent is {owned:?}"));
+        };
+        let mut line = format!("[{}] {}", self.string_at(&fs[0])?, self.string_at(&fs[1])?);
+        let fields = match &fs[2] {
+            Value::Box(id) => self.vec_elems(*id)?.clone(),
+            _ => Vec::new(),
+        };
+        for f in &fields {
+            if let Value::Agg(kv) = f {
+                let (k, v) = (self.string_at(&kv[0])?, self.string_at(&kv[1])?);
+                line.push_str(&format!(" {k}={v}"));
+            }
+        }
+        if let Some(Value::Int(id)) = fs.get(3).filter(|v| !matches!(v, Value::Int(0))) {
+            line.push_str(&format!(" span_id={id}"));
+        }
+        line.push('\n');
+        self.write_out(false, &line);
+        if !by_ref {
+            self.drop_value(event, event_ty)?;
+        }
+        Ok(())
+    }
+
+    /// A reference to a shallow copy of `v` in a scratch slot, which the
+    /// caller frees without dropping.
+    fn scratch_ref(&mut self, v: Value) -> (Value, AllocId) {
+        let id = self.alloc(HeapObj {
+            count: 1,
+            weak: 0,
+            value: v,
+        });
+        (
+            Value::Ref(Addr {
+                root: Root::Heap(id),
+                path: Vec::new(),
+            }),
+            id,
+        )
+    }
+
     /// The heap a static's value reaches: live until exit, like the static.
     fn held_by_statics(&self) -> rustc_hash::FxHashSet<AllocId> {
         let mut seen = rustc_hash::FxHashSet::default();
-        let mut todo: Vec<&Value> = self.statics.iter().collect();
+        let mut todo: Vec<&Value> = self
+            .statics
+            .iter()
+            .chain(self.tracing_sink.iter().map(|(v, _)| v))
+            .collect();
         while let Some(v) = todo.pop() {
             match v {
                 Value::Agg(fs) | Value::Variant(_, fs) => todo.extend(fs),
