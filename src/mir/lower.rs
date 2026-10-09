@@ -7434,20 +7434,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let mut ops = vec![Operand::Move(Place::local(r))];
                     // A stored value moves in (`LOG.push(line)`), as into
                     // any collection; other non-Copy arguments are lent.
-                    let stores = matches!(
-                        m.as_str(),
-                        "push"
-                            | "push_back"
-                            | "push_front"
-                            | "insert"
-                            | "extend"
-                            | "append"
-                            | "resize"
-                            | "fill"
-                            | "set"
-                            | "send"
-                            | "try_send"
-                    );
+                    let stores = stores_argument(m.as_str());
                     for a in args {
                         let t = self.expr_ty(&a.value)?;
                         let by_ref = !stores && !self.is_copy(t);
@@ -9112,19 +9099,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.note_assigned(object, caps);
                 }
                 go(object, recv_owned, out);
-                let stores = matches!(
-                    method.as_str(),
-                    "push"
-                        | "push_back"
-                        | "push_front"
-                        | "insert"
-                        | "extend"
-                        | "append"
-                        | "set"
-                        | "or_insert"
-                        | "send"
-                        | "try_send"
-                );
+                let stores = stores_argument(method.as_str());
                 for (i, a) in args.iter().enumerate() {
                     let owned = match def {
                         Some(d) => self.owned_param(d, i),
@@ -10006,22 +9981,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.hint_lib_args(base, method, args);
                 // Stored values and closures move in; other non-Copy
                 // arguments (keys, needles, slices, text) are borrowed.
-                let stores = matches!(
-                    method,
-                    "push"
-                        | "push_back"
-                        | "push_front"
-                        | "insert"
-                        | "extend"
-                        | "append"
-                        | "resize"
-                        | "fill"
-                        | "set"
-                        | "entry"
-                        | "or_insert"
-                        | "send"
-                        | "try_send"
-                );
+                let stores = stores_argument(method);
                 for a in args {
                     if self.is_fn_typed(a.value.id)
                         || matches!(a.value.kind, ExprKind::Closure { .. })
@@ -10375,6 +10335,28 @@ const BAKED_SOURCES: &[(&str, &[&str])] = &[
         &["Command", "Child", "ExitStatus"],
     ),
 ];
+
+/// A library method that keeps its argument (`v.push(x)`, `m.insert(k, v)`,
+/// `tx.send(x)`): the value moves in, where other non-Copy arguments (keys,
+/// needles, text) are lent.
+fn stores_argument(method: &str) -> bool {
+    matches!(
+        method,
+        "push"
+            | "push_back"
+            | "push_front"
+            | "insert"
+            | "extend"
+            | "append"
+            | "resize"
+            | "fill"
+            | "set"
+            | "entry"
+            | "or_insert"
+            | "send"
+            | "try_send"
+    )
+}
 
 /// Whether the program declares a type the baked file declares. A program
 /// with its own `Command` or `Message` means its own, and appending the
