@@ -1079,6 +1079,11 @@ impl<'a> Interp<'a> {
                 Ok(self.alloc_box(ty_name, Value::Str(s.clone())))
             }
             ("Atomic", _) => self.atomic_method(name, method, args, ret),
+            // A `Mutex` holds its value as an `Atomic` does; a `lock` block
+            // reaches it through `get_mut` (one task runs at a time here).
+            ("Mutex", "new" | "get_mut" | "into_inner") => {
+                self.atomic_method(name, method, args, ret)
+            }
             // Only the library entry's methods: a user `struct Entry` keeps
             // its own (derived `clone`, ...) through the arms below.
             ("Entry", "and_modify" | "or_insert" | "or_insert_with") => {
@@ -6120,7 +6125,7 @@ impl<'a> Interp<'a> {
                 }
                 return Ok(());
             }
-            "OnceLock" | "OnceCell" | "TaskHandle" => Some(0),
+            "OnceLock" | "OnceCell" | "TaskHandle" | "Mutex" => Some(0),
             "Arena" => Some(1),
             _ => None,
         };

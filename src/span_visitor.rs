@@ -712,7 +712,10 @@ fn visit_expr(e: &Expr, visit: &mut impl FnMut(&Span)) {
         ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) | ExprKind::Par(b) => {
             visit_block(b, visit);
         }
-        ExprKind::Lock { body, .. } => visit_block(body, visit),
+        ExprKind::Lock { mutex, body, .. } => {
+            visit_expr(mutex, visit);
+            visit_block(body, visit);
+        }
         ExprKind::Providers { bindings, body } => {
             for pb in bindings {
                 visit_provider_binding(pb, visit);
@@ -1120,7 +1123,10 @@ fn walk_expr_mut(e: &mut Expr, visit: &mut impl MutVisitor) {
         ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) | ExprKind::Par(b) => {
             visit_block_spans_mut(b, visit);
         }
-        ExprKind::Lock { body, .. } => visit_block_spans_mut(body, visit),
+        ExprKind::Lock { mutex, body, .. } => {
+            walk_expr_mut(mutex, visit);
+            visit_block_spans_mut(body, visit);
+        }
         ExprKind::Providers { bindings, body } => {
             for pb in bindings {
                 visit.span(&mut pb.resource_span);

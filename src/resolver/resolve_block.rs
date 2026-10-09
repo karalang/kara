@@ -823,12 +823,14 @@ impl<'a> super::Resolver<'a> {
                     _ => None,
                 });
                 if let Some(name) = bind_name {
-                    let _ = self.table.define(
+                    let defined = self.table.define(
                         name,
                         SymbolKind::Variable { is_mut: true },
                         expr.span,
                         false,
                     );
+                    // The `lock` expression introduces the binding.
+                    self.record_binding_node(&defined, expr.id);
                 }
                 self.resolve_block_no_scope(body);
                 self.table.pop_scope();

@@ -2029,6 +2029,47 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// End the current block with a terminator that does not fall through,
     /// and continue in a fresh (unreachable) block.
+    /// `lock m x { body }`: the body, with `x` naming the value the
+    /// `Mutex` `m` holds (`m` itself when there is no alias). The value is
+    /// reached through the library's `get_mut`, which writes through a
+    /// shared borrow as every cell does (core semantics §6.3).
+    fn lock_block(
+        &mut self,
+        e: &'a Expr,
+        mutex: &'a Expr,
+        alias: &Option<String>,
+        body: &'a Block,
+        dest: Place,
+    ) -> R<()> {
+        let name = match (alias, &mutex.kind) {
+            (Some(a), _) => a.clone(),
+            (None, ExprKind::Identifier(n)) => n.clone(),
+            _ => return self.unsupported(e.span, "a `lock` with no name for its value"),
+        };
+        let Some(&sym) = self.lcx.binding_syms.get(&(e.id, name)) else {
+            return self.unsupported(e.span, "a `lock` with no name for its value");
+        };
+        let (mp, mt) = self.deref_place(mutex, false)?;
+        let inner = match self.tys().tcx().kind(mt) {
+            HK::Adt { args, .. } if self.tys().display(mt).starts_with("Mutex[") => {
+                self.tys().tcx().list(args)[0]
+            }
+            _ => return self.unsupported(e.span, "a `lock` of other than a `Mutex`"),
+        };
+        let rt = self.tys().tcx().reference(mt, false);
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Shared, mp));
+        let gt = self.tys().tcx().reference(inner, true);
+        let g = self.temp(gt);
+        let get = format!("{}.get_mut", self.tys().display(mt));
+        self.call_native(&get, vec![Operand::Move(Place::local(r))], Place::local(g));
+        self.captured
+            .insert(sym, Place::local(g).project(ProjElem::Deref));
+        let r = self.block_into(body, dest);
+        self.captured.remove(&sym);
+        r
+    }
+
     /// `o?.f`: `f` of the value `o` holds, or `None` when it holds none.
     /// A field that is itself an `Option` is the result, not wrapped again
     /// (`u.address?.city` is an `Option[City]`).
@@ -4172,6 +4213,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 field_or_method,
                 args: None,
             } => self.optional_chain(e, object, field_or_method, dest),
+            ExprKind::Lock { mutex, alias, body } => self.lock_block(e, mutex, alias, body, dest),
             ExprKind::Cast { expr: inner, ty } => {
                 // `x as T` of a refinement `T`: the cast to its base, and a
                 // panic unless the value satisfies `T`'s predicate.
@@ -13875,6 +13917,41 @@ fn main() {
 }
 "#;
         let out = "false\ntrue\ninside\n42\n";
+        assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
+    }
+
+    #[test]
+    fn lock_blocks_with_and_without_alias_break_and_return() {
+        let src = r#"
+fn bump(m: mut ref Mutex[i64], n: i64) {
+    lock m x {
+        x += n;
+    }
+}
+fn take(m: mut ref Mutex[i64]) -> i64 {
+    lock m x {
+        return x * 2;
+    }
+}
+fn main() {
+    let mut m = Mutex.new(1);
+    bump(mut m, 5);
+    for i in 0..3 {
+        lock m x {
+            if i == 1 { break; }
+            x += 10;
+        }
+    }
+    lock m {
+        println("held");
+    }
+    let t = take(mut m);
+    lock m y {
+        println(f"{y} {t}");
+    }
+}
+"#;
+        let out = "held\n16 32\n";
         assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
     }
 
