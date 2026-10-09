@@ -1,0 +1,61 @@
+G-bare
+  x
+  dSh1
+C-bare
+  x
+  dSh1
+G-round
+  x
+  dSh2
+C-round
+  x
+  dSh2
+G-arm
+  got3
+  dSh3
+C-arm
+  got3
+  dSh3
+G-temp
+  eaten
+  dSh4
+  x
+C-temp
+  eaten
+  dSh4
+  x
+G-named
+  eaten
+  dSh5
+  x
+C-named
+  eaten
+  dSh5
+  x
+G-alias
+  x
+  dSh6
+C-alias
+  x
+  dSh6
+par
+  x
+  dPa7
+twoparam
+  x
+  dSh8
+otherarm
+  x
+unit
+  x
+string
+  x
+scalar
+  x
+plain
+  x
+  dPl13
+sharedenum
+  x
+  dPl14
+end

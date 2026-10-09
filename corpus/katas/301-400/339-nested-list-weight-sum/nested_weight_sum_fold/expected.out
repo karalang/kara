@@ -1,0 +1,12 @@
+[[1,1],2,[1,1]] -> 10
+[1,[4,[6]]] -> 27
+[] -> 0
+[[]] -> 0
+[[],[[]],7] -> 7
+[-3,[-4,[5,[-6]]]] -> -20
+[[[[[[[[[[9]]]]]]]]]] -> 90
+[0,[0,[0]],1000000] -> 1000000
+seed 1, 10 members, depth up to 4: 38 chars, weight sum -131
+seed 7, 1000 members, depth up to 8: 8528 chars, weight sum 10144
+seed 42, 20000 members, depth up to 12: 179395 chars, weight sum -10934
+seed 2026, 50000 members, depth up to 30: 450750 chars, weight sum -180294

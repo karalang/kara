@@ -11,5 +11,5 @@ rules = []
 backends = []
 env = {}
 bucket = "mir-gap:an expression with no recorded type is not lowered yet; no body for `drop`"
-classified_with = "9c612aba2+local"
+classified_with = "d43d40485"
 model_rev = "f3a17c7c"
