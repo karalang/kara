@@ -216,6 +216,11 @@ pub fn resume_name(name: &str) -> String {
     format!("{name}.resume")
 }
 
+/// The `drop_frame` body of coroutine `name`.
+pub fn drop_frame_name(name: &str) -> String {
+    format!("{name}.drop_frame")
+}
+
 /// A DefId no type uses yet, for the frame and `Poll` types the transform
 /// makes.
 fn fresh_def(tys: &TyInterner) -> DefId {
@@ -349,6 +354,7 @@ pub fn transform(
         .collect();
     for &n in &order {
         out.push(Resume::new(by_name[n], &layouts[n], &frames, tys).build()?);
+        out.push(drop_frame(by_name[n], &layouts[n], &frames, tys)?);
     }
     Ok((out, frames))
 }
@@ -827,8 +833,238 @@ impl<'a> Resume<'a> {
                 })
                 .collect(),
             suspends: false,
+            drop_flags: Vec::new(),
         })
     }
+}
+
+/// What `drop_frame` does to one place of a suspended frame.
+enum Release {
+    Drop(Place),
+    /// Drop the place when the flag field is set.
+    Guarded(Place, Place),
+    /// Drop the callee's frame through `G.drop_frame`.
+    Callee(String, Place, Ty),
+}
+
+/// `F.drop_frame(frame: mut ref F.Frame)`: drops what a frame suspended at
+/// each point still owns, innermost first (the callee's frame, then the
+/// locals in reverse order), and marks the frame returned. A frame that has
+/// not started or has returned owns nothing.
+///
+/// Which places are initialized at a point comes from the same dataflow
+/// drop elaboration uses: a place that is initialized on every path is
+/// dropped, one that is on some paths is dropped under the flag
+/// elaboration made for it, and one with no flag of its own is opened into
+/// its parts, as elaboration opens it.
+fn drop_frame(
+    body: &Body,
+    layout: &CoroutineLayout,
+    frames: &BTreeMap<String, FrameInfo>,
+    tys: &TyInterner,
+) -> Result<Body, String> {
+    use super::elaborate::{
+        apply, dataflow, entry_state, gather_move_paths, statement_effects, terminator_effects,
+        Effect, MovePaths, PathIdx, State,
+    };
+    let name = &body.instance.name;
+    let r = Resume::new(body, layout, frames, tys);
+    let me = r.me;
+    let paths = gather_move_paths(body, tys, &|t| tys.needs_drop(t))?;
+    let stmt_effects: Vec<Vec<Vec<Effect>>> = body
+        .blocks
+        .iter()
+        .map(|b| {
+            b.statements
+                .iter()
+                .map(|s| statement_effects(&paths, &s.kind))
+                .collect()
+        })
+        .collect();
+    let term_effects: Vec<Vec<Effect>> = body
+        .blocks
+        .iter()
+        .map(|b| terminator_effects(&paths, &b.terminator.kind))
+        .collect();
+    let states = dataflow(
+        body,
+        &paths,
+        &entry_state(body, &paths),
+        &stmt_effects,
+        &term_effects,
+    );
+    fn release(
+        r: &Resume,
+        paths: &MovePaths,
+        st: &State,
+        p: PathIdx,
+        out: &mut Vec<Release>,
+    ) -> Result<(), String> {
+        let place = paths.place(p);
+        if st.init[p] && !st.uninit[p] {
+            out.push(Release::Drop(r.place(place)?));
+        } else if st.init[p] {
+            match r.body.drop_flags.iter().find(|(pl, _)| pl == place) {
+                Some((_, flag)) => {
+                    if !r.me.fields.contains_key(flag) {
+                        return Err(format!(
+                            "{}: the drop flag of {place:?} is not in the frame",
+                            r.body.instance.name
+                        ));
+                    }
+                    out.push(Release::Guarded(r.local(*flag)?, r.place(place)?));
+                }
+                None => {
+                    for &c in paths.children(p).iter().rev() {
+                        release(r, paths, st, c, out)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    let mut per_state: Vec<Vec<Release>> = Vec::new();
+    for (k, pt) in layout.points.iter().enumerate() {
+        let bi = pt.block.index();
+        let mut st = states[bi].clone();
+        for effs in &stmt_effects[bi] {
+            apply(&paths, &mut st, effs);
+        }
+        // The call's moves have happened; its destination is not written yet.
+        let moved: Vec<Effect> = term_effects[bi]
+            .iter()
+            .copied()
+            .filter(|e| matches!(e, Effect::Uninit(_)))
+            .collect();
+        apply(&paths, &mut st, &moved);
+        let mut out = Vec::new();
+        if let Some(callee) = frames.get(&pt.callee) {
+            out.push(Release::Callee(
+                pt.callee.clone(),
+                r.field(me.subs[&k], callee.ty),
+                callee.ty,
+            ));
+        }
+        for &l in pt.across.iter().rev() {
+            if let Some(p) = paths.lookup(&Place::local(l)) {
+                release(&r, &paths, &st, p, &mut out)?;
+            }
+        }
+        per_state.push(out);
+    }
+
+    let mut r = r;
+    let unit = tys.unit();
+    r.locals.push(LocalDecl {
+        ty: unit,
+        mutability: Mutability::Mut,
+        kind: LocalKind::ReturnPlace,
+        source_info: r.info(),
+    });
+    r.locals.push(LocalDecl {
+        ty: tys.intern(TyKind::MutRef(me.ty)),
+        mutability: Mutability::Not,
+        kind: LocalKind::Arg {
+            name: "frame".into(),
+            node: NodeId(0),
+        },
+        source_info: r.info(),
+    });
+    let block = |r: &Resume, statements, kind| BasicBlockData {
+        statements,
+        terminator: Terminator {
+            kind,
+            source_info: r.info(),
+        },
+    };
+    // bb0 dispatches, bb1 marks the frame returned.
+    r.blocks
+        .push(block(&r, vec![], TerminatorKind::Unreachable));
+    let done = vec![
+        r.assign(r.state(), Rvalue::Use(r.u32_const(me.returned))),
+        r.assign(
+            Place::local(Local::RETURN_PLACE),
+            Rvalue::Use(Operand::Const(Const {
+                ty: unit,
+                kind: ConstKind::Unit,
+            })),
+        ),
+    ];
+    r.blocks.push(block(&r, done, TerminatorKind::Return));
+    let mut values = Vec::new();
+    for (k, rel) in per_state.into_iter().enumerate() {
+        // Built back to front: each release continues to the next one.
+        let mut next = BasicBlock(1);
+        for a in rel.into_iter().rev() {
+            let at = BasicBlock(r.blocks.len() as u32);
+            match a {
+                Release::Drop(place) => {
+                    let kind = TerminatorKind::Drop {
+                        place,
+                        target: next,
+                        unwind: UnwindAction::Abort,
+                    };
+                    r.blocks.push(block(&r, vec![], kind));
+                }
+                Release::Guarded(flag, place) => {
+                    let kind = TerminatorKind::Drop {
+                        place,
+                        target: next,
+                        unwind: UnwindAction::Abort,
+                    };
+                    r.blocks.push(block(&r, vec![], kind));
+                    let kind = TerminatorKind::SwitchInt {
+                        discr: Operand::Copy(flag),
+                        targets: SwitchTargets::if_else(at, next),
+                    };
+                    r.blocks.push(block(&r, vec![], kind));
+                }
+                Release::Callee(callee, sub, ty) => {
+                    let t = r.temp(tys.intern(TyKind::MutRef(ty)));
+                    let u = r.temp(unit);
+                    let kind = TerminatorKind::Call {
+                        func: Operand::Const(Const {
+                            ty: unit,
+                            kind: ConstKind::FnDef(InstanceId {
+                                def: DefId(0),
+                                args: vec![],
+                                name: drop_frame_name(&callee),
+                            }),
+                        }),
+                        args: vec![Operand::Move(Place::local(t))],
+                        destination: Place::local(u),
+                        target: Some(next),
+                        unwind: UnwindAction::Abort,
+                    };
+                    let stmts = vec![r.assign(Place::local(t), Rvalue::Ref(BorrowKind::Mut, sub))];
+                    r.blocks.push(block(&r, stmts, kind));
+                }
+            }
+            next = BasicBlock(r.blocks.len() as u32 - 1);
+        }
+        values.push((k as u128 + 1, next));
+    }
+    r.blocks[0].terminator.kind = TerminatorKind::SwitchInt {
+        discr: Operand::Copy(r.state()),
+        targets: SwitchTargets {
+            values,
+            otherwise: BasicBlock(1),
+        },
+    };
+    let mut instance = body.instance.clone();
+    instance.name = drop_frame_name(name);
+    Ok(Body {
+        instance,
+        locals: r.locals,
+        arg_count: 1,
+        blocks: r.blocks,
+        scopes: body.scopes.clone(),
+        phase: body.phase,
+        span: body.span,
+        par_regions: Vec::new(),
+        suspends: false,
+        drop_flags: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -1040,7 +1276,15 @@ fn main() -> () {
 
         let (bodies, frames) = transform(&m.bodies, &m.tys).unwrap();
         let names: BTreeSet<&str> = bodies.iter().map(|b| b.instance.name.as_str()).collect();
-        assert_eq!(names, BTreeSet::from(["leaf.resume", "main.resume"]));
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                "leaf.drop_frame",
+                "leaf.resume",
+                "main.drop_frame",
+                "main.resume"
+            ])
+        );
         // `main` keeps `i` and `leaf`'s frame; `leaf` keeps its argument
         // and the reference to it.
         assert_eq!(
@@ -1143,5 +1387,102 @@ fn main() -> () {
         assert_eq!(tasks.output, sync.output, "{:?}", tasks.outcome);
         assert_eq!(tasks.exit_code(), Some(0), "{:?}", tasks.outcome);
         assert_eq!(tasks.resumes, 1);
+    }
+
+    const FLAGGED: &str = "
+struct R: Drop { id: i64 }
+
+fn R.drop(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const \"drop\", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn consume(_1: R) -> () {
+    let mut _0: ();
+    bb0: {
+        drop(_1) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn leaf(_1: R, _2: bool) -> () suspends {
+    let mut _0: ();
+    let _3: ();
+    bb0: {
+        switchInt(copy _2) -> [0: bb2, otherwise: bb1];
+    }
+    bb1: {
+        _3 = consume(move _1) -> bb2;
+    }
+    bb2: {
+        _3 = __yield_now() -> bb3;
+    }
+    bb3: {
+        _3 = println(const \"resumed\") -> bb4;
+    }
+    bb4: {
+        drop(_1) -> bb5;
+    }
+    bb5: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: R;
+    let _2: R;
+    bb0: {
+        _1 = R { const 8_i64 };
+        _2 = R { const 7_i64 };
+        _0 = leaf(move _2, const MOVED) -> bb1;
+    }
+    bb1: {
+        drop(_1) -> bb2;
+    }
+    bb2: {
+        return;
+    }
+}
+";
+
+    /// A frame dropped while suspended drops what it owns at that point:
+    /// the callee's frame first, then its own locals; a conditionally
+    /// moved argument under the flag elaboration made for it.
+    #[test]
+    fn drop_frame_drops_a_suspended_frame() {
+        use crate::mir::elaborate_drops;
+        use crate::mir::interp::{run, run_coroutines, run_coroutines_cancelled, Program};
+        for (moved, sync_out, cancelled_out) in [
+            ("false", "resumed\ndrop7\ndrop8\n", "drop7\ndrop8\n"),
+            ("true", "drop7\nresumed\ndrop8\n", "drop7\ndrop8\n"),
+        ] {
+            let mut m = parse_module(&FLAGGED.replace("MOVED", moved)).unwrap();
+            for b in &mut m.bodies {
+                elaborate_drops(b, &mut m.tys).unwrap();
+            }
+            let leaf = m.body("leaf").unwrap();
+            assert_eq!(leaf.drop_flags.len(), 1, "{moved}: the flag for _1");
+            let prog = Program::from_module(&m);
+            let sync = run(&prog, &m.tys, "main", vec![]);
+            assert_eq!(sync.output, sync_out, "{moved}: {:?}", sync.outcome);
+            let tasks = run_coroutines(&prog, &m.tys, "main", vec![]);
+            assert_eq!(tasks.output, sync_out, "{moved}: {:?}", tasks.outcome);
+            assert_eq!(tasks.resumes, 1);
+            let c = run_coroutines_cancelled(&prog, &m.tys, "main", vec![], 1);
+            assert_eq!(c.output, cancelled_out, "{moved}: {:?}", c.outcome);
+            assert_eq!(c.exit_code(), Some(0), "{moved}: {:?}", c.outcome);
+        }
     }
 }

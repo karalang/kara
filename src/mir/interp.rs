@@ -265,7 +265,7 @@ const MAX_STEPS: u64 = 4_000_000_000;
 /// Runs `entry` with `args`, validating every body first, and records
 /// the [`Event`] trace.
 pub fn run(program: &Program, tys: &TyInterner, entry: &str, args: Vec<Value>) -> RunResult {
-    run_with(program, tys, entry, args, true, false, coroutines_flag())
+    run_with(program, tys, entry, args, true, false, tasks_flag())
 }
 
 /// [`run`], without the trace: [`RunResult::events`] stays empty.
@@ -275,7 +275,7 @@ pub fn run_untraced(
     entry: &str,
     args: Vec<Value>,
 ) -> RunResult {
-    run_with(program, tys, entry, args, false, false, coroutines_flag())
+    run_with(program, tys, entry, args, false, false, tasks_flag())
 }
 
 /// [`run_untraced`], writing the program's stdout and stderr to the
@@ -287,7 +287,7 @@ pub fn run_streaming(
     entry: &str,
     args: Vec<Value>,
 ) -> RunResult {
-    run_with(program, tys, entry, args, false, true, coroutines_flag())
+    run_with(program, tys, entry, args, false, true, tasks_flag())
 }
 
 /// [`run`], with coroutines run as state machines under the executor
@@ -298,13 +298,47 @@ pub fn run_coroutines(
     entry: &str,
     args: Vec<Value>,
 ) -> RunResult {
-    run_with(program, tys, entry, args, true, false, true)
+    run_with(program, tys, entry, args, true, false, Tasks::Run)
 }
 
-/// `KARAC_MIR_COROUTINES=1`: coroutines run as state machines under an
-/// executor; otherwise their suspending calls complete synchronously.
-fn coroutines_flag() -> bool {
-    std::env::var("KARAC_MIR_COROUTINES").is_ok_and(|v| v == "1")
+/// [`run_coroutines`], dropping the root's frame through its `drop_frame`
+/// once it has been pending `after` times, as a cancellation would.
+pub fn run_coroutines_cancelled(
+    program: &Program,
+    tys: &TyInterner,
+    entry: &str,
+    args: Vec<Value>,
+    after: u64,
+) -> RunResult {
+    run_with(
+        program,
+        tys,
+        entry,
+        args,
+        true,
+        false,
+        Tasks::CancelAfter(after),
+    )
+}
+
+/// How coroutines run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tasks {
+    /// Their suspending calls complete synchronously.
+    Sync,
+    /// As state machines, the root resumed by the executor until `Ready`.
+    Run,
+    /// As `Run`, cancelling the root after it has been pending this often.
+    CancelAfter(u64),
+}
+
+/// `KARAC_MIR_COROUTINES=1` runs coroutines under the executor.
+fn tasks_flag() -> Tasks {
+    if std::env::var("KARAC_MIR_COROUTINES").is_ok_and(|v| v == "1") {
+        Tasks::Run
+    } else {
+        Tasks::Sync
+    }
 }
 
 fn run_with(
@@ -314,8 +348,9 @@ fn run_with(
     args: Vec<Value>,
     trace: bool,
     stream: bool,
-    coroutines: bool,
+    tasks: Tasks,
 ) -> RunResult {
+    let coroutines = tasks != Tasks::Sync;
     let transformed;
     let program = if coroutines {
         let bodies: Vec<Body> = program.bodies.values().cloned().collect();
@@ -372,6 +407,10 @@ fn run_with(
         sorted_tables: Default::default(),
         flags: Vec::new(),
         resumes: 0,
+        cancel_after: match tasks {
+            Tasks::CancelAfter(n) => Some(n),
+            _ => None,
+        },
     };
     let task = coroutines && program.bodies.contains_key(&coroutine::resume_name(entry));
     let outcome = if !problems.is_empty() {
@@ -548,6 +587,8 @@ struct Interp<'a> {
     flags: Vec<(Addr, Flag)>,
     /// Resumes of a pending task root.
     resumes: u64,
+    /// Drop the root's frame once it has been pending this often.
+    cancel_after: Option<u64>,
 }
 
 impl<'a> Interp<'a> {
@@ -5042,7 +5083,19 @@ impl<'a> Interp<'a> {
                     self.free_slot(slot);
                     return Ok(fs.remove(0));
                 }
-                Value::Variant(1, _) => self.resumes += 1,
+                Value::Variant(1, _) => {
+                    self.resumes += 1;
+                    if self.cancel_after == Some(self.resumes) {
+                        let drop = coroutine::drop_frame_name(entry);
+                        self.call(&drop, vec![Value::Ref(at.clone())])?;
+                        let frame = self.live(slot)?.value.clone();
+                        if self.frame_holds(&frame, frame_ty) {
+                            return err(format!("{drop} left a value in the frame"));
+                        }
+                        self.free_slot(slot);
+                        return Ok(Value::Unit);
+                    }
+                }
                 other => return err(format!("{resume} returned {other:?}, not a Poll")),
             }
         }

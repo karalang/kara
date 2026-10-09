@@ -134,6 +134,33 @@ impl Validator<'_> {
         }
     }
 
+    /// A place inside a field of a coroutine frame, through the frame
+    /// reference a `resume` or `drop_frame` body takes (`coroutine`): the
+    /// fields are that body's locals, so it may move out of them.
+    fn frame_field(&self, p: &Place) -> bool {
+        let frame = Local(1);
+        let is_frame = self.body.arg_count == 1
+            && self.body.locals.len() > 1
+            && match self.tys.kind(self.body.local(frame).ty) {
+                TyKind::MutRef(t) => match self.tys.kind(t) {
+                    TyKind::Adt(a) => self.tys.adt(a).name.ends_with(".Frame"),
+                    _ => false,
+                },
+                _ => false,
+            };
+        let rest = Place {
+            local: p.local,
+            projection: p.projection.iter().skip(2).copied().collect(),
+        };
+        is_frame
+            && p.local == frame
+            && matches!(
+                p.projection.as_slice(),
+                [ProjElem::Deref, ProjElem::Field(..), ..]
+            )
+            && !rest.is_move_forbidden()
+    }
+
     fn operand(&mut self, o: &Operand) -> Option<Ty> {
         match o {
             Operand::Copy(p) => {
@@ -150,7 +177,7 @@ impl Validator<'_> {
             Operand::Move(p) => {
                 let ty = self.place(p)?;
                 let what = pretty::place(self.body, self.tys, p);
-                if p.is_move_forbidden() {
+                if p.is_move_forbidden() && !self.frame_field(p) {
                     self.err(format!(
                         "move out of {what}, which is behind a reference or an index (core semantics §3.7)"
                     ));

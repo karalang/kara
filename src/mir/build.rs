@@ -188,6 +188,7 @@ impl BodyBuilder {
             span: self.info.span,
             par_regions: self.par_regions,
             suspends: self.suspends,
+            drop_flags: Vec::new(),
         })
     }
 }

@@ -619,6 +619,7 @@ impl Parser {
             span: SourceInfo::dummy().span,
             par_regions: Vec::new(),
             suspends,
+            drop_flags: Vec::new(),
         };
         for line in par_lines {
             let r = self

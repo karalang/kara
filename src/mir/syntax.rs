@@ -129,6 +129,10 @@ pub struct Body {
     /// callees, this decides which bodies the coroutine transform rewrites
     /// (`coroutine::coroutines`).
     pub suspends: bool,
+    /// The drop flag elaboration made for each place it guards, so a pass
+    /// after it can drop a maybe-initialized place the same way
+    /// (`coroutine` does, in `drop_frame`). Empty before elaboration.
+    pub drop_flags: Vec<(Place, Local)>,
 }
 
 impl Body {

@@ -37,6 +37,19 @@ impl MovePaths {
         self.by_place.get(p).copied()
     }
 
+    /// The place path `p` stands for.
+    pub(super) fn place(&self, p: PathIdx) -> &Place {
+        self.by_place
+            .iter()
+            .find(|(_, &i)| i == p)
+            .map(|(pl, _)| pl)
+            .expect("every path has a place")
+    }
+
+    pub(super) fn children(&self, p: PathIdx) -> &[PathIdx] {
+        &self.paths[p].children
+    }
+
     /// The path for `place`, creating it and its prefixes as needed.
     fn intern(&mut self, place: &Place) -> PathIdx {
         if let Some(i) = self.lookup(place) {
@@ -244,6 +257,12 @@ pub fn elaborate_drops(body: &mut Body, tys: &mut TyInterner) -> Result<(), Stri
     }
 
     extend_par_regions(e.body, n_orig);
+    let drop_flags = e
+        .flags
+        .iter()
+        .map(|(&p, &l)| (e.paths.place(p).clone(), l))
+        .collect();
+    e.body.drop_flags = drop_flags;
     e.body.phase = MirPhase::DropsElaborated;
     Ok(())
 }
