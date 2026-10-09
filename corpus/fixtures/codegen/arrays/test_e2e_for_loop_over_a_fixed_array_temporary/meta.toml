@@ -12,4 +12,4 @@ backends = []
 env = {}
 bucket = "mir-gap:the capture of `i`"
 classified_with = "2e937a8b2+local"
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"

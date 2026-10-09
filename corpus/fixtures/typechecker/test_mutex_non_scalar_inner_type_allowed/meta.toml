@@ -13,4 +13,4 @@ env = {}
 note = "first literal of the holding test: 'fn main() { let _m: Mutex[(i64, i64)] = Mutex.new((1, 2)); }'"
 bucket = "mir-gap:runtime: in main at bbN[term]: call of unknown function Mutex[String].new"
 classified_with = "2e937a8b2+local"
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"

@@ -1,0 +1,48 @@
+enum
+  b1
+dE
+dR1
+enum end
+opt
+  b2
+dR2
+opt end
+res
+  b3
+dR3
+res end
+two
+  b4
+dE
+dR4
+two end
+sv
+  b5
+dSv
+dR5
+sv end
+tup
+  b6
+dR6
+tup end
+ref
+  b7
+ref end
+local
+  b8
+dE
+dR8
+local end
+fresh
+  b9
+dE
+dR9
+fresh end
+norebind
+  b10
+dE
+dR10
+norebind end
+done
+dE
+dR7

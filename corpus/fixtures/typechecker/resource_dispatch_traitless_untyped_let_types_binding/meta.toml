@@ -13,4 +13,4 @@ env = {}
 note = "first literal of the holding test: 'is_some/unwrap side-table must populate for the untyped binding'"
 bucket = "mir-gap:an expression with no recorded type"
 classified_with = "2e937a8b2+local"
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"

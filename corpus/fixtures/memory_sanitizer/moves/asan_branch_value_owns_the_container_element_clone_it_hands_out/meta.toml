@@ -13,6 +13,6 @@ env = {}
 bucket = "a:refused"
 classified_with = "2e937a8b2+local"
 model_note = "move out of an index projection (C3)"
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"
 model_verdict = "V2-REJECT"
 v2_reject = "core-semantics §3.1: a branch tail moves an element out of a collection (karac check refuses it since Thread A's df8f08ee55/df2e4cabe9, 2026-10-09)"

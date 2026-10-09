@@ -13,5 +13,5 @@ env = {}
 note = "first literal of the holding test: 'define void @__par_branch_'"
 bucket = "a:refused"
 classified_with = "2e937a8b2+local"
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"
 v2_reject = "core-semantics §11.2: two par branches that both print conflict, writes(Stdout) (kata thread, 2026-10-08)"

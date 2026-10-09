@@ -13,5 +13,5 @@ env = {}
 bucket = "b-fix-incomplete:borrow_projection_copy"
 classified_with = "2e937a8b2+local"
 model_note = "move out of a ref place (C3): a reference passed where an owned value is expected"
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"
 model_verdict = "V2-REJECT"

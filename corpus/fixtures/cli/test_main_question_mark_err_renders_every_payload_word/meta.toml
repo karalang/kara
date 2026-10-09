@@ -14,5 +14,5 @@ note = "first literal of the holding test: 'main-q-wide-err'"
 bucket = "a"
 classified_with = "2e937a8b2+local"
 model_exit = 1
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"
 model_verdict = "SAME"

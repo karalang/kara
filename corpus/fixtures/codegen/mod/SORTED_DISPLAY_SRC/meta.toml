@@ -13,4 +13,4 @@ env = {}
 note = "v2 Display: collections print no type prefix (design.md §9 'A value renders the same at every depth'; review thread decision 2026-10-08) e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
 classified_with = "2e937a8b2+local"
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"

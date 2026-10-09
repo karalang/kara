@@ -12,5 +12,5 @@ backends = []
 env = {}
 bucket = "a:refused"
 classified_with = "2e937a8b2+local"
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"
 v2_reject = "core-semantics §3.1: a block or branch tail moves the binding, which is used after (karac check refuses it since Thread A's df8f08ee55/df2e4cabe9, 2026-10-09)"

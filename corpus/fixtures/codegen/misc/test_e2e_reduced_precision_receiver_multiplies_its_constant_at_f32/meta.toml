@@ -13,4 +13,4 @@ env = {}
 note = "first literal of the holding test: 'f16 1.74609375 0.0005316734313964844 32.8125 0.0304718017578125'"
 bucket = "mir-gap:runtime: in main at bbN[term]: call of unknown function fN.to_degrees"
 classified_with = "2e937a8b2+local"
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"

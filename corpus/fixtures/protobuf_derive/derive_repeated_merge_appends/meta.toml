@@ -13,4 +13,4 @@ env = {}
 note = "first literal of the holding test: '3'"
 bucket = "mir-gap:a type that failed to check"
 classified_with = "2e937a8b2+local"
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"

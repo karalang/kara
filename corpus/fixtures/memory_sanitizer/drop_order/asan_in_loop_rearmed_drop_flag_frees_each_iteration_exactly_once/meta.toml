@@ -13,5 +13,5 @@ env = {}
 bucket = "a:refused"
 classified_with = "2e937a8b2+local"
 model_note = "`p` is moved inside a loop and not initialized again before the next iteration (E0500)"
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"
 model_verdict = "V2-REJECT"

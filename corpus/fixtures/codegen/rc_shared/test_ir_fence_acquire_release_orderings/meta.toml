@@ -13,4 +13,4 @@ env = {}
 note = "first literal of the holding test: 'fence acquire'"
 bucket = "mir-gap:runtime: in main at bbN[term]: in barriers at bbN[term]: call of unknown functi"
 classified_with = "2e937a8b2+local"
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"

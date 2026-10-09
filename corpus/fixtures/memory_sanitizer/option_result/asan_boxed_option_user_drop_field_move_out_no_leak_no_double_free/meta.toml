@@ -13,5 +13,5 @@ env = {}
 bucket = "b-fix-incomplete:partial_move_of_drop_struct"
 classified_with = "2e937a8b2+local"
 model_note = "move out of a field of a type with a Drop body (C3)"
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"
 model_verdict = "V2-REJECT"

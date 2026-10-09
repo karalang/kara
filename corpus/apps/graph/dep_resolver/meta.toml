@@ -14,4 +14,4 @@ note = "stmt-par groups (source.orig.kara lines): L332-L335 four fs.write, each 
 bucket = "mir-gap:borrow check"
 classified_with = "2e937a8b2+local"
 fixed_by_classify = true
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"

@@ -14,4 +14,4 @@ note = "first literal of the holding test: 'count 10' class c: v2 order unreview
 bucket = "b->c-unreviewed"
 classified_with = "2e937a8b2+local"
 fixed_by_classify = true
-model_rev = "a95741fd"
+model_rev = "f3a17c7c"
