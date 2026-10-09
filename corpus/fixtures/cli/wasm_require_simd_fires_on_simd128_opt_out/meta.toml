@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'simd_require'"
 bucket = "mir-gap:runtime: in main at bbN[term]: in fN_scale at bbN[N]: Mul on Agg([Float(N.N), F"
-classified_with = "ddae1ab1c+local"
+classified_with = "22b63d46f+local"
 model_rev = "629c2395"

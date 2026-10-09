@@ -11,5 +11,5 @@ rules = []
 backends = []
 env = {}
 bucket = "mir-gap:the builtin `UserDB.healthy` is not lowered yet; 5:62 in `use_db`: the builtin `"
-classified_with = "ddae1ab1c+local"
+classified_with = "22b63d46f+local"
 model_rev = "629c2395"

@@ -1,0 +1,9 @@
+cmp=true true false false false true
+arith=3 -1 2 0.5
+unary=-1 1
+minmax=1 2
+clamp=2
+eq=true
+contains=true
+map=1
+fmt=1 back=1

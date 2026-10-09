@@ -3,7 +3,7 @@ dedup_of = []
 expect = "panic:7"
 exit = 7
 tags = ["literal-unmatched"]
-class = "e"
+class = "a"
 expected_from = "legacy-run"
 legacy_backend = "legacy-build"
 legacy_exit = 7
@@ -11,6 +11,6 @@ rules = []
 backends = []
 env = {}
 note = "first literal of the holding test: 'stderr={:?}'"
-bucket = "mir-gap:build"
-classified_with = "ddae1ab1c+local"
+bucket = "a"
+classified_with = "22b63d46f+local"
 model_rev = "629c2395"
