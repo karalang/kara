@@ -6206,21 +6206,81 @@ impl<'a> Interp<'a> {
         seen
     }
 
+    /// What is still allocated at exit and is a leak. A cycle of strong
+    /// handles is never freed (core semantics §6.5), so an allocation whose
+    /// every count is a handle held inside other leftover allocations is the
+    /// cycle's, not a leak. An allocation counted more often than the
+    /// leftovers hold it (a drop that lost a handle), or held by nothing
+    /// (a value that was never dropped), is one, with whatever it reaches.
     fn leaks(&self) -> Option<String> {
         let held = self.held_by_statics();
-        let live: Vec<String> = self
+        let live: Vec<AllocId> = self
             .heap
             .iter()
             .enumerate()
-            .filter(|(i, _)| !self.snapshots.contains(&AllocId(*i as u32)))
-            .filter(|(i, _)| !held.contains(&AllocId(*i as u32)))
-            .filter_map(|(i, o)| o.as_ref().map(|o| format!("a{i} (count {})", o.count)))
+            .map(|(i, _)| AllocId(i as u32))
+            .filter(|a| !self.snapshots.contains(a) && !held.contains(a))
+            .filter(|a| self.heap[a.0 as usize].is_some())
             .collect();
         if live.is_empty() {
-            None
-        } else {
-            Some(format!("leaked at exit: {}", live.join(", ")))
+            return None;
         }
+        // The handles each leftover allocation holds, strong and weak.
+        let holds = |a: AllocId| -> Vec<(AllocId, bool)> {
+            let mut out = Vec::new();
+            let mut todo: Vec<&Value> = vec![&self.heap[a.0 as usize].as_ref().unwrap().value];
+            while let Some(v) = todo.pop() {
+                match v {
+                    Value::Agg(fs) | Value::Variant(_, fs) => todo.extend(fs),
+                    Value::Box(h) | Value::Shared(h) => out.push((*h, true)),
+                    Value::Weak(h) if *h != EMPTY_WEAK => out.push((*h, false)),
+                    Value::Erased {
+                        env: Some((h, _)), ..
+                    } => out.push((*h, true)),
+                    _ => {}
+                }
+            }
+            out
+        };
+        let mut strong: rustc_hash::FxHashMap<AllocId, u32> = Default::default();
+        let mut weak: rustc_hash::FxHashMap<AllocId, u32> = Default::default();
+        for &a in &live {
+            for (h, is_strong) in holds(a) {
+                *if is_strong { &mut strong } else { &mut weak }
+                    .entry(h)
+                    .or_default() += 1;
+            }
+        }
+        let mut leaked: Vec<AllocId> = live
+            .iter()
+            .copied()
+            .filter(|a| {
+                let o = self.heap[a.0 as usize].as_ref().unwrap();
+                o.count > strong.get(a).copied().unwrap_or(0)
+                    || o.weak > weak.get(a).copied().unwrap_or(0)
+            })
+            .collect();
+        let mut i = 0;
+        while i < leaked.len() {
+            for (h, _) in holds(leaked[i]) {
+                if live.contains(&h) && !leaked.contains(&h) {
+                    leaked.push(h);
+                }
+            }
+            i += 1;
+        }
+        if leaked.is_empty() {
+            return None;
+        }
+        leaked.sort();
+        let text: Vec<String> = leaked
+            .iter()
+            .map(|a| {
+                let o = self.heap[a.0 as usize].as_ref().unwrap();
+                format!("{a} (count {})", o.count)
+            })
+            .collect();
+        Some(format!("leaked at exit: {}", text.join(", ")))
     }
 }
 
@@ -7277,5 +7337,32 @@ fn main() -> () {
         }
         assert!(bad.is_empty(), "{}", bad.join("\n"));
         ran
+    }
+
+    /// A cycle of strong handles is never freed (core semantics §6.5), so
+    /// it is not a leak at exit. (A handle a body forgot to drop is caught
+    /// at its return, before the exit check.)
+    #[test]
+    fn mir_interp_exit_leak_check_spares_strong_cycles() {
+        let cycle = "
+shared struct Node {
+    val: i64,
+    mut next: Option[Node],
+}
+
+fn main() {
+    let a = Node { val: 1, next: None };
+    let b = Node { val: 2, next: Some(a) };
+    a.next = Some(b);
+    println(f\"{a.val}\");
+}
+";
+        let r = crate::mir::lower::run_source(cycle).unwrap();
+        assert_eq!(
+            (r.output.as_str(), r.exit_code()),
+            ("1\n", Some(0)),
+            "{:?}",
+            r.outcome
+        );
     }
 }

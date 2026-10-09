@@ -3803,7 +3803,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                 then_block,
                 else_branch,
             } => {
+                // The condition's temporaries drop once it is evaluated,
+                // before either branch runs (core semantics §7.4).
+                self.push_scope();
                 let c = self.expr_operand(condition)?;
+                self.pop_scope()?;
                 let then_bb = self.b.new_block();
                 let else_bb = self.b.new_block();
                 let join = self.b.new_block();
