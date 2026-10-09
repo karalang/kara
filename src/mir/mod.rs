@@ -9,6 +9,7 @@
 
 pub mod borrowck;
 pub mod build;
+pub mod coroutine;
 pub mod effects;
 pub mod elaborate;
 pub mod flags;

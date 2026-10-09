@@ -16,6 +16,8 @@ pub struct BodyBuilder {
     info: SourceInfo,
     /// See [`Body::par_regions`].
     pub par_regions: Vec<ParRegion>,
+    /// See [`Body::suspends`].
+    pub suspends: bool,
 }
 
 impl BodyBuilder {
@@ -44,6 +46,7 @@ impl BodyBuilder {
             }],
             info,
             par_regions: Vec::new(),
+            suspends: false,
         }
     }
 
@@ -184,6 +187,7 @@ impl BodyBuilder {
             phase: MirPhase::Built,
             span: self.info.span,
             par_regions: self.par_regions,
+            suspends: self.suspends,
         })
     }
 }

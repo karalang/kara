@@ -2105,6 +2105,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.old_vals.insert(o.id, l);
         }
         self.ensures = &f.ensures;
+        self.b.suspends = f.effects.as_ref().is_some_and(|e| {
+            e.items.iter().any(|i| {
+                matches!(i, ast::EffectItem::Verb(v) if matches!(v.kind, ast::EffectVerbKind::Suspends))
+            })
+        });
         Ok(())
     }
 

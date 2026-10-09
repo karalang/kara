@@ -543,6 +543,7 @@ impl Parser {
         let mut c = Cur::new(&head.code);
         c.expect_kw("fn").map_err(|e| at(head, e))?;
         let name = c.fn_name().map_err(|e| at(head, e))?;
+        let mut suspends = false;
         let mut locals = vec![LocalDecl {
             ty: self.tys.unit(), // replaced by the return type below
             mutability: Mutability::Mut,
@@ -574,6 +575,7 @@ impl Parser {
             }
             c.expect("->")?;
             locals[0].ty = self.ty(&mut c)?;
+            suspends = c.eat_kw("suspends");
             c.expect("{")?;
             c.done()
         })()
@@ -616,6 +618,7 @@ impl Parser {
             phase: MirPhase::Built,
             span: SourceInfo::dummy().span,
             par_regions: Vec::new(),
+            suspends,
         };
         for line in par_lines {
             let r = self

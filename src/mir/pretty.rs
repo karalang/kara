@@ -18,10 +18,11 @@ pub fn pretty_body(body: &Body, tys: &TyInterner) -> String {
         .collect();
     let _ = writeln!(
         out,
-        "fn {}({}) -> {} {{",
+        "fn {}({}) -> {}{} {{",
         body.instance.name,
         args.join(", "),
-        tys.display(body.return_ty())
+        tys.display(body.return_ty()),
+        if body.suspends { " suspends" } else { "" }
     );
     for (i, decl) in body.locals.iter().enumerate() {
         if (1..=body.arg_count).contains(&i) {

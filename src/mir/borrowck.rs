@@ -691,7 +691,7 @@ fn transfer_live(live: &mut Vec<Local>, uses: &[Local], defs: &[Local]) {
 }
 
 /// The locals live at the end of each block.
-fn liveness(body: &Body) -> Vec<Vec<Local>> {
+pub(super) fn liveness(body: &Body) -> Vec<Vec<Local>> {
     let n = body.blocks.len();
     let mut live_in: Vec<Vec<Local>> = vec![Vec::new(); n];
     let mut live_out: Vec<Vec<Local>> = vec![Vec::new(); n];

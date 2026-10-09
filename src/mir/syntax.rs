@@ -125,6 +125,10 @@ pub struct Body {
     /// The `par` regions, outer before inner (a region nested in another's
     /// branch comes after it).
     pub par_regions: Vec<ParRegion>,
+    /// The function declares `suspends`. With the calls to suspending
+    /// callees, this decides which bodies the coroutine transform rewrites
+    /// (`coroutine::coroutines`).
+    pub suspends: bool,
 }
 
 impl Body {
