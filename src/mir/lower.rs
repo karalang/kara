@@ -2266,7 +2266,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     let l = self.user_local(name, t, pattern.id);
                     self.push_scope();
-                    self.expr_into(value, Place::local(l))?;
+                    // `let idx: i64 = m.get(k).unwrap()` reads the `ref i64`
+                    // (core semantics §5.10).
+                    let vt = self.expr_ty(value)?;
+                    if ty.is_some()
+                        && !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
+                        && matches!(self.tys().tcx().kind(vt), HK::Ref(i) | HK::MutRef(i) if i == t)
+                    {
+                        let op = self.owned_operand(value, t)?;
+                        self.assign(l, Rvalue::Use(op));
+                    } else {
+                        self.expr_into(value, Place::local(l))?;
+                    }
                     self.pop_scope()?;
                     self.declare(l, t);
                     return Ok(());
@@ -3319,10 +3330,16 @@ impl<'l, 'a> Bx<'l, 'a> {
             HK::Ref(t) | HK::MutRef(t) => t,
             _ => return self.expr_operand(e),
         };
-        if inner != want || !self.is_place(e) {
+        if inner != want {
             return self.expr_operand(e);
         }
-        let p = self.expr_place(e, false)?.project(ProjElem::Deref);
+        // A reference a call returns is read through its temporary.
+        let p = if self.is_place(e) {
+            self.expr_place(e, false)?
+        } else {
+            Place::local(self.temp_of(e, at)?)
+        }
+        .project(ProjElem::Deref);
         if self.is_handle(inner) || self.is_handle_aggregate(inner) {
             let l = self.temp(inner);
             self.count_copy(p, inner, Place::local(l));
@@ -9999,6 +10016,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     let callable = matches!(self.tys().tcx().kind(at), HK::Closure { .. });
                     let by_ref = !stores && !callable && !self.is_copy(at);
+                    // A number's method reads a `ref` to the same number as
+                    // its value: `n.min(m)` with `m: ref i64` (§5.10).
+                    if matches!(
+                        self.tys().tcx().kind(base),
+                        HK::Int(_) | HK::UInt(_) | HK::Float(_)
+                    ) && matches!(self.tys().tcx().kind(at), HK::Ref(t) | HK::MutRef(t) if t == base)
+                    {
+                        rest.push(self.owned_operand(&a.value, base)?);
+                        continue;
+                    }
                     // A borrowed value stored into a container of owned
                     // elements is a move out of the borrow, which the move
                     // check refuses (a container of references stores it).

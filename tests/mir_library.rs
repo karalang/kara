@@ -370,3 +370,32 @@ fn main() {
         "6\n",
     );
 }
+
+/// `Map.get` lends the value (`Option[ref V]`): a `Copy` value reads out
+/// through `??`, a value with a `Drop` body is borrowed rather than
+/// cloned, and `.cloned()` copies a `String` out.
+#[test]
+fn map_get_lends_the_value() {
+    assert_runs(
+        r#"
+struct G { n: i64 }
+impl Drop for G { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a".to_string(), 3);
+    let c = m.get("a".to_string()) ?? 0;
+    let d = m.get("z".to_string()) ?? 7;
+    match m.get("a".to_string()) { Some(v) => println(f"{v + c + d}"), None => println("none") }
+    let mut g: Map[i64, G] = Map.new();
+    g.insert(1, G { n: 5 });
+    if let Some(x) = g.get(1) { println(f"got {x.n}"); }
+    let names: Map[i64, String] = Map.new();
+    let s = names.get(1).cloned() ?? "dflt".to_string();
+    println(s);
+    let idx: i64 = m.get("a".to_string()).unwrap();
+    if let Some(k) = m.get("a".to_string()) { println(f"{idx} {idx.min(k)} {10.max(k)}"); }
+}
+"#,
+        "13\ngot 5\ndflt\n3 3 10\ndrop 5\n",
+    );
+}

@@ -5090,6 +5090,21 @@ impl<'a> TypeChecker<'a> {
         if a == b {
             return Some(a.clone());
         }
+        // On the MIR pipeline a branch giving a `ref` to a `Copy` value or
+        // handle and one giving the value join at the value (core semantics
+        // §5.10): `match m.get(k) { Some(n) => n, None => 0 }`.
+        if self.library_methods_from_source {
+            for (r, v) in [(a, b), (b, a)] {
+                if let Type::Ref(inner) | Type::MutRef(inner) = r {
+                    if !matches!(v, Type::Ref(_) | Type::MutRef(_))
+                        && self.reads_as_value(inner)
+                        && self.types_compatible_with_projections(inner, v)
+                    {
+                        return self.join_branch_types(inner, v);
+                    }
+                }
+            }
+        }
         if matches!(a, Type::Refinement { .. }) || matches!(b, Type::Refinement { .. }) {
             let a_base = strip_refinement(a);
             let b_base = strip_refinement(b);
@@ -5443,6 +5458,23 @@ impl<'a> TypeChecker<'a> {
     }
 
     /// `Copy`, a handle, or an `Option` / tuple of those (§5.10, §6.1).
+    /// A numeric method's argument fails to match its receiver type. In library
+    /// mode a `ref` to the same Copy scalar reads as the value (§5.10), so
+    /// `n.min(m)` with `m: ref i64` from `Map.get` checks.
+    pub(super) fn numeric_arg_mismatch(&self, arg_ty: &Type, receiver: &Type) -> bool {
+        if *arg_ty == Type::Error || arg_ty == receiver {
+            return false;
+        }
+        if self.library_methods_from_source {
+            if let Type::Ref(inner) | Type::MutRef(inner) = arg_ty {
+                if **inner == *receiver && self.reads_as_value(inner) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     fn reads_as_value(&self, t: &Type) -> bool {
         match t {
             Type::Shared(_) => true,

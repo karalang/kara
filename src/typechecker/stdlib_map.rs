@@ -275,6 +275,9 @@ impl<'a> super::TypeChecker<'a> {
                 // refers to anything.
                 let payload = match &resolved_v {
                     Type::Weak(referent) => (**referent).clone(),
+                    // On the MIR pipeline `get` lends the value, as the
+                    // library signature says (`Option[ref V]`).
+                    _ if self.library_methods_from_source => super::inference::ref_of(resolved_v),
                     _ => resolved_v,
                 };
                 Type::Named {
@@ -808,6 +811,9 @@ impl<'a> super::TypeChecker<'a> {
                 // refers to anything.
                 let payload = match &resolved_v {
                     Type::Weak(referent) => (**referent).clone(),
+                    // On the MIR pipeline `get` lends the value, as the
+                    // library signature says (`Option[ref V]`).
+                    _ if self.library_methods_from_source => super::inference::ref_of(resolved_v),
                     _ => resolved_v,
                 };
                 Type::Named {

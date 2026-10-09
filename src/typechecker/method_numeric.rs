@@ -133,7 +133,7 @@ impl<'a> super::TypeChecker<'a> {
                             self.record_expr_type(&arg.span, receiver_for_lookup);
                             return Some(receiver_for_lookup.clone());
                         }
-                        if arg_ty != Type::Error && arg_ty != *receiver_for_lookup {
+                        if self.numeric_arg_mismatch(&arg_ty, receiver_for_lookup) {
                             self.type_error(
                                 format!(
                                     "{method} expects an argument of type `{}`, got `{}`",
@@ -315,7 +315,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.record_promoted_literal(arg, receiver_for_lookup);
                 return Some(receiver_for_lookup.clone());
             }
-            if arg_ty != Type::Error && arg_ty != *receiver_for_lookup {
+            if self.numeric_arg_mismatch(&arg_ty, receiver_for_lookup) {
                 self.type_error(
                     format!(
                         "{method} expects an argument of type `{}`, got `{}`",
@@ -359,7 +359,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.record_expr_type(args_close_span, receiver_for_lookup);
                 return Some(receiver_for_lookup.clone());
             }
-            if arg_ty != Type::Error && arg_ty != *receiver_for_lookup {
+            if self.numeric_arg_mismatch(&arg_ty, receiver_for_lookup) {
                 self.type_error(
                     format!(
                         "{method} expects an argument of type `{}`, got `{}`",
@@ -414,7 +414,7 @@ impl<'a> super::TypeChecker<'a> {
                 // (mirrors `wrapping_*`); otherwise it must match exactly.
                 if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(false) {
                     self.record_promoted_literal(arg, receiver_for_lookup);
-                } else if arg_ty != Type::Error && arg_ty != *receiver_for_lookup {
+                } else if self.numeric_arg_mismatch(&arg_ty, receiver_for_lookup) {
                     self.type_error(
                         format!(
                             "{method} expects an argument of type `{}`, got `{}`",
@@ -501,7 +501,7 @@ impl<'a> super::TypeChecker<'a> {
             let is_bare_num_lit = Self::unsuffixed_num_literal(arg, receiver_for_lookup).is_some();
             if is_bare_num_lit {
                 self.record_promoted_literal(arg, receiver_for_lookup);
-            } else if arg_ty != Type::Error && arg_ty != *receiver_for_lookup {
+            } else if self.numeric_arg_mismatch(&arg_ty, receiver_for_lookup) {
                 self.type_error(
                     format!(
                         "`{method}` expects an argument of type `{}`, got `{}`",
@@ -543,7 +543,7 @@ impl<'a> super::TypeChecker<'a> {
                     Self::unsuffixed_num_literal(arg, receiver_for_lookup).is_some();
                 if is_bare_num_lit {
                     self.record_promoted_literal(arg, receiver_for_lookup);
-                } else if arg_ty != Type::Error && arg_ty != *receiver_for_lookup {
+                } else if self.numeric_arg_mismatch(&arg_ty, receiver_for_lookup) {
                     self.type_error(
                         format!(
                             "`clamp` expects an argument of type `{}`, got `{}`",
@@ -667,7 +667,7 @@ impl<'a> super::TypeChecker<'a> {
             // otherwise it must match exactly (mirrors `checked_*`).
             if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(false) {
                 self.record_promoted_literal(arg, receiver_for_lookup);
-            } else if arg_ty != Type::Error && arg_ty != *receiver_for_lookup {
+            } else if self.numeric_arg_mismatch(&arg_ty, receiver_for_lookup) {
                 self.type_error(
                     format!(
                         "abs_diff expects an argument of type `{}`, got `{}`",

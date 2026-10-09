@@ -125,3 +125,13 @@ impl[T] Option[T] {
         }
     }
 }
+
+impl[T: Clone] Option[ref T] {
+    /// The value this borrows, cloned: `m.get(k).cloned() ?? d`.
+    fn cloned(own self) -> Option[T] {
+        match self {
+            Some(x) => Some(x.clone()),
+            None => None,
+        }
+    }
+}
