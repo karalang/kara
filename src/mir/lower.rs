@@ -549,6 +549,11 @@ impl<'a> Lcx<'a> {
                     let impl_arg_pos = impl_arg_positions(b);
                     for it in &b.items {
                         let ImplItem::Method(f) = it else { continue };
+                        // A `#[compiler_builtin]` method's body is a
+                        // placeholder: a call is the interpreter's.
+                        if f.attributes.iter().any(|a| a.is_bare("compiler_builtin")) {
+                            continue;
+                        }
                         let mut p = impl_path.clone();
                         p.push(f.name.clone());
                         if let Some(d) = self.defs.table.lookup(&DefPath::new(p)) {
@@ -7427,9 +7432,25 @@ impl<'l, 'a> Bx<'l, 'a> {
                     };
                     self.assign(r, Rvalue::Ref(kind, p));
                     let mut ops = vec![Operand::Move(Place::local(r))];
+                    // A stored value moves in (`LOG.push(line)`), as into
+                    // any collection; other non-Copy arguments are lent.
+                    let stores = matches!(
+                        m.as_str(),
+                        "push"
+                            | "push_back"
+                            | "push_front"
+                            | "insert"
+                            | "extend"
+                            | "append"
+                            | "resize"
+                            | "fill"
+                            | "set"
+                            | "send"
+                            | "try_send"
+                    );
                     for a in args {
                         let t = self.expr_ty(&a.value)?;
-                        let by_ref = !self.is_copy(t);
+                        let by_ref = !stores && !self.is_copy(t);
                         ops.push(self.lib_arg(&a.value, by_ref)?);
                     }
                     let name = format!("{}.{m}", self.tys().display(vt));
@@ -10342,29 +10363,100 @@ pub fn run_source_streaming(src: &str) -> Result<interp::RunResult, String> {
     ))
 }
 
+/// Baked library modules appended to a program that names one of their
+/// words.
+const BAKED_SOURCES: &[(&str, &[&str])] = &[
+    (
+        include_str!("../../runtime/stdlib/protobuf.kara"),
+        &["ProtoBuf", "ProtoReader", "Message", "proto_schema"],
+    ),
+    (
+        include_str!("../../runtime/stdlib/process.kara"),
+        &["Command", "Child", "ExitStatus"],
+    ),
+];
+
+/// Whether the program declares a type the baked file declares. A program
+/// with its own `Command` or `Message` means its own, and appending the
+/// library's would define the name twice.
+fn defines_a_baked_type(src: &str, baked: &str) -> bool {
+    let declared = |text: &str| -> Vec<String> {
+        let mut names = Vec::new();
+        for line in text.lines() {
+            let line = line
+                .trim_start()
+                .trim_start_matches("pub ")
+                .trim_start_matches("shared ");
+            for kw in ["struct ", "enum ", "trait ", "type "] {
+                if let Some(rest) = line.strip_prefix(kw) {
+                    let name: String = rest
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !name.is_empty() {
+                        names.push(name);
+                    }
+                }
+            }
+        }
+        names
+    };
+    let ours = declared(src);
+    declared(baked).iter().any(|n| ours.contains(n))
+}
+
+/// The appended library's `#[compiler_builtin]` functions are stdlib items,
+/// which the resolver lets carry the attribute; their bodies are
+/// placeholders, so they stay the interpreter's (`index_functions`).
+fn mark_library_builtins(program: &mut ast::Program, user_len: usize) {
+    let mark = |f: &mut ast::Function| {
+        if f.span.offset >= user_len && f.attributes.iter().any(|a| a.is_bare("compiler_builtin")) {
+            f.stdlib_origin = true;
+        }
+    };
+    for item in &mut program.items {
+        match item {
+            Item::Function(f) => mark(f),
+            Item::ImplBlock(b) => {
+                for it in &mut b.items {
+                    if let ImplItem::Method(f) = it {
+                        mark(f);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Check one source file, build its MIR and elaborate drops; or the first
 /// stage that refused it.
 pub fn build_source(src: &str) -> Result<Lowered, String> {
     // The library's Kāra methods go after the program, so the program's own
     // line numbers and spans are unchanged (redesign A2).
     let mut src = src.to_string();
-    // `std.protobuf`'s wire codec is all Kāra; a program that names it (or
-    // derives `Message`, whose `encode` / `decode` call it) gets the baked
-    // file, as `PriorityQueue`'s is appended. Most programs do not, and it
-    // is long.
-    let protobuf = ["ProtoBuf", "ProtoReader", "Message", "proto_schema"]
+    let user_len = src.len();
+    // Baked modules whose bodies are Kāra, for a program that names them
+    // (`#[derive(Message)]`'s `encode` / `decode` call `std.protobuf`), as
+    // `PriorityQueue`'s is appended. Most programs do not, and they are long.
+    let baked: Vec<&str> = BAKED_SOURCES
         .iter()
-        .any(|w| src.contains(w));
+        .filter(|(text, words)| {
+            words.iter().any(|w| src.contains(w)) && !defines_a_baked_type(&src, text)
+        })
+        .map(|(text, _)| *text)
+        .collect();
     for (_, lib) in crate::prelude::LIBRARY_SOURCES {
         src.push('\n');
         src.push_str(lib);
     }
-    if protobuf {
-        // Its `//!` header is a module doc comment, legal only at the top.
-        for line in include_str!("../../runtime/stdlib/protobuf.kara").lines() {
+    for text in baked {
+        // A `//!` header is a module doc comment, legal only at the top, and
+        // the baked spelling `Unit` is `()` outside the stdlib.
+        for line in text.lines() {
             src.push('\n');
             if !line.starts_with("//!") {
-                src.push_str(line);
+                src.push_str(&line.replace("[Unit,", "[(),"));
             }
         }
     }
@@ -10373,6 +10465,7 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
         return Err(format!("parse: {:?}", parsed.errors[0]));
     }
     let mut program = parsed.program;
+    mark_library_builtins(&mut program, user_len);
     crate::desugar::with_collect_through_from_iterator(|| {
         crate::prepare_for_resolve(&mut program);
     });
@@ -11941,7 +12034,7 @@ let mut NAMES: Vec[String] = Vec.new();
 let mut COUNT: i64 = 0;
 fn bump() {
     COUNT = COUNT + 1;
-    NAMES.push("x");
+    NAMES.push(f"x{COUNT}");
     HITS.fetch_add(1, MemoryOrdering.SeqCst);
 }
 fn main() {
@@ -11973,6 +12066,8 @@ fn main() {
         for want in ["const &static#0", "const &static#1", "const &static#2"] {
             assert!(bump.contains(want), "{want}\n{bump}");
         }
+        // The pushed `String` moves into the static `Vec`; it is not lent.
+        assert!(!bump.contains("ref String"), "{bump}");
         // `LIMIT` is no static: its value is computed at the use.
         assert!(text("main").contains("const 42_i64"), "{}", text("main"));
         for b in lowered.program.bodies.values() {
@@ -12193,5 +12288,40 @@ fn main() {
 }
 "#;
         assert_eq!(run_source(src), Ok(("100\n".to_string(), Some(0))));
+    }
+
+    /// `std.process`'s builder methods are Kāra, appended for a program that
+    /// names `Command`; its `#[compiler_builtin]` methods stay native calls.
+    #[test]
+    fn baked_process_builder_bodies() {
+        let src = r#"
+struct Holder { c: Command, n: i64 }
+fn main() {
+    let h = Holder { c: Command.new("echo").arg("hi").env("K", "V"), n: 7 };
+    println(h.n);
+}
+"#;
+        assert_eq!(run_source(src), Ok(("7\n".to_string(), Some(0))));
+        let src = r#"
+fn main() {
+    let c = Command.new("true");
+    let r = c.spawn();
+    println(r.is_ok());
+}
+"#;
+        let lowered = build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!lowered.program.bodies.contains_key("Command.spawn"));
+        let main = crate::mir::pretty::pretty_body(&lowered.program.bodies["main"], &lowered.tys);
+        assert!(main.contains("Command.spawn("), "{main}");
+        // A program with its own `Command` keeps it; the library's would
+        // define the name twice.
+        let src = r#"
+enum Command { Go(i64) }
+fn main() {
+    let c = Command.Go(3);
+    match c { Command.Go(n) => println(n) }
+}
+"#;
+        assert_eq!(run_source(src), Ok(("3\n".to_string(), Some(0))));
     }
 }
