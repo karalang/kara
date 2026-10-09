@@ -232,7 +232,7 @@ impl Resolver {
         let rel = ref self.releases[idx];
         let who = rel.name + "@" + rel.version.text();
         for dep in rel.deps {
-            self.require(dep.name.clone(), dep.constraint, who)?;
+            self.require(dep.name.clone(), dep.constraint, who.clone())?;
         }
         Ok(())
     }

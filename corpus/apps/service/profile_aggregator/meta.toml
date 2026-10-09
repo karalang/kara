@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "stmt-par groups (source.orig.kara lines): L257-L259 three backend fetches (accounts, orders, recs), each sleep_ms(3) plus a map lookup"
 bucket = "mir-gap:an iterator value"
-classified_with = "0982ac954+local"
+classified_with = "2e937a8b2+local"
 model_rev = "a95741fd"

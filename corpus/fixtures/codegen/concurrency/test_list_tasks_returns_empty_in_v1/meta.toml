@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: '0'"
 bucket = "a:refused"
-classified_with = "0982ac954+local"
+classified_with = "2e937a8b2+local"
 model_rev = "a95741fd"
 v2_reject = "core-semantics §11.2: two par branches that both print conflict, writes(Stdout) (kata thread, 2026-10-08)"

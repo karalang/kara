@@ -10,11 +10,11 @@ fn main() {
     v.push(Ho.Full(mks(1)));
     v.push(Ho.Empty);
     v.push(Ho.Full(mks(2)));
-    for h in v.into_iter() { shows(h) }
+    for h in v.clone().into_iter() { shows(h) }
     println(f"n{v.len()}");
     let mut w: Vec[Ho[S]] = Vec.new();
     w.push(Ho.Full(mks(3)));
-    for h in w.into_iter() { outer(h) }
+    for h in w.clone().into_iter() { outer(h) }
     println("a");
     for h in w.into_iter() { two(h, Ho.Full(mks(4))) }
     println("b");

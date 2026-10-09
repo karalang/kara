@@ -34,8 +34,8 @@ fn s08() { let h = H { g: Ho.Full(R { id: 5 }) }; eat(h); println("after"); }
 fn s09() { let h = H { g: Ho.Full(R { id: 5 }) }; let k = h; println("k"); }
 fn s10() { let h = H { g: Ho.Empty }; println("h"); }
 fn s12() { let mut v: Vec[H] = Vec.new(); v.push(H { g: Ho.Full(R { id: 5 }) }); println("v"); }
-fn w9() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v.into_iter() { show(h) } println(f"n{v.len()}"); }
-fn m15() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v.into_iter() { show(h) } println(f"n{v.len()}"); }
+fn w9() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v.clone().into_iter() { show(h) } println(f"n{v.len()}"); }
+fn m15() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); for h in v.clone().into_iter() { show(h) } println(f"n{v.len()}"); }
 fn main() {
     v01();
     v02();

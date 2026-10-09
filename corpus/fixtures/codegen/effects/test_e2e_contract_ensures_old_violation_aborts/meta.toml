@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'contract violated'"
 bucket = "mir-gap:a type that failed to check"
-classified_with = "0982ac954+local"
+classified_with = "2e937a8b2+local"
 model_rev = "a95741fd"

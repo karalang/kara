@@ -1,0 +1,9 @@
+
+fn main() {
+    let v: Vec[i64] = Vec[1i64, 2i64, 3i64];
+    let r: Vec[i64] = v.into_iter().collect();
+    println(f"{r.len()} {r[0]} {r[2]} {v.len()}");
+    let s: Vec[String] = Vec["aa".to_string(), "bb".to_string()];
+    let t: Vec[String] = s.into_iter().collect();
+    println(f"{t.len()} {t[0]}{t[1]} {s.len()}");
+}

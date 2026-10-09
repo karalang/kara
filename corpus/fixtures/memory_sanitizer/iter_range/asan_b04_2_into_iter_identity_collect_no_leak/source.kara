@@ -1,14 +1,14 @@
 
 fn main() {
-    let mut round: i64 = 0i64;
-    while round < 40i64 {
+    let mut round: i64 = 0;
+    while round < 40 {
         let w: Vec[String] = Vec[
             "into-iter-collect-alpha-aaaaaaaaaaaaaaaaaaaaaa".to_string(),
             "into-iter-collect-bravo-bbbbbbbbbbbbbbbbbbbbbb".to_string()
         ];
-        let r: Vec[String] = w.into_iter().collect();
-        let r1: String = r[1i64].clone();
+        let r: Vec[String] = w.clone().into_iter().collect();
+        let r1: String = r[1].clone();
         println(f"{r.len()} {w.len()} {r1}");
-        round = round + 1i64;
+        round = round + 1;
     }
 }

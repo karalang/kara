@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "stmt-par groups (source.orig.kara lines): L269-L271 three run_worker calls, each one call_remote standing in as sleep_ms(2); the take_next selections before them are sequential"
 bucket = "a"
-classified_with = "0982ac954+local"
+classified_with = "2e937a8b2+local"
 model_rev = "a95741fd"

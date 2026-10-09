@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "the expected E0200 was a legacy typecheck bug (an `if` arm `None` first fixed the closure's type); fixed in 6a029a4f63, and the output is legacy --interp's, checked by hand: scan stops at the first None and does not call the closure again (2026-10-09)"
 bucket = "mir-gap:an iterator value"
-classified_with = "0982ac954+local"
+classified_with = "2e937a8b2+local"
 model_rev = "a95741fd"
