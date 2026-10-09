@@ -1061,6 +1061,10 @@ impl<'a> Lcx<'a> {
                 if let Some(kind) = intrinsic {
                     let args = self.tys.tcx().intern_list(&args);
                     HK::Intrinsic { kind, args }
+                } else if name == "StringSlice" && std {
+                    // A view of a `String`'s text: the interpreter holds
+                    // it as a `String` of its own.
+                    HK::Str
                 } else {
                     let shared = self.register_adt(def)?;
                     let targs = args.clone();
@@ -1163,6 +1167,25 @@ impl<'a> Lcx<'a> {
         self.mir_ty(hir, &args)
     }
 
+    /// Whether `def` is the builtin `CStr` (a borrowed view, `Copy`) or
+    /// `CString` (owned), as `Some(is_copy)`.
+    fn c_string_def(&self, def: DefId, name: &str) -> Option<bool> {
+        let std = self
+            .defs
+            .table
+            .get(def)
+            .path
+            .segments
+            .first()
+            .map(String::as_str)
+            == Some("std");
+        match name {
+            "CStr" if std => Some(true),
+            "CString" if std => Some(false),
+            _ => None,
+        }
+    }
+
     /// Register the definition of the ADT `def` (and its `Drop` body),
     /// once. Returns whether it is `shared`.
     fn register_adt(&mut self, def: DefId) -> Result<bool, String> {
@@ -1216,6 +1239,10 @@ impl<'a> Lcx<'a> {
                         .get(&name)
                         .is_some_and(|d| d.contains("Copy")),
                 )
+            } else if let Some(copy) = self.c_string_def(def, &name) {
+                // `CStr` / `CString`: opaque, their bytes held by the
+                // interpreter's natives.
+                (Vec::new(), vec![(name.clone(), Vec::new())], false, copy)
             } else {
                 return Err(format!("no definition for type `{name}`"));
             };
@@ -3911,6 +3938,30 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             ExprKind::ArrayLiteral(es) => self.array_literal(e, es, dest),
+            // `c"..."` is a `ref CStr` to its bytes, which live in a place
+            // of the body's own that nothing drops (design.md § C-String
+            // Literals gives them the program's lifetime).
+            ExprKind::CStringLit { bytes, .. } => {
+                let rt = self.expr_ty(e)?;
+                let ct = match self.tys().tcx().kind(rt) {
+                    HK::Ref(t) => t,
+                    _ => rt,
+                };
+                let u8_t = self.tys().tcx().intern(HK::UInt(UIntSize::U8));
+                let ops = bytes
+                    .iter()
+                    .map(|&b| {
+                        Operand::Const(Const {
+                            ty: u8_t,
+                            kind: ConstKind::Scalar(b as u128),
+                        })
+                    })
+                    .collect();
+                let l = self.temp(ct);
+                self.call_native("CStr.from_bytes", ops, Place::local(l));
+                self.assign(dest, Rvalue::Ref(BorrowKind::Shared, Place::local(l)));
+                Ok(())
+            }
             // `b"..."` is an `Array[u8, N]` of its bytes (design.md § Byte
             // and byte-string literals).
             ExprKind::ByteStringLit(bytes) => {
@@ -11782,6 +11833,41 @@ fn main() {
         assert_eq!(
             run_source(src),
             Ok(("p = pos, q = neg\nneg\n".to_string(), Some(0)))
+        );
+    }
+
+    /// `c"..."` is a `ref CStr` to its bytes, `to_cstring` builds an owned
+    /// `CString`, and a `StringSlice` reads as the text it views
+    /// (design.md § C-String Literals, § StringSlice).
+    #[test]
+    fn c_strings_and_string_slices_run() {
+        let src = r#"
+fn byte_at(c: ref CStr, i: i64) -> u8 { c.as_bytes()[i] }
+fn first_word(s: ref String) -> StringSlice {
+    let end = s.find(' ').unwrap_or(s.len());
+    s.slice(0, end)
+}
+fn main() {
+    let c = c"caf\u{e9}";
+    println(f"{c.len()} {c"".is_empty()} {byte_at(c, 0)}");
+    match c"\xe2\x82".to_string() {
+        Ok(_) => println("ok"),
+        Err(e) => match e {
+            Utf8Error.IncompleteSequence => println("incomplete"),
+            _ => println("other"),
+        },
+    }
+    match "hi".to_string().to_cstring() {
+        Ok(cs) => println(f"{cs.len()} {cs.as_bytes()[1]}"),
+        Err(_) => println("nul"),
+    }
+    let s = "hello world".to_string();
+    println(first_word(s).to_string());
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("5 true 99\nincomplete\n2 105\nhello\n".to_string(), Some(0)))
         );
     }
 
