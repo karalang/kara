@@ -1729,6 +1729,21 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(&expr.span, &ty);
             return ty;
         }
+        // A `par {}` with a value at check position: the same, so `Ok(7)` as
+        // the join expression of `let r: Result[i64, i64] = par { .. }` gets
+        // its `Err` type from `expected`. The branches' bindings hoist into
+        // the enclosing scope as in the synth arm.
+        if let ExprKind::Par(block) = &expr.kind {
+            if let Some(tail) = &block.final_expr {
+                self.check_cross_task_safe_par_block(block, &expr.span);
+                for stmt in &block.stmts {
+                    self.check_stmt(stmt);
+                }
+                let ty = self.check_expr(tail, expected);
+                self.record_expr_type(&expr.span, &ty);
+                return ty;
+            }
+        }
 
         // If/IfLet at check position: push `expected` into both branches.
         // Each branch's `check_expr` enforces assignability against the
