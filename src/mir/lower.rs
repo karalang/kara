@@ -8446,12 +8446,11 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// is read as the value (core semantics §5.10) and a handle is a counted
     /// copy, but anything else would be moved out of the collection the
     /// items view, so it needs `.cloned()` first (iterators.md).
-    fn check_collect_items(&mut self, span: Span, v: Ty, c: Ty) -> R<()> {
+    /// The element a collection `c` is built from: `T` for `Vec[T]`,
+    /// `(K, V)` for `Map[K, V]`.
+    fn collect_elem(&self, c: Ty) -> Option<Ty> {
         let tcx = self.tys().tcx();
-        let (HK::Ref(inner) | HK::MutRef(inner)) = tcx.kind(v) else {
-            return Ok(());
-        };
-        let elem = match tcx.kind(c) {
+        match tcx.kind(c) {
             HK::Intrinsic { args, .. } => {
                 let a = tcx.list(args);
                 match a.len() {
@@ -8461,23 +8460,73 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
             _ => None,
+        }
+    }
+
+    /// Is `elem` the tuple `v` with some `ref` parts to `Copy` values read
+    /// as those values?
+    fn copies_ref_parts(&self, v: Ty, elem: Ty) -> bool {
+        let tcx = self.tys().tcx();
+        match (tcx.kind(v), tcx.kind(elem)) {
+            (HK::Tuple(vs), HK::Tuple(es)) => {
+                let (vs, es) = (tcx.list(vs), tcx.list(es));
+                vs.len() == es.len()
+                    && vs.iter().zip(es.iter()).all(|(a, b)| {
+                        a == b
+                            || matches!(tcx.kind(*a), HK::Ref(i) | HK::MutRef(i)
+                                if i == *b && self.is_copy(i))
+                            || self.copies_ref_parts(*a, *b)
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    fn check_collect_items(&mut self, span: Span, v: Ty, c: Ty) -> R<()> {
+        let elem = self.collect_elem(c);
+        let Some(elem) = elem else {
+            return Ok(());
         };
-        if elem != Some(inner)
-            || self.is_copy(inner)
-            || self.is_handle(inner)
-            || self.is_handle_aggregate(inner)
-        {
+        if !self.reads_a_ref_as_value(v, elem) {
             return Ok(());
         }
-        let t = self.tys().display(inner);
+        let (shown_v, shown_e) = (self.tys().display(v), self.tys().display(elem));
+        let fix = if matches!(self.tys().tcx().kind(v), HK::Ref(_) | HK::MutRef(_)) {
+            "write `.cloned()` before `collect`"
+        } else {
+            "clone each borrowed part in a `.map(...)` before `collect`"
+        };
         self.errors.push(format!(
-            "{} in `{}`: the items are `ref {t}`, and collecting them as `{t}` would move each \
-             out of the collection it views; write `.cloned()` before `collect` \
-             (core semantics §5.10)",
+            "{} in `{}`: the items are `{shown_v}`, and collecting them as `{shown_e}` would \
+             move each borrowed part out of the collection it views; {fix} (core semantics \
+             §5.10)",
             at(span),
             self.name
         ));
         Err(())
+    }
+
+    /// Would reading an item of type `v` as `elem` copy a non-`Copy` value
+    /// out from behind a `ref`, here or in a tuple part?
+    fn reads_a_ref_as_value(&self, v: Ty, elem: Ty) -> bool {
+        let tcx = self.tys().tcx();
+        match (tcx.kind(v), tcx.kind(elem)) {
+            (HK::Ref(inner) | HK::MutRef(inner), _) => {
+                inner == elem
+                    && !self.is_copy(inner)
+                    && !self.is_handle(inner)
+                    && !self.is_handle_aggregate(inner)
+            }
+            (HK::Tuple(vs), HK::Tuple(es)) => {
+                let (vs, es) = (tcx.list(vs), tcx.list(es));
+                vs.len() == es.len()
+                    && vs
+                        .iter()
+                        .zip(es.iter())
+                        .any(|(a, b)| self.reads_a_ref_as_value(*a, *b))
+            }
+            _ => false,
+        }
     }
 
     /// The library's `iter_read_value(x)`: `x` read as the call's type. A
@@ -8517,6 +8566,59 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 let op = self.use_place(p, inner);
                 self.assign(dest, Rvalue::Use(op));
+                return Ok(());
+            }
+        }
+        // A tuple with `ref` parts read as one with values there
+        // (`(i64, ref i64)` as `(i64, i64)`, from `.iter().enumerate()`):
+        // each such part is read as above, and the rest move.
+        if let (HK::Tuple(xl), HK::Tuple(rl)) = (tcx.kind(xt), tcx.kind(rt)) {
+            let (xs, rs) = (tcx.list(xl), tcx.list(rl));
+            let as_ref = |t: Ty| match tcx.kind(t) {
+                HK::Ref(i) | HK::MutRef(i) => Some(i),
+                _ => None,
+            };
+            // Each part: its type, the type it views (a `ref` part), and
+            // whether it is read as a `ref` too.
+            let parts: Vec<(Ty, Option<Ty>, bool)> = xs
+                .iter()
+                .zip(rs.iter())
+                .map(|(a, b)| (*a, as_ref(*a), as_ref(*b).is_some()))
+                .collect();
+            if xs.len() == rs.len() && parts.iter().any(|(_, i, b)| i.is_some() && !b) {
+                let src = Place::local(self.temp_of(x, xt)?);
+                let mut ops = Vec::new();
+                for (i, (a, inner, b_ref)) in parts.into_iter().enumerate() {
+                    let fp = src.field(i as u32, a);
+                    let Some(inner) = inner else {
+                        ops.push(Operand::Move(fp));
+                        continue;
+                    };
+                    if b_ref {
+                        ops.push(Operand::Copy(fp));
+                        continue;
+                    }
+                    let p = fp.project(ProjElem::Deref);
+                    if self.is_handle(inner) || self.is_handle_aggregate(inner) {
+                        let l = self.temp(inner);
+                        self.count_copy(p, inner, Place::local(l));
+                        ops.push(Operand::Move(Place::local(l)));
+                    } else if self.is_copy(inner) {
+                        ops.push(self.use_place(p, inner));
+                    } else {
+                        let t = self.tys().display(inner);
+                        self.errors.push(format!(
+                            "{} in `{}`: the items hold a `ref {t}`, and reading it as a \
+                             `{t}` would move it out of the collection it views; clone each \
+                             borrowed part in a `.map(...)` before `collect` (core semantics \
+                             §5.10)",
+                            at(e.span),
+                            self.name
+                        ));
+                        return Err(());
+                    }
+                }
+                self.assign(dest, Rvalue::Aggregate(AggregateKind::Tuple, ops));
                 return Ok(());
             }
         }
@@ -9982,12 +10084,19 @@ impl<'l, 'a> Bx<'l, 'a> {
         match callee {
             Callee::Def(d) if self.lcx.fns.contains_key(&d) => {
                 let inst_args = self.instance_args(e.span, &substs)?;
+                let mut inst_args = inst_args;
                 if method == "collect" && args.is_empty() && inst_args.len() >= 2 {
-                    let (v, c) = (
-                        inst_args[inst_args.len() - 2],
-                        inst_args[inst_args.len() - 1],
-                    );
+                    let n = inst_args.len();
+                    let (v, c) = (inst_args[n - 2], inst_args[n - 1]);
                     self.check_collect_items(e.span, v, c)?;
+                    // Tuple items with `ref` parts to `Copy` values are
+                    // collected as the collection's elements, each such part
+                    // copied out (`(i64, ref i64)` as `(i64, i64)`).
+                    if let Some(elem) = self.collect_elem(c) {
+                        if elem != v && self.copies_ref_parts(v, elem) {
+                            inst_args[n - 2] = elem;
+                        }
+                    }
                 }
                 self.user_method_call(e, object, d, inst_args, args, dest)
             }

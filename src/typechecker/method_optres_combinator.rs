@@ -69,6 +69,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "take"
                 | "get_or_insert"
                 | "replace"
+                | "cloned"
         ) {
             let optres = |ty: &Type| -> Option<(bool, Type, Option<Type>)> {
                 match ty {
@@ -208,6 +209,48 @@ impl<'a> super::TypeChecker<'a> {
                         }
                         record_src(self, &t_ty);
                         Some(opt(resolve_type_var_top(&t_ty, &self.env.substitutions)))
+                    }
+                    // `Option[ref T].cloned() -> Option[T]`
+                    // (docs/library/collections.md: `Map.get` lends the value).
+                    // The checker still types `get` as `Option[V]`, so on a
+                    // value payload it is the identity; the MIR pipeline takes
+                    // the Kāra body in option.kara.
+                    "cloned"
+                        if !is_result && args.is_empty() && !self.library_methods_from_source =>
+                    {
+                        let inner = match resolve_type_var_top(&t_ty, &self.env.substitutions) {
+                            Type::Ref(t) | Type::MutRef(t) => *t,
+                            t => t,
+                        };
+                        if !matches!(inner, Type::TypeVar(_) | Type::Error)
+                            && !self.type_supports_clone(&inner)
+                            && self.type_param_name(&inner).is_none()
+                        {
+                            let message = format!(
+                                "`Option.cloned` needs a payload with `.clone()`; '{}' has none",
+                                type_display(&inner)
+                            );
+                            match self
+                                .cli_lint_overrides
+                                .strict_core
+                                .then(|| self.copy_derive_fix(&inner))
+                                .flatten()
+                            {
+                                Some(fix) => self.type_error_with_fix_it(
+                                    message,
+                                    *span,
+                                    TypeErrorKind::TraitBoundNotSatisfied,
+                                    fix,
+                                ),
+                                None => self.type_error(
+                                    message,
+                                    *span,
+                                    TypeErrorKind::TraitBoundNotSatisfied,
+                                ),
+                            }
+                        }
+                        record_src(self, &t_ty);
+                        Some(opt(inner))
                     }
                     // `Option[T].get_or_insert(v: T) -> T` — MUTATING: inserts
                     // `Some(v)` when the receiver is `None`, then yields the

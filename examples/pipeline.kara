@@ -86,7 +86,7 @@ fn main() {
     let slow: Vec[String] = reqs
         .iter()
         .filter(|r| r.ms > 100)
-        .map(|r| r.path)
+        .map(|r| r.path.clone())
         .collect();
     println(f"slow_paths: {slow.len()}");
     for p in slow {

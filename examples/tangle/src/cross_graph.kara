@@ -18,7 +18,7 @@ shared struct GraphNode {
 
 impl GraphNode {
     // Owned `target` moved into self's edge list (the container store).
-    fn add_edge(mut ref self, target: own GraphNode) {
+    fn add_edge(self, target: own GraphNode) {
         self.edges.push(target);
     }
 }

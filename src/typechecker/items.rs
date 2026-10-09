@@ -21,7 +21,7 @@ use super::inference::{find_unbound_const_param, find_unbound_type_param};
 use super::types::{
     type_display, type_is_fully_concrete, IntSize, ScrutineeMode, Type, UIntSize, VariantTypeInfo,
 };
-use super::{ConstEvalError, FixIt, LocalTypeScope, TypeErrorKind};
+use super::{ConstEvalError, CoreLent, FixIt, LocalTypeScope, TypeErrorKind};
 use crate::ast::narrow_literal_to_i64;
 
 impl<'a> super::TypeChecker<'a> {
@@ -1939,6 +1939,53 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// v2 core §5: a reference points into something the caller lent, so a
+    /// function declared `-> ref T` cannot return a value it makes (a
+    /// struct, tuple or array literal, or a literal). Return the value
+    /// itself: `-> T`.
+    fn check_core_fresh_ref_return(&mut self, f: &Function) {
+        let (Some(ret), Some(tail)) = (&f.return_type, &f.body.final_expr) else {
+            return;
+        };
+        let (TypeKind::Ref(inner) | TypeKind::MutRef(inner)) = &ret.kind else {
+            return;
+        };
+        let fresh = matches!(
+            tail.kind,
+            ExprKind::StructLiteral { .. }
+                | ExprKind::Tuple(_)
+                | ExprKind::ArrayLiteral(_)
+                | ExprKind::Integer(..)
+                | ExprKind::Float(..)
+                | ExprKind::StringLit(_)
+                | ExprKind::InterpolatedStringLit(_)
+                | ExprKind::Bool(_)
+                | ExprKind::CharLit(_)
+        );
+        if !fresh || inner.span.offset <= ret.span.offset {
+            return;
+        }
+        self.type_error_with_fix_it(
+            format!(
+                "'{}' is declared to return a reference, but its body makes a new value: a \
+                 reference points into something the caller lent (core semantics §5). \
+                 Return the value itself: drop the `ref`",
+                f.name
+            ),
+            tail.span,
+            TypeErrorKind::ReturnTypeMismatch,
+            FixIt {
+                span: Span {
+                    offset: ret.span.offset,
+                    length: inner.span.offset - ret.span.offset,
+                    line: ret.span.line,
+                    column: ret.span.column,
+                },
+                replacement: String::new(),
+            },
+        );
+    }
+
     fn check_function(
         &mut self,
         f: &Function,
@@ -2202,6 +2249,9 @@ impl<'a> super::TypeChecker<'a> {
             set
         });
         if f.body.final_expr.is_some() {
+            if self.cli_lint_overrides.strict_core && !f.stdlib_origin {
+                self.check_core_fresh_ref_return(f);
+            }
             self.check_block_against(&f.body, &return_type);
         } else {
             // B-2026-08-16-6 — a tail-less body must still satisfy the
@@ -3447,6 +3497,47 @@ impl<'a> super::TypeChecker<'a> {
         self.current_impl_span = saved_impl_span;
     }
 
+    /// v2 core §4.3: a `shared` type's methods take a borrowed `self` only.
+    /// A handle is never consumed by a call, and its `mut` fields are written
+    /// through any handle (§6.2), so `own self` and `mut ref self` have
+    /// nothing to say. A trait impl keeps the trait's modes (§4.7).
+    fn check_core_shared_receivers(&mut self, imp: &ImplBlock, type_name: &str) {
+        let shared = self.env.structs.get(type_name).is_some_and(|s| s.is_shared)
+            || self.env.enums.get(type_name).is_some_and(|e| e.is_shared);
+        if !shared {
+            return;
+        }
+        for item in &imp.items {
+            let ImplItem::Method(f) = item else { continue };
+            if f.stdlib_origin {
+                continue;
+            }
+            let written = if f.self_is_own {
+                "own self"
+            } else if matches!(f.self_param, Some(SelfParam::MutRef)) {
+                "mut ref self"
+            } else {
+                continue;
+            };
+            let Some(span) = f.self_span else { continue };
+            self.type_error_with_fix_it(
+                format!(
+                    "method '{}' of the shared type '{type_name}' takes `{written}`, but a \
+                     shared type's methods take a borrowed `self` only (core semantics \
+                     §4.3): a call never consumes a handle, and `mut` fields are written \
+                     through any handle. Write `self`",
+                    f.name
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+                FixIt {
+                    span,
+                    replacement: "self".to_string(),
+                },
+            );
+        }
+    }
+
     fn check_impl_block_inner(&mut self, imp: &ImplBlock) {
         // Variance markers are legal only on stdlib struct/enum
         // declarations (design.md § Variance) — never on impl blocks.
@@ -3464,6 +3555,9 @@ impl<'a> super::TypeChecker<'a> {
         // noise from the unregistered impl.
         if self.env.opaque_foreign_types.contains(&type_name) {
             return;
+        }
+        if self.cli_lint_overrides.strict_core && imp.trait_name.is_none() {
+            self.check_core_shared_receivers(imp, &type_name);
         }
         // Validate inline bounds and where clause on the impl block itself
         let gp = Self::generic_param_names(&imp.generic_params);
@@ -5749,6 +5843,61 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         false
+    }
+
+    /// v2 core §5.10: which parts of an iterator chain's items are lent by
+    /// the collection it walks (`.iter()` and its pass-through adaptors), so
+    /// that collecting them as owned values would move them out of it.
+    pub(super) fn core_lent_items(e: &Expr) -> CoreLent {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &e.kind
+        else {
+            return CoreLent::No;
+        };
+        match method.as_str() {
+            "iter" | "iter_mut" | "keys" | "values" | "values_mut" if args.is_empty() => {
+                CoreLent::Yes(e.span)
+            }
+            "rev" | "skip" | "take" | "step_by" | "filter" | "peekable" | "skip_while"
+            | "take_while" | "cycle" | "inspect" => Self::core_lent_items(object),
+            "chain" => match (
+                Self::core_lent_items(object),
+                args.first().map(|a| Self::core_lent_items(&a.value)),
+            ) {
+                (CoreLent::Yes(at), _) | (_, Some(CoreLent::Yes(at))) => CoreLent::Yes(at),
+                (l, _) => l,
+            },
+            "enumerate" => CoreLent::Tuple(vec![CoreLent::No, Self::core_lent_items(object)]),
+            "zip" => CoreLent::Tuple(vec![
+                Self::core_lent_items(object),
+                args.first()
+                    .map_or(CoreLent::No, |a| Self::core_lent_items(&a.value)),
+            ]),
+            _ => CoreLent::No,
+        }
+    }
+
+    /// The first source whose lent part of items typed `ty` is not a value
+    /// to copy, with that part's type.
+    pub(super) fn core_lent_part_moves(&self, ty: &Type, lent: &CoreLent) -> Option<(Span, Type)> {
+        match (lent, ty) {
+            (CoreLent::No, _) => None,
+            (CoreLent::Tuple(ls), Type::Tuple(ts)) if ls.len() == ts.len() => ls
+                .iter()
+                .zip(ts.iter())
+                .find_map(|(l, t)| self.core_lent_part_moves(t, l)),
+            (CoreLent::Tuple(_), _) => None,
+            (CoreLent::Yes(_), Type::Ref(_) | Type::MutRef(_) | Type::TypeVar(_) | Type::Error) => {
+                None
+            }
+            (CoreLent::Yes(at), t) => (!self.reads_as_value(t)
+                && !self.copy_is_only_an_rc_retain(t))
+            .then(|| (*at, t.clone())),
+        }
     }
 
     pub(super) fn for_iterable_is_core_collection(iter_ty: &Type) -> bool {

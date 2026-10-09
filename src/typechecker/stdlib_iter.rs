@@ -929,6 +929,28 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![item.clone()],
                 }
             }
+            "cloned" => {
+                // `cloned() -> Iterator[T]` over an iterator of `ref T`:
+                // each item is cloned out of the collection it views.
+                if !args.is_empty() {
+                    self.type_error(
+                        "Iterator.cloned() takes no arguments".to_string(),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                let new_item = match item {
+                    Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                    other => other.clone(),
+                };
+                Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![new_item],
+                }
+            }
             "cycle" => {
                 // `cycle() -> Iterator[T]` — element type passes
                 // through. The "cloneable source" requirement noted
@@ -1270,6 +1292,7 @@ impl<'a> super::TypeChecker<'a> {
                     "chain",
                     "chunk_by",
                     "chunks",
+                    "cloned",
                     "collect",
                     "count",
                     "cycle",

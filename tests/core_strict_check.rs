@@ -1739,6 +1739,166 @@ fn a_ref_binding_inside_an_fstring_hole_borrows() {
     );
 }
 
+/// The element parameter of a closure handed to an adaptor over `.iter()`
+/// borrows the element (§4.6); moving a field out of it takes `.clone()`.
+#[test]
+fn an_iter_closure_param_borrows_its_element() {
+    rejected_then_fixed_in(
+        "iter-closure-view",
+        "struct Req { path: String, ms: i64 }\n\
+         fn main() {\n\
+             let v = vec![Req { path: \"a\", ms: 200 }];\n\
+             let slow: Vec[String] = v.iter().filter(|r| r.ms > 100).map(|r| r.path).collect();\n\
+             let total = v.iter().fold(0, |acc, r| acc + r.ms);\n\
+             println(slow.len() + total);\n\
+         }\n",
+        "cannot move a non-`Copy` value out of a borrowed place",
+        ".map(|r| r.path.clone())",
+        1,
+    );
+}
+
+/// `Map.get` lends the value; `.cloned()` copies it out, after a derive
+/// when the payload has no `.clone()`.
+#[test]
+fn map_get_cloned_checks_and_derives_clone() {
+    rejected_then_fixed_in(
+        "map-get-cloned",
+        "struct P { a: String }\n\
+         fn main() {\n\
+             let mut m: Map[String, P] = Map.new();\n\
+             m.insert(\"k\", P { a: \"x\" });\n\
+             let o: Option[P] = m.get(\"k\").cloned();\n\
+             println(o.is_some());\n\
+         }\n",
+        "`Option.cloned` needs a payload with `.clone()`",
+        "#[derive(Clone)]\nstruct P",
+        1,
+    );
+}
+
+/// A `for` element stored as a map key, and an enumerated element handed
+/// out in a tuple, are copies of borrowed values (§3.7): `.clone()`.
+#[test]
+fn a_borrowed_element_stored_or_returned_in_a_tuple_takes_clone() {
+    rejected_then_fixed_in(
+        "entry-key-view",
+        "fn main() {\n\
+             let words: Vec[String] = vec![\"a\", \"b\"];\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             for w in words { *m.entry(w).or_insert(0) += 1; }\n\
+             println(words.len() + m.len());\n\
+         }\n",
+        "cannot move 'w'",
+        "m.entry(w.clone())",
+        1,
+    );
+    rejected_then_fixed_in(
+        "enumerate-tuple-view",
+        "fn main() {\n\
+             let v: Vec[String] = vec![\"x\"];\n\
+             let t: Vec[(i64, String)] = v.iter().enumerate().map(|p| (p.0, p.1)).collect();\n\
+             println(t.len());\n\
+         }\n",
+        "cannot move a non-`Copy` value out of a borrowed place",
+        "(p.0, p.1.clone())",
+        1,
+    );
+}
+
+/// §5.10: `collect` builds owned values, so collecting a chain over
+/// `.iter()` moves each lent item out of its collection; `.cloned()` before
+/// `collect` clones them, and a tuple with a lent part is reported too.
+#[test]
+fn collecting_lent_items_takes_cloned() {
+    rejected_then_fixed_in(
+        "collect-chain-lent",
+        "fn main() {\n\
+             let a: Vec[String] = vec![\"x\"];\n\
+             let b: Vec[String] = vec![\"y\"];\n\
+             let r: Vec[String] = a.iter().chain(b.iter()).collect();\n\
+             println(r.len() + a.len());\n\
+         }\n",
+        "`collect` would move each one out of it",
+        "a.iter().chain(b.iter()).cloned().collect()",
+        1,
+    );
+    rejected_then_fixed_in(
+        "collect-enumerate-lent",
+        "fn main() {\n\
+             let a: Vec[String] = vec![\"x\"];\n\
+             let r: Vec[(i64, String)] = a.iter().enumerate().collect();\n\
+             println(r.len());\n\
+         }\n",
+        "after the `.iter()` that lends them",
+        "a.iter().cloned().enumerate().collect()",
+        1,
+    );
+}
+
+/// §5.10: a tuple's `.clone()` copies the references it holds, so a tuple
+/// view moving out of a closure clones its non-`Copy` parts one by one.
+#[test]
+fn a_tuple_view_moving_out_clones_its_parts() {
+    rejected_then_fixed_in(
+        "tuple-view-tail",
+        "fn main() {\n\
+             let v: Vec[String] = vec![\"x\"];\n\
+             let t: Vec[(i64, String)] = v.iter().enumerate().map(|p| p).collect();\n\
+             println(t.len());\n\
+         }\n",
+        "copies the references it holds",
+        "map(|p| (p.0, p.1.clone()))",
+        1,
+    );
+}
+
+/// §4.3: a `shared` type's methods take a borrowed `self` only; `karac fix`
+/// rewrites `own self` and `mut ref self` to `self`.
+#[test]
+fn a_shared_types_methods_take_self() {
+    rejected_then_fixed_in(
+        "shared-own-self",
+        "shared struct C { mut n: i64 }\n\
+         impl C {\n\
+             fn take(own self) -> i64 { self.n }\n\
+             fn bump(mut ref self) { self.n = self.n + 1; }\n\
+         }\n\
+         fn main() { let c = C { n: 1 }; c.bump(); println(c.take()); }\n",
+        "a shared type's methods take a borrowed `self` only",
+        "fn take(self) -> i64",
+        2,
+    );
+}
+
+/// A collection's `.clone()` clones each element, so the element type
+/// needs `.clone()`; `karac fix` derives it.
+#[test]
+fn cloning_a_vec_derives_clone_on_its_element() {
+    rejected_then_fixed_in(
+        "vec-clone-derive",
+        "struct R { id: i64, s: String }\n\
+         fn main() { let v = [R { id: 1, s: \"a\" }]; let w = v.clone(); println(w[0].id + v.len()); }\n",
+        "clones each element, and 'R' has no `.clone()`",
+        "#[derive(Clone)]",
+        1,
+    );
+}
+
+/// §5: a function declared `-> ref T` cannot return a value it makes.
+#[test]
+fn a_fresh_value_is_not_returned_by_reference() {
+    rejected_then_fixed_in(
+        "fresh-ref-return",
+        "struct P { x: i64 }\n\
+         fn mk(n: i64) -> ref P { P { x: n } }\n\
+         fn main() { println(mk(3).x); }\n",
+        "declared to return a reference, but its body makes a new value",
+        "fn mk(n: i64) -> P {",
+        1,
+    );
+}
+
 /// `check` must fail with `expect` in its output (no fix is expected).
 fn rejected_with(tag: &str, src: &str, expect: &str) {
     let (dir, path) = fixture(tag, src);

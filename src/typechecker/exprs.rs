@@ -31,6 +31,7 @@ use super::types::{
 };
 use super::BreakFrame;
 use super::TypeErrorKind;
+use super::{CoreLent, FixIt};
 
 /// Validate an f-string format specifier `{expr:spec}` against the hole's
 /// inferred type (Phase 8 format specifiers). Runs at typecheck so `karac run`
@@ -1708,6 +1709,19 @@ impl<'a> super::TypeChecker<'a> {
                         ty
                     })
                     .collect();
+                // v2 core §4.6: the element parameter of an adaptor over
+                // `.iter()` is a view of the element it is lent.
+                if let Some(i) = self
+                    .core_view_closure_params
+                    .get(&SpanKey::from_span(&expr.span))
+                    .copied()
+                {
+                    if let Some(p) = params.get(i) {
+                        for n in p.pattern.binding_names() {
+                            self.local_scope.mark_view(&n);
+                        }
+                    }
+                }
                 // B-2026-08-10-17 — push the closure-scoped `return` collector
                 // here too. B-2026-07-31-18 added it to the INFER-direction
                 // arm only, so a closure whose type is known from context (an
@@ -1729,7 +1743,7 @@ impl<'a> super::TypeChecker<'a> {
                 // out of `p` as a fn's tail does. A block body's tail is
                 // checked where blocks are.
                 if !matches!(body.kind, ExprKind::Block(_)) {
-                    self.warn_borrow_projection_copy(body, &body_ty);
+                    self.warn_closure_tail_copy(body, &body_ty);
                 }
                 // B-2026-08-26-19 — the scalar `ref` peel that `check_assignable`
                 // performs (B-2026-07-15-3) has ALREADY accepted this body
@@ -3997,6 +4011,139 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// v2 core §5.10: `collect` builds owned values, so a chain whose items
+    /// are lent by the collection it walks (`v.iter().chain(w.iter())`)
+    /// would move each one out of it. `.cloned()` before `collect` clones
+    /// them instead.
+    fn check_core_collect_lent(&mut self, object: &Expr) {
+        let lent = Self::core_lent_items(object);
+        let Some(Type::Named { name, args }) = self
+            .expr_types
+            .get(&SpanKey::from_span(&object.span))
+            .map(|t| resolve_type_var_top(t, &self.env.substitutions))
+        else {
+            return;
+        };
+        if name != "Iterator" || args.len() != 1 {
+            return;
+        }
+        let item = resolve_type_var_top(&args[0], &self.env.substitutions);
+        let Some((source, part)) = self.core_lent_part_moves(&item, &lent) else {
+            return;
+        };
+        let shown = type_display(&item);
+        let whole = matches!(lent, CoreLent::Yes(_));
+        // A whole item is cloned before `collect`; a tuple's lent part right
+        // after the source that lends it (`v.iter().cloned().enumerate()`).
+        let at = if whole { object.span } else { source };
+        let end = Span {
+            offset: at.offset + at.length,
+            length: 0,
+            line: at.line,
+            column: at.column,
+        };
+        let items = if whole {
+            format!("`ref {shown}`, lent by the collection they walk")
+        } else {
+            format!("`{shown}` with parts lent by the collection they walk")
+        };
+        let place = if whole {
+            "before `collect`"
+        } else {
+            "after the `.iter()` that lends them"
+        };
+        let (message, fix) = if self.type_supports_clone(&part) {
+            (
+                format!(
+                    "cannot move a non-`Copy` value out of a borrowed place: the items are \
+                     {items}, and `collect` would move each one out of it (core semantics \
+                     §5.10). Write `.cloned()` {place}"
+                ),
+                Some(FixIt {
+                    span: end,
+                    replacement: ".cloned()".to_string(),
+                }),
+            )
+        } else {
+            let part_shown = type_display(&part);
+            (
+                format!(
+                    "cannot move a non-`Copy` value out of a borrowed place: the items are \
+                     {items}, and `collect` would move each one out of it (core semantics \
+                     §5.10). '{part_shown}' has no `.clone()` yet: derive `Clone` on it and \
+                     write `.cloned()` {place}"
+                ),
+                self.copy_derive_fix(&part),
+            )
+        };
+        self.type_lint_warning_with_fix(
+            message,
+            object.span,
+            TypeErrorKind::TypeMismatch,
+            "borrow_projection_copy",
+            fix,
+        );
+    }
+
+    /// A closure's tail value moves out: report a borrowed part it copies,
+    /// looking into a tuple literal's elements (`|p| (p.0, p.1)`).
+    fn warn_closure_tail_copy(&mut self, body: &Expr, body_ty: &Type) {
+        if let (ExprKind::Tuple(elems), Type::Tuple(tys)) = (&body.kind, body_ty) {
+            if elems.len() == tys.len() {
+                for (e, t) in elems.iter().zip(tys.iter()) {
+                    let t = resolve_type_var_top(t, &self.env.substitutions);
+                    self.warn_closure_tail_copy(e, &t);
+                }
+                return;
+            }
+        }
+        // A closure checked against an expectation is walked twice.
+        if self.errors.iter().any(|e| {
+            e.span == body.span && e.lint_name.as_deref() == Some("borrow_projection_copy")
+        }) {
+            return;
+        }
+        let before = self.errors.len();
+        self.warn_borrow_projection_copy(body, body_ty);
+        // §5.10: a tuple's `.clone()` copies the references it holds, so a
+        // tuple view moving out clones its non-`Copy` parts one by one:
+        // `|p| p` becomes `|p| (p.0, p.1.clone())`.
+        if let (ExprKind::Identifier(n), Type::Tuple(tys)) = (&body.kind, body_ty) {
+            let parts: Vec<String> = tys
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    let t = resolve_type_var_top(t, &self.env.substitutions);
+                    if self.reads_as_value(&t) || self.copy_is_only_an_rc_retain(&t) {
+                        format!("{n}.{i}")
+                    } else {
+                        format!("{n}.{i}.clone()")
+                    }
+                })
+                .collect();
+            let replacement = format!("({})", parts.join(", "));
+            for e in &mut self.errors[before..] {
+                if e.span == body.span
+                    && e.fix_it
+                        .as_ref()
+                        .is_some_and(|f| f.replacement == ".clone()")
+                {
+                    e.message = e.message.replace(
+                        "Write `.clone()` to take a copy",
+                        &format!(
+                            "A tuple's `.clone()` copies the references it holds, so clone \
+                             its parts: write `{replacement}`"
+                        ),
+                    );
+                    e.fix_it = Some(FixIt {
+                        span: body.span,
+                        replacement: replacement.clone(),
+                    });
+                }
+            }
+        }
+    }
+
     /// Check whether `ty` satisfies the named trait. Consults three
     /// sources in order:
     ///
@@ -5637,7 +5784,29 @@ impl<'a> super::TypeChecker<'a> {
                 turbofish: _,
                 args_close_span,
             } => {
+                // v2 core §4.6: an adaptor over `.iter()` lends each element,
+                // so the closure's element parameter is a view of it.
+                if self.cli_lint_overrides.strict_core && Self::core_iter_yields_refs(object) {
+                    let at = match method.as_str() {
+                        "map" | "filter" | "for_each" | "any" | "all" | "find" | "filter_map"
+                        | "flat_map" | "take_while" | "skip_while" | "position" | "inspect"
+                        | "max_by_key" | "min_by_key" | "partition" | "find_map" => Some(0),
+                        "fold" => Some(1),
+                        _ => None,
+                    };
+                    if let Some(i) = at {
+                        for a in args {
+                            if matches!(a.value.kind, ExprKind::Closure { .. }) {
+                                self.core_view_closure_params
+                                    .insert(SpanKey::from_span(&a.value.span), i);
+                            }
+                        }
+                    }
+                }
                 let t = self.infer_method_call(object, method, args, &expr.span, args_close_span);
+                if self.cli_lint_overrides.strict_core && method == "collect" && args.is_empty() {
+                    self.check_core_collect_lent(object);
+                }
                 if self.cli_lint_overrides.strict_core && self.core_receiver_is_borrowed(object) {
                     self.core_borrowed_receivers
                         .insert(SpanKey::from_span(&object.span));
@@ -5646,7 +5815,10 @@ impl<'a> super::TypeChecker<'a> {
                 // value, so a borrow cannot be stored. `push` has its own
                 // site (`method_vec_mutation`); these are the other stores.
                 if self.cli_lint_overrides.strict_core
-                    && matches!(method.as_str(), "insert" | "push_back" | "push_front")
+                    && matches!(
+                        method.as_str(),
+                        "insert" | "push_back" | "push_front" | "entry"
+                    )
                     && self.core_receiver_is_builtin_collection(object)
                 {
                     for a in args {
@@ -6750,6 +6922,19 @@ impl<'a> super::TypeChecker<'a> {
                         ty
                     })
                     .collect();
+                // v2 core §4.6: the element parameter of an adaptor over
+                // `.iter()` is a view of the element it is lent.
+                if let Some(i) = self
+                    .core_view_closure_params
+                    .get(&SpanKey::from_span(&expr.span))
+                    .copied()
+                {
+                    if let Some(p) = params.get(i) {
+                        for n in p.pattern.binding_names() {
+                            self.local_scope.mark_view(&n);
+                        }
+                    }
+                }
                 // B-2026-07-31-18 — closure-scoped `return`: push a collector
                 // frame so `return E` inside THIS body records E's type here
                 // (the Return arm's collector path) instead of checking
@@ -6761,7 +6946,7 @@ impl<'a> super::TypeChecker<'a> {
                     .push(super::ClosureReturnFrame::default());
                 let body_ty = self.infer_expr(body);
                 if !matches!(body.kind, ExprKind::Block(_)) {
-                    self.warn_borrow_projection_copy(body, &body_ty);
+                    self.warn_closure_tail_copy(body, &body_ty);
                 }
                 let collected = self
                     .closure_return_types

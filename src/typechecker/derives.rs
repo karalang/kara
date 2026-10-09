@@ -845,17 +845,25 @@ impl<'a> super::TypeChecker<'a> {
     /// of [`Self::copy_derive_decls`]: `Copy`, or `Clone` (whose `.clone()`
     /// the next `karac fix` pass writes at the site).
     pub(super) fn copy_derive_fix(&self, ty: &Type) -> Option<super::FixIt> {
+        self.copy_derive_fix_named(ty).map(|(_, f)| f)
+    }
+
+    /// [`Self::copy_derive_fix`] with the name of the declaration it edits.
+    pub(super) fn copy_derive_fix_named(&self, ty: &Type) -> Option<(String, super::FixIt)> {
         let decls = self.copy_derive_decls();
-        let (_, (edit, line)) = Self::derive_target(ty, &decls, &mut Vec::new())?;
-        Some(super::FixIt {
-            span: Span {
-                offset: edit.offset,
-                length: 0,
-                line: *line,
-                column: 1,
+        let (name, (edit, line)) = Self::derive_target(ty, &decls, &mut Vec::new())?;
+        Some((
+            name.to_string(),
+            super::FixIt {
+                span: Span {
+                    offset: edit.offset,
+                    length: 0,
+                    line: *line,
+                    column: 1,
+                },
+                replacement: edit.replacement.clone(),
             },
-            replacement: edit.replacement.clone(),
-        })
+        ))
     }
 
     /// The declaration whose derive comes first on the way to making `ty`

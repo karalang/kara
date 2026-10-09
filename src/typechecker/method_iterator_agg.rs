@@ -123,6 +123,27 @@ impl<'a> super::TypeChecker<'a> {
         // see the note in `clone_receiver_self_type`.
         if method == "clone" {
             if let Some(self_ty) = self.clone_receiver_self_type(obj_ty) {
+                // v2 core: a collection's `.clone()` clones each element, so
+                // the element type needs `.clone()` too (design.md § Derive).
+                // A local type that lacks it gets a derive.
+                if self.cli_lint_overrides.strict_core
+                    && !self.library_methods_from_source
+                    && !self.type_supports_clone(&self_ty)
+                {
+                    if let Some((name, fix)) = self.copy_derive_fix_named(&self_ty) {
+                        self.type_error_with_fix_it(
+                            format!(
+                                "`.clone()` on '{}' clones each element, and '{name}' has no \
+                                 `.clone()`: add `{}` to it",
+                                super::types::type_display(&self_ty),
+                                fix.replacement.trim()
+                            ),
+                            *span,
+                            TypeErrorKind::TraitBoundNotSatisfied,
+                            fix,
+                        );
+                    }
+                }
                 if !args.is_empty() {
                     self.type_error(
                         "clone() takes no arguments".to_string(),

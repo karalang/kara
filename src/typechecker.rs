@@ -462,6 +462,15 @@ pub(super) enum CaptureWalkMode {
     Consuming,
 }
 
+/// v2 core §5.10: which parts of an iterator chain's items are lent by the
+/// collection it walks (see `TypeChecker::core_lent_items`).
+pub(super) enum CoreLent {
+    No,
+    /// Lent by the source call at this span (`v.iter()`).
+    Yes(crate::token::Span),
+    Tuple(Vec<CoreLent>),
+}
+
 /// One `break`-target frame for the value-collecting walk
 /// (design.md § `loop` type inference, § `break expr`).
 ///
@@ -2939,6 +2948,9 @@ pub struct TypeChecker<'a> {
     /// `Fn(A) -> R` pushdown gives, without forcing a return-type expectation.
     /// An explicit param annotation still wins.
     pub(super) closure_param_seeds: FxHashMap<SpanKey, Vec<Type>>,
+    /// v2 core §4.6: closures handed to an adaptor over `.iter()`, with the
+    /// index of the parameter that receives the lent element.
+    pub(super) core_view_closure_params: FxHashMap<SpanKey, usize>,
     /// `stdlib_origin` of the function whose body we're currently
     /// checking. Saved/restored across `check_function` so nested
     /// item-checks (e.g. impl method bodies inside a stdlib-origin
@@ -3227,6 +3239,7 @@ impl<'a> TypeChecker<'a> {
             enclosing_trait: None,
             closure_once_reasons: FxHashMap::default(),
             closure_param_seeds: FxHashMap::default(),
+            core_view_closure_params: FxHashMap::default(),
             current_fn_stdlib_origin: false,
             compiling_stdlib: false,
             library_methods_from_source: false,

@@ -771,3 +771,21 @@ fn main() {
         "[beta, alpha]\n",
     );
 }
+
+/// §5.10: `(i64, ref i64)` items collected as `(i64, i64)` copy the viewed
+/// part, so the result outlives a temporary source.
+#[test]
+fn a_tuple_with_a_ref_to_a_copy_part_collects_by_value() {
+    assert_runs(
+        r#"
+fn nums() -> Vec[i64] {
+    return Vec[10, 20, 30];
+}
+fn main() {
+    let pf: Vec[(i64, i64)] = nums().iter().enumerate().collect();
+    println(f"{pf.len()} {pf[1].0} {pf[2].1}");
+}
+"#,
+        "3 1 30\n",
+    );
+}

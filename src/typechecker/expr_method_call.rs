@@ -1052,6 +1052,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "chain"
                 | "chunk_by"
                 | "chunks"
+                | "cloned"
                 | "collect"
                 | "count"
                 | "cycle"
