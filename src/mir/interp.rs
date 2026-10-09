@@ -316,7 +316,7 @@ fn run_with(
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(MAX_STEPS),
-        snapshots: Vec::new(),
+        snapshots: Default::default(),
         arenas: 0,
         sorted_tables: Default::default(),
         flags: Vec::new(),
@@ -480,7 +480,7 @@ struct Interp<'a> {
     max_steps: u64,
     /// Read-only copies a library method hands out a view of (the bytes
     /// of a `String`): live until exit, and not leaks.
-    snapshots: Vec<AllocId>,
+    snapshots: rustc_hash::FxHashSet<AllocId>,
     /// The last `Arena` id handed out.
     arenas: i128,
     /// The tables a `Vacant` entry was made from that keep key order.
@@ -3097,7 +3097,7 @@ impl<'a> Interp<'a> {
                 let Value::Box(id) = self.alloc_box("bytes", Value::Agg(bytes)) else {
                     unreachable!("alloc_box makes a box")
                 };
-                self.snapshots.push(id);
+                self.snapshots.insert(id);
                 Ok(Value::Slice {
                     base: Addr {
                         root: Root::Heap(id),
