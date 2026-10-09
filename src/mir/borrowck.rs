@@ -443,6 +443,12 @@ impl Cx<'_> {
             | Rvalue::Len(_)
             | Rvalue::NullaryOp(..) => {}
         }
+        let moved: Vec<&Operand> = match rv {
+            Rvalue::Use(op) | Rvalue::Cast(_, op, _) => vec![op],
+            Rvalue::Aggregate(_, ops) => ops.iter().collect(),
+            _ => Vec::new(),
+        };
+        clear_moved(o, moved);
         self.assign(o, dest, val);
     }
 
@@ -486,7 +492,21 @@ impl Cx<'_> {
         for a in std::iter::once(func).chain(from) {
             self.operand_origins(o, a, &mut val);
         }
+        clear_moved(o, std::iter::once(func).chain(args));
         self.assign(o, dest, val);
+    }
+}
+
+/// A local moved out whole holds nothing afterwards, so it holds no borrow
+/// either: its borrows went with the value. Its scope-end `drop`, which
+/// elaboration removes, then keeps no loan alive.
+fn clear_moved<'o>(o: &mut Origins, ops: impl IntoIterator<Item = &'o Operand>) {
+    for op in ops {
+        if let Operand::Move(p) = op {
+            if p.projection.is_empty() {
+                o[p.local.index()].iter_mut().for_each(|b| *b = false);
+            }
+        }
     }
 }
 

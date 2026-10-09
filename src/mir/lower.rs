@@ -6683,6 +6683,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                 fn_tys.push(Some(t));
                 continue;
             }
+            if let Some(op) = self.closure_for_param(&a.value, p, &inst_args)? {
+                ops.push(PendingRecv::Ready(op));
+                fn_tys.push(None);
+                continue;
+            }
             let pt = self.callee_param_ty(p, &inst_args)?;
             ops.push(self.arg_pending(&a.value, pt)?);
             fn_tys.push(None);
@@ -6706,6 +6711,41 @@ impl<'l, 'a> Bx<'l, 'a> {
             next,
         );
         Ok(())
+    }
+
+    /// A closure literal passed for a parameter whose type is a bare type
+    /// parameter the checker solved to an erased `Fn(..)` (`f: own F` in
+    /// `inspect`). The callee may keep it in what it returns, but that value
+    /// is a local view (core semantics §9.2), so the closure does not escape
+    /// (§9.3): it captures what it writes by `mut ref` (§9.1), and borrowck
+    /// holds the loan for as long as the erased value lives.
+    fn closure_for_param(
+        &mut self,
+        a: &'a Expr,
+        p: &'a ast::Param,
+        inst_args: &[Ty],
+    ) -> R<Option<Operand>> {
+        if !matches!(a.kind, ExprKind::Closure { .. }) {
+            return Ok(None);
+        }
+        let Some(&pt) = self.lcx.node_types.get(&p.pattern.id) else {
+            return Ok(None);
+        };
+        let HK::Param(param) = self.tys().tcx().kind(pt) else {
+            return Ok(None);
+        };
+        let i = param.index as usize;
+        let erased = inst_args
+            .get(i)
+            .is_some_and(|&t| matches!(self.tys().tcx().kind(t), HK::Fn { .. }));
+        if !erased {
+            return Ok(None);
+        }
+        self.closure_escapes = false;
+        let (op, _) = self.closure_value(a)?;
+        let l = self.temp(inst_args[i]);
+        self.assign(l, Rvalue::Use(op));
+        Ok(Some(Operand::Move(Place::local(l))))
     }
 
     /// The MIR types of a call's type arguments, in this instance.
@@ -7485,6 +7525,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                         let (op, t) = self.fn_arg(&a.value)?;
                         rest.push(PendingRecv::Ready(op));
                         fn_tys.push(Some(t));
+                        continue;
+                    }
+                    if let Some(op) = self.closure_for_param(&a.value, p, &inst_args)? {
+                        rest.push(PendingRecv::Ready(op));
+                        fn_tys.push(None);
                         continue;
                     }
                     let pt = self.callee_param_ty(p, &inst_args)?;
@@ -9983,6 +10028,47 @@ fn main() {
                 Some(0)
             ))
         );
+    }
+
+    /// A closure passed for an `own F` slot the checker erased to `Fn(..)`
+    /// still lends what it writes by `mut ref` (core semantics §9.1-§9.3):
+    /// the adaptor holding it is a local view. The loan lasts while the
+    /// adaptor lives and ends when `fold` consumes it.
+    #[test]
+    fn closure_in_a_generic_slot_lends_its_capture() {
+        let iter = r#"
+struct Counter { n: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.n < 5 { self.n = self.n + 1; Some(self.n) } else { None }
+    }
+}
+"#;
+        let ok = format!(
+            "{iter}
+fn main() {{
+    let mut seen = 0;
+    let it = Counter {{ n: 0 }}.take(4).inspect(|x| {{ seen = seen + 1; }});
+    let total = it.fold(0, |a, x| a + x);
+    seen = seen + 100;
+    println(f\"{{total}} {{seen}}\");
+}}
+"
+        );
+        assert_eq!(run_source(&ok), Ok(("10 104\n".to_string(), Some(0))));
+        let live = format!(
+            "{iter}
+fn main() {{
+    let mut seen = 0;
+    let it = Counter {{ n: 0 }}.inspect(|x| {{ seen = seen + 1; }});
+    seen = 7;
+    println(f\"{{it.fold(0, |a, x| a + x)}}\");
+}}
+"
+        );
+        let err = run_source(&live).expect_err("a write while the adaptor lives");
+        assert!(err.contains("E0516"), "{err}");
     }
 
     /// A tuple literal is built at its slot's element types: a struct
