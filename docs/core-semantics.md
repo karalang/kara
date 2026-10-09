@@ -267,6 +267,8 @@ Only a value whose type can hold a reference has origins: a reference, a view, a
 
 The body is checked against the rule. A function that needs a different relation must be restructured or return an owned value.
 
+**Items borrow what the receiver borrows.** For a method with a `ref self` or `mut ref self` receiver whose result type contains a reference only through a type parameter of the impl or an associated type (`T`, `Self.Item`, `I.Item`), and not through a `ref` written in the signature or a named type that declares a `ref` field, the result borrows what `self`'s value borrows (its origins, §5.3), not the receiver place. So two `it.next()` results can be live together, and both borrow the collection `it` iterates; `last`, `nth` and `find` can return items. The body is checked against this: the result may hold only references reached through `self`'s own `ref` fields, so an iterator whose items point into itself (a lending iterator) is an error at the return. A `ref` written in the signature keeps the rule above: `peek(mut ref self) -> Option[ref Self.Item]` borrows `self`. (Decided by Gowtham, 2026-10-09.)
+
 No body-dependent precision is allowed. `design.md` Part 3's tracing of private function bodies is removed, so a function's borrow contract cannot change when its body changes.
 
 Pins:
