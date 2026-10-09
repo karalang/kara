@@ -118,6 +118,14 @@ pub fn lower_program<'a>(
     let mut lcx = Lcx {
         tc,
         source,
+        refined: program
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::DistinctType(d) if d.refinement.is_some() => Some(d.name.clone()),
+                _ => None,
+            })
+            .collect(),
         ref_bindings: &program.ref_binding_spans,
         escaping_fns: &program.escaping_fn_types,
         defs,
@@ -358,6 +366,9 @@ struct Lcx<'a> {
     tc: &'a TypeCheckResult,
     /// The checked source text, for `dbg(e)`'s rendering of `e`.
     source: &'a str,
+    /// The distinct types with a `where` predicate, which their
+    /// constructors would have to check.
+    refined: FxHashSet<String>,
     /// `ref name` pattern bindings, by the binding's span.
     ref_bindings: &'a FxHashSet<SpanKey>,
     /// The types of `escaping Fn(..)` parameters, by span.
@@ -1094,7 +1105,7 @@ impl<'a> Lcx<'a> {
     fn register_adt(&mut self, def: DefId) -> Result<bool, String> {
         let name = self.def_name(def);
         let tc = self.tc;
-        let (generics, variants, shared, derived): (_, Vec<CheckedVariant>, _, _) =
+        let (generics, variants, shared, copy): (_, Vec<CheckedVariant>, _, _) =
             if let Some(s) = tc.struct_info.get(&name) {
                 (
                     s.generic_params.clone(),
@@ -1106,7 +1117,7 @@ impl<'a> Lcx<'a> {
                             .collect(),
                     )],
                     s.is_shared || s.is_par,
-                    &s.derived_traits,
+                    s.derived_traits.contains("Copy"),
                 )
             } else if let Some(e) = tc.enum_info.get(&name) {
                 let vs = e
@@ -1129,7 +1140,18 @@ impl<'a> Lcx<'a> {
                     e.generic_params.clone(),
                     vs,
                     e.is_shared || e.is_par,
-                    &e.derived_traits,
+                    e.derived_traits.contains("Copy"),
+                )
+            } else if let Some(base) = tc.distinct_bases.get(&name) {
+                // `distinct type UserId = i64`: a struct of one field, the
+                // base value (`UserId(7)` builds it, `.raw()` reads it).
+                (
+                    Vec::new(),
+                    vec![(name.clone(), vec![("0".to_string(), base.clone())])],
+                    false,
+                    tc.distinct_type_traits
+                        .get(&name)
+                        .is_some_and(|d| d.contains("Copy")),
                 )
             } else {
                 return Err(format!("no definition for type `{name}`"));
@@ -1161,6 +1183,11 @@ impl<'a> Lcx<'a> {
                 .display_styles
                 .insert(AdtId(def.0), interp::DisplayStyle::SnakeCase);
         }
+        if tc.distinct_bases.contains_key(&name) && !tc.struct_info.contains_key(&name) {
+            self.program
+                .display_styles
+                .insert(AdtId(def.0), interp::DisplayStyle::Transparent);
+        }
         if name == "Secret"
             && tc
                 .struct_info
@@ -1177,7 +1204,7 @@ impl<'a> Lcx<'a> {
             is_enum,
             variants: vdefs,
             has_drop_impl,
-            is_copy: derived.contains("Copy") || (is_enum && name == "Option"),
+            is_copy: copy || (is_enum && name == "Option"),
         });
         if has_drop_impl {
             let drop_fn = self
@@ -3642,6 +3669,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     _ => return self.unsupported(e.span, "this unary operator"),
                 };
+                let t = self.expr_ty(operand)?;
+                if let Some(bt) = self.distinct_base(t).filter(|&bt| self.is_copy(bt)) {
+                    // `-d` on an `Arithmetic` distinct type.
+                    let p = self.expr_place(operand, false)?;
+                    let v = self.temp(bt);
+                    self.assign(
+                        Place::local(v),
+                        Rvalue::UnaryOp(mop, Operand::Copy(p.field(0, bt))),
+                    );
+                    self.wrap_distinct(t, v, dest);
+                    return Ok(());
+                }
                 let (o, _) = self.scalar_operand(operand)?;
                 self.assign(dest, Rvalue::UnaryOp(mop, o));
                 Ok(())
@@ -3956,6 +3995,24 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// A path naming a value: a unit variant (`None`, `E.A`) or a constant.
     fn path_value(&mut self, e: &'a Expr, dest: Place) -> R<()> {
+        // `ExitCode.SUCCESS`, `ExitCode.FAILURE`: the library's codes.
+        if let ExprKind::Path { segments, .. } = &e.kind {
+            if let [ty, c] = segments.as_slice() {
+                if let Some(code) = crate::prelude::lookup_exitcode_const(ty, c) {
+                    let t = self.expr_ty(e)?;
+                    if let Some(bt) = self.distinct_base(t) {
+                        let v = self.temp(bt);
+                        let op = Operand::Const(Const {
+                            ty: bt,
+                            kind: ConstKind::Scalar(code as u32 as u128),
+                        });
+                        self.assign(Place::local(v), Rvalue::Use(op));
+                        self.wrap_distinct(t, v, dest);
+                        return Ok(());
+                    }
+                }
+            }
+        }
         // `None` stored into a `weak` slot is an empty weak reference: the
         // `None` downgraded, the same shape as an `Option` value stored there.
         let t = self.expr_ty(e)?;
@@ -4270,6 +4327,27 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         if matches!(self.tys().tcx().kind(lbase), HK::Str) {
             return self.string_op(left, bin, right, dest);
+        }
+        // `a + b` on a `distinct type` that derives `Arithmetic`: the
+        // operator on the base values, wrapped back.
+        if let Some(bt) = self.distinct_base(lbase).filter(|&bt| self.is_copy(bt)) {
+            if matches!(
+                bin,
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem
+            ) {
+                let lp = self.expr_place(left, false)?;
+                let (lp, _) = self.strip_refs(lp);
+                let rp = self.expr_place(right, false)?;
+                let (rp, _) = self.strip_refs(rp);
+                let v = self.temp(bt);
+                let (l, r) = (
+                    Operand::Copy(lp.field(0, bt)),
+                    Operand::Copy(rp.field(0, bt)),
+                );
+                self.arith(bin, l, r, bt, Place::local(v));
+                self.wrap_distinct(lbase, v, dest);
+                return Ok(());
+            }
         }
         // `a + b`, `a < b` on lane vectors: one operator over every lane
         // (a comparison gives a `Vector[bool, N]` mask).
@@ -7420,6 +7498,36 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.clone_into(Place::local(l), t, dest);
             return Ok(());
         }
+        // `UserId(7)`: a distinct type's constructor wraps its base, as
+        // does the library's `ExitCode.from(code)`.
+        let wraps = match &callee.kind {
+            ExprKind::Identifier(name) => Some(name.as_str()),
+            ExprKind::Path { segments, .. }
+                if segments.len() == 2 && segments[0] == "ExitCode" && segments[1] == "from" =>
+            {
+                Some("ExitCode")
+            }
+            _ => None,
+        };
+        if let (Some(name), [a]) = (wraps, args) {
+            let tc = self.lcx.tc;
+            if tc.distinct_bases.contains_key(name) && !tc.struct_info.contains_key(name) {
+                // The checker records no types inside a `where` predicate,
+                // so the check it asks of the constructor is not built yet
+                // (post-M1, the verification track).
+                if self.lcx.refined.contains(name) {
+                    return self.unsupported(e.span, &format!("`{name}`'s `where` predicate"));
+                }
+                let t = self.expr_ty(e)?;
+                if let Some(bt) = self.distinct_base(t) {
+                    let v = self.temp(bt);
+                    let op = self.operand_at(&a.value, bt)?;
+                    self.assign(Place::local(v), Rvalue::Use(op));
+                    self.wrap_distinct(t, v, dest);
+                    return Ok(());
+                }
+            }
+        }
         let rc = self.lcx.calls.get(&e.id);
         // `T.m(..)` with `T` a type parameter of this body goes to the
         // instance's type, also where the program has a type or value named
@@ -8254,6 +8362,33 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(true)
     }
 
+    /// The base type of `t` when it is a `distinct type`.
+    fn distinct_base(&self, t: Ty) -> Option<Ty> {
+        let HK::Adt { def, .. } = self.tys().tcx().kind(t) else {
+            return None;
+        };
+        let name = self.lcx.def_name(def);
+        let tc = self.lcx.tc;
+        if !tc.distinct_bases.contains_key(&name) || tc.struct_info.contains_key(&name) {
+            return None;
+        }
+        self.tys().tcx().field_ty(t, None, 0)
+    }
+
+    /// `dest = T(v)` for the distinct type `t`.
+    fn wrap_distinct(&mut self, t: Ty, v: Local, dest: Place) {
+        self.assign(
+            dest,
+            Rvalue::Aggregate(
+                AggregateKind::Adt {
+                    ty: t,
+                    variant: VariantIdx(0),
+                },
+                vec![Operand::Move(Place::local(v))],
+            ),
+        );
+    }
+
     /// The assertion builtin `e` calls, if any. The checker records the
     /// call's type as an error; its value is `()`.
     fn assert_builtin(&self, e: &Expr) -> Option<&'static str> {
@@ -8571,6 +8706,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 let name = format!("{}.{method}", self.tys().display(t));
                 self.call_native(&name, ops, dest);
+                return Ok(());
+            }
+        }
+        if method == "raw" && args.is_empty() {
+            // `id.raw()`: a distinct type's base value.
+            let t = self.expr_ty(object)?;
+            let base = match self.tys().tcx().kind(t) {
+                HK::Ref(t) | HK::MutRef(t) => t,
+                _ => t,
+            };
+            if let Some(bt) = self.distinct_base(base) {
+                let p = self.expr_place(object, false)?;
+                let (p, _) = self.strip_refs(p);
+                let by_ref = base != t;
+                let op = if self.is_copy(bt) {
+                    Operand::Copy(p.field(0, bt))
+                } else if by_ref {
+                    return self.unsupported(e.span, "`raw` of a borrowed distinct value");
+                } else {
+                    Operand::Move(p.field(0, bt))
+                };
+                self.assign(dest, Rvalue::Use(op));
                 return Ok(());
             }
         }
@@ -12508,6 +12665,39 @@ fn main() {
 
     /// `std.process`'s builder methods are Kāra, appended for a program that
     /// names `Command`; its `#[compiler_builtin]` methods stay native calls.
+    #[test]
+    fn distinct_types_wrap_their_base() {
+        let src = r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Display, Copy, Clone)]
+distinct type UserId = i64;
+#[derive(PartialEq, Arithmetic, Display)]
+distinct type Meters = f64;
+distinct type Name = String;
+fn identity(id: own UserId) -> UserId { id }
+fn main() {
+    let u = identity(UserId(7));
+    let v = UserId(9);
+    println(u.raw());
+    println(u == v);
+    println(u < v);
+    println(u);
+    let m = Meters(1.5) + Meters(2.0);
+    println(m);
+    let n = Name("ann");
+    println(n.raw());
+}
+"#;
+        let out = "7\nfalse\ntrue\n7\n3.5\nann\n";
+        assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
+        let src = r#"
+fn main() -> ExitCode {
+    println("ran");
+    if false { ExitCode.SUCCESS } else { ExitCode.from(42) }
+}
+"#;
+        assert_eq!(run_source(src), Ok(("ran\n".to_string(), Some(42))));
+    }
+
     #[test]
     fn assertions_test_and_panic() {
         let src = r#"

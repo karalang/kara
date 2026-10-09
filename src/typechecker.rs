@@ -1564,6 +1564,8 @@ pub struct TypeCheckResult {
     pub union_info: FxHashMap<String, UnionInfo>,
     /// Derived traits for each `distinct type` declaration.
     pub distinct_type_traits: FxHashMap<String, FxHashSet<String>>,
+    /// The base type of each `distinct type Name = Base`, by name.
+    pub distinct_bases: FxHashMap<String, Type>,
     /// For each `?` expression that requires cross-error-type conversion via
     /// `From`, the target error type's name. Interpreter / codegen consult
     /// this side-table to know whether to call `<target>.from(err)` on the
@@ -3485,6 +3487,7 @@ impl<'a> TypeChecker<'a> {
         // moves into the result below.
         self.emit_nested_enum_inst_errors();
         let distinct_type_traits = self.env.distinct_types.clone();
+        let distinct_bases = self.env.distinct_bases.clone();
         let compiler_builtins = self.env.compiler_builtins.clone();
         let must_use_functions = self.env.must_use_functions.clone();
         let (node_types, node_call_subs) = self.resolved_node_tables();
@@ -3527,6 +3530,7 @@ impl<'a> TypeChecker<'a> {
             enum_info: self.env.enums,
             union_info: self.env.unions,
             distinct_type_traits,
+            distinct_bases,
             question_conversions: self.question_conversions,
             assoc_conversion_dispatch: self.assoc_conversion_dispatch,
             question_ok_payload_types: self.question_ok_payload_types,

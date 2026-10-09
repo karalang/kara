@@ -48,6 +48,8 @@ pub enum DisplayStyle {
     SnakeCase,
     /// The library's `Secret[T]`: shown as `<redacted>` at any depth.
     Redacted,
+    /// A `distinct type`: shown as its base value.
+    Transparent,
 }
 
 impl Program {
@@ -4631,6 +4633,12 @@ impl<'a> Interp<'a> {
                 let name = self.user_display(ty).unwrap();
                 self.call_display(&name, v)?
             }
+            (TyKind::Adt(a), Value::Agg(fs))
+                if self.program.display_styles.get(&a) == Some(&DisplayStyle::Transparent) =>
+            {
+                let ft = self.tys.adt(a).variants[0].fields[0].1;
+                self.display_typed(&fs[0], ft)?
+            }
             (TyKind::Shared(_), Value::Shared(id)) => {
                 // A derived Display shows the value behind the handle.
                 let inner = self.live(*id)?.value.clone();
@@ -5971,6 +5979,14 @@ impl<'a> Interp<'a> {
             return Ok(Outcome::Returned(v));
         };
         let adt = self.tys.adt(a);
+        // `fn main() -> ExitCode`: the process exits with its code.
+        if adt.name == "ExitCode" {
+            if let Value::Agg(fs) = &v {
+                if let [Value::Int(n)] = fs.as_slice() {
+                    return Ok(Outcome::Exited(*n as i32));
+                }
+            }
+        }
         if adt.name != "Result" {
             return Ok(Outcome::Returned(v));
         }
