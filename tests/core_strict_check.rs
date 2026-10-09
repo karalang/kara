@@ -2009,3 +2009,54 @@ fn main() {
         3,
     );
 }
+
+/// `v.into_iter()` consumes `v` (core semantics §4.3), so a use of `v`
+/// after the loop is a use after move, and `fix` clones it at the call.
+#[test]
+fn a_collection_used_after_into_iter_is_an_error() {
+    rejected_then_fixed_by(
+        "into-iter-moves",
+        r#"
+fn show(h: own String) { println(h); }
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("a");
+    for h in v.into_iter() {
+        show(h);
+    }
+    println(f"n{v.len()}");
+}
+"#,
+        "moved here",
+        "v.clone().into_iter()",
+    );
+}
+
+/// An `own` argument of a `mut ref self` method is stored past the call, so
+/// passing the same binding on every iteration moves it twice (core
+/// semantics §3.3), as a free function's argument does.
+#[test]
+fn an_own_method_argument_moved_in_a_loop_is_an_error() {
+    rejected_then_fixed_by(
+        "loop-container-store",
+        r#"
+struct R { n: i64 }
+impl R {
+    fn req(mut ref self, by: own String) { self.n = self.n + by.len(); }
+    fn go(mut ref self) {
+        let who = "w";
+        for i in 0..3 {
+            self.req(who);
+        }
+    }
+}
+fn main() {
+    let mut r = R { n: 0 };
+    r.go();
+    println(f"{r.n}");
+}
+"#,
+        "is moved inside a loop",
+        "self.req(who.clone())",
+    );
+}

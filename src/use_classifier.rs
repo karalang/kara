@@ -1694,8 +1694,10 @@ impl<'a> UseClassifier<'a> {
     /// Record `v[i]` as a v2 C3 move, unless it is a range slice (`s[i..j]`),
     /// which builds a new value rather than naming an element.
     /// v2 core: the prelude `Option` / `Result` methods that take `self` by
-    /// value (the set Rust's take by value). Legacy reads the receiver of
-    /// every one of them, so this applies under the strict commands only.
+    /// value (the set Rust's take by value), and the collections' consuming
+    /// iterators (`v.into_iter()` moves `v`, core semantics §4.3). Legacy
+    /// reads the receiver of every one of them, so this applies under the
+    /// strict commands only.
     fn core_builtin_consumes_receiver(&self, object: &Expr, method: &str) -> bool {
         if !crate::ownership::core_rules() {
             return false;
@@ -1710,6 +1712,12 @@ impl<'a> UseClassifier<'a> {
         let Type::Named { name, .. } = ty else {
             return false;
         };
+        if matches!(
+            name.as_str(),
+            "Vec" | "VecDeque" | "Map" | "Set" | "SortedMap" | "SortedSet"
+        ) {
+            return matches!(method, "into_iter" | "into_keys" | "into_values");
+        }
         matches!(name.as_str(), "Option" | "Result")
             && matches!(
                 method,

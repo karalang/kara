@@ -497,3 +497,28 @@ fn main() {
         "<10>\n<20>\n<30>\n30\n4\n16\n36\n5\n6\n7\nsaw 1\nsaw 2\nsaw 3\n6\n",
     );
 }
+
+/// A closure handed to a library adaptor writes its capture through a loan
+/// (core semantics §9.1), so the count `inspect` keeps is visible after the
+/// chain runs.
+#[test]
+fn an_adaptor_closure_writes_its_capture() {
+    assert_runs(
+        r#"
+struct Counter { n: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        self.n = self.n + 1;
+        Some(self.n)
+    }
+}
+fn main() {
+    let mut seen = 0;
+    let total = Counter { n: 0 }.take(4).inspect(|x| { seen = seen + 1; }).fold(0, |a, x| a + x);
+    println(f"{total} {seen}");
+}
+"#,
+        "10 4\n",
+    );
+}

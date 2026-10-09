@@ -164,7 +164,7 @@ impl<'a> super::OwnershipChecker<'a> {
             let moved_span = projection.map_or(entry.consume_span, |(span, _)| *span);
             let (line, col) = (entry.consume_span.line, entry.consume_span.column);
             let message = match entry.trigger {
-                RcTrigger::DirectReuseAfterConsume
+                RcTrigger::DirectReuseAfterConsume | RcTrigger::ContainerStoreWithSubsequentUse
                     if entry.other_use_span.offset <= entry.consume_span.offset =>
                 {
                     format!(

@@ -853,8 +853,26 @@ fn reaches_header_unrebound(
     if cfg.block(cb).uses[ci + 1..].iter().any(rebinds) {
         return false;
     }
+    successors_reach_header_unrebound(cfg, nloop, header, cb, binding, place)
+}
+
+/// Whether a path from `from`'s successors reaches the loop `header` with
+/// no rebind of `binding`'s `place` on the way.
+fn successors_reach_header_unrebound(
+    cfg: &Cfg,
+    nloop: &FxHashSet<BlockId>,
+    header: BlockId,
+    from: BlockId,
+    binding: &str,
+    place: &PlacePath,
+) -> bool {
+    let rebinds = |u: &UseSite| {
+        u.binding == binding
+            && matches!(u.kind, UseKind::Reassign | UseKind::Define)
+            && place_rebind_covers(&u.place, place)
+    };
     let mut seen: FxHashSet<BlockId> = FxHashSet::default();
-    let mut stack: Vec<BlockId> = cfg.block(cb).successors.clone();
+    let mut stack: Vec<BlockId> = cfg.block(from).successors.clone();
     while let Some(b) = stack.pop() {
         if b == header {
             return true;
@@ -903,7 +921,29 @@ pub(crate) fn loop_of_consume_candidates_from_sites(
             // outside the inner body) does not close the inner
             // back-edge — it leaves the Consume re-entering its
             // already-moved value on the next iteration.
+            // A container-store consume sits in a dead-end sink block hung
+            // off the call (`cfg.rs`, round 12.12), outside every loop; the
+            // call site is the sink's predecessor, which the loop holds.
+            let call_site = match cfg.predecessors(*cb).as_slice() {
+                [p] if c.consume_origin == ConsumeOrigin::ContainerStore => Some(*p),
+                _ => None,
+            };
             let fires = loops.iter().any(|(header, nloop)| {
+                if let Some(p) = call_site {
+                    if !nloop.contains(&p) {
+                        return false;
+                    }
+                    if crate::ownership::core_rules() {
+                        let local = uses
+                            .iter()
+                            .any(|(rb, _, u)| u.kind == UseKind::Define && nloop.contains(rb));
+                        return !local
+                            && successors_reach_header_unrebound(
+                                cfg, nloop, *header, p, binding, &c.place,
+                            );
+                    }
+                    return false;
+                }
                 if !nloop.contains(cb) {
                     return false;
                 }
