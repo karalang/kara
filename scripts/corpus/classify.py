@@ -110,6 +110,12 @@ def check_errors(karac, d, env, timeout):
 # (E0200 with these lint names, C1/C3).
 V2_CODES = {"E0288", "E0289"}
 V2_LINTS = {"borrow_projection_copy", "for_element_drop_copy", "partial_move_of_drop_struct"}
+# The v2 named-parameter rule (DESIGN_REVIEW §5: only a parameter after `;`
+# is named and may have a default) reports under the general E0200/E0215
+# codes, so it is told apart by message; `karac fix` inserts the `;` and the
+# call-site labels.
+V2_MESSAGES = ("only a named parameter can have a default",
+               "and the parameters after it are named")
 
 
 def diag_key(e):
@@ -119,7 +125,8 @@ def diag_key(e):
 def is_v2(e):
     code = e.get("code") or ""
     return (re.fullmatch(r"E05\d\d", code) is not None or code in V2_CODES
-            or e.get("lint_name") in V2_LINTS)
+            or e.get("lint_name") in V2_LINTS
+            or any(m in (e.get("message") or "") for m in V2_MESSAGES))
 
 
 def gap_construct(stderr: str) -> str:
