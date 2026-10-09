@@ -5,10 +5,8 @@ box
 err
   rd3
 wild
-dR104/t104
   rd4
 awild
-dR5/t5
   rb5
 nest
   in6
@@ -29,7 +27,9 @@ dR9/t9
 dR108/t108
 dR8/t8
 dR105/t105
+dR5/t5
 dR4/t4
+dR104/t104
 dR3/t3
 dQ102/u102
 dQ2/u2

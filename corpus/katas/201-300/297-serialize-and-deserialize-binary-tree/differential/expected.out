@@ -1,0 +1,7 @@
+trees 900 nodes 10278
+P1 round-trip failures 0
+P2 cross-format disagreements 0
+P3 re-serialization mismatches 0
+P4 structure/in-order failures 0
+P5 adversarial-shape failures 0
+DIFFERENTIAL OK

@@ -1,0 +1,18 @@
+cases 72 relabel-cases 54 entries 24570 census-cells 510
+P1  back-vs-mask disagreements 0
+P2  grow-vs-mask disagreements 0
+P3  runs-vs-mask disagreements 0
+P4  count != 2^n 0
+P5  expansion failures 0
+P6  duplicate entries 0
+P7  malformed numbers 0
+P8  length-identity failures 0
+P9  mask-bijection failures 0
+P10 prefix-induction failures 0
+P11 reversal-symmetry failures 0
+P12 relabel-commutes mask failures 0
+P12 relabel-commutes back failures 0
+P12 relabel-commutes grow failures 0
+P12 relabel-commutes runs failures 0
+P13 run-census failures 0
+DIFFERENTIAL OK

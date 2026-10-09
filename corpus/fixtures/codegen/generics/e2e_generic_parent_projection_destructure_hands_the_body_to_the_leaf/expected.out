@@ -28,8 +28,8 @@ nodrop
   b1/2
 nodrop end
 wildcard
-dR48/t48/1
   b0
+dR48/t48/1
 wildcard end
 nested
   b49/1/2

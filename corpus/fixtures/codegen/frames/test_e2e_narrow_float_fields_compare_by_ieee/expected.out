@@ -1,0 +1,6 @@
+f32-negzero=true
+f32-nan=false
+f16-eq=true
+f16-ne=false
+bf16-eq=true
+bf16-ne=false

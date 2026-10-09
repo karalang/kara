@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: '@\"Ordering.is_lt\"'"
 bucket = "mir-gap:runtime: in main at bbN[term]: call of unknown function Ordering.is_lt"
-classified_with = "30baabfe7"
+classified_with = "0982ac954+local"
 model_rev = "7b8ab2eb"

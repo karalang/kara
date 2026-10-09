@@ -1,0 +1,5 @@
+H { u: A { n: 1 } }
+H { u: T(1, 2) }
+H { u: S { s: hi } }
+H { u: Z }
+G { u: cue }

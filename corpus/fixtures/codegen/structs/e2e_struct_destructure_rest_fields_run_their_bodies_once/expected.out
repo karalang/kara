@@ -1,23 +1,23 @@
 local_a
-  dR2
   mid
   dR1
+  dR2
   v=1
 local_ab
-  dR12
   mid
   dR11
   dR10
+  dR12
   v=21
 local_all_rest
+  mid
   dR21
   dR20
-  mid
   v=1
 local_wild
-  dR31
   mid
   dR30
+  dR31
   v=30
 lit_a
   dR41
@@ -35,18 +35,18 @@ call_a
   dR60
   v=60
 param_a
-  dR71
   mid
   dR70
+  dR71
   v=1
 view_a
-  dR80
   mid
   dR90
+  dR80
   v=90
 view_w
-  dR82
   mid
   dR92
+  dR82
   v=92
 end

@@ -1,9 +1,9 @@
 rd0
 dR1/tag-value-1
 dR0/tag-value-0
-dR2/tag-value-2
 rb0
 dR3/tag-value-3
+dR2/tag-value-2
 got5/tag-value-5
 dR5/tag-value-5
 rd4
@@ -13,9 +13,9 @@ dR6/tag-value-6
 rd10
 dR11/tag-value-11
 dR10/tag-value-10
-dR12/tag-value-12
 rb10
 dR13/tag-value-13
+dR12/tag-value-12
 got15/tag-value-15
 dR15/tag-value-15
 rd14
@@ -25,9 +25,9 @@ dR16/tag-value-16
 rd20
 dR21/tag-value-21
 dR20/tag-value-20
-dR22/tag-value-22
 rb20
 dR23/tag-value-23
+dR22/tag-value-22
 got25/tag-value-25
 dR25/tag-value-25
 rd24

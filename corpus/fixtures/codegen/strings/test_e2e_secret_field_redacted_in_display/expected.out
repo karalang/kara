@@ -1,0 +1,3 @@
+Config { name: alice, token: <redacted> }
+Config { name: alice, token: <redacted> }
+cfg=Config { name: alice, token: <redacted> }

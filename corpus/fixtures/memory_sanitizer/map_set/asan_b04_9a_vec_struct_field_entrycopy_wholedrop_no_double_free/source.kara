@@ -6,7 +6,7 @@ struct AttrN { path: Vec[String], args: Vec[ArgN], string_value: Option[String] 
 // Entry-copy-THEN-whole-drop: `a` is entry-copied, `a.args.len()` read, then
 // the copy is WHOLE-dropped at return while the caller's for-loop element `a`
 // also drops. A shallow field bit-copy => the same element buffers freed twice.
-fn count(a: own AttrN) -> i64 { a.args.len() }
+fn count(a: AttrN) -> i64 { a.args.len() }
 
 fn build() -> Vec[AttrN] {
     let mut v: Vec[AttrN] = Vec.new();

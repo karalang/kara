@@ -1,0 +1,12 @@
+[[1,1],2,[1,1]] -> [1,1,2,1,1]
+[1,[4,[6]]] -> [1,4,6]
+[] -> []
+[[]] -> []
+[[],[[]],7] -> [7]
+[-3,[-4,[5,[-6]]]] -> [-3,-4,5,-6]
+[[[[[[[[[[9]]]]]]]]]] -> [9]
+[0,[0,[0]],1000000] -> [0,0,0,1000000]
+seed 1, 10 members, depth up to 4: 38 chars, 9 integers, sum -70, hash 601136191
+seed 7, 1000 members, depth up to 8: 8528 chars, 1936 integers, sum 5690, hash 84801442
+seed 42, 20000 members, depth up to 12: 179395 chars, 39899 integers, sum -5041, hash 110894613
+seed 2026, 50000 members, depth up to 30: 450750 chars, 99775 integers, sum -41133, hash 23090003

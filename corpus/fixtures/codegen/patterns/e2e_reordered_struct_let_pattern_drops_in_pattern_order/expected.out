@@ -20,14 +20,14 @@ desugared_control
   dR11
   v=21
 rest_swapped
-  dR13
   dR12
   dR14
+  dR13
   v=26
 wild_mixed
-  dR16
   dR15
   dR17
+  dR16
   v=32
 scalar_between
   dR18

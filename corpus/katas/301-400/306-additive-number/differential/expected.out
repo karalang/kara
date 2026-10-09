@@ -1,0 +1,12 @@
+cases 8896
+  of which additive 1820
+  arm E (all cuts) run on 8896
+  arm D (i64) answered 8896
+P1 arm disagreements 0
+P2 constructed-positive rejections 0
+P3 short-string acceptances 0
+P4 all-zero rejections 0
+P5 truncation failures 0
+P6 extension failures 0
+P7 i64 disagreements 0
+DIFFERENTIAL OK

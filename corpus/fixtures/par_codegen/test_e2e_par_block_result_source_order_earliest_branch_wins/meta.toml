@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "expected.out from design.md Failure: only `?` in a branch makes an error exit, so a branch whose `let` holds an `Err` value does not change the join, which is `Ok(7)`; legacy overrode the join with the Err (Thread B, 2026-10-09)"
 bucket = "mir-gap:a call with no resolved callee"
-classified_with = "30baabfe7"
+classified_with = "0982ac954+local"
 model_rev = "7b8ab2eb"

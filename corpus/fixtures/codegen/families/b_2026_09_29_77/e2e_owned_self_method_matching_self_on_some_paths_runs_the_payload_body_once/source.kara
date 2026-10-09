@@ -10,7 +10,7 @@ impl E {
   fn t2(own self, c: bool) -> i64 { if c { let k = match self { E.A(s) => s.id, E.B(n) => n }; return k }; return 0 }
   fn t3(own self, c: bool) -> i64 { if c { return match self { E.A(s) => s.id, E.B(n) => n } }; return 0 }
   fn e1(own self, c: bool) -> i64 { if c { return 0 }; match self { E.A(s) => s.id, E.B(n) => n } }
-  fn e2(own self, c: bool) -> i64 { if c { if let E.A(s) = self { return s.id } }; return 0 }
+  fn e2(self, c: bool) -> i64 { if c { if let E.A(s) = self { return s.id } }; return 0 }
   fn e3(own self, c: bool) -> i64 { let k = if c { match self { E.A(s) => s.id, E.B(n) => n } } else { 7 }; return k }
   fn h2(own self, c: bool) -> i64 { if c { return self.m() }; match self { E.A(s) => s.id, E.B(n) => n } }
 }

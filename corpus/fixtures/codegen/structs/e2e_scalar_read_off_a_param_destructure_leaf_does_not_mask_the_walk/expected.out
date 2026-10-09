@@ -9,24 +9,24 @@ full_let
   dR3
   v=7
 rest_ret
-  dR6
   mid
   dR5
+  dR6
   v=5
 wild_ret
-  dR8
   mid
   dR7
+  dR8
   v=7
 rest_len
-  dR10
   mid
   dR9
+  dR10
   v=2
 rest_none
-  dR12
   mid
   dR11
+  dR12
   v=1
 whole_b
   mid

@@ -14,7 +14,7 @@ fn show(h: own Ho[R]) { match h { Ho.Full(r) => println(f"r{r.id}"), Ho.Empty =>
 fn shows(h: own Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}"), Ho.Empty => println("e") } }
 struct Hm { g: MoR }
 struct Gh[T] { g: Ho[T] }
-fn eat(h: own H) { println("eat") }
+fn eat(h: H) { println("eat") }
 fn v01() { let mut v: Vec[Ho[R]] = Vec.new(); v.push(Ho.Full(R { id: 7 })); v.push(Ho.Empty); v.push(Ho.Full(R { id: 8 })); println(f"n{v.len()}"); }
 fn v02() { let mut v: Vec[Ho[W]] = Vec.new(); v.push(Ho.Full(W { id: 7, n2: 1 })); v.push(Ho.Empty); println(f"n{v.len()}"); }
 fn v03() { let mut v: Vec[Ho[S]] = Vec.new(); v.push(Ho.Full(mks(7))); v.push(Ho.Empty); println(f"n{v.len()}"); }

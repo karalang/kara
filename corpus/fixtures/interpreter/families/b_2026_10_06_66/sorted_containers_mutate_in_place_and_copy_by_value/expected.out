@@ -1,0 +1,9 @@
+b=2 c=3
+s=1 t=2
+c=3 h.m=4 t=2 h.s=3
+h.m=4 h2.m=3 h.s=3 h2.s=2
+c after bump=4 takes=4
+t=2 v0=3
+v0=3 w0=4
+h.m=0 h2.m=3
+floor 7=5

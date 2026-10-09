@@ -47,7 +47,7 @@ fn pick(hi: bool) -> impl Named[Label = String] {
 
 // The existential flows INTO a generic (argument-position `impl Trait`),
 // which must monomorphize on a type the call site cannot name.
-fn shout(x: own impl Named[Label = String]) -> String { x.label() }
+fn shout(x: impl Named[Label = String]) -> String { x.label() }
 
 struct Factory { seed: i64 }
 impl Factory {
