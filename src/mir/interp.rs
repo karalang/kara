@@ -843,6 +843,13 @@ impl<'a> Interp<'a> {
                     let x = self.slot(&base.child(lo + i))?;
                     out.push(self.clone_value(&x, e)?);
                 }
+                // A Vec passed by value is consumed: its elements were
+                // cloned, so it drops here.
+                if let (Value::Box(_), Some(&t)) = (view, arg_tys.first()) {
+                    if matches!(self.tys.kind(t), TyKind::Intrinsic(IntrinsicTy::Vec(_))) {
+                        self.drop_value(view.clone(), t)?;
+                    }
+                }
                 Ok(self.alloc_box(ty_name, Value::Agg(out)))
             }
             ("Vec", _) if VEC_MORE_METHODS.contains(&method) => {

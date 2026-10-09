@@ -9982,6 +9982,24 @@ fn main() {
         assert_eq!(r.output, "[(1, 10)]\nSome((5, 50)) None Some((9, 90)) None Some((1, 10)) Some((9, 90))\n[5050, 9090]\ntrue false true true q Q Some(7)\n[3, 1, 2] Some(1) None\nabc x  Some(-c) [a, b, c] bba [x, y] 5\n[1, 2, 3, 4] [1] [2, 3]\n3 26 10\n");
     }
 
+    /// `Vec.from_slice` of a Vec passed by value clones its elements and
+    /// drops the Vec (a leak would fail the run).
+    #[test]
+    fn vec_from_slice_consumes_an_owned_vec() {
+        let src = r#"
+fn main() {
+    let mut src: Vec[String] = Vec.new();
+    src.push(String.from("alpha"));
+    src.push(String.from("beta"));
+    let dst: Vec[String] = Vec.from_slice(src);
+    println(f"{dst[0]} {dst[1]}");
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(r.output, "alpha beta\n");
+    }
+
     /// Float math natives compute at the receiver's width, and float
     /// literals and results round to their type.
     #[test]
