@@ -282,7 +282,7 @@ fn print_summary(summary: ref Summary, logs: ref Vec[ParsedLog]) {
 
     println("-- components --");
     for (name, count) in summary.component_counts {
-        let mut samples = summary.component_latencies.get(name).unwrap_or(Vec.new());
+        let mut samples = summary.component_latencies.get(name).cloned().unwrap_or(Vec.new());
         samples.sort();
         let p50 = percentile(samples, 50);
         let p95 = percentile(samples, 95);

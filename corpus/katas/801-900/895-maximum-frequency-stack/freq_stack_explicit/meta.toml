@@ -10,6 +10,7 @@ legacy_exit = 0
 rules = []
 backends = []
 env = {}
+note = "source edited: `.cloned()` after `Map.get` at line(s) 38, since `Map.get` returns `Option[ref V]` (docs/library/collections.md; Thread A's 7902786668). Legacy has no `Option.cloned`, so legacy.out stays the oracle. (kata thread, 2026-10-09)"
 bucket = "b->a"
 classified_with = "9c612aba2+local"
 fixed_by_classify = true

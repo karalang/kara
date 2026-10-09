@@ -4,13 +4,13 @@ expect = "stdout"
 exit = 0
 tags = ["closure"]
 class = "e"
-expected_from = "spec"
+expected_from = "assert"
 legacy_backend = "legacy-interp"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-note = "§9.1: a closure copies a `Copy` place it captures, so the filter keeps reading lim = 5; legacy reads the live variable. (kata thread, 2026-10-09) e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
 classified_with = "d43d40485"
 model_rev = "f3a17c7c"
+v2_reject = "core-semantics §9.1 (Gowtham's Borrow ruling, ddae1ab1cb) and §5.6: the adaptor's closure captures the Copy local by `ref`, and the loop body writes it while the closure is live (kata thread, 2026-10-09)"

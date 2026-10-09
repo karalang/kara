@@ -11,14 +11,14 @@ fn clone_bfs(g: frozen Node) -> Node {
     while qi < queue.len() {
         let curr = queue[qi as u64];
         qi = qi + 1;
-        let curr_clone = visited.get(curr.val).unwrap();
+        let curr_clone = visited.get(curr.val).cloned().unwrap();
         for nb in curr.neighbors {
             if let None = visited.get(nb.val) {
                 let fresh = Node { val: nb.val, neighbors: Vec.new() };
                 let _ = visited.insert(nb.val, fresh);
                 queue.push(nb);
             }
-            let nb_clone = visited.get(nb.val).unwrap();
+            let nb_clone = visited.get(nb.val).cloned().unwrap();
             curr_clone.neighbors.push(nb_clone);
         }
     }

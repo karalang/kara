@@ -13,3 +13,4 @@ env = {}
 bucket = "mir-gap:move check"
 classified_with = "d43d40485"
 model_rev = "f3a17c7c"
+v2_reject = "design.md: a value of a function type is move-only, so the program uses the closure after it moved (drop schedule thread's triage) (kata thread, 2026-10-09)"

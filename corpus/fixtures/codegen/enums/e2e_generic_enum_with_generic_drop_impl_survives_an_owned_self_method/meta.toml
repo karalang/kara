@@ -16,3 +16,4 @@ fixed_by_classify = true
 model_note = "move out of the payload of a type with a Drop body (C3)"
 model_rev = "f3a17c7c"
 model_verdict = "V2-REJECT"
+v2_reject = "core-semantics C4 / §3.6: `match self { G.X(t) => .. }` moves a payload out of a type with a Drop body (kata thread, 2026-10-09)"

@@ -13,3 +13,4 @@ env = {}
 bucket = "mir-gap:borrow check"
 classified_with = "d43d40485"
 model_rev = "f3a17c7c"
+v2_reject = "core-semantics §8.2: the place is evaluated first, so the `mut ref` from `or_insert` is live while the value reads the map; legacy's output relies on value-first order (kata thread, 2026-10-09)"

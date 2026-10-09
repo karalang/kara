@@ -148,7 +148,7 @@ impl LruCache {
     }
 
     fn get(mut ref self, key: String) -> Option[i64] {
-        let found = self.index.get(key);
+        let found = self.index.get(key).cloned();
         match found {
             Some(node) => {
                 self.stats.hits += 1;
@@ -163,14 +163,14 @@ impl LruCache {
     }
 
     fn peek(ref self, key: String) -> Option[i64] {
-        match self.index.get(key) {
+        match self.index.get(key).cloned() {
             Some(node) => Some(node.value),
             None => None,
         }
     }
 
     fn put(mut ref self, key: own String, value: i64) {
-        match self.index.get(key) {
+        match self.index.get(key).cloned() {
             Some(node) => {
                 node.value = value;
                 self.stats.updates += 1;

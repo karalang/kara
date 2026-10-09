@@ -30,14 +30,14 @@ fn clone_graph(root: Option[Node]) -> Option[Node] {
                     // visible to every other handle. (Pre-refcount-fix
                     // this was re-fetched per neighbor to dodge a
                     // shared-struct aliasing hang.)
-                    let curr_clone = visited.get(curr.val).unwrap();
+                    let curr_clone = visited.get(curr.val).cloned().unwrap();
                     for nb in curr.neighbors.iter() {
                         if let None = visited.get(nb.val) {
                             let fresh = Node { val: nb.val, neighbors: Vec.new() };
                             let _ = visited.insert(nb.val, fresh);
                             queue.push_back(nb);
                         }
-                        let nb_clone = visited.get(nb.val).unwrap();
+                        let nb_clone = visited.get(nb.val).cloned().unwrap();
                         curr_clone.neighbors.push(nb_clone);
                     }
                 } else {
