@@ -34,6 +34,7 @@ The lang-item traits `Iterator` and `Iterable`, and the way `for` uses them, are
 | `inspect` | `fn inspect[F: MutFn(Self.Item)](own self, f: own F) -> impl Iterator[Item = Self.Item]` | Calls `f` on each item as it passes |
 | `scan` | `fn scan[A, U, F: MutFn(own A, own Self.Item) -> Option[(A, U)]](own self, init: own A, f: own F) -> impl Iterator[Item = U]` | Threads a state: `f` returns the next state and the item to yield. Stops at the first `None` |
 | `by_ref` | `fn by_ref(mut ref self) -> impl Iterator[Item = Self.Item]` | Borrows the iterator instead of consuming it; see below |
+| `cloned` | `fn cloned[T: Clone](own self) -> impl Iterator[Item = T] where Self.Item = ref T` | An owned copy of each viewed item. For a `Copy` `T` it copies, and is only needed where §5.10 does not already read the item |
 
 `filter`, `take_while`, `skip_while`, `find`, `position` and `partition` lend each item to the predicate (a bare `Self.Item`), so the test does not consume it; only items that pass are yielded by value.
 
@@ -54,10 +55,10 @@ let rest: Vec[Str] = words.collect();   // the words after "--"
 | Method | Signature | Notes |
 |---|---|---|
 | `fold` | `fn fold[A](own self, init: own A, f: own MutFn(own A, own Self.Item) -> A) -> A` | |
-| `reduce` | `fn reduce(own self, f: own MutFn(own Self.Item, own Self.Item) -> Self.Item) -> Option[Self.Item]` | `None` if empty |
+| `reduce` | `fn reduce(own self, f: own MutFn(own V, own V) -> V) -> Option[V]` | `None` if empty. `V` is defined below |
 | `count` | `fn count(own self) -> i64` | Number of items |
-| `sum` | `fn sum(own self) -> Self.Item` | Numeric items; 0 if empty. Overflow follows the item type's arithmetic |
-| `product` | `fn product(own self) -> Self.Item` | Numeric items; 1 if empty |
+| `sum` | `fn sum(own self) -> V` | Numeric items; 0 if empty. Overflow follows the item type's arithmetic |
+| `product` | `fn product(own self) -> V` | Numeric items; 1 if empty |
 | `min` | `fn min(own self) -> Option[Self.Item] where Self.Item: Ord` | `None` if empty |
 | `max` | `fn max(own self) -> Option[Self.Item] where Self.Item: Ord` | `None` if empty |
 | `min_by` | `fn min_by(own self, cmp: own MutFn(Self.Item, Self.Item) -> Ordering) -> Option[Self.Item]` | |
@@ -71,11 +72,13 @@ let rest: Vec[Str] = words.collect();   // the words after "--"
 | `position` | `fn position(own self, pred: own MutFn(Self.Item) -> bool) -> Option[i64]` | Index of the first item that passes |
 | `last` | `fn last(own self) -> Option[Self.Item]` | |
 | `nth` | `fn nth(own self, n: i64) -> Option[Self.Item]` | The item at index `n` |
-| `collect` | `fn collect[C: FromIterator[Self.Item]](own self) -> C` | See below |
+| `collect` | `fn collect[C: FromIterator[V]](own self) -> C` | See below |
 | `for_each` | `fn for_each(own self, f: own MutFn(own Self.Item))` | |
 | `partition` | `fn partition(own self, pred: own MutFn(Self.Item) -> bool) -> (Vec[Self.Item], Vec[Self.Item])` | Items that pass, then items that fail |
 
 A terminal method calls its function before it returns and keeps nothing, so it takes an ordinary non-escaping function parameter. The number of items is `count()`; iterators have no `len`.
+
+**Items read through a reference.** `sum`, `product`, `reduce` and `collect` build a new value out of the items, so they read each item as a value (core-semantics.md §5.10). Their item type `V` is `T` when `Self.Item` is `ref T` or `mut ref T` and `T` is `Copy`, and `Self.Item` otherwise. So over a `Vec[i64]`, `v.iter().sum()` is an `i64` and needs no annotation, and `let w: Vec[i64] = v.iter().collect()` works. The other methods keep `Self.Item`: `v.iter().max()` is an `Option[ref i64]`, a view of the largest element, and `v.iter().max() ?? 0` is an `i64` (design.md, the `??` operator). For items that are not `Copy`, write `.cloned()` first: `let copy: Vec[String] = names.iter().cloned().collect()`. An item that is a tuple of references, such as a map's `(ref K, ref V)`, is not read this way; build the tuple you want with `map`: `m.iter().map(|(k, v)| (*k, *v))` for `Copy` keys and values.
 
 ## `collect` and `FromIterator`
 
