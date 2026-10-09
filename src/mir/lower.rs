@@ -122,7 +122,20 @@ pub fn lower_program<'a>(
             .items
             .iter()
             .filter_map(|i| match i {
-                Item::DistinctType(d) if d.refinement.is_some() => Some(d.name.clone()),
+                Item::DistinctType(d)
+                    if d.generic_params
+                        .as_ref()
+                        .is_none_or(|g| g.params.is_empty()) =>
+                {
+                    Some((d.name.clone(), d.refinement.as_ref()?))
+                }
+                Item::TypeAlias(t)
+                    if t.generic_params
+                        .as_ref()
+                        .is_none_or(|g| g.params.is_empty()) =>
+                {
+                    Some((t.name.clone(), t.refinement.as_ref()?))
+                }
                 _ => None,
             })
             .collect(),
@@ -371,9 +384,9 @@ struct Lcx<'a> {
     tc: &'a TypeCheckResult,
     /// The checked source text, for `dbg(e)`'s rendering of `e`.
     source: &'a str,
-    /// The distinct types with a `where` predicate, which their
-    /// constructors would have to check.
-    refined: FxHashSet<String>,
+    /// The `where` predicate of each refinement and distinct type that has
+    /// one, which making a value of it checks.
+    refined: FxHashMap<String, &'a Expr>,
     /// `ref name` pattern bindings, by the binding's span.
     ref_bindings: &'a FxHashSet<SpanKey>,
     /// The types of `escaping Fn(..)` parameters, by span.
@@ -1989,6 +2002,138 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// End the current block with a terminator that does not fall through,
     /// and continue in a fresh (unreachable) block.
+    /// `inner as T` into `dest`, `T` being `e`'s type.
+    fn cast_into(&mut self, e: &'a Expr, inner: &'a Expr, dest: Place) -> R<()> {
+        let from = self.expr_ty(inner)?;
+        let to = self.expr_ty(e)?;
+        let o = self.expr_operand(inner)?;
+        let kind = {
+            let tcx = self.tys().tcx();
+            let int = |t| matches!(tcx.kind(t), HK::Int(_) | HK::UInt(_));
+            let float = |t| matches!(tcx.kind(t), HK::Float(_));
+            let (char_k, bool_k) = (|t| tcx.kind(t) == HK::Char, |t| tcx.kind(t) == HK::Bool);
+            match (int(from) || from == to, float(from), int(to), float(to)) {
+                _ if from == to => None,
+                _ if char_k(to) && matches!(tcx.kind(from), HK::UInt(UIntSize::U8)) => {
+                    Some(CastKind::IntToChar)
+                }
+                _ if char_k(from) && int(to) => Some(CastKind::CharToInt),
+                _ if bool_k(from) && int(to) => Some(CastKind::BoolToInt),
+                (true, _, true, _) => Some(CastKind::IntToInt),
+                (true, _, _, true) => Some(CastKind::IntToFloat),
+                (_, true, true, _) => Some(CastKind::FloatToInt),
+                (_, true, _, true) => Some(CastKind::FloatToFloat),
+                _ => return self.unsupported(e.span, "this cast"),
+            }
+        };
+        match kind {
+            None => self.assign(dest, Rvalue::Use(o)),
+            Some(k) => self.assign(dest, Rvalue::Cast(k, o, to)),
+        }
+        Ok(())
+    }
+
+    /// Panics unless the value in `v` satisfies the `where` predicate of
+    /// the refinement or distinct type `name`, when it has one: the
+    /// predicate, with `self` the value.
+    fn require_refinement(&mut self, name: &str, v: Local) -> R<()> {
+        let Some(ok) = self.refinement_holds(name, v)? else {
+            return Ok(());
+        };
+        let pass = self.b.new_block();
+        let fail = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(ok)),
+                targets: SwitchTargets::if_else(pass, fail),
+            },
+            fail,
+        );
+        self.diverge(TerminatorKind::Abort {
+            reason: AbortReason::Panic,
+        });
+        self.cur = pass;
+        Ok(())
+    }
+
+    /// Whether the value in `v` satisfies the `where` predicate of `name`,
+    /// as a `bool` local; `None` when `name` has no predicate.
+    fn refinement_holds(&mut self, name: &str, v: Local) -> R<Option<Local>> {
+        let Some(&pred) = self.lcx.refined.get(name) else {
+            return Ok(None);
+        };
+        let bool_t = self.tys().bool();
+        let ok = self.temp(bool_t);
+        let saved = self.self_local.replace(v);
+        let c = self.operand_at(pred, bool_t);
+        self.self_local = saved;
+        let c = c?;
+        self.assign(Place::local(ok), Rvalue::Use(c));
+        Ok(Some(ok))
+    }
+
+    /// `T.try_from(x)` of a refinement `T`: `Ok(x)` when `x` satisfies
+    /// `T`'s predicate, else `Err` of the message saying it does not.
+    fn refinement_try_from(
+        &mut self,
+        e: &'a Expr,
+        name: &str,
+        arg: &'a Expr,
+        dest: Place,
+    ) -> R<()> {
+        let rt = self.expr_ty(e)?;
+        let tcx = self.tys().tcx();
+        let idx = |want: &str| {
+            tcx.adt_of(rt)
+                .and_then(|(adt, _)| adt.variants.iter().position(|v| v.name == want))
+                .map(|i| i as u32)
+        };
+        let (Some(ok_idx), Some(err_idx)) = (idx("Ok"), idx("Err")) else {
+            return self.unsupported(e.span, &format!("`{name}.try_from` of no `Result`"));
+        };
+        let (Some(pt), Some(et)) = (
+            tcx.field_ty(rt, Some(ok_idx), 0),
+            tcx.field_ty(rt, Some(err_idx), 0),
+        ) else {
+            return self.unsupported(e.span, &format!("`{name}.try_from` of no `Result`"));
+        };
+        // A distinct type's value wraps its base's; a refinement's is it.
+        let distinct = self.distinct_base(pt);
+        let v = self.temp_of(arg, distinct.unwrap_or(pt))?;
+        let payload = |s: &mut Self| {
+            if distinct.is_none() {
+                return Operand::Move(Place::local(v));
+            }
+            let w = s.temp(pt);
+            s.wrap_distinct(pt, v, Place::local(w));
+            Operand::Move(Place::local(w))
+        };
+        let Some(ok) = self.refinement_holds(name, v)? else {
+            let op = payload(self);
+            self.build_variant(rt, ok_idx, vec![op], dest);
+            return Ok(());
+        };
+        let (pass, fail, join) = (self.b.new_block(), self.b.new_block(), self.b.new_block());
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(ok)),
+                targets: SwitchTargets::if_else(pass, fail),
+            },
+            pass,
+        );
+        let op = payload(self);
+        self.build_variant(rt, ok_idx, vec![op], dest.clone());
+        self.goto(join);
+        self.cur = fail;
+        let msg = self.temp(et);
+        let text = self.static_str(&format!("value does not satisfy refinement `{name}`"));
+        self.call_native("String.from", vec![text], Place::local(msg));
+        self.build_variant(rt, err_idx, vec![Operand::Move(Place::local(msg))], dest);
+        self.goto(join);
+        self.cur = join;
+        Ok(())
+    }
+
     fn diverge(&mut self, kind: TerminatorKind) {
         let next = self.b.new_block();
         self.goto_with(kind, next);
@@ -3907,34 +4052,24 @@ impl<'l, 'a> Bx<'l, 'a> {
             ExprKind::RepeatLiteral { value, count, .. } => {
                 self.repeat_literal(e, value, count, dest)
             }
-            ExprKind::Cast { expr: inner, .. } => {
-                let from = self.expr_ty(inner)?;
-                let to = self.expr_ty(e)?;
-                let o = self.expr_operand(inner)?;
-                let kind = {
-                    let tcx = self.tys().tcx();
-                    let int = |t| matches!(tcx.kind(t), HK::Int(_) | HK::UInt(_));
-                    let float = |t| matches!(tcx.kind(t), HK::Float(_));
-                    let (char_k, bool_k) =
-                        (|t| tcx.kind(t) == HK::Char, |t| tcx.kind(t) == HK::Bool);
-                    match (int(from) || from == to, float(from), int(to), float(to)) {
-                        _ if from == to => None,
-                        _ if char_k(to) && matches!(tcx.kind(from), HK::UInt(UIntSize::U8)) => {
-                            Some(CastKind::IntToChar)
-                        }
-                        _ if char_k(from) && int(to) => Some(CastKind::CharToInt),
-                        _ if bool_k(from) && int(to) => Some(CastKind::BoolToInt),
-                        (true, _, true, _) => Some(CastKind::IntToInt),
-                        (true, _, _, true) => Some(CastKind::IntToFloat),
-                        (_, true, true, _) => Some(CastKind::FloatToInt),
-                        (_, true, _, true) => Some(CastKind::FloatToFloat),
-                        _ => return self.unsupported(e.span, "this cast"),
-                    }
+            ExprKind::Cast { expr: inner, ty } => {
+                // `x as T` of a refinement `T`: the cast to its base, and a
+                // panic unless the value satisfies `T`'s predicate.
+                let refined = match &ty.kind {
+                    ast::TypeKind::Path(p) => p
+                        .segments
+                        .last()
+                        .filter(|n| self.lcx.refined.contains_key(*n)),
+                    _ => None,
                 };
-                match kind {
-                    None => self.assign(dest, Rvalue::Use(o)),
-                    Some(k) => self.assign(dest, Rvalue::Cast(k, o, to)),
-                }
+                let Some(name) = refined else {
+                    return self.cast_into(e, inner, dest);
+                };
+                let to = self.expr_ty(e)?;
+                let v = self.temp(to);
+                self.cast_into(e, inner, Place::local(v))?;
+                self.require_refinement(name, v)?;
+                self.assign(dest, Rvalue::Use(Operand::Move(Place::local(v))));
                 Ok(())
             }
             ExprKind::While {
@@ -7736,17 +7871,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         if let (Some(name), [a]) = (wraps, args) {
             let tc = self.lcx.tc;
             if tc.distinct_bases.contains_key(name) && !tc.struct_info.contains_key(name) {
-                // The checker records no types inside a `where` predicate,
-                // so the check it asks of the constructor is not built yet
-                // (post-M1, the verification track).
-                if self.lcx.refined.contains(name) {
-                    return self.unsupported(e.span, &format!("`{name}`'s `where` predicate"));
-                }
                 let t = self.expr_ty(e)?;
                 if let Some(bt) = self.distinct_base(t) {
                     let v = self.temp(bt);
                     let op = self.operand_at(&a.value, bt)?;
                     self.assign(Place::local(v), Rvalue::Use(op));
+                    self.require_refinement(name, v)?;
                     self.wrap_distinct(t, v, dest);
                     return Ok(());
                 }
@@ -7759,6 +7889,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         // `V.default()`).
         if let ExprKind::Path { segments, .. } = &callee.kind {
             if let [tp, m] = segments.as_slice() {
+                // `T.try_from(x)` of a refinement or distinct type with a
+                // `where` predicate has no definition: the checker makes it.
+                if let ("try_from", [a], None) = (m.as_str(), args, rc) {
+                    if self.lcx.refined.contains_key(tp) {
+                        return self.refinement_try_from(e, tp, &a.value, dest);
+                    }
+                }
                 if rc.is_none_or(|rc| matches!(rc.callee, Callee::Builtin(_))) {
                     if let Some(t) = self.type_param(tp) {
                         return self.type_param_call(e, t, m, args, dest);
@@ -8886,6 +9023,34 @@ impl<'l, 'a> Bx<'l, 'a> {
             if self.operator_call(owner, method, args, dest.clone())? {
                 return Ok(());
             }
+            if let ("try_from", [a]) = (method, args) {
+                if self.lcx.refined.contains_key(owner) {
+                    return self.refinement_try_from(e, owner, &a.value, dest);
+                }
+            }
+            // `Vec.try_from_slice(src)`, `String.try_with_capacity(n)`: the
+            // constructor they are the fallible companions of, as an `Ok`
+            // (an allocation here does not fail).
+            let base = crate::fallible_alloc::static_companion_base(method);
+            if let Some(base @ ("with_capacity" | "from_slice")) = base {
+                let rt = self.expr_ty(e)?;
+                let tcx = self.tys().tcx();
+                let ok = tcx
+                    .adt_of(rt)
+                    .and_then(|(adt, _)| adt.variants.iter().position(|v| v.name == "Ok"))
+                    .map(|i| i as u32);
+                if let Some((idx, pt)) = ok.and_then(|i| Some((i, tcx.field_ty(rt, Some(i), 0)?))) {
+                    let mut ops = Vec::new();
+                    for a in args {
+                        ops.push(self.expr_operand(&a.value)?);
+                    }
+                    let built = self.temp(pt);
+                    let ty_name = self.tys().display(pt);
+                    self.call_native(&format!("{ty_name}.{base}"), ops, Place::local(built));
+                    self.build_variant(rt, idx, vec![Operand::Move(Place::local(built))], dest);
+                    return Ok(());
+                }
+            }
         }
         match name {
             "println" | "print" | "eprintln" | "eprint" => {
@@ -9224,6 +9389,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Some(Callee::Def(d)) if self.lcx.fns.contains_key(d)
             );
             if !user && self.conversion_call(e, object, dest.clone())? {
+                return Ok(());
+            }
+        }
+        // `n.try_into()` between integers: the target's `try_from`, the
+        // target being the `Ok` payload of the call's `Result`.
+        if method == "try_into" && args.is_empty() && !self.lcx.calls.contains_key(&e.id) {
+            let (st, rt) = (self.expr_ty(object)?, self.expr_ty(e)?);
+            let tcx = self.tys().tcx();
+            let int = |t| matches!(tcx.kind(t), HK::Int(_) | HK::UInt(_));
+            let ok = tcx
+                .adt_of(rt)
+                .and_then(|(adt, _)| adt.variants.iter().position(|v| v.name == "Ok"))
+                .and_then(|i| tcx.field_ty(rt, Some(i as u32), 0));
+            if let Some(tt) = ok.filter(|&tt| int(tt) && int(st)) {
+                let name = format!("{}.try_from", self.tys().display(tt));
+                let op = self.expr_operand(object)?;
+                self.call_native(&name, vec![op], dest);
                 return Ok(());
             }
         }
@@ -13401,6 +13583,34 @@ fn main() {
 "#;
         let out = "4\nSome(42) 25 Q Z\nNaN 5 true bb\nthree3 [] two2 one1\n";
         assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
+    }
+
+    #[test]
+    fn refinements_check_their_predicate_where_a_value_is_made() {
+        let src = r#"
+type Even = i64 where self % 2 == 0;
+type Name = String where self.len() > 0;
+distinct type Odd = i64 where self % 2 == 1;
+fn main() {
+    let e = 4 as Even;
+    println(e + e);
+    println(("bob" as Name).len());
+    match Even.try_from(3) { Ok(v) => println(v), Err(m) => println(m) }
+    match Name.try_from(f"al") { Ok(v) => println(v), Err(m) => println(m) }
+    match Odd.try_from(7) { Ok(v) => println(v.raw()), Err(m) => println(m) }
+    println(Odd(9).raw());
+    let n: i32 = 70000;
+    let r: Result[i16, String] = n.try_into();
+    match r { Ok(v) => println(v), Err(m) => println(m) }
+    let src: Vec[String] = vec![f"x", f"y"];
+    match Vec.try_from_slice(src) { Ok(d) => println(d[1]), Err(_) => println("err") }
+    let two = 1 + n as i64 - 69999;
+    println(Odd(two).raw());
+}
+"#;
+        let out =
+            "8\n3\nvalue does not satisfy refinement `Even`\nal\n7\n9\nout of range for i16\ny\n";
+        assert_eq!(run_source(src), Ok((out.to_string(), Some(101))));
     }
 
     #[test]

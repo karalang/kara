@@ -194,13 +194,36 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 Item::UnionDef(u) => self.check_repr_transparent_union(u),
-                Item::DistinctType(d) => self.check_repr_transparent_distinct(d),
+                Item::DistinctType(d) => {
+                    self.check_repr_transparent_distinct(d);
+                    if let (Some(pred), true) = (
+                        &d.refinement,
+                        d.generic_params
+                            .as_ref()
+                            .is_none_or(|g| g.params.is_empty()),
+                    ) {
+                        let base = self.env.distinct_bases.get(&d.name).cloned();
+                        self.type_refinement_predicate(pred, base);
+                    }
+                }
                 // Variance markers are legal only on stdlib struct/enum
                 // declarations (design.md § Variance) — never on type
                 // aliases. The alias's other checks (bound enforcement,
                 // phase-8 "type alias bounds" entry) live elsewhere.
                 Item::TypeAlias(t) => {
                     self.reject_user_variance_markers(&t.generic_params, false);
+                    if let (Some(pred), true) = (
+                        &t.refinement,
+                        t.generic_params
+                            .as_ref()
+                            .is_none_or(|g| g.params.is_empty()),
+                    ) {
+                        let base = match self.env.type_aliases.get(&t.name) {
+                            Some(Type::Refinement { base, .. }) => Some((**base).clone()),
+                            _ => None,
+                        };
+                        self.type_refinement_predicate(pred, base);
+                    }
                 }
                 // `host fn` boundary-type restrictions (phase-10,
                 // design.md § Host Functions > Parameter and return
@@ -2844,6 +2867,25 @@ impl<'a> super::TypeChecker<'a> {
     /// Each invariant must be `bool`, evaluated with `self` bound to the
     /// struct's own type so `self.field` references resolve. No-op for a
     /// struct without invariants.
+    /// Types a refinement's `where` predicate with `self` its base, so the
+    /// builders that run it at a construction (`x as T`, `T.try_from(x)`,
+    /// a distinct type's constructor) find its types recorded. The
+    /// predicate already passed the constraint-language validation when the
+    /// type was declared; any error typing it raises here is that
+    /// validation's to report, so none is kept.
+    fn type_refinement_predicate(&mut self, pred: &Expr, base: Option<Type>) {
+        let Some(base) = base else {
+            return;
+        };
+        let errors = self.errors.len();
+        self.local_scope = LocalTypeScope::new();
+        self.local_scope.insert("self".to_string(), base.clone());
+        let saved_self = self.current_self_type.replace(base);
+        self.check_expr(pred, &Type::Bool);
+        self.current_self_type = saved_self;
+        self.errors.truncate(errors);
+    }
+
     fn check_struct_invariants(&mut self, s: &StructDef, gp: &[String]) {
         if s.invariants.is_empty() && s.impl_invariants.is_empty() {
             return;

@@ -989,7 +989,9 @@ impl TyCtxt {
                 ))
             }
             Type::Existential { .. } => return Err(LowerError::Unsupported("impl Trait")),
-            Type::Refinement { .. } => return Err(LowerError::Unsupported("refinement types")),
+            // A refined value is its base's: the predicate is checked where
+            // one is made, and the name only gates what checks.
+            Type::Refinement { base, .. } => return lower(base),
         };
         Ok(self.intern(kind))
     }
