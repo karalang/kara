@@ -1159,7 +1159,8 @@ fn par_joins(rr: &ResolveResult) -> FxHashMap<SymbolId, Vec<SymbolId>> {
 enum ScopeEntry<'a> {
     Drop(Place),
     Defer(&'a Block),
-    ErrDefer(&'a Block),
+    /// An `errdefer` body, with `errdefer(e)`'s name and statement node.
+    ErrDefer(&'a Block, Option<(&'a str, NodeId)>),
     /// A local whose storage ends with the scope.
     Storage(Local),
 }
@@ -1901,8 +1902,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                     );
                 }
                 ScopeEntry::Defer(body) => self.defer_body(body)?,
-                ScopeEntry::ErrDefer(body) if error => self.defer_body(body)?,
-                ScopeEntry::ErrDefer(_) => {}
+                ScopeEntry::ErrDefer(body, None) if error => self.defer_body(body)?,
+                ScopeEntry::ErrDefer(body, Some((name, node))) if error => {
+                    self.errdefer_bound(body, name, *node)?
+                }
+                ScopeEntry::ErrDefer(..) => {}
                 ScopeEntry::Storage(l) => {
                     let bb = self.cur;
                     self.b.push(bb, StatementKind::StorageDead(*l));
@@ -1916,6 +1920,28 @@ impl<'l, 'a> Bx<'l, 'a> {
         let t = self.unit();
         let tmp = self.temp(t);
         self.block_into(body, Place::local(tmp))
+    }
+
+    /// `errdefer(e) { .. }` on the error exit: `e` borrows the `Err`
+    /// payload of the value being returned, for the body only.
+    fn errdefer_bound(&mut self, body: &'a Block, name: &str, node: NodeId) -> R<()> {
+        let ret = self.b.local_ty(Local::RETURN_PLACE);
+        let err = self.error_variant(ret);
+        let et = err.and_then(|vi| self.tys().tcx().field_ty(ret, Some(vi), 0));
+        let (Some(vi), Some(et)) = (err, et) else {
+            return self.unsupported(body.span, "an `errdefer` binding outside a `Result`");
+        };
+        let payload = Place::local(Local::RETURN_PLACE)
+            .project(ProjElem::Downcast(VariantIdx(vi)))
+            .field(0, et);
+        self.push_scope();
+        let mut binds = Vec::new();
+        self.bind_one(name, node, payload, et, true, &mut binds);
+        for (l, t) in binds {
+            self.declare(l, t);
+        }
+        self.defer_body(body)?;
+        self.pop_scope()
     }
 
     /// Run the exit sequence of every scope above `depth`, innermost first,
@@ -2241,11 +2267,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.schedule(ScopeEntry::Defer(body));
                 Ok(())
             }
-            StmtKind::ErrDefer {
-                binding: None,
-                body,
-            } => {
-                self.schedule(ScopeEntry::ErrDefer(body));
+            StmtKind::ErrDefer { binding, body } => {
+                let bound = binding.as_deref().map(|n| (n, s.id));
+                self.schedule(ScopeEntry::ErrDefer(body, bound));
                 Ok(())
             }
             // `let x: T;`: storage now, a value at its first assignment
@@ -2410,7 +2434,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         // Left to right: the target's own subexpressions, then the value,
         // then the old value is dropped and the new one stored (D4).
         let pending = self.prepare_place(target)?;
-        let op = self.expr_operand(value)?;
+        // A tuple literal is built at the target's element types, as a
+        // `let`'s is at its annotation's (`b[1] = (7, 8)` into `(i32, i32)`).
+        let op = if matches!(value.kind, ExprKind::Tuple(_)) {
+            let tt = self.expr_ty(target)?;
+            let (_, tt) = self.strip_ty_full(tt);
+            self.operand_at(value, tt)?
+        } else {
+            self.expr_operand(value)?
+        };
         let op = self.settle(op);
         let place = self.finish_place(pending, true)?;
         let (place, t) = self.write_through(place, value)?;
@@ -2977,10 +3009,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         mutable: bool,
     ) -> R<Place> {
         let (base, bt) = self.deref_place(object, mutable)?;
-        // A `Vec` or slice takes a `usize` position; a `Map` its key.
+        // A `Vec`, `VecDeque` or slice takes a `usize` position; a `Map`
+        // its key.
         let (elem, positional) = match self.tys().tcx().kind(bt) {
             HK::Intrinsic {
-                kind: IntrinsicKind::Vec,
+                kind: IntrinsicKind::Vec | IntrinsicKind::VecDeque,
                 args,
             } => (self.tys().tcx().list(args)[0], true),
             HK::Intrinsic {
@@ -5988,7 +6021,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             .scopes
             .iter()
             .flatten()
-            .any(|e| matches!(e, ScopeEntry::ErrDefer(_)));
+            .any(|e| matches!(e, ScopeEntry::ErrDefer(..)));
         let ret_ty = self.b.local_ty(Local::RETURN_PLACE);
         let err_variant = self.error_variant(ret_ty);
         match (has_errdefer, err_variant) {
@@ -7309,8 +7342,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 if let Some((_, idx)) = self.lcx.variant(d) {
                     let t = self.expr_ty(e)?;
                     let mut ops = Vec::new();
-                    for a in args {
-                        ops.push(self.expr_operand(&a.value)?);
+                    for (i, a) in args.iter().enumerate() {
+                        // Each payload at its field's type (`Some((1, 2))`
+                        // as an `Option[(i32, i32)]`).
+                        let ft = self.tys().tcx().field_ty(t, Some(idx), i as u32);
+                        ops.push(match ft {
+                            Some(ft) => self.operand_at(&a.value, ft)?,
+                            None => self.expr_operand(&a.value)?,
+                        });
                     }
                     let kind = self.adt_aggregate(t, idx);
                     self.assign(dest, Rvalue::Aggregate(kind, ops));
@@ -8354,15 +8393,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     None => None,
                 };
+                // No receiver: `G[i64].mk()` names an associated function
+                // through its type, which is all the object is.
                 let recv = match mode {
                     Some(SelfParam::Owned) => {
                         let st = self.expr_ty(object)?;
                         let (_, st) = self.strip_ty_full(st);
-                        PendingRecv::Ready(self.owned_operand(object, st)?)
+                        Some(PendingRecv::Ready(self.owned_operand(object, st)?))
                     }
-                    Some(SelfParam::Ref) => self.recv_place(object, false)?,
-                    Some(SelfParam::MutRef) => self.recv_place(object, true)?,
-                    None => return self.unsupported(e.span, "an associated function as a method"),
+                    Some(SelfParam::Ref) => Some(self.recv_place(object, false)?),
+                    Some(SelfParam::MutRef) => Some(self.recv_place(object, true)?),
+                    None => None,
                 };
                 let mut rest = Vec::with_capacity(args.len());
                 let mut fn_tys: Vec<Option<Ty>> = Vec::with_capacity(args.len());
@@ -8386,7 +8427,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     fn_tys.push(None);
                 }
                 let mut rest = self.finish_args(rest)?;
-                let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
+                let mut ops = match recv {
+                    Some(recv) => vec![self.recv_borrow_after(recv, &mut rest)?],
+                    None => Vec::new(),
+                };
                 ops.extend(rest);
                 let name = if fn_tys.iter().any(Option::is_some) {
                     self.lcx.instance_with_fns(d, inst_args.clone(), fn_tys)
@@ -11540,5 +11584,56 @@ fn main() {
 }
 "#;
         assert_eq!(run_source(src), Ok(("2 11 2\n".to_string(), Some(0))));
+    }
+
+    #[test]
+    fn errdefer_bindings_deque_indexing_and_type_qualified_calls() {
+        let src = r#"
+fn body(n: i64) -> Result[i64, String] {
+    errdefer(e) { println(f"cleanup {e}"); }
+    if n < 0 { return Err(f"neg {n}"); }
+    Ok(n * 2)
+}
+fn caller(n: i64) -> Result[i64, String] {
+    errdefer(e) { println(e.len()); }
+    let v = body(n)?;
+    Ok(v + 1)
+}
+struct G[T] { k: T }
+impl[T] G[T] {
+    fn mk(x: own T) -> G[T] { G { k: x } }
+}
+fn main() {
+    println(caller(3).unwrap_or(0));
+    println(caller(-2).unwrap_or(0));
+    let mut d: VecDeque[String] = VecDeque.new();
+    d.push_back("b");
+    d.push_front("a");
+    d[1] = "c";
+    println(f"{d[0]}{d[1]}");
+    let g = G[i64].mk(5);
+    println(g.k);
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("7\ncleanup neg -2\n6\n0\nac\n5\n".to_string(), Some(0)))
+        );
+    }
+
+    #[test]
+    fn tuple_literals_take_the_slot_types() {
+        let src = r#"
+fn main() {
+    let mut b: Vec[(i32, i32)] = Vec.new();
+    b.push((1, 2));
+    b[0] = (7, 8);
+    let mut u: (u8, i32) = (0, 0);
+    u = (3, 4);
+    let o: Option[(i32, i32)] = Some((5, 6));
+    match o { Some(p) => println(f"{b[0].0} {u.0} {p.1}"), None => {} }
+}
+"#;
+        assert_eq!(run_source(src), Ok(("7 3 6\n".to_string(), Some(0))));
     }
 }

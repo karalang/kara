@@ -205,12 +205,16 @@ impl<'a> super::Resolver<'a> {
             StmtKind::ErrDefer { binding, body } => {
                 self.table.push_scope(ScopeKind::Block);
                 if let Some(name) = binding {
-                    if let Err(e) = self.table.define(
+                    let defined = self.table.define(
                         name.clone(),
                         SymbolKind::Variable { is_mut: false },
                         stmt.span,
                         false,
-                    ) {
+                    );
+                    // The statement is the binding's node: `errdefer(e)` has
+                    // no pattern of its own.
+                    self.record_binding_node(&defined, stmt.id);
+                    if let Err(e) = defined {
                         self.errors.push(e);
                     }
                 }
