@@ -2029,6 +2029,74 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// End the current block with a terminator that does not fall through,
     /// and continue in a fresh (unreachable) block.
+    /// `o?.f`: `f` of the value `o` holds, or `None` when it holds none.
+    /// A field that is itself an `Option` is the result, not wrapped again
+    /// (`u.address?.city` is an `Option[City]`).
+    fn optional_chain(&mut self, e: &'a Expr, object: &'a Expr, field: &str, dest: Place) -> R<()> {
+        let rt = self.expr_ty(e)?;
+        let (base, bt) = self.deref_place(object, false)?;
+        let tcx = self.tys().tcx();
+        let idx = |t: Ty, want: &str| {
+            tcx.adt_of(t)
+                .and_then(|(adt, _)| adt.variants.iter().position(|v| v.name == want))
+                .map(|i| i as u32)
+        };
+        let (Some(some), Some(r_some), Some(r_none)) =
+            (idx(bt, "Some"), idx(rt, "Some"), idx(rt, "None"))
+        else {
+            return self.unsupported(e.span, "`?.` of other than an `Option`");
+        };
+        let Some(st) = tcx.field_ty(bt, Some(some), 0) else {
+            return self.unsupported(e.span, "`?.` of other than an `Option`");
+        };
+        let Some((fidx, ft)) = self.field_of(st, None, field) else {
+            return self.unsupported(e.span, &format!("the field `{field}`"));
+        };
+        let through_ref = base.projection.iter().any(|p| matches!(p, ProjElem::Deref));
+        if through_ref && !self.is_copy(ft) {
+            return self.unsupported(e.span, "`?.` moving out of a borrow");
+        }
+        let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+        let tag = self.temp(isize_t);
+        self.assign(tag, Rvalue::Discriminant(base.clone()));
+        let is_some = self.temp(self.tys().bool());
+        self.assign(
+            is_some,
+            Rvalue::BinaryOp(
+                BinOp::Eq,
+                Operand::Copy(Place::local(tag)),
+                Operand::Const(Const {
+                    ty: isize_t,
+                    kind: ConstKind::Scalar(some as u128),
+                }),
+            ),
+        );
+        let (yes, no, join) = (self.b.new_block(), self.b.new_block(), self.b.new_block());
+        self.goto_with(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::local(is_some)),
+                targets: SwitchTargets::if_else(yes, no),
+            },
+            no,
+        );
+        self.build_variant(rt, r_none, Vec::new(), dest.clone());
+        self.goto(join);
+        self.cur = yes;
+        let q = base
+            .project(ProjElem::Downcast(VariantIdx(some)))
+            .field(0, st)
+            .field(fidx, ft);
+        let op = self.use_place(q, ft);
+        if ft == rt {
+            self.assign(dest, Rvalue::Use(op));
+        } else {
+            self.build_variant(rt, r_some, vec![op], dest);
+        }
+        self.goto(join);
+        self.cur = join;
+        Ok(())
+    }
+
     /// `inner as T` into `dest`, `T` being `e`'s type.
     fn cast_into(&mut self, e: &'a Expr, inner: &'a Expr, dest: Place) -> R<()> {
         let from = self.expr_ty(inner)?;
@@ -3979,11 +4047,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             ExprKind::MapLiteral { entries, .. } => self.map_literal(e, entries, dest),
-            ExprKind::PrefixCollectionLiteral { type_name, items }
-                if type_name == "Vec" || type_name == "Array" =>
-            {
-                self.array_literal(e, items, dest)
-            }
+            ExprKind::PrefixCollectionLiteral { items, .. } => self.prefix_literal(e, items, dest),
             ExprKind::StructLiteral {
                 fields,
                 spread: None,
@@ -4103,6 +4167,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             ExprKind::RepeatLiteral { value, count, .. } => {
                 self.repeat_literal(e, value, count, dest)
             }
+            ExprKind::OptionalChain {
+                object,
+                field_or_method,
+                args: None,
+            } => self.optional_chain(e, object, field_or_method, dest),
             ExprKind::Cast { expr: inner, ty } => {
                 // `x as T` of a refinement `T`: the cast to its base, and a
                 // panic unless the value satisfies `T`'s predicate.
@@ -4429,6 +4498,43 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.assign(arr, agg);
         let name = format!("{}.from_array", self.tys().display(t));
         self.call_native(&name, vec![Operand::Move(Place::local(arr))], dest);
+        Ok(())
+    }
+
+    /// `Set[1, 2]`, `VecDeque[4, 5]`, `SortedMap[]`: a new collection and
+    /// each item added in order (a `Vec` or an array is its literal).
+    fn prefix_literal(&mut self, e: &'a Expr, items: &'a [Expr], dest: Place) -> R<()> {
+        let t = self.expr_ty(e)?;
+        let (kind, targs) = match self.tys().tcx().kind(t) {
+            HK::Intrinsic { kind, args } => (kind, self.tys().tcx().list(args)),
+            HK::Array { .. } => return self.array_literal(e, items, dest),
+            _ => return self.unsupported(e.span, "this collection literal"),
+        };
+        if kind == IntrinsicKind::Vec {
+            return self.array_literal(e, items, dest);
+        }
+        let name = self.tys().display(t);
+        self.call_native(&format!("{name}.new"), Vec::new(), dest.clone());
+        let (add, ret) = match kind {
+            _ if items.is_empty() => return Ok(()),
+            IntrinsicKind::Set | IntrinsicKind::SortedSet => ("insert", self.tys().bool()),
+            IntrinsicKind::VecDeque => ("push_back", self.unit()),
+            _ => return self.unsupported(e.span, "this collection literal"),
+        };
+        let elem = targs[0];
+        for x in items {
+            let v = self.owned_operand(x, elem)?;
+            let v = self.widen(v, elem);
+            let rt = self.tys().tcx().reference(t, true);
+            let r = self.temp(rt);
+            self.assign(r, Rvalue::Ref(BorrowKind::Mut, dest.clone()));
+            let out = self.temp(ret);
+            self.call_native(
+                &format!("{name}.{add}"),
+                vec![Operand::Move(Place::local(r)), v],
+                Place::local(out),
+            );
+        }
         Ok(())
     }
 
@@ -6227,7 +6333,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             ..
         } = &e.kind
         else {
-            return Ok(None);
+            // `for c in s` of a `String` walks its chars.
+            let t = self.expr_ty(e)?;
+            return Ok(matches!(self.strip_ty(t), HK::Str).then_some(e));
         };
         if method != "chars" || !args.is_empty() {
             return Ok(None);
@@ -13767,6 +13875,35 @@ fn main() {
 }
 "#;
         let out = "false\ntrue\ninside\n42\n";
+        assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
+    }
+
+    #[test]
+    fn optional_chains_prefix_literals_and_string_loops() {
+        let src = r#"
+struct City { name: String, zip: i64 }
+struct Address { city: Option[City], tag: String }
+struct User { address: Option[Address] }
+fn mk(i: i64) -> User {
+    if i == 0 { return User { address: None }; }
+    User { address: Some(Address { city: Some(City { name: f"c{i}", zip: i }), tag: f"t" }) }
+}
+fn main() {
+    let u = mk(1);
+    match u.address?.city?.name { Some(n) => println(n), None => println("none") }
+    let w = mk(0);
+    println(w.address?.tag);
+    let s = Set[1, 1, 2];
+    let d = VecDeque[4, 5];
+    let e: VecDeque[i64] = VecDeque[];
+    println(f"{s.len()} {d.len()} {e.len()}");
+    for c in "ab" { print(c); }
+    let t = f"cd";
+    for c in t { print(c); }
+    println("");
+}
+"#;
+        let out = "c1\nNone\n2 2 0\nabcd\n";
         assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
     }
 
