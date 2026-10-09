@@ -1493,6 +1493,7 @@ fn main() -> () {
         let own = crate::ownershipcheck(&program, &tc);
         let mut lowered = crate::mir::lower::lower_program(
             &program,
+            src,
             &tc,
             &defs,
             &res,

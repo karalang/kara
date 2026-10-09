@@ -98,9 +98,11 @@ pub struct Lowered {
 }
 
 /// Lower every instance reachable from `main`.
-pub fn lower_program(
-    program: &ast::Program,
-    tc: &TypeCheckResult,
+#[allow(clippy::too_many_arguments)]
+pub fn lower_program<'a>(
+    program: &'a ast::Program,
+    source: &'a str,
+    tc: &'a TypeCheckResult,
     defs: &ProgramDefs,
     res: &FxHashMap<NodeId, Res>,
     rr: &ResolveResult,
@@ -115,6 +117,7 @@ pub fn lower_program(
     } = hir;
     let mut lcx = Lcx {
         tc,
+        source,
         ref_bindings: &program.ref_binding_spans,
         escaping_fns: &program.escaping_fn_types,
         defs,
@@ -353,6 +356,8 @@ fn impl_arg_positions(b: &ast::ImplBlock) -> Option<Vec<usize>> {
 
 struct Lcx<'a> {
     tc: &'a TypeCheckResult,
+    /// The checked source text, for `dbg(e)`'s rendering of `e`.
+    source: &'a str,
     /// `ref name` pattern bindings, by the binding's span.
     ref_bindings: &'a FxHashSet<SpanKey>,
     /// The types of `escaping Fn(..)` parameters, by span.
@@ -1407,6 +1412,9 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// local, which differs from the checker's when it binds by reference
     /// (`ref name` patterns, `self` under `ref self`).
     fn expr_ty(&mut self, e: &Expr) -> R<Ty> {
+        if self.assert_builtin(e).is_some() {
+            return Ok(self.unit());
+        }
         match &e.kind {
             ExprKind::Identifier(_) => {
                 if let Some(Res::Local(sym)) = self.lcx.res.get(&e.id) {
@@ -8246,6 +8254,20 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(true)
     }
 
+    /// The assertion builtin `e` calls, if any. The checker records the
+    /// call's type as an error; its value is `()`.
+    fn assert_builtin(&self, e: &Expr) -> Option<&'static str> {
+        if !matches!(e.kind, ExprKind::Call { .. }) {
+            return None;
+        }
+        match &self.lcx.calls.get(&e.id)?.callee {
+            Callee::Builtin(n) => ["assert", "assert_eq", "assert_ne"]
+                .into_iter()
+                .find(|a| a == n),
+            _ => None,
+        }
+    }
+
     fn builtin_call(&mut self, e: &'a Expr, name: &str, args: &'a [CallArg], dest: Place) -> R<()> {
         match name {
             "println" | "print" | "eprintln" | "eprint" => {
@@ -8260,6 +8282,88 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.diverge(TerminatorKind::Abort {
                     reason: AbortReason::Panic,
                 });
+                Ok(())
+            }
+            // `assert(c)`, `assert_eq(a, b)`, `assert_ne(a, b)`: a test, and a
+            // panic when it fails.
+            "assert" | "assert_eq" | "assert_ne" => {
+                let bool_t = self.tys().bool();
+                let ok = self.temp(bool_t);
+                match (name, args) {
+                    ("assert", [c, ..]) => {
+                        let c = self.operand_at(&c.value, bool_t)?;
+                        self.assign(Place::local(ok), Rvalue::Use(c));
+                    }
+                    (_, [a, b]) => {
+                        let base = |s: &mut Self, x: &Expr| -> R<Ty> {
+                            let t = s.expr_ty(x)?;
+                            Ok(match s.tys().tcx().kind(t) {
+                                HK::Ref(t) | HK::MutRef(t) => t,
+                                _ => t,
+                            })
+                        };
+                        let (lt, rt) = (base(self, &a.value)?, base(self, &b.value)?);
+                        let int = |s: &Self, t: Ty| {
+                            matches!(s.tys().tcx().kind(t), HK::Int(_) | HK::UInt(_))
+                        };
+                        // Integers of two widths meet at the wider one; any
+                        // other pair of types has no `==`.
+                        if lt != rt && !(int(self, lt) && int(self, rt)) {
+                            return self.unsupported(e.span, &format!("`{name}` of two types"));
+                        }
+                        let ne = name == "assert_ne";
+                        self.binary(
+                            if ne { AstBinOp::NotEq } else { AstBinOp::Eq },
+                            &a.value,
+                            &b.value,
+                            Place::local(ok),
+                        )?;
+                    }
+                    _ => {
+                        return self.unsupported(e.span, &format!("`{name}` without its operands"))
+                    }
+                }
+                let pass = self.b.new_block();
+                let fail = self.b.new_block();
+                self.goto_with(
+                    TerminatorKind::SwitchInt {
+                        discr: Operand::Copy(Place::local(ok)),
+                        targets: SwitchTargets::if_else(pass, fail),
+                    },
+                    fail,
+                );
+                self.diverge(TerminatorKind::Abort {
+                    reason: AbortReason::Panic,
+                });
+                self.cur = pass;
+                let unit = self.unit();
+                self.assign(dest, Rvalue::Use(unit_const(unit)));
+                Ok(())
+            }
+            // `dbg(e)`: `e`'s value, after the library's `dbg` writes
+            // `[file:line] e = <value>` to stderr.
+            "dbg" => {
+                let [a] = args else {
+                    return self.unsupported(e.span, "`dbg` of other than one value");
+                };
+                self.expr_into(&a.value, dest.clone())?;
+                let (off, len) = (a.value.span.offset, a.value.span.length);
+                let text = self
+                    .lcx
+                    .source
+                    .get(off..off + len)
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or("<expr>");
+                let text = self.static_str(text);
+                let line = Operand::Const(Const {
+                    ty: self.tys().tcx().intern(HK::Int(IntSize::I64)),
+                    kind: ConstKind::Scalar(e.span.line as u128),
+                });
+                let t = self.place_type(&dest);
+                let value = self.ref_to(dest, t);
+                let unit = self.unit();
+                let out = self.temp(unit);
+                self.call_native("dbg", vec![line, text, value], Place::local(out));
                 Ok(())
             }
             // `Vector[f32, 4](a, b, c, d)`: the lanes, as an array's
@@ -10558,7 +10662,16 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     let res = crate::node_res::node_res(&r, &defs, 0, None);
     let hir = crate::typed_hir::build(&tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
     let own = crate::ownershipcheck(&program, &tc);
-    let mut lowered = lower_program(&program, &tc, &defs, &res, &r, hir, &own.closure_captures);
+    let mut lowered = lower_program(
+        &program,
+        &src,
+        &tc,
+        &defs,
+        &res,
+        &r,
+        hir,
+        &own.closure_captures,
+    );
     if !lowered.errors.is_empty() {
         return Err(format!("build: {}", lowered.errors.join("; ")));
     }
@@ -12350,6 +12463,39 @@ fn main() {
 
     /// `std.process`'s builder methods are Kāra, appended for a program that
     /// names `Command`; its `#[compiler_builtin]` methods stay native calls.
+    #[test]
+    fn assertions_test_and_panic() {
+        let src = r#"
+fn main() {
+    assert(1 < 2);
+    assert_eq(1 + 1, 2);
+    assert_ne("a", "b");
+    let v = [1, 2];
+    assert_eq(v, [1, 2]);
+    println("ok");
+    assert(false, "boom");
+    println("unreached");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("ok\n".to_string(), Some(101))));
+    }
+
+    #[test]
+    fn dbg_hands_its_value_back_after_the_library_prints_it() {
+        let src = r#"
+fn main() {
+    let x = dbg(2 + 3);
+    println(x);
+}
+"#;
+        let lowered = build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let main = crate::mir::pretty::pretty_body(&lowered.program.bodies["main"], &lowered.tys);
+        assert!(
+            main.contains(r#"dbg(const 3_i64, const "2 + 3", "#),
+            "{main}"
+        );
+    }
+
     #[test]
     fn lane_vectors_lower_as_lanes_with_lane_operators() {
         let src = r#"
