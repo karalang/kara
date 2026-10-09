@@ -19,6 +19,25 @@ use super::types::{
 };
 use crate::ast::narrow_literal_to_i64;
 
+/// `ref t`. A borrow of a borrow is the borrow (design.md: `ref r` of a
+/// `r: ref T` stays `ref T`), so a `ref Self.Item` whose item is `ref T` is a
+/// `ref T`.
+pub(crate) fn ref_of(t: Type) -> Type {
+    match t {
+        Type::Ref(t) | Type::MutRef(t) => Type::Ref(t),
+        t => Type::Ref(Box::new(t)),
+    }
+}
+
+/// `mut ref t`, collapsing a borrow of a borrow as [`ref_of`] does.
+pub(crate) fn mut_ref_of(t: Type) -> Type {
+    match t {
+        Type::Ref(t) => Type::Ref(t),
+        Type::MutRef(t) => Type::MutRef(t),
+        t => Type::MutRef(Box::new(t)),
+    }
+}
+
 /// Structural substitution of `Type::TypeParam(name)` → concrete type
 /// from `subs`. Callers build `subs` externally from concrete types and
 /// use this purely as a tree-walk utility — they do *not* perform type
@@ -76,8 +95,11 @@ pub(crate) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValu
             element: Box::new(substitute_type_params(element, subs)),
             mutable: *mutable,
         },
-        Type::Ref(inner) => Type::Ref(Box::new(substitute_type_params(inner, subs))),
-        Type::MutRef(inner) => Type::MutRef(Box::new(substitute_type_params(inner, subs))),
+        // A borrow of a borrow is the borrow (design.md: `ref r` of a
+        // `r: ref T` stays `ref T`), so a `ref Self.Item` whose item is
+        // `ref T` is a `ref T`.
+        Type::Ref(inner) => ref_of(substitute_type_params(inner, subs)),
+        Type::MutRef(inner) => mut_ref_of(substitute_type_params(inner, subs)),
         Type::Weak(inner) => Type::Weak(Box::new(substitute_type_params(inner, subs))),
         Type::Pointer { is_mut, inner } => Type::Pointer {
             is_mut: *is_mut,

@@ -1700,7 +1700,22 @@ impl<'a> super::TypeChecker<'a> {
         ty_expr: &crate::ast::TypeExpr,
         scope: &[String],
     ) -> Type {
-        let declared = self.lower_type_expr(ty_expr, scope);
+        // On the MIR pipeline the enclosing item's type parameters are in
+        // scope, so `let out: Set[T]` names the parameter even where the
+        // program declares a type `T` of its own; the appended library
+        // source is generic over names a program may use.
+        let declared = if self.library_methods_from_source {
+            let mut scope = scope.to_vec();
+            if let Some(frame) = self
+                .node_generic_frames
+                .get(self.current_generic_frame as usize)
+            {
+                scope.extend(frame.iter().cloned());
+            }
+            self.lower_type_expr(ty_expr, &scope)
+        } else {
+            self.lower_type_expr(ty_expr, scope)
+        };
         match self.current_self_type.clone() {
             Some(st) if !Self::is_self_type(&st) => {
                 self.resolve_assoc_projections(&Self::resolve_self_in_type(declared, &st))
@@ -3505,6 +3520,18 @@ impl<'a> super::TypeChecker<'a> {
                         && !args.is_empty()
                         && !args.iter().all(|a| matches!(a, Type::TypeParam(_)))
                         && !args.iter().all(type_is_fully_concrete) =>
+                {
+                    lowered.clone()
+                }
+                // On the MIR pipeline, a generic impl on a library collection
+                // (`impl[T] Vec[T]`) keeps its args too: the collection's
+                // method table reads its element type off them, so an erased
+                // `Vec` has no `len`.
+                Type::Named { name, args }
+                    if self.library_methods_from_source
+                        && !args.is_empty()
+                        && !matches!(name.as_str(), "Option" | "Result")
+                        && crate::impl_dispatch::impl_head_keeps_type_args(name) =>
                 {
                     lowered.clone()
                 }

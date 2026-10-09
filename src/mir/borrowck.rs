@@ -8,7 +8,15 @@
 //!   receiver when the callee takes `ref self` / `mut ref self`, else of
 //!   every argument (§5.4); a reborrow `&(*r)` keeps `r`'s loans as well
 //!   as its own. MIR does not record receivers, so the caller says which
-//!   callees have one.
+//!   callees have one ([`ResultBorrows`]).
+//! - A result whose references come only through a type parameter or an
+//!   associated type of the receiver's type (`next(mut ref self) ->
+//!   Option[Self.Item]`) borrows what the receiver's value borrows, not
+//!   the receiver's place (§5.4), so two `it.next()` results can be live
+//!   together. Such a body may return no borrow of a place its receiver
+//!   owns: an iterator whose items point into itself is an error. A call
+//!   of a closure through a reference likewise borrows what the closure
+//!   borrows, not the closure.
 //!   Only a value whose type can hold a reference has origins. A call
 //!   with a whole-local `mut ref` argument may store the other arguments'
 //!   borrows into its pointee, so the pointee's origins grow by theirs
@@ -63,14 +71,27 @@ struct Loan {
 /// Per local, the loans its value may hold.
 type Origins = Vec<Vec<bool>>;
 
+/// What a call's result borrows (§5.4).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ResultBorrows {
+    /// What every argument holds.
+    Args,
+    /// What the first argument, a `ref self` / `mut ref self`, holds.
+    Receiver,
+    /// What the value the first argument refers to holds: the result's
+    /// references come only through the receiver type's parameters or
+    /// associated types.
+    ReceiverValue,
+}
+
 /// Checks `body`; the errors name each conflicting access by block and
-/// statement. `has_receiver` says whether a callee takes `ref self` or
-/// `mut ref self` as its first argument. Read-only: `check_moves` is what
-/// marks a body `Checked`.
+/// statement. `has_receiver` says what each callee's result borrows, this
+/// body's own included. Read-only: `check_moves` is what marks a body
+/// `Checked`.
 pub fn check_borrows(
     body: &Body,
     tys: &TyInterner,
-    has_receiver: &dyn Fn(&InstanceId) -> bool,
+    has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
 ) -> Result<(), Vec<String>> {
     let mut errs = read_only_errors(body, tys);
     let loans = collect_loans(body);
@@ -87,6 +108,7 @@ pub fn check_borrows(
     };
     let origins = origins_dataflow(&cx, entry);
     let live_out = liveness(body);
+    let view = body.arg_count > 0 && has_receiver(&body.instance) == ResultBorrows::ReceiverValue;
 
     for (bi, block) in body.blocks.iter().enumerate() {
         let Some(mut o) = origins[bi].clone() else {
@@ -137,14 +159,29 @@ pub fn check_borrows(
                 cx.transfer(&mut o, &block.statements[si].kind, at);
             } else if let TerminatorKind::Return = block.terminator.kind {
                 for (li, loan) in loans.iter().enumerate() {
-                    if o[0][li] && !loan.place.projection.contains(&ProjElem::Deref) {
-                        errs.push(format!(
-                            "{}: the result borrows {}, which this function owns (borrow at {}) [E0509]",
-                            loc(at, n),
-                            show_place(body, tys, &loan.place),
-                            loc(loan.at, body.blocks[loan.at.0].statements.len()),
-                        ));
+                    if !o[0][li] {
+                        continue;
                     }
+                    let derefs = loan
+                        .place
+                        .projection
+                        .iter()
+                        .filter(|p| **p == ProjElem::Deref)
+                        .count();
+                    let owned = if derefs == 0 {
+                        "this function owns"
+                    } else if view && derefs == 1 && loan.place.local.index() == 1 {
+                        "the receiver owns; an item may borrow only what its `ref` fields borrow"
+                    } else {
+                        continue;
+                    };
+                    errs.push(format!(
+                        "{}: the result borrows {}, which {} (borrow at {}) [E0509]",
+                        loc(at, n),
+                        show_place(body, tys, &loan.place),
+                        owned,
+                        loc(loan.at, body.blocks[loan.at.0].statements.len()),
+                    ));
                 }
             }
         }
@@ -167,7 +204,7 @@ pub(super) type LoanSite = (BorrowKind, Place, (usize, usize));
 pub(super) fn loan_liveness(
     body: &Body,
     tys: &TyInterner,
-    has_receiver: &dyn Fn(&InstanceId) -> bool,
+    has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
 ) -> (Vec<LoanSite>, Vec<Vec<Vec<bool>>>) {
     let loans = collect_loans(body);
     let n_locals = body.locals.len();
@@ -330,7 +367,7 @@ struct Cx<'a> {
     body: &'a Body,
     tys: &'a TyInterner,
     loans: &'a [Loan],
-    has_receiver: &'a dyn Fn(&InstanceId) -> bool,
+    has_receiver: &'a dyn Fn(&InstanceId) -> ResultBorrows,
 }
 
 impl Cx<'_> {
@@ -353,6 +390,19 @@ impl Cx<'_> {
     fn operand_origins(&self, o: &Origins, op: &Operand, into: &mut [bool]) {
         if let Some(p) = op.place() {
             self.place_origins(o, p, into);
+        }
+    }
+
+    /// What the values `op`'s references point at may hold: for each loan
+    /// `op` holds of a place not reached through a reference, what that
+    /// place's local holds. A place behind a reference holds only what
+    /// came from outside this body.
+    fn pointee_origins(&self, o: &Origins, op: &Operand, into: &mut [bool]) {
+        let Some(p) = op.place() else { return };
+        for (li, l) in self.loans.iter().enumerate() {
+            if o[p.local.index()][li] && !l.place.projection.contains(&ProjElem::Deref) {
+                self.place_origins(o, &l.place, into);
+            }
         }
     }
 
@@ -457,11 +507,13 @@ impl Cx<'_> {
     /// may store any other argument's borrows into its pointee, as
     /// `group.spawn(closure)` does (§9.5).
     fn transfer_call(&self, o: &mut Origins, func: &Operand, args: &[Operand], dest: &Place) {
-        let receiver = matches!(
-            func,
-            Operand::Const(Const { kind: ConstKind::FnDef(callee), .. })
-                if !args.is_empty() && (self.has_receiver)(callee)
-        );
+        let borrows = match func {
+            Operand::Const(Const {
+                kind: ConstKind::FnDef(callee),
+                ..
+            }) if !args.is_empty() => (self.has_receiver)(callee),
+            _ => ResultBorrows::Args,
+        };
         // Each whole-local `mut ref` argument may store the other operands'
         // borrows into its pointee (§9.5).
         let before = o.clone();
@@ -488,9 +540,24 @@ impl Cx<'_> {
             self.store_through(o, p.local, &others, through_shared);
         }
         let mut val = vec![false; self.loans.len()];
-        let from = if receiver { &args[..1] } else { args };
-        for a in std::iter::once(func).chain(from) {
-            self.operand_origins(o, a, &mut val);
+        // A closure called through a reference: what the closure holds.
+        let callee_ref = func.place().is_some_and(|p| {
+            place_ty(self.body, self.tys, p)
+                .is_ok_and(|pt| matches!(self.tys.kind(pt.ty), TyKind::Ref(_) | TyKind::MutRef(_)))
+        });
+        if callee_ref {
+            self.pointee_origins(o, func, &mut val);
+        } else {
+            self.operand_origins(o, func, &mut val);
+        }
+        match borrows {
+            ResultBorrows::Args => {
+                for a in args {
+                    self.operand_origins(o, a, &mut val);
+                }
+            }
+            ResultBorrows::Receiver => self.operand_origins(o, &args[0], &mut val),
+            ResultBorrows::ReceiverValue => self.pointee_origins(o, &args[0], &mut val),
         }
         clear_moved(o, std::iter::once(func).chain(args));
         self.assign(o, dest, val);
@@ -837,9 +904,9 @@ mod tests {
 
     /// The text form records no receivers: a body named `Type.method`
     /// whose first parameter is a reference is taken to have one.
-    fn receivers(m: &crate::mir::MirModule) -> impl Fn(&InstanceId) -> bool + '_ {
+    fn receivers(m: &crate::mir::MirModule) -> impl Fn(&InstanceId) -> ResultBorrows + '_ {
         |callee| {
-            m.bodies.iter().any(|b| {
+            let recv = m.bodies.iter().any(|b| {
                 b.instance.name == callee.name
                     && b.instance.name.contains('.')
                     && b.arg_count > 0
@@ -847,7 +914,12 @@ mod tests {
                         m.tys.kind(b.locals[1].ty),
                         crate::mir::TyKind::Ref(_) | crate::mir::TyKind::MutRef(_)
                     )
-            })
+            });
+            if recv {
+                ResultBorrows::Receiver
+            } else {
+                ResultBorrows::Args
+            }
         }
     }
 
@@ -1146,7 +1218,7 @@ fn main(_1: ref P) -> ref i64 {
         let m = parse_module(&src).unwrap();
         let main = m.bodies.iter().find(|b| b.instance.name == "main").unwrap();
         assert_eq!(check_borrows(main, &m.tys, &receivers(&m)), Ok(()));
-        let errs = check_borrows(main, &m.tys, &|_| false).unwrap_err();
+        let errs = check_borrows(main, &m.tys, &|_| ResultBorrows::Args).unwrap_err();
         one(&errs, "bb4[term]: drop of _6 while it is borrowed");
     }
 
@@ -1446,10 +1518,15 @@ fn main() -> () {
             })
             .collect();
         let has_receiver = |c: &InstanceId| {
-            methods
+            if methods
                 .iter()
                 .find(|(n, _)| *n == c.name)
                 .is_none_or(|(_, r)| *r)
+            {
+                ResultBorrows::Receiver
+            } else {
+                ResultBorrows::Args
+            }
         };
         let mut refused = Vec::new();
         for body in lowered.program.bodies.values_mut() {

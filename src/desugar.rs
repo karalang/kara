@@ -2835,6 +2835,21 @@ fn is_iterator_chain(e: &Expr) -> bool {
     }
 }
 
+thread_local! {
+    static COLLECT_THROUGH_FROM_ITERATOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with the collect-target rewrite off. The MIR pipeline needs it:
+/// its library source defines `collect` through `FromIterator`, so a
+/// `let s: Set[T] = it.collect()` is typed by the annotation and must reach
+/// the checker as written.
+pub fn with_collect_through_from_iterator<R>(f: impl FnOnce() -> R) -> R {
+    let prev = COLLECT_THROUGH_FROM_ITERATOR.with(|c| c.replace(true));
+    let r = f();
+    COLLECT_THROUGH_FROM_ITERATOR.with(|c| c.set(prev));
+    r
+}
+
 /// Rewrite `let x: T = <chain>.collect();` for a non-`Vec` target `T` into the
 /// accumulate-into-`T` block the language already supports:
 ///
@@ -2886,6 +2901,9 @@ fn desugar_collect_target(ty: &TypeExpr, value: &mut Expr) {
 /// annotation's span, and two call sites recording the same target type under
 /// one key is a harmless agreement rather than a collision.
 fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) {
+    if COLLECT_THROUGH_FROM_ITERATOR.with(|c| c.get()) {
+        return;
+    }
     let Some(target) = collect_target_of(ty) else {
         return;
     };

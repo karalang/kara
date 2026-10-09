@@ -1,0 +1,88 @@
+// The iterators over the library's collections, as Kāra (redesign A2;
+// docs/library/iterators.md).
+//
+// The MIR pipeline appends this file to the program. Each source is a struct
+// that borrows its collection and holds a position, so an iterator over a
+// borrowed collection is a view (core semantics §5.2) and its items are
+// `ref T`. The legacy backends do not read it.
+
+/// The elements of a `Vec`, front to back, each borrowed.
+struct VecIter[T] {
+    v: ref Vec[T],
+    front: i64,
+    back: i64,
+}
+
+impl[T] Iterator for VecIter[T] {
+    type Item = ref T;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        self.v.get(i)
+    }
+}
+
+impl[T] Vec[T] {
+    /// The elements, front to back, each borrowed.
+    fn iter(ref self) -> VecIter[T] {
+        VecIter { v: self, front: 0, back: self.len() }
+    }
+}
+
+impl[T] DoubleEndedIterator for VecIter[T] {
+    fn next_back(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        self.back = self.back - 1;
+        self.v.get(self.back)
+    }
+}
+
+impl[T] FromIterator[T] for Vec[T] {
+    fn from_iter[I: Iterator[Item = T]](iter: own I) -> Vec[T] {
+        let mut it = iter;
+        let mut out: Vec[T] = Vec.new();
+        while let Some(x) = it.next() {
+            out.push(x);
+        }
+        out
+    }
+}
+
+impl FromIterator[char] for String {
+    fn from_iter[I: Iterator[Item = char]](iter: own I) -> String {
+        let mut it = iter;
+        let mut out = String.new();
+        while let Some(c) = it.next() {
+            out.push(c);
+        }
+        out
+    }
+}
+
+impl[K, V] FromIterator[(K, V)] for Map[K, V] {
+    fn from_iter[I: Iterator[Item = (K, V)]](iter: own I) -> Map[K, V] {
+        let mut it = iter;
+        let mut out: Map[K, V] = Map.new();
+        while let Some((k, v)) = it.next() {
+            out.insert(k, v);
+        }
+        out
+    }
+}
+
+impl[T] FromIterator[T] for Set[T] {
+    fn from_iter[I: Iterator[Item = T]](iter: own I) -> Set[T] {
+        let mut it = iter;
+        let mut out: Set[T] = Set.new();
+        while let Some(x) = it.next() {
+            out.insert(x);
+        }
+        out
+    }
+}

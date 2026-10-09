@@ -522,3 +522,183 @@ fn main() {
         "10 4\n",
     );
 }
+
+/// `v.iter()` is the library's `VecIter`, a Kāra struct that borrows the
+/// `Vec`, and the adaptors run over it with items `ref T`.
+#[test]
+fn a_vec_s_iter_is_a_kara_struct_under_the_adaptors() {
+    assert_runs(
+        r#"
+struct Person { name: String, n: i64 }
+fn main() {
+    let v = vec![1, 2, 3, 4];
+    let d = v.iter().map(|x| x * 2).fold(0, |a, b| a + b);
+    println(f"{d} {v.iter().count()}");
+    for (i, x) in v.iter().enumerate() {
+        print(f"{i}:{x} ");
+    }
+    println("");
+    for x in v.iter().rev() {
+        print(f"{x} ");
+    }
+    println("");
+    let ps = vec![Person { name: "a".to_string(), n: 1 }, Person { name: "bb".to_string(), n: 2 }];
+    for p in ps.iter().filter(|p| p.n > 1) {
+        println(f"{p.name}");
+    }
+    let total = ps.iter().map(|p| p.name.len()).fold(0, |a, b| a + b);
+    println(f"{total}");
+    println(f"{v.iter().any(|x| *x == 3)} {v.iter().position(|x| *x == 3) ?? -1}");
+}
+"#,
+        "20 4\n0:1 1:2 2:3 3:4 \n4 3 2 1 \nbb\n3\ntrue 2\n",
+    );
+}
+
+/// `sum`, `reduce` and `collect` produce values, not borrows, when the
+/// items are `ref T` of a `Copy` `T`; `cloned` copies each item.
+#[test]
+fn sum_reduce_cloned_and_collect_read_through_ref_items() {
+    assert_runs(
+        r#"
+fn main() {
+    let v = vec![1, 2, 3, 4];
+    let s: i64 = v.iter().sum();
+    let fs = vec![1.5, 2.25];
+    let fsum: f64 = fs.iter().sum();
+    let m = v.iter().reduce(|a, b| if a > b { a } else { b }) ?? 0;
+    let w: Vec[i64] = v.iter().cloned().filter(|x| *x % 2 == 0).collect();
+    let e: Vec[i64] = v.iter().map(|x| x * 10).collect();
+    println(f"{s} {fsum} {m} {w.len()} {w[1]} {e[3]}");
+}
+"#,
+        "10 3.75 4 2 4 40\n",
+    );
+}
+
+/// `collect` goes through `FromIterator`, so the annotation picks the
+/// collection: `Set`, `Map` and `String` as well as `Vec`.
+#[test]
+fn collect_builds_the_annotated_collection() {
+    assert_runs(
+        r#"
+fn main() {
+    let v = vec![1, 2, 2];
+    let s: Set[i64] = v.iter().collect();
+    println(f"{s.len()}");
+    let ks = vec![1, 2];
+    let m: Map[i64, i64] = ks.iter().map(|k| (*k, *k * 10)).collect();
+    println(f"{m.len()} {m[2]}");
+    let cs = vec!['a', 'b'];
+    let st: String = cs.iter().cloned().collect();
+    println(st);
+}
+"#,
+        "2\n2 20\nab\n",
+    );
+}
+
+/// An item borrows the collection, not the iterator (core semantics §5.4):
+/// two `next` results are live together, and `nth`, `last` and `find`
+/// return items from their own iterator.
+#[test]
+fn an_item_borrows_the_collection_not_the_iterator() {
+    assert_runs(
+        r#"
+fn main() {
+    let v = vec![1, 2, 3];
+    let mut it = v.iter();
+    let a = it.next();
+    let b = it.next();
+    println(f"{a ?? 0} {b ?? 0}");
+    println(f"{v.iter().nth(1) ?? 0} {v.iter().last() ?? 0}");
+    let f = v.iter().find(|x| *x > 1);
+    println(f"{f ?? 0}");
+}
+"#,
+        "1 2\n2 3\n2\n",
+    );
+}
+
+/// An iterator whose `next` returns a borrow of what it owns is refused:
+/// its items would point into the iterator.
+#[test]
+fn a_lending_next_is_refused() {
+    let src = r#"
+struct Own { buf: Vec[i64], i: i64 }
+impl Iterator for Own {
+    type Item = ref i64;
+    fn next(mut ref self) -> Option[Self.Item] {
+        let i = self.i;
+        self.i = i + 1;
+        self.buf.get(i)
+    }
+}
+fn main() {
+    let mut o = Own { buf: vec![1, 2], i: 0 };
+    println(f"{o.next() ?? 0}");
+}
+"#;
+    match run(src) {
+        Err(e) if e.contains("Own.next") && e.contains("[E0509]") => {}
+        other => panic!("want E0509 in Own.next, got {other:?}"),
+    }
+}
+
+/// A method's own type parameter can be filled from another argument, so
+/// `pick`'s `U` may borrow the receiver's place: the result keeps the
+/// receiver borrowed and the write after it is refused.
+#[test]
+fn a_method_s_own_type_parameter_keeps_the_receiver_borrowed() {
+    let src = r#"
+struct S { name: String }
+impl S {
+    fn name_ref(ref self) -> ref String { self.name }
+    fn pick[U](ref self, f: own Fn(ref S) -> U) -> U { f(self) }
+}
+fn main() {
+    let mut s = S { name: "a".to_string() };
+    let r = s.pick(|x| x.name_ref());
+    s.name = "b".to_string();
+    println(r);
+}
+"#;
+    match run(src) {
+        Err(e) if e.contains("write of _1.0 while it is borrowed") => {}
+        other => panic!("want the write refused, got {other:?}"),
+    }
+}
+
+/// A `ref` item is read where a value is expected (core semantics §5.10,
+/// §6.1): in a tuple literal pushed into a `Vec`, and a shared handle as a
+/// counted copy.
+#[test]
+fn a_ref_item_reads_as_a_value_in_a_value_slot() {
+    assert_runs(
+        r#"
+shared struct Node { val: i64 }
+fn mk() -> Vec[(i64, i64)] {
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    let v = vec![6, 5];
+    for j in v.iter() {
+        pairs.push((1, j));
+    }
+    pairs.sort();
+    return pairs;
+}
+fn main() {
+    for p in mk().iter() {
+        let (i, j) = p;
+        print(f"{i}:{j} ");
+    }
+    let xs = vec![Node { val: 3 }];
+    let mut q: Vec[Node] = Vec.new();
+    for x in xs.iter() {
+        q.push(x);
+    }
+    println(f"{q[0].val} {xs[0].val}");
+}
+"#,
+        "1:5 1:6 3 3\n",
+    );
+}

@@ -1421,8 +1421,10 @@ impl<'a> super::TypeChecker<'a> {
                 element: Box::new(self.resolve_assoc_projections(element)),
                 mutable: *mutable,
             },
-            Type::Ref(inner) => Type::Ref(Box::new(self.resolve_assoc_projections(inner))),
-            Type::MutRef(inner) => Type::MutRef(Box::new(self.resolve_assoc_projections(inner))),
+            Type::Ref(inner) => super::inference::ref_of(self.resolve_assoc_projections(inner)),
+            Type::MutRef(inner) => {
+                super::inference::mut_ref_of(self.resolve_assoc_projections(inner))
+            }
             Type::Weak(inner) => Type::Weak(Box::new(self.resolve_assoc_projections(inner))),
             Type::Pointer { is_mut, inner } => Type::Pointer {
                 is_mut: *is_mut,

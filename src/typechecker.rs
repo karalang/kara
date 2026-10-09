@@ -5424,6 +5424,36 @@ impl<'a> TypeChecker<'a> {
     /// Is `t` a scalar a `ref`/`mut ref` binding reads through implicitly
     /// (B-2026-07-15-3)? Numeric + bool + char — the plain-`Copy` value
     /// kinds, matching arithmetic's existing auto-deref set.
+    /// A value of type `found` flows into a `expected` slot, reading each
+    /// `ref` to a `Copy` value or handle it holds at the top or in a tuple.
+    fn reads_into(&mut self, expected: &Type, found: &Type) -> bool {
+        match (expected, found) {
+            (_, Type::Ref(inner) | Type::MutRef(inner))
+                if !matches!(expected, Type::Ref(_) | Type::MutRef(_))
+                    && self.reads_as_value(inner) =>
+            {
+                self.is_subtype_with_projections(expected, inner)
+            }
+            (Type::Tuple(es), Type::Tuple(fs)) if es.len() == fs.len() => es
+                .iter()
+                .zip(fs)
+                .all(|(e, f)| self.reads_into(e, f) || self.is_subtype_with_projections(e, f)),
+            _ => false,
+        }
+    }
+
+    /// `Copy`, a handle, or an `Option` / tuple of those (§5.10, §6.1).
+    fn reads_as_value(&self, t: &Type) -> bool {
+        match t {
+            Type::Shared(_) => true,
+            Type::Tuple(ts) => ts.iter().all(|t| self.reads_as_value(t)),
+            Type::Named { name, args } if name == "Option" => {
+                args.iter().all(|t| self.reads_as_value(t))
+            }
+            _ => self.is_copy_type_during_check(t),
+        }
+    }
+
     pub(super) fn scalar_reads_as_value(t: &Type) -> bool {
         matches!(
             t,
@@ -5566,6 +5596,12 @@ impl<'a> TypeChecker<'a> {
             {
                 return true;
             }
+        }
+        // On the MIR pipeline, core semantics §5.10 and §6.1 in full: a
+        // `ref` to a `Copy` value or a handle reads as the value (a copy, or
+        // a counted copy), also as an element of a tuple literal.
+        if self.library_methods_from_source && self.reads_into(expected, found) {
+            return true;
         }
         if self.is_subtype_with_projections(expected, found) {
             // Record a concrete witness flowing into the current function's
@@ -6353,7 +6389,7 @@ fn names_foreign_param(ty: &Type, scope: &[String]) -> bool {
 
 /// Bind the generic parameters `pattern` names (outside `scope`) to the
 /// matching parts of `actual`. The first binding of a parameter wins.
-fn bind_params(
+pub(super) fn bind_params(
     pattern: &Type,
     actual: &Type,
     scope: &[String],

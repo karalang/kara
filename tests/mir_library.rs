@@ -333,3 +333,40 @@ fn main() {
 "#;
     assert_runs(src, "true false true true true\n1\n-1 0.5 2.5 \n");
 }
+
+/// The library source is generic over `T`; a program's own type named `T`
+/// does not stand in for that parameter inside the library's bodies.
+#[test]
+fn a_program_s_type_named_t_does_not_shadow_the_library_s_parameter() {
+    assert_runs(
+        r#"
+shared struct T { v: i64 }
+fn main() {
+    let v = vec![1, 2, 2];
+    let s: Set[i64] = v.iter().collect();
+    let t = T { v: s.len() };
+    println(f"{t.v}");
+}
+"#,
+        "2\n",
+    );
+}
+
+/// `sum` calls `V.default()`; a program's own `struct V` or variant `V`
+/// does not stand in for that parameter.
+#[test]
+fn a_program_s_v_does_not_shadow_the_library_s_parameter() {
+    assert_runs(
+        r#"
+struct V { id: i64 }
+enum E { V(i64) }
+fn main() {
+    let v = vec![1, 2, 3];
+    let s: i64 = v.iter().sum();
+    let x = V { id: s };
+    match E.V(x.id) { E.V(n) => println(f"{n}") }
+}
+"#,
+        "6\n",
+    );
+}

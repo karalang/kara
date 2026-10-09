@@ -159,6 +159,45 @@ trait Iterator {
         None
     }
 
+    /// The items, gathered into a collection of the type the context names.
+    /// A `ref` to a `Copy` item is read as the item (`V`).
+    fn collect[V, C: FromIterator[V]](own self) -> C {
+        let values: ItemValues[Self, V] = ItemValues { it: self };
+        C.from_iter(values)
+    }
+
+    /// An owned copy of each viewed item (`V` is the type a `ref V` item
+    /// views).
+    fn cloned[V](own self) -> IterCloned[Self, V] {
+        IterCloned { it: self }
+    }
+
+    /// The items added up; 0 if there are none. A `ref` to a `Copy` item is
+    /// read as the item (`V`).
+    fn sum[V: Default + Add[Output = V]](own self) -> V {
+        let mut it = self;
+        let mut acc: V = V.default();
+        while let Some(x) = it.next() {
+            let v: V = iter_read_value(x);
+            acc = acc + v;
+        }
+        acc
+    }
+
+    /// The items combined front to back by `f`; `None` if there are none.
+    fn reduce[V](own self, f: own MutFn(own V, own V) -> V) -> Option[V] {
+        let mut it = self;
+        let mut acc: Option[V] = None;
+        while let Some(x) = it.next() {
+            let v: V = iter_read_value(x);
+            acc = match acc {
+                None => Some(v),
+                Some(a) => Some(f(a, v)),
+            };
+        }
+        acc
+    }
+
     /// The index of the first item `pred` holds for.
     fn position(mut ref self, pred: own MutFn(own Self.Item) -> bool) -> Option[i64] {
         let mut i = 0;
@@ -408,5 +447,89 @@ impl[I: Iterator, F: MutFn(ref I.Item)] Iterator for IterInspect[I, F] {
             }
             None => None,
         }
+    }
+}
+
+/// `x` read as a `B` (core semantics §5.10): a `ref` to a `Copy` value is
+/// copied out, and any other value moves. The MIR builder lowers each call
+/// in place, so the body never runs.
+fn iter_read_value[A, B](x: own A) -> B {
+    panic("iter_read_value is lowered at each call")
+}
+
+/// A clone of the value `x` views. The MIR builder lowers each call in
+/// place, so the body never runs.
+fn iter_clone_value[A, B](x: own A) -> B {
+    panic("iter_clone_value is lowered at each call")
+}
+
+struct IterCloned[I, V] {
+    it: I,
+}
+
+impl[I: Iterator, V] Iterator for IterCloned[I, V] {
+    type Item = V;
+
+    fn next(mut ref self) -> Option[V] {
+        match self.it.next() {
+            Some(x) => {
+                let v: V = iter_clone_value(x);
+                Some(v)
+            }
+            None => None,
+        }
+    }
+}
+
+/// The items of `it` read as values: a `ref` to a `Copy` item is read as
+/// the item.
+struct ItemValues[I, V] {
+    it: I,
+}
+
+impl[I: Iterator, V] Iterator for ItemValues[I, V] {
+    type Item = V;
+
+    fn next(mut ref self) -> Option[V] {
+        match self.it.next() {
+            Some(x) => {
+                let v: V = iter_read_value(x);
+                Some(v)
+            }
+            None => None,
+        }
+    }
+}
+
+/// A collection that can be built from an iterator's items (`collect`).
+trait FromIterator[T] {
+    fn from_iter[I: Iterator[Item = T]](iter: own I) -> Self;
+}
+
+/// An iterator that can also yield from the back.
+trait DoubleEndedIterator: Iterator {
+    fn next_back(mut ref self) -> Option[Self.Item];
+
+    /// The items, back to front.
+    fn rev(own self) -> IterRev[Self] {
+        IterRev { it: self }
+    }
+}
+
+struct IterRev[I] {
+    it: I,
+}
+
+impl[I: DoubleEndedIterator] Iterator for IterRev[I] {
+    type Item = I.Item;
+
+    fn next(mut ref self) -> Option[I.Item] {
+        self.it.next_back()
+    }
+}
+
+impl[I: DoubleEndedIterator] DoubleEndedIterator for IterRev[I] {
+    fn next_back(mut ref self) -> Option[I.Item] {
+        self.it.next()
     }
 }

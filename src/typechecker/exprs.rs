@@ -40,6 +40,11 @@ use super::TypeErrorKind;
 /// render identically.
 fn check_format_spec_for_type(spec_raw: &str, ty: &Type) -> Result<(), String> {
     let fs = crate::format_spec::FormatSpec::parse(spec_raw)?;
+    // A borrowed value formats as the value it views.
+    let mut ty = ty;
+    while let Type::Ref(t) | Type::MutRef(t) = ty {
+        ty = t;
+    }
     let is_int = matches!(ty, Type::Int(_) | Type::UInt(_));
     let is_float = matches!(ty, Type::Float(_));
     let is_str = matches!(ty, Type::Str);
@@ -608,7 +613,42 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
-        let ty = self.check_expr_inner(expr, expected);
+        let mut ty = self.check_expr_inner(expr, expected);
+        // A result whose type only the context decides (`collect`'s `C`)
+        // takes the context's type, so the call's type argument is solved.
+        if self.library_methods_from_source {
+            if let Type::TypeVar(_) = resolve_type_var_top(&ty, &self.env.substitutions) {
+                if !matches!(expected, Type::TypeVar(_) | Type::Error)
+                    && unify_types(
+                        &ty,
+                        expected,
+                        &mut self.env.substitutions,
+                        &mut self.env.const_substitutions,
+                    )
+                {
+                    ty = expected.clone();
+                }
+            }
+            // A method's own parameter that only its result names (`collect`'s
+            // `C`) is still that parameter here; the context binds it.
+            if matches!(expr.kind, ExprKind::MethodCall { .. })
+                && !expr.id.is_dummy()
+                && self.mentions_foreign_param(&ty)
+                && !self.mentions_foreign_param(expected)
+            {
+                let scope = self
+                    .node_generic_frames
+                    .get(self.current_generic_frame as usize)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut bound = std::collections::HashMap::new();
+                super::bind_params(&ty, expected, &scope, &mut bound);
+                let frame = self.node_call_subs.entry(expr.id).or_default();
+                for (n, t) in bound {
+                    frame.entry(n).or_insert(t);
+                }
+            }
+        }
         // The checking-position constructor paths (`Ok(1)` against a
         // `Result`) never reach `infer_expr`, which records the callee.
         if let ExprKind::Call { callee, .. } = &expr.kind {
@@ -772,6 +812,25 @@ impl<'a> super::TypeChecker<'a> {
         if let ExprKind::Identifier(name) = &expr.kind {
             if let Some(ty) = self.bare_variant_from_expected(name, expected) {
                 self.record_expr_type(&expr.span, &ty);
+                return ty;
+            }
+        }
+        // A payload-free variant of a generic enum (`None`) against that enum
+        // with a borrowed argument (`Option[ref T]`) takes the context's type.
+        // It synthesizes as the enum's own `Option[T]`, and a borrow of a type
+        // parameter never unifies with a bare one (`types_compatible`).
+        if let (ExprKind::Identifier(_) | ExprKind::Path { .. }, Type::Named { args, .. }) =
+            (&expr.kind, expected)
+        {
+            if args
+                .iter()
+                .any(|a| matches!(a, Type::Ref(_) | Type::MutRef(_)))
+            {
+                let ty = self.infer_expr(expr);
+                if self.is_underdetermined_variant(expr, &ty, expected) {
+                    self.record_expr_type(&expr.span, expected);
+                    return expected.clone();
+                }
                 return ty;
             }
         }
@@ -1117,8 +1176,19 @@ impl<'a> super::TypeChecker<'a> {
                 // checking the inner tuple against its slot re-enters this arm
                 // one level down, so the question recurses to any depth while
                 // staying gated on the same two leaf shapes.
+                // On the MIR pipeline a place element is checked against its
+                // slot too, so a `ref` to a `Copy` value is read into a value
+                // slot (`pairs.push((i, j))` with `j` an item of `v.iter()`).
+                let library = self.library_methods_from_source;
                 let elem_needs_expected = |e: &Expr, slot: &Type| {
-                    elem_is_inferred_ctor(e) || Self::literal_needs_array_slot(e, slot)
+                    elem_is_inferred_ctor(e)
+                        || Self::literal_needs_array_slot(e, slot)
+                        || (library
+                            && !matches!(slot, Type::Ref(_) | Type::MutRef(_))
+                            && matches!(
+                                e.kind,
+                                ExprKind::Identifier(_) | ExprKind::FieldAccess { .. }
+                            ))
                 };
                 if elems
                     .iter()

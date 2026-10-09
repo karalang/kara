@@ -492,18 +492,39 @@ impl<'a> super::TypeChecker<'a> {
             Some(b) => b.clone(),
             None => Vec::new(),
         };
-        let candidates: Vec<(crate::ast::TraitBound, crate::ast::TraitMethod)> = bounds
+        let mut candidates: Vec<(crate::ast::TraitBound, crate::ast::TraitMethod)> = bounds
             .iter()
             .filter_map(|b| {
                 let trait_name = b.path.last()?;
-                let m = self.find_trait_method(trait_name, method)?;
-                // Only methods (with self_param) are receiver-form
-                // candidates. Associated functions (no self_param) reach
-                // the dispatch only through type-prefixed `T.method()`.
-                m.self_param.as_ref()?;
-                Some((b.clone(), m.clone()))
+                if let Some(m) = self.find_trait_method(trait_name, method) {
+                    // Only methods (with self_param) are receiver-form
+                    // candidates. Associated functions (no self_param) reach
+                    // the dispatch only through type-prefixed `T.method()`.
+                    m.self_param.as_ref()?;
+                    return Some((b.clone(), m.clone()));
+                }
+                // A supertrait's method: `I: DoubleEndedIterator` has
+                // `Iterator`'s `next`.
+                for st in self
+                    .env
+                    .supertrait_closure_traits(trait_name)
+                    .into_iter()
+                    .skip(1)
+                {
+                    if let Some(m) = self.find_trait_method(&st, method) {
+                        m.self_param.as_ref()?;
+                        let mut sb = b.clone();
+                        sb.path = vec![st];
+                        sb.generic_args = None;
+                        return Some((sb, m.clone()));
+                    }
+                }
+                None
             })
             .collect();
+        // Two bounds can reach one trait (`I: Iterator + DoubleEndedIterator`).
+        let mut seen = std::collections::HashSet::new();
+        candidates.retain(|(b, _)| seen.insert(b.path.last().cloned()));
 
         match candidates.len() {
             0 => {

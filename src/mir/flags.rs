@@ -24,7 +24,9 @@
 //! the gap §6.2's same-handle rule does not cover, and it stays open
 //! until loans cross calls.
 
-use super::borrowck::{loan_liveness, statement_accesses, terminator_accesses, Access};
+use super::borrowck::{
+    loan_liveness, statement_accesses, terminator_accesses, Access, ResultBorrows,
+};
 use super::place_ty::place_ty;
 use super::syntax::*;
 use super::ty::{Ty, TyInterner, TyKind};
@@ -34,7 +36,7 @@ use super::ty::{Ty, TyInterner, TyKind};
 pub fn insert_borrow_flags(
     body: &mut Body,
     tys: &TyInterner,
-    has_receiver: &dyn Fn(&InstanceId) -> bool,
+    has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
 ) {
     let (loans, live) = loan_liveness(body, tys, has_receiver);
     let held: Vec<Vec<(Place, BorrowKind)>> = loans

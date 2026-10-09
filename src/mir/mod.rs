@@ -24,7 +24,7 @@ pub mod syntax;
 pub mod ty;
 pub mod validate;
 
-pub use borrowck::check_borrows;
+pub use borrowck::{check_borrows, ResultBorrows};
 pub use build::BodyBuilder;
 pub use elaborate::elaborate_drops;
 pub use flags::insert_borrow_flags;
@@ -528,7 +528,7 @@ fn main() -> () {{
             "        _1 = const 3_i64;\n        _0 = const ();\n        drop(_4)",
         );
         let m = parse_module(&tail).unwrap_or_else(|e| panic!("{e}"));
-        let errs = check_borrows(&m.bodies[0], &m.tys, &|_| false).unwrap_err();
+        let errs = check_borrows(&m.bodies[0], &m.tys, &|_| ResultBorrows::Args).unwrap_err();
         assert!(
             errors_mention(&errs, "write of _1 while it is borrowed"),
             "{errs:?}"
@@ -632,7 +632,7 @@ fn main(_1: shared Node) -> () {{
         assert!(elaborated.contains("drop(_5)"), "{elaborated}");
         // A weak value holds no borrow: writing the handle it came from
         // while it lives is fine.
-        assert!(check_borrows(&m.bodies[0], &m.tys, &|_| false).is_ok());
+        assert!(check_borrows(&m.bodies[0], &m.tys, &|_| ResultBorrows::Args).is_ok());
 
         let mut errs = Vec::new();
         for body in [

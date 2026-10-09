@@ -92,6 +92,9 @@ pub struct Lowered {
     pub errors: Vec<String>,
     /// The instances that take `ref self` or `mut ref self`.
     pub receivers: FxHashSet<String>,
+    /// The receivers whose result borrows what the receiver's value
+    /// borrows, not its place (§5.4; [`view_result`]).
+    pub views: FxHashSet<String>,
 }
 
 /// Lower every instance reachable from `main`.
@@ -184,9 +187,23 @@ pub fn lower_program(
         None => lcx.errors.push("no `main` function".into()),
     }
     let mut receivers = FxHashSet::default();
+    let mut views = FxHashSet::default();
     loop {
         if let Some((def, args, name)) = lcx.queue.pop() {
             let has_self = lcx.fns.get(&def).is_some_and(|i| i.f.self_param.is_some());
+            let view = lcx.fns.get(&def).is_some_and(|i| {
+                // The impl's parameters only: a method's own can be filled
+                // from another argument (`pick[U](ref self, f: Fn(ref Self)
+                // -> U)`), so its value may borrow the receiver's place.
+                let params: Vec<&str> = i
+                    .impl_generics
+                    .iter()
+                    .flat_map(|g| g.params.iter().map(|p| p.name.as_str()))
+                    .collect();
+                i.f.return_type
+                    .as_ref()
+                    .is_some_and(|t| view_result(t, &params))
+            });
             lcx.lower_instance(def, &args, &name);
             // A receiver the body borrows, written or (D5) a bare `self`.
             let borrows = lcx.program.bodies.get(&name).is_some_and(|b| {
@@ -197,6 +214,9 @@ pub fn lower_program(
                     )
             });
             if has_self && borrows {
+                if view {
+                    views.insert(name.clone());
+                }
                 receivers.insert(name.clone());
             }
         } else if let Some(job) = lcx.closure_queue.pop() {
@@ -212,6 +232,62 @@ pub fn lower_program(
         tys: lcx.tys,
         errors: lcx.errors,
         receivers,
+        views,
+    }
+}
+
+/// Whether a method's result, of declared type `t`, can hold a reference
+/// only through a type parameter of its impl (`params`) or an associated type
+/// (`Self.Item`, `I.Item`): built from those, scalars, `String`, `Option`,
+/// `Result`, tuples and arrays. Such a reference came from outside the
+/// receiver, since a value cannot borrow itself, so the result borrows
+/// what the receiver's value borrows (§5.4). A `ref` written in the type,
+/// or a named type that may hold one, keeps the receiver's place.
+fn view_result(t: &ast::TypeExpr, params: &[&str]) -> bool {
+    match &t.kind {
+        ast::TypeKind::Path(p) => {
+            let args_ok = || {
+                p.generic_args.as_ref().is_none_or(|g| {
+                    g.iter().all(|a| match a {
+                        ast::GenericArg::Type(t) => view_result(t, params),
+                        _ => false,
+                    })
+                })
+            };
+            match p.segments.as_slice() {
+                [base, _] => {
+                    (base == "Self" || params.contains(&base.as_str())) && p.generic_args.is_none()
+                }
+                [n] if params.contains(&n.as_str()) => p.generic_args.is_none(),
+                [n] if matches!(n.as_str(), "Option" | "Result") => args_ok(),
+                [n] => {
+                    p.generic_args.is_none()
+                        && matches!(
+                            n.as_str(),
+                            "i8" | "i16"
+                                | "i32"
+                                | "i64"
+                                | "i128"
+                                | "isize"
+                                | "u8"
+                                | "u16"
+                                | "u32"
+                                | "u64"
+                                | "u128"
+                                | "usize"
+                                | "f32"
+                                | "f64"
+                                | "bool"
+                                | "char"
+                                | "String"
+                        )
+                }
+                _ => false,
+            }
+        }
+        ast::TypeKind::Tuple(ts) => ts.iter().all(|t| view_result(t, params)),
+        ast::TypeKind::Array { element, .. } => view_result(element, params),
+        _ => false,
     }
 }
 
@@ -518,6 +594,7 @@ impl<'a> Lcx<'a> {
             "f64" => HK::Float(FloatSize::F64),
             "bool" => HK::Bool,
             "char" => HK::Char,
+            "String" => HK::Str,
             _ => return None,
         };
         Some(self.tys.tcx().intern(kind))
@@ -3272,6 +3349,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                     return Ok(Operand::Move(Place::local(l)));
                 }
             }
+        }
+        // A `ref` to a `Copy` value or handle in a value slot is read
+        // (core semantics §5.10, §6.1).
+        let et = self.expr_ty(e)?;
+        if !matches!(self.tys().tcx().kind(want), HK::Ref(_) | HK::MutRef(_))
+            && matches!(self.tys().tcx().kind(et), HK::Ref(_) | HK::MutRef(_))
+        {
+            return self.owned_operand(e, want);
         }
         let op = self.expr_operand(e)?;
         Ok(self.widen(op, want))
@@ -7276,14 +7361,21 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.clone_into(Place::local(l), t, dest);
             return Ok(());
         }
-        let Some(rc) = self.lcx.calls.get(&e.id) else {
-            if let ExprKind::Path { segments, .. } = &callee.kind {
-                if let [tp, m] = segments.as_slice() {
+        let rc = self.lcx.calls.get(&e.id);
+        // `T.m(..)` with `T` a type parameter of this body goes to the
+        // instance's type, also where the program has a type or value named
+        // `T` that the checker took the path for (`struct V` against `sum`'s
+        // `V.default()`).
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if let [tp, m] = segments.as_slice() {
+                if rc.is_none_or(|rc| matches!(rc.callee, Callee::Builtin(_))) {
                     if let Some(t) = self.type_param(tp) {
                         return self.type_param_call(e, t, m, args, dest);
                     }
                 }
             }
+        }
+        let Some(rc) = rc else {
             return self.unsupported(e.span, "a call with no resolved callee");
         };
         let callee_kind = rc.callee.clone();
@@ -7360,6 +7452,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.assign(dest, Rvalue::Aggregate(kind, ops));
                     return Ok(());
                 }
+                if let ("iter_read_value", None, [a]) =
+                    (self.lcx.def_name(d).as_str(), self.lcx.def_owner(d), args)
+                {
+                    return self.read_value(e, &a.value, dest);
+                }
+                if let ("iter_clone_value", None, [a]) =
+                    (self.lcx.def_name(d).as_str(), self.lcx.def_owner(d), args)
+                {
+                    let (p, t) = self.deref_place(&a.value, false)?;
+                    self.clone_into(p, t, dest);
+                    return Ok(());
+                }
                 // Labels need no lowering: the default-argument fill has
                 // already put a labeled call's arguments in declaration
                 // order, and the typechecker rejected any it could not.
@@ -7414,6 +7518,30 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.def_call(e, d, f, inst_args, recv, args, dest)
             }
         }
+    }
+
+    /// The library's `iter_read_value(x)`: `x` read as the call's type. A
+    /// `ref` to a value of that type is copied out (core semantics §5.10);
+    /// any other value moves.
+    fn read_value(&mut self, e: &'a Expr, x: &'a Expr, dest: Place) -> R<()> {
+        let xt = self.expr_ty(x)?;
+        let rt = self.expr_ty(e)?;
+        let tcx = self.tys().tcx();
+        if let HK::Ref(inner) | HK::MutRef(inner) = tcx.kind(xt) {
+            if !matches!(tcx.kind(rt), HK::Ref(_) | HK::MutRef(_)) {
+                let p = if self.is_place(x) && self.is_local_rooted(x) {
+                    self.expr_place(x, false)?
+                } else {
+                    Place::local(self.temp_of(x, xt)?)
+                };
+                let op = self.use_place(p.project(ProjElem::Deref), inner);
+                self.assign(dest, Rvalue::Use(op));
+                return Ok(());
+            }
+        }
+        let op = self.expr_operand(x)?;
+        self.assign(dest, Rvalue::Use(op));
+        Ok(())
     }
 
     /// `Ordering.Less.is_lt()` parses as a call of the path
@@ -7494,6 +7622,10 @@ impl<'l, 'a> Bx<'l, 'a> {
         dest: Place,
     ) -> R<()> {
         if let Some((d, inst_args)) = self.method_by_receiver(t, m) {
+            let f = self.lcx.fns[&d].f;
+            return self.def_call(e, d, f, inst_args, None, args, dest);
+        }
+        if let Some((d, inst_args)) = self.generic_fn_by_receiver(t, m, args)? {
             let f = self.lcx.fns[&d].f;
             return self.def_call(e, d, f, inst_args, None, args, dest);
         }
@@ -8356,6 +8488,101 @@ impl<'l, 'a> Bx<'l, 'a> {
             return None;
         }
         Some((d, item.impl_args(&targs)?))
+    }
+
+    /// The associated function `m` of `t`'s impl when it has generic
+    /// parameters of its own (`C.from_iter(it)` with `C` a `Vec`), each read
+    /// off the argument its parameter is written as (`iter: own I`).
+    fn generic_fn_by_receiver(
+        &mut self,
+        t: Ty,
+        m: &str,
+        args: &'a [CallArg],
+    ) -> R<Option<(DefId, Vec<Ty>)>> {
+        let (kind, base) = self.strip_ty_full(t);
+        // A primitive's impl (`impl FromIterator[char] for String`) has no
+        // target definition and no type arguments.
+        let mut prim = self
+            .lcx
+            .fns
+            .iter()
+            .filter(|(_, i)| i.impl_prim == Some(base) && i.f.name == m);
+        if let Some((&d, _)) = prim.next() {
+            if prim.next().is_some() {
+                return Ok(None);
+            }
+            return self.own_generics_from_args(d, Vec::new(), args);
+        }
+        let (target, targs) = match kind {
+            HK::Adt { def, args } | HK::Shared { def, args } => (def, self.tys().tcx().list(args)),
+            HK::Intrinsic { kind, args } => {
+                let name = match kind {
+                    IntrinsicKind::Vec => "Vec",
+                    IntrinsicKind::Map => "Map",
+                    IntrinsicKind::Set => "Set",
+                    IntrinsicKind::VecDeque => "VecDeque",
+                    IntrinsicKind::SortedMap => "SortedMap",
+                    IntrinsicKind::SortedSet => "SortedSet",
+                };
+                let Some(d) = self.lcx.defs.lookup(0, name) else {
+                    return Ok(None);
+                };
+                (d, self.tys().tcx().list(args))
+            }
+            _ => return Ok(None),
+        };
+        let mut found = self
+            .lcx
+            .fns
+            .iter()
+            .filter(|(_, i)| i.impl_target == Some(target) && i.f.name == m);
+        let Some((&d, item)) = found.next() else {
+            return Ok(None);
+        };
+        if found.next().is_some() {
+            return Ok(None);
+        }
+        let Some(inst) = item.impl_args(&targs) else {
+            return Ok(None);
+        };
+        self.own_generics_from_args(d, inst, args)
+    }
+
+    /// `d`'s instance arguments: `inst` (its impl's), then each of its own
+    /// generic parameters read off the argument written as that bare name.
+    fn own_generics_from_args(
+        &mut self,
+        d: DefId,
+        mut inst: Vec<Ty>,
+        args: &'a [CallArg],
+    ) -> R<Option<(DefId, Vec<Ty>)>> {
+        let f = self.lcx.fns[&d].f;
+        let Some(own) = f.generic_params.as_ref() else {
+            return Ok(None);
+        };
+        let mut from: Vec<&'a Expr> = Vec::new();
+        for gp in &own.params {
+            let at = f
+                .params
+                .iter()
+                .zip(args)
+                .find_map(|(p, a)| match &p.ty.kind {
+                    ast::TypeKind::Path(q)
+                        if q.generic_args.is_none() && q.segments == [gp.name.clone()] =>
+                    {
+                        Some(&a.value)
+                    }
+                    _ => None,
+                });
+            let Some(a) = at else {
+                return Ok(None);
+            };
+            from.push(a);
+        }
+        for a in from {
+            inst.push(self.expr_ty(a)?);
+        }
+        Ok(Some((d, inst)))
     }
 
     fn user_method_call(
@@ -9549,7 +9776,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         );
         match self.tys().tcx().field_ty(lt, Some(ok), 0) {
             Some(pt) => {
-                let fp = p.project(ProjElem::Downcast(VariantIdx(ok))).field(0, pt);
+                let mut fp = p.project(ProjElem::Downcast(VariantIdx(ok))).field(0, pt);
+                let mut pt = pt;
+                // `Option[ref V] ?? v` with a `Copy` `V` reads the value
+                // (design.md, `?` and `??`).
+                let dt = self.place_type(&dest);
+                if let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(pt) {
+                    if !matches!(self.tys().tcx().kind(dt), HK::Ref(_) | HK::MutRef(_)) {
+                        fp = fp.project(ProjElem::Deref);
+                        pt = inner;
+                    }
+                }
                 let op = self.use_place(fp, pt);
                 self.assign(dest.clone(), Rvalue::Use(op));
             }
@@ -9793,6 +10030,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                                 rest.push(Operand::Move(p.project(ProjElem::Deref)));
                                 continue;
                             }
+                        }
+                    }
+                    // A tuple literal stored is built at the slot's types,
+                    // reading any `ref` element (§5.10).
+                    if let (true, ExprKind::Tuple(_)) = (stores, &a.value.kind) {
+                        let slot = self
+                            .lib_param_tys(base, method)
+                            .and_then(|s| s.get(rest.len()).copied());
+                        if let Some(slot) = slot {
+                            rest.push(self.operand_at(&a.value, slot)?);
+                            continue;
                         }
                     }
                     rest.push(self.lib_arg(&a.value, by_ref)?);
@@ -10070,7 +10318,9 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
         return Err(format!("parse: {:?}", parsed.errors[0]));
     }
     let mut program = parsed.program;
-    crate::prepare_for_resolve(&mut program);
+    crate::desugar::with_collect_through_from_iterator(|| {
+        crate::prepare_for_resolve(&mut program);
+    });
     let r = crate::resolve(&program);
     if !r.errors.is_empty() {
         return Err(format!("resolve: {:?}", r.errors[0]));
@@ -10101,8 +10351,16 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
         // collection, when it borrows at all. `KARAC_MIR_BORROWCK=0` skips
         // the check.
         let receivers = &lowered.receivers;
-        let has_receiver =
-            |i: &InstanceId| !names.contains(i.name.as_str()) || receivers.contains(&i.name);
+        let views = &lowered.views;
+        let has_receiver = |i: &InstanceId| {
+            if views.contains(&i.name) {
+                crate::mir::ResultBorrows::ReceiverValue
+            } else if !names.contains(i.name.as_str()) || receivers.contains(&i.name) {
+                crate::mir::ResultBorrows::Receiver
+            } else {
+                crate::mir::ResultBorrows::Args
+            }
+        };
         if borrowck {
             crate::mir::check_borrows(body, &lowered.tys, &has_receiver)
                 .map_err(|e| format!("borrow check {}: {}", body.instance.name, e.join("; ")))?;

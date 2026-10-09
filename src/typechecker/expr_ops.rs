@@ -1146,6 +1146,24 @@ impl<'a> super::TypeChecker<'a> {
             let type_name = &segments[0];
             let member = &segments[1];
 
+            // `T.default()` with `T` a type parameter: the parameter's own
+            // value, never a type or value the program happens to name `T`
+            // (an `enum V`, a bare variant `V`).
+            if self
+                .node_generic_frames
+                .get(self.current_generic_frame as usize)
+                .is_some_and(|f| f.iter().any(|p| p == type_name))
+            {
+                return if member == "default" {
+                    Type::Function {
+                        params: Vec::new(),
+                        return_type: Box::new(Type::TypeParam(type_name.clone())),
+                    }
+                } else {
+                    Type::Error
+                };
+            }
+
             // `ExitCode.SUCCESS` / `ExitCode.FAILURE` — paren-free
             // associated constants of the `ExitCode` distinct type
             // (Phase-8 entry-point contract Slice B). Parsed as a
@@ -1558,6 +1576,15 @@ impl<'a> super::TypeChecker<'a> {
     /// `generic_args: Some(...)` so it routes through the UFCS path,
     /// not this one; same for longer paths (`module.Sub.fn()`).
     pub(super) fn path_first_segment_is_value_binding(&self, name: &str) -> bool {
+        // A type parameter in scope names the type, as `V.default()` does,
+        // even where the program has a value (a bare variant `V`) by that name.
+        if self
+            .node_generic_frames
+            .get(self.current_generic_frame as usize)
+            .is_some_and(|f| f.iter().any(|p| p == name))
+        {
+            return false;
+        }
         if self.local_scope.lookup(name).is_some() {
             return true;
         }
@@ -3623,6 +3650,19 @@ impl<'a> super::TypeChecker<'a> {
         };
 
         let r_ty = self.infer_expr(right);
+        // `Option[ref V] ?? v` with a `Copy` `V` reads the value: the default
+        // is a `V` and so is the result (design.md, `?` and `??`).
+        let payload = match &payload {
+            Type::Ref(v) | Type::MutRef(v)
+                if self.library_methods_from_source
+                    && err_ty.is_none()
+                    && !matches!(r_ty, Type::Ref(_) | Type::MutRef(_))
+                    && self.is_copy_type_during_check(v) =>
+            {
+                (**v).clone()
+            }
+            _ => payload,
+        };
         if r_ty != Type::Error {
             self.check_assignable(&payload, &r_ty, right.span);
         }

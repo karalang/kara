@@ -774,6 +774,13 @@ impl<'a> super::TypeChecker<'a> {
                         .map(|(p, t)| (p, SubstValue::Type(t)))
                         .collect()
                 };
+                // The method's own generic parameters shadow the impl's: a
+                // trait's provided `filter[F]` called on `IterMap[I, F, U]` has
+                // its own `F`, not the adaptor's.
+                let recv_subs: HashMap<String, SubstValue> = recv_subs
+                    .into_iter()
+                    .filter(|(p, _)| !sig.generic_params.iter().any(|g| g == p))
+                    .collect();
                 self.record_node_impl_subs(span, &recv_subs);
                 // B-2026-08-30-43 — hand the same binding to the interpreter.
                 // It is computed here anyway; the tree-walk had no way to see
@@ -813,11 +820,47 @@ impl<'a> super::TypeChecker<'a> {
                 // here.)
                 // `Self.Item` in a trait default method's signature names
                 // the receiver's own `Item`, as `Self` names the receiver.
-                let self_subs: HashMap<String, SubstValue> = std::iter::once((
+                let mut self_subs: HashMap<String, SubstValue> = std::iter::once((
                     "Self".to_string(),
                     SubstValue::Type(receiver_for_lookup.clone()),
                 ))
                 .collect();
+                // `Iterator`'s `sum`, `product`, `reduce` and `collect` read
+                // their items as values: their `V` is `T` when `Self.Item` is a
+                // `ref T` of a `Copy` `T`, and `Self.Item` otherwise
+                // (docs/library/iterators.md). `cloned` copies what a `ref V`
+                // item views.
+                if self.library_methods_from_source
+                    && matches!(method, "sum" | "product" | "reduce" | "collect" | "cloned")
+                    && sig.generic_params.iter().any(|g| g == "V")
+                    && self.find_trait_method("Iterator", method).is_some()
+                {
+                    let item = Type::AssocProjection {
+                        param: "Self".to_string(),
+                        assoc: "Item".to_string(),
+                        args: Vec::new(),
+                        receiver_args: Vec::new(),
+                    };
+                    let item =
+                        self.resolve_assoc_projections(&substitute_type_params(&item, &self_subs));
+                    // `cloned`'s `V` is the type a `ref V` item views,
+                    // whether or not it is `Copy`.
+                    let value = match &item {
+                        Type::Ref(t) | Type::MutRef(t)
+                            if method == "cloned" || self.is_copy_type_during_check(t) =>
+                        {
+                            (**t).clone()
+                        }
+                        _ => item,
+                    };
+                    if !matches!(value, Type::AssocProjection { .. }) {
+                        let v: HashMap<String, SubstValue> =
+                            std::iter::once(("V".to_string(), SubstValue::Type(value.clone())))
+                                .collect();
+                        self.record_node_impl_subs(span, &v);
+                        self_subs.insert("V".to_string(), SubstValue::Type(value));
+                    }
+                }
                 let params: Vec<Type> = sig
                     .params
                     .iter()
