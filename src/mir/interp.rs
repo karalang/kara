@@ -5471,10 +5471,40 @@ impl<'a> Interp<'a> {
         }
     }
 
-    /// Whether frame `v` of type `ty` still holds a value of its body that
-    /// needs dropping: a frame that returned holds none.
-    fn frame_holds(&self, v: &Value, ty: Ty) -> bool {
-        let owned = || v.any_init() && self.tys.needs_drop(ty);
+    /// Whether `v`, of type `ty`, still owns something a drop would give
+    /// back: a heap handle, a closure environment, or a value whose type has
+    /// a `Drop` body. A fieldless variant, or an enum whose payload was
+    /// moved, owns nothing, though it reads as initialized; elaboration
+    /// leaves such a shell without a drop.
+    fn owns(&self, v: &Value, ty: Ty) -> bool {
+        match v {
+            Value::Uninit => false,
+            Value::Box(_) | Value::Shared(_) | Value::Weak(_) => true,
+            Value::Erased { env, .. } => env.is_some(),
+            Value::Agg(fs) | Value::Variant(_, fs) => {
+                if self.tys.has_drop_impl(ty) && v.any_init() {
+                    return true;
+                }
+                let variant = match v {
+                    Value::Variant(k, _) => Some(*k),
+                    _ => None,
+                };
+                fs.iter().enumerate().any(|(i, f)| {
+                    match self.tys.field_ty(ty, variant, i as u32) {
+                        Some(t) => self.owns(f, t),
+                        // An array element: no field type to ask.
+                        None => self.owns(f, self.tys.unit()),
+                    }
+                })
+            }
+            _ => false,
+        }
+    }
+
+    /// The field of frame `v` (of type `ty`) that still holds a value of
+    /// its body needing a drop, if any: a frame that returned holds none.
+    fn frame_holds(&self, v: &Value, ty: Ty) -> Option<String> {
+        let owned = || self.owns(v, ty).then(String::new);
         let TyKind::Adt(a) = self.tys.kind(ty) else {
             return owned();
         };
@@ -5488,7 +5518,14 @@ impl<'a> Interp<'a> {
         fs.iter()
             .zip(&adt.variants[0].fields)
             .skip(1)
-            .any(|(f, (_, t))| self.frame_holds(f, *t))
+            .find_map(|(f, (name, t))| {
+                let inner = self.frame_holds(f, *t)?;
+                Some(if inner.is_empty() {
+                    format!("{}.{name}", adt.name)
+                } else {
+                    inner
+                })
+            })
     }
 
     /// Runs coroutine `entry` as a task root (`KARAC_MIR_COROUTINES=1`): the
@@ -5521,9 +5558,9 @@ impl<'a> Interp<'a> {
             match self.call(&resume, vec![Value::Ref(at.clone())])? {
                 Value::Variant(0, mut fs) if fs.len() == 1 => {
                     let frame = self.live(slot)?.value.clone();
-                    if self.frame_holds(&frame, frame_ty) {
+                    if let Some(field) = self.frame_holds(&frame, frame_ty) {
                         return err(format!(
-                            "{entry} returned with its frame still holding a value"
+                            "{entry} returned with its frame still holding a value in {field}"
                         ));
                     }
                     self.free_slot(slot);
@@ -5535,8 +5572,8 @@ impl<'a> Interp<'a> {
                         let drop = coroutine::drop_frame_name(entry);
                         self.call(&drop, vec![Value::Ref(at.clone())])?;
                         let frame = self.live(slot)?.value.clone();
-                        if self.frame_holds(&frame, frame_ty) {
-                            return err(format!("{drop} left a value in the frame"));
+                        if let Some(field) = self.frame_holds(&frame, frame_ty) {
+                            return err(format!("{drop} left a value in {field}"));
                         }
                         self.free_slot(slot);
                         return Ok(Value::Unit);

@@ -13,9 +13,27 @@ use super::borrowck::liveness;
 use super::syntax::*;
 use super::ty::{AdtDef, IntTy, Ty, TyInterner, TyKind, VariantDef};
 
-/// Natives that suspend. `__yield_now` is the executor's test native: it is
-/// `Pending` on its first resume and `Ready(())` on the next.
-pub const SUSPENDING_NATIVES: &[&str] = &["__yield_now"];
+/// The executor's test native: `Pending` on its first resume and `Ready(())`
+/// on the next.
+pub const YIELD_NOW: &str = "__yield_now";
+
+/// Whether the native `name` suspends: `__yield_now`, a sleep, a channel
+/// receive, or a join. The interpreter's natives complete synchronously, so
+/// under the executor a suspending native other than `__yield_now` yields
+/// once and then makes its call when resumed.
+pub fn suspends_native(name: &str) -> bool {
+    if name == YIELD_NOW || name == "sleep_ms" {
+        return true;
+    }
+    let Some((ty, method)) = name.rsplit_once('.') else {
+        return false;
+    };
+    let base = ty.split('[').next().unwrap_or(ty);
+    matches!(
+        (base, method),
+        ("Receiver" | "Channel", "recv" | "recv_blocking") | ("TaskHandle", "join")
+    )
+}
 
 /// The callee a `Call` names directly, if it names one.
 fn direct_callee(func: &Operand) -> Option<&str> {
@@ -54,13 +72,19 @@ pub fn coroutines<'a>(bodies: impl IntoIterator<Item = &'a Body> + Clone) -> BTr
             if set.contains(&b.instance.name) {
                 continue;
             }
-            if calls(b).any(|(_, c)| set.contains(c) || SUSPENDING_NATIVES.contains(&c)) {
+            if calls(b).any(|(_, c)| set.contains(c) || suspends_native(c)) {
                 set.insert(b.instance.name.clone());
                 changed = true;
             }
         }
     }
     set
+}
+
+/// A suspending native other than `__yield_now`: the frame suspends before
+/// the call, which runs when it is resumed.
+fn yields_before_call(callee: &str) -> bool {
+    callee != YIELD_NOW && suspends_native(callee)
 }
 
 /// A call that may suspend.
@@ -97,10 +121,12 @@ pub fn layout(body: &Body, coroutines: &BTreeSet<String>) -> CoroutineLayout {
     let mut points = Vec::new();
     let mut frame: BTreeSet<Local> = BTreeSet::new();
     for (bb, callee) in calls(body) {
-        if !coroutines.contains(callee) && !SUSPENDING_NATIVES.contains(&callee) {
+        if !coroutines.contains(callee) && !suspends_native(callee) {
             continue;
         }
         let TerminatorKind::Call {
+            func,
+            args,
             destination,
             target,
             ..
@@ -117,6 +143,25 @@ pub fn layout(body: &Body, coroutines: &BTreeSet<String>) -> CoroutineLayout {
             .copied()
             .filter(|&l| !(l == destination.local && destination.projection.is_empty()))
             .collect();
+        if yields_before_call(callee) {
+            // The call itself runs after the resume, so what it reads is
+            // held across too.
+            for o in std::iter::once(func).chain(args) {
+                if let Some(p) = o.place() {
+                    for l in std::iter::once(p.local).chain(p.projection.iter().filter_map(|e| {
+                        if let ProjElem::Index(i) = e {
+                            Some(*i)
+                        } else {
+                            None
+                        }
+                    })) {
+                        if !across.contains(&l) {
+                            across.push(l);
+                        }
+                    }
+                }
+            }
+        }
         across.sort();
         frame.extend(across.iter().copied());
         points.push(SuspensionPoint {
@@ -689,23 +734,47 @@ impl<'a> Resume<'a> {
                         |extra: &Vec<BasicBlockData>| BasicBlock(first_extra + extra.len() as u32);
                     match self.frames.get(callee) {
                         None => {
-                            // A suspending native: `__yield_now` is pending
-                            // once, then `()`.
+                            // A suspending native is pending once. Then
+                            // `__yield_now` is `()`, and any other makes its
+                            // call.
                             let unit = self.tys.unit();
                             let back = at(&extra);
-                            extra.push(BasicBlockData {
-                                statements: vec![self.assign(
-                                    dest,
-                                    Rvalue::Use(Operand::Const(Const {
-                                        ty: unit,
-                                        kind: ConstKind::Unit,
-                                    })),
-                                )],
-                                terminator: Terminator {
-                                    kind: TerminatorKind::Goto { target: b(*next) },
-                                    source_info: t.source_info,
-                                },
-                            });
+                            let resumed = if callee == YIELD_NOW {
+                                BasicBlockData {
+                                    statements: vec![self.assign(
+                                        dest,
+                                        Rvalue::Use(Operand::Const(Const {
+                                            ty: unit,
+                                            kind: ConstKind::Unit,
+                                        })),
+                                    )],
+                                    terminator: Terminator {
+                                        kind: TerminatorKind::Goto { target: b(*next) },
+                                        source_info: t.source_info,
+                                    },
+                                }
+                            } else {
+                                let TerminatorKind::Call { func, unwind, .. } = &t.kind else {
+                                    unreachable!("a suspension point is a call")
+                                };
+                                BasicBlockData {
+                                    statements: vec![],
+                                    terminator: Terminator {
+                                        kind: TerminatorKind::Call {
+                                            func: self.operand(func)?,
+                                            args: args
+                                                .iter()
+                                                .map(|a| self.operand(a))
+                                                .collect::<Result<_, _>>()?,
+                                            destination: dest,
+                                            target: Some(b(*next)),
+                                            unwind: *unwind,
+                                        },
+                                        source_info: t.source_info,
+                                    },
+                                }
+                            };
+                            extra.push(resumed);
                             resumes.push((state as u128, back));
                             self.blocks.push(self.pending(statements, state));
                             continue;
@@ -1007,11 +1076,12 @@ fn drop_frame(
         for effs in &stmt_effects[bi] {
             apply(&paths, &mut st, effs);
         }
-        // The call's moves have happened; its destination is not written yet.
+        // The call's moves have happened, unless it runs only when resumed;
+        // its destination is not written yet.
         let moved: Vec<Effect> = term_effects[bi]
             .iter()
             .copied()
-            .filter(|e| matches!(e, Effect::Uninit(_)))
+            .filter(|e| matches!(e, Effect::Uninit(_)) && !yields_before_call(&pt.callee))
             .collect();
         apply(&paths, &mut st, &moved);
         let mut out = Vec::new();
@@ -1651,5 +1721,63 @@ fn main() -> () {
             e.contains("leaf suspends and is used as a function value"),
             "{e}"
         );
+    }
+
+    /// A suspending native other than `__yield_now` yields before its call
+    /// and makes the call when resumed; a frame cancelled there still owns
+    /// what the call would have read.
+    #[test]
+    fn a_suspending_native_yields_before_its_call() {
+        use crate::mir::interp::{run, run_coroutines, run_coroutines_cancelled, Program};
+        let src = "
+struct R: Drop { id: i64 }
+
+fn R.drop(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const \"drop\", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: R;
+    let _2: ();
+    let _3: i64;
+    bb0: {
+        _1 = R { const 5_i64 };
+        _3 = const 0_i64;
+        _2 = sleep_ms(copy _3) -> bb1;
+    }
+    bb1: {
+        _2 = println(const \"woke\", copy _1.0) -> bb2;
+    }
+    bb2: {
+        drop(_1) -> bb3;
+    }
+    bb3: {
+        _0 = const ();
+        return;
+    }
+}
+";
+        let m = parse_module(src).unwrap();
+        let set = coroutines(&m.bodies);
+        let main = layout(m.body("main").unwrap(), &set);
+        // The argument `_3` is read by the call, after the resume.
+        assert_eq!(main.points[0].across, [Local(1), Local(3)]);
+        let prog = Program::from_module(&m);
+        let sync = run(&prog, &m.tys, "main", vec![]);
+        assert_eq!(sync.output, "woke5\ndrop5\n", "{:?}", sync.outcome);
+        let tasks = run_coroutines(&prog, &m.tys, "main", vec![]);
+        assert_eq!(tasks.output, sync.output, "{:?}", tasks.outcome);
+        assert_eq!(tasks.resumes, 1);
+        let c = run_coroutines_cancelled(&prog, &m.tys, "main", vec![], 1);
+        assert_eq!(c.output, "drop5\n", "{:?}", c.outcome);
     }
 }
