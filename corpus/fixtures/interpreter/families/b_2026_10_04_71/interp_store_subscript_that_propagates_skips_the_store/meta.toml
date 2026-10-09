@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "§7.5: a compound assignment evaluates its place's subscripts once (legacy calls `pick` twice); `m[k] = v` inserts (Gowtham, 2026-10-08 14:14Z). (kata thread, 2026-10-09) e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "d43d40485"
+classified_with = "ddae1ab1c+local"
 model_rev = "629c2395"

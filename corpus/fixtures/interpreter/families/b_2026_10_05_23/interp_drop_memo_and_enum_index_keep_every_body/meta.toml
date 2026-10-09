@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'count 10' class c: v2 order unreviewed against core §7"
 bucket = "b->c-unreviewed"
-classified_with = "9c612aba2+local"
+classified_with = "ddae1ab1c+local"
 fixed_by_classify = true
 model_rev = "629c2395"

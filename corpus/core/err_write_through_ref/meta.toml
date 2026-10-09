@@ -12,4 +12,4 @@ backends = []
 env = {}
 note = "legacy.out recorded by Thread A with legacy-build: it prints \"1 0\", while legacy `run --interp` prints \"1 1\" (the bare-for row write is lost in the build, kept in the interpreter). Legacy is frozen, so that divergence is recorded here, not filed. The expected.out wording of an error pin is guidance, not a byte oracle."
 bucket = "a:refused"
-classified_with = "9c612aba2+local"
+classified_with = "ddae1ab1c+local"

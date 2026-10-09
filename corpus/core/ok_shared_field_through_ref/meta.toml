@@ -12,4 +12,4 @@ backends = []
 env = {}
 note = "legacy.out recorded by Thread A with legacy-build (matches expected.out)."
 bucket = "a"
-classified_with = "9c612aba2+local"
+classified_with = "ddae1ab1c+local"

@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'par_block_heap_bindings_escape_no_double_free'"
 bucket = "mir-gap:move check"
-classified_with = "d43d40485"
+classified_with = "ddae1ab1c+local"
 model_rev = "629c2395"

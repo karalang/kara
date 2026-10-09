@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "v2 Display: collections print no type prefix (design.md §9 'A value renders the same at every depth'; review thread decision 2026-10-08) e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "9c612aba2+local"
+classified_with = "ddae1ab1c+local"
 model_rev = "629c2395"

@@ -26,7 +26,7 @@ fn mkp(i: i64) -> P[R] { return P.X(mk(i)) }
 enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 impl E {
-    fn eread(own self) -> i64 { match self { E.A(ref t) => { return 1; } E.B => { return 0; } } }
+    fn eread(own self) -> i64 { match self { E.A(t) => { return 1; } E.B => { return 0; } } }
     fn enone(self) -> i64 { return 5 }
 }
 

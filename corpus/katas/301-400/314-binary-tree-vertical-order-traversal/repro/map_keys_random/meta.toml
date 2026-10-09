@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "prints a plain Map's walk order, which is per-process random by design (the file's own header says so); no fixed expected output exists (kata thread, 2026-10-09)"
 bucket = "skip:prints a plain Map's walk order, which i"
-classified_with = "d43d40485"
+classified_with = "ddae1ab1c+local"
 model_rev = "f3a17c7c"

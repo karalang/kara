@@ -11,5 +11,5 @@ rules = []
 backends = []
 env = {}
 note = "legacy.out recorded by Thread A with legacy-build (matches expected.out)."
-bucket = "mir-gap:build"
-classified_with = "d43d40485"
+bucket = "mir-gap:runtime: in main at bbN[term]: TaskHandle[iN].join of a handle holding [Ref(Add"
+classified_with = "ddae1ab1c+local"

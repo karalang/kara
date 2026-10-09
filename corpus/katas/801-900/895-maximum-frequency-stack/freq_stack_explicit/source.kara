@@ -35,11 +35,11 @@ impl FreqStack {
         if f > self.maxfreq {
             self.maxfreq = f;
         }
-        match self.buckets.get(f) {
+        match self.buckets.get(f).cloned() {
             Some(bucket) => {
                 let mut b = bucket;
                 b.push(x);
-                self.buckets.insert(f, b.clone());
+                self.buckets.insert(f, b);
             }
             None => {
                 let mut b: Vec[i64] = Vec.new();

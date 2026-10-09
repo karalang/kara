@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'index reads inside par-branch must not add cancel checks; expected exactly 2 (one per helper() call), found {total}; IR:'"
 bucket = "a"
-classified_with = "9c612aba2+local"
+classified_with = "ddae1ab1c+local"
 model_rev = "629c2395"

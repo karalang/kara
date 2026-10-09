@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'declare void @karac_par_run'"
 bucket = "a:refused"
-classified_with = "9c612aba2+local"
+classified_with = "ddae1ab1c+local"
 model_rev = "629c2395"
 v2_reject = "core-semantics §11.2: two par branches that both print conflict, writes(Stdout) (kata thread, 2026-10-08)"
