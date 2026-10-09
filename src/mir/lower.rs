@@ -4144,6 +4144,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                     .collect();
                 self.lex_cmp(span, parts, dest)
             }
+            HK::Adt { .. } | HK::Shared { .. } if self.total_float_wrapper(t).is_some() => {
+                // `F64` / `F32` order their field totally: `-0.0 < 0.0`, and
+                // a NaN equals itself.
+                let (float, ft) = self.total_float_wrapper(t).expect("checked");
+                let lo = self.ref_to(l.field(0, ft), ft);
+                let ro = self.ref_to(r.field(0, ft), ft);
+                self.call_native(&format!("{float}.total_cmp"), vec![lo, ro], dest);
+                Ok(())
+            }
             HK::Adt { .. } | HK::Shared { .. } => {
                 if let Some((d, args)) = self.user_impl_method(t, "Ord", "cmp") {
                     let lo = self.ref_to(l, t);
@@ -4179,6 +4188,19 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             _ => self.unsupported(span, "ordering this type"),
         }
+    }
+
+    /// The library's total-order float wrapper `t` is (`F64`, `F32`): the
+    /// float type its one field holds, and that field's type.
+    fn total_float_wrapper(&self, t: Ty) -> Option<(&'static str, Ty)> {
+        let (adt, _) = self.tys().tcx().adt_of(t)?;
+        let float = match adt.name.as_str() {
+            "F64" => "f64",
+            "F32" => "f32",
+            _ => return None,
+        };
+        let ft = self.tys().tcx().field_ty(t, None, 0)?;
+        matches!(self.tys().tcx().kind(ft), HK::Float(_)).then_some((float, ft))
     }
 
     /// `dest` is the first pair's ordering that is not `Equal`, else `Equal`.
@@ -4430,6 +4452,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.seq_eq(span, l, r, t, elem, dest)
             }
             HK::Slice { elem, .. } => self.seq_eq(span, l, r, t, elem, dest),
+            HK::Adt { .. } | HK::Shared { .. } if self.total_float_wrapper(t).is_some() => {
+                let (ot, [_, equal, _]) = self.ordering_ty(span)?;
+                let o = self.temp(ot);
+                self.cmp_places(span, l, r, t, Place::local(o))?;
+                let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+                let disc = self.temp(isize_t);
+                self.assign(disc, Rvalue::Discriminant(Place::local(o)));
+                let want = Operand::Const(Const {
+                    ty: isize_t,
+                    kind: ConstKind::Scalar(equal as u128),
+                });
+                self.assign(
+                    dest,
+                    Rvalue::BinaryOp(BinOp::Eq, Operand::Copy(Place::local(disc)), want),
+                );
+                Ok(())
+            }
             HK::Adt { .. } | HK::Shared { .. } => {
                 if let Some((d, args)) = self.user_eq(t) {
                     let lo = self.ref_to(l, t);

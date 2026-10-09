@@ -304,3 +304,32 @@ fn main() {
         "true true false false false\nfalse false false false\n",
     );
 }
+
+/// The `F64` / `F32` wrappers compare their field by total order, every NaN
+/// as one and last: `-0.0 < 0.0`, a NaN equals itself, and as `Map` keys two
+/// NaNs are one key.
+#[test]
+fn the_float_wrappers_compare_by_total_order() {
+    let src = r#"
+fn main() {
+    let z = 0.0;
+    let a = F64.from(-z);
+    let b = F64.from(z);
+    let n = F64.from(z / z);
+    println(f"{a < b} {a == b} {n == n} {b < n} {a.cmp(b).is_lt()}");
+    let mut m: Map[F64, i64] = Map.new();
+    m.insert(n, 1);
+    m.insert(F64.from(z / z), 2);
+    println(f"{m.len()}");
+    let mut q: PriorityQueue[F32] = PriorityQueue.new();
+    q.push(F32.from(2.5));
+    q.push(F32.from(-1.0));
+    q.push(F32.from(0.5));
+    while let Some(x) = q.pop() {
+        print(f"{x.value} ");
+    }
+    println("");
+}
+"#;
+    assert_runs(src, "true false true true true\n1\n-1 0.5 2.5 \n");
+}

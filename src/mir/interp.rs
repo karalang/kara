@@ -538,6 +538,39 @@ impl<'a> Interp<'a> {
         let (ty_name, method) = split_method(name);
         let base = ty_name.split('[').next().unwrap_or(ty_name);
         match (base, method) {
+            ("F64" | "F32", "from") if args.len() == 1 => {
+                // The total-order wrapper around its one float field.
+                Ok(Value::Agg(args))
+            }
+            ("f64" | "f32", "total_cmp") if args.len() == 2 => {
+                // The total order the `F64` / `F32` wrappers compare by.
+                let mut x = [0f64; 2];
+                for (i, a) in args.iter().enumerate() {
+                    let v = match a {
+                        Value::Ref(at) => self.slot(at)?,
+                        v => v.clone(),
+                    };
+                    let Value::Float(f) = v else {
+                        return err(format!("{name}: argument {i} is not a float"));
+                    };
+                    x[i] = f;
+                }
+                // Every NaN orders as the positive quiet one, last: its sign
+                // is the producer's (x86 division gives a negative NaN), not
+                // the program's, as the legacy backends canonicalize it.
+                let canon = |f: f64| if f.is_nan() { f64::NAN } else { f };
+                let o = if base == "f32" {
+                    (canon(x[0]) as f32).total_cmp(&(canon(x[1]) as f32))
+                } else {
+                    canon(x[0]).total_cmp(&canon(x[1]))
+                };
+                let want = match o {
+                    std::cmp::Ordering::Less => "Less",
+                    std::cmp::Ordering::Equal => "Equal",
+                    std::cmp::Ordering::Greater => "Greater",
+                };
+                self.variant_named(ret, None, want, Vec::new())
+            }
             ("Env", "args") => {
                 // argv[0] only: the MIR interpreter passes no arguments,
                 // and legacy counts the program name.
@@ -2490,6 +2523,18 @@ impl<'a> Interp<'a> {
 
     /// The index of the entry whose key equals `key`, if any.
     fn find_key(&mut self, id: AllocId, key: &Value, key_ty: Ty, is_map: bool) -> R<Option<usize>> {
+        if self.total_float_key(key_ty) {
+            // `F64` / `F32` keys are equal by total order: their bits.
+            let want = total_form(self.key_form(key)?);
+            let n = self.vec_elems(id)?.len();
+            for i in 0..n {
+                let k = self.entry_key(id, i, is_map)?;
+                if total_form(self.key_form(&k)?) == want {
+                    return Ok(Some(i));
+                }
+            }
+            return Ok(None);
+        }
         let user_eq = self.user_eq(key_ty);
         if user_eq.is_none() {
             if let Some(r) = self.key_repr(key)? {
@@ -2515,6 +2560,16 @@ impl<'a> Interp<'a> {
             }
         }
         Ok(None)
+    }
+
+    /// Whether `ty` is a library total-order float wrapper (`F64`, `F32`).
+    fn total_float_key(&self, ty: Ty) -> bool {
+        let mut ty = ty;
+        while let TyKind::Ref(inner) | TyKind::MutRef(inner) = self.tys.kind(ty) {
+            ty = inner;
+        }
+        matches!(self.tys.kind(ty), TyKind::Adt(_))
+            && matches!(self.tys.adt_name(ty).as_str(), "F64" | "F32")
     }
 
     /// The key of table `id`'s entry `i`.
@@ -3580,6 +3635,12 @@ impl<'a> Interp<'a> {
         };
         if fs.is_empty() {
             return Ok(name);
+        }
+        if k.is_none() && matches!(name.as_str(), "F64" | "F32") && fs.len() == 1 {
+            // The total-order float wrappers show as the float they hold.
+            if let Some(t) = self.tys.field_ty(ty, None, 0) {
+                return self.display_typed(&fs[0], t);
+            }
         }
         let var = &adt.variants[k.unwrap_or(0) as usize];
         let mut parts = Vec::with_capacity(fs.len());
@@ -5069,6 +5130,18 @@ fn key_order(a: &Value, b: &Value) -> std::cmp::Ordering {
                 .unwrap_or(Ordering::Equal)
         }),
         _ => Ordering::Equal,
+    }
+}
+
+/// `v` with each float replaced by its bits, which are equal exactly when
+/// the floats are under the total order (every NaN as one).
+fn total_form(v: Value) -> Value {
+    match v {
+        Value::Float(f) if f.is_nan() => Value::Int(f64::NAN.to_bits() as i128),
+        Value::Float(f) => Value::Int(f.to_bits() as i128),
+        Value::Agg(fs) => Value::Agg(fs.into_iter().map(total_form).collect()),
+        Value::Variant(i, fs) => Value::Variant(i, fs.into_iter().map(total_form).collect()),
+        v => v,
     }
 }
 
