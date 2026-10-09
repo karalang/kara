@@ -940,6 +940,18 @@ class Model:
             return False
         return not any(cell is t for ts in self.temps[:-1] for t in ts)
 
+    def check_dropped_temp_origin(self, v):
+        """A value leaving a scope must not refer to a temporary that scope already dropped (§5.5)."""
+        if isinstance(v, Ref):
+            if any(c.temp and c.v is MOVED for c in [v.cell] + list(v.origins)):
+                raise ModelError("a reference to a temporary outlives its statement (§5.5)")
+        elif isinstance(v, Enum) and isinstance(v.payload, list):
+            for x in v.payload:
+                self.check_dropped_temp_origin(x)
+        elif isinstance(v, Tup):
+            for x in v.elems:
+                self.check_dropped_temp_origin(x)
+
     def check_no_temp_origin(self, v):
         if isinstance(v, Ref):
             if self.outlived_temp(v.cell) or any(self.outlived_temp(o) for o in v.origins):
@@ -1576,7 +1588,12 @@ class Model:
             self.bind(pat, c, p, b, sc)
             self.frame.scopes.append(sc)
             try:
-                v = self.value(body) if body[0] != "block" else self.eval_block(body[1])
+                if body[0] == "block":
+                    v = self.eval_block(body[1])
+                else:
+                    # an unbraced arm is a block with only a tail: its temporaries drop at the arm's end
+                    v = self.in_stmt(lambda: self.value(body), keep_result=True)
+                    self.check_dropped_temp_origin(v)
             except Ret as r:
                 self.exit_scope(sc, r.is_err)
                 self.frame.scopes.pop()
