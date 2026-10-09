@@ -154,6 +154,8 @@ pub fn lower_program<'a>(
         bindings: FxHashMap::default(),
         statics: FxHashMap::default(),
         static_queue: Vec::new(),
+        eq_queue: Vec::new(),
+        eq_queued: FxHashSet::default(),
         self_tys: FxHashMap::default(),
         queue: Vec::new(),
         queued: FxHashSet::default(),
@@ -234,6 +236,8 @@ pub fn lower_program<'a>(
             lcx.lower_closure(job);
         } else if let Some((def, name)) = lcx.static_queue.pop() {
             lcx.lower_static(def, &name);
+        } else if let Some((t, name)) = lcx.eq_queue.pop() {
+            lcx.lower_derived_eq(t, &name);
         } else {
             break;
         }
@@ -399,6 +403,10 @@ struct Lcx<'a> {
     statics: FxHashMap<DefId, (u32, Ty, bool)>,
     /// Statics whose initializer body is still to be built.
     static_queue: Vec<(DefId, String)>,
+    /// Derived `==` bodies to build, for types whose comparison reaches
+    /// itself (`shared struct Node { next: Option[Node] }`).
+    eq_queue: Vec<(Ty, String)>,
+    eq_queued: FxHashSet<Ty>,
     /// The receiver type a method of a non-generic impl was called with:
     /// its `self` type when the impl names a concrete instance of a
     /// generic type (`impl Joiner for Vec[String]`).
@@ -814,6 +822,39 @@ impl<'a> Lcx<'a> {
         };
         let mut bx = Bx::new(self, instance, t, Vec::new());
         let _ = bx.lower_static_init(&b.value);
+        let (body, errors) = bx.finish();
+        self.errors.extend(errors);
+        if let Some(body) = body {
+            self.program.add(body);
+        }
+    }
+
+    /// `T.eq#derived(a: ref T, b: ref T) -> bool`: a derived `==` built as
+    /// its own body, which a comparison calls where it would otherwise
+    /// inline itself forever.
+    fn lower_derived_eq(&mut self, t: Ty, name: &str) {
+        let bool_t = self.tys.bool();
+        let rt = self.tys.tcx().reference(t, false);
+        let instance = InstanceId {
+            def: DefId(u32::MAX),
+            args: Vec::new(),
+            name: name.to_string(),
+        };
+        let mut bx = Bx::new(self, instance, bool_t, Vec::new());
+        let a = bx.b.arg("a", rt);
+        let b = bx.b.arg("b", rt);
+        bx.eq_stack.push(t);
+        let r = bx.derived_eq(
+            Span::default(),
+            Place::local(a).project(ProjElem::Deref),
+            Place::local(b).project(ProjElem::Deref),
+            t,
+            Place::local(Local::RETURN_PLACE),
+        );
+        if r.is_ok() {
+            let cur = bx.cur;
+            bx.b.terminate(cur, TerminatorKind::Return);
+        }
         let (body, errors) = bx.finish();
         self.errors.extend(errors);
         if let Some(body) = body {
@@ -1347,6 +1388,8 @@ struct Bx<'l, 'a> {
     impl_target: Option<(DefId, usize)>,
     /// Subscripts of an assignment's target, evaluated before its value.
     pre_indices: FxHashMap<NodeId, Operand>,
+    /// The types whose derived `==` is being inlined, outermost first.
+    eq_stack: Vec<Ty>,
 }
 
 type R<T> = Result<T, ()>;
@@ -1378,6 +1421,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             ensures: &[],
             impl_target: None,
             pre_indices: FxHashMap::default(),
+            eq_stack: Vec::new(),
         }
     }
 
@@ -4436,16 +4480,96 @@ impl<'l, 'a> Bx<'l, 'a> {
             BinOp::Le => (greater, false),
             _ => (less, false),
         };
+        let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
+        let op = if eq { BinOp::Eq } else { BinOp::Ne };
+        // A type that implements `PartialOrd` and not `Ord`: its own
+        // `partial_cmp`, where `None` (unordered) makes every operator false.
+        let partial = match self.user_impl_method(lt, "Ord", "cmp") {
+            Some(_) => None,
+            None => self.user_impl_method(lt, "PartialOrd", "partial_cmp"),
+        };
+        if let Some((d, args)) = partial {
+            let Some(opt_t) = self.option_of(ot) else {
+                return self.unsupported(left.span, "a `partial_cmp` with no `Option`");
+            };
+            let some = self
+                .tys()
+                .tcx()
+                .adt_of(opt_t)
+                .and_then(|(a, _)| a.variants.iter().position(|v| v.name == "Some"));
+            let Some(some) = some else {
+                return self.unsupported(left.span, "a `partial_cmp` with no `Option`");
+            };
+            let lo = self.ref_to(lp, lt);
+            let ro = self.ref_to(rp, lt);
+            let name = self.lcx.instance(d, args.clone());
+            let func = self.fn_operand(&name, d, args);
+            let opt = self.temp(opt_t);
+            let next = self.b.new_block();
+            self.goto_with(
+                TerminatorKind::Call {
+                    func,
+                    args: vec![lo, ro],
+                    destination: Place::local(opt),
+                    target: Some(next),
+                    unwind: UnwindAction::Abort,
+                },
+                next,
+            );
+            let tag = self.temp(isize_t);
+            self.assign(tag, Rvalue::Discriminant(Place::local(opt)));
+            let is_some = self.temp(self.tys().bool());
+            self.assign(
+                is_some,
+                Rvalue::BinaryOp(
+                    BinOp::Eq,
+                    Operand::Copy(Place::local(tag)),
+                    Operand::Const(Const {
+                        ty: isize_t,
+                        kind: ConstKind::Scalar(some as u128),
+                    }),
+                ),
+            );
+            let (yes, no, join) = (self.b.new_block(), self.b.new_block(), self.b.new_block());
+            self.goto_with(
+                TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(Place::local(is_some)),
+                    targets: SwitchTargets::if_else(yes, no),
+                },
+                no,
+            );
+            let f = Operand::Const(Const {
+                ty: self.tys().bool(),
+                kind: ConstKind::Scalar(0),
+            });
+            self.assign(dest.clone(), Rvalue::Use(f));
+            self.goto(join);
+            self.cur = yes;
+            let payload = Place::local(opt)
+                .project(ProjElem::Downcast(VariantIdx(some as u32)))
+                .field(0, ot);
+            let disc = self.temp(isize_t);
+            self.assign(disc, Rvalue::Discriminant(payload));
+            let want = Operand::Const(Const {
+                ty: isize_t,
+                kind: ConstKind::Scalar(want as u128),
+            });
+            self.assign(
+                dest,
+                Rvalue::BinaryOp(op, Operand::Copy(Place::local(disc)), want),
+            );
+            self.goto(join);
+            self.cur = join;
+            return Ok(());
+        }
         let o = self.temp(ot);
         self.cmp_places(left.span, lp, rp, lt, Place::local(o))?;
-        let isize_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
         let disc = self.temp(isize_t);
         self.assign(disc, Rvalue::Discriminant(Place::local(o)));
         let want = Operand::Const(Const {
             ty: isize_t,
             kind: ConstKind::Scalar(want as u128),
         });
-        let op = if eq { BinOp::Eq } else { BinOp::Ne };
         self.assign(
             dest,
             Rvalue::BinaryOp(op, Operand::Copy(Place::local(disc)), want),
@@ -4895,22 +5019,56 @@ impl<'l, 'a> Bx<'l, 'a> {
                     );
                     return Ok(());
                 }
-                let (adt, _) = self.tys().tcx().adt_of(t).expect("an ADT");
-                if !adt.is_enum {
-                    let n = adt.variants.first().map_or(0, |v| v.fields.len());
-                    let mut parts = Vec::new();
-                    for i in 0..n as u32 {
-                        let Some(ft) = self.tys().tcx().field_ty(t, None, i) else {
-                            return self.unsupported(span, "comparing this type");
-                        };
-                        parts.push((l.clone().field(i, ft), r.clone().field(i, ft), ft));
+                if self.eq_stack.contains(&t) {
+                    // The comparison reaches its own type: call the derived
+                    // body, built once, rather than inline it again.
+                    let name = format!("{}.eq#derived", self.tys().display(t));
+                    if self.lcx.eq_queued.insert(t) {
+                        self.lcx.eq_queue.push((t, name.clone()));
                     }
-                    return self.all_eq(span, parts, dest);
+                    let lo = self.ref_to(l, t);
+                    let ro = self.ref_to(r, t);
+                    let func = self.fn_operand(&name, DefId(u32::MAX), Vec::new());
+                    let next = self.b.new_block();
+                    self.goto_with(
+                        TerminatorKind::Call {
+                            func,
+                            args: vec![lo, ro],
+                            destination: dest,
+                            target: Some(next),
+                            unwind: UnwindAction::Abort,
+                        },
+                        next,
+                    );
+                    return Ok(());
                 }
-                self.enum_eq(span, l, r, t, &adt, dest)
+                self.eq_stack.push(t);
+                let res = self.derived_eq(span, l, r, t, dest);
+                self.eq_stack.pop();
+                res
             }
             _ => self.unsupported(span, "comparing this type"),
         }
+    }
+
+    /// `l == r` by a derived `PartialEq`: field by field, or variant and
+    /// then payload.
+    fn derived_eq(&mut self, span: Span, l: Place, r: Place, t: Ty, dest: Place) -> R<()> {
+        let Some((adt, _)) = self.tys().tcx().adt_of(t) else {
+            return self.unsupported(span, "comparing this type");
+        };
+        if !adt.is_enum {
+            let n = adt.variants.first().map_or(0, |v| v.fields.len());
+            let mut parts = Vec::new();
+            for i in 0..n as u32 {
+                let Some(ft) = self.tys().tcx().field_ty(t, None, i) else {
+                    return self.unsupported(span, "comparing this type");
+                };
+                parts.push((l.clone().field(i, ft), r.clone().field(i, ft), ft));
+            }
+            return self.all_eq(span, parts, dest);
+        }
+        self.enum_eq(span, l, r, t, &adt, dest)
     }
 
     /// Two enum values are equal when their variants are, and then their
@@ -12665,6 +12823,45 @@ fn main() {
 
     /// `std.process`'s builder methods are Kāra, appended for a program that
     /// names `Command`; its `#[compiler_builtin]` methods stay native calls.
+    #[test]
+    fn ordering_operators_use_a_user_partial_cmp() {
+        let src = r#"
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl PartialOrd for Item {
+    fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] {
+        if self.id == 3 { None } else { Some(other.id.cmp(self.id)) }
+    }
+}
+fn main() {
+    let a = Item { id: 1 };
+    let b = Item { id: 5 };
+    let n = Item { id: 3 };
+    println(f"{a < b} {a > b} {a <= b} {a >= b}");
+    println(f"{n < b} {n > b} {n <= b} {n >= b}");
+}
+"#;
+        let out = "false true false true\nfalse false false false\n";
+        assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
+    }
+
+    #[test]
+    fn derived_eq_on_a_recursive_type_is_its_own_body() {
+        let src = r#"
+#[derive(Eq, PartialEq)]
+shared struct Node { v: i64, next: Option[Node] }
+fn chain(n: i64) -> Node {
+    if n == 0 { return Node { v: 0, next: None }; }
+    return Node { v: n, next: Some(chain(n - 1)) };
+}
+fn main() {
+    println(chain(4) == chain(4));
+    println(chain(4) == chain(3));
+}
+"#;
+        assert_eq!(run_source(src), Ok(("true\nfalse\n".to_string(), Some(0))));
+    }
+
     #[test]
     fn distinct_types_wrap_their_base() {
         let src = r#"
