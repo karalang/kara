@@ -1023,6 +1023,10 @@ impl<'a> Lcx<'a> {
                 elem: self.convert(elem)?,
                 mutable,
             },
+            HK::Vector { elem, lanes } => HK::Vector {
+                elem: self.convert(elem)?,
+                lanes,
+            },
             HK::Ref(t) => HK::Ref(self.convert(t)?),
             HK::MutRef(t) => HK::MutRef(self.convert(t)?),
             HK::Opaque { .. } => return Err("an iterator value".into()),
@@ -1217,7 +1221,9 @@ fn has_param(tys: &TyInterner, t: Ty) -> bool {
         }
         HK::Tuple(l) => tcx.list(l).into_iter().any(|a| has_param(tys, a)),
         HK::Ref(i) | HK::MutRef(i) | HK::Weak(i) => has_param(tys, i),
-        HK::Array { elem, .. } | HK::Slice { elem, .. } => has_param(tys, elem),
+        HK::Array { elem, .. } | HK::Slice { elem, .. } | HK::Vector { elem, .. } => {
+            has_param(tys, elem)
+        }
         _ => false,
     }
 }
@@ -3064,7 +3070,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 (ProjElem::Field(_, ft), _) => *ft,
                 (ProjElem::Downcast(_), _) => t,
                 (ProjElem::Deref, HK::Ref(inner) | HK::MutRef(inner)) => inner,
-                (ProjElem::Index(_) | ProjElem::ConstIndex(_), HK::Array { elem, .. }) => elem,
+                (
+                    ProjElem::Index(_) | ProjElem::ConstIndex(_),
+                    HK::Array { elem, .. } | HK::Vector { elem, .. },
+                ) => elem,
                 _ => t,
             };
         }
@@ -3131,7 +3140,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 args,
             } => (self.tys().tcx().list(args)[1], false),
             HK::Slice { elem, .. } => (elem, true),
-            HK::Array { .. } => return Ok(self.array_index(base, idx)),
+            HK::Array { .. } | HK::Vector { .. } => return Ok(self.array_index(base, idx)),
             _ => return self.unsupported(e.span, "indexing this type"),
         };
         let (usize_t, rt, et) = {
@@ -4253,6 +4262,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         if matches!(self.tys().tcx().kind(lbase), HK::Str) {
             return self.string_op(left, bin, right, dest);
+        }
+        // `a + b`, `a < b` on lane vectors: one operator over every lane
+        // (a comparison gives a `Vector[bool, N]` mask).
+        if lt0 == lbase && matches!(self.tys().tcx().kind(lbase), HK::Vector { .. }) {
+            let l = self.expr_operand(left)?;
+            let r = self.operand_at(right, lbase)?;
+            self.assign(dest, Rvalue::BinaryOp(bin, l, r));
+            return Ok(());
         }
         let scalar = |k: HK| {
             matches!(
@@ -8245,6 +8262,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                 });
                 Ok(())
             }
+            // `Vector[f32, 4](a, b, c, d)`: the lanes, as an array's
+            // elements.
+            "Vector" => {
+                let t = self.expr_ty(e)?;
+                let HK::Vector { elem, .. } = self.tys().tcx().kind(t) else {
+                    return self.unsupported(e.span, "a `Vector` of no lane type");
+                };
+                let mut ops = Vec::with_capacity(args.len());
+                for a in args {
+                    ops.push(self.operand_at(&a.value, elem)?);
+                }
+                self.assign(dest, Rvalue::Aggregate(AggregateKind::Array(elem), ops));
+                Ok(())
+            }
             // `Vec.new()`, `String.new()`, `Map.new()`, `Vec.with_capacity(n)`:
             // a library constructor, named after the type it builds.
             // `String.from(x)`: a literal is passed as the constant; a
@@ -8413,6 +8444,31 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             self.call_native(&format!("{owner}.{method}"), ops, dest);
             return Ok(());
+        }
+        if let ExprKind::Path {
+            segments,
+            generic_args: Some(_),
+        } = &object.kind
+        {
+            if segments.len() == 1 && segments[0] == "Vector" {
+                // `Vector[f32, 4].splat(x)`, `.from_array([..])`: a library
+                // constructor of the vector type the call builds.
+                let t = self.expr_ty(e)?;
+                let elem = match self.tys().tcx().kind(t) {
+                    HK::Vector { elem, .. } => elem,
+                    _ => return self.unsupported(e.span, "a `Vector` constructor of no lane type"),
+                };
+                let mut ops = Vec::with_capacity(args.len());
+                for a in args {
+                    ops.push(match method {
+                        "splat" => self.operand_at(&a.value, elem)?,
+                        _ => self.expr_operand(&a.value)?,
+                    });
+                }
+                let name = format!("{}.{method}", self.tys().display(t));
+                self.call_native(&name, ops, dest);
+                return Ok(());
+            }
         }
         if method == "cmp" && self.scalar_cmp(e, object, args, dest.clone())? {
             return Ok(());
@@ -8744,6 +8800,26 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     fn hint_lib_args(&mut self, recv: Ty, method: &str, args: &[CallArg]) {
+        // `v.shuffle([3, 0])`: the lane indices are a literal the checker
+        // reads as constants and leaves untyped.
+        if method == "shuffle" && matches!(self.tys().tcx().kind(recv), HK::Vector { .. }) {
+            for a in args {
+                let ExprKind::ArrayLiteral(es) = &a.value.kind else {
+                    continue;
+                };
+                let (i64_t, at) = {
+                    let tcx = self.tys().tcx();
+                    let i = tcx.intern(HK::Int(IntSize::I64));
+                    let len = crate::ty::ArrayLen::Known(es.len() as u64);
+                    (i, tcx.intern(HK::Array { elem: i, len }))
+                };
+                self.ty_hints.entry(a.value.id).or_insert(at);
+                for x in es {
+                    self.ty_hints.entry(x.id).or_insert(i64_t);
+                }
+            }
+            return;
+        }
         let Some(params) = self.lib_param_tys(recv, method) else {
             return;
         };
@@ -12274,6 +12350,39 @@ fn main() {
 
     /// `std.process`'s builder methods are Kāra, appended for a program that
     /// names `Command`; its `#[compiler_builtin]` methods stay native calls.
+    #[test]
+    fn lane_vectors_lower_as_lanes_with_lane_operators() {
+        let src = r#"
+fn main() {
+    let a = Vector[i64, 4](1, 5, 3, 8);
+    let b = Vector[i64, 4].splat(2);
+    let s = a + b;
+    let m = a < b;
+    let p = Vector[f64, 4](1.0, 2.0, 3.0, 4.0);
+    let q = p.shuffle([3, 0]);
+    println(s[1]);
+    println(m[0]);
+    println(a.dot(b));
+    println(q[0]);
+}
+"#;
+        let lowered = build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let main = crate::mir::pretty::pretty_body(&lowered.program.bodies["main"], &lowered.tys);
+        for want in [
+            "Vector[i64, 4]",
+            "Vector[bool, 4]",
+            "Vector[f64, 2]",
+            "[const 1_i64, const 5_i64, const 3_i64, const 8_i64]",
+            "Vector[i64, 4].splat(const 2_i64)",
+            "Vector[i64, 4].dot(",
+            "Vector[f64, 4].shuffle(",
+            " Add(",
+            " Lt(",
+        ] {
+            assert!(main.contains(want), "no `{want}` in\n{main}");
+        }
+    }
+
     #[test]
     fn baked_process_builder_bodies() {
         let src = r#"

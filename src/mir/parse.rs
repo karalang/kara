@@ -478,6 +478,15 @@ impl Parser {
             "f32" => TyKind::Float(FloatTy::F32),
             "f64" => TyKind::Float(FloatTy::F64),
             "String" => TyKind::Intrinsic(IntrinsicTy::String),
+            "Vector" => {
+                c.expect("[")?;
+                let elem = self.ty(c)?;
+                c.expect(",")?;
+                let lanes = crate::ty::ArrayLen::Known(c.number()?);
+                c.expect("]")?;
+                let tcx = self.tys.tcx();
+                return Ok(tcx.intern(crate::ty::TyKind::Vector { elem, lanes }));
+            }
             "Array" | "Slice" | "Vec" | "Set" | "Map" | "VecDeque" | "SortedSet" | "SortedMap" => {
                 c.expect("[")?;
                 let a = self.ty(c)?;

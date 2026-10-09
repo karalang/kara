@@ -432,6 +432,13 @@ impl TyInterner {
         tcx.intern(shared)
     }
 
+    /// Whether `t` is a `Vector[T, N]`, whose operators work lane by lane
+    /// (`a + b`, and `a < b` giving `Vector[bool, N]`); MIR otherwise sees
+    /// it as `Array[T, N]`.
+    pub fn is_vector(&self, t: Ty) -> bool {
+        matches!(self.tcx.kind(t), SharedKind::Vector { .. })
+    }
+
     /// MIR's view of `t`.
     pub fn kind(&self, t: Ty) -> TyKind {
         let tcx = &self.tcx;
@@ -451,9 +458,15 @@ impl TyInterner {
             SharedKind::StaticStr => TyKind::Str,
             SharedKind::Str => TyKind::Intrinsic(IntrinsicTy::String),
             SharedKind::Tuple(l) => TyKind::Tuple(tcx.list(l)),
+            // A lane vector is laid out and read as its lanes' array;
+            // `is_vector` tells the operators apart.
             SharedKind::Array {
                 elem,
                 len: ArrayLen::Known(n),
+            }
+            | SharedKind::Vector {
+                elem,
+                lanes: ArrayLen::Known(n),
             } => TyKind::Array(elem, n),
             SharedKind::Slice { elem, .. } => TyKind::Slice(elem),
             SharedKind::Adt { def, .. } => TyKind::Adt(AdtId(def.0)),
@@ -563,6 +576,9 @@ impl TyInterner {
             TyKind::Tuple(ts) => {
                 let parts: Vec<String> = ts.iter().map(|&t| self.display(t)).collect();
                 format!("({})", parts.join(", "))
+            }
+            TyKind::Array(e, n) if self.is_vector(t) => {
+                format!("Vector[{}, {}]", self.display(e), n)
             }
             TyKind::Array(e, n) => format!("Array[{}, {}]", self.display(e), n),
             TyKind::Slice(e) => format!("Slice[{}]", self.display(e)),

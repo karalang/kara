@@ -90,6 +90,12 @@ pub enum TyKind {
         elem: Ty,
         mutable: bool,
     },
+    /// `Vector[T, N]`, the portable-SIMD lane vector: `Copy`, laid out and
+    /// read like `Array[T, N]`, with element-wise operators.
+    Vector {
+        elem: Ty,
+        lanes: ArrayLen,
+    },
     /// A struct or enum, including the builtin collections (`Vec`, `Option`,
     /// `Result`, `Map`, …), which the caller's name lookup maps to DefIds.
     ///
@@ -369,6 +375,10 @@ impl TyCtxt {
                         len: ArrayLen::Param(_),
                         ..
                     }
+                    | TyKind::Vector {
+                        lanes: ArrayLen::Param(_),
+                        ..
+                    }
             ) {
                 concrete = false;
             }
@@ -398,7 +408,9 @@ impl TyCtxt {
                 }
                 self.walk(ret, f);
             }
-            TyKind::Array { elem, .. } | TyKind::Slice { elem, .. } => self.walk(elem, f),
+            TyKind::Array { elem, .. }
+            | TyKind::Vector { elem, .. }
+            | TyKind::Slice { elem, .. } => self.walk(elem, f),
             TyKind::Ref(t)
             | TyKind::MutRef(t)
             | TyKind::Weak(t)
@@ -468,6 +480,15 @@ impl TyCtxt {
                     known => known,
                 },
             },
+            TyKind::Vector { elem, lanes } => TyKind::Vector {
+                elem: self.subst(elem, args, const_args),
+                lanes: match lanes {
+                    ArrayLen::Param(p) => {
+                        const_args.get(p.index as usize).copied().unwrap_or(lanes)
+                    }
+                    known => known,
+                },
+            },
             TyKind::Slice { elem, mutable } => TyKind::Slice {
                 elem: self.subst(elem, args, const_args),
                 mutable,
@@ -531,6 +552,10 @@ impl TyCtxt {
                 elem: go(elem),
                 len,
             },
+            TyKind::Vector { elem, lanes } => TyKind::Vector {
+                elem: go(elem),
+                lanes,
+            },
             TyKind::Slice { elem, mutable } => TyKind::Slice {
                 elem: go(elem),
                 mutable,
@@ -578,6 +603,13 @@ impl TyCtxt {
                     ArrayLen::Param(p) => self.resolve_name(p.name).to_string(),
                 };
                 format!("Array[{}, {len}]", self.display(elem, def_name))
+            }
+            TyKind::Vector { elem, lanes } => {
+                let lanes = match lanes {
+                    ArrayLen::Known(n) => n.to_string(),
+                    ArrayLen::Param(p) => self.resolve_name(p.name).to_string(),
+                };
+                format!("Vector[{}, {lanes}]", self.display(elem, def_name))
             }
             TyKind::Slice { elem, mutable } => format!(
                 "{}Slice[{}]",
@@ -716,6 +748,7 @@ impl TyCtxt {
                 self.list(l).into_iter().all(|t| self.is_copy(t))
             }
             TyKind::Array { elem, .. } => self.is_copy(elem),
+            TyKind::Vector { .. } => true,
             // A generic type that is `Copy` is so at the instances whose
             // arguments are (`Option[i64]`, not `Option[String]`).
             TyKind::Adt { def, args } => {
@@ -763,6 +796,7 @@ impl TyCtxt {
                 .into_iter()
                 .any(|t| self.needs_drop_in(t, outer)),
             TyKind::Array { elem, .. } => self.needs_drop_in(elem, outer),
+            TyKind::Vector { .. } => false,
             TyKind::Adt { .. } => {
                 let Some((adt, args)) = self.adt_of(ty) else {
                     return false;
@@ -821,6 +855,16 @@ impl TyCtxt {
                 name: self.param_name(name),
             })
         };
+        let length = |n: &ConstArg| -> Result<ArrayLen, LowerError> {
+            match n {
+                ConstArg::Literal(n) if *n >= 0 => Ok(ArrayLen::Known(*n as u64)),
+                ConstArg::ConstParam(name) => Ok(ArrayLen::Param(param_ty(name)?)),
+                ConstArg::ConstVar(_) => Err(LowerError::Unresolved),
+                ConstArg::Literal(_) | ConstArg::DynamicDim => {
+                    Err(LowerError::Unsupported("array length"))
+                }
+            }
+        };
         let kind = match ty {
             Type::Int(s) => TyKind::Int(*s),
             Type::UInt(s) => TyKind::UInt(*s),
@@ -834,14 +878,11 @@ impl TyCtxt {
             Type::Tuple(elems) => TyKind::Tuple(lower_all(elems)?),
             Type::Array { element, size } => TyKind::Array {
                 elem: lower(element)?,
-                len: match size {
-                    ConstArg::Literal(n) if *n >= 0 => ArrayLen::Known(*n as u64),
-                    ConstArg::ConstParam(name) => ArrayLen::Param(param_ty(name)?),
-                    ConstArg::ConstVar(_) => return Err(LowerError::Unresolved),
-                    ConstArg::Literal(_) | ConstArg::DynamicDim => {
-                        return Err(LowerError::Unsupported("array length"))
-                    }
-                },
+                len: length(size)?,
+            },
+            Type::Vector { element, lanes } => TyKind::Vector {
+                elem: lower(element)?,
+                lanes: length(lanes)?,
             },
             Type::Slice { element, mutable } => TyKind::Slice {
                 elem: lower(element)?,
@@ -902,7 +943,6 @@ impl TyCtxt {
             Type::Rc(_) => return Err(LowerError::Unsupported("Rc[T]")),
             Type::Arc(_) => return Err(LowerError::Unsupported("Arc[T]")),
             Type::Weak(inner) => TyKind::Weak(lower(inner)?),
-            Type::Vector { .. } => return Err(LowerError::Unsupported("Vector[T, N]")),
             Type::Shape(_) => return Err(LowerError::Unsupported("shape arguments")),
             // `I.Item` over a parameter in scope, or `Tk[I].Item` over a
             // nominal type; the builder normalizes it at each instance.
