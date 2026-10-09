@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "depends on branch cancellation, which v2 drops (design.md Failure: no branch is cancelled), so the gated branch spins forever (Thread B, 2026-10-09)"
 bucket = "skip:depends on branch cancellation, which v2"
-classified_with = "2e937a8b2+local"
+classified_with = "9c612aba2+local"
 model_rev = "7b8ab2eb"

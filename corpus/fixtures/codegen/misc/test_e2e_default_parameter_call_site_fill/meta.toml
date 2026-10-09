@@ -11,6 +11,6 @@ rules = []
 backends = []
 env = {}
 bucket = "b->a"
-classified_with = "4e6b50666"
+classified_with = "9c612aba2+local"
 fixed_by_classify = true
 model_rev = "f3a17c7c"

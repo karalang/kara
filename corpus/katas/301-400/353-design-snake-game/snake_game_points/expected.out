@@ -1,0 +1,15 @@
+example: 0 0 1 1 2 -1
+wall: -1
+tail chase: 1 2 2 2 2 2 2 2 2 2
+self bite: 1 2 3 4 -1
+no food left: 1 1 1 1 1
+turn back at length 2: 1 1
+turn back at length 3: 1 2 -1
+after 1200 moves: score 400, length 401
+after 2400 moves: score 800, length 801
+after 3600 moves: score 1000, length 1001
+after 4800 moves: score 1000, length 1001
+after 6000 moves: score 1000, length 1001
+after 7200 moves: score 1000, length 1001
+bite: -1
+long game: 7200 moves, checksum 769209767

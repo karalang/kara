@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: \"target `native` does not provide resource 'Display'\""
 bucket = "check-refuses:E0411"
-classified_with = "2e937a8b2+local"
+classified_with = "9c612aba2+local"
 model_rev = "f3a17c7c"

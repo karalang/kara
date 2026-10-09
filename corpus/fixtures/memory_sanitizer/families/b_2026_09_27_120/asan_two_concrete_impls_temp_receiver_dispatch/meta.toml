@@ -11,5 +11,5 @@ rules = []
 backends = []
 env = {}
 bucket = "mir-gap:the method call `.show` with no resolved callee"
-classified_with = "2e937a8b2+local"
+classified_with = "9c612aba2+local"
 model_rev = "f3a17c7c"

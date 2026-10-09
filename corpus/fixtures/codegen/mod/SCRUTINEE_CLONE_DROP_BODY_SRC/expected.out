@@ -1,0 +1,21 @@
+refchain
+got 2
+refchain end
+dE
+dR1
+loop
+got 3
+loop end
+dE
+dR2
+index
+got 4
+index end
+dE
+dR3
+fresh
+got 5
+dE
+dR4
+fresh end
+end
