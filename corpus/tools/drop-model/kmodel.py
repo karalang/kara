@@ -932,9 +932,17 @@ class Model:
             for x in v.elems:
                 self.tag_origins(x, cells)
 
+    def outlived_temp(self, cell):
+        """A temporary a binding made now would outlive (§5.5): one that drops at the end of
+        the current statement. A temporary of an enclosing statement, such as a `match`
+        scrutinee (§7.4), lives through the construct, so a binding inside it does not."""
+        if not cell.temp:
+            return False
+        return not any(cell is t for ts in self.temps[:-1] for t in ts)
+
     def check_no_temp_origin(self, v):
         if isinstance(v, Ref):
-            if v.cell.temp or any(o.temp for o in v.origins):
+            if self.outlived_temp(v.cell) or any(self.outlived_temp(o) for o in v.origins):
                 raise ModelError("a reference to a temporary outlives its statement (§5.5)")
         elif isinstance(v, Enum) and isinstance(v.payload, list):
             for x in v.payload:
@@ -1939,7 +1947,7 @@ class Model:
             if b == "guard":
                 nc = Cell(self.copy_value(v) if self.is_copy(v) else Ref(c, p), refbind=True)
             elif by_ref:
-                if in_let and c.temp:
+                if in_let and self.outlived_temp(c):
                     raise ModelError("a reference to a temporary outlives its statement (§5.5)")
                 nc = Cell(Ref(c, p, mut), refbind=True)
             elif isinstance(v, Ref) or isinstance(v, Handle) or self.is_copy(v):
