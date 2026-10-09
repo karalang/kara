@@ -21,7 +21,7 @@ use super::value::{try_write_or_panic, EnumData, Value};
 /// so `karac run --interp` and `karac build`/JIT report the same features on the
 /// machine they run on. An unknown name is `false`.
 #[cfg(target_arch = "x86_64")]
-fn host_cpu_supports(name: &str) -> bool {
+pub(crate) fn host_cpu_supports(name: &str) -> bool {
     match name {
         "sse4.2" => std::is_x86_feature_detected!("sse4.2"),
         "avx" => std::is_x86_feature_detected!("avx"),
@@ -39,7 +39,7 @@ fn host_cpu_supports(name: &str) -> bool {
 }
 
 #[cfg(target_arch = "aarch64")]
-fn host_cpu_supports(name: &str) -> bool {
+pub(crate) fn host_cpu_supports(name: &str) -> bool {
     match name {
         "neon" => std::arch::is_aarch64_feature_detected!("neon"),
         "dotprod" => std::arch::is_aarch64_feature_detected!("dotprod"),
@@ -53,7 +53,7 @@ fn host_cpu_supports(name: &str) -> bool {
 }
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-fn host_cpu_supports(_name: &str) -> bool {
+pub(crate) fn host_cpu_supports(_name: &str) -> bool {
     false
 }
 

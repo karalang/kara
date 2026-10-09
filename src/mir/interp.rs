@@ -750,6 +750,18 @@ impl<'a> Interp<'a> {
         match (base, method) {
             // `std.mem`: moves through borrowed places, which MIR itself
             // does not spell (`take` is `replace` with the default).
+            // `cpu.supports("avx2")`: the host's CPU features, as the
+            // other backends probe them.
+            ("Cpu", "supports") => {
+                let [n] = args.as_slice() else {
+                    return err(format!("{name} takes a feature name"));
+                };
+                let n = self.string_at(n)?;
+                Ok(Value::Bool(crate::interpreter::host_cpu_supports(&n)))
+            }
+            // The guard of `critical_section.acquire()`: interrupts were
+            // never masked, so there is nothing to restore.
+            ("CriticalSectionGuard", "drop") => Ok(Value::Unit),
             ("mem", "swap") => {
                 let [Value::Ref(a), Value::Ref(b)] = args.as_slice() else {
                     return err(format!("{name} takes two references"));

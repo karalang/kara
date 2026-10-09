@@ -9368,6 +9368,22 @@ impl<'l, 'a> Bx<'l, 'a> {
         args: &'a [CallArg],
         dest: Place,
     ) -> R<()> {
+        // `critical_section.acquire()`: the guard whose drop ends the
+        // section. Interrupts are not masked here, so it holds no token.
+        if let (ExprKind::Identifier(m), "acquire", []) = (&object.kind, method, args) {
+            if m == "critical_section"
+                && !matches!(self.lcx.res.get(&object.id), Some(Res::Local(_)))
+            {
+                let t = self.expr_ty(e)?;
+                let kind = self.adt_aggregate(t, 0);
+                let zero = Operand::Const(Const {
+                    ty: self.tys().tcx().intern(HK::Int(IntSize::I64)),
+                    kind: ConstKind::Scalar(0),
+                });
+                self.assign(dest, Rvalue::Aggregate(kind, vec![zero]));
+                return Ok(());
+            }
+        }
         if let Some(resource) = self.ambient_module(object) {
             // `env.args()`, `clock.now()`, …: a call of the ambient
             // resource's library method, `Env.args`. Copy arguments go by
@@ -9945,6 +9961,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             "stdout" => "Stdout",
             "stderr" => "Stderr",
             "fs" => "FileSystem",
+            "cpu" => "Cpu",
             _ => return None,
         })
     }
@@ -13730,6 +13747,27 @@ fn main() {
         let out =
             "8\n3\nvalue does not satisfy refinement `Even`\nal\n7\n9\nout of range for i16\ny\n";
         assert_eq!(run_source(src), Ok((out.to_string(), Some(101))));
+    }
+
+    #[test]
+    fn cpu_probes_critical_sections_and_multiversioned_functions() {
+        let src = r#"
+#[multiversion(baseline, "avx2")]
+fn scale(v: i64) -> i64 { v * 3 }
+fn guarded() with writes(Hardware) {
+    let _guard = critical_section.acquire();
+    println("inside");
+}
+fn main() {
+    println(cpu.supports("not-a-real-feature"));
+    let a = cpu.supports("avx2");
+    println(a == a);
+    guarded();
+    println(scale(14));
+}
+"#;
+        let out = "false\ntrue\ninside\n42\n";
+        assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
     }
 
     #[test]

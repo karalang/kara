@@ -24,6 +24,7 @@ mod exec;
 // featureless clippy flags it unused without the gate.
 #[cfg(feature = "llvm")]
 pub(crate) use exec::{compute_block_last_use, last_use_fires_at};
+pub(crate) use method_call::host_cpu_supports;
 
 /// B-2026-09-23-24 — see `Interpreter::let_view_tail_frames`: the frame depth,
 /// the arm-tail spans that hand a param view over, and whether one was reached.
