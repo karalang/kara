@@ -12131,6 +12131,39 @@ fn main() {
         assert_eq!(r.output, "2 7 2 20\n");
     }
 
+    /// `Interner`, `LazyLock`, the fences and the HTTP client's request
+    /// builder, as legacy prints them (the request fails before any
+    /// connection: its URL does not parse).
+    #[test]
+    fn interner_lazy_lock_fences_and_http_match_legacy() {
+        let src = r#"
+fn build() -> i64 { println("INIT"); return 42; }
+let TABLE: LazyLock[i64] = LazyLock.new(|| build());
+fn main() {
+    let mut tab: Interner = Interner.new();
+    let a = tab.intern("alpha");
+    let b = tab.intern("beta");
+    let c = tab.intern("alpha");
+    println(f"{a == c} {a == b} {tab.len()}");
+    println(tab.resolve(b));
+    println(tab.resolve(a).len());
+    compiler_fence(MemoryOrdering.Acquire);
+    // Safety: one thread; the fence orders nothing.
+    unsafe { fence(MemoryOrdering.SeqCst); }
+    println(TABLE.get());
+    println(TABLE.get());
+    let cl = Client.new();
+    match cl.request("GET", "not a url").header("x", "y").timeout(100).send() {
+        Ok(_) => println("ok"),
+        Err(_) => println("err"),
+    }
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(r.output, "true false 2\nbeta\n5\nINIT\n42\n42\nerr\n");
+    }
+
     /// `std.tracing`: the active span `with_span` sets, the minimum level,
     /// a registered exporter and the default `StdoutExporter`, as legacy
     /// prints them.

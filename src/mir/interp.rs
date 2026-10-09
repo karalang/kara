@@ -423,6 +423,9 @@ fn run_with(
         tracing_min: 0,
         tracing_sink: None,
         active_spans: Vec::new(),
+        interners: Vec::new(),
+        http_builders: Vec::new(),
+        http_headers: Vec::new(),
         cancel_after: match tasks {
             Tasks::CancelAfter(n) => Some(n),
             _ => None,
@@ -636,6 +639,34 @@ struct Interp<'a> {
     tracing_sink: Option<(Value, Ty)>,
     /// The ids of the spans `with_span` made active, innermost last.
     active_spans: Vec<i128>,
+    /// The tables behind `Interner` values, by handle - 1: each interned
+    /// string, its symbol's position, and the place `resolve` lends it
+    /// from once asked.
+    interners: Vec<Interned>,
+    /// The requests `Client.request` started, by `RequestBuilder` handle - 1.
+    http_builders: Vec<HttpBuilder>,
+    /// Each `Response`'s headers, by the id its value carries after its
+    /// fields.
+    http_headers: Vec<Vec<(String, String)>>,
+}
+
+/// A request `RequestBuilder` assembles: method, url, headers in order,
+/// body and timeout in milliseconds (0 for none).
+#[derive(Default, Clone)]
+struct HttpBuilder {
+    method: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    body: String,
+    timeout_ms: i128,
+}
+
+/// One `Interner`'s strings.
+#[derive(Default)]
+struct Interned {
+    strings: Vec<String>,
+    ids: rustc_hash::FxHashMap<String, usize>,
+    lent: Vec<Option<AllocId>>,
 }
 
 impl<'a> Interp<'a> {
@@ -859,6 +890,62 @@ impl<'a> Interp<'a> {
                 Ok(std::mem::replace(slot, fill))
             }
             ("__yield_now", "") => Ok(Value::Unit),
+            ("fence" | "compiler_fence", "") => {
+                // One thread runs the program; a fence orders nothing. A
+                // `Relaxed` one is refused, as legacy refuses it.
+                if base == "fence" && matches!(args.first(), Some(Value::Variant(0, _))) {
+                    return err("`fence` takes an ordering stronger than `Relaxed`");
+                }
+                Ok(Value::Unit)
+            }
+            ("LazyLock", "new") => match args.into_iter().next() {
+                // The initializer, until the first `get` runs it.
+                Some(f) => Ok(Value::Agg(vec![f])),
+                None => err(format!("{name} takes an initializer")),
+            },
+            ("LazyLock", "get") => {
+                let Some(recv) = args.first() else {
+                    return err(format!("{name} needs its receiver"));
+                };
+                let at = self.cell_struct(recv, name)?;
+                let filled = match self.slot(&at)? {
+                    Value::Agg(fs) => fs.len() > 1,
+                    other => return err(format!("{name} of {other:?}")),
+                };
+                if !filled {
+                    let v = self.call_erased(Value::Ref(at.child(0)), Vec::new())?;
+                    if let Value::Agg(fs) = self.slot_mut(&at)? {
+                        fs.push(v);
+                    }
+                }
+                Ok(Value::Ref(at.child(1)))
+            }
+            ("dbg", "") => {
+                // `[file:line] text = value` on stderr; the program's file
+                // name is not known here.
+                let [line, text, value] = args.as_slice() else {
+                    return err("dbg takes a line, a text and a value");
+                };
+                let line = match line {
+                    Value::Int(l) => *l,
+                    _ => 0,
+                };
+                let text = self.string_at(text)?;
+                let shown = match arg_tys.get(2) {
+                    Some(&t) => self.display_typed(value, t)?,
+                    None => self.display(value)?,
+                };
+                self.write_out(true, &format!("[<unknown>:{line}] {text} = {shown}\n"));
+                Ok(Value::Unit)
+            }
+            ("Client" | "RequestBuilder" | "Response" | "HttpError", _) => {
+                self.http_method(name, base, method, args, ret)
+            }
+            ("Interner", "new") => {
+                self.interners.push(Interned::default());
+                Ok(Value::Agg(vec![Value::Int(self.interners.len() as i128)]))
+            }
+            ("Interner", "intern" | "resolve" | "len") => self.interner_method(method, &args),
             ("tracing_active_span", "") => {
                 Ok(Value::Int(self.active_spans.last().copied().unwrap_or(0)))
             }
@@ -6274,6 +6361,270 @@ impl<'a> Interp<'a> {
             self.statics.push(v);
         }
         Ok(())
+    }
+
+    /// `std.http`'s client, through `ureq` as legacy's. A `Response` is its
+    /// status and body, then the id of its headers; a `RequestBuilder` the
+    /// handle of the request it assembles.
+    fn http_method(
+        &mut self,
+        name: &str,
+        base: &str,
+        method: &str,
+        args: Vec<Value>,
+        ret: Ty,
+    ) -> R<Value> {
+        let recv = match args.first() {
+            Some(Value::Ref(at)) => self.slot(at)?,
+            Some(v) => v.clone(),
+            None => Value::Unit,
+        };
+        let field = |i: usize| match &recv {
+            Value::Agg(fs) => fs.get(i).cloned(),
+            _ => None,
+        };
+        match (base, method) {
+            ("Client", "new") => Ok(Value::Agg(Vec::new())),
+            ("Client", "get" | "post") => {
+                let url = self.string_at(&args[1])?;
+                let body = match args.get(2) {
+                    Some(b) => self.string_at(b)?,
+                    None => String::new(),
+                };
+                let req = HttpBuilder {
+                    method: if method == "get" { "GET" } else { "POST" }.into(),
+                    url,
+                    body,
+                    ..HttpBuilder::default()
+                };
+                self.http_send(req, method == "post", ret)
+            }
+            ("Client", "request") => {
+                let method = self.string_at(&args[1])?;
+                let url = self.string_at(&args[2])?;
+                self.http_builders.push(HttpBuilder {
+                    method,
+                    url,
+                    ..HttpBuilder::default()
+                });
+                Ok(Value::Agg(vec![Value::Int(
+                    self.http_builders.len() as i128
+                )]))
+            }
+            ("RequestBuilder", _) => {
+                let Some(Value::Int(h)) = field(0) else {
+                    return err(format!("{name} of {recv:?}"));
+                };
+                let i = (h as usize).wrapping_sub(1);
+                if i >= self.http_builders.len() {
+                    return err(format!("{name} on an unknown request"));
+                }
+                match method {
+                    "header" => {
+                        let k = self.string_at(&args[1])?;
+                        let v = self.string_at(&args[2])?;
+                        self.http_builders[i].headers.push((k, v));
+                    }
+                    "body" => self.http_builders[i].body = self.string_at(&args[1])?,
+                    "timeout" => {
+                        if let Some(Value::Int(ms)) = args.get(1) {
+                            self.http_builders[i].timeout_ms = *ms;
+                        }
+                    }
+                    "send" => {
+                        let req = self.http_builders[i].clone();
+                        let with_body = !req.body.is_empty();
+                        return self.http_send(req, with_body, ret);
+                    }
+                    _ => return err(format!("call of unknown function {name}")),
+                }
+                Ok(recv)
+            }
+            ("Response", "status") => {
+                field(0).ok_or_else(|| Stop::Error(format!("{name} of {recv:?}")))
+            }
+            ("Response" | "HttpError", "body" | "message") => {
+                let text = match field(if base == "Response" { 1 } else { 0 }) {
+                    Some(v) => self.string_at(&v)?,
+                    None => return err(format!("{name} of {recv:?}")),
+                };
+                Ok(self.alloc_box("String", Value::Str(text)))
+            }
+            ("Response", "bytes") => {
+                let text = match field(1) {
+                    Some(v) => self.string_at(&v)?,
+                    None => return err(format!("{name} of {recv:?}")),
+                };
+                let bytes = text.bytes().map(|b| Value::Int(i128::from(b))).collect();
+                Ok(self.alloc_box("Vec", Value::Agg(bytes)))
+            }
+            ("Response", "header" | "headers") => {
+                let headers = match field(2) {
+                    Some(Value::Int(id)) => self
+                        .http_headers
+                        .get(id as usize)
+                        .cloned()
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                };
+                if method == "header" {
+                    let want = self.string_at(&args[1])?.to_ascii_lowercase();
+                    let found = headers
+                        .into_iter()
+                        .find(|(k, _)| k.to_ascii_lowercase() == want)
+                        .map(|(_, v)| self.alloc_box("String", Value::Str(v)));
+                    return self.option(ret, found);
+                }
+                let pairs = headers
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let k = self.alloc_box("String", Value::Str(k));
+                        let v = self.alloc_box("String", Value::Str(v));
+                        Value::Agg(vec![k, v])
+                    })
+                    .collect();
+                Ok(self.alloc_box("Vec", Value::Agg(pairs)))
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// Sends `req`: `Ok` of a `Response`, or `Err` of an `HttpError`
+    /// carrying `ureq`'s message (a non-2xx status is one, as legacy's).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn http_send(&mut self, req: HttpBuilder, with_body: bool, ret: Ty) -> R<Value> {
+        let mut r = ureq::request(&req.method, &req.url);
+        for (k, v) in &req.headers {
+            r = r.set(k, v);
+        }
+        if req.timeout_ms > 0 {
+            r = r.timeout(std::time::Duration::from_millis(req.timeout_ms as u64));
+        }
+        let result = if with_body {
+            r.send_string(&req.body)
+        } else {
+            r.call()
+        };
+        match result {
+            Ok(resp) => {
+                let status = i128::from(resp.status());
+                let headers: Vec<(String, String)> = resp
+                    .headers_names()
+                    .into_iter()
+                    .filter_map(|n| resp.header(&n).map(|v| (n, v.to_string())))
+                    .collect();
+                let body = resp.into_string().unwrap_or_default();
+                self.http_headers.push(headers);
+                let id = self.http_headers.len() as i128 - 1;
+                let body = self.alloc_box("String", Value::Str(body));
+                let response = Value::Agg(vec![Value::Int(status), body, Value::Int(id)]);
+                self.variant_named(ret, None, "Ok", vec![response])
+            }
+            Err(ureq::Error::Transport(t)) if t.kind() == ureq::ErrorKind::ConnectionFailed => {
+                // The runtime's wording, which the compiled program prints.
+                use std::error::Error;
+                let cause = match t.source() {
+                    Some(io) => io.to_string(),
+                    None => t.to_string(),
+                };
+                self.http_error(format!("{}: connect failed: {cause}", req.url), ret)
+            }
+            Err(e) => self.http_error(e.to_string(), ret),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn http_send(&mut self, _req: HttpBuilder, _with_body: bool, ret: Ty) -> R<Value> {
+        self.http_error(
+            "the HTTP client is not available in the browser".into(),
+            ret,
+        )
+    }
+
+    fn http_error(&mut self, message: String, ret: Ty) -> R<Value> {
+        let message = self.alloc_box("String", Value::Str(message));
+        self.variant_named(ret, None, "Err", vec![Value::Agg(vec![message])])
+    }
+
+    /// `Interner.intern`, `.resolve` and `.len`. A symbol is its string's
+    /// position; `resolve` lends the string from a place that lives until
+    /// exit, as the interner's strings do.
+    fn interner_method(&mut self, method: &str, args: &[Value]) -> R<Value> {
+        let recv = match args.first() {
+            Some(Value::Ref(at)) => self.slot(at)?,
+            Some(v) => v.clone(),
+            None => return err(format!("Interner.{method} takes a receiver")),
+        };
+        let Value::Agg(fs) = &recv else {
+            return err(format!("an Interner is {recv:?}"));
+        };
+        let Some(Value::Int(h)) = fs.first() else {
+            return err(format!("an Interner is {recv:?}"));
+        };
+        let h = (*h as usize).wrapping_sub(1);
+        if h >= self.interners.len() {
+            return err(format!("Interner.{method} on an unknown handle"));
+        }
+        match method {
+            "intern" => {
+                let text = self.string_at(&args[1])?;
+                let t = &mut self.interners[h];
+                let id = match t.ids.get(&text) {
+                    Some(&id) => id,
+                    None => {
+                        t.strings.push(text.clone());
+                        t.lent.push(None);
+                        t.ids.insert(text, t.strings.len() - 1);
+                        t.strings.len() - 1
+                    }
+                };
+                Ok(Value::Agg(vec![Value::Int(id as i128)]))
+            }
+            "resolve" => {
+                let sym = match &args[1] {
+                    Value::Ref(at) => self.slot(at)?,
+                    v => v.clone(),
+                };
+                let id = match sym {
+                    Value::Agg(fs) => match fs.first() {
+                        Some(Value::Int(i)) => *i,
+                        _ => -1,
+                    },
+                    Value::Int(i) => i,
+                    _ => -1,
+                };
+                // A foreign symbol reads as the empty string, as legacy's.
+                let i = usize::try_from(id)
+                    .ok()
+                    .filter(|&i| i < self.interners[h].strings.len());
+                let holder = match i.and_then(|i| self.interners[h].lent[i]) {
+                    Some(a) => a,
+                    None => {
+                        let text =
+                            i.map_or(String::new(), |i| self.interners[h].strings[i].clone());
+                        let Value::Box(b) = self.alloc_box("String", Value::Str(text)) else {
+                            unreachable!()
+                        };
+                        let a = self.alloc(HeapObj {
+                            count: 1,
+                            weak: 0,
+                            value: Value::Box(b),
+                        });
+                        self.snapshots.insert(b);
+                        self.snapshots.insert(a);
+                        if let Some(i) = i {
+                            self.interners[h].lent[i] = Some(a);
+                        }
+                        a
+                    }
+                };
+                Ok(Value::Ref(Addr {
+                    root: Root::Heap(holder),
+                    path: Vec::new(),
+                }))
+            }
+            _ => Ok(Value::Int(self.interners[h].strings.len() as i128)),
+        }
     }
 
     /// `tracing_emit_event`: the registered exporter's `export_event`
