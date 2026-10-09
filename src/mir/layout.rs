@@ -11,6 +11,8 @@
 //!   its alignment, in order; the whole is padded to its largest alignment.
 //! - An enum is a tag (the smallest unsigned integer that counts its
 //!   variants) followed by the largest variant laid out as a struct.
+//! - A `shared` handle points at a box: two `u64` counts (strong, then
+//!   weak) and then the type's body, laid out as the plain struct or enum.
 //! - `String`, `Vec` and `VecDeque` are `{ptr, len, cap}`; a slice, a static
 //!   `str` and an erased function value are two words; the map and set
 //!   collections, `shared` and `weak` handles, references to sized types and
@@ -89,36 +91,7 @@ fn layout_at(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
                 align: el.align,
             }
         }
-        TyKind::Adt(_) => {
-            let (adt, _) = tys.tcx().adt_of(t)?;
-            let variant = |v: usize| -> Option<Vec<Layout>> {
-                let fields = adt.variants[v].fields.len() as u32;
-                let var = adt.is_enum.then_some(v as u32);
-                (0..fields).map(|f| of(tys.field_ty(t, var, f)?)).collect()
-            };
-            if !adt.is_enum {
-                return Some(record(ZST, variant(0).unwrap_or_default()));
-            }
-            let n = adt.variants.len() as u64;
-            let tag = match n {
-                0 => return Some(ZST),
-                1..=0x100 => scalar(1),
-                0x101..=0x1_0000 => scalar(2),
-                _ => scalar(4),
-            };
-            let mut whole = tag;
-            for v in 0..adt.variants.len() {
-                let l = record(tag, variant(v)?);
-                whole = Layout {
-                    size: whole.size.max(l.size),
-                    align: whole.align.max(l.align),
-                };
-            }
-            Layout {
-                size: align_up(whole.size, whole.align),
-                align: whole.align,
-            }
-        }
+        TyKind::Adt(_) => adt_body(tys, t, depth)?,
         TyKind::Ref(p) | TyKind::MutRef(p) => match tys.kind(p) {
             TyKind::Str | TyKind::Slice(_) => TWO_WORDS,
             _ => WORD,
@@ -132,4 +105,98 @@ fn layout_at(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
             _ => return None,
         },
     })
+}
+
+/// The layout of the body of the struct or enum `t`, which is a plain ADT
+/// or a `shared` one (whose handle points at a box holding this body).
+fn adt_body(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
+    let of = |t: Ty| layout_at(tys, t, depth + 1);
+    let (adt, _) = tys.tcx().adt_of(t)?;
+    let variant = |v: usize| -> Option<Vec<Layout>> {
+        let fields = adt.variants[v].fields.len() as u32;
+        let var = adt.is_enum.then_some(v as u32);
+        (0..fields).map(|f| of(tys.field_ty(t, var, f)?)).collect()
+    };
+    if !adt.is_enum {
+        return Some(record(ZST, variant(0).unwrap_or_default()));
+    }
+    let Some(tag) = enum_tag(tys, t) else {
+        return Some(ZST);
+    };
+    let mut whole = tag;
+    for v in 0..adt.variants.len() {
+        let l = record(tag, variant(v)?);
+        whole = Layout {
+            size: whole.size.max(l.size),
+            align: whole.align.max(l.align),
+        };
+    }
+    Some(Layout {
+        size: align_up(whole.size, whole.align),
+        align: whole.align,
+    })
+}
+
+/// The tag of the enum `t` (plain or `shared`): the smallest unsigned
+/// integer that counts its variants, at offset 0, holding the variant's
+/// index. `None` for a struct or an enum with no variants.
+pub fn enum_tag(tys: &TyInterner, t: Ty) -> Option<Layout> {
+    let (adt, _) = tys.tcx().adt_of(t)?;
+    if !adt.is_enum {
+        return None;
+    }
+    Some(match adt.variants.len() as u64 {
+        0 => return None,
+        1..=0x100 => scalar(1),
+        0x101..=0x1_0000 => scalar(2),
+        _ => scalar(4),
+    })
+}
+
+/// The bytes before a `shared` box's body: the strong and the weak count.
+pub const SHARED_COUNTS: u64 = 16;
+
+/// The layout of the body of the ADT `t` (plain or `shared`): for a plain
+/// ADT this is `layout(t)`; for a `shared` one it is what the box holds
+/// after its counts.
+pub fn body_layout(tys: &TyInterner, t: Ty) -> Option<Layout> {
+    adt_body(tys, t, 0)
+}
+
+/// Where a `shared` box keeps the body of `t`: after the counts, aligned.
+pub fn shared_body_offset(tys: &TyInterner, t: Ty) -> Option<u64> {
+    Some(align_up(SHARED_COUNTS, body_layout(tys, t)?.align))
+}
+
+/// The offset of field `f` within a value of `t` (seen as `variant` when
+/// `t` is an enum): a tuple element, a closure capture, or a struct or
+/// enum field. For a `shared` type it is the offset within the box's body
+/// (add [`shared_body_offset`] for the offset within the box).
+pub fn field_offset(tys: &TyInterner, t: Ty, variant: Option<u32>, f: u32) -> Option<u64> {
+    let (start, count) = match tys.kind(t) {
+        TyKind::Tuple(ts) | TyKind::Closure(_, ts) if variant.is_none() => (ZST, ts.len()),
+        TyKind::Adt(_) | TyKind::Shared(_) => {
+            let (adt, _) = tys.tcx().adt_of(t)?;
+            let v = match (adt.is_enum, variant) {
+                (false, None) => 0,
+                (true, Some(v)) => v as usize,
+                _ => return None,
+            };
+            let start = if adt.is_enum { enum_tag(tys, t)? } else { ZST };
+            (start, adt.variants.get(v)?.fields.len())
+        }
+        _ => return None,
+    };
+    if f as usize >= count {
+        return None;
+    }
+    let mut at = start.size;
+    for i in 0..=f {
+        let l = layout(tys, tys.field_ty(t, variant, i)?)?;
+        at = align_up(at, l.align);
+        if i < f {
+            at += l.size;
+        }
+    }
+    Some(at)
 }

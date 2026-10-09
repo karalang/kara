@@ -70,6 +70,7 @@ mod closures;
 mod collections;
 mod column;
 mod conc_state;
+pub mod mir;
 // B-2026-09-02-26 — `consume_class` now lives at CRATE level (`src/consume_class.rs`)
 // and is re-exported here so every `super::consume_class::` path keeps resolving.
 //
