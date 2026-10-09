@@ -2924,7 +2924,9 @@ impl<'a> Interp<'a> {
         let Some((bits, signed)) = int_width(t) else {
             return err(format!("{name} on {t}"));
         };
-        let (lo, hi) = if signed {
+        let (lo, hi) = if signed && bits == 128 {
+            (i128::MIN, i128::MAX)
+        } else if signed {
             (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
         } else if bits == 128 {
             (0, i128::MAX)

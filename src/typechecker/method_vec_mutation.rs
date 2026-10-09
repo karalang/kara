@@ -111,7 +111,25 @@ impl<'a> super::TypeChecker<'a> {
                     self.record_expr_type(&args[0].value.span, &elem);
                     return Some(Type::Unit);
                 }
-                let arg_ty = self.infer_expr(&args[0].value);
+                // An empty `[]` has no elements to infer from, so it is
+                // checked against the slot, as a `let` with an annotation
+                // checks it; otherwise its element type stays unsolved.
+                let empty_literal = matches!(
+                    &args[0].value.kind,
+                    ExprKind::ArrayLiteral(es) if es.is_empty()
+                );
+                let sequence_slot = matches!(
+                    &elem,
+                    Type::Named { name, .. } if name == "Vec" || name == "VecDeque"
+                ) || matches!(&elem, Type::Array { .. });
+                let arg_ty = if empty_literal
+                    && sequence_slot
+                    && super::exprs::expectation_is_concrete(&elem)
+                {
+                    self.check_expr(&args[0].value, &elem)
+                } else {
+                    self.infer_expr(&args[0].value)
+                };
                 // B-2026-08-08-2 — a `frozen` parameter reads as `ref T`; the
                 // ownership pass decides whether this store is legal.
                 let arg_ty = self.deref_frozen_param_arg(&args[0].value, arg_ty, &elem);

@@ -115,7 +115,7 @@ fn tuple_index_parts(index: &Expr) -> Vec<Option<&Expr>> {
 /// own name — after which `T` could not be inferred at all
 /// (`let b = Boxed { v: Some("x".to_string()) }`). Reuses the existing
 /// `contains_type_param` from the types module. B-2026-08-05-25.
-fn expectation_is_concrete(t: &Type) -> bool {
+pub(super) fn expectation_is_concrete(t: &Type) -> bool {
     !contains_type_var(t) && !contains_type_param(t)
 }
 

@@ -335,6 +335,15 @@ struct Lcx<'a> {
     fn_param_tys: FxHashMap<String, Vec<Option<Ty>>>,
 }
 
+/// An element position in a sequence a slice pattern matches.
+#[derive(Debug, Clone, Copy)]
+enum SeqPos {
+    /// The `i`th from the start.
+    Start(u64),
+    /// The `m`th from the end, counting the last as 1.
+    End(u64),
+}
+
 /// How a closure's body takes its environment (core semantics §9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EnvMode {
@@ -2363,6 +2372,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 Ok(())
             }
+            PatternKind::Slice { .. } | PatternKind::AtBinding { .. } => {
+                self.bind_pattern(pat, &place, t, false, out)
+            }
             _ => self.unsupported(pat.span, "this pattern in a `let`"),
         }
     }
@@ -3373,12 +3385,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let (start, end) = (start.as_deref(), end.as_deref());
                     return self.string_range(object, start, end, *inclusive, dest);
                 }
-                if *inclusive {
-                    return self.unsupported(index.span, "an inclusive slice range");
-                }
                 let t = self.expr_ty(e)?;
-                let s =
-                    self.slice_view(object, Some((start.as_deref(), end.as_deref())), t, false)?;
+                let range = (start.as_deref(), end.as_deref(), *inclusive);
+                let s = self.slice_view(object, Some(range), t, false)?;
                 self.assign(dest, Rvalue::Use(Operand::Move(Place::local(s))));
                 Ok(())
             }
@@ -3482,6 +3491,22 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             ExprKind::ArrayLiteral(es) => self.array_literal(e, es, dest),
+            // `b"..."` is an `Array[u8, N]` of its bytes (design.md § Byte
+            // and byte-string literals).
+            ExprKind::ByteStringLit(bytes) => {
+                let u8_t = self.tys().tcx().intern(HK::UInt(UIntSize::U8));
+                let ops = bytes
+                    .iter()
+                    .map(|&b| {
+                        Operand::Const(Const {
+                            ty: u8_t,
+                            kind: ConstKind::Scalar(b as u128),
+                        })
+                    })
+                    .collect();
+                self.assign(dest, Rvalue::Aggregate(AggregateKind::Array(u8_t), ops));
+                Ok(())
+            }
             ExprKind::MapLiteral { entries, .. } => self.map_literal(e, entries, dest),
             ExprKind::PrefixCollectionLiteral { type_name, items }
                 if type_name == "Vec" || type_name == "Array" =>
@@ -6684,20 +6709,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 end,
                 inclusive,
             } => {
-                let bound = |b: &Option<crate::ast::RangeBound>| -> Option<Option<u128>> {
-                    match b {
-                        None => Some(None),
-                        Some(crate::ast::RangeBound::Literal(LiteralPattern::Integer(v, _))) => {
-                            Some(Some(*v as u128))
-                        }
-                        Some(crate::ast::RangeBound::Literal(LiteralPattern::Char(c))) => {
-                            Some(Some(*c as u128))
-                        }
-                        _ => None,
-                    }
-                };
-                let (Some(lo), Some(hi)) = (bound(start), bound(end)) else {
-                    return self.unsupported(pat.span, "a range pattern with a named bound");
+                let lo = self.range_bound(start.as_ref(), t)?;
+                let hi = self.range_bound(end.as_ref(), t)?;
+                let (Some(lo), Some(hi)) = (lo, hi) else {
+                    return self.unsupported(pat.span, "this range pattern bound");
                 };
                 let bool_t = self.tys().bool();
                 let konst = |v: u128| {
@@ -6727,8 +6742,177 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 Ok(())
             }
-            _ => self.unsupported(pat.span, "this pattern"),
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                let Some((elem, known)) = self.seq_of(t) else {
+                    return self.unsupported(pat.span, "a slice pattern on this type");
+                };
+                let (k, j) = (prefix.len() as u64, suffix.len() as u64);
+                // An array's length is in its type, which the checker held
+                // the pattern to; a view's is tested.
+                if known.is_none() {
+                    let n = self.seq_len(place, t);
+                    let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+                    let bool_t = self.tys().bool();
+                    let op = if rest.is_some() { BinOp::Ge } else { BinOp::Eq };
+                    let c = self.temp(bool_t);
+                    self.assign(
+                        c,
+                        Rvalue::BinaryOp(
+                            op,
+                            Operand::Copy(Place::local(n)),
+                            Operand::Const(Const {
+                                ty: usize_t,
+                                kind: ConstKind::Scalar((k + j) as u128),
+                            }),
+                        ),
+                    );
+                    let ok = self.b.new_block();
+                    self.goto_with(
+                        TerminatorKind::SwitchInt {
+                            discr: Operand::Copy(Place::local(c)),
+                            targets: SwitchTargets::if_else(ok, fail),
+                        },
+                        ok,
+                    );
+                }
+                for (i, p) in prefix.iter().enumerate() {
+                    if self.destructures(p) {
+                        let ep = self.seq_elem(place, t, SeqPos::Start(i as u64))?;
+                        self.test_pattern(p, &ep, elem, fail)?;
+                    }
+                }
+                for (i, p) in suffix.iter().enumerate() {
+                    if self.destructures(p) {
+                        let ep = self.seq_elem(place, t, SeqPos::End(j - i as u64))?;
+                        self.test_pattern(p, &ep, elem, fail)?;
+                    }
+                }
+                Ok(())
+            }
         }
+    }
+
+    /// A range pattern's bound as the bits of a `t`: `Some(None)` when it
+    /// is open, `None` when it is not a constant the builder can read. A
+    /// named bound is a constant or an integer type's limit (design.md
+    /// § Range patterns).
+    fn range_bound(
+        &mut self,
+        b: Option<&'a crate::ast::RangeBound>,
+        t: Ty,
+    ) -> R<Option<Option<u128>>> {
+        use crate::ast::RangeBound;
+        let Some(b) = b else {
+            return Ok(Some(None));
+        };
+        Ok(match b {
+            RangeBound::Literal(LiteralPattern::Integer(v, _)) => Some(Some(*v as u128)),
+            RangeBound::Literal(LiteralPattern::Char(c)) => Some(Some(*c as u128)),
+            RangeBound::Literal(_) => None,
+            RangeBound::Path { segments, .. } => match segments.as_slice() {
+                [name] => {
+                    let value = self
+                        .lcx
+                        .defs
+                        .lookup(0, name)
+                        .and_then(|d| self.lcx.consts.get(&d).copied());
+                    match value {
+                        Some(v) => match self.expr_operand(v)? {
+                            Operand::Const(Const {
+                                kind: ConstKind::Scalar(x),
+                                ..
+                            }) => Some(Some(x)),
+                            _ => None,
+                        },
+                        None => None,
+                    }
+                }
+                [_, _] => int_limit(self.tys().tcx().kind(t), &segments.join(".")).map(Some),
+                _ => None,
+            },
+        })
+    }
+
+    /// The element type of a sequence a slice pattern matches, and its
+    /// length when that is in the type (an array).
+    fn seq_of(&self, t: Ty) -> Option<(Ty, Option<u64>)> {
+        let tcx = self.tys().tcx();
+        match tcx.kind(t) {
+            HK::Array {
+                elem,
+                len: crate::ty::ArrayLen::Known(n),
+            } => Some((elem, Some(n))),
+            HK::Slice { elem, .. } => Some((elem, None)),
+            HK::Intrinsic {
+                kind: IntrinsicKind::Vec,
+                args,
+            } => Some((tcx.list(args)[0], None)),
+            _ => None,
+        }
+    }
+
+    /// The length of the sequence at `place`, as a `usize` local.
+    fn seq_len(&mut self, place: &Place, t: Ty) -> Local {
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let n = self.temp(usize_t);
+        if matches!(self.tys().tcx().kind(t), HK::Array { .. }) {
+            self.assign(n, Rvalue::Len(place.clone()));
+        } else {
+            let r = self.ref_to(place.clone(), t);
+            let name = self.tys().display(t);
+            self.call_native(&format!("{name}.len"), vec![r], Place::local(n));
+        }
+        n
+    }
+
+    /// The place of one element of the sequence at `place`: an array's
+    /// element itself, or a view's through the library's `index`, which
+    /// lends it (design.md § Slice and array patterns: a pattern over a
+    /// `Vec` or `Slice` sees a view).
+    fn seq_elem(&mut self, place: &Place, t: Ty, pos: SeqPos) -> R<Place> {
+        let Some((elem, known)) = self.seq_of(t) else {
+            unreachable!("a sequence type")
+        };
+        if let Some(n) = known {
+            let i = match pos {
+                SeqPos::Start(i) => i,
+                SeqPos::End(m) => n - m,
+            };
+            return Ok(place.project(ProjElem::ConstIndex(i)));
+        }
+        let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        let idx = match pos {
+            SeqPos::Start(i) => Operand::Const(Const {
+                ty: usize_t,
+                kind: ConstKind::Scalar(i as u128),
+            }),
+            SeqPos::End(m) => {
+                let n = self.seq_len(place, t);
+                let i = self.temp(usize_t);
+                self.assign(
+                    i,
+                    Rvalue::BinaryOp(
+                        BinOp::Sub,
+                        Operand::Copy(Place::local(n)),
+                        Operand::Const(Const {
+                            ty: usize_t,
+                            kind: ConstKind::Scalar(m as u128),
+                        }),
+                    ),
+                );
+                Operand::Copy(Place::local(i))
+            }
+        };
+        let r = self.ref_to(place.clone(), t);
+        let et = self.tys().tcx().reference(elem, false);
+        let out = self.temp(et);
+        let name = self.tys().display(t);
+        self.call_native(&format!("{name}.index"), vec![r, idx], Place::local(out));
+        Ok(Place::local(out).project(ProjElem::Deref))
     }
 
     fn test_variant(
@@ -6871,10 +7055,96 @@ impl<'l, 'a> Bx<'l, 'a> {
                 name,
                 pattern,
                 by_ref: at_ref,
-            } if by_ref || *at_ref || self.is_copy(t) || !self.pattern_binds(pattern) => {
+            } => {
                 let by_ref = by_ref || *at_ref;
+                // Under an owned scrutinee `name` takes the whole, so `p`
+                // may bind only `Copy` parts (design.md § `@` bindings):
+                // those are copied out first.
+                self.bind_pattern(pattern, place, t, by_ref, out)?;
                 self.bind_one(name, pat.id, place.clone(), t, by_ref, out);
-                self.bind_pattern(pattern, place, t, by_ref, out)
+                Ok(())
+            }
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                let Some((elem, known)) = self.seq_of(t) else {
+                    return self.unsupported(pat.span, "a slice pattern on this type");
+                };
+                // Over a view every element binding borrows.
+                let by_ref = by_ref || known.is_none();
+                let (k, j) = (prefix.len() as u64, suffix.len() as u64);
+                for (i, p) in prefix.iter().enumerate() {
+                    if self.pattern_binds(p) {
+                        let ep = self.seq_elem(place, t, SeqPos::Start(i as u64))?;
+                        self.bind_pattern(p, &ep, elem, by_ref, out)?;
+                    }
+                }
+                for (i, p) in suffix.iter().enumerate() {
+                    if self.pattern_binds(p) {
+                        let ep = self.seq_elem(place, t, SeqPos::End(j - i as u64))?;
+                        self.bind_pattern(p, &ep, elem, by_ref, out)?;
+                    }
+                }
+                if let Some(ast::RestPattern::Bound(name)) = rest {
+                    // Over an array, `..rest` is the middle as an array; a
+                    // middle of `Copy` elements is copied, which reads the
+                    // same as the borrow the spec describes.
+                    if let Some(n) = known {
+                        if !self.is_copy(elem) {
+                            return self
+                                .unsupported(pat.span, "a named rest of non-`Copy` elements");
+                        }
+                        let ops = (k..n - j)
+                            .map(|i| Operand::Copy(place.project(ProjElem::ConstIndex(i))))
+                            .collect();
+                        let at = self.tys().tcx().intern(HK::Array {
+                            elem,
+                            len: crate::ty::ArrayLen::Known(n - k - j),
+                        });
+                        let l = self.user_local(name, at, pat.id);
+                        self.assign(l, Rvalue::Aggregate(AggregateKind::Array(elem), ops));
+                        out.push((l, at));
+                        return Ok(());
+                    }
+                    // `..rest` is a view of the middle, `[k, len - j)`.
+                    let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+                    let n = self.seq_len(place, t);
+                    let hi = self.temp(usize_t);
+                    self.assign(
+                        hi,
+                        Rvalue::BinaryOp(
+                            BinOp::Sub,
+                            Operand::Copy(Place::local(n)),
+                            Operand::Const(Const {
+                                ty: usize_t,
+                                kind: ConstKind::Scalar(j as u128),
+                            }),
+                        ),
+                    );
+                    let st = self.tys().tcx().intern(HK::Slice {
+                        elem,
+                        mutable: false,
+                    });
+                    let r = self.ref_to(place.clone(), t);
+                    let tname = self.tys().display(t);
+                    let l = self.user_local(name, st, pat.id);
+                    self.call_native(
+                        &format!("{tname}.slice"),
+                        vec![
+                            r,
+                            Operand::Const(Const {
+                                ty: usize_t,
+                                kind: ConstKind::Scalar(k as u128),
+                            }),
+                            Operand::Copy(Place::local(hi)),
+                        ],
+                        Place::local(l),
+                    );
+                    out.push((l, st));
+                }
+                Ok(())
             }
             _ => self.unsupported(pat.span, "this pattern"),
         }
@@ -7526,7 +7796,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn slice_view(
         &mut self,
         coll: &'a Expr,
-        range: Option<(Option<&'a Expr>, Option<&'a Expr>)>,
+        range: Option<(Option<&'a Expr>, Option<&'a Expr>, bool)>,
         slice_t: Ty,
         mutable: bool,
     ) -> R<Local> {
@@ -7546,7 +7816,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let name = self.tys().display(ct);
         let s = self.temp(slice_t);
-        let Some((start, end)) = range else {
+        let Some((start, end, inclusive)) = range else {
             let r = self.temp(rt);
             self.assign(r, Rvalue::Ref(kind, p));
             let method = if mutable { "as_mut_slice" } else { "as_slice" };
@@ -7568,6 +7838,24 @@ impl<'l, 'a> Bx<'l, 'a> {
             }),
         };
         let hi = match end {
+            // `a..=b` ends after `b`.
+            Some(x) if inclusive => {
+                let o = self.expr_operand(x)?;
+                let o = self.cast_index(o, usize_t);
+                let h = self.temp(usize_t);
+                self.assign(
+                    h,
+                    Rvalue::BinaryOp(
+                        BinOp::Add,
+                        o,
+                        Operand::Const(Const {
+                            ty: usize_t,
+                            kind: ConstKind::Scalar(1),
+                        }),
+                    ),
+                );
+                Operand::Copy(Place::local(h))
+            }
             Some(x) => {
                 let o = self.expr_operand(x)?;
                 self.cast_index(o, usize_t)
@@ -11137,5 +11425,101 @@ fn main() {
             let errs = crate::mir::validate::validate(b, tys);
             assert!(errs.is_empty(), "{errs:?}");
         }
+    }
+
+    /// Slice patterns (design.md § Slice and array patterns): a `Vec` is
+    /// matched as a view by length, with its elements and a named rest
+    /// borrowed; an array destructures by position.
+    #[test]
+    fn slice_patterns() {
+        let src = r#"
+fn ends(v: ref Vec[i64]) -> i64 {
+    match v {
+        [first, .., last] => first + last,
+        [only] => only,
+        [] => -1,
+    }
+}
+fn tail(v: ref Vec[String]) -> String {
+    match v {
+        [_, ..rest] => f"{rest.len()} {rest[0]}",
+        [] => "none",
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    println(ends(v));
+    v.push(4);
+    println(ends(v));
+    v.push(5);
+    v.push(6);
+    println(ends(v));
+    let w: Vec[String] = vec!["a", "b", "c"];
+    println(tail(w));
+    let arr: Array[i64, 5] = [1, 2, 3, 4, 5];
+    let [first, ..mid, last] = arr;
+    println(f"{first} {mid.len()} {mid[2]} {last}");
+    let [a, b, .., z] = arr;
+    println(f"{a} {b} {z}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("-1\n4\n10\n2 b\n1 3 4 5\n1 2 5\n".to_string(), Some(0)))
+        );
+    }
+
+    /// A range pattern's bound may be a constant or an integer type's
+    /// limit; `v[a..=b]` ends after `b`; `b"..."` is an array of its bytes;
+    /// `x @ P` under an owned scrutinee copies `P`'s `Copy` parts first.
+    #[test]
+    fn named_range_bounds_inclusive_slices_and_byte_strings() {
+        let src = r#"
+const LO: i64 = 10;
+const HI: i64 = 20;
+struct Foo { a: i64, n: i64 }
+fn classify(n: i64) -> i64 {
+    match n {
+        ..LO => 1,
+        LO..=HI => 2,
+        _ => 3,
+    }
+}
+fn main() {
+    println(f"{classify(5)} {classify(10)} {classify(20)} {classify(25)}");
+    let v: Vec[i64] = vec![1, 2, 3, 4, 5];
+    let s = v[1..=3];
+    println(f"{s.len()} {s[2]}");
+    let b = b"a\x01";
+    println(f"{b.len()} {b[0]} {b[1]}");
+    match Foo { a: 1, n: 7 } {
+        x @ Foo { a, n } => println(f"{a} {n} {x.n}"),
+    }
+    let m: i128 = 100000000000000000000i128;
+    println(m.saturating_add(1));
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok((
+                "1 2 2 3\n3 4\n2 97 1\n1 7 7\n100000000000000000001\n".to_string(),
+                Some(0)
+            ))
+        );
+    }
+
+    /// `v.push([])` checks the empty literal against the element slot, so
+    /// it is built at that type.
+    #[test]
+    fn empty_literal_pushed_takes_the_element_type() {
+        let src = r#"
+fn main() {
+    let mut cases: Vec[Vec[i64]] = Vec.new();
+    cases.push([]);
+    cases.push([1, 2]);
+    println(f"{cases.len()} {cases[0].len()} {cases[1].len()}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("2 0 2\n".to_string(), Some(0))));
     }
 }
