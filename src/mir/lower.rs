@@ -137,6 +137,9 @@ pub fn lower_program(
             .collect(),
         fns: FxHashMap::default(),
         consts: FxHashMap::default(),
+        bindings: FxHashMap::default(),
+        statics: FxHashMap::default(),
+        static_queue: Vec::new(),
         self_tys: FxHashMap::default(),
         queue: Vec::new(),
         queued: FxHashSet::default(),
@@ -153,6 +156,15 @@ pub fn lower_program(
         fn_param_tys: FxHashMap::default(),
     };
     lcx.index_functions(program);
+    // Statics are initialized in declaration order, so they are numbered
+    // in it.
+    for item in &program.items {
+        if let Item::ModuleBinding(b) = item {
+            if let Some(d) = defs.lookup(0, &b.name) {
+                lcx.static_of(d);
+            }
+        }
+    }
     // Contracts are checked at run time; until the builder emits those
     // checks, a program with one is refused rather than run without them.
     for item in &program.items {
@@ -189,6 +201,8 @@ pub fn lower_program(
             }
         } else if let Some(job) = lcx.closure_queue.pop() {
             lcx.lower_closure(job);
+        } else if let Some((def, name)) = lcx.static_queue.pop() {
+            lcx.lower_static(def, &name);
         } else {
             break;
         }
@@ -286,6 +300,13 @@ struct Lcx<'a> {
     /// Module-level constants and immutable `let` bindings, by
     /// definition, with their initializers.
     consts: FxHashMap<DefId, &'a Expr>,
+    /// Every module `let` binding, by definition.
+    bindings: FxHashMap<DefId, &'a ast::ModuleBinding>,
+    /// The module bindings that live in a static: each one's index in
+    /// `program.statics`, its type, and whether it is `let mut`.
+    statics: FxHashMap<DefId, (u32, Ty, bool)>,
+    /// Statics whose initializer body is still to be built.
+    static_queue: Vec<(DefId, String)>,
     /// The receiver type a method of a non-generic impl was called with:
     /// its `self` type when the impl names a concrete instance of a
     /// generic type (`impl Joiner for Vec[String]`).
@@ -414,10 +435,14 @@ impl<'a> Lcx<'a> {
                     }
                 }
                 // An immutable module `let` is evaluated where it is used,
-                // like a constant; `let mut` needs a global place.
-                Item::ModuleBinding(b) if !b.is_mut => {
+                // like a constant, unless it lives in a static
+                // (`static_of`).
+                Item::ModuleBinding(b) => {
                     if let Some(d) = self.defs.lookup(0, &b.name) {
-                        self.consts.insert(d, &b.value);
+                        self.bindings.insert(d, b);
+                        if !b.is_mut {
+                            self.consts.insert(d, &b.value);
+                        }
                     }
                 }
                 Item::ImplBlock(b) => {
@@ -623,6 +648,65 @@ impl<'a> Lcx<'a> {
         let fn_params = self.fn_param_tys.get(name).cloned().unwrap_or_default();
         let mut bx = Bx::new(self, instance, ret, args.to_vec());
         bx.lower_fn(f, impl_target, &fn_params);
+        let (body, errors) = bx.finish();
+        self.errors.extend(errors);
+        if let Some(body) = body {
+            self.program.add(body);
+        }
+    }
+
+    /// The static a module binding lives in, as its index, type and
+    /// mutability, allocated (and its initializer queued) on first ask.
+    /// A `let mut` binding needs one global place; so does an immutable
+    /// one holding a cell (`Atomic`, `Mutex`, ...), whose writes through
+    /// a shared borrow every use must see. Any other binding is a value
+    /// computed where it is used.
+    fn static_of(&mut self, d: DefId) -> Option<(u32, Ty, bool)> {
+        if let Some(&s) = self.statics.get(&d) {
+            return Some(s);
+        }
+        let b = *self.bindings.get(&d)?;
+        let t = *self.node_types.get(&b.value.id)?;
+        let t = self.mir_ty(t, &[]).ok()?;
+        if !b.is_mut {
+            let shown = self.tys.display(t);
+            let cell = [
+                "Atomic", "Mutex", "RwLock", "Arena", "OnceLock", "OnceCell", "LazyLock",
+            ]
+            .iter()
+            .any(|c| shown == *c || shown.starts_with(&format!("{c}[")));
+            if !cell {
+                return None;
+            }
+        }
+        let idx = self.program.statics.len() as u32;
+        let init = format!("static.{}", b.name);
+        self.program.statics.push(StaticDef {
+            name: b.name.clone(),
+            ty: t,
+            mutable: b.is_mut,
+            init: init.clone(),
+        });
+        self.statics.insert(d, (idx, t, b.is_mut));
+        self.static_queue.push((d, init));
+        Some((idx, t, b.is_mut))
+    }
+
+    /// A static's initializer: a body of no parameters returning its value.
+    fn lower_static(&mut self, def: DefId, name: &str) {
+        let Some(b) = self.bindings.get(&def).copied() else {
+            return;
+        };
+        let Some(&(_, t, _)) = self.statics.get(&def) else {
+            return;
+        };
+        let instance = InstanceId {
+            def,
+            args: Vec::new(),
+            name: name.to_string(),
+        };
+        let mut bx = Bx::new(self, instance, t, Vec::new());
+        let _ = bx.lower_static_init(&b.value);
         let (body, errors) = bx.finish();
         self.errors.extend(errors);
         if let Some(body) = body {
@@ -1841,6 +1925,16 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     // ── functions ───────────────────────────────────────────────────
 
+    fn lower_static_init(&mut self, value: &'a Expr) -> R<()> {
+        let ret = Place::local(Local::RETURN_PLACE);
+        self.push_scope();
+        self.expr_into(value, ret)?;
+        self.pop_scope()?;
+        self.return_exit()?;
+        self.scopes.clear();
+        Ok(())
+    }
+
     fn lower_fn(
         &mut self,
         f: &'a Function,
@@ -2608,9 +2702,11 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// value)?
     fn is_place(&self, e: &Expr) -> bool {
         match &e.kind {
-            ExprKind::Identifier(_) => {
-                matches!(self.lcx.res.get(&e.id), Some(Res::Local(_)))
-            }
+            ExprKind::Identifier(_) => match self.lcx.res.get(&e.id) {
+                Some(Res::Local(_)) => true,
+                Some(Res::Def(d)) => self.lcx.statics.contains_key(d),
+                _ => false,
+            },
             ExprKind::SelfValue => true,
             // A field of a temporary is a place too: the temporary's.
             ExprKind::FieldAccess { .. } => self.int_limit_of(e).is_none(),
@@ -2739,6 +2835,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         None => self.unsupported(e.span, &format!("the capture of `{name}`")),
                     },
                 },
+                Some(&Res::Def(d)) if self.lcx.statics.contains_key(&d) => Ok(self.static_place(d)),
                 _ => self.temp_place(e),
             },
             ExprKind::SelfValue => match self.self_local {
@@ -2786,6 +2883,22 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             _ => self.temp_place(e),
         }
+    }
+
+    /// The place of a module binding that lives in a static: `*_t`, with
+    /// `_t` the static's borrow.
+    fn static_place(&mut self, d: DefId) -> Place {
+        let (i, t, mutable) = self.lcx.statics[&d];
+        let rt = self.tys().tcx().reference(t, mutable);
+        let l = self.temp(rt);
+        self.assign(
+            l,
+            Rvalue::Use(Operand::Const(Const {
+                ty: rt,
+                kind: ConstKind::Static(i),
+            })),
+        );
+        Place::local(l).project(ProjElem::Deref)
     }
 
     /// The MIR type `p` ends at: its local's type through each projection.
@@ -3679,6 +3792,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                     None if self.lcx.fns.contains_key(&d) => {
                         let (op, _) = self.fn_item_value(e.span, d)?;
                         self.assign(dest, Rvalue::Use(op));
+                        Ok(())
+                    }
+                    None if self.lcx.statics.contains_key(&d) => {
+                        let p = self.static_place(d);
+                        let t = self.place_type(&p);
+                        if !self.is_copy(t) {
+                            return self.unsupported(e.span, "a move out of a module binding");
+                        }
+                        self.assign(dest, Rvalue::Use(Operand::Copy(p)));
                         Ok(())
                     }
                     None => match self.lcx.consts.get(&d) {
@@ -6862,6 +6984,29 @@ impl<'l, 'a> Bx<'l, 'a> {
         // constant's value, which is computed here.
         if let ExprKind::Path { segments, .. } = &callee.kind {
             if let [c, m] = segments.as_slice() {
+                // A binding in a static is the receiver itself, borrowed.
+                let st = self.lcx.defs.lookup(0, c);
+                if let Some(d) = st.filter(|d| self.lcx.statics.contains_key(d)) {
+                    let (_, vt, mutable) = self.lcx.statics[&d];
+                    let p = self.static_place(d);
+                    let rt = self.tys().tcx().reference(vt, mutable);
+                    let r = self.temp(rt);
+                    let kind = if mutable {
+                        BorrowKind::Mut
+                    } else {
+                        BorrowKind::Shared
+                    };
+                    self.assign(r, Rvalue::Ref(kind, p));
+                    let mut ops = vec![Operand::Move(Place::local(r))];
+                    for a in args {
+                        let t = self.expr_ty(&a.value)?;
+                        let by_ref = !self.is_copy(t);
+                        ops.push(self.lib_arg(&a.value, by_ref)?);
+                    }
+                    let name = format!("{}.{m}", self.tys().display(vt));
+                    self.call_native(&name, ops, dest);
+                    return Ok(());
+                }
                 let value = self
                     .lcx
                     .defs
@@ -10939,5 +11084,58 @@ fn main() {
 }
 "#;
         assert_eq!(run_source(src), Ok(("1 2 7 9 5\n".to_string(), Some(0))));
+    }
+
+    /// A `let mut` module binding, or one holding a cell, lives in a static:
+    /// numbered in declaration order, computed by its own initializer body,
+    /// and borrowed at each use. Any other module binding is computed where
+    /// it is used.
+    #[test]
+    fn module_bindings_that_need_one_place_are_statics() {
+        let src = r#"
+let LIMIT: i64 = 40 + 2;
+let HITS: Atomic[i64] = Atomic.new(5);
+let mut NAMES: Vec[String] = Vec.new();
+let mut COUNT: i64 = 0;
+fn bump() {
+    COUNT = COUNT + 1;
+    NAMES.push("x");
+    HITS.fetch_add(1, MemoryOrdering.SeqCst);
+}
+fn main() {
+    bump();
+    println(f"{COUNT} {NAMES.len()} {HITS.load(MemoryOrdering.SeqCst)} {LIMIT}");
+}
+"#;
+        let lowered = build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let tys = &lowered.tys;
+        let statics: Vec<_> = lowered
+            .program
+            .statics
+            .iter()
+            .map(|s| crate::mir::parse::pretty_static(tys, s))
+            .collect();
+        assert_eq!(
+            statics,
+            [
+                "static HITS: Atomic[i64] = static.HITS",
+                "static mut NAMES: Vec[String] = static.NAMES",
+                "static mut COUNT: i64 = static.COUNT",
+            ]
+        );
+        for s in &lowered.program.statics {
+            assert!(lowered.program.bodies.contains_key(&s.init), "{}", s.init);
+        }
+        let text = |name: &str| crate::mir::pretty::pretty_body(&lowered.program.bodies[name], tys);
+        let bump = text("bump");
+        for want in ["const &static#0", "const &static#1", "const &static#2"] {
+            assert!(bump.contains(want), "{want}\n{bump}");
+        }
+        // `LIMIT` is no static: its value is computed at the use.
+        assert!(text("main").contains("const 42_i64"), "{}", text("main"));
+        for b in lowered.program.bodies.values() {
+            let errs = crate::mir::validate::validate(b, tys);
+            assert!(errs.is_empty(), "{errs:?}");
+        }
     }
 }

@@ -36,6 +36,8 @@ pub struct Program {
     pub drop_by_ty: BTreeMap<Ty, String>,
     /// ADTs whose derived `Display` is not the default shape.
     pub display_styles: BTreeMap<AdtId, DisplayStyle>,
+    /// The program's statics, indexed by `ConstKind::Static`.
+    pub statics: Vec<StaticDef>,
 }
 
 /// How a derived `Display` departs from the default.
@@ -67,6 +69,7 @@ impl Program {
             }
             p.add(b.clone());
         }
+        p.statics = m.statics.clone();
         p
     }
 }
@@ -4112,6 +4115,7 @@ impl<'a> Interp<'a> {
             ConstKind::Str(s) => Value::Str(s.clone()),
             ConstKind::Unit | ConstKind::ZeroSized => Value::Unit,
             ConstKind::FnDef(inst) => Value::Fn(inst.clone()),
+            ConstKind::Static(_) => return err("a static is not interpreted yet"),
         })
     }
 

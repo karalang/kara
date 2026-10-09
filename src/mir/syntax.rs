@@ -271,6 +271,21 @@ pub enum ConstKind {
     /// A function item: the callee of a direct `Call`.
     FnDef(InstanceId),
     ZeroSized,
+    /// A borrow of the static at this index in the program's statics:
+    /// `ref T`, or `mut ref T` for a `let mut` binding.
+    Static(u32),
+}
+
+/// A module binding that lives in one global place: its value is computed
+/// once, by the body named `init` (no parameters, returning `ty`), before
+/// `main` runs, in declaration order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StaticDef {
+    pub name: String,
+    pub ty: Ty,
+    /// `let mut`: its uses borrow it `mut ref`.
+    pub mutable: bool,
+    pub init: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

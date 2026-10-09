@@ -41,6 +41,8 @@ pub struct MirModule {
     pub bodies: Vec<Body>,
     /// The name of each [`DefId`], indexed by its number.
     pub def_names: Vec<String>,
+    /// The declared statics, in declaration order.
+    pub statics: Vec<StaticDef>,
 }
 
 impl MirModule {
@@ -78,6 +80,10 @@ pub fn parse_module(src: &str) -> Result<MirModule, String> {
         let line = &lines[i];
         if line.code.starts_with("fn ") {
             i = p.body(&lines, i)?;
+        } else if line.code.starts_with("static ") {
+            p.static_decl(&line.code)
+                .map_err(|e| format!("line {}: {e}", line.no))?;
+            i += 1;
         } else if line.code.starts_with("struct ") || line.code.starts_with("enum ") {
             // A declaration runs until its braces balance.
             let mut text = String::new();
@@ -97,7 +103,7 @@ pub fn parse_module(src: &str) -> Result<MirModule, String> {
                 .map_err(|e| format!("line {start}: {e}"))?;
         } else {
             return Err(format!(
-                "line {}: expected `fn`, `struct` or `enum`, found `{}`",
+                "line {}: expected `fn`, `static`, `struct` or `enum`, found `{}`",
                 line.no, line.code
             ));
         }
@@ -111,6 +117,7 @@ pub fn parse_module(src: &str) -> Result<MirModule, String> {
         adts: p.adts,
         bodies: p.bodies,
         def_names: p.def_names,
+        statics: p.statics,
     })
 }
 
@@ -121,6 +128,10 @@ pub fn pretty_module(m: &MirModule) -> String {
         out.push_str(&pretty_adt(&m.tys, a));
         out.push('\n');
     }
+    for st in &m.statics {
+        out.push_str(&pretty_static(&m.tys, st));
+        out.push('\n');
+    }
     for b in &m.bodies {
         if !out.is_empty() {
             out.push('\n');
@@ -128,6 +139,17 @@ pub fn pretty_module(m: &MirModule) -> String {
         out.push_str(&pretty_body(b, &m.tys));
     }
     out
+}
+
+/// `static mut COUNT: i64 = static.COUNT`: a static and its initializer.
+pub fn pretty_static(tys: &TyInterner, st: &StaticDef) -> String {
+    format!(
+        "static {}{}: {} = {}",
+        if st.mutable { "mut " } else { "" },
+        st.name,
+        tys.display(st.ty),
+        st.init
+    )
 }
 
 /// The declaration line of one ADT.
@@ -232,6 +254,7 @@ struct Parser {
     fns: HashMap<String, DefId>,
     def_names: Vec<String>,
     bodies: Vec<Body>,
+    statics: Vec<StaticDef>,
 }
 
 impl Parser {
@@ -490,6 +513,26 @@ impl Parser {
             },
         };
         Ok(self.tys.intern(kind))
+    }
+
+    /// `static [mut] NAME: T = init`.
+    fn static_decl(&mut self, line: &str) -> Result<(), String> {
+        let mut c = Cur::new(line);
+        c.expect_kw("static")?;
+        let mutable = c.eat_kw("mut");
+        let name = c.ident()?.to_string();
+        c.expect(":")?;
+        let ty = self.ty(&mut c)?;
+        c.expect("=")?;
+        let init = c.fn_name()?;
+        c.done()?;
+        self.statics.push(StaticDef {
+            name,
+            ty,
+            mutable,
+            init,
+        });
+        Ok(())
     }
 
     /// Parses the body whose header is `lines[start]`; returns the index of
@@ -968,6 +1011,20 @@ impl Parser {
         if c.eat("()") {
             let ty = self.tys.unit();
             return konst(ty, ConstKind::Unit);
+        }
+        if c.eat("&static#") {
+            let i = c.number()? as usize;
+            let st = self
+                .statics
+                .get(i)
+                .ok_or_else(|| format!("`static#{i}` is not declared before its use"))?;
+            let (t, mutable) = (st.ty, st.mutable);
+            let ty = self.tys.intern(if mutable {
+                TyKind::MutRef(t)
+            } else {
+                TyKind::Ref(t)
+            });
+            return konst(ty, ConstKind::Static(i as u32));
         }
         if c.eat("<ZST") {
             let ty = self.ty(c)?;
@@ -1715,6 +1772,49 @@ fn f(_1: R) -> Option[R] {
 ",
         );
         assert!(m.adt_named("Result[i64, String]").is_some());
+    }
+
+    /// A static is declared before the bodies; a use borrows it by index,
+    /// `mut ref` for a `let mut` binding.
+    #[test]
+    fn mir_text_round_trips_statics() {
+        let src = "\
+static mut COUNT: i64 = static.COUNT
+static LIMIT: i64 = static.LIMIT
+
+fn static.COUNT() -> i64 {
+    let mut _0: i64;
+    bb0: {
+        _0 = const 0_i64;
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: mut ref i64;
+    let _2: ref i64;
+    bb0: {
+        _1 = const &static#0;
+        _2 = const &static#1;
+        (*_1) = copy (*_2);
+        _0 = const ();
+        return;
+    }
+}
+";
+        let m = round_trip(src);
+        assert_eq!(m.statics.len(), 2);
+        assert!(m.statics[0].mutable && !m.statics[1].mutable);
+        assert_eq!(m.statics[1].init, "static.LIMIT");
+        let main = m.body("main").unwrap();
+        let tys = &m.tys;
+        assert_eq!(tys.display(main.locals[1].ty), "mut ref i64");
+        let err = parse_module("fn main() -> () {\n    let mut _0: ();\n    let _1: ref i64;\n    bb0: {\n        _1 = const &static#0;\n        return;\n    }\n}\n");
+        assert!(
+            matches!(&err, Err(e) if e.contains("`static#0` is not declared")),
+            "{err:?}"
+        );
     }
 
     #[test]

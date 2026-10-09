@@ -229,6 +229,7 @@ pub fn constant(tys: &TyInterner, c: &Const) -> String {
         ConstKind::Unit => "()".to_string(),
         ConstKind::FnDef(inst) => inst.name.clone(),
         ConstKind::ZeroSized => format!("<ZST {}>", tys.display(c.ty)),
+        ConstKind::Static(i) => format!("&static#{i}"),
     }
 }
 

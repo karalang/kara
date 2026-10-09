@@ -37,6 +37,12 @@ impl<'a> super::Resolver<'a> {
                 Item::TraitDef(t) => self.resolve_trait_def(t),
                 Item::ImplBlock(i) => self.resolve_impl_block(i),
                 Item::ConstDecl(c) => self.resolve_const_decl(c),
+                Item::ModuleBinding(b) => {
+                    if let Some(ty) = &b.ty {
+                        self.resolve_type_expr(ty);
+                    }
+                    self.resolve_expr(&b.value);
+                }
                 Item::TypeAlias(t) => self.resolve_type_alias_def(t),
                 Item::ExternFunction(e) => self.resolve_extern_function(e),
                 Item::ExternBlock(b) => {
