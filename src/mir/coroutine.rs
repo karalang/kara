@@ -7,8 +7,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::ids::{DefId, NodeId};
+
 use super::borrowck::liveness;
 use super::syntax::*;
+use super::ty::{AdtDef, IntTy, Ty, TyInterner, TyKind, VariantDef};
 
 /// Natives that suspend. `__yield_now` is the executor's test native: it is
 /// `Pending` on its first resume and `Ready(())` on the next.
@@ -187,6 +190,647 @@ pub fn recursive_cycles<'a>(
     cycles
 }
 
+// ---- the transform ----
+
+/// The local a resume body reaches its frame through.
+const FRAME: Local = Local(1);
+
+/// A coroutine's frame type and where each of its locals lives in it.
+#[derive(Debug, Clone)]
+pub struct FrameInfo {
+    /// `F.Frame`, a struct whose field 0 is the `u32` state.
+    pub ty: Ty,
+    /// The field holding each frame local of the original body.
+    pub fields: BTreeMap<Local, u32>,
+    /// The field holding the callee's frame at each suspension point that
+    /// calls a body (a native keeps no frame).
+    pub subs: BTreeMap<usize, u32>,
+    /// `Poll[T]` for the body's return type `T`: `Ready(T) | Pending`.
+    pub poll: Ty,
+    /// The state of a frame whose body has returned.
+    pub returned: u32,
+}
+
+/// The `resume` body of coroutine `name`.
+pub fn resume_name(name: &str) -> String {
+    format!("{name}.resume")
+}
+
+/// A DefId no type uses yet, for the frame and `Poll` types the transform
+/// makes.
+fn fresh_def(tys: &TyInterner) -> DefId {
+    let mut n = u32::MAX / 2;
+    while tys.tcx().adt_def(DefId(n)).is_some() {
+        n += 1;
+    }
+    DefId(n)
+}
+
+fn poll_of(tys: &TyInterner, polls: &mut BTreeMap<Ty, Ty>, t: Ty) -> Ty {
+    if let Some(&p) = polls.get(&t) {
+        return p;
+    }
+    let def = fresh_def(tys);
+    let id = tys.add_adt(AdtDef {
+        def,
+        name: format!("Poll[{}]", tys.display(t)),
+        is_enum: true,
+        variants: vec![
+            VariantDef {
+                name: "Ready".into(),
+                fields: vec![("0".into(), t)],
+            },
+            VariantDef {
+                name: "Pending".into(),
+                fields: vec![],
+            },
+        ],
+        has_drop_impl: false,
+        is_copy: false,
+    });
+    let p = tys.intern(TyKind::Adt(id));
+    polls.insert(t, p);
+    p
+}
+
+/// Rewrites every coroutine among `bodies` into its `resume` body
+/// (`F.resume(frame: mut ref F.Frame) -> Poll[T]`), registering the frame
+/// and `Poll` types in `tys`. The other bodies are returned unchanged; the
+/// original coroutine bodies are not returned, since nothing may call one
+/// except through its `resume`.
+///
+/// Refuses a recursive cycle of coroutines, whose frame would contain
+/// itself.
+pub fn transform(
+    bodies: &[Body],
+    tys: &TyInterner,
+) -> Result<(Vec<Body>, BTreeMap<String, FrameInfo>), String> {
+    let set = coroutines(bodies);
+    if let Some(cycle) = recursive_cycles(bodies, &set).first() {
+        return Err(format!(
+            "recursive coroutines are not supported yet: {}",
+            cycle.join(", ")
+        ));
+    }
+    let by_name: BTreeMap<&str, &Body> = bodies
+        .iter()
+        .filter(|b| set.contains(&b.instance.name))
+        .map(|b| (b.instance.name.as_str(), b))
+        .collect();
+    let layouts: BTreeMap<&str, CoroutineLayout> =
+        by_name.iter().map(|(&n, b)| (n, layout(b, &set))).collect();
+    // A frame holds its callees' frames, so make the callees' types first.
+    let mut order: Vec<&str> = Vec::new();
+    fn visit<'a>(
+        n: &'a str,
+        layouts: &BTreeMap<&'a str, CoroutineLayout>,
+        order: &mut Vec<&'a str>,
+    ) {
+        if order.contains(&n) {
+            return;
+        }
+        for p in &layouts[n].points {
+            if let Some((&c, _)) = layouts.get_key_value(p.callee.as_str()) {
+                visit(c, layouts, order);
+            }
+        }
+        order.push(n);
+    }
+    for &n in layouts.keys() {
+        visit(n, &layouts, &mut order);
+    }
+    let u32t = tys.int(IntTy::U32);
+    let mut polls = BTreeMap::new();
+    let mut frames: BTreeMap<String, FrameInfo> = BTreeMap::new();
+    for &n in &order {
+        let body = by_name[n];
+        let lay = &layouts[n];
+        let mut locals: BTreeSet<Local> = lay.frame.iter().copied().collect();
+        locals.extend(body.args());
+        let mut fields_def = vec![("state".to_string(), u32t)];
+        let mut fields = BTreeMap::new();
+        for l in locals {
+            fields.insert(l, fields_def.len() as u32);
+            fields_def.push((format!("l{}", l.0), body.local(l).ty));
+        }
+        let mut subs = BTreeMap::new();
+        for (k, p) in lay.points.iter().enumerate() {
+            if let Some(f) = frames.get(&p.callee) {
+                subs.insert(k, fields_def.len() as u32);
+                fields_def.push((format!("sub{k}"), f.ty));
+            }
+        }
+        let id = tys.add_adt(AdtDef {
+            def: fresh_def(tys),
+            name: format!("{n}.Frame"),
+            is_enum: false,
+            variants: vec![VariantDef {
+                name: format!("{n}.Frame"),
+                fields: fields_def,
+            }],
+            has_drop_impl: false,
+            is_copy: false,
+        });
+        frames.insert(
+            n.to_string(),
+            FrameInfo {
+                ty: tys.intern(TyKind::Adt(id)),
+                fields,
+                subs,
+                poll: poll_of(tys, &mut polls, body.return_ty()),
+                returned: lay.points.len() as u32 + 1,
+            },
+        );
+    }
+    let mut out: Vec<Body> = bodies
+        .iter()
+        .filter(|b| !set.contains(&b.instance.name))
+        .cloned()
+        .collect();
+    for &n in &order {
+        out.push(Resume::new(by_name[n], &layouts[n], &frames, tys).build()?);
+    }
+    Ok((out, frames))
+}
+
+struct Resume<'a> {
+    body: &'a Body,
+    layout: &'a CoroutineLayout,
+    frames: &'a BTreeMap<String, FrameInfo>,
+    me: &'a FrameInfo,
+    tys: &'a TyInterner,
+    locals: Vec<LocalDecl>,
+    blocks: Vec<BasicBlockData>,
+}
+
+impl<'a> Resume<'a> {
+    fn new(
+        body: &'a Body,
+        layout: &'a CoroutineLayout,
+        frames: &'a BTreeMap<String, FrameInfo>,
+        tys: &'a TyInterner,
+    ) -> Self {
+        Resume {
+            body,
+            layout,
+            frames,
+            me: &frames[&body.instance.name],
+            tys,
+            locals: Vec::new(),
+            blocks: Vec::new(),
+        }
+    }
+
+    fn info(&self) -> SourceInfo {
+        SourceInfo {
+            span: self.body.span,
+            scope: SourceScope(0),
+        }
+    }
+
+    fn temp(&mut self, ty: Ty) -> Local {
+        self.locals.push(LocalDecl {
+            ty,
+            mutability: Mutability::Mut,
+            kind: LocalKind::Temp,
+            source_info: self.info(),
+        });
+        Local(self.locals.len() as u32 - 1)
+    }
+
+    fn stmt(&self, kind: StatementKind) -> Statement {
+        Statement {
+            kind,
+            source_info: self.info(),
+        }
+    }
+
+    fn assign(&self, p: Place, rv: Rvalue) -> Statement {
+        self.stmt(StatementKind::Assign(p, rv))
+    }
+
+    /// `(*frame).f`, of type `ty`.
+    fn field(&self, f: u32, ty: Ty) -> Place {
+        Place {
+            local: FRAME,
+            projection: vec![ProjElem::Deref, ProjElem::Field(FieldIdx(f), ty)],
+        }
+    }
+
+    fn state(&self) -> Place {
+        self.field(0, self.tys.int(IntTy::U32))
+    }
+
+    fn u32_const(&self, v: u32) -> Operand {
+        Operand::Const(Const {
+            ty: self.tys.int(IntTy::U32),
+            kind: ConstKind::Scalar(v as u128),
+        })
+    }
+
+    /// `state = s; _0 = Poll::Pending; return`, after `stmts`.
+    fn pending(&self, mut stmts: Vec<Statement>, s: u32) -> BasicBlockData {
+        stmts.push(self.assign(self.state(), Rvalue::Use(self.u32_const(s))));
+        stmts.push(self.assign(
+            Place::local(Local::RETURN_PLACE),
+            Rvalue::Aggregate(
+                AggregateKind::Adt {
+                    ty: self.me.poll,
+                    variant: VariantIdx(1),
+                },
+                vec![],
+            ),
+        ));
+        BasicBlockData {
+            statements: stmts,
+            terminator: Terminator {
+                kind: TerminatorKind::Return,
+                source_info: self.info(),
+            },
+        }
+    }
+
+    fn local(&self, l: Local) -> Result<Place, String> {
+        Ok(match self.me.fields.get(&l) {
+            Some(&f) => self.field(f, self.body.local(l).ty),
+            None => Place::local(Local(l.0 + 2)),
+        })
+    }
+
+    fn place(&self, p: &Place) -> Result<Place, String> {
+        let mut out = self.local(p.local)?;
+        for e in &p.projection {
+            out.projection.push(match e {
+                ProjElem::Index(i) => match self.local(*i)? {
+                    Place { local, projection } if projection.is_empty() => ProjElem::Index(local),
+                    _ => {
+                        return Err(format!(
+                            "{}: index {i} is held across a suspension point",
+                            self.body.instance.name
+                        ))
+                    }
+                },
+                e => *e,
+            });
+        }
+        Ok(out)
+    }
+
+    fn operand(&self, o: &Operand) -> Result<Operand, String> {
+        Ok(match o {
+            Operand::Copy(p) => Operand::Copy(self.place(p)?),
+            Operand::Move(p) => Operand::Move(self.place(p)?),
+            Operand::Const(c) => Operand::Const(c.clone()),
+        })
+    }
+
+    fn rvalue(&self, rv: &Rvalue) -> Result<Rvalue, String> {
+        Ok(match rv {
+            Rvalue::Use(o) => Rvalue::Use(self.operand(o)?),
+            Rvalue::UnaryOp(op, o) => Rvalue::UnaryOp(*op, self.operand(o)?),
+            Rvalue::Cast(k, o, t) => Rvalue::Cast(*k, self.operand(o)?, *t),
+            Rvalue::BinaryOp(op, a, b) => Rvalue::BinaryOp(*op, self.operand(a)?, self.operand(b)?),
+            Rvalue::CheckedBinaryOp(op, a, b) => {
+                Rvalue::CheckedBinaryOp(*op, self.operand(a)?, self.operand(b)?)
+            }
+            Rvalue::Aggregate(k, ops) => Rvalue::Aggregate(
+                k.clone(),
+                ops.iter()
+                    .map(|o| self.operand(o))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Rvalue::Ref(k, p) => Rvalue::Ref(*k, self.place(p)?),
+            Rvalue::Retain(p) => Rvalue::Retain(self.place(p)?),
+            Rvalue::Discriminant(p) => Rvalue::Discriminant(self.place(p)?),
+            Rvalue::Len(p) => Rvalue::Len(self.place(p)?),
+            Rvalue::NullaryOp(op, t) => Rvalue::NullaryOp(*op, *t),
+        })
+    }
+
+    fn statement(&self, s: &Statement) -> Result<Statement, String> {
+        let frame_local = |l: &Local| self.me.fields.contains_key(l);
+        let kind = match &s.kind {
+            StatementKind::Assign(p, rv) => StatementKind::Assign(self.place(p)?, self.rvalue(rv)?),
+            StatementKind::StorageLive(l) | StatementKind::StorageDead(l) if frame_local(l) => {
+                StatementKind::Nop
+            }
+            StatementKind::StorageLive(l) => StatementKind::StorageLive(Local(l.0 + 2)),
+            StatementKind::StorageDead(l) => StatementKind::StorageDead(Local(l.0 + 2)),
+            StatementKind::SetDiscriminant(p, v) => {
+                StatementKind::SetDiscriminant(self.place(p)?, *v)
+            }
+            StatementKind::BorrowFlag(op) => StatementKind::BorrowFlag(match op {
+                FlagOp::Acquire { place, kind, loan } => FlagOp::Acquire {
+                    place: self.place(place)?,
+                    kind: *kind,
+                    loan: *loan,
+                },
+                FlagOp::Release { loan } => FlagOp::Release { loan: *loan },
+                FlagOp::Check { place, kind } => FlagOp::Check {
+                    place: self.place(place)?,
+                    kind: *kind,
+                },
+            }),
+            StatementKind::Nop => StatementKind::Nop,
+        };
+        Ok(Statement {
+            kind,
+            source_info: s.source_info,
+        })
+    }
+
+    fn build(mut self) -> Result<Body, String> {
+        let name = &self.body.instance.name;
+        let b = |bb: BasicBlock| BasicBlock(bb.0 + 1);
+        let frame_ref = self.tys.intern(TyKind::MutRef(self.me.ty));
+        // `_0: Poll[T]`, `_1: mut ref F.Frame`, then the original locals.
+        self.locals.push(LocalDecl {
+            ty: self.me.poll,
+            mutability: Mutability::Mut,
+            kind: LocalKind::ReturnPlace,
+            source_info: self.info(),
+        });
+        self.locals.push(LocalDecl {
+            ty: frame_ref,
+            mutability: Mutability::Not,
+            kind: LocalKind::Arg {
+                name: "frame".into(),
+                node: NodeId(0),
+            },
+            source_info: self.info(),
+        });
+        for d in &self.body.locals {
+            let mut d = d.clone();
+            if matches!(d.kind, LocalKind::ReturnPlace | LocalKind::Arg { .. }) {
+                d.kind = LocalKind::Temp;
+            }
+            self.locals.push(d);
+        }
+        // bb0 dispatches on the state; the original blocks follow.
+        self.blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Terminator {
+                kind: TerminatorKind::Unreachable,
+                source_info: self.info(),
+            },
+        });
+        let points: BTreeMap<BasicBlock, usize> = self
+            .layout
+            .points
+            .iter()
+            .enumerate()
+            .map(|(k, p)| (p.block, k))
+            .collect();
+        let mut resumes: Vec<(u128, BasicBlock)> = Vec::new();
+        let mut extra: Vec<BasicBlockData> = Vec::new();
+        let first_extra = 1 + self.body.blocks.len() as u32;
+        for (i, data) in self.body.blocks.iter().enumerate() {
+            let mut statements = data
+                .statements
+                .iter()
+                .map(|s| self.statement(s))
+                .collect::<Result<Vec<_>, _>>()?;
+            let t = &data.terminator;
+            let kind = match &t.kind {
+                TerminatorKind::Call {
+                    args,
+                    destination,
+                    target: Some(next),
+                    ..
+                } if points.contains_key(&BasicBlock(i as u32)) => {
+                    let k = points[&BasicBlock(i as u32)];
+                    let state = k as u32 + 1;
+                    let callee = &self.layout.points[k].callee;
+                    let dest = self.place(destination)?;
+                    let at =
+                        |extra: &Vec<BasicBlockData>| BasicBlock(first_extra + extra.len() as u32);
+                    match self.frames.get(callee) {
+                        None => {
+                            // A suspending native: `__yield_now` is pending
+                            // once, then `()`.
+                            let unit = self.tys.unit();
+                            let back = at(&extra);
+                            extra.push(BasicBlockData {
+                                statements: vec![self.assign(
+                                    dest,
+                                    Rvalue::Use(Operand::Const(Const {
+                                        ty: unit,
+                                        kind: ConstKind::Unit,
+                                    })),
+                                )],
+                                terminator: Terminator {
+                                    kind: TerminatorKind::Goto { target: b(*next) },
+                                    source_info: t.source_info,
+                                },
+                            });
+                            resumes.push((state as u128, back));
+                            self.blocks.push(self.pending(statements, state));
+                            continue;
+                        }
+                        Some(callee_frame) => {
+                            let callee_body_ret = match self.tys.kind(callee_frame.poll) {
+                                TyKind::Adt(a) => self.tys.adt(a).variants[0].fields[0].1,
+                                _ => unreachable!("Poll is an ADT"),
+                            };
+                            let sub_f = self.me.subs[&k];
+                            let sub = self.field(sub_f, callee_frame.ty);
+                            // Start the callee: its state and its arguments.
+                            let mut start = sub.clone();
+                            start
+                                .projection
+                                .push(ProjElem::Field(FieldIdx(0), self.tys.int(IntTy::U32)));
+                            statements.push(self.assign(start, Rvalue::Use(self.u32_const(0))));
+                            for (j, a) in args.iter().enumerate() {
+                                let l = Local(j as u32 + 1);
+                                let f = callee_frame.fields[&l];
+                                let ty = match self.tys.kind(callee_frame.ty) {
+                                    TyKind::Adt(id) => {
+                                        self.tys.adt(id).variants[0].fields[f as usize].1
+                                    }
+                                    _ => unreachable!(),
+                                };
+                                let mut p = sub.clone();
+                                p.projection.push(ProjElem::Field(FieldIdx(f), ty));
+                                statements.push(self.assign(p, Rvalue::Use(self.operand(a)?)));
+                            }
+                            let r = self.temp(callee_frame.poll);
+                            let tref = self.temp(self.tys.intern(TyKind::MutRef(callee_frame.ty)));
+                            let d = self.temp(self.tys.int(IntTy::I64));
+                            let poll = at(&extra);
+                            let check = BasicBlock(poll.0 + 1);
+                            let ready = BasicBlock(poll.0 + 2);
+                            let pend = BasicBlock(poll.0 + 3);
+                            let unit = self.tys.unit();
+                            extra.push(BasicBlockData {
+                                statements: vec![self.assign(
+                                    Place::local(tref),
+                                    Rvalue::Ref(BorrowKind::Mut, sub.clone()),
+                                )],
+                                terminator: Terminator {
+                                    kind: TerminatorKind::Call {
+                                        func: Operand::Const(Const {
+                                            ty: unit,
+                                            kind: ConstKind::FnDef(InstanceId {
+                                                def: DefId(0),
+                                                args: vec![],
+                                                name: resume_name(callee),
+                                            }),
+                                        }),
+                                        args: vec![Operand::Move(Place::local(tref))],
+                                        destination: Place::local(r),
+                                        target: Some(check),
+                                        unwind: UnwindAction::Abort,
+                                    },
+                                    source_info: t.source_info,
+                                },
+                            });
+                            extra.push(BasicBlockData {
+                                statements: vec![self.assign(
+                                    Place::local(d),
+                                    Rvalue::Discriminant(Place::local(r)),
+                                )],
+                                terminator: Terminator {
+                                    kind: TerminatorKind::SwitchInt {
+                                        discr: Operand::Copy(Place::local(d)),
+                                        targets: SwitchTargets {
+                                            values: vec![(0, ready)],
+                                            otherwise: pend,
+                                        },
+                                    },
+                                    source_info: t.source_info,
+                                },
+                            });
+                            extra.push(BasicBlockData {
+                                statements: vec![self.assign(
+                                    dest,
+                                    Rvalue::Use(Operand::Move(Place {
+                                        local: r,
+                                        projection: vec![
+                                            ProjElem::Downcast(VariantIdx(0)),
+                                            ProjElem::Field(FieldIdx(0), callee_body_ret),
+                                        ],
+                                    })),
+                                )],
+                                terminator: Terminator {
+                                    kind: TerminatorKind::Goto { target: b(*next) },
+                                    source_info: t.source_info,
+                                },
+                            });
+                            extra.push(self.pending(vec![], state));
+                            resumes.push((state as u128, poll));
+                            TerminatorKind::Goto { target: poll }
+                        }
+                    }
+                }
+                TerminatorKind::Return => {
+                    let ret = self.local(Local::RETURN_PLACE)?;
+                    statements.push(self.assign(
+                        Place::local(Local::RETURN_PLACE),
+                        Rvalue::Aggregate(
+                            AggregateKind::Adt {
+                                ty: self.me.poll,
+                                variant: VariantIdx(0),
+                            },
+                            vec![Operand::Move(ret)],
+                        ),
+                    ));
+                    statements.push(
+                        self.assign(self.state(), Rvalue::Use(self.u32_const(self.me.returned))),
+                    );
+                    TerminatorKind::Return
+                }
+                TerminatorKind::Goto { target } => TerminatorKind::Goto { target: b(*target) },
+                TerminatorKind::SwitchInt { discr, targets } => TerminatorKind::SwitchInt {
+                    discr: self.operand(discr)?,
+                    targets: SwitchTargets {
+                        values: targets.values.iter().map(|&(v, t)| (v, b(t))).collect(),
+                        otherwise: b(targets.otherwise),
+                    },
+                },
+                TerminatorKind::Call {
+                    func,
+                    args,
+                    destination,
+                    target,
+                    unwind,
+                } => TerminatorKind::Call {
+                    func: self.operand(func)?,
+                    args: args
+                        .iter()
+                        .map(|a| self.operand(a))
+                        .collect::<Result<_, _>>()?,
+                    destination: self.place(destination)?,
+                    target: target.map(b),
+                    unwind: *unwind,
+                },
+                TerminatorKind::Drop {
+                    place,
+                    target,
+                    unwind,
+                } => TerminatorKind::Drop {
+                    place: self.place(place)?,
+                    target: b(*target),
+                    unwind: *unwind,
+                },
+                k @ (TerminatorKind::Abort { .. } | TerminatorKind::Unreachable) => k.clone(),
+            };
+            self.blocks.push(BasicBlockData {
+                statements,
+                terminator: Terminator {
+                    kind,
+                    source_info: t.source_info,
+                },
+            });
+        }
+        self.blocks.extend(extra);
+        let resumed_after_return = BasicBlock(self.blocks.len() as u32);
+        self.blocks.push(BasicBlockData {
+            statements: vec![],
+            terminator: Terminator {
+                kind: TerminatorKind::Abort {
+                    reason: AbortReason::Panic,
+                },
+                source_info: self.info(),
+            },
+        });
+        let mut values = vec![(0, BasicBlock(1))];
+        values.extend(resumes);
+        self.blocks[0].terminator.kind = TerminatorKind::SwitchInt {
+            discr: Operand::Copy(self.state()),
+            targets: SwitchTargets {
+                values,
+                otherwise: resumed_after_return,
+            },
+        };
+        let mut instance = self.body.instance.clone();
+        instance.name = resume_name(name);
+        Ok(Body {
+            instance,
+            locals: self.locals,
+            arg_count: 1,
+            blocks: self.blocks,
+            scopes: self.body.scopes.clone(),
+            phase: self.body.phase,
+            span: self.body.span,
+            par_regions: self
+                .body
+                .par_regions
+                .iter()
+                .map(|r| ParRegion {
+                    kind: r.kind.clone(),
+                    span: r.span,
+                    branches: r
+                        .branches
+                        .iter()
+                        .map(|br| br.iter().map(|&x| b(x)).collect())
+                        .collect(),
+                })
+                .collect(),
+            suspends: false,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +973,175 @@ fn c() -> () {
             recursive_cycles(&m.bodies, &set),
             [vec!["a".to_string(), "b".to_string()]]
         );
+    }
+
+    const LOOP: &str = "
+fn leaf(_1: i64) -> i64 suspends {
+    let mut _0: i64;
+    let _2: ();
+    let _3: ref i64;
+    let _4: i64;
+    bb0: {
+        _3 = &_1;
+        _2 = __yield_now() -> bb1;
+    }
+    bb1: {
+        _4 = copy (*_3);
+        _0 = Add(copy _4, const 10_i64);
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: i64;
+    let _2: bool;
+    let _3: i64;
+    let _4: ();
+    bb0: {
+        _1 = const 0_i64;
+        goto -> bb1;
+    }
+    bb1: {
+        _2 = Lt(copy _1, const 3_i64);
+        switchInt(copy _2) -> [0: bb5, otherwise: bb2];
+    }
+    bb2: {
+        _3 = leaf(copy _1) -> bb3;
+    }
+    bb3: {
+        _4 = println(copy _3) -> bb4;
+    }
+    bb4: {
+        _1 = Add(copy _1, const 1_i64);
+        goto -> bb1;
+    }
+    bb5: {
+        _0 = const ();
+        return;
+    }
+}
+";
+
+    /// The executor runs the state machine to the output the synchronous
+    /// run prints, resuming once per yield: a loop variable and a borrowed
+    /// argument live in the frames across each one.
+    #[test]
+    fn executor_matches_the_synchronous_run() {
+        use crate::mir::interp::{run, run_coroutines, Program};
+        let m = parse_module(LOOP).unwrap();
+        let prog = Program::from_module(&m);
+        let sync = run(&prog, &m.tys, "main", vec![]);
+        assert_eq!(sync.output, "10\n11\n12\n", "{:?}", sync.outcome);
+        let tasks = run_coroutines(&prog, &m.tys, "main", vec![]);
+        assert_eq!(tasks.output, sync.output, "{:?}", tasks.outcome);
+        assert_eq!(tasks.exit_code(), Some(0), "{:?}", tasks.outcome);
+        assert_eq!(tasks.resumes, 3);
+
+        let (bodies, frames) = transform(&m.bodies, &m.tys).unwrap();
+        let names: BTreeSet<&str> = bodies.iter().map(|b| b.instance.name.as_str()).collect();
+        assert_eq!(names, BTreeSet::from(["leaf.resume", "main.resume"]));
+        // `main` keeps `i` and `leaf`'s frame; `leaf` keeps its argument
+        // and the reference to it.
+        assert_eq!(
+            frames["main"].fields.keys().copied().collect::<Vec<_>>(),
+            [Local(1)]
+        );
+        assert_eq!(frames["main"].subs.len(), 1);
+        assert_eq!(
+            frames["leaf"].fields.keys().copied().collect::<Vec<_>>(),
+            [Local(1), Local(3)]
+        );
+    }
+
+    #[test]
+    fn transform_refuses_recursive_coroutines() {
+        let src = "
+fn a() -> () suspends {
+    let mut _0: ();
+    bb0: {
+        _0 = a() -> bb1;
+    }
+    bb1: {
+        return;
+    }
+}
+";
+        let m = parse_module(src).unwrap();
+        let e = transform(&m.bodies, &m.tys).unwrap_err();
+        assert!(e.contains("recursive coroutines"), "{e}");
+    }
+
+    /// A value with a Drop body held across a yield is dropped once, after
+    /// the resume, in both the caller's and the callee's frame.
+    #[test]
+    fn drops_across_a_yield_run_once() {
+        use crate::mir::interp::{run, run_coroutines, Program};
+        let src = "
+struct R: Drop { id: i64 }
+
+fn R.drop(_1: mut ref R) -> () {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = println(const \"drop\", copy (*_1).0) -> bb1;
+    }
+    bb1: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn leaf(_1: R) -> () suspends {
+    let mut _0: ();
+    let _2: ();
+    bb0: {
+        _2 = __yield_now() -> bb1;
+    }
+    bb1: {
+        _2 = println(const \"leaf\", copy _1.0) -> bb2;
+    }
+    bb2: {
+        drop(_1) -> bb3;
+    }
+    bb3: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: R;
+    let _2: R;
+    let _3: ();
+    bb0: {
+        _1 = R { const 8_i64 };
+        _2 = R { const 7_i64 };
+        _0 = leaf(move _2) -> bb1;
+    }
+    bb1: {
+        _3 = println(const \"main\", copy _1.0) -> bb2;
+    }
+    bb2: {
+        drop(_1) -> bb3;
+    }
+    bb3: {
+        return;
+    }
+}
+";
+        let m = parse_module(src).unwrap();
+        let prog = Program::from_module(&m);
+        let sync = run(&prog, &m.tys, "main", vec![]);
+        assert_eq!(
+            sync.output, "leaf7\ndrop7\nmain8\ndrop8\n",
+            "{:?}",
+            sync.outcome
+        );
+        let tasks = run_coroutines(&prog, &m.tys, "main", vec![]);
+        assert_eq!(tasks.output, sync.output, "{:?}", tasks.outcome);
+        assert_eq!(tasks.exit_code(), Some(0), "{:?}", tasks.outcome);
+        assert_eq!(tasks.resumes, 1);
     }
 }

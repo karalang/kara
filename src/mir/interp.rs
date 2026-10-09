@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use super::coroutine;
 use super::parse::MirModule;
 use super::place_ty::place_ty;
 use super::pretty;
@@ -26,7 +27,7 @@ use super::validate::validate;
 
 /// The functions of a program, by instance name, and the `Drop` body of
 /// each ADT that has one.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Program {
     pub bodies: BTreeMap<String, Body>,
     /// The instance name of each ADT's `Drop` body, which takes the value
@@ -230,6 +231,9 @@ pub struct RunResult {
     pub stderr: String,
     pub events: Vec<Event>,
     pub outcome: Outcome,
+    /// How many times the executor resumed a task root that was pending
+    /// (`KARAC_MIR_COROUTINES=1`); 0 otherwise.
+    pub resumes: u64,
 }
 
 impl RunResult {
@@ -261,7 +265,7 @@ const MAX_STEPS: u64 = 4_000_000_000;
 /// Runs `entry` with `args`, validating every body first, and records
 /// the [`Event`] trace.
 pub fn run(program: &Program, tys: &TyInterner, entry: &str, args: Vec<Value>) -> RunResult {
-    run_with(program, tys, entry, args, true, false)
+    run_with(program, tys, entry, args, true, false, coroutines_flag())
 }
 
 /// [`run`], without the trace: [`RunResult::events`] stays empty.
@@ -271,7 +275,7 @@ pub fn run_untraced(
     entry: &str,
     args: Vec<Value>,
 ) -> RunResult {
-    run_with(program, tys, entry, args, false, false)
+    run_with(program, tys, entry, args, false, false, coroutines_flag())
 }
 
 /// [`run_untraced`], writing the program's stdout and stderr to the
@@ -283,7 +287,24 @@ pub fn run_streaming(
     entry: &str,
     args: Vec<Value>,
 ) -> RunResult {
-    run_with(program, tys, entry, args, false, true)
+    run_with(program, tys, entry, args, false, true, coroutines_flag())
+}
+
+/// [`run`], with coroutines run as state machines under the executor
+/// whatever `KARAC_MIR_COROUTINES` says.
+pub fn run_coroutines(
+    program: &Program,
+    tys: &TyInterner,
+    entry: &str,
+    args: Vec<Value>,
+) -> RunResult {
+    run_with(program, tys, entry, args, true, false, true)
+}
+
+/// `KARAC_MIR_COROUTINES=1`: coroutines run as state machines under an
+/// executor; otherwise their suspending calls complete synchronously.
+fn coroutines_flag() -> bool {
+    std::env::var("KARAC_MIR_COROUTINES").is_ok_and(|v| v == "1")
 }
 
 fn run_with(
@@ -293,7 +314,34 @@ fn run_with(
     args: Vec<Value>,
     trace: bool,
     stream: bool,
+    coroutines: bool,
 ) -> RunResult {
+    let transformed;
+    let program = if coroutines {
+        let bodies: Vec<Body> = program.bodies.values().cloned().collect();
+        match coroutine::transform(&bodies, tys) {
+            Ok((bodies, _)) => {
+                let mut p = program.clone();
+                p.bodies = bodies
+                    .into_iter()
+                    .map(|b| (b.instance.name.clone(), b))
+                    .collect();
+                transformed = p;
+                &transformed
+            }
+            Err(e) => {
+                return RunResult {
+                    output: String::new(),
+                    stderr: String::new(),
+                    events: Vec::new(),
+                    outcome: Outcome::Error(e),
+                    resumes: 0,
+                }
+            }
+        }
+    } else {
+        program
+    };
     let mut problems = Vec::new();
     for (name, body) in &program.bodies {
         for e in validate(body, tys) {
@@ -323,11 +371,18 @@ fn run_with(
         arenas: 0,
         sorted_tables: Default::default(),
         flags: Vec::new(),
+        resumes: 0,
     };
+    let task = coroutines && program.bodies.contains_key(&coroutine::resume_name(entry));
     let outcome = if !problems.is_empty() {
         Outcome::Error(format!("invalid MIR:\n{}", problems.join("\n")))
     } else {
-        match it.call(entry, args).and_then(|v| it.main_result(entry, v)) {
+        let ret = if task {
+            it.run_task(entry, args)
+        } else {
+            it.call(entry, args)
+        };
+        match ret.and_then(|v| it.main_result(entry, v)) {
             Ok(done) => match it.leaks() {
                 Some(leaks) => Outcome::Error(leaks),
                 None => done,
@@ -341,6 +396,7 @@ fn run_with(
         stderr: it.stderr,
         events: it.events,
         outcome,
+        resumes: it.resumes,
     }
 }
 
@@ -490,6 +546,8 @@ struct Interp<'a> {
     sorted_tables: rustc_hash::FxHashSet<AllocId>,
     /// The borrow flags currently held, by field address.
     flags: Vec<(Addr, Flag)>,
+    /// Resumes of a pending task root.
+    resumes: u64,
 }
 
 impl<'a> Interp<'a> {
@@ -580,6 +638,7 @@ impl<'a> Interp<'a> {
                 let prog = self.alloc_box("String", Value::Str("main".into()));
                 Ok(self.alloc_box(ty_name, Value::Agg(vec![prog])))
             }
+            ("__yield_now", "") => Ok(Value::Unit),
             ("format", "") => {
                 // An f-string used as a value: print's convention, into a
                 // new String.
@@ -4845,6 +4904,16 @@ impl<'a> Interp<'a> {
     fn main_result(&mut self, entry: &str, v: Value) -> R<Outcome> {
         let ret = match self.program.bodies.get(entry) {
             Some(b) if entry == "main" => b.locals[0].ty,
+            None if entry == "main" => {
+                // A coroutine `main`: the `T` of its resume's `Poll[T]`.
+                match self.program.bodies.get(&coroutine::resume_name(entry)) {
+                    Some(b) => match self.tys.field_ty(b.locals[0].ty, Some(0), 0) {
+                        Some(t) => t,
+                        None => return Ok(Outcome::Returned(v)),
+                    },
+                    None => return Ok(Outcome::Returned(v)),
+                }
+            }
             _ => return Ok(Outcome::Returned(v)),
         };
         let TyKind::Adt(a) = self.tys.kind(ret) else {
@@ -4886,6 +4955,96 @@ impl<'a> Interp<'a> {
             }
             (false, false) => self.output.push_str(text),
             (false, true) => self.stderr.push_str(text),
+        }
+    }
+
+    /// A coroutine frame of type `ty`, before its first resume: state 0,
+    /// every local uninitialized, and each callee frame shaped the same way
+    /// so the resume body can start it field by field.
+    fn fresh_frame(&self, ty: Ty) -> Value {
+        match self.tys.kind(ty) {
+            TyKind::Adt(a) if self.tys.adt(a).name.ends_with(".Frame") => {
+                let adt = self.tys.adt(a);
+                let fields = &adt.variants[0].fields;
+                Value::Agg(
+                    fields
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (_, t))| {
+                            if i == 0 {
+                                Value::Int(0)
+                            } else {
+                                self.fresh_frame(*t)
+                            }
+                        })
+                        .collect(),
+                )
+            }
+            _ => Value::Uninit,
+        }
+    }
+
+    /// Whether frame `v` of type `ty` still holds a value of its body that
+    /// needs dropping: a frame that returned holds none.
+    fn frame_holds(&self, v: &Value, ty: Ty) -> bool {
+        let owned = || v.any_init() && self.tys.needs_drop(ty);
+        let TyKind::Adt(a) = self.tys.kind(ty) else {
+            return owned();
+        };
+        let adt = self.tys.adt(a);
+        if !adt.name.ends_with(".Frame") {
+            return owned();
+        }
+        let Value::Agg(fs) = v else {
+            return owned();
+        };
+        fs.iter()
+            .zip(&adt.variants[0].fields)
+            .skip(1)
+            .any(|(f, (_, t))| self.frame_holds(f, *t))
+    }
+
+    /// Runs coroutine `entry` as a task root (`KARAC_MIR_COROUTINES=1`): the
+    /// executor owns its frame and resumes it until it is `Ready`.
+    fn run_task(&mut self, entry: &str, args: Vec<Value>) -> R<Value> {
+        let resume = coroutine::resume_name(entry);
+        let Some(body) = self.program.bodies.get(&resume) else {
+            return err(format!("{entry} is not a coroutine"));
+        };
+        let TyKind::MutRef(frame_ty) = self.tys.kind(body.locals[1].ty) else {
+            return err(format!("{resume} does not take its frame"));
+        };
+        let mut frame = self.fresh_frame(frame_ty);
+        if let Value::Agg(fs) = &mut frame {
+            // The arguments are the frame's first locals after the state.
+            for (i, a) in args.into_iter().enumerate() {
+                fs[i + 1] = a;
+            }
+        }
+        let slot = self.alloc(HeapObj {
+            count: 1,
+            weak: 0,
+            value: frame,
+        });
+        let at = Addr {
+            root: Root::Heap(slot),
+            path: Vec::new(),
+        };
+        loop {
+            match self.call(&resume, vec![Value::Ref(at.clone())])? {
+                Value::Variant(0, mut fs) if fs.len() == 1 => {
+                    let frame = self.live(slot)?.value.clone();
+                    if self.frame_holds(&frame, frame_ty) {
+                        return err(format!(
+                            "{entry} returned with its frame still holding a value"
+                        ));
+                    }
+                    self.free_slot(slot);
+                    return Ok(fs.remove(0));
+                }
+                Value::Variant(1, _) => self.resumes += 1,
+                other => return err(format!("{resume} returned {other:?}, not a Poll")),
+            }
         }
     }
 

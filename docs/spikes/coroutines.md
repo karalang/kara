@@ -68,3 +68,8 @@ Written by the MIR owner after the decision, as the plan the implementation foll
 4. `drop_frame`.
 5. The executor and tests.
 6. The recursion and function-value refusals.
+
+**Status (2026-10-09).** Steps 1, 2, 3 and 5 are in `src/mir/coroutine.rs`, plus the recursion half of step 6. A body is a coroutine when it declares `suspends` (`Body.suspends`, set by the builder) or directly calls a coroutine or `__yield_now`. C10's effect sets have no `suspends` verb yet, so the declared flag stands in for them. The frame holds every argument, every local live across a point, and every borrowed local. The last is a conservative stand-in for loan liveness. `interp::run_coroutines`, or `KARAC_MIR_COROUTINES=1` on the ordinary entry points, runs a coroutine `main` under the executor. The tests check that it prints what the synchronous run prints and that it resumes once per yield. Still open:
+- `drop_frame` (step 4). It needs each local's drop flag at each state, and elaboration does not record that mapping yet.
+- The function-value refusal. An erased `Fn` type carries no effects in MIR.
+- A borrow flag held across a yield. The interpreter releases a frame's flags when `resume` returns `Pending`.
