@@ -9439,6 +9439,75 @@ fn main() {
         assert_eq!(r.output, "12 15 6 15 14 40\nok 40\nerr 41\nfalse true false\nfalse\nset\nrejected b\na\ninit\ninit\nx y 2\n1\n");
     }
 
+    /// `Map.entry` chains: `or_insert` into a vacant entry (in key order
+    /// for a SortedMap), `and_modify` on an occupied one, an unused value
+    /// or closure dropped, and an entry dropped unconsumed (a leak would
+    /// fail the run). The output is legacy's.
+    #[test]
+    fn entry_chains_insert_modify_and_drop() {
+        let src = r#"
+fn main() {
+    let mut m: SortedMap[String, String] = SortedMap.new();
+    m.entry(String.from("m")).or_insert(String.from("1"));
+    m.entry(String.from("c")).or_insert(String.from("2"));
+    m.entry(String.from("x")).or_insert_with(|| String.from("3"));
+    m.entry(String.from("c")).or_insert(String.from("unused"));
+    let tag = String.from("!");
+    m.entry(String.from("m")).and_modify(|v| { v.push_str("!"); }).or_insert(String.from("no"));
+    m.entry(String.from("a")).and_modify(|v| { v.push_str("?"); }).or_insert(String.from("4"));
+    m.entry(String.from("z"));
+    for (k, v) in m.iter() { println(f"{k}={v}"); }
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(r.output, "a=4\nc=2\nm=1!\nx=3\n");
+    }
+
+    /// Map ranges and bounds, set algebra, slice copies, binary search,
+    /// String text methods, char classes and width-dependent integer
+    /// methods, each as legacy prints them.
+    #[test]
+    fn collection_char_and_int_natives_match_legacy() {
+        let src = r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1, 10);
+    let es = m.entries();
+    println(f"{es}");
+    let mut s: SortedMap[i64, i64] = SortedMap.new();
+    s.insert(1, 10); s.insert(5, 50); s.insert(9, 90);
+    println(f"{s.floor(6)} {s.floor(0)} {s.ceiling(6)} {s.ceiling(10)} {s.min()} {s.max()}");
+    let mut r: Vec[i64] = Vec.new();
+    for (k, v) in s.range(2, 9) { r.push(k * 1000 + v); }
+    println(f"{r}");
+    println(f"{'a'.is_alphabetic()} {'1'.is_alphabetic()} {'A'.is_uppercase()} {'7'.is_ascii_digit()} {'Q'.to_lowercase()} {'q'.to_ascii_uppercase()} {'7'.to_digit(10)}");
+    let v = vec![3, 1, 2];
+    let sl = v.as_slice();
+    let w = sl.to_vec();
+    println(f"{w} {v.binary_search(1)} {v.binary_search(3)}");
+    println(f"{"cab".sorted()} {"  x ".trim_start()} {"ab-c".strip_prefix("ab")} {"a b  c".split_whitespace()} {"aaa".replacen("a", "b", 2)} {"x\ny".lines()} {"héllo".char_count()}");
+    let mut a: Set[i64] = Set.new(); a.insert(1); a.insert(2); a.insert(3);
+    let mut b: Set[i64] = Set.new(); b.insert(2); b.insert(3); b.insert(4);
+    let mut u: Vec[i64] = Vec.new();
+    for x in a.union(b) { u.push(x); }
+    u.sort();
+    let mut d: Vec[i64] = Vec.new();
+    for x in a.difference(b) { d.push(x); }
+    let mut sa: SortedSet[i64] = SortedSet.new(); sa.insert(1); sa.insert(2); sa.insert(3);
+    let mut sb: SortedSet[i64] = SortedSet.new(); sb.insert(2); sb.insert(3); sb.insert(4);
+    let mut i: Vec[i64] = Vec.new();
+    for x in sa.intersection(sb) { i.push(x); }
+    println(f"{u} {d} {i}");
+    let t: i32 = 40;
+    println(f"{t.trailing_zeros()} {t.leading_zeros()} {(17).clamp(0, 10)}");
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(r.output, "[(1, 10)]\nSome((5, 50)) None Some((9, 90)) None Some((1, 10)) Some((9, 90))\n[5050, 9090]\ntrue false true true q Q Some(7)\n[3, 1, 2] Some(1) None\nabc x  Some(-c) [a, b, c] bba [x, y] 5\n[1, 2, 3, 4] [1] [2, 3]\n3 26 10\n");
+    }
+
     /// Float math natives compute at the receiver's width, and float
     /// literals and results round to their type.
     #[test]
