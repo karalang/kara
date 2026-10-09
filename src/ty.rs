@@ -203,7 +203,12 @@ impl IntrinsicKind {
 /// Library structs whose values hold values of their one type argument
 /// that the struct's declared fields do not show (`OnceLock[T]` declares
 /// only a handle): they need dropping exactly when the argument does.
-pub const LIBRARY_CELLS: &[&str] = &["OnceLock", "OnceCell", "Arena"];
+pub const LIBRARY_CELLS: &[&str] = &["OnceLock", "OnceCell", "Arena", "TaskHandle"];
+
+/// Library handles that are always dropped, whatever they hold: a dropped
+/// `Channel` end is what closes the channel and frees what is still queued
+/// in it, and a dropped `File` closes the file.
+pub const HANDLES: &[&str] = &["Sender", "Receiver", "File"];
 
 /// A struct or enum definition as the middle end needs it. Field types are
 /// written in the definition's own generic parameters ([`TyKind::Param`] by
@@ -768,6 +773,9 @@ impl TyCtxt {
                 // A library cell keeps values of its type argument in place
                 // of its fields (the MIR interpreter's `once_method` and
                 // `arena_method`).
+                if HANDLES.contains(&adt.name.as_str()) {
+                    return true;
+                }
                 if LIBRARY_CELLS.contains(&adt.name.as_str()) {
                     return args.first().is_some_and(|&t| self.needs_drop_in(t, outer));
                 }

@@ -404,6 +404,8 @@ fn run_with(
             .unwrap_or(MAX_STEPS),
         snapshots: Default::default(),
         arenas: 0,
+        channels: Vec::new(),
+        files: Vec::new(),
         sorted_tables: Default::default(),
         flags: Vec::new(),
         resumes: 0,
@@ -581,6 +583,10 @@ struct Interp<'a> {
     snapshots: rustc_hash::FxHashSet<AllocId>,
     /// The last `Arena` id handed out.
     arenas: i128,
+    /// The queues behind `Channel` ends and `BoundedChannel`s, by id - 1.
+    channels: Vec<Chan>,
+    /// The open files behind `File` values, by id - 1; `None` once closed.
+    files: Vec<Option<std::fs::File>>,
     /// The tables a `Vacant` entry was made from that keep key order.
     sorted_tables: rustc_hash::FxHashSet<AllocId>,
     /// The borrow flags currently held, by field address.
@@ -721,9 +727,18 @@ impl<'a> Interp<'a> {
                 Ok(self.alloc_box(ty_name, Value::Str(s.clone())))
             }
             ("Atomic", _) => self.atomic_method(name, method, args, ret),
-            ("Entry", _) => self.entry_method(name, method, args, arg_tys, ret),
+            // Only the library entry's methods: a user `struct Entry` keeps
+            // its own (derived `clone`, ...) through the arms below.
+            ("Entry", "and_modify" | "or_insert" | "or_insert_with") => {
+                self.entry_method(name, method, args, arg_tys, ret)
+            }
             ("OnceLock" | "OnceCell", _) => self.once_method(name, method, args, arg_tys, ret),
             ("Arena", _) => self.arena_method(name, method, args, arg_tys),
+            ("Channel" | "Sender" | "Receiver" | "BoundedChannel", _) => {
+                self.channel_method(name, base, method, args, arg_tys, ret)
+            }
+            ("File", _) => self.file_method(name, method, args, arg_tys, ret),
+            ("TaskGroup" | "TaskHandle", _) => self.task_method(name, base, method, args, arg_tys),
             ("Vec", "from_array") => {
                 let [Value::Agg(elems)] = args.as_slice() else {
                     return err(format!("{name} takes an array"));
@@ -959,7 +974,9 @@ impl<'a> Interp<'a> {
                 self.vec_more_method(ty_name, method, args, arg_tys)
             }
             ("Vec" | "String", _) => self.collection_method(ty_name, method, args, arg_tys, ret),
-            ("FileSystem", "write" | "read_to_string") => self.fs_method(method, args, ret),
+            ("FileSystem", "write" | "read_to_string" | "read_lines") => {
+                self.fs_method(method, args, ret)
+            }
             (t, "parse" | "from_str_radix") if t == "f64" || int_width(t).is_some() => {
                 self.parse_number(t, method, &args, ret)
             }
@@ -988,6 +1005,22 @@ impl<'a> Interp<'a> {
                 .is_some_and(|a| matches!(a, Value::Int(_) | Value::Float(_))) =>
             {
                 self.scalar_method(name, method, &args, ret)
+            }
+            // IEEE-754 reinterpretation, as legacy's: `to_bits` is the f64
+            // pattern whatever the float's width, `to_bits32` the pattern of
+            // the value rounded to f32.
+            (_, "to_bits" | "to_bits32" | "bits_as_f64" | "bits_as_f32") => {
+                match (method, args.as_slice()) {
+                    ("to_bits", [Value::Float(f)]) => Ok(Value::Int(i128::from(f.to_bits()))),
+                    ("to_bits32", [Value::Float(f)]) => {
+                        Ok(Value::Int(i128::from((*f as f32).to_bits())))
+                    }
+                    ("bits_as_f64", [Value::Int(b)]) => Ok(Value::Float(f64::from_bits(*b as u64))),
+                    ("bits_as_f32", [Value::Int(b)]) => {
+                        Ok(Value::Float(f64::from(f32::from_bits(*b as u32))))
+                    }
+                    _ => err(format!("{name}: wrong arguments")),
+                }
             }
             (_, m)
                 if matches!(args.first(), Some(Value::Float(_)))
@@ -1988,6 +2021,327 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// `Channel.new()` / `Channel.bounded(n)` and their `Sender` /
+    /// `Receiver` ends, and `BoundedChannel[T]`: a queue in `channels`,
+    /// which each end (and a `BoundedChannel`) names by its id. Single
+    /// threaded, as the legacy interpreter is: a `send` that would block
+    /// panics and a `recv` from an empty channel aborts, since no other task
+    /// could ever make progress.
+    fn channel_method(
+        &mut self,
+        name: &str,
+        base: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
+        let panic = |me: &mut Self| -> R<Value> {
+            if me.trace {
+                me.events.push(Event::Abort(AbortReason::Panic));
+            }
+            Err(Stop::Abort(AbortReason::Panic))
+        };
+        match (base, method) {
+            ("Channel", "new" | "bounded") => {
+                let cap = match args.as_slice() {
+                    [] => 0,
+                    [Value::Int(n)] => (*n).max(0) as usize,
+                    _ => return err(format!("{name}: wrong arguments")),
+                };
+                let elem = self
+                    .tys
+                    .field_ty(ret, None, 0)
+                    .and_then(|end| self.tys.tcx().adt_of(end))
+                    .and_then(|(_, args)| args.first().copied())
+                    .ok_or_else(|| Stop::Error(format!("{name} needs its element type")))?;
+                let id = self.new_chan(elem, cap, 1, 1);
+                let end = || Value::Agg(vec![Value::Int(id)]);
+                Ok(Value::Agg(vec![end(), end()]))
+            }
+            ("BoundedChannel", "new") => {
+                let [Value::Int(n), on_full] = args.as_slice() else {
+                    return err(format!("{name}: wrong arguments"));
+                };
+                let elem = self
+                    .tys
+                    .tcx()
+                    .adt_of(ret)
+                    .and_then(|(_, args)| args.first().copied())
+                    .ok_or_else(|| Stop::Error(format!("{name} needs its element type")))?;
+                if let Some(t) = arg_tys.get(1) {
+                    self.drop_value(on_full.clone(), *t)?;
+                }
+                // Capacity 0 holds nothing: every send is `Full`.
+                let id = self.new_chan(elem, (*n).max(0) as usize, 1, 1);
+                self.chan_mut(id, name)?.bounded = true;
+                Ok(Value::Agg(vec![Value::Int(id)]))
+            }
+            (_, "drop") => {
+                // `BoundedChannel.drop`, registered by the builder for the
+                // `#[compiler_builtin]` Drop impl.
+                let id = self.chan_id(args.first(), name)?;
+                self.end_dropped(id, true)?;
+                self.end_dropped(id, false)?;
+                Ok(Value::Unit)
+            }
+            (_, "clone") => {
+                let id = self.chan_id(args.first(), name)?;
+                let c = self.chan_mut(id, name)?;
+                if base == "Sender" {
+                    c.senders += 1;
+                } else {
+                    c.receivers += 1;
+                }
+                Ok(Value::Agg(vec![Value::Int(id)]))
+            }
+            (_, "send" | "try_send") => {
+                let [recv, v] = args.as_slice() else {
+                    return err(format!("{name} takes a value"));
+                };
+                let id = self.chan_id(Some(recv), name)?;
+                let c = self.chan_mut(id, name)?;
+                let full = (c.bounded || c.cap > 0) && c.queue.len() >= c.cap;
+                let closed = !c.bounded && c.receivers == 0;
+                let elem = c.elem;
+                if !closed && !full {
+                    c.queue.push_back(v.clone());
+                }
+                match (base, method, closed, full) {
+                    (_, "try_send", true, _) | (_, "try_send", _, true) => {
+                        // `Closed` before `Full`: a retry can never succeed.
+                        let want = if closed { "Closed" } else { "Full" };
+                        let e = self.variant_named(ret, Some("Err"), want, vec![v.clone()])?;
+                        self.variant_named(ret, None, "Err", vec![e])
+                    }
+                    (_, "try_send", ..) => self.variant_named(ret, None, "Ok", vec![Value::Unit]),
+                    ("BoundedChannel", ..) if full => {
+                        self.drop_value(v.clone(), elem)?;
+                        let e = self.variant_named(ret, Some("Err"), "Full", Vec::new())?;
+                        self.variant_named(ret, None, "Err", vec![e])
+                    }
+                    ("BoundedChannel", ..) => {
+                        self.variant_named(ret, None, "Ok", vec![Value::Unit])
+                    }
+                    (.., true, _) | (.., true) => {
+                        self.drop_value(v.clone(), elem)?;
+                        panic(self)
+                    }
+                    _ => Ok(Value::Unit),
+                }
+            }
+            (_, "recv" | "recv_blocking" | "try_recv") => {
+                let id = self.chan_id(args.first(), name)?;
+                let v = self.chan_mut(id, name)?.queue.pop_front();
+                if base == "BoundedChannel" || method == "try_recv" {
+                    return self.option(ret, v);
+                }
+                match v {
+                    Some(v) => Ok(v),
+                    None => panic(self),
+                }
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    fn new_chan(&mut self, elem: Ty, cap: usize, senders: usize, receivers: usize) -> i128 {
+        self.channels.push(Chan {
+            queue: std::collections::VecDeque::new(),
+            elem,
+            cap,
+            bounded: false,
+            senders,
+            receivers,
+        });
+        self.channels.len() as i128
+    }
+
+    fn chan_mut(&mut self, id: i128, name: &str) -> R<&mut Chan> {
+        usize::try_from(id - 1)
+            .ok()
+            .and_then(|i| self.channels.get_mut(i))
+            .ok_or_else(|| Stop::Error(format!("{name} of a channel never made")))
+    }
+
+    /// The id a channel end (or a reference to one) holds.
+    fn chan_id(&mut self, v: Option<&Value>, name: &str) -> R<i128> {
+        let v = v.ok_or_else(|| Stop::Error(format!("{name} needs its receiver")))?;
+        let held = match v {
+            Value::Ref(_) => {
+                let at = self.cell_struct(v, name)?;
+                self.slot(&at)?.clone()
+            }
+            other => other.clone(),
+        };
+        match held {
+            Value::Agg(fs) => match fs.as_slice() {
+                [Value::Int(id)] => Ok(*id),
+                _ => err(format!("{name} of a channel end holding {fs:?}")),
+            },
+            other => err(format!("{name} of {other:?}")),
+        }
+    }
+
+    /// One end of channel `id` is gone; with both gone, what is still
+    /// queued drops.
+    fn end_dropped(&mut self, id: i128, sender: bool) -> R<()> {
+        let c = self.chan_mut(id, "drop")?;
+        let count = if sender {
+            &mut c.senders
+        } else {
+            &mut c.receivers
+        };
+        *count = count.saturating_sub(1);
+        if c.senders > 0 || c.receivers > 0 {
+            return Ok(());
+        }
+        let elem = c.elem;
+        let queued = std::mem::take(&mut c.queue);
+        for v in queued {
+            self.drop_value(v, elem)?;
+        }
+        Ok(())
+    }
+
+    /// `File`: an id into `files`, closed when the `File` drops. Bytes go
+    /// through `Slice[u8]` views one element at a time, as legacy's do.
+    fn file_method(
+        &mut self,
+        name: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
+        use std::io::{Read, Seek, Write};
+        if let ("open" | "create" | "append", [path]) = (method, args.as_slice()) {
+            let path = self.string_at(path)?;
+            let mut opts = std::fs::OpenOptions::new();
+            match method {
+                "open" => opts.read(true),
+                "create" => opts.write(true).create(true).truncate(true),
+                _ => opts.append(true).create(true),
+            };
+            return match opts.open(path) {
+                Ok(f) => {
+                    self.files.push(Some(f));
+                    let file = Value::Agg(vec![Value::Int(self.files.len() as i128)]);
+                    self.variant_named(ret, None, "Ok", vec![file])
+                }
+                Err(e) => self.io_err(ret, e),
+            };
+        }
+        let id = self.chan_id(args.first(), name)?;
+        let slot = usize::try_from(id - 1).ok();
+        let Some(Some(mut f)) = slot.and_then(|i| self.files.get_mut(i)).map(Option::take) else {
+            return err(format!("{name} of a closed file"));
+        };
+        let res = match (method, &args[1..]) {
+            ("read", [buf]) => {
+                let (base, lo, len) = self.view_of(buf)?;
+                let mut bytes = vec![0u8; len as usize];
+                f.read(&mut bytes).map(|n| {
+                    for (i, b) in bytes[..n].iter().enumerate() {
+                        let at = base.child(lo + i as u64);
+                        if let Ok(v) = self.slot_mut(&at) {
+                            *v = Value::Int(i128::from(*b));
+                        }
+                    }
+                    Value::Int(n as i128)
+                })
+            }
+            ("write", [buf]) => {
+                let (base, lo, len) = self.view_of(buf)?;
+                let mut bytes = Vec::with_capacity(len as usize);
+                for i in 0..len {
+                    match self.slot(&base.child(lo + i))? {
+                        Value::Int(b) => bytes.push(b as u8),
+                        other => return err(format!("{name} of a byte holding {other:?}")),
+                    }
+                }
+                f.write(&bytes).map(|n| Value::Int(n as i128))
+            }
+            ("flush", []) => f.flush().map(|()| Value::Unit),
+            ("sync_all", []) => f.sync_all().map(|()| Value::Unit),
+            ("sync_data", []) => f.sync_data().map(|()| Value::Unit),
+            ("seek", [whence, Value::Int(off)]) => {
+                // `SeekFrom` comes by value or behind a reference.
+                let k = match whence {
+                    Value::Variant(k, _) => *k,
+                    Value::Ref(at) => match self.slot(at)? {
+                        Value::Variant(k, _) => k,
+                        other => return err(format!("{name} of {other:?}")),
+                    },
+                    other => return err(format!("{name} of {other:?}")),
+                };
+                let whence_ty = arg_tys.get(1).map(|&t| match self.tys.kind(t) {
+                    TyKind::Ref(t) | TyKind::MutRef(t) => t,
+                    _ => t,
+                });
+                let whence = whence_ty
+                    .and_then(|t| self.tys.tcx().adt_of(t))
+                    .and_then(|(adt, _)| adt.variants.get(k as usize).map(|v| v.name.clone()));
+                let off = *off as i64;
+                let pos = match whence.as_deref() {
+                    Some("Start") if off < 0 => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "invalid seek to a negative position",
+                    )),
+                    Some("Start") => Ok(std::io::SeekFrom::Start(off as u64)),
+                    Some("Current") => Ok(std::io::SeekFrom::Current(off)),
+                    Some("End") => Ok(std::io::SeekFrom::End(off)),
+                    _ => return err(format!("{name} of an unknown SeekFrom")),
+                };
+                pos.and_then(|p| f.seek(p))
+                    .map(|p| Value::Int(i128::from(p)))
+            }
+            ("drop", []) => {
+                // `f` is closed by going out of scope here.
+                return Ok(Value::Unit);
+            }
+            _ => return err(format!("call of unknown function {name}")),
+        };
+        if let Some(i) = slot {
+            self.files[i] = Some(f);
+        }
+        match res {
+            Ok(v) => self.variant_named(ret, None, "Ok", vec![v]),
+            Err(e) => self.io_err(ret, e),
+        }
+    }
+
+    /// `TaskGroup.spawn`, run eagerly at the spawn as the legacy
+    /// interpreter does: a `TaskHandle[T]` holds the child's result where
+    /// its id would be, and `join` hands it back.
+    fn task_method(
+        &mut self,
+        name: &str,
+        base: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+    ) -> R<Value> {
+        match (base, method) {
+            ("TaskGroup", "new") => Ok(Value::Agg(vec![Value::Int(0)])),
+            ("TaskGroup", "cancel" | "drop") => Ok(Value::Unit),
+            ("TaskGroup", "spawn") => {
+                let (Some(f), Some(&fty)) = (args.get(1), arg_tys.get(1)) else {
+                    return err(format!("{name} takes a closure"));
+                };
+                let mut callee = self.hold_callee(f.clone(), fty, name)?;
+                let v = self.call_callee(&mut callee, Vec::new());
+                self.release_callee(callee, fty)?;
+                Ok(Value::Agg(vec![v?]))
+            }
+            ("TaskHandle", "join") => match args.as_slice() {
+                [Value::Agg(fs)] if fs.len() == 1 => Ok(fs[0].clone()),
+                _ => err(format!("{name} of a handle holding {args:?}")),
+            },
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
     /// The struct a (possibly doubly) referenced library cell points at.
     fn cell_struct(&mut self, v: &Value, name: &str) -> R<Addr> {
         let mut v = v.clone();
@@ -2520,6 +2874,16 @@ impl<'a> Interp<'a> {
                 });
                 self.option_of_place(ret, at)
             }
+            ("get", [Value::Int(i)]) => {
+                let n = self.vec_elems(id)?.len() as i128;
+                let at = (0..n).contains(i).then(|| {
+                    Value::Ref(Addr {
+                        root: Root::Heap(id),
+                        path: vec![*i as u64],
+                    })
+                });
+                self.option_of_place(ret, at)
+            }
             ("entry_at" | "index" | "index_mut", [Value::Int(i)]) => {
                 let i = self.bounds(id, *i, false)?;
                 Ok(Value::Ref(Addr {
@@ -2546,7 +2910,7 @@ impl<'a> Interp<'a> {
                 let (path, text) = (self.string_at(path)?, self.string_at(text)?);
                 std::fs::write(path, text).map(|()| None)
             }
-            ("read_to_string", [path]) => {
+            ("read_to_string" | "read_lines", [path]) => {
                 let path = self.string_at(path)?;
                 std::fs::read_to_string(path).map(Some)
             }
@@ -2554,29 +2918,41 @@ impl<'a> Interp<'a> {
         };
         match res {
             Ok(None) => self.variant_named(ret, None, "Ok", vec![Value::Unit]),
+            Ok(Some(text)) if method == "read_lines" => {
+                let lines = text
+                    .lines()
+                    .map(|l| self.alloc_box("String", Value::Str(l.to_string())))
+                    .collect();
+                let v = self.alloc_box("Vec[String]", Value::Agg(lines));
+                self.variant_named(ret, None, "Ok", vec![v])
+            }
             Ok(Some(text)) => {
                 let s = self.alloc_box("String", Value::Str(text));
                 self.variant_named(ret, None, "Ok", vec![s])
             }
-            Err(e) => {
-                use std::io::ErrorKind as K;
-                let (kind, msg) = match e.kind() {
-                    K::NotFound => ("NotFound", None),
-                    K::PermissionDenied => ("PermissionDenied", None),
-                    K::AlreadyExists => ("AlreadyExists", None),
-                    K::UnexpectedEof => ("UnexpectedEof", None),
-                    K::InvalidData => ("InvalidUtf8", None),
-                    K::Interrupted => ("Interrupted", None),
-                    _ => ("Other", Some(e.to_string())),
-                };
-                let fields = match msg {
-                    Some(m) => vec![self.alloc_box("String", Value::Str(m))],
-                    None => Vec::new(),
-                };
-                let payload = self.variant_named(ret, Some("Err"), kind, fields)?;
-                self.variant_named(ret, None, "Err", vec![payload])
-            }
+            Err(e) => self.io_err(ret, e),
         }
+    }
+
+    /// `Err(IoError)` in the `Result` type `ret`, with legacy's variant for
+    /// the error's kind.
+    fn io_err(&mut self, ret: Ty, e: std::io::Error) -> R<Value> {
+        use std::io::ErrorKind as K;
+        let (kind, msg) = match e.kind() {
+            K::NotFound => ("NotFound", None),
+            K::PermissionDenied => ("PermissionDenied", None),
+            K::AlreadyExists => ("AlreadyExists", None),
+            K::UnexpectedEof => ("UnexpectedEof", None),
+            K::InvalidData => ("InvalidUtf8", None),
+            K::Interrupted => ("Interrupted", None),
+            _ => ("Other", Some(e.to_string())),
+        };
+        let fields = match msg {
+            Some(m) => vec![self.alloc_box("String", Value::Str(m))],
+            None => Vec::new(),
+        };
+        let payload = self.variant_named(ret, Some("Err"), kind, fields)?;
+        self.variant_named(ret, None, "Err", vec![payload])
     }
 
     /// `i64.parse(s)`, `f64.parse(s)`, `u8.from_str_radix(s, 16)`: `Some`
@@ -4806,7 +5182,25 @@ impl<'a> Interp<'a> {
         // would be (`atomic_method`, `once_method`, `arena_method`).
         let first = match adt.name.as_str() {
             "Atomic" => return Ok(()),
-            "OnceLock" | "OnceCell" => Some(0),
+            "Sender" | "Receiver" | "File" => {
+                if let Value::Agg(fs) = self.slot(addr)? {
+                    if let [Value::Int(id)] = fs.as_slice() {
+                        let id = *id;
+                        if adt.name == "File" {
+                            if let Some(f) = usize::try_from(id - 1)
+                                .ok()
+                                .and_then(|i| self.files.get_mut(i))
+                            {
+                                *f = None;
+                            }
+                            return Ok(());
+                        }
+                        return self.end_dropped(id, adt.name == "Sender");
+                    }
+                }
+                return Ok(());
+            }
+            "OnceLock" | "OnceCell" | "TaskHandle" => Some(0),
             "Arena" => Some(1),
             _ => None,
         };
@@ -5229,6 +5623,18 @@ fn cmp_keys(xs: &[Value], ys: &[Value]) -> std::cmp::Ordering {
 }
 
 /// `Vec[R].len` -> (`Vec[R]`, `len`); a plain `println` -> (`println`, ``).
+/// A channel's queue: its element type, its capacity (0 is unbounded for a
+/// `Channel`), and how many of each end are live.
+struct Chan {
+    queue: std::collections::VecDeque<Value>,
+    elem: Ty,
+    cap: usize,
+    /// A `BoundedChannel`: capacity 0 holds nothing, and no end closes it.
+    bounded: bool,
+    senders: usize,
+    receivers: usize,
+}
+
 fn split_method(name: &str) -> (&str, &str) {
     let mut depth = 0;
     let mut dot = None;

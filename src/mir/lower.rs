@@ -8845,6 +8845,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                         | "append"
                         | "set"
                         | "or_insert"
+                        | "send"
+                        | "try_send"
                 );
                 for (i, a) in args.iter().enumerate() {
                     let owned = match def {
@@ -9730,6 +9732,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                         | "set"
                         | "entry"
                         | "or_insert"
+                        | "send"
+                        | "try_send"
                 );
                 for a in args {
                     if self.is_fn_typed(a.value.id)
@@ -9745,6 +9749,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                         continue;
                     }
                     let at = self.expr_ty(&a.value)?;
+                    if a.mut_marker && self.is_place(&a.value) {
+                        // `f.read(mut buf)`: a `mut Slice[T]` / `mut ref T`
+                        // parameter lends the place mutably, even a `Copy`
+                        // array, so the native writes the caller's elements.
+                        let p = self.expr_place(&a.value, true)?;
+                        let rt = self.tys().tcx().reference(at, true);
+                        let r = self.temp(rt);
+                        self.assign(r, Rvalue::Ref(BorrowKind::Mut, p));
+                        rest.push(Operand::Move(Place::local(r)));
+                        continue;
+                    }
                     let callable = matches!(self.tys().tcx().kind(at), HK::Closure { .. });
                     let by_ref = !stores && !callable && !self.is_copy(at);
                     // A borrowed value stored into a container of owned
@@ -10480,6 +10495,138 @@ fn main() {
         let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
         assert_eq!(r.output, "alpha beta\n");
+    }
+
+    /// Channel ends name a queue the interpreter keeps; what is still
+    /// queued drops with the last end. A user `struct Entry` keeps its
+    /// derived `clone` rather than reaching the library entry's natives.
+    #[test]
+    fn channels_deque_get_and_user_entry_run_as_natives() {
+        let src = r#"
+#[derive(Clone)]
+struct Entry { key: String, n: i64 }
+fn main() {
+    let (tx, rx): (Sender[String], Receiver[String]) = Channel.new();
+    tx.send("a");
+    let tx2 = tx.clone();
+    tx2.send(String.from("b"));
+    tx.send(String.from("left behind"));
+    println(rx.recv());
+    match rx.try_recv() {
+        Some(s) => println(s),
+        None => println("empty"),
+    }
+    let (btx, brx) = Channel.bounded(1);
+    match btx.try_send(String.from("one")) {
+        Ok(_) => println("sent"),
+        Err(SendError.Full(v)) => println(f"full {v}"),
+        Err(SendError.Closed(v)) => println(f"closed {v}"),
+    }
+    match btx.try_send(String.from("two")) {
+        Ok(_) => println("sent"),
+        Err(SendError.Full(v)) => println(f"full {v}"),
+        Err(SendError.Closed(v)) => println(f"closed {v}"),
+    }
+    println(brx.recv());
+    let mut q: VecDeque[i64] = VecDeque.new();
+    q.push_back(7);
+    q.push_back(9);
+    match q.get(1) {
+        Some(v) => println(v),
+        None => println("none"),
+    }
+    match q.get(2) {
+        Some(v) => println(v),
+        None => println("none"),
+    }
+    let e = Entry { key: String.from("k"), n: 3 };
+    let e2 = e.clone();
+    println(f"{e2.key} {e2.n}");
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(r.output, "a\nb\nsent\nfull two\none\n9\nnone\nk 3\n");
+    }
+
+    /// The protobuf codecs' bit reinterpretation, as legacy prints it.
+    #[test]
+    fn float_bits_round_trip() {
+        let src = r#"
+fn main() {
+    let x: f64 = 1.5;
+    let y: f32 = 1.5;
+    let n: f64 = -2.0;
+    let b = x.to_bits();
+    let c = y.to_bits32();
+    let d = y.to_bits();
+    println(f"{b} {c} {d} {n.to_bits()}");
+    println(f"{b.bits_as_f64()} {c.bits_as_f32()} {n.to_bits().bits_as_f64()}");
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(
+            r.output,
+            "4609434218613702656 1069547520 4609434218613702656 13835058055282163712\n\
+             1.5 1.5 -2\n"
+        );
+    }
+
+    /// `File` reads into the caller's `mut` buffer, writes, seeks and
+    /// reports a missing file as `IoError.NotFound`, as legacy does.
+    #[test]
+    fn file_natives_read_write_and_seek() {
+        let path = std::env::temp_dir().join(format!("karac_mir_file_{}", std::process::id()));
+        let src = r#"
+fn main() with reads(FileSystem) writes(FileSystem) {
+    let path = "PATH";
+    match File.create(path) {
+        Ok(f) => {
+            let mut bytes: Vec[u8] = Vec.new();
+            bytes.push(104u8);
+            bytes.push(105u8);
+            bytes.push(10u8);
+            match f.write(bytes.as_slice()) {
+                Ok(n) => println(f"wrote {n}"),
+                Err(_) => println("write err"),
+            }
+        }
+        Err(_) => println("create err"),
+    }
+    match File.open(path) {
+        Ok(f) => {
+            let mut buf: Array[u8, 8] = [0u8; 8];
+            match f.read(mut buf) {
+                Ok(n) => println(f"read {n} first {buf[0]} last {buf[2]}"),
+                Err(_) => println("read err"),
+            }
+            match f.seek(SeekFrom.Start, 1) {
+                Ok(p) => println(f"at {p}"),
+                Err(_) => println("seek err"),
+            }
+        }
+        Err(_) => println("open err"),
+    }
+    match File.open("/nonexistent/karac-mir") {
+        Ok(_) => println("opened"),
+        Err(IoError.NotFound) => println("not found"),
+        Err(_) => println("other"),
+    }
+    match FileSystem.read_lines(path) {
+        Ok(ls) => println(ls.len()),
+        Err(_) => println("read_lines err"),
+    }
+}
+"#
+        .replace("PATH", &path.display().to_string());
+        let r = super::run_source(&src).unwrap_or_else(|e| panic!("{e}"));
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(
+            r.output,
+            "wrote 3\nread 3 first 104 last 10\nat 1\nnot found\n1\n"
+        );
     }
 
     /// Float math natives compute at the receiver's width, and float
