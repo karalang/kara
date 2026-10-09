@@ -98,6 +98,8 @@ enum Root {
         local: Local,
     },
     Heap(AllocId),
+    /// The static at this index in the program's statics.
+    Static(u32),
 }
 
 /// Where a value lives: a root and the field or element indices below it.
@@ -406,6 +408,7 @@ fn run_with(
         arenas: 0,
         channels: Vec::new(),
         files: Vec::new(),
+        statics: Vec::new(),
         sorted_tables: Default::default(),
         flags: Vec::new(),
         resumes: 0,
@@ -418,11 +421,13 @@ fn run_with(
     let outcome = if !problems.is_empty() {
         Outcome::Error(format!("invalid MIR:\n{}", problems.join("\n")))
     } else {
-        let ret = if task {
-            it.run_task(entry, args)
-        } else {
-            it.call(entry, args)
-        };
+        let ret = it.init_statics().and_then(|()| {
+            if task {
+                it.run_task(entry, args)
+            } else {
+                it.call(entry, args)
+            }
+        });
         match ret.and_then(|v| it.main_result(entry, v)) {
             Ok(done) => match it.leaks() {
                 Some(leaks) => Outcome::Error(leaks),
@@ -587,6 +592,9 @@ struct Interp<'a> {
     channels: Vec<Chan>,
     /// The open files behind `File` values, by id - 1; `None` once closed.
     files: Vec<Option<std::fs::File>>,
+    /// The values of the program's statics, in declaration order: each
+    /// initializer runs before `main`, and its value lives until exit.
+    statics: Vec<Value>,
     /// The tables a `Vacant` entry was made from that keep key order.
     sorted_tables: rustc_hash::FxHashSet<AllocId>,
     /// The borrow flags currently held, by field address.
@@ -4243,6 +4251,10 @@ impl<'a> Interp<'a> {
                 Some(Some(obj)) => Ok(&mut obj.value),
                 _ => err(format!("use of {a} after it was freed")),
             },
+            Root::Static(i) => match self.statics.get_mut(i as usize) {
+                Some(v) => Ok(v),
+                None => err(format!("use of static#{i} before its initializer ran")),
+            },
         }
     }
 
@@ -4593,7 +4605,10 @@ impl<'a> Interp<'a> {
             ConstKind::Str(s) => Value::Str(s.clone()),
             ConstKind::Unit | ConstKind::ZeroSized => Value::Unit,
             ConstKind::FnDef(inst) => Value::Fn(inst.clone()),
-            ConstKind::Static(_) => return err("a static is not interpreted yet"),
+            ConstKind::Static(i) => Value::Ref(Addr {
+                root: Root::Static(*i),
+                path: Vec::new(),
+            }),
         })
     }
 
@@ -5495,12 +5510,56 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// Runs each static's initializer, in declaration order, before `main`.
+    fn init_statics(&mut self) -> R<()> {
+        let program = self.program;
+        for def in &program.statics {
+            let v = self.call(&def.init, Vec::new()).map_err(|e| match e {
+                Stop::Error(e) => Stop::Error(format!("initializing static {}: {e}", def.name)),
+                abort => abort,
+            })?;
+            self.statics.push(v);
+        }
+        Ok(())
+    }
+
+    /// The heap a static's value reaches: live until exit, like the static.
+    fn held_by_statics(&self) -> rustc_hash::FxHashSet<AllocId> {
+        let mut seen = rustc_hash::FxHashSet::default();
+        let mut todo: Vec<&Value> = self.statics.iter().collect();
+        while let Some(v) = todo.pop() {
+            match v {
+                Value::Agg(fs) | Value::Variant(_, fs) => todo.extend(fs),
+                Value::Box(a) | Value::Shared(a) | Value::Weak(a) => {
+                    if seen.insert(*a) {
+                        if let Some(Some(obj)) = self.heap.get(a.0 as usize) {
+                            todo.push(&obj.value);
+                        }
+                    }
+                }
+                Value::Erased {
+                    env: Some((a, _)), ..
+                } => {
+                    if seen.insert(*a) {
+                        if let Some(Some(obj)) = self.heap.get(a.0 as usize) {
+                            todo.push(&obj.value);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        seen
+    }
+
     fn leaks(&self) -> Option<String> {
+        let held = self.held_by_statics();
         let live: Vec<String> = self
             .heap
             .iter()
             .enumerate()
             .filter(|(i, _)| !self.snapshots.contains(&AllocId(*i as u32)))
+            .filter(|(i, _)| !held.contains(&AllocId(*i as u32)))
             .filter_map(|(i, o)| o.as_ref().map(|o| format!("a{i} (count {})", o.count)))
             .collect();
         if live.is_empty() {

@@ -10549,6 +10549,32 @@ fn main() {
         assert_eq!(r.output, "a\nb\nsent\nfull two\none\n9\nnone\nk 3\n");
     }
 
+    /// Statics initialize before `main`, every use sees earlier writes,
+    /// and a static's heap lives to exit without counting as a leak.
+    #[test]
+    fn statics_hold_writes_across_calls() {
+        let src = r#"
+let mut COUNT: i64 = 0;
+let SEEN: Atomic[i64] = Atomic.new(5);
+let mut LOG: Vec[i64] = Vec.new();
+
+fn bump() {
+    COUNT = COUNT + 1;
+    LOG.push(COUNT * 10);
+}
+
+fn main() {
+    bump();
+    bump();
+    SEEN.fetch_add(2, MemoryOrdering.SeqCst);
+    println(f"{COUNT} {SEEN.load(MemoryOrdering.SeqCst)} {LOG.len()} {LOG[1]}");
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(r.output, "2 7 2 20\n");
+    }
+
     /// The protobuf codecs' bit reinterpretation, as legacy prints it.
     #[test]
     fn float_bits_round_trip() {
