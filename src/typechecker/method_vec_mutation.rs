@@ -111,21 +111,29 @@ impl<'a> super::TypeChecker<'a> {
                     self.record_expr_type(&args[0].value.span, &elem);
                     return Some(Type::Unit);
                 }
-                // An empty `[]` has no elements to infer from, so it is
-                // checked against the slot, as a `let` with an annotation
-                // checks it; otherwise its element type stays unsolved.
-                let empty_literal = matches!(
-                    &args[0].value.kind,
-                    ExprKind::ArrayLiteral(es) if es.is_empty()
-                );
-                let sequence_slot = matches!(
-                    &elem,
-                    Type::Named { name, .. } if name == "Vec" || name == "VecDeque"
-                ) || matches!(&elem, Type::Array { .. });
-                let arg_ty = if empty_literal
-                    && sequence_slot
-                    && super::exprs::expectation_is_concrete(&elem)
-                {
+                // An empty `[]`, `None`, or `Ok(x)` / `Err(e)` / `Some(x)`
+                // leaves a type parameter with nothing to solve it when
+                // inferred alone, so it is checked against the slot, as a
+                // `let` with an annotation checks it.
+                let arg = &args[0].value;
+                let ctor = |name: &str| matches!(name, "Ok" | "Err" | "Some" | "None");
+                let open_value = match &arg.kind {
+                    ExprKind::ArrayLiteral(es) => {
+                        es.is_empty()
+                            && (matches!(
+                                &elem,
+                                Type::Named { name, .. } if name == "Vec" || name == "VecDeque"
+                            ) || matches!(&elem, Type::Array { .. }))
+                    }
+                    ExprKind::Identifier(n) => n == "None",
+                    ExprKind::Call { callee, .. } => match &callee.kind {
+                        ExprKind::Identifier(n) => ctor(n),
+                        ExprKind::Path { segments, .. } => segments.last().is_some_and(|n| ctor(n)),
+                        _ => false,
+                    },
+                    _ => false,
+                };
+                let arg_ty = if open_value && super::exprs::expectation_is_concrete(&elem) {
                     self.check_expr(&args[0].value, &elem)
                 } else {
                     self.infer_expr(&args[0].value)

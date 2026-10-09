@@ -11522,4 +11522,23 @@ fn main() {
 "#;
         assert_eq!(run_source(src), Ok(("2 0 2\n".to_string(), Some(0))));
     }
+
+    #[test]
+    fn variant_constructors_pushed_take_the_element_type() {
+        let src = r#"
+fn main() {
+    let mut rs: Vec[Result[String, String]] = Vec.new();
+    rs.push(Err("b"));
+    rs.push(Ok("a"));
+    let mut os: Vec[Option[i64]] = Vec.new();
+    os.push(None);
+    os.push(Some(3));
+    let k = rs.len();
+    let mut n = 0;
+    for r in rs { match r { Ok(s) => n += s.len(), Err(_) => n += 10 } }
+    println(f"{k} {n} {os.len()}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("2 11 2\n".to_string(), Some(0))));
+    }
 }
