@@ -7365,4 +7365,44 @@ fn main() {
             r.outcome
         );
     }
+
+    /// A `Result` of `Copy` parts is `Copy`, and one of shared handles is
+    /// a handle aggregate (core semantics §1.1, §6.1; Gowtham 2026-10-09):
+    /// using either as a value copies it rather than moving.
+    #[test]
+    fn mir_interp_result_is_copy_and_a_handle_aggregate() {
+        let src = "
+shared struct Node { val: i64 }
+
+fn cls(r: own Result[Option[i64], i64]) -> i64 {
+    match r {
+        Result.Ok(Option.Some(x)) => x,
+        Result.Ok(_) => -1,
+        Result.Err(e) => e,
+    }
+}
+
+fn val(r: own Result[Node, i64]) -> i64 {
+    match r {
+        Result.Ok(n) => n.val,
+        Result.Err(e) => e,
+    }
+}
+
+fn main() {
+    let v: Vec[Result[Option[i64], i64]] = [Result.Ok(Option.Some(4)), Result.Err(7)];
+    let a = cls(v[0]) + cls(v[1]) + cls(v[0]);
+    let h: Result[Node, i64] = Result.Ok(Node { val: 30 });
+    let b = val(h) + val(h);
+    println(f\"{a} {b}\");
+}
+";
+        let r = crate::mir::lower::run_source(src).unwrap();
+        assert_eq!(
+            (r.output.as_str(), r.exit_code()),
+            ("15 60\n", Some(0)),
+            "{:?}",
+            r.outcome
+        );
+    }
 }

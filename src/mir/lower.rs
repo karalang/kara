@@ -1245,7 +1245,7 @@ impl<'a> Lcx<'a> {
             is_enum,
             variants: vdefs,
             has_drop_impl,
-            is_copy: copy || (is_enum && name == "Option"),
+            is_copy: copy || (is_enum && matches!(name.as_str(), "Option" | "Result")),
         });
         if has_drop_impl {
             let drop_fn = self
@@ -3387,13 +3387,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         matches!(self.tys().tcx().kind(t), HK::Shared { .. })
     }
 
-    /// An `Option` or tuple made only of `shared` handles and `Copy` parts,
+    /// An `Option`, `Result` or tuple made only of `shared` handles and `Copy` parts,
     /// with at least one handle: a read copies it by counting each handle,
     /// as for a bare handle (core semantics §6.1).
     fn is_handle_aggregate(&self, t: Ty) -> bool {
         let parts = match self.tys().tcx().kind(t) {
             HK::Tuple(l) => self.tys().tcx().list(l),
-            HK::Adt { def, args } if self.lcx.def_name(def) == "Option" => {
+            HK::Adt { def, args }
+                if matches!(self.lcx.def_name(def).as_str(), "Option" | "Result") =>
+            {
                 self.tys().tcx().list(args)
             }
             _ => return false,
