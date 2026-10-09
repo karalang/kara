@@ -243,7 +243,7 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
     ) -> Type {
         let scrut_ty = self.infer_expr(scrutinee);
-        let scrut_ty = self.freshen_unsolved_scrutinee_params(scrut_ty);
+        let scrut_ty = self.freshen_scrutinee(scrutinee, scrut_ty);
         let (mode, dispatch_ty) = ScrutineeMode::classify(&scrut_ty);
         let dispatch_ty = dispatch_ty.clone();
         // B-2026-08-31-3 — the CHECK-position twin of `infer_match`'s gate, and
@@ -551,6 +551,17 @@ impl<'a> super::TypeChecker<'a> {
     /// variable, so the arms solve it and `finalize_typevar_pattern_bindings`
     /// records what they solved. Only an enum scrutinee is touched, and an
     /// in-scope param of the enclosing fn is never renamed.
+    /// [`Self::freshen_unsolved_scrutinee_params`], with the freshened type
+    /// recorded for typed HIR: the arms solve what they can of it
+    /// (`Err(e) => e`), and what they leave unsolved is unconstrained.
+    fn freshen_scrutinee(&mut self, scrutinee: &Expr, ty: Type) -> Type {
+        let fresh = self.freshen_unsolved_scrutinee_params(ty.clone());
+        if fresh != ty {
+            self.record_node_type(scrutinee.id, &fresh);
+        }
+        fresh
+    }
+
     fn freshen_unsolved_scrutinee_params(&mut self, ty: Type) -> Type {
         let Type::Named { name, .. } = &ty else {
             return ty;
@@ -594,7 +605,7 @@ impl<'a> super::TypeChecker<'a> {
 
     pub(super) fn infer_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], span: &Span) -> Type {
         let scrut_ty = self.infer_expr(scrutinee);
-        let scrut_ty = self.freshen_unsolved_scrutinee_params(scrut_ty);
+        let scrut_ty = self.freshen_scrutinee(scrutinee, scrut_ty);
         let (mode, dispatch_ty) = ScrutineeMode::classify(&scrut_ty);
         let dispatch_ty = dispatch_ty.clone();
         // B-2026-08-31-3 — a `v[i]` scrutinee is a BORROW of an element the

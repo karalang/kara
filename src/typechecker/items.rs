@@ -4258,6 +4258,7 @@ impl<'a> super::TypeChecker<'a> {
             // lowering) see `StringSlice`, not the `String` the literal
             // would otherwise infer.
             self.record_expr_type(&value.span, declared);
+            self.record_node_type(value.id, declared);
             return;
         }
         match (declared, &value.kind) {
@@ -4266,6 +4267,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_module_binding_value(elem, ty);
                 }
                 self.record_expr_type(&value.span, declared);
+                self.record_node_type(value.id, declared);
             }
             (
                 Type::Array {
@@ -4285,10 +4287,12 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_module_binding_value(elem, element);
                 }
                 self.record_expr_type(&value.span, declared);
+                self.record_node_type(value.id, declared);
             }
             (Type::Array { element, .. }, ExprKind::RepeatLiteral { value: elem, .. }) => {
                 self.check_module_binding_value(elem, element);
                 self.record_expr_type(&value.span, declared);
+                self.record_node_type(value.id, declared);
             }
             (Type::Named { name, args }, ExprKind::StructLiteral { fields, .. })
                 if args.is_empty() =>
@@ -4326,6 +4330,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_module_binding_value(&f.value, &ty);
                 }
                 self.record_expr_type(&value.span, declared);
+                self.record_node_type(value.id, declared);
             }
             _ => {
                 self.check_expr(value, declared);

@@ -2568,6 +2568,25 @@ impl<'a> super::TypeChecker<'a> {
             return Type::Error;
         }
 
+        // `c == None`, `a == Box1.Nil`: a variant whose parameters nothing
+        // decided compares at the other operand's type, which typed HIR
+        // records for it.
+        if matches!(
+            op,
+            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
+        ) {
+            for (side, side_ty, other_ty) in
+                [(right, &right_ty, &left_ty), (left, &left_ty, &right_ty)]
+            {
+                let other = Self::peel_borrow(other_ty);
+                if self.is_underdetermined_variant(side, side_ty, other)
+                    && !self.mentions_foreign_param(other)
+                {
+                    self.record_node_type(side.id, other);
+                }
+            }
+        }
+
         // `f16_software_emulated` (design.md:2347) — the last starter-set
         // lint that was target-dependent rather than mechanical, and so
         // outlived the other seven (B-2026-08-22-7). Emitted HERE, in the

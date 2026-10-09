@@ -77,6 +77,11 @@ pub trait HirDefs {
     fn variant_enum(&self, _def: DefId) -> Option<DefId> {
         None
     }
+    /// Whether `def` is a free function: its generics are its own, none of
+    /// them an impl's that a receiver decides.
+    fn is_free_fn(&self, _def: DefId) -> bool {
+        false
+    }
 }
 
 /// [`HirDefs`] over the module-qualified definition table and the resolver's
@@ -181,6 +186,10 @@ impl HirDefs for ProgramHirDefs<'_> {
     fn variant_enum(&self, def: DefId) -> Option<DefId> {
         self.variant_enum.get(&def).copied()
     }
+
+    fn is_free_fn(&self, def: DefId) -> bool {
+        self.defs.table.get(def).kind == DefKind::Fn
+    }
 }
 
 /// The typed HIR tables of one program.
@@ -207,7 +216,42 @@ pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
             .unwrap_or(&[]);
         // An inner parameter shadows an outer one of the same name.
         let param = |p: &str| names.iter().rposition(|n| n == p).map(|i| i as u32);
-        tcx.lower_legacy(ty, &lookup, &param)
+        // A variable the checker left unsolved is unconstrained: no value of
+        // its type exists, so `()` stands in for it.
+        tcx.lower_legacy_with(ty, &lookup, &param, true)
+    };
+    // The parameters in scope at `frame`.
+    let in_frame = |frame: u32, p: &str| {
+        tc.node_generic_frames
+            .get(frame as usize)
+            .is_some_and(|names| names.iter().any(|n| n == p))
+    };
+    // A variant's type with each parameter of its enum that nothing decided
+    // (`E` in a discarded `Ok(5)`, `T` in `None` handed to `Option[T]` with
+    // `T` the callee's) read as `()`: it holds no value.
+    let undecided_as_unit = |ty: &Type, frame: u32| -> Option<Ty> {
+        let Type::Named { name, args } = ty else {
+            return None;
+        };
+        let args = args
+            .iter()
+            .map(|a| match a {
+                Type::TypeParam(p) if !in_frame(frame, p) => Type::Unit,
+                a => a.clone(),
+            })
+            .collect();
+        lower(
+            &Type::Named {
+                name: name.clone(),
+                args,
+            },
+            frame,
+        )
+        .ok()
+    };
+    let is_variant = |e: NodeId| match defs.path_callee(e) {
+        Some(Callee::Def(d)) => defs.variant_enum(d).is_some(),
+        _ => false,
     };
 
     // A call's callee expression is typed with the callee's GENERIC
@@ -227,6 +271,11 @@ pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
         match lower(ty, *frame) {
             Ok(t) => {
                 node_types.insert(id, t);
+            }
+            Err(LowerError::UnknownParam(_))
+                if is_variant(id) && undecided_as_unit(ty, *frame).is_some() =>
+            {
+                node_types.insert(id, undecided_as_unit(ty, *frame).expect("checked"));
             }
             Err(e) => errors.push((id, HirError::Type(e))),
         }
@@ -248,8 +297,12 @@ pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
             .and_then(|&e| defs.path_callee(e));
         let callee = by_path.or_else(|| {
             tc.node_method_callees.get(&id).and_then(|key| {
-                key.rsplit_once('.')
-                    .and_then(|(owner, method)| defs.method_callee(owner, method))
+                // `Ho[R].Full(x)`, `Vec[i64].new()`: the owner is named with
+                // its type arguments, which the call's type carries.
+                key.rsplit_once('.').and_then(|(owner, method)| {
+                    let owner = owner.split_once('[').map_or(owner, |(o, _)| o);
+                    defs.method_callee(owner, method)
+                })
             })
         });
         let Some(callee) = callee else {
@@ -263,7 +316,24 @@ pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
         // the call's own type carries in full.
         let enum_args = match &callee {
             Callee::Def(d) => defs.variant_enum(*d).and_then(|e| {
-                let t = *node_types.get(&id)?;
+                // A parameter of the enum that nothing decided (`E` in a
+                // discarded `Ok(5)`, or one handed to `Result[T, E]` with
+                // `T` the callee's) holds no value: `()` stands in for it.
+                if let std::collections::hash_map::Entry::Vacant(slot) = node_types.entry(id) {
+                    if let Some(t) = tc
+                        .node_types
+                        .get(&id)
+                        .and_then(|(ty, _)| undecided_as_unit(ty, frame))
+                    {
+                        slot.insert(t);
+                    }
+                }
+                // A constructor lent straight to a `ref` parameter is typed
+                // as the borrow; the enum is under it.
+                let mut t = *node_types.get(&id)?;
+                while let TyKind::Ref(inner) | TyKind::MutRef(inner) = tcx.kind(t) {
+                    t = inner;
+                }
                 match tcx.kind(t) {
                     TyKind::Adt { def, args } if def == e => Some(args),
                     _ => None,
@@ -275,7 +345,12 @@ pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
             calls.insert(id, ResolvedCall { callee, substs });
             continue;
         }
-        match place_substs(tc.node_call_subs.get(&id), &callee, defs, |t| {
+        // A parameter of a callee that nothing at the call decided, where
+        // the call's own type is known, reaches the callee only through
+        // arguments that hold none of it (`g(None)` for `g[T](x: Option[T])`).
+        let free = matches!(callee, Callee::Def(d) if defs.is_free_fn(d));
+        let unit = (free && node_types.contains_key(&id)).then(|| tcx.unit());
+        match place_substs(tc.node_call_subs.get(&id), &callee, defs, unit, |t| {
             lower(t, frame)
         }) {
             Ok(tys) => {
@@ -300,6 +375,7 @@ fn place_substs(
     solved: Option<&FxHashMap<String, Type>>,
     callee: &Callee,
     defs: &dyn HirDefs,
+    undecided: Option<Ty>,
     lower: impl Fn(&Type) -> Result<Ty, LowerError>,
 ) -> Result<Vec<Ty>, HirError> {
     let order = match callee {
@@ -318,11 +394,15 @@ fn place_substs(
     };
     order
         .iter()
-        .map(|name| {
-            let ty = solved
-                .and_then(|s| s.get(name))
-                .ok_or_else(|| HirError::UnsolvedParam(name.clone()))?;
-            lower(ty).map_err(HirError::Type)
+        .map(|name| match (solved.and_then(|s| s.get(name)), undecided) {
+            // Solved to the callee's own parameter: nothing decided it.
+            (Some(ty), Some(unit)) => match lower(ty) {
+                Err(LowerError::UnknownParam(_)) => Ok(unit),
+                r => r.map_err(HirError::Type),
+            },
+            (Some(ty), None) => lower(ty).map_err(HirError::Type),
+            (None, Some(unit)) => Ok(unit),
+            (None, None) => Err(HirError::UnsolvedParam(name.clone())),
         })
         .collect()
 }

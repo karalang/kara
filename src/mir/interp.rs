@@ -707,6 +707,24 @@ impl<'a> Interp<'a> {
         let (ty_name, method) = split_method(name);
         let base = ty_name.split('[').next().unwrap_or(ty_name);
         match (base, method) {
+            // `std.mem`: moves through borrowed places, which MIR itself
+            // does not spell (`take` is `replace` with the default).
+            ("mem", "swap") => {
+                let [Value::Ref(a), Value::Ref(b)] = args.as_slice() else {
+                    return err(format!("{name} takes two references"));
+                };
+                let va = self.slot(a)?;
+                let vb = std::mem::replace(self.slot_mut(b)?, va);
+                *self.slot_mut(a)? = vb;
+                Ok(Value::Unit)
+            }
+            ("mem", "replace") => {
+                let [Value::Ref(a), v] = args.as_slice() else {
+                    return err(format!("{name} takes a reference and a value"));
+                };
+                let v = v.clone();
+                Ok(std::mem::replace(self.slot_mut(a)?, v))
+            }
             ("F64" | "F32" | "F16" | "Bf16", "from") if args.len() == 1 => {
                 // The total-order wrapper around its one float field.
                 Ok(Value::Agg(args))

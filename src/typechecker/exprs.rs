@@ -605,7 +605,7 @@ impl<'a> super::TypeChecker<'a> {
     /// The owned type a `ref T` / `mut ref T` slot borrows, or the slot
     /// itself. A constructor or empty literal handed to a borrowed parameter
     /// builds that owned `T`.
-    fn peel_borrow(expected: &Type) -> &Type {
+    pub(super) fn peel_borrow(expected: &Type) -> &Type {
         match expected {
             Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
             other => other,
@@ -682,7 +682,12 @@ impl<'a> super::TypeChecker<'a> {
     /// as `Result[T, E]`, which typed HIR would read as the impl's `T` and
     /// `E`. `mentions_foreign_param` cannot see that, since those names are
     /// in scope; the context's type is the precise one.
-    fn is_underdetermined_variant(&self, expr: &Expr, ty: &Type, expected: &Type) -> bool {
+    pub(super) fn is_underdetermined_variant(
+        &self,
+        expr: &Expr,
+        ty: &Type,
+        expected: &Type,
+    ) -> bool {
         let (Type::Named { name, args }, Type::Named { name: want, .. }) = (ty, expected) else {
             return false;
         };

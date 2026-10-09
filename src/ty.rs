@@ -843,7 +843,21 @@ impl TyCtxt {
         lookup: &dyn Fn(&str) -> Option<TypeName>,
         param: &dyn Fn(&str) -> Option<u32>,
     ) -> Result<Ty, LowerError> {
-        let lower = |t: &Type| self.lower_legacy(t, lookup, param);
+        self.lower_legacy_with(ty, lookup, param, false)
+    }
+
+    /// [`Self::lower_legacy`], with every inference variable the checker left
+    /// unsolved read as `()` when `vars_to_unit`. Nothing constrains such a
+    /// variable, so no value of its type is ever built or read (`Err`'s
+    /// payload in `match Result.Ok(a) { .. }`).
+    pub fn lower_legacy_with(
+        &self,
+        ty: &Type,
+        lookup: &dyn Fn(&str) -> Option<TypeName>,
+        param: &dyn Fn(&str) -> Option<u32>,
+        vars_to_unit: bool,
+    ) -> Result<Ty, LowerError> {
+        let lower = |t: &Type| self.lower_legacy_with(t, lookup, param, vars_to_unit);
         let lower_all = |ts: &[Type]| -> Result<TyList, LowerError> {
             let tys = ts.iter().map(lower).collect::<Result<Vec<_>, _>>()?;
             Ok(self.intern_list(&tys))
@@ -939,6 +953,7 @@ impl TyCtxt {
                 pointee: lower(inner)?,
             },
             Type::TypeParam(name) => TyKind::Param(param_ty(name)?),
+            Type::TypeVar(_) if vars_to_unit => TyKind::Unit,
             Type::TypeVar(_) => return Err(LowerError::Unresolved),
             Type::Rc(_) => return Err(LowerError::Unsupported("Rc[T]")),
             Type::Arc(_) => return Err(LowerError::Unsupported("Arc[T]")),
