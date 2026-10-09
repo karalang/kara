@@ -389,6 +389,7 @@ Pins: `drop_defer`, `drop_callee_owns`, `drop_shadowing`.
 | `match` / `if let` scrutinee | at the end of the whole construct |
 | `while let` scrutinee | at the end of each iteration's body |
 | block tail value | after the tail is computed, before the block's locals |
+| `match` arm without braces (`p => e`) | as a block tail: after `e` is computed, at the arm's end |
 | `return e` | after `e` is computed, before the function's locals and defers |
 | `for` iterator | at loop exit |
 
@@ -480,7 +481,7 @@ Reordering that cannot be observed is allowed.
 - **by `mut ref`** if the body mutates it;
 - **by move** if the body moves it, or if the closure escapes (§9.3).
 
-`Copy` places are copied. `shared` and `sync` handles are counted. A `frozen` handle is never counted, so a closure that captures one is a view (§5.2, §5.7).
+A by-move capture of a `Copy` place copies it. A read-only capture of a `Copy` place is still a `ref` capture, so writing the place while the closure is live is an error (§5.6), never a silent read of a stale copy: in `for x in xs.iter().filter(|v| v < lim) { lim = lim - 1; }` the write to `lim` is rejected. To give the closure a snapshot, copy the value into a new binding first. (Decided by Gowtham, 2026-10-09.) `shared` and `sync` handles are counted. A `frozen` handle is never counted, so a closure that captures one is a view (§5.2, §5.7).
 
 **9.2 Closures as views.** A closure with any `ref` or `mut ref` capture is a view (§5). It can be called and passed down, but not stored where §5.7 forbids it.
 
