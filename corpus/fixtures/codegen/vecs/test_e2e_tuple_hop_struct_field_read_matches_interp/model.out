@@ -1,0 +1,10 @@
+9 alpha-1-long-enough-to-heap 27
+9 alpha-1-long-enough-to-heap 27
+a alpha-1-long-enough-to-heap 36
+w alpha-2-long-enough-to-heap 8
+c alpha-3-long-enough-to-heap 7
+k1 27 alpha-4-long-enough-to-heap
+k2 a
+m 3 alpha-4-long-enough-to-heap alpha-5-long-enough-to-heap alpha-5-long-enough-to-heap
+n 6 5
+done

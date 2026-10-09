@@ -1,0 +1,50 @@
+enum/local
+  dE
+  dR1
+  x1
+enum/temp
+  dE
+  dR2
+  x2
+noshell/local
+  dR3
+  x3
+noshell/temp
+  dR4
+  x4
+struct/local
+  dR5
+  x5
+struct/temp
+  dR6
+  x6
+structdrop/local
+  dS
+  dR7
+  x7
+structdrop/temp
+  dS
+  dR8
+  x8
+free/local
+  dE
+  dR9
+  x9
+free/temp
+  dE
+  dR10
+  x10
+cond-true/local
+  dE
+  dR11
+  x11
+cond-false/local
+  dE
+  dR12
+  x112
+mut/local
+  dE
+  dR13
+  dE
+  x0
+end

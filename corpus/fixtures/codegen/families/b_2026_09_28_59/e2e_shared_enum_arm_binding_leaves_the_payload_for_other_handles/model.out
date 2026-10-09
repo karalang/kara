@@ -1,0 +1,31 @@
+c1a 1
+c1b 1
+c2 25 25
+c3a 3
+c3b 3 3
+c4a 1
+c4b 1 7
+c5a 1
+c5b 1
+c6a 25
+c6b 25
+c7a 1
+c7b 1
+c8 1 1
+c9 1
+c9 1
+c9 1
+c10a 1 2
+c10b 1
+c11 1 1
+c12a 1
+c12b 1
+c13 2 1 1
+c14a a-heap-string-long-enough
+c14b a-heap-string-long-enough
+c16a 1 1
+c16b 1 1
+c17 2500
+c19a 1
+c19b 1 2
+end

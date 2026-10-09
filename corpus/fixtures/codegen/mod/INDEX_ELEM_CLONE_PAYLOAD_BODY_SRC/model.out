@@ -1,0 +1,31 @@
+bare
+got 2
+bare end
+dE
+dR1
+field
+got 3
+field end
+dE
+dR2
+scalar
+got 3
+scalar end
+dQ
+dP3
+wild
+got
+wild end
+dE
+dR4
+fresh
+got 6
+dE
+dR5
+fresh end
+local
+got 7
+local end
+dE
+dR6
+end

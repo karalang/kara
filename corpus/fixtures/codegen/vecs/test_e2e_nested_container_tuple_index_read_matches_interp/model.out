@@ -1,0 +1,12 @@
+beta-2-long-enough-to-heap
+beta-2-long-enough-to-heap
+beta-2-long-enough-to-heap
+rd alpha-1-long-enough-to-heap 27 false 7
+co alpha-1-long-enough-to-heap 2 alpha-1-long-enough-to-heap beta-2-long-enough-to-heap alpha-1-long-enough-to-heap beta-2-long-enough-to-heap 27 alpha-1-long-enough-to-heap
+co alpha-1-long-enough-to-heap beta-2-long-enough-to-heap
+gamma-3-long-enough-to-heap
+tl gamma-3-long-enough-to-heap 7
+vl 1
+vl delta-4-long-enough-to-heap delta-4-long-enough-to-heap
+wi alpha-1-long-enough-to-heap 7 alpha-1-long-enough-to-heap
+done

@@ -14,4 +14,4 @@ note = "first literal of the holding test: 'karac-cli-query-rc-{}-{}'"
 bucket = "b->a"
 classified_with = "0982ac954+local"
 fixed_by_classify = true
-model_rev = "7b8ab2eb"
+model_rev = "a95741fd"

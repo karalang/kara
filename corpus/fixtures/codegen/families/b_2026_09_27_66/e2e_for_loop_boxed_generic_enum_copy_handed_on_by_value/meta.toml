@@ -13,5 +13,5 @@ env = {}
 bucket = "b-fix-incomplete:E0500"
 classified_with = "0982ac954+local"
 model_note = "move out of a ref place (C3): a reference passed where an owned value is expected"
-model_rev = "7b8ab2eb"
+model_rev = "a95741fd"
 model_verdict = "V2-REJECT"

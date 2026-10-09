@@ -13,4 +13,4 @@ env = {}
 note = "first literal of the holding test: '3 running-sum-payload-0-plus-1 running-sum-payload-3-plus-3 3'"
 bucket = "mir-gap:an iterator value"
 classified_with = "0982ac954+local"
-model_rev = "7b8ab2eb"
+model_rev = "a95741fd"

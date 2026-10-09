@@ -13,5 +13,5 @@ env = {}
 bucket = "mir-gap:an expression with no recorded type is not lowered yet; 7:35 in `mkq`: an expres"
 classified_with = "0982ac954+local"
 model_exit = 0
-model_rev = "7b8ab2eb"
+model_rev = "a95741fd"
 model_verdict = "ORDER"

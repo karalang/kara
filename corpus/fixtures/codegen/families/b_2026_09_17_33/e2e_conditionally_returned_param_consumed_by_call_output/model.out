@@ -1,0 +1,77 @@
+p1d
+dR1/a
+  90a
+p1b
+  2
+p2d
+  3 1
+p2b
+  4 1
+p3d
+dR5/e
+  3
+p3b
+  6
+p5d
+dR1/t
+dR9/i
+  10
+p5b
+  10
+p6d
+dR11/k
+  12
+p6b
+  12
+p7d
+dR13/m
+  13
+p7b
+  1
+q1
+dR1/a
+  2
+q2
+dR2/b
+  2
+q3
+dR3/c
+  3
+free
+dR1/a
+k:1
+assoc
+dR2/b
+k:2
+method
+dR3/c
+k:3
+free-back
+k:4
+assoc-back
+k:5
+method-back
+k:6
+end
+dR6/g
+dR5/e
+dR4/d
+dR3/z
+dR2/z
+dR1/z
+dR3/z
+dR2/z
+dR2/z
+dR14/n
+dR0/z
+dR12/l
+dR12/z
+dR10/j
+dR10/z
+dR6/f
+dR3/z
+dR4/d
+dR3/z
+dR2/b
+dR90/a
+dR3/c

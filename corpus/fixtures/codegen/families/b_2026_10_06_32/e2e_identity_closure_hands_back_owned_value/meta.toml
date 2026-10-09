@@ -12,5 +12,5 @@ backends = []
 env = {}
 bucket = "a:refused"
 classified_with = "0982ac954+local"
-model_rev = "7b8ab2eb"
+model_rev = "a95741fd"
 v2_reject = "core-semantics §3.1: a closure moves a field out of a shared value (karac check refuses it since Thread A's df8f08ee55/df2e4cabe9, 2026-10-09)"

@@ -12,4 +12,4 @@ backends = []
 env = {}
 bucket = "mir-gap:an operator on a non-scalar"
 classified_with = "0982ac954+local"
-model_rev = "7b8ab2eb"
+model_rev = "a95741fd"

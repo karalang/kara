@@ -13,4 +13,4 @@ env = {}
 note = "first literal of the holding test: '3:delta-b044-payload-dddddddddddddddddddd 2:alpha-b044-payload-aaaaaaaaaaaaaaaaaaaa 3:delta-b044-payload-ddddddddddddddd'"
 bucket = "mir-gap:an iterator value"
 classified_with = "0982ac954+local"
-model_rev = "7b8ab2eb"
+model_rev = "a95741fd"

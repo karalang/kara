@@ -1,0 +1,17 @@
+rebind 2
+typed 2
+chain 4
+  2
+noret 9
+iflet 2
+whilelet 2
+local 2
+vecs 2
+drops
+  d1
+  d22
+  1
+eat 4
+ret cdcd
+push 1
+end
