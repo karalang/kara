@@ -34,3 +34,37 @@ A call to a `suspends` function may park the task and free the thread (design.md
 **Stackless (inferred).** Its cost is concentrated in one MIR transform, which the drop-elaboration and liveness machinery already half builds. Its two classic pains are already covered: function colouring is free, because `suspends` is inferred, and pinning holds by construction, because no frame is a value. Stackful's main advantage, no transform, is cancelled on wasm, where it needs Asyncify, which is a stackless transform anyway. On native it costs either a hard memory floor per task or crash-on-overflow small stacks, both at the 1M-connection scale the services plan targets.
 
 The open cost of stackless is a recursive or dynamically dispatched `suspends` call, where the frame must be boxed per call. Measuring how often real service code does that (the corpus has few `suspends` programs today) is the first M4 task under this choice.
+
+## The MIR transform (M4 plan, 2026-10-09)
+
+Written by the MIR owner after the decision, as the plan the implementation follows. **(checked)** and **(inferred)** as above. It follows rustc's generator transform, without the storage overlap for now.
+
+**Which bodies.** A body is a coroutine when its effect set (C10, `src/mir/effects.rs`) contains `suspends`. A suspension point is a `Call` whose callee is a coroutine, or a native that suspends (socket I/O, `sleep`, a channel receive, a join). No new terminator appears in the bodies the builder makes, so every pass before the transform (move check, borrow check, drop elaboration) sees a suspending call as an ordinary call.
+
+**Where.** After drop elaboration and the borrow check, so drop flags and explicit drops already exist and only the validator runs after it. A transformed body is marked as one. For such a body only, the validator allows a move out of a frame field through the frame reference.
+
+**What it makes, for a coroutine `F(args) -> T`:**
+- **The frame**, `F.Frame`: a struct with a `state: u32`, one field per local that is live across any suspension point (arguments included), one field per drop flag of such a local, and one field `sub_k: G.Frame` per suspension point `k` calling `G`. A field is uninitialized whenever its local is. Each local keeps a field of its own across the whole body, so a `ref` into a local held across a yield keeps pointing at the same field. Overlapping fields whose live ranges are disjoint is an M2 layout optimization, not part of the transform.
+- **The resume function**, `F.resume(frame: mut ref F.Frame) -> Poll[T]`, where `Poll[T]` is `Ready(T) | Pending`. Its body is `F`'s body, with each frame local replaced by its field. It enters through a switch on `state`: 0 goes to the original entry, `k` goes to suspension point `k`'s poll block, and the returned state aborts. A suspension point `dest = G(a…) -> next` becomes:
+  - `(*frame).sub_k = G.Frame { state: 0, a… }`, then the poll block;
+  - poll: `r = G.resume(&mut (*frame).sub_k)`. On `Ready(v)`, `dest = v` and continue to `next`. On `Pending`, `(*frame).state = k` and return `Pending`.
+  - A return becomes `_0 = Ready(value)`, then `state = RETURNED`, then return.
+- **The cleanup function**, `F.drop_frame(frame: mut ref F.Frame)`. It switches on `state`, drops the fields that are live and initialized at that state (gated by the saved drop flags), and calls `G.drop_frame` on `sub_k`. It runs when a frame is dropped before it returns. v1 cancels nothing (§11.7), so today it runs only on frames that already returned, where it does nothing. It exists so that cancellation and the unwind slot's `Cleanup` edge have their drops ready.
+
+**The borrow check needs no change.** It runs before the transform, where a suspending call is a call. A `ref` held across a yield points into a frame field, and the frame does not move after its first resume: it lives in the task, and no Kāra value owns a frame **(checked: §9.5, `TaskGroup` owns only results)**. Effect conflicts between tasks are C10's.
+
+**Task roots.** `suspends` is transitive, so only a task root calls a coroutine from outside one: `main`, a `par {}` branch, a `par for` body, or a `TaskGroup.spawn` closure. The runtime (or, in tests, the interpreter's executor) holds the root's frame and calls its `resume` until `Ready`, parking the task on `Pending`.
+
+**Not in the first cut:**
+- **A recursive cycle of coroutines** has no finite frame. It is refused with a diagnostic until the first measurement says how often services need it, as the decision asked. Then the callee frame at the back edge is boxed.
+- **A `suspends` call through a function value** whose callee is unknown is refused for the same reason.
+
+**The interpreter** already runs suspending programs correctly without the transform, because its natives complete synchronously. So the transform is validated by an executor behind `KARAC_MIR_COROUTINES=1`, with a test native `__yield_now()` that is `Pending` on its first resume, until the corpus agrees under it. Only then does the executor become the default.
+
+**Steps:**
+1. Suspension points, from C10's effects.
+2. Liveness across them, and the frame layout.
+3. The resume body.
+4. `drop_frame`.
+5. The executor and tests.
+6. The recursion and function-value refusals.
