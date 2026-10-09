@@ -724,6 +724,9 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
     Some(match (base, method) {
         ("println" | "print", "") => vec![(Writes, "Stdout", None), HEAP],
         ("eprintln" | "eprint", "") => vec![(Writes, "Stderr", None), HEAP],
+        // `dbg` is transparent (design.md § dbg()): it never changes an
+        // effect set or conflicts with anything, its stderr write included.
+        ("dbg", "") => vec![],
         ("Stdout", "println" | "print" | "flush") => vec![(Writes, "Stdout", None), HEAP],
         ("Stderr", "println" | "print" | "flush") => vec![(Writes, "Stderr", None), HEAP],
         ("format", "") | (_, "to_string") => vec![HEAP],
@@ -1420,6 +1423,19 @@ mod tests {
             effects(&r, "main")
         );
         assert!(!r.summaries["main"].unknown);
+    }
+
+    /// `dbg` is transparent, so two `par` branches that each call it do
+    /// not conflict.
+    #[test]
+    fn effects_dbg_is_transparent() {
+        let r = from_source("fn main() {\n    let x = dbg(1);\n    println(x);\n}\n");
+        assert!(!r.summaries["main"].unknown, "{:?}", effects(&r, "main"));
+        assert!(
+            !effects(&r, "main").iter().any(|e| e.contains("Stderr")),
+            "{:?}",
+            effects(&r, "main")
+        );
     }
 
     /// C10: a value's Drop body is charged to the function whose scope
