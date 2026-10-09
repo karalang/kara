@@ -198,7 +198,7 @@ const FRAME: Local = Local(1);
 /// A coroutine's frame type and where each of its locals lives in it.
 #[derive(Debug, Clone)]
 pub struct FrameInfo {
-    /// `F.Frame`, a struct whose field 0 is the `u32` state.
+    /// `F#Frame`, a struct whose field 0 is the `u32` state.
     pub ty: Ty,
     /// The field holding each frame local of the original body.
     pub fields: BTreeMap<Local, u32>,
@@ -213,12 +213,34 @@ pub struct FrameInfo {
 
 /// The `resume` body of coroutine `name`.
 pub fn resume_name(name: &str) -> String {
-    format!("{name}.resume")
+    format!("{name}#resume")
+}
+
+/// The frame type of coroutine `name`. `#` cannot appear in a Kāra name,
+/// so the generated names (this, `resume_name`, `drop_frame_name`) never
+/// collide with a user type or method.
+pub fn frame_name(name: &str) -> String {
+    format!("{name}#Frame")
+}
+
+/// Whether `adt_name` is a coroutine frame type.
+pub fn is_frame(adt_name: &str) -> bool {
+    adt_name.ends_with("#Frame")
+}
+
+/// Whether `body_name` is a coroutine's `resume` body.
+pub fn is_resume(body_name: &str) -> bool {
+    body_name.ends_with("#resume")
+}
+
+/// Whether `body_name` is a coroutine's `drop_frame` body.
+pub fn is_drop_frame(body_name: &str) -> bool {
+    body_name.ends_with("#drop_frame")
 }
 
 /// The `drop_frame` body of coroutine `name`.
 pub fn drop_frame_name(name: &str) -> String {
-    format!("{name}.drop_frame")
+    format!("{name}#drop_frame")
 }
 
 /// A DefId no type uses yet, for the frame and `Poll` types the transform
@@ -259,7 +281,7 @@ fn poll_of(tys: &TyInterner, polls: &mut BTreeMap<Ty, Ty>, t: Ty) -> Ty {
 }
 
 /// Rewrites every coroutine among `bodies` into its `resume` body
-/// (`F.resume(frame: mut ref F.Frame) -> Poll[T]`), registering the frame
+/// (`F#resume(frame: mut ref F#Frame) -> Poll[T]`), registering the frame
 /// and `Poll` types in `tys`. The other bodies are returned unchanged; the
 /// original coroutine bodies are not returned, since nothing may call one
 /// except through its `resume`.
@@ -275,6 +297,12 @@ pub fn transform(
         return Err(format!(
             "recursive coroutines are not supported yet: {}",
             cycle.join(", ")
+        ));
+    }
+    if let Some(name) = called_indirectly(bodies, &set, tys) {
+        return Err(format!(
+            "{name} suspends and is used as a function value; calling a coroutine through a \
+             function value is not supported yet"
         ));
     }
     let by_name: BTreeMap<&str, &Body> = bodies
@@ -327,10 +355,10 @@ pub fn transform(
         }
         let id = tys.add_adt(AdtDef {
             def: fresh_def(tys),
-            name: format!("{n}.Frame"),
+            name: frame_name(n),
             is_enum: false,
             variants: vec![VariantDef {
-                name: format!("{n}.Frame"),
+                name: frame_name(n),
                 fields: fields_def,
             }],
             has_drop_impl: false,
@@ -357,6 +385,55 @@ pub fn transform(
         out.push(drop_frame(by_name[n], &layouts[n], &frames, tys)?);
     }
     Ok((out, frames))
+}
+
+/// A coroutine that is used other than as the callee of a direct call: a
+/// function item taken as a value, or a closure that is made. Its callers
+/// cannot be found, so the transform cannot give them a frame for it.
+fn called_indirectly(bodies: &[Body], set: &BTreeSet<String>, tys: &TyInterner) -> Option<String> {
+    let closure_defs: BTreeMap<DefId, &str> = bodies
+        .iter()
+        .filter(|b| set.contains(&b.instance.name))
+        .map(|b| (b.instance.def, b.instance.name.as_str()))
+        .collect();
+    let named = |o: &Operand| match o {
+        Operand::Const(Const {
+            kind: ConstKind::FnDef(inst),
+            ..
+        }) if set.contains(&inst.name) => Some(inst.name.clone()),
+        _ => None,
+    };
+    for b in bodies {
+        for data in &b.blocks {
+            for st in &data.statements {
+                let StatementKind::Assign(_, rv) = &st.kind else {
+                    continue;
+                };
+                if let Rvalue::Aggregate(AggregateKind::Closure { ty }, _) = rv {
+                    if let TyKind::Closure(def, _) = tys.kind(*ty) {
+                        if let Some(n) = closure_defs.get(&def) {
+                            return Some(n.to_string());
+                        }
+                    }
+                }
+                let ops: Vec<&Operand> = match rv {
+                    Rvalue::Use(o) | Rvalue::UnaryOp(_, o) | Rvalue::Cast(_, o, _) => vec![o],
+                    Rvalue::BinaryOp(_, a, b) | Rvalue::CheckedBinaryOp(_, a, b) => vec![a, b],
+                    Rvalue::Aggregate(_, ops) => ops.iter().collect(),
+                    _ => vec![],
+                };
+                if let Some(n) = ops.into_iter().find_map(named) {
+                    return Some(n);
+                }
+            }
+            if let TerminatorKind::Call { args, .. } = &data.terminator.kind {
+                if let Some(n) = args.iter().find_map(named) {
+                    return Some(n);
+                }
+            }
+        }
+    }
+    None
 }
 
 struct Resume<'a> {
@@ -549,7 +626,7 @@ impl<'a> Resume<'a> {
         let name = &self.body.instance.name;
         let b = |bb: BasicBlock| BasicBlock(bb.0 + 1);
         let frame_ref = self.tys.intern(TyKind::MutRef(self.me.ty));
-        // `_0: Poll[T]`, `_1: mut ref F.Frame`, then the original locals.
+        // `_0: Poll[T]`, `_1: mut ref F#Frame`, then the original locals.
         self.locals.push(LocalDecl {
             ty: self.me.poll,
             mutability: Mutability::Mut,
@@ -843,11 +920,11 @@ enum Release {
     Drop(Place),
     /// Drop the place when the flag field is set.
     Guarded(Place, Place),
-    /// Drop the callee's frame through `G.drop_frame`.
+    /// Drop the callee's frame through `G#drop_frame`.
     Callee(String, Place, Ty),
 }
 
-/// `F.drop_frame(frame: mut ref F.Frame)`: drops what a frame suspended at
+/// `F#drop_frame(frame: mut ref F#Frame)`: drops what a frame suspended at
 /// each point still owns, innermost first (the callee's frame, then the
 /// locals in reverse order), and marks the frame returned. A frame that has
 /// not started or has returned owns nothing.
@@ -1279,10 +1356,10 @@ fn main() -> () {
         assert_eq!(
             names,
             BTreeSet::from([
-                "leaf.drop_frame",
-                "leaf.resume",
-                "main.drop_frame",
-                "main.resume"
+                "leaf#drop_frame",
+                "leaf#resume",
+                "main#drop_frame",
+                "main#resume"
             ])
         );
         // `main` keeps `i` and `leaf`'s frame; `leaf` keeps its argument
@@ -1484,5 +1561,95 @@ fn main() -> () {
             assert_eq!(c.output, cancelled_out, "{moved}: {:?}", c.outcome);
             assert_eq!(c.exit_code(), Some(0), "{moved}: {:?}", c.outcome);
         }
+    }
+
+    /// A borrow flag taken before a yield is still held after it: the
+    /// second, shared borrow of the same field panics in both runs.
+    #[test]
+    fn borrow_flags_stay_held_across_a_yield() {
+        use crate::mir::interp::{run, run_coroutines, Program};
+        let src = "
+struct Bag { items: Vec[i64] }
+
+fn main() -> () suspends {
+    let mut _0: ();
+    let _1: shared Bag;
+    let _2: Vec[i64];
+    let _3: mut ref Vec[i64];
+    let _4: ();
+    let _5: ref Vec[i64];
+    bb0: {
+        _2 = Vec[i64].new() -> bb1;
+    }
+    bb1: {
+        _1 = shared Bag { move _2 };
+        flag_acquire(&mut _1.0, L0);
+        _3 = &mut _1.0;
+        _4 = __yield_now() -> bb2;
+    }
+    bb2: {
+        flag_acquire(&_1.0, L1);
+        _5 = &_1.0;
+        _4 = println(const \"no conflict\") -> bb3;
+    }
+    bb3: {
+        flag_release(L1);
+        flag_release(L0);
+        drop(_1) -> bb4;
+    }
+    bb4: {
+        _0 = const ();
+        return;
+    }
+}
+";
+        let m = parse_module(src).unwrap();
+        let prog = Program::from_module(&m);
+        let sync = run(&prog, &m.tys, "main", vec![]);
+        assert_eq!(
+            (sync.output.as_str(), sync.exit_code()),
+            ("", Some(101)),
+            "{:?}",
+            sync.outcome
+        );
+        let tasks = run_coroutines(&prog, &m.tys, "main", vec![]);
+        assert_eq!(
+            (tasks.output.as_str(), tasks.exit_code()),
+            ("", Some(101)),
+            "{:?}",
+            tasks.outcome
+        );
+        assert_eq!(tasks.resumes, 1);
+    }
+
+    #[test]
+    fn transform_refuses_a_coroutine_used_as_a_value() {
+        let src = "
+fn leaf() -> () suspends {
+    let mut _0: ();
+    bb0: {
+        _0 = __yield_now() -> bb1;
+    }
+    bb1: {
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: fn#0;
+    bb0: {
+        _1 = const leaf;
+        _0 = const ();
+        return;
+    }
+}
+";
+        let m = parse_module(src).unwrap();
+        let e = transform(&m.bodies, &m.tys).unwrap_err();
+        assert!(
+            e.contains("leaf suspends and is used as a function value"),
+            "{e}"
+        );
     }
 }

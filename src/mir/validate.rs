@@ -4,6 +4,7 @@
 //! dataflow invariants of `Checked` and `DropsElaborated` belong to the
 //! passes that establish them.
 
+use super::coroutine;
 use super::flags;
 use super::place_ty::{passes_through_shared, place_ty};
 use super::pretty;
@@ -143,7 +144,7 @@ impl Validator<'_> {
             && self.body.locals.len() > 1
             && match self.tys.kind(self.body.local(frame).ty) {
                 TyKind::MutRef(t) => match self.tys.kind(t) {
-                    TyKind::Adt(a) => self.tys.adt(a).name.ends_with(".Frame"),
+                    TyKind::Adt(a) => coroutine::is_frame(&self.tys.adt(a).name),
                     _ => false,
                 },
                 _ => false,

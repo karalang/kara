@@ -412,6 +412,7 @@ fn run_with(
         sorted_tables: Default::default(),
         flags: Vec::new(),
         resumes: 0,
+        parked_flags: Vec::new(),
         cancel_after: match tasks {
             Tasks::CancelAfter(n) => Some(n),
             _ => None,
@@ -524,12 +525,16 @@ fn err<T>(msg: impl Into<String>) -> R<T> {
     Err(Stop::Error(msg.into()))
 }
 
+/// The borrow flags a frame holds: by loan site, each flagged field's
+/// address and how it is held.
+type Held = Vec<(u32, Vec<(Addr, BorrowKind)>)>;
+
 struct Frame {
     id: u64,
     locals: Vec<Value>,
     /// The §6.2 borrow flags this frame holds, by loan site: each flag's
     /// field address and how it is held.
-    held: Vec<(u32, Vec<(Addr, BorrowKind)>)>,
+    held: Held,
 }
 
 /// A §6.2 borrow flag: how many readers hold it, or whether a writer does.
@@ -603,6 +608,8 @@ struct Interp<'a> {
     resumes: u64,
     /// Drop the root's frame once it has been pending this often.
     cancel_after: Option<u64>,
+    /// The borrow flags each suspended coroutine frame holds, by its address.
+    parked_flags: Vec<(Addr, Held)>,
 }
 
 impl<'a> Interp<'a> {
@@ -621,23 +628,53 @@ impl<'a> Interp<'a> {
         if self.frames.len() >= MAX_DEPTH {
             return err("stack overflow");
         }
+        // A coroutine's borrow flags outlive the `resume` that suspended
+        // holding them: they are parked with its frame until the next
+        // resume, or until `drop_frame` gives them back.
+        let frame_at = match args.first() {
+            Some(Value::Ref(a)) if coroutine::is_resume(name) || coroutine::is_drop_frame(name) => {
+                Some(a.clone())
+            }
+            _ => None,
+        };
+        let parked = frame_at.as_ref().and_then(|a| {
+            let i = self.parked_flags.iter().position(|(at, _)| at == a)?;
+            Some(self.parked_flags.swap_remove(i).1)
+        });
         let mut locals = vec![Value::Uninit; body.locals.len()];
         for (i, a) in args.into_iter().enumerate() {
             locals[i + 1] = a;
         }
         self.next_frame_id += 1;
+        let mut held = Vec::new();
+        if coroutine::is_drop_frame(name) {
+            for (_, flags) in parked.into_iter().flatten() {
+                self.release_flags(flags);
+            }
+        } else {
+            held = parked.unwrap_or_default();
+        }
         self.frames.push(Frame {
             id: self.next_frame_id,
             locals,
-            held: Vec::new(),
+            held,
         });
         if self.trace {
             self.events.push(Event::Enter(name.to_string()));
         }
         let result = self.run_body(body);
         let frame = self.frames.pop().expect("frame");
-        for (_, flags) in frame.held {
-            self.release_flags(flags);
+        match (&result, frame_at) {
+            (Ok(Value::Variant(1, _)), Some(at)) if coroutine::is_resume(name) => {
+                if !frame.held.is_empty() {
+                    self.parked_flags.push((at, frame.held));
+                }
+            }
+            _ => {
+                for (_, flags) in frame.held {
+                    self.release_flags(flags);
+                }
+            }
         }
         if result.is_ok() && self.trace {
             self.events.push(Event::Exit(name.to_string()));
@@ -5413,7 +5450,7 @@ impl<'a> Interp<'a> {
     /// so the resume body can start it field by field.
     fn fresh_frame(&self, ty: Ty) -> Value {
         match self.tys.kind(ty) {
-            TyKind::Adt(a) if self.tys.adt(a).name.ends_with(".Frame") => {
+            TyKind::Adt(a) if coroutine::is_frame(&self.tys.adt(a).name) => {
                 let adt = self.tys.adt(a);
                 let fields = &adt.variants[0].fields;
                 Value::Agg(
@@ -5442,7 +5479,7 @@ impl<'a> Interp<'a> {
             return owned();
         };
         let adt = self.tys.adt(a);
-        if !adt.name.ends_with(".Frame") {
+        if !coroutine::is_frame(&adt.name) {
             return owned();
         }
         let Value::Agg(fs) = v else {
