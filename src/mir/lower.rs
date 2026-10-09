@@ -10535,6 +10535,10 @@ fn stores_argument(method: &str) -> bool {
             | "or_insert"
             | "send"
             | "try_send"
+            | "try_push"
+            | "try_push_back"
+            | "try_push_front"
+            | "try_insert"
     )
 }
 
@@ -11171,6 +11175,47 @@ fn main() {
         assert_eq!(r.output, "2 7 2 20\n");
     }
 
+    /// Numeric conversions, `clamp` on a reversed range, char predicates,
+    /// `reserve`/`capacity`, a slice sort and the sorted copies, as legacy
+    /// prints them.
+    #[test]
+    fn long_tail_natives_match_legacy() {
+        let src = r#"
+fn msort(s: mut Slice[i64]) { s.sort(); }
+fn main() {
+    println(f"{7i64.clamp(10i64, 5i64)} {(2.5f64).clamp(0.0, 1.0)} {(2.75f64).fract()}");
+    println(f"{(300.0f64).wrapping_to_i8()} {(1e20f64).saturating_to_i32()} {(42.9f64).trunc_to_i32()}");
+    let p = 2000000000i32.overflowing_add(2000000000i32);
+    println(f"{p.0} {p.1}");
+    match i8.try_from(300) {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+    println(f"{'ß'.to_uppercase()} {'f'.is_digit(16)} {'g'.is_ascii_hexdigit()}");
+    let mut v: Vec[i64] = Vec.new();
+    v.push(3);
+    v.push(1);
+    v.push(2);
+    v.reserve(10);
+    println(v.capacity() >= 13);
+    msort(mut v[0..3]);
+    println(f"{v[0]} {v[1]} {v[2]} {v.as_slice().contains(2)}");
+    let w = v.sorted_by(|a, b| b.cmp(a));
+    println(f"{w[0]} {w.len()}");
+    let sq: Vec[i64] = Vec.from_fn(4, |i| i * i);
+    println(sq[3]);
+    println("bdac".sorted_by(|a, b| b.cmp(a)));
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(
+            r.output,
+            "10 1 0.75\n44 2147483647 42\n-294967296 true\nout of range for i8\n\
+             ß true false\ntrue\n1 2 3 true\n3 3\n9\ndcba\n"
+        );
+    }
+
     /// The protobuf codecs' bit reinterpretation, as legacy prints it.
     #[test]
     fn float_bits_round_trip() {
@@ -11241,7 +11286,7 @@ fn main() with reads(FileSystem) writes(FileSystem) {
     }
 }
 "#
-        .replace("PATH", &path.display().to_string());
+        .replace("PATH", &path.display().to_string().replace('\\', "/"));
         let r = super::run_source(&src).unwrap_or_else(|e| panic!("{e}"));
         let _ = std::fs::remove_file(&path);
         assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));

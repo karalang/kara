@@ -409,6 +409,11 @@ fn run_with(
         channels: Vec::new(),
         files: Vec::new(),
         statics: Vec::new(),
+        caps: Default::default(),
+        rand: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64)
+            | 1,
         sorted_tables: Default::default(),
         flags: Vec::new(),
         resumes: 0,
@@ -495,6 +500,11 @@ fn float_unary(method: &str, x: f64, wide: bool) -> Option<f64> {
         "acosh" => libm!(fm::acosh_f64, fm::acosh_f32),
         "atanh" => libm!(fm::atanh_f64, fm::atanh_f32),
         "cbrt" => libm!(fm::cbrt_f64, fm::cbrt_f32),
+        "recip" => at!(recip),
+        "to_degrees" => at!(to_degrees),
+        "to_radians" => at!(to_radians),
+        "fract" => at!(fract),
+        "signum" => at!(signum),
         _ => return None,
     })
 }
@@ -600,6 +610,10 @@ struct Interp<'a> {
     /// The values of the program's statics, in declaration order: each
     /// initializer runs before `main`, and its value lives until exit.
     statics: Vec<Value>,
+    /// The capacity `reserve` promised each `Vec` allocation, beyond its length.
+    caps: rustc_hash::FxHashMap<AllocId, usize>,
+    /// `RandomSource`'s xorshift state.
+    rand: u64,
     /// The tables a `Vacant` entry was made from that keep key order.
     sorted_tables: rustc_hash::FxHashSet<AllocId>,
     /// The borrow flags currently held, by field address.
@@ -691,7 +705,7 @@ impl<'a> Interp<'a> {
         let (ty_name, method) = split_method(name);
         let base = ty_name.split('[').next().unwrap_or(ty_name);
         match (base, method) {
-            ("F64" | "F32", "from") if args.len() == 1 => {
+            ("F64" | "F32" | "F16" | "Bf16", "from") if args.len() == 1 => {
                 // The total-order wrapper around its one float field.
                 Ok(Value::Agg(args))
             }
@@ -723,6 +737,76 @@ impl<'a> Interp<'a> {
                     std::cmp::Ordering::Greater => "Greater",
                 };
                 self.variant_named(ret, None, want, Vec::new())
+            }
+            ("Env", "var") => {
+                let [n] = args.as_slice() else {
+                    return err(format!("{name} takes a name"));
+                };
+                let n = self.string_at(n)?;
+                match std::env::var(n) {
+                    Ok(v) => {
+                        let v = self.alloc_box("String", Value::Str(v));
+                        self.variant_named(ret, None, "Ok", vec![v])
+                    }
+                    Err(_) => {
+                        let e = self.variant_named(ret, Some("Err"), "NotPresent", Vec::new())?;
+                        self.variant_named(ret, None, "Err", vec![e])
+                    }
+                }
+            }
+            ("Env", "set") => {
+                let [n, v] = args.as_slice() else {
+                    return err(format!("{name} takes a name and a value"));
+                };
+                let (n, v) = (self.string_at(n)?, self.string_at(v)?);
+                std::env::set_var(n, v);
+                // Owned `String`s given by value drop here.
+                for (a, t) in args.iter().zip(arg_tys) {
+                    if matches!(a, Value::Box(_)) {
+                        self.drop_value(a.clone(), *t)?;
+                    }
+                }
+                Ok(Value::Unit)
+            }
+            ("Stdout" | "Stderr", "print" | "println" | "flush") => {
+                if let [s] = args.as_slice() {
+                    let mut text = self.string_at(s)?;
+                    if method == "println" {
+                        text.push('\n');
+                    }
+                    self.write_out(base == "Stderr", &text);
+                }
+                Ok(Value::Unit)
+            }
+            ("Stdin", "read_line" | "read_to_string") => {
+                use std::io::Read;
+                let mut buf = String::new();
+                let r = if method == "read_line" {
+                    std::io::stdin().read_line(&mut buf).map(|_| ())
+                } else {
+                    std::io::stdin().read_to_string(&mut buf).map(|_| ())
+                };
+                match r {
+                    Ok(()) => {
+                        let s = self.alloc_box("String", Value::Str(buf));
+                        self.variant_named(ret, None, "Ok", vec![s])
+                    }
+                    Err(e) => self.io_err(ret, e),
+                }
+            }
+            ("Clock", "now") => Ok(Value::Int(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| i128::from(d.as_secs())),
+            )),
+            ("RandomSource", "next_u64") => {
+                // Xorshift64 from a clock seed, as legacy's.
+                let mut x = self.rand;
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                self.rand = x;
+                Ok(Value::Int(i128::from(x)))
             }
             ("Env", "args") => {
                 // argv[0] only: the MIR interpreter passes no arguments,
@@ -841,7 +925,27 @@ impl<'a> Interp<'a> {
                 let vname = self.tys.display(ret);
                 Ok(self.alloc_box(&vname, Value::Agg(out)))
             }
-            ("Vec", "reserve" | "shrink_to_fit") => Ok(Value::Unit),
+            ("Vec", "reserve" | "reserve_exact" | "shrink_to_fit" | "capacity") => {
+                // The capacity a `reserve` asked for, so `capacity()` keeps
+                // its promise; a non-positive request changes nothing.
+                let Some(v) = args.first() else {
+                    return err(format!("{name} needs a receiver"));
+                };
+                let id = self.box_behind(v)?;
+                let len = self.vec_elems(id)?.len();
+                let cap = self.caps.get(&id).copied().unwrap_or(0).max(len);
+                match (method, &args[1..]) {
+                    ("capacity", []) => return Ok(Value::Int(cap as i128)),
+                    ("shrink_to_fit", []) => {
+                        self.caps.remove(&id);
+                    }
+                    (_, [Value::Int(n)]) if *n > 0 => {
+                        self.caps.insert(id, cap.max(len + *n as usize));
+                    }
+                    _ => {}
+                }
+                Ok(Value::Unit)
+            }
             ("Vec" | "Slice", "binary_search") => {
                 // Rust's binary search over the elements' key forms, as
                 // legacy runs it: the index of an equal element, if found.
@@ -865,8 +969,136 @@ impl<'a> Interp<'a> {
                     .map(|i| Value::Int(i as i128));
                 self.option(ret, found)
             }
+            ("String", "reserve" | "reserve_exact") => Ok(Value::Unit),
+            ("String", "with_capacity") => Ok(self.alloc_box("String", Value::Str(String::new()))),
+            ("Vec", "from_fn") => {
+                let (Some(Value::Int(n)), Some(f), Some(&fty)) =
+                    (args.first(), args.get(1), arg_tys.get(1))
+                else {
+                    return err(format!("{name} takes a length and a closure"));
+                };
+                let mut out = Vec::with_capacity((*n).max(0) as usize);
+                if let Value::Erased { .. } = f {
+                    // A `Fn(i64) -> T` value: called through a reference to
+                    // it, then dropped.
+                    let slot = self.alloc(HeapObj {
+                        count: 1,
+                        weak: 0,
+                        value: f.clone(),
+                    });
+                    let at = Value::Ref(Addr {
+                        root: Root::Heap(slot),
+                        path: Vec::new(),
+                    });
+                    for i in 0..*n {
+                        out.push(self.call_erased(at.clone(), vec![Value::Int(i)])?);
+                    }
+                    let f = std::mem::replace(&mut self.live(slot)?.value, Value::Uninit);
+                    self.free_slot(slot);
+                    self.drop_value(f, fty)?;
+                } else {
+                    let mut callee = self.hold_callee(f.clone(), fty, name)?;
+                    for i in 0..*n {
+                        out.push(self.call_callee(&mut callee, vec![Value::Int(i)])?);
+                    }
+                    self.release_callee(callee, fty)?;
+                }
+                let vname = self.tys.display(ret);
+                Ok(self.alloc_box(&vname, Value::Agg(out)))
+            }
+            ("Vec", "split_off") => {
+                let [v, Value::Int(at)] = args.as_slice() else {
+                    return err(format!("{name} takes a receiver and an index"));
+                };
+                let id = self.box_behind(v)?;
+                let at = self.bounds(id, *at, true)?;
+                let tail = self.vec_elems(id)?.split_off(at);
+                let vname = self.tys.display(ret);
+                Ok(self.alloc_box(&vname, Value::Agg(tail)))
+            }
+            ("Vec", "sorted" | "sorted_by" | "sorted_by_key") => {
+                // A sorted copy: an owned receiver sorts in place and comes
+                // back; a borrowed one is cloned first.
+                let Some(recv) = args.first() else {
+                    return err(format!("{name} needs a receiver"));
+                };
+                let sorted = match recv {
+                    Value::Box(_) => recv.clone(),
+                    _ => {
+                        let id = self.box_behind(recv)?;
+                        self.clone_value(&Value::Box(id), ret)?
+                    }
+                };
+                let mut rest = vec![sorted.clone()];
+                rest.extend(args[1..].iter().cloned());
+                let unit = self.tys.unit();
+                let base_name = name.replacen(".sorted", ".sort", 1);
+                self.native(&base_name, rest, arg_tys, unit)?;
+                Ok(sorted)
+            }
+            ("Map" | "SortedMap" | "Set" | "SortedSet", "reserve" | "shrink_to_fit") => {
+                Ok(Value::Unit)
+            }
+            ("Slice", m) if m.starts_with("sort") && VEC_MORE_METHODS.contains(&m) => {
+                // Sorted through a scratch `Vec` of the view's elements,
+                // written back in their new order.
+                let Some(view) = args.first() else {
+                    return err(format!("{name} needs a receiver"));
+                };
+                let (base, lo, len) = self.view_of(view)?;
+                let mut elems = Vec::with_capacity(len as usize);
+                for i in 0..len {
+                    elems.push(self.slot(&base.child(lo + i))?);
+                }
+                let scratch = self.alloc_box("Vec", Value::Agg(elems));
+                let mut rest = vec![scratch.clone()];
+                rest.extend(args[1..].iter().cloned());
+                let unit = self.tys.unit();
+                let vec_name = name.replacen("Slice", "Vec", 1);
+                self.native(&vec_name, rest, arg_tys, unit)?;
+                let Value::Box(sid) = scratch else {
+                    unreachable!()
+                };
+                let sorted = std::mem::take(self.vec_elems(sid)?);
+                self.free_slot(sid);
+                for (i, v) in sorted.into_iter().enumerate() {
+                    *self.slot_mut(&base.child(lo + i as u64))? = v;
+                }
+                Ok(Value::Unit)
+            }
+            ("Vec" | "VecDeque" | "String" | "Map" | "SortedMap" | "Set" | "SortedSet", m)
+                if m.starts_with("try_") && m != "try_into" && m != "try_from" =>
+            {
+                // The fallible companions: the interpreter's allocator never
+                // fails, so each is its base method, in `Ok`.
+                let ok_ty = self.payload_ty(ret, "Ok")?;
+                let base_name = name.replacen(".try_", ".", 1);
+                let v = self.native(&base_name, args, arg_tys, ok_ty)?;
+                self.variant_named(ret, None, "Ok", vec![v])
+            }
+            ("Slice" | "Array", "fill") => {
+                // Each element drops and becomes a clone of the value, which
+                // drops once every slot holds its own.
+                let [view, v] = args.as_slice() else {
+                    return err(format!("{name} takes a value"));
+                };
+                let e = self.vec_elem_ty(arg_tys, name)?;
+                let (base, lo, len) = self.view_of(view)?;
+                for i in 0..len {
+                    let at = base.child(lo + i);
+                    self.drop_at(&at, e)?;
+                    let c = self.clone_value(v, e)?;
+                    *self.slot_mut(&at)? = c;
+                }
+                if !matches!(v, Value::Ref(_)) {
+                    self.drop_value(v.clone(), e)?;
+                }
+                Ok(Value::Unit)
+            }
+            (_, "as_slice_mut") => self.view_method(name, "as_mut_slice", args, ret),
+            ("Vec", "get_unchecked") => self.view_method(name, method, args, ret),
             (_, "as_slice" | "as_mut_slice" | "slice" | "slice_mut") | ("Slice" | "Array", _) => {
-                self.view_method(name, method, args)
+                self.view_method(name, method, args, ret)
             }
             ("format_spec", "") => {
                 // One hole with a spec (`{x:.3}`, `{n:04}`, `{s:>10}`): the
@@ -947,6 +1179,45 @@ impl<'a> Interp<'a> {
                     }
                 }
             }
+            ("String", "sorted_by") => {
+                // The chars, in the comparator's order, as a new String; the
+                // comparator sees two chars by reference.
+                let (Some(recv), Some(f), Some(&fty)) = (args.first(), args.get(1), arg_tys.get(1))
+                else {
+                    return err(format!("{name} takes a comparator"));
+                };
+                let text = self.string_at(recv)?;
+                let chars: Vec<Value> = text.chars().map(Value::Char).collect();
+                let n = chars.len();
+                let scratch = self.alloc(HeapObj {
+                    count: 1,
+                    weak: 0,
+                    value: Value::Agg(chars),
+                });
+                let at = |i: usize| Addr {
+                    root: Root::Heap(scratch),
+                    path: vec![i as u64],
+                };
+                let mut callee = self.hold_callee(f.clone(), fty, name)?;
+                let ord_ty = callee.body.return_ty();
+                let order = self.merge_order(n, &mut |me, a, b| {
+                    let o =
+                        me.call_callee(&mut callee, vec![Value::Ref(at(a)), Value::Ref(at(b))])?;
+                    me.ordering(&o, ord_ty)
+                });
+                self.release_callee(callee, fty)?;
+                let order = order?;
+                let chars = std::mem::take(self.vec_elems(scratch)?);
+                self.free_slot(scratch);
+                let out: String = order
+                    .into_iter()
+                    .filter_map(|i| match chars[i] {
+                        Value::Char(c) => Some(c),
+                        _ => None,
+                    })
+                    .collect();
+                Ok(self.alloc_box("String", Value::Str(out)))
+            }
             ("String", _) if STRING_TEXT_METHODS.contains(&method) => {
                 self.string_text_method(name, method, args, ret)
             }
@@ -970,7 +1241,8 @@ impl<'a> Interp<'a> {
                 "is_ascii_digit"
                 | "is_ascii_alphabetic"
                 | "is_ascii_alphanumeric"
-                | "is_ascii_whitespace",
+                | "is_ascii_whitespace"
+                | "is_ascii_hexdigit",
             ) if int_width(t).is_some() => {
                 // A byte's ASCII class.
                 let [Value::Int(b)] = args.as_slice() else {
@@ -989,8 +1261,37 @@ impl<'a> Interp<'a> {
                 t,
                 "trailing_zeros" | "leading_zeros" | "count_zeros" | "count_ones" | "abs_diff"
                 | "checked_add" | "checked_sub" | "checked_mul" | "saturating_add"
-                | "saturating_sub" | "saturating_mul" | "clamp",
+                | "saturating_sub" | "saturating_mul" | "clamp" | "overflowing_add"
+                | "overflowing_sub" | "overflowing_mul" | "to_ne_bytes" | "to_le_bytes"
+                | "to_be_bytes",
             ) if int_width(t).is_some() => self.int_method(name, t, method, &args, ret),
+            (t, "try_from" | "from") if int_width(t).is_some() || t == "char" => {
+                self.convert_from(name, t, method, &args, ret)
+            }
+            (_, m)
+                if matches!(args.first(), Some(Value::Float(_)))
+                    && crate::numeric_conv::parse_float_to_int(m).is_some() =>
+            {
+                let Some(Value::Float(f)) = args.first() else {
+                    unreachable!()
+                };
+                let (family, _, bits, signed) =
+                    crate::numeric_conv::parse_float_to_int(m).expect("checked by the guard");
+                use crate::numeric_conv::ConvOutcome;
+                match crate::numeric_conv::convert_float_to_int(*f, family, bits, signed) {
+                    ConvOutcome::Value(n) if method.starts_with("checked_to_") => {
+                        self.option(ret, Some(Value::Int(n)))
+                    }
+                    ConvOutcome::Value(n) => Ok(Value::Int(n)),
+                    ConvOutcome::None => self.option(ret, None),
+                    ConvOutcome::Panic => {
+                        if self.trace {
+                            self.events.push(Event::Abort(AbortReason::Panic));
+                        }
+                        Err(Stop::Abort(AbortReason::Panic))
+                    }
+                }
+            }
             ("Vec", "from_slice") => {
                 // A new Vec of clones of the slice's elements.
                 let [view] = args.as_slice() else {
@@ -1044,13 +1345,29 @@ impl<'a> Interp<'a> {
                 _,
                 "max" | "min" | "abs" | "pow" | "wrapping_add" | "wrapping_sub" | "wrapping_mul"
                 | "count_ones" | "signum" | "sqrt" | "floor" | "ceil" | "round" | "rem_euclid"
-                | "div_euclid" | "is_power_of_two",
+                | "div_euclid" | "is_power_of_two" | "clamp",
             ) if args
                 .first()
                 .is_some_and(|a| matches!(a, Value::Int(_) | Value::Float(_))) =>
             {
+                // An integer literal beside a float receiver is that float,
+                // as legacy reads it (`f.max(2)`).
+                let args = match args.first() {
+                    Some(Value::Float(_)) => args
+                        .into_iter()
+                        .map(|a| match a {
+                            Value::Int(n) => Value::Float(n as f64),
+                            a => a,
+                        })
+                        .collect(),
+                    _ => args,
+                };
                 self.scalar_method(name, method, &args, ret)
             }
+            (t, "to_f64" | "to_f32") if int_width(t).is_some() => match args.as_slice() {
+                [Value::Int(n)] => Ok(narrow_float(Value::Float(*n as f64), self.tys.kind(ret))),
+                _ => err(format!("{name} takes an integer")),
+            },
             // IEEE-754 reinterpretation, as legacy's: `to_bits` is the f64
             // pattern whatever the float's width, `to_bits32` the pattern of
             // the value rounded to f32.
@@ -1108,7 +1425,13 @@ impl<'a> Interp<'a> {
                 }
                 Err(Stop::Abort(AbortReason::Panic))
             }
-            (true, "new" | "with_capacity", _) => Ok(self.alloc_box(ty_name, Value::Agg(vec![]))),
+            (true, "new" | "with_capacity", _) => {
+                let v = self.alloc_box(ty_name, Value::Agg(vec![]));
+                if let (Value::Box(id), [Value::Int(n), ..]) = (&v, args.as_slice()) {
+                    self.caps.insert(*id, *n as usize);
+                }
+                Ok(v)
+            }
             (false, "new", []) => Ok(self.alloc_box(ty_name, Value::Str(String::new()))),
             (true, "push", [v, val]) => {
                 let id = self.box_behind(v)?;
@@ -2421,7 +2744,7 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn view_method(&mut self, name: &str, method: &str, args: Vec<Value>) -> R<Value> {
+    fn view_method(&mut self, name: &str, method: &str, args: Vec<Value>, ret: Ty) -> R<Value> {
         let Some(recv) = args.first() else {
             return err(format!("{name} needs a receiver"));
         };
@@ -2443,7 +2766,125 @@ impl<'a> Interp<'a> {
             }
             ("len", []) => Ok(Value::Int(len as i128)),
             ("is_empty", []) => Ok(Value::Bool(len == 0)),
-            ("index" | "index_mut", [Value::Int(i)]) => {
+            ("first" | "last" | "get", rest) => {
+                let i = match (method, rest) {
+                    ("first", []) => 0,
+                    ("last", []) => len as i128 - 1,
+                    // `last(k)` counts from the end: `last(0)` is `last()`.
+                    ("last", [Value::Int(k)]) => len as i128 - 1 - k,
+                    ("get", [Value::Int(i)]) => *i,
+                    _ => return err(format!("{name}: wrong arguments")),
+                };
+                let at = (0..len as i128)
+                    .contains(&i)
+                    .then(|| Value::Ref(base.child(lo + i as u64)));
+                self.option_of_place(ret, at)
+            }
+            ("split_at" | "split_at_mut", [Value::Int(m)]) => {
+                if *m < 0 || *m > len as i128 {
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    }
+                    return Err(Stop::Abort(AbortReason::BoundsCheck));
+                }
+                let m = *m as u64;
+                Ok(Value::Agg(vec![
+                    Value::Slice {
+                        base: base.clone(),
+                        lo,
+                        len: m,
+                    },
+                    Value::Slice {
+                        base,
+                        lo: lo + m,
+                        len: len - m,
+                    },
+                ]))
+            }
+            ("chunks" | "windows", [Value::Int(n)]) => {
+                // Views into the receiver: back to back, the last one
+                // shorter, or every run of `n` in a row.
+                if *n <= 0 {
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::Panic));
+                    }
+                    return Err(Stop::Abort(AbortReason::Panic));
+                }
+                let n = *n as u64;
+                let mut views = Vec::new();
+                let mut at = 0;
+                while at < len && (method == "chunks" || at + n <= len) {
+                    views.push(Value::Slice {
+                        base: base.clone(),
+                        lo: lo + at,
+                        len: n.min(len - at),
+                    });
+                    at += if method == "chunks" { n } else { 1 };
+                }
+                let vname = self.tys.display(ret);
+                Ok(self.alloc_box(&vname, Value::Agg(views)))
+            }
+            ("contains", [needle]) => {
+                let mut needle = needle.clone();
+                while let Value::Ref(a) = &needle {
+                    needle = self.slot(a)?;
+                }
+                let want = self.key_form(&needle)?;
+                for i in 0..len {
+                    let x = self.slot(&base.child(lo + i))?;
+                    if self.key_form(&x)? == want {
+                        return Ok(Value::Bool(true));
+                    }
+                }
+                Ok(Value::Bool(false))
+            }
+            ("reverse", []) => {
+                let mut elems = Vec::with_capacity(len as usize);
+                for i in 0..len {
+                    elems.push(self.slot(&base.child(lo + i))?);
+                }
+                for (i, v) in elems.into_iter().rev().enumerate() {
+                    *self.slot_mut(&base.child(lo + i as u64))? = v;
+                }
+                Ok(Value::Unit)
+            }
+            ("swap", [Value::Int(i), Value::Int(j)]) => {
+                if !(0..len as i128).contains(i) || !(0..len as i128).contains(j) {
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    }
+                    return Err(Stop::Abort(AbortReason::BoundsCheck));
+                }
+                let (a, b) = (base.child(lo + *i as u64), base.child(lo + *j as u64));
+                let (x, y) = (self.slot(&a)?, self.slot(&b)?);
+                *self.slot_mut(&a)? = y;
+                *self.slot_mut(&b)? = x;
+                Ok(Value::Unit)
+            }
+            ("is_sorted", []) => {
+                let mut prev: Option<Value> = None;
+                for i in 0..len {
+                    let x = self.slot(&base.child(lo + i))?;
+                    let k = self.key_form(&x)?;
+                    if prev.as_ref().is_some_and(|p| cmp_key(p, &k).is_gt()) {
+                        return Ok(Value::Bool(false));
+                    }
+                    prev = Some(k);
+                }
+                Ok(Value::Bool(true))
+            }
+            ("get_unchecked", [Value::Int(i)]) if !matches!(self.tys.kind(ret), TyKind::Ref(_)) => {
+                // Typed `T`: a copy of the element.
+                if *i < 0 || *i >= len as i128 {
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    }
+                    return Err(Stop::Abort(AbortReason::BoundsCheck));
+                }
+                let x = self.slot(&base.child(lo + *i as u64))?;
+                self.clone_value(&x, ret)
+            }
+            ("index" | "index_mut" | "get_unchecked", [Value::Int(i)]) => {
                 if *i < 0 || *i >= len as i128 {
                     if self.trace {
                         self.events.push(Event::Abort(AbortReason::BoundsCheck));
@@ -2699,6 +3140,27 @@ impl<'a> Interp<'a> {
                     root: Root::Heap(id),
                     path: vec![i as u64, 1],
                 }))
+            }
+            ("min" | "max" | "first" | "last", []) if !is_map => {
+                // The least / greatest element, in place.
+                let n = self.vec_elems(id)?.len();
+                let mut keys = Vec::with_capacity(n);
+                for i in 0..n {
+                    let k = self.entry_key(id, i, false)?;
+                    keys.push(self.key_form(&k)?);
+                }
+                let pick = if matches!(method, "min" | "first") {
+                    (0..n).min_by(|&a, &b| key_order(&keys[a], &keys[b]))
+                } else {
+                    (0..n).max_by(|&a, &b| key_order(&keys[a], &keys[b]))
+                };
+                let at = pick.map(|i| {
+                    Value::Ref(Addr {
+                        root: Root::Heap(id),
+                        path: vec![i as u64],
+                    })
+                });
+                self.option_of_place(ret, at)
             }
             (
                 "entries" | "range" | "floor" | "ceiling" | "min" | "max" | "first" | "last",
@@ -3394,8 +3856,7 @@ impl<'a> Interp<'a> {
         Ok(t)
     }
 
-    /// `char` classification and case mapping. A case mapping that yields
-    /// several chars keeps the first, as legacy does.
+    /// `char` classification and case mapping.
     fn char_method(&mut self, name: &str, method: &str, args: &[Value], ret: Ty) -> R<Value> {
         let Some(Value::Char(c)) = args.first() else {
             return err(format!("{name} takes a char"));
@@ -3417,8 +3878,15 @@ impl<'a> Interp<'a> {
             "is_ascii_lowercase" => b(c.is_ascii_lowercase()),
             "is_ascii_punctuation" => b(c.is_ascii_punctuation()),
             "is_ascii_whitespace" => b(c.is_ascii_whitespace()),
-            "to_lowercase" => Ok(Value::Char(c.to_lowercase().next().unwrap_or(c))),
-            "to_uppercase" => Ok(Value::Char(c.to_uppercase().next().unwrap_or(c))),
+            // A mapping to several chars leaves the char as it is, as
+            // legacy and the runtime's `single_scalar` do.
+            "to_lowercase" => Ok(Value::Char(single_scalar(c.to_lowercase()).unwrap_or(c))),
+            "to_uppercase" => Ok(Value::Char(single_scalar(c.to_uppercase()).unwrap_or(c))),
+            "is_ascii_hexdigit" => b(c.is_ascii_hexdigit()),
+            "is_digit" => match args.get(1) {
+                Some(Value::Int(r)) if (2..=36).contains(r) => b(c.is_digit(*r as u32)),
+                _ => err(format!("{name} takes a radix from 2 to 36")),
+            },
             "to_ascii_lowercase" => Ok(Value::Char(c.to_ascii_lowercase())),
             "to_ascii_uppercase" => Ok(Value::Char(c.to_ascii_uppercase())),
             "to_digit" => {
@@ -3434,6 +3902,40 @@ impl<'a> Interp<'a> {
     }
 
     /// Integer methods that depend on the receiver's width (`t`).
+    /// `i8.try_from(x)` (`Err` names the target, as legacy's does),
+    /// `i64.from(x)` (a widening the checker allowed), `char.try_from(n)`
+    /// (`Err` carries the code point).
+    fn convert_from(
+        &mut self,
+        name: &str,
+        t: &str,
+        method: &str,
+        args: &[Value],
+        ret: Ty,
+    ) -> R<Value> {
+        let n = match args {
+            [Value::Int(n)] => *n,
+            [Value::Bool(b)] => i128::from(*b),
+            [Value::Char(c)] => i128::from(u32::from(*c)),
+            _ => return err(format!("{name} takes a number")),
+        };
+        match (t, method) {
+            ("char", _) => match u32::try_from(n).ok().and_then(char::from_u32) {
+                Some(c) => self.variant_named(ret, None, "Ok", vec![Value::Char(c)]),
+                None => self.variant_named(ret, None, "Err", vec![Value::Int(n)]),
+            },
+            (_, "from") => Ok(Value::Int(n)),
+            _ => {
+                if crate::numeric_conv::fits_in_target(n, t) {
+                    self.variant_named(ret, None, "Ok", vec![Value::Int(n)])
+                } else {
+                    let msg = self.alloc_box("String", Value::Str(format!("out of range for {t}")));
+                    self.variant_named(ret, None, "Err", vec![msg])
+                }
+            }
+        }
+    }
+
     fn int_method(
         &mut self,
         name: &str,
@@ -3473,7 +3975,40 @@ impl<'a> Interp<'a> {
             ("count_zeros", [a]) => Ok(Value::Int((bits - raw(*a).count_ones()) as i128)),
             ("count_ones", [a]) => Ok(Value::Int(raw(*a).count_ones() as i128)),
             ("abs_diff", [a, b]) => Ok(Value::Int((a - b).abs())),
-            ("clamp", [a, l, h]) => Ok(Value::Int(*a.max(l).min(h))),
+            // `lo` when below it, else `hi` when above it, as legacy: a
+            // reversed range is not an error.
+            ("clamp", [a, l, h]) => Ok(Value::Int(if a < l {
+                *l
+            } else if a > h {
+                *h
+            } else {
+                *a
+            })),
+            ("overflowing_add" | "overflowing_sub" | "overflowing_mul", [a, b]) => {
+                let (r, of) = match method {
+                    "overflowing_add" => a.overflowing_add(*b),
+                    "overflowing_sub" => a.overflowing_sub(*b),
+                    _ => a.overflowing_mul(*b),
+                };
+                let m = raw(r);
+                let wrapped = if signed && bits < 128 && (m >> (bits - 1)) & 1 == 1 {
+                    m as i128 - (1i128 << bits)
+                } else {
+                    m as i128
+                };
+                let of = of || !(lo..=hi).contains(&r);
+                Ok(Value::Agg(vec![Value::Int(wrapped), Value::Bool(of)]))
+            }
+            ("to_ne_bytes" | "to_le_bytes" | "to_be_bytes", [a]) => {
+                let n = (bits / 8) as usize;
+                let le = raw(*a).to_le_bytes();
+                let mut bytes: Vec<Value> =
+                    le[..n].iter().map(|b| Value::Int(i128::from(*b))).collect();
+                if method == "to_be_bytes" {
+                    bytes.reverse();
+                }
+                Ok(Value::Agg(bytes))
+            }
             ("checked_add" | "checked_sub" | "checked_mul", [a, b]) => {
                 let r = match method {
                     "checked_add" => a.checked_add(*b),
@@ -3733,6 +4268,22 @@ impl<'a> Interp<'a> {
             ("min", [Value::Int(a), Value::Int(b)]) => Ok(Value::Int(*a.min(b))),
             ("max", [Value::Float(a), Value::Float(b)]) => Ok(Value::Float(a.max(*b))),
             ("min", [Value::Float(a), Value::Float(b)]) => Ok(Value::Float(a.min(*b))),
+            ("clamp", [Value::Int(a), Value::Int(l), Value::Int(h)]) => Ok(Value::Int(if a < l {
+                *l
+            } else if a > h {
+                *h
+            } else {
+                *a
+            })),
+            ("clamp", [Value::Float(a), Value::Float(l), Value::Float(h)]) => {
+                Ok(Value::Float(if a < l {
+                    *l
+                } else if a > h {
+                    *h
+                } else {
+                    *a
+                }))
+            }
             ("abs", [Value::Int(a)]) => fit(self, a.abs()),
             ("abs", [Value::Float(a)]) => Ok(Value::Float(a.abs())),
             ("signum", [Value::Int(a)]) => Ok(Value::Int(a.signum())),
@@ -3832,7 +4383,9 @@ impl<'a> Interp<'a> {
             t = inner;
         }
         match self.tys.kind(t) {
-            TyKind::Intrinsic(IntrinsicTy::Vec(e)) => Ok(e),
+            TyKind::Intrinsic(IntrinsicTy::Vec(e)) | TyKind::Slice(e) | TyKind::Array(e, _) => {
+                Ok(e)
+            }
             _ => err(format!("{name} on {}", self.tys.display(t))),
         }
     }
@@ -3930,6 +4483,16 @@ impl<'a> Interp<'a> {
             return err(format!("{} has no variant {want}", adt.name));
         };
         Ok(Value::Variant(idx as u32, fields))
+    }
+
+    /// The type of the one payload of variant `want` of enum `ty`.
+    fn payload_ty(&self, ty: Ty, want: &str) -> R<Ty> {
+        let TyKind::Adt(a) = self.tys.kind(ty) else {
+            return err(format!("expected an enum, found {}", self.tys.display(ty)));
+        };
+        let k = self.tys.adt(a).variants.iter().position(|v| v.name == want);
+        k.and_then(|k| self.tys.field_ty(ty, Some(k as u32), 0))
+            .ok_or_else(|| Stop::Error(format!("{} has no {want} payload", self.tys.display(ty))))
     }
 
     /// `Some(v)` or `None` in the `Option` type `ret`, by variant name.
@@ -5314,6 +5877,7 @@ impl<'a> Interp<'a> {
     /// an `Upgrade` cannot reach whatever reuses it.
     fn free_slot(&mut self, id: AllocId) {
         self.key_index.remove(&id);
+        self.caps.remove(&id);
         if self.heap[id.0 as usize].take().is_some() {
             self.free.push(id.0);
         }
@@ -5695,7 +6259,15 @@ const CHAR_METHODS: &[&str] = &[
     "to_ascii_lowercase",
     "to_ascii_uppercase",
     "to_digit",
+    "is_ascii_hexdigit",
+    "is_digit",
 ];
+
+/// The one char of a case mapping, or `None` when it maps to several.
+fn single_scalar(mut it: impl Iterator<Item = char>) -> Option<char> {
+    let first = it.next()?;
+    it.next().is_none().then_some(first)
+}
 
 /// `Vec` methods [`Interp::vec_more_method`] implements.
 const VEC_MORE_METHODS: &[&str] = &[
