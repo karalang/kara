@@ -5464,7 +5464,7 @@ impl<'a> super::TypeChecker<'a> {
     /// the strict commands, which keep legacy's binding rules.
     pub(super) fn scrutinee_core_borrowed(&self, value: &Expr) -> bool {
         if !self.cli_lint_overrides.strict_core {
-            return false;
+            return self.library_methods_from_source && self.library_view_scrutinee(value);
         }
         let mut root = value;
         while let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } =
@@ -5482,6 +5482,55 @@ impl<'a> super::TypeChecker<'a> {
             || self.rooted_in_borrow(value, true)
             || self.core_map_get_view(value, false)
             || self.core_map_get_view(value, true)
+    }
+
+    /// On the MIR pipeline, is `value` a place reached through a reference,
+    /// a handle or an index (`self.peeked` in a `mut ref self` method,
+    /// `v[i]`)? The builder matches such a place through a shared reborrow,
+    /// so a binding of a part that is not `Copy` is a `ref` (core semantics
+    /// §4.6).
+    fn library_view_scrutinee(&self, value: &Expr) -> bool {
+        let mut root = value;
+        let mut projected = false;
+        loop {
+            match &root.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    if self.expr_is_shared_handle(object) {
+                        return true;
+                    }
+                    projected = true;
+                    root = object;
+                }
+                ExprKind::Index { .. } => return true,
+                ExprKind::SelfValue => return self.current_fn_ref_params.contains("self"),
+                ExprKind::Identifier(n) => {
+                    return projected
+                        && matches!(
+                            self.local_scope.lookup(n.as_str()),
+                            Some(Type::Ref(_) | Type::MutRef(_))
+                        );
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// A binding's type under [`Self::library_view_scrutinee`]: a part that
+    /// is not `Copy` or a handle is a `ref` into the scrutinee.
+    pub(super) fn lib_view_binding_ty(&self, mode: ScrutineeMode, ty: Type) -> Type {
+        if !self.library_methods_from_source
+            || self.cli_lint_overrides.strict_core
+            || !self.current_scrutinee_core_borrowed
+            || !matches!(mode, ScrutineeMode::Owned)
+            || matches!(
+                ty,
+                Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. } | Type::Error
+            )
+            || self.reads_as_value(&ty)
+        {
+            return ty;
+        }
+        Type::Ref(Box::new(ty))
     }
 
     /// Is `e` (as typed) a `shared` handle, or a reference to one?
@@ -5830,11 +5879,18 @@ impl<'a> super::TypeChecker<'a> {
             } else {
                 "cannot move a non-`Copy` value out of a borrowed place".to_string()
             };
+            let derive_clone = !has_clone
+                && self
+                    .copy_derive_fix(ty)
+                    .is_some_and(|f| f.replacement.contains("Clone"));
             message += if has_clone {
                 ". Write `.clone()` to take a copy, or keep using it in place"
             } else if self.core_let_ref_fix {
                 ". This type has no `.clone()`: borrow it instead (`ref <place>`), use it \
                  in place, or take it with `mem.replace` / `mem.swap` / `Option.take()`"
+            } else if derive_clone {
+                ". This type has no `.clone()` yet: derive `Clone` on it and write \
+                 `.clone()` to take a copy, or keep using it in place"
             } else {
                 ". This type has no `.clone()`: use it in place, or take it with \
                  `mem.replace` / `mem.swap` / `Option.take()`"
@@ -5882,7 +5938,7 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Where `.into_iter()` would turn the `for` element this value is rooted
     /// at into an owned one, under the strict commands.
-    fn core_for_into_iter_fix(&self, value: &Expr) -> Option<Span> {
+    pub(super) fn core_for_into_iter_fix(&self, value: &Expr) -> Option<Span> {
         if !self.cli_lint_overrides.strict_core {
             return None;
         }
@@ -7024,6 +7080,15 @@ impl<'a> super::TypeChecker<'a> {
                     replacement: ".clone()".to_string(),
                 },
             );
+        } else if let Some(fix) = self
+            .cli_lint_overrides
+            .strict_core
+            .then(|| self.copy_derive_fix(ty))
+            .flatten()
+        {
+            // v2 core: derive the trait first; the next `karac fix` pass
+            // writes the `.clone()` (or none, for a `Copy` derive).
+            self.type_error_with_fix_it(message, value.span, TypeErrorKind::IndexMoveNonCopy, fix);
         } else {
             self.type_error(message, value.span, TypeErrorKind::IndexMoveNonCopy);
         }

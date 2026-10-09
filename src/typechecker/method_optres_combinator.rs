@@ -61,7 +61,14 @@ impl<'a> super::TypeChecker<'a> {
         // un-nest). The closure-taking combinators are a separate arm below.
         if matches!(
             method,
-            "ok" | "err" | "or" | "and" | "ok_or" | "flatten" | "take" | "get_or_insert"
+            "ok" | "err"
+                | "or"
+                | "and"
+                | "ok_or"
+                | "flatten"
+                | "take"
+                | "get_or_insert"
+                | "replace"
         ) {
             let optres = |ty: &Type| -> Option<(bool, Type, Option<Type>)> {
                 match ty {
@@ -178,6 +185,23 @@ impl<'a> super::TypeChecker<'a> {
                         if !args.is_empty() {
                             self.type_error(
                                 "Option.take takes no arguments".to_string(),
+                                *span,
+                                TypeErrorKind::WrongNumberOfArgs,
+                            );
+                        }
+                        record_src(self, &t_ty);
+                        Some(opt(resolve_type_var_top(&t_ty, &self.env.substitutions)))
+                    }
+                    // `Option[T].replace(v: T) -> Option[T]` — MUTATING: stores
+                    // `Some(v)` and returns the old contents. MIR pipeline only
+                    // (the legacy backends have no arm for it).
+                    "replace" if !is_result && self.library_methods_from_source => {
+                        if let Some(a) = args.first() {
+                            let at = self.infer_expr(&a.value);
+                            self.check_assignable(&t_ty, &at, a.value.span);
+                        } else {
+                            self.type_error(
+                                "Option.replace takes one argument".to_string(),
                                 *span,
                                 TypeErrorKind::WrongNumberOfArgs,
                             );

@@ -3258,6 +3258,48 @@ impl<'a> super::TypeChecker<'a> {
                 // diagnostic (slice 2a) handles this; don't double-report.
                 continue;
             };
+            // v2 core: a caller's own type parameter satisfies a bound only
+            // when its declaration says so; `karac fix` adds the bound.
+            if self.cli_lint_overrides.strict_core {
+                if let Some(p) = self.type_param_name(concrete_ty).cloned() {
+                    if self.enclosing_bounds.contains_key(&p) {
+                        for bound in bounds {
+                            let Some(trait_name) = bound.path.last() else {
+                                continue;
+                            };
+                            if self.type_param_satisfies_bound(&p, trait_name) {
+                                continue;
+                            }
+                            let message = format!(
+                                "type parameter '{p}' is passed where '{type_name}: \
+                                 {trait_name}' is required, but its declaration does not \
+                                 bound it by `{trait_name}`: write `{p}: {trait_name}`"
+                            );
+                            match self.param_bound_edit(discharge_span.offset, &p, trait_name) {
+                                Some(edit) => self.type_error_with_fix_it(
+                                    message,
+                                    *discharge_span,
+                                    TypeErrorKind::TraitBoundNotSatisfied,
+                                    super::FixIt {
+                                        span: Span {
+                                            offset: edit.offset,
+                                            length: 0,
+                                            line: discharge_span.line,
+                                            column: discharge_span.column,
+                                        },
+                                        replacement: edit.replacement,
+                                    },
+                                ),
+                                None => self.type_error(
+                                    message,
+                                    *discharge_span,
+                                    TypeErrorKind::TraitBoundNotSatisfied,
+                                ),
+                            }
+                        }
+                    }
+                }
+            }
             if matches!(concrete_ty, Type::TypeVar(_) | Type::Error)
                 || self.type_param_name(concrete_ty).is_some()
             {
@@ -6554,6 +6596,14 @@ impl<'a> super::TypeChecker<'a> {
                         ..iterable.span
                     };
                     (at, self.local_scope.depth())
+                })
+                .or_else(|| {
+                    // A loop over a part of an outer `for` element: the
+                    // outer loop's `.into_iter()` comes first.
+                    core_borrowed
+                        .then(|| self.core_for_into_iter_fix(iterable))
+                        .flatten()
+                        .map(|at| (at, self.local_scope.depth()))
                 });
                 let saved_into_iter: Vec<(String, Option<(Span, usize)>)> = pattern
                     .binding_names()

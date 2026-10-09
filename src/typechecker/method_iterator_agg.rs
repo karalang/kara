@@ -148,8 +148,9 @@ impl<'a> super::TypeChecker<'a> {
             args: type_args,
         } = obj_ty
         {
+            // On the MIR pipeline `Peekable` is the library's Kāra struct.
             if name == "Iterator"
-                || name == "Peekable"
+                || (name == "Peekable" && !self.library_methods_from_source)
                 || name == "Range"
                 || name == "RangeInclusive"
             {

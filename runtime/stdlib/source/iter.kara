@@ -111,6 +111,32 @@ trait Iterator {
         IterInspect { it: self, f: f }
     }
 
+    /// The items of each iterator `f` returns, in turn.
+    fn flat_map[U: Iterator, F: MutFn(own Self.Item) -> U](own self, f: own F) -> IterFlatMap[Self, F, U] {
+        IterFlatMap { it: self, f, cur: None }
+    }
+
+    /// The items of each item, in turn.
+    fn flatten(own self) -> IterFlatten[Self, Self.Item] {
+        IterFlatten { it: self, cur: None }
+    }
+
+    /// Threads a state through the items: `f` returns the next state and
+    /// the item to yield, and the first `None` ends the iteration.
+    fn scan[A, U, F: MutFn(own A, own Self.Item) -> Option[(A, U)]](own self, init: own A, f: own F) -> IterScan[Self, A, F, U] {
+        IterScan { it: self, state: Some(init), f }
+    }
+
+    /// An iterator that can look at its next item without taking it.
+    fn peekable(own self) -> Peekable[Self, Self.Item] {
+        Peekable { it: self, peeked: None }
+    }
+
+    /// Borrows the iterator instead of consuming it.
+    fn by_ref(mut ref self) -> ByRef[Self] {
+        ByRef { it: self }
+    }
+
     /// Folds every item into an accumulator, front to back.
     fn fold[B](own self, init: own B, f: own MutFn(own B, own Self.Item) -> B) -> B {
         let mut it = self;
@@ -498,6 +524,140 @@ impl[I: Iterator, V] Iterator for ItemValues[I, V] {
             }
             None => None,
         }
+    }
+}
+
+struct IterFlatMap[I, F, U] {
+    it: I,
+    f: F,
+    cur: Option[U],
+}
+
+impl[I: Iterator, F: MutFn(own I.Item) -> U, U: Iterator] Iterator for IterFlatMap[I, F, U] {
+    type Item = U.Item;
+
+    fn next(mut ref self) -> Option[U.Item] {
+        loop {
+            match self.cur.take() {
+                Some(inner) => {
+                    let mut inner = inner;
+                    match inner.next() {
+                        Some(x) => {
+                            self.cur = Some(inner);
+                            return Some(x);
+                        }
+                        None => {}
+                    }
+                }
+                None => {}
+            }
+            match self.it.next() {
+                Some(x) => self.cur = Some((self.f)(x)),
+                None => return None,
+            }
+        }
+    }
+}
+
+struct IterFlatten[I, U] {
+    it: I,
+    cur: Option[U],
+}
+
+impl[I: Iterator[Item = U], U: Iterator] Iterator for IterFlatten[I, U] {
+    type Item = U.Item;
+
+    fn next(mut ref self) -> Option[U.Item] {
+        loop {
+            match self.cur.take() {
+                Some(inner) => {
+                    let mut inner = inner;
+                    match inner.next() {
+                        Some(x) => {
+                            self.cur = Some(inner);
+                            return Some(x);
+                        }
+                        None => {}
+                    }
+                }
+                None => {}
+            }
+            match self.it.next() {
+                Some(x) => self.cur = Some(x),
+                None => return None,
+            }
+        }
+    }
+}
+
+struct IterScan[I, A, F, U] {
+    it: I,
+    state: Option[A],
+    f: F,
+}
+
+impl[I: Iterator, A, F: MutFn(own A, own I.Item) -> Option[(A, U)], U] Iterator for IterScan[I, A, F, U] {
+    type Item = U;
+
+    fn next(mut ref self) -> Option[U] {
+        let Some(a) = self.state.take() else {
+            return None;
+        };
+        let Some(x) = self.it.next() else {
+            return None;
+        };
+        match (self.f)(a, x) {
+            Some((next, u)) => {
+                self.state = Some(next);
+                Some(u)
+            }
+            None => None,
+        }
+    }
+}
+
+/// An iterator that can look at its next item without taking it.
+struct Peekable[I, T] {
+    it: I,
+    peeked: Option[Option[T]],
+}
+
+impl[I: Iterator[Item = T], T] Iterator for Peekable[I, T] {
+    type Item = I.Item;
+
+    fn next(mut ref self) -> Option[I.Item] {
+        match self.peeked.take() {
+            Some(v) => v,
+            None => self.it.next(),
+        }
+    }
+}
+
+impl[I: Iterator[Item = T], T] Peekable[I, T] {
+    /// The next item, borrowed, without taking it.
+    fn peek(mut ref self) -> Option[ref T] {
+        if self.peeked.is_none() {
+            self.peeked = Some(self.it.next());
+        }
+        match self.peeked.as_ref() {
+            Some(o) => match o {
+                Some(x) => Some(x),
+                None => None,
+            },
+            None => None,
+        }
+    }
+}
+
+struct ByRef[I] {
+    it: mut ref I,
+}
+
+impl[I: Iterator] Iterator for ByRef[I] {
+    type Item = I.Item;
+
+    fn next(mut ref self) -> Option[I.Item] {
+        self.it.next()
     }
 }
 

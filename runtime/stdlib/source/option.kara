@@ -31,6 +31,14 @@ impl[T] Option[T] {
         }
     }
 
+    /// A view of the value, without moving it.
+    fn as_ref(ref self) -> Option[ref T] {
+        match self {
+            Some(x) => Some(x),
+            None => None,
+        }
+    }
+
     fn unwrap(own self) -> T {
         match self {
             Some(x) => x,

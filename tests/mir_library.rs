@@ -399,3 +399,31 @@ fn main() {
         "13\ngot 5\ndflt\n3 3 10\ndrop 5\n",
     );
 }
+
+/// `Option.as_ref` lends the payload, and a match on a place reached
+/// through `ref self` binds a part that is not `Copy` as a `ref`.
+#[test]
+fn as_ref_lends_the_payload() {
+    assert_runs(
+        r#"
+struct Box2 { name: Option[String], n: Option[i64] }
+impl Box2 {
+    fn name_len(ref self) -> i64 {
+        match self.name { Some(s) => s.len(), None => 0 }
+    }
+}
+fn main() {
+    let b = Box2 { name: Some("abc".to_string()), n: Some(4) };
+    match b.name.as_ref() { Some(s) => println(f"{s}"), None => println("none") }
+    match b.n.as_ref() { Some(k) => println(f"{k}"), None => println("none") }
+    println(f"{b.name_len()}");
+    let mut o: Option[String] = Some("x".to_string());
+    let t = o.take();
+    println(f"{t.is_some()} {o.is_none()}");
+    let old = o.replace("y".to_string());
+    println(f"{old.is_none()} {o.unwrap()}");
+}
+"#,
+        "abc\n4\n3\ntrue true\ntrue y\n",
+    );
+}

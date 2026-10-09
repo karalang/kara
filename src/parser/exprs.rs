@@ -1349,6 +1349,33 @@ impl super::Parser {
                                     edits,
                                 );
                             }
+                            // The `ref name` marks (§4.6) are offset-keyed
+                            // too; without them a `ref` binding inside a hole
+                            // reads as a move, and `karac fix` writes the
+                            // `ref` again on every pass.
+                            let shift_key = |k: crate::resolver::SpanKey| {
+                                let mut sp = crate::token::Span {
+                                    offset: k.0,
+                                    length: k.1,
+                                    line,
+                                    column,
+                                };
+                                crate::span_visitor::shift_interp_span(
+                                    &mut sp, offset, line, column,
+                                );
+                                crate::resolver::SpanKey(sp.offset, sp.length)
+                            };
+                            for k in &result.program.ref_binding_spans {
+                                self.ref_binding_spans.insert(shift_key(*k));
+                            }
+                            for k in &result.program.mut_ref_binding_spans {
+                                self.mut_ref_binding_spans.insert(shift_key(*k));
+                            }
+                            for (k, at) in &result.program.ref_binding_keywords {
+                                let key = shift_key(*k);
+                                let kw = shift_key(crate::resolver::SpanKey(*at, 0)).0;
+                                self.ref_binding_keywords.insert(key, kw);
+                            }
                             let expr = result.program.items.into_iter().find_map(|item| {
                                 if let crate::ast::Item::Function(f) = item {
                                     f.body.stmts.into_iter().find_map(|s| {

@@ -216,11 +216,19 @@ impl<'a> super::OwnershipChecker<'a> {
             } else {
                 derive_copy.map(|(_, edit)| Box::new(edit.clone()))
             };
-            let suggestion = if let Some((ty, _)) = derive_copy {
-                format!(
-                    "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so '{binding}' \
-                     is copied instead of moved), or restructure to avoid the reuse"
-                )
+            let suggestion = if let Some((ty, edit)) = derive_copy {
+                if edit.replacement.contains("Clone") {
+                    let step = crate::ownership::clone_step(ty, edit);
+                    format!(
+                        "{step} and clone '{binding}' at the move site \
+                         (`{binding}.clone()`), or restructure to avoid the reuse"
+                    )
+                } else {
+                    format!(
+                        "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so \
+                         '{binding}' is copied instead of moved), or restructure to avoid the reuse"
+                    )
+                }
             } else if capture && supports_clone {
                 format!(
                     "clone '{binding}' into a new binding before the closure and capture that, \
@@ -268,11 +276,20 @@ impl<'a> super::OwnershipChecker<'a> {
             } else {
                 derive_copy.map(|(_, edit)| Box::new(edit.clone()))
             };
-            let suggestion = if let Some((ty, _)) = derive_copy {
-                format!(
-                    "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`), read the \
-                     element in place, or take it out with `v.swap(i, j)` / `mem.replace`"
-                )
+            let suggestion = if let Some((ty, edit)) = derive_copy {
+                if edit.replacement.contains("Clone") {
+                    let step = crate::ownership::clone_step(ty, edit);
+                    format!(
+                        "{step} and write `.clone()` to take a copy, \
+                         read the element in place, or take it out with `v.swap(i, j)` / \
+                         `mem.replace`"
+                    )
+                } else {
+                    format!(
+                        "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`), read the \
+                         element in place, or take it out with `v.swap(i, j)` / `mem.replace`"
+                    )
+                }
             } else if supports_clone {
                 "write `.clone()` to take a copy, read the element in place, or take it out \
                  with `v.swap(i, j)` / `mem.replace`"
@@ -315,11 +332,19 @@ impl<'a> super::OwnershipChecker<'a> {
             } else {
                 derive_copy.map(|(_, edit)| Box::new(edit.clone()))
             };
-            let suggestion = if let Some((ty, _)) = derive_copy {
-                format!(
-                    "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`), or use a \
-                     method that borrows"
-                )
+            let suggestion = if let Some((ty, edit)) = derive_copy {
+                if edit.replacement.contains("Clone") {
+                    let step = crate::ownership::clone_step(ty, edit);
+                    format!(
+                        "{step} and write `.clone()` to call it on a \
+                         copy, or use a method that borrows"
+                    )
+                } else {
+                    format!(
+                        "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`), or use a \
+                         method that borrows"
+                    )
+                }
             } else if supports_clone {
                 "write `.clone()` to call it on a copy, or use a method that borrows".to_string()
             } else {

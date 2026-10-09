@@ -252,6 +252,16 @@ impl<'a> super::TypeChecker<'a> {
         // `method_callee_types` side-table that codegen's `dispatch_key` reads,
         // pointing dispatch at a name no impl can ever be registered under —
         // an early return keeps the fix inside the typechecker.
+        // `.clone()` on a tuple whose elements all clone, element by element:
+        // `type_supports_clone` already says so, and the `karac fix` edits
+        // that write `.clone()` rely on it.
+        if method == "clone"
+            && args.is_empty()
+            && matches!(receiver_for_lookup, Type::Tuple(elems) if !elems.is_empty())
+            && self.type_supports_clone(receiver_for_lookup)
+        {
+            return Some(receiver_for_lookup.clone());
+        }
         if matches!(receiver_for_lookup, Type::Tuple(_)) {
             for arg in args {
                 self.infer_expr(&arg.value);

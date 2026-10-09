@@ -17,6 +17,13 @@ use super::{
     extract_derived_traits, FxHashMap, NestedEnumInstKey, NestedEnumInstSite, Span, TypeErrorKind,
 };
 
+/// A local type `karac fix` can derive `Copy` or `Clone` on: the edit and
+/// its line, and the field types its derive needs the trait on.
+pub(super) struct DeriveDecl {
+    edit: (crate::resolver::TextEdit, usize),
+    fields: Vec<Type>,
+}
+
 impl<'a> super::TypeChecker<'a> {
     /// See [`super::env::TypeEnv::distinct_derive_supported`].
     fn distinct_derive_supported(&self, ty: &Type, wanted: &[&str]) -> Option<bool> {
@@ -732,48 +739,174 @@ impl<'a> super::TypeChecker<'a> {
         clonable: &FxHashSet<SpanKey>,
     ) -> FxHashMap<SpanKey, (String, crate::resolver::TextEdit)> {
         let decls = self.copy_derive_decls();
-        if decls.is_empty() {
-            return FxHashMap::default();
-        }
         self.expr_types
             .iter()
             .filter(|(key, _)| !clonable.contains(*key))
-            .filter_map(|(key, ty)| match ty {
-                Type::Named { name, args } if args.is_empty() => decls
-                    .get(name.as_str())
-                    .map(|(edit, _)| (*key, (name.clone(), edit.clone()))),
-                _ => None,
+            .filter_map(|(key, ty)| {
+                if let Some((param, edit)) = self.clone_bound_target(key.0, ty) {
+                    return Some((*key, (param, edit)));
+                }
+                let (name, (edit, _)) = Self::derive_target(ty, &decls, &mut Vec::new())?;
+                Some((*key, (name.to_string(), edit.clone())))
             })
             .collect()
     }
 
-    /// v2 core: the `#[derive(Copy)]` fix that would make `ty` `Copy`, when
-    /// it is one of [`Self::copy_derive_decls`].
-    pub(super) fn copy_derive_fix(&self, ty: &Type) -> Option<super::FixIt> {
-        let Type::Named { name, args } = ty else {
-            return None;
+    /// A type parameter in `ty` whose declaration (on the function or impl
+    /// around `offset`) has no `Clone` or `Copy` bound, with the edit that
+    /// adds `Clone` to it; the next `karac fix` pass writes the `.clone()`.
+    fn clone_bound_target(
+        &self,
+        offset: usize,
+        ty: &Type,
+    ) -> Option<(String, crate::resolver::TextEdit)> {
+        let param = match ty {
+            Type::TypeParam(p) => p,
+            Type::Ref(t) | Type::MutRef(t) => match t.as_ref() {
+                Type::TypeParam(p) => p,
+                _ => return None,
+            },
+            _ => return None,
         };
-        if !args.is_empty() {
+        let edit = self.param_bound_edit(offset, param, "Clone")?;
+        Some((param.clone(), edit))
+    }
+
+    /// Does the in-scope type parameter `p` carry `trait_name`, directly or
+    /// through a supertrait (`Copy` counts as `Clone`)?
+    pub(super) fn type_param_satisfies_bound(&self, p: &str, trait_name: &str) -> bool {
+        self.enclosing_bounds.get(p).is_some_and(|bounds| {
+            bounds.iter().any(|tb| {
+                let t = tb.path.last().cloned().unwrap_or_default();
+                t == trait_name
+                    || (trait_name == "Clone" && t == "Copy")
+                    || self
+                        .env
+                        .supertrait_closure_traits(&t)
+                        .iter()
+                        .any(|st| st == trait_name)
+            })
+        })
+    }
+
+    /// The edit adding `trait_name` to the declaration of type parameter
+    /// `param` on the function or impl around `offset`, or `None` when that
+    /// declaration already names `Clone` / `Copy` (for `Clone`) or the trait.
+    pub(super) fn param_bound_edit(
+        &self,
+        offset: usize,
+        param: &str,
+        trait_name: &str,
+    ) -> Option<crate::resolver::TextEdit> {
+        let inside = |sp: &Span| sp.offset <= offset && offset < sp.offset + sp.length;
+        let mut scopes: Vec<&Option<GenericParams>> = Vec::new();
+        for item in &self.program.items {
+            match item {
+                Item::Function(f) if inside(&f.span) => scopes.push(&f.generic_params),
+                Item::ImplBlock(imp) if inside(&imp.span) => {
+                    for it in &imp.items {
+                        if let ImplItem::Method(f) = it {
+                            if inside(&f.span) {
+                                scopes.push(&f.generic_params);
+                            }
+                        }
+                    }
+                    scopes.push(&imp.generic_params);
+                }
+                _ => {}
+            }
+        }
+        let gp = scopes
+            .into_iter()
+            .flatten()
+            .flat_map(|g| g.params.iter())
+            .find(|g| g.name == param && !g.is_const)?;
+        if gp.span.length == 0
+            || gp.bounds.iter().any(|b| {
+                b.path
+                    .last()
+                    .is_some_and(|t| t == trait_name || (trait_name == "Clone" && t == "Copy"))
+            })
+        {
             return None;
         }
-        let (edit, line) = self.copy_derive_decls().remove(name.as_str())?;
+        Some(crate::resolver::TextEdit {
+            offset: gp.span.offset + gp.span.length,
+            length: 0,
+            replacement: if gp.bounds.is_empty() {
+                format!(": {trait_name}")
+            } else {
+                format!(" + {trait_name}")
+            },
+        })
+    }
+
+    /// v2 core: the derive that makes a copy of `ty` possible, when it is one
+    /// of [`Self::copy_derive_decls`]: `Copy`, or `Clone` (whose `.clone()`
+    /// the next `karac fix` pass writes at the site).
+    pub(super) fn copy_derive_fix(&self, ty: &Type) -> Option<super::FixIt> {
+        let decls = self.copy_derive_decls();
+        let (_, (edit, line)) = Self::derive_target(ty, &decls, &mut Vec::new())?;
         Some(super::FixIt {
             span: Span {
                 offset: edit.offset,
                 length: 0,
-                line,
+                line: *line,
                 column: 1,
             },
-            replacement: edit.replacement,
+            replacement: edit.replacement.clone(),
         })
     }
 
-    /// The local types that could be made `Copy` by deriving it: non-generic
+    /// The declaration whose derive comes first on the way to making `ty`
+    /// copyable: a field's or type argument's local type before the type
+    /// that holds it, since a derive needs its parts to have the trait. One
+    /// derive per `karac fix` pass; the next pass finds the next one.
+    #[allow(clippy::type_complexity)]
+    fn derive_target<'d>(
+        ty: &Type,
+        decls: &'d FxHashMap<&str, DeriveDecl>,
+        seen: &mut Vec<String>,
+    ) -> Option<(&'d str, &'d (crate::resolver::TextEdit, usize))> {
+        match ty {
+            Type::Named { name, args } => {
+                for a in args {
+                    if let Some(t) = Self::derive_target(a, decls, seen) {
+                        return Some(t);
+                    }
+                }
+                let (key, decl) = decls.get_key_value(name.as_str())?;
+                if seen.contains(name) {
+                    return None;
+                }
+                seen.push(name.clone());
+                for f in &decl.fields {
+                    if let Some(t) = Self::derive_target(f, decls, seen) {
+                        return Some(t);
+                    }
+                }
+                // A generic type takes only the `Clone` derive.
+                if !args.is_empty() && !decl.edit.0.replacement.contains("Clone") {
+                    return None;
+                }
+                Some((key, &decl.edit))
+            }
+            Type::Tuple(ts) => ts.iter().find_map(|t| Self::derive_target(t, decls, seen)),
+            Type::Ref(t) | Type::MutRef(t) => Self::derive_target(t, decls, seen),
+            _ => None,
+        }
+    }
+
+    /// The local types that could be made `Copy` or `Clone` by deriving it:
     /// structs and enums of this program (not `shared` / `par`, not from the
-    /// stdlib) with no `Clone` or `Copy` derive, no `Drop` impl, and only
-    /// `Copy` fields. The edit goes at the start of the declaration's line,
-    /// ahead of any `pub` / `shared` before the keyword its span starts at.
-    fn copy_derive_decls(&self) -> FxHashMap<&str, (crate::resolver::TextEdit, usize)> {
+    /// stdlib) with no `Clone` or `Copy` derive. `Copy` when the type is not
+    /// generic, has no `Drop` body and every field is `Copy`; otherwise
+    /// `Clone` when every field clones (a type parameter's bound propagates,
+    /// design.md §9). A field of another such type counts as having the trait,
+    /// since [`Self::derive_target`] derives it first. The edit goes at the
+    /// start of the declaration's line, ahead of any `pub` / `shared` before
+    /// the keyword its span starts at.
+    fn copy_derive_decls(&self) -> FxHashMap<&str, DeriveDecl> {
         let drops: FxHashSet<&str> = self
             .env
             .impls
@@ -781,10 +914,11 @@ impl<'a> super::TypeChecker<'a> {
             .filter(|imp| imp.trait_name.as_deref() == Some("Drop"))
             .map(|imp| imp.target_type.as_str())
             .collect();
-        let mut decls: FxHashMap<&str, (crate::resolver::TextEdit, usize)> = FxHashMap::default();
+        // (name, edit offset, line, fields, may be `Copy`)
+        let mut cands: Vec<(&str, usize, usize, Vec<Type>, bool)> = Vec::new();
         for item in &self.program.items {
-            let (name, span, fields) = match item {
-                Item::StructDef(s) if !s.is_shared && !s.is_par && s.generic_params.is_none() => {
+            let (name, span, fields, generic) = match item {
+                Item::StructDef(s) if !s.is_shared && !s.is_par => {
                     let Some(info) = self.env.structs.get(&s.name) else {
                         continue;
                     };
@@ -794,10 +928,10 @@ impl<'a> super::TypeChecker<'a> {
                     {
                         continue;
                     }
-                    let fields: Vec<&Type> = info.fields.iter().map(|(_, t, _)| t).collect();
-                    (s.name.as_str(), s.span, fields)
+                    let fields: Vec<Type> = info.fields.iter().map(|(_, t, _)| t.clone()).collect();
+                    (s.name.as_str(), s.span, fields, s.generic_params.is_some())
                 }
-                Item::EnumDef(e) if !e.is_shared && !e.is_par && e.generic_params.is_none() => {
+                Item::EnumDef(e) if !e.is_shared && !e.is_par => {
                     let Some(info) = self.env.enums.get(&e.name) else {
                         continue;
                     };
@@ -807,40 +941,112 @@ impl<'a> super::TypeChecker<'a> {
                     {
                         continue;
                     }
-                    let fields: Vec<&Type> = info
+                    let fields: Vec<Type> = info
                         .variants
                         .iter()
                         .flat_map(|(_, v)| match v {
                             VariantTypeInfo::Unit => Vec::new(),
-                            VariantTypeInfo::Tuple(ts) => ts.iter().collect(),
-                            VariantTypeInfo::Struct(fs) => fs.iter().map(|(_, t)| t).collect(),
+                            VariantTypeInfo::Tuple(ts) => ts.clone(),
+                            VariantTypeInfo::Struct(fs) => {
+                                fs.iter().map(|(_, t)| t.clone()).collect()
+                            }
                         })
                         .collect();
-                    (e.name.as_str(), e.span, fields)
+                    (e.name.as_str(), e.span, fields, e.generic_params.is_some())
                 }
                 _ => continue,
             };
-            if span.length == 0
-                || span.column == 0
-                || span.offset < span.column - 1
-                || drops.contains(name)
-                || !fields.iter().all(|t| self.is_type_copy(t))
-            {
+            if span.length == 0 || span.column == 0 || span.offset < span.column - 1 {
                 continue;
             }
-            decls.insert(
+            let may_copy = !generic && !drops.contains(name);
+            cands.push((
                 name,
-                (
-                    crate::resolver::TextEdit {
-                        offset: span.offset - (span.column - 1),
-                        length: 0,
-                        replacement: "#[derive(Copy)]\n".to_string(),
-                    },
-                    span.line,
-                ),
-            );
+                span.offset - (span.column - 1),
+                span.line,
+                fields,
+                may_copy,
+            ));
         }
-        decls
+        // The largest set closed under "every field has the trait, counting
+        // a field of a member type as having it": start from every candidate
+        // and drop the ones that fail, so a recursive type (`enum N { L(Vec[N])
+        // }`) can derive. A member type's field stands in as an `i64`, which
+        // is both `Copy` and `Clone`.
+        let shrink = |trait_ok: &dyn Fn(&Type) -> bool, copy: bool| {
+            let mut set: FxHashSet<&str> =
+                cands.iter().filter(|c| !copy || c.4).map(|c| c.0).collect();
+            loop {
+                let before = set.len();
+                let failing: Vec<&str> = cands
+                    .iter()
+                    .filter(|c| set.contains(c.0))
+                    .filter(|c| {
+                        !c.3.iter()
+                            .all(|t| trait_ok(&Self::stand_in_members(t, &set, !copy)))
+                    })
+                    .map(|c| c.0)
+                    .collect();
+                for n in failing {
+                    set.remove(n);
+                }
+                if set.len() == before {
+                    return set;
+                }
+            }
+        };
+        let copy_set = shrink(&|t| self.is_type_copy(t), true);
+        let clone_set = shrink(&|t| self.type_supports_clone(t), false);
+        cands
+            .into_iter()
+            .filter_map(|(name, offset, line, fields, _)| {
+                let derive = if copy_set.contains(name) {
+                    "Copy"
+                } else if clone_set.contains(name) {
+                    "Clone"
+                } else {
+                    return None;
+                };
+                Some((
+                    name,
+                    DeriveDecl {
+                        edit: (
+                            crate::resolver::TextEdit {
+                                offset,
+                                length: 0,
+                                replacement: format!("#[derive({derive})]\n"),
+                            },
+                            line,
+                        ),
+                        fields,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// `t` with each type named in `set` (and, when `params`, each type
+    /// parameter) replaced by `i64`.
+    fn stand_in_members(t: &Type, set: &FxHashSet<&str>, params: bool) -> Type {
+        match t {
+            Type::Named { name, .. } if set.contains(name.as_str()) => {
+                Type::Int(super::types::IntSize::I64)
+            }
+            Type::TypeParam(_) if params => Type::Int(super::types::IntSize::I64),
+            Type::Named { name, args } => Type::Named {
+                name: name.clone(),
+                args: args
+                    .iter()
+                    .map(|a| Self::stand_in_members(a, set, params))
+                    .collect(),
+            },
+            Type::Tuple(ts) => Type::Tuple(
+                ts.iter()
+                    .map(|a| Self::stand_in_members(a, set, params))
+                    .collect(),
+            ),
+            _ => t.clone(),
+        }
     }
 
     /// Validate that #[derive(Copy)] structs/enums have all-Copy fields, and

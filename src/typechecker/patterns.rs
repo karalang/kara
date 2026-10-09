@@ -1175,7 +1175,18 @@ impl<'a> super::TypeChecker<'a> {
                         TypeErrorKind::TypeMismatch,
                     );
                 }
-                let binding_ty = mode.wrap_binding_ty(expected.clone());
+                let wrapped = mode.wrap_binding_ty(expected.clone());
+                let binding_ty = self.lib_view_binding_ty(mode, wrapped.clone());
+                if self.library_methods_from_source
+                    && matches!(binding_ty, Type::Ref(_) | Type::MutRef(_))
+                    && !matches!(expected, Type::Ref(_) | Type::MutRef(_))
+                    && !self.reads_as_value(expected)
+                {
+                    // The MIR builder binds it by reference whatever the
+                    // instance (core semantics §4.6); a part that is `Copy`
+                    // at its declared type still binds a copy.
+                    self.record_node_type(pattern.id, &binding_ty);
+                }
                 self.local_scope.insert(name.clone(), binding_ty);
                 // v2 core §4.6: a `ref name` binding, or any binding over a
                 // place the function does not own, borrows its part; moving
@@ -1605,7 +1616,10 @@ impl<'a> super::TypeChecker<'a> {
                 // `@` binding") — the outer alias is `ref T` and every
                 // inner binding borrows into the (still-owned) scrutinee.
                 let effective_mode = if *by_ref { ScrutineeMode::Ref } else { mode };
-                let binding_ty = effective_mode.wrap_binding_ty(expected.clone());
+                let binding_ty = self.lib_view_binding_ty(
+                    effective_mode,
+                    effective_mode.wrap_binding_ty(expected.clone()),
+                );
                 self.local_scope.insert(name.clone(), binding_ty);
                 // The `name @` outer alias is recorded against the outer
                 // pattern's span; the inner sub-pattern records its own
@@ -1721,6 +1735,22 @@ impl<'a> super::TypeChecker<'a> {
     ) {
         let prev = std::mem::take(&mut self.core_pattern_moves);
         self.check_pattern_against(pattern, ty, mode);
+        // §4.6: a binding into a `for` element that `.into_iter()` would make
+        // owned is fixed by the same `.into_iter()`.
+        if self.cli_lint_overrides.strict_core {
+            let inherited = self.core_for_into_iter_fix(scrutinee);
+            let depth = self.local_scope.depth();
+            for n in pattern.binding_names() {
+                match inherited {
+                    Some(at) if self.local_scope.is_view(&n) => {
+                        self.core_for_into_iter.insert(n, (at, depth));
+                    }
+                    _ => {
+                        self.core_for_into_iter.remove(&n);
+                    }
+                }
+            }
+        }
         let moves = std::mem::replace(&mut self.core_pattern_moves, prev);
         if !moves.is_empty() {
             self.core_moving_scrutinees

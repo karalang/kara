@@ -1664,6 +1664,16 @@ pub struct OwnershipChecker<'a> {
     pub(crate) loop_da_stack: Vec<LoopDaFrame>,
 }
 
+/// The first step of a `Clone` fix whose edit `karac fix` writes: the derive
+/// on a local type, or the bound on a type parameter.
+pub(crate) fn clone_step(ty: &str, edit: &crate::resolver::TextEdit) -> String {
+    if edit.replacement.starts_with("#[") {
+        format!("add `#[derive(Clone)]` to '{ty}'")
+    } else {
+        format!("bound '{ty}' by `Clone`")
+    }
+}
+
 impl<'a> OwnershipChecker<'a> {
     /// Emit a "wrote to a non-`mut` binding" diagnostic (B-2026-07-27-9).
     ///
@@ -2053,11 +2063,19 @@ impl<'a> OwnershipChecker<'a> {
                     "clone '{text}' at the move site (`{text}.clone()`), or restructure to \
                      avoid reuse"
                 )
-            } else if let Some((ty, _)) = &derive_copy {
-                format!(
-                    "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so '{text}' is \
-                     copied instead of moved), or restructure to avoid reuse"
-                )
+            } else if let Some((ty, edit)) = &derive_copy {
+                if edit.replacement.contains("Clone") {
+                    let step = crate::ownership::clone_step(ty, edit);
+                    format!(
+                        "{step} and clone '{text}' at the move site \
+                         (`{text}.clone()`), or restructure to avoid reuse"
+                    )
+                } else {
+                    format!(
+                        "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so '{text}' \
+                         is copied instead of moved), or restructure to avoid reuse"
+                    )
+                }
             } else {
                 format!("restructure to avoid reuse ('{text}' has no `.clone()`)")
             });
@@ -3088,12 +3106,21 @@ impl<'a> OwnershipChecker<'a> {
                          parameter `ref` if it only reads, or restructure to avoid reuse",
                         binding, binding
                     )
-                } else if let Some((ty, _)) = derive_copy {
-                    format!(
-                        "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so \
-                         '{binding}' is copied instead of moved), declare the callee \
-                         parameter `ref` if it only reads, or restructure to avoid reuse"
-                    )
+                } else if let Some((ty, edit)) = derive_copy {
+                    if edit.replacement.contains("Clone") {
+                        let step = crate::ownership::clone_step(ty, edit);
+                        format!(
+                            "{step} and clone '{binding}' at the \
+                             move site (`{binding}.clone()`), declare the callee parameter \
+                             `ref` if it only reads, or restructure to avoid reuse"
+                        )
+                    } else {
+                        format!(
+                            "add `#[derive(Copy)]` to '{ty}' (its fields are all `Copy`, so \
+                             '{binding}' is copied instead of moved), declare the callee \
+                             parameter `ref` if it only reads, or restructure to avoid reuse"
+                        )
+                    }
                 } else {
                     format!(
                         "declare the callee parameter `ref` if it only reads, or \

@@ -702,3 +702,72 @@ fn main() {
         "1:5 1:6 3 3\n",
     );
 }
+
+/// `flat_map`, `flatten` and `scan` are adapter structs in Kāra; the inner
+/// iterator moves through `Option.take` and back.
+#[test]
+fn flat_map_flatten_and_scan_run_as_kara_structs() {
+    assert_runs(
+        r#"
+fn main() {
+    let v = vec![1, 2, 3];
+    let w: Vec[Vec[i64]] = vec![vec![1, 2], Vec.new(), vec![3]];
+    let a: Vec[i64] = w.iter().flat_map(|p| p.iter()).collect();
+    println(f"{a}");
+    let mut n = 0;
+    for x in w.iter().map(|p| p.iter()).flatten() { n = n + x; }
+    println(f"{n}");
+    let c: Vec[i64] = v.iter().scan(0, |acc, x| Some((acc + x, acc + x))).collect();
+    println(f"{c}");
+    let d: Vec[i64] = v.iter().scan(0, |acc, x| if x < 3 { Some((acc, x)) } else { None }).collect();
+    println(f"{d}");
+}
+"#,
+        "[1, 2, 3]\n6\n[1, 3, 6]\n[1, 2]\n",
+    );
+}
+
+/// `peek` lends the next item without taking it; `by_ref` lets a loop stop
+/// part-way and leaves the rest in the iterator.
+#[test]
+fn peekable_and_by_ref_keep_the_rest() {
+    assert_runs(
+        r#"
+fn main() {
+    let v = vec![1, 2, 3];
+    let mut p = v.iter().peekable();
+    match p.peek() { Some(x) => println(f"peek {x}"), None => println("none") }
+    match p.peek() { Some(x) => println(f"again {x}"), None => println("none") }
+    match p.next() { Some(x) => println(f"next {x}"), None => println("none") }
+    println(f"count {p.count()}");
+    let mut e = v.iter().take(0).peekable();
+    if e.peek().is_none() { println("empty"); }
+    let mut it = v.iter();
+    for x in it.by_ref() { if x == 2 { break; } }
+    let rest: Vec[i64] = it.collect();
+    println(f"{rest}");
+}
+"#,
+        "peek 1\nagain 1\nnext 1\ncount 2\nempty\n[3]\n",
+    );
+}
+
+/// `collect` reads a `ref` item as a value only when the item is `Copy`;
+/// `ref String` items gathered as `String` need `.cloned()`, and the
+/// builder says so instead of sharing the collection's buffers.
+#[test]
+fn collecting_ref_strings_as_strings_needs_cloned() {
+    let src = r#"
+fn main() {
+    let v: Vec[String] = ["alpha", "beta"];
+    let r: Vec[String] = v.iter().rev().collect();
+    println(f"{r}");
+}
+"#;
+    let err = run(src).unwrap_err();
+    assert!(err.contains("write `.cloned()` before `collect`"), "{err}");
+    assert_runs(
+        &src.replace(".rev().collect()", ".rev().cloned().collect()"),
+        "[beta, alpha]\n",
+    );
+}

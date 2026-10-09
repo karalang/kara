@@ -1577,6 +1577,168 @@ fn derive_copy_fixes_loop_and_field_moves() {
     );
 }
 
+/// A type that cannot be `Copy` (a `String` field, a `Drop` body, a type
+/// parameter) gets `#[derive(Clone)]`, and the next pass clones the reused
+/// value at its move.
+#[test]
+fn derive_clone_then_clone_fixes_a_reused_move() {
+    rejected_then_fixed_in(
+        "derive-clone-generic",
+        "enum G[T] { Y(T), N }\n\
+         fn two(a: own G[String], b: own G[String]) {\n\
+             match a { G.Y(v) => println(v), G.N => println(0) }\n\
+             match b { G.Y(v) => println(v), G.N => println(0) }\n\
+         }\n\
+         fn main() {\n\
+             let g: G[String] = G.Y(\"p\");\n\
+             two(g, g);\n\
+         }\n",
+        "moved here, used again",
+        "two(g.clone(), g)",
+        2,
+    );
+    rejected_then_fixed_in(
+        "derive-clone-drop",
+        "struct R { id: i64, name: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(self.id) } }\n\
+         fn eat(r: own R) { println(r.name) }\n\
+         fn main() {\n\
+             let r = R { id: 1, name: \"a\" };\n\
+             eat(r);\n\
+             eat(r);\n\
+         }\n",
+        "moved here, used again",
+        "#[derive(Clone)]\nstruct R",
+        2,
+    );
+}
+
+/// A payload of a type with a `Drop` body borrows (§3.7); handing it on by
+/// value takes `#[derive(Clone)]` and `.clone()`, which `karac fix` writes in
+/// turn.
+#[test]
+fn ref_payload_handed_on_takes_derive_clone_then_clone() {
+    rejected_then_fixed_in(
+        "derive-clone-payload",
+        "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(self.id) } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(0) } }\n\
+         fn eat(r: own R) -> i64 { return r.id }\n\
+         fn call(b: own E) -> i64 { match b { E.A(r) => { return eat(r); } E.B => { return 1; } } }\n\
+         fn main() { println(call(E.A(R { id: 2, tag: \"t\" }))); }\n",
+        "cannot move 'r' out of 'E'",
+        "eat(r.clone())",
+        3,
+    );
+}
+
+/// A tuple whose elements clone has `.clone()`, so the fix that writes it
+/// type-checks.
+#[test]
+fn a_borrowed_tuple_payload_returned_is_cloned() {
+    rejected_then_fixed_in(
+        "tuple-clone",
+        "shared enum Sh { S((Vec[String], Option[String])), N }\n\
+         fn take(s: Sh) -> (Vec[String], Option[String]) {\n\
+             match s { Sh.S(x) => { return x; } Sh.N => { return (Vec.new(), None); } }\n\
+         }\n\
+         fn main() { let t = take(Sh.S((vec![\"a\"], Some(\"b\")))); println(t.0.len()); }\n",
+        "cannot move 'x'",
+        "return x.clone();",
+        1,
+    );
+}
+
+/// An element of a generic collection is copied out with `.clone()`, which
+/// needs `T: Clone`; a caller's own unbounded `T` handed to that function
+/// gets the bound too. `karac fix` writes each edit in turn.
+#[test]
+fn a_generic_element_takes_a_clone_bound_up_the_call_chain() {
+    rejected_then_fixed_in(
+        "clone-bound-chain",
+        "fn head[T](v: ref Vec[T]) -> T { return v[0]; }\n\
+         fn via[T](v: ref Vec[T]) -> T { return head(v); }\n\
+         fn main() { let a = vec![1, 2]; println(via(a)); }\n",
+        "cannot move a non-`Copy` value out of a collection element",
+        "fn via[T: Clone](v: ref Vec[T])",
+        3,
+    );
+}
+
+/// A type parameter passed where a bound is required must declare it.
+#[test]
+fn an_unbounded_type_parameter_does_not_satisfy_a_callee_bound() {
+    rejected_with(
+        "unbounded-param",
+        "trait Sh { fn sh(ref self) -> i64; }\n\
+         impl Sh for i64 { fn sh(ref self) -> i64 { return 1; } }\n\
+         fn k[T: Sh](x: ref T) -> i64 { return x.sh(); }\n\
+         fn j[T](x: ref T) -> i64 { return k(x); }\n\
+         fn main() { println(j(2)); }\n",
+        "type parameter 'T' is passed where 'T: Sh' is required",
+    );
+}
+
+/// The derive goes on the innermost type first: `P` inside `Option[P]`,
+/// and `R` before the `E` that holds it.
+#[test]
+fn derive_clone_reaches_through_option_and_payloads() {
+    rejected_then_fixed_in(
+        "derive-nested",
+        "struct P { a: String }\n\
+         struct H { p: Option[P] }\n\
+         fn main() { let v = vec![H { p: Some(P { a: \"x\" }) }]; let q = v[0].p; println(q.is_some()); }\n",
+        "cannot move a non-`Copy` value out of a collection element",
+        "#[derive(Clone)]\nstruct P",
+        2,
+    );
+    rejected_then_fixed_in(
+        "derive-dep-first",
+        "struct R { id: i64, v: Vec[i64] }\n\
+         impl Drop for R { fn drop(mut ref self) { println(self.id) } }\n\
+         enum E { A(R), B }\n\
+         fn main() { let v = vec![E.A(R { id: 1, v: vec![1] })]; let e = v[0]; match e { E.A(r) => println(r.id), E.B => println(0) } }\n",
+        "cannot move out of an index expression",
+        "#[derive(Clone)]\nenum E",
+        3,
+    );
+}
+
+/// Moving an element out of a loop over a payload of an outer `for`
+/// element: the outer loop's `.into_iter()` comes first, then the inner one.
+#[test]
+fn nested_loop_moves_take_into_iter_outside_in() {
+    rejected_then_fixed_in(
+        "into-iter-nested",
+        "enum N { I(i64), L(Vec[N]) }\n\
+         fn flat(level: own Vec[N]) -> Vec[N] {\n\
+             let mut out: Vec[N] = Vec.new();\n\
+             for item in level { match item { N.I(v) => println(v), N.L(inner) => { for x in inner { out.push(x); } } } }\n\
+             return out;\n\
+         }\n\
+         fn main() { println(flat(vec![N.L(vec![N.I(1)])]).len()); }\n",
+        "cannot move 'x'",
+        "for item in level.into_iter()",
+        3,
+    );
+}
+
+/// A `ref` binding inside an f-string hole keeps its mark, so the fix that
+/// writes it settles.
+#[test]
+fn a_ref_binding_inside_an_fstring_hole_borrows() {
+    rejected_then_fixed_in(
+        "fstring-ref",
+        "enum Ve { A(String), B }\n\
+         impl Drop for Ve { fn drop(mut ref self) { println(\"d\") } }\n\
+         fn main() { let v = Ve.A(\"x\"); println(f\"[{match v { Ve.A(s) => { s.len() } Ve.B => { 0 } }}]\"); }\n",
+        "cannot move 's' out of 'Ve'",
+        "Ve.A(ref s)",
+        1,
+    );
+}
+
 /// `check` must fail with `expect` in its output (no fix is expected).
 fn rejected_with(tag: &str, src: &str, expect: &str) {
     let (dir, path) = fixture(tag, src);

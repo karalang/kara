@@ -7642,7 +7642,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         // A binding that covers a whole handle (or handle aggregate) copies
         // it even from a `ref` scrutinee (core semantics §4.6, §6.1).
         let handle = self.is_handle(t) || self.is_handle_aggregate(t);
-        if mutable || (by_ref && !self.is_copy(t) && !handle) {
+        // A generic body's binding the checker typed as a `ref` stays one
+        // when its instance is `Copy` (`Option.as_ref` at a `Copy` `T`).
+        let typed_ref = by_ref
+            && self.lcx.node_types.contains_key(&node)
+            && self.node_ty(node, Span::default()).is_ok_and(
+                |bt| matches!(self.tys().tcx().kind(bt), HK::Ref(i) | HK::MutRef(i) if i == t),
+            );
+        if mutable || typed_ref || (by_ref && !self.is_copy(t) && !handle) {
             let rt = self.tys().tcx().reference(t, mutable);
             let l = self.user_local(name, rt, node);
             let kind = if mutable {
@@ -7960,6 +7967,44 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
+    /// `collect` of `ref T` items into a collection of `T`: a `Copy` item
+    /// is read as the value (core semantics §5.10) and a handle is a counted
+    /// copy, but anything else would be moved out of the collection the
+    /// items view, so it needs `.cloned()` first (iterators.md).
+    fn check_collect_items(&mut self, span: Span, v: Ty, c: Ty) -> R<()> {
+        let tcx = self.tys().tcx();
+        let (HK::Ref(inner) | HK::MutRef(inner)) = tcx.kind(v) else {
+            return Ok(());
+        };
+        let elem = match tcx.kind(c) {
+            HK::Intrinsic { args, .. } => {
+                let a = tcx.list(args);
+                match a.len() {
+                    1 => Some(a[0]),
+                    2 => Some(tcx.intern(HK::Tuple(tcx.intern_list(&a)))),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if elem != Some(inner)
+            || self.is_copy(inner)
+            || self.is_handle(inner)
+            || self.is_handle_aggregate(inner)
+        {
+            return Ok(());
+        }
+        let t = self.tys().display(inner);
+        self.errors.push(format!(
+            "{} in `{}`: the items are `ref {t}`, and collecting them as `{t}` would move each \
+             out of the collection it views; write `.cloned()` before `collect` \
+             (core semantics §5.10)",
+            at(span),
+            self.name
+        ));
+        Err(())
+    }
+
     /// The library's `iter_read_value(x)`: `x` read as the call's type. A
     /// `ref` to a value of that type is copied out (core semantics §5.10);
     /// any other value moves.
@@ -7974,7 +8019,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                 } else {
                     Place::local(self.temp_of(x, xt)?)
                 };
-                let op = self.use_place(p.project(ProjElem::Deref), inner);
+                let p = p.project(ProjElem::Deref);
+                // A handle is a counted copy (§6.1); anything else that is
+                // not `Copy` would move out of the collection the item
+                // views, so it needs `.cloned()` first (iterators.md).
+                if self.is_handle(inner) || self.is_handle_aggregate(inner) {
+                    let l = self.temp(inner);
+                    self.count_copy(p, inner, Place::local(l));
+                    self.assign(dest, Rvalue::Use(Operand::Move(Place::local(l))));
+                    return Ok(());
+                }
+                if !self.is_copy(inner) {
+                    let t = self.tys().display(inner);
+                    self.errors.push(format!(
+                        "{} in `{}`: the items are `ref {t}`, and reading one as a `{t}` would \
+                         move it out of the collection it views; write `.cloned()` before \
+                         `collect` (core semantics §5.10)",
+                        at(e.span),
+                        self.name
+                    ));
+                    return Err(());
+                }
+                let op = self.use_place(p, inner);
                 self.assign(dest, Rvalue::Use(op));
                 return Ok(());
             }
@@ -9229,6 +9295,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         match callee {
             Callee::Def(d) if self.lcx.fns.contains_key(&d) => {
                 let inst_args = self.instance_args(e.span, &substs)?;
+                if method == "collect" && args.is_empty() && inst_args.len() >= 2 {
+                    let (v, c) = (
+                        inst_args[inst_args.len() - 2],
+                        inst_args[inst_args.len() - 1],
+                    );
+                    self.check_collect_items(e.span, v, c)?;
+                }
                 self.user_method_call(e, object, d, inst_args, args, dest)
             }
             Callee::Def(d) => {
@@ -10831,7 +10904,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.hint_lib_args(base, method, args);
                 // Stored values and closures move in; other non-Copy
                 // arguments (keys, needles, slices, text) are borrowed.
-                let stores = stores_argument(method);
+                let stores = stores_argument(method)
+                    || (method == "replace" && self.tys().display(base).starts_with("Option["));
                 for a in args {
                     if self.is_fn_typed(a.value.id)
                         || matches!(a.value.kind, ExprKind::Closure { .. })
@@ -11380,7 +11454,22 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
         let receivers = &lowered.receivers;
         let views = &lowered.views;
         let has_receiver = |i: &InstanceId| {
-            if views.contains(&i.name) {
+            // A native that moves a value out of its receiver returns what
+            // that value borrowed, not a borrow of the receiver.
+            let moves_out = !names.contains(i.name.as_str())
+                && matches!(
+                    i.name.rsplit('.').next(),
+                    Some(
+                        "take"
+                            | "replace"
+                            | "pop"
+                            | "pop_front"
+                            | "pop_back"
+                            | "remove"
+                            | "swap_remove"
+                    )
+                );
+            if views.contains(&i.name) || moves_out {
                 crate::mir::ResultBorrows::ReceiverValue
             } else if !names.contains(i.name.as_str()) || receivers.contains(&i.name) {
                 crate::mir::ResultBorrows::Receiver

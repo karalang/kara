@@ -1123,6 +1123,11 @@ impl<'a> super::TypeChecker<'a> {
         // types. The structs themselves are baked; the assoc-type
         // mapping has no syntactic representation in baked source.
         for name in &["Vec", "VecDeque", "SortedSet", "Set", "Peekable", "Slice"] {
+            // On the MIR pipeline `Peekable` is the library's Kāra struct,
+            // whose impl names its `Item`.
+            if *name == "Peekable" && self.library_methods_from_source {
+                continue;
+            }
             self.env.impl_assoc_types.insert(
                 (name.to_string(), "Item".to_string()),
                 ImplAssocTypeEntry {

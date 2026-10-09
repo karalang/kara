@@ -844,6 +844,20 @@ impl<'a> Interp<'a> {
                 let prog = self.alloc_box("String", Value::Str("main".into()));
                 Ok(self.alloc_box(ty_name, Value::Agg(vec![prog])))
             }
+            ("Option", "take" | "replace") if matches!(args.first(), Some(Value::Ref(_))) => {
+                // Moves the value out of the borrowed `Option` and leaves
+                // `None`, or `Some(value)` for `replace`.
+                let Some(Value::Ref(at)) = args.first() else {
+                    unreachable!("checked above")
+                };
+                let at = at.clone();
+                let fill = match args.get(1) {
+                    Some(v) => self.variant_named(ret, None, "Some", vec![v.clone()])?,
+                    None => self.variant_named(ret, None, "None", Vec::new())?,
+                };
+                let slot = self.slot_mut(&at)?;
+                Ok(std::mem::replace(slot, fill))
+            }
             ("__yield_now", "") => Ok(Value::Unit),
             ("tracing_active_span", "") => {
                 Ok(Value::Int(self.active_spans.last().copied().unwrap_or(0)))
@@ -3887,12 +3901,10 @@ impl<'a> Interp<'a> {
                 Ok(self.alloc_box(&name, Value::Agg(out)))
             }
             // A struct or enum with no user `Clone` body: field by field,
-            // as `#[derive(Clone)]` does. A type with a user `Drop` body
-            // owns something a field copy cannot duplicate, so it needs
-            // its own `Clone`.
-            (TyKind::Adt(a), Value::Agg(_) | Value::Variant(..))
-                if !self.tys.adt(a).has_drop_impl =>
-            {
+            // as `#[derive(Clone)]` does, whether or not it has a `Drop`
+            // body (design.md §9). The checker allows `.clone()` only on a
+            // type that derives or implements `Clone`.
+            (TyKind::Adt(_), Value::Agg(_) | Value::Variant(..)) => {
                 let (variant, fs) = match v {
                     Value::Variant(k, fs) => (Some(*k), fs.clone()),
                     Value::Agg(fs) => (None, fs.clone()),

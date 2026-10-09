@@ -64,6 +64,11 @@ pub(super) enum Access {
 struct Loan {
     kind: BorrowKind,
     place: Place,
+    /// The place is reached through a shared reference held in its local
+    /// (`&(*r).0` with `r: ref T`): the loan is of the pointee, so ending
+    /// or overwriting `r` itself leaves it valid; its value keeps `r`'s
+    /// loans instead.
+    through_shared_ref: bool,
     /// Where it was created: block and statement.
     at: (usize, usize),
 }
@@ -94,7 +99,7 @@ pub fn check_borrows(
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
 ) -> Result<(), Vec<String>> {
     let mut errs = read_only_errors(body, tys);
-    let loans = collect_loans(body);
+    let loans = collect_loans(body, tys);
     if loans.is_empty() {
         return if errs.is_empty() { Ok(()) } else { Err(errs) };
     }
@@ -206,7 +211,7 @@ pub(super) fn loan_liveness(
     tys: &TyInterner,
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
 ) -> (Vec<LoanSite>, Vec<Vec<Vec<bool>>>) {
-    let loans = collect_loans(body);
+    let loans = collect_loans(body, tys);
     let n_locals = body.locals.len();
     let entry: Origins = vec![vec![false; loans.len()]; n_locals];
     let cx = Cx {
@@ -346,14 +351,17 @@ fn access_name(a: Access) -> &'static str {
     }
 }
 
-fn collect_loans(body: &Body) -> Vec<Loan> {
+fn collect_loans(body: &Body, tys: &TyInterner) -> Vec<Loan> {
     let mut loans = Vec::new();
     for (bi, block) in body.blocks.iter().enumerate() {
         for (si, s) in block.statements.iter().enumerate() {
             if let StatementKind::Assign(_, Rvalue::Ref(kind, place)) = &s.kind {
+                let through_shared_ref = place.projection.first() == Some(&ProjElem::Deref)
+                    && matches!(tys.kind(body.local(place.local).ty), TyKind::Ref(_));
                 loans.push(Loan {
                     kind: *kind,
                     place: place.clone(),
+                    through_shared_ref,
                     at: (bi, si),
                 });
             }
@@ -889,6 +897,9 @@ fn overlaps(a: &Place, b: &Place) -> bool {
 
 fn conflicts(loan: &Loan, place: &Place, access: Access) -> bool {
     if !overlaps(&loan.place, place) {
+        return false;
+    }
+    if loan.through_shared_ref && place.projection.is_empty() {
         return false;
     }
     match loan.kind {
