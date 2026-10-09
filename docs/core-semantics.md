@@ -92,7 +92,7 @@ Gowtham approved these at 16:53Z as decisions D1, D2, D4 and D6 of the design re
 
 **1.1 `Copy` types.**
 - The primitives (integers, floats, `bool`, `char`).
-- `Array[T, N]`, tuples and `Option[T]` when their parts are `Copy`.
+- `Array[T, N]`, tuples, `Option[T]` and `Result[T, E]` when their parts are `Copy`. (`Result` added by Gowtham, 2026-10-09.)
 - User types with `#[derive(Copy)]`, which the compiler checks field by field.
 - `ref T`, but not `mut ref T`. Copying a shared reference gives a second reference to the same place, with the same origins (§5.3). So `let u = x;` with `x` bound by `ref` makes `u` a reference too, and moves nothing.
 - A closure of kind `Fn` (§9.6) whose captures are all `Copy`, `ref` captures included. A `MutFn` or `OnceFn` closure never is.
@@ -319,7 +319,7 @@ Pins: `err_write_through_ref`, `ok_shared_field_through_ref`.
 - Using a handle as a value (assigning it, passing it to an `own` parameter, storing it, returning it) **increments** the count, including when the handle is read from a borrowed place. The source stays usable. Passing a handle to a borrowed parameter borrows it and counts nothing.
 - Every binding, field or temporary holding a handle **releases** it when that holder is dropped, under §7.
 - The object's `Drop` body and fields run when the count reaches zero.
-- An `Option` or a tuple whose parts are only handles, Copy values, and further such `Option`s and tuples (`Option[Node]`, `(Node, i64)`, `Option[(Node, Node)]`) is a **handle aggregate**. It is duplicated the same way: using it as a value increments every handle inside it, the source stays usable, and each copy releases its own handles when dropped. So `cur = node.next` walks a list without `.clone()` (decision 2026-10-06).
+- An `Option`, a `Result` or a tuple whose parts are only handles, Copy values, and further such `Option`s, `Result`s and tuples (`Option[Node]`, `(Node, i64)`, `Option[(Node, Node)]`, `Result[Node, i64]`) is a **handle aggregate**. It is duplicated the same way: using it as a value increments every handle inside it, the source stays usable, and each copy releases its own handles when dropped. So `cur = node.next` walks a list without `.clone()` (decision 2026-10-06).
 - Any other type that contains a handle, a user `struct` or `enum` or a `Vec[Node]`, is an ordinary move-only value. Moving it moves the handle without counting; `.clone()` increments.
 
 **6.2 `mut` fields of a shared value** (amended 2026-10-07, D1).

@@ -1363,7 +1363,7 @@ enum Result[T, E] { Ok(T), Err(E) }
 ```
 
 - Their variants are always written bare: `Some(x)`, `None`, `Ok(v)`, `Err(e)`.
-- `Option[T]` is `Copy` when `T` is ([core-semantics.md §1.1](core-semantics.md#1-values)). An `Option` of shared handles is a handle aggregate ([core-semantics.md §6.1](core-semantics.md#6-sharing-c7)), and `Option[ref T]` is a view ([core-semantics.md §5.2](core-semantics.md#5-references-and-views-c5)).
+- `Option[T]` is `Copy` when `T` is ([core-semantics.md §1.1](core-semantics.md#1-values)). `Result[T, E]` is `Copy` when `T` and `E` both are, and a `Result` of shared handles and `Copy` values is a handle aggregate. An `Option` of shared handles is a handle aggregate ([core-semantics.md §6.1](core-semantics.md#6-sharing-c7)), and `Option[ref T]` is a view ([core-semantics.md §5.2](core-semantics.md#5-references-and-views-c5)).
 - `?` propagates `None` and `Err` ([§10](#results-and-propagation)), and `??` supplies a default in their place ([`?` and `??`](#-and-)). Error handling, the `Error` trait and `AnyError` are in [§10](#10-errors-and-panics). The methods are in [library/core-types.md](library/core-types.md).
 
 ### Strings
