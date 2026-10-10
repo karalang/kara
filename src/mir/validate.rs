@@ -296,6 +296,8 @@ impl Validator<'_> {
                             | (CastKind::IntToChar, TyKind::Int(IntTy::U8), TyKind::Char)
                             | (CastKind::CharToInt, TyKind::Char, TyKind::Int(_))
                             | (CastKind::BoolToInt, TyKind::Bool, TyKind::Int(_))
+                            | (CastKind::RefToPtr, TyKind::Ref(_), TyKind::RawPtr { mutable: false, .. })
+                            | (CastKind::RefToPtr, TyKind::MutRef(_), TyKind::RawPtr { .. })
                             // A closure's signature is not in its MIR type, so
                             // the interpreter checks it at the call.
                             | (

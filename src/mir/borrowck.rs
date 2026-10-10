@@ -486,6 +486,8 @@ impl Cx<'_> {
                     }
                 }
             }
+            // A raw pointer holds no loan (`unsafe` code answers for it).
+            Rvalue::Cast(CastKind::RefToPtr, ..) => {}
             Rvalue::Use(op) | Rvalue::UnaryOp(_, op) | Rvalue::Cast(_, op, _) => {
                 self.operand_origins(o, op, &mut val)
             }

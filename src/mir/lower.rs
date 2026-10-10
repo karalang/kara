@@ -1130,7 +1130,10 @@ impl<'a> Lcx<'a> {
                 once,
                 mutable,
             },
-            HK::RawPtr { .. } => return Err("a raw pointer".into()),
+            HK::RawPtr { mutable, pointee } => HK::RawPtr {
+                mutable,
+                pointee: self.convert(pointee)?,
+            },
             other => other,
         };
         Ok(self.tys.tcx().intern(new))
@@ -3472,7 +3475,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             t = match (elem, tcx.kind(t)) {
                 (ProjElem::Field(_, ft), _) => *ft,
                 (ProjElem::Downcast(_), _) => t,
-                (ProjElem::Deref, HK::Ref(inner) | HK::MutRef(inner)) => inner,
+                (
+                    ProjElem::Deref,
+                    HK::Ref(inner) | HK::MutRef(inner) | HK::RawPtr { pointee: inner, .. },
+                ) => inner,
                 (
                     ProjElem::Index(_) | ProjElem::ConstIndex(_),
                     HK::Array { elem, .. } | HK::Vector { elem, .. },
@@ -8276,6 +8282,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                         return Ok(());
                     }
                     if self.lcx.def_owner(d).is_none()
+                        && self.volatile_call(&name, args, dest.clone())?
+                    {
+                        return Ok(());
+                    }
+                    if self.lcx.def_owner(d).is_none()
                         && self.mem_call(e, &name, args, dest.clone())?
                     {
                         return Ok(());
@@ -9135,6 +9146,46 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(true)
     }
 
+    /// `dest = p` as the raw pointer `e`'s type names: a borrow of the
+    /// place, cast to a pointer that holds no loan.
+    fn raw_ptr_to(&mut self, e: &'a Expr, p: Place, mutable: bool, dest: Place) -> R<()> {
+        let pt = self.expr_ty(e)?;
+        let target = self.place_type(&p);
+        let rt = self.tys().tcx().reference(target, mutable);
+        let r = self.temp(rt);
+        let kind = if mutable {
+            BorrowKind::Mut
+        } else {
+            BorrowKind::Shared
+        };
+        self.assign(r, Rvalue::Ref(kind, p));
+        self.assign(
+            dest,
+            Rvalue::Cast(CastKind::RefToPtr, Operand::Move(Place::local(r)), pt),
+        );
+        Ok(())
+    }
+
+    /// `volatile_read(p)` is `*p`, and `volatile_write(p, v)` is `*p = v`.
+    fn volatile_call(&mut self, name: &str, args: &'a [CallArg], dest: Place) -> R<bool> {
+        match (name, args) {
+            ("volatile_read", [p]) => {
+                let pp = self.expr_place(&p.value, false)?.project(ProjElem::Deref);
+                let t = self.place_type(&pp);
+                let op = self.use_place(pp, t);
+                self.assign(dest, Rvalue::Use(op));
+                Ok(true)
+            }
+            ("volatile_write", [p, v]) => {
+                let pp = self.expr_place(&p.value, false)?.project(ProjElem::Deref);
+                self.expr_into(&v.value, pp)?;
+                self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     /// Whether `x.cmp(y)` is the `Ordering` variant `variant`.
     fn ord_is(&mut self, span: Span, x: Local, y: Local, t: Ty, variant: u32) -> R<Local> {
         let (ot, _) = self.ordering_ty(span)?;
@@ -9651,6 +9702,24 @@ impl<'l, 'a> Bx<'l, 'a> {
                 });
                 self.assign(dest, Rvalue::Aggregate(kind, vec![zero]));
                 return Ok(());
+            }
+        }
+        // `ptr.mut(x)` / `ptr.const(x)`: a raw pointer to the place `x`.
+        if let (ExprKind::Identifier(m), "mut" | "const", [a]) = (&object.kind, method, args) {
+            if m == "ptr" && !matches!(self.lcx.res.get(&object.id), Some(Res::Local(_))) {
+                let p = self.expr_place(&a.value, method == "mut")?;
+                return self.raw_ptr_to(e, p, method == "mut", dest);
+            }
+        }
+        // `a.as_ptr()` / `a.as_mut_ptr()` of an array: a raw pointer to its
+        // first element.
+        if let ("as_ptr" | "as_mut_ptr", []) = (method, args) {
+            let ot = self.expr_ty(object)?;
+            let (_, base) = self.strip_ty_full(ot);
+            if matches!(self.tys().tcx().kind(base), HK::Array { .. }) {
+                let mutable = method == "as_mut_ptr";
+                let (p, _) = self.deref_place(object, mutable)?;
+                return self.raw_ptr_to(e, p.project(ProjElem::ConstIndex(0)), mutable, dest);
             }
         }
         if let Some(resource) = self.ambient_module(object) {
@@ -14057,6 +14126,39 @@ fn main() {
 }
 "#;
         let out = "false\ntrue\ninside\n42\n";
+        assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
+    }
+
+    #[test]
+    fn raw_pointers_to_places_and_array_elements() {
+        let src = r#"
+struct Reg { status: i32, control: i32 }
+fn bump(r: mut ref Reg) -> i32 {
+    unsafe {
+        let pw: *mut i32 = ptr.mut(r.control);
+        volatile_write(pw, 7);
+        let pr: *const i32 = ptr.const(r.control);
+        volatile_read(pr)
+    }
+}
+fn main() {
+    let mut r: Reg = Reg { status: 1, control: 2 };
+    let got = bump(mut r);
+    let mut a: Array[u8, 3] = [65u8, 66u8, 67u8];
+    let p = a.as_mut_ptr();
+    unsafe { *p = 90u8; }
+    let b: u8 = unsafe { *p };
+    let mut v: Vec[i32] = Vec.new();
+    v.push(3);
+    v.push(4);
+    unsafe {
+        let pw: *mut i32 = ptr.mut(v[1]);
+        volatile_write(pw, 44);
+    }
+    println(f"{got} {r.control} {b} {a[0]} {v[1]}");
+}
+"#;
+        let out = "7 7 90 90 44\n";
         assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
     }
 

@@ -75,7 +75,7 @@ fn project(
             _ => Err(format!("downcast of non-enum {}", tys.display(cur.ty))),
         },
         ProjElem::Deref => match kind {
-            TyKind::Ref(t) | TyKind::MutRef(t) => Ok(PlaceTy {
+            TyKind::Ref(t) | TyKind::MutRef(t) | TyKind::RawPtr { pointee: t, .. } => Ok(PlaceTy {
                 ty: t,
                 variant: None,
             }),

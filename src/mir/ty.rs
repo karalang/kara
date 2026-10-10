@@ -274,6 +274,12 @@ pub enum TyKind {
     Weak(Ty),
     Ref(Ty),
     MutRef(Ty),
+    /// A raw pointer (`*const T`, `*mut T`): `Copy`, holds no loan, and is
+    /// read or written through only in `unsafe` code.
+    RawPtr {
+        pointee: Ty,
+        mutable: bool,
+    },
     /// A library collection the MIR interpreter implements natively
     /// (`String`, `Vec[T]`, `Map[K, V]`, ...): §8 open question 2.
     Intrinsic(IntrinsicTy),
@@ -388,6 +394,7 @@ impl TyInterner {
             TyKind::Weak(t) => SharedKind::Weak(t),
             TyKind::Ref(t) => SharedKind::Ref(t),
             TyKind::MutRef(t) => SharedKind::MutRef(t),
+            TyKind::RawPtr { pointee, mutable } => SharedKind::RawPtr { pointee, mutable },
             TyKind::Intrinsic(IntrinsicTy::String) => SharedKind::Str,
             TyKind::Intrinsic(IntrinsicTy::Vec(e)) => SharedKind::Intrinsic {
                 kind: IntrinsicKind::Vec,
@@ -476,6 +483,7 @@ impl TyInterner {
             }
             SharedKind::Ref(t) => TyKind::Ref(t),
             SharedKind::MutRef(t) => TyKind::MutRef(t),
+            SharedKind::RawPtr { pointee, mutable } => TyKind::RawPtr { pointee, mutable },
             SharedKind::Intrinsic { kind, args } => {
                 let a = tcx.list(args);
                 match (kind, a.as_slice()) {
@@ -587,6 +595,10 @@ impl TyInterner {
             TyKind::Weak(s) => format!("weak {}", self.adt_name(s)),
             TyKind::Ref(t) => format!("ref {}", self.display(t)),
             TyKind::MutRef(t) => format!("mut ref {}", self.display(t)),
+            TyKind::RawPtr { pointee, mutable } => {
+                let m = if mutable { "mut" } else { "const" };
+                format!("*{m} {}", self.display(pointee))
+            }
             TyKind::Intrinsic(IntrinsicTy::String) => "String".into(),
             TyKind::Intrinsic(IntrinsicTy::Vec(e)) => format!("Vec[{}]", self.display(e)),
             TyKind::Intrinsic(IntrinsicTy::Map(k, v)) => {

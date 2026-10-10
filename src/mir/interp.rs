@@ -5290,7 +5290,7 @@ impl<'a> Interp<'a> {
                         other => return err(format!("deref of non-reference {other:?}")),
                     }
                     ty = match self.tys.kind(ty) {
-                        TyKind::Ref(t) | TyKind::MutRef(t) => t,
+                        TyKind::Ref(t) | TyKind::MutRef(t) | TyKind::RawPtr { pointee: t, .. } => t,
                         _ => return err("deref of a non-reference type"),
                     };
                     behind_handle = false;
@@ -5581,6 +5581,8 @@ impl<'a> Interp<'a> {
                 let (x, from) = self.operand(body, o)?;
                 self.erase(x, from)
             }
+            // A raw pointer is the address the reference held.
+            Rvalue::Cast(CastKind::RefToPtr, o, _) => Ok(self.operand(body, o)?.0),
             Rvalue::Cast(CastKind::Downgrade, o, _) => {
                 // A new weak handle to the value a `ref shared T`,
                 // `ref weak T` or `ref Option[shared T]` reaches; `None`

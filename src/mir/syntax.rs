@@ -394,6 +394,9 @@ pub enum CastKind {
     /// counted, while the object is alive, `None` after its last handle
     /// is dropped.
     Upgrade,
+    /// A reference into a raw pointer to the same place (`ptr.mut(x)`,
+    /// `a.as_ptr()`). The pointer holds no loan: the borrow ends here.
+    RefToPtr,
 }
 
 #[derive(Debug, Clone, PartialEq)]

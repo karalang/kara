@@ -19,7 +19,6 @@
 //!   raw pointers are one word.
 
 use super::ty::{FloatTy, IntrinsicTy, Ty, TyInterner, TyKind};
-use crate::ty::TyKind as SharedKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Layout {
@@ -99,11 +98,8 @@ fn layout_at(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
         TyKind::Intrinsic(IntrinsicTy::String | IntrinsicTy::Vec(_) | IntrinsicTy::VecDeque(_)) => {
             Layout { size: 24, align: 8 }
         }
-        TyKind::Intrinsic(_) | TyKind::Shared(_) | TyKind::Weak(_) => WORD,
-        TyKind::Other => match tys.tcx().kind(t) {
-            SharedKind::RawPtr { .. } => WORD,
-            _ => return None,
-        },
+        TyKind::Intrinsic(_) | TyKind::Shared(_) | TyKind::Weak(_) | TyKind::RawPtr { .. } => WORD,
+        TyKind::Other => return None,
     })
 }
 
