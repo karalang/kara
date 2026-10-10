@@ -2,7 +2,7 @@
 fn echo[T](x: own T) -> T { return x; }
 fn takeout[T](b: own T) -> T { match b { v => { return v; } } }
 fn iflet[T](b: own T) -> T { if let w = b { return w; } return b; }
-fn letelse[T](b: own T) -> T { let w = b else { return b; }; return w; }
+fn letelse[T: Clone](b: own T) -> T { let w = b.clone() else { return b; }; return w; }
 fn main() {
     let mut k: i64 = 0;
     let mut t: i64 = 0;

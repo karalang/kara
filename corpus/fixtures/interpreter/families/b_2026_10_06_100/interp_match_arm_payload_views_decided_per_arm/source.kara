@@ -1,3 +1,4 @@
+#[derive(Clone)]
 struct D { n: i64, s: String }
 impl Drop for D { fn drop(mut ref self) { println(f"d{self.n}") } }
 fn d(n: i64) -> D { D { n: n, s: f"heap-string-longer-than-sso-{n}" } }
@@ -15,10 +16,10 @@ fn main() {
     match b { E.One(x) => println(f"o{x.n}"), E.Many(xs) => eatv(xs), E.No => println("no") }
     println("B");
     let c = F.Many(vec![d(4), d(5)]);
-    match c { F.One(x) => eat(x), F.Many(xs) => println(f"m{xs.len()}") }
+    match c { F.One(ref x) => eat(x.clone()), F.Many(ref xs) => println(f"m{xs.len()}") }
     println("C");
     let e = F.One(d(6));
-    match e { F.One(x) => eat(x), F.Many(xs) => println(f"m{xs.len()}") }
+    match e { F.One(ref x) => eat(x.clone()), F.Many(ref xs) => println(f"m{xs.len()}") }
     println("D");
     let t = T.Two(d(7), d(8));
     match t { T.One(x) => eat(x), T.Two(p, q) => println(f"t{p.n}{q.n}") }

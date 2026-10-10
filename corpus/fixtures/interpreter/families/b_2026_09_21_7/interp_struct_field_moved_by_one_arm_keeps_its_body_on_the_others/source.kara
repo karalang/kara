@@ -1,3 +1,4 @@
+#[derive(Clone)]
 struct R { id: i64, s: String }
 impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
 fn mk(i: i64) -> R { R { id: i, s: f"heap-string-longer-than-sso-{i}" } }
@@ -9,11 +10,11 @@ struct Se { e: E, b: R }
 struct Sv { v: Vec[R], b: R }
 struct In { r: R, k: i64 }
 struct Out { i: In, b: R }
-fn g1(t: i64) -> i64 { let s = S3 { a: mk(1), b: mk(2), k: t }; match s { S3 { a, .. } if s.k > 900 => { return a.id; } S3 { b, .. } => { return b.id; } } }
-fn g2(t: i64) -> i64 { let s = S3 { a: mk(1), b: mk(2), k: t }; match s { S3 { a, .. } if s.k > 900 => { eat(a); 1 } _ => { 0 } } }
+fn g1(t: i64) -> i64 { let s = S3 { a: mk(1), b: mk(2), k: t }; match s { S3 { a: ref a, .. } if s.k > 900 => { return a.id; } S3 { b: ref b, .. } => { return b.id; } } }
+fn g2(t: i64) -> i64 { let s = S3 { a: mk(1), b: mk(2), k: t }; match s { S3 { a: ref a, .. } if s.k > 900 => { eat(a.clone()); 1 } _ => { 0 } } }
 fn g3(t: i64) -> i64 { let s = S3 { a: mk(1), b: mk(2), k: t }; match s { S3 { a, k, .. } if k > 900 => { a.id } S3 { b, k: 1, .. } => { b.id } S3 { .. } => { 0 } } }
 fn g4(t: i64) -> i64 { let s = S3 { a: mk(1), b: mk(2), k: t }; match s { S3 { a, b, k } if k > 900 => { eat(b); a.id } S3 { b, .. } => { b.id } } }
-fn g5(t: i64) -> i64 { let s = Se { e: E.A(mk(1)), b: mk(2) }; match s { Se { e, .. } if t > 900 => { match e { E.A(r) => r.id, E.B => 0 } } Se { b, .. } => { b.id } } }
+fn g5(t: i64) -> i64 { let s = Se { e: E.A(mk(1)), b: mk(2) }; match s { Se { e, .. } if t > 900 => { match e { E.A(ref r) => r.id, E.B => 0 } } Se { b, .. } => { b.id } } }
 fn g6(t: i64) -> i64 { let s = Sv { v: vec![mk(1), mk(3)], b: mk(2) }; match s { Sv { v, .. } if t > 900 => { v.len() } Sv { b, .. } => { b.id } } }
 fn g7(t: i64) -> i64 { let mut n = 0; for i in 0..2 { let s = S3 { a: mk(1 + i * 10), b: mk(2 + i * 10), k: t }; match s { S3 { a, k, .. } if k > 900 => { n = n + a.id; } S3 { b, .. } => { n = n + b.id; } } } n }
 fn g8(t: i64) -> i64 { let s = S3 { a: mk(1), b: mk(2), k: t }; let x = match s { S3 { a, k, .. } if k > 900 => { a } S3 { b, .. } => { b } }; x.id }

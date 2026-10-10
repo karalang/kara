@@ -1,0 +1,39 @@
+
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
+fn takes(s: String) -> i64 { return s.len(); }
+fn takep(p: P) -> i64 { return p.b; }
+impl P { fn take(self) -> i64 { return self.b; } }
+fn loop3() -> i64 { let t = mkp(9); let mut r = payload(); let mut i = 0i64;
+  while i < 3i64 { t.take(); i = i + 1; }
+  return r.len(); }
+fn zero() -> i64 { let t = mkp(9); let mut r = payload(); let mut i = 0i64;
+  while i < 0i64 { t.take(); i = i + 1; }
+  return r.len(); }
+fn proj() -> i64 { let t = mkp(9); let mut r = payload(); let mut i = 0i64; let mut acc = 0i64;
+  while i < 3i64 { acc = acc + takes(t.a); i = i + 1; }
+  return r.len() + acc; }
+fn after() -> i64 { let t = mkp(9); let mut r = payload(); let mut i = 0i64;
+  while i < 3i64 { t.take(); i = i + 1; }
+  return r.len() + t.b; }
+fn nofanout() -> i64 { let t = mkp(9); let mut i = 0i64; let mut acc = 0i64;
+  while i < 3i64 { acc = acc + t.take(); i = i + 1; }
+  return acc; }
+fn explicitpar() -> i64 {
+  par {
+    let t = mkp(9);
+    let k = seed() + 41i64;
+  }
+  let mut i = 0i64;
+  while i < 3i64 { takep(t); i = i + 1; }
+  return k; }
+fn main() {
+  println(loop3());
+  println(zero());
+  println(proj());
+  println(after());
+  println(nofanout());
+  println(explicitpar());
+}

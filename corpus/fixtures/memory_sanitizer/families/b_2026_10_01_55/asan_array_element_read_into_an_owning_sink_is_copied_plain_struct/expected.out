@@ -1,0 +1,25 @@
+local_ret0 q1:23
+local_reti q2:23
+local_tail q2:23
+local_tup q1:23
+local_some q2:23
+local_push q1:23/q2:23
+local_fld q1:23
+local_fldi q2:23
+own_ret0 q1:23
+own_reti q2:23
+own_tail q2:23
+own_tup q1:23
+own_some q2:23
+own_push q1:23/q2:23
+own_fld q1:23
+own_fldi q2:23
+ref_ret0 q1:23
+ref_reti q2:23
+ref_tail q2:23
+ref_tup q1:23
+ref_some q2:23
+ref_push q1:23/q2:23
+ref_fld q1:23
+ref_fldi q2:23
+end

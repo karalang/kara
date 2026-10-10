@@ -1,0 +1,39 @@
+
+struct P { s: String }
+struct P2 { s: String, t: String }
+struct Pv { v: Vec[String] }
+enum Ws { Full(P), Empty }
+
+fn wlen(w: own Ws) -> i64 { match w { Ws.Full(q) => { return q.s.len(); } Ws.Empty => { return 0; } } }
+fn takep(p: P) -> i64 { return p.s.len(); }
+fn mkp(n: i64) -> P { return P { s: f"b1516-src-aaaaaaaaaaaa-{n}" }; }
+
+fn main() {
+    let a = mkp(1);
+    { let w = Ws.Full(a); println(f"ctor {wlen(w)}"); }
+    println(f"a {a.s}");
+
+    let b = mkp(2);
+    { let mut v: Vec[P] = []; v.push(b); println(f"push {v.len()}"); }
+    println(f"b {b.s}");
+
+    let c = mkp(3);
+    { let mut m: Map[i64, P] = Map.new(); m.insert(1, c); println(f"insert {m.len()}"); }
+    println(f"c {c.s}");
+
+    let d = P2 { s: f"b1516-two-bbbbbbbbbbbb", t: f"b1516-two-cccccccccccc" };
+    { let mut v: Vec[P2] = []; v.push(d); println(f"two {v.len()}"); }
+    println(f"d {d.s} {d.t}");
+
+    let e = Pv { v: [f"b1516-vecf-dddddddddddd"] };
+    { let mut v: Vec[Pv] = []; v.push(e); println(f"vecf {v.len()}"); }
+    println(f"e {e.v.len()}");
+
+    let f = mkp(6);
+    { let w = Ws.Full(f); println(f"alive {f.s}"); println(f"w {wlen(w)}"); }
+    println(f"f {f.s}");
+
+    let g = mkp(7);
+    { println(f"call {takep(g)}"); }
+    println(f"g {g.s}");
+}

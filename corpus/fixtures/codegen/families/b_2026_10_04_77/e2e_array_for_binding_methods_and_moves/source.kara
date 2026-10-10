@@ -1,3 +1,4 @@
+#[derive(Clone)]
 struct P { n: i64, s: String }
 struct H { names: Array[String, 2] }
 impl H { fn total(ref self) -> i64 { let mut k = 0; for x in self.names { k += x.len(); } return k } }
@@ -5,7 +6,7 @@ fn cnt(a: ref Array[Vec[i64], 2]) -> i64 { let mut k = 0; for v in a { k += v.le
 fn main() {
     let ss: Array[String, 2] = [f"q{1}", f"rr{2}"];
     let mut out: Vec[String] = Vec.new();
-    for x in ss { out.push(x); let up = x.to_uppercase(); println(f"{up} {x.len()} {x.starts_with("q")}"); }
+    for x in ss { out.push(x.clone()); let up = x.to_uppercase(); println(f"{up} {x.len()} {x.starts_with("q")}"); }
     println(f"a:{out[0]}{out[1]} {ss[0]}");
     let h = H { names: [f"ab{1}", f"c{2}"] };
     println(f"b:{h.total()}");
@@ -17,7 +18,7 @@ fn main() {
     println(f"e:{m} {t.0[1]}");
     let ps: Array[P, 2] = [P { n: 1, s: f"p{1}" }, P { n: 2, s: f"o{2}" }];
     let mut kept: Vec[P] = Vec.new();
-    for p in ps { kept.push(p); }
+    for p in ps { kept.push(p.clone()); }
     for p in ps { let q = p; println(f"f:{q.n}{q.s}"); }
     println(f"g:{kept[1].s} {ps[1].s} {kept.len()}");
 }

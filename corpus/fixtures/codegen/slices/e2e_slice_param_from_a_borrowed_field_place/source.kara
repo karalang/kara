@@ -1,9 +1,9 @@
 struct Bag[=T] { xs: Vec[T] }
 struct Wrap { b: Bag[i64] }
-fn head[T](s: Slice[T]) -> T { return s[0]; }
-fn via_ref[T](g: ref Bag[T]) -> T { return head(g.xs); }
+fn head[T: Clone](s: Slice[T]) -> T { return s[0].clone(); }
+fn via_ref[T: Clone](g: ref Bag[T]) -> T { return head(g.xs); }
 fn nested(w: ref Wrap) -> i64 { return head(w.b.xs); }
-impl[T] Bag[T] {
+impl[T: Clone] Bag[T] {
     fn first(ref self) -> T { return head(self.xs); }
 }
 fn main() {

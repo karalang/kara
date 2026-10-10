@@ -1,0 +1,28 @@
+
+struct R { id: i64, name: String }
+struct Q { r: R, n: i64 }
+
+fn mkq() -> Vec[Q] {
+    return [Q { r: R { id: 1, name: f"a{1}" }, n: 1 },
+            Q { r: R { id: 2, name: f"b{2}" }, n: 2 }];
+}
+fn ret_r(q: Vec[Q]) -> R { return q[0].r; }
+
+fn main() {
+    let q = mkq();
+    let mut e = q[1].r;
+    e.name = e.name + "X";
+    e.id = 99;
+    // the binding owns a copy; the container's element is untouched
+    println(e.name);
+    println(e.id);
+    println(q[1].r.name);
+    println(q[1].r.id);
+
+    let mut o: Vec[R] = Vec.new();
+    o.push(q[0].r);
+    println(o[0].name);
+    println(q[0].r.name);
+
+    println(ret_r(mkq()).name);
+}

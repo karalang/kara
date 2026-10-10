@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 struct H { label: String, k: i64 }
 struct Node { hp: Option[H], k: i64 }
 shared enum E { V(Node) }
@@ -12,19 +13,19 @@ fn main() {
     let a = E.V(Node { hp: Some(H { label: "deep".to_string(), k: 2 }), k: 7 });
     match a {
         V(nd) => {
-            println(hname(nd.hp));
+            println(hname(nd.hp.clone()));
         }
     }
     let b = E.V(Node { hp: Some(H { label: "second".to_string(), k: 3 }), k: 8 });
     match b {
         V(nd) => {
-            println(hname(nd.hp));
+            println(hname(nd.hp.clone()));
         }
     }
     let c = E.V(Node { hp: None, k: 9 });
     match c {
         V(nd) => {
-            println(hname(nd.hp));
+            println(hname(nd.hp.clone()));
         }
     }
 }

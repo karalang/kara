@@ -1,5 +1,7 @@
 
+#[derive(Clone)]
 struct In { s: String }
+#[derive(Clone)]
 struct Out { i: In }
 struct A3 { s: String }
 struct B3 { a: A3 }
@@ -46,7 +48,7 @@ fn main() {
     v.push(Out { i: In { s: f"b1627-loop-ffffffffffff" } });
     v.push(Out { i: In { s: f"b1627-loop-gggggggggggg" } });
     let mut total = 0;
-    for e in v {
+    for e in v.into_iter() {
         let i = e.i;
         total = total + i.s.len();
     }
@@ -57,7 +59,7 @@ fn main() {
     println(f"call {arm_call(Wn.Full(Out { i: In { s: f"b1627-call-jjjjjjjjjjjj" } }))}");
 
     let o = Out { i: In { s: f"b1627-live-iiiiiiiiiiii" } };
-    { let w = Wn.Full(o); println(f"ctorsrc {arm_move(w)}"); }
+    { let w = Wn.Full(o.clone()); println(f"ctorsrc {arm_move(w)}"); }
     let k = o.i;
     println(f"src {k.s}");
 }

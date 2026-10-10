@@ -1,5 +1,7 @@
+#[derive(Clone)]
 struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+#[derive(Clone)]
 enum Ho[T] { Full(T), Empty }
 fn mks(i: i64) -> S { return S { id: i, s: "ab".to_string() + "cd" } }
 fn shows(h: own Ho[S]) { match h { Ho.Full(r) => println(f"s{r.id}{r.s}"), Ho.Empty => println("e") } }
@@ -21,33 +23,33 @@ fn main() {
     println("method");
     {
         let v = mkv(1, 2);
-        for h in v { let k = K { k: 1 }; k.take(h) }
+        for h in v.clone().into_iter() { let k = K { k: 1 }; k.take(h) }
         println(f"n{v.len()}");
     }
     println("refself");
     {
         let v = mkv(3, 4);
         let k = K { k: 2 };
-        for h in v { k.takr(h) }
+        for h in v.clone().into_iter() { k.takr(h) }
         println(f"n{v.len()}");
     }
     println("static");
     {
         let v = mkv(5, 6);
-        for h in v { K.st(h) }
+        for h in v.clone().into_iter() { K.st(h) }
         println(f"n{v.len()}");
     }
     println("twice");
     {
         let v = mkv(7, 8);
         let k = K { k: 3 };
-        for h in v { K.st(h); K.st(h); k.takr(h) }
+        for h in v.clone().into_iter() { K.st(h.clone()); K.st(h.clone()); k.takr(h) }
         println(f"n{v.len()}");
     }
     println("handback");
     {
         let v = mkv(9, 10);
-        for h in v { let j = K.id(h); shows(j) }
+        for h in v.clone().into_iter() { let j = K.id(h); shows(j) }
         println(f"n{v.len()}");
     }
     println("local");

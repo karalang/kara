@@ -2,7 +2,7 @@
 shared enum Sh { S((Array[String, 2], i64)), N }
 fn mkt(t: String) -> (Array[String, 2], i64) { let a: Array[String, 2] = [f"a-{t}-bbbbbbbbbbbbbbbbbbbbbbbb", f"a-{t}-cc"]; return (a, 7); }
 fn ostr(o: ref Option[String]) -> String { match o { Some(v) => v.clone(), None => "none" } }
-fn take(s: Sh) -> (Array[String, 2], i64) { match s { Sh.S(x) => { return x; } Sh.N => { return mkt("z"); } } }
+fn take(s: Sh) -> (Array[String, 2], i64) { match s { Sh.S(x) => { return x.clone(); } Sh.N => { return mkt("z"); } } }
 fn main() {
     { let s = Sh.S(mkt("r")); match s { Sh.S(x) => { println(f"read {x.0[0]}"); } Sh.N => { println("n"); } } }
     { let s = Sh.S(mkt("l")); match s { Sh.S(x) => { let u = x; println("let"); } Sh.N => { println("n"); } } }

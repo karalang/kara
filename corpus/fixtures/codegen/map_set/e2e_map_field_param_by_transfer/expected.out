@@ -1,0 +1,18 @@
+temp_arg
+  dQ1
+  v=1
+temp_arg_reads_map
+  dQ2
+  v=1
+temp_arg_rebind
+  dQ3
+  v=3
+no_drop_struct
+  v=4
+copy_supported
+  dP5
+  v=5
+no_call
+  v=6
+end
+  dQ6

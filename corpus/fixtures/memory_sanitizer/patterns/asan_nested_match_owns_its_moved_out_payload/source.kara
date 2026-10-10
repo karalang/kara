@@ -8,11 +8,11 @@ fn main() {
     let mut i = 0;
     let mut total = 0;
     while i < 3 {
-        println(f"fstr[{match mkVe(i) { Ve.A(s) => { s } Ve.B => { "none".to_string() } }}]");
-        total = total + sink(match mkVe(i) { Ve.A(s) => { s } Ve.B => { "none".to_string() } });
+        println(f"fstr[{match mkVe(i) { Ve.A(ref s) => { s.clone() } Ve.B => { "none".to_string() } }}]");
+        total = total + sink(match mkVe(i) { Ve.A(ref s) => { s.clone() } Ve.B => { "none".to_string() } });
         let v = mkVe(i);
-        println(f"named[{match v { Ve.A(s) => { s } Ve.B => { "none".to_string() } }}]");
-        let out = match mkVe(i) { Ve.A(s) => { s } Ve.B => { "none".to_string() } };
+        println(f"named[{match v { Ve.A(ref s) => { s.clone() } Ve.B => { "none".to_string() } }}]");
+        let out = match mkVe(i) { Ve.A(ref s) => { s.clone() } Ve.B => { "none".to_string() } };
         println(f"let[{out}]");
         let plain = f"plainplainplain{i}";
         println(f"whole[{match plain { t => { t } }}]");

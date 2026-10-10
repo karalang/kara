@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 enum G1[T] { Y(T), N }
 
 fn one[T](a: own G1[T]) {
@@ -18,13 +19,13 @@ fn twoc(a: own G1[String], b: own G1[String]) {
     match b { G1.Y(v) => { println(f"  bx {v}") } G1.N => { println("  bx NONE") } }
 }
 
-fn a_gen_dup() { println("a"); let g: G1[String] = G1.Y(f"pa"); two(g, g) }
-fn b_con_dup() { println("b"); let g: G1[String] = G1.Y(f"pb"); twoc(g, g) }
-fn c_triple() { println("c"); let g: G1[String] = G1.Y(f"pc"); three(g, g, g) }
+fn a_gen_dup() { println("a"); let g: G1[String] = G1.Y(f"pa"); two(g.clone(), g) }
+fn b_con_dup() { println("b"); let g: G1[String] = G1.Y(f"pb"); twoc(g.clone(), g) }
+fn c_triple() { println("c"); let g: G1[String] = G1.Y(f"pc"); three(g.clone(), g.clone(), g) }
 fn d_distinct() { println("d"); let g: G1[String] = G1.Y(f"pd"); let h: G1[String] = G1.Y(f"qd"); two(g, h) }
 fn e_single() { println("e"); let g: G1[String] = G1.Y(f"pe"); one(g) }
-fn f_twocalls() { println("f"); let g: G1[String] = G1.Y(f"pf"); one(g); one(g) }
-fn g_middle() { println("g"); let g: G1[String] = G1.Y(f"pg"); let h: G1[String] = G1.Y(f"qg"); three(g, h, g) }
+fn f_twocalls() { println("f"); let g: G1[String] = G1.Y(f"pf"); one(g.clone()); one(g) }
+fn g_middle() { println("g"); let g: G1[String] = G1.Y(f"pg"); let h: G1[String] = G1.Y(f"qg"); three(g.clone(), h, g) }
 
 fn main() {
     a_gen_dup();

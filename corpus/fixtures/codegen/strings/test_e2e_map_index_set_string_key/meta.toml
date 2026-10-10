@@ -12,7 +12,7 @@ backends = []
 env = {}
 note = "`m[k] = v` on a missing Map key inserts (Gowtham, decision card 2026-10-08 14:14Z): legacy's output is the expected output."
 bucket = "a"
-classified_with = "ddae1ab1c+local"
+classified_with = "28b4fa5b9"
 model_exit = 0
 model_rev = "629c2395"
 model_verdict = "SAME"

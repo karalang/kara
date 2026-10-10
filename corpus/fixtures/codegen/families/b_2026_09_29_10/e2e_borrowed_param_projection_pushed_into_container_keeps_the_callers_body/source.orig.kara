@@ -1,0 +1,12 @@
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+struct W { r: R }
+fn pushref(xs: mut ref Vec[R], w: ref W) { xs.push(w.r); }
+fn main() {
+    let mut xs: Vec[R] = Vec.new();
+    let w: W = W { r: mk(11) };
+    pushref(mut xs, w);
+    println(f"n{xs.len()}");
+    println("end");
+}

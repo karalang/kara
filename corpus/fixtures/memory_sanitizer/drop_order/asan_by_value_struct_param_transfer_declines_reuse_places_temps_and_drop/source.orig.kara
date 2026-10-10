@@ -1,0 +1,39 @@
+
+struct Res { id: i64, buf: Vec[i64] }
+struct Guard { id: i64, buf: Vec[i64] }
+impl Drop for Guard { fn drop(mut ref self) { println(f"drop {self.id}") } }
+struct Holder { r: Res }
+
+fn mk(n: i64) -> Res {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 8 { v.push(i + n); i = i + 1; }
+    return Res { id: n, buf: v };
+}
+fn mkg(n: i64) -> Guard {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 8 { v.push(i + n); i = i + 1; }
+    return Guard { id: n, buf: v };
+}
+
+fn readf(r: Res) -> i64 { return r.buf[3]; }
+fn peek(r: Res) -> i64 { return r.buf[4]; }
+fn guard_eat(g: own Guard) -> i64 { return g.buf[1]; }
+
+fn main() {
+    let h = Holder { r: mk(40) };
+    let rf = readf(h.r);
+    println(f"field={rf}");
+    let rt = readf(mk(50));
+    println(f"temp={rt}");
+
+    let e = mk(60);
+    let rp = peek(e);
+    println(f"peek={rp}");
+    println(f"reuse={e.buf[5]}");
+
+    let g = mkg(70);
+    let rg = guard_eat(g);
+    println(f"guard={rg}");
+}

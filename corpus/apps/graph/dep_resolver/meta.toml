@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "stmt-par groups (source.orig.kara lines): L332-L335 four fs.write, each to its own manifest file"
 bucket = "mir-gap:borrow check"
-classified_with = "22b63d46f+local"
+classified_with = "28b4fa5b9"
 fixed_by_classify = true
 model_rev = "629c2395"

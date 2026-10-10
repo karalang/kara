@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: '{kkkkkkkkkkkkkkkk: 1}'"
 bucket = "b->a"
-classified_with = "ddae1ab1c+local"
+classified_with = "28b4fa5b9"
 fixed_by_classify = true
 model_rev = "629c2395"

@@ -1,3 +1,4 @@
+#[derive(Clone)]
 struct R { id: i64, tag: String }
 impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" } }
@@ -9,14 +10,14 @@ fn keep(v: mut ref Vec[R], r: own R) { v.push(r); }
 enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("  dE") } }
 impl E {
-    fn call(own self) -> i64 { match self { E.A(r) => { return eat(r); } E.B => { return 0; } } }
-    fn tailc(own self) -> i64 { match self { E.A(r) => eat(r), E.B => 0 } }
-    fn gcall(own self) -> i64 { match self { E.A(r) => { return eatg(r, 7); } E.B => { return 0; } } }
-    fn stmt(own self) -> i64 { match self { E.A(r) => { say(r); return 1; } E.B => { return 0; } } }
-    fn iflet(own self) -> i64 { if let E.A(r) = self { return eat(r); } return 0; }
-    fn opt(own self) -> Option[R] { match self { E.A(r) => { return Some(r); } E.B => { return None; } } }
-    fn cid(own self) -> i64 { match self { E.A(r) => { let q = id(r); return q.id; } E.B => { return 0; } } }
-    fn ckeep(own self, v: mut ref Vec[R]) -> i64 { match self { E.A(r) => { keep(v, r); return 1; } E.B => { return 0; } } }
+    fn call(own self) -> i64 { match self { E.A(ref r) => { return eat(r.clone()); } E.B => { return 0; } } }
+    fn tailc(own self) -> i64 { match self { E.A(ref r) => eat(r.clone()), E.B => 0 } }
+    fn gcall(own self) -> i64 { match self { E.A(ref r) => { return eatg(r.clone(), 7); } E.B => { return 0; } } }
+    fn stmt(own self) -> i64 { match self { E.A(ref r) => { say(r.clone()); return 1; } E.B => { return 0; } } }
+    fn iflet(own self) -> i64 { if let E.A(ref r) = self { return eat(r.clone()); } return 0; }
+    fn opt(own self) -> Option[R] { match self { E.A(ref r) => { return Some(r.clone()); } E.B => { return None; } } }
+    fn cid(own self) -> i64 { match self { E.A(ref r) => { let q = id(r.clone()); return q.id; } E.B => { return 0; } } }
+    fn ckeep(own self, v: mut ref Vec[R]) -> i64 { match self { E.A(ref r) => { keep(v, r.clone()); return 1; } E.B => { return 0; } } }
 }
 fn main() {
     println("call");  { let a: E = E.A(mk(1)); println(f"  x{a.call()}") }

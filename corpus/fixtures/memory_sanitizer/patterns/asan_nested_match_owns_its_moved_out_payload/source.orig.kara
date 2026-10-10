@@ -1,0 +1,22 @@
+enum Ve { A(String), B }
+impl Drop for Ve { fn drop(mut ref self) { println("dVe") } }
+fn mkVe(n: i64) -> Ve { return Ve.A(f"payloadpayload{n}") }
+fn sink(s: String) -> i64 { return s.len() }
+
+#[allow(partial_move_of_drop_enum)]
+fn main() {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 3 {
+        println(f"fstr[{match mkVe(i) { Ve.A(s) => { s } Ve.B => { "none".to_string() } }}]");
+        total = total + sink(match mkVe(i) { Ve.A(s) => { s } Ve.B => { "none".to_string() } });
+        let v = mkVe(i);
+        println(f"named[{match v { Ve.A(s) => { s } Ve.B => { "none".to_string() } }}]");
+        let out = match mkVe(i) { Ve.A(s) => { s } Ve.B => { "none".to_string() } };
+        println(f"let[{out}]");
+        let plain = f"plainplainplain{i}";
+        println(f"whole[{match plain { t => { t } }}]");
+        i = i + 1;
+    }
+    println(f"total {total}");
+}

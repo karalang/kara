@@ -1,12 +1,21 @@
+#[derive(Clone)]
 enum Hc { Full(String), Empty }
+#[derive(Clone)]
 enum Hv { Vs(Vec[String]), Vi(Vec[i64]), E }
+#[derive(Clone)]
 struct W { s: String, n: i64 }
+#[derive(Clone)]
 enum Hw { Wr(W), E }
 shared struct Node { v: i64 }
+#[derive(Clone)]
 struct Wn { n: Node, s: String }
+#[derive(Clone)]
 enum Hn { Wn(Wn), E }
+#[derive(Clone)]
 enum Hm { M(Map[i64, String]), E }
+#[derive(Clone)]
 enum Ht { T((String, i64)), E }
+#[derive(Clone)]
 enum Hk { K { a: String, b: Vec[String] }, E }
 fn hs(s: own String) -> String { s + "-heap-string-long-enough" }
 fn gr(h: ref Hc) -> i64 { match h { Hc.Full(s) => s.len(), Hc.Empty => 0 } }
@@ -19,18 +28,18 @@ fn gk(h: ref Hk) -> i64 { match h { Hk.K { a, b } => a.len() + b.len(), Hk.E => 
 fn eat(h: Hc) -> i64 { gr(h) }
 struct Box1 { h: Hc }
 fn main() {
-    { let h = Hc.Full(hs("ab")); let g = h; println(f"c1 {gr(g)} {gr(h)}"); }
-    { let h = Hv.Vs([hs("a"), hs("b")]); let g = h; println(f"c2 {gv(g)} {gv(h)}"); }
-    { let h = Hv.Vi([7, 8]); let g = h; println(f"c3 {gv(g)} {gv(h)}"); }
-    { let h = Hw.Wr(W { s: hs("w"), n: 3 }); let g = h; println(f"c4 {gw(g)} {gw(h)}"); }
-    { let h = Hn.Wn(Wn { n: Node { v: 5 }, s: hs("n") }); let g = h; println(f"c5 {gn(g)} {gn(h)}"); }
-    { let mut m: Map[i64, String] = Map.new(); m.insert(1, hs("m")); let h = Hm.M(m); let g = h; println(f"c6 {gm(g)} {gm(h)}"); }
-    { let h = Ht.T((hs("t"), 2)); let g = h; println(f"c8 {gt(g)} {gt(h)}"); }
-    { let h = Hk.K { a: hs("k"), b: [hs("x")] }; let g = h; println(f"c10 {gk(g)} {gk(h)}"); }
-    { let h = Hc.Full(hs("ab")); let n = eat(h); println(f"c11 {n} {gr(h)}"); }
-    { let h = Hc.Full(hs("ab")); let b = Box1 { h: h }; println(f"c12 {gr(b.h)} {gr(h)}"); }
-    { let h = Hc.Empty; let g = h; println(f"c13 {gr(g)} {gr(h)}"); }
-    { let h = Hc.Full(hs("ab")); let g = h; let k = h; println(f"c15 {gr(g)} {gr(k)} {gr(h)}"); }
-    { let mut v: Vec[Hc] = Vec.new(); let h = Hc.Full(hs("ab")); v.push(h); println(f"c16 {gr(v[0])} {gr(h)}"); }
+    { let h = Hc.Full(hs("ab")); let g = h.clone(); println(f"c1 {gr(g)} {gr(h)}"); }
+    { let h = Hv.Vs([hs("a"), hs("b")]); let g = h.clone(); println(f"c2 {gv(g)} {gv(h)}"); }
+    { let h = Hv.Vi([7, 8]); let g = h.clone(); println(f"c3 {gv(g)} {gv(h)}"); }
+    { let h = Hw.Wr(W { s: hs("w"), n: 3 }); let g = h.clone(); println(f"c4 {gw(g)} {gw(h)}"); }
+    { let h = Hn.Wn(Wn { n: Node { v: 5 }, s: hs("n") }); let g = h.clone(); println(f"c5 {gn(g)} {gn(h)}"); }
+    { let mut m: Map[i64, String] = Map.new(); m.insert(1, hs("m")); let h = Hm.M(m); let g = h.clone(); println(f"c6 {gm(g)} {gm(h)}"); }
+    { let h = Ht.T((hs("t"), 2)); let g = h.clone(); println(f"c8 {gt(g)} {gt(h)}"); }
+    { let h = Hk.K { a: hs("k"), b: [hs("x")] }; let g = h.clone(); println(f"c10 {gk(g)} {gk(h)}"); }
+    { let h = Hc.Full(hs("ab")); let n = eat(h.clone()); println(f"c11 {n} {gr(h)}"); }
+    { let h = Hc.Full(hs("ab")); let b = Box1 { h: h.clone() }; println(f"c12 {gr(b.h)} {gr(h)}"); }
+    { let h = Hc.Empty; let g = h.clone(); println(f"c13 {gr(g)} {gr(h)}"); }
+    { let h = Hc.Full(hs("ab")); let g = h.clone(); let k = h.clone(); println(f"c15 {gr(g)} {gr(k)} {gr(h)}"); }
+    { let mut v: Vec[Hc] = Vec.new(); let h = Hc.Full(hs("ab")); v.push(h.clone()); println(f"c16 {gr(v[0])} {gr(h)}"); }
     println("end")
 }

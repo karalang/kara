@@ -1,5 +1,7 @@
+#[derive(Clone)]
 struct R { id: i64, v: Vec[String] }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+#[derive(Clone)]
 enum E { A(R), B }
 
 fn mk(n: i64) -> E {
@@ -38,7 +40,7 @@ fn leg_whilelet() {
 fn leg_letelse() {
     let mut xs: Vec[E] = Vec.new();
     xs.push(mk(3));
-    let E.A(r) = xs[0] else { println("none"); return }
+    let E.A(r) = xs[0].clone() else { println("none"); return }
     println(f"n{r.id} {r.v.len()}");
 }
 

@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: '{keykeykeykeykey: 1}' v2 Display: collections print no type prefix (design.md §9 'A value renders the same at every depth'; review thread decision 2026-10-08) e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "ddae1ab1c+local"
+classified_with = "28b4fa5b9"
 model_rev = "629c2395"

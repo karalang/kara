@@ -11,5 +11,5 @@ rules = []
 backends = []
 env = {}
 bucket = "b-fix-incomplete:borrow_projection_copy"
-classified_with = "22b63d46f+local"
+classified_with = "28b4fa5b9"
 model_rev = "629c2395"

@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 enum Tk { A, Id(String), Num(i64) }
 struct Sp { tok: Tk, off: i64 }
 struct P { toks: Vec[Sp], pos: i64 }

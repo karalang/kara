@@ -1,0 +1,43 @@
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
+fn eat(r: own R) -> i64 { return r.id; }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("  dE") } }
+enum N { A(R), B }
+struct W { e: E }
+impl E {
+    fn read(own self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn wild(own self) -> i64 { match self { E.A(_) => { return 1; } E.B => { return 0; } } }
+    fn iflet(own self) -> i64 { if let E.A(r) = self { return r.id; } return 0; }
+    fn call(own self) -> i64 { match self { E.A(r) => { return eat(r); } E.B => { return 0; } } }
+    fn me(own self) -> E { return self; }
+    fn none(own self) -> i64 { return 5 }
+    fn letself(own self) -> i64 { let e = self; match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+    fn ret_self(own self) -> E { return self }
+    fn wrap(own self) -> W { return W { e: self } }
+    fn refm(ref self) -> i64 { match self { E.A(r) => { return r.id; } E.B => { return 0; } } }
+}
+impl N {
+    fn read(own self) -> i64 { match self { N.A(r) => { return r.id; } N.B => { return 0; } } }
+    fn out(own self) -> R { match self { N.A(r) => { return r; } N.B => { return mk(0); } } }
+}
+fn f_read(e: own E) -> i64 { match e { E.A(r) => { return r.id; } E.B => { return 0; } } }
+fn main() {
+    println("named/read");   { let a: E = E.A(mk(1)); println(f"  x{a.read()}") }
+    println("temp/read");    { println(f"  x{E.A(mk(2)).read()}") }
+    println("named/wild");   { let a: E = E.A(mk(3)); println(f"  x{a.wild()}") }
+    println("named/iflet");  { let a: E = E.A(mk(4)); println(f"  x{a.iflet()}") }
+    println("chain/read");   { println(f"  x{E.A(mk(5)).me().read()}") }
+    println("named/call");   { let a: E = E.A(mk(6)); println(f"  x{a.call()}") }
+    println("named/none");   { let a: E = E.A(mk(7)); println(f"  x{a.none()}") }
+    println("named/letself");{ let a: E = E.A(mk(8)); println(f"  x{a.letself()}") }
+    println("ret_self");     { let a: E = E.A(mk(9)); let b: E = a.ret_self(); println("  got") }
+    println("wrap");         { let a: E = E.A(mk(10)); let w: W = a.wrap(); println("  got") }
+    println("refm");         { let a: E = E.A(mk(11)); println(f"  x{a.refm()}") }
+    println("plain");        { let a: E = E.A(mk(12)); println("  x12") }
+    println("param");        { let a: E = E.A(mk(13)); println(f"  x{f_read(a)}") }
+    println("nodrop/read");  { let a: N = N.A(mk(14)); println(f"  x{a.read()}") }
+    println("nodrop/out");   { let a: N = N.A(mk(15)); let r: R = a.out(); println(f"  x{r.id}") }
+    println("end");
+}

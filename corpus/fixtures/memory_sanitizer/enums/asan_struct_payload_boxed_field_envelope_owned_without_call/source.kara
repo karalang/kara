@@ -1,4 +1,5 @@
 
+#[derive(Copy)]
 struct W { o: Option[Option[i64]] }
 struct V { a: i64, o: Option[Option[i64]] }
 struct S { o: Option[Option[String]] }

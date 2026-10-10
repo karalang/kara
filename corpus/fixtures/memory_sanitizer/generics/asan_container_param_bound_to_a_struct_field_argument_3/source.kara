@@ -1,7 +1,7 @@
 
 struct Bag[=T] { xs: Vec[T] }
-fn first[T](v: ref Vec[T]) -> T { return v[0]; }
-impl[T] Bag[T] {
+fn first[T: Clone](v: ref Vec[T]) -> T { return v[0].clone(); }
+impl[T: Clone] Bag[T] {
     fn head(ref self) -> T { return first(self.xs); }
 }
 fn main() {

@@ -1,5 +1,5 @@
 
-fn gsum[T](s: Slice[T]) -> T { s[0] }
+fn gsum[T: Clone](s: Slice[T]) -> T { s[0].clone() }
 fn main() {
     let vs: Vec[String] = ["autopar-first-long-payload-here", "autopar-second-long-payload"];
     println(f"{gsum(vs)}");

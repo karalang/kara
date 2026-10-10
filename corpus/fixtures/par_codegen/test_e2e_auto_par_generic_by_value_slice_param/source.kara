@@ -1,5 +1,5 @@
 
-fn gsum[T](s: Slice[T]) -> T { s[0] }
+fn gsum[T: Clone](s: Slice[T]) -> T { s[0].clone() }
 fn glen[T](s: Slice[T]) -> i64 { s.len() }
 fn geti() -> i64 { 1 }
 fn main() {

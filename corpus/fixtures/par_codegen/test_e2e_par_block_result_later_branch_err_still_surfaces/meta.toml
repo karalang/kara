@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "expected.out from design.md Failure: only `?` in a branch makes an error exit, so a branch whose `let` holds an `Err` value does not change the join, which is `Ok(7)`; legacy overrode the join with the Err (Thread B, 2026-10-09) e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "ddae1ab1c+local"
+classified_with = "28b4fa5b9"
 model_rev = "629c2395"

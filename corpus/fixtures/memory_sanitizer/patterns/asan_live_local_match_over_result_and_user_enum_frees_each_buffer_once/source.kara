@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 enum E { A(String), B }
 fn main() {
     let mut i: i64 = 0;

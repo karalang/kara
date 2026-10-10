@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "§6.1/§7: the tuple parameter drops at the callee's end, which releases the last handle of the shared enum and runs R's body; legacy leaks it. (kata thread, 2026-10-09) e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "ddae1ab1c+local"
+classified_with = "28b4fa5b9"
 model_rev = "629c2395"

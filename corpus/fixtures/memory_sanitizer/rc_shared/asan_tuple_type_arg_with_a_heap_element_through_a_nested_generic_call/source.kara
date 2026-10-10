@@ -1,20 +1,20 @@
 
 struct Bag[=T] { xs: Vec[T] }
 
-impl[T] Bag[T] {
+impl[T: Clone] Bag[T] {
     fn sw(mut ref self, i: i64, j: i64) { self.xs.swap(i, j); }
     fn mid(mut ref self) { self.sw(0, 1); }
     fn outer(mut ref self) { self.mid(); }
-    fn at(ref self, i: i64) -> T { return self.xs[i]; }
+    fn at(ref self, i: i64) -> T { return self.xs[i].clone(); }
 }
 
 fn main() {
-    let mut n = 0i64;
-    let mut i = 0i64;
-    while i < 40i64 {
+    let mut n = 0;
+    let mut i = 0;
+    while i < 40 {
         let mut s: Bag[(String, i64)] = Bag { xs: Vec.new() };
-        s.xs.push(("x" + "y", 1i64));
-        s.xs.push(("p" + "q", 2i64));
+        s.xs.push(("x" + "y", 1));
+        s.xs.push(("p" + "q", 2));
         s.outer();
         let s0 = s.at(0);
         n = n + s0.1;

@@ -1,0 +1,34 @@
+
+struct R { id: i64, name: String }
+
+fn mks() -> Vec[(String, i64)] { return [(f"a{1}", 1), (f"b{2}", 2)]; }
+fn mkr() -> Vec[(R, i64)] {
+    return [(R { id: 1, name: f"a{1}" }, 1), (R { id: 2, name: f"b{2}" }, 2)];
+}
+fn ret_r(v: Vec[(R, i64)]) -> R { return v[0].0; }
+
+fn main() {
+    let v = mks();
+    let mut w = v[0].0;
+    w = w + "X";
+    // the binding owns a copy; the container's element is untouched
+    println(w);
+    println(v[0].0);
+
+    let mut o: Vec[String] = Vec.new();
+    o.push(v[1].0);
+    println(o[0]);
+    println(v[1].0);
+
+    let c = true;
+    let d = if c { v[0].0 } else { v[1].0 };
+    println(d);
+    println(v[0].0);
+
+    // a struct member, and the row's own escaping shape
+    let r = ret_r(mkr());
+    println(r.name);
+    let s = mkr();
+    let t = s[1].0;
+    println(t.name);
+}

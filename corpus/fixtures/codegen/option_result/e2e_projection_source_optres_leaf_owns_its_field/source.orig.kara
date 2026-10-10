@@ -1,0 +1,69 @@
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct HoOpt { a: R, b: Option[R] }
+struct WrapR { inner: HoRes }
+struct WrapO { inner: HoOpt }
+struct Outer { h: WrapR }
+fn eat(x: own R) { println(f"  eat{x.id}") }
+
+fn unused()  { let w = WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}") }
+fn rmatch()  { let w = WrapR { inner: HoRes { a: mk(2), b: Result.Ok(mk(102)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}");
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn rlive()   { let w = WrapR { inner: HoRes { a: mk(3), b: Result.Ok(mk(103)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}");
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") }
+               println(f"  w{w.inner.a.id}") }
+fn ounused() { let w = WrapO { inner: HoOpt { a: mk(4), b: Option.Some(mk(104)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}") }
+fn omatch()  { let w = WrapO { inner: HoOpt { a: mk(5), b: Option.Some(mk(105)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}");
+               match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
+fn olive()   { let w = WrapO { inner: HoOpt { a: mk(6), b: Option.Some(mk(106)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}");
+               match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") }
+               println(f"  w{w.inner.a.id}") }
+fn two()     { let g = Outer { h: WrapR { inner: HoRes { a: mk(7), b: Result.Ok(mk(107)) } } }; let HoRes { a, b } = g.h.inner; println(f"  rd{a.id}");
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn rcall()   { let w = WrapR { inner: HoRes { a: mk(8), b: Result.Ok(mk(108)) } }; let HoRes { a, b } = w.inner;
+               match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
+fn resc()    { let w = WrapR { inner: HoRes { a: mk(9), b: Result.Ok(mk(109)) } }; let HoRes { a, b } = w.inner;
+               let g = match b { Result.Ok(r) => r, Result.Err(e) => mk(0) }; println(f"  got{g.id}") }
+fn rrebind() { let w = WrapR { inner: HoRes { a: mk(10), b: Result.Ok(mk(110)) } }; let HoRes { a, b } = w.inner; let c = b;
+               match c { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn ocall()   { let w = WrapO { inner: HoOpt { a: mk(11), b: Option.Some(mk(111)) } }; let HoOpt { a, b } = w.inner;
+               match b { Option.Some(r) => eat(r), Option.None => println("  none") } }
+fn oesc()    { let w = WrapO { inner: HoOpt { a: mk(12), b: Option.Some(mk(112)) } }; let HoOpt { a, b } = w.inner;
+               let g = match b { Option.Some(r) => r, Option.None => mk(0) }; println(f"  got{g.id}") }
+fn orebind() { let w = WrapO { inner: HoOpt { a: mk(13), b: Option.Some(mk(113)) } }; let HoOpt { a, b } = w.inner; let c = b;
+               match c { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
+fn wild()    { let w = WrapR { inner: HoRes { a: mk(14), b: Result.Ok(mk(114)) } }; let HoRes { a, b: _ } = w.inner; println(f"  rd{a.id}") }
+fn awild()   { let w = WrapR { inner: HoRes { a: mk(15), b: Result.Ok(mk(115)) } }; let HoRes { a: _, b } = w.inner;
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn nest()    { let w = WrapR { inner: HoRes { a: mk(16), b: Result.Ok(mk(116)) } };
+               { let HoRes { a, b } = w.inner; println(f"  rd{a.id}") }
+               println("  outer") }
+fn errs()    { let w = WrapR { inner: HoRes { a: mk(17), b: Result.Err("e17") } }; let HoRes { a, b } = w.inner;
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn livecall(){ let w = WrapR { inner: HoRes { a: mk(18), b: Result.Ok(mk(118)) } }; let HoRes { a, b } = w.inner;
+               match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") }
+               println(f"  w{w.inner.a.id}") }
+
+fn main() {
+  println("unused");   unused();
+  println("rmatch");   rmatch();
+  println("rlive");    rlive();
+  println("ounused");  ounused();
+  println("omatch");   omatch();
+  println("olive");    olive();
+  println("two");      two();
+  println("rcall");    rcall();
+  println("resc");     resc();
+  println("rrebind");  rrebind();
+  println("ocall");    ocall();
+  println("oesc");     oesc();
+  println("orebind");  orebind();
+  println("wild");     wild();
+  println("awild");    awild();
+  println("nest");     nest();
+  println("errs");     errs();
+  println("livecall"); livecall();
+  println("done")
+}

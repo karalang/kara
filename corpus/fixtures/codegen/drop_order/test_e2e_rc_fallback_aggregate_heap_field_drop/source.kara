@@ -1,13 +1,14 @@
 
+#[derive(Clone)]
 struct Named { id: i64, label: String }
 fn sink_t(t: (i64, String)) { }
 fn sink_s(n: Named) { }
 fn main() {
     let cond: bool = false;
-    let t = (1i64, f"tup-{1}");
-    if cond { sink_t(t); }
+    let t = (1, f"tup-{1}");
+    if cond { sink_t(t.clone()); }
     println(t.1);
     let s = Named { id: 2, label: f"st-{2}" };
-    if cond { sink_s(s); }
+    if cond { sink_s(s.clone()); }
     println(s.label);
 }

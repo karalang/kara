@@ -1,19 +1,20 @@
 
+#[derive(Clone)]
 struct R { id: i64, name: String }
 struct Wt { pair: (String, i64), k: i64 }
 struct Wr { pr: (R, i64), k: i64 }
 
 fn sink(s: String) -> i64 { return s.len(); }
 
-fn ret(t: ref Wt) -> String { return t.pair.0; }
-fn tail(t: ref Wt) -> String { t.pair.0 }
-fn bound(t: ref Wt) -> String { let s = t.pair.0; return s; }
-fn arg(t: ref Wt) -> i64 { return sink(t.pair.0); }
+fn ret(t: ref Wt) -> String { return t.pair.0.clone(); }
+fn tail(t: ref Wt) -> String { t.pair.0.clone() }
+fn bound(t: ref Wt) -> String { let s = t.pair.0.clone(); return s; }
+fn arg(t: ref Wt) -> i64 { return sink(t.pair.0.clone()); }
 fn scalar(t: ref Wt) -> i64 { return t.pair.1; }
-fn structleaf(t: ref Wr) -> R { return t.pr.0; }
+fn structleaf(t: ref Wr) -> R { return t.pr.0.clone(); }
 fn owned(t: own Wt) -> String { return t.pair.0; }
 
-impl Wt { fn peek(ref self) -> String { return self.pair.0; } }
+impl Wt { fn peek(ref self) -> String { return self.pair.0.clone(); } }
 
 fn main() {
     let v = Wt { pair: (f"n{41}", 7), k: 2 };

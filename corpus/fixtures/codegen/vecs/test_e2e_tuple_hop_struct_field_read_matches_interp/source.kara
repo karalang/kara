@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 enum K { A(String), B }
 struct H { s: String, n: i64 }
 struct G { k: K, n: i64 }

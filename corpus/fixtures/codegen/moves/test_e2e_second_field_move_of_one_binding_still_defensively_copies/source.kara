@@ -1,14 +1,15 @@
 
 enum Cmd { Clear(Vec[String]) }
+#[derive(Clone)]
 struct Doc { lines: Vec[String] }
 struct Ed { doc: Doc }
 fn apply(d: mut ref Doc, c: own Cmd) -> Cmd {
     match c {
         Clear(old) => {
             let mut snap: Vec[String] = Vec.new();
-            for i in 0..d.lines.len() { snap.push(d.lines[i]); }
+            for i in 0..d.lines.len() { snap.push(d.lines[i].clone()); }
             d.lines.clear();
-            for i in 0..old.len() { d.lines.push(old[i]); }
+            for i in 0..old.len() { d.lines.push(old[i].clone()); }
             Cmd.Clear(snap)
         }
     }
@@ -24,9 +25,9 @@ fn main() {
     l.push(a);
     let mut e = Ed { doc: Doc { lines: l } };
     let mut snapshot: Vec[String] = Vec.new();
-    let cur = e.doc;
-    for i in 0..cur.lines.len() { snapshot.push(cur.lines[i]); }
+    let cur = e.doc.clone();
+    for i in 0..cur.lines.len() { snapshot.push(cur.lines[i].clone()); }
     let _inv = apply(mut e.doc, Cmd.Clear(snapshot));
-    let after = e.doc;
+    let after = e.doc.clone();
     println(f"[{render(e.doc)}] lines={after.lines.len()}")
 }

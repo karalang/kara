@@ -1,3 +1,4 @@
+#[derive(Clone)]
 struct P { a: String, b: String }
 enum K { A(String), B }
 struct H { o: Option[String], n: i64 }
@@ -36,15 +37,15 @@ fn main() {
     match hp.k.unwrap() { K.A(s) => println(s), K.B => println("b") }
     println(hp.q.unwrap().b);
     let g = [mk(16)];
-    println(g[0].o.unwrap());
-    println(g[0].o.unwrap());
+    println(g[0].o.clone().unwrap());
+    println(g[0].o.clone().unwrap());
     println(g[0].o.is_some());
     let v = vec![Hp { p: Some(P { a: f"aaa-string-longer-than-sso-17", b: f"b" }), k: None, q: Err(0) }];
-    println(v[0].p.unwrap().a);
+    println(v[0].p.clone().unwrap().a);
     println(v[0].p.is_some());
     let w = vec![Hr { r: Ok(f"ok-string-longer-than-sso-18"), e: Err(f"err-string-longer-than-sso-19") }];
-    println(w[0].r.unwrap());
-    println(w[0].e.unwrap_or(f"dflt"));
-    println(w[0].e.unwrap_err());
+    println(w[0].r.clone().unwrap());
+    println(w[0].e.clone().unwrap_or(f"dflt"));
+    println(w[0].e.clone().unwrap_err());
     println("end")
 }

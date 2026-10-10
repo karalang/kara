@@ -1,0 +1,27 @@
+
+struct Node {
+    val: i64,
+    mut kids: Vec[Node],
+}
+
+impl Node {
+    fn adopt(mut ref self, child: own Node) {
+        self.kids.push(child);
+    }
+}
+
+fn total(n: Node) -> i64 {
+    let mut sum = n.val;
+    for k in n.kids {
+        sum = sum + total(k);
+    }
+    sum
+}
+
+fn main() {
+    let mut root = Node { val: 1, kids: Vec.new() };
+    let leaf = Node { val: 2, kids: Vec.new() };
+    root.adopt(leaf);
+    let t = total(root);
+    println(f"total: {t}");
+}

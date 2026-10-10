@@ -1,0 +1,13 @@
+
+struct Doc { lines: Vec[String] }
+struct Ed { doc: Doc }
+fn count(d: ref Doc) -> i64 { return d.lines.len(); }
+fn text(d: ref Doc) -> String { return d.lines[0]; }
+fn main() {
+    let mut l: Vec[String] = Vec.new();
+    l.push("alphaalphaalpha");
+    let mut e = Ed { doc: Doc { lines: l } };
+    let cur = e.doc;
+    let after = e.doc;
+    println(f"{cur.lines[0]} {after.lines[0]} [{text(e.doc)}] {count(e.doc)}");
+}

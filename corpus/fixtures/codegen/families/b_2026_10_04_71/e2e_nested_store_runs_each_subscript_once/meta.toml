@@ -12,7 +12,7 @@ backends = []
 env = {}
 note = "§7.5: an assignment evaluates the place's subscripts once, before the value (legacy evaluates the value first and a compound target twice); `m[k] = v` on a missing key inserts (Gowtham, 2026-10-08 14:14Z). Equals the drop model's output. (kata thread, 2026-10-09) e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "ddae1ab1c+local"
+classified_with = "28b4fa5b9"
 model_exit = 0
 model_rev = "629c2395"
 model_verdict = "DIFF"

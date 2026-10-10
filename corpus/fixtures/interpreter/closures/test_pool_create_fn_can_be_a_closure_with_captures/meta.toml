@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "v2 accepts: core-semantics §9.3, an escaping closure captures by move and a non-escaping one may capture by ref; legacy refused it (E0508). No v2 oracle yet."
 bucket = "mir-gap:runtime: in main at bbN[term]: call of unknown function Pool[String].new"
-classified_with = "22b63d46f+local"
+classified_with = "28b4fa5b9"
 legacy_expect = "error:E0508"
 model_rev = "629c2395"

@@ -1,8 +1,11 @@
+#[derive(Clone)]
 struct R { id: i64, tag: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
 fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+#[derive(Clone)]
 struct HoRes { a: R, b: Result[R, String] }
 struct HoErr { a: R, b: Result[String, R] }
+#[derive(Clone)]
 struct HoOpt { a: R, b: Option[R] }
 struct WrapR { inner: HoRes }
 struct WrapE { inner: HoErr }
@@ -12,7 +15,7 @@ fn eat(x: own R) { println(f"  eat{x.id}") }
 
 fn rmatch(w: own WrapR)  { let HoRes { a, b } = w.inner; println(f"  rd{a.id}");
                        match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
-fn rlive(w: own WrapR)   { let HoRes { a, b } = w.inner; println(f"  rd{a.id}");
+fn rlive(w: own WrapR)   { let HoRes { a, b } = w.inner.clone(); println(f"  rd{a.id}");
                        match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") }
                        println(f"  w{w.inner.a.id}") }
 fn two(o: own Outer)     { let HoRes { a, b } = o.h.inner; println(f"  rd{a.id}");
@@ -25,12 +28,12 @@ fn errs(w: own WrapE)    { let HoErr { a, b } = w.inner;
 fn wild(w: own WrapR)    { let HoRes { a, b: _ } = w.inner; println(f"  rd{a.id}") }
 fn awild(w: own WrapR)   { let HoRes { a: _, b } = w.inner;
                        match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
-fn livecall(w: own WrapR){ let HoRes { a, b } = w.inner;
+fn livecall(w: own WrapR){ let HoRes { a, b } = w.inner.clone();
                        match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") }
                        println(f"  w{w.inner.a.id}") }
 fn omatch(w: own WrapO)  { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}");
                        match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
-fn olive(w: own WrapO)   { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}");
+fn olive(w: own WrapO)   { let HoOpt { a, b } = w.inner.clone(); println(f"  rd{a.id}");
                        match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") }
                        println(f"  w{w.inner.a.id}") }
 fn ocall(w: own WrapO)   { let HoOpt { a, b } = w.inner;

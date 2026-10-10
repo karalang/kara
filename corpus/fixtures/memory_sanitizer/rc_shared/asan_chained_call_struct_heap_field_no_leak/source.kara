@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 struct N { name: String, id: i64 }
 impl N {
     fn relabel(self) -> N {
@@ -6,11 +7,11 @@ impl N {
     }
 }
 fn main() {
-    let mut i = 0i64;
-    let mut acc = 0i64;
-    while i < 50i64 {
+    let mut i = 0;
+    let mut acc = 0;
+    while i < 50 {
         let n = N { name: "seed string that is also quite long", id: i };
-        acc = acc + n.relabel().name.len() + n.relabel().id;
+        acc = acc + n.clone().relabel().name.len() + n.relabel().id;
         i = i + 1;
     }
     println(f"{acc}");

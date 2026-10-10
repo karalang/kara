@@ -15,6 +15,7 @@ shared enum Ex {
     Leaf,
 }
 
+#[derive(Clone)]
 enum Tok {
     Integer(i128, String),
     Word(String),

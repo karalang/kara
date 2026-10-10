@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'expected a clean typecheck for a valid Vector program; got: {:?}'"
 bucket = "mir-gap:runtime: in main at bbN[N]: Add on Agg([Int(N), Int(N), Int(N), Int(N)]) and Ag"
-classified_with = "22b63d46f+local"
+classified_with = "28b4fa5b9"
 model_rev = "629c2395"

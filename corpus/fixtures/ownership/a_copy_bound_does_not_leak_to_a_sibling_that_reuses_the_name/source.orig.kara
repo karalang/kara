@@ -1,0 +1,4 @@
+
+fn copyfn[T: Copy](x: T) -> i64 { let a = x; let b = x; return 1; }
+fn movefn[T](x: own T) -> i64 { let a = x; let b = x; return 2; }
+fn main() { println(f"{copyfn(7)}"); }

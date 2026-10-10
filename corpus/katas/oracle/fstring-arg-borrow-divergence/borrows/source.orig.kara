@@ -1,0 +1,45 @@
+// The divergence (FIXED by c8bce5d3 — this file is now a regression test that
+// must be REJECTED): the SAME owning call, written inside an f-string
+// interpolation, did not consume its argument.
+//
+// `consume(t)` is called twice on one `t`. By the declared signature that is a
+// use-after-move — and in statement position `karac check` says exactly that
+// (see rejected.kara). Before the fix this was accepted, and the destructor did
+// not run inside either call. `karac check` now reports the move; the output
+// below is what the accepted-but-wrong build printed:
+//
+//       consume sees: [hello-world-payload] len=19
+//       consume sees: [hello-world-payload] len=19
+//     DROP tearing down: [hello-world-payload]
+//     a=19
+//     b=19
+//     end of main
+//
+// Note where DROP lands: after BOTH calls, at `t`'s last use in the caller —
+// not inside the callee that declared ownership of it. Interp, JIT and codegen
+// all agree, exactly one drop, and nothing is poisoned under MallocScribble=1,
+// so this is a borrow rather than a use-after-free.
+
+struct Tracked {
+    s: String,
+}
+
+impl Drop for Tracked {
+    fn drop(mut ref self) {
+        println(f"DROP tearing down: [{self.s}]");
+    }
+}
+
+fn consume(t: own Tracked) -> i64 {
+    println(f"  consume sees: [{t.s}] len={t.s.len()}");
+    return t.s.len();
+}
+
+fn main() {
+    let t = Tracked { s: "hello-world-payload" };
+    let a = f"a={consume(t)}";
+    let b = f"b={consume(t)}";
+    println(a);
+    println(b);
+    println("end of main");
+}

@@ -1,0 +1,20 @@
+
+fn vfirst[T](v: ref Vec[T]) -> T { v[0] }
+fn geti() -> i64 { 1 }
+fn main() {
+    let vu8: Vec[u8] = [255u8, 1u8];
+    let vu16: Vec[u16] = [65535u16, 1u16];
+    let vu32: Vec[u32] = [4294967295u32, 1u32];
+    let vi8: Vec[i8] = [255u8 as i8, 1u8 as i8];
+    let a = geti();
+    let b = geti();
+    let u8v: u8 = vfirst(vu8);
+    let u16v: u16 = vfirst(vu16);
+    let u32v: u32 = vfirst(vu32);
+    let i8v: i8 = vfirst(vi8);
+    println(a + b);
+    println(u8v);
+    println(f"{u16v}");
+    println(u32v);
+    println(i8v);
+}

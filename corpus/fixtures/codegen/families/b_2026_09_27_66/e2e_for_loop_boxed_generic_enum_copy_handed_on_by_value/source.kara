@@ -1,4 +1,6 @@
+#[derive(Clone)]
 struct P { id: i64, s: String }
+#[derive(Clone)]
 enum Ho[T] { Full(T), Empty }
 fn mkp(i: i64) -> P { return P { id: i, s: "ab".to_string() + "cd" } }
 fn shows(h: own Ho[P]) { match h { Ho.Full(r) => println(f"s{r.id}{r.s}"), Ho.Empty => println("e") } }
@@ -18,36 +20,36 @@ fn main() {
     {
         let v = mkv(1, 2);
         let mut w: Vec[Ho[P]] = Vec.new();
-        for h in v { w.push(keep(h)) }
+        for h in v.clone().into_iter() { w.push(keep(h)) }
         println(f"n{v.len()}{w.len()}");
-        for x in w { shows(x) }
+        for x in w.into_iter() { shows(x) }
     }
     println("twice");
     {
         let v = mkv(3, 4);
-        for h in v { shows(h); shows(h) }
+        for h in v.into_iter() { shows(h.clone()); shows(h) }
     }
     println("bound");
     {
         let v = mkv(5, 6);
-        for h in v { let k = keep(h); println("got") }
+        for h in v.into_iter() { let k = keep(h); println("got") }
     }
     println("chain");
     {
         let v = mkv(7, 8);
-        for h in v { let k = keep(h); let j = keep(k); shows(j) }
+        for h in v.into_iter() { let k = keep(h); let j = keep(k); shows(j) }
     }
     println("mixed");
     {
         let v = mkv(9, 10);
         let mut w: Vec[Ho[P]] = Vec.new();
-        for h in v { w.push(keep(h)); shows(h) }
+        for h in v.into_iter() { w.push(keep(h.clone())); shows(h) }
         println(f"n{w.len()}")
     }
     println("pick");
     {
         let v = mkv(11, 12);
-        for h in v { let k = pick(h, Ho.Full(mkp(99))); shows(k) }
+        for h in v.into_iter() { let k = pick(h, Ho.Full(mkp(99))); shows(k) }
     }
     println("string");
     {
@@ -55,8 +57,8 @@ fn main() {
         v.push(Ho.Full("x".to_string() + "y"));
         v.push(Ho.Empty);
         let mut w: Vec[Ho[String]] = Vec.new();
-        for h in v { w.push(keept(h)); showt(h) }
-        for x in w { showt(x) }
+        for h in v.into_iter() { w.push(keept(h.clone())); showt(h) }
+        for x in w.into_iter() { showt(x) }
     }
     println("end")
 }

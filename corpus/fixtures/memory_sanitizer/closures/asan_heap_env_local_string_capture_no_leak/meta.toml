@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "§9.3: a returned closure escapes and captures `s` by move, so v2 runs it; legacy refused it (E0508). (kata thread, 2026-10-09) e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "ddae1ab1c+local"
+classified_with = "28b4fa5b9"
 legacy_expect = "error:E0508"
 model_rev = "629c2395"

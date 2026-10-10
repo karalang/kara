@@ -1,0 +1,21 @@
+struct R { id: i64, name: String }
+    impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}/{self.name}") } }
+    fn mk(i: i64) -> R { return R { id: i, name: f"n{i}" } }
+    struct Inner { r: R, q: R }
+    struct Outer { h: Inner, k: R }
+    struct P { a: R, m: Option[R] }
+    fn param(o: own Outer) { let x: R = o.k; println(f"  x={x.id}"); let Outer { h, k } = o; }
+    fn early(c: bool) -> i64 { let o: Outer = Outer { h: Inner { r: mk(18), q: mk(19) }, k: mk(20) }; if c { let x: R = o.k; return x.id } let Outer { h, k } = o; 0 }
+    fn main() {
+        println("bound");   { let o: Outer = Outer { h: Inner { r: mk(1), q: mk(2) }, k: mk(3) }; let x: R = o.k; println(f"  x={x.id}"); let Outer { h, k } = o; }
+        println("renamed"); { let o: Outer = Outer { h: Inner { r: mk(4), q: mk(5) }, k: mk(6) }; let x: R = o.k; println(f"  x={x.id}"); let Outer { h, k: kk } = o; }
+        println("inner");   { let o: Outer = Outer { h: Inner { r: mk(7), q: mk(8) }, k: mk(9) }; let x: Inner = o.h; println(f"  x={x.r.id}"); let Outer { h, k } = o; }
+        println("option");  { let o: P = P { a: mk(10), m: Some(mk(11)) }; let x: Option[R] = o.m; println("  x"); let P { a, m } = o; }
+        println("param");   param(Outer { h: Inner { r: mk(12), q: mk(13) }, k: mk(14) });
+        println("rebound"); { let o: Outer = Outer { h: Inner { r: mk(15), q: mk(16) }, k: mk(17) }; let x: R = o.k; println(f"  x={x.id}"); let o: Outer = Outer { h: Inner { r: mk(21), q: mk(22) }, k: mk(23) }; let Outer { h, k } = o; }
+        println("early");   println(f"  {early(true)}");
+        println("kept");    println(f"  {early(false)}");
+        println("wild");    { let o: Outer = Outer { h: Inner { r: mk(24), q: mk(25) }, k: mk(26) }; let x: R = o.k; println(f"  x={x.id}"); let Outer { h, k: _ } = o; }
+        println("end");
+    }
+    

@@ -1,5 +1,7 @@
 
+#[derive(Clone)]
 struct Inner { data: Vec[i64], n: i64 }
+#[derive(Clone)]
 enum E { Wrap(Inner), Empty }
 fn mk(x: i64) -> Vec[i64] {
     let mut v: Vec[i64] = Vec.new();
@@ -37,7 +39,7 @@ fn main() {
         let got = unwrap_or(e3);
         // consuming call, then re-use the (copy-supported, callee-owned) original
         let e4 = E.Wrap(Inner { data: mk(i), n: 4 });
-        let a = sink(e4);
+        let a = sink(e4.clone());
         let b = match e4 {
             Wrap(inner) => inner.n,
             Empty => 0,

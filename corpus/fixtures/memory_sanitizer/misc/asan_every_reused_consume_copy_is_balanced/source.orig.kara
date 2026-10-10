@@ -1,0 +1,52 @@
+
+enum Cmd { Clear(Vec[String]) }
+struct Doc { lines: Vec[String] }
+struct Ed { doc: Doc }
+fn apply(d: mut ref Doc, c: own Cmd) -> Cmd {
+    match c {
+        Clear(old) => {
+            let mut snap: Vec[String] = Vec.new();
+            for i in 0..d.lines.len() { snap.push(d.lines[i]); }
+            d.lines.clear();
+            for i in 0..old.len() { d.lines.push(old[i]); }
+            Cmd.Clear(snap)
+        }
+    }
+}
+fn render(d: ref Doc) -> String {
+    let mut s = String.new();
+    for i in 0..d.lines.len() { s.push_str(d.lines[i]); }
+    s
+}
+fn eat(s: String) -> i64 { return s.len(); }
+fn main() {
+    let mut l: Vec[String] = Vec.new();
+    let mut a = String.new(); a.push_str("ALPHAALPHAALPHA");
+    l.push(a);
+    let mut e = Ed { doc: Doc { lines: l } };
+    let mut snapshot: Vec[String] = Vec.new();
+    let cur = e.doc;
+    for i in 0..cur.lines.len() { snapshot.push(cur.lines[i]); }
+    let _inv = apply(mut e.doc, Cmd.Clear(snapshot));
+    let after = e.doc;
+    println(f"[{render(e.doc)}] lines={after.lines.len()}");
+
+    let b = "betabetabetabeta";
+    let x = eat(b);
+    let y = eat(b);
+    let z = eat(b);
+    println(f"{x} {y} {z} {b.len()}");
+
+    let mut k = 0;
+    let mut t = 0;
+    while k < 10 {
+        let mut v: Vec[String] = Vec.new();
+        v.push("gammagammagamma");
+        let first = v;
+        let second = v;
+        t = t + first.len() + second.len();
+        k = k + 1;
+    }
+    println(f"{t}");
+    println("end");
+}

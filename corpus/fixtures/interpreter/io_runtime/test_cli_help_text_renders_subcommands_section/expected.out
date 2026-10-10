@@ -1,0 +1,13 @@
+greet
+
+USAGE:
+    greet <SUBCOMMAND>
+
+SUBCOMMANDS:
+    upper  uppercase
+    lower  lowercase
+
+OPTIONS:
+    -h, --help     Print help
+    -V, --version  Print version
+

@@ -1,8 +1,11 @@
+#[derive(Clone)]
 struct R { id: i64, v: Vec[i64] }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+#[derive(Clone)]
 enum E { A(R), B }
 impl Drop for E { fn drop(mut ref self) { println("dE") } }
 struct H { xs: Vec[E] }
+#[derive(Clone)]
 struct W { r: R, k: i64 }
 
 fn mkr(n: i64) -> R { let mut v: Vec[i64] = Vec.new(); v.push(n); return R { id: n, v: v } }
@@ -15,7 +18,7 @@ fn leg_bare() {
     println("bare");
     let mut v: Vec[E] = Vec.new();
     v.push(mk(1));
-    let E.A(r) = v[0] else { println("no"); return }
+    let E.A(ref r) = v[0].clone() else { println("no"); return }
     println(f"got {r.id + r.v.len()}");
     println("bare end");
 }
@@ -25,7 +28,7 @@ fn leg_live_after() {
     println("liveafter");
     let mut v: Vec[E] = Vec.new();
     v.push(mk(2));
-    let E.A(r) = v[0] else { println("no"); return }
+    let E.A(ref r) = v[0].clone() else { println("no"); return }
     println(f"got {r.id + r.v.len()}");
     println(f"len {v.len()}");
     println("liveafter end");
@@ -37,7 +40,7 @@ fn leg_field() {
     let mut xs: Vec[E] = Vec.new();
     xs.push(mk(3));
     let h = H { xs: xs };
-    let E.A(r) = h.xs[0] else { println("no"); return }
+    let E.A(ref r) = h.xs[0].clone() else { println("no"); return }
     println(f"got {r.id + r.v.len()}");
     println("field end");
 }
@@ -48,7 +51,7 @@ fn leg_two() {
     let mut v: Vec[E] = Vec.new();
     v.push(mk(4));
     v.push(mk(5));
-    let E.A(r) = v[1] else { println("no"); return }
+    let E.A(ref r) = v[1].clone() else { println("no"); return }
     println(f"got {r.id + r.v.len()}");
     println("two end");
 }
@@ -57,7 +60,7 @@ fn leg_opt() {
     println("opt");
     let mut v: Vec[Option[R]] = Vec.new();
     v.push(Option.Some(mkr(6)));
-    let Option.Some(r) = v[0] else { println("no"); return }
+    let Option.Some(r) = v[0].clone() else { println("no"); return }
     println(f"got {r.id + r.v.len()}");
     println("opt end");
 }
@@ -66,7 +69,7 @@ fn leg_struct() {
     println("struct");
     let mut v: Vec[W] = Vec.new();
     v.push(mkw(7));
-    let W { r, k } = v[0] else { println("no"); return }
+    let W { r, k } = v[0].clone() else { println("no"); return }
     println(f"got {r.id + k}");
     println("struct end");
 }
@@ -74,7 +77,7 @@ fn leg_struct() {
 #[allow(partial_move_of_drop_enum)]
 fn leg_temp() {
     println("temp");
-    let E.A(r) = mkv(8)[0] else { println("no"); return }
+    let E.A(ref r) = mkv(8)[0].clone() else { println("no"); return }
     println(f"got {r.id + r.v.len()}");
     println("temp end");
 }
@@ -92,7 +95,7 @@ fn leg_elsetaken() {
     println("elsetaken");
     let mut v: Vec[E] = Vec.new();
     v.push(E.B);
-    let E.A(r) = v[0] else { println("no"); return }
+    let E.A(ref r) = v[0].clone() else { println("no"); return }
     println(f"got {r.id}");
 }
 

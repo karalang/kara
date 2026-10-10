@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "stmt-par groups (source.orig.kara lines): L324-L326 three fs.write of separate log files; L328-L330 three fs.read_to_string; L332-L334 three parses, one per file source edited: `.cloned()` after `Map.get` at line(s) 285, since `Map.get` returns `Option[ref V]` (docs/library/collections.md; Thread A's 7902786668). Legacy has no `Option.cloned`, so legacy.out stays the oracle. (kata thread, 2026-10-09)"
 bucket = "check-refuses:E0236"
-classified_with = "22b63d46f+local"
+classified_with = "28b4fa5b9"
 model_rev = "629c2395"

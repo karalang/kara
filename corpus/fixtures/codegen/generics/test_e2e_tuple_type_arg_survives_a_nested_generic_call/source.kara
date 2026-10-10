@@ -1,11 +1,11 @@
 
 struct Bag[=T] { xs: Vec[T] }
 
-impl[T] Bag[T] {
+impl[T: Clone] Bag[T] {
     fn sw(mut ref self, i: i64, j: i64) { self.xs.swap(i, j); }
     fn mid(mut ref self) { self.sw(0, 1); }
     fn outer(mut ref self) { self.mid(); }
-    fn at(ref self, i: i64) -> T { return self.xs[i]; }
+    fn at(ref self, i: i64) -> T { return self.xs[i].clone(); }
 }
 
 fn main() {

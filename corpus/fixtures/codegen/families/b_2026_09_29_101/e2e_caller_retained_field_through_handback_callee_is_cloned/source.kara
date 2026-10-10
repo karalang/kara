@@ -1,4 +1,5 @@
 shared struct Sh { k: i64 }
+#[derive(Clone)]
 struct S2 { h: Sh, id: i64 }
 impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
 fn mk(i: i64) -> S2 { return S2 { h: Sh { k: i }, id: i } }
@@ -19,7 +20,7 @@ fn f1(q: own W3) -> S2 { return keep(q.u) }
 fn f2(q: own W3) -> S2 { let k = keep(q.u); return k }
 fn f3(q: own W3) -> S2 { let x = q.u; return keep(x) }
 fn f4(q: own W3) -> S2 { return keepr(q.u) }
-fn f5(q: own W3) -> S2 { let x = q.u; let W3 { n, .. } = q; println(f"n{n}"); return keep(x) }
+fn f5(q: own W3) -> S2 { let x = q.u.clone(); let W3 { n, .. } = q; println(f"n{n}"); return keep(x) }
 fn f6(q: own W3) -> S2 { return keep2(q.u) }
 fn f7(q: own W3) -> S2 { let x = q.u; return keep2(x) }
 fn f8(q: own W7) -> S5 { return keep5(q.u) }

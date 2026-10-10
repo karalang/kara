@@ -1,5 +1,5 @@
 
-fn vfirst[T](v: ref Vec[T]) -> T { v[0] }
+fn vfirst[T: Clone](v: ref Vec[T]) -> T { v[0].clone() }
 fn geti() -> i64 { 1 }
 fn main() {
     let vu8: Vec[u8] = [255u8, 1u8];

@@ -16,13 +16,13 @@ fn main() {
     for item in mk(7) { if item.n == 8 { continue; } println(f"c{item.n}"); }
     println("B");
     let mut held: Vec[D] = Vec.new();
-    for item in mk(10) { if item.n == 11 { held.push(item); } }
+    for item in mk(10).into_iter() { if item.n == 11 { held.push(item); } }
     println(f"held{held.len()}");
-    for item in mk(13) { if item.n != 14 { eat(item); } }
+    for item in mk(13).into_iter() { if item.n != 14 { eat(item); } }
     println("C");
     for item in mk(16) { let x = item; println(f"x{x.n}"); }
     println(f"f{find()}");
-    for e in me() { match e { E.One(p) => eat(p), _ => println("other") } }
+    for e in me().into_iter() { match e { E.One(p) => eat(p), _ => println("other") } }
     println("D");
     for e in me() { match e { E.Many(xs) => { let n = count(xs); println(f"many{n}") } _ => println("other") } }
     println("end")

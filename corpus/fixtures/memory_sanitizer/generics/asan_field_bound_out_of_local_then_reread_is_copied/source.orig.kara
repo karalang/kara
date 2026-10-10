@@ -1,0 +1,36 @@
+
+struct A { lines: Vec[String] }
+struct B { a: A }
+struct S { name: String }
+fn main() {
+    let k = env.args().len() as i64;
+    let mut s = String.new(); s.push_str("alpha"); s.push_str(k.to_string());
+    let mut v: Vec[String] = Vec.new(); v.push(s);
+    let a = A { lines: v };
+    let mut t = a.lines;
+    let mut i = 0i64;
+    while i < 2000 {
+        let mut q = String.new(); q.push_str("y"); q.push_str(k.to_string());
+        t.push(q);
+        i = i + 1;
+    }
+    let mut acc = t.len() as i64;
+    acc = acc + a.lines.len() as i64;
+    acc = acc + a.lines[0].len();
+
+    let mut s2 = String.new(); s2.push_str("beta"); s2.push_str(k.to_string());
+    let mut v2: Vec[String] = Vec.new(); v2.push(s2);
+    let b = B { a: A { lines: v2 } };
+    let u = b.a;
+    acc = acc + u.lines.len() as i64;
+    let w = b.a;
+    acc = acc + w.lines.len() as i64;
+    acc = acc + w.lines[0].len();
+
+    let mut s3 = String.new(); s3.push_str("gamma"); s3.push_str(k.to_string());
+    let st = S { name: s3 };
+    let n1 = st.name;
+    let n2 = st.name;
+    acc = acc + n1.len() + n2.len();
+    println(acc);
+}

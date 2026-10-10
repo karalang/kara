@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "stmt-par groups (source.orig.kara lines): L328-L329 fs.write of the store and of the undo file in undo_last; L375-L376 the same pair in main; legacy_backend is legacy-interp: legacy build double-frees on the hand edit at L336 (let cmd = match cmd { Command.Undo => return .., other => other }); interp agrees (see notes.md); frozen legacy bug"
 bucket = "a"
-classified_with = "ddae1ab1c+local"
+classified_with = "28b4fa5b9"
 model_rev = "629c2395"

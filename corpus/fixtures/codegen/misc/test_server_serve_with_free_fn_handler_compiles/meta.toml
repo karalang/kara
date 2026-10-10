@@ -12,4 +12,4 @@ backends = []
 env = {}
 note = "legacy run timed out after 60s"
 bucket = "skip:legacy run timed out after 60s"
-classified_with = "ddae1ab1c+local"
+classified_with = "28b4fa5b9"

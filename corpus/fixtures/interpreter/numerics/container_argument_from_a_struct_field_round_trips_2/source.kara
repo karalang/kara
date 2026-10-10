@@ -1,9 +1,9 @@
 
 struct Bag[=T] { xs: Vec[T] }
 fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }
-impl[T] Bag[T] {
+impl[T: Clone] Bag[T] {
     fn go(mut ref self) { swap01(mut self.xs); }
-    fn at(ref self, i: i64) -> T { return self.xs[i]; }
+    fn at(ref self, i: i64) -> T { return self.xs[i].clone(); }
 }
 fn main() {
     let mut a: Bag[String] = Bag { xs: Vec.new() };

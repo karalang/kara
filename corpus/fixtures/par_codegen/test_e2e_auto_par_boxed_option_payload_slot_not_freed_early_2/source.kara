@@ -1,14 +1,15 @@
 
+#[derive(Clone)]
 struct P { val: i64, mut kids: Vec[i64] }
 fn get(v: ref Vec[P], k: i64) -> Option[P] {
-    let mut i = 0i64;
-    while i < v.len() { if v[i].val == k { return Some(v[i]); } i = i + 1i64; }
+    let mut i = 0;
+    while i < v.len() { if v[i].val == k { return Some(v[i].clone()); } i = i + 1; }
     return None;
 }
 fn main() {
     let mut ns: Vec[P] = Vec.new();
-    ns.push(P { val: 5i64, kids: [1i64] });
-    let hit = get(ns, 5i64);
-    let miss = get(ns, 9i64);
+    ns.push(P { val: 5, kids: [1] });
+    let hit = get(ns, 5);
+    let miss = get(ns, 9);
     println(f"{hit?.val} {miss?.val}");
 }

@@ -1,0 +1,29 @@
+
+fn g_add[T: Add](a: own T, b: own T) -> T { a + b }
+fn g_sub[T: Sub](a: own T, b: own T) -> T { a - b }
+fn g_mul[T: Mul](a: own T, b: own T) -> T { a * b }
+fn g_div[T: Div](a: own T, b: own T) -> T { a / b }
+fn g_neg[T: Neg](a: own T) -> T { -a }
+fn g_poly[T: Add + Mul](a: own T, b: own T) -> T { g_add(g_mul(a, b), b) }
+fn g_sum[T: Add](xs: own Vec[T], zero: own T) -> T {
+    let mut acc = zero;
+    for x in xs { acc = acc + x; }
+    acc
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let one: f32 = n as f32;
+    let p: f16 = (one * 0.1f32) as f16;
+    let q: f16 = (one * 0.3f32) as f16;
+    let big: f16 = (one * 65504.0f32) as f16;
+    let three: f16 = (one * 3.0f32) as f16;
+    let tiny: f16 = (one * 0.00001f32) as f16;
+    println(f"h {g_add(p,q)} {g_sub(p,q)} {g_mul(p,q)} {g_div(p,q)} {g_neg(p)}");
+    println(f"o {g_mul(big,three)} {g_mul(tiny,tiny)}");
+    println(f"y {g_poly(p,q)}");
+    let mut hx: Vec[f16] = vec![];
+    let mut i: i64 = 0;
+    while i < 10 { hx.push(p); i = i + 1; }
+    println(f"a {g_sum(hx, (one * 0.0f32) as f16)}");
+}

@@ -13,6 +13,7 @@
 //
 // The f-string interpolation is the whole difference.
 
+#[derive(Clone)]
 struct Tracked {
     s: String,
 }
@@ -29,6 +30,6 @@ fn consume(t: own Tracked) -> i64 {
 
 fn main() {
     let t = Tracked { s: "hello-world-payload" };
-    println(consume(t));
+    println(consume(t.clone()));
     println(consume(t));
 }

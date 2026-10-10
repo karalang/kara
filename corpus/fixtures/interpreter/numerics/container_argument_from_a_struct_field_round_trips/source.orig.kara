@@ -1,0 +1,13 @@
+
+struct Bag[=T] { xs: Vec[T] }
+fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }
+impl[T] Bag[T] {
+    fn go(mut ref self) { swap01(mut self.xs); }
+    fn at(ref self, i: i64) -> T { return self.xs[i]; }
+}
+fn main() {
+    let mut a: Bag[(i64, i64)] = Bag { xs: Vec.new() };
+    a.xs.push((1, 10)); a.xs.push((2, 20)); a.go();
+    let z0 = a.at(0); let z1 = a.at(1);
+    println(f"{z0.0}:{z0.1} {z1.0}:{z1.1}");
+}

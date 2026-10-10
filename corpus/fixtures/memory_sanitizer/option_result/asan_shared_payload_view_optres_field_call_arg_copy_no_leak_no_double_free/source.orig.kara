@@ -1,0 +1,30 @@
+
+struct H { label: String, k: i64 }
+struct Node { hp: Option[H], k: i64 }
+shared enum E { V(Node) }
+fn hname(h: own Option[H]) -> String {
+    match h {
+        None => "none".to_string(),
+        Some(x) => x.label,
+    }
+}
+fn main() {
+    let a = E.V(Node { hp: Some(H { label: "deep".to_string(), k: 2 }), k: 7 });
+    match a {
+        V(nd) => {
+            println(hname(nd.hp));
+        }
+    }
+    let b = E.V(Node { hp: Some(H { label: "second".to_string(), k: 3 }), k: 8 });
+    match b {
+        V(nd) => {
+            println(hname(nd.hp));
+        }
+    }
+    let c = E.V(Node { hp: None, k: 9 });
+    match c {
+        V(nd) => {
+            println(hname(nd.hp));
+        }
+    }
+}

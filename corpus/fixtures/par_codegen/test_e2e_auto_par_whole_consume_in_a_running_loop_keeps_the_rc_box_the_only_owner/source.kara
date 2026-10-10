@@ -1,18 +1,19 @@
 
+#[derive(Clone)]
 struct P { a: String, b: i64 }
 fn seed() -> i64 { env.args().len() }
 fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
 fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
 fn takep(p: P) -> i64 { return p.b; }
 fn two(x: P, y: P) -> i64 { return x.b + y.b; }
-fn loop3() -> i64 { let t = mkp(9); let mut i = 0i64; let mut n = 0i64;
-  while i < 3i64 { n = n + takep(t); i = i + 1; }
+fn loop3() -> i64 { let t = mkp(9); let mut i = 0; let mut n = 0;
+  while i < 3 { n = n + takep(t.clone()); i = i + 1; }
   return n; }
-fn forloop() -> i64 { let t = mkp(9); let mut n = 0i64;
-  for _k in 0i64..3i64 { n = n + takep(t); }
+fn forloop() -> i64 { let t = mkp(9); let mut n = 0;
+  for _k in 0..3 { n = n + takep(t.clone()); }
   return n; }
-fn second() -> i64 { let t = mkp(9); let mut i = 0i64; let mut n = 0i64;
-  while i < 3i64 { n = n + two(mkp(1), t); i = i + 1; }
+fn second() -> i64 { let t = mkp(9); let mut i = 0; let mut n = 0;
+  while i < 3 { n = n + two(mkp(1), t.clone()); i = i + 1; }
   return n; }
 fn noloop() -> i64 { let t = mkp(9); return takep(t); }
 fn main() {

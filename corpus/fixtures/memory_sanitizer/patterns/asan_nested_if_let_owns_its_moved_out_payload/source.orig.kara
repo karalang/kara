@@ -1,0 +1,45 @@
+enum Ve { A(String), B }
+impl Drop for Ve { fn drop(mut ref self) { println("dVe") } }
+fn mkVe(n: i64) -> Ve { return Ve.A(f"payloadpayload{n}") }
+fn sink(s: String) -> i64 { return s.len() }
+
+enum Vv { A(Vec[i64]), B }
+fn mkVv(n: i64) -> Vv { let mut v: Vec[i64] = Vec.new(); v.push(n); v.push(n + 1); v.push(n + 2); v.push(n + 3); return Vv.A(v) }
+
+fn mkStep(n: i64) -> Ve { if n >= 3 { return Ve.B } return Ve.A(f"steppayload{n}") }
+
+#[allow(partial_move_of_drop_enum)]
+fn deboxIfLet(v: own Ve) -> String { if let Ve.A(s) = v { s } else { "none".to_string() } }
+
+enum Opt[T] { Yes(T), No }
+fn getIfLet[T](o: own Opt[T], d: own T) -> T { if let Opt.Yes(v) = o { v } else { d } }
+
+#[allow(partial_move_of_drop_enum)]
+fn main() {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 3 {
+        println(f"fstr[{if let Ve.A(s) = mkVe(i) { s } else { "none".to_string() }}]");
+        total = total + sink(if let Ve.A(s) = mkVe(i) { s } else { "none".to_string() });
+        let v = mkVe(i);
+        println(f"named[{if let Ve.A(s) = v { s } else { "none".to_string() }}]");
+        let out = if let Ve.A(s) = mkVe(i) { s } else { "none".to_string() };
+        println(f"let[{out}]");
+        println(f"escape[{deboxIfLet(mkVe(i))}]");
+        total = total + (if let Vv.A(w) = mkVv(i) { w } else { Vec.new() }).len();
+        i = i + 1;
+    }
+    let mut j = 0;
+    while let Ve.A(s) = mkStep(j) {
+        println(f"step[{s}]");
+        j = j + 1;
+    }
+    let g = getIfLet(Opt.Yes("genericpayload".to_string()), "d".to_string());
+    println(f"generic[{g}]");
+    let mut gv: Vec[i64] = Vec.new();
+    gv.push(7);
+    gv.push(8);
+    println(f"genericvec[{getIfLet(Opt.Yes(gv), Vec.new()).len()}]");
+    println(f"total {total}");
+    println("end");
+}

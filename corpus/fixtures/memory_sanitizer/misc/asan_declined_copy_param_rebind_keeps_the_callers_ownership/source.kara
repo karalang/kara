@@ -1,5 +1,6 @@
 
 shared struct Inner { v: i64 }
+#[derive(Clone)]
 struct R { id: i64, name: String, inner: Inner }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, name: f"h{i}", inner: Inner { v: i } }; }
@@ -31,11 +32,11 @@ fn deep(s: own S) -> i64 { let m = s; return m.mid.d.v; }
 fn nodrop(n: own N) -> i64 { let m = n; return m.inner.v; }
 fn selfref(nd: own Node) -> i64 { let m = nd; return m.id; }
 fn ctl(p: own P) -> i64 { let m = p; return m.id; }
-fn rd(r: own R) -> String { let m = r; return f"{r.name}"; }
-fn rdi(r: own R) -> i64 { let m = r; return r.inner.v; }
-fn rdb(r: own R) -> i64 { let m = r; return m.id + r.id; }
-fn rdc(r: own R) -> String { let m = r; let n = m; return f"{m.name}"; }
-impl R { fn takerd(own self) -> String { let m = self; let n = m; return f"{m.name}"; } }
+fn rd(r: own R) -> String { let m = r.clone(); return f"{r.name}"; }
+fn rdi(r: own R) -> i64 { let m = r.clone(); return r.inner.v; }
+fn rdb(r: own R) -> i64 { let m = r.clone(); return m.id + r.id; }
+fn rdc(r: own R) -> String { let m = r; let n = m.clone(); return f"{m.name}"; }
+impl R { fn takerd(own self) -> String { let m = self; let n = m.clone(); return f"{m.name}"; } }
 
 fn main() {
     println(f"top={top(mk(21))}");

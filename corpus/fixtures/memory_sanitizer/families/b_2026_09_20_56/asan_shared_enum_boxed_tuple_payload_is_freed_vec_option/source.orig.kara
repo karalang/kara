@@ -1,0 +1,14 @@
+
+shared enum Sh { S((Vec[String], Option[String])), N }
+fn mkt(t: String) -> (Vec[String], Option[String]) { let mut v: Vec[String] = Vec.new(); v.push(f"v-{t}-eeeeeeeeeeeeeeeeeeeeeeeeee"); return (v, Option.Some(f"q-{t}-gggggggggggggggggggggg")); }
+fn ostr(o: ref Option[String]) -> String { match o { Some(v) => v.clone(), None => "none" } }
+fn take(s: Sh) -> (Vec[String], Option[String]) { match s { Sh.S(x) => { return x; } Sh.N => { return mkt("z"); } } }
+fn main() {
+    { let s = Sh.S(mkt("r")); match s { Sh.S(x) => { println(f"read {x.0[0]}/{ostr(x.1)}"); } Sh.N => { println("n"); } } }
+    { let s = Sh.S(mkt("l")); match s { Sh.S(x) => { let u = x; println("let"); } Sh.N => { println("n"); } } }
+    { let t = mkt("m"); let s = Sh.S(t); match s { Sh.S(x) => { println(f"named {x.0[0]}/{ostr(x.1)}"); } Sh.N => { println("n"); } } }
+    { let s = Sh.S(mkt("u")); println("unmatched"); }
+    { let s = Sh.S(mkt("v")); let s2 = s; { match s { Sh.S(x) => { let u = x; println("moved"); } Sh.N => { println("n"); } } } match s2 { Sh.S(x) => { println(f"after {x.0[0]}/{ostr(x.1)}"); } Sh.N => { println("n"); } } }
+    { let s = Sh.S(mkt("t")); let s2 = s; { let y = take(s); println("taken"); } match s2 { Sh.S(x) => { println(f"kept {x.0[0]}/{ostr(x.1)}"); } Sh.N => { println("n"); } } }
+    println("done");
+}

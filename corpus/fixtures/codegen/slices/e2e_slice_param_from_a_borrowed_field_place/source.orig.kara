@@ -1,0 +1,21 @@
+struct Bag[=T] { xs: Vec[T] }
+struct Wrap { b: Bag[i64] }
+fn head[T](s: Slice[T]) -> T { return s[0]; }
+fn via_ref[T](g: ref Bag[T]) -> T { return head(g.xs); }
+fn nested(w: ref Wrap) -> i64 { return head(w.b.xs); }
+impl[T] Bag[T] {
+    fn first(ref self) -> T { return head(self.xs); }
+}
+fn main() {
+    let mut a: Bag[String] = Bag { xs: Vec.new() };
+    a.xs.push("aa"); a.xs.push("bb");
+    println(a.first());
+    println(via_ref(a));
+    let mut n: Bag[i64] = Bag { xs: Vec.new() };
+    n.xs.push(7); n.xs.push(8);
+    println(f"{n.first()}");
+    println(f"{via_ref(n)}");
+    let w: Wrap = Wrap { b: n };
+    println(f"{nested(w)}");
+    println("end");
+}

@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 struct R { id: i64, name: String }
 struct V { id: i64, xs: Vec[i64] }
 struct H { r: R }
@@ -9,7 +10,7 @@ fn ret(p: own (R, i64)) -> R { return p.0; }
 fn lit(p: own (R, i64)) -> H { H { r: p.0 } }
 fn nested(p: own (R, i64)) -> String { p.0.name }
 fn vecpay(p: own (V, i64)) -> V { p.0 }
-fn arr_lit(a: Array[R, 2]) -> H { H { r: a[0] } }
+fn arr_lit(a: Array[R, 2]) -> H { H { r: a[0].clone() } }
 fn peek(p: ref (R, i64)) -> i64 { p.0.id }
 fn main() {
     let base: i64 = env.args().len();

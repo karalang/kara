@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 struct Res { id: i64, buf: Vec[i64] }
 struct Guard { id: i64, buf: Vec[i64] }
 impl Drop for Guard { fn drop(mut ref self) { println(f"drop {self.id}") } }
@@ -29,7 +30,7 @@ fn main() {
     println(f"temp={rt}");
 
     let e = mk(60);
-    let rp = peek(e);
+    let rp = peek(e.clone());
     println(f"peek={rp}");
     println(f"reuse={e.buf[5]}");
 

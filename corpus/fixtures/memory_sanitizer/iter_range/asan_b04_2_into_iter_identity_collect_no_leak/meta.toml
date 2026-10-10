@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: '2 2 into-iter-collect-bravo-bbbbbbbbbbbbbbbbbbbbbb'"
 bucket = "mir-gap:an iterator value"
-classified_with = "22b63d46f+local"
+classified_with = "28b4fa5b9"
 fixed_by_classify = true
 model_rev = "629c2395"

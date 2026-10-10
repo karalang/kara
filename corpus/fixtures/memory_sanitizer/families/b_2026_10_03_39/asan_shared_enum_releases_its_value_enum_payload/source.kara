@@ -1,4 +1,5 @@
 shared enum H4 { Z(E), N }
+#[derive(Clone)]
 enum E { A(Vec[String]), B }
 enum Ep { P(i64, i64), Q }
 shared enum H5 { Z(Ep), N }
@@ -12,7 +13,7 @@ enum E2 { A(String, Vec[i64]), B }
 shared enum H8 { Z(E2), N }
 shared enum H7 { Z { e: E, k: i64 }, N }
 fn mki(n: i64) -> Vec[i64] { let mut v = Vec.new(); for i in 0..n { v.push(i) }; v }
-fn take(h: H4) -> E { match h { H4.Z(e) => e, _ => E.B } }
+fn take(h: H4) -> E { match h { H4.Z(e) => e.clone(), _ => E.B } }
 fn peek(h: ref H4) -> i64 { match h { H4.Z(E.A(x)) => x.len(), _ => 0 } }
 fn elen(e: own E) -> i64 { match e { E.A(x) => x.len(), E.B => 0 } }
 fn main() {
@@ -26,7 +27,7 @@ fn main() {
     let n4 = match c { H4.Z(e) => 1, _ => 0 };
     println(f"c4 {n4}");
     let d = H4.Z(E.A(mkv(hs(4))));
-    let e2 = match d { H4.Z(e) => e, _ => E.B };
+    let e2 = match d { H4.Z(e) => e.clone(), _ => E.B };
     let n5 = match e2 { E.A(x) => x.len(), E.B => 0 };
     println(f"c5 {n5}");
     let g = H4.Z(E.A(mkv(hs(6))));
@@ -52,18 +53,18 @@ fn main() {
     println(f"c12 {s12}");
     let u = H6.Z(Es.S(hs(13)), 4);
     let w = u;
-    let s13 = match u { H6.Z(Es.S(t), k) => t, _ => "none".to_string() };
-    let t13 = match w { H6.Z(Es.S(t), k) => t, _ => "none".to_string() };
+    let s13 = match u { H6.Z(Es.S(t), k) => t.clone(), _ => "none".to_string() };
+    let t13 = match w { H6.Z(Es.S(t), k) => t.clone(), _ => "none".to_string() };
     println(f"c13 {s13} {t13}");
     let dd = H4.Z(E.A(mkv(hs(1))));
     let mut ev: Vec[E] = Vec.new();
-    match dd { H4.Z(e) => ev.push(e), _ => {} }
+    match dd { H4.Z(e) => ev.push(e.clone()), _ => {} }
     println(f"d1 {ev.len()}");
     let gg = H4.Z(E.A(mkv(hs(2))));
-    if let H4.Z(e) = gg { println(f"d2 {elen(e)}") }
+    if let H4.Z(e) = gg { println(f"d2 {elen(e.clone())}") }
     let g3 = H4.Z(E.A(mkv(hs(3))));
     let H4.Z(e3) = g3 else { return };
-    println(f"d3 {elen(e3)}");
+    println(f"d3 {elen(e3.clone())}");
     let g4 = H4.Z(E.A(mkv(hs(4))));
     let g4b = g4;
     let nn4 = elen(take(g4));
@@ -72,13 +73,13 @@ fn main() {
     let g5 = H4.Z(E.A(mkv(hs(5))));
     println(f"d5 {peek(g5)} {peek(g5)}");
     let g6 = H6.Z(Es.S(hs(6)), 1);
-    let s6 = match g6 { H6.Z(e, _) => match e { Es.S(t) => t, Es.T => "t".to_string() }, _ => "n".to_string() };
+    let s6 = match g6 { H6.Z(e, _) => match e { Es.S(t) => t.clone(), Es.T => "t".to_string() }, _ => "n".to_string() };
     println(f"d6 {s6}");
     let gg7 = Hc.Z(C.Y);
     let n7 = match gg7 { Hc.Z(C.Y) => 1, _ => 0 };
     println(f"d7 {n7}");
     let g8 = H8.Z(E2.A(hs(8), mki(3)));
-    let s8 = match g8 { H8.Z(E2.A(s, _)) => s, _ => "n".to_string() };
+    let s8 = match g8 { H8.Z(E2.A(s, _)) => s.clone(), _ => "n".to_string() };
     println(f"d8 {s8}");
     let g9 = H8.Z(E2.A(hs(9), mki(2)));
     let g9b = g9;
@@ -89,7 +90,7 @@ fn main() {
     let n10 = match g10 { H7.Z { e: E.A(x), k } => x.len() + k, _ => 0 };
     println(f"d10 {n10}");
     let g11 = H7.Z { e: E.A(mkv(hs(11))), k: 5 };
-    let nn11 = match g11 { H7.Z { e, k } => elen(e) + k, _ => 0 };
+    let nn11 = match g11 { H7.Z { e, k } => elen(e.clone()) + k, _ => 0 };
     println(f"d11 {nn11}");
     let g12 = H4.Z(E.A(mkv(hs(12))));
     let n12 = match g12 { H4.Z(E.A(_)) => 1, _ => 0 };
@@ -98,6 +99,6 @@ fn main() {
     hv2.push(H4.Z(E.A(mkv(hs(13)))));
     hv2.push(H4.Z(E.B));
     let mut tot = 0;
-    for h in hv2 { let k = match h { H4.Z(e) => elen(e), _ => 0 }; tot = tot + k; }
+    for h in hv2.into_iter() { let k = match h { H4.Z(e) => elen(e.clone()), _ => 0 }; tot = tot + k; }
     println(f"d13 {tot}");
 }

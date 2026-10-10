@@ -20,6 +20,7 @@
 // all agree, exactly one drop, and nothing is poisoned under MallocScribble=1,
 // so this is a borrow rather than a use-after-free.
 
+#[derive(Clone)]
 struct Tracked {
     s: String,
 }
@@ -37,7 +38,7 @@ fn consume(t: own Tracked) -> i64 {
 
 fn main() {
     let t = Tracked { s: "hello-world-payload" };
-    let a = f"a={consume(t)}";
+    let a = f"a={consume(t.clone())}";
     let b = f"b={consume(t)}";
     println(a);
     println(b);

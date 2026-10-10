@@ -11,6 +11,6 @@ rules = []
 backends = []
 env = {}
 bucket = "a:refused"
-classified_with = "ddae1ab1c+local"
+classified_with = "28b4fa5b9"
 model_rev = "629c2395"
 v2_reject = "core-semantics §11.7 (D4): `collect_all` / `collect_all_vec` are removed (kata thread, 2026-10-09)"

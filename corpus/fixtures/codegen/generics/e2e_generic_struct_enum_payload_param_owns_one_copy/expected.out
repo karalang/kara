@@ -1,0 +1,21 @@
+w 30
+b heap-string-longer-than-sso-b0
+v 2
+c 2 heap-string-longer-than-sso-d0
+p 37
+p heap-string-longer-than-sso-p0 3 7
+e 1 heap-string-longer-than-sso-e0
+r heap-string-longer-than-sso-r0
+s heap-string-longer-than-sso-s0
+n 0 none
+w 30
+b heap-string-longer-than-sso-b1
+v 2
+c 2 heap-string-longer-than-sso-d1
+p 37
+p heap-string-longer-than-sso-p1 3 7
+e 1 heap-string-longer-than-sso-e1
+r heap-string-longer-than-sso-r1
+s heap-string-longer-than-sso-s1
+n 0 none
+end

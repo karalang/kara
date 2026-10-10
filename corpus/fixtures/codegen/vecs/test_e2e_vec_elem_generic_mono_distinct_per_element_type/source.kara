@@ -1,8 +1,8 @@
 
-fn first[T](v: ref Vec[T]) -> T {
-    v[0]
+fn first[T: Clone](v: ref Vec[T]) -> T {
+    v[0].clone()
 }
-fn wrap[T](v: ref Vec[T]) -> T {
+fn wrap[T: Clone](v: ref Vec[T]) -> T {
     first(v)
 }
 fn main() {

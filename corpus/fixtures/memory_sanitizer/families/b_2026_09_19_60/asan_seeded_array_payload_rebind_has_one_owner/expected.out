@@ -1,0 +1,26 @@
+rebind 10
+  d10
+  d11
+untyped 21
+  d20
+  d21
+store 30
+  d30
+  d31
+iflet 40
+  d40
+  d41
+bare 50
+  d50
+  d51
+ok 60
+  d60
+  d61
+strs bb2
+loop 70
+  d70
+  d71
+loop 72
+  d72
+  d73
+end
