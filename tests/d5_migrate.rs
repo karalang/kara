@@ -279,3 +279,23 @@ fn main() { println(dup(\"a\".to_string()).len()); println(local_use(\"b\".to_st
     assert!(out.contains("fn local_use(x: own String)"), "{out}");
     assert!(out.contains("fn width(x: String)"), "{out}");
 }
+
+#[test]
+fn a_key_stored_by_index_assignment_is_owned() {
+    // `m[k] = v` inserts a missing key (decided 2026-10-08), so it moves
+    // `k` exactly as `m.insert(k, v)` does.
+    let src = "\
+fn put(m: mut ref Map[String, i64], k: String) { m[k] = 1; }
+fn bump(m: mut ref Map[String, i64], k: String) { m.insert(k, 1); }
+fn main() { let mut m: Map[String, i64] = Map.new(); put(mut m, \"a\"); bump(mut m, \"b\"); println(m.len()); }
+";
+    let out = migrate(src);
+    assert!(
+        out.contains("fn put(m: mut ref Map[String, i64], k: own String)"),
+        "{out}"
+    );
+    assert!(
+        out.contains("fn bump(m: mut ref Map[String, i64], k: own String)"),
+        "{out}"
+    );
+}

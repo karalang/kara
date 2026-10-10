@@ -448,3 +448,25 @@ fn main() {
         "5\n2\nnone\n",
     );
 }
+
+/// `Vec.is_empty`, `reverse` and `swap_remove` are Kāra bodies over `len`,
+/// `swap` and `pop` (redesign A2).
+#[test]
+fn vec_reverse_and_swap_remove_are_written_in_kara() {
+    assert_runs(
+        r#"
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("a"); v.push("b"); v.push("c"); v.push("d");
+    v.reverse();
+    println(v.join(","));
+    let x = v.swap_remove(0);
+    println(f"{x} {v.join(",")} {v.is_empty()}");
+    let mut e: Vec[i64] = Vec.new();
+    e.reverse();
+    println(e.is_empty());
+}
+"#,
+        "d,c,b,a\nd a,c,b false\ntrue\n",
+    );
+}

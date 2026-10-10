@@ -602,6 +602,11 @@ impl<'a> UseClassifier<'a> {
                 // non-identifier root.
                 if let ExprKind::Identifier(_) = &target.kind {
                     self.record(&target.span, UseKind::Reassign);
+                } else if let Some((object, key)) = self.core_map_index_assign(target) {
+                    // `m[k] = v` inserts a missing key, so `k` moves into
+                    // the map (decided 2026-10-08).
+                    self.walk_expr(object, Mode::Reading);
+                    self.walk_expr(key, Mode::Consuming);
                 } else if !self.record_projection_reassign(target) {
                     self.walk_expr(target, Mode::Reading);
                 }
@@ -1808,6 +1813,24 @@ impl<'a> UseClassifier<'a> {
                 .core_projection_consumes
                 .insert(SpanKey::from_span(&root), (expr.span, t));
         }
+    }
+
+    /// `m[k]` as an assignment target over a `Map` or `SortedMap`, under
+    /// the v2 core: the map and the key expressions.
+    fn core_map_index_assign<'e>(&self, target: &'e Expr) -> Option<(&'e Expr, &'e Expr)> {
+        if !crate::ownership::core_rules() {
+            return None;
+        }
+        let ExprKind::Index { object, index } = &target.kind else {
+            return None;
+        };
+        let ty = self.tc.expr_types.get(&SpanKey::from_span(&object.span))?;
+        let ty = match ty {
+            Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+            t => t,
+        };
+        matches!(ty, Type::Named { name, .. } if name == "Map" || name == "SortedMap")
+            .then_some((object.as_ref(), index.as_ref()))
     }
 
     fn record_core_index_move(&mut self, expr: &Expr) {

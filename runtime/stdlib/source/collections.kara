@@ -31,6 +31,29 @@ impl[T] Vec[T] {
     fn iter(ref self) -> VecIter[T] {
         VecIter { v: self, front: 0, back: self.len() }
     }
+
+    fn is_empty(ref self) -> bool {
+        self.len() == 0
+    }
+
+    /// The elements in reverse order, in place.
+    fn reverse(mut ref self) {
+        let mut i = 0;
+        let mut j = self.len() - 1;
+        while i < j {
+            self.swap(i, j);
+            i = i + 1;
+            j = j - 1;
+        }
+    }
+
+    /// Removes and returns the element at `idx`, moving the last element
+    /// into its place. An index out of bounds aborts, as `v[idx]` does.
+    fn swap_remove(mut ref self, idx: i64) -> T {
+        let last = self.len() - 1;
+        self.swap(idx, last);
+        self.pop().unwrap()
+    }
 }
 
 impl[T] DoubleEndedIterator for VecIter[T] {

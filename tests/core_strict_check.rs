@@ -2530,3 +2530,19 @@ fn a_struct_pattern_reads_only_the_parts_it_binds() {
         "moved here, used again here",
     );
 }
+
+/// `m[k] = v` inserts a missing key (decided 2026-10-08), so the key moves
+/// into the map; reusing it is a use after move, fixed with `.clone()`.
+#[test]
+fn an_index_assigned_map_key_moves() {
+    rejected_then_fixed(
+        "map-index-assign-key",
+        "fn main() {\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             let k = \"a\".to_string();\n\
+             m[k] = 1;\n\
+             println(k);\n\
+         }\n",
+        "value 'k' moved here",
+    );
+}

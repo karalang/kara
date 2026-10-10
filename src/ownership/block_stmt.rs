@@ -382,7 +382,16 @@ impl<'a> super::OwnershipChecker<'a> {
                             );
                         }
                     }
-                    self.check_expr_reading(target, states, param_types, param_usage);
+                    match self.map_index_assign_key(target) {
+                        // `m[k] = v` inserts when `k` is missing, so the key
+                        // moves into the map as `m.insert(k, v)`'s does
+                        // (decided 2026-10-08).
+                        Some((object, key)) => {
+                            self.check_expr_reading(object, states, param_types, param_usage);
+                            self.check_expr_consuming(key, states, param_types, param_usage);
+                        }
+                        None => self.check_expr_reading(target, states, param_types, param_usage),
+                    }
                     self.check_expr_consuming(value, states, param_types, param_usage);
                 }
             }
@@ -420,5 +429,28 @@ impl<'a> super::OwnershipChecker<'a> {
                 self.check_expr_reading(expr, states, param_types, param_usage);
             }
         }
+    }
+}
+
+impl super::OwnershipChecker<'_> {
+    /// `m[k]` as an assignment target over a `Map` or `SortedMap`, under the
+    /// v2 core or the D5 migration: the map and the key expressions.
+    fn map_index_assign_key<'e>(&self, target: &'e Expr) -> Option<(&'e Expr, &'e Expr)> {
+        if !crate::ownership::core_rules() && self.d5.is_none() {
+            return None;
+        }
+        let ExprKind::Index { object, index } = &target.kind else {
+            return None;
+        };
+        let ty = self
+            .typecheck_result
+            .expr_types
+            .get(&SpanKey::from_span(&object.span))?;
+        let ty = match ty {
+            Type::Ref(t) | Type::MutRef(t) => t.as_ref(),
+            t => t,
+        };
+        matches!(ty, Type::Named { name, .. } if name == "Map" || name == "SortedMap")
+            .then_some((object.as_ref(), index.as_ref()))
     }
 }
