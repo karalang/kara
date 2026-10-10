@@ -16,7 +16,13 @@
 //! - a `shared` handle releases its box: at strong count 0 the body is
 //!   dropped like the ADT's, and the box is freed when no weak handle
 //!   keeps it; a `weak` handle (null when empty) frees a box whose strong
-//!   count is already 0 when it was the last weak one.
+//!   count is already 0 when it was the last weak one;
+//! - a `VecDeque` drops its elements front to back, across the wrap, then
+//!   frees its buffer; a map or set drops each entry's key then its value,
+//!   in the runtime table's order, then frees the table;
+//! - an erased function value drops its captures through its own glue
+//!   pointer and frees their block;
+//! - a library cell hands its handle to the runtime (`LIBRARY_CELLS`).
 //!
 //! The glue of a type `T` is `void @"drop.T"(ptr)`, built once per type
 //! and on demand, so recursive types (through a box or a buffer) are fine.
@@ -33,18 +39,30 @@ use crate::mir::place_ty::place_ty;
 use crate::mir::ty::{AdtId, IntrinsicTy, TyKind};
 use crate::mir::{BasicBlock, Place, Ty};
 
-/// The library cells whose contents are not their declared fields; the
-/// interpreter drops them by hand (`Interp::drop_adt`).
-const LIBRARY_CELLS: &[&str] = &[
-    "Atomic",
-    "Sender",
-    "Receiver",
-    "File",
-    "OnceLock",
-    "OnceCell",
-    "TaskHandle",
-    "Arena",
+/// The library cells whose contents live in the runtime, behind a one-word
+/// handle at offset 0 (the interpreter drops them by hand in
+/// `Interp::drop_adt`), with the runtime entry point that drops one:
+/// `void(i64 handle, ptr held_glue)`, where `held_glue` is the glue of the
+/// held type (the cell's first type argument), or null when it owns
+/// nothing. A zero handle (a hand-built literal) owns nothing. `Atomic[T]`
+/// holds a `T` in place, which is never a type that owns anything.
+const LIBRARY_CELLS: &[(&str, &str)] = &[
+    ("Sender", "karac_sender_drop"),
+    ("Receiver", "karac_receiver_drop"),
+    ("File", "karac_file_drop"),
+    ("OnceLock", "karac_once_lock_drop"),
+    ("OnceCell", "karac_once_cell_drop"),
+    ("TaskHandle", "karac_task_handle_drop"),
+    ("Arena", "karac_arena_drop"),
 ];
+
+/// The runtime's table behind a map or set handle: its entry count, a
+/// pointer to entry `i` (in iteration order, which is key order for the
+/// sorted kinds), and the free of the table itself. A map entry is laid
+/// out as the tuple `(K, V)`, a set entry as `K`.
+const TABLE_LEN: &str = "karac_table_len";
+const TABLE_ENTRY: &str = "karac_table_entry";
+const TABLE_FREE: &str = "karac_table_free";
 
 /// The glue built or requested so far.
 #[derive(Default)]
@@ -119,6 +137,12 @@ impl<'ctx> Cx<'ctx, '_> {
     fn drop_value(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<()> {
         match self.tys.kind(ty) {
             TyKind::Adt(a) => {
+                if let Some(rt) = self.cell_drop(a) {
+                    return self.drop_cell(p, ty, rt);
+                }
+                if self.tys.adt(a).name == "Atomic" {
+                    return Ok(());
+                }
                 if self.adt_has_drop_body(a)? {
                     // `fn T.drop(mut ref self)`: its argument slot holds
                     // the reference.
@@ -157,6 +181,19 @@ impl<'ctx> Cx<'ctx, '_> {
                 }
                 self.free_buffer(p)
             }
+            TyKind::Intrinsic(IntrinsicTy::VecDeque(e)) => {
+                if self.tys.needs_drop(e) {
+                    self.drop_ring(p, e)?;
+                }
+                self.free_buffer(p)
+            }
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
+                self.drop_table(p, k, Some(v))
+            }
+            TyKind::Intrinsic(IntrinsicTy::Set(k) | IntrinsicTy::SortedSet(k)) => {
+                self.drop_table(p, k, None)
+            }
+            TyKind::Fn { .. } => self.drop_erased_fn(p),
             _ => err(format!(
                 "MIR to LLVM: dropping a `{}` is not lowered yet",
                 self.tys.display(ty)
@@ -165,14 +202,175 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     fn adt_has_drop_body(&self, a: AdtId) -> R<bool> {
-        let adt = self.tys.adt(a);
-        if LIBRARY_CELLS.contains(&adt.name.as_str()) {
-            return err(format!(
-                "MIR to LLVM: dropping a `{}` is not lowered yet",
-                adt.name
-            ));
-        }
-        Ok(adt.has_drop_impl)
+        Ok(self.tys.adt(a).has_drop_impl)
+    }
+
+    /// The runtime entry point that drops the library cell `a`, if it is one.
+    fn cell_drop(&self, a: AdtId) -> Option<&'static str> {
+        let name = self.tys.adt(a).name.clone();
+        LIBRARY_CELLS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, rt)| *rt)
+    }
+
+    /// Drops the library cell of type `ty` at `p` through the runtime.
+    fn drop_cell(&mut self, p: PointerValue<'ctx>, ty: Ty, rt: &str) -> R<()> {
+        let held = self
+            .tys
+            .tcx()
+            .adt_of(ty)
+            .and_then(|(_, args)| args.first().copied())
+            .filter(|&t| self.tys.needs_drop(t));
+        let glue = match held {
+            Some(t) => self.glue_fn(t).as_global_value().as_pointer_value(),
+            None => self.ptr_ty().const_null(),
+        };
+        let i64t = self.llcx.i64_type();
+        let f = self.extern_fn(
+            rt,
+            self.llcx
+                .void_type()
+                .fn_type(&[i64t.into(), self.ptr_ty().into()], false),
+        );
+        let h = self.load_i64(p)?;
+        let zero = self.is_zero(h)?;
+        let some = self
+            .builder
+            .build_not(zero, "")
+            .map_err(|e| e.to_string())?;
+        self.if_then(some, |cx| {
+            cx.builder
+                .build_call(f, &[h.into(), glue.into()], "")
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+    }
+
+    /// Drops the elements of the `VecDeque` ring at `p`: `len` of them from
+    /// slot `head`, wrapping at `cap`, front to back.
+    fn drop_ring(&mut self, p: PointerValue<'ctx>, e: Ty) -> R<()> {
+        let size = self.layout(e)?.size;
+        let buf = self.load_ptr(p)?;
+        let head = self.load_i64(self.offset(p, 8)?)?;
+        let len = self.load_i64(self.offset(p, 16)?)?;
+        let cap = self.load_i64(self.offset(p, 24)?)?;
+        let b = &self.builder;
+        let room = b.build_int_sub(cap, head, "").map_err(|e| e.to_string())?;
+        let fits = b
+            .build_int_compare(IntPredicate::ULE, len, room, "")
+            .map_err(|e| e.to_string())?;
+        let first = b
+            .build_select(fits, len, room, "first")
+            .map_err(|e| e.to_string())?
+            .into_int_value();
+        let wrapped = b
+            .build_int_sub(len, first, "wrapped")
+            .map_err(|e| e.to_string())?;
+        let at = b
+            .build_int_mul(head, self.i64(size), "")
+            .map_err(|e| e.to_string())?;
+        // SAFETY: slot `head < cap` of a buffer of `cap` elements (or the
+        // end of an empty one, which is not read).
+        let front = unsafe {
+            b.build_in_bounds_gep(self.llcx.i8_type(), buf, &[at], "")
+                .map_err(|e| e.to_string())?
+        };
+        self.each_elem(front, first, e)?;
+        self.each_elem(buf, wrapped, e)
+    }
+
+    /// Drops the map or set at `p`: each entry's key, then its value, in
+    /// the table's order, then the table. A null handle owns nothing.
+    fn drop_table(&mut self, p: PointerValue<'ctx>, k: Ty, v: Option<Ty>) -> R<()> {
+        let (pt, i64t) = (self.ptr_ty(), self.llcx.i64_type());
+        let len_f = self.extern_fn(TABLE_LEN, i64t.fn_type(&[pt.into()], false));
+        let entry_f = self.extern_fn(TABLE_ENTRY, pt.fn_type(&[pt.into(), i64t.into()], false));
+        let free_f = self.extern_fn(
+            TABLE_FREE,
+            self.llcx.void_type().fn_type(&[pt.into()], false),
+        );
+        let (kd, vd) = (
+            self.tys.needs_drop(k),
+            v.is_some_and(|v| self.tys.needs_drop(v)),
+        );
+        let voff = match v {
+            Some(v) => {
+                let (kl, vl) = (self.layout(k)?, self.layout(v)?);
+                kl.size.div_ceil(vl.align) * vl.align
+            }
+            None => 0,
+        };
+        let h = self.load_ptr(p)?;
+        let null = self
+            .builder
+            .build_is_null(h, "")
+            .map_err(|e| e.to_string())?;
+        let some = self
+            .builder
+            .build_not(null, "")
+            .map_err(|e| e.to_string())?;
+        self.if_then(some, |cx| {
+            if kd || vd {
+                let n = cx
+                    .builder
+                    .build_call(len_f, &[h.into()], "n")
+                    .map_err(|e| e.to_string())?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("karac_table_len returns nothing")?
+                    .into_int_value();
+                cx.count_loop(n, |cx, i| {
+                    let ent = cx
+                        .builder
+                        .build_call(entry_f, &[h.into(), i.into()], "entry")
+                        .map_err(|e| e.to_string())?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or("karac_table_entry returns nothing")?
+                        .into_pointer_value();
+                    if kd {
+                        cx.call_glue(ent, k)?;
+                    }
+                    if let (true, Some(v)) = (vd, v) {
+                        cx.call_glue(cx.offset(ent, voff)?, v)?;
+                    }
+                    Ok(())
+                })?;
+            }
+            cx.builder
+                .build_call(free_f, &[h.into()], "")
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })
+    }
+
+    /// Drops the erased function value `{code, env, drop}` at `p`: its
+    /// captures through `drop`, then their block. A null `env` owns
+    /// nothing; a null `drop` has captures that own nothing.
+    fn drop_erased_fn(&mut self, p: PointerValue<'ctx>) -> R<()> {
+        let env = self.load_ptr(self.offset(p, 8)?)?;
+        let null = self
+            .builder
+            .build_is_null(env, "")
+            .map_err(|e| e.to_string())?;
+        let some = self
+            .builder
+            .build_not(null, "")
+            .map_err(|e| e.to_string())?;
+        self.if_then(some, |cx| {
+            let d = cx.load_ptr(cx.offset(p, 16)?)?;
+            let no = cx.builder.build_is_null(d, "").map_err(|e| e.to_string())?;
+            let has = cx.builder.build_not(no, "").map_err(|e| e.to_string())?;
+            cx.if_then(has, |cx| {
+                let ty = cx.llcx.void_type().fn_type(&[cx.ptr_ty().into()], false);
+                cx.builder
+                    .build_indirect_call(ty, d, &[env.into()], "")
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            })?;
+            cx.free(env)
+        })
     }
 
     /// Calls the `Drop` body of the ADT `a` (instance `ty`), whose argument
@@ -360,19 +558,39 @@ impl<'ctx> Cx<'ctx, '_> {
     /// Drops `n` elements of type `e` laid out from `base`, first to last.
     fn each_elem(&mut self, base: PointerValue<'ctx>, n: IntValue<'ctx>, e: Ty) -> R<()> {
         let size = self.layout(e)?.size;
+        self.count_loop(n, |cx, i| {
+            let at = cx
+                .builder
+                .build_int_mul(i, cx.i64(size), "")
+                .map_err(|e| e.to_string())?;
+            // SAFETY: element `i < n` of a buffer of `n` elements of `size` bytes.
+            let q = unsafe {
+                cx.builder
+                    .build_in_bounds_gep(cx.llcx.i8_type(), base, &[at], "")
+                    .map_err(|e| e.to_string())?
+            };
+            cx.call_glue(q, e)
+        })
+    }
+
+    /// `for i in 0..n { body(i) }`, leaving the builder after it.
+    fn count_loop(
+        &mut self,
+        n: IntValue<'ctx>,
+        body: impl FnOnce(&mut Self, IntValue<'ctx>) -> R<()>,
+    ) -> R<()> {
         let f = self.cur_fn()?;
         let pre = self.builder.get_insert_block().ok_or("no insert block")?;
         let head = self.llcx.append_basic_block(f, "elem");
-        let body = self.llcx.append_basic_block(f, "elem.drop");
+        let each = self.llcx.append_basic_block(f, "elem.drop");
         let done = self.llcx.append_basic_block(f, "elems.dropped");
         self.builder
             .build_unconditional_branch(head)
             .map_err(|e| e.to_string())?;
         self.builder.position_at_end(head);
-        let i64t = self.llcx.i64_type();
         let i = self
             .builder
-            .build_phi(i64t, "i")
+            .build_phi(self.llcx.i64_type(), "i")
             .map_err(|e| e.to_string())?;
         i.add_incoming(&[(&self.i64(0), pre)]);
         let iv = i.as_basic_value().into_int_value();
@@ -381,20 +599,10 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_int_compare(IntPredicate::ULT, iv, n, "")
             .map_err(|e| e.to_string())?;
         self.builder
-            .build_conditional_branch(more, body, done)
+            .build_conditional_branch(more, each, done)
             .map_err(|e| e.to_string())?;
-        self.builder.position_at_end(body);
-        let at = self
-            .builder
-            .build_int_mul(iv, self.i64(size), "")
-            .map_err(|e| e.to_string())?;
-        // SAFETY: element `i < n` of a buffer of `n` elements of `size` bytes.
-        let q = unsafe {
-            self.builder
-                .build_in_bounds_gep(self.llcx.i8_type(), base, &[at], "")
-                .map_err(|e| e.to_string())?
-        };
-        self.call_glue(q, e)?;
+        self.builder.position_at_end(each);
+        body(self, iv)?;
         let next = self
             .builder
             .build_int_add(iv, self.i64(1), "")
@@ -505,6 +713,9 @@ mod tests {
     enum Ev {
         Free(usize),
         Drop(i64),
+        /// A library cell's runtime drop: its handle, and whether it was
+        /// handed the held type's glue.
+        Cell(i64, bool),
     }
 
     thread_local! {
@@ -521,6 +732,38 @@ mod tests {
         LOG.with(|l| l.borrow_mut().push(Ev::Drop(id)));
     }
 
+    /// A stand-in for the runtime's table: `n` entries of `size` bytes.
+    #[repr(C)]
+    struct Table {
+        n: u64,
+        size: u64,
+        entries: *mut u8,
+    }
+
+    extern "C" fn table_len(t: *mut Table) -> u64 {
+        // SAFETY: the test built `t`.
+        unsafe { (*t).n }
+    }
+
+    extern "C" fn table_entry(t: *mut Table, i: u64) -> *mut u8 {
+        // SAFETY: as above; `i < n`.
+        unsafe { (*t).entries.add((i * (*t).size) as usize) }
+    }
+
+    extern "C" fn table_free(t: *mut Table) {
+        LOG.with(|l| l.borrow_mut().push(Ev::Free(t as usize)));
+    }
+
+    extern "C" fn cell_drop(h: i64, glue: usize) {
+        LOG.with(|l| l.borrow_mut().push(Ev::Cell(h, glue != 0)));
+    }
+
+    extern "C" fn env_drop(env: *mut u8) {
+        // SAFETY: the test's env block holds an id at offset 0.
+        let id = unsafe { (env as *mut i64).read() };
+        LOG.with(|l| l.borrow_mut().push(Ev::Drop(id)));
+    }
+
     const SRC: &str = "
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f\"{self.id}\") } }
@@ -532,7 +775,9 @@ fn main() {
     let e: E = E.B(1);
     let n: Node = Node { name: String.from(\"n\"), next: None, parent: None };
     let arr: Array[String, 2] = [String.from(\"a\"), String.from(\"b\")];
+    cells(OnceLock.new(), None, Atomic.new(0), VecDeque.new(), Map.new(), Set.new());
 }
+fn cells(o: OnceLock[R], f: Option[File], x: Atomic[i64], q: VecDeque[R], m: Map[String, R], s: Set[String]) {}
 ";
 
     /// The type displayed as `name` among the program's locals.
@@ -591,6 +836,19 @@ fn main() {
             .unwrap();
         engine.add_global_mapping(&free, logged_free as *const () as usize);
         engine.add_global_mapping(&log, logged_drop as *const () as usize);
+        let stubs: [(&str, usize); 6] = [
+            (TABLE_LEN, table_len as *const () as usize),
+            (TABLE_ENTRY, table_entry as *const () as usize),
+            (TABLE_FREE, table_free as *const () as usize),
+            ("karac_once_lock_drop", cell_drop as *const () as usize),
+            ("karac_file_drop", cell_drop as *const () as usize),
+            ("karac_sender_drop", cell_drop as *const () as usize),
+        ];
+        for (n, a) in stubs {
+            if let Some(f) = cx.module.get_function(n) {
+                engine.add_global_mapping(&f, a);
+            }
+        }
         let addrs = names
             .iter()
             .map(|n| engine.get_function_address(n).unwrap())
@@ -781,5 +1039,180 @@ fn main() {
         put(handle, 0, 0);
         assert_eq!(run(g[1], handle), vec![]);
         unsafe { libc::free(handle as *mut c_void) };
+    }
+
+    fn param_ty(l: &Lowered, body: &str, i: usize) -> Ty {
+        let keys: Vec<_> = l
+            .program
+            .bodies
+            .keys()
+            .filter(|k| !k.contains('.'))
+            .collect();
+        l.program
+            .bodies
+            .get(body)
+            .unwrap_or_else(|| panic!("no body {body} in {keys:?}"))
+            .locals[i]
+            .ty
+    }
+
+    /// A `VecDeque` drops its elements front to back, across the wrap,
+    /// then its buffer; an empty one with no buffer owns nothing.
+    #[test]
+    fn mir_llvm_glue_drops_a_ring_front_to_back() {
+        let l = build_source(SRC).unwrap();
+        let q = param_ty(&l, "cells", 4);
+        assert_eq!(l.tys.display(q), "VecDeque[R]");
+        assert_eq!(layout::layout(&l.tys, q).unwrap().size, 32);
+        let c = Context::create();
+        let (_e, g) = jit(&c, &l, &[q]);
+
+        // cap 4, head 3, len 3: slots 3, 0, 1.
+        let p = alloc(32);
+        let buf = alloc(32);
+        for (slot, id) in [(3u64, 10u64), (0, 11), (1, 12), (2, 99)] {
+            put(buf, slot * 8, id);
+        }
+        put(p, 0, buf as u64);
+        put(p, 8, 3);
+        put(p, 16, 3);
+        put(p, 24, 4);
+        assert_eq!(
+            run(g[0], p),
+            vec![
+                Ev::Drop(10),
+                Ev::Drop(11),
+                Ev::Drop(12),
+                Ev::Free(buf as usize)
+            ]
+        );
+
+        // No wrap: head 1, len 2.
+        let buf = alloc(32);
+        for (slot, id) in [(1u64, 20u64), (2, 21)] {
+            put(buf, slot * 8, id);
+        }
+        put(p, 0, buf as u64);
+        put(p, 8, 1);
+        put(p, 16, 2);
+        assert_eq!(
+            run(g[0], p),
+            vec![Ev::Drop(20), Ev::Drop(21), Ev::Free(buf as usize)]
+        );
+
+        for i in 0..4 {
+            put(p, i * 8, 0);
+        }
+        assert_eq!(run(g[0], p), vec![]);
+        unsafe { libc::free(p as *mut c_void) };
+    }
+
+    /// A map drops each entry's key then its value, in the table's order,
+    /// then the table; a set drops its keys; a null handle owns nothing.
+    #[test]
+    fn mir_llvm_glue_drops_map_and_set_entries() {
+        let l = build_source(SRC).unwrap();
+        let (m, st) = (param_ty(&l, "cells", 5), param_ty(&l, "cells", 6));
+        assert_eq!(l.tys.display(m), "Map[String, R]");
+        let c = Context::create();
+        let (_e, g) = jit(&c, &l, &[m, st]);
+
+        // Map[String, R]: entries `(String, R)`, 32 bytes.
+        let entries = alloc(64);
+        let k0 = string_at(entries);
+        put(entries, 24, 1);
+        let k1 = string_at(unsafe { entries.add(32) });
+        put(entries, 56, 2);
+        let mut t = Table {
+            n: 2,
+            size: 32,
+            entries,
+        };
+        let tp = &mut t as *mut Table;
+        let h = alloc(8);
+        put(h, 0, tp as u64);
+        assert_eq!(
+            run(g[0], h),
+            vec![
+                Ev::Free(k0),
+                Ev::Drop(1),
+                Ev::Free(k1),
+                Ev::Drop(2),
+                Ev::Free(tp as usize)
+            ]
+        );
+
+        // Set[String].
+        let k0 = string_at(entries);
+        // SAFETY: `tp` points at `t`, which outlives the call.
+        unsafe {
+            (*tp).n = 1;
+            (*tp).size = 24;
+        }
+        assert_eq!(run(g[1], h), vec![Ev::Free(k0), Ev::Free(tp as usize)]);
+
+        put(h, 0, 0);
+        assert_eq!(run(g[0], h), vec![]);
+        unsafe { libc::free(entries as *mut c_void) };
+        unsafe { libc::free(h as *mut c_void) };
+    }
+
+    /// An erased function drops its captures through its `drop` and frees
+    /// their block; no captures (a null env) owns nothing, and captures
+    /// with no glue are only freed.
+    #[test]
+    fn mir_llvm_glue_drops_an_erased_fn() {
+        let l = build_source(SRC).unwrap();
+        let i64t = l.tys.int(crate::mir::ty::IntTy::I64);
+        let f = l.tys.intern(TyKind::Fn {
+            params: vec![i64t],
+            ret: i64t,
+            kind: crate::mir::ty::FnKind::Fn,
+        });
+        assert_eq!(layout::layout(&l.tys, f).unwrap().size, 24);
+        let c = Context::create();
+        let (_e, g) = jit(&c, &l, &[f]);
+
+        let p = alloc(24);
+        let env = alloc(8);
+        put(env, 0, 5);
+        put(p, 8, env as u64);
+        put(p, 16, env_drop as *const () as u64);
+        assert_eq!(run(g[0], p), vec![Ev::Drop(5), Ev::Free(env as usize)]);
+
+        let env = alloc(8);
+        put(p, 8, env as u64);
+        put(p, 16, 0);
+        assert_eq!(run(g[0], p), vec![Ev::Free(env as usize)]);
+
+        put(p, 8, 0);
+        assert_eq!(run(g[0], p), vec![]);
+        unsafe { libc::free(p as *mut c_void) };
+    }
+
+    /// A library cell hands its handle, and the held type's glue when it
+    /// owns anything, to the runtime; a zero handle and an `Atomic` own
+    /// nothing.
+    #[test]
+    fn mir_llvm_glue_drops_library_cells_through_the_runtime() {
+        let l = build_source(SRC).unwrap();
+        let (o, fl, at) = (
+            param_ty(&l, "cells", 1),
+            l.tys.tcx().adt_of(param_ty(&l, "cells", 2)).unwrap().1[0],
+            param_ty(&l, "cells", 3),
+        );
+        assert_eq!(l.tys.display(fl), "File");
+        assert_eq!(layout::layout(&l.tys, fl).unwrap().size, 8);
+        assert_eq!(layout::layout(&l.tys, at).unwrap().size, 8);
+        let c = Context::create();
+        let (_e, g) = jit(&c, &l, &[o, fl, at]);
+        let h = alloc(8);
+        put(h, 0, 7);
+        assert_eq!(run(g[0], h), vec![Ev::Cell(7, true)]);
+        assert_eq!(run(g[1], h), vec![Ev::Cell(7, false)]);
+        assert_eq!(run(g[2], h), vec![]);
+        put(h, 0, 0);
+        assert_eq!(run(g[0], h), vec![]);
+        unsafe { libc::free(h as *mut c_void) };
     }
 }

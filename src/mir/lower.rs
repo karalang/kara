@@ -11088,7 +11088,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             (IntrinsicKind::Vec, "push" | "contains") => vec![targs[0]],
             (IntrinsicKind::VecDeque, "push_back" | "push_front") => vec![targs[0]],
             (IntrinsicKind::Vec, "insert") => vec![usize_t, targs[0]],
-            (IntrinsicKind::Vec, "resize") => vec![usize_t, targs[0]],
+            // `fn resize(mut ref self, n: i64, val: own T)`: a negative
+            // `n` counts as 0.
+            (IntrinsicKind::Vec, "resize") => {
+                vec![self.tys().tcx().intern(HK::Int(IntSize::I64)), targs[0]]
+            }
             (IntrinsicKind::Map | IntrinsicKind::SortedMap, "insert") => vec![targs[0], targs[1]],
             (IntrinsicKind::Map, "get" | "contains_key" | "remove") => vec![targs[0]],
             (IntrinsicKind::Set, "insert" | "contains" | "remove") => vec![targs[0]],

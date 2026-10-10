@@ -35,7 +35,7 @@ use inkwell::basic_block::BasicBlock as LlBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
+use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FunctionType};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 
@@ -175,6 +175,14 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             _ => self.llcx.void_type().fn_type(&[p.into()], false),
         };
         self.module.add_function(name, ty, Some(Linkage::External))
+    }
+
+    /// The external function `name` of type `ty`, declared once (a
+    /// runtime entry point).
+    pub fn extern_fn(&self, name: &str, ty: FunctionType<'ctx>) -> FunctionValue<'ctx> {
+        self.module
+            .get_function(name)
+            .unwrap_or_else(|| self.module.add_function(name, ty, Some(Linkage::External)))
     }
 
     /// One function per body, by the calling convention above.

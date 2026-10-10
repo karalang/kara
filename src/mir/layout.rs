@@ -13,10 +13,18 @@
 //!   variants) followed by the largest variant laid out as a struct.
 //! - A `shared` handle points at a box: two `u64` counts (strong, then
 //!   weak) and then the type's body, laid out as the plain struct or enum.
-//! - `String`, `Vec` and `VecDeque` are `{ptr, len, cap}`; a slice, a static
-//!   `str` and an erased function value are two words; the map and set
-//!   collections, `shared` and `weak` handles, references to sized types and
-//!   raw pointers are one word.
+//! - `String` and `Vec` are `{ptr, len, cap}`; `VecDeque` is a ring,
+//!   `{ptr, head, len, cap}`. A slice and a static `str` are two words.
+//! - An erased function value is `{code, env, drop}`: `env` points at the
+//!   closure's captures (laid out as its MIR closure type) in a malloc'd
+//!   block, or is null with no captures, and `drop` is the captures' glue,
+//!   or null.
+//! - The map and set collections are one word, a handle on a table the
+//!   runtime builds; `shared` and `weak` handles, references to sized types
+//!   and raw pointers are one word too.
+//! - The library cells: `Sender`, `Receiver` and `File` are a one-word
+//!   handle, `Atomic[T]` is a `T` held in place, and the rest keep the
+//!   fields they declare (one `i64` handle each).
 
 use super::ty::{FloatTy, IntrinsicTy, Ty, TyInterner, TyKind};
 
@@ -75,7 +83,8 @@ fn layout_at(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
         TyKind::Float(FloatTy::F32) => scalar(4),
         TyKind::Float(FloatTy::F64) => scalar(8),
         TyKind::Unit | TyKind::Never | TyKind::FnDef(_) => ZST,
-        TyKind::Str | TyKind::Slice(_) | TyKind::Fn { .. } => TWO_WORDS,
+        TyKind::Str | TyKind::Slice(_) => TWO_WORDS,
+        TyKind::Fn { .. } => Layout { size: 24, align: 8 },
         TyKind::Tuple(ts) | TyKind::Closure(_, ts) => {
             let mut parts = Vec::with_capacity(ts.len());
             for t in ts {
@@ -90,17 +99,44 @@ fn layout_at(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
                 align: el.align,
             }
         }
-        TyKind::Adt(_) => adt_body(tys, t, depth)?,
+        TyKind::Adt(_) => match library_cell(tys, t) {
+            Some(Cell::Handle) => WORD,
+            Some(Cell::Inline(held)) => of(held)?,
+            None => adt_body(tys, t, depth)?,
+        },
         TyKind::Ref(p) | TyKind::MutRef(p) => match tys.kind(p) {
             TyKind::Str | TyKind::Slice(_) => TWO_WORDS,
             _ => WORD,
         },
-        TyKind::Intrinsic(IntrinsicTy::String | IntrinsicTy::Vec(_) | IntrinsicTy::VecDeque(_)) => {
+        TyKind::Intrinsic(IntrinsicTy::String | IntrinsicTy::Vec(_)) => {
             Layout { size: 24, align: 8 }
         }
+        TyKind::Intrinsic(IntrinsicTy::VecDeque(_)) => Layout { size: 32, align: 8 },
         TyKind::Intrinsic(_) | TyKind::Shared(_) | TyKind::Weak(_) | TyKind::RawPtr { .. } => WORD,
         TyKind::Other => return None,
     })
+}
+
+/// How a library cell whose declared fields are not its contents is held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cell {
+    /// A one-word runtime handle (`Sender`, `Receiver`, `File`).
+    Handle,
+    /// The held value, in place (`Atomic[T]`).
+    Inline(Ty),
+}
+
+/// Whether the plain ADT `t` is a library cell laid out other than by its
+/// declared fields.
+pub fn library_cell(tys: &TyInterner, t: Ty) -> Option<Cell> {
+    let TyKind::Adt(a) = tys.kind(t) else {
+        return None;
+    };
+    match tys.adt(a).name.as_str() {
+        "Sender" | "Receiver" | "File" => Some(Cell::Handle),
+        "Atomic" => Some(Cell::Inline(tys.tcx().adt_of(t)?.1.first().copied()?)),
+        _ => None,
+    }
 }
 
 /// The layout of the body of the struct or enum `t`, which is a plain ADT
