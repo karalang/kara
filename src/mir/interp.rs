@@ -266,6 +266,15 @@ const MAX_DEPTH: usize = 200_000;
 /// runner's timeout bounds wall time. `KARAC_MIR_MAX_STEPS` overrides it.
 const MAX_STEPS: u64 = 4_000_000_000;
 
+/// The program's file name as `karac __mir-run` was given it, for
+/// `dbg`'s `[file:line]` prefix; `<unknown>` when nothing set it.
+static SOURCE_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Names the program's file for `dbg` output. The first name set wins.
+pub fn set_source_name(name: &str) {
+    let _ = SOURCE_NAME.set(name.to_string());
+}
+
 /// Runs `entry` with `args`, validating every body first, and records
 /// the [`Event`] trace.
 pub fn run(program: &Program, tys: &TyInterner, entry: &str, args: Vec<Value>) -> RunResult {
@@ -421,6 +430,7 @@ fn run_with(
         resumes: 0,
         parked_flags: Vec::new(),
         tracing_min: 0,
+        debug_render: false,
         tracing_sink: None,
         active_spans: Vec::new(),
         interners: Vec::new(),
@@ -634,6 +644,9 @@ struct Interp<'a> {
     parked_flags: Vec<(Addr, Held)>,
     /// `std.tracing`'s minimum level, by rank (trace 0 .. error 4).
     tracing_min: i128,
+    /// Set while `dbg` renders its value: the `Debug` form, which quotes
+    /// strings and characters and ignores a user `Display`.
+    debug_render: bool,
     /// The exporter `Log.set_exporter` registered, and its type; `None`
     /// sends events to the default `StdoutExporter`.
     tracing_sink: Option<(Value, Ty)>,
@@ -956,8 +969,7 @@ impl<'a> Interp<'a> {
                 Ok(Value::Ref(at.child(1)))
             }
             ("dbg", "") => {
-                // `[file:line] text = value` on stderr; the program's file
-                // name is not known here.
+                // `[file:line] text = value` on stderr.
                 let [line, text, value] = args.as_slice() else {
                     return err("dbg takes a line, a text and a value");
                 };
@@ -966,11 +978,15 @@ impl<'a> Interp<'a> {
                     _ => 0,
                 };
                 let text = self.string_at(text)?;
+                self.debug_render = true;
                 let shown = match arg_tys.get(2) {
-                    Some(&t) => self.display_typed(value, t)?,
-                    None => self.display(value)?,
+                    Some(&t) => self.display_typed(value, t),
+                    None => self.display(value),
                 };
-                self.write_out(true, &format!("[<unknown>:{line}] {text} = {shown}\n"));
+                self.debug_render = false;
+                let shown = shown?;
+                let file = SOURCE_NAME.get().map_or("<unknown>", String::as_str);
+                self.write_out(true, &format!("[{file}:{line}] {text} = {shown}\n"));
                 Ok(Value::Unit)
             }
             ("Client" | "RequestBuilder" | "Response" | "HttpError", _) => {
@@ -4985,11 +5001,22 @@ impl<'a> Interp<'a> {
                 let tys = vec![e; fs.len()];
                 format!("[{}]", list(self, &fs, &tys)?.join(", "))
             }
+            (TyKind::Str | TyKind::Intrinsic(IntrinsicTy::String), _) if self.debug_render => {
+                format!("{:?}", self.display(v)?)
+            }
+            (TyKind::Char, _) if self.debug_render => {
+                let shown = self.display(v)?;
+                match shown.chars().next() {
+                    Some(c) if shown.chars().count() == 1 => format!("{c:?}"),
+                    _ => format!("{shown:?}"),
+                }
+            }
             (
                 TyKind::Intrinsic(IntrinsicTy::Map(kt, vt) | IntrinsicTy::SortedMap(kt, vt)),
                 Value::Box(id),
             ) => {
-                // `{k: v, ...}` in iteration order.
+                // `{k: v, ...}` in iteration order, with no type name (the
+                // 2026-10-08 display decision).
                 let entries = self.vec_elems(*id)?.clone();
                 let mut parts = Vec::with_capacity(entries.len());
                 for e in &entries {
@@ -5015,7 +5042,9 @@ impl<'a> Interp<'a> {
             {
                 "<redacted>".to_string()
             }
-            (TyKind::Adt(_) | TyKind::Shared(_), _) if self.user_display(ty).is_some() => {
+            (TyKind::Adt(_) | TyKind::Shared(_), _)
+                if !self.debug_render && self.user_display(ty).is_some() =>
+            {
                 // A user `Display` wins at every depth (legacy B-2026-08-26-29).
                 let name = self.user_display(ty).unwrap();
                 self.call_display(&name, v)?

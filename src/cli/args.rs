@@ -101,6 +101,7 @@ pub fn parse_args(args: &[String]) -> Command {
                 eprintln!("error: {path}: {e}");
                 process::exit(1);
             });
+            crate::mir::interp::set_source_name(path);
             // The MIR interpreter drops a long chain (a 100 000-node list)
             // by recursion, so it runs on a thread with room for that.
             let result = std::thread::Builder::new()

@@ -11660,9 +11660,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                                 rest.push(Operand::Move(Place::local(l)));
                                 continue;
                             }
-                            if !holds_refs && !self.is_copy(inner) {
-                                let p = self.expr_place(&a.value, false)?;
-                                rest.push(Operand::Move(p.project(ProjElem::Deref)));
+                            if !holds_refs {
+                                // A `Copy` element is read through the
+                                // borrow (`out.push(v)` with `v: ref i64`).
+                                let p = self.expr_place(&a.value, false)?.project(ProjElem::Deref);
+                                rest.push(match self.is_copy(inner) {
+                                    true => Operand::Copy(p),
+                                    false => Operand::Move(p),
+                                });
                                 continue;
                             }
                         }
@@ -12712,6 +12717,47 @@ fn main() {
         let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
         assert_eq!(r.output, "20000\n[10, 20, 30]\ntrue false tok\n4\n");
+    }
+
+    /// A `ref` element stored into a `Vec` of numbers is read through;
+    /// collections show no type name (the 2026-10-08 display decision);
+    /// `dbg` shows the `Debug` form, quoting strings and characters.
+    #[test]
+    fn stored_refs_collection_names_and_dbg_quoting_match_legacy() {
+        let src = r#"
+struct P { a: i64, b: String }
+fn joined(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for v in a.iter() { out.push(v); }
+    for v in b.iter() { out.push(v); }
+    return out;
+}
+fn main() {
+    let a: Vec[i64] = [1, 2];
+    let b: Vec[i64] = [3];
+    let k: Vec[i64] = [1, 2, 3];
+    println(f"{joined(a, b) == k}");
+    let mut m: SortedMap[i64, String] = SortedMap.new();
+    m.insert(2, "b");
+    m.insert(1, "a");
+    let mut s: SortedSet[i64] = SortedSet.new();
+    s.insert(3);
+    s.insert(1);
+    let mut h: Set[String] = Set.new();
+    h.insert("q");
+    println(f"{m} {s} {h}");
+    dbg(P { a: 1, b: "w" });
+    dbg(('c', "s"));
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(r.output, "true\n{1: a, 2: b} {1, 3} {q}\n");
+        assert_eq!(
+            r.stderr,
+            "[<unknown>:23] P { a: 1, b: \"w\" } = P { a: 1, b: \"w\" }\n\
+             [<unknown>:24] ('c', \"s\") = ('c', \"s\")\n"
+        );
     }
 
     /// `Interner`, `LazyLock`, the fences and the HTTP client's request
