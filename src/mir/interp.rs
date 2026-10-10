@@ -458,6 +458,7 @@ fn run_with(
                 None => done,
             },
             Err(Stop::Abort(r)) => Outcome::Aborted(r),
+            Err(Stop::Exit(code)) => Outcome::Exited(code),
             Err(Stop::Error(e)) => Outcome::Error(e),
         }
     };
@@ -538,6 +539,9 @@ fn narrow_float(v: Value, kind: TyKind) -> Value {
 
 enum Stop {
     Abort(AbortReason),
+    /// `process.exit(code)`: the process ends now with `code`, running no
+    /// drops.
+    Exit(i32),
     Error(String),
 }
 
@@ -777,6 +781,10 @@ impl<'a> Interp<'a> {
             // The guard of `critical_section.acquire()`: interrupts were
             // never masked, so there is nothing to restore.
             ("CriticalSectionGuard", "drop") => Ok(Value::Unit),
+            ("process", "exit") => match args.as_slice() {
+                [Value::Int(code)] => Err(Stop::Exit(*code as i32)),
+                _ => err(format!("{name} takes an exit code")),
+            },
             ("mem", "swap") => {
                 let [Value::Ref(a), Value::Ref(b)] = args.as_slice() else {
                     return err(format!("{name} takes two references"));
