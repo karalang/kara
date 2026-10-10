@@ -397,6 +397,8 @@ pub enum CastKind {
     /// A reference into a raw pointer to the same place (`ptr.mut(x)`,
     /// `a.as_ptr()`). The pointer holds no loan: the borrow ends here.
     RefToPtr,
+    /// A raw pointer as another raw pointer (`p as *const u8`).
+    PtrToPtr,
 }
 
 #[derive(Debug, Clone, PartialEq)]

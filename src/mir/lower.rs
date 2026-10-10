@@ -2158,6 +2158,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 _ if char_k(from) && int(to) => Some(CastKind::CharToInt),
                 _ if bool_k(from) && int(to) => Some(CastKind::BoolToInt),
+                _ if matches!(
+                    (tcx.kind(from), tcx.kind(to)),
+                    (HK::RawPtr { .. }, HK::RawPtr { .. })
+                ) =>
+                {
+                    Some(CastKind::PtrToPtr)
+                }
                 (true, _, true, _) => Some(CastKind::IntToInt),
                 (true, _, _, true) => Some(CastKind::IntToFloat),
                 (_, true, true, _) => Some(CastKind::FloatToInt),
@@ -9668,7 +9675,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // A library function that builds something else
                     // (`String.from_utf8` returns a `Result`): named by
                     // its owner alone.
-                    if !matches!(owner, "String" | "char") {
+                    if !matches!(owner, "String" | "char" | "CStr") {
                         return self.unsupported(e.span, &format!("the builtin `{name}`"));
                     }
                     ty_name = owner.to_string();
@@ -14261,9 +14268,14 @@ fn main() {
         volatile_write(pw, 44);
     }
     println(f"{got} {r.control} {b} {a[0]} {v[1]}");
+    let hi: Array[u8, 4] = [104u8, 105u8, 0u8, 0u8];
+    let s = unsafe { CStr.from_ptr(hi.as_mut_ptr() as *const u8) };
+    let lit = c"hello";
+    let t = unsafe { CStr.from_ptr(lit.as_ptr()) };
+    println(f"{s.len()} {t.len()}");
 }
 "#;
-        let out = "7 7 90 90 44\n";
+        let out = "7 7 90 90 44\n2 5\n";
         assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
     }
 

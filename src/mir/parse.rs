@@ -1144,6 +1144,7 @@ impl Parser {
                     "Downgrade" => CastKind::Downgrade,
                     "Upgrade" => CastKind::Upgrade,
                     "RefToPtr" => CastKind::RefToPtr,
+                    "PtrToPtr" => CastKind::PtrToPtr,
                     other => return Err(format!("unknown cast kind `{other}`")),
                 };
                 c.expect(")")?;

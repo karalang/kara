@@ -2985,6 +2985,40 @@ impl<'a> Interp<'a> {
         if (base, method) == ("CStr", "from_bytes") {
             return Ok(Value::Agg(args));
         }
+        if (base, method) == ("CStr", "from_ptr") {
+            // The bytes from the pointed-at element of a byte sequence up
+            // to its first NUL (or its end).
+            let [Value::Ref(p)] = args.as_slice() else {
+                return err(format!("{name} takes a pointer"));
+            };
+            let mut seq = p.clone();
+            let Some(start) = seq.path.pop() else {
+                return err(format!("{name} of a pointer to no sequence"));
+            };
+            let Value::Agg(cells) = self.slot(&seq)? else {
+                return err(format!("{name} of a pointer into no sequence"));
+            };
+            let mut bytes = Vec::new();
+            for c in cells.iter().skip(start as usize) {
+                match c {
+                    Value::Int(0) => break,
+                    Value::Int(b) => bytes.push(Value::Int(*b)),
+                    other => return err(format!("{name}: byte {other:?}")),
+                }
+            }
+            // A `ref CStr` view of them, held until exit like any other
+            // read-only snapshot a library method hands out.
+            let id = self.alloc(HeapObj {
+                count: 1,
+                weak: 0,
+                value: Value::Agg(bytes),
+            });
+            self.snapshots.insert(id);
+            return Ok(Value::Ref(Addr {
+                root: Root::Heap(id),
+                path: Vec::new(),
+            }));
+        }
         let Some(recv) = args.first() else {
             return err(format!("{name} needs a receiver"));
         };
@@ -3019,6 +3053,11 @@ impl<'a> Interp<'a> {
         match method {
             "len" => Ok(Value::Int(bytes.len() as i128)),
             "is_empty" => Ok(Value::Bool(bytes.is_empty())),
+            // The address of the first byte.
+            "as_ptr" => match at {
+                Some(at) => Ok(Value::Ref(at.child(0))),
+                None => err(format!("{name} of an unborrowed value")),
+            },
             "as_bytes" => {
                 let Some(at) = at else {
                     return err(format!("{name} of an unborrowed value"));
@@ -5582,7 +5621,9 @@ impl<'a> Interp<'a> {
                 self.erase(x, from)
             }
             // A raw pointer is the address the reference held.
-            Rvalue::Cast(CastKind::RefToPtr, o, _) => Ok(self.operand(body, o)?.0),
+            Rvalue::Cast(CastKind::RefToPtr | CastKind::PtrToPtr, o, _) => {
+                Ok(self.operand(body, o)?.0)
+            }
             Rvalue::Cast(CastKind::Downgrade, o, _) => {
                 // A new weak handle to the value a `ref shared T`,
                 // `ref weak T` or `ref Option[shared T]` reaches; `None`
