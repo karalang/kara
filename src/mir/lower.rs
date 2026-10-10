@@ -2648,6 +2648,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.stmt(s)?;
         }
         match &block.final_expr {
+            // A value in a `()` slot (the arm of an `if` with no `else`)
+            // is discarded, as a statement's is: built, then dropped.
+            Some(e) if self.discards(e, &dest)? => {
+                self.push_scope();
+                let t = self.expr_ty(e)?;
+                self.temp_of(e, t)?;
+                self.pop_scope()?;
+                self.assign(dest, Rvalue::Use(unit_const(self.unit())));
+            }
             Some(e) => {
                 self.push_scope();
                 self.expr_into(e, dest)?;
@@ -2656,6 +2665,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             None => self.assign(dest, Rvalue::Use(unit_const(self.unit()))),
         }
         self.pop_scope()
+    }
+
+    /// Whether `e`, a block's final expression, has a value that `dest`, a
+    /// `()` place, cannot hold.
+    fn discards(&mut self, e: &'a Expr, dest: &Place) -> R<bool> {
+        let unit = |k: HK| matches!(k, HK::Unit | HK::Never);
+        let (dt, et) = (self.place_type(dest), self.expr_ty(e)?);
+        let tcx = self.tys().tcx();
+        Ok(unit(tcx.kind(dt)) && !unit(tcx.kind(et)))
     }
 
     fn stmt(&mut self, s: &'a Stmt) -> R<()> {
@@ -10304,10 +10322,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let targs = self.tys().tcx().list(targs);
         let usize_t = self.tys().tcx().intern(HK::UInt(UIntSize::Usize));
+        // The fallible forms (`try_push`, `try_resize`) take what the
+        // plain ones do.
+        let method = method.strip_prefix("try_").unwrap_or(method);
         Some(match (kind, method) {
             (IntrinsicKind::Vec, "push" | "contains") => vec![targs[0]],
             (IntrinsicKind::VecDeque, "push_back" | "push_front") => vec![targs[0]],
             (IntrinsicKind::Vec, "insert") => vec![usize_t, targs[0]],
+            (IntrinsicKind::Vec, "resize") => vec![usize_t, targs[0]],
             (IntrinsicKind::Map | IntrinsicKind::SortedMap, "insert") => vec![targs[0], targs[1]],
             (IntrinsicKind::Map, "get" | "contains_key" | "remove") => vec![targs[0]],
             (IntrinsicKind::Set, "insert" | "contains" | "remove") => vec![targs[0]],
@@ -11968,6 +11990,12 @@ const BAKED_SOURCES: &[(&str, &[&str])] = &[
 /// `tx.send(x)`): the value moves in, where other non-Copy arguments (keys,
 /// needles, text) are lent.
 fn stores_argument(method: &str) -> bool {
+    // The fallible forms (`try_append`, `try_resize`) keep what the plain
+    // ones do.
+    let method = match method.strip_prefix("try_") {
+        Some(m) if m != "send" => m,
+        _ => method,
+    };
     matches!(
         method,
         "push"

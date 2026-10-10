@@ -4179,6 +4179,13 @@ impl<'a> Interp<'a> {
                 }
                 Ok(Value::Shared(*id))
             }
+            // A new weak handle to the same object.
+            (TyKind::Weak(_), Value::Weak(id)) => {
+                if *id != EMPTY_WEAK {
+                    self.live(*id)?.weak += 1;
+                }
+                Ok(Value::Weak(*id))
+            }
             (TyKind::Intrinsic(IntrinsicTy::Map(k, val) | IntrinsicTy::SortedMap(k, val)), _) => {
                 let id = self.box_behind(v)?;
                 let entries = self.vec_elems(id)?.clone();
@@ -4844,6 +4851,23 @@ impl<'a> Interp<'a> {
         match payload.map(|t| (t, self.tys.kind(t))) {
             Some((_, TyKind::Ref(_) | TyKind::MutRef(_))) | None => {
                 self.option(ret, Some(Value::Ref(at)))
+            }
+            // A `weak` element read as the `shared` type it points at
+            // (`Map[K, weak N].get`): upgraded, so a dead target reads as
+            // `None` (core semantics §6.5).
+            Some((_, TyKind::Shared(_))) if matches!(self.slot(&at)?, Value::Weak(_)) => {
+                let Value::Weak(id) = self.slot(&at)? else {
+                    unreachable!()
+                };
+                if id == EMPTY_WEAK {
+                    return self.option(ret, None);
+                }
+                let obj = self.live(id)?;
+                let alive = obj.count > 0;
+                if alive {
+                    obj.count += 1;
+                }
+                self.option(ret, alive.then_some(Value::Shared(id)))
             }
             Some((t, _)) => {
                 let v = self.slot(&at)?;
@@ -6324,8 +6348,14 @@ impl<'a> Interp<'a> {
                 root: Root::Heap(id),
                 path: Vec::new(),
             };
+            // The body may hold the last weak handle to its own box (a
+            // node whose `weak` field points at itself): keep the box for
+            // the length of the drop, so releasing that handle cannot free
+            // it under us.
+            self.live(id)?.weak += 1;
             self.drop_adt(&root, ty, a)?;
             let obj = self.live(id)?;
+            obj.weak -= 1;
             if obj.weak > 0 {
                 // Weak handles keep the slot, dead, for `Upgrade` to see.
                 obj.value = Value::Uninit;

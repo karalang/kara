@@ -277,6 +277,17 @@ impl<'ctx> Cx<'ctx, '_> {
             .map_err(|e| e.to_string())?;
         let last = self.is_zero(left)?;
         self.if_then(last, |cx| {
+            // Hold a weak count across the drop: the body may hold the last
+            // weak handle to its own box, whose release must not free it.
+            let wp = cx.offset(b, 8)?;
+            let w = cx.load_i64(wp)?;
+            let held = cx
+                .builder
+                .build_int_add(w, cx.i64(1), "")
+                .map_err(|e| e.to_string())?;
+            cx.builder
+                .build_store(wp, held)
+                .map_err(|e| e.to_string())?;
             if cx.adt_has_drop_body(a)? {
                 // The body takes a reference to a handle, as every read
                 // through one does: the handle at `p`.
@@ -287,7 +298,14 @@ impl<'ctx> Cx<'ctx, '_> {
             let off = layout::shared_body_offset(cx.tys, ty)
                 .ok_or_else(|| format!("`{}` has no layout", cx.tys.display(ty)))?;
             cx.drop_fields(cx.offset(b, off)?, ty)?;
-            let weak = cx.load_i64(cx.offset(b, 8)?)?;
+            let weak = cx.load_i64(wp)?;
+            let weak = cx
+                .builder
+                .build_int_sub(weak, cx.i64(1), "")
+                .map_err(|e| e.to_string())?;
+            cx.builder
+                .build_store(wp, weak)
+                .map_err(|e| e.to_string())?;
             let no_weak = cx.is_zero(weak)?;
             cx.if_then(no_weak, |cx| cx.free(b))
         })
@@ -748,6 +766,16 @@ fn main() {
         put(handle, 0, b as u64);
         assert_eq!(run(g[0], handle), vec![Ev::Free(name)]);
         assert_eq!(run(g[1], handle), vec![Ev::Free(b as usize)]);
+
+        // A body whose weak field points at its own box: releasing that
+        // handle during the drop must not free the box under it.
+        let (b, name) = new_box(1, 1);
+        put(b, body + off(&l, node, None, 2), b as u64);
+        put(handle, 0, b as u64);
+        assert_eq!(
+            run(g[0], handle),
+            vec![Ev::Free(name), Ev::Free(b as usize)]
+        );
 
         // An empty weak handle is null and owns nothing.
         put(handle, 0, 0);
