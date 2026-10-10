@@ -1385,7 +1385,11 @@ impl<'a> Interp<'a> {
             }
             (_, "as_slice_mut") => self.view_method(name, "as_mut_slice", args, ret),
             ("Vec", "get_unchecked") => self.view_method(name, method, args, ret),
-            (_, "as_slice" | "as_mut_slice" | "slice" | "slice_mut") | ("Slice" | "Array", _) => {
+            (_, "as_slice" | "as_mut_slice" | "slice" | "slice_mut")
+            | ("Slice", _)
+            | ("Array", _)
+                if !(base == "Array" && method == "clone") =>
+            {
                 self.view_method(name, method, args, ret)
             }
             ("format_spec", "") => {
