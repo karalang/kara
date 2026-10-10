@@ -260,7 +260,7 @@ impl RunResult {
     }
 }
 
-const MAX_DEPTH: usize = 1000;
+const MAX_DEPTH: usize = 200_000;
 /// The default step budget, which only stops a runaway loop: real
 /// programs in the corpus run tens of millions of steps, and the corpus
 /// runner's timeout bounds wall time. `KARAC_MIR_MAX_STEPS` overrides it.
@@ -719,7 +719,9 @@ impl<'a> Interp<'a> {
         if self.trace {
             self.events.push(Event::Enter(name.to_string()));
         }
-        let result = self.run_body(body);
+        // A deep recursion outgrows any fixed thread stack: the body runs
+        // on a fresh segment once this one runs low.
+        let result = stacker::maybe_grow(256 * 1024, 16 * 1024 * 1024, || self.run_body(body));
         let frame = self.frames.pop().expect("frame");
         match (&result, frame_at) {
             (Ok(Value::Variant(1, _)), Some(at)) if coroutine::is_resume(name) => {
@@ -973,6 +975,25 @@ impl<'a> Interp<'a> {
             }
             ("Client" | "RequestBuilder" | "Response" | "HttpError", _) => {
                 self.http_method(name, base, method, args, ret)
+            }
+            ("Secret", "expose" | "expose_mut" | "ct_eq") => {
+                // The value is the struct's one field, lent; `ct_eq`
+                // compares two such values (the interpreter has no timing
+                // to keep constant).
+                let Some(recv) = args.first() else {
+                    return err(format!("{name} needs its receiver"));
+                };
+                let at = self.cell_struct(recv, name)?.child(0);
+                if method != "ct_eq" {
+                    return Ok(Value::Ref(at));
+                }
+                let Some(other) = args.get(1) else {
+                    return err(format!("{name} takes another secret"));
+                };
+                let other = self.cell_struct(other, name)?.child(0);
+                let a = self.key_form(&Value::Ref(at))?;
+                let b = self.key_form(&Value::Ref(other))?;
+                Ok(Value::Bool(a == b))
             }
             ("Interner", "new") => {
                 self.interners.push(Interned::default());
@@ -2189,7 +2210,23 @@ impl<'a> Interp<'a> {
                 }));
             }
         }
-        all.extend(args);
+        // A closure that names a `Copy` parameter's type (`|a: i64, b: i64|`
+        // for `sort_by`'s `Fn(ref T, ref T)`) takes the value, not the
+        // reference the library hands it.
+        let skip = all.len();
+        for (i, a) in args.into_iter().enumerate() {
+            let pt = f.body.locals.get(skip + i + 1).map(|l| l.ty);
+            let a = match (a, pt) {
+                (Value::Ref(at), Some(t))
+                    if !matches!(self.tys.kind(t), TyKind::Ref(_) | TyKind::MutRef(_))
+                        && !self.needs_drop(t) =>
+                {
+                    self.slot(&at)?
+                }
+                (a, _) => a,
+            };
+            all.push(a);
+        }
         self.call(&f.body.instance.name, all)
     }
 
@@ -3329,12 +3366,21 @@ impl<'a> Interp<'a> {
                             return err(format!("{name}: a malformed entry"));
                         };
                         let old = std::mem::replace(&mut entry[1], val.clone());
+                        // A call whose result the program discards (a
+                        // `match` arm in statement position) is typed `()`.
+                        if ret == self.tys.unit() {
+                            self.drop_value(old, val_ty)?;
+                            return Ok(Value::Unit);
+                        }
                         self.option(ret, Some(old))
                     }
                     (true, None, [val]) => {
                         let entry = Value::Agg(vec![key.clone(), val.clone()]);
                         let at = self.insert_at(id, key, is_map, sorted)?;
                         self.table_insert(id, at, entry, key)?;
+                        if ret == self.tys.unit() {
+                            return Ok(Value::Unit);
+                        }
                         self.option(ret, None)
                     }
                     (false, Some(_), []) => {
@@ -7133,6 +7179,12 @@ fn split_method(name: &str) -> (&str, &str) {
 
 fn locate(s: Stop, body: &Body, at: String) -> Stop {
     match s {
+        // A deep recursion's chain stops growing once it is long: the
+        // innermost frames say where it failed.
+        Stop::Error(e) if e.len() > 2000 => match e.starts_with("... ") {
+            true => Stop::Error(e),
+            false => Stop::Error(format!("... {e}")),
+        },
         Stop::Error(e) => Stop::Error(format!("in {} at {at}: {e}", body.instance.name)),
         abort => abort,
     }

@@ -12675,6 +12675,45 @@ fn main() {
         assert_eq!(r.output, "2 7 2 20\n");
     }
 
+    /// A recursion deeper than a thread stack holds, a by-value closure
+    /// for `sort_by`, `Secret`, and a `Map.insert` whose result the `match`
+    /// discards, as legacy prints them.
+    #[test]
+    fn deep_recursion_secret_and_discarded_insert_match_legacy() {
+        let src = r#"
+import std.secret.{Secret};
+fn down(n: i64) -> i64 {
+    if n == 0 { return 0; }
+    return 1 + down(n - 1);
+}
+fn first_dup(xs: Vec[i64]) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    for x in xs {
+        match seen.get(x) {
+            Some(_) => return x,
+            None => seen.insert(x, 1),
+        }
+    }
+    -1
+}
+fn main() {
+    println(down(20000));
+    let cmp = |a: i64, b: i64| a.cmp(b);
+    let mut v: Vec[i64] = [30, 10, 20];
+    v.sort_by(cmp);
+    println(v);
+    let a = Secret.new("tok");
+    let b = Secret.new("tok");
+    let c = Secret.new("other");
+    println(f"{a.ct_eq(b)} {a.ct_eq(c)} {a.expose()}");
+    println(first_dup([4, 7, 4]));
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(r.output, "20000\n[10, 20, 30]\ntrue false tok\n4\n");
+    }
+
     /// `Interner`, `LazyLock`, the fences and the HTTP client's request
     /// builder, as legacy prints them (the request fails before any
     /// connection: its URL does not parse).
