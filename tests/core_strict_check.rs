@@ -1899,6 +1899,60 @@ fn a_fresh_value_is_not_returned_by_reference() {
     );
 }
 
+/// §5.6: `let rel = ref self.rels[i]` borrows that element until `rel`'s
+/// last use, and a `for` over `rel.deps` borrows it for the whole loop, so
+/// a `mut ref self` call inside is a conflict; fix iterates a copy.
+#[test]
+fn a_loop_over_a_ref_local_borrows_what_it_points_into() {
+    rejected_then_fixed_in(
+        "ref-let-loop",
+        "struct Rel { deps: Vec[i64] }\n\
+         struct R { rels: Vec[Rel], seen: Vec[i64] }\n\
+         impl R {\n\
+             fn require(mut ref self, i: i64) {\n\
+                 self.seen.push(i);\n\
+                 let rel = ref self.rels[i];\n\
+                 for d in rel.deps { self.require(d); }\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let mut r = R { rels: [Rel { deps: [1] }, Rel { deps: [] }], seen: [] };\n\
+             r.require(0);\n\
+             println(r.seen.len());\n\
+         }\n",
+        "while the `for` loop over `rel.deps` borrows it",
+        "for d in rel.deps.clone()",
+        1,
+    );
+    rejected_with(
+        "ref-let-used-after-write",
+        "struct R { names: Vec[String], n: i64 }\n\
+         impl R {\n\
+             fn bump(mut ref self) { self.n = self.n + 1; }\n\
+             fn run(mut ref self) {\n\
+                 let first = ref self.names[0];\n\
+                 self.bump();\n\
+                 println(first);\n\
+             }\n\
+         }\n\
+         fn main() { let mut r = R { names: [\"a\"], n: 0 }; r.run(); }\n",
+        "while `ref first` borrows `self.names[..]`",
+    );
+    accepted(
+        "ref-let-done-before-write",
+        "struct R { names: Vec[String], n: i64 }\n\
+         impl R {\n\
+             fn bump(mut ref self) { self.n = self.n + 1; }\n\
+             fn run(mut ref self) {\n\
+                 let first = ref self.names[0];\n\
+                 println(first);\n\
+                 self.bump();\n\
+             }\n\
+         }\n\
+         fn main() { let mut r = R { names: [\"a\"], n: 0 }; r.run(); }\n",
+    );
+}
+
 /// `check` must fail with `expect` in its output (no fix is expected).
 fn rejected_with(tag: &str, src: &str, expect: &str) {
     let (dir, path) = fixture(tag, src);

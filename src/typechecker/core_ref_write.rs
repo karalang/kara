@@ -80,10 +80,14 @@ struct Walk<'t, 'a> {
     errors: Vec<(Span, String, Option<FixIt>)>,
     /// The places enclosing `for` loops iterate, innermost last.
     borrowed: Vec<Borrowed>,
+    /// Locals bound by `let name = ref <place>`: the local, and the place it
+    /// borrows (root, path, through a handle). A `for` over a place inside
+    /// such a local borrows that place for the whole loop.
+    ref_lets: Vec<(Root, Root, Vec<Option<String>>, bool)>,
     /// The `if` / `match` branches the walk is inside (see `exclusive`).
     branches: Vec<(usize, usize)>,
     /// Conflicting writes to a borrowed place (§5.6, §6.2).
-    conflicts: Vec<(Span, String)>,
+    conflicts: Vec<(Span, String, Option<FixIt>)>,
     /// The program's own free functions by name, for the kind check at a
     /// call (§9.6). Library functions are not migrated to `MutFn` yet.
     fn_decls: &'t FxHashMap<String, &'a Function>,
@@ -123,6 +127,8 @@ struct Borrowed {
     handle: bool,
     /// For a `ref` pattern binding: what it borrows until its last use.
     binding: Option<RefHold>,
+    /// The edit that removes a conflict with this borrow, when one is known.
+    fix: Option<FixIt>,
 }
 
 /// A `ref` pattern binding's borrow (§5.6): a write to the place conflicts
@@ -227,6 +233,7 @@ impl<'a> TypeChecker<'a> {
             self_fix: None,
             errors: Vec::new(),
             borrowed: Vec::new(),
+            ref_lets: Vec::new(),
             branches: Vec::new(),
             conflicts: Vec::new(),
             fn_decls: &fn_decls,
@@ -274,6 +281,7 @@ impl<'a> TypeChecker<'a> {
                 })
                 .collect()];
             w.borrowed.clear();
+            w.ref_lets.clear();
             w.branches.clear();
             w.mut_fn_params.clear();
             w.mut_closure_locals.clear();
@@ -300,10 +308,16 @@ impl<'a> TypeChecker<'a> {
         for (span, message, fix) in prefix_errors {
             self.type_error_with_fix_it(message, span, TypeErrorKind::CapturePrefixRemoved, fix);
         }
-        conflicts.sort_by_key(|(s, _)| s.offset);
+        conflicts.sort_by_key(|(s, _, _)| s.offset);
         conflicts.dedup_by(|a, b| a.0.offset == b.0.offset);
-        for (span, message) in conflicts {
-            self.type_error(message, span, TypeErrorKind::BorrowConflict);
+        let mut fixed_loops: FxHashSet<usize> = FxHashSet::default();
+        for (span, message, fix) in conflicts {
+            match fix.filter(|f| fixed_loops.insert(f.span.offset)) {
+                Some(fix) => {
+                    self.type_error_with_fix_it(message, span, TypeErrorKind::BorrowConflict, fix)
+                }
+                None => self.type_error(message, span, TypeErrorKind::BorrowConflict),
+            }
         }
         errors.sort_by_key(|(s, _, _)| s.offset);
         errors.dedup_by(|a, b| a.0.offset == b.0.offset);
@@ -328,12 +342,17 @@ impl<'a> TypeChecker<'a> {
 impl Walk<'_, '_> {
     fn block(&mut self, b: &Block) {
         self.scopes.push(Vec::new());
-        for s in &b.stmts {
+        let lets = self.ref_lets.len();
+        let mut held = Vec::new();
+        for (i, s) in b.stmts.iter().enumerate() {
             self.stmt(s);
+            held.extend(self.hold_ref_let(s, &b.stmts[i + 1..], b.final_expr.as_deref()));
         }
         if let Some(e) = &b.final_expr {
             self.expr(e);
         }
+        self.release(&held);
+        self.ref_lets.truncate(lets);
         self.scopes.pop();
         let depth = self.scopes.len();
         self.mut_closure_locals.retain(|((i, _), _)| *i < depth);
@@ -454,6 +473,7 @@ impl Walk<'_, '_> {
             text: place_text(e)?,
             handle,
             binding: None,
+            fix: None,
         })
     }
 
@@ -472,6 +492,76 @@ impl Walk<'_, '_> {
     fn release(&mut self, keys: &[usize]) {
         self.borrowed
             .retain(|b| b.binding.as_ref().is_none_or(|h| !keys.contains(&h.at)));
+    }
+
+    /// §5.6: `let name = ref <place>` borrows the place from here to the
+    /// last use of `name` in `rest` / `tail`, as a `ref` pattern binding
+    /// does. Returns what identifies the hold for `release`.
+    fn hold_ref_let(&mut self, s: &Stmt, rest: &[Stmt], tail: Option<&Expr>) -> Vec<usize> {
+        let StmtKind::Let { pattern, value, .. } = &s.kind else {
+            return Vec::new();
+        };
+        let (
+            PatternKind::Binding(name),
+            ExprKind::Unary {
+                op: UnaryOp::Ref,
+                operand,
+            },
+        ) = (&pattern.kind, &value.kind)
+        else {
+            return Vec::new();
+        };
+        let (Some((root, path, handle)), Some(text)) =
+            (self.place_path(operand), place_text(operand))
+        else {
+            return Vec::new();
+        };
+        self.ref_lets
+            .push((self.root_of(name), root, path.clone(), handle));
+        let rest = Block {
+            stmts: rest.to_vec(),
+            final_expr: tail.map(|e| Box::new(e.clone())),
+            span: s.span,
+        };
+        let mut uses = Vec::new();
+        uses_in_block(&rest, name, &mut self.branches.clone(), &mut uses);
+        if uses.is_empty() {
+            return Vec::new();
+        }
+        self.hold(vec![Borrowed {
+            root,
+            path,
+            text,
+            handle,
+            binding: Some(RefHold {
+                name: name.clone(),
+                at: pattern.span.offset,
+                uses,
+            }),
+            fix: None,
+        }])
+    }
+
+    /// The place a `for` over `iterable` borrows through a `let … = ref`
+    /// local it is rooted at: `rel.deps` after `let rel = ref self.rels[i]`
+    /// borrows `self.rels[..].deps` for the whole loop.
+    fn iterated_through_ref_let(&self, iterable: &Expr) -> Option<Borrowed> {
+        let inner = self.iterated_place(iterable)?;
+        let (_, base, base_path, handle) = self
+            .ref_lets
+            .iter()
+            .rev()
+            .find(|(local, ..)| *local == inner.root)?;
+        let mut path = base_path.clone();
+        path.extend(inner.path);
+        Some(Borrowed {
+            root: *base,
+            path,
+            text: inner.text,
+            handle: *handle || inner.handle,
+            binding: None,
+            fix: None,
+        })
     }
 
     /// The scrutinee place each `ref` / `mut ref` binding of `pattern`
@@ -519,6 +609,7 @@ impl Walk<'_, '_> {
                         at: sp.offset,
                         uses,
                     }),
+                    fix: None,
                 });
             }
         }
@@ -574,7 +665,8 @@ impl Walk<'_, '_> {
                 b.text
             )
         };
-        self.conflicts.push((at, message));
+        let fix = b.fix.clone();
+        self.conflicts.push((at, message, fix));
     }
 
     fn lookup(&self, name: &str) -> Option<&Binding> {
@@ -695,16 +787,26 @@ impl Walk<'_, '_> {
                 } else {
                     (Origin::Owned, None)
                 };
+                let before = self.borrowed.len();
                 let borrowed = self.iterated_place(iterable);
-                let pushed = borrowed.is_some();
                 self.borrowed.extend(borrowed);
+                if let Some(mut b) = self.iterated_through_ref_let(iterable) {
+                    // A conflict here is fixed by iterating a copy.
+                    b.fix = Some(FixIt {
+                        span: Span {
+                            offset: iterable.span.offset + iterable.span.length,
+                            length: 0,
+                            ..iterable.span
+                        },
+                        replacement: ".clone()".to_string(),
+                    });
+                    self.borrowed.push(b);
+                }
                 self.scopes.push(Vec::new());
                 self.bind(pattern, origin, fix);
                 self.block(body);
                 self.scopes.pop();
-                if pushed {
-                    self.borrowed.pop();
-                }
+                self.borrowed.truncate(before);
                 return;
             }
             ExprKind::Match { scrutinee, arms } => {
