@@ -70,7 +70,8 @@ POST_M1 = [
             r"|\bClient\.(?:new|builder)\b|\bRequestBuilder\b"),
     ("process", r"\bCommand\b|\bChild\b"),
     ("dyn", r"\bdyn\s+[A-Z]"),
-    ("escaping", r"\bescaping\b"),
+    # §9.3: a returned closure escapes, as does one passed to an `escaping` parameter.
+    ("escaping", r"\bescaping\b|->\s*(?:Once|Mut)?Fn\s*\("),
     # Deferred past M1 by design.md: providers to M4a services (§ Deferred),
     # SIMD, contracts and predicates on distinct types to the later tracks.
     ("provider", r"\bwith_provider\b|\bproviders\s*\{"),
