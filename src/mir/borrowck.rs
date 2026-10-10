@@ -50,6 +50,7 @@ use super::place_ty::place_ty;
 use super::pretty::place as show_place;
 use super::syntax::*;
 use super::ty::{IntrinsicTy, Ty, TyInterner, TyKind};
+use crate::ty::TyKind as SharedKind;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Access {
@@ -591,28 +592,30 @@ fn clear_moved<'o>(o: &mut Origins, ops: impl IntoIterator<Item = &'o Operand>) 
 /// so can anything with a part that can; a `shared` handle cannot (§5.7).
 /// A type MIR cannot see into is assumed to, and so is `TaskGroup`.
 fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
-    fn go(tys: &TyInterner, ty: Ty, seen: &mut Vec<Ty>) -> bool {
-        if seen.contains(&ty) {
+    // `stored`: `ty` sits in a struct or enum field or a collection, where
+    // a closure escapes (§9.3) and so holds no borrow.
+    fn go(tys: &TyInterner, ty: Ty, stored: bool, seen: &mut Vec<(Ty, bool)>) -> bool {
+        if seen.contains(&(ty, stored)) {
             return false;
         }
-        seen.push(ty);
+        seen.push((ty, stored));
         match tys.kind(ty) {
-            // An erased function value may hold whatever its closure captured.
-            TyKind::Ref(_)
-            | TyKind::MutRef(_)
-            | TyKind::Slice(_)
-            | TyKind::Fn { .. }
-            | TyKind::Other => true,
-            TyKind::Tuple(ts) | TyKind::Closure(_, ts) => ts.iter().any(|t| go(tys, *t, seen)),
-            TyKind::Array(t, _) => go(tys, t, seen),
+            TyKind::Ref(_) | TyKind::MutRef(_) | TyKind::Slice(_) | TyKind::Other => true,
+            // An erased function value may hold whatever its closure
+            // captured, unless it was stored, which made it capture by move.
+            TyKind::Fn { .. } => !stored,
+            TyKind::Tuple(ts) | TyKind::Closure(_, ts) => {
+                ts.iter().any(|t| go(tys, *t, stored, seen))
+            }
+            TyKind::Array(t, _) => go(tys, t, stored, seen),
             TyKind::Intrinsic(
                 IntrinsicTy::Vec(e)
                 | IntrinsicTy::Set(e)
                 | IntrinsicTy::VecDeque(e)
                 | IntrinsicTy::SortedSet(e),
-            ) => go(tys, e, seen),
+            ) => go(tys, e, true, seen),
             TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
-                go(tys, k, seen) || go(tys, v, seen)
+                go(tys, k, true, seen) || go(tys, v, true, seen)
             }
             TyKind::Adt(a) => {
                 let adt = tys.adt(a);
@@ -623,17 +626,28 @@ fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
                 }
                 let counts: Vec<usize> = adt.variants.iter().map(|v| v.fields.len()).collect();
                 let is_enum = adt.is_enum;
+                // A field declared as a type parameter holds what the
+                // instance put there, a view included (§5.8): an adaptor
+                // holding a borrowing closure is a local view. A field
+                // declared as a function type holds an escaped closure.
+                let decl = tys.tcx().adt_of(ty).map(|(d, _)| d);
+                let is_param = |v: usize, f: usize| {
+                    decl.as_ref()
+                        .and_then(|d| d.variants.get(v)?.fields.get(f).map(|(_, t)| *t))
+                        .is_some_and(|t| matches!(tys.tcx().kind(t), SharedKind::Param(_)))
+                };
                 counts.iter().enumerate().any(|(v, n)| {
                     (0..*n as u32).any(|f| {
+                        let stored = !is_param(v, f as usize);
                         tys.field_ty(ty, is_enum.then_some(v as u32), f)
-                            .is_some_and(|t| go(tys, t, seen))
+                            .is_some_and(|t| go(tys, t, stored, seen))
                     })
                 })
             }
             _ => false,
         }
     }
-    go(tys, ty, &mut Vec::new())
+    go(tys, ty, false, &mut Vec::new())
 }
 
 /// `TaskGroup` holds its tasks' closures outside its declared fields and

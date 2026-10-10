@@ -13500,6 +13500,26 @@ fn main() {{
         assert!(err.contains("E0516"), "{err}");
     }
 
+    /// A closure stored in a struct field escapes and captures by move
+    /// (core semantics §9.3), so a struct holding an `Fn` holds no borrow:
+    /// lending a `ref` argument beside its `mut ref self` keeps no loan.
+    #[test]
+    fn a_stored_fn_field_holds_no_borrow() {
+        let src = "
+type H = Fn(i64) -> i64;
+struct App { n: i64, h: H }
+impl App {
+    fn handle(mut ref self, r: ref String) -> i64 { self.n = self.n + r.len() as i64; self.n }
+}
+fn main() {
+    let mut app = App { n: 0, h: |x| x + 1 };
+    let s = \"abc\".to_string();
+    println(app.handle(s));
+}
+";
+        assert_eq!(run_source(src), Ok(("3\n".to_string(), Some(0))));
+    }
+
     /// A tuple literal is built at its slot's element types: a struct
     /// field, an array element, a nested tuple, a return value.
     #[test]
