@@ -71,6 +71,11 @@ impl<'a> super::TypeChecker<'a> {
                 if matches!(name.as_str(), "Option" | "Result") {
                     return args.iter().all(|a| self.is_copy_type_during_check(a));
                 }
+                // v2 core §5.2: `StringSlice` is `Str`, a shared view, which
+                // copies as the reference it is.
+                if name == "StringSlice" && self.cli_lint_overrides.strict_core {
+                    return true;
+                }
                 if let Some(info) = self.env.structs.get(name) {
                     info.derived_traits.contains("Copy")
                 } else if let Some(info) = self.env.enums.get(name) {

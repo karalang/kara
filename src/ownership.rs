@@ -1164,21 +1164,63 @@ pub(crate) fn core_rules() -> bool {
     CORE_RULES.with(|c| c.get())
 }
 
-/// Whether `ty` holds a reference-counted handle anywhere a copy would
-/// have to count it.
-fn contains_handle(ty: &Type, tc: &TypeCheckResult) -> bool {
-    match ty {
-        Type::Shared(_) | Type::Rc(_) | Type::Arc(_) => true,
-        Type::Tuple(types) => types.iter().any(|t| contains_handle(t, tc)),
-        Type::Named { name, args } => {
-            tc.enum_info
-                .get(name)
-                .is_some_and(|info| info.is_shared || info.is_par)
-                || (matches!(name.as_str(), "Option" | "Result")
-                    && args.iter().any(|a| contains_handle(a, tc)))
-        }
-        _ => false,
+/// v2 core §4.6: when `let <struct pattern> = <local>` binds every part it
+/// names by copy or by `ref`, the parts it reads, as `local.field` places.
+/// `None` when some binding moves, or for any other shape, and outside the
+/// strict commands.
+pub(crate) fn core_copied_parts(
+    pattern: &Pattern,
+    value: &Expr,
+    tc: &TypeCheckResult,
+    is_copy: &dyn Fn(&Type) -> bool,
+    binds: &dyn Fn(&Pattern) -> bool,
+) -> Option<Vec<Expr>> {
+    if !core_rules() || !matches!(value.kind, ExprKind::Identifier(_)) {
+        return None;
     }
+    let PatternKind::Struct { fields, .. } = &pattern.kind else {
+        return None;
+    };
+    // A field of a type parameter's type is not known to copy, so a generic
+    // struct's parts are judged conservatively below.
+    let Some(Type::Named { name, .. }) = tc.expr_types.get(&SpanKey::from_span(&value.span)) else {
+        return None;
+    };
+    let info = tc.struct_info.get(name)?;
+    if info.is_shared {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for f in fields {
+        let (_, fty, _) = info.fields.iter().find(|(n, _, _)| *n == f.name)?;
+        let reads = match &f.pattern {
+            Some(p) if matches!(p.kind, PatternKind::Wildcard) => false,
+            Some(p) if matches!(p.kind, PatternKind::Binding(_)) => {
+                if binds(p) && !is_copy(fty) {
+                    return None;
+                }
+                true
+            }
+            Some(_) => return None,
+            None => {
+                if !is_copy(fty) {
+                    return None;
+                }
+                true
+            }
+        };
+        if reads {
+            parts.push(Expr {
+                kind: ExprKind::FieldAccess {
+                    object: Box::new(value.clone()),
+                    field: f.name.clone(),
+                },
+                span: f.span,
+                id: value.id,
+            });
+        }
+    }
+    Some(parts)
 }
 
 fn is_copy_type_basic(ty: &Type) -> bool {
@@ -1343,11 +1385,8 @@ pub(crate) fn is_copy_type_in_scope(
         Type::Function { .. } => true,
         Type::Named { name, args } => {
             if matches!(name.as_str(), "Option" | "Result") {
-                // §6.1: only `Option`s and tuples of handles count; a
-                // `Result` holding one moves.
-                if name == "Result" && core_rules() && args.iter().any(|a| contains_handle(a, tc)) {
-                    return false;
-                }
+                // §6.1: an `Option` or `Result` of handles and `Copy` parts
+                // is a handle aggregate, duplicated by counting.
                 return args
                     .iter()
                     .all(|a| is_copy_type_in_scope(a, tc, copy_params));

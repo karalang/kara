@@ -499,6 +499,15 @@ impl<'a> UseClassifier<'a> {
                 // (design.md § @ Bindings) — read, not consume. Mirrors
                 // the `block_stmt` Let-arm gate in the legacy walker.
                 let rhs_mode = self.let_rhs_mode(pattern);
+                // v2 core §4.6: a struct pattern that copies or borrows its
+                // parts reads just those parts of a local.
+                let copied_parts = crate::ownership::core_copied_parts(
+                    pattern,
+                    value,
+                    self.tc,
+                    &|t| self.is_copy_type(t),
+                    &|p| self.pattern_binds_anything(p),
+                );
                 let rhs_is_closure = matches!(value.kind, ExprKind::Closure { .. });
                 let pre_capture_count = if rhs_is_closure {
                     self.classification
@@ -509,7 +518,14 @@ impl<'a> UseClassifier<'a> {
                 } else {
                     0
                 };
-                self.walk_expr(value, rhs_mode);
+                match &copied_parts {
+                    Some(parts) => {
+                        for part in parts {
+                            self.walk_expr(part, Mode::Reading);
+                        }
+                    }
+                    None => self.walk_expr(value, rhs_mode),
+                }
                 let rhs_is_once = rhs_is_closure && {
                     let post_capture_count = self
                         .classification

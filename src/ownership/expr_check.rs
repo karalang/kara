@@ -146,6 +146,17 @@ impl<'a> super::OwnershipChecker<'a> {
     /// don't bind. Used by step 4 of the consume predicate (match scrutinee
     /// classification): if any arm pattern binds anything, the scrutinee
     /// is consumed (subject to Copy).
+    /// [`crate::ownership::core_copied_parts`] for this walker.
+    pub(super) fn core_copied_parts(&self, pattern: &Pattern, value: &Expr) -> Option<Vec<Expr>> {
+        crate::ownership::core_copied_parts(
+            pattern,
+            value,
+            self.typecheck_result,
+            &|t| self.is_copy_type(t),
+            &|p| self.pattern_binds_anything(p),
+        )
+    }
+
     pub(super) fn pattern_binds_anything(&self, pattern: &Pattern) -> bool {
         match &pattern.kind {
             PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {

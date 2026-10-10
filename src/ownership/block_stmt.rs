@@ -81,6 +81,14 @@ impl<'a> super::OwnershipChecker<'a> {
                         && !self.pattern_binds_anything(pattern))
                 {
                     self.check_expr_reading(value, states, param_types, param_usage);
+                } else if let Some(parts) = self.core_copied_parts(pattern, value) {
+                    // v2 core §4.6: only bindings move, so a struct pattern
+                    // that copies or borrows its parts reads just those
+                    // parts. `let Q { n, .. } = q` after `q.u` moved out is
+                    // fine.
+                    for part in &parts {
+                        self.check_expr_reading(part, states, param_types, param_usage);
+                    }
                 } else {
                     // v2 core §4.6: `_` never binds and never moves, so `let _ =
                     // x;` leaves `x` intact. Legacy still drops `x` here, so the

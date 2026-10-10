@@ -5487,10 +5487,6 @@ impl<'a> super::TypeChecker<'a> {
                 let _ = args;
                 true
             }
-            // v2 core §6.1: a `Result` holding a handle is move-only.
-            Type::Named { name, .. } if name == "Result" && self.cli_lint_overrides.strict_core => {
-                false
-            }
             Type::Named { name, args } if matches!(name.as_str(), "Option" | "Result") => {
                 !args.is_empty()
                     && args.iter().any(|a| self.copy_is_only_an_rc_retain(a))

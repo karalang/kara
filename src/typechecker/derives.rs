@@ -2288,10 +2288,12 @@ impl super::env::TypeEnv {
                 if self.has_impl("Clone", name, args) {
                     return true;
                 }
+                // A `shared` type named directly clones as its handle does
+                // (the `Type::Shared` arm below): a refcount bump.
                 if let Some(info) = self.structs.get(name) {
-                    info.derived_traits.contains("Clone")
+                    info.is_shared || info.derived_traits.contains("Clone")
                 } else if let Some(info) = self.enums.get(name) {
-                    info.derived_traits.contains("Clone")
+                    info.is_shared || info.derived_traits.contains("Clone")
                 } else if let Some(traits) = self.distinct_types.get(name) {
                     traits.contains("Clone")
                 } else {

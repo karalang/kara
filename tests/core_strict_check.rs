@@ -391,11 +391,10 @@ fn passing_an_into_iter_element_by_value_is_accepted() {
 }
 
 #[test]
-fn a_result_holding_a_handle_moves() {
-    // §6.1: only `Option`s and tuples of handles copy by counting; a
-    // `Result` holding one is move-only, so reusing it is a use after move.
-    // (`Result` has no `.clone()` yet, so there is no fix to apply.)
-    let (dir, path) = fixture(
+fn a_result_holding_a_handle_copies_by_counting() {
+    // §6.1 (since 2026-10-09): a `Result` of handles and `Copy` parts is a
+    // handle aggregate like an `Option`, so reusing it counts.
+    accepted(
         "result-handle",
         "shared struct Node { v: i64 }\n\
          fn take(r: Result[Node, i64]) -> i64 { match r { Ok(n) => n.v, Err(e) => e } }\n\
@@ -405,11 +404,6 @@ fn a_result_holding_a_handle_moves() {
              println(a + take(r));\n\
          }\n",
     );
-    let out = karac().arg("check").arg(&path).output().unwrap();
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "check must reject: {err}");
-    assert!(err.contains("value 'r' moved here"), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -2456,5 +2450,83 @@ fn main() {
 "#,
         "is moved inside a loop",
         "self.req(who.clone())",
+    );
+}
+
+/// §5.2: `StringSlice` is `Str`, a shared view, so reading one out of a
+/// borrowed place copies it.
+#[test]
+fn a_string_slice_field_copies_out_of_a_borrow() {
+    accepted(
+        "string-slice-copy",
+        "struct It { rest: StringSlice, done: bool }\n\
+         impl It {\n\
+             fn next(mut ref self) -> Option[StringSlice] {\n\
+                 if self.done { return None; }\n\
+                 self.done = true;\n\
+                 return Some(self.rest);\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let s = \"abc\".to_string();\n\
+             let mut it = It { rest: s.slice(0, 2), done: false };\n\
+             match it.next() { Some(f) => println(f.len()), None => {} }\n\
+         }\n",
+    );
+}
+
+/// A type holding only `shared` handles and clonable parts derives
+/// `Clone`, so moving one out of a `shared enum`'s payload is fixed by the
+/// derive and then a `.clone()`.
+#[test]
+fn a_payload_of_a_shared_enum_derives_clone_through_its_handles() {
+    rejected_then_fixed_in(
+        "shared-enum-payload-derive",
+        "shared enum M { My(Vec[String]), N }\n\
+         enum V { Z(M), N }\n\
+         shared enum H { Z(V), N }\n\
+         fn getv(h: H) -> V { match h { H.Z(v) => v, H.N => V.N } }\n\
+         fn main() { match getv(H.Z(V.Z(M.N))) { V.Z(_) => println(\"z\"), _ => println(\"o\") } }\n",
+        "cannot move 'v'",
+        "H.Z(v) => v.clone()",
+        2,
+    );
+}
+
+/// §6.1: a `Result` of a handle and `Copy` parts is a handle aggregate, so
+/// matching on a collection element of that type counts rather than moves.
+#[test]
+fn a_result_of_a_handle_is_counted_out_of_an_element() {
+    accepted(
+        "result-handle-element",
+        "shared struct Node { val: i64 }\n\
+         fn main() {\n\
+             let mut dst: Vec[Result[Node, i64]] = Vec.new();\n\
+             dst.push(Ok(Node { val: 10 }));\n\
+             match dst[0] { Err(_) => {} Ok(nd) => { println(nd.val); } }\n\
+             println(dst.len());\n\
+         }\n",
+    );
+}
+
+/// §4.6: only bindings move, so after a field moves out of a local a
+/// struct pattern may still copy the other fields. Binding the moved field
+/// again is still a use after move.
+#[test]
+fn a_struct_pattern_reads_only_the_parts_it_binds() {
+    accepted(
+        "pattern-after-partial-move",
+        "struct S { name: String }\n\
+         struct Q { u: S, n: i64 }\n\
+         fn f(q: own Q) -> i64 { let x = q.u; let Q { n, .. } = q; println(x.name); n }\n\
+         fn main() { println(f(Q { u: S { name: \"a\" }, n: 2 })) }\n",
+    );
+    rejected_with(
+        "pattern-rebinds-moved-part",
+        "struct S { name: String }\n\
+         struct Q { u: S, n: i64 }\n\
+         fn f(q: own Q) -> i64 { let x = q.u; let Q { u, n } = q; println(x.name); n }\n\
+         fn main() { println(f(Q { u: S { name: \"a\" }, n: 2 })) }\n",
+        "moved here, used again here",
     );
 }
