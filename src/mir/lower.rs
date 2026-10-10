@@ -3745,6 +3745,28 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
+    /// A `weak` value behind a reference or an index cannot move out:
+    /// reading it is a new weak handle to the same object (§6.5), a
+    /// downgrade through a borrow of it, in a new temporary.
+    fn weak_read(&mut self, p: &Place, t: Ty) -> Option<Local> {
+        let behind = p
+            .projection
+            .iter()
+            .any(|e| matches!(e, ProjElem::Deref | ProjElem::Index(_)));
+        if !behind || !matches!(self.tys().tcx().kind(t), HK::Weak(_)) {
+            return None;
+        }
+        let rt = self.tys().tcx().reference(t, false);
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Shared, p.clone()));
+        let w = self.temp(t);
+        self.assign(
+            w,
+            Rvalue::Cast(CastKind::Downgrade, Operand::Move(Place::local(r)), t),
+        );
+        Some(w)
+    }
+
     /// Read a place as an operand: a copy for a `Copy` type, else a move.
     fn use_place(&self, p: Place, t: Ty) -> Operand {
         if self.is_copy(t) {
@@ -3812,6 +3834,20 @@ impl<'l, 'a> Bx<'l, 'a> {
         {
             return self.owned_operand(e, want);
         }
+        // A value the checker typed with a free parameter left at `()`
+        // (`None` beside `Some(s)` in `[Some(s), None]`) is built at the
+        // slot's type.
+        if et != want && !self.is_place(e) {
+            let tcx = self.tys().tcx();
+            if let (HK::Adt { def: a, .. }, HK::Adt { def: b, .. }) = (tcx.kind(et), tcx.kind(want))
+            {
+                if a == b {
+                    let l = self.temp(want);
+                    self.expr_into(e, Place::local(l))?;
+                    return Ok(Operand::Move(Place::local(l)));
+                }
+            }
+        }
         let op = self.expr_operand(e)?;
         Ok(self.widen(op, want))
     }
@@ -3838,6 +3874,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let l = self.temp(t);
                 self.assign(l, Rvalue::Ref(BorrowKind::Mut, p.project(ProjElem::Deref)));
                 return Ok(Operand::Move(Place::local(l)));
+            }
+            if let Some(w) = self.weak_read(&p, t) {
+                return Ok(Operand::Move(Place::local(w)));
             }
             return Ok(self.use_place(p, t));
         }
@@ -4019,6 +4058,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // Copying a `shared` handle counts; the source keeps
                     // its own (core semantics §6.1).
                     self.count_copy(p, t, dest);
+                    return Ok(());
+                }
+                if let Some(w) = self.weak_read(&p, t) {
+                    self.assign(dest, Rvalue::Use(Operand::Move(Place::local(w))));
                     return Ok(());
                 }
                 let op = self.use_place(p, t);
@@ -4430,7 +4473,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let d = *d;
                 match self.lcx.variant(d) {
                     Some((_, idx)) => {
-                        let t = self.expr_ty(e)?;
+                        // A fieldless variant takes its destination's type
+                        // when the checker left a parameter free (`None`).
+                        let mut t = self.expr_ty(e)?;
+                        let dt = self.place_type(&dest);
+                        let tcx = self.tys().tcx();
+                        if let (HK::Adt { def: a, .. }, HK::Adt { def: b, .. }) =
+                            (tcx.kind(t), tcx.kind(dt))
+                        {
+                            if a == b {
+                                t = dt;
+                            }
+                        }
                         self.build_variant(t, idx, Vec::new(), dest);
                         Ok(())
                     }
@@ -7492,7 +7546,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             },
             PatternKind::Struct { fields, .. } => {
                 let variant = match self.lcx.res.get(&pat.id) {
-                    Some(Res::Def(d)) => self.lcx.variant(*d),
+                    Some(&Res::Def(d)) => self.variant_at(d, t).map(|i| (d, i)),
                     _ => None,
                 };
                 let base = match variant {
@@ -7740,6 +7794,27 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(Place::local(out).project(ProjElem::Deref))
     }
 
+    /// The index of the variant `v` names in the enum `t`. A bare variant
+    /// name that two enums share (`Str(n)`) may have resolved to the other
+    /// one's; the scrutinee's enum decides, by name.
+    fn variant_at(&mut self, v: DefId, t: Ty) -> Option<u32> {
+        let (e, idx) = self.lcx.variant(v)?;
+        let tcx = self.tys().tcx();
+        let def = match tcx.kind(t) {
+            HK::Adt { def, .. } | HK::Shared { def, .. } => def,
+            _ => return Some(idx),
+        };
+        if def == e {
+            return Some(idx);
+        }
+        let name = self.lcx.def_name(v);
+        let (adt, _) = tcx.adt_of(t)?;
+        adt.variants
+            .iter()
+            .position(|x| x.name == name.as_str())
+            .map(|i| i as u32)
+    }
+
     fn test_variant(
         &mut self,
         pat: &'a Pattern,
@@ -7749,7 +7824,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         t: Ty,
         fail: BasicBlock,
     ) -> R<()> {
-        let Some((_, idx)) = self.lcx.variant(v) else {
+        let Some(idx) = self.variant_at(v, t) else {
             return self.unsupported(pat.span, "this variant");
         };
         self.switch_variant(place, idx, fail);
@@ -7838,10 +7913,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             PatternKind::TupleVariant { patterns, .. } => {
-                let Some(Res::Def(d)) = self.lcx.res.get(&pat.id) else {
+                let Some(&Res::Def(d)) = self.lcx.res.get(&pat.id) else {
                     return Ok(());
                 };
-                let Some((_, idx)) = self.lcx.variant(*d) else {
+                let Some(idx) = self.variant_at(d, t) else {
                     return Ok(());
                 };
                 let base = place.project(ProjElem::Downcast(VariantIdx(idx)));
@@ -7853,7 +7928,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             PatternKind::Struct { fields, .. } => {
                 let variant = match self.lcx.res.get(&pat.id) {
-                    Some(Res::Def(d)) => self.lcx.variant(*d),
+                    Some(&Res::Def(d)) => self.variant_at(d, t).map(|i| (d, i)),
                     _ => None,
                 };
                 let base = match variant {
@@ -14126,6 +14201,36 @@ fn main() {
 }
 "#;
         let out = "false\ntrue\ninside\n42\n";
+        assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
+    }
+
+    #[test]
+    fn weak_reads_untyped_none_and_shared_variant_names() {
+        let src = r#"
+shared struct Node { val: i64, mut next: weak Node }
+struct SLit { value: String }
+enum Tok { Str(String), Int(i64) }
+shared enum Expr { Int(i64), Str(SLit) }
+fn text_of(e: Expr) -> String {
+    match e {
+        Int(v) => v.to_string(),
+        Str(n) => n.value.clone(),
+    }
+}
+fn main() {
+    let mut nodes: Vec[Node] = Vec.new();
+    nodes.push(Node { val: 1, next: None });
+    nodes.push(Node { val: 2, next: None });
+    nodes[1].next = nodes[0];
+    nodes[0].next = nodes[1].next;
+    let back = nodes[0].val;
+    let ov = vec![Some(f"x"), None];
+    let t = Tok.Int(1);
+    let k = match t { Tok.Str(_) => 0, Tok.Int(v) => v };
+    println(f"{back} {ov.len()} {ov[1].is_none()} {text_of(Expr.Str(SLit { value: f"lit" }))} {k}");
+}
+"#;
+        let out = "1 2 true lit 1\n";
         assert_eq!(run_source(src), Ok((out.to_string(), Some(0))));
     }
 
