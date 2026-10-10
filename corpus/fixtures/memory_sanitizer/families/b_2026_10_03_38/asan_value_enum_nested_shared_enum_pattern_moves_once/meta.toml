@@ -14,6 +14,6 @@ bucket = "b->a"
 classified_with = "ee6378a7f+local"
 fixed_by_classify = true
 model_exit = 0
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
 model_src = "50ab2664"
 model_verdict = "SAME"

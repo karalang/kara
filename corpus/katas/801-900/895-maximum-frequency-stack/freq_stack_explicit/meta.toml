@@ -13,4 +13,5 @@ env = {}
 note = "source edited: `.cloned()` after `Map.get` at line(s) 38, since `Map.get` returns `Option[ref V]` (docs/library/collections.md; Thread A's 7902786668). Legacy has no `Option.cloned`, so legacy.out stays the oracle. (kata thread, 2026-10-09)"
 bucket = "check-refuses:E0236"
 classified_with = "28b4fa5b9"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "b273a2a2"

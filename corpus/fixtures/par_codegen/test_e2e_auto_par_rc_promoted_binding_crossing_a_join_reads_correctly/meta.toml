@@ -13,5 +13,5 @@ env = {}
 bucket = "mir-gap:move check"
 classified_with = "ee6378a7f+local"
 fixed_by_classify = true
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
 model_src = "d0b375b3"

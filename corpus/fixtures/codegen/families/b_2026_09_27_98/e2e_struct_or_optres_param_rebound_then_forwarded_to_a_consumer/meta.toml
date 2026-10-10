@@ -14,5 +14,6 @@ note = "e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
 classified_with = "28b4fa5b9"
 model_exit = 0
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "f2d97fc5"
 model_verdict = "ORDER"

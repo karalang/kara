@@ -12,5 +12,6 @@ backends = []
 env = {}
 bucket = "a:refused"
 classified_with = "28b4fa5b9"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "0062fb0c"
 v2_reject = "design.md §8: no call-site type arguments, and the const parameter appears in no argument or result to infer it from (karac check refuses it since 6507e8b023, 2026-10-09)"

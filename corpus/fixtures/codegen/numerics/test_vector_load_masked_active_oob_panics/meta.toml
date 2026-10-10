@@ -13,4 +13,5 @@ env = {}
 note = "first literal of the holding test: 'load_masked: active lane index out of bounds'"
 bucket = "mir-gap:runtime: in main at bbN[N]: Lt on Agg([Int(N), Int(N), Int(N), Int(N)]) and Agg"
 classified_with = "28b4fa5b9"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "7dfa5482"

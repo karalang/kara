@@ -13,4 +13,5 @@ env = {}
 note = "e-spec: core-semantics §7.2/§7.3 drop at scope end (h, ov, m, then v first to last); legacy dropped at last use; the drop model has no Vec.as_slice"
 bucket = "mir-gap:runtime: invalid MIR:"
 classified_with = "ee6378a7f"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "44606d87"

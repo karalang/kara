@@ -13,4 +13,5 @@ env = {}
 note = "first literal of the holding test: 'scatter: index out of bounds'"
 bucket = "mir-gap:runtime: in main at bbN[term]: in fill at bbN[term]: call of unknown function V"
 classified_with = "28b4fa5b9"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "efef8e55"

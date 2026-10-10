@@ -13,4 +13,5 @@ env = {}
 note = "stmt-par groups (source.orig.kara lines): L238-L242 five fs.read_to_string, one per text file"
 bucket = "a"
 classified_with = "28b4fa5b9"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "95b85681"

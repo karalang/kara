@@ -12,5 +12,6 @@ backends = []
 env = {}
 bucket = "a:refused"
 classified_with = "28b4fa5b9"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "69088f0c"
 v2_reject = "design.md §5 widening: u64 -> f64 is not implicit, write `as f64` (Thread B, 2026-10-08)"

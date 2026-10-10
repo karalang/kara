@@ -13,5 +13,5 @@ env = {}
 bucket = "b->a"
 classified_with = "831024337"
 fixed_by_classify = true
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
 model_src = "945f91aa"

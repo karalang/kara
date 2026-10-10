@@ -13,4 +13,5 @@ env = {}
 note = "first literal of the holding test: '3:delta-b044-payload-dddddddddddddddddddd 2:alpha-b044-payload-aaaaaaaaaaaaaaaaaaaa 3:delta-b044-payload-ddddddddddddddd'"
 bucket = "mir-gap:the items are `ref String`, and collecting them as `String` would move each out "
 classified_with = "28b4fa5b9"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "98b65a0c"

@@ -13,5 +13,6 @@ env = {}
 bucket = "b-fix-incomplete:E0289"
 classified_with = "28b4fa5b9"
 model_note = "move out of the payload of a type with a Drop body (C3)"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "089fe0b3"
 model_verdict = "V2-REJECT"

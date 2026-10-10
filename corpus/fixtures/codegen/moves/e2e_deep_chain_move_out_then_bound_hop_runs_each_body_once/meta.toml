@@ -13,5 +13,6 @@ env = {}
 bucket = "b-fix-incomplete:E0500"
 classified_with = "28b4fa5b9"
 model_note = "use of a partially moved value (C4)"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "a7732e4d"
 model_verdict = "V2-REJECT"

@@ -13,4 +13,5 @@ env = {}
 note = "decision 2026-10-08 (library/collections.md: collection Display adds no type name), so `SortedMap{..}` prints as `{..}`"
 bucket = "mir-gap:the expression kind `PrefixCollectionLiteral`"
 classified_with = "28b4fa5b9"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "53127523"

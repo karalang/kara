@@ -12,5 +12,6 @@ backends = []
 env = {}
 bucket = "e-not-refused:any"
 classified_with = "28b4fa5b9"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "d5717ab3"
 v2_reject = "core-semantics §9.1 (Gowtham's Borrow ruling, ddae1ab1cb) and §5.6: the adaptor's closure captures the Copy local by `ref`, and the loop body writes it while the closure is live (kata thread, 2026-10-09)"

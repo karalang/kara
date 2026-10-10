@@ -14,5 +14,6 @@ note = "first literal of the holding test: 'program should compile and run'"
 bucket = "a"
 classified_with = "28b4fa5b9"
 model_exit = 0
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "95501e29"
 model_verdict = "SAME"

@@ -14,5 +14,6 @@ note = "first literal of the holding test: 'expected zero queries for a clean pr
 bucket = "a"
 classified_with = "28b4fa5b9"
 model_exit = 0
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "54e446c3"
 model_verdict = "SAME"

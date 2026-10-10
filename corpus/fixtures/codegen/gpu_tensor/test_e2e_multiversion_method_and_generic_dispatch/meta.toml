@@ -13,5 +13,6 @@ env = {}
 bucket = "mir-gap:an expression with no recorded type is not lowered yet; 14:5 in `Acc.consume`: a"
 classified_with = "28b4fa5b9"
 model_exit = 0
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "85d32db9"
 model_verdict = "SAME"

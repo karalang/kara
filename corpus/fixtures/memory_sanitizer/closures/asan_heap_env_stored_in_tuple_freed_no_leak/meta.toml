@@ -12,5 +12,6 @@ backends = []
 env = {}
 bucket = "a:refused"
 classified_with = "831024337"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "35f32c32"
 v2_reject = "design.md: a value of a function type is move-only, so the program uses the closure after it moved (drop schedule thread's triage) (kata thread, 2026-10-09)"

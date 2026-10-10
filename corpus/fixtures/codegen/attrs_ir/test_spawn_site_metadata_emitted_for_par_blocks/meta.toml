@@ -13,5 +13,6 @@ env = {}
 note = "first literal of the holding test: '@KARAC_SPAWN_SITES_LEN'"
 bucket = "a:refused"
 classified_with = "28b4fa5b9"
-model_rev = "629c2395"
+model_rev = "8be6ddd7"
+model_src = "69b17c35"
 v2_reject = "core-semantics §11.2: two par branches that both print conflict, writes(Stdout) (kata thread, 2026-10-08)"
