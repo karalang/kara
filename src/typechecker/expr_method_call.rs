@@ -1950,6 +1950,20 @@ impl<'a> super::TypeChecker<'a> {
             _ => None,
         };
         if let Some(elem) = vec_elem_for_dispatch {
+            // `VecDeque.front` / `back` borrow the element `pop_front` /
+            // `pop_back` would return (docs/library/collections.md).
+            let deque = match &obj_ty {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                t => t,
+            };
+            let deque = matches!(deque, Type::Named { name, .. } if name == "VecDeque");
+            if deque && matches!(method, "front" | "back") {
+                self.expect_no_args(&format!("VecDeque.{method}"), args, span);
+                return Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![Type::Ref(Box::new(elem))],
+                };
+            }
             if let Some(ty) = self.infer_vec_method(&elem, method, args, span) {
                 // Stash the element type at the non-aliased close-paren leaf so
                 // the interpreter recovers element signedness for the unsigned-64

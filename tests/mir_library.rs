@@ -427,3 +427,24 @@ fn main() {
         "abc\n4\n3\ntrue true\ntrue y\n",
     );
 }
+
+/// `VecDeque.front` / `back` borrow the element `pop_front` / `pop_back`
+/// would return (docs/library/collections.md), and check types them so.
+#[test]
+fn a_deque_lends_its_front_and_back() {
+    assert_runs(
+        r#"
+fn main() {
+    let mut q: VecDeque[(i64, i64)] = VecDeque.new();
+    q.push_back((1, 5));
+    q.push_back((2, 9));
+    match q.front() { Some(e) => println(e.1), None => println("none") }
+    match q.back() { Some(e) => { if e.1 > 3 { println(e.0) } } None => {} }
+    q.pop_front();
+    q.pop_front();
+    match q.front() { Some(_) => println("some"), None => println("none") }
+}
+"#,
+        "5\n2\nnone\n",
+    );
+}
