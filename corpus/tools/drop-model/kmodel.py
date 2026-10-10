@@ -1530,7 +1530,17 @@ class Model:
             v = r
         return v
 
+    def in_construct(self, fn):
+        """A `match` or `if let` scrutinee temporary, and any temporary its expression makes, drops at the
+        end of the whole construct (§7.4), not at the end of the enclosing statement."""
+        v = self.in_stmt(fn, keep_result=True)
+        self.check_dropped_temp_origin(v)
+        return v
+
     def if_let(self, pat, scrut, then, els):
+        return self.in_construct(lambda: self.if_let_inner(pat, scrut, then, els))
+
+    def if_let_inner(self, pat, scrut, then, els):
         c, p, b = self.resolve_or_temp(scrut)
         if self.matches(pat, c, p):
             sc = Scope()
@@ -1555,6 +1565,9 @@ class Model:
         return e[0] == "mcall" and e[2] in ("to_string", "clone", "to_owned") and not e[3]
 
     def e_match(self, e):
+        return self.in_construct(lambda: self.match_inner(e))
+
+    def match_inner(self, e):
         _, scrut, arms = e
         if SHARED_FLAGS and scrut[0] in self.PLACES:
             (c, p, b), _log = self.resolve_logged(scrut, temp=True)
