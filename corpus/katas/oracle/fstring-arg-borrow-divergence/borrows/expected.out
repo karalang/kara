@@ -1,0 +1,7 @@
+  consume sees: [hello-world-payload] len=19
+DROP tearing down: [hello-world-payload]
+  consume sees: [hello-world-payload] len=19
+DROP tearing down: [hello-world-payload]
+a=19
+b=19
+end of main

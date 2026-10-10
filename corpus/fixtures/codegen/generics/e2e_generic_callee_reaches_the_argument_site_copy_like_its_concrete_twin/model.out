@@ -1,0 +1,32 @@
+gen
+  mx pa
+  mx pa
+con
+  cx pa
+  cx pa
+one
+  mx pa
+thrice
+  mx pa
+  mx pa
+  mx pa
+i32
+  mx 24
+  mx 24
+none
+  mx NONE
+  mx NONE
+nongen
+  nx pa
+twodist
+  ax xa
+  bx yb
+  mx xa
+  mx yb
+scalar
+  mx pa
+  n1
+long
+  mx abcdefghijklmnopqrstuvwx
+  mx abcdefghijklmnopqrstuvwx
+end

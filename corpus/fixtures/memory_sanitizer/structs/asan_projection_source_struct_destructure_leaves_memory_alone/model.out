@@ -1,0 +1,69 @@
+res
+  rd1
+dR101/t101
+dR1/t1
+opt
+  rd2
+dR102/t102
+dR2/t2
+pln
+  rd3
+dR103/t103
+dR3/t3
+two
+  rd4
+dR104/t104
+dR4/t4
+live
+  rd5
+  w5
+dR105/t105
+dR5/t5
+dR105/t105
+dR5/t5
+res
+  rd1
+dR101/t101
+dR1/t1
+opt
+  rd2
+dR102/t102
+dR2/t2
+pln
+  rd3
+dR103/t103
+dR3/t3
+two
+  rd4
+dR104/t104
+dR4/t4
+live
+  rd5
+  w5
+dR105/t105
+dR5/t5
+dR105/t105
+dR5/t5
+res
+  rd1
+dR101/t101
+dR1/t1
+opt
+  rd2
+dR102/t102
+dR2/t2
+pln
+  rd3
+dR103/t103
+dR3/t3
+two
+  rd4
+dR104/t104
+dR4/t4
+live
+  rd5
+  w5
+dR105/t105
+dR5/t5
+dR105/t105
+dR5/t5

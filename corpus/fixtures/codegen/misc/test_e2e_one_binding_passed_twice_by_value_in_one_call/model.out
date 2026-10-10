@@ -1,0 +1,23 @@
+a
+  ax pa
+  bx pa
+b
+  ax pb
+  bx pb
+c
+  ax pc
+  bx pc
+  cx pc
+d
+  ax pd
+  bx qd
+e
+  1x pe
+f
+  1x pf
+  1x pf
+g
+  ax pg
+  bx qg
+  cx pg
+end

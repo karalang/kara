@@ -1,0 +1,60 @@
+named/read
+  dE
+  dR1
+  x1
+temp/read
+  dE
+  dR2
+  x2
+named/wild
+  dE
+  dR3
+  x1
+named/iflet
+  dE
+  dR4
+  x4
+chain/read
+  dE
+  dR5
+  x5
+named/call
+  dR6
+  dE
+  dR6
+  x6
+named/none
+  dE
+  dR7
+  x5
+named/letself
+  dE
+  dR8
+  x8
+ret_self
+  got
+  dE
+  dR9
+wrap
+  got
+  dE
+  dR10
+refm
+  x11
+  dE
+  dR11
+plain
+  x12
+  dE
+  dR12
+param
+  dE
+  dR13
+  x13
+nodrop/read
+  dR14
+  x14
+nodrop/out
+  x15
+  dR15
+end

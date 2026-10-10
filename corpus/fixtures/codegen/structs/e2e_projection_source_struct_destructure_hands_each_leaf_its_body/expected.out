@@ -1,0 +1,39 @@
+res
+  rd1
+dR101/t101
+dR1/t1
+local
+  rd2
+dR102/t102
+dR2/t2
+opt
+  rd3
+dR103/t103
+dR3/t3
+pln
+  rd4
+dR104/t104
+dR4/t4
+str
+  rd5
+dR5/t5
+two
+  rd6
+dR106/t106
+dR6/t6
+live
+  rd7
+  w7
+dR107/t107
+dR7/t7
+dR107/t107
+dR7/t7
+nodest
+  rd8
+dR108/t108
+dR8/t8
+move
+  rd9
+dR109/t109
+dR9/t9
+done

@@ -1,0 +1,44 @@
+sum/local
+  dE
+  dR1
+  x101
+sum/temp
+  dE
+  dR2
+  x102
+alias/local
+  dE
+  dR7
+  x207
+read/local
+  dE
+  dR11
+  x11
+ecall/A
+  dR21
+  dE2
+  dR21
+  x21
+ecall/B
+  dE2
+  x22
+earith/A
+  dE2
+  dR23
+  x46
+earith/B
+  dE2
+  x25
+sk/A
+  dE3
+  dR31
+  x31
+sk/S
+  dE3
+  dR132
+  x32
+sk/S-temp
+  dE3
+  dR133
+  x33
+end

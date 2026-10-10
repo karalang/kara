@@ -1,0 +1,15 @@
+ctor 24
+a b1516-src-aaaaaaaaaaaa-1
+push 1
+b b1516-src-aaaaaaaaaaaa-2
+insert 1
+c b1516-src-aaaaaaaaaaaa-3
+two 1
+d b1516-two-bbbbbbbbbbbb b1516-two-cccccccccccc
+vecf 1
+e 1
+alive b1516-src-aaaaaaaaaaaa-6
+w 24
+f b1516-src-aaaaaaaaaaaa-6
+call 24
+g b1516-src-aaaaaaaaaaaa-7

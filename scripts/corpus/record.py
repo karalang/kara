@@ -181,7 +181,7 @@ def mirror_one(entry: Path, args) -> str:
     return tag
 
 
-MODEL_KEYS = ("model_verdict", "model_exit", "model_rev", "model_note")
+MODEL_KEYS = ("model_verdict", "model_exit", "model_rev", "model_note", "model_src")
 MODEL_OUT_VERDICTS = ("SAME", "ORDER", "ORDER-UNSPEC", "DIFF")
 
 
@@ -214,7 +214,13 @@ def model_one(job) -> str:
     meta = read_toml(entry / "meta.toml")
     if not (entry / "legacy.out").exists() or meta.get("expect") == "skip":
         return "unrecorded-or-skip"
-    if meta.get("model_rev") == rev and not redo:
+    # The verdict is for one text: classify's `karac fix` rewrites source.kara
+    # after the model has run, so a changed source needs its own verdict.
+    # Entries recorded before `model_src` existed count as stale only if fixed.
+    import hashlib
+    src = hashlib.md5((entry / "source.kara").read_bytes()).hexdigest()[:8]
+    same_src = meta.get("model_src", None if meta.get("fixed_by_classify") else src) == src
+    if meta.get("model_rev") == rev and same_src and not redo:
         return "kept"
     seen = {}
     real = corpus_run.run_source
@@ -233,14 +239,15 @@ def model_one(job) -> str:
     mo = entry / "model.out"
     if v in MODEL_OUT_VERDICTS:
         mo.write_text(out)
-        meta.update({"model_verdict": v, "model_exit": seen["r"][1], "model_rev": rev})
+        meta.update({"model_verdict": v, "model_exit": seen["r"][1], "model_rev": rev, "model_src": src})
     else:
         if mo.exists():
             mo.unlink()
         if v == "V2-REJECT":
-            meta.update({"model_verdict": v, "model_rev": rev, "model_note": " ".join(why.split())[:200]})
+            meta.update({"model_verdict": v, "model_rev": rev, "model_src": src,
+                         "model_note": " ".join(why.split())[:200]})
         else:
-            meta["model_rev"] = rev  # no verdict, but this rev has looked at it
+            meta.update({"model_rev": rev, "model_src": src})  # no verdict, but this rev has looked at it
     write_toml(entry / "meta.toml", meta)
     return v
 

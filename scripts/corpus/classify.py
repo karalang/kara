@@ -66,7 +66,8 @@ SPEC_VERDICTS = {"SAME", "ORDER", "ORDER-UNSPEC", "DIFF"}
 # What M1 does not promise (gate rules 2026-10-08, item 2).
 POST_M1 = [
     ("par", r"\bpar\s*\{|\bpar\s+for\b|\bspawn\s*\(|\bTaskGroup\b|\basync\b|\.await\b|\bChannel\b|\bSender\b|\bReceiver\b"),
-    ("net", r"\bTcp(Stream|Listener)\b|\bUdpSocket\b|\bserve(_https)?\s*\(|\bHttp[A-Z]\w*|\bRequest\b|\bResponse\b|\bWebSocket\b"),
+    ("net", r"\bTcp(Stream|Listener)\b|\bUdpSocket\b|\bserve(_https)?\s*\(|\bHttp[A-Z]\w*|\bRequest\b|\bResponse\b|\bWebSocket\b"
+            r"|\bClient\.(?:new|builder)\b|\bRequestBuilder\b"),
     ("process", r"\bCommand\b|\bChild\b"),
     ("dyn", r"\bdyn\s+[A-Z]"),
     ("escaping", r"\bescaping\b"),
