@@ -74,7 +74,9 @@ POST_M1 = [
     # SIMD, contracts and predicates on distinct types to the later tracks.
     ("provider", r"\bwith_provider\b|\bproviders\s*\{"),
     ("simd", r"\bVector\["),
-    ("contract", r"(?m)\bfn\b[^\n{]*\b(?:requires|ensures)\b|^[ \t]*(?:requires|ensures)(?:\(\w+\))?[ \t]+\S"),
+    ("contract", r"(?m)\bfn\b[^\n{]*\b(?:requires|ensures)\b|^[ \t]*(?:requires|ensures)(?:\(\w+\))?[ \t]+\S"
+                 # a type invariant (design.md § Keywords: deferred with contracts)
+                 r"|(?:^|[{,])[ \t]*(?:impl[ \t]+)?invariant[ \t]+self\b"),
     ("refinement", r"\btype\s+[A-Z]\w*(?:\[[^\]]*\])?\s*=[^\n;]*\bwhere\b"),
 ]
 LIB = [("map", r"\bMap\b"), ("set", r"\bSet\b"), ("sortedmap", r"\bSortedMap\b"),
