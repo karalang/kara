@@ -2740,6 +2740,20 @@ impl<'l, 'a> Bx<'l, 'a> {
                         let t = self.place_type(&p);
                         (p, t)
                     }
+                    // A pattern that only borrows or copies (`let W { r: ref
+                    // r, n: _ } = w`) reads a local where it is, even one
+                    // whose type runs a `Drop` body: nothing moves out of it.
+                    None if matches!(value.kind, ExprKind::Identifier(_))
+                        && matches!(self.lcx.res.get(&value.id), Some(Res::Local(s)) if self.locals.contains_key(s))
+                        && {
+                            let vt = self.expr_ty(value)?;
+                            self.moves_nothing(pattern, vt)
+                        } =>
+                    {
+                        let p = self.expr_place(value, false)?;
+                        let t = self.place_type(&p);
+                        (p, t)
+                    }
                     None => {
                         let t = self.expr_ty(value)?;
                         (Place::local(self.temp_of(value, t)?), t)
@@ -2896,6 +2910,15 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         match &pat.kind {
             PatternKind::Wildcard => Ok(()),
+            PatternKind::Binding(name)
+                if self
+                    .lcx
+                    .ref_bindings
+                    .contains(&SpanKey::from_span(&pat.span)) =>
+            {
+                self.bind_one(name, pat.id, place, t, true, out);
+                Ok(())
+            }
             PatternKind::Binding(name) => {
                 let l = self.user_local(name, t, pat.id);
                 if self.is_handle(t) || self.is_handle_aggregate(t) {
@@ -7893,6 +7916,39 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     fn pattern_binds(&self, pat: &Pattern) -> bool {
         !pat.binding_names().is_empty()
+    }
+
+    /// Whether an irrefutable pattern binds only by `ref` or copies, so
+    /// destructuring with it moves nothing out of the scrutinee.
+    fn moves_nothing(&mut self, pat: &Pattern, t: Ty) -> bool {
+        if let HK::Ref(_) | HK::MutRef(_) = self.tys().tcx().kind(t) {
+            return true;
+        }
+        match &pat.kind {
+            PatternKind::Wildcard | PatternKind::Literal(_) => true,
+            PatternKind::Binding(_) => {
+                self.is_copy(t)
+                    || self
+                        .lcx
+                        .ref_bindings
+                        .contains(&SpanKey::from_span(&pat.span))
+            }
+            PatternKind::Tuple(ps) => ps.iter().enumerate().all(|(i, p)| {
+                self.tys()
+                    .field_ty(t, None, i as u32)
+                    .is_some_and(|ft| self.moves_nothing(p, ft))
+            }),
+            PatternKind::Struct { fields, .. } => fields.iter().all(|fp| {
+                let Some((_, ft)) = self.field_of(t, None, &fp.name) else {
+                    return false;
+                };
+                match &fp.pattern {
+                    Some(p) => self.moves_nothing(p, ft),
+                    None => self.is_copy(ft),
+                }
+            }),
+            _ => false,
+        }
     }
 
     /// Bind the names of a pattern known to match. A binding moves its

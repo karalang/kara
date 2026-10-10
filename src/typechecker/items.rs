@@ -6195,6 +6195,28 @@ impl<'a> super::TypeChecker<'a> {
         if into_iter.is_some() && !has_clone {
             message += ", or iterate with `.into_iter()` to move the elements out";
         }
+        // v2 core §3.7: away from a `for` element (a `ref` binding, a binding
+        // into a borrowed place) the site is a move out of a borrowed place;
+        // a type with no `.clone()` gets a derive, and the next pass writes
+        // the `.clone()`.
+        let derive = (self.cli_lint_overrides.strict_core && into_iter.is_none() && !has_clone)
+            .then(|| self.copy_derive_fix(ty))
+            .flatten()
+            .filter(|f| f.replacement.contains("Clone"));
+        if self.cli_lint_overrides.strict_core && into_iter.is_none() {
+            message = "cannot move a non-`Copy` value out of a borrowed place: its type runs a \
+                 user `Drop` body, so a copy would run that body twice"
+                .to_string();
+            message += if has_clone {
+                ". Write `.clone()` to take a copy, or keep using it in place"
+            } else if derive.is_some() {
+                ". This type has no `.clone()` yet: derive `Clone` on it and write `.clone()` \
+                 to take a copy, or keep using it in place"
+            } else {
+                ". This type has no `.clone()`: use it in place, or take it with \
+                 `mem.replace` / `mem.swap` / `Option.take()`"
+            };
+        }
         let fix_it = if has_clone {
             Some(crate::typechecker::FixIt {
                 span: Span {
@@ -6207,10 +6229,12 @@ impl<'a> super::TypeChecker<'a> {
             })
         } else {
             // `for x in c` → `for x in c.into_iter()` (§4.6).
-            into_iter.map(|at| crate::typechecker::FixIt {
-                span: at,
-                replacement: ".into_iter()".to_string(),
-            })
+            into_iter
+                .map(|at| crate::typechecker::FixIt {
+                    span: at,
+                    replacement: ".into_iter()".to_string(),
+                })
+                .or(derive)
         };
         self.type_lint_warning_with_fix(
             message,
@@ -6778,11 +6802,14 @@ impl<'a> super::TypeChecker<'a> {
         // which is what the drop body will find missing.
         let moved: Vec<&str> = fields
             .iter()
-            .filter(|f| {
-                !matches!(
-                    f.pattern.as_ref().map(|p| &p.kind),
-                    Some(crate::ast::PatternKind::Wildcard)
-                )
+            .filter(|f| match f.pattern.as_ref() {
+                Some(p) if matches!(p.kind, crate::ast::PatternKind::Wildcard) => false,
+                // A `ref` sub-pattern borrows the field where it is.
+                Some(p) => !self
+                    .program
+                    .ref_binding_spans
+                    .contains(&crate::resolver::SpanKey::from_span(&p.span)),
+                None => true,
             })
             .filter_map(|f| {
                 let (name, ty, _) = info.fields.iter().find(|(n, _, _)| *n == f.name)?;
@@ -7062,20 +7089,32 @@ impl<'a> super::TypeChecker<'a> {
         // the core states it, with `.clone()` as the fix where it exists.
         if self.cli_lint_overrides.strict_core {
             let has_clone = self.type_supports_clone(ty);
-            let fix_it = has_clone.then(|| crate::typechecker::FixIt {
-                span: Span {
-                    offset: value.span.offset + value.span.length,
-                    length: 0,
-                    line: value.span.line,
-                    column: value.span.column,
-                },
-                replacement: ".clone()".to_string(),
-            });
+            // No `.clone()` yet: a derive, and the next pass writes it.
+            let derive = (!has_clone)
+                .then(|| self.copy_derive_fix(ty))
+                .flatten()
+                .filter(|f| f.replacement.contains("Clone"));
             let help = if has_clone {
                 "Write `.clone()` to take a copy, or keep using it in place"
+            } else if derive.is_some() {
+                "This type has no `.clone()` yet: derive `Clone` on it and write `.clone()` \
+                 to take a copy, or keep using it in place"
             } else {
                 "This type has no `.clone()`: use it in place, or take it with \
                  `mem.replace` / `mem.swap` / `Option.take()`"
+            };
+            let fix_it = if has_clone {
+                Some(crate::typechecker::FixIt {
+                    span: Span {
+                        offset: value.span.offset + value.span.length,
+                        length: 0,
+                        line: value.span.line,
+                        column: value.span.column,
+                    },
+                    replacement: ".clone()".to_string(),
+                })
+            } else {
+                derive
             };
             self.type_lint_warning_with_fix(
                 format!(

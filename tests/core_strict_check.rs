@@ -1953,6 +1953,28 @@ fn a_loop_over_a_ref_local_borrows_what_it_points_into() {
     );
 }
 
+/// §3.7: a `ref` binding's value whose type runs a `Drop` body cannot move
+/// out; a type with no `.clone()` gets `#[derive(Clone)]`, then `.clone()`.
+#[test]
+fn a_drop_value_behind_a_ref_binding_derives_clone() {
+    rejected_then_fixed_in(
+        "ref-binding-drop-move",
+        "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"d{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         struct H { f: R }\n\
+         fn put(b: own E) -> i64 {\n\
+             let mut h = H { f: R { id: 1 } };\n\
+             match b { E.A(ref r) => { h.f = r; } E.B => { } }\n\
+             h.f.id\n\
+         }\n\
+         fn main() { println(put(E.A(R { id: 2 }))); }\n",
+        "its type runs a user `Drop` body",
+        "h.f = r.clone()",
+        2,
+    );
+}
+
 /// `check` must fail with `expect` in its output (no fix is expected).
 fn rejected_with(tag: &str, src: &str, expect: &str) {
     let (dir, path) = fixture(tag, src);

@@ -2917,6 +2917,16 @@ impl<'a> super::TypeChecker<'a> {
                 // that moves a part out of a type with a `Drop` body.
                 self.reject_core_move_out_binding(name, &pattern.span, ty, ScrutineeMode::Owned);
                 self.local_scope.insert(name.clone(), ty.clone());
+                // v2 core §4.6: a `ref name` binding in a `let` borrows its
+                // part, as it does in a `match`; moving it is §3.7's error.
+                if self.cli_lint_overrides.strict_core
+                    && self
+                        .program
+                        .ref_binding_spans
+                        .contains(&SpanKey::from_span(&pattern.span))
+                {
+                    self.local_scope.mark_view(name);
+                }
                 // Record the surface type for codegen so it can reconstitute
                 // struct payloads from the i64 word at match-arm bind sites
                 // (see TypeCheckResult.pattern_binding_types). Named types
