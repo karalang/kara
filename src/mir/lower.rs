@@ -12788,6 +12788,47 @@ fn main() {
         );
     }
 
+    /// A lane vector shows as `Vector(..)`, its operators work lane by
+    /// lane (a comparison gives a mask), and its methods and constructors
+    /// run as legacy runs them.
+    #[test]
+    fn lane_vectors_match_legacy() {
+        let src = r#"
+fn main() {
+    let a = Vector[i64, 4](1, 5, 3, 8);
+    let b = Vector[i64, 4](4, 2, 3, 6);
+    println(a + b);
+    let m = a < b;
+    println(m);
+    println(m.select(a, b));
+    println(a.reduce_sum());
+    println(a.reduce_max());
+    println(a.dot(b));
+    println(a.reverse());
+    println(a.rotate_lanes_left(1));
+    println(a.shuffle([3, 0]));
+    println(a.replace(2, 9));
+    let s = Vector[i64, 4].splat(7);
+    println(s);
+    let xs: Array[i64, 6] = [10, 20, 30, 40, 50, 60];
+    println(Vector[i64, 4].gather(xs.as_slice(), Vector[i64, 4](5, 0, 1, 1)));
+    println(Vector[f64, 2].cast_from(Vector[i64, 2](3, -4)));
+    let u: Vector[u64, 2] = Vector[u64, 2](18446744073709551615u64, 1u64);
+    println(Some(u));
+    println(~Vector[u8, 2](0u8, 255u8));
+}
+"#;
+        let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
+        assert_eq!(
+            r.output,
+            "Vector(5, 7, 6, 14)\nVector(true, false, false, false)\nVector(1, 2, 3, 6)\n\
+             17\n8\n71\nVector(8, 3, 5, 1)\nVector(5, 3, 8, 1)\nVector(8, 1)\n\
+             Vector(1, 5, 9, 8)\nVector(7, 7, 7, 7)\nVector(60, 10, 20, 20)\nVector(3, -4)\n\
+             Some(Vector(18446744073709551615, 1))\nVector(255, 0)\n"
+        );
+    }
+
     /// `Interner`, `LazyLock`, the fences and the HTTP client's request
     /// builder, as legacy prints them (the request fails before any
     /// connection: its URL does not parse).

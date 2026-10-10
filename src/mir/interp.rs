@@ -992,6 +992,7 @@ impl<'a> Interp<'a> {
             ("Client" | "RequestBuilder" | "Response" | "HttpError", _) => {
                 self.http_method(name, base, method, args, ret)
             }
+            ("Vector", _) => self.vector_method(method, &args, arg_tys, ret),
             ("Secret", "expose" | "expose_mut" | "ct_eq") => {
                 // The value is the struct's one field, lent; `ct_eq`
                 // compares two such values (the interpreter has no timing
@@ -5007,7 +5008,12 @@ impl<'a> Interp<'a> {
             }
             (TyKind::Array(e, _), Value::Agg(fs)) => {
                 let tys = vec![e; fs.len()];
-                format!("[{}]", list(self, fs, &tys)?.join(", "))
+                let shown = list(self, fs, &tys)?.join(", ");
+                // A lane vector names itself, as both legacy backends print it.
+                match self.tys.is_vector(ty) {
+                    true => format!("Vector({shown})"),
+                    false => format!("[{shown}]"),
+                }
             }
             (TyKind::Intrinsic(IntrinsicTy::Vec(e) | IntrinsicTy::VecDeque(e)), Value::Box(id)) => {
                 let fs = self.vec_elems(*id)?.clone();
@@ -5697,23 +5703,7 @@ impl<'a> Interp<'a> {
             }
             Rvalue::UnaryOp(op, a) => {
                 let (x, ty) = self.operand(body, a)?;
-                match (op, x, self.tys.kind(ty)) {
-                    (UnOp::Not, Value::Bool(b), _) => Ok(Value::Bool(!b)),
-                    (UnOp::Not, Value::Int(i), TyKind::Int(it)) => Ok(Value::Int(wrap(!i, it))),
-                    (UnOp::Neg, Value::Int(i), TyKind::Int(it)) => {
-                        let (r, of) = i.overflowing_neg();
-                        if of || wrap(r, it) != r {
-                            // `-MIN` overflows, and C8 traps it.
-                            if self.trace {
-                                self.events.push(Event::Abort(AbortReason::Overflow));
-                            }
-                            return Err(Stop::Abort(AbortReason::Overflow));
-                        }
-                        Ok(Value::Int(r))
-                    }
-                    (UnOp::Neg, Value::Float(f), _) => Ok(Value::Float(-f)),
-                    (op, x, _) => err(format!("cannot apply {op:?} to {x:?}")),
-                }
+                self.unop(*op, x, ty)
             }
             Rvalue::Cast(CastKind::Erase, o, _) => {
                 let (x, from) = self.operand(body, o)?;
@@ -5856,6 +5846,36 @@ impl<'a> Interp<'a> {
     }
 
     /// The result of `op` and whether it overflowed `ty`.
+    /// A unary operator; a lane vector's works lane by lane.
+    fn unop(&mut self, op: UnOp, x: Value, ty: Ty) -> R<Value> {
+        if let (Value::Agg(fs), TyKind::Array(et, _)) = (&x, self.tys.kind(ty)) {
+            if self.tys.is_vector(ty) {
+                let mut lanes = Vec::with_capacity(fs.len());
+                for l in fs.clone() {
+                    lanes.push(self.unop(op, l, et)?);
+                }
+                return Ok(Value::Agg(lanes));
+            }
+        }
+        match (op, x, self.tys.kind(ty)) {
+            (UnOp::Not, Value::Bool(b), _) => Ok(Value::Bool(!b)),
+            (UnOp::Not, Value::Int(i), TyKind::Int(it)) => Ok(Value::Int(wrap(!i, it))),
+            (UnOp::Neg, Value::Int(i), TyKind::Int(it)) => {
+                let (r, of) = i.overflowing_neg();
+                if of || wrap(r, it) != r {
+                    // `-MIN` overflows, and C8 traps it.
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::Overflow));
+                    }
+                    return Err(Stop::Abort(AbortReason::Overflow));
+                }
+                Ok(Value::Int(r))
+            }
+            (UnOp::Neg, Value::Float(f), _) => Ok(Value::Float(-f)),
+            (op, x, _) => err(format!("cannot apply {op:?} to {x:?}")),
+        }
+    }
+
     fn binop(&self, op: BinOp, x: Value, y: Value, ty: Ty) -> R<(Value, bool)> {
         use BinOp::*;
         let cmp = |o: std::cmp::Ordering| -> Value {
@@ -5869,6 +5889,20 @@ impl<'a> Interp<'a> {
                 _ => unreachable!(),
             })
         };
+        if let (Value::Agg(a), Value::Agg(b), TyKind::Array(et, _)) = (&x, &y, self.tys.kind(ty)) {
+            if self.tys.is_vector(ty) {
+                // A lane vector's operators work lane by lane; a comparison
+                // gives a lane mask.
+                let mut lanes = Vec::with_capacity(a.len());
+                let mut overflow = false;
+                for (p, q) in a.iter().zip(b) {
+                    let (v, of) = self.binop(op, p.clone(), q.clone(), et)?;
+                    overflow |= of;
+                    lanes.push(v);
+                }
+                return Ok((Value::Agg(lanes), overflow));
+            }
+        }
         match (x, y) {
             (Value::Int(a), Value::Int(b)) if self.tys.kind(ty) == TyKind::Int(IntTy::U128) => {
                 Ok(u128_binop(op, a as u128, b as u128, cmp)?)
@@ -6813,6 +6847,355 @@ impl<'a> Interp<'a> {
     /// `Interner.intern`, `.resolve` and `.len`. A symbol is its string's
     /// position; `resolve` lends the string from a place that lives until
     /// exit, as the interner's strings do.
+    /// A panic raised by a native: the run aborts with exit 101.
+    fn native_panic<T>(&mut self) -> R<T> {
+        if self.trace {
+            self.events.push(Event::Abort(AbortReason::Panic));
+        }
+        Err(Stop::Abort(AbortReason::Panic))
+    }
+
+    /// A lane vector's lanes, from the vector or a reference to it.
+    fn lanes(&mut self, v: &Value) -> R<Vec<Value>> {
+        match v {
+            Value::Agg(fs) => Ok(fs.clone()),
+            Value::Ref(at) => {
+                let inner = self.slot(at)?;
+                self.lanes(&inner)
+            }
+            other => err(format!("a lane vector expected, found {other:?}")),
+        }
+    }
+
+    /// The element addresses of a slice, an array or a reference to
+    /// either: where `gather` reads and `scatter` writes.
+    fn element_addrs(&mut self, v: &Value) -> R<Vec<Addr>> {
+        match v {
+            Value::Slice { base, lo, len } => {
+                Ok((*lo..*lo + *len).map(|i| base.child(i)).collect())
+            }
+            Value::Ref(at) => match self.slot(at)? {
+                Value::Agg(fs) => Ok((0..fs.len() as u64).map(|i| at.child(i)).collect()),
+                inner => self.element_addrs(&inner),
+            },
+            other => err(format!("a slice expected, found {other:?}")),
+        }
+    }
+
+    /// `Vector[T, N]`'s methods and constructors (design.md § Portable
+    /// SIMD), lane by lane with the scalar operators, as legacy runs them.
+    fn vector_method(&mut self, method: &str, args: &[Value], arg_tys: &[Ty], ret: Ty) -> R<Value> {
+        let strip = |me: &Self, mut t: Ty| {
+            while let TyKind::Ref(i) | TyKind::MutRef(i) = me.tys.kind(t) {
+                t = i;
+            }
+            t
+        };
+        // The element type of a vector type.
+        let elem_of = |me: &Self, t: Ty| match me.tys.kind(strip(me, t)) {
+            TyKind::Array(e, n) => Some((e, n as usize)),
+            _ => None,
+        };
+        let int_index = |v: &Value| match v {
+            Value::Int(i) => Some(*i),
+            _ => None,
+        };
+        let fold = |me: &mut Self, op: BinOp, lanes: Vec<Value>, et: Ty| -> R<Value> {
+            let mut it = lanes.into_iter();
+            let Some(mut acc) = it.next() else {
+                return err("a vector with no lanes");
+            };
+            for x in it {
+                let (v, of) = me.binop(op, acc, x, et)?;
+                if of {
+                    return Err(Stop::Abort(AbortReason::Overflow));
+                }
+                acc = v;
+            }
+            Ok(acc)
+        };
+        match method {
+            // Constructors: the receiver is the type.
+            "splat" | "from_array" | "from_slice" | "load_masked" | "gather" | "cast_from" => {
+                let Some((et, n)) = elem_of(self, ret) else {
+                    return err(format!("Vector.{method} returns no vector"));
+                };
+                let lanes = match method {
+                    "splat" => vec![args[0].clone(); n],
+                    "from_array" => self.lanes(&args[0])?,
+                    "from_slice" => {
+                        let addrs = self.element_addrs(&args[0])?;
+                        if addrs.len() != n {
+                            return self.native_panic();
+                        }
+                        let mut out = Vec::with_capacity(n);
+                        for a in &addrs {
+                            out.push(self.slot(a)?);
+                        }
+                        out
+                    }
+                    "load_masked" => {
+                        let addrs = self.element_addrs(&args[0])?;
+                        let mask = self.lanes(&args[1])?;
+                        let zero = match self.tys.kind(et) {
+                            TyKind::Float(_) => Value::Float(0.0),
+                            _ => Value::Int(0),
+                        };
+                        let mut out = Vec::with_capacity(n);
+                        for i in 0..n {
+                            if !matches!(mask.get(i), Some(Value::Bool(true))) {
+                                out.push(zero.clone());
+                                continue;
+                            }
+                            let Some(a) = addrs.get(i) else {
+                                return self.native_panic();
+                            };
+                            out.push(self.slot(a)?);
+                        }
+                        out
+                    }
+                    "gather" => {
+                        let addrs = self.element_addrs(&args[0])?;
+                        let idx = self.lanes(&args[1])?;
+                        let mut out = Vec::with_capacity(idx.len());
+                        for i in &idx {
+                            let a = int_index(i)
+                                .and_then(|i| usize::try_from(i).ok())
+                                .and_then(|i| addrs.get(i));
+                            let Some(a) = a else {
+                                return self.native_panic();
+                            };
+                            out.push(self.slot(a)?);
+                        }
+                        out
+                    }
+                    _ => {
+                        // `cast_from`: each lane converted to the target
+                        // element type.
+                        let src = self.lanes(&args[0])?;
+                        let kind = self.tys.kind(et);
+                        src.into_iter()
+                            .map(|l| match (l, &kind) {
+                                (Value::Int(i), TyKind::Float(ft)) => {
+                                    Value::Float(ft.round(i as f64))
+                                }
+                                (Value::Float(f), TyKind::Float(ft)) => Value::Float(ft.round(f)),
+                                (Value::Float(f), TyKind::Int(it)) => {
+                                    Value::Int(wrap(f as i64 as i128, *it))
+                                }
+                                (Value::Int(i), TyKind::Int(it)) => Value::Int(wrap(i, *it)),
+                                (l, _) => l,
+                            })
+                            .collect()
+                    }
+                };
+                Ok(Value::Agg(lanes))
+            }
+            _ => {
+                let Some((et, n)) = arg_tys.first().and_then(|&t| elem_of(self, t)) else {
+                    return err(format!("Vector.{method} on no vector"));
+                };
+                let lanes = self.lanes(&args[0])?;
+                let float = |x: &Value| match x {
+                    Value::Float(f) => Some(*f),
+                    _ => None,
+                };
+                let et_kind = self.tys.kind(et);
+                match method {
+                    "sqrt" | "exp" | "ln" | "tanh" | "sigmoid" | "floor" | "ceil" | "round"
+                    | "trunc" => Ok(Value::Agg(
+                        lanes
+                            .into_iter()
+                            .map(|l| match float(&l) {
+                                Some(x) => {
+                                    let r = match method {
+                                        "sqrt" => x.sqrt(),
+                                        "exp" => x.exp(),
+                                        "ln" => x.ln(),
+                                        "tanh" => x.tanh(),
+                                        "floor" => x.floor(),
+                                        "ceil" => x.ceil(),
+                                        "round" => x.round(),
+                                        "trunc" => x.trunc(),
+                                        _ => 1.0 / (1.0 + (-x).exp()),
+                                    };
+                                    narrow_float(Value::Float(r), et_kind.clone())
+                                }
+                                None => l,
+                            })
+                            .collect(),
+                    )),
+                    "to_bits" => Ok(Value::Agg(
+                        lanes
+                            .into_iter()
+                            .map(|l| match (float(&l), &et_kind) {
+                                (Some(x), TyKind::Float(crate::mir::ty::FloatTy::F32)) => {
+                                    Value::Int((x as f32).to_bits() as i128)
+                                }
+                                (Some(x), _) => Value::Int(x.to_bits() as i128),
+                                (None, _) => l,
+                            })
+                            .collect(),
+                    )),
+                    "bits_as_f32" | "bits_as_f64" => Ok(Value::Agg(
+                        lanes
+                            .into_iter()
+                            .map(|l| match l {
+                                Value::Int(b) if method == "bits_as_f32" => {
+                                    Value::Float(f32::from_bits(b as u32) as f64)
+                                }
+                                Value::Int(b) => Value::Float(f64::from_bits(b as u64)),
+                                l => l,
+                            })
+                            .collect(),
+                    )),
+                    "reduce_sum" | "reduce_product" | "reduce_and" | "reduce_or" | "reduce_xor" => {
+                        let op = match method {
+                            "reduce_sum" => BinOp::Add,
+                            "reduce_product" => BinOp::Mul,
+                            "reduce_and" => BinOp::BitAnd,
+                            "reduce_or" => BinOp::BitOr,
+                            _ => BinOp::BitXor,
+                        };
+                        fold(self, op, lanes, et)
+                    }
+                    "reduce_min" | "reduce_max" => {
+                        let want = match method {
+                            "reduce_min" => BinOp::Lt,
+                            _ => BinOp::Gt,
+                        };
+                        let mut it = lanes.into_iter();
+                        let Some(mut acc) = it.next() else {
+                            return err("a vector with no lanes");
+                        };
+                        for x in it {
+                            let (keep, _) = self.binop(want, acc.clone(), x.clone(), et)?;
+                            if !matches!(keep, Value::Bool(true)) {
+                                acc = x;
+                            }
+                        }
+                        Ok(acc)
+                    }
+                    "dot" => {
+                        let rhs = self.lanes(&args[1])?;
+                        let mut prods = Vec::with_capacity(n);
+                        for (x, y) in lanes.into_iter().zip(rhs) {
+                            let (v, of) = self.binop(BinOp::Mul, x, y, et)?;
+                            if of {
+                                return Err(Stop::Abort(AbortReason::Overflow));
+                            }
+                            prods.push(v);
+                        }
+                        fold(self, BinOp::Add, prods, et)
+                    }
+                    "cross" => {
+                        let b = self.lanes(&args[1])?;
+                        let a = lanes;
+                        if a.len() != 3 || b.len() != 3 {
+                            return err("cross is defined only for 3-lane vectors");
+                        }
+                        let mut out = Vec::with_capacity(3);
+                        for (p, q, r, t) in [(1, 2, 2, 1), (2, 0, 0, 2), (0, 1, 1, 0)] {
+                            let pq = fold(self, BinOp::Mul, vec![a[p].clone(), b[q].clone()], et)?;
+                            let rt = fold(self, BinOp::Mul, vec![a[r].clone(), b[t].clone()], et)?;
+                            out.push(fold(self, BinOp::Sub, vec![pq, rt], et)?);
+                        }
+                        Ok(Value::Agg(out))
+                    }
+                    "select" => {
+                        let a = self.lanes(&args[1])?;
+                        let b = self.lanes(&args[2])?;
+                        Ok(Value::Agg(
+                            lanes
+                                .into_iter()
+                                .zip(a.into_iter().zip(b))
+                                .map(|(m, (x, y))| match m {
+                                    Value::Bool(true) => x,
+                                    _ => y,
+                                })
+                                .collect(),
+                        ))
+                    }
+                    "reverse" => {
+                        let mut out = lanes;
+                        out.reverse();
+                        Ok(Value::Agg(out))
+                    }
+                    "rotate_lanes_left" | "rotate_lanes_right" => {
+                        let Some(k) = args.get(1).and_then(int_index) else {
+                            return err(format!("{method} takes a lane count"));
+                        };
+                        if n == 0 {
+                            return Ok(Value::Agg(lanes));
+                        }
+                        let k = k.rem_euclid(n as i128) as usize;
+                        Ok(Value::Agg(
+                            (0..n)
+                                .map(|i| match method {
+                                    "rotate_lanes_left" => lanes[(i + k) % n].clone(),
+                                    _ => lanes[(i + n - k) % n].clone(),
+                                })
+                                .collect(),
+                        ))
+                    }
+                    "replace" => {
+                        let i = args.get(1).and_then(int_index);
+                        let mut out = lanes;
+                        match i
+                            .and_then(|i| usize::try_from(i).ok())
+                            .filter(|&i| i < out.len())
+                        {
+                            Some(i) => {
+                                out[i] = args[2].clone();
+                                Ok(Value::Agg(out))
+                            }
+                            None => self.native_panic(),
+                        }
+                    }
+                    "shuffle" => {
+                        let idx = self.lanes(&args[1])?;
+                        let mut out = Vec::with_capacity(idx.len());
+                        for i in &idx {
+                            match int_index(i)
+                                .and_then(|i| usize::try_from(i).ok())
+                                .and_then(|i| lanes.get(i))
+                            {
+                                Some(l) => out.push(l.clone()),
+                                None => return self.native_panic(),
+                            }
+                        }
+                        Ok(Value::Agg(out))
+                    }
+                    "store_masked" | "scatter" => {
+                        let addrs = self.element_addrs(&args[1])?;
+                        let sel = self.lanes(&args[2])?;
+                        for (i, l) in lanes.into_iter().enumerate() {
+                            let at = match method {
+                                "store_masked" => {
+                                    if !matches!(sel.get(i), Some(Value::Bool(true))) {
+                                        continue;
+                                    }
+                                    addrs.get(i)
+                                }
+                                _ => sel
+                                    .get(i)
+                                    .and_then(int_index)
+                                    .and_then(|i| usize::try_from(i).ok())
+                                    .and_then(|i| addrs.get(i)),
+                            };
+                            let Some(at) = at else {
+                                return self.native_panic();
+                            };
+                            *self.slot_mut(at)? = l;
+                        }
+                        Ok(Value::Unit)
+                    }
+                    _ => err(format!("call of unknown function Vector.{method}")),
+                }
+            }
+        }
+    }
+
     fn interner_method(&mut self, method: &str, args: &[Value]) -> R<Value> {
         let recv = match args.first() {
             Some(Value::Ref(at)) => self.slot(at)?,
