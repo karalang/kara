@@ -1,0 +1,19 @@
+"9,3,4,#,#,1,#,#,2,#,6,#,#" -> true
+"1,#" -> false
+"9,#,#,1" -> false
+"#" -> true
+"#,#" -> false
+"1" -> false
+"1,#,#" -> true
+"1,#,#,#" -> false
+"#,1,#,#" -> false
+"100,99,#,#,0,#,#" -> true
+"1,2,3,#,#,#,#" -> true
+"1,2,3,#,#,#" -> false
+random 0: 7 tokens -> true, last dropped -> false
+random 1: 15 tokens -> true, last dropped -> false
+random 2: 23 tokens -> true, last dropped -> false
+random 3: 11 tokens -> true, last dropped -> false
+random 4: 39 tokens -> true, last dropped -> false
+random 5: 13 tokens -> true, last dropped -> false
+big: 10001 tokens -> true, one more # -> false

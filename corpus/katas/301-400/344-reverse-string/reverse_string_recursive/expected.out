@@ -1,0 +1,10 @@
+"hello" -> "olleh"
+"Hannah" -> "hannaH"
+"" -> ""
+"a" -> "a"
+"ab" -> "ba"
+"racecar" -> "racecar"
+"Kāra" -> "arāK"
+"añb€c🦀d" -> "d🦀c€bña"
+"tab	here" -> "ereh	bat"
+100000 letters: first after one reverse 't', twice restores: true

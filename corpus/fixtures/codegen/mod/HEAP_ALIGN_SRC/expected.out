@@ -1,0 +1,18 @@
+lit  [Vector(1, 2, 3, 4), Vector(5, 6, 7, 8)]
+idx  Vector(1, 2, 3, 4)
+push [Vector(1, 2, 3, 4), Vector(5, 6, 7, 8), Vector(1, 2, 3, 4)]
+for  Vector(1, 2, 3, 4)
+for  Vector(5, 6, 7, 8)
+for  Vector(1, 2, 3, 4)
+set  [Vector(1, 2, 3, 4), Vector(5, 6, 7, 8), Vector(1, 2, 3, 4)]
+pop  Vector(1, 2, 3, 4)
+ins  [Vector(5, 6, 7, 8), Vector(1, 2, 3, 4), Vector(5, 6, 7, 8)]
+rem  Vector(5, 6, 7, 8)
+ret  [Vector(1, 2, 3, 4)]
+w8   [Vector(1, 2, 3, 4, 5, 6, 7, 8)]
+hs   [Holder { v: Vector(1, 2, 3, 4), n: 1 }]
+es   [V(Vector(1, 2, 3, 4))]
+map  {k: Vector(1, 2, 3, 4)}
+os   [Some(Vector(1, 2, 3, 4))]
+av   [[Vector(1, 2, 3, 4), Vector(5, 6, 7, 8)]]
+sum  3520

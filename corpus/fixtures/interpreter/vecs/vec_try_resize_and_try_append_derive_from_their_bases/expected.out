@@ -1,0 +1,5 @@
+grow 6 7
+shrink 2
+append 2 30
+heap 4 pad tail
+ok 4

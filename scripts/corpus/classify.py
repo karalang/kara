@@ -403,6 +403,9 @@ def main() -> int:
                     help="recompute the slice tags from each source without running anything, then report")
     ap.add_argument("--resume", action="store_true",
                     help="skip entries already classified with this compiler commit")
+    ap.add_argument("--skip-bench", action="store_true",
+                    help="leave kata bench variants as recorded: they are outside the gate, and most "
+                         "of them run to the timeout, which is most of a full run's wall time")
     args = ap.parse_args()
     corpus = Path(args.corpus)
     if args.retag:
@@ -421,7 +424,8 @@ def main() -> int:
                 if (not args.filter or any(f in str(e.relative_to(corpus)) for f in args.filter))
                 and (not args.bucket
                      or any(str(read_toml(e / "meta.toml").get("bucket", "")).startswith(b) for b in args.bucket))
-                and not (args.resume and read_toml(e / "meta.toml").get("classified_with") == sha)]
+                and not (args.resume and read_toml(e / "meta.toml").get("classified_with") == sha)
+                and not (args.skip_bench and "/bench/" in f"/{e.relative_to(corpus)}/")]
         n = 0
         with cf.ThreadPoolExecutor(args.jobs) as ex:
             futs = {ex.submit(classify, e, corpus, args, rev, sha): e for e in todo}

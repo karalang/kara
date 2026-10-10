@@ -1,0 +1,7 @@
+arith=14 -2 12 3 2
+cmp=true false true true false false
+math=4.8125 20.25 2.765625
+act=3.21875 3.453125
+round=6 6 6 6
+red=1 2 4 12
+lanes=6 6 6 1

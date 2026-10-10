@@ -11,6 +11,6 @@ rules = []
 backends = []
 env = {}
 bucket = "mir-gap:the builtin `Neg.try_from` is not lowered yet; 17:11 in `probe`: the builtin `Us"
-classified_with = "28b4fa5b9"
+classified_with = "fa2007d38+local"
 model_rev = "8be6ddd7"
 model_src = "ccdd8e16"

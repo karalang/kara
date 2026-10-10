@@ -1,0 +1,16 @@
+cases 1607 brute-cases 1464 reachable 1389 samples 25712 hits 18747
+P1  bfs-vs-star disagreements 0
+P2  memo-vs-star disagreements 0
+P3  brute-vs-star disagreements 0
+P4  reachability mismatches 0
+P5  answers with no witness 0
+P6  sampled combinations cheaper than the answer 0
+P7  coin-order failures 0
+P8  extra-denomination failures 0
+P9  recurrence failures 0
+P10 subadditivity failures 0
+P11 scaling failures 0
+P12 bound failures 0
+P13 greedy-beats-answer failures 0
+P14 target-as-coin failures 0
+DIFFERENTIAL OK

@@ -1,0 +1,19 @@
+[3,2,3,null,3,null,1] -> 7
+[3,4,5,1,3,null,1] -> 9
+[] -> 0
+[0] -> 0
+[7] -> 7
+[1,2] -> 2
+[2,1,1] -> 2
+[1,2,3] -> 5
+[4,1,null,2,null,3] -> 7
+[2,1,3,null,4] -> 7
+[0,0,0,0,0] -> 0
+[10,1,1,10,10,10,10] -> 50
+random 0: 3 houses -> 2
+random 1: 8 houses -> 21
+random 2: 13 houses -> 45
+random 3: 18 houses -> 67
+random 4: 23 houses -> 88
+random 5: 28 houses -> 104
+big: 10000 houses -> 29860032, chain of 10000 -> 25005000

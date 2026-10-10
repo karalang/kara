@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "the holding test asserts the `E_RAII_ACROSS_YIELD` refusal; it was extracted as a stdout program (kata thread, 2026-10-09)"
 bucket = "a:refused"
-classified_with = "28b4fa5b9"
+classified_with = "fa2007d38+local"
 model_rev = "8be6ddd7"
 model_src = "eae8abfd"

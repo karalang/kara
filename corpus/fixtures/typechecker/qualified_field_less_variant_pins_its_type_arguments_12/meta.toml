@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: \"expected 'Ho[i64]', found 'Ho[String]'\"; source rewritten from `size_of[i64]()` to `i64.size_of()`, since Kāra has no call-site type arguments (design.md §8, 2026-10-09)"
 bucket = "a"
-classified_with = "28b4fa5b9"
+classified_with = "fa2007d38+local"
 model_rev = "8be6ddd7"
 model_src = "4e4611b3"
