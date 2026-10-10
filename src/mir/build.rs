@@ -50,6 +50,11 @@ impl BodyBuilder {
         }
     }
 
+    /// The source info stamped on what is pushed now.
+    pub fn source_info(&self) -> SourceInfo {
+        self.info
+    }
+
     /// The source info stamped on everything pushed from now on.
     pub fn set_source_info(&mut self, info: SourceInfo) {
         self.info = info;

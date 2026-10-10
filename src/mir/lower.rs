@@ -3464,6 +3464,17 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// The place `e` names. Field access through a reference derefs it.
     fn expr_place(&mut self, e: &'a Expr, mutable: bool) -> R<Place> {
+        let outer = self.b.source_info();
+        self.b.set_source_info(SourceInfo {
+            span: e.span,
+            ..outer
+        });
+        let r = self.expr_place_here(e, mutable);
+        self.b.set_source_info(outer);
+        r
+    }
+
+    fn expr_place_here(&mut self, e: &'a Expr, mutable: bool) -> R<Place> {
         let p = self.expr_place_of(e, mutable)?;
         if mutable {
             return Ok(p);
@@ -4058,8 +4069,20 @@ impl<'l, 'a> Bx<'l, 'a> {
         })
     }
 
-    /// Evaluate `e` and store its value in `dest`.
+    /// Evaluate `e` and store its value in `dest`. What it pushes carries
+    /// `e`'s span, so a run that aborts in it names the place.
     fn expr_into(&mut self, e: &'a Expr, dest: Place) -> R<()> {
+        let outer = self.b.source_info();
+        self.b.set_source_info(SourceInfo {
+            span: e.span,
+            ..outer
+        });
+        let r = self.expr_into_here(e, dest);
+        self.b.set_source_info(outer);
+        r
+    }
+
+    fn expr_into_here(&mut self, e: &'a Expr, dest: Place) -> R<()> {
         // `process.exit(code)`: the process ends here, with no drops.
         if let Some([code]) = process_exit_args(e) {
             let i32_t = self.tys().tcx().intern(HK::Int(IntSize::I32));
@@ -10249,6 +10272,30 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             "panic" | "todo" | "unimplemented" | "unreachable" => {
+                // The message is shown when the run aborts.
+                let mut ops = Vec::new();
+                for a in args {
+                    self.print_operands(&a.value, &mut ops)?;
+                }
+                // Legacy's wording: `todo`, `unimplemented` and `unreachable`
+                // put their own words before any message.
+                let default = match name {
+                    "panic" => None,
+                    "todo" => Some("not yet implemented"),
+                    _ => Some("entered unreachable code"),
+                };
+                if let Some(d) = default {
+                    let head = match ops.is_empty() {
+                        true => d.to_string(),
+                        false => format!("{d}: "),
+                    };
+                    ops.insert(0, self.static_str(&head));
+                }
+                if !ops.is_empty() {
+                    let unit = self.tys().unit();
+                    let l = self.temp(unit);
+                    self.call_native("panic_message", ops, Place::local(l));
+                }
                 self.diverge(TerminatorKind::Abort {
                     reason: AbortReason::Panic,
                 });
@@ -10302,6 +10349,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                     },
                     fail,
                 );
+                // Legacy's message: `assert`'s literal one if it has one.
+                let msg = match (name, args.get(1).map(|a| &a.value.kind)) {
+                    ("assert", Some(ExprKind::StringLit(m))) => m.as_str(),
+                    ("assert", _) => "assertion failed",
+                    ("assert_eq", _) => "assertion failed: left != right",
+                    _ => "assertion failed: left == right",
+                };
+                let msg = self.static_str(msg);
+                let unit_t = self.tys().unit();
+                let l = self.temp(unit_t);
+                self.call_native("panic_message", vec![msg], Place::local(l));
                 self.diverge(TerminatorKind::Abort {
                     reason: AbortReason::Panic,
                 });
@@ -13007,6 +13065,7 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
         hir,
         &own.closure_captures,
     );
+    lowered.program.user_source_len = Some(user_len);
     if !lowered.errors.is_empty() {
         return Err(format!("build: {}", lowered.errors.join("; ")));
     }
@@ -13634,6 +13693,44 @@ fn main() {
             "[<unknown>:23] P { a: 1, b: \"w\" } = P { a: 1, b: \"w\" }\n\
              [<unknown>:24] ('c', \"s\") = ('c', \"s\")\n"
         );
+    }
+
+    /// An aborted run reports on stderr as legacy does: the message, then
+    /// where it happened, at the program's own call when the panic is in
+    /// the library (`unwrap`).
+    #[test]
+    fn aborts_report_their_message_and_place() {
+        let cases = [
+            (
+                "fn main() {\n    println(\"x\");\n    panic(f\"bad {1 + 1}\");\n}\n",
+                "bad 2",
+                "3:5",
+            ),
+            (
+                "fn main() {\n    let a: i64 = 9223372036854775807;\n    println(a + 1);\n}\n",
+                "integer overflow",
+                "3:13",
+            ),
+            (
+                "fn main() {\n    let o: Option[i64] = None;\n    println(o.unwrap());\n}\n",
+                "called unwrap() on None",
+                "3:13",
+            ),
+            (
+                "fn main() {\n    let x = 3;\n    assert_eq(x, 4);\n}\n",
+                "assertion failed: left != right",
+                "3:5",
+            ),
+        ];
+        for (src, msg, at) in cases {
+            let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
+            assert!(matches!(r.outcome, interp::Outcome::Aborted(_)), "{src}");
+            assert_eq!(
+                r.stderr,
+                format!("runtime error: {msg}\n  at <unknown>:{at}\nError return trace:\n  <unknown>:{at}\n"),
+                "{src}"
+            );
+        }
     }
 
     /// A lane vector shows as `Vector(..)`, its operators work lane by

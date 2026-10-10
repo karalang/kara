@@ -39,6 +39,9 @@ pub struct Program {
     pub display_styles: BTreeMap<AdtId, DisplayStyle>,
     /// The program's statics, indexed by `ConstKind::Static`.
     pub statics: Vec<StaticDef>,
+    /// The length of the program's own source, before the library text
+    /// appended after it: a span at or past it is in the library.
+    pub user_source_len: Option<usize>,
 }
 
 /// How a derived `Display` departs from the default.
@@ -431,6 +434,8 @@ fn run_with(
         parked_flags: Vec::new(),
         tracing_min: 0,
         debug_render: false,
+        panic_message: None,
+        abort_reported: false,
         tracing_sink: None,
         active_spans: Vec::new(),
         interners: Vec::new(),
@@ -651,6 +656,11 @@ struct Interp<'a> {
     /// Set while `dbg` renders its value: the `Debug` form, which quotes
     /// strings and characters and ignores a user `Display`.
     debug_render: bool,
+    /// `panic(msg)`'s message, shown when the run aborts.
+    panic_message: Option<String>,
+    /// Whether an abort has been reported on stderr: the innermost frame
+    /// reports it, where it happened.
+    abort_reported: bool,
     /// The exporter `Log.set_exporter` registered, and its type; `None`
     /// sends events to the default `StdoutExporter`.
     tracing_sink: Option<(Value, Ty)>,
@@ -1096,6 +1106,10 @@ impl<'a> Interp<'a> {
                 }
                 let text = self.show(&args, arg_tys)?;
                 Ok(self.alloc_box("String", Value::Str(text)))
+            }
+            ("panic_message", "") => {
+                self.panic_message = Some(self.show(&args, arg_tys)?);
+                Ok(Value::Unit)
             }
             ("println" | "print" | "eprintln" | "eprint", "") => {
                 // The arguments print one after another (an f-string's
@@ -5252,11 +5266,13 @@ impl<'a> Interp<'a> {
             for (i, st) in block.statements.iter().enumerate() {
                 self.tick()?;
                 self.statement(body, &st.kind)
+                    .map_err(|s| self.report_abort(s, st.source_info.span))
                     .map_err(|s| locate(s, body, format!("{bb}[{i}]")))?;
             }
             self.tick()?;
             let next = self
                 .terminator(body, &block.terminator.kind, strict)
+                .map_err(|s| self.report_abort(s, block.terminator.source_info.span))
                 .map_err(|s| locate(s, body, format!("{bb}[term]")))?;
             match next {
                 Some(b) => bb = b,
@@ -5267,6 +5283,38 @@ impl<'a> Interp<'a> {
                 }
             }
         }
+    }
+
+    /// An abort, reported on stderr where it happened the first time it
+    /// passes a frame, as legacy reports a runtime error (core semantics
+    /// §10.2): the message, then the place.
+    fn report_abort(&mut self, s: Stop, span: crate::token::Span) -> Stop {
+        // A library body (`unwrap`'s `panic`) leaves the report to the
+        // program's call into it.
+        let in_library = self
+            .program
+            .user_source_len
+            .is_some_and(|n| span.offset >= n);
+        if let Stop::Abort(reason) = &s {
+            if !self.abort_reported && !in_library {
+                self.abort_reported = true;
+                let msg = match (self.panic_message.take(), reason) {
+                    (Some(m), _) => m,
+                    (None, AbortReason::Panic) => "explicit panic".to_string(),
+                    (None, AbortReason::Overflow) => "integer overflow".to_string(),
+                    (None, AbortReason::DivByZero) => "division by zero".to_string(),
+                    (None, AbortReason::BoundsCheck) => "index out of bounds".to_string(),
+                    (None, AbortReason::UnreachableArm) => "entered unreachable code".to_string(),
+                };
+                let file = SOURCE_NAME.get().map_or("<unknown>", String::as_str);
+                let at = format!("{file}:{}:{}", span.line, span.column);
+                self.write_out(
+                    true,
+                    &format!("runtime error: {msg}\n  at {at}\nError return trace:\n  {at}\n"),
+                );
+            }
+        }
+        s
     }
 
     fn tick(&mut self) -> R<()> {
