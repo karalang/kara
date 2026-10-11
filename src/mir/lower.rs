@@ -13454,10 +13454,7 @@ pub(crate) mod tests {
 
     /// Core pins the builder cannot run yet, each with what it waits on.
     /// A listed pin must still fail, so the list only shrinks.
-    pub(crate) const NOT_YET: &[&str] = &[
-        // `TaskGroup` and `TaskHandle` have no MIR lowering or natives yet.
-        "ok_taskgroup_borrows",
-    ];
+    pub(crate) const NOT_YET: &[&str] = &[];
 
     /// Every runnable core pin, built from source, elaborated and run, prints
     /// its expected output and exits with its expected code.
