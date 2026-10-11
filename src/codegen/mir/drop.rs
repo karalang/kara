@@ -39,30 +39,53 @@ use crate::mir::place_ty::place_ty;
 use crate::mir::ty::{AdtId, IntrinsicTy, TyKind};
 use crate::mir::{BasicBlock, Place, Ty};
 
+/// How the runtime drops a library cell.
+#[derive(Clone, Copy)]
+enum CellDrop {
+    /// `void(ptr handle)`: the runtime owns everything behind the handle.
+    /// A channel end's undelivered payloads are dropped through the glue
+    /// `karac_runtime_channel_set_elem_drop` recorded on the channel.
+    Free(&'static str),
+    /// A `OnceLock` / `OnceCell`: the held value, read through
+    /// `karac_runtime_once_get` (null while unset), drops through its own
+    /// glue, then `karac_runtime_once_free` frees the cell.
+    Once,
+}
+
 /// The library cells whose contents live in the runtime, behind a one-word
 /// handle at offset 0 (the interpreter drops them by hand in
-/// `Interp::drop_adt`), with the runtime entry point that drops one:
-/// `void(i64 handle, ptr held_glue)`, where `held_glue` is the glue of the
-/// held type (the cell's first type argument), or null when it owns
-/// nothing. A zero handle (a hand-built literal) owns nothing. `Atomic[T]`
-/// holds a `T` in place, which is never a type that owns anything.
-const LIBRARY_CELLS: &[(&str, &str)] = &[
-    ("Sender", "karac_sender_drop"),
-    ("Receiver", "karac_receiver_drop"),
-    ("File", "karac_file_drop"),
-    ("OnceLock", "karac_once_lock_drop"),
-    ("OnceCell", "karac_once_cell_drop"),
-    ("TaskHandle", "karac_task_handle_drop"),
-    ("Arena", "karac_arena_drop"),
+/// `Interp::drop_adt`), with how the runtime drops one. A null handle (a
+/// hand-built literal) owns nothing. An unjoined `TaskHandle` is detached:
+/// the task runs on and reaps itself. `Atomic[T]` holds a `T` in place,
+/// which is never a type that owns anything.
+const LIBRARY_CELLS: &[(&str, CellDrop)] = &[
+    (
+        "Sender",
+        CellDrop::Free("karac_runtime_channel_drop_sender"),
+    ),
+    (
+        "Receiver",
+        CellDrop::Free("karac_runtime_channel_drop_receiver"),
+    ),
+    ("File", CellDrop::Free("karac_runtime_file_close")),
+    ("OnceLock", CellDrop::Once),
+    ("OnceCell", CellDrop::Once),
+    ("TaskHandle", CellDrop::Free("karac_runtime_task_detach")),
+    ("Arena", CellDrop::Free("karac_runtime_arena_free")),
 ];
 
-/// The runtime's table behind a map or set handle: its entry count, a
-/// pointer to entry `i` (in iteration order, which is key order for the
-/// sorted kinds), and the free of the table itself. A map entry is laid
-/// out as the tuple `(K, V)`, a set entry as `K`.
-const TABLE_LEN: &str = "karac_table_len";
-const TABLE_ENTRY: &str = "karac_table_entry";
-const TABLE_FREE: &str = "karac_table_free";
+const ONCE_GET: &str = "karac_runtime_once_get";
+const ONCE_FREE: &str = "karac_runtime_once_free";
+
+/// The runtime's hash table behind a map or set handle (`runtime/src/map.rs`;
+/// a set is a map with zero-size values, and the sorted kinds share it).
+/// The glue walks it with an iterator that copies each key and value out
+/// into aligned slots, drops the copies, and then frees the table, which
+/// drops nothing itself.
+const MAP_ITER_NEW: &str = "karac_map_iter_new";
+const MAP_ITER_NEXT: &str = "karac_map_iter_next";
+const MAP_ITER_FREE: &str = "karac_map_iter_free";
+const MAP_FREE: &str = "karac_map_free";
 
 /// The glue built or requested so far.
 #[derive(Default)]
@@ -205,46 +228,70 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(self.tys.adt(a).has_drop_impl)
     }
 
-    /// The runtime entry point that drops the library cell `a`, if it is one.
-    fn cell_drop(&self, a: AdtId) -> Option<&'static str> {
+    /// How the runtime drops the library cell `a`, if it is one.
+    fn cell_drop(&self, a: AdtId) -> Option<CellDrop> {
         let name = self.tys.adt(a).name.clone();
         LIBRARY_CELLS
             .iter()
             .find(|(n, _)| *n == name)
-            .map(|(_, rt)| *rt)
+            .map(|&(_, d)| d)
     }
 
     /// Drops the library cell of type `ty` at `p` through the runtime.
-    fn drop_cell(&mut self, p: PointerValue<'ctx>, ty: Ty, rt: &str) -> R<()> {
-        let held = self
-            .tys
-            .tcx()
-            .adt_of(ty)
-            .and_then(|(_, args)| args.first().copied())
-            .filter(|&t| self.tys.needs_drop(t));
-        let glue = match held {
-            Some(t) => self.glue_fn(t).as_global_value().as_pointer_value(),
-            None => self.ptr_ty().const_null(),
-        };
-        let i64t = self.llcx.i64_type();
-        let f = self.extern_fn(
-            rt,
-            self.llcx
-                .void_type()
-                .fn_type(&[i64t.into(), self.ptr_ty().into()], false),
-        );
-        let h = self.load_i64(p)?;
-        let zero = self.is_zero(h)?;
+    fn drop_cell(&mut self, p: PointerValue<'ctx>, ty: Ty, how: CellDrop) -> R<()> {
+        let pt = self.ptr_ty();
+        let void = self.llcx.void_type();
+        let h = self.load_ptr(p)?;
+        let null = self
+            .builder
+            .build_is_null(h, "")
+            .map_err(|e| e.to_string())?;
         let some = self
             .builder
-            .build_not(zero, "")
+            .build_not(null, "")
             .map_err(|e| e.to_string())?;
-        self.if_then(some, |cx| {
-            cx.builder
-                .build_call(f, &[h.into(), glue.into()], "")
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        })
+        match how {
+            CellDrop::Free(rt) => {
+                let f = self.extern_fn(rt, void.fn_type(&[pt.into()], false));
+                self.if_then(some, |cx| {
+                    cx.builder
+                        .build_call(f, &[h.into()], "")
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })
+            }
+            CellDrop::Once => {
+                let held = self
+                    .tys
+                    .tcx()
+                    .adt_of(ty)
+                    .and_then(|(_, args)| args.first().copied())
+                    .filter(|&t| self.tys.needs_drop(t));
+                let get = self.extern_fn(ONCE_GET, pt.fn_type(&[pt.into()], false));
+                let free = self.extern_fn(ONCE_FREE, void.fn_type(&[pt.into()], false));
+                self.if_then(some, |cx| {
+                    if let Some(t) = held {
+                        let v = cx
+                            .builder
+                            .build_call(get, &[h.into()], "held")
+                            .map_err(|e| e.to_string())?
+                            .try_as_basic_value()
+                            .basic()
+                            .ok_or("karac_runtime_once_get returns nothing")?
+                            .into_pointer_value();
+                        let set = cx
+                            .builder
+                            .build_is_not_null(v, "")
+                            .map_err(|e| e.to_string())?;
+                        cx.if_then(set, |cx| cx.call_glue(v, t))?;
+                    }
+                    cx.builder
+                        .build_call(free, &[h.into()], "")
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })
+            }
+        }
     }
 
     /// Drops the elements of the `VecDeque` ring at `p`: `len` of them from
@@ -282,25 +329,25 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// Drops the map or set at `p`: each entry's key, then its value, in
     /// the table's order, then the table. A null handle owns nothing.
+    ///
+    /// The sorted kinds should destroy in key order (CLAUDE.md, "`Map` /
+    /// `Set` iteration order"), which needs a comparator for the key type;
+    /// until `Ord` is lowered they drop in table order like the hashed ones.
     fn drop_table(&mut self, p: PointerValue<'ctx>, k: Ty, v: Option<Ty>) -> R<()> {
-        let (pt, i64t) = (self.ptr_ty(), self.llcx.i64_type());
-        let len_f = self.extern_fn(TABLE_LEN, i64t.fn_type(&[pt.into()], false));
-        let entry_f = self.extern_fn(TABLE_ENTRY, pt.fn_type(&[pt.into(), i64t.into()], false));
-        let free_f = self.extern_fn(
-            TABLE_FREE,
-            self.llcx.void_type().fn_type(&[pt.into()], false),
-        );
+        let (pt, void) = (self.ptr_ty(), self.llcx.void_type());
+        let free_f = self.extern_fn(MAP_FREE, void.fn_type(&[pt.into()], false));
         let (kd, vd) = (
             self.tys.needs_drop(k),
             v.is_some_and(|v| self.tys.needs_drop(v)),
         );
-        let voff = match v {
-            Some(v) => {
-                let (kl, vl) = (self.layout(k)?, self.layout(v)?);
-                kl.size.div_ceil(vl.align) * vl.align
-            }
-            None => 0,
+        let slot_size = |cx: &Self, t: Option<Ty>| -> R<u32> {
+            let size = match t {
+                Some(t) => cx.layout(t)?.size,
+                None => 0,
+            };
+            u32::try_from(size.max(1)).map_err(|e| e.to_string())
         };
+        let (ks, vs) = (slot_size(self, Some(k))?, slot_size(self, v)?);
         let h = self.load_ptr(p)?;
         let null = self
             .builder
@@ -312,31 +359,47 @@ impl<'ctx> Cx<'ctx, '_> {
             .map_err(|e| e.to_string())?;
         self.if_then(some, |cx| {
             if kd || vd {
-                let n = cx
+                let new_f = cx.extern_fn(MAP_ITER_NEW, pt.fn_type(&[pt.into()], false));
+                let next_f = cx.extern_fn(
+                    MAP_ITER_NEXT,
+                    cx.llcx
+                        .bool_type()
+                        .fn_type(&[pt.into(), pt.into(), pt.into()], false),
+                );
+                let ifree_f = cx.extern_fn(MAP_ITER_FREE, void.fn_type(&[pt.into()], false));
+                let (kslot, vslot) = (cx.entry_slot(ks, "key")?, cx.entry_slot(vs, "val")?);
+                let it = cx
                     .builder
-                    .build_call(len_f, &[h.into()], "n")
+                    .build_call(new_f, &[h.into()], "it")
                     .map_err(|e| e.to_string())?
                     .try_as_basic_value()
                     .basic()
-                    .ok_or("karac_table_len returns nothing")?
-                    .into_int_value();
-                cx.count_loop(n, |cx, i| {
-                    let ent = cx
-                        .builder
-                        .build_call(entry_f, &[h.into(), i.into()], "entry")
-                        .map_err(|e| e.to_string())?
-                        .try_as_basic_value()
-                        .basic()
-                        .ok_or("karac_table_entry returns nothing")?
-                        .into_pointer_value();
-                    if kd {
-                        cx.call_glue(ent, k)?;
-                    }
-                    if let (true, Some(v)) = (vd, v) {
-                        cx.call_glue(cx.offset(ent, voff)?, v)?;
-                    }
-                    Ok(())
-                })?;
+                    .ok_or("karac_map_iter_new returns nothing")?
+                    .into_pointer_value();
+                cx.while_loop(
+                    |cx| {
+                        Ok(cx
+                            .builder
+                            .build_call(next_f, &[it.into(), kslot.into(), vslot.into()], "more")
+                            .map_err(|e| e.to_string())?
+                            .try_as_basic_value()
+                            .basic()
+                            .ok_or("karac_map_iter_next returns nothing")?
+                            .into_int_value())
+                    },
+                    |cx| {
+                        if kd {
+                            cx.call_glue(kslot, k)?;
+                        }
+                        if let (true, Some(v)) = (vd, v) {
+                            cx.call_glue(vslot, v)?;
+                        }
+                        Ok(())
+                    },
+                )?;
+                cx.builder
+                    .build_call(ifree_f, &[it.into()], "")
+                    .map_err(|e| e.to_string())?;
             }
             cx.builder
                 .build_call(free_f, &[h.into()], "")
@@ -616,6 +679,33 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(())
     }
 
+    /// `while cond() { body() }`, leaving the builder after it.
+    fn while_loop(
+        &mut self,
+        cond: impl FnOnce(&mut Self) -> R<IntValue<'ctx>>,
+        body: impl FnOnce(&mut Self) -> R<()>,
+    ) -> R<()> {
+        let f = self.cur_fn()?;
+        let head = self.llcx.append_basic_block(f, "next");
+        let each = self.llcx.append_basic_block(f, "next.drop");
+        let done = self.llcx.append_basic_block(f, "all.dropped");
+        self.builder
+            .build_unconditional_branch(head)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(head);
+        let more = cond(self)?;
+        self.builder
+            .build_conditional_branch(more, each, done)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(each);
+        body(self)?;
+        self.builder
+            .build_unconditional_branch(head)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(done);
+        Ok(())
+    }
+
     // ── helpers ─────────────────────────────────────────────────────
 
     fn field_offset(&self, ty: Ty, v: Option<u32>, f: u32) -> R<u64> {
@@ -713,9 +803,8 @@ mod tests {
     enum Ev {
         Free(usize),
         Drop(i64),
-        /// A library cell's runtime drop: its handle, and whether it was
-        /// handed the held type's glue.
-        Cell(i64, bool),
+        /// A library cell's runtime free, and its handle.
+        Cell(&'static str, usize),
     }
 
     thread_local! {
@@ -732,30 +821,34 @@ mod tests {
         LOG.with(|l| l.borrow_mut().push(Ev::Drop(id)));
     }
 
-    /// A stand-in for the runtime's table: `n` entries of `size` bytes.
-    #[repr(C)]
-    struct Table {
-        n: u64,
-        size: u64,
-        entries: *mut u8,
+    extern "C" fn closed(h: usize) {
+        LOG.with(|l| l.borrow_mut().push(Ev::Cell("close", h)));
     }
 
-    extern "C" fn table_len(t: *mut Table) -> u64 {
-        // SAFETY: the test built `t`.
-        unsafe { (*t).n }
+    extern "C" fn once_free(h: usize) {
+        LOG.with(|l| l.borrow_mut().push(Ev::Cell("once_free", h)));
     }
 
-    extern "C" fn table_entry(t: *mut Table, i: u64) -> *mut u8 {
-        // SAFETY: as above; `i < n`.
-        unsafe { (*t).entries.add((i * (*t).size) as usize) }
+    /// A `OnceLock` stand-in whose handle is the address of its held value,
+    /// or of a zero word while unset.
+    extern "C" fn once_get(h: *mut u64) -> *mut u64 {
+        // SAFETY: the test's handle points at a readable word.
+        if unsafe { *h } == 0 {
+            std::ptr::null_mut()
+        } else {
+            h
+        }
     }
 
-    extern "C" fn table_free(t: *mut Table) {
-        LOG.with(|l| l.borrow_mut().push(Ev::Free(t as usize)));
+    /// The real runtime table: keys hashed and compared by their first word.
+    unsafe extern "C" fn word_hash(k: *const c_void) -> u64 {
+        // SAFETY: every key the tests insert is at least a word.
+        unsafe { (k as *const u64).read_unaligned() }
     }
 
-    extern "C" fn cell_drop(h: i64, glue: usize) {
-        LOG.with(|l| l.borrow_mut().push(Ev::Cell(h, glue != 0)));
+    unsafe extern "C" fn word_eq(a: *const c_void, b: *const c_void) -> bool {
+        // SAFETY: as `word_hash`.
+        unsafe { word_hash(a) == word_hash(b) }
     }
 
     extern "C" fn env_drop(env: *mut u8) {
@@ -836,13 +929,20 @@ fn cells(o: OnceLock[R], f: Option[File], x: Atomic[i64], q: VecDeque[R], m: Map
             .unwrap();
         engine.add_global_mapping(&free, logged_free as *const () as usize);
         engine.add_global_mapping(&log, logged_drop as *const () as usize);
-        let stubs: [(&str, usize); 6] = [
-            (TABLE_LEN, table_len as *const () as usize),
-            (TABLE_ENTRY, table_entry as *const () as usize),
-            (TABLE_FREE, table_free as *const () as usize),
-            ("karac_once_lock_drop", cell_drop as *const () as usize),
-            ("karac_file_drop", cell_drop as *const () as usize),
-            ("karac_sender_drop", cell_drop as *const () as usize),
+        use karac_runtime::map as rt;
+        let stubs: [(&str, usize); 9] = [
+            (MAP_ITER_NEW, rt::karac_map_iter_new as *const () as usize),
+            (MAP_ITER_NEXT, rt::karac_map_iter_next as *const () as usize),
+            (MAP_ITER_FREE, rt::karac_map_iter_free as *const () as usize),
+            (MAP_FREE, rt::karac_map_free as *const () as usize),
+            (ONCE_GET, once_get as *const () as usize),
+            (ONCE_FREE, once_free as *const () as usize),
+            ("karac_runtime_file_close", closed as *const () as usize),
+            (
+                "karac_runtime_channel_drop_sender",
+                closed as *const () as usize,
+            ),
+            ("karac_runtime_task_detach", closed as *const () as usize),
         ];
         for (n, a) in stubs {
             if let Some(f) = cx.module.get_function(n) {
@@ -1107,53 +1207,53 @@ fn cells(o: OnceLock[R], f: Option[File], x: Atomic[i64], q: VecDeque[R], m: Map
         unsafe { libc::free(p as *mut c_void) };
     }
 
-    /// A map drops each entry's key then its value, in the table's order,
-    /// then the table; a set drops its keys; a null handle owns nothing.
+    /// A map drops each entry's key then its value, then the table; a set
+    /// drops its keys; a null handle owns nothing. The table is the real
+    /// runtime's, whose order is unspecified, so only the pairing is
+    /// asserted.
     #[test]
     fn mir_llvm_glue_drops_map_and_set_entries() {
+        use karac_runtime::map as rt;
         let l = build_source(SRC).unwrap();
         let (m, st) = (param_ty(&l, "cells", 5), param_ty(&l, "cells", 6));
         assert_eq!(l.tys.display(m), "Map[String, R]");
         let c = Context::create();
         let (_e, g) = jit(&c, &l, &[m, st]);
-
-        // Map[String, R]: entries `(String, R)`, 32 bytes.
-        let entries = alloc(64);
-        let k0 = string_at(entries);
-        put(entries, 24, 1);
-        let k1 = string_at(unsafe { entries.add(32) });
-        put(entries, 56, 2);
-        let mut t = Table {
-            n: 2,
-            size: 32,
-            entries,
-        };
-        let tp = &mut t as *mut Table;
         let h = alloc(8);
-        put(h, 0, tp as u64);
+        let kv = alloc(32);
+
+        // Map[String, R].
+        // SAFETY: the map is built for 24-byte keys and 8-byte values, and
+        // `kv` holds one of each.
+        let map = unsafe { rt::karac_map_new(24, 8, word_hash, word_eq) };
+        let mut keys = Vec::new();
+        for id in 1..=2u64 {
+            keys.push(string_at(kv));
+            put(kv, 24, id);
+            unsafe { rt::karac_map_insert(map, kv as *const c_void, kv.add(24) as *const c_void) };
+        }
+        put(h, 0, map as u64);
+        let mut got: Vec<_> = run(g[0], h).chunks(2).map(|p| p.to_vec()).collect();
+        got.sort_by_key(|p| p[1] == Ev::Drop(2));
         assert_eq!(
-            run(g[0], h),
+            got,
             vec![
-                Ev::Free(k0),
-                Ev::Drop(1),
-                Ev::Free(k1),
-                Ev::Drop(2),
-                Ev::Free(tp as usize)
+                vec![Ev::Free(keys[0]), Ev::Drop(1)],
+                vec![Ev::Free(keys[1]), Ev::Drop(2)]
             ]
         );
 
         // Set[String].
-        let k0 = string_at(entries);
-        // SAFETY: `tp` points at `t`, which outlives the call.
-        unsafe {
-            (*tp).n = 1;
-            (*tp).size = 24;
-        }
-        assert_eq!(run(g[1], h), vec![Ev::Free(k0), Ev::Free(tp as usize)]);
+        // SAFETY: as above, with zero-size values.
+        let set = unsafe { rt::karac_map_new(24, 0, word_hash, word_eq) };
+        let k = string_at(kv);
+        unsafe { rt::karac_map_insert(set, kv as *const c_void, kv as *const c_void) };
+        put(h, 0, set as u64);
+        assert_eq!(run(g[1], h), vec![Ev::Free(k)]);
 
         put(h, 0, 0);
         assert_eq!(run(g[0], h), vec![]);
-        unsafe { libc::free(entries as *mut c_void) };
+        unsafe { libc::free(kv as *mut c_void) };
         unsafe { libc::free(h as *mut c_void) };
     }
 
@@ -1190,9 +1290,9 @@ fn cells(o: OnceLock[R], f: Option[File], x: Atomic[i64], q: VecDeque[R], m: Map
         unsafe { libc::free(p as *mut c_void) };
     }
 
-    /// A library cell hands its handle, and the held type's glue when it
-    /// owns anything, to the runtime; a zero handle and an `Atomic` own
-    /// nothing.
+    /// A library cell hands its handle to the runtime's free; a
+    /// `OnceLock` drops its held value first, when it is set; a null handle
+    /// and an `Atomic` own nothing.
     #[test]
     fn mir_llvm_glue_drops_library_cells_through_the_runtime() {
         let l = build_source(SRC).unwrap();
@@ -1206,13 +1306,21 @@ fn cells(o: OnceLock[R], f: Option[File], x: Atomic[i64], q: VecDeque[R], m: Map
         assert_eq!(layout::layout(&l.tys, at).unwrap().size, 8);
         let c = Context::create();
         let (_e, g) = jit(&c, &l, &[o, fl, at]);
-        let h = alloc(8);
-        put(h, 0, 7);
-        assert_eq!(run(g[0], h), vec![Ev::Cell(7, true)]);
-        assert_eq!(run(g[1], h), vec![Ev::Cell(7, false)]);
+        let (h, cell) = (alloc(8), alloc(8));
+        put(h, 0, cell as u64);
+        let c = cell as usize;
+
+        // OnceLock[R], set to R { id: 7 }, then unset.
+        put(cell, 0, 7);
+        assert_eq!(run(g[0], h), vec![Ev::Drop(7), Ev::Cell("once_free", c)]);
+        put(cell, 0, 0);
+        assert_eq!(run(g[0], h), vec![Ev::Cell("once_free", c)]);
+        assert_eq!(run(g[1], h), vec![Ev::Cell("close", c)]);
         assert_eq!(run(g[2], h), vec![]);
         put(h, 0, 0);
         assert_eq!(run(g[0], h), vec![]);
+        assert_eq!(run(g[1], h), vec![]);
+        unsafe { libc::free(cell as *mut c_void) };
         unsafe { libc::free(h as *mut c_void) };
     }
 }
