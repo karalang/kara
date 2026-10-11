@@ -62,8 +62,9 @@
 // spells pointers as `*mut u8`/`*const u8` rather than `c_void`, so that the
 // declarations agree with each other (`clashing_extern_declarations`,
 // B-2026-06-14-24). The signatures are ABI-identical to libc's, which is the
-// case this rustc lint (new in 1.99) says to allow.
-#![allow(suspicious_runtime_symbol_definitions)]
+// case this rustc lint (new in 1.99) says to allow. `unknown_lints` keeps the
+// pinned 1.98 quiet about a lint it does not know yet.
+#![allow(unknown_lints, suspicious_runtime_symbol_definitions)]
 
 // Modules carrying `pub unsafe` fns are `pub mod` ON PURPOSE (2026-08-14):
 // clippy's `missing_safety_doc` only checks PUBLICLY REACHABLE functions, so a

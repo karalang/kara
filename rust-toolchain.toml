@@ -28,8 +28,15 @@
 # on this pin); this file is the ceiling every other job runs. Raising the
 # pin does not oblige you to raise the floor — only a change that genuinely
 # needs newer rustc does, and the `msrv` job is what tells you.
+# Why 1.98 and not 1.99 (2026-10-11): on 1.99.0 (LLVM 23) the fat-LTO release
+# `karac` build never finishes. The final rustc sits in LLVM's inliner
+# (`InlinerPass` -> `shouldInline`, inline-cost analysis) for 40+ minutes, where
+# 1.98.0 (LLVM 22) and 1.94.1 (LLVM 21) finish the same tree in under 6. Every
+# `Compile Speed` run from the 1.99 bump (53d298c2cb) on was cancelled
+# unfinished. Try 1.99.x or 1.100 against `cargo build --release --bin karac`
+# before bumping again.
 [toolchain]
-channel = "1.99.0"
+channel = "1.98.0"
 components = ["rustfmt", "clippy"]
 # Targets the wasm archives need (phase-10 `--target=wasm_wasi` /
 # `wasm_browser`). Declared here so a fresh checkout can build them
