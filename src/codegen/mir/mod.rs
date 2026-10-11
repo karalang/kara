@@ -29,7 +29,9 @@
 mod body;
 mod call;
 mod callable;
+mod cells;
 mod clone;
+mod deque;
 mod drop;
 mod fmt;
 mod key;
@@ -429,6 +431,16 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         }
         // What `main` returned is dropped before the process exits; a
         // returned frame holds nothing.
+        let (vt, vp) = if task {
+            let t = self
+                .tys
+                .field_ty(ret_ty, Some(0), 0)
+                .ok_or("a `Poll` without a payload")?;
+            (t, self.offset(ret, self.field_offset(ret_ty, Some(0), 0)?)?)
+        } else {
+            (ret_ty, ret)
+        };
+        let code = self.main_exit_code(vt, vp)?;
         if self.tys.needs_drop(ret_ty) {
             let glue = self.glue_fn(ret_ty);
             self.builder
@@ -437,9 +449,56 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         }
         self.rt("flush", &[])?;
         self.builder
-            .build_return(Some(&i32t.const_zero()))
+            .build_return(Some(&code))
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// The process's exit code for `main` returning the `t` at `p`, as the
+    /// interpreter's `main_result` has it: an `ExitCode`'s own code, and 1
+    /// for an `Err`, whose error first goes to stderr as `Error: {e}`.
+    fn main_exit_code(&mut self, t: Ty, p: PointerValue<'ctx>) -> R<IntValue<'ctx>> {
+        let i32t = self.llcx.i32_type();
+        let TyKind::Adt(a) = self.tys.kind(t) else {
+            return Ok(i32t.const_zero());
+        };
+        let name = self.tys.adt(a).name.clone();
+        if name == "ExitCode" {
+            let n = self.load_i64(self.offset(p, self.field_offset(t, None, 0)?)?)?;
+            return self
+                .builder
+                .build_int_truncate(n, i32t, "")
+                .map_err(|e| e.to_string());
+        }
+        if name != "Result" {
+            return Ok(i32t.const_zero());
+        }
+        let er = self.variant_of(t, "Err")?;
+        let et = self
+            .tys
+            .field_ty(t, Some(er), 0)
+            .ok_or("Result.Err has no payload")?;
+        let tag = self.load_tag(p, t)?;
+        let is_err = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                tag.get_type().const_int(u64::from(er), false),
+                "",
+            )
+            .map_err(|e| e.to_string())?;
+        let off = self.field_offset(t, Some(er), 0)?;
+        self.if_then(is_err, |cx| {
+            cx.rt("fmt_begin", &[])?;
+            let (s, n) = cx.str_const("Error: ")?;
+            cx.rt("fmt_str", &[s.into(), n.into()])?;
+            cx.fmt_call(cx.offset(p, off)?, et)?;
+            cx.rt("print_end", &[i32t.const_int(3, false).into()])
+        })?;
+        self.builder
+            .build_int_z_extend(is_err, i32t, "")
+            .map_err(|e| e.to_string())
     }
 
     /// The global holding static `i`, zeroed until its initializer runs.

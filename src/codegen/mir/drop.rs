@@ -219,7 +219,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 if self.tys.needs_drop(e) {
                     self.drop_ring(p, e)?;
                 }
-                self.free_buffer(p)
+                self.free_buffer_at(p, 24)
             }
             TyKind::Intrinsic(
                 IntrinsicTy::Map(..)
@@ -537,7 +537,13 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// Frees the buffer of the `String` or `Vec` at `p` when it has one.
     fn free_buffer(&mut self, p: PointerValue<'ctx>) -> R<()> {
-        let cap = self.load_i64(self.offset(p, 16)?)?;
+        self.free_buffer_at(p, 16)
+    }
+
+    /// Frees the buffer at offset 0 of `p` when the capacity at `cap_at`
+    /// is not zero.
+    fn free_buffer_at(&mut self, p: PointerValue<'ctx>, cap_at: u64) -> R<()> {
+        let cap = self.load_i64(self.offset(p, cap_at)?)?;
         let has = self
             .builder
             .build_int_compare(IntPredicate::NE, cap, self.i64(0), "")

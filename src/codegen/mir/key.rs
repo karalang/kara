@@ -91,6 +91,35 @@ impl<'ctx> Cx<'ctx, '_> {
                 .ok_or("key glue has no parameter")?
                 .into_pointer_value();
             match op {
+                // A key with a user `eq` is found by calling it on every
+                // entry, as the interpreter's `find_key` does: one bucket.
+                KeyOp::Hash if self.user_eq_body(ty).is_some() => {
+                    let z = self.llcx.i64_type().const_zero();
+                    self.builder.build_return(Some(&z)).map_err(e)?;
+                }
+                KeyOp::Eq if self.user_eq_body(ty).is_some() => {
+                    let b = f
+                        .get_nth_param(1)
+                        .ok_or("eq glue has one parameter")?
+                        .into_pointer_value();
+                    let name = self.user_eq_body(ty).unwrap_or_default();
+                    let program = self.program;
+                    let bt = program.bodies[&name].return_ty();
+                    let func = self.function(&name)?;
+                    let ret = self.temp(bt, "eq")?;
+                    let (sa, sb) = (self.entry_slot(8, "a")?, self.entry_slot(8, "b")?);
+                    self.store(sa, a.into())?;
+                    self.store(sb, b.into())?;
+                    self.builder
+                        .build_call(func, &[ret.into(), sa.into(), sb.into()], "")
+                        .map_err(e)?;
+                    let v = self.load(ret, bt)?.into_int_value();
+                    let t = self
+                        .builder
+                        .build_int_compare(IntPredicate::NE, v, v.get_type().const_zero(), "")
+                        .map_err(e)?;
+                    self.builder.build_return(Some(&t)).map_err(e)?;
+                }
                 KeyOp::Hash => {
                     let h = self.hash_value(a, ty)?;
                     self.builder.build_return(Some(&h)).map_err(e)?;
@@ -158,6 +187,19 @@ impl<'ctx> Cx<'ctx, '_> {
         self.program.bodies.contains_key(&name).then_some(name)
     }
 
+    /// The lowered body of `ty`'s user `PartialEq.eq`, if it has one.
+    fn user_eq_body(&self, ty: Ty) -> Option<String> {
+        let mut ty = ty;
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(ty) {
+            ty = i;
+        }
+        if !matches!(self.tys.kind(ty), TyKind::Adt(_) | TyKind::Shared(_)) {
+            return None;
+        }
+        let name = format!("{}.eq", self.tys.adt_name(ty));
+        self.program.bodies.contains_key(&name).then_some(name)
+    }
+
     /// -1, 0 or 1 from the `Ordering` the `cmp` body of `ty` returns for
     /// `a` and `b`, each passed by reference.
     fn user_cmp_value(
@@ -183,7 +225,11 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// -1, 0 or 1 for the `Ordering` of type `ord_ty` at `p`.
-    pub(super) fn ordering_value(&mut self, p: PointerValue<'ctx>, ord_ty: Ty) -> R<IntValue<'ctx>> {
+    pub(super) fn ordering_value(
+        &mut self,
+        p: PointerValue<'ctx>,
+        ord_ty: Ty,
+    ) -> R<IntValue<'ctx>> {
         let t = self.load_tag(p, ord_ty)?;
         let i32t = self.llcx.i32_type();
         let t = self
@@ -194,11 +240,21 @@ impl<'ctx> Cx<'ctx, '_> {
         let greater = self.variant_of(ord_ty, "Greater")?;
         let is_less = self
             .builder
-            .build_int_compare(IntPredicate::EQ, t, i32t.const_int(u64::from(less), false), "")
+            .build_int_compare(
+                IntPredicate::EQ,
+                t,
+                i32t.const_int(u64::from(less), false),
+                "",
+            )
             .map_err(e)?;
         let is_greater = self
             .builder
-            .build_int_compare(IntPredicate::EQ, t, i32t.const_int(u64::from(greater), false), "")
+            .build_int_compare(
+                IntPredicate::EQ,
+                t,
+                i32t.const_int(u64::from(greater), false),
+                "",
+            )
             .map_err(e)?;
         self.ord_of(is_less, is_greater)
     }

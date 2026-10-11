@@ -157,6 +157,10 @@ pub fn parse_args(args: &[String]) -> Command {
                 eprintln!("error[mir]: llvm: no karac_jit_runner beside karac");
                 process::exit(3);
             };
+            // `KARAC_MIR_LL=<path>` keeps a copy of the IR for debugging.
+            if let Some(keep) = std::env::var_os("KARAC_MIR_LL") {
+                let _ = std::fs::write(keep, &ir);
+            }
             let ll = std::env::temp_dir().join(format!("karac-mir-{}.ll", process::id()));
             if let Err(e) = std::fs::write(&ll, ir) {
                 eprintln!("error[mir]: llvm: {}: {e}", ll.display());

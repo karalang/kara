@@ -162,6 +162,47 @@ pub unsafe extern "C" fn karac_mir_fmt_end_string(out: *mut RawVec) {
     unsafe { string_of(out, text.as_bytes()) };
 }
 
+/// One f-string hole with a spec (`{x:.3}`, `{n:04}`, `{s:>10}`): the
+/// value, rendered by `kind` (0 a signed integer `lo`, 1 an unsigned one,
+/// 2 a 128-bit signed `hi:lo`, 3 an unsigned one, 4 the float `f`, 5 the
+/// text the innermost format buffer holds, which is popped) through the
+/// interpreter's own `FormatSpec`, as a `String` at `out`.
+///
+/// # Safety
+/// `spec` is readable for `spec_len` bytes; `out` is writable for a
+/// `String`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_fmt_spec(
+    out: *mut RawVec,
+    spec: *const u8,
+    spec_len: usize,
+    kind: i32,
+    lo: u64,
+    hi: u64,
+    f: f64,
+) {
+    use crate::fmt::format_spec::FormatSpec;
+    // SAFETY: the caller's contract.
+    let raw = String::from_utf8_lossy(unsafe { bytes(spec, spec_len) }).into_owned();
+    let wide = (u128::from(hi) << 64) | u128::from(lo);
+    let text = match FormatSpec::parse(&raw) {
+        Err(e) => format!("<bad format spec: {e}>"),
+        Ok(fs) => match kind {
+            0 => fs.apply_int(lo as i64),
+            1 => fs.apply_uint(lo),
+            2 => fs.apply_int128(wide as i128),
+            3 => fs.apply_uint128(wide),
+            4 => fs.apply_float(f),
+            _ => {
+                let shown = FMT.with(|b| b.borrow_mut().pop()).unwrap_or_default();
+                fs.apply_str(&shown)
+            }
+        },
+    };
+    // SAFETY: the caller's contract.
+    unsafe { string_of(out, text.as_bytes()) };
+}
+
 /// Writes a fresh `String` holding `b` at `out`.
 ///
 /// # Safety
@@ -557,6 +598,203 @@ pub unsafe extern "C" fn karac_mir_str_join(
     }
     // SAFETY: as above.
     unsafe { string_of(out, t.as_bytes()) };
+}
+
+extern "C" {
+    fn free(ptr: *mut core::ffi::c_void);
+}
+
+/// `FileSystem.write(path, text)` (`op` 0), `read_to_string(path)` (1) or
+/// `read_lines(path)` (2) on the real file system. Returns -1 on success,
+/// with the text read as a `String` (or its lines as a `Vec[String]`) at
+/// `out`; otherwise the index of the failure's `IoError` variant (in
+/// declaration order: `NotFound`, `PermissionDenied`, `AlreadyExists`,
+/// `UnexpectedEof`, `InvalidUtf8`, `Interrupted`, `Other`), with `Other`'s
+/// message as a `String` at `out`.
+///
+/// # Safety
+/// Each pointer is readable for its length; `out` is writable for a
+/// `String` or `Vec`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_fs(
+    op: i32,
+    path: *const u8,
+    path_len: usize,
+    text: *const u8,
+    text_len: usize,
+    out: *mut RawVec,
+) -> i32 {
+    use std::io::ErrorKind as K;
+    // SAFETY: the caller's contract.
+    let path = String::from_utf8_lossy(unsafe { bytes(path, path_len) }).into_owned();
+    let res = match op {
+        // SAFETY: as above.
+        0 => std::fs::write(&path, unsafe { bytes(text, text_len) }).map(|()| None),
+        _ => std::fs::read_to_string(&path).map(Some),
+    };
+    let e = match res {
+        Ok(None) => return -1,
+        Ok(Some(t)) if op == 2 => {
+            let lines: Vec<&str> = t.lines().collect();
+            // SAFETY: `out` is writable for a `Vec` of `String`s.
+            unsafe {
+                karac_mir_vec_alloc(out, lines.len(), std::mem::size_of::<RawVec>());
+                let buf = (*out).ptr.cast::<RawVec>();
+                for (i, l) in lines.iter().enumerate() {
+                    string_of(buf.add(i), l.as_bytes());
+                }
+            }
+            return -1;
+        }
+        Ok(Some(t)) => {
+            // SAFETY: `out` is writable for a `String`.
+            unsafe { string_of(out, t.as_bytes()) };
+            return -1;
+        }
+        Err(e) => e,
+    };
+    match e.kind() {
+        K::NotFound => 0,
+        K::PermissionDenied => 1,
+        K::AlreadyExists => 2,
+        K::UnexpectedEof => 3,
+        K::InvalidData => 4,
+        K::Interrupted => 5,
+        _ => {
+            // SAFETY: `out` is writable for a `String`.
+            unsafe { string_of(out, e.to_string().as_bytes()) };
+            6
+        }
+    }
+}
+
+/// A `VecDeque`: a ring of `cap` slots from which `len` elements, starting
+/// at slot `head`, are live (zero-sized elements keep `cap` and `head` 0).
+#[repr(C)]
+pub struct RawDeque {
+    pub ptr: *mut u8,
+    pub head: usize,
+    pub len: usize,
+    pub cap: usize,
+}
+
+impl RawDeque {
+    fn slot(&self, i: usize, size: usize) -> *mut u8 {
+        if size == 0 {
+            return self.ptr;
+        }
+        // SAFETY: a slot index below `cap`, inside the buffer.
+        unsafe { self.ptr.add((self.head + i) % self.cap * size) }
+    }
+
+    /// Makes room for one more element, unwrapping into a new buffer.
+    fn grow(&mut self, size: usize) {
+        if size == 0 || self.len < self.cap {
+            return;
+        }
+        let cap = (self.cap * 2).max(4);
+        let buf = karac_realloc_or_panic(std::ptr::null_mut(), cap * size);
+        for i in 0..self.len {
+            // SAFETY: element `i` is live; slot `i` of the new buffer is free.
+            unsafe { std::ptr::copy_nonoverlapping(self.slot(i, size), buf.add(i * size), size) };
+        }
+        if self.cap != 0 {
+            // SAFETY: the old buffer came from `karac_realloc_or_panic`.
+            unsafe { free(self.ptr.cast()) };
+        }
+        self.ptr = buf;
+        self.head = 0;
+        self.cap = cap;
+    }
+}
+
+/// Writes a deque of `n` uninitialized `size`-byte elements at `out`
+/// (`head == 0`, `len == cap == n`), for the caller to fill.
+///
+/// # Safety
+/// `out` is writable for a deque.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_deque_alloc(out: *mut RawDeque, n: usize, size: usize) {
+    let mut v = RawVec {
+        ptr: std::ptr::null_mut(),
+        len: 0,
+        cap: 0,
+    };
+    // SAFETY: `v` is a writable vector.
+    unsafe { karac_mir_vec_alloc(&mut v, n, size) };
+    // SAFETY: the caller's contract.
+    unsafe {
+        out.write(RawDeque {
+            ptr: v.ptr,
+            head: 0,
+            len: n,
+            cap: v.cap,
+        })
+    };
+}
+
+/// The element `i` of the deque at `q` (in bounds).
+///
+/// # Safety
+/// `q` is a live deque of `size`-byte elements with more than `i` of them.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_deque_slot(
+    q: *const RawDeque,
+    i: usize,
+    size: usize,
+) -> *mut u8 {
+    // SAFETY: the caller's contract.
+    unsafe { (*q).slot(i, size) }
+}
+
+/// Adds the `size` bytes at `elem` at the back, or the front when `front`.
+///
+/// # Safety
+/// `q` is a live deque of `size`-byte elements; `elem` is readable.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_deque_push(
+    q: *mut RawDeque,
+    elem: *const u8,
+    size: usize,
+    front: u8,
+) {
+    // SAFETY: the caller's contract.
+    let q = unsafe { &mut *q };
+    q.grow(size);
+    if front != 0 && size != 0 {
+        q.head = (q.head + q.cap - 1) % q.cap;
+    }
+    let at = if front != 0 { 0 } else { q.len };
+    q.len += 1;
+    // SAFETY: `grow` made room; slot `at` is free.
+    unsafe { std::ptr::copy_nonoverlapping(elem, q.slot(at, size), size) };
+}
+
+/// Moves the back element, or the front one when `front`, to `out` and
+/// returns 1, or returns 0 when the deque is empty.
+///
+/// # Safety
+/// `q` is a live deque of `size`-byte elements; `out` is writable.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_deque_pop(
+    q: *mut RawDeque,
+    out: *mut u8,
+    size: usize,
+    front: u8,
+) -> u8 {
+    // SAFETY: the caller's contract.
+    let q = unsafe { &mut *q };
+    if q.len == 0 {
+        return 0;
+    }
+    let at = if front != 0 { 0 } else { q.len - 1 };
+    // SAFETY: element `at` is live.
+    unsafe { std::ptr::copy_nonoverlapping(q.slot(at, size), out, size) };
+    if front != 0 && size != 0 {
+        q.head = (q.head + 1) % q.cap;
+    }
+    q.len -= 1;
+    1
 }
 
 /// A stable sort of `n` elements of `size` bytes at `buf` by `cmp`, which

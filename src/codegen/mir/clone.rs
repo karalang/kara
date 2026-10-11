@@ -146,6 +146,21 @@ impl<'ctx> Cx<'ctx, '_> {
                 let sb = self.load_ptr(src)?;
                 self.clone_elems(db, sb, n, el)
             }
+            TyKind::Intrinsic(IntrinsicTy::VecDeque(el)) => {
+                let n = self.load_i64(self.offset(src, 16)?)?;
+                let size = self.layout(el)?.size;
+                self.rt(
+                    "deque_alloc",
+                    &[dst.into(), n.into(), self.i64(size).into()],
+                )?;
+                let db = self.load_ptr(dst)?;
+                self.count_loop(n, |cx, i| {
+                    let s =
+                        cx.mrt_ptr("deque_slot", &[src.into(), i.into(), cx.i64(size).into()])?;
+                    let d = cx.elem_ptr(db, i, size)?;
+                    cx.clone_into(d, s, el)
+                })
+            }
             TyKind::Array(el, n) => self.clone_elems(dst, src, self.i64(n), el),
             TyKind::Tuple(ts) | TyKind::Closure(_, ts) => {
                 self.copy(dst, src, ty)?;

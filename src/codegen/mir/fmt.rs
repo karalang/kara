@@ -15,7 +15,7 @@ use super::{Cx, R};
 use crate::mir::interp::DisplayStyle;
 use crate::mir::layout;
 use crate::mir::ty::{FloatTy, IntTy, IntrinsicTy};
-use crate::mir::{Ty, TyKind};
+use crate::mir::{Operand, Place, Ty, TyKind};
 
 fn e<T: ToString>(x: T) -> String {
     x.to_string()
@@ -176,13 +176,62 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             TyKind::Array(el, n) => {
                 let size = self.layout(el)?.size;
-                self.seq(p, self.i64(n), el, size, "[", "]")
+                // A lane vector names itself, as the interpreter prints it.
+                let open = if self.tys.is_vector(ty) {
+                    "Vector("
+                } else {
+                    "["
+                };
+                let close = if open == "[" { "]" } else { ")" };
+                self.seq(p, self.i64(n), el, size, open, close)
             }
             TyKind::Slice(el) | TyKind::Intrinsic(IntrinsicTy::Vec(el)) => {
                 let size = self.layout(el)?.size;
                 let buf = self.load_ptr(p)?;
                 let n = self.load_i64(self.offset(p, 8)?)?;
                 self.seq(buf, n, el, size, "[", "]")
+            }
+            TyKind::Intrinsic(IntrinsicTy::VecDeque(el)) => {
+                let size = self.layout(el)?.size;
+                let n = self.load_i64(self.offset(p, 16)?)?;
+                self.lit("[")?;
+                self.count_loop(n, |cx, i| {
+                    let first = cx.is_zero(i)?;
+                    let not_first = cx.builder.build_not(first, "").map_err(e)?;
+                    cx.if_then(not_first, |cx| cx.lit(", "))?;
+                    let q = cx.mrt_ptr("deque_slot", &[p.into(), i.into(), cx.i64(size).into()])?;
+                    cx.fmt_call(q, el)
+                })?;
+                self.lit("]")
+            }
+            // `{k: v, ...}` or `{k, ...}` in the table's own order.
+            TyKind::Intrinsic(
+                IntrinsicTy::Map(..)
+                | IntrinsicTy::SortedMap(..)
+                | IntrinsicTy::Set(_)
+                | IntrinsicTy::SortedSet(_),
+            ) => {
+                let t = self.table_of(ty).ok_or("not a table")?;
+                let h = self.load_ptr(p)?;
+                let n = self.mrt_i64("map_len", &[h.into()])?;
+                let voff = match t.val {
+                    Some(_) => Some(self.field_offset(t.entry, None, 1)?),
+                    None => None,
+                };
+                self.lit("{")?;
+                self.count_loop(n, |cx, i| {
+                    let first = cx.is_zero(i)?;
+                    let not_first = cx.builder.build_not(first, "").map_err(e)?;
+                    cx.if_then(not_first, |cx| cx.lit(", "))?;
+                    let at = cx.mrt_ptr("map_at", &[h.into(), i.into()])?;
+                    cx.fmt_call(at, t.key)?;
+                    if let (Some(v), Some(off)) = (t.val, voff) {
+                        cx.lit(": ")?;
+                        cx.fmt_call(cx.offset(at, off)?, v)?;
+                    }
+                    Ok(())
+                })?;
+                self.lit("}")
             }
             TyKind::Tuple(ts) => {
                 self.lit("(")?;
@@ -202,6 +251,86 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.tys.display(ty)
             )),
         }
+    }
+
+    /// `format_spec(value, spec)`: one f-string hole with a spec, as a
+    /// `String` at `dest`, through the interpreter's `FormatSpec`
+    /// (`karac_mir_fmt_spec`): numbers by value, anything else by its
+    /// display.
+    pub(super) fn format_spec(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let [v, spec] = args else {
+            return Err("format_spec takes a value and a spec".into());
+        };
+        let mut t = self.operand_type(v)?;
+        let mut p = self.operand_ptr(v)?;
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
+            p = self.load_ptr(p)?;
+            t = i;
+        }
+        let (sp, sn) = self.str_parts(spec)?;
+        let i64t = self.llcx.i64_type();
+        let (mut lo, mut hi) = (i64t.const_zero(), i64t.const_zero());
+        let mut f = self.llcx.f64_type().const_zero();
+        let kind = match self.tys.kind(t) {
+            TyKind::Int(it) => {
+                let x = self.load(p, t)?.into_int_value();
+                let signed = !matches!(
+                    it,
+                    IntTy::U8 | IntTy::U16 | IntTy::U32 | IntTy::U64 | IntTy::Usize | IntTy::U128
+                );
+                if matches!(it, IntTy::I128 | IntTy::U128) {
+                    lo = self.builder.build_int_truncate(x, i64t, "").map_err(e)?;
+                    let sh = self
+                        .builder
+                        .build_right_shift(x, x.get_type().const_int(64, false), false, "")
+                        .map_err(e)?;
+                    hi = self.builder.build_int_truncate(sh, i64t, "").map_err(e)?;
+                    if signed {
+                        2
+                    } else {
+                        3
+                    }
+                } else {
+                    lo = self
+                        .builder
+                        .build_int_cast_sign_flag(x, i64t, signed, "")
+                        .map_err(e)?;
+                    if matches!(it, IntTy::U64 | IntTy::Usize) {
+                        1
+                    } else {
+                        0
+                    }
+                }
+            }
+            TyKind::Float(_) => {
+                let x = self.load(p, t)?.into_float_value();
+                f = self
+                    .builder
+                    .build_float_cast(x, self.llcx.f64_type(), "")
+                    .map_err(e)?;
+                4
+            }
+            _ => {
+                self.rt("fmt_begin", &[])?;
+                self.fmt_call(p, t)?;
+                5
+            }
+        };
+        let d = self.place_ptr(dest)?;
+        let k = self.llcx.i32_type().const_int(kind, false);
+        self.rt(
+            "fmt_spec",
+            &[
+                d.into(),
+                sp.into(),
+                sn.into(),
+                k.into(),
+                lo.into(),
+                hi.into(),
+                f.into(),
+            ],
+        )?;
+        self.drop_moved(args)
     }
 
     /// `open e0, e1, ... close` over `n` elements of `size` bytes from

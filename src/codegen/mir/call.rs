@@ -114,6 +114,27 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The pointer a `ref T` / `mut ref T` operand holds.
+    /// Fills the `Some` payload at `q` of the option type `dty` with the
+    /// element at `at`: the reference itself when the payload is one, else
+    /// a clone of the element, as the interpreter's `option_of_place` has
+    /// it (`Array[i64, 4].get` is an `Option[i64]`).
+    pub(super) fn store_found(
+        &mut self,
+        q: PointerValue<'ctx>,
+        dty: Ty,
+        some: u32,
+        at: PointerValue<'ctx>,
+    ) -> R<()> {
+        let pt = self
+            .tys
+            .field_ty(dty, Some(some), 0)
+            .ok_or("an option without a payload")?;
+        match self.tys.kind(pt) {
+            TyKind::Ref(_) | TyKind::MutRef(_) => self.store(q, at.into()),
+            _ => self.clone_into(q, at, pt),
+        }
+    }
+
     pub(super) fn ref_arg(&mut self, a: &Operand) -> R<PointerValue<'ctx>> {
         let p = self.operand_ptr(a)?;
         self.load_ptr(p)
@@ -133,10 +154,36 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         if matches!(
             base,
-            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
-                | "u128" | "usize" | "f32" | "f64" | "char"
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "isize"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+                | "f32"
+                | "f64"
+                | "char"
         ) && self.scalar_native(method, args, dest)?.is_some()
         {
+            return Ok(());
+        }
+        if base == "FileSystem" && self.fs_native(method, args, dest)?.is_some() {
+            return Ok(());
+        }
+        if base == "Atomic" && self.atomic_native(method, args, dest)?.is_some() {
+            return Ok(());
+        }
+        if matches!(base, "OnceLock" | "OnceCell")
+            && self.once_native(method, args, dest)?.is_some()
+        {
+            return Ok(());
+        }
+        if base == "VecDeque" && self.deque_native(method, args, dest)?.is_some() {
             return Ok(());
         }
         if (base, method) == ("Vec", "from_slice") {
@@ -165,6 +212,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.rt("fmt_end_string", &[d.into()])?;
                 self.drop_moved(args)
             }
+            ("format_spec", "") => self.format_spec(args, dest),
             ("panic_message", "") => {
                 self.rt("fmt_begin", &[])?;
                 self.fmt_args(args)?;
@@ -368,7 +416,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     let at = cx.elem_ptr(buf, i, size)?;
                     cx.store_tag(d, dty, some)?;
                     let q = cx.offset(d, cx.field_offset(dty, Some(some), 0)?)?;
-                    cx.store(q, at.into())
+                    cx.store_found(q, dty, some, at)
                 })
             }
             ("Vec", "pop") => {

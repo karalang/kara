@@ -371,7 +371,7 @@ impl<'ctx> Cx<'ctx, '_> {
         self.if_then(ok, |cx| {
             let at = cx.elem_ptr(p, i, size)?;
             cx.store_tag(d, dty, some)?;
-            cx.store(cx.offset(d, off)?, at.into())
+            cx.store_found(cx.offset(d, off)?, dty, some, at)
         })
     }
 
@@ -519,13 +519,25 @@ impl<'ctx> Cx<'ctx, '_> {
                     &[p.into(), n.into(), self.i64(size).into(), cmp.into()],
                 )?;
             }
-            ("sort_by" | "sort_unstable_by" | "sort_by_key" | "sort_unstable_by_key"
-            | "sort_by_cached_key", [f]) => {
+            (
+                "sort_by"
+                | "sort_unstable_by"
+                | "sort_by_key"
+                | "sort_unstable_by_key"
+                | "sort_by_cached_key",
+                [f],
+            ) => {
                 let by_key = method.contains("key");
                 let (cmp, ctx) = self.sort_by_args(f, by_key, el)?;
                 self.rt(
                     "sort_ctx",
-                    &[p.into(), n.into(), self.i64(size).into(), cmp.into(), ctx.into()],
+                    &[
+                        p.into(),
+                        n.into(),
+                        self.i64(size).into(),
+                        cmp.into(),
+                        ctx.into(),
+                    ],
                 )?;
                 self.drop_moved(&args[1..])?;
             }
@@ -731,7 +743,9 @@ impl<'ctx> Cx<'ctx, '_> {
                         .into_int_value();
                 }
                 let it = self.llvm_ty(self.place_type(dest)?)?.into_int_type();
-                b.build_int_cast_sign_flag(n, it, false, "").map_err(e)?.into()
+                b.build_int_cast_sign_flag(n, it, false, "")
+                    .map_err(e)?
+                    .into()
             }
             (TyKind::Int(it), "abs", [x]) => {
                 let x = x.into_int_value();

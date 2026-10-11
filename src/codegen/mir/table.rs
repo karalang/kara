@@ -58,7 +58,11 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
-    fn mrt_ptr(&self, name: &str, args: &[BasicMetadataValueEnum<'ctx>]) -> R<PointerValue<'ctx>> {
+    pub(super) fn mrt_ptr(
+        &self,
+        name: &str,
+        args: &[BasicMetadataValueEnum<'ctx>],
+    ) -> R<PointerValue<'ctx>> {
         let tys = self.arg_tys(args);
         let f = self.extern_fn(
             &format!("karac_mir_{name}"),
@@ -278,7 +282,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     let v = cx.offset(at, voff)?;
                     cx.store_tag(d, dty, some)?;
                     let q = cx.offset(d, cx.field_offset(dty, Some(some), 0)?)?;
-                    cx.store(q, v.into())
+                    cx.store_found(q, dty, some, v)
                 })?;
                 self.drop_moved(&args[1..])?;
             }
@@ -352,7 +356,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 if method == "entry_or_insert_with" {
                     let c = self.callee_of(val)?;
                     self.call_callee(&c, vslot, &[])?;
-                    if matches!(val, Operand::Move(_)) {
+                    if !Self::consumes(&c) {
                         self.drop_moved(std::slice::from_ref(val))?;
                     }
                 } else {

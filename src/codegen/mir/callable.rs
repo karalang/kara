@@ -231,6 +231,16 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
+    /// Whether calling `c` disposes of the closure value it was made from
+    /// (a by-value environment, or a consuming erased call), so the caller
+    /// must not drop that value again.
+    pub(super) fn consumes(c: &Callee<'ctx>) -> bool {
+        match c {
+            Callee::Body { env, .. } => matches!(env, Some((_, true))),
+            Callee::Erased { consume, .. } => *consume,
+        }
+    }
+
     /// Calls `c` with `args`, writing its result at `ret`.
     pub(super) fn call_callee(
         &mut self,
@@ -272,7 +282,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 let code = self.load_ptr(*at)?;
                 let env = self.load_ptr(self.offset(*at, 8)?)?;
                 let flag = self.llcx.i8_type().const_int(u64::from(*consume), false);
-                let mut vals: Vec<BasicMetadataValueEnum> = vec![ret.into(), env.into(), flag.into()];
+                let mut vals: Vec<BasicMetadataValueEnum> =
+                    vec![ret.into(), env.into(), flag.into()];
                 for (a, want) in args.iter().zip(params.iter()) {
                     let q = self.adapt_arg(*a, *want)?;
                     vals.push(q.into());
@@ -366,7 +377,13 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The `Erase` cast: `from` as an erased value at `dst`.
-    pub(super) fn erase_into(&mut self, dst: PointerValue<'ctx>, a: &Operand, from: Ty, to: Ty) -> R<()> {
+    pub(super) fn erase_into(
+        &mut self,
+        dst: PointerValue<'ctx>,
+        a: &Operand,
+        from: Ty,
+        to: Ty,
+    ) -> R<()> {
         let null = self.ptr_ty().const_null();
         if matches!(self.tys.kind(from), TyKind::Fn { .. }) {
             let src = self.operand_ptr(a)?;

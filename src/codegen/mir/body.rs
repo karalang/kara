@@ -157,6 +157,13 @@ impl<'ctx> Cx<'ctx, '_> {
                         layout::field_offset(self.tys, ty, variant, f.0).ok_or_else(|| {
                             format!("`{}` has no field {}", self.tys.display(ty), f.0)
                         })?;
+                    // A field of a `shared` value is in the body its handle
+                    // points at.
+                    if let TyKind::Shared(_) = self.tys.kind(ty) {
+                        let b = self.load_ptr(ptr)?;
+                        let at = layout::shared_body_offset(self.tys, ty).unwrap_or(SHARED_COUNTS);
+                        ptr = self.offset(b, at)?;
+                    }
                     ptr = self.offset(ptr, off)?;
                     ty = fty;
                     variant = None;
@@ -429,6 +436,38 @@ impl<'ctx> Cx<'ctx, '_> {
             Rvalue::UnaryOp(op, a) => {
                 let at = self.operand_type(a)?;
                 let x = self.operand_scalar(a)?;
+                // `-MIN` overflows (and negating a non-zero unsigned value
+                // leaves its range): C8 traps it, as the interpreter does.
+                if let (UnOp::Neg, TyKind::Int(it)) = (op, self.tys.kind(at)) {
+                    let x = x.into_int_value();
+                    let signed = matches!(
+                        it,
+                        IntTy::I8
+                            | IntTy::I16
+                            | IntTy::I32
+                            | IntTy::I64
+                            | IntTy::I128
+                            | IntTy::Isize
+                    );
+                    let bad = if signed {
+                        let w = x.get_type().get_bit_width();
+                        let min = x
+                            .get_type()
+                            .const_int(1, false)
+                            .const_shl(x.get_type().const_int(u64::from(w - 1), false));
+                        self.builder.build_int_compare(IntPredicate::EQ, x, min, "")
+                    } else {
+                        self.builder.build_int_compare(
+                            IntPredicate::NE,
+                            x,
+                            x.get_type().const_zero(),
+                            "",
+                        )
+                    }
+                    .map_err(e)?;
+                    let ok = self.builder.build_not(bad, "").map_err(e)?;
+                    self.abort_unless(ok, "integer overflow")?;
+                }
                 let b = &self.builder;
                 let v: BasicValueEnum = match (op, self.tys.kind(at)) {
                     (UnOp::Not, TyKind::Bool) => b
@@ -679,13 +718,18 @@ impl<'ctx> Cx<'ctx, '_> {
         match kind {
             CastKind::RefToPtr | CastKind::PtrToPtr => return self.store_operand(dst, a),
             CastKind::Downgrade => {
-                // `shared T` to `weak T`: one more weak count.
-                let p = self.operand_ptr(a)?;
-                let h = self.load_ptr(p)?;
-                let w = self.offset(h, 8)?;
-                let n = self.load_i64(w)?;
-                let n = self.builder.build_int_add(n, self.i64(1), "").map_err(e)?;
-                self.builder.build_store(w, n).map_err(e)?;
+                // A new weak handle to what a `ref shared T`, `ref weak T`
+                // or `ref Option[shared T]` reaches: one more weak count;
+                // nothing gives the empty (null) weak handle.
+                let h = self.handle_behind(a)?;
+                let live = self.builder.build_is_not_null(h, "").map_err(e)?;
+                self.if_then(live, |cx| {
+                    let w = cx.offset(h, 8)?;
+                    let n = cx.load_i64(w)?;
+                    let n = cx.builder.build_int_add(n, cx.i64(1), "").map_err(e)?;
+                    cx.builder.build_store(w, n).map_err(e)?;
+                    Ok(())
+                })?;
                 return self.store(dst, h.into());
             }
             CastKind::Upgrade => return self.upgrade(dst, a, to),
@@ -758,8 +802,7 @@ impl<'ctx> Cx<'ctx, '_> {
             .position(|v| v.name == "Some")
             .ok_or("an upgrade's Option has no Some")? as u32;
         let none = 1 - some;
-        let p = self.operand_ptr(a)?;
-        let h = self.load_ptr(p)?;
+        let h = self.handle_behind(a)?;
         self.store_tag(dst, to, none)?;
         let live = self.builder.build_is_not_null(h, "").map_err(e)?;
         self.if_then(live, |cx| {
@@ -777,6 +820,51 @@ impl<'ctx> Cx<'ctx, '_> {
                 cx.store(at, h.into())
             })
         })
+    }
+
+    /// The handle (null for none) that the operand reaches through its
+    /// references: a `shared T` or `weak T` slot holds it, and an
+    /// `Option[shared T]` holds it in `Some`.
+    fn handle_behind(&mut self, a: &Operand) -> R<PointerValue<'ctx>> {
+        let mut t = self.operand_type(a)?;
+        let mut p = self.operand_ptr(a)?;
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
+            p = self.load_ptr(p)?;
+            t = i;
+        }
+        match self.tys.kind(t) {
+            TyKind::Shared(_) | TyKind::Weak(_) => self.load_ptr(p),
+            TyKind::Adt(_) => {
+                let (adt, _) = self.tys.tcx().adt_of(t).ok_or("not an Option")?;
+                let some = adt
+                    .variants
+                    .iter()
+                    .position(|v| v.name == "Some")
+                    .ok_or("a handle behind a non-Option")? as u32;
+                let off = self.field_offset(t, Some(some), 0)?;
+                let tag = self.load_tag(p, t)?;
+                let is_some = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        tag,
+                        tag.get_type().const_int(u64::from(some), false),
+                        "",
+                    )
+                    .map_err(e)?;
+                let h = self.load_ptr(self.offset(p, off)?)?;
+                let null = self.ptr_ty().const_null();
+                Ok(self
+                    .builder
+                    .build_select(is_some, h, null, "")
+                    .map_err(e)?
+                    .into_pointer_value())
+            }
+            _ => Err(format!(
+                "MIR to LLVM: a handle behind a `{}`",
+                self.tys.display(t)
+            )),
+        }
     }
 
     // ── aggregates and enums ───────────────────────────────────────
@@ -840,7 +928,12 @@ impl<'ctx> Cx<'ctx, '_> {
             self.store_operand(at, op)?;
         }
         if enum_ {
-            self.store_tag(dst, ty, v)?;
+            // `dst` is the body itself, also for a `shared` type.
+            let plain = match self.tys.kind(ty) {
+                TyKind::Shared(a) => self.tys.intern(TyKind::Adt(a)),
+                _ => ty,
+            };
+            self.store_tag(dst, plain, v)?;
         }
         Ok(())
     }

@@ -37,7 +37,7 @@
 
 #[allow(dead_code)]
 #[path = "../../src/format_spec.rs"]
-mod format_spec;
+pub(crate) mod format_spec;
 
 use format_spec::FormatSpec;
 
