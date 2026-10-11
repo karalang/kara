@@ -1,10 +1,10 @@
 struct R { name: String, id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.name}") } }
-fn eat(x: R) -> i64 { return x.id; }
-fn eatn(x: R) -> String { return x.name.clone(); }
+fn eat(x: own R) -> i64 { return x.id; }
+fn eatn(x: own R) -> String { return x.name.clone(); }
 fn keep(x: own R, v: mut ref Vec[R]) -> i64 { let n = x.id; v.push(x); return n; }
-fn geat[T](x: T) -> i64 { return 3; }
-fn two(a: R, b: R) -> i64 { return a.id + b.id; }
+fn geat[T](x: own T) -> i64 { return 3; }
+fn two(a: own R, b: own R) -> i64 { return a.id + b.id; }
 fn p1(r: own R, f: bool) -> R { if f { return r } return R { name: eatn(r), id: 90 } }
 fn p2(r: own R, f: bool, v: mut ref Vec[R]) -> R { if f { return r } return R { name: f"z", id: keep(r, v) } }
 fn p3(r: own R, f: bool) -> R { if f { return r } return R { name: f"z", id: geat(r) } }
