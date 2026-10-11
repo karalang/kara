@@ -1434,7 +1434,7 @@ fn a_task_group_borrows_what_its_tasks_capture() {
                  hs.push(g.spawn(|| work(name) + c));\n\
                  i = i + 1;\n\
              }\n\
-             for h in hs { println(h.join()); }\n\
+             for h in hs.into_iter() { println(h.join()); }\n\
          }\n",
     );
     rejected(
@@ -2896,5 +2896,36 @@ fn a_peeked_item_is_borrowed() {
              println(s);\n\
          }\n",
         "found 'ref String'",
+    );
+}
+
+/// §4.6: a bare `for` borrows its collection, so a method that takes `self`
+/// by value (`TaskHandle.join(own self)`, a user `own self` method) cannot
+/// run on its element. `karac fix` makes the loop move the elements out.
+#[test]
+fn an_owned_receiver_on_a_for_element_moves_the_loop() {
+    rejected_then_fixed_by(
+        "for-elem-join",
+        "fn main() {\n\
+             let mut g = TaskGroup.new();\n\
+             let mut hs: Vec[TaskHandle[i64]] = Vec.new();\n\
+             hs.push(g.spawn(|| 1));\n\
+             let mut total = 0;\n\
+             for h in hs { total = total + h.join(); }\n\
+             println(total);\n\
+         }\n",
+        "cannot move a `for` element out of the collection",
+        "for h in hs.into_iter()",
+    );
+    rejected_then_fixed_by(
+        "for-elem-own-self",
+        "struct W { s: String }\n\
+         impl W { fn take(own self) -> String { self.s } }\n\
+         fn main() {\n\
+             let v = vec![W { s: \"a\".to_string() }];\n\
+             for w in v { println(w.take()); }\n\
+         }\n",
+        "`.into_iter()`",
+        "for w in v.into_iter()",
     );
 }

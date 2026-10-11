@@ -12,6 +12,6 @@ fn main() with panics {
         k = k + 1;
     }
     let mut hits = 0;
-    for h in handles { hits = hits + h.join(); }
+    for h in handles.into_iter() { hits = hits + h.join(); }
     if hits == 3 { println("hits 3"); } else { println("WRONG"); }
 }

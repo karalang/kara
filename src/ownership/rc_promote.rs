@@ -332,6 +332,33 @@ impl<'a> super::OwnershipChecker<'a> {
             if !seen.insert(key) {
                 continue;
             }
+            // A bare `for` element: the loop can move its elements out
+            // instead (`for h in hs.into_iter()`, §4.6).
+            if let Some(at) = self
+                .typecheck_result
+                .core_for_into_iter_receivers
+                .get(&SpanKey::from_span(span))
+            {
+                out.push(OwnershipError {
+                    message: "cannot move a `for` element out of the collection: a bare \
+                              `for` borrows it, and this method takes `self` by value"
+                        .to_string(),
+                    span: *span,
+                    kind: OwnershipErrorKind::MoveOutOfPlace,
+                    suggestion: Some(
+                        "iterate with `.into_iter()` to move the elements out of the \
+                         collection"
+                            .to_string(),
+                    ),
+                    replacement: Some(Box::new(crate::resolver::TextEdit {
+                        offset: at.offset,
+                        length: 0,
+                        replacement: ".into_iter()".to_string(),
+                    })),
+                    consume_span: None,
+                });
+                continue;
+            }
             let supports_clone = self.moved_type_supports_clone(span);
             let derive_copy = if supports_clone {
                 None

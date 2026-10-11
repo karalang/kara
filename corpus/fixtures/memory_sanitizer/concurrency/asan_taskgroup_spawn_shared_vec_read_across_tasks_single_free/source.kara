@@ -19,6 +19,6 @@ fn main() with panics {
         k = k + 1;
     }
     let mut total = 0;
-    for h in handles { total = total + h.join(); }
+    for h in handles.into_iter() { total = total + h.join(); }
     if total == 4950 { println("total 4950"); } else { println("WRONG"); }
 }

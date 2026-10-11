@@ -1526,6 +1526,10 @@ pub struct TypeCheckResult {
     /// one or through a `shared` handle). A method taking `self` by value
     /// there moves out of a borrow (§3.7), which the ownership pass reports.
     pub core_borrowed_receivers: FxHashSet<SpanKey>,
+    /// Of those receivers, the bare `for` elements, each with the point after
+    /// the loop's iterable where `.into_iter()` makes the loop move its
+    /// elements out (§4.6).
+    pub core_for_into_iter_receivers: FxHashMap<SpanKey, Span>,
     /// Index reads that produce a fresh value rather than naming an element
     /// the container keeps (`Column[i]`, a `Map` index). Nothing is moved out
     /// of the container by taking them by value.
@@ -2340,6 +2344,8 @@ pub struct TypeChecker<'a> {
     pub(super) core_moving_scrutinees: FxHashMap<SpanKey, Vec<crate::resolver::TextEdit>>,
     /// See [`TypeCheckResult::core_borrowed_receivers`].
     pub(super) core_borrowed_receivers: FxHashSet<SpanKey>,
+    /// See [`TypeCheckResult::core_for_into_iter_receivers`].
+    pub(super) core_for_into_iter_receivers: FxHashMap<SpanKey, Span>,
     /// v2 core §3.7, checked per instantiation: inside a generic body, each
     /// move of a bare type parameter's value out of a borrowed place, keyed
     /// by the body's callee key (`f` or `Type.method`). Whether it is a move
@@ -3130,6 +3136,7 @@ impl<'a> TypeChecker<'a> {
             core_once_calls: FxHashSet::default(),
             core_moving_scrutinees: FxHashMap::default(),
             core_borrowed_receivers: FxHashSet::default(),
+            core_for_into_iter_receivers: FxHashMap::default(),
             core_generic_moves: FxHashMap::default(),
             current_fn_core_key: None,
             core_let_ref_fix: false,
@@ -3547,6 +3554,7 @@ impl<'a> TypeChecker<'a> {
             core_ref_copy_spans: self.core_ref_copy_spans,
             core_moving_scrutinees: self.core_moving_scrutinees,
             core_borrowed_receivers: self.core_borrowed_receivers,
+            core_for_into_iter_receivers: self.core_for_into_iter_receivers,
             core_fresh_index_reads: self.index_read_is_fresh_value.clone(),
             core_escaping_closures,
             core_task_moved_captures,

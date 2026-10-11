@@ -5954,6 +5954,10 @@ impl<'a> super::TypeChecker<'a> {
                 if self.cli_lint_overrides.strict_core && self.core_receiver_is_borrowed(object) {
                     self.core_borrowed_receivers
                         .insert(SpanKey::from_span(&object.span));
+                    if let Some(at) = self.core_for_into_iter_fix(object) {
+                        self.core_for_into_iter_receivers
+                            .insert(SpanKey::from_span(&object.span), at);
+                    }
                 }
                 // v2 core §3.7: storing into a builtin collection moves the
                 // value, so a borrow cannot be stored. `push` has its own
