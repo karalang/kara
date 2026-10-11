@@ -417,6 +417,7 @@ fn run_with(
         tys,
         frames: Vec::new(),
         next_frame_id: 0,
+        spare_locals: Vec::new(),
         heap: Vec::new(),
         free: Vec::new(),
         key_index: Default::default(),
@@ -616,6 +617,8 @@ struct Interp<'a> {
     tys: &'a TyInterner,
     frames: Vec<Frame>,
     next_frame_id: u64,
+    /// Emptied local vectors of returned frames, reused by the next call.
+    spare_locals: Vec<Vec<Value>>,
     heap: Vec<Option<HeapObj>>,
     /// Freed slots of `heap`, reused by [`Interp::alloc`].
     free: Vec<u32>,
@@ -633,7 +636,8 @@ struct Interp<'a> {
     stream: bool,
     /// `needs_drop` per type, asked on every write: the type context
     /// walks the type each time.
-    needs_drop: std::cell::RefCell<rustc_hash::FxHashMap<Ty, bool>>,
+    /// By type index: 0 unknown, 1 no, 2 yes.
+    needs_drop: std::cell::RefCell<Vec<u8>>,
     output: String,
     stderr: String,
     steps: u64,
@@ -715,6 +719,11 @@ impl<'a> Interp<'a> {
             let unit = self.tys.unit();
             return self.native(name, args, &[], unit);
         };
+        self.call_body(name, body, args)
+    }
+
+    /// [`Interp::call`] of the body already found for `name`.
+    fn call_body(&mut self, name: &str, body: &'a Body, args: Vec<Value>) -> R<Value> {
         if args.len() != body.arg_count {
             return err(format!(
                 "{name} takes {} arguments, got {}",
@@ -738,10 +747,10 @@ impl<'a> Interp<'a> {
             let i = self.parked_flags.iter().position(|(at, _)| at == a)?;
             Some(self.parked_flags.swap_remove(i).1)
         });
-        let mut locals = vec![Value::Uninit; body.locals.len()];
-        for (i, a) in args.into_iter().enumerate() {
-            locals[i + 1] = a;
-        }
+        let mut locals = self.spare_locals.pop().unwrap_or_default();
+        locals.push(Value::Uninit);
+        locals.extend(args);
+        locals.resize(body.locals.len(), Value::Uninit);
         self.next_frame_id += 1;
         let mut held = Vec::new();
         if coroutine::is_drop_frame(name) {
@@ -762,7 +771,10 @@ impl<'a> Interp<'a> {
         // A deep recursion outgrows any fixed thread stack: the body runs
         // on a fresh segment once this one runs low.
         let result = stacker::maybe_grow(256 * 1024, 16 * 1024 * 1024, || self.run_body(body));
-        let frame = self.frames.pop().expect("frame");
+        let mut frame = self.frames.pop().expect("frame");
+        let mut spare = std::mem::take(&mut frame.locals);
+        spare.clear();
+        self.spare_locals.push(spare);
         match (&result, frame_at) {
             (Ok(Value::Variant(1, _)), Some(at)) if coroutine::is_resume(name) => {
                 if !frame.held.is_empty() {
@@ -795,6 +807,47 @@ impl<'a> Interp<'a> {
             return self.native(&format!("String.{method}"), args, arg_tys, ret);
         }
         match (base, method) {
+            // The hottest natives first: an arm's place in the match is
+            // its cost on every call.
+            ("Vec", "len") => {
+                let [v] = args.as_slice() else {
+                    return err(format!("{name} takes one argument"));
+                };
+                let id = self.box_behind(v)?;
+                match &self.live(id)?.value {
+                    Value::Agg(fs) => Ok(Value::Int(fs.len() as i128)),
+                    other => err(format!("{name} of {other:?}")),
+                }
+            }
+            ("Vec", "index" | "index_mut") => {
+                let [v, Value::Int(i)] = args.as_slice() else {
+                    return err(format!("{name} takes a reference and an index"));
+                };
+                let id = self.box_behind(v)?;
+                let len = match &self.live(id)?.value {
+                    Value::Agg(fs) => fs.len() as i128,
+                    other => return err(format!("{name} of {other:?}")),
+                };
+                if *i < 0 || *i >= len {
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                    }
+                    return Err(Stop::Abort(AbortReason::BoundsCheck));
+                }
+                Ok(Value::Ref(Addr {
+                    root: Root::Heap(id),
+                    path: vec![*i as u64],
+                }))
+            }
+            ("Vec", "push") if args.len() == 2 => {
+                let mut args = args.into_iter();
+                let (Some(v), Some(val)) = (args.next(), args.next()) else {
+                    unreachable!("two arguments")
+                };
+                let id = self.box_behind(&v)?;
+                self.vec_elems(id)?.push(val);
+                Ok(Value::Unit)
+            }
             // `std.mem`: moves through borrowed places, which MIR itself
             // does not spell (`take` is `replace` with the default).
             // `cpu.supports("avx2")`: the host's CPU features, as the
@@ -1182,36 +1235,6 @@ impl<'a> Interp<'a> {
                     return err(format!("{name} of a partly uninitialized array"));
                 }
                 Ok(self.alloc_box(ty_name, Value::Agg(elems.clone())))
-            }
-            ("Vec", "len") => {
-                let [v] = args.as_slice() else {
-                    return err(format!("{name} takes one argument"));
-                };
-                let id = self.box_behind(v)?;
-                match &self.live(id)?.value {
-                    Value::Agg(fs) => Ok(Value::Int(fs.len() as i128)),
-                    other => err(format!("{name} of {other:?}")),
-                }
-            }
-            ("Vec", "index" | "index_mut") => {
-                let [v, Value::Int(i)] = args.as_slice() else {
-                    return err(format!("{name} takes a reference and an index"));
-                };
-                let id = self.box_behind(v)?;
-                let len = match &self.live(id)?.value {
-                    Value::Agg(fs) => fs.len() as i128,
-                    other => return err(format!("{name} of {other:?}")),
-                };
-                if *i < 0 || *i >= len {
-                    if self.trace {
-                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
-                    }
-                    return Err(Stop::Abort(AbortReason::BoundsCheck));
-                }
-                Ok(Value::Ref(Addr {
-                    root: Root::Heap(id),
-                    path: vec![*i as u64],
-                }))
             }
             ("Slice" | "Vec", "to_vec") => {
                 // A new Vec of clones of the receiver's elements.
@@ -2322,8 +2345,7 @@ impl<'a> Interp<'a> {
         let (addr, ty) = self
             .resolve(body, destination, Mode::Write)?
             .expect("write mode never probes");
-        let old = self.slot(&addr)?;
-        if self.owns_drop(&old, ty) {
+        if self.owns_drop(self.slot_ref(&addr)?, ty) {
             return err("call result overwrites a place that still owns a value");
         }
         *self.slot_mut(&addr)? = ret;
@@ -5133,10 +5155,13 @@ impl<'a> Interp<'a> {
             // A reference to a reference (`ref ref Vec`, a `ref` binding
             // of a `ref` element) reaches the same box.
             Value::Ref(addr) => {
-                let inner = self.slot(addr)?;
+                let inner = self.slot_ref(addr)?;
                 match inner {
-                    Value::Box(a) => Ok(a),
-                    Value::Ref(_) => self.box_behind(&inner),
+                    Value::Box(a) => Ok(*a),
+                    Value::Ref(_) => {
+                        let inner = inner.clone();
+                        self.box_behind(&inner)
+                    }
                     other => err(format!("expected a library value, found {other:?}")),
                 }
             }
@@ -5489,11 +5514,12 @@ impl<'a> Interp<'a> {
                 ));
             }
         }
-        let ret = frame.locals[0].clone();
-        if !ret.fully_init() {
+        if !frame.locals[0].fully_init() {
             return err("return with _0 not initialized");
         }
-        Ok(ret)
+        // The frame is popped next; `_0` moves out of it.
+        let frame = self.frames.last_mut().expect("a frame is running");
+        Ok(std::mem::replace(&mut frame.locals[0], Value::Uninit))
     }
 
     fn place_str(&self, body: &Body, p: &Place) -> String {
@@ -5541,6 +5567,43 @@ impl<'a> Interp<'a> {
         Ok(self.slot_mut(addr)?.clone())
     }
 
+    fn root_ref(&self, root: &Root) -> R<&Value> {
+        match *root {
+            Root::Local { frame, id, local } => match self.frames.get(frame) {
+                Some(f) if f.id == id => Ok(&f.locals[local.index()]),
+                _ => err("dangling reference to a local of a function that returned"),
+            },
+            Root::Heap(a) => match self.heap.get(a.0 as usize) {
+                Some(Some(obj)) => Ok(&obj.value),
+                _ => err(format!("use of {a} after it was freed")),
+            },
+            Root::Static(i) => match self.statics.get(i as usize) {
+                Some(v) => Ok(v),
+                None => err(format!("use of static#{i} before its initializer ran")),
+            },
+        }
+    }
+
+    /// `slot_mut` without the borrow, so the value can be inspected
+    /// alongside `self` and is cloned only when it is kept.
+    fn slot_ref(&self, addr: &Addr) -> R<&Value> {
+        let mut v = self.root_ref(&addr.root)?;
+        for &i in &addr.path {
+            v = match v {
+                Value::Agg(fs) | Value::Variant(_, fs) => {
+                    let n = fs.len();
+                    match fs.get(i as usize) {
+                        Some(x) => x,
+                        None => return err(format!("index {i} out of bounds for length {n}")),
+                    }
+                }
+                Value::Uninit => return err("projection into an uninitialized value"),
+                other => return err(format!("projection into non-aggregate {other:?}")),
+            };
+        }
+        Ok(v)
+    }
+
     fn n_fields(&self, ty: Ty, variant: Option<u32>) -> usize {
         match self.tys.kind(ty) {
             TyKind::Tuple(ts) | TyKind::Closure(_, ts) => ts.len(),
@@ -5584,10 +5647,10 @@ impl<'a> Interp<'a> {
         };
         for elem in &place.projection {
             if matches!(elem, ProjElem::Field(..) | ProjElem::Downcast(_))
-                && matches!(self.tys.kind(ty), TyKind::Shared(_))
                 && !behind_handle
+                && matches!(self.tys.tcx().kind(ty), crate::ty::TyKind::Shared { .. })
             {
-                match self.slot(&addr)? {
+                match *self.slot_ref(&addr)? {
                     Value::Shared(a) => {
                         addr = Addr {
                             root: Root::Heap(a),
@@ -5596,18 +5659,17 @@ impl<'a> Interp<'a> {
                         behind_handle = true;
                     }
                     Value::Uninit => return uninit("projection"),
-                    other => return err(format!("expected a shared handle, found {other:?}")),
+                    ref other => return err(format!("expected a shared handle, found {other:?}")),
                 }
             }
             match *elem {
                 ProjElem::Field(f, fty) => {
-                    let n = self.n_fields(ty, variant);
-                    let slot = self.slot_mut(&addr)?;
-                    if *slot == Value::Uninit {
+                    if matches!(self.slot_mut(&addr)?, Value::Uninit) {
                         if mode != Mode::Write || variant.is_some() {
                             return uninit("field access");
                         }
-                        *slot = Value::Agg(vec![Value::Uninit; n]);
+                        let n = self.n_fields(ty, variant);
+                        *self.slot_mut(&addr)? = Value::Agg(vec![Value::Uninit; n]);
                     }
                     addr.path.push(f.0 as u64);
                     ty = fty;
@@ -5615,7 +5677,10 @@ impl<'a> Interp<'a> {
                     behind_handle = false;
                 }
                 ProjElem::Downcast(v) => {
-                    let n = self.n_fields(ty, Some(v.0));
+                    let n = match self.slot_mut(&addr)? {
+                        Value::Uninit => self.n_fields(ty, Some(v.0)),
+                        _ => 0,
+                    };
                     let slot = self.slot_mut(&addr)?;
                     match slot {
                         Value::Variant(cur, _) if *cur == v.0 => {}
@@ -5635,8 +5700,8 @@ impl<'a> Interp<'a> {
                     variant = Some(v.0);
                 }
                 ProjElem::Deref => {
-                    match self.slot(&addr)? {
-                        Value::Ref(a) => addr = a,
+                    match self.slot_ref(&addr)? {
+                        Value::Ref(a) => addr = a.clone(),
                         Value::Uninit => return uninit("deref"),
                         other => return err(format!("deref of non-reference {other:?}")),
                     }
@@ -5673,6 +5738,67 @@ impl<'a> Interp<'a> {
         Ok(Some((addr, ty)))
     }
 
+    /// A field path straight down a local's aggregates (`_23.1`), or down
+    /// what a reference local points at (`(*_1).seen`), reached without
+    /// building an address. `None` sends anything else, and any error, to
+    /// `resolve`.
+    fn local_fields_mut(&mut self, body: &Body, place: &Place) -> Option<(&mut Value, Ty)> {
+        let tys = self.tys;
+        let mut ty = body.local(place.local).ty;
+        let mut elems = place.projection.as_slice();
+        // A leading deref: the referent's root and path, copied out so the
+        // walk below can borrow the whole interpreter.
+        let mut path = [0u64; 8];
+        let mut depth = 0;
+        let root = match elems.first() {
+            Some(ProjElem::Deref) => {
+                let Value::Ref(a) = &self.frames.last()?.locals[place.local.index()] else {
+                    return None;
+                };
+                if a.path.len() > path.len() {
+                    return None;
+                }
+                ty = match tys.kind(ty) {
+                    TyKind::Ref(t) | TyKind::MutRef(t) => t,
+                    _ => return None,
+                };
+                depth = a.path.len();
+                path[..depth].copy_from_slice(&a.path);
+                elems = &elems[1..];
+                a.root.clone()
+            }
+            _ => {
+                let fi = self.frames.len() - 1;
+                Root::Local {
+                    frame: fi,
+                    id: self.frames[fi].id,
+                    local: place.local,
+                }
+            }
+        };
+        let mut v = self.root_mut(&root).ok()?;
+        for &i in &path[..depth] {
+            v = match v {
+                Value::Agg(fs) | Value::Variant(_, fs) => fs.get_mut(i as usize)?,
+                _ => return None,
+            };
+        }
+        for elem in elems {
+            let ProjElem::Field(f, fty) = *elem else {
+                return None;
+            };
+            if matches!(tys.tcx().kind(ty), crate::ty::TyKind::Shared { .. }) {
+                return None;
+            }
+            v = match v {
+                Value::Agg(fs) => fs.get_mut(f.0 as usize)?,
+                _ => return None,
+            };
+            ty = fty;
+        }
+        Some((v, ty))
+    }
+
     fn resolve_read(&mut self, body: &Body, place: &Place) -> R<(Addr, Ty)> {
         Ok(self
             .resolve(body, place, Mode::Read)?
@@ -5685,24 +5811,34 @@ impl<'a> Interp<'a> {
         match s {
             StatementKind::Assign(p, rv) => {
                 let v = self.rvalue(body, rv)?;
-                let (addr, ty) = self
-                    .resolve(body, p, Mode::Write)?
-                    .expect("write mode never probes");
-                let old = self.slot(&addr)?;
-                if self.owns_drop(&old, ty) {
-                    let what = pretty::place(body, self.tys, p);
-                    return err(format!(
-                        "assignment overwrites {what}, which still owns a value"
-                    ));
-                }
-                *self.slot_mut(&addr)? = v.clone();
-                if p.projection.is_empty() && body.local(p.local).kind == LocalKind::DropFlag {
-                    if self.trace {
-                        self.events
-                            .push(Event::Flag(p.local, matches!(v, Value::Bool(true))));
+                let flag = matches!(v, Value::Bool(true));
+                if p.projection.is_empty() {
+                    // A bare local: no address to build.
+                    let ty = body.local(p.local).ty;
+                    let frame = self.frames.last().expect("frame");
+                    if self.owns_drop(&frame.locals[p.local.index()], ty) {
+                        let what = pretty::place(body, self.tys, p);
+                        return err(format!(
+                            "assignment overwrites {what}, which still owns a value"
+                        ));
                     }
+                    self.frames.last_mut().expect("frame").locals[p.local.index()] = v;
                 } else {
-                    if self.trace {
+                    let (addr, ty) = self
+                        .resolve(body, p, Mode::Write)?
+                        .expect("write mode never probes");
+                    if self.owns_drop(self.slot_ref(&addr)?, ty) {
+                        let what = pretty::place(body, self.tys, p);
+                        return err(format!(
+                            "assignment overwrites {what}, which still owns a value"
+                        ));
+                    }
+                    *self.slot_mut(&addr)? = v;
+                }
+                if self.trace {
+                    if p.projection.is_empty() && body.local(p.local).kind == LocalKind::DropFlag {
+                        self.events.push(Event::Flag(p.local, flag));
+                    } else {
                         self.events.push(Event::Init(self.place_str(body, p)));
                     }
                 }
@@ -5832,16 +5968,45 @@ impl<'a> Interp<'a> {
     fn operand(&mut self, body: &Body, o: &Operand) -> R<(Value, Ty)> {
         match o {
             Operand::Copy(p) | Operand::Move(p) => {
-                let (addr, ty) = self.resolve_read(body, p)?;
-                let v = self.slot(&addr)?;
-                if !v.fully_init() {
-                    return err(format!("read of uninitialized {}", self.place_str(body, p)));
-                }
-                if let Operand::Move(_) = o {
-                    *self.slot_mut(&addr)? = Value::Uninit;
-                    if self.trace {
-                        self.events.push(Event::Move(self.place_str(body, p)));
+                let is_move = matches!(o, Operand::Move(_));
+                let (v, ty) = if p.projection.is_empty() {
+                    // A bare local: read the frame slot directly.
+                    let ty = body.local(p.local).ty;
+                    let slot = &mut self.frames.last_mut().expect("frame").locals[p.local.index()];
+                    if !slot.fully_init() {
+                        return err(format!("read of uninitialized {}", self.place_str(body, p)));
                     }
+                    let v = if is_move {
+                        std::mem::replace(slot, Value::Uninit)
+                    } else {
+                        slot.clone()
+                    };
+                    (v, ty)
+                } else if let Some((slot, ty)) = self.local_fields_mut(body, p) {
+                    if !slot.fully_init() {
+                        return err(format!("read of uninitialized {}", self.place_str(body, p)));
+                    }
+                    let v = if is_move {
+                        std::mem::replace(slot, Value::Uninit)
+                    } else {
+                        slot.clone()
+                    };
+                    (v, ty)
+                } else {
+                    let (addr, ty) = self.resolve_read(body, p)?;
+                    let slot = self.slot_mut(&addr)?;
+                    if !slot.fully_init() {
+                        return err(format!("read of uninitialized {}", self.place_str(body, p)));
+                    }
+                    let v = if is_move {
+                        std::mem::replace(slot, Value::Uninit)
+                    } else {
+                        slot.clone()
+                    };
+                    (v, ty)
+                };
+                if is_move && self.trace {
+                    self.events.push(Event::Move(self.place_str(body, p)));
                 }
                 Ok((v, ty))
             }
@@ -6096,8 +6261,8 @@ impl<'a> Interp<'a> {
                 _ => unreachable!(),
             })
         };
-        if let (Value::Agg(a), Value::Agg(b), TyKind::Array(et, _)) = (&x, &y, self.tys.kind(ty)) {
-            if self.tys.is_vector(ty) {
+        if let (Value::Agg(a), Value::Agg(b)) = (&x, &y) {
+            if let (true, TyKind::Array(et, _)) = (self.tys.is_vector(ty), self.tys.kind(ty)) {
                 // A lane vector's operators work lane by lane; a comparison
                 // gives a lane mask.
                 let mut lanes = Vec::with_capacity(a.len());
@@ -6111,14 +6276,15 @@ impl<'a> Interp<'a> {
             }
         }
         match (x, y) {
-            (Value::Int(a), Value::Int(b)) if self.tys.kind(ty) == TyKind::Int(IntTy::U128) => {
-                Ok(u128_binop(op, a as u128, b as u128, cmp)?)
-            }
             (Value::Int(a), Value::Int(b)) => {
+                let int = self.tys.int_ty(ty);
+                if int == Some(IntTy::U128) {
+                    return u128_binop(op, a as u128, b as u128, cmp);
+                }
                 if op.is_comparison() {
                     return Ok((cmp(a.cmp(&b)), false));
                 }
-                let TyKind::Int(it) = self.tys.kind(ty) else {
+                let Some(it) = int else {
                     return err("integer operands of a non-integer type");
                 };
                 // In 128 bits, with the 128-bit overflow kept: a narrower
@@ -6224,32 +6390,61 @@ impl<'a> Interp<'a> {
                 target,
                 unwind: UnwindAction::Abort,
             } => {
-                let (f, _) = self.operand(body, func)?;
+                // A function item named in place is called by its name
+                // without making a value of it.
+                let named = match func {
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(inst),
+                        ..
+                    }) => Some(inst.name.as_str()),
+                    _ => None,
+                };
+                let f = match named {
+                    Some(_) => None,
+                    None => Some(self.operand(body, func)?.0),
+                };
+                // Only a native reads the argument types.
+                let program: &'a Program = self.program;
+                let found = named.and_then(|n| program.bodies.get(n));
+                let native = found.is_none();
                 let mut vals = Vec::with_capacity(args.len());
-                let mut arg_tys = Vec::with_capacity(args.len());
+                let mut arg_tys = Vec::with_capacity(if native { args.len() } else { 0 });
                 for a in args {
                     let (v, t) = self.operand(body, a)?;
                     vals.push(v);
-                    arg_tys.push(t);
+                    if native {
+                        arg_tys.push(t);
+                    }
                 }
-                let ret_ty = place_ty(body, self.tys, destination)
-                    .map_err(|e| Stop::Error(format!("call destination: {e}")))?
-                    .ty;
-                let inst = match f {
-                    Value::Fn(inst) => inst,
-                    erased @ (Value::Erased { .. } | Value::Ref(_)) => {
+                let owned;
+                let name = match (named, f) {
+                    (Some(n), _) => n,
+                    (None, Some(Value::Fn(inst))) => {
+                        owned = inst.name;
+                        owned.as_str()
+                    }
+                    (None, Some(erased @ (Value::Erased { .. } | Value::Ref(_)))) => {
                         let ret = self.call_erased(erased, vals)?;
                         return self.finish_call(body, destination, target, ret, "an erased call");
                     }
                     _ => return err("call of a value that is not a function item"),
                 };
-                let ret = if self.program.bodies.contains_key(&inst.name) {
-                    self.call(&inst.name, vals)?
-                } else {
-                    let v = self.native(&inst.name, vals, &arg_tys, ret_ty)?;
-                    self.inline_str(v, ret_ty)?
+                let callee = match (found, named) {
+                    (Some(b), _) => Some(b),
+                    (None, Some(_)) => None,
+                    (None, None) => program.bodies.get(name),
                 };
-                self.finish_call(body, destination, target, ret, &inst.name)
+                let ret = match callee {
+                    Some(callee) => self.call_body(name, callee, vals)?,
+                    None => {
+                        let ret_ty = place_ty(body, self.tys, destination)
+                            .map_err(|e| Stop::Error(format!("call destination: {e}")))?
+                            .ty;
+                        let v = self.native(name, vals, &arg_tys, ret_ty)?;
+                        self.inline_str(v, ret_ty)?
+                    }
+                };
+                self.finish_call(body, destination, target, ret, name)
             }
             TerminatorKind::Drop {
                 place,
@@ -6265,20 +6460,23 @@ impl<'a> Interp<'a> {
                     }
                     return Ok(Some(*target));
                 };
-                let v = self.slot(&addr)?;
-                let what = self.place_str(body, place);
-                if !v.any_init() {
+                let v = self.slot_ref(&addr)?;
+                let (any, all) = (v.any_init(), v.fully_init());
+                if !any {
                     if strict {
+                        let what = self.place_str(body, place);
                         return err(format!("drop of {what}, which is not initialized"));
                     }
                     return Ok(Some(*target));
                 }
-                if strict && !v.fully_init() {
+                if strict && !all {
+                    let what = self.place_str(body, place);
                     return err(format!(
                         "drop of {what}, which is partly moved; elaboration must drop its parts"
                     ));
                 }
                 if self.trace {
+                    let what = self.place_str(body, place);
                     self.events.push(Event::Drop(what, self.tys.display(ty)));
                 }
                 self.drop_at(&addr, ty)?;
@@ -6300,10 +6498,19 @@ impl<'a> Interp<'a> {
     /// of core semantics §6: the user `Drop` body first, then struct,
     /// tuple and enum parts last to first, array elements first to last.
     fn drop_at(&mut self, addr: &Addr, ty: Ty) -> R<()> {
-        let v = self.slot(addr)?;
+        if !self.needs_drop(ty) {
+            return Ok(());
+        }
+        let v = self.slot_ref(addr)?;
         if !v.any_init() {
             return Ok(());
         }
+        // The arms below read only a handle or a box out of `v`; an
+        // aggregate is dropped through `addr`, so it is not copied.
+        let v = match v {
+            Value::Agg(_) | Value::Variant(..) => Value::Uninit,
+            other => other.clone(),
+        };
         match self.tys.kind(ty).clone() {
             TyKind::Adt(a) => self.drop_adt(addr, ty, a),
             TyKind::Shared(a) => {
@@ -6406,16 +6613,35 @@ impl<'a> Interp<'a> {
     /// nothing, so leaving it in place at a return or overwriting it is
     /// not a missing drop.
     fn needs_drop(&self, ty: Ty) -> bool {
-        if let Some(&d) = self.needs_drop.borrow().get(&ty) {
-            return d;
+        match self.needs_drop.borrow().get(ty.index()) {
+            Some(1) => return false,
+            Some(2) => return true,
+            _ => {}
         }
         let d = self.tys.needs_drop(ty);
-        self.needs_drop.borrow_mut().insert(ty, d);
+        let mut table = self.needs_drop.borrow_mut();
+        if table.len() <= ty.index() {
+            table.resize(ty.index() + 1, 0);
+        }
+        table[ty.index()] = if d { 2 } else { 1 };
         d
     }
 
     fn owns_drop(&self, v: &Value, ty: Ty) -> bool {
-        if !self.needs_drop(ty) {
+        // A scalar owns nothing whatever its type says, which spares the
+        // type lookup on most assignments.
+        if matches!(
+            v,
+            Value::Uninit
+                | Value::Slice { .. }
+                | Value::Ref(_)
+                | Value::Int(_)
+                | Value::Bool(_)
+                | Value::Char(_)
+                | Value::Float(_)
+                | Value::Unit
+        ) || !self.needs_drop(ty)
+        {
             return false;
         }
         let (variant, parts) = match v {
@@ -7830,13 +8056,14 @@ struct Chan {
 }
 
 fn split_method(name: &str) -> (&str, &str) {
+    // The delimiters are ASCII, so a byte scan finds them.
     let mut depth = 0;
     let mut dot = None;
-    for (i, c) in name.char_indices() {
+    for (i, c) in name.bytes().enumerate() {
         match c {
-            '[' => depth += 1,
-            ']' => depth -= 1,
-            '.' if depth == 0 => dot = Some(i),
+            b'[' => depth += 1,
+            b']' => depth -= 1,
+            b'.' if depth == 0 => dot = Some(i),
             _ => {}
         }
     }

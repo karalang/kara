@@ -38,6 +38,14 @@ use crate::typechecker::types::{ConstArg, FloatSize, IntSize, Type, UIntSize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Ty(u32);
 
+impl Ty {
+    /// The interned index: dense from zero, so a per-type table can be a
+    /// vector.
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// An interned list of types (tuple elements, generic arguments, parameters).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TyList(u32);

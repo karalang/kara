@@ -446,6 +446,11 @@ impl TyInterner {
         matches!(self.tcx.kind(t), SharedKind::Vector { .. })
     }
 
+    /// `t` as an integer type, without building its whole kind.
+    pub fn int_ty(&self, t: Ty) -> Option<IntTy> {
+        IntTy::from_shared(self.tcx.kind(t))
+    }
+
     /// MIR's view of `t`.
     pub fn kind(&self, t: Ty) -> TyKind {
         let tcx = &self.tcx;
