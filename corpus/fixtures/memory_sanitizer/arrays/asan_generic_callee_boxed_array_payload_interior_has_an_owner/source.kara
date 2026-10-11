@@ -6,10 +6,10 @@ struct Hold { arr: Array[String, 2] }
 enum G[T] { Y(T), N }
 
 fn gshow[T](g: own G[T]) -> i64 { match g { G.Y(v) => { println(f"  p={v}"); return 1; } G.N => { return 0; } } }
-fn gnomatch[T](g: G[T]) -> i64 { return 2 }
-fn two[T](p: G[T], q: G[T]) -> i64 { return 3 }
+fn gnomatch[T](g: own G[T]) -> i64 { return 2 }
+fn two[T](p: own G[T], q: own G[T]) -> i64 { return 3 }
 
-impl[T] G[T] { fn mlen(self) -> i64 { return 4 } }
+impl[T] G[T] { fn mlen(own self) -> i64 { return 4 } }
 
 fn main() {
     let base: i64 = env.args().len();

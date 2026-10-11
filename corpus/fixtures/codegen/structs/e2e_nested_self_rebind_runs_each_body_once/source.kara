@@ -16,7 +16,7 @@ impl E {
     fn cond_loop(own self, n: i64) -> i64 { let mut i = 0; while i < n { let e = self; return 9; } return 0; }
     fn cond_arm(own self, k: i64) -> i64 { match k { 1 => { let e = self; return 1; } _ => { return 2; } } }
     fn top_let(own self) -> i64 { let e = self; match e { E.A(ref r) => { return r.id; } E.B => { return 0; } } }
-    fn plain(self, c: bool) -> i64 { if c { return 1; } return 2; }
+    fn plain(own self, c: bool) -> i64 { if c { return 1; } return 2; }
     fn borrowed(ref self, c: bool) -> i64 { if c { return 1; } return 2; }
 }
 
