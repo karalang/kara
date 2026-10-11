@@ -354,7 +354,7 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// The place an operand of a (possibly borrowed) value points at, and
     /// the value's type.
-    fn behind_refs(&mut self, a: &Operand) -> R<(PointerValue<'ctx>, Ty)> {
+    pub(super) fn behind_refs(&mut self, a: &Operand) -> R<(PointerValue<'ctx>, Ty)> {
         let mut t = self.operand_type(a)?;
         let mut p = self.operand_ptr(a)?;
         while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {

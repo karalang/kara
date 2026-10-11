@@ -288,6 +288,9 @@ impl<'ctx> Cx<'ctx, '_> {
         {
             return Ok(());
         }
+        if base == "Vector" && self.vector_native(method, args, dest)?.is_some() {
+            return Ok(());
+        }
         if base == "Interner" && self.interner_native(method, args, dest)?.is_some() {
             return Ok(());
         }

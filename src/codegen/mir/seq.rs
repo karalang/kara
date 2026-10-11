@@ -335,7 +335,7 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The pointer to element `i` of a view, aborting out of bounds.
-    fn checked_elem(
+    pub(super) fn checked_elem(
         &mut self,
         p: PointerValue<'ctx>,
         n: IntValue<'ctx>,

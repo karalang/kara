@@ -38,6 +38,7 @@ mod key;
 mod num;
 mod seq;
 mod table;
+mod vector;
 
 use std::collections::HashMap;
 

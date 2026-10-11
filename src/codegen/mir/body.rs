@@ -421,10 +421,55 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             Rvalue::BinaryOp(op, a, b) => {
                 let at = self.operand_type(a)?;
+                if let Some((et, n)) = self.vector_of(at) {
+                    // Lane by lane; a comparison's lanes are bools.
+                    let (dt, _) = self
+                        .vector_of(ty)
+                        .ok_or("a lane operation into no vector")?;
+                    let (pa, pb) = (self.operand_ptr(a)?, self.operand_ptr(b)?);
+                    let bt = self.operand_type(b)?;
+                    let (bet, _) = self.vector_of(bt).unwrap_or((bt, 0));
+                    let (es, bs, ds) = (
+                        self.layout(et)?.size,
+                        self.layout(bet)?.size,
+                        self.layout(dt)?.size,
+                    );
+                    for i in 0..n {
+                        let x = self.load(self.offset(pa, i * es)?, et)?;
+                        let y = self.load(self.offset(pb, i * bs)?, bet)?;
+                        let v = self.binop(*op, et, x, y)?;
+                        self.store(self.offset(dst, i * ds)?, v)?;
+                    }
+                    return Ok(());
+                }
                 let x = self.operand_scalar(a)?;
                 let y = self.operand_scalar(b)?;
                 let v = self.binop(*op, at, x, y)?;
                 self.store(dst, v)
+            }
+            Rvalue::CheckedBinaryOp(op, a, b)
+                if self.vector_of(self.operand_type(a)?).is_some() =>
+            {
+                let at = self.operand_type(a)?;
+                let (et, n) = self.vector_of(at).ok_or("no vector")?;
+                let (pa, pb) = (self.operand_ptr(a)?, self.operand_ptr(b)?);
+                let es = self.layout(et)?.size;
+                let mut any = self.llcx.bool_type().const_zero();
+                for i in 0..n {
+                    let x = self.load(self.offset(pa, i * es)?, et)?.into_int_value();
+                    let y = self.load(self.offset(pb, i * es)?, et)?.into_int_value();
+                    let (v, o) = self.checked(*op, et, x, y)?;
+                    self.store(self.offset(dst, i * es)?, v.into())?;
+                    any = self.builder.build_or(any, o, "").map_err(e)?;
+                }
+                let off1 = layout::field_offset(self.tys, ty, None, 1)
+                    .ok_or("a checked operation's result is not a pair")?;
+                let o = self
+                    .builder
+                    .build_int_z_extend(any, self.llcx.i8_type(), "")
+                    .map_err(e)?;
+                let at = self.offset(dst, off1)?;
+                self.store(at, o.into())
             }
             Rvalue::CheckedBinaryOp(op, a, b) => {
                 let at = self.operand_type(a)?;
@@ -443,64 +488,17 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             Rvalue::UnaryOp(op, a) => {
                 let at = self.operand_type(a)?;
-                let x = self.operand_scalar(a)?;
-                // `-MIN` overflows (and negating a non-zero unsigned value
-                // leaves its range): C8 traps it, as the interpreter does.
-                if let (UnOp::Neg, TyKind::Int(it)) = (op, self.tys.kind(at)) {
-                    let x = x.into_int_value();
-                    let signed = matches!(
-                        it,
-                        IntTy::I8
-                            | IntTy::I16
-                            | IntTy::I32
-                            | IntTy::I64
-                            | IntTy::I128
-                            | IntTy::Isize
-                    );
-                    let bad = if signed {
-                        let w = x.get_type().get_bit_width();
-                        let min = x
-                            .get_type()
-                            .const_int(1, false)
-                            .const_shl(x.get_type().const_int(u64::from(w - 1), false));
-                        self.builder.build_int_compare(IntPredicate::EQ, x, min, "")
-                    } else {
-                        self.builder.build_int_compare(
-                            IntPredicate::NE,
-                            x,
-                            x.get_type().const_zero(),
-                            "",
-                        )
+                if let Some((et, n)) = self.vector_of(at) {
+                    let (src, es) = (self.operand_ptr(a)?, self.layout(et)?.size);
+                    for i in 0..n {
+                        let x = self.load(self.offset(src, i * es)?, et)?;
+                        let v = self.unop_value(*op, et, x)?;
+                        self.store(self.offset(dst, i * es)?, v)?;
                     }
-                    .map_err(e)?;
-                    let ok = self.builder.build_not(bad, "").map_err(e)?;
-                    self.abort_unless(ok, "integer overflow")?;
+                    return Ok(());
                 }
-                let b = &self.builder;
-                let v: BasicValueEnum = match (op, self.tys.kind(at)) {
-                    (UnOp::Not, TyKind::Bool) => b
-                        .build_xor(
-                            x.into_int_value(),
-                            self.llcx.i8_type().const_int(1, false),
-                            "",
-                        )
-                        .map_err(e)?
-                        .into(),
-                    (UnOp::Not, _) => b.build_not(x.into_int_value(), "").map_err(e)?.into(),
-                    (UnOp::Neg, TyKind::Float(FloatTy::F16 | FloatTy::BF16)) => b
-                        .build_xor(
-                            x.into_int_value(),
-                            self.llcx.i16_type().const_int(0x8000, false),
-                            "",
-                        )
-                        .map_err(e)?
-                        .into(),
-                    (UnOp::Neg, TyKind::Float(_)) => b
-                        .build_float_neg(x.into_float_value(), "")
-                        .map_err(e)?
-                        .into(),
-                    (UnOp::Neg, _) => b.build_int_neg(x.into_int_value(), "").map_err(e)?.into(),
-                };
+                let x = self.operand_scalar(a)?;
+                let v = self.unop_value(*op, at, x)?;
                 self.store(dst, v)
             }
             Rvalue::Cast(kind, a, to) => self.cast(dst, *kind, a, *to),
@@ -561,7 +559,68 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(())
     }
 
-    fn binop(
+    /// `op` on the scalar `x` of type `at`.
+    fn unop_value(&mut self, op: UnOp, at: Ty, x: BasicValueEnum<'ctx>) -> R<BasicValueEnum<'ctx>> {
+        // `-MIN` overflows (and negating a non-zero unsigned value
+        // leaves its range): C8 traps it, as the interpreter does.
+        if let (UnOp::Neg, TyKind::Int(it)) = (op, self.tys.kind(at)) {
+            let x = x.into_int_value();
+            let signed = matches!(
+                it,
+                IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64 | IntTy::I128 | IntTy::Isize
+            );
+            let bad = if signed {
+                let w = x.get_type().get_bit_width();
+                let min = x
+                    .get_type()
+                    .const_int(1, false)
+                    .const_shl(x.get_type().const_int(u64::from(w - 1), false));
+                self.builder.build_int_compare(IntPredicate::EQ, x, min, "")
+            } else {
+                self.builder
+                    .build_int_compare(IntPredicate::NE, x, x.get_type().const_zero(), "")
+            }
+            .map_err(e)?;
+            let ok = self.builder.build_not(bad, "").map_err(e)?;
+            self.abort_unless(ok, "integer overflow")?;
+        }
+        let b = &self.builder;
+        let v: BasicValueEnum = match (op, self.tys.kind(at)) {
+            (UnOp::Not, TyKind::Bool) => b
+                .build_xor(
+                    x.into_int_value(),
+                    self.llcx.i8_type().const_int(1, false),
+                    "",
+                )
+                .map_err(e)?
+                .into(),
+            (UnOp::Not, _) => b.build_not(x.into_int_value(), "").map_err(e)?.into(),
+            (UnOp::Neg, TyKind::Float(FloatTy::F16 | FloatTy::BF16)) => b
+                .build_xor(
+                    x.into_int_value(),
+                    self.llcx.i16_type().const_int(0x8000, false),
+                    "",
+                )
+                .map_err(e)?
+                .into(),
+            (UnOp::Neg, TyKind::Float(_)) => b
+                .build_float_neg(x.into_float_value(), "")
+                .map_err(e)?
+                .into(),
+            (UnOp::Neg, _) => b.build_int_neg(x.into_int_value(), "").map_err(e)?.into(),
+        };
+        Ok(v)
+    }
+
+    /// The lane type and count of a lane vector type.
+    pub(super) fn vector_of(&self, t: Ty) -> Option<(Ty, u64)> {
+        match self.tys.kind(t) {
+            TyKind::Array(et, n) if self.tys.is_vector(t) => Some((et, n)),
+            _ => None,
+        }
+    }
+
+    pub(super) fn binop(
         &self,
         op: BinOp,
         ty: Ty,
@@ -651,7 +710,7 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// `x op y` and whether it overflowed `ty`.
-    fn checked(
+    pub(super) fn checked(
         &self,
         op: BinOp,
         ty: Ty,
