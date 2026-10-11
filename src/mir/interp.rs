@@ -578,6 +578,9 @@ fn run_with(
         arenas: 0,
         channels: Vec::new(),
         files: Vec::new(),
+        pools: Vec::new(),
+        semaphores: Vec::new(),
+        limiters: Vec::new(),
         statics: Vec::new(),
         caps: Default::default(),
         rand: std::time::SystemTime::now()
@@ -797,6 +800,13 @@ struct Interp<'a> {
     channels: Vec<Chan>,
     /// The open files behind `File` values, by id - 1; `None` once closed.
     files: Vec<Option<std::fs::File>>,
+    /// The `Pool[T]`s, by handle - 1. A pool lives until exit, as legacy's
+    /// does: `Pool` values are handles, and copies share it.
+    pools: Vec<PoolEntry>,
+    /// The `Semaphore`s, by handle - 1: permits available and the budget.
+    semaphores: Vec<(i128, i128)>,
+    /// The `RateLimiter`s, by handle - 1.
+    limiters: Vec<Limiter>,
     /// The values of the program's statics, in declaration order: each
     /// initializer runs before `main`, and its value lives until exit.
     statics: Vec<Value>,
@@ -1371,6 +1381,11 @@ impl<'a> Interp<'a> {
             }
             ("OnceLock" | "OnceCell", _) => self.once_method(name, method, args, arg_tys, ret),
             ("Arena", _) => self.arena_method(name, method, args, arg_tys),
+            ("Pool" | "PooledConnection", _) => {
+                self.pool_method(name, base, method, args, arg_tys, ret)
+            }
+            ("Semaphore", _) => self.semaphore_method(name, method, args, ret),
+            ("RateLimiter", _) => self.limiter_method(name, method, args, arg_tys),
             ("Channel" | "Sender" | "Receiver" | "BoundedChannel", _) => {
                 self.channel_method(name, base, method, args, arg_tys, ret)
             }
@@ -2761,6 +2776,414 @@ impl<'a> Interp<'a> {
     /// `Arena[T]`: the struct holds the arena's id, then its items in push
     /// order (`Agg([id, item0, item1, ...])`). A handle is the arena's id
     /// and the item's index; a checkpoint the id and the length.
+    /// `Semaphore` (std backpressure). One task runs at a time here, so an
+    /// exhausted semaphore times out at once, as in legacy's interpreter;
+    /// `release` gives a permit back, never past the budget. A hand-built
+    /// handle that names no semaphore fails closed.
+    fn semaphore_method(
+        &mut self,
+        name: &str,
+        method: &str,
+        args: Vec<Value>,
+        ret: Ty,
+    ) -> R<Value> {
+        if method == "new" {
+            let [Value::Int(n)] = args.as_slice() else {
+                return err(format!("{name} takes a permit count"));
+            };
+            let n = (*n).max(0);
+            self.semaphores.push((n, n));
+            return Ok(Value::Agg(vec![Value::Int(self.semaphores.len() as i128)]));
+        }
+        if method == "drop" {
+            return Ok(Value::Unit);
+        }
+        let id = self.handle_field(args.first(), name)?;
+        let entry = usize::try_from(id - 1)
+            .ok()
+            .and_then(|i| self.semaphores.get_mut(i));
+        match method {
+            "acquire" => match entry {
+                Some((avail, _)) if *avail > 0 => {
+                    *avail -= 1;
+                    self.variant_named(ret, None, "Ok", vec![Value::Unit])
+                }
+                _ => {
+                    let e = self.variant_named(ret, Some("Err"), "Timeout", vec![])?;
+                    self.variant_named(ret, None, "Err", vec![e])
+                }
+            },
+            "release" => {
+                if let Some((avail, max)) = entry {
+                    if *avail < *max {
+                        *avail += 1;
+                    }
+                }
+                Ok(Value::Unit)
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// `RateLimiter` (std backpressure, a token bucket per key), as legacy
+    /// runs it: a fresh key's bucket starts full, refills against the
+    /// monotonic clock on each call, and `try_acquire` takes a token when
+    /// one is there. A hand-built handle that names no limiter fails closed.
+    fn limiter_method(
+        &mut self,
+        name: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+    ) -> R<Value> {
+        match (method, args.as_slice()) {
+            ("new_token_bucket", [Value::Int(rate), Value::Int(cap)]) => {
+                self.limiters.push(Limiter {
+                    rate: (*rate).max(0) as f64,
+                    capacity: (*cap).max(0) as f64,
+                    buckets: Default::default(),
+                });
+                Ok(Value::Agg(vec![Value::Int(self.limiters.len() as i128)]))
+            }
+            ("drop", _) => Ok(Value::Unit),
+            ("try_acquire", [recv, key]) => {
+                let id = self.handle_field(Some(recv), name)?;
+                let k = self.str_ref(key)?.to_string();
+                // An owned key is consumed here.
+                if let (Value::Box(_), Some(&t)) = (key, arg_tys.get(1)) {
+                    self.drop_value(key.clone(), t)?;
+                }
+                let Some(l) = usize::try_from(id - 1)
+                    .ok()
+                    .and_then(|i| self.limiters.get_mut(i))
+                else {
+                    return Ok(Value::Bool(false));
+                };
+                let now = std::time::Instant::now();
+                let (rate, cap) = (l.rate, l.capacity);
+                let (tokens, last) = l.buckets.entry(k).or_insert((cap, now));
+                let elapsed = now.saturating_duration_since(*last).as_secs_f64();
+                *tokens = (*tokens + elapsed * rate).min(cap);
+                *last = now;
+                let granted = *tokens >= 1.0;
+                if granted {
+                    *tokens -= 1.0;
+                }
+                Ok(Value::Bool(granted))
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// The `handle_id` of a one-field handle struct reached through a
+    /// (possibly doubly) referenced receiver.
+    fn handle_field(&mut self, recv: Option<&Value>, name: &str) -> R<i128> {
+        let Some(recv) = recv else {
+            return err(format!("{name} needs its receiver"));
+        };
+        let at = self.cell_struct(recv, name)?;
+        match self.slot_ref(&at)? {
+            Value::Agg(fs) => match fs.first() {
+                Some(Value::Int(id)) => Ok(*id),
+                _ => err(format!("{name} of a handle with no id")),
+            },
+            other => err(format!("{name} of {other:?}")),
+        }
+    }
+
+    /// `Pool[T]` (std connection pool), as legacy's sequential interpreter
+    /// runs it: `acquire` hands back an idle connection (after its health
+    /// check, which evicts a failing one) or mints one with the factory
+    /// while under `max_connections`, and otherwise times out at once. A
+    /// `PooledConnection` goes back to its pool on `release` or when it
+    /// drops; one from another pool is dropped instead.
+    fn pool_method(
+        &mut self,
+        name: &str,
+        base: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
+        let mut args = args.into_iter();
+        if base == "PooledConnection" {
+            if method != "drop" {
+                return err(format!("call of unknown function {name}"));
+            }
+            // The connection's value goes back to its pool, or drops.
+            let Some(Value::Ref(at)) = args.next() else {
+                return err(format!("{name} needs its receiver"));
+            };
+            let (handle, conn) = match self.slot_ref(&at)? {
+                Value::Agg(fs) => match fs.as_slice() {
+                    [Value::Int(h), Value::Int(c), _] => (*h, *c),
+                    _ => return err(format!("{name} of a malformed connection")),
+                },
+                other => return err(format!("{name} of {other:?}")),
+            };
+            let val = std::mem::replace(self.slot_mut(&at.child(2))?, Value::Uninit);
+            if conn == RELEASED {
+                // Its value went back to the pool on `release`.
+                std::mem::forget(val);
+                return Ok(Value::Unit);
+            }
+            return self.return_conn(handle, conn, val, name);
+        }
+        match method {
+            "new" => {
+                let (Some(create), Some(Value::Int(max))) = (args.next(), args.next()) else {
+                    return err(format!("{name} takes a factory and two bounds"));
+                };
+                let elem = self
+                    .tys
+                    .tcx()
+                    .adt_of(ret)
+                    .and_then(|(_, a)| a.first().copied())
+                    .ok_or_else(|| Stop::Error(format!("{name} needs its connection type")))?;
+                // A closure is held erased, so every call goes one way.
+                let create = match arg_tys.first() {
+                    Some(&t) => self.erase(create, t)?,
+                    None => create,
+                };
+                let create = self.alloc_box("Fn", create);
+                self.pools.push(PoolEntry {
+                    elem,
+                    create,
+                    check: None,
+                    slots: Vec::new(),
+                    active: 0,
+                    max,
+                    out: Default::default(),
+                    next_conn: 1,
+                });
+                Ok(Value::Agg(vec![Value::Int(self.pools.len() as i128)]))
+            }
+            "drop" => Ok(Value::Unit),
+            "with_health_check" => {
+                let recv = args.next();
+                let id = self.handle_field(recv.as_ref(), name)?;
+                let Some(check) = args.next() else {
+                    return err(format!("{name} takes a check"));
+                };
+                let check = match arg_tys.get(1) {
+                    Some(&t) => self.erase(check, t)?,
+                    None => check,
+                };
+                let check = self.alloc_box("Fn", check);
+                match self.pool(id) {
+                    Some(p) => {
+                        if let Some(Value::Box(old)) = p.check.replace(check) {
+                            self.free_slot(old);
+                        }
+                    }
+                    None => {
+                        if let Value::Box(a) = check {
+                            self.free_slot(a);
+                        }
+                    }
+                }
+                Ok(Value::Agg(vec![Value::Int(id)]))
+            }
+            "acquire" => {
+                let recv = args.next();
+                let id = self.handle_field(recv.as_ref(), name)?;
+                let fail = |me: &Self, why: &str| -> R<Value> {
+                    let e = me.variant_named(ret, Some("Err"), why, vec![])?;
+                    me.variant_named(ret, None, "Err", vec![e])
+                };
+                let elem = match self.pool(id) {
+                    Some(p) => p.elem,
+                    None => return fail(self, "PoolClosed"),
+                };
+                // Idle connections first, each through the health check.
+                loop {
+                    let Some(p) = self.pool(id) else {
+                        return fail(self, "PoolClosed");
+                    };
+                    let Some(val) = p.slots.pop() else {
+                        break;
+                    };
+                    match p.check.clone() {
+                        None => return self.check_out(id, val, ret),
+                        Some(Value::Box(f)) => {
+                            let (healthy, val) = self.pool_check(f, val, elem, name)?;
+                            if healthy {
+                                return self.check_out(id, val, ret);
+                            }
+                            // A failing connection is evicted, freeing its
+                            // place for a fresh one.
+                            self.drop_value(val, elem)?;
+                            if let Some(p) = self.pool(id) {
+                                p.active = (p.active - 1).max(0);
+                            }
+                        }
+                        Some(other) => return err(format!("{name}: a check held as {other:?}")),
+                    }
+                }
+                let Some(p) = self.pool(id) else {
+                    return fail(self, "PoolClosed");
+                };
+                if p.active >= p.max {
+                    return fail(self, "Timeout");
+                }
+                let Value::Box(f) = p.create.clone() else {
+                    return err(format!("{name}: a factory held as {:?}", p.create));
+                };
+                let minted = self.call_held(f, vec![], name)?;
+                match self.pool(id) {
+                    Some(p) => p.active += 1,
+                    None => {
+                        self.drop_value(minted, elem)?;
+                        return fail(self, "PoolClosed");
+                    }
+                }
+                self.check_out(id, minted, ret)
+            }
+            "release" => {
+                let recv = args.next();
+                let id = self.handle_field(recv.as_ref(), name)?;
+                // The connection is consumed. One lent by reference keeps its
+                // place, which its owner still drops: its value is moved to
+                // the pool and the shell marked `RELEASED`, whose drop then
+                // frees nothing.
+                let fs = match args.next() {
+                    Some(Value::Agg(fs)) => fs,
+                    Some(Value::Ref(at)) => {
+                        let slot = self.slot_mut(&at)?;
+                        let Value::Agg(fs) = slot else {
+                            return err(format!("{name} of {slot:?}"));
+                        };
+                        if matches!(fs.get(1), Some(Value::Int(RELEASED))) {
+                            return Ok(Value::Unit);
+                        }
+                        let moved = fs.clone();
+                        fs[1] = Value::Int(RELEASED);
+                        moved
+                    }
+                    _ => return err(format!("{name} takes a connection")),
+                };
+                let [Value::Int(h), Value::Int(c), val] = <[Value; 3]>::try_from(fs)
+                    .map_err(|_| Stop::Error(format!("{name} of a malformed connection")))?
+                else {
+                    return err(format!("{name} of a malformed connection"));
+                };
+                // A connection from another pool is not this pool's to keep.
+                let h = if h == id { h } else { 0 };
+                self.return_conn(h, c, val, name)?;
+                Ok(Value::Unit)
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    fn pool(&mut self, id: i128) -> Option<&mut PoolEntry> {
+        usize::try_from(id - 1)
+            .ok()
+            .and_then(|i| self.pools.get_mut(i))
+    }
+
+    /// `Ok` of a `PooledConnection` for `val`, recorded as checked out.
+    fn check_out(&mut self, id: i128, val: Value, ret: Ty) -> R<Value> {
+        let p = self.pool(id).expect("checked by the caller");
+        let conn = p.next_conn;
+        p.next_conn += 1;
+        p.out.insert(conn);
+        let c = Value::Agg(vec![Value::Int(id), Value::Int(conn), val]);
+        self.variant_named(ret, None, "Ok", vec![c])
+    }
+
+    /// Puts a checked-out connection's value back in its pool; one that is
+    /// not checked out there (another pool's, or returned already) drops.
+    fn return_conn(&mut self, handle: i128, conn: i128, val: Value, name: &str) -> R<Value> {
+        let elem = match self.pool(handle) {
+            Some(p) => {
+                if p.out.remove(&conn) {
+                    p.slots.push(val);
+                    return Ok(Value::Unit);
+                }
+                p.elem
+            }
+            // A value of a type with nothing to free needs no type to drop.
+            None if val.is_plain() => return Ok(Value::Unit),
+            None => return err(format!("{name}: a connection from no pool")),
+        };
+        self.drop_value(val, elem)?;
+        Ok(Value::Unit)
+    }
+
+    /// Calls the function value held in box `f` through a reference, so
+    /// it stays for the next call.
+    fn call_held(&mut self, f: AllocId, args: Vec<Value>, name: &str) -> R<Value> {
+        match self.slot_ref(&Addr {
+            root: Root::Heap(f),
+            path: Path::new(),
+        })? {
+            Value::Fn(inst) => {
+                let callee = inst.name.clone();
+                self.call(&callee, args)
+            }
+            Value::Erased { .. } => self.call_erased(
+                Value::Ref(Addr {
+                    root: Root::Heap(f),
+                    path: Path::new(),
+                }),
+                args,
+            ),
+            other => err(format!("{name}: cannot call {other:?}")),
+        }
+    }
+
+    /// Runs a pool's health check on an idle connection's value, lent to
+    /// the check by reference or copied to it, and hands the value back.
+    fn pool_check(&mut self, f: AllocId, val: Value, elem: Ty, name: &str) -> R<(bool, Value)> {
+        let by_ref = {
+            let program: &'a Program = self.program;
+            let body = match self.slot_ref(&Addr {
+                root: Root::Heap(f),
+                path: Path::new(),
+            })? {
+                Value::Fn(inst) => program.bodies.get(&inst.name),
+                Value::Erased { body, .. } => program.bodies.get(body),
+                _ => None,
+            }
+            .ok_or_else(|| Stop::Error(format!("{name}: no body for the health check")))?;
+            // The last parameter is the connection; an environment comes
+            // first.
+            let p = body
+                .args()
+                .last()
+                .map(|l| body.local(l).ty)
+                .ok_or_else(|| Stop::Error(format!("{name}: a check with no parameter")))?;
+            self.tys.pointee(p).is_some()
+        };
+        let (verdict, val) = if by_ref {
+            let slot = self.alloc(HeapObj {
+                count: 1,
+                weak: 0,
+                value: val,
+            });
+            let r = self.call_held(
+                f,
+                vec![Value::Ref(Addr {
+                    root: Root::Heap(slot),
+                    path: Path::new(),
+                })],
+                name,
+            );
+            let val = std::mem::replace(&mut self.live(slot)?.value, Value::Uninit);
+            self.free_slot(slot);
+            (r?, val)
+        } else if val.is_plain() || !self.needs_drop(elem) {
+            (self.call_held(f, vec![val.clone()], name)?, val)
+        } else {
+            return err(format!(
+                "{name}: a health check that takes the connection by value"
+            ));
+        };
+        Ok((matches!(verdict, Value::Bool(true) | Value::Unit), val))
+    }
+
     fn arena_method(
         &mut self,
         name: &str,
@@ -8231,6 +8654,11 @@ impl<'a> Interp<'a> {
             .statics
             .iter()
             .chain(self.tracing_sink.iter().map(|(v, _)| v))
+            .chain(self.pools.iter().flat_map(|p| {
+                std::iter::once(&p.create)
+                    .chain(p.check.iter())
+                    .chain(p.slots.iter())
+            }))
             .collect();
         while let Some(v) = todo.pop() {
             match v {
@@ -8423,6 +8851,34 @@ const VEC_MORE_METHODS: &[&str] = &[
 ];
 
 /// A closure or function item held by a library method that calls it.
+/// One `Pool[T]`: its connection factory and health check (each a box
+/// holding the function value), the idle connections, and the ids of the
+/// connections checked out.
+/// One `RateLimiter`: a token bucket per key, each holding up to
+/// `capacity` tokens and refilled at `rate` a second, with the time of its
+/// last refill.
+struct Limiter {
+    rate: f64,
+    capacity: f64,
+    buckets: rustc_hash::FxHashMap<String, (f64, std::time::Instant)>,
+}
+
+/// The `conn_id` of a `PooledConnection` whose value `release` has moved
+/// back to its pool.
+const RELEASED: i128 = -1;
+
+struct PoolEntry {
+    /// The connection type `T`.
+    elem: Ty,
+    create: Value,
+    check: Option<Value>,
+    slots: Vec<Value>,
+    active: i128,
+    max: i128,
+    out: rustc_hash::FxHashSet<i128>,
+    next_conn: i128,
+}
+
 struct Callee<'a> {
     body: &'a Body,
     /// The heap slot holding a closure's environment.
