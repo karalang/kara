@@ -3,12 +3,12 @@ impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
 fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] } }
 shared enum Sh { A(R), B }
 impl Sh {
-    fn read(self) -> i64 { match self { Sh.A(r) => { return r.id; } Sh.B => { return 0; } } }
-    fn none(self) -> i64 { return 5; }
+    fn read(own self) -> i64 { match self { Sh.A(r) => { return r.id; } Sh.B => { return 0; } } }
+    fn none(own self) -> i64 { return 5; }
 }
 shared enum Sd { A(R), B }
 impl Drop for Sd { fn drop(mut ref self) { println("  dSd") } }
-impl Sd { fn read(self) -> i64 { match self { Sd.A(r) => { return r.id; } Sd.B => { return 0; } } } }
+impl Sd { fn read(own self) -> i64 { match self { Sd.A(r) => { return r.id; } Sd.B => { return 0; } } } }
 fn rd(s: Sh) -> i64 { match s { Sh.A(r) => { return r.id; } Sh.B => { return 0; } } }
 fn main() {
     println("recv");  { let s: Sh = Sh.A(mk(1)); println(f"  x{s.read()}") }

@@ -17,7 +17,7 @@ fn gn(h: ref Hn) -> i64 { match h { Hn.N(o) => match o { Some(n) => n.v, None =>
 fn outs(h: own Hs) -> String { match h { Hs.P(Some(s)) => s, _ => "none" } }
 fn outo(h: own Hs) -> Option[String] { match h { Hs.P(o) => o, Hs.Q => None } }
 fn nest(h: own Hs) -> i64 { match h { Hs.P(o) => match o { Some(s) => s.len(), None => 0 }, Hs.Q => -1 } }
-fn keepo(o: Option[String]) -> i64 { match o { Some(s) => s.len(), None => 0 } }
+fn keepo(o: own Option[String]) -> i64 { match o { Some(s) => s.len(), None => 0 } }
 fn pass(h: own Hs) -> i64 { match h { Hs.P(o) => keepo(o), Hs.Q => -1 } }
 fn back(h: own Hs) -> Hs { h }
 enum Hk { P { o: Option[String], k: i64 }, Q }

@@ -63,7 +63,7 @@ fn weight_sum_bfs(items: own Vec[Nested]) -> i64 {
 
 // ---- nested_weight_sum_stack.kara ----
 
-fn weight_sum_stack(items: Vec[Nested]) -> i64 {
+fn weight_sum_stack(items: own Vec[Nested]) -> i64 {
     let mut stack: Vec[(Nested, i64)] = Vec.new();
     for item in items.into_iter() {
         stack.push((item, 1));

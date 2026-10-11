@@ -7,7 +7,7 @@ fn rebind(g: own G[Array[String, 2]]) -> i64 { match g { G.Y(x) => { let y = x; 
 fn typed(g: own G[Array[String, 2]]) -> i64 { match g { G.Y(x) => { let y: Array[String, 2] = x; return y[0].len() } G.N => { return 0 } } }
 fn chain(g: own G[Array[String, 2]]) -> i64 { match g { G.Y(x) => { let y = x; let z = y; return z[1].len() } G.N => { return 0 } } }
 fn noret(g: own G[Array[String, 2]]) -> i64 { match g { G.Y(x) => { let y = x; println(f"  {y[0].len()}") } G.N => {} }; return 9 }
-fn iflet(g: G[Array[String, 2]]) -> i64 { if let G.Y(x) = g { let y = x; return y[0].len() } return 0 }
+fn iflet(g: own G[Array[String, 2]]) -> i64 { if let G.Y(x) = g { let y = x; return y[0].len() } return 0 }
 fn whilelet(g: own G[Array[String, 2]]) -> i64 { let mut k = 0; let mut h = g; while let G.Y(x) = h { let y = x; k = y[0].len(); h = G.N; } return k }
 fn local() -> i64 { let g = G.Y(mka(f"ab")); match g { G.Y(x) => { let y = x; return y[0].len() } G.N => { return 0 } } }
 fn vecs(g: own G[Array[Vec[i64], 2]]) -> i64 { match g { G.Y(x) => { let y = x; return y[0].len() } G.N => { return 0 } } }
