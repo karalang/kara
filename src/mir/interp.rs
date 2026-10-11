@@ -4853,6 +4853,8 @@ impl<'a> Interp<'a> {
                 self.option(ret, c)
             }
             "contains" => Ok(Value::Bool(s.contains(text(1)?))),
+            // A view of the string's text (core semantics §5.2).
+            "as_str" => Ok(Value::Str(s.to_string())),
             "starts_with" => Ok(Value::Bool(s.starts_with(text(1)?))),
             "ends_with" => Ok(Value::Bool(s.ends_with(text(1)?))),
             "trim" => {
@@ -8280,6 +8282,7 @@ impl<'a> Interp<'a> {
 /// `String` methods [`Interp::string_text_method`] implements.
 const STRING_TEXT_METHODS: &[&str] = &[
     "find",
+    "as_str",
     "cmp",
     "char_at",
     "contains",

@@ -4032,6 +4032,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         // A `ref` to a `Copy` value or handle in a value slot is read
         // (core semantics §5.10, §6.1).
         let et = self.expr_ty(e)?;
+        // An owned place stored where a `ref` (or a `Str` view) is wanted
+        // is lent, as it would be to a parameter.
+        if matches!(
+            self.tys().tcx().kind(want),
+            HK::Ref(_) | HK::MutRef(_) | HK::StaticStr
+        ) && !matches!(self.tys().tcx().kind(et), HK::Ref(_) | HK::MutRef(_))
+            && et != want
+        {
+            return self.arg_operand(e, want);
+        }
         if !matches!(self.tys().tcx().kind(want), HK::Ref(_) | HK::MutRef(_))
             && matches!(self.tys().tcx().kind(et), HK::Ref(_) | HK::MutRef(_))
         {
@@ -9830,6 +9840,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                 });
             }
         }
+        // A `String` passed for a `Str` parameter is viewed, not moved
+        // (core semantics §5.2).
+        if matches!(self.tys().tcx().kind(pt), HK::StaticStr)
+            && matches!(self.strip_ty(at), HK::Str)
+        {
+            let recv = self.recv_ref(a, false)?;
+            let v = self.temp(pt);
+            self.call_native("String.as_str", vec![recv], Place::local(v));
+            return Ok(Operand::Move(Place::local(v)));
+        }
         let arg_is_ref = matches!(self.tys().tcx().kind(at), HK::Ref(_) | HK::MutRef(_));
         // A `mut ref` place passed on is reborrowed, `&mut (*r)` (or `&(*r)`
         // for a `ref` parameter), so the caller keeps its reference.
@@ -9855,6 +9875,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.assign(r, Rvalue::Ref(kind, p));
                 Ok(Operand::Move(Place::local(r)))
             }
+            // A tuple literal handed to a tuple of wider numbers is built
+            // at the parameter's element types.
+            None if matches!(a.kind, ExprKind::Tuple(_)) && at != pt => self.operand_at(a, pt),
             None => {
                 let op = self.owned_operand(a, pt)?;
                 if self.erases(&op, pt) {
@@ -11623,7 +11646,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.lcx.fns.get(&d).is_some_and(|item| {
             item.f.params.get(i).is_some_and(|p| {
                 self.lcx.node_types.get(&p.pattern.id).is_some_and(|&t| {
-                    // A slice parameter views its argument.
+                    // A slice parameter views its argument, and under D5 a
+                    // bare one borrows it.
+                    let t = self.param_mode_ty(p, t);
                     !matches!(
                         self.tys().tcx().kind(t),
                         HK::Ref(_) | HK::MutRef(_) | HK::Slice { .. }
@@ -11874,6 +11899,18 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.assigned_caps.borrow_mut().clear();
         let moved = self.moved_captures(body, &captured);
         let assigned = std::mem::take(&mut *self.assigned_caps.borrow_mut());
+        // The places a task takes by move because they drop before its
+        // group (core semantics §9.5), as the checker found them.
+        let task_moved: Vec<String> = if task {
+            self.lcx
+                .tc
+                .core_task_moved_captures
+                .get(&SpanKey::from_span(&e.span))
+                .map(|v| v.iter().map(|(n, _)| n.clone()).collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         for sym in captured {
             let place = match self.locals.get(&sym) {
                 Some(&l) => Place::local(l),
@@ -11894,11 +11931,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 None => None,
             };
             let explicit = declared.is_some();
+            // The legacy analysis reads a bare parameter as owned, so under
+            // D5 its by-move answer is replaced by the moves found here.
             let mode = declared.or_else(|| {
                 legacy
                     .iter()
                     .find(|(n, _)| *n == name)
                     .map(|(_, m)| m.clone())
+                    .filter(|m| !(d5_params() && *m == OwnershipMode::Own))
             });
             // A read-only capture of a `Copy` place is still a `ref`
             // capture, so writing the place while the closure is live is
@@ -11908,6 +11948,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             writes |= mode == Some(OwnershipMode::MutRef);
             let cm = match mode {
                 _ if escapes => CapMode::Value,
+                _ if !explicit && task_moved.contains(&name) => CapMode::Value,
                 Some(OwnershipMode::MutRef) => CapMode::Mut,
                 // A capture the body assigns to is lent by `mut ref` (§9.1).
                 _ if !explicit && assigned.contains(&sym) && !moved.contains(&sym) => CapMode::Mut,
@@ -11916,7 +11957,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 _ if !explicit && !task && self.is_copy(t) => CapMode::Ref,
                 Some(OwnershipMode::Own) => CapMode::Value,
                 _ if self.is_copy(t) => CapMode::Value,
-                None | Some(OwnershipMode::Ref) if (once || moved.contains(&sym)) && !explicit => {
+                // Under D5 a capture is moved place by place, as the body
+                // moves it (§9.1). A task still takes a once-callable
+                // closure's captures by move until the checker's table of
+                // task moves reads bare parameters as borrowed.
+                None | Some(OwnershipMode::Ref)
+                    if ((once && (task || !d5_params())) || moved.contains(&sym)) && !explicit =>
+                {
                     CapMode::Value
                 }
                 _ => CapMode::Ref,
@@ -12669,9 +12716,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                         method,
                         "and_modify" | "or_insert" | "or_insert_with" | "or_default"
                     )
+                    || (self.tys().display(base).starts_with("TaskHandle[") && method == "join")
                 {
                     // An `Entry` is consumed by each step of its chain
-                    // (docs/library/collections.md).
+                    // (docs/library/collections.md), and `join` consumes its
+                    // handle.
                     PendingRecv::Ready(self.expr_operand(object)?)
                 } else {
                     // `Atomic`, `Mutex` and the library cells write through
@@ -15792,6 +15841,35 @@ fn main() {
         assert_eq!(run_source(src), Ok(("ok\n".to_string(), Some(101))));
     }
 
+    /// An owned place stored in a `ref` field is lent, not moved, and a
+    /// tuple literal handed to a tuple of wider integers is built at the
+    /// parameter's widths.
+    #[test]
+    fn ref_fields_borrow_and_tuple_args_widen() {
+        let src = r#"
+struct Src { source: ref String, position: i64 }
+fn take(t: (i64, i64)) -> i64 { t.0 + t.1 }
+fn main() {
+    let s2 = String.from("second");
+    let o = Src { source: s2, position: 1 };
+    let b: u8 = 200;
+    let d: u32 = 70000;
+    println(f"{o.source.len()} {take((b, d))} {s2}");
+}
+"#;
+        let lowered = build_source(src).unwrap_or_else(|e| panic!("{e}"));
+        let main = crate::mir::pretty::pretty_body(&lowered.program.bodies["main"], &lowered.tys);
+        assert!(
+            main.contains("_3 = &_1;") && main.contains("Src { move _3"),
+            "{main}"
+        );
+        assert!(main.contains("as i64 (IntToInt)"), "{main}");
+        assert_eq!(
+            run_source(src),
+            Ok(("6 70200 second\n".to_string(), Some(0)))
+        );
+    }
+
     #[test]
     fn dbg_hands_its_value_back_after_the_library_prints_it() {
         let src = r#"
@@ -16027,6 +16105,36 @@ fn main() {
 }
 "#;
         assert_eq!(run_source(src), Ok(("3 0 5 0 11\n".to_string(), Some(0))));
+    }
+
+    /// A `String` passed for a `Str` parameter is viewed, so the caller
+    /// keeps it (core semantics §5.2); `as_str` makes the same view, and a
+    /// task's handle is consumed by `join`.
+    #[test]
+    fn str_params_view_their_string_arguments() {
+        let src = r#"
+fn n(s: Str) -> i64 { s.len() }
+fn m(s: String) -> i64 { n(s) + n(s.as_str()) }
+fn first_word(s: Str) -> Str { match s.find(" ") { Some(i) => s[0..i], None => s } }
+struct P { name: String }
+fn twice(k: i64) -> i64 { k * 2 }
+fn main() {
+    let s = "hello".to_string();
+    let p = P { name: "xy".to_string() };
+    let v: Vec[String] = ["q".to_string()];
+    let line = "ab cd".to_string();
+    println(f"{n("abc".to_string())} {m(s)} {n(p.name)} {p.name} {n(v[0])} {n("lit")} {first_word(line)} {line}");
+    let g = TaskGroup.new();
+    let hs: Vec[TaskHandle[i64]] = [g.spawn(|| twice(1)), g.spawn(|| twice(2))];
+    let mut t = 0;
+    for h in hs.into_iter() { t = t + h.join(); }
+    println(t);
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("3 10 2 xy 1 3 ab ab cd\n6\n".to_string(), Some(0)))
+        );
     }
 
     #[test]
