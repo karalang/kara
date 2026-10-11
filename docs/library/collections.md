@@ -212,6 +212,19 @@ A B-tree set, `T: Ord`. Every operation is O(log n), and iteration is in ascendi
 | `intersection` | `fn intersection(self, other: SortedSet[T]) -> SortedSet[T]` | |
 | `difference` | `fn difference(self, other: SortedSet[T]) -> SortedSet[T]` | |
 
+## Lookup by view
+
+On a `Map`, `Set`, `SortedMap` or `SortedSet` whose key is a `String` or a `Vec[T]`, the lookup methods take the key's view: `Str` for a `String` key, `Slice[T]` for a `Vec[T]` key. The lookup methods are `get`, `get_mut`, `contains`, `contains_key` and `remove`. A lookup with a slice of other text then allocates nothing:
+
+```kara
+let n = keywords.get(src[start..end]) ?? 0     // keywords: Map[String, i64]
+if seen.contains(cand) { ... }                  // seen: Set[String], cand: Str
+```
+
+A `String` or `Vec[T]` argument still works, borrowed, because a `String` passes as `Str` and a `Vec[T]` as `Slice[T]` at a call boundary ([design.md Strings](../design.md#strings)). Every other key type is looked up by `K`, as the tables above show. Methods that store a key (`insert`, `entry`) still take an owned `K`, and `range`, `floor` and `ceiling` take `K`.
+
+This works because a view and its owner hash, compare and order identically: `s.as_str()` and `s` give the same `hash`, `==` and `cmp` results against any other key, and so do `v.as_slice()` and `v`. There is no user-facing trait for this (Rust's `Borrow`). A user key type is looked up by the key type itself; see [deferred.md](../deferred.md).
+
 ## `VecDeque[T]`
 
 A ring buffer with O(1) push and pop at both ends.

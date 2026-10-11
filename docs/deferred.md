@@ -7892,6 +7892,14 @@ Effect: `reads(Env)` on `.parse()` (consumes `env.args()`). API surface inspired
 
 **Cross-reference:** [library/collections.md](library/collections.md) (unordered `Map`/`Set` semantics). Deterministic `Display` output is a real ergonomic gap that `OrderedMap` would close.
 
+### Lookup by a Borrowed Form for User Key Types (`Borrow`)
+
+**Decision:** v1 lets a `String`- or `Vec[T]`-keyed `Map`/`Set`/`SortedMap`/`SortedSet` be looked up by `Str` or `Slice[T]` ([library/collections.md § Lookup by view](library/collections.md#lookup-by-view); Gowtham, 2026-10-11). A user key type is still looked up by the key type itself. A trait that lets a user type name its own borrowed lookup form (Rust's `Borrow`, `HashMap<K, V>::get<Q>(&Q) where K: Borrow<Q>`) is deferred.
+
+**Why deferred:** in practice nearly every allocating lookup comes from text and byte keys: tokenizers, routers, header maps, interners, protocol tables. The built-in owner/view pairs cover those cases. A general trait brings an obligation the type checker cannot verify, namely that `K` and `Q` agree on `Hash`, `Eq` and `Ord`. When they disagree, lookups silently miss. The trait should wait for a real user key type that needs it: a composite key looked up by a tuple of views, say, or an owned path looked up by a path view.
+
+**Why non-breaking:** a generic lookup parameter that defaults to the current form keeps every existing call valid.
+
 ### Terminal Control Library (`std.terminal` or `kara-terminal`)
 
 A stdlib module or external package providing cursor movement, screen clearing, and color control — the minimum needed to write CLIs, TUI dashboards, and game-of-life–style display loops without embedding raw ANSI escape sequences.

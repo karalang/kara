@@ -1405,6 +1405,8 @@ let owned: String = w.to_string();    // an owned copy, to keep beyond `line`
 
 Splitting methods (`split`, `lines` and the like) return lazy iterators of `Str` views into the original text ([library/strings.md](library/strings.md)). There is no copy-on-write and no hidden retention: the programmer always knows whether they hold a view or a copy.
 
+**A `Str` agrees with its `String`.** For any `String` `s`, `s.as_str()` and `s` give the same `hash`, the same `==` and the same `cmp` against any other text, and so do `v.as_slice()` and `v` for a `Vec[T]`. That is what lets a `String`-keyed `Map` or `Set` be looked up by a `Str` without allocating ([library/collections.md § Lookup by view](library/collections.md#lookup-by-view)).
+
 **`Str` is not `Slice[u8]`.** The UTF-8 guarantee is carried by the type, not by the element type, and a byte slice would lose it. `Slice[T]` covers every other sequence; `Str` covers text.
 
 **Characters.** `char` is one Unicode scalar value. `for c in s` iterates over characters, decoding UTF-8. Byte access is explicit: `s.bytes()` gives a `Slice[u8]`.
