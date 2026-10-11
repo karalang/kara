@@ -203,6 +203,7 @@ pub struct TypedHir {
 /// Build the typed HIR tables from a finished type check.
 pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
     let tcx = TyCtxt::new();
+    tcx.set_existential_witnesses(tc.impl_trait_witness_types.clone());
     let mut node_types = FxHashMap::default();
     let mut calls = FxHashMap::default();
     let mut errors = Vec::new();

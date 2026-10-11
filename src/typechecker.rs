@@ -2140,6 +2140,8 @@ pub struct TypeCheckResult {
     /// trait declaration, or a body that only ever re-returns another
     /// existential.
     pub impl_trait_return_witnesses: FxHashMap<SpanKey, TypeExpr>,
+    /// `impl_trait_return_witnesses` as checker types, for the typed HIR.
+    pub impl_trait_witness_types: FxHashMap<SpanKey, Type>,
     /// Sibling table to `pattern_binding_types` carrying the inner element
     /// `TypeExpr` for `Vec[T]` / `Slice[T]` pattern bindings only. Keyed by
     /// the same `SpanKey` (the pattern's span). Populated alongside the
@@ -3619,6 +3621,7 @@ impl<'a> TypeChecker<'a> {
             call_type_subs_mangle: self.call_type_subs_mangle,
             call_type_subs_te: self.call_type_subs_te,
             pattern_binding_types: self.pattern_binding_types,
+            impl_trait_witness_types: self.impl_trait_return_witnesses.clone(),
             impl_trait_return_witnesses: self
                 .impl_trait_return_witnesses
                 .iter()

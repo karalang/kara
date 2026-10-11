@@ -273,6 +273,9 @@ pub struct TyCtxt {
     tables: RefCell<Tables>,
     names: Interner,
     adts: RefCell<FxHashMap<DefId, std::rc::Rc<AdtDef>>>,
+    /// Each return-position `impl Trait`'s one concrete type, by the
+    /// existential's origin: the type a value of it lowers to.
+    witnesses: RefCell<FxHashMap<crate::resolver::SpanKey, Type>>,
 }
 
 impl Default for TyCtxt {
@@ -287,7 +290,13 @@ impl TyCtxt {
             tables: RefCell::new(Tables::default()),
             names: Interner::new(),
             adts: RefCell::new(FxHashMap::default()),
+            witnesses: RefCell::new(FxHashMap::default()),
         }
+    }
+
+    /// Record the concrete types return-position `impl Trait`s stand for.
+    pub fn set_existential_witnesses(&self, w: FxHashMap<crate::resolver::SpanKey, Type>) {
+        *self.witnesses.borrow_mut() = w;
     }
 
     /// Intern a type. Structurally equal kinds return the same handle.
@@ -996,7 +1005,13 @@ impl TyCtxt {
                     "generic associated type projection",
                 ))
             }
-            Type::Existential { .. } => return Err(LowerError::Unsupported("impl Trait")),
+            Type::Existential { origin, .. } => {
+                let w = self.witnesses.borrow().get(origin).cloned();
+                return match w {
+                    Some(w) => lower(&w),
+                    None => Err(LowerError::Unsupported("impl Trait")),
+                };
+            }
             // A refined value is its base's: the predicate is checked where
             // one is made, and the name only gates what checks.
             Type::Refinement { base, .. } => return lower(base),

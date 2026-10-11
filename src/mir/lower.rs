@@ -343,6 +343,10 @@ struct FnItem<'a> {
     /// checker's per-function tables (a trait default method copied into
     /// several impls has the same span in each).
     impl_span: Option<SpanKey>,
+    /// The checker's name for an impl for one instantiation of a generic
+    /// type (`impl Bx[String]`) that shares a method name with a sibling
+    /// impl, as `TypeCheckResult.method_impl_dispatch` names the winner.
+    impl_dispatch: Option<String>,
 }
 
 impl FnItem<'_> {
@@ -547,6 +551,7 @@ impl<'a> Lcx<'a> {
     /// `impl Option[T]` is `impl#1` when the stdlib already has one.
     fn index_functions(&mut self, program: &'a ast::Program) {
         let mut impl_ids = self.defs.module_impls.first().into_iter().flatten();
+        let dispatch_names = crate::impl_dispatch::collect_impl_dispatch_names(program);
         for item in &program.items {
             match item {
                 Item::Function(f) => {
@@ -567,6 +572,7 @@ impl<'a> Lcx<'a> {
                                 impl_generics: None,
                                 impl_arg_pos: None,
                                 impl_span: None,
+                                impl_dispatch: None,
                             },
                         );
                     }
@@ -617,6 +623,9 @@ impl<'a> Lcx<'a> {
                     if target.is_none() && prim.is_none() {
                         continue;
                     }
+                    let impl_dispatch = dispatch_names
+                        .get(&SpanKey::from_span(&b.target_type.span))
+                        .cloned();
                     let impl_path = self.defs.table.get(impl_id).path.segments.clone();
                     let impl_params = b.generic_params.as_ref().map_or(0, |g| g.params.len());
                     let impl_arg_pos = impl_arg_positions(b);
@@ -643,6 +652,7 @@ impl<'a> Lcx<'a> {
                                     impl_generics: b.generic_params.as_ref(),
                                     impl_arg_pos: impl_arg_pos.clone(),
                                     impl_span: Some(SpanKey::from_span(&b.span)),
+                                    impl_dispatch: impl_dispatch.clone(),
                                 },
                             );
                         }
@@ -761,10 +771,14 @@ impl<'a> Lcx<'a> {
             Some(FnItem {
                 impl_target: Some(t),
                 impl_params,
+                impl_dispatch,
                 ..
             }) => {
                 let (impl_args, own) = args.split_at((*impl_params).min(args.len()));
-                let mut s = self.def_name(*t);
+                // A method of one of several single-instantiation impls is
+                // named for its instantiation (`Bx[String].tag`), apart from
+                // its siblings'.
+                let mut s = impl_dispatch.clone().unwrap_or_else(|| self.def_name(*t));
                 if !impl_args.is_empty() {
                     s = format!("{s}[{}]", show(impl_args));
                 }
@@ -10932,6 +10946,33 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return self.collect_chars(e, text, dest);
             }
         }
+        // One of several impls for single instantiations of one type
+        // (`impl Bx[String]`, `impl Bx[i64]`): the one the checker resolved
+        // for this call site, by its dispatch name. The recorded callee names
+        // the first impl of that name whatever the receiver.
+        if let Some(seg) = self
+            .lcx
+            .tc
+            .method_impl_dispatch
+            .get(&(SpanKey::from_span(&e.span), method.to_string()))
+        {
+            let hit = self
+                .lcx
+                .fns
+                .iter()
+                .find(|(_, i)| i.f.name == method && i.impl_dispatch.as_ref() == Some(seg))
+                .map(|(&d, _)| d);
+            if let Some(d) = hit {
+                let inst_args = match self.lcx.calls.get(&e.id) {
+                    Some(rc) => {
+                        let substs = self.lcx.tys.tcx().list(rc.substs);
+                        self.instance_args(e.span, &substs)?
+                    }
+                    None => Vec::new(),
+                };
+                return self.user_method_call(e, object, d, inst_args, args, dest);
+            }
+        }
         let Some(rc) = self.lcx.calls.get(&e.id) else {
             if self.option_method(object, method, args, dest.clone())? {
                 return Ok(());
@@ -15864,6 +15905,47 @@ fn main() {
             run_source(src),
             Ok(("4 true false 3 12 0\n".to_string(), Some(0)))
         );
+    }
+
+    /// A function item handed to an adaptor solves the adaptor's result
+    /// type from its own, and a return-position `impl Trait` is its one
+    /// concrete type.
+    #[test]
+    fn fn_items_solve_bounds_and_impl_trait_is_its_witness() {
+        let src = r#"
+trait Named { fn label(ref self) -> String; }
+struct Node { name: String }
+impl Named for Node { fn label(ref self) -> String { self.name.clone() } }
+fn a_node(i: i64) -> impl Named { Node { name: f"n{i}" } }
+fn double(n: i64) -> i64 { n * 2 }
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    let a: Vec[i64] = v.iter().map(double).collect();
+    let held = a_node(4);
+    println(f"{a[2]} {held.label()} {a_node(5).label()}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("6 n4 n5\n".to_string(), Some(0))));
+    }
+
+    /// Impls for single instantiations of one generic type that share a
+    /// method name each get their own body, and a call reaches the one the
+    /// checker resolved for its receiver.
+    #[test]
+    fn colliding_concrete_impls_dispatch_by_instantiation() {
+        let src = r#"
+struct Bx[T] { v: T, n: i64 }
+impl Bx[String] { fn get(own self) -> String { self.v } fn tag(ref self) -> i64 { 1 } }
+impl Bx[Vec[i64]] { fn get(own self) -> Vec[i64] { self.v } fn tag(ref self) -> i64 { 2 } }
+impl Bx[i64] { fn tag(ref self) -> i64 { 3 } }
+fn main() {
+    let a = Bx { v: "s".to_string(), n: 1 };
+    let b = Bx { v: vec![1, 2], n: 2 };
+    let c = Bx { v: 5, n: 3 };
+    println(f"{a.tag()} {b.tag()} {c.tag()} {a.get()} {b.get().len()}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("1 2 3 s 2\n".to_string(), Some(0))));
     }
 
     /// An owned place stored in a `ref` field is lent, not moved, and a

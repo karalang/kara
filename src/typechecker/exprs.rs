@@ -2928,7 +2928,9 @@ impl<'a> super::TypeChecker<'a> {
         // is silent here — pass 2's `check_assignable` produces the
         // user-facing diagnostic, and unify already records partial
         // structural matches.
-        for (sub_param_ty, arg_ty_opt) in sub_params.iter().zip(arg_tys.iter()) {
+        for ((sub_param_ty, arg_ty_opt), formal) in
+            sub_params.iter().zip(arg_tys.iter()).zip(params.iter())
+        {
             if let Some(arg_ty) = arg_ty_opt {
                 unify_types(
                     sub_param_ty,
@@ -2936,6 +2938,25 @@ impl<'a> super::TypeChecker<'a> {
                     &mut self.env.substitutions,
                     &mut self.env.const_substitutions,
                 );
+                // A function value for a parameter with a function-trait
+                // bound (`f: F` where `F: Fn(i64) -> U`) also solves the
+                // parameters only its bound mentions: `app(double, 4)` fixes
+                // `U` from `double`'s return type.
+                if let (Type::TypeParam(p), Type::Function { .. }) = (formal, arg_ty) {
+                    if let Some(sig) = self.call_fn_bound_expectation(
+                        p,
+                        where_clause,
+                        &name_to_id,
+                        formal_generic_params,
+                    ) {
+                        unify_types(
+                            &sig,
+                            arg_ty,
+                            &mut self.env.substitutions,
+                            &mut self.env.const_substitutions,
+                        );
+                    }
+                }
             }
         }
         // Pass 2: check each arg against the resolved slot. For
