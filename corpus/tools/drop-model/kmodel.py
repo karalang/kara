@@ -985,13 +985,23 @@ class Model:
         """A value stored into an owned field or payload: a reference is read (Copy), counted (handle) or C3."""
         if not isinstance(v, Ref):
             return v
-        if ty is not None and (ty[0] in ("ref", "mutref") or ty[0] != "app"
-                               or (len(ty[1]) == 1 and ty[1] not in self.p.structs and ty[1] not in self.p.enums)):
+        if ty is not None and ty[0] != "tuple" and self.loose_type(ty):
             return v  # a declared reference, a view, or a generic parameter
         r = self.read_through_ref(self.deref_refs(v))
         if r is not None:
             return r
+        if ty is not None and self.loose_type(ty):
+            return v  # a tuple with a reference or generic part may hold the reference itself
         raise ModelError(f"move out of a ref place (C3): a reference stored into an owned {what}")
+
+    def loose_type(self, ty) -> bool:
+        """A declared type that may itself be a reference: `ref T`, a generic parameter, or a tuple with
+        such a part. A tuple of owned parts is not one: a reference stored into it is read (§1.1)."""
+        if ty[0] in ("ref", "mutref"):
+            return True
+        if ty[0] == "tuple":
+            return any(self.loose_type(t) for t in ty[1])
+        return len(ty[1]) == 1 and ty[1] not in self.p.structs and ty[1] not in self.p.enums
 
     def own_nested(self, v, ty, what):
         """store_owned applied through an aggregate, following its declared type: a reference inside an
