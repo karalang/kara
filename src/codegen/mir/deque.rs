@@ -118,7 +118,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.abort_unless(ok, "index out of bounds")?;
                 let at = self.slot(q, i, size)?;
                 let d = self.place_ptr(dest)?;
-                self.store(d, at.into())?;
+                self.store_ref(d, at, el)?;
             }
             _ => return Ok(None),
         }

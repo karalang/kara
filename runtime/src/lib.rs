@@ -247,6 +247,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_sleep_ms,
         mir::karac_mir_run_main,
         mir::karac_mir_bsearch,
+        mir::karac_mir_f2i,
         mir::karac_mir_str_split,
         mir::karac_mir_str_join,
         mir::karac_mir_sort,

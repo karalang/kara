@@ -143,6 +143,10 @@ impl<'ctx> Cx<'ctx, '_> {
             ("mem", "replace") => return self.mem_replace(args, dest),
             ("Option", "take" | "replace") => return self.option_take(method, args, dest),
             ("char", "try_from") => return self.char_try_from(args, dest),
+            ("mem", "swap") => return self.mem_swap(args),
+            (t, "try_from") if crate::numeric_conv::is_int_target(t) => {
+                return self.int_try_from(t, args, dest)
+            }
             (_, "parse" | "from_str_radix") => return self.parse_num(base, method, args, dest),
             _ => {}
         }
@@ -281,6 +285,210 @@ impl<'ctx> Cx<'ctx, '_> {
                 .map_err(e)?;
             cx.store(oq, c.into())
         })?;
+        Ok(Some(()))
+    }
+
+    /// `mem.swap(a, b)`: the two places trade values.
+    fn mem_swap(&mut self, args: &[Operand]) -> R<Option<()>> {
+        let [a, b] = args else {
+            return Ok(None);
+        };
+        let at = self.operand_type(a)?;
+        let (TyKind::Ref(t) | TyKind::MutRef(t)) = self.tys.kind(at) else {
+            return Ok(None);
+        };
+        let pa = self.operand_ptr(a)?;
+        let pa = self.load_ptr(pa)?;
+        let pb = self.operand_ptr(b)?;
+        let pb = self.load_ptr(pb)?;
+        let tmp = self.temp(t, "swap")?;
+        self.copy(tmp, pa, t)?;
+        self.copy(pa, pb, t)?;
+        self.copy(pb, tmp, t)?;
+        Ok(Some(()))
+    }
+
+    /// `T.try_from(n)` for an integer target `t`: `Ok(n)` when `n` fits,
+    /// else `Err("out of range for {t}")`.
+    fn int_try_from(&mut self, t: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
+        let [n] = args else {
+            return Ok(None);
+        };
+        let nt = self.operand_type(n)?;
+        let src_signed = match self.tys.kind(nt) {
+            TyKind::Int(it) if it.bits() <= 64 => it.signed(),
+            TyKind::Bool => false,
+            _ => return Ok(None),
+        };
+        let Some(&(_, bits, signed)) = crate::numeric_conv::INT_TARGETS
+            .iter()
+            .find(|(name, _, _)| *name == t)
+        else {
+            return Ok(None);
+        };
+        if bits > 64 {
+            return Ok(None);
+        }
+        let dty = self.place_type(dest)?;
+        let ok_v = self.variant_of(dty, "Ok")?;
+        let err_v = self.variant_of(dty, "Err")?;
+        let v = self.operand_scalar(n)?.into_int_value();
+        let i64t = self.llcx.i64_type();
+        let w = self
+            .builder
+            .build_int_cast_sign_flag(v, i64t, src_signed, "")
+            .map_err(e)?;
+        // The source as a 65-bit quantity: its i64 bits and whether it is
+        // negative (a signed source below zero).
+        let b = &self.builder;
+        let neg = if src_signed {
+            b.build_int_compare(IntPredicate::SLT, w, self.i64(0), "")
+                .map_err(e)?
+        } else {
+            self.llcx.bool_type().const_zero()
+        };
+        let fits = match (signed, bits) {
+            (true, 64) => {
+                // Fits unless an unsigned source is above i64::MAX.
+                if src_signed {
+                    self.llcx.bool_type().const_int(1, false)
+                } else {
+                    b.build_int_compare(IntPredicate::SGE, w, self.i64(0), "")
+                        .map_err(e)?
+                }
+            }
+            (false, 64) => b.build_not(neg, "").map_err(e)?,
+            (true, k) => {
+                let lo = -(1i64 << (k - 1));
+                let hi = (1i64 << (k - 1)) - 1;
+                let ge = b
+                    .build_int_compare(IntPredicate::SGE, w, i64t.const_int(lo as u64, true), "")
+                    .map_err(e)?;
+                let le = b
+                    .build_int_compare(IntPredicate::SLE, w, self.i64(hi as u64), "")
+                    .map_err(e)?;
+                let both = b.build_and(ge, le, "").map_err(e)?;
+                if src_signed {
+                    both
+                } else {
+                    // An unsigned source above i64::MAX reads as negative.
+                    let le_u = b
+                        .build_int_compare(IntPredicate::ULE, w, self.i64(hi as u64), "")
+                        .map_err(e)?;
+                    le_u
+                }
+            }
+            (false, k) => {
+                let hi = (1u64 << k) - 1;
+                let le = b
+                    .build_int_compare(IntPredicate::ULE, w, self.i64(hi), "")
+                    .map_err(e)?;
+                let nn = b.build_not(neg, "").map_err(e)?;
+                b.build_and(le, nn, "").map_err(e)?
+            }
+        };
+        let d = self.place_ptr(dest)?;
+        let oq = self.offset(d, self.field_offset(dty, Some(ok_v), 0)?)?;
+        let eq = self.offset(d, self.field_offset(dty, Some(err_v), 0)?)?;
+        let ot = self
+            .tys
+            .field_ty(dty, Some(ok_v), 0)
+            .ok_or("an Ok without a payload")?;
+        let oit = self.llvm_ty(ot)?.into_int_type();
+        let msg = format!("out of range for {t}");
+        let f = self.cur_fn()?;
+        let (yes, no, done) = (
+            self.llcx.append_basic_block(f, "try_from.ok"),
+            self.llcx.append_basic_block(f, "try_from.err"),
+            self.llcx.append_basic_block(f, "try_from.done"),
+        );
+        self.builder
+            .build_conditional_branch(fits, yes, no)
+            .map_err(e)?;
+        self.builder.position_at_end(yes);
+        self.store_tag(d, dty, ok_v)?;
+        let c = self
+            .builder
+            .build_int_truncate_or_bit_cast(w, oit, "")
+            .map_err(e)?;
+        self.store(oq, c.into())?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(no);
+        self.store_tag(d, dty, err_v)?;
+        let (mp, mn) = self.str_const(&msg)?;
+        self.rt("string_from", &[eq.into(), mp.into(), mn.into()])?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        Ok(Some(()))
+    }
+
+    /// `x.trunc_to_i32()` and its `saturating_` / `wrapping_` / `checked_`
+    /// siblings, as the interpreter's `numeric_conv` has them.
+    fn float_to_int(&mut self, method: &str, x: FloatValue<'ctx>, dest: &Place) -> R<Option<()>> {
+        let Some((family, _, bits, signed)) = crate::numeric_conv::parse_float_to_int(method)
+        else {
+            return Ok(None);
+        };
+        if bits > 64 {
+            return Ok(None);
+        }
+        use crate::numeric_conv::FloatToIntFamily as F;
+        let fam = match family {
+            F::Saturating => 0,
+            F::Wrapping => 1,
+            F::Checked => 2,
+            F::Trunc => 3,
+        };
+        let f64t = self.llcx.f64_type();
+        let x = if x.get_type() == f64t {
+            x
+        } else {
+            self.builder.build_float_ext(x, f64t, "").map_err(e)?
+        };
+        let slot = self.entry_slot(8, "f2i")?;
+        let i32t = self.llcx.i32_type();
+        let r = self.rt_u8(
+            "f2i",
+            &[
+                x.into(),
+                i32t.const_int(fam, false).into(),
+                i32t.const_int(u64::from(bits), false).into(),
+                self.llcx
+                    .i8_type()
+                    .const_int(u64::from(signed), false)
+                    .into(),
+                slot.into(),
+            ],
+        )?;
+        let v = self.load_i64(slot)?;
+        match family {
+            F::Checked => {
+                let dty = self.place_type(dest)?;
+                let d = self.place_ptr(dest)?;
+                let (some, none) = self.option_variants(dty)?;
+                self.store_tag(d, dty, none)?;
+                let pt = self
+                    .tys
+                    .field_ty(dty, Some(some), 0)
+                    .ok_or("an option without a payload")?;
+                let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
+                let it = self.llvm_ty(pt)?.into_int_type();
+                let ok = self.is_zero(r)?;
+                self.if_then(ok, |cx| {
+                    cx.store_tag(d, dty, some)?;
+                    let n = cx
+                        .builder
+                        .build_int_truncate_or_bit_cast(v, it, "")
+                        .map_err(e)?;
+                    cx.store(q, n.into())
+                })?;
+            }
+            _ => {
+                let ok = self.is_zero(r)?;
+                self.abort_unless(ok, "explicit panic")?;
+                self.store_int_as(dest, v, signed)?;
+            }
+        }
         Ok(Some(()))
     }
 
@@ -508,6 +716,17 @@ impl<'ctx> Cx<'ctx, '_> {
                 let v = b.build_select(lt, l, v, "").map_err(e)?.into_int_value();
                 self.store_int_as(dest, v, it.signed())?;
             }
+            ("to_ne_bytes" | "to_le_bytes" | "to_be_bytes", []) => {
+                // The integer's bytes, little-endian in memory; `to_be`
+                // swaps them first.
+                let v = if method == "to_be_bytes" && it.bits() > 8 {
+                    self.int_intrinsic("bswap", &[x.into()], xt)?
+                } else {
+                    x
+                };
+                let d = self.place_ptr(dest)?;
+                self.store(d, v.into())?;
+            }
             ("rem_euclid" | "div_euclid", [y]) => {
                 if self.operand_type(y)? != self.operand_type(&args[0])? {
                     return Ok(None);
@@ -642,6 +861,11 @@ impl<'ctx> Cx<'ctx, '_> {
         let xt = self.operand_type(&args[0])?;
         let x = self.operand_scalar(&args[0])?;
         let x = self.float_of(x, xt)?;
+        if args.len() == 1 {
+            if let Some(()) = self.float_to_int(method, x, dest)? {
+                return Ok(Some(()));
+            }
+        }
         let f64t = self.llcx.f64_type();
         let f32t = self.llcx.f32_type();
         let b = &self.builder;

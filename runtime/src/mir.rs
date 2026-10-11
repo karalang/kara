@@ -444,6 +444,19 @@ pub unsafe extern "C" fn karac_mir_str_slice(
     // SAFETY: the caller's contract.
     let s = unsafe { text(s, n) };
     let len = s.len() as i64;
+    if mode == 2 {
+        // `String.slice`: a start out of range is empty, the end clamps,
+        // and a cut inside a char is lossy.
+        let t = if lo < 0 || lo > len {
+            String::new()
+        } else {
+            let end = hi.clamp(lo, len);
+            String::from_utf8_lossy(&s.as_bytes()[lo as usize..end as usize]).into_owned()
+        };
+        // SAFETY: as above.
+        unsafe { string_of(out, t.as_bytes()) };
+        return 0;
+    }
     let (lo, hi) = if mode == 0 {
         let hi = hi.min(len);
         if lo < 0 || lo >= hi {
@@ -658,6 +671,72 @@ pub unsafe extern "C" fn karac_mir_bsearch(
         o.cmp(&0)
     })
     .map_or(-1, |i| i as i64)
+}
+
+/// A float to an integer of `bits` bits, as `numeric_conv` converts it:
+/// family 0 saturating, 1 wrapping, 2 checked, 3 trunc. Writes the value
+/// (as its i64 bits) at `out` and returns 0, or 1 when the value is out of
+/// range for a checked or trunc conversion, with nothing written.
+///
+/// # Safety
+/// `out` is writable for an `i64`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_f2i(
+    f: f64,
+    family: i32,
+    bits: i32,
+    signed: u8,
+    out: *mut i64,
+) -> u8 {
+    let signed = signed != 0;
+    let saturating = |f: f64| -> i64 {
+        match (bits, signed) {
+            (8, true) => i64::from(f as i8),
+            (16, true) => i64::from(f as i16),
+            (32, true) => i64::from(f as i32),
+            (8, false) => i64::from(f as u8),
+            (16, false) => i64::from(f as u16),
+            (32, false) => i64::from(f as u32),
+            (64, false) => f as u64 as i64,
+            _ => f as i64,
+        }
+    };
+    let v = match family {
+        0 => saturating(f),
+        1 => {
+            let t = f.trunc();
+            if !t.is_finite() {
+                0
+            } else {
+                let raw = t as i128;
+                let modulus = 1i128 << bits;
+                let mut m = raw & (modulus - 1);
+                if signed && (m & (1i128 << (bits - 1))) != 0 {
+                    m -= modulus;
+                }
+                m as i64
+            }
+        }
+        _ => {
+            if !f.is_finite() {
+                return 1;
+            }
+            let t = f.trunc();
+            let (lo, hi) = if signed {
+                let half = 2f64.powi(bits - 1);
+                (-half, half - 1.0)
+            } else {
+                (0.0, 2f64.powi(bits) - 1.0)
+            };
+            if !(t >= lo && t <= hi) {
+                return 1;
+            }
+            saturating(f)
+        }
+    };
+    // SAFETY: the caller's contract.
+    unsafe { out.write(v) };
+    0
 }
 
 /// `std.time::sleep_ms`: a real pause; a count of zero or less is a

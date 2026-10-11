@@ -136,6 +136,28 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store_ordering(d, dty, o)?;
             }
+            ("reserve" | "reserve_exact" | "shrink_to_fit", _) => {}
+            ("slice", [s, lo, hi]) => {
+                // Saturating, as the interpreter's: a start out of range is
+                // empty and the end clamps; a cut inside a char is lossy.
+                let (p, n) = self.str_parts(s)?;
+                let lo = self.int_arg(lo)?;
+                let hi = self.int_arg(hi)?;
+                let mode = self.llcx.i32_type().const_int(2, false);
+                let d = self.place_ptr(dest)?;
+                self.rt_int(
+                    "str_slice",
+                    &[
+                        d.into(),
+                        p.into(),
+                        n.into(),
+                        lo.into(),
+                        hi.into(),
+                        mode.into(),
+                    ],
+                    8,
+                )?;
+            }
             ("substring" | "index_range", [s, lo, rest @ ..]) => {
                 let (p, n) = self.str_parts(s)?;
                 let lo = self.int_arg(lo)?;
@@ -523,7 +545,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let i = self.int_arg(i)?;
                 let at = self.checked_elem(p, n, i, size)?;
                 let d = self.place_ptr(dest)?;
-                self.store(d, at.into())?;
+                self.store_ref(d, at, el)?;
             }
             ("get", [i]) => {
                 let i = self.int_arg(i)?;
@@ -750,6 +772,55 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(self.offset(v, 8)?, m.into())?;
                 self.store(self.offset(q, 8)?, self.i64(0).into())?;
                 self.drop_moved(&args[1..])?;
+            }
+            ("chunks" | "windows", [k]) => {
+                // Views into the receiver: back to back with the last one
+                // shorter, or every run of `k` in a row.
+                let k = self.int_arg(k)?;
+                let pos = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, k, self.i64(0), "")
+                    .map_err(e)?;
+                self.abort_unless(pos, "explicit panic")?;
+                let b = &self.builder;
+                let count = if method == "chunks" {
+                    let m = b.build_int_add(n, k, "").map_err(e)?;
+                    let m = b.build_int_sub(m, self.i64(1), "").map_err(e)?;
+                    b.build_int_unsigned_div(m, k, "").map_err(e)?
+                } else {
+                    let enough = b
+                        .build_int_compare(IntPredicate::UGE, n, k, "")
+                        .map_err(e)?;
+                    let c = b.build_int_sub(n, k, "").map_err(e)?;
+                    let c = b.build_int_add(c, self.i64(1), "").map_err(e)?;
+                    b.build_select(enough, c, self.i64(0), "")
+                        .map_err(e)?
+                        .into_int_value()
+                };
+                let d = self.place_ptr(dest)?;
+                self.rt("vec_alloc", &[d.into(), count.into(), self.i64(16).into()])?;
+                let buf = self.load_ptr(d)?;
+                let chunks = method == "chunks";
+                self.count_loop(count, |cx, i| {
+                    let b = &cx.builder;
+                    let at = if chunks {
+                        b.build_int_mul(i, k, "").map_err(e)?
+                    } else {
+                        i
+                    };
+                    let left = b.build_int_sub(n, at, "").map_err(e)?;
+                    let short = b
+                        .build_int_compare(IntPredicate::ULT, left, k, "")
+                        .map_err(e)?;
+                    let len = b
+                        .build_select(short, left, k, "")
+                        .map_err(e)?
+                        .into_int_value();
+                    let start = cx.elem_ptr(p, at, size)?;
+                    let slot = cx.elem_ptr(buf, i, 16)?;
+                    cx.store(slot, start.into())?;
+                    cx.store(cx.offset(slot, 8)?, len.into())
+                })?;
             }
             ("binary_search", [x]) => {
                 let kp = self.key_arg_of(x, el)?;
@@ -1114,7 +1185,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let at = self.checked_elem(p, n, i, size)?;
                 let d = self.place_ptr(dest)?;
                 if matches!(self.tys.kind(dty), TyKind::Ref(_) | TyKind::MutRef(_)) {
-                    self.store(d, at.into())?;
+                    self.store_ref(d, at, el)?;
                 } else {
                     self.clone_into(d, at, dty)?;
                 }

@@ -150,6 +150,21 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
+    /// Writes a reference to the `el` at `at` into `d`: its address, or
+    /// for a `str` or slice the two words a reference to one is.
+    pub(super) fn store_ref(
+        &mut self,
+        d: PointerValue<'ctx>,
+        at: PointerValue<'ctx>,
+        el: Ty,
+    ) -> R<()> {
+        if matches!(self.tys.kind(el), TyKind::Str | TyKind::Slice(_)) {
+            self.copy(d, at, el)
+        } else {
+            self.store(d, at.into())
+        }
+    }
+
     /// Drops each argument the native was handed by move and did not keep.
     pub(super) fn drop_moved(&mut self, args: &[Operand]) -> R<()> {
         for a in args {
@@ -214,7 +229,7 @@ impl<'ctx> Cx<'ctx, '_> {
             .ok_or("an option without a payload")?;
         let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
         match (self.tys.kind(pt), self.tys.kind(el)) {
-            (TyKind::Ref(_) | TyKind::MutRef(_), _) => self.store(q, at.into()),
+            (TyKind::Ref(_) | TyKind::MutRef(_), _) => self.store_ref(q, at, el),
             (TyKind::Shared(_), TyKind::Weak(_)) => {
                 let (_, none) = self.option_variants(dty)?;
                 self.store_tag(d, dty, none)?;
@@ -251,7 +266,7 @@ impl<'ctx> Cx<'ctx, '_> {
         {
             return Ok(());
         }
-        if base == "String" && self.string_native(method, args, dest)?.is_some() {
+        if matches!(base, "String" | "str") && self.string_native(method, args, dest)?.is_some() {
             return Ok(());
         }
         if matches!(
@@ -351,6 +366,8 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("format_spec", "") => self.format_spec(args, dest),
             ("dbg", "") => self.dbg(args),
+            // One thread runs the program; a fence orders nothing.
+            ("fence" | "compiler_fence", "") => Ok(()),
             ("sleep_ms", "") if args.len() == 1 => {
                 let ms = self.int_arg(&args[0])?;
                 self.rt("sleep_ms", &[ms.into()])
@@ -387,7 +404,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     .map_err(e)?;
                 Ok(())
             }
-            ("String" | "Vec", "len") => {
+            ("String" | "Vec" | "str", "len") => {
                 let (_, n) = self.view_of(&args[0])?;
                 let d = self.place_ptr(dest)?;
                 let it = self.llvm_ty(dty)?.into_int_type();
@@ -397,7 +414,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     .map_err(e)?;
                 self.store(d, n.into())
             }
-            ("String" | "Vec", "is_empty") => {
+            ("String" | "Vec" | "str", "is_empty") => {
                 let (_, n) = self.view_of(&args[0])?;
                 let z = self.is_zero(n)?;
                 let z = self
@@ -541,7 +558,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let buf = self.load_ptr(v)?;
                 let at = self.elem_ptr(buf, i, size)?;
                 let d = self.place_ptr(dest)?;
-                self.store(d, at.into())
+                self.store_ref(d, at, el)
             }
             ("Vec", "get") => {
                 let v = self.ref_arg(&args[0])?;
