@@ -627,6 +627,162 @@ impl<'ctx> Cx<'ctx, '_> {
                 let m = self.builder.build_int_add(n, on, "").map_err(e)?;
                 self.store(self.offset(v, 8)?, m.into())?;
             }
+            ("truncate", [k]) if is_vec => {
+                // The tail drops first to last, as a dying Vec's does.
+                let k = self.int_arg(k)?;
+                let neg = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, k, self.i64(0), "")
+                    .map_err(e)?;
+                let k = self
+                    .builder
+                    .build_select(neg, self.i64(0), k, "")
+                    .map_err(e)?
+                    .into_int_value();
+                let over = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, k, n, "")
+                    .map_err(e)?;
+                let keep = self
+                    .builder
+                    .build_select(over, n, k, "")
+                    .map_err(e)?
+                    .into_int_value();
+                if self.tys.needs_drop(el) {
+                    let cut = self.builder.build_int_sub(n, keep, "").map_err(e)?;
+                    self.count_loop(cut, |cx, i| {
+                        let j = cx.builder.build_int_add(keep, i, "").map_err(e)?;
+                        let x = cx.elem_ptr(p, j, size)?;
+                        cx.call_glue(x, el)
+                    })?;
+                }
+                let v = self.ref_arg(recv)?;
+                self.store(self.offset(v, 8)?, keep.into())?;
+            }
+            ("reserve" | "reserve_exact", [k]) if is_vec => {
+                let k = self.int_arg(k)?;
+                let pos = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, k, self.i64(0), "")
+                    .map_err(e)?;
+                let v = self.ref_arg(recv)?;
+                self.if_then(pos, |cx| {
+                    cx.rt("vec_reserve", &[v.into(), k.into(), cx.i64(size).into()])
+                })?;
+            }
+            ("shrink_to_fit", []) if is_vec => {}
+            ("is_sorted", []) => {
+                let cmp = self.key_fn(KeyOp::Cmp, el);
+                let res = self.entry_slot(1, "sorted")?;
+                self.store(res, self.llcx.i8_type().const_int(1, false).into())?;
+                let pairs = self.builder.build_int_sub(n, self.i64(1), "").map_err(e)?;
+                let some = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, pairs, self.i64(0), "")
+                    .map_err(e)?;
+                let pairs = self
+                    .builder
+                    .build_select(some, pairs, self.i64(0), "")
+                    .map_err(e)?
+                    .into_int_value();
+                self.count_loop(pairs, |cx, i| {
+                    let x = cx.elem_ptr(p, i, size)?;
+                    let y = cx.offset(x, size)?;
+                    let o = cx
+                        .builder
+                        .build_call(cmp, &[x.into(), y.into()], "")
+                        .map_err(e)?
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value();
+                    let gt = cx
+                        .builder
+                        .build_int_compare(IntPredicate::SGT, o, o.get_type().const_zero(), "")
+                        .map_err(e)?;
+                    cx.if_then(gt, |cx| {
+                        cx.store(res, cx.llcx.i8_type().const_zero().into())
+                    })
+                })?;
+                let d = self.place_ptr(dest)?;
+                let v = self
+                    .builder
+                    .build_load(self.llcx.i8_type(), res, "")
+                    .map_err(e)?;
+                self.store(d, v)?;
+            }
+            ("dedup", []) if is_vec => {
+                // A run of equal elements keeps its first; the rest drop in
+                // order.
+                let eq = self.key_fn(KeyOp::Eq, el);
+                let w = self.entry_slot(8, "kept")?;
+                self.store(w, self.i64(0).into())?;
+                self.count_loop(n, |cx, i| {
+                    let k = cx.load_i64(w)?;
+                    let x = cx.elem_ptr(p, i, size)?;
+                    let first = cx.is_zero(k)?;
+                    let dup = cx.entry_slot(1, "dup")?;
+                    cx.store(dup, cx.llcx.i8_type().const_zero().into())?;
+                    let not_first = cx.builder.build_not(first, "").map_err(e)?;
+                    cx.if_then(not_first, |cx| {
+                        let km = cx.builder.build_int_sub(k, cx.i64(1), "").map_err(e)?;
+                        let last = cx.elem_ptr(p, km, size)?;
+                        let same = cx
+                            .builder
+                            .build_call(eq, &[last.into(), x.into()], "")
+                            .map_err(e)?
+                            .try_as_basic_value()
+                            .unwrap_basic()
+                            .into_int_value();
+                        let same = cx
+                            .builder
+                            .build_int_z_extend(same, cx.llcx.i8_type(), "")
+                            .map_err(e)?;
+                        cx.store(dup, same.into())
+                    })?;
+                    let d = cx
+                        .builder
+                        .build_load(cx.llcx.i8_type(), dup, "")
+                        .map_err(e)?
+                        .into_int_value();
+                    let is_dup = cx
+                        .builder
+                        .build_int_compare(IntPredicate::NE, d, d.get_type().const_zero(), "")
+                        .map_err(e)?;
+                    let f = cx.cur_fn()?;
+                    let drop_bb = cx.llcx.append_basic_block(f, "dedup.drop");
+                    let keep_bb = cx.llcx.append_basic_block(f, "dedup.keep");
+                    let next = cx.llcx.append_basic_block(f, "dedup.next");
+                    cx.builder
+                        .build_conditional_branch(is_dup, drop_bb, keep_bb)
+                        .map_err(e)?;
+                    cx.builder.position_at_end(drop_bb);
+                    if cx.tys.needs_drop(el) {
+                        cx.call_glue(x, el)?;
+                    }
+                    cx.builder.build_unconditional_branch(next).map_err(e)?;
+                    cx.builder.position_at_end(keep_bb);
+                    let at = cx.elem_ptr(p, k, size)?;
+                    cx.copy(at, x, el)?;
+                    let k1 = cx.builder.build_int_add(k, cx.i64(1), "").map_err(e)?;
+                    cx.store(w, k1.into())?;
+                    cx.builder.build_unconditional_branch(next).map_err(e)?;
+                    cx.builder.position_at_end(next);
+                    Ok(())
+                })?;
+                let v = self.ref_arg(recv)?;
+                let k = self.load_i64(w)?;
+                self.store(self.offset(v, 8)?, k.into())?;
+            }
+            ("get_unchecked", [i]) => {
+                let i = self.int_arg(i)?;
+                let at = self.checked_elem(p, n, i, size)?;
+                let d = self.place_ptr(dest)?;
+                if matches!(self.tys.kind(dty), TyKind::Ref(_) | TyKind::MutRef(_)) {
+                    self.store(d, at.into())?;
+                } else {
+                    self.clone_into(d, at, dty)?;
+                }
+            }
             _ => return Ok(None),
         }
         let _ = base;

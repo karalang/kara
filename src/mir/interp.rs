@@ -283,6 +283,11 @@ pub fn set_source_name(name: &str) {
     let _ = SOURCE_NAME.set(name.to_string());
 }
 
+/// The program's file name, when [`set_source_name`] gave one.
+pub fn source_name() -> Option<&'static str> {
+    SOURCE_NAME.get().map(String::as_str)
+}
+
 /// Runs `entry` with `args`, validating every body first, and records
 /// the [`Event`] trace.
 pub fn run(program: &Program, tys: &TyInterner, entry: &str, args: Vec<Value>) -> RunResult {

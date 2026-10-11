@@ -904,3 +904,189 @@ pub unsafe extern "C" fn karac_mir_abort(ptr: *const u8, len: usize) -> ! {
     write(true, format!("runtime error: {msg}\n").as_bytes());
     karac_mir_exit(101)
 }
+
+/// A string in Rust's `Debug` form (`"a\n"`), for `dbg`.
+///
+/// # Safety
+/// `ptr` is readable for `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_fmt_str_debug(ptr: *const u8, len: usize) {
+    // SAFETY: the caller's contract.
+    let b = unsafe { bytes(ptr, len) };
+    append(&format!("{:?}", String::from_utf8_lossy(b)));
+}
+
+/// A char in Rust's `Debug` form (`'a'`), for `dbg`.
+#[no_mangle]
+pub extern "C" fn karac_mir_fmt_char_debug(c: u32) {
+    append(&format!("{:?}", char::from_u32(c).unwrap_or('\u{fffd}')));
+}
+
+/// The char method `op` (the index into the list below) of `c`, with
+/// `radix` for `is_digit` and `to_digit`: a predicate is 0 or 1, a case
+/// mapping is the mapped char (itself when the mapping expands), and
+/// `to_digit` is the digit or -1. Bit 8 of `op` reads `c` as a byte (an
+/// integer receiver), which is in no class when it is above 255.
+#[no_mangle]
+pub extern "C" fn karac_mir_char(op: u32, c: i64, radix: i64) -> i64 {
+    let ch = if op & 0x100 != 0 {
+        u8::try_from(c).ok().map(char::from)
+    } else {
+        u32::try_from(c).ok().and_then(char::from_u32)
+    };
+    let Some(ch) = ch else {
+        return 0;
+    };
+    let b = i64::from;
+    let one = |it: &mut dyn Iterator<Item = char>| {
+        let first = it.next();
+        match (first, it.next()) {
+            (Some(m), None) => m,
+            _ => ch,
+        }
+    };
+    let r = u32::try_from(radix).unwrap_or(0);
+    match CHAR_OPS.get((op & 0xff) as usize).copied().unwrap_or("") {
+        "is_alphabetic" => b(ch.is_alphabetic()),
+        "is_numeric" => b(ch.is_numeric()),
+        "is_alphanumeric" => b(ch.is_alphanumeric()),
+        "is_uppercase" => b(ch.is_uppercase()),
+        "is_lowercase" => b(ch.is_lowercase()),
+        "is_whitespace" => b(ch.is_whitespace()),
+        "is_ascii" => b(ch.is_ascii()),
+        "is_ascii_digit" => b(ch.is_ascii_digit()),
+        "is_ascii_alphabetic" => b(ch.is_ascii_alphabetic()),
+        "is_ascii_alphanumeric" => b(ch.is_ascii_alphanumeric()),
+        "is_ascii_uppercase" => b(ch.is_ascii_uppercase()),
+        "is_ascii_lowercase" => b(ch.is_ascii_lowercase()),
+        "is_ascii_punctuation" => b(ch.is_ascii_punctuation()),
+        "is_ascii_whitespace" => b(ch.is_ascii_whitespace()),
+        "is_ascii_hexdigit" => b(ch.is_ascii_hexdigit()),
+        "to_lowercase" => i64::from(u32::from(one(&mut ch.to_lowercase()))),
+        "to_uppercase" => i64::from(u32::from(one(&mut ch.to_uppercase()))),
+        "to_ascii_lowercase" => i64::from(u32::from(ch.to_ascii_lowercase())),
+        "to_ascii_uppercase" => i64::from(u32::from(ch.to_ascii_uppercase())),
+        "is_digit" => b(ch.is_digit(r)),
+        "to_digit" => ch.to_digit(r).map_or(-1, i64::from),
+        _ => 0,
+    }
+}
+
+/// The char methods [`karac_mir_char`] answers, by index; codegen keeps
+/// the same list (`src/codegen/mir/num.rs`).
+const CHAR_OPS: &[&str] = &[
+    "is_alphabetic",
+    "is_numeric",
+    "is_alphanumeric",
+    "is_uppercase",
+    "is_lowercase",
+    "is_whitespace",
+    "is_ascii",
+    "is_ascii_digit",
+    "is_ascii_alphabetic",
+    "is_ascii_alphanumeric",
+    "is_ascii_uppercase",
+    "is_ascii_lowercase",
+    "is_ascii_punctuation",
+    "is_ascii_whitespace",
+    "is_ascii_hexdigit",
+    "to_lowercase",
+    "to_uppercase",
+    "to_ascii_lowercase",
+    "to_ascii_uppercase",
+    "is_digit",
+    "to_digit",
+];
+
+/// `T.parse(s)` / `T.from_str_radix(s, radix)` for an integer of `bits`
+/// bits (at most 64): 1 with the number at `out` when the trimmed text is
+/// one that fits, else 0.
+///
+/// # Safety
+/// `ptr` is readable for `len` bytes; `out` is writable.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_parse_int(
+    ptr: *const u8,
+    len: usize,
+    radix: i64,
+    bits: u32,
+    signed: u8,
+    out: *mut i64,
+) -> u8 {
+    // SAFETY: the caller's contract.
+    let text = String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned();
+    let text = text.trim();
+    if !(2..=36).contains(&radix) || (signed == 0 && text.starts_with('-')) {
+        return 0;
+    }
+    let Ok(n) = i128::from_str_radix(text, radix as u32) else {
+        return 0;
+    };
+    let fits = if signed != 0 {
+        let half = 1i128 << (bits - 1);
+        (-half..half).contains(&n)
+    } else {
+        n >= 0 && n < (1i128 << bits)
+    };
+    if !fits {
+        return 0;
+    }
+    // SAFETY: the caller's contract.
+    unsafe { *out = n as i64 };
+    1
+}
+
+/// `f64.parse(s)`: 1 with the number at `out`, else 0.
+///
+/// # Safety
+/// `ptr` is readable for `len` bytes; `out` is writable.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_parse_f64(ptr: *const u8, len: usize, out: *mut f64) -> u8 {
+    // SAFETY: the caller's contract.
+    let text = String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned();
+    match text.trim().parse::<f64>() {
+        Ok(v) => {
+            // SAFETY: the caller's contract.
+            unsafe { *out = v };
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
+/// `a.pow(e)` for an integer of `bits` bits (at most 64): 0 with the
+/// power at `out`, 1 when it overflows the type, 2 for an exponent out of
+/// `u32`. An unsigned `a` arrives as its bits.
+///
+/// # Safety
+/// `out` is writable.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_ipow(
+    a: i64,
+    e: i64,
+    bits: u32,
+    signed: u8,
+    out: *mut i64,
+) -> u8 {
+    let Ok(e) = u32::try_from(e) else {
+        return 2;
+    };
+    let a = if signed != 0 {
+        i128::from(a)
+    } else {
+        i128::from(a as u64)
+    };
+    let (lo, hi) = if signed != 0 {
+        (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+    } else {
+        (0, (1i128 << bits) - 1)
+    };
+    match a.checked_pow(e) {
+        Some(v) if (lo..=hi).contains(&v) => {
+            // SAFETY: the caller's contract.
+            unsafe { *out = v as i64 };
+            0
+        }
+        _ => 1,
+    }
+}

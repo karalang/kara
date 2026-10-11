@@ -23,8 +23,11 @@ fn e<T: ToString>(x: T) -> String {
 
 #[derive(Default)]
 pub(super) struct Fmt<'ctx> {
-    fns: HashMap<Ty, FunctionValue<'ctx>>,
-    todo: Vec<(Ty, FunctionValue<'ctx>)>,
+    fns: HashMap<(Ty, bool), FunctionValue<'ctx>>,
+    todo: Vec<(Ty, bool, FunctionValue<'ctx>)>,
+    /// Glue being built shows values in their `Debug` form (`dbg`):
+    /// strings and chars quoted, no user `Display`.
+    debug: bool,
 }
 
 impl<'ctx> Cx<'ctx, '_> {
@@ -35,24 +38,30 @@ impl<'ctx> Cx<'ctx, '_> {
     /// The display glue of `ty`, declared now and built by
     /// [`Cx::finish_fmt`].
     pub(super) fn fmt_fn(&mut self, ty: Ty) -> FunctionValue<'ctx> {
-        if let Some(&f) = self.fmt.fns.get(&ty) {
+        let key = (ty, self.fmt.debug);
+        if let Some(&f) = self.fmt.fns.get(&key) {
             return f;
         }
         let fn_ty = self
             .llcx
             .void_type()
             .fn_type(&[self.ptr_ty().into()], false);
-        let name = format!("fmt.{}", self.tys.display(ty));
+        let name = format!(
+            "{}.{}",
+            if self.fmt.debug { "dbg" } else { "fmt" },
+            self.tys.display(ty)
+        );
         let f = self
             .module
             .add_function(&name, fn_ty, Some(Linkage::Internal));
-        self.fmt.fns.insert(ty, f);
-        self.fmt.todo.push((ty, f));
+        self.fmt.fns.insert(key, f);
+        self.fmt.todo.push((ty, self.fmt.debug, f));
         f
     }
 
     pub(super) fn finish_fmt(&mut self) -> R<()> {
-        while let Some((ty, f)) = self.fmt.todo.pop() {
+        while let Some((ty, debug, f)) = self.fmt.todo.pop() {
+            self.fmt.debug = debug;
             let entry = self.llcx.append_basic_block(f, "entry");
             self.builder.position_at_end(entry);
             let p = f
@@ -62,6 +71,7 @@ impl<'ctx> Cx<'ctx, '_> {
             self.fmt_value(p, ty)?;
             self.builder.build_return(None).map_err(e)?;
         }
+        self.fmt.debug = false;
         Ok(())
     }
 
@@ -165,13 +175,23 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             TyKind::Char => {
                 let v = self.load(p, ty)?;
-                self.rt("fmt_char", &[v.into()])
+                let f = if self.fmt.debug {
+                    "fmt_char_debug"
+                } else {
+                    "fmt_char"
+                };
+                self.rt(f, &[v.into()])
             }
             TyKind::Unit => self.lit("()"),
             TyKind::Str | TyKind::Intrinsic(IntrinsicTy::String) => {
                 let s = self.load_ptr(p)?;
                 let n = self.load_i64(self.offset(p, 8)?)?;
-                self.rt("fmt_str", &[s.into(), n.into()])
+                let f = if self.fmt.debug {
+                    "fmt_str_debug"
+                } else {
+                    "fmt_str"
+                };
+                self.rt(f, &[s.into(), n.into()])
             }
             TyKind::Ref(t) | TyKind::MutRef(t) => {
                 if matches!(self.tys.kind(t), TyKind::Str | TyKind::Slice(_)) {
@@ -367,6 +387,32 @@ impl<'ctx> Cx<'ctx, '_> {
         self.lit(close)
     }
 
+    /// `dbg(line, text, value)`: `[file:line] text = value` on standard
+    /// error, the value in its `Debug` form.
+    pub(super) fn dbg(&mut self, args: &[Operand]) -> R<()> {
+        let [line, text, value] = args else {
+            return Err("dbg takes a line, a text and a value".into());
+        };
+        let file = crate::mir::interp::source_name().unwrap_or("<unknown>");
+        self.rt("fmt_begin", &[])?;
+        self.lit(&format!("[{file}:"))?;
+        let l = self.int_arg(line)?;
+        self.rt("fmt_i64", &[l.into()])?;
+        self.lit("] ")?;
+        let (s, n) = self.str_parts(text)?;
+        self.rt("fmt_str", &[s.into(), n.into()])?;
+        self.lit(" = ")?;
+        let vt = self.operand_type(value)?;
+        let p = self.operand_ptr(value)?;
+        self.fmt.debug = true;
+        let f = self.fmt_fn(vt);
+        self.fmt.debug = false;
+        self.builder.build_call(f, &[p.into()], "").map_err(e)?;
+        let f = self.llcx.i32_type().const_int(3, false);
+        self.rt("print_end", &[f.into()])?;
+        self.drop_moved(args)
+    }
+
     fn fmt_adt(&mut self, p: PointerValue<'ctx>, ty: Ty, a: crate::mir::ty::AdtId) -> R<()> {
         let program = self.program;
         let style = program.display_styles.get(&a).copied();
@@ -374,7 +420,7 @@ impl<'ctx> Cx<'ctx, '_> {
             return self.lit("<redacted>");
         }
         let user = format!("{}.to_string", self.tys.adt_name(ty));
-        if program.bodies.contains_key(&user) {
+        if !self.fmt.debug && program.bodies.contains_key(&user) {
             return self.fmt_user(p, ty, &user);
         }
         // The body behind a `shared` handle.

@@ -262,6 +262,9 @@ impl<'ctx> Cx<'ctx, '_> {
         {
             return Ok(());
         }
+        if self.num_native(base, method, args, dest)?.is_some() {
+            return Ok(());
+        }
         if base == "FileSystem" && self.fs_native(method, args, dest)?.is_some() {
             return Ok(());
         }
@@ -303,6 +306,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.drop_moved(args)
             }
             ("format_spec", "") => self.format_spec(args, dest),
+            ("dbg", "") => self.dbg(args),
             ("panic_message", "") => {
                 self.rt("fmt_begin", &[])?;
                 self.fmt_args(args)?;

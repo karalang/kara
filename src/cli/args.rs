@@ -145,6 +145,7 @@ pub fn parse_args(args: &[String]) -> Command {
                 eprintln!("error: {path}: {e}");
                 process::exit(1);
             });
+            crate::mir::interp::set_source_name(path);
             let ir = crate::mir::lower::build_source(&src).and_then(|l| {
                 crate::codegen::mir::compile_mir_ir(&l.program, &l.tys)
                     .map_err(|e| format!("llvm: {e}"))

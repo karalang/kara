@@ -35,6 +35,7 @@ mod deque;
 mod drop;
 mod fmt;
 mod key;
+mod num;
 mod seq;
 mod table;
 
