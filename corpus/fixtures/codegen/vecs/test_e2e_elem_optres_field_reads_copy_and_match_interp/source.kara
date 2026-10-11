@@ -2,7 +2,7 @@
 struct G { o: Option[String], r: Result[String, i64], n: i64 }
 fn mk(i: i64) -> String { f"alpha-{i}-long-enough-to-heap" }
 fn mg(i: i64) -> G { G { o: Some(mk(i)), r: Ok(mk(i + 10)), n: i } }
-fn cons(o: own Option[String]) -> i64 { match o { Some(s) => s.len(), None => 0 } }
+fn cons(o: Option[String]) -> i64 { match o { Some(s) => s.len(), None => 0 } }
 fn main() {
     let g: Vec[G] = [mg(1), mg(2)];
     let mut out: Vec[String] = [];

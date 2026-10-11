@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'Wrap { p: Point { x: 1, y: 2 }, name: hi, ok: true }'"
 bucket = "a"
-classified_with = "dd664416b"
+classified_with = "61feb360a+local"
 model_rev = "8be6ddd7"
 model_src = "112f82d8"

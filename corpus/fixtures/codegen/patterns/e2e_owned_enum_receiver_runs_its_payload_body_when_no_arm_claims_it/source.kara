@@ -7,14 +7,14 @@ struct R { id: i64, tag: String, xs: Vec[i64] }
     enum G[T] { X(T), Y }
     struct W { e: E }
     impl E {
-        fn none(own self) -> i64 { return 5 }
+        fn none(self) -> i64 { return 5 }
         fn matches(own self) -> i64 { match self { E.A(ref r) => { return r.id; } E.B => { return 0; } } }
         fn ret_self(own self) -> E { return self }
         fn wrap(own self) -> W { return W { e: self } }
         fn refm(ref self) -> i64 { return 3 }
     }
-    impl N { fn none(own self) -> i64 { return 5 } }
-    impl G[R] { fn none(own self) -> i64 { return 5 } }
+    impl N { fn none(self) -> i64 { return 5 } }
+    impl G[R] { fn none(self) -> i64 { return 5 } }
     fn main() {
         println("none");     { let a: E = E.A(mk(1)); println(f"  x{a.none()}") }
         println("temp");     { println(f"  x{E.A(mk(2)).none()}") }

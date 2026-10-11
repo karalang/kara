@@ -12,7 +12,7 @@ impl R {
       i = i + 1;
     }
   }
-  fn label_ref(mut ref self, label: own Option[String]) {
+  fn label_ref(mut ref self, label: Option[String]) {
     match label {
       Some(l) => { if not self.in_scope(l) { self.hits = self.hits + 1; } }
       None => {}

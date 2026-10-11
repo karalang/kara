@@ -1,0 +1,19 @@
+cases 2267 feasible 1382 single-building 588 walled 2115 cleared 1398 neighbours_checked 2258
+P1 relax-oracle disagreements 0
+P2 from-empty disagreements 0
+P3 pruned disagreements 0
+P4 transpose bfs failures 0
+P4 transpose from-empty failures 0
+P4 transpose pruned failures 0
+P4 transpose relax failures 0
+P5 flip bfs failures 0
+P5 flip from-empty failures 0
+P5 flip pruned failures 0
+P5 flip relax failures 0
+P6 manhattan-floor failures 0
+P7 wall-never-helps failures 0
+P8 clear-never-hurts failures 0
+P9 witness failures 0
+P10 local-optimality failures 0
+P11 single-building failures 0
+DIFFERENTIAL OK

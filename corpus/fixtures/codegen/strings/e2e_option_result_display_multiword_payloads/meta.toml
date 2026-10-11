@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "Display decision (2026-10-08): collections print `{..}` / `[..]` with no type prefix; expected.out is legacy's output without it. e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "dd664416b"
+classified_with = "61feb360a+local"
 model_rev = "8be6ddd7"
 model_src = "f1f8e633"

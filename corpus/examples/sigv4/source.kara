@@ -331,7 +331,7 @@ fn uri_encode(s: String, keep_slash: bool) -> String {
 // Insertion sort by canonical name. Small n, and it keeps the comparison in
 // one place — the spec orders headers by lowercased name and query params by
 // encoded key.
-fn sort_headers(headers: own Vec[Header]) -> Vec[Header] {
+fn sort_headers(headers: Vec[Header]) -> Vec[Header] {
     let mut out: Vec[Header] = Vec.new();
     for h in headers.into_iter() {
         let key = lower(h.name.clone());
@@ -350,7 +350,7 @@ fn sort_headers(headers: own Vec[Header]) -> Vec[Header] {
     out
 }
 
-fn sort_params(params: own Vec[QueryParam]) -> Vec[QueryParam] {
+fn sort_params(params: Vec[QueryParam]) -> Vec[QueryParam] {
     let mut out: Vec[QueryParam] = Vec.new();
     for p in params.into_iter() {
         let key = uri_encode(p.key.clone(), false);
@@ -369,7 +369,7 @@ fn sort_params(params: own Vec[QueryParam]) -> Vec[QueryParam] {
     out
 }
 
-fn canonical_query(params: own Vec[QueryParam]) -> String {
+fn canonical_query(params: Vec[QueryParam]) -> String {
     let sorted = sort_params(params);
     let mut out = String.new();
     let mut first = true;
@@ -387,8 +387,8 @@ fn canonical_query(params: own Vec[QueryParam]) -> String {
 fn canonical_request(
     method: own String,
     path: String,
-    params: own Vec[QueryParam],
-    headers: own Vec[Header],
+    params: Vec[QueryParam],
+    headers: Vec[Header],
     payload_hash: own String,
 ) -> String {
     let sorted = sort_headers(headers);

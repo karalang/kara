@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: \"`<` on a complete hand-written `impl PartialOrd` + `impl Ord` should now typecheck and lower to the user's `cmp`, got: {\""
 bucket = "a"
-classified_with = "dd664416b"
+classified_with = "61feb360a+local"
 model_rev = "8be6ddd7"
 model_src = "47324d18"

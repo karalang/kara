@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "e-spec: the holding test asserts this; the legacy recording run exited 1 e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "dd664416b"
+classified_with = "61feb360a+local"
 model_rev = "8be6ddd7"
 model_src = "b82eed09"

@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: '3 2 1 chunks-heap-collect-alpha-aaaaaaaaaaaaaaaaaa chunks-heap-collect-echo-eeeeeeeeeeeeeeeeeeee 5'"
 bucket = "mir-gap:typecheck"
-classified_with = "dd664416b"
+classified_with = "61feb360a+local"
 model_rev = "8be6ddd7"
 model_src = "515c7c93"

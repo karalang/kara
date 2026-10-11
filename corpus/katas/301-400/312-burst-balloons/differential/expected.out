@@ -1,0 +1,9 @@
+cases 3024
+P1 arm disagreements 0
+P2 reversal failures 0
+P3 single-balloon failures 0
+P4 two-balloon closed-form failures 0
+P5 monotonicity failures 0
+P6 feasible-lower-bound failures 0
+P7 upper-bound failures 0
+DIFFERENTIAL OK
