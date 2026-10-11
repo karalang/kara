@@ -8,7 +8,7 @@ use inkwell::IntPredicate;
 
 use super::key::KeyOp;
 use super::{Cx, R};
-use crate::mir::ty::IntrinsicTy;
+use crate::mir::ty::{IntTy, IntrinsicTy};
 use crate::mir::{Operand, Place, Ty, TyKind};
 
 fn e<T: ToString>(x: T) -> String {
@@ -159,6 +159,26 @@ impl<'ctx> Cx<'ctx, '_> {
                 _ => break,
             }
         }
+        // An integer of another width (a `u8` byte looked up in a
+        // `Set[i64]`) is widened to the key type, as the interpreter's
+        // untyped integers compare.
+        if let (TyKind::Int(from), TyKind::Int(_)) = (self.tys.kind(t), self.tys.kind(key)) {
+            if t != key {
+                let signed = matches!(
+                    from,
+                    IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64 | IntTy::I128 | IntTy::Isize
+                );
+                let v = self.load(p, t)?.into_int_value();
+                let kt = self.llvm_ty(key)?.into_int_type();
+                let w = self
+                    .builder
+                    .build_int_cast_sign_flag(v, kt, signed, "")
+                    .map_err(e)?;
+                let tmp = self.temp(key, "key")?;
+                self.store(tmp, w.into())?;
+                return Ok(tmp);
+            }
+        }
         Ok(p)
     }
 
@@ -281,8 +301,8 @@ impl<'ctx> Cx<'ctx, '_> {
                     let at = cx.entry_at(h, i)?;
                     let v = cx.offset(at, voff)?;
                     cx.store_tag(d, dty, some)?;
-                    let q = cx.offset(d, cx.field_offset(dty, Some(some), 0)?)?;
-                    cx.store_found(q, dty, some, v)
+                    let vt = t.val.unwrap_or(t.key);
+                    cx.store_found(d, dty, some, v, vt)
                 })?;
                 self.drop_moved(&args[1..])?;
             }
@@ -331,7 +351,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 // the new key and the unused value.
                 let v = t.val.unwrap_or(t.key);
                 let h = self.load_ptr(hp)?;
-                let kp = self.operand_ptr(k)?;
+                let kp = self.key_arg(k, t.key)?;
                 let i = self.find(h, kp, t)?;
                 let found = self.found(i)?;
                 let slot = self.entry_slot(8, "stored")?;
@@ -503,7 +523,7 @@ impl<'ctx> Cx<'ctx, '_> {
         unit: bool,
     ) -> R<()> {
         let h = self.load_ptr(hp)?;
-        let kp = self.operand_ptr(k)?;
+        let kp = self.key_arg(k, t.key)?;
         let i = self.find(h, kp, t)?;
         let found = self.found(i)?;
         let f = self.cur_fn()?;

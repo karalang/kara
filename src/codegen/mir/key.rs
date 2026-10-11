@@ -211,6 +211,14 @@ impl<'ctx> Cx<'ctx, '_> {
         let name = self
             .user_cmp_body(ty)
             .ok_or_else(|| format!("`{}` has no cmp body", self.tys.display(ty)))?;
+        // A key that is itself a reference (`sort_by_key(|s| s)`) points
+        // at the value the body compares.
+        let (mut a, mut b, mut t) = (a, b, ty);
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
+            a = self.load_ptr(a)?;
+            b = self.load_ptr(b)?;
+            t = i;
+        }
         let program = self.program;
         let ord_ty = program.bodies[&name].return_ty();
         let f = self.function(&name)?;

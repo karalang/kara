@@ -7,7 +7,7 @@ use inkwell::IntPredicate;
 
 use super::{Cx, R};
 use crate::mir::ty::IntrinsicTy;
-use crate::mir::{Operand, Place, TyKind};
+use crate::mir::{Operand, Place, Ty, TyKind};
 
 fn e<T: ToString>(x: T) -> String {
     x.to_string()
@@ -97,17 +97,17 @@ impl<'ctx> Cx<'ctx, '_> {
                     .map_err(e)?;
                 self.if_then(got, |cx| cx.store_tag(d, dty, some))?;
             }
-            ("front" | "front_mut", []) => self.some_slot(dest, q, len, self.i64(0), size)?,
+            ("front" | "front_mut", []) => self.some_slot(dest, q, len, self.i64(0), size, el)?,
             ("back" | "back_mut", []) => {
                 let i = self
                     .builder
                     .build_int_sub(len, self.i64(1), "")
                     .map_err(e)?;
-                self.some_slot(dest, q, len, i, size)?;
+                self.some_slot(dest, q, len, i, size, el)?;
             }
             ("get" | "get_mut", [i]) => {
                 let i = self.int_arg(i)?;
-                self.some_slot(dest, q, len, i, size)?;
+                self.some_slot(dest, q, len, i, size, el)?;
             }
             ("entry_at" | "index" | "index_mut", [i]) => {
                 let i = self.int_arg(i)?;
@@ -137,6 +137,7 @@ impl<'ctx> Cx<'ctx, '_> {
         len: IntValue<'ctx>,
         i: IntValue<'ctx>,
         size: u64,
+        el: Ty,
     ) -> R<()> {
         let dty = self.place_type(dest)?;
         let ok = self
@@ -146,11 +147,10 @@ impl<'ctx> Cx<'ctx, '_> {
         let d = self.place_ptr(dest)?;
         let (some, none) = self.option_variants(dty)?;
         self.store_tag(d, dty, none)?;
-        let off = self.field_offset(dty, Some(some), 0)?;
         self.if_then(ok, |cx| {
             let at = cx.slot(q, i, size)?;
             cx.store_tag(d, dty, some)?;
-            cx.store_found(cx.offset(d, off)?, dty, some, at)
+            cx.store_found(d, dty, some, at, el)
         })
     }
 }

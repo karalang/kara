@@ -11,7 +11,7 @@ use inkwell::IntPredicate;
 
 use super::{Cx, R};
 use crate::mir::interp::split_method;
-use crate::mir::ty::IntrinsicTy;
+use crate::mir::ty::{IntTy, IntrinsicTy};
 use crate::mir::{BasicBlock, ConstKind, Operand, Place, Ty, TyKind};
 
 fn e<T: ToString>(x: T) -> String {
@@ -61,15 +61,81 @@ impl<'ctx> Cx<'ctx, '_> {
         let dty = self.place_type(dest)?;
         let ret = self.temp(dty, "ret")?;
         let mut vals = vec![ret.into()];
-        for a in args {
+        let program = self.program;
+        let params = program.bodies.get(name).map(|b| &b.locals);
+        for (i, a) in args.iter().enumerate() {
             let t = self.operand_type(a)?;
-            let slot = self.temp(t, "arg")?;
-            self.store_operand(slot, a)?;
+            let want = params.and_then(|ls| ls.get(1 + i)).map(|l| l.ty);
+            let slot = match want {
+                // An argument whose integers are narrower than the
+                // parameter's (`(u8, u32)` for a `(i64, i64)`) is widened.
+                Some(w) if w != t && self.widens(t, w) => {
+                    let src = self.operand_ptr(a)?;
+                    let slot = self.temp(w, "arg")?;
+                    self.widen_into(slot, src, t, w)?;
+                    slot
+                }
+                _ => {
+                    let slot = self.temp(t, "arg")?;
+                    self.store_operand(slot, a)?;
+                    slot
+                }
+            };
             vals.push(slot.into());
         }
         self.builder.build_call(f, &vals, "").map_err(e)?;
         let d = self.place_ptr(dest)?;
         self.copy(d, ret, dty)
+    }
+
+    /// Whether a `from` value converts to `to` by widening its integers
+    /// in place: integers, and tuples of them of the same arity.
+    pub(super) fn widens(&self, from: Ty, to: Ty) -> bool {
+        match (self.tys.kind(from), self.tys.kind(to)) {
+            (TyKind::Int(_), TyKind::Int(_)) => true,
+            (TyKind::Tuple(a), TyKind::Tuple(b)) => {
+                a.len() == b.len() && a.iter().zip(&b).all(|(x, y)| x == y || self.widens(*x, *y))
+            }
+            _ => false,
+        }
+    }
+
+    /// Writes the `from` at `src` as a `to` at `dst` (see [`Self::widens`]).
+    pub(super) fn widen_into(
+        &mut self,
+        dst: PointerValue<'ctx>,
+        src: PointerValue<'ctx>,
+        from: Ty,
+        to: Ty,
+    ) -> R<()> {
+        if from == to {
+            return self.copy(dst, src, to);
+        }
+        match (self.tys.kind(from), self.tys.kind(to)) {
+            (TyKind::Int(it), TyKind::Int(_)) => {
+                let signed = matches!(
+                    it,
+                    IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64 | IntTy::I128 | IntTy::Isize
+                );
+                let v = self.load(src, from)?.into_int_value();
+                let wt = self.llvm_ty(to)?.into_int_type();
+                let w = self
+                    .builder
+                    .build_int_cast_sign_flag(v, wt, signed, "")
+                    .map_err(e)?;
+                self.store(dst, w.into())
+            }
+            (TyKind::Tuple(a), TyKind::Tuple(b)) => {
+                for (i, (x, y)) in a.iter().zip(&b).enumerate() {
+                    let so = self.field_offset(from, None, i as u32)?;
+                    let d = self.field_offset(to, None, i as u32)?;
+                    let (sp, dp) = (self.offset(src, so)?, self.offset(dst, d)?);
+                    self.widen_into(dp, sp, *x, *y)?;
+                }
+                Ok(())
+            }
+            _ => self.copy(dst, src, to),
+        }
     }
 
     /// Drops each argument the native was handed by move and did not keep.
@@ -118,19 +184,43 @@ impl<'ctx> Cx<'ctx, '_> {
     /// element at `at`: the reference itself when the payload is one, else
     /// a clone of the element, as the interpreter's `option_of_place` has
     /// it (`Array[i64, 4].get` is an `Option[i64]`).
+    ///
+    /// `d` is the option, already tagged `Some`; `el` is the element's
+    /// type. A `weak` element read as the `shared` type it points at is
+    /// upgraded, so a dead target reads as `None`.
     pub(super) fn store_found(
         &mut self,
-        q: PointerValue<'ctx>,
+        d: PointerValue<'ctx>,
         dty: Ty,
         some: u32,
         at: PointerValue<'ctx>,
+        el: Ty,
     ) -> R<()> {
         let pt = self
             .tys
             .field_ty(dty, Some(some), 0)
             .ok_or("an option without a payload")?;
-        match self.tys.kind(pt) {
-            TyKind::Ref(_) | TyKind::MutRef(_) => self.store(q, at.into()),
+        let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
+        match (self.tys.kind(pt), self.tys.kind(el)) {
+            (TyKind::Ref(_) | TyKind::MutRef(_), _) => self.store(q, at.into()),
+            (TyKind::Shared(_), TyKind::Weak(_)) => {
+                let (_, none) = self.option_variants(dty)?;
+                self.store_tag(d, dty, none)?;
+                let h = self.load_ptr(at)?;
+                let set = self.builder.build_is_not_null(h, "").map_err(e)?;
+                self.if_then(set, |cx| {
+                    let n = cx.load_i64(h)?;
+                    let alive = cx
+                        .builder
+                        .build_int_compare(IntPredicate::NE, n, cx.i64(0), "")
+                        .map_err(e)?;
+                    cx.if_then(alive, |cx| {
+                        cx.retain(h)?;
+                        cx.store_tag(d, dty, some)?;
+                        cx.store(q, h.into())
+                    })
+                })
+            }
             _ => self.clone_into(q, at, pt),
         }
     }
@@ -230,6 +320,11 @@ impl<'ctx> Cx<'ctx, '_> {
             ("String", "from") => {
                 let (s, n) = self.str_parts(&args[0])?;
                 let d = self.place_ptr(dest)?;
+                // A static `StringSlice` re-reads its literal as a view.
+                if matches!(self.tys.kind(dty), TyKind::Str) {
+                    self.store(d, s.into())?;
+                    return self.store(self.offset(d, 8)?, n.into());
+                }
                 self.rt("string_from", &[d.into(), s.into(), n.into()])?;
                 self.drop_moved(args)
             }
@@ -241,8 +336,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 Ok(())
             }
             ("String" | "Vec", "len") => {
-                let v = self.ref_arg(&args[0])?;
-                let n = self.load_i64(self.offset(v, 8)?)?;
+                let (_, n) = self.view_of(&args[0])?;
                 let d = self.place_ptr(dest)?;
                 let it = self.llvm_ty(dty)?.into_int_type();
                 let n = self
@@ -252,8 +346,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(d, n.into())
             }
             ("String" | "Vec", "is_empty") => {
-                let v = self.ref_arg(&args[0])?;
-                let n = self.load_i64(self.offset(v, 8)?)?;
+                let (_, n) = self.view_of(&args[0])?;
                 let z = self.is_zero(n)?;
                 let z = self
                     .builder
@@ -415,8 +508,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     let buf = cx.load_ptr(v)?;
                     let at = cx.elem_ptr(buf, i, size)?;
                     cx.store_tag(d, dty, some)?;
-                    let q = cx.offset(d, cx.field_offset(dty, Some(some), 0)?)?;
-                    cx.store_found(q, dty, some, at)
+                    cx.store_found(d, dty, some, at, el)
                 })
             }
             ("Vec", "pop") => {

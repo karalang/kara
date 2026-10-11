@@ -358,6 +358,7 @@ impl<'ctx> Cx<'ctx, '_> {
         n: IntValue<'ctx>,
         i: IntValue<'ctx>,
         size: u64,
+        el: Ty,
     ) -> R<()> {
         let dty = self.place_type(dest)?;
         let ok = self
@@ -367,11 +368,10 @@ impl<'ctx> Cx<'ctx, '_> {
         let d = self.place_ptr(dest)?;
         let (some, none) = self.option_variants(dty)?;
         self.store_tag(d, dty, none)?;
-        let off = self.field_offset(dty, Some(some), 0)?;
         self.if_then(ok, |cx| {
             let at = cx.elem_ptr(p, i, size)?;
             cx.store_tag(d, dty, some)?;
-            cx.store_found(cx.offset(d, off)?, dty, some, at)
+            cx.store_found(d, dty, some, at, el)
         })
     }
 
@@ -431,9 +431,9 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("get", [i]) => {
                 let i = self.int_arg(i)?;
-                self.some_elem(dest, p, n, i, size)?;
+                self.some_elem(dest, p, n, i, size, el)?;
             }
-            ("first", []) => self.some_elem(dest, p, n, self.i64(0), size)?,
+            ("first", []) => self.some_elem(dest, p, n, self.i64(0), size, el)?,
             ("last", rest) => {
                 let k = match rest {
                     [k] => self.int_arg(k)?,
@@ -441,7 +441,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 };
                 let last = self.builder.build_int_sub(n, self.i64(1), "").map_err(e)?;
                 let i = self.builder.build_int_sub(last, k, "").map_err(e)?;
-                self.some_elem(dest, p, n, i, size)?;
+                self.some_elem(dest, p, n, i, size, el)?;
             }
             ("slice" | "slice_mut", [a, b]) => {
                 let (a, b) = (self.int_arg(a)?, self.int_arg(b)?);

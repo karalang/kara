@@ -149,9 +149,15 @@ impl<'ctx> Cx<'ctx, '_> {
                 let v = self.load(p, ty)?;
                 self.rt("fmt_f64", &[v.into()])
             }
+            // An `f32` prints as the `f64` it widens to, as the
+            // interpreter's floats are all `f64`.
             TyKind::Float(FloatTy::F32) => {
-                let v = self.load(p, ty)?;
-                self.rt("fmt_f32", &[v.into()])
+                let v = self.load(p, ty)?.into_float_value();
+                let w = self
+                    .builder
+                    .build_float_ext(v, self.llcx.f64_type(), "")
+                    .map_err(e)?;
+                self.rt("fmt_f64", &[w.into()])
             }
             TyKind::Bool => {
                 let v = self.load(p, ty)?;

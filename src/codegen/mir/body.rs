@@ -715,6 +715,19 @@ impl<'ctx> Cx<'ctx, '_> {
 
     fn cast(&mut self, dst: PointerValue<'ctx>, kind: CastKind, a: &Operand, to: Ty) -> R<()> {
         let from = self.operand_type(a)?;
+        let narrow = |t: Ty| {
+            matches!(
+                self.tys.kind(t),
+                TyKind::Float(FloatTy::F16 | FloatTy::BF16)
+            )
+        };
+        if narrow(from) || narrow(to) {
+            return Err(format!(
+                "MIR to LLVM: a cast from `{}` to `{}` is not lowered yet",
+                self.tys.display(from),
+                self.tys.display(to)
+            ));
+        }
         match kind {
             CastKind::RefToPtr | CastKind::PtrToPtr => return self.store_operand(dst, a),
             CastKind::Downgrade => {

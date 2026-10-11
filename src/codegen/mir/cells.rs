@@ -193,11 +193,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 let (some, none) = self.option_variants(dty)?;
                 self.store_tag(d, dty, none)?;
-                let off = self.field_offset(dty, Some(some), 0)?;
                 let set = self.builder.build_is_not_null(p, "").map_err(e)?;
                 self.if_then(set, |cx| {
                     cx.store_tag(d, dty, some)?;
-                    cx.store_found(cx.offset(d, off)?, dty, some, p)
+                    cx.store_found(d, dty, some, p, t)
                 })?;
             }
             ("set", [v]) => {
