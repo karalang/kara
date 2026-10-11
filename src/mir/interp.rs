@@ -3649,6 +3649,16 @@ impl<'a> Interp<'a> {
             }
             ("TaskHandle", "join") => match args.as_slice() {
                 [Value::Agg(fs)] if fs.len() == 1 => Ok(fs[0].clone()),
+                // A handle lent to `join` gives its result up; its owner
+                // then drops an empty handle.
+                [r @ Value::Ref(_)] => {
+                    let at = self.cell_struct(r, name)?.child(0);
+                    let v = std::mem::replace(self.slot_mut(&at)?, Value::Uninit);
+                    if !v.fully_init() {
+                        return err(format!("{name} of a handle already joined"));
+                    }
+                    Ok(v)
+                }
                 _ => err(format!("{name} of a handle holding {args:?}")),
             },
             _ => err(format!("call of unknown function {name}")),
