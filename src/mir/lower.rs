@@ -164,6 +164,7 @@ pub fn lower_program<'a>(
             .map(|s| ((s.name.clone(), s.span.offset, s.span.length), s.id))
             .collect(),
         fns: FxHashMap::default(),
+        builtin_owns: FxHashMap::default(),
         consts: FxHashMap::default(),
         bindings: FxHashMap::default(),
         statics: FxHashMap::default(),
@@ -347,6 +348,10 @@ struct FnItem<'a> {
     /// type (`impl Bx[String]`) that shares a method name with a sibling
     /// impl, as `TypeCheckResult.method_impl_dispatch` names the winner.
     impl_dispatch: Option<String>,
+    /// `#k` for the `k`th (k > 0) impl of a generic trait on one type
+    /// (`impl From[S] for E` beside `impl From[T] for E`), which keeps
+    /// its methods' bodies apart from the first impl's.
+    impl_suffix: Option<String>,
 }
 
 impl FnItem<'_> {
@@ -399,6 +404,9 @@ struct Lcx<'a> {
     ref_bindings: &'a FxHashSet<SpanKey>,
     /// The types of `escaping Fn(..)` parameters, by span.
     escaping_fns: &'a FxHashSet<SpanKey>,
+    /// Which arguments of each `#[compiler_builtin]` method (by its type's
+    /// name and its own) are declared `own`: the native keeps them.
+    builtin_owns: FxHashMap<(String, String), Vec<bool>>,
     defs: &'a ProgramDefs,
     res: &'a FxHashMap<NodeId, Res>,
     node_types: FxHashMap<NodeId, Ty>,
@@ -550,6 +558,14 @@ impl<'a> Lcx<'a> {
     /// impl blocks in item order after the stdlib's: a program's
     /// `impl Option[T]` is `impl#1` when the stdlib already has one.
     fn index_functions(&mut self, program: &'a ast::Program) {
+        let baked = crate::prelude::STDLIB_PROGRAMS
+            .iter()
+            .map(|(_, p)| p)
+            .chain(crate::prelude::GATED_STDLIB_PROGRAMS.iter().map(|(_, p)| p));
+        for p in baked {
+            self.note_builtin_owns(p);
+        }
+        self.note_builtin_owns(program);
         let mut impl_ids = self.defs.module_impls.first().into_iter().flatten();
         let dispatch_names = crate::impl_dispatch::collect_impl_dispatch_names(program);
         for item in &program.items {
@@ -573,6 +589,7 @@ impl<'a> Lcx<'a> {
                                 impl_arg_pos: None,
                                 impl_span: None,
                                 impl_dispatch: None,
+                                impl_suffix: None,
                             },
                         );
                     }
@@ -627,6 +644,14 @@ impl<'a> Lcx<'a> {
                         .get(&SpanKey::from_span(&b.target_type.span))
                         .cloned();
                     let impl_path = self.defs.table.get(impl_id).path.segments.clone();
+                    let impl_suffix = b
+                        .trait_name
+                        .as_ref()
+                        .filter(|t| t.generic_args.is_some())
+                        .and(impl_path.last())
+                        .and_then(|l| l.rsplit_once('#'))
+                        .filter(|(_, k)| *k != "0")
+                        .map(|(_, k)| format!("#{k}"));
                     let impl_params = b.generic_params.as_ref().map_or(0, |g| g.params.len());
                     let impl_arg_pos = impl_arg_positions(b);
                     for it in &b.items {
@@ -653,6 +678,7 @@ impl<'a> Lcx<'a> {
                                     impl_arg_pos: impl_arg_pos.clone(),
                                     impl_span: Some(SpanKey::from_span(&b.span)),
                                     impl_dispatch: impl_dispatch.clone(),
+                                    impl_suffix: impl_suffix.clone(),
                                 },
                             );
                         }
@@ -686,6 +712,31 @@ impl<'a> Lcx<'a> {
             _ => return None,
         };
         Some(self.tys.tcx().intern(kind))
+    }
+
+    /// Record which arguments the library's `#[compiler_builtin]` methods
+    /// declare `own`.
+    fn note_builtin_owns(&mut self, program: &ast::Program) {
+        for item in &program.items {
+            let Item::ImplBlock(b) = item else { continue };
+            let ast::TypeKind::Path(tp) = &b.target_type.kind else {
+                continue;
+            };
+            let Some(head) = tp.segments.last() else {
+                continue;
+            };
+            for it in &b.items {
+                let ImplItem::Method(f) = it else { continue };
+                if f.attributes.iter().any(|a| a.is_bare("compiler_builtin"))
+                    && f.params.iter().any(|p| p.is_own)
+                {
+                    self.builtin_owns.insert(
+                        (head.clone(), f.name.clone()),
+                        f.params.iter().map(|p| p.is_own).collect(),
+                    );
+                }
+            }
+        }
     }
 
     /// The method `d` resolves to, or the same method of another impl of
@@ -772,6 +823,7 @@ impl<'a> Lcx<'a> {
                 impl_target: Some(t),
                 impl_params,
                 impl_dispatch,
+                impl_suffix,
                 ..
             }) => {
                 let (impl_args, own) = args.split_at((*impl_params).min(args.len()));
@@ -784,6 +836,9 @@ impl<'a> Lcx<'a> {
                 }
                 s.push('.');
                 s.push_str(&name);
+                if let Some(k) = impl_suffix {
+                    s.push_str(k);
+                }
                 if !own.is_empty() {
                     s = format!("{s}[{}]", show(own));
                 }
@@ -11998,11 +12053,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Some(OwnershipMode::Own) => CapMode::Value,
                 _ if self.is_copy(t) => CapMode::Value,
                 // Under D5 a capture is moved place by place, as the body
-                // moves it (§9.1). A task still takes a once-callable
-                // closure's captures by move until the checker's table of
-                // task moves reads bare parameters as borrowed.
+                // moves it (§9.1).
                 None | Some(OwnershipMode::Ref)
-                    if ((once && (task || !d5_params())) || moved.contains(&sym)) && !explicit =>
+                    if ((once && !d5_params()) || moved.contains(&sym)) && !explicit =>
                 {
                     CapMode::Value
                 }
@@ -12789,7 +12842,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // arguments (keys, needles, slices, text) are borrowed.
                 let stores = stores_argument(method)
                     || (method == "replace" && self.tys().display(base).starts_with("Option["));
-                for a in args {
+                // A library method declared to take an argument `own` keeps it.
+                let owns = {
+                    let shown = self.tys().display(base);
+                    let head = shown.split('[').next().unwrap_or("").to_string();
+                    self.lcx
+                        .builtin_owns
+                        .get(&(head, method.to_string()))
+                        .cloned()
+                        .unwrap_or_default()
+                };
+                for (i, a) in args.iter().enumerate() {
+                    let stores = stores || owns.get(i).copied().unwrap_or(false);
                     if self.is_fn_typed(a.value.id)
                         || matches!(a.value.kind, ExprKind::Closure { .. })
                     {
@@ -15902,6 +15966,29 @@ fn main() {
             run_source(src),
             Ok(("4 true false 3 12 0\n".to_string(), Some(0)))
         );
+    }
+
+    /// Two impls of one generic trait on one type (`From[A]`, `From[B]`)
+    /// keep separate bodies, and `?` converts with the one for its source.
+    #[test]
+    fn two_from_impls_keep_their_own_bodies() {
+        let src = r#"
+struct A { n: i64 }
+struct B { s: String }
+struct E { v: i64 }
+impl From[A] for E { fn from(a: own A) -> E { E { v: a.n } } }
+impl From[B] for E { fn from(b: own B) -> E { E { v: b.s.len() } } }
+fn fa() -> Result[i64, A] { Result.Err(A { n: 7 }) }
+fn fb() -> Result[i64, B] { Result.Err(B { s: "abc".to_string() }) }
+fn ga() -> Result[i64, E] { let x = fa()?; Result.Ok(x) }
+fn gb() -> Result[i64, E] { let x = fb()?; Result.Ok(x) }
+fn main() {
+    let a = match ga() { Result.Ok(v) => v, Result.Err(e) => e.v };
+    let b = match gb() { Result.Ok(v) => v, Result.Err(e) => e.v };
+    println(f"{a} {b}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("7 3\n".to_string(), Some(0))));
     }
 
     /// A function item handed to an adaptor solves the adaptor's result
