@@ -111,7 +111,93 @@ enum Root {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Addr {
     root: Root,
-    path: Vec<u64>,
+    path: Path,
+}
+
+/// The field and element indices of an [`Addr`] below its root. Nearly
+/// every path is one or two steps long, so those are held inline: the
+/// interpreter makes an address on most steps, and a heap allocation for
+/// each was its largest single cost.
+#[derive(Clone)]
+enum Path {
+    Inline(u8, [u64; 2]),
+    // Boxed so the long form costs one word and `Path` stays 24 bytes.
+    #[allow(clippy::box_collection)]
+    Heap(Box<Vec<u64>>),
+}
+
+impl Path {
+    fn new() -> Path {
+        Path::Inline(0, [0; 2])
+    }
+
+    fn from_slice(s: &[u64]) -> Path {
+        if s.len() <= 2 {
+            let mut a = [0; 2];
+            a[..s.len()].copy_from_slice(s);
+            Path::Inline(s.len() as u8, a)
+        } else {
+            Path::Heap(Box::new(s.to_vec()))
+        }
+    }
+
+    fn push(&mut self, i: u64) {
+        match self {
+            Path::Inline(n, a) if (*n as usize) < a.len() => {
+                a[*n as usize] = i;
+                *n += 1;
+            }
+            Path::Inline(n, a) => {
+                let mut v = a[..*n as usize].to_vec();
+                v.push(i);
+                *self = Path::Heap(Box::new(v));
+            }
+            Path::Heap(v) => v.push(i),
+        }
+    }
+
+    fn pop(&mut self) -> Option<u64> {
+        match self {
+            Path::Inline(0, _) => None,
+            Path::Inline(n, a) => {
+                *n -= 1;
+                Some(a[*n as usize])
+            }
+            Path::Heap(v) => v.pop(),
+        }
+    }
+}
+
+impl std::ops::Deref for Path {
+    type Target = [u64];
+
+    fn deref(&self) -> &[u64] {
+        match self {
+            Path::Inline(n, a) => &a[..*n as usize],
+            Path::Heap(v) => v,
+        }
+    }
+}
+
+impl PartialEq for Path {
+    fn eq(&self, other: &Path) -> bool {
+        **self == **other
+    }
+}
+
+impl fmt::Debug for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl<'p> IntoIterator for &'p Path {
+    type Item = &'p u64;
+    type IntoIter = std::slice::Iter<'p, u64>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
 }
 
 impl Addr {
@@ -1335,7 +1421,7 @@ impl<'a> Interp<'a> {
                     });
                     let at = Value::Ref(Addr {
                         root: Root::Heap(slot),
-                        path: Vec::new(),
+                        path: Path::new(),
                     });
                     for i in 0..*n {
                         out.push(self.call_erased(at.clone(), vec![Value::Int(i)])?);
@@ -1547,7 +1633,7 @@ impl<'a> Interp<'a> {
                 });
                 let at = |i: usize| Addr {
                     root: Root::Heap(scratch),
-                    path: vec![i as u64],
+                    path: Path::from_slice(&[i as u64]),
                 };
                 let mut callee = self.hold_callee(f.clone(), fty, name)?;
                 let ord_ty = callee.body.return_ty();
@@ -1866,7 +1952,7 @@ impl<'a> Interp<'a> {
                 for i in keep..len {
                     let at = Addr {
                         root: Root::Heap(id),
-                        path: vec![i as u64],
+                        path: Path::from_slice(&[i as u64]),
                     };
                     self.drop_at(&at, e)?;
                 }
@@ -1879,7 +1965,7 @@ impl<'a> Interp<'a> {
                 let elem = (n > 0).then(|| {
                     Value::Ref(Addr {
                         root: Root::Heap(id),
-                        path: vec![0],
+                        path: Path::from_slice(&[0]),
                     })
                 });
                 self.option_of_place(ret, elem)
@@ -1890,7 +1976,7 @@ impl<'a> Interp<'a> {
                 let elem = (n > 0).then(|| {
                     Value::Ref(Addr {
                         root: Root::Heap(id),
-                        path: vec![n as u64 - 1],
+                        path: Path::from_slice(&[n as u64 - 1]),
                     })
                 });
                 self.option_of_place(ret, elem)
@@ -1902,7 +1988,7 @@ impl<'a> Interp<'a> {
                 let elem = (0..n).contains(&i).then(|| {
                     Value::Ref(Addr {
                         root: Root::Heap(id),
-                        path: vec![i as u64],
+                        path: Path::from_slice(&[i as u64]),
                     })
                 });
                 self.option_of_place(ret, elem)
@@ -1926,7 +2012,7 @@ impl<'a> Interp<'a> {
                 for i in 0..n {
                     let at = Addr {
                         root: Root::Heap(id),
-                        path: vec![i as u64],
+                        path: Path::from_slice(&[i as u64]),
                     };
                     self.drop_at(&at, e)?;
                 }
@@ -1939,7 +2025,7 @@ impl<'a> Interp<'a> {
                 let i = self.bounds(id, *i, false)?;
                 let at = Addr {
                     root: Root::Heap(id),
-                    path: vec![i as u64],
+                    path: Path::from_slice(&[i as u64]),
                 };
                 // The new value is evaluated already; the old one drops
                 // before the store (core-semantics D4).
@@ -1993,7 +2079,7 @@ impl<'a> Interp<'a> {
         let e = self.vec_elem_ty(arg_tys, &name)?;
         let elem = |i: usize| Addr {
             root: Root::Heap(id),
-            path: vec![i as u64],
+            path: Path::from_slice(&[i as u64]),
         };
         let closure_ty = || {
             arg_tys
@@ -2323,7 +2409,7 @@ impl<'a> Interp<'a> {
             } else {
                 all.push(Value::Ref(Addr {
                     root: Root::Heap(slot),
-                    path: Vec::new(),
+                    path: Path::new(),
                 }));
             }
         }
@@ -2361,13 +2447,23 @@ impl<'a> Interp<'a> {
                 "{what} returned, but the call site says it never does"
             ));
         };
-        let (addr, ty) = self
-            .resolve(body, destination, Mode::Write)?
-            .expect("write mode never probes");
-        if self.owns_drop(self.slot_ref(&addr)?, ty) {
-            return err("call result overwrites a place that still owns a value");
+        if destination.projection.is_empty() {
+            // A bare local: no address to build.
+            let ty = body.local(destination.local).ty;
+            let frame = self.frames.last().expect("frame");
+            if self.owns_drop(&frame.locals[destination.local.index()], ty) {
+                return err("call result overwrites a place that still owns a value");
+            }
+            self.frames.last_mut().expect("frame").locals[destination.local.index()] = ret;
+        } else {
+            let (addr, ty) = self
+                .resolve(body, destination, Mode::Write)?
+                .expect("write mode never probes");
+            if self.owns_drop(self.slot_ref(&addr)?, ty) {
+                return err("call result overwrites a place that still owns a value");
+            }
+            *self.slot_mut(&addr)? = ret;
         }
-        *self.slot_mut(&addr)? = ret;
         if self.trace {
             self.events
                 .push(Event::Init(self.place_str(body, destination)));
@@ -2442,7 +2538,7 @@ impl<'a> Interp<'a> {
             .ok_or_else(|| Stop::Error(format!("{name}: a closure body with no env")))?;
         let at = Addr {
             root: Root::Heap(slot),
-            path: Vec::new(),
+            path: Path::new(),
         };
         let mut all = Vec::with_capacity(args.len() + 1);
         if takes_env {
@@ -2474,7 +2570,7 @@ impl<'a> Interp<'a> {
             if !f.taken {
                 let at = Addr {
                     root: Root::Heap(slot),
-                    path: Vec::new(),
+                    path: Path::new(),
                 };
                 self.drop_at(&at, fty)?;
             }
@@ -2763,7 +2859,7 @@ impl<'a> Interp<'a> {
                 self.table_insert(id, at, Value::Agg(vec![key.clone(), v]), key)?;
                 Ok(Value::Ref(Addr {
                     root: Root::Heap(id),
-                    path: vec![at as u64, 1],
+                    path: Path::from_slice(&[at as u64, 1]),
                 }))
             }
             _ => err(format!("call of unknown function {name}")),
@@ -3169,7 +3265,7 @@ impl<'a> Interp<'a> {
             self.snapshots.insert(id);
             return Ok(Value::Ref(Addr {
                 root: Root::Heap(id),
-                path: Vec::new(),
+                path: Path::new(),
             }));
         }
         let Some(recv) = args.first() else {
@@ -3411,7 +3507,7 @@ impl<'a> Interp<'a> {
                 let n = self.vec_elems(id)?.len() as u64;
                 let base = Addr {
                     root: Root::Heap(id),
-                    path: Vec::new(),
+                    path: Path::new(),
                 };
                 Ok((base, 0, n))
             }
@@ -3456,7 +3552,7 @@ impl<'a> Interp<'a> {
                 let at = found.map(|i| {
                     Value::Ref(Addr {
                         root: Root::Heap(id),
-                        path: vec![i as u64, 1],
+                        path: Path::from_slice(&[i as u64, 1]),
                     })
                 });
                 self.option_of_place(ret, at)
@@ -3472,7 +3568,7 @@ impl<'a> Interp<'a> {
                 };
                 Ok(Value::Ref(Addr {
                     root: Root::Heap(id),
-                    path: vec![i as u64, 1],
+                    path: Path::from_slice(&[i as u64, 1]),
                 }))
             }
             ("insert", [key, rest @ ..]) => {
@@ -3543,7 +3639,7 @@ impl<'a> Interp<'a> {
                 let i = self.bounds(id, *i, false)?;
                 Ok(Value::Ref(Addr {
                     root: Root::Heap(id),
-                    path: vec![i as u64],
+                    path: Path::from_slice(&[i as u64]),
                 }))
             }
             ("get_or", [key, default]) if is_map => {
@@ -3555,7 +3651,7 @@ impl<'a> Interp<'a> {
                     Some(i) => {
                         let v = self.slot(&Addr {
                             root: Root::Heap(id),
-                            path: vec![i as u64, 1],
+                            path: Path::from_slice(&[i as u64, 1]),
                         })?;
                         if owned_default {
                             self.drop_value(default.clone(), val_ty)?;
@@ -3587,7 +3683,7 @@ impl<'a> Interp<'a> {
                 for i in 0..n as u64 {
                     let at = Addr {
                         root: Root::Heap(id),
-                        path: vec![i, part],
+                        path: Path::from_slice(&[i, part]),
                     };
                     if by_ref {
                         out.push(Value::Ref(at));
@@ -3607,7 +3703,7 @@ impl<'a> Interp<'a> {
                     self.drop_value(key.clone(), key_ty)?;
                     let at = Value::Ref(Addr {
                         root: Root::Heap(id),
-                        path: vec![i as u64, 1],
+                        path: Path::from_slice(&[i as u64, 1]),
                     });
                     return self.variant_named(ret, None, "Occupied", vec![at]);
                 }
@@ -3649,7 +3745,7 @@ impl<'a> Interp<'a> {
                 };
                 Ok(Value::Ref(Addr {
                     root: Root::Heap(id),
-                    path: vec![i as u64, 1],
+                    path: Path::from_slice(&[i as u64, 1]),
                 }))
             }
             ("range" | "range_inclusive", [lo, hi]) if !is_map => {
@@ -3689,7 +3785,7 @@ impl<'a> Interp<'a> {
                 for (_, i) in picked {
                     let at = Addr {
                         root: Root::Heap(id),
-                        path: vec![i as u64],
+                        path: Path::from_slice(&[i as u64]),
                     };
                     if by_ref {
                         out.push(Value::Ref(at));
@@ -3717,7 +3813,7 @@ impl<'a> Interp<'a> {
                 let at = pick.map(|i| {
                     Value::Ref(Addr {
                         root: Root::Heap(id),
-                        path: vec![i as u64],
+                        path: Path::from_slice(&[i as u64]),
                     })
                 });
                 self.option_of_place(ret, at)
@@ -3791,7 +3887,7 @@ impl<'a> Interp<'a> {
                 for i in picked {
                     let e = Addr {
                         root: Root::Heap(id),
-                        path: vec![i as u64],
+                        path: Path::from_slice(&[i as u64]),
                     };
                     let (k, v) = (self.slot(&e.child(0))?, self.slot(&e.child(1))?);
                     out.push(Value::Agg(vec![
@@ -3847,7 +3943,7 @@ impl<'a> Interp<'a> {
                 for i in 0..n as u64 {
                     let at = Addr {
                         root: Root::Heap(id),
-                        path: vec![i],
+                        path: Path::from_slice(&[i]),
                     };
                     if is_map {
                         self.drop_at(&at.child(0), key_ty)?;
@@ -3944,7 +4040,7 @@ impl<'a> Interp<'a> {
                 let at = (n > 0).then(|| {
                     Value::Ref(Addr {
                         root: Root::Heap(id),
-                        path: vec![i as u64],
+                        path: Path::from_slice(&[i as u64]),
                     })
                 });
                 self.option_of_place(ret, at)
@@ -3954,7 +4050,7 @@ impl<'a> Interp<'a> {
                 let at = (0..n).contains(i).then(|| {
                     Value::Ref(Addr {
                         root: Root::Heap(id),
-                        path: vec![*i as u64],
+                        path: Path::from_slice(&[*i as u64]),
                     })
                 });
                 self.option_of_place(ret, at)
@@ -3963,7 +4059,7 @@ impl<'a> Interp<'a> {
                 let i = self.bounds(id, *i, false)?;
                 Ok(Value::Ref(Addr {
                     root: Root::Heap(id),
-                    path: vec![i as u64],
+                    path: Path::from_slice(&[i as u64]),
                 }))
             }
             ("clone", []) => {
@@ -4281,7 +4377,7 @@ impl<'a> Interp<'a> {
             scratch.push(slot);
             refs.push(Value::Ref(Addr {
                 root: Root::Heap(AllocId(slot as u32)),
-                path: Vec::new(),
+                path: Path::new(),
             }));
         }
         Ok((refs, scratch))
@@ -4307,7 +4403,7 @@ impl<'a> Interp<'a> {
             scratch.push(slot);
             refs.push(Value::Ref(Addr {
                 root: Root::Heap(AllocId(slot as u32)),
-                path: Vec::new(),
+                path: Path::new(),
             }));
         }
         let r = self.call(name, refs);
@@ -4465,7 +4561,7 @@ impl<'a> Interp<'a> {
             .0 as usize;
         let at = Addr {
             root: Root::Heap(AllocId(scratch as u32)),
-            path: Vec::new(),
+            path: Path::new(),
         };
         self.drop_at(&at, ty)?;
         self.free_slot(AllocId(scratch as u32));
@@ -4849,7 +4945,7 @@ impl<'a> Interp<'a> {
                 Ok(Value::Slice {
                     base: Box::new(Addr {
                         root: Root::Heap(id),
-                        path: Vec::new(),
+                        path: Path::new(),
                     }),
                     lo: 0,
                     len: n,
@@ -5211,7 +5307,7 @@ impl<'a> Interp<'a> {
         }
         Ok(Value::Ref(Addr {
             root: Root::Heap(id),
-            path: vec![i as u64],
+            path: Path::from_slice(&[i as u64]),
         }))
     }
 
@@ -5420,7 +5516,7 @@ impl<'a> Interp<'a> {
             .0 as usize;
         let at = Addr {
             root: Root::Heap(AllocId(scratch as u32)),
-            path: Vec::new(),
+            path: Path::new(),
         };
         let shown = self.call(name, vec![Value::Ref(at)]);
         // The copy shares `v`'s allocations, so it goes without a drop.
@@ -5693,7 +5789,7 @@ impl<'a> Interp<'a> {
                 id: self.frames[fi].id,
                 local: place.local,
             },
-            path: Vec::new(),
+            path: Path::new(),
         };
         let mut ty = body.local(place.local).ty;
         let mut variant: Option<u32> = None;
@@ -5720,7 +5816,7 @@ impl<'a> Interp<'a> {
                     Value::Shared(a) => {
                         addr = Addr {
                             root: Root::Heap(a),
-                            path: Vec::new(),
+                            path: Path::new(),
                         };
                         behind_handle = true;
                     }
@@ -5863,6 +5959,38 @@ impl<'a> Interp<'a> {
             ty = fty;
         }
         Some((v, ty))
+    }
+
+    /// The address `resolve` gives a place that [`Interp::local_fields_mut`]
+    /// can walk, made without its checks being repeated: the walk itself
+    /// proves each step reaches an initialized aggregate.
+    fn fast_addr(&mut self, body: &Body, place: &Place) -> Option<Addr> {
+        let mut addr = match place.projection.first() {
+            Some(ProjElem::Deref) => match &self.frames.last()?.locals[place.local.index()] {
+                Value::Ref(a) => a.clone(),
+                _ => return None,
+            },
+            _ => {
+                let fi = self.frames.len() - 1;
+                Addr {
+                    root: Root::Local {
+                        frame: fi,
+                        id: self.frames[fi].id,
+                        local: place.local,
+                    },
+                    path: Path::new(),
+                }
+            }
+        };
+        if !place.projection.is_empty() {
+            self.local_fields_mut(body, place)?;
+        }
+        for elem in &place.projection {
+            if let ProjElem::Field(f, _) = *elem {
+                addr.path.push(f.0 as u64);
+            }
+        }
+        Some(addr)
     }
 
     fn resolve_read(&mut self, body: &Body, place: &Place) -> R<(Addr, Ty)> {
@@ -6123,7 +6251,7 @@ impl<'a> Interp<'a> {
             ConstKind::FnDef(inst) => Value::Fn(inst.clone()),
             ConstKind::Static(i) => Value::Ref(Addr {
                 root: Root::Static(*i),
-                path: Vec::new(),
+                path: Path::new(),
             }),
         })
     }
@@ -6131,7 +6259,10 @@ impl<'a> Interp<'a> {
     fn rvalue(&mut self, body: &Body, rv: &Rvalue) -> R<Value> {
         match rv {
             Rvalue::Use(o) => Ok(self.operand(body, o)?.0),
-            Rvalue::Ref(_, p) => Ok(Value::Ref(self.resolve_read(body, p)?.0)),
+            Rvalue::Ref(_, p) => match self.fast_addr(body, p) {
+                Some(addr) => Ok(Value::Ref(addr)),
+                None => Ok(Value::Ref(self.resolve_read(body, p)?.0)),
+            },
             Rvalue::Retain(p) => {
                 let (addr, _) = self.resolve_read(body, p)?;
                 let Value::Shared(a) = self.slot(&addr)? else {
@@ -6654,7 +6785,7 @@ impl<'a> Interp<'a> {
                 } => {
                     let at = Addr {
                         root: Root::Heap(slot),
-                        path: Vec::new(),
+                        path: Path::new(),
                     };
                     self.drop_at(&at, env_ty)?;
                     self.free_slot(slot);
@@ -6675,7 +6806,7 @@ impl<'a> Interp<'a> {
                         };
                         let root = Addr {
                             root: Root::Heap(id),
-                            path: Vec::new(),
+                            path: Path::new(),
                         };
                         for i in 0..n {
                             self.drop_at(&root.child(i as u64), e)?;
@@ -6688,7 +6819,7 @@ impl<'a> Interp<'a> {
                         for i in 0..self.vec_elems(id)?.len() as u64 {
                             let entry = Addr {
                                 root: Root::Heap(id),
-                                path: vec![i],
+                                path: Path::from_slice(&[i]),
                             };
                             self.drop_at(&entry.child(0), k)?;
                             self.drop_at(&entry.child(1), val)?;
@@ -6698,7 +6829,7 @@ impl<'a> Interp<'a> {
                         for i in 0..self.vec_elems(id)?.len() as u64 {
                             let at = Addr {
                                 root: Root::Heap(id),
-                                path: vec![i],
+                                path: Path::from_slice(&[i]),
                             };
                             self.drop_at(&at, e)?;
                         }
@@ -6810,7 +6941,7 @@ impl<'a> Interp<'a> {
                         .0 as usize;
                     let handle = Addr {
                         root: Root::Heap(AllocId(scratch as u32)),
-                        path: Vec::new(),
+                        path: Path::new(),
                     };
                     let r = self.call(&f, vec![Value::Ref(handle)]);
                     self.free_slot(AllocId(scratch as u32));
@@ -6903,6 +7034,11 @@ impl<'a> Interp<'a> {
     /// A native's result as a `str` view when that is its type: the text
     /// of a `String` it made, held in place, its allocation freed.
     fn inline_str(&mut self, v: Value, ty: Ty) -> R<Value> {
+        // Only a box or a variant can hold a `str`; anything else passes
+        // without its type being looked at.
+        if !matches!(v, Value::Box(_) | Value::Variant(..)) {
+            return Ok(v);
+        }
         match (self.tys.kind(ty), v) {
             (TyKind::Str, v @ Value::Box(id)) => {
                 let text = self.string_at(&v)?;
@@ -6946,7 +7082,7 @@ impl<'a> Interp<'a> {
         if c == 0 {
             let root = Addr {
                 root: Root::Heap(id),
-                path: Vec::new(),
+                path: Path::new(),
             };
             // The body may hold the last weak handle to its own box (a
             // node whose `weak` field points at itself): keep the box for
@@ -7182,7 +7318,7 @@ impl<'a> Interp<'a> {
         });
         let at = Addr {
             root: Root::Heap(slot),
-            path: Vec::new(),
+            path: Path::new(),
         };
         loop {
             match self.call(&resume, vec![Value::Ref(at.clone())])? {
@@ -7833,7 +7969,7 @@ impl<'a> Interp<'a> {
                 };
                 Ok(Value::Ref(Addr {
                     root: Root::Heap(holder),
-                    path: Vec::new(),
+                    path: Path::new(),
                 }))
             }
             _ => Ok(Value::Int(self.interners[h].strings.len() as i128)),
@@ -7919,7 +8055,7 @@ impl<'a> Interp<'a> {
         (
             Value::Ref(Addr {
                 root: Root::Heap(id),
-                path: Vec::new(),
+                path: Path::new(),
             }),
             id,
         )
