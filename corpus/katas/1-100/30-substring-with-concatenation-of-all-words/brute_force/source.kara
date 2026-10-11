@@ -85,7 +85,7 @@ fn find_substring(s: ref String, words: Slice[String]) -> Vec[i64] {
                     ok = false;
                     j = k;
                 } else {
-                    seen.insert(s[start..start + wl], cur + 1);
+                    seen.insert(s[start..start + wl].to_string(), cur + 1);
                     j = j + 1;
                 }
             }

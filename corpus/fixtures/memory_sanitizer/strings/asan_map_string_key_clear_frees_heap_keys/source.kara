@@ -2,10 +2,10 @@
 fn main() {
     let base = "abcdefghij";
     let mut m: Map[String, i64] = Map.new();
-    let mut round = 0i64;
+    let mut round = 0;
     while round < 50 {
-        let mut v = 0i64;
-        while v < 5 { m.insert(base[v*2 .. v*2+2], v); v = v + 1; }
+        let mut v = 0;
+        while v < 5 { m.insert(base[v*2 .. v*2+2].to_string(), v); v = v + 1; }
         m.clear();
         round = round + 1;
     }

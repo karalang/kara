@@ -6661,6 +6661,34 @@ impl<'a> super::TypeChecker<'a> {
 
     /// v2 core §5.5: whether `e` produces a temporary that owns its value
     /// (one with no named place), as opposed to a place or a view.
+    /// v2 core §5.5: a `ref` binding in a `let` (or `let … else`) pattern
+    /// borrows from the initializer, and when that is a temporary it is
+    /// dropped at the `;` while the binding lives on. There is no temporary
+    /// lifetime extension, so this is rejected: bind the temporary first, or
+    /// bind the part by value.
+    fn core_reject_ref_pattern_into_temp(&mut self, pattern: &Pattern, value: &Expr) {
+        if !self.cli_lint_overrides.strict_core || !self.core_expr_is_temp(value) {
+            return;
+        }
+        let borrowed = pattern.binding_name_spans().into_iter().find(|(_, span)| {
+            let key = SpanKey::from_span(span);
+            self.program.ref_binding_spans.contains(&key)
+                || self.program.mut_ref_binding_spans.contains(&key)
+        });
+        let Some((name, _)) = borrowed else {
+            return;
+        };
+        self.type_error(
+            format!(
+                "a reference to a temporary outlives its statement (core-semantics.md \
+                 §5.5): `ref {name}` borrows from a temporary that is dropped at the `;`. \
+                 Bind the temporary to a variable first, or bind `{name}` by value"
+            ),
+            value.span,
+            TypeErrorKind::TypeMismatch,
+        );
+    }
+
     fn core_expr_is_temp(&self, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Call { .. }
@@ -7364,6 +7392,7 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     self.core_check_ref_tails(value);
                 }
+                self.core_reject_ref_pattern_into_temp(pattern, value);
                 // v2 core §5.5: a `let` that keeps a reference to a temporary.
                 if self.cli_lint_overrides.strict_core && self.core_is_view(&expected_ty) {
                     if let Some(temp) = self.core_view_temp_origin(value) {
@@ -7557,6 +7586,7 @@ impl<'a> super::TypeChecker<'a> {
                 // plain `let` warns about (W0299): its bindings own a copy taken
                 // off the borrow exactly as `let e = h.e`'s binding does.
                 self.warn_scrutinee_projection_copy(value, &expected_ty);
+                self.core_reject_ref_pattern_into_temp(pattern, value);
                 // The else block runs on the NON-matching edge, so the
                 // pattern's bindings are NOT in scope there — infer it first,
                 // before binding the pattern. It must diverge.

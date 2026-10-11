@@ -696,6 +696,19 @@ impl<'a> UseClassifier<'a> {
         }
     }
 
+    /// v2 core C3 only. The value of an `if` or `match` is a temporary built
+    /// from its arms' tails, which are block tail values (§3.1), so an index
+    /// projection there moves the element out of its collection even where
+    /// the result is then only borrowed (`println(match t { A(x) => x[1], _
+    /// => s })`). `Block` already walks its tail as consuming; this records
+    /// the same index moves for the branching forms without changing how
+    /// anything else in the arms is classified.
+    fn walk_core_value_tails(&mut self, expr: &Expr, mode: Mode) {
+        if mode != Mode::Consuming && crate::ownership::core_rules() {
+            self.walk_core_tail(expr);
+        }
+    }
+
     /// A pattern binding inside a closure body is closure-local, like an
     /// inner `let`: moving it is a fresh move, not a capture consume.
     fn note_closure_locals(&mut self, pattern: &Pattern) {
@@ -1026,6 +1039,7 @@ impl<'a> UseClassifier<'a> {
                 then_block,
                 else_branch,
             } => {
+                self.walk_core_value_tails(expr, mode);
                 self.walk_expr(condition, Mode::Reading);
                 self.walk_block(then_block, mode);
                 if let Some(eb) = else_branch {
@@ -1038,6 +1052,7 @@ impl<'a> UseClassifier<'a> {
                 else_branch,
                 pattern,
             } => {
+                self.walk_core_value_tails(expr, mode);
                 self.note_closure_locals(pattern);
                 // The scrutinee of `if let` is a pattern match — same shape
                 // as `match` step 4. For simplicity (and to align with the
@@ -1056,6 +1071,7 @@ impl<'a> UseClassifier<'a> {
                 }
             }
             ExprKind::Match { scrutinee, arms } => {
+                self.walk_core_value_tails(expr, mode);
                 // Match-ergonomics: under a `ref T` / `mut ref T`
                 // scrutinee, arm bindings borrow rather than move, so
                 // the scrutinee is always read regardless of what the

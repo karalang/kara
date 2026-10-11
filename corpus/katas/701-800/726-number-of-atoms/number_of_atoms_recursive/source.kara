@@ -78,7 +78,7 @@ fn parse_at(s: ref String, start: i64) -> (Vec[String], Vec[i64], i64) {
                 i = i + 1;
             }
             if not have { c = 1; }
-            names.push(name);
+            names.push(name.to_string());
             counts.push(c);
         } else {
             i = i + 1;

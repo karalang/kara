@@ -1,6 +1,6 @@
 
 fn tail30(s: ref String) -> String {
-    s[6..36]
+    s[6..36].to_string()
 }
 
 fn main() {

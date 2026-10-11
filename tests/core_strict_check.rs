@@ -856,6 +856,120 @@ fn a_reference_to_a_temporary_cannot_outlive_its_statement() {
     );
 }
 
+/// §5.5 again: a `ref` binding in a `let` pattern borrows from the
+/// initializer, so over a temporary it would outlive the `;` that drops it.
+#[test]
+fn a_ref_pattern_binding_cannot_borrow_from_a_temporary() {
+    rejected(
+        "ref-pattern-temp-let-else",
+        "#[derive(Clone)]\n\
+         enum E { A(String), B }\n\
+         fn main() {\n\
+             let v: Vec[E] = [E.A(\"x\".to_string())];\n\
+             let E.A(ref r) = v[0].clone() else { return };\n\
+             println(r);\n\
+         }\n",
+        "`ref r` borrows from a temporary",
+    );
+    rejected(
+        "ref-pattern-temp-let",
+        "fn mk() -> (String, i64) { return (\"a\".to_string(), 1) }\n\
+         fn main() {\n\
+             let (ref s, n) = mk();\n\
+             println(f\"{s} {n}\");\n\
+         }\n",
+        "`ref s` borrows from a temporary",
+    );
+    accepted(
+        "ref-pattern-named",
+        "#[derive(Clone)]\n\
+         enum E { A(String), B }\n\
+         fn main() {\n\
+             let v: Vec[E] = [E.A(\"x\".to_string())];\n\
+             let e = v[0].clone();\n\
+             let E.A(ref r) = e else { return };\n\
+             println(r);\n\
+             let E.A(q) = v[0].clone() else { return };\n\
+             println(q);\n\
+         }\n",
+    );
+}
+
+/// "Views at lookup" (Gowtham, 2026-10-11): a String-keyed map or set is
+/// looked up by a `Str`, a `Vec`-keyed one by a `Slice`, with no copy.
+#[test]
+fn a_string_keyed_lookup_takes_a_str() {
+    accepted(
+        "lookup-by-str",
+        "fn main() {\n\
+             let s = \"abcd\".to_string();\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             m.insert(s[0..2].to_string(), 1);\n\
+             let mut t: SortedMap[String, i64] = SortedMap.new();\n\
+             t.insert(\"cd\".to_string(), 2);\n\
+             let mut u: Set[String] = Set.new();\n\
+             u.insert(\"ab\".to_string());\n\
+             let k = s[0..2];\n\
+             println(m.get(k) ?? 0);\n\
+             println(m.contains_key(s[2..4]));\n\
+             println(t.get(s[2..4]) ?? 0);\n\
+             println(u.contains(k));\n\
+             println(u.remove(s[0..2]));\n\
+             println(m.remove(k) ?? 0);\n\
+             println(m.get(s) ?? 0);\n\
+         }\n",
+    );
+    // Storing still takes an owned `String`.
+    rejected_then_fixed_by(
+        "insert-by-str",
+        "fn main() {\n\
+             let s = \"abcd\".to_string();\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             m.insert(s[0..2], 1);\n\
+             println(m.len());\n\
+         }\n",
+        "found 'Str'",
+        "m.insert(s[0..2].to_string(), 1);",
+    );
+}
+
+/// C3: the value of a `match` or `if let` is built from its arms' tails,
+/// which are block tail values (§3.1), so an element taken there moves out
+/// of its collection even when the result is only borrowed afterwards.
+#[test]
+fn an_element_in_an_arm_tail_moves_out_of_its_collection() {
+    rejected_then_fixed_by(
+        "arm-tail-index-match",
+        "shared enum M { My(Vec[String]), N }\n\
+         fn main() {\n\
+             let t = M.My([\"a\".to_string(), \"b\".to_string()]);\n\
+             println(match t { M.My(x) => x[1], _ => \"n\" });\n\
+         }\n",
+        "out of a collection element",
+        "x[1].clone()",
+    );
+    rejected_then_fixed_by(
+        "arm-tail-index-if-let",
+        "shared enum M { My(Vec[String]), N }\n\
+         fn main() {\n\
+             let t = M.My([\"a\".to_string(), \"b\".to_string()]);\n\
+             println(if let M.My(x) = t { x[1] } else { \"n\" });\n\
+         }\n",
+        "out of a collection element",
+        "x[1].clone()",
+    );
+    // An arm that only reads the element takes nothing out.
+    accepted(
+        "arm-tail-index-read",
+        "fn main() {\n\
+             let v: Vec[String] = [\"a\".to_string()];\n\
+             let c = true;\n\
+             println(if c { v[0].len() } else { 0 });\n\
+             println(match c { true => v[0].len(), false => 1 });\n\
+         }\n",
+    );
+}
+
 #[test]
 fn a_by_value_receiver_moves_and_cannot_come_out_of_a_borrow() {
     // `unwrap` takes `self` by value, so it moves its receiver: a field

@@ -96,7 +96,7 @@ fn number_of_atoms(s: ref String) -> String {
                 i = i + 1;
             }
             if not have { c = 1; }
-            names.push(name);
+            names.push(name.to_string());
             counts.push(c);
         } else {
             // Well-formed input has nothing else; skip defensively.

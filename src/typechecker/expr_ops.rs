@@ -243,6 +243,15 @@ fn merge_tensor_dim(l: &DimArg, r: &DimArg) -> Result<DimArg, ()> {
 }
 
 impl<'a> super::TypeChecker<'a> {
+    /// strings.md: `String` and `Str` compare by their UTF-8 bytes, so a
+    /// view (`s[a..b]`, a v2 core `Str`) compares against a `String` and
+    /// the other way round. Both are read, neither moves.
+    fn core_text_compare(&self, a: &Type, b: &Type) -> bool {
+        let view = |t: &Type| matches!(t, Type::Named { name, args } if name == "StringSlice" && args.is_empty());
+        self.cli_lint_overrides.strict_core
+            && ((view(a) && matches!(b, Type::Str)) || (matches!(a, Type::Str) && view(b)))
+    }
+
     /// B-2026-10-03-33 — a comparison between a signed and an unsigned
     /// integer is a type error (design.md § Integer overflow: "Mixed-signedness
     /// across `lhs` and `rhs` is a type error at the call site — cast
@@ -3050,7 +3059,9 @@ impl<'a> super::TypeChecker<'a> {
                 // ref String`); the comparison only reads through the borrow.
                 let cmp_left = strip_refs_for_compare(&left_ty);
                 let cmp_right = strip_refs_for_compare(&right_ty);
-                if !types_compatible(cmp_left, cmp_right) {
+                if !types_compatible(cmp_left, cmp_right)
+                    && !self.core_text_compare(cmp_left, cmp_right)
+                {
                     self.type_error(
                         format!(
                             "cannot compare '{}' and '{}'",
@@ -3095,7 +3106,9 @@ impl<'a> super::TypeChecker<'a> {
                 // See `Eq` arm: reference operands auto-deref for comparison.
                 let cmp_left = strip_refs_for_compare(&left_ty);
                 let cmp_right = strip_refs_for_compare(&right_ty);
-                if !types_compatible(cmp_left, cmp_right) {
+                if !types_compatible(cmp_left, cmp_right)
+                    && !self.core_text_compare(cmp_left, cmp_right)
+                {
                     self.type_error(
                         format!(
                             "cannot compare '{}' and '{}'",

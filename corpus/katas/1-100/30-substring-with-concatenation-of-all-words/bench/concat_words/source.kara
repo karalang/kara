@@ -63,7 +63,7 @@ fn find_substring(s: ref String, words: Slice[String]) -> Vec[i64] {
                     Some(c) => c,
                     None => 0,
                 };
-                seen.insert(s[j..j + wl], cur + 1);
+                seen.insert(s[j..j + wl].to_string(), cur + 1);
                 count = count + 1;
                 while (match seen.get(s[j..j + wl]) {
                     Some(c) => c,
@@ -74,7 +74,7 @@ fn find_substring(s: ref String, words: Slice[String]) -> Vec[i64] {
                         Some(c) => c,
                         None => 0,
                     };
-                    seen.insert(s[left..left + wl], lc - 1);
+                    seen.insert(s[left..left + wl].to_string(), lc - 1);
                     left = left + wl;
                     count = count - 1;
                 }
@@ -84,7 +84,7 @@ fn find_substring(s: ref String, words: Slice[String]) -> Vec[i64] {
                         Some(c) => c,
                         None => 0,
                     };
-                    seen.insert(s[left..left + wl], lc - 1);
+                    seen.insert(s[left..left + wl].to_string(), lc - 1);
                     left = left + wl;
                     count = count - 1;
                 }
@@ -103,7 +103,7 @@ fn main() {
     let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/";
     let mut vocab: Vec[String] = Vec.new();
     for v in 0..16 {
-        vocab.push(chars[v * 4..v * 4 + 4]);
+        vocab.push(chars[v * 4..v * 4 + 4].to_string());
     }
 
     // Build the text once: NSLOTS slots, each an LCG-chosen vocab word.

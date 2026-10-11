@@ -43,6 +43,26 @@ impl<'a> super::TypeChecker<'a> {
         self.check_map_slot_arg_inner(slot, arg, true);
     }
 
+    /// Gowtham, 2026-10-11 ("views at lookup"): the lookup methods of a
+    /// `String`-keyed map or set take a `Str`, and those of a `Vec[T]`-keyed
+    /// one a `Slice[T]`, so a parser can look a slice up without copying it.
+    /// `Str` and `String` hash, compare and order alike, as do `Slice` and
+    /// `Vec`. Every other key type is looked up by a borrowed `K` as before.
+    pub(super) fn is_key_view(&self, key: &Type, arg: &Type) -> bool {
+        if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
+            return false;
+        }
+        match (key, arg) {
+            (Type::Str, Type::Named { name, args }) => name == "StringSlice" && args.is_empty(),
+            (Type::Named { name, args }, Type::Slice { element, .. }) => {
+                name == "Vec"
+                    && args.len() == 1
+                    && super::types::types_compatible(&args[0], element)
+            }
+            _ => false,
+        }
+    }
+
     fn check_map_slot_arg(&mut self, slot: &Type, arg: &CallArg) {
         self.check_map_slot_arg_inner(slot, arg, false);
     }
@@ -124,6 +144,9 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             arg_ty
         };
+        if allow_borrowed && self.is_key_view(&pre_slot, &arg_ty) {
+            return;
+        }
         unify_types(
             slot,
             &arg_ty,
@@ -666,7 +689,10 @@ impl<'a> super::TypeChecker<'a> {
                     // B-2026-08-14-12 — the float-narrowing sibling.
                     self.check_float_narrowing_coercion(&arg.value, &elem, &at);
                     let probe_at = crate::typechecker::peel_probe_ref(&at);
-                    self.check_assignable(&elem, &probe_at, arg.value.span);
+                    let key = resolve_type_var_top(&elem, &self.env.substitutions);
+                    if !self.is_key_view(&key, &probe_at) {
+                        self.check_assignable(&elem, &probe_at, arg.value.span);
+                    }
                 }
                 Type::Bool
             }
@@ -1135,7 +1161,10 @@ impl<'a> super::TypeChecker<'a> {
                     // B-2026-08-14-12 — the float-narrowing sibling.
                     self.check_float_narrowing_coercion(&arg.value, &elem, &at);
                     let probe_at = crate::typechecker::peel_probe_ref(&at);
-                    self.check_assignable(&elem, &probe_at, arg.value.span);
+                    let key = resolve_type_var_top(&elem, &self.env.substitutions);
+                    if !self.is_key_view(&key, &probe_at) {
+                        self.check_assignable(&elem, &probe_at, arg.value.span);
+                    }
                 }
                 Type::Bool
             }

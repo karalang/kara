@@ -64,7 +64,7 @@ fn number_of_atoms(s: ref String) -> String {
             while j < n and is_lower(bytes[j]) {
                 j = j + 1;
             }
-            kinds.push(0); texts.push(s[i..j]); nums.push(0);
+            kinds.push(0); texts.push(s[i..j].to_string()); nums.push(0);
             i = j;
         } else {
             i = i + 1;

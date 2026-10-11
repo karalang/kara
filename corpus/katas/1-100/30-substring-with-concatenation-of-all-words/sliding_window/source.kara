@@ -82,7 +82,7 @@ fn find_substring(s: ref String, words: Slice[String]) -> Vec[i64] {
                     Some(c) => c,
                     None => 0,
                 };
-                seen.insert(s[j..j + wl], cur + 1);
+                seen.insert(s[j..j + wl].to_string(), cur + 1);
                 count = count + 1;
                 // Too many of this word: drop words off the left until balanced.
                 while (match seen.get(s[j..j + wl]) {
@@ -94,7 +94,7 @@ fn find_substring(s: ref String, words: Slice[String]) -> Vec[i64] {
                         Some(c) => c,
                         None => 0,
                     };
-                    seen.insert(s[left..left + wl], lc - 1);
+                    seen.insert(s[left..left + wl].to_string(), lc - 1);
                     left = left + wl;
                     count = count - 1;
                 }
@@ -105,7 +105,7 @@ fn find_substring(s: ref String, words: Slice[String]) -> Vec[i64] {
                         Some(c) => c,
                         None => 0,
                     };
-                    seen.insert(s[left..left + wl], lc - 1);
+                    seen.insert(s[left..left + wl].to_string(), lc - 1);
                     left = left + wl;
                     count = count - 1;
                 }

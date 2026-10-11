@@ -114,7 +114,7 @@ fn multiply(a: ref String, b: ref String) -> String {
     while p < acb.len() - 1 and acb[p] == b'0' {
         p = p + 1;
     }
-    acc[p..acb.len()]
+    acc[p..acb.len()].to_string()
 }
 
 fn report(a: ref String, b: ref String) {

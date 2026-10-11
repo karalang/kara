@@ -5902,6 +5902,36 @@ impl<'a> TypeChecker<'a> {
                 return false;
             }
         }
+        // design.md §5: `s[a..b]` is a `Str` view. Where an owned `String`
+        // is wanted, `.to_string()` takes the copy the view's slice used to
+        // allocate implicitly, so the fix keeps the program's meaning.
+        if self.cli_lint_overrides.strict_core
+            && matches!(expected, Type::Str)
+            && matches!(found, Type::Named { name, args } if name == "StringSlice" && args.is_empty())
+        {
+            self.errors.push(TypeError {
+                message: "expected 'String', found 'Str': a `Str` is a view and the \
+                          `String` here owns its text (design.md §5). Take an owned \
+                          copy with `.to_string()`"
+                    .to_string(),
+                span,
+                kind: TypeErrorKind::TypeMismatch,
+                lint_name: None,
+                fix_it: Some(FixIt {
+                    span: Span {
+                        line: span.line,
+                        column: span.column,
+                        offset: span.offset + span.length,
+                        length: 0,
+                    },
+                    replacement: ".to_string()".to_string(),
+                }),
+                class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+                expected: Some(type_display(expected)),
+                got: Some(type_display(found)),
+            });
+            return false;
+        }
         // Canonical assignment-mismatch site. Use the typed-fields
         // helper so the JSON consumer gets `expected` / `got` as
         // structured fields rather than having to parse the prose
