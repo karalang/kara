@@ -251,7 +251,52 @@ pub enum Value {
 const _: () = assert!(std::mem::size_of::<Value>() <= 64);
 
 impl Value {
+    /// A copy of the value, inline for the scalars nearly every step
+    /// copies.
+    #[inline(always)]
+    fn copy(&self) -> Value {
+        match *self {
+            Value::Int(i) => Value::Int(i),
+            Value::Bool(b) => Value::Bool(b),
+            Value::Float(f) => Value::Float(f),
+            Value::Char(c) => Value::Char(c),
+            Value::Unit => Value::Unit,
+            _ => self.clone(),
+        }
+    }
+
+    /// Whether the value holds nothing to free, so dropping it is a no-op.
+    #[inline(always)]
+    fn is_plain(&self) -> bool {
+        matches!(
+            self,
+            Value::Uninit
+                | Value::Int(_)
+                | Value::Bool(_)
+                | Value::Float(_)
+                | Value::Char(_)
+                | Value::Unit
+        )
+    }
+
+    /// Stores `v` in `slot`, skipping the drop of a plain old value.
+    #[inline(always)]
+    fn overwrite(slot: &mut Value, v: Value) {
+        let old = std::mem::replace(slot, v);
+        if old.is_plain() {
+            std::mem::forget(old);
+        }
+    }
+
+    #[inline(always)]
     fn fully_init(&self) -> bool {
+        if self.is_plain() {
+            return !matches!(self, Value::Uninit);
+        }
+        self.fully_init_parts()
+    }
+
+    fn fully_init_parts(&self) -> bool {
         match self {
             Value::Uninit => false,
             Value::Agg(fs) | Value::Variant(_, fs) => fs.iter().all(Value::fully_init),
@@ -5920,10 +5965,7 @@ impl<'a> Interp<'a> {
                 if a.path.len() > path.len() {
                     return None;
                 }
-                ty = match tys.kind(ty) {
-                    TyKind::Ref(t) | TyKind::MutRef(t) => t,
-                    _ => return None,
-                };
+                ty = tys.pointee(ty)?;
                 depth = a.path.len();
                 path[..depth].copy_from_slice(&a.path);
                 elems = &elems[1..];
@@ -6017,8 +6059,8 @@ impl<'a> Interp<'a> {
                             if fs.len() == 2
                                 && matches!(fs[0], Value::Int(_) | Value::Float(_) | Value::Bool(_))
                             {
-                                fs[0] = v;
-                                fs[1] = Value::Bool(overflow);
+                                Value::overwrite(&mut fs[0], v);
+                                Value::overwrite(&mut fs[1], Value::Bool(overflow));
                                 if self.trace {
                                     self.events.push(Event::Init(self.place_str(body, p)));
                                 }
@@ -6040,7 +6082,10 @@ impl<'a> Interp<'a> {
                             "assignment overwrites {what}, which still owns a value"
                         ));
                     }
-                    self.frames.last_mut().expect("frame").locals[p.local.index()] = v;
+                    Value::overwrite(
+                        &mut self.frames.last_mut().expect("frame").locals[p.local.index()],
+                        v,
+                    );
                 } else {
                     let (addr, ty) = self
                         .resolve(body, p, Mode::Write)?
@@ -6183,7 +6228,28 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// An operand's value and type. A plain scalar read from a bare local
+    /// is most of them, so it is handled inline and the rest out of line.
+    #[inline(always)]
     fn operand(&mut self, body: &Body, o: &Operand) -> R<(Value, Ty)> {
+        if let Operand::Copy(p) | Operand::Move(p) = o {
+            // A traced move is logged out of line.
+            if p.projection.is_empty() && !(self.trace && matches!(o, Operand::Move(_))) {
+                let slot = &mut self.frames.last_mut().expect("frame").locals[p.local.index()];
+                if slot.is_plain() && !matches!(slot, Value::Uninit) {
+                    let v = if matches!(o, Operand::Move(_)) {
+                        std::mem::replace(slot, Value::Uninit)
+                    } else {
+                        slot.copy()
+                    };
+                    return Ok((v, body.local(p.local).ty));
+                }
+            }
+        }
+        self.operand_slow(body, o)
+    }
+
+    fn operand_slow(&mut self, body: &Body, o: &Operand) -> R<(Value, Ty)> {
         match o {
             Operand::Copy(p) | Operand::Move(p) => {
                 let is_move = matches!(o, Operand::Move(_));
@@ -6197,7 +6263,7 @@ impl<'a> Interp<'a> {
                     let v = if is_move {
                         std::mem::replace(slot, Value::Uninit)
                     } else {
-                        slot.clone()
+                        slot.copy()
                     };
                     (v, ty)
                 } else if let Some((slot, ty)) = self.local_fields_mut(body, p) {
@@ -6207,7 +6273,7 @@ impl<'a> Interp<'a> {
                     let v = if is_move {
                         std::mem::replace(slot, Value::Uninit)
                     } else {
-                        slot.clone()
+                        slot.copy()
                     };
                     (v, ty)
                 } else {
@@ -6219,7 +6285,7 @@ impl<'a> Interp<'a> {
                     let v = if is_move {
                         std::mem::replace(slot, Value::Uninit)
                     } else {
-                        slot.clone()
+                        slot.copy()
                     };
                     (v, ty)
                 };
@@ -6234,6 +6300,9 @@ impl<'a> Interp<'a> {
 
     fn constant(&self, c: &Const) -> R<Value> {
         Ok(match &c.kind {
+            ConstKind::Scalar(v) if self.tys.int_ty(c.ty).is_some() => {
+                Value::Int(from_bits(*v, self.tys.int_ty(c.ty).expect("checked")))
+            }
             ConstKind::Scalar(v) => match self.tys.kind(c.ty) {
                 TyKind::Bool => Value::Bool(*v != 0),
                 TyKind::Char => match char::from_u32(*v as u32) {
@@ -6336,6 +6405,14 @@ impl<'a> Interp<'a> {
             }
             Rvalue::Cast(kind, o, to) => {
                 let (x, from) = self.operand(body, o)?;
+                // The common integer resize, without building either kind.
+                if let (CastKind::IntToInt, Value::Int(i), Some(it)) =
+                    (kind, &x, self.tys.int_ty(*to))
+                {
+                    let r = wrap(*i, it);
+                    std::mem::forget(x);
+                    return Ok(Value::Int(r));
+                }
                 let from_u128 = self.tys.kind(from) == TyKind::Int(IntTy::U128);
                 let to_kind = self.tys.kind(*to).clone();
                 match (kind, x, to_kind) {
@@ -6470,6 +6547,72 @@ impl<'a> Interp<'a> {
     }
 
     fn binop(&self, op: BinOp, x: Value, y: Value, ty: Ty) -> R<(Value, bool)> {
+        if let (Value::Int(a), Value::Int(b)) = (&x, &y) {
+            let (a, b) = (*a, *b);
+            // Both are plain: nothing to drop.
+            std::mem::forget(x);
+            std::mem::forget(y);
+            return self.int_binop(op, a, b, ty);
+        }
+        self.binop_slow(op, x, y, ty)
+    }
+
+    fn int_binop(&self, op: BinOp, a: i128, b: i128, ty: Ty) -> R<(Value, bool)> {
+        use BinOp::*;
+        let cmp = |o: std::cmp::Ordering| -> Value {
+            Value::Bool(match op {
+                Eq => o.is_eq(),
+                Ne => o.is_ne(),
+                Lt => o.is_lt(),
+                Le => o.is_le(),
+                Gt => o.is_gt(),
+                Ge => o.is_ge(),
+                _ => unreachable!(),
+            })
+        };
+        let int = self.tys.int_ty(ty);
+        if int == Some(IntTy::U128) {
+            return u128_binop(op, a as u128, b as u128, cmp);
+        }
+        if op.is_comparison() {
+            return Ok((cmp(a.cmp(&b)), false));
+        }
+        let Some(it) = int else {
+            return err("integer operands of a non-integer type");
+        };
+        // In 128 bits, with the 128-bit overflow kept: a narrower
+        // type's result then wraps to the right value, and an
+        // `i128` one is flagged.
+        let (exact, of) = match op {
+            Add => a.overflowing_add(b),
+            Sub => a.overflowing_sub(b),
+            Mul => a.overflowing_mul(b),
+            Div | Rem if b == 0 => return err("division by zero; the builder must guard it"),
+            Div => a.overflowing_div(b),
+            // `MIN % -1` is 0 mathematically, but it overflows on
+            // the machine exactly as `MIN / -1` does, and C8 traps
+            // both (Rust's `overflowing_rem`).
+            Rem if it.signed() && b == -1 && a == wrap(1 << (it.bits() - 1), it) => {
+                return Ok((Value::Int(0), true));
+            }
+            Rem => a.overflowing_rem(b),
+            BitAnd => (a & b, false),
+            BitOr => (a | b, false),
+            BitXor => (a ^ b, false),
+            Shl | Shr => {
+                if b < 0 || b >= it.bits() as i128 {
+                    return Ok((Value::Int(0), true));
+                }
+                let r = if op == Shl { wrap(a << b, it) } else { a >> b };
+                return Ok((Value::Int(r), false));
+            }
+            _ => unreachable!(),
+        };
+        let wrapped = wrap(exact, it);
+        Ok((Value::Int(wrapped), of || wrapped != exact))
+    }
+
+    fn binop_slow(&self, op: BinOp, x: Value, y: Value, ty: Ty) -> R<(Value, bool)> {
         use BinOp::*;
         let cmp = |o: std::cmp::Ordering| -> Value {
             Value::Bool(match op {
@@ -6497,50 +6640,7 @@ impl<'a> Interp<'a> {
             }
         }
         match (x, y) {
-            (Value::Int(a), Value::Int(b)) => {
-                let int = self.tys.int_ty(ty);
-                if int == Some(IntTy::U128) {
-                    return u128_binop(op, a as u128, b as u128, cmp);
-                }
-                if op.is_comparison() {
-                    return Ok((cmp(a.cmp(&b)), false));
-                }
-                let Some(it) = int else {
-                    return err("integer operands of a non-integer type");
-                };
-                // In 128 bits, with the 128-bit overflow kept: a narrower
-                // type's result then wraps to the right value, and an
-                // `i128` one is flagged.
-                let (exact, of) = match op {
-                    Add => a.overflowing_add(b),
-                    Sub => a.overflowing_sub(b),
-                    Mul => a.overflowing_mul(b),
-                    Div | Rem if b == 0 => {
-                        return err("division by zero; the builder must guard it")
-                    }
-                    Div => a.overflowing_div(b),
-                    // `MIN % -1` is 0 mathematically, but it overflows on
-                    // the machine exactly as `MIN / -1` does, and C8 traps
-                    // both (Rust's `overflowing_rem`).
-                    Rem if it.signed() && b == -1 && a == wrap(1 << (it.bits() - 1), it) => {
-                        return Ok((Value::Int(0), true));
-                    }
-                    Rem => a.overflowing_rem(b),
-                    BitAnd => (a & b, false),
-                    BitOr => (a | b, false),
-                    BitXor => (a ^ b, false),
-                    Shl | Shr => {
-                        if b < 0 || b >= it.bits() as i128 {
-                            return Ok((Value::Int(0), true));
-                        }
-                        let r = if op == Shl { wrap(a << b, it) } else { a >> b };
-                        return Ok((Value::Int(r), false));
-                    }
-                    _ => unreachable!(),
-                };
-                let wrapped = wrap(exact, it);
-                Ok((Value::Int(wrapped), of || wrapped != exact))
-            }
+            (Value::Int(a), Value::Int(b)) => self.int_binop(op, a, b, ty),
             (Value::Bool(a), Value::Bool(b)) => Ok((
                 match op {
                     BitAnd => Value::Bool(a & b),
@@ -6589,10 +6689,12 @@ impl<'a> Interp<'a> {
             TerminatorKind::Goto { target } => Ok(Some(*target)),
             TerminatorKind::SwitchInt { discr, targets } => {
                 let (v, ty) = self.operand(body, discr)?;
-                let bits = match (v, self.tys.kind(ty)) {
+                let bits = match (v, ty) {
                     (Value::Bool(b), _) => b as u128,
                     (Value::Char(c), _) => c as u128,
-                    (Value::Int(i), TyKind::Int(it)) => to_bits(i, it),
+                    (Value::Int(i), ty) if self.tys.int_ty(ty).is_some() => {
+                        to_bits(i, self.tys.int_ty(ty).expect("checked"))
+                    }
                     (v, _) => return err(format!("switchInt on {v:?}")),
                 };
                 let next = targets
@@ -6866,9 +6968,17 @@ impl<'a> Interp<'a> {
         d
     }
 
+    #[inline(always)]
     fn owns_drop(&self, v: &Value, ty: Ty) -> bool {
         // A scalar owns nothing whatever its type says, which spares the
         // type lookup on most assignments.
+        if v.is_plain() {
+            return false;
+        }
+        self.owns_drop_slow(v, ty)
+    }
+
+    fn owns_drop_slow(&self, v: &Value, ty: Ty) -> bool {
         if matches!(
             v,
             Value::Uninit

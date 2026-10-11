@@ -451,6 +451,15 @@ impl TyInterner {
         IntTy::from_shared(self.tcx.kind(t))
     }
 
+    /// The referent of a `ref`/`mut ref` type, without building its
+    /// [`TyKind`].
+    pub fn pointee(&self, t: Ty) -> Option<Ty> {
+        match self.tcx.kind(t) {
+            SharedKind::Ref(t) | SharedKind::MutRef(t) => Some(t),
+            _ => None,
+        }
+    }
+
     /// MIR's view of `t`.
     pub fn kind(&self, t: Ty) -> TyKind {
         let tcx = &self.tcx;
