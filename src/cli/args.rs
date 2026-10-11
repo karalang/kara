@@ -131,6 +131,47 @@ pub fn parse_args(args: &[String]) -> Command {
                 }
             }
         }
+        // Hidden plumbing for the corpus runner's `mir-llvm` backend
+        // (redesign M2): build one file's MIR, compile it to LLVM IR and run
+        // it under `karac_jit_runner`. Exits with the program's code, or 3
+        // with the stage that refused it on stderr.
+        #[cfg(feature = "llvm")]
+        "__mir-llvm-run" => {
+            let Some(path) = args.get(2) else {
+                eprintln!("error: __mir-llvm-run requires a file argument");
+                process::exit(1);
+            };
+            let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
+                eprintln!("error: {path}: {e}");
+                process::exit(1);
+            });
+            let ir = crate::mir::lower::build_source(&src).and_then(|l| {
+                crate::codegen::mir::compile_mir_ir(&l.program, &l.tys)
+                    .map_err(|e| format!("llvm: {e}"))
+            });
+            let ir = ir.unwrap_or_else(|e| {
+                eprintln!("error[mir]: {e}");
+                process::exit(3);
+            });
+            let Some(runner) = crate::test_jit_dispatch::locate_karac_jit_runner() else {
+                eprintln!("error[mir]: llvm: no karac_jit_runner beside karac");
+                process::exit(3);
+            };
+            let ll = std::env::temp_dir().join(format!("karac-mir-{}.ll", process::id()));
+            if let Err(e) = std::fs::write(&ll, ir) {
+                eprintln!("error[mir]: llvm: {}: {e}", ll.display());
+                process::exit(3);
+            }
+            let status = process::Command::new(runner).arg(&ll).status();
+            let _ = std::fs::remove_file(&ll);
+            match status {
+                Ok(s) => process::exit(s.code().unwrap_or(101)),
+                Err(e) => {
+                    eprintln!("error[mir]: llvm: karac_jit_runner: {e}");
+                    process::exit(3);
+                }
+            }
+        }
         // Hidden plumbing for the C10 effect pass (redesign M1): check one
         // file, build and elaborate its MIR, and print every instance's
         // effects as JSON. Exits 3 with the stage that refused it on stderr.

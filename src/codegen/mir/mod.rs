@@ -27,7 +27,12 @@
 //! `malloc` and goes back through `free`.
 
 mod body;
+mod call;
+mod clone;
 mod drop;
+mod fmt;
+mod key;
+mod table;
 
 use std::collections::HashMap;
 
@@ -72,14 +77,19 @@ pub fn compile_mir<'ctx>(
         program
     };
     let mut cx = Cx::new(llcx, name, program, tys);
-    cx.declare_bodies()?;
-    for body in program.bodies.values() {
-        cx.lower_body(body)?;
-    }
     cx.c_main()?;
-    cx.finish_glue()?;
+    cx.drain()?;
     cx.module.verify().map_err(|e| e.to_string())?;
     Ok(cx.module)
+}
+
+/// The LLVM IR of `program`, for `karac_jit_runner` to run: that binary
+/// links the runtime the compiled code calls, which `karac` itself does
+/// not.
+pub fn compile_mir_ir(program: &Program, tys: &TyInterner) -> R<String> {
+    let llcx = Context::create();
+    let module = compile_mir(&llcx, "main", program, tys)?;
+    Ok(module.print_to_string().to_string())
 }
 
 /// The backend's state: the LLVM handles, the program being compiled, and
@@ -98,6 +108,13 @@ pub struct Cx<'ctx, 'p> {
     /// The LLVM block of each MIR block of `body`.
     pub blocks: Vec<LlBlock<'ctx>>,
     glue: drop::Glue<'ctx>,
+    fmt: fmt::Fmt<'ctx>,
+    clones: clone::Clones<'ctx>,
+    keys: key::Keys<'ctx>,
+    /// Bodies declared and not lowered yet.
+    todo: Vec<&'p Body>,
+    /// The global holding each static, by index.
+    statics: HashMap<u32, PointerValue<'ctx>>,
 }
 
 impl<'ctx, 'p> Cx<'ctx, 'p> {
@@ -113,6 +130,11 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             locals: Vec::new(),
             blocks: Vec::new(),
             glue: drop::Glue::default(),
+            fmt: fmt::Fmt::default(),
+            clones: clone::Clones::default(),
+            keys: key::Keys::default(),
+            todo: Vec::new(),
+            statics: HashMap::new(),
         }
     }
 
@@ -196,26 +218,63 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             .unwrap_or_else(|| self.module.add_function(name, ty, Some(Linkage::External)))
     }
 
-    /// One function per body, by the calling convention above.
+    /// Declares the function of `body` by the calling convention above.
+    fn declare(&mut self, name: &str, body: &Body) -> FunctionValue<'ctx> {
+        let params: Vec<BasicMetadataTypeEnum> =
+            (0..=body.arg_count).map(|_| self.ptr_ty().into()).collect();
+        let ty = self.llcx.void_type().fn_type(&params, false);
+        let f = self
+            .module
+            .add_function(&fn_symbol(name), ty, Some(Linkage::Internal));
+        self.fns.insert(name.to_string(), f);
+        f
+    }
+
+    /// Declares every body without lowering any, for tests that write
+    /// bodies by hand.
+    #[cfg(test)]
     fn declare_bodies(&mut self) -> R<()> {
         for (name, body) in &self.program.bodies {
-            let params: Vec<BasicMetadataTypeEnum> =
-                (0..=body.arg_count).map(|_| self.ptr_ty().into()).collect();
-            let ty = self.llcx.void_type().fn_type(&params, false);
-            let f = self
-                .module
-                .add_function(&fn_symbol(name), ty, Some(Linkage::Internal));
-            self.fns.insert(name.clone(), f);
+            self.declare(name, body);
         }
         Ok(())
     }
 
-    /// The function of the body `name`.
-    pub fn function(&self, name: &str) -> R<FunctionValue<'ctx>> {
-        self.fns
+    /// The function of the body `name`, declared now and lowered by
+    /// [`Cx::drain`] if it was not already: only the bodies a program
+    /// reaches are compiled, since the library's are appended to every one.
+    pub fn function(&mut self, name: &str) -> R<FunctionValue<'ctx>> {
+        if let Some(&f) = self.fns.get(name) {
+            return Ok(f);
+        }
+        let program = self.program;
+        let body = program
+            .bodies
             .get(name)
-            .copied()
-            .ok_or_else(|| format!("no body named `{name}`"))
+            .ok_or_else(|| format!("no body named `{name}`"))?;
+        let f = self.declare(name, body);
+        self.todo.push(body);
+        Ok(f)
+    }
+
+    /// Lowers every requested body and builds every requested glue, until
+    /// neither requests more.
+    fn drain(&mut self) -> R<()> {
+        loop {
+            if let Some(body) = self.todo.pop() {
+                self.lower_body(body)?;
+            } else if self.glue_pending() {
+                self.finish_glue()?;
+            } else if self.fmt_pending() {
+                self.finish_fmt()?;
+            } else if self.clone_pending() {
+                self.finish_clones()?;
+            } else if self.keys_pending() {
+                self.finish_keys()?;
+            } else {
+                return Ok(());
+            }
+        }
     }
 
     /// Lowers `body` into its declared function: an `alloca` per local
@@ -297,10 +356,11 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     /// executor until the runtime parks tasks.
     fn c_main(&mut self) -> R<()> {
         let resume = coroutine::resume_name("main");
-        let (name, task) = match (self.fns.get("main"), self.fns.get(&resume)) {
-            (Some(_), _) => ("main", false),
-            (None, Some(_)) => (resume.as_str(), true),
-            (None, None) => return Ok(()),
+        let bodies = &self.program.bodies;
+        let (name, task) = match (bodies.contains_key("main"), bodies.contains_key(&resume)) {
+            (true, _) => ("main", false),
+            (false, true) => (resume.as_str(), true),
+            (false, false) => return Ok(()),
         };
         let kmain = self.function(name)?;
         let body = &self.program.bodies[name];
@@ -313,6 +373,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             .add_function("main", i32t.fn_type(&[], false), None);
         self.builder
             .position_at_end(self.llcx.append_basic_block(f, "entry"));
+        self.init_statics()?;
         let ret_ty = body.return_ty();
         let ret = self.c_main_slot(ret_ty, "ret")?;
         if !task {
@@ -368,9 +429,46 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 .build_call(glue, &[ret.into()], "")
                 .map_err(|e| e.to_string())?;
         }
+        self.rt("flush", &[])?;
         self.builder
             .build_return(Some(&i32t.const_zero()))
             .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// The global holding static `i`, zeroed until its initializer runs.
+    pub(super) fn static_ptr(&mut self, i: u32) -> R<PointerValue<'ctx>> {
+        if let Some(&g) = self.statics.get(&i) {
+            return Ok(g);
+        }
+        let def = self
+            .program
+            .statics
+            .get(i as usize)
+            .ok_or_else(|| format!("no static {i}"))?;
+        let l = self.layout(def.ty)?;
+        let ty = self.llcx.i8_type().array_type(l.size.max(1) as u32);
+        let g = self
+            .module
+            .add_global(ty, None, &format!("kara.static.{}", def.name));
+        g.set_initializer(&ty.const_zero());
+        g.set_alignment(l.align.max(8) as u32);
+        let p = g.as_pointer_value();
+        self.statics.insert(i, p);
+        Ok(p)
+    }
+
+    /// Runs each static's initializer into its global, in declaration
+    /// order, at the builder's position (the start of the C `main`).
+    fn init_statics(&mut self) -> R<()> {
+        let program = self.program;
+        for (i, def) in program.statics.iter().enumerate() {
+            let g = self.static_ptr(i as u32)?;
+            let f = self.function(&def.init)?;
+            self.builder
+                .build_call(f, &[g.into()], "")
+                .map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
@@ -524,6 +622,10 @@ fn main() -> () {
         for (g, a) in [(resumes, &RESUMES), (states, &STATES), (drops, &DROPS)] {
             engine.add_global_mapping(&g, a as *const AtomicI64 as usize);
         }
+        // The runtime's output buffer is not linked into this process.
+        extern "C" fn flush() {}
+        let f = cx.module.get_function("karac_mir_flush").unwrap();
+        engine.add_global_mapping(&f, flush as *const () as usize);
 
         // SAFETY: `main` is the module's `i32 main()`.
         let main: extern "C" fn() -> i32 =

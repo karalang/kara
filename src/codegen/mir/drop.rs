@@ -78,16 +78,6 @@ const LIBRARY_CELLS: &[(&str, CellDrop)] = &[
 const ONCE_GET: &str = "karac_runtime_once_get";
 const ONCE_FREE: &str = "karac_runtime_once_free";
 
-/// The runtime's hash table behind a map or set handle (`runtime/src/map.rs`;
-/// a set is a map with zero-size values, and the sorted kinds share it).
-/// The glue walks it with an iterator that copies each key and value out
-/// into aligned slots, drops the copies, and then frees the table, which
-/// drops nothing itself.
-const MAP_ITER_NEW: &str = "karac_map_iter_new";
-const MAP_ITER_NEXT: &str = "karac_map_iter_next";
-const MAP_ITER_FREE: &str = "karac_map_iter_free";
-const MAP_FREE: &str = "karac_map_free";
-
 /// The glue built or requested so far.
 #[derive(Default)]
 pub(super) struct Glue<'ctx> {
@@ -134,6 +124,11 @@ impl<'ctx> Cx<'ctx, '_> {
         f
     }
 
+    /// Whether glue has been requested and not built yet.
+    pub(super) fn glue_pending(&self) -> bool {
+        !self.glue.todo.is_empty()
+    }
+
     /// Builds every glue function requested so far, and those they request.
     pub fn finish_glue(&mut self) -> R<()> {
         while let Some((ty, f)) = self.glue.todo.pop() {
@@ -149,7 +144,7 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(())
     }
 
-    fn call_glue(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<()> {
+    pub(super) fn call_glue(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<()> {
         let f = self.glue_fn(ty);
         self.builder
             .build_call(f, &[p.into()], "")
@@ -226,12 +221,12 @@ impl<'ctx> Cx<'ctx, '_> {
                 }
                 self.free_buffer(p)
             }
-            TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
-                self.drop_table(p, k, Some(v))
-            }
-            TyKind::Intrinsic(IntrinsicTy::Set(k) | IntrinsicTy::SortedSet(k)) => {
-                self.drop_table(p, k, None)
-            }
+            TyKind::Intrinsic(
+                IntrinsicTy::Map(..)
+                | IntrinsicTy::SortedMap(..)
+                | IntrinsicTy::Set(_)
+                | IntrinsicTy::SortedSet(_),
+            ) => self.drop_table(p, ty),
             TyKind::Fn { .. } => self.drop_erased_fn(p),
             _ => err(format!(
                 "MIR to LLVM: dropping a `{}` is not lowered yet",
@@ -341,87 +336,6 @@ impl<'ctx> Cx<'ctx, '_> {
         };
         self.each_elem(front, first, e)?;
         self.each_elem(buf, wrapped, e)
-    }
-
-    /// Drops the map or set at `p`: each entry's key, then its value, in
-    /// the table's order, then the table. A null handle owns nothing.
-    ///
-    /// The sorted kinds should destroy in key order (CLAUDE.md, "`Map` /
-    /// `Set` iteration order"), which needs a comparator for the key type;
-    /// until `Ord` is lowered they drop in table order like the hashed ones.
-    fn drop_table(&mut self, p: PointerValue<'ctx>, k: Ty, v: Option<Ty>) -> R<()> {
-        let (pt, void) = (self.ptr_ty(), self.llcx.void_type());
-        let free_f = self.extern_fn(MAP_FREE, void.fn_type(&[pt.into()], false));
-        let (kd, vd) = (
-            self.tys.needs_drop(k),
-            v.is_some_and(|v| self.tys.needs_drop(v)),
-        );
-        let slot_size = |cx: &Self, t: Option<Ty>| -> R<u32> {
-            let size = match t {
-                Some(t) => cx.layout(t)?.size,
-                None => 0,
-            };
-            u32::try_from(size.max(1)).map_err(|e| e.to_string())
-        };
-        let (ks, vs) = (slot_size(self, Some(k))?, slot_size(self, v)?);
-        let h = self.load_ptr(p)?;
-        let null = self
-            .builder
-            .build_is_null(h, "")
-            .map_err(|e| e.to_string())?;
-        let some = self
-            .builder
-            .build_not(null, "")
-            .map_err(|e| e.to_string())?;
-        self.if_then(some, |cx| {
-            if kd || vd {
-                let new_f = cx.extern_fn(MAP_ITER_NEW, pt.fn_type(&[pt.into()], false));
-                let next_f = cx.extern_fn(
-                    MAP_ITER_NEXT,
-                    cx.llcx
-                        .bool_type()
-                        .fn_type(&[pt.into(), pt.into(), pt.into()], false),
-                );
-                let ifree_f = cx.extern_fn(MAP_ITER_FREE, void.fn_type(&[pt.into()], false));
-                let (kslot, vslot) = (cx.entry_slot(ks, "key")?, cx.entry_slot(vs, "val")?);
-                let it = cx
-                    .builder
-                    .build_call(new_f, &[h.into()], "it")
-                    .map_err(|e| e.to_string())?
-                    .try_as_basic_value()
-                    .basic()
-                    .ok_or("karac_map_iter_new returns nothing")?
-                    .into_pointer_value();
-                cx.while_loop(
-                    |cx| {
-                        Ok(cx
-                            .builder
-                            .build_call(next_f, &[it.into(), kslot.into(), vslot.into()], "more")
-                            .map_err(|e| e.to_string())?
-                            .try_as_basic_value()
-                            .basic()
-                            .ok_or("karac_map_iter_next returns nothing")?
-                            .into_int_value())
-                    },
-                    |cx| {
-                        if kd {
-                            cx.call_glue(kslot, k)?;
-                        }
-                        if let (true, Some(v)) = (vd, v) {
-                            cx.call_glue(vslot, v)?;
-                        }
-                        Ok(())
-                    },
-                )?;
-                cx.builder
-                    .build_call(ifree_f, &[it.into()], "")
-                    .map_err(|e| e.to_string())?;
-            }
-            cx.builder
-                .build_call(free_f, &[h.into()], "")
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        })
     }
 
     /// Drops the erased function value `{code, env, drop}` at `p`: its
@@ -653,7 +567,7 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// `for i in 0..n { body(i) }`, leaving the builder after it.
-    fn count_loop(
+    pub(super) fn count_loop(
         &mut self,
         n: IntValue<'ctx>,
         body: impl FnOnce(&mut Self, IntValue<'ctx>) -> R<()>,
@@ -695,41 +609,14 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(())
     }
 
-    /// `while cond() { body() }`, leaving the builder after it.
-    fn while_loop(
-        &mut self,
-        cond: impl FnOnce(&mut Self) -> R<IntValue<'ctx>>,
-        body: impl FnOnce(&mut Self) -> R<()>,
-    ) -> R<()> {
-        let f = self.cur_fn()?;
-        let head = self.llcx.append_basic_block(f, "next");
-        let each = self.llcx.append_basic_block(f, "next.drop");
-        let done = self.llcx.append_basic_block(f, "all.dropped");
-        self.builder
-            .build_unconditional_branch(head)
-            .map_err(|e| e.to_string())?;
-        self.builder.position_at_end(head);
-        let more = cond(self)?;
-        self.builder
-            .build_conditional_branch(more, each, done)
-            .map_err(|e| e.to_string())?;
-        self.builder.position_at_end(each);
-        body(self)?;
-        self.builder
-            .build_unconditional_branch(head)
-            .map_err(|e| e.to_string())?;
-        self.builder.position_at_end(done);
-        Ok(())
-    }
-
     // ── helpers ─────────────────────────────────────────────────────
 
-    fn field_offset(&self, ty: Ty, v: Option<u32>, f: u32) -> R<u64> {
+    pub(super) fn field_offset(&self, ty: Ty, v: Option<u32>, f: u32) -> R<u64> {
         layout::field_offset(self.tys, ty, v, f)
             .ok_or_else(|| format!("`{}` has no field {f}", self.tys.display(ty)))
     }
 
-    fn cur_fn(&self) -> R<FunctionValue<'ctx>> {
+    pub(super) fn cur_fn(&self) -> R<FunctionValue<'ctx>> {
         self.builder
             .get_insert_block()
             .and_then(|b| b.get_parent())
@@ -738,7 +625,7 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// An 8-aligned stack slot of `size` bytes in the current function's
     /// entry block, so a loop does not grow the stack.
-    fn entry_slot(&self, size: u32, name: &str) -> R<PointerValue<'ctx>> {
+    pub(super) fn entry_slot(&self, size: u32, name: &str) -> R<PointerValue<'ctx>> {
         let f = self.cur_fn()?;
         let entry = f.get_first_basic_block().ok_or("no entry block")?;
         let b = self.llcx.create_builder();
@@ -756,7 +643,7 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(a)
     }
 
-    fn load_ptr(&self, p: PointerValue<'ctx>) -> R<PointerValue<'ctx>> {
+    pub(super) fn load_ptr(&self, p: PointerValue<'ctx>) -> R<PointerValue<'ctx>> {
         Ok(self
             .builder
             .build_load(self.ptr_ty(), p, "")
@@ -764,7 +651,7 @@ impl<'ctx> Cx<'ctx, '_> {
             .into_pointer_value())
     }
 
-    fn load_i64(&self, p: PointerValue<'ctx>) -> R<IntValue<'ctx>> {
+    pub(super) fn load_i64(&self, p: PointerValue<'ctx>) -> R<IntValue<'ctx>> {
         Ok(self
             .builder
             .build_load(self.llcx.i64_type(), p, "")
@@ -772,13 +659,13 @@ impl<'ctx> Cx<'ctx, '_> {
             .into_int_value())
     }
 
-    fn is_zero(&self, v: IntValue<'ctx>) -> R<IntValue<'ctx>> {
+    pub(super) fn is_zero(&self, v: IntValue<'ctx>) -> R<IntValue<'ctx>> {
         self.builder
             .build_int_compare(IntPredicate::EQ, v, v.get_type().const_zero(), "")
             .map_err(|e| e.to_string())
     }
 
-    fn free(&self, p: PointerValue<'ctx>) -> R<()> {
+    pub(super) fn free(&self, p: PointerValue<'ctx>) -> R<()> {
         let free = self.libc_fn("free");
         self.builder
             .build_call(free, &[p.into()], "")
@@ -787,7 +674,11 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// `if cond { then }`, leaving the builder after it.
-    fn if_then(&mut self, cond: IntValue<'ctx>, then: impl FnOnce(&mut Self) -> R<()>) -> R<()> {
+    pub(super) fn if_then(
+        &mut self,
+        cond: IntValue<'ctx>,
+        then: impl FnOnce(&mut Self) -> R<()>,
+    ) -> R<()> {
         let f = self.cur_fn()?;
         let yes = self.llcx.append_basic_block(f, "then");
         let done = self.llcx.append_basic_block(f, "endif");
@@ -857,16 +748,6 @@ mod tests {
     }
 
     /// The real runtime table: keys hashed and compared by their first word.
-    unsafe extern "C" fn word_hash(k: *const c_void) -> u64 {
-        // SAFETY: every key the tests insert is at least a word.
-        unsafe { (k as *const u64).read_unaligned() }
-    }
-
-    unsafe extern "C" fn word_eq(a: *const c_void, b: *const c_void) -> bool {
-        // SAFETY: as `word_hash`.
-        unsafe { word_hash(a) == word_hash(b) }
-    }
-
     extern "C" fn env_drop(env: *mut u8) {
         // SAFETY: the test's env block holds an id at offset 0.
         let id = unsafe { (env as *mut i64).read() };
@@ -945,12 +826,20 @@ fn cells(o: OnceLock[R], f: Option[File], x: Atomic[i64], q: VecDeque[R], m: Map
             .unwrap();
         engine.add_global_mapping(&free, logged_free as *const () as usize);
         engine.add_global_mapping(&log, logged_drop as *const () as usize);
-        use karac_runtime::map as rt;
-        let stubs: [(&str, usize); 9] = [
-            (MAP_ITER_NEW, rt::karac_map_iter_new as *const () as usize),
-            (MAP_ITER_NEXT, rt::karac_map_iter_next as *const () as usize),
-            (MAP_ITER_FREE, rt::karac_map_iter_free as *const () as usize),
-            (MAP_FREE, rt::karac_map_free as *const () as usize),
+        use karac_runtime::mir_map as rt;
+        let stubs: [(&str, usize); 8] = [
+            (
+                "karac_mir_map_len",
+                rt::karac_mir_map_len as *const () as usize,
+            ),
+            (
+                "karac_mir_map_at",
+                rt::karac_mir_map_at as *const () as usize,
+            ),
+            (
+                "karac_mir_map_free",
+                rt::karac_mir_map_free as *const () as usize,
+            ),
             (ONCE_GET, once_get as *const () as usize),
             (ONCE_FREE, once_free as *const () as usize),
             ("karac_runtime_file_close", closed as *const () as usize),
@@ -1229,7 +1118,7 @@ fn cells(o: OnceLock[R], f: Option[File], x: Atomic[i64], q: VecDeque[R], m: Map
     /// asserted.
     #[test]
     fn mir_llvm_glue_drops_map_and_set_entries() {
-        use karac_runtime::map as rt;
+        use karac_runtime::mir_map as rt;
         let l = build_source(SRC).unwrap();
         let (m, st) = (param_ty(&l, "cells", 5), param_ty(&l, "cells", 6));
         assert_eq!(l.tys.display(m), "Map[String, R]");
@@ -1238,33 +1127,31 @@ fn cells(o: OnceLock[R], f: Option[File], x: Atomic[i64], q: VecDeque[R], m: Map
         let h = alloc(8);
         let kv = alloc(32);
 
-        // Map[String, R].
-        // SAFETY: the map is built for 24-byte keys and 8-byte values, and
-        // `kv` holds one of each.
-        let map = unsafe { rt::karac_map_new(24, 8, word_hash, word_eq) };
+        // Map[String, R]: entries in insertion order, each key before its
+        // value.
+        put(h, 0, 0);
         let mut keys = Vec::new();
         for id in 1..=2u64 {
             keys.push(string_at(kv));
             put(kv, 24, id);
-            unsafe { rt::karac_map_insert(map, kv as *const c_void, kv.add(24) as *const c_void) };
+            // SAFETY: `h` holds a table handle; `kv` is one 32-byte entry.
+            unsafe { rt::karac_mir_map_insert(h as *mut _, 32, kv, None, None) };
         }
-        put(h, 0, map as u64);
-        let mut got: Vec<_> = run(g[0], h).chunks(2).map(|p| p.to_vec()).collect();
-        got.sort_by_key(|p| p[1] == Ev::Drop(2));
         assert_eq!(
-            got,
+            run(g[0], h),
             vec![
-                vec![Ev::Free(keys[0]), Ev::Drop(1)],
-                vec![Ev::Free(keys[1]), Ev::Drop(2)]
+                Ev::Free(keys[0]),
+                Ev::Drop(1),
+                Ev::Free(keys[1]),
+                Ev::Drop(2)
             ]
         );
 
         // Set[String].
-        // SAFETY: as above, with zero-size values.
-        let set = unsafe { rt::karac_map_new(24, 0, word_hash, word_eq) };
+        put(h, 0, 0);
         let k = string_at(kv);
-        unsafe { rt::karac_map_insert(set, kv as *const c_void, kv as *const c_void) };
-        put(h, 0, set as u64);
+        // SAFETY: as above, with 24-byte entries.
+        unsafe { rt::karac_mir_map_insert(h as *mut _, 24, kv, None, None) };
         assert_eq!(run(g[1], h), vec![Ev::Free(k)]);
 
         put(h, 0, 0);

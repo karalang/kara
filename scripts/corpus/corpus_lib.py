@@ -24,13 +24,14 @@ META_ORDER = ["source", "dedup_of", "expect", "exit", "tags", "class",
 # compile step that leaves ./source behind and is then executed (`build`).
 # `check` runs `karac check` first and counts its refusal as the backend's.
 # `mir-interp` is the hidden `karac __mir-run` (single-file programs: MIR
-# builder, drop elaboration, MIR interpreter); the other mir-* slots have no
-# command until MIR->LLVM exists.
+# builder, drop elaboration, MIR interpreter); `mir-llvm` is the hidden
+# `karac __mir-llvm-run` (the same MIR compiled to LLVM IR and run under
+# `karac_jit_runner`).
 BACKENDS = {
     "legacy-interp": {"run": ["run", "--interp"]},
     "legacy-build": {"build": ["build"], "env": {"KARAC_AUTO_PAR": "0"}},
     "mir-interp": {"check": True, "run": ["__mir-run"]},
-    "mir-llvm": None,
+    "mir-llvm": {"check": True, "run": ["__mir-llvm-run"]},
     "mir-llvm-asan": None,
 }
 

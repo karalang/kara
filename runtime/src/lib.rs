@@ -118,6 +118,8 @@ pub mod gpu;
 pub mod interner;
 pub mod lazy;
 pub mod map;
+pub mod mir;
+pub mod mir_map;
 pub mod mutex;
 pub mod once;
 // Arrow IPC FFI (`karac_arrow_*`) — opt-in `arrow` feature →
@@ -210,6 +212,40 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // `karac_free_buf` is the release-side sibling (large-buffer recycling
     // cache): codegen routes Vec/String data-buffer frees through it, so it
     // is exactly as JIT-load-bearing as the realloc entry.
+    // The MIR backend's natives (`runtime/src/mir.rs`), resolved by name
+    // when `karac __mir-llvm-run` runs a program under the JIT.
+    keep!(
+        mir::karac_mir_flush,
+        mir::karac_mir_fmt_begin,
+        mir::karac_mir_fmt_str,
+        mir::karac_mir_fmt_i64,
+        mir::karac_mir_fmt_u64,
+        mir::karac_mir_fmt_i128,
+        mir::karac_mir_fmt_f64,
+        mir::karac_mir_fmt_f32,
+        mir::karac_mir_fmt_bool,
+        mir::karac_mir_fmt_char,
+        mir::karac_mir_print_end,
+        mir::karac_mir_fmt_end_string,
+        mir::karac_mir_string_from,
+        mir::karac_mir_vec_reserve,
+        mir::karac_mir_vec_alloc,
+        mir::karac_mir_bytes_eq,
+        mir::karac_mir_bytes_cmp,
+        mir_map::karac_mir_map_find,
+        mir_map::karac_mir_map_insert,
+        mir_map::karac_mir_map_at,
+        mir_map::karac_mir_map_len,
+        mir_map::karac_mir_map_remove,
+        mir_map::karac_mir_map_clear,
+        mir_map::karac_mir_map_free,
+        mir::karac_mir_vec_push,
+        mir::karac_mir_string_push_str,
+        mir::karac_mir_string_push_char,
+        mir::karac_mir_exit,
+        mir::karac_mir_panic_set,
+        mir::karac_mir_abort,
+    );
     keep!(
         alloc::karac_alloc_fallible,
         alloc::karac_alloc_or_panic,

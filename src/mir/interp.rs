@@ -8055,7 +8055,7 @@ struct Chan {
     receivers: usize,
 }
 
-fn split_method(name: &str) -> (&str, &str) {
+pub(crate) fn split_method(name: &str) -> (&str, &str) {
     // The delimiters are ASCII, so a byte scan finds them.
     let mut depth = 0;
     let mut dot = None;
