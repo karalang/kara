@@ -328,6 +328,10 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("format_spec", "") => self.format_spec(args, dest),
             ("dbg", "") => self.dbg(args),
+            ("sleep_ms", "") if args.len() == 1 => {
+                let ms = self.int_arg(&args[0])?;
+                self.rt("sleep_ms", &[ms.into()])
+            }
             ("panic_message", "") => {
                 self.rt("fmt_begin", &[])?;
                 self.fmt_args(args)?;

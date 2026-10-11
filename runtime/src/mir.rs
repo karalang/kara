@@ -526,6 +526,112 @@ pub unsafe extern "C" fn karac_mir_str_replace(
     unsafe { string_of(out, t.as_bytes()) };
 }
 
+/// The byte offset of the first `needle` in `s`, or -1. A non-negative
+/// `c` is a char needle and `needle` is unread.
+///
+/// # Safety
+/// Each pointer is readable for its length, of UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_find(
+    s: *const u8,
+    sn: usize,
+    needle: *const u8,
+    nn: usize,
+    c: i64,
+) -> i64 {
+    // SAFETY: the caller's contract.
+    let s = unsafe { text(s, sn) };
+    let at = if c >= 0 {
+        char::from_u32(c as u32).and_then(|c| s.find(c))
+    } else {
+        // SAFETY: as above.
+        s.find(unsafe { text(needle, nn) })
+    };
+    at.map_or(-1, |b| b as i64)
+}
+
+/// The `i`-th char of `s` (op 0), or -1 past the end or below zero; or
+/// the count of its chars (op 1).
+///
+/// # Safety
+/// `s` is readable for `n` bytes of UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_chars(op: i32, s: *const u8, n: usize, i: i64) -> i64 {
+    // SAFETY: the caller's contract.
+    let s = unsafe { text(s, n) };
+    if op == 1 {
+        return s.chars().count() as i64;
+    }
+    usize::try_from(i)
+        .ok()
+        .and_then(|i| s.chars().nth(i))
+        .map_or(-1, |c| i64::from(u32::from(c)))
+}
+
+/// `s.strip_prefix(p)` (op 0) or `strip_suffix` (op 1): 1 with the rest
+/// as a new `String` at `out`, or 0 with nothing written.
+///
+/// # Safety
+/// `out` is writable for a `String`; each pointer readable for its length.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_strip(
+    out: *mut RawVec,
+    op: i32,
+    s: *const u8,
+    sn: usize,
+    p: *const u8,
+    pn: usize,
+) -> u8 {
+    // SAFETY: the caller's contract.
+    let (s, p) = unsafe { (text(s, sn), text(p, pn)) };
+    let rest = if op == 0 {
+        s.strip_prefix(p)
+    } else {
+        s.strip_suffix(p)
+    };
+    match rest {
+        Some(t) => {
+            // SAFETY: as above.
+            unsafe { string_of(out, t.as_bytes()) };
+            1
+        }
+        None => 0,
+    }
+}
+
+/// `s.replacen(a, b, n)` (a negative count is 0) as a new `String` at
+/// `out`.
+///
+/// # Safety
+/// `out` is writable for a `String`; each pointer readable for its length.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn karac_mir_str_replacen(
+    out: *mut RawVec,
+    s: *const u8,
+    sn: usize,
+    a: *const u8,
+    an: usize,
+    b: *const u8,
+    bn: usize,
+    n: i64,
+) {
+    // SAFETY: the caller's contract.
+    let t = unsafe { text(s, sn).replacen(text(a, an), text(b, bn), n.max(0) as usize) };
+    // SAFETY: as above.
+    unsafe { string_of(out, t.as_bytes()) };
+}
+
+/// `std.time::sleep_ms`: a real pause; a count of zero or less is a
+/// no-op.
+#[no_mangle]
+pub extern "C" fn karac_mir_sleep_ms(ms: i64) {
+    if ms > 0 {
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+    }
+}
+
 /// `s.repeat(n)` (a negative count is 0) as a new `String` at `out`.
 ///
 /// # Safety

@@ -250,6 +250,102 @@ impl<'ctx> Cx<'ctx, '_> {
                 )?;
                 self.drop_moved(&args[1..])?;
             }
+            ("find", [s, needle]) => {
+                let (sp, sn) = self.str_parts(s)?;
+                let nt = self.operand_type(needle)?;
+                let (np, nn, c) = if matches!(self.tys.kind(nt), TyKind::Char) {
+                    let c = self.operand_scalar(needle)?.into_int_value();
+                    let c = self
+                        .builder
+                        .build_int_z_extend(c, self.llcx.i64_type(), "")
+                        .map_err(e)?;
+                    (sp, self.i64(0), c)
+                } else if self.is_text(needle)? {
+                    let (np, nn) = self.str_parts(needle)?;
+                    (np, nn, self.i64(u64::MAX))
+                } else {
+                    return Ok(None);
+                };
+                let at = self.rt_int(
+                    "str_find",
+                    &[sp.into(), sn.into(), np.into(), nn.into(), c.into()],
+                    64,
+                )?;
+                self.store_opt_int(dest, at)?;
+                self.drop_moved(&args[1..])?;
+            }
+            ("char_at" | "char_count", [s, rest @ ..]) => {
+                let (sp, sn) = self.str_parts(s)?;
+                let (op, i) = match rest {
+                    [i] => (0, self.int_arg(i)?),
+                    _ => (1, self.i64(0)),
+                };
+                let op = self.llcx.i32_type().const_int(op, false);
+                let v = self.rt_int(
+                    "str_chars",
+                    &[op.into(), sp.into(), sn.into(), i.into()],
+                    64,
+                )?;
+                if method == "char_at" {
+                    self.store_opt_int(dest, v)?;
+                } else {
+                    self.store_int_as(dest, v, true)?;
+                }
+            }
+            ("strip_prefix" | "strip_suffix", [s, p]) => {
+                if !self.is_text(p)? {
+                    return Ok(None);
+                }
+                let (sp, sn) = self.str_parts(s)?;
+                let (pp, pn) = self.str_parts(p)?;
+                let d = self.place_ptr(dest)?;
+                let (some, none) = self.option_variants(dty)?;
+                self.store_tag(d, dty, none)?;
+                let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
+                let op = self
+                    .llcx
+                    .i32_type()
+                    .const_int(u64::from(method == "strip_suffix"), false);
+                let r = self.rt_int(
+                    "str_strip",
+                    &[
+                        q.into(),
+                        op.into(),
+                        sp.into(),
+                        sn.into(),
+                        pp.into(),
+                        pn.into(),
+                    ],
+                    8,
+                )?;
+                let found = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, r, r.get_type().const_zero(), "")
+                    .map_err(e)?;
+                self.if_then(found, |cx| cx.store_tag(d, dty, some))?;
+                self.drop_moved(&args[1..])?;
+            }
+            ("replacen", [s, a, b, n]) => {
+                let (sp, sn) = self.str_parts(s)?;
+                let (ap, an) = self.str_parts(a)?;
+                let (bp, bn) = self.str_parts(b)?;
+                let n = self.int_arg(n)?;
+                let d = self.place_ptr(dest)?;
+                self.rt(
+                    "str_replacen",
+                    &[
+                        d.into(),
+                        sp.into(),
+                        sn.into(),
+                        ap.into(),
+                        an.into(),
+                        bp.into(),
+                        bn.into(),
+                        n.into(),
+                    ],
+                )?;
+                self.drop_moved(&args[1..3])?;
+            }
             ("repeat", [s, n]) => {
                 let (sp, sn) = self.str_parts(s)?;
                 let n = self.int_arg(n)?;
@@ -626,6 +722,34 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.clone_seq(end, op, on, el)?;
                 let m = self.builder.build_int_add(n, on, "").map_err(e)?;
                 self.store(self.offset(v, 8)?, m.into())?;
+            }
+            ("extend" | "append", [other]) if is_vec => {
+                // The other `Vec`'s elements move over and it is left empty;
+                // passed by value it is then dropped (freeing its buffer).
+                let mut ot = self.operand_type(other)?;
+                let mut q = self.operand_ptr(other)?;
+                while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(ot) {
+                    q = self.load_ptr(q)?;
+                    ot = i;
+                }
+                if !matches!(self.tys.kind(ot), TyKind::Intrinsic(IntrinsicTy::Vec(_))) {
+                    return Ok(None);
+                }
+                let op = self.load_ptr(q)?;
+                let on = self.load_i64(self.offset(q, 8)?)?;
+                let v = self.ref_arg(recv)?;
+                self.rt("vec_reserve", &[v.into(), on.into(), self.i64(size).into()])?;
+                let buf = self.load_ptr(v)?;
+                let end = self.elem_ptr(buf, n, size)?;
+                let bytes = self
+                    .builder
+                    .build_int_mul(on, self.i64(size), "")
+                    .map_err(e)?;
+                self.builder.build_memcpy(end, 1, op, 1, bytes).map_err(e)?;
+                let m = self.builder.build_int_add(n, on, "").map_err(e)?;
+                self.store(self.offset(v, 8)?, m.into())?;
+                self.store(self.offset(q, 8)?, self.i64(0).into())?;
+                self.drop_moved(&args[1..])?;
             }
             ("truncate", [k]) if is_vec => {
                 // The tail drops first to last, as a dying Vec's does.

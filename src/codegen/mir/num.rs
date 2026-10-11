@@ -104,6 +104,33 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
+    /// Writes `Some(v)` at `dest` (an `Option` of an integer or `char`)
+    /// when the `i64` `v` is non-negative, else `None`.
+    pub(super) fn store_opt_int(&mut self, dest: &Place, v: IntValue<'ctx>) -> R<()> {
+        let dty = self.place_type(dest)?;
+        let d = self.place_ptr(dest)?;
+        let (some, none) = self.option_variants(dty)?;
+        self.store_tag(d, dty, none)?;
+        let ok = self
+            .builder
+            .build_int_compare(IntPredicate::SGE, v, self.i64(0), "")
+            .map_err(e)?;
+        let pt = self
+            .tys
+            .field_ty(dty, Some(some), 0)
+            .ok_or("an option without a payload")?;
+        let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
+        let it = self.llvm_ty(pt)?.into_int_type();
+        self.if_then(ok, |cx| {
+            cx.store_tag(d, dty, some)?;
+            let n = cx
+                .builder
+                .build_int_truncate_or_bit_cast(v, it, "")
+                .map_err(e)?;
+            cx.store(q, n.into())
+        })
+    }
+
     /// The methods of this file, or `None` for one not lowered here.
     pub(super) fn num_native(
         &mut self,
@@ -179,29 +206,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let v = self.rt_int("char", &[op.into(), c.into(), r.into()], 64)?;
         let dty = self.place_type(dest)?;
         match method {
-            "to_digit" => {
-                let d = self.place_ptr(dest)?;
-                let (some, none) = self.option_variants(dty)?;
-                self.store_tag(d, dty, none)?;
-                let ok = self
-                    .builder
-                    .build_int_compare(IntPredicate::SGE, v, self.i64(0), "")
-                    .map_err(e)?;
-                let pt = self
-                    .tys
-                    .field_ty(dty, Some(some), 0)
-                    .ok_or("an option without a payload")?;
-                let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
-                let it = self.llvm_ty(pt)?.into_int_type();
-                self.if_then(ok, |cx| {
-                    cx.store_tag(d, dty, some)?;
-                    let n = cx
-                        .builder
-                        .build_int_truncate_or_bit_cast(v, it, "")
-                        .map_err(e)?;
-                    cx.store(q, n.into())
-                })?;
-            }
+            "to_digit" => self.store_opt_int(dest, v)?,
             m if m.starts_with("to_") => {
                 let it = self.llvm_ty(dty)?.into_int_type();
                 let c = self
@@ -356,7 +361,7 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// Stores the integer `v` at `dest`, cast to its integer type.
-    fn store_int_as(&mut self, dest: &Place, v: IntValue<'ctx>, signed: bool) -> R<()> {
+    pub(super) fn store_int_as(&mut self, dest: &Place, v: IntValue<'ctx>, signed: bool) -> R<()> {
         let dty = self.place_type(dest)?;
         let it = self.llvm_ty(dty)?.into_int_type();
         let v = self
@@ -501,6 +506,71 @@ impl<'ctx> Cx<'ctx, '_> {
                 let gt = b.build_int_compare(gp, x, h, "").map_err(e)?;
                 let v = b.build_select(gt, h, x, "").map_err(e)?.into_int_value();
                 let v = b.build_select(lt, l, v, "").map_err(e)?.into_int_value();
+                self.store_int_as(dest, v, it.signed())?;
+            }
+            ("rem_euclid" | "div_euclid", [y]) => {
+                if self.operand_type(y)? != self.operand_type(&args[0])? {
+                    return Ok(None);
+                }
+                let y = self.operand_scalar(y)?.into_int_value();
+                let z = xt.const_zero();
+                let nz = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, y, z, "")
+                    .map_err(e)?;
+                self.abort_unless(nz, "division by zero")?;
+                let b = &self.builder;
+                let v = if it.signed() {
+                    // `MIN % -1` is undefined in LLVM and 0 by the rule; a
+                    // divisor of 1 gives that remainder.
+                    let m1 = b
+                        .build_int_compare(IntPredicate::EQ, y, xt.const_all_ones(), "")
+                        .map_err(e)?;
+                    let safe = b
+                        .build_select(m1, xt.const_int(1, false), y, "")
+                        .map_err(e)?
+                        .into_int_value();
+                    let r = b.build_int_signed_rem(x, safe, "").map_err(e)?;
+                    let neg = b
+                        .build_int_compare(IntPredicate::SLT, r, z, "")
+                        .map_err(e)?;
+                    let ypos = b
+                        .build_int_compare(IntPredicate::SGT, y, z, "")
+                        .map_err(e)?;
+                    if method == "rem_euclid" {
+                        let up = b.build_int_add(r, y, "").map_err(e)?;
+                        let dn = b.build_int_sub(r, y, "").map_err(e)?;
+                        let fixed = b.build_select(ypos, up, dn, "").map_err(e)?;
+                        b.build_select(neg, fixed, r.into(), "")
+                            .map_err(e)?
+                            .into_int_value()
+                    } else {
+                        let min = xt.const_int(1u64 << (it.bits() - 1), false);
+                        let at_min = b
+                            .build_int_compare(IntPredicate::EQ, x, min, "")
+                            .map_err(e)?;
+                        let over = b.build_and(at_min, m1, "").map_err(e)?;
+                        let fine = b.build_not(over, "").map_err(e)?;
+                        self.abort_unless(fine, "integer overflow")?;
+                        let b = &self.builder;
+                        let safe2 = b
+                            .build_select(over, xt.const_int(1, false), y, "")
+                            .map_err(e)?
+                            .into_int_value();
+                        let q = b.build_int_signed_div(x, safe2, "").map_err(e)?;
+                        let one = xt.const_int(1, false);
+                        let qm = b.build_int_sub(q, one, "").map_err(e)?;
+                        let qp = b.build_int_add(q, one, "").map_err(e)?;
+                        let fixed = b.build_select(ypos, qm, qp, "").map_err(e)?;
+                        b.build_select(neg, fixed, q.into(), "")
+                            .map_err(e)?
+                            .into_int_value()
+                    }
+                } else if method == "rem_euclid" {
+                    b.build_int_unsigned_rem(x, y, "").map_err(e)?
+                } else {
+                    b.build_int_unsigned_div(x, y, "").map_err(e)?
+                };
                 self.store_int_as(dest, v, it.signed())?;
             }
             ("bits_as_f64", []) => {
@@ -678,6 +748,43 @@ impl<'ctx> Cx<'ctx, '_> {
                     .map_err(e)?;
                 let v = b.build_select(gt, h, x, "").map_err(e)?.into_float_value();
                 b.build_select(lt, l, v, "").map_err(e)?.into_float_value()
+            }
+            ("rem_euclid" | "div_euclid", [y]) => {
+                if self.operand_type(y)? != xt {
+                    return Ok(None);
+                }
+                let y = self.operand_scalar(y)?;
+                let y = self.float_of(y, xt)?;
+                let x = self.at_dest_width(x, dest)?;
+                let y = self.at_dest_width(y, dest)?;
+                let t = x.get_type();
+                let b = &self.builder;
+                let r = b.build_float_rem(x, y, "").map_err(e)?;
+                let neg = b
+                    .build_float_compare(inkwell::FloatPredicate::OLT, r, t.const_zero(), "")
+                    .map_err(e)?;
+                if method == "rem_euclid" {
+                    let ay = self.float_intrinsic("fabs", &[y])?;
+                    let b = &self.builder;
+                    let up = b.build_float_add(r, ay, "").map_err(e)?;
+                    b.build_select(neg, up, r, "")
+                        .map_err(e)?
+                        .into_float_value()
+                } else {
+                    let q = b.build_float_div(x, y, "").map_err(e)?;
+                    let q = self.libm("trunc", q, None)?;
+                    let b = &self.builder;
+                    let ypos = b
+                        .build_float_compare(inkwell::FloatPredicate::OGT, y, t.const_zero(), "")
+                        .map_err(e)?;
+                    let one = t.const_float(1.0);
+                    let qm = b.build_float_sub(q, one, "").map_err(e)?;
+                    let qp = b.build_float_add(q, one, "").map_err(e)?;
+                    let fixed = b.build_select(ypos, qm, qp, "").map_err(e)?;
+                    b.build_select(neg, fixed, q.into(), "")
+                        .map_err(e)?
+                        .into_float_value()
+                }
             }
             ("recip" | "fract" | "to_degrees" | "to_radians", []) => {
                 let x = self.at_dest_width(x, dest)?;
