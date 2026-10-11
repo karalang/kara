@@ -789,6 +789,11 @@ impl<'a> Interp<'a> {
     fn native(&mut self, name: &str, args: Vec<Value>, arg_tys: &[Ty], ret: Ty) -> R<Value> {
         let (ty_name, method) = split_method(name);
         let base = ty_name.split('[').next().unwrap_or(ty_name);
+        // A `str` view (`StringSlice`) reads as the text it views: the
+        // `String` methods that only read serve it.
+        if base == "str" {
+            return self.native(&format!("String.{method}"), args, arg_tys, ret);
+        }
         match (base, method) {
             // `std.mem`: moves through borrowed places, which MIR itself
             // does not spell (`take` is `replace` with the default).
@@ -1956,6 +1961,15 @@ impl<'a> Interp<'a> {
         };
         match (method, &args[1..]) {
             ("sort" | "sort_unstable", []) => {
+                let et = self.vec_elem_ty(arg_tys, &name)?;
+                if let Some(cmp) = self.user_cmp(et) {
+                    let n = self.vec_elems(id)?.len();
+                    let order = self.merge_order(n, &mut |me, a, b| {
+                        me.call_cmp(&cmp, &Value::Ref(elem(a)), &Value::Ref(elem(b)))
+                    })?;
+                    self.permute(id, &order)?;
+                    return Ok(Value::Unit);
+                }
                 let elems = self.vec_elems(id)?.clone();
                 let mut keys = Vec::with_capacity(elems.len());
                 for x in &elems {
@@ -2008,7 +2022,12 @@ impl<'a> Interp<'a> {
                     owned.push(k);
                 }
                 self.release_callee(f, fty)?;
-                let order = self.merge_order(n, &mut |_, a, b| Ok(cmp_key(&keys[a], &keys[b])))?;
+                // A key type with a user `Ord` is ordered by its `cmp`.
+                let order = match self.user_cmp(key_ty) {
+                    Some(cmp) => self
+                        .merge_order(n, &mut |me, a, b| me.call_cmp(&cmp, &owned[a], &owned[b]))?,
+                    None => self.merge_order(n, &mut |_, a, b| Ok(cmp_key(&keys[a], &keys[b])))?,
+                };
                 self.permute(id, &order)?;
                 for k in owned {
                     self.drop_value(k, key_ty)?;
@@ -4114,6 +4133,58 @@ impl<'a> Interp<'a> {
         self.program.bodies.contains_key(&name).then_some(name)
     }
 
+    /// The lowered body of `ty`'s user `Ord.cmp`, if it has one. Lowering
+    /// queues it for the elements of a sort and the keys of a keyed sort.
+    fn user_cmp(&self, ty: Ty) -> Option<String> {
+        let mut ty = ty;
+        while let TyKind::Ref(inner) | TyKind::MutRef(inner) = self.tys.kind(ty) {
+            ty = inner;
+        }
+        if !matches!(self.tys.kind(ty), TyKind::Adt(_) | TyKind::Shared(_)) {
+            return None;
+        }
+        let name = format!("{}.cmp", self.tys.adt_name(ty));
+        self.program.bodies.contains_key(&name).then_some(name)
+    }
+
+    /// `a.cmp(b)` by the user `cmp` body `name`, which takes both by
+    /// reference (a value that is itself a reference is passed as is).
+    fn call_cmp(&mut self, name: &str, a: &Value, b: &Value) -> R<std::cmp::Ordering> {
+        let ret = self.program.bodies[name].return_ty();
+        let (refs, scratch) = self.by_ref(&[a, b])?;
+        let r = self.call(name, refs);
+        for slot in scratch {
+            self.free_slot(AllocId(slot as u32));
+        }
+        self.ordering(&r?, ret)
+    }
+
+    /// Each value as a reference: a reference as is, else a scratch slot
+    /// holding a copy (freed by the caller, its contents undropped).
+    fn by_ref(&mut self, vs: &[&Value]) -> R<(Vec<Value>, Vec<usize>)> {
+        let mut scratch = Vec::new();
+        let mut refs = Vec::new();
+        for v in vs {
+            if let Value::Ref(_) = v {
+                refs.push((*v).clone());
+                continue;
+            }
+            let slot = self
+                .alloc(HeapObj {
+                    count: 1,
+                    weak: 0,
+                    value: (*v).clone(),
+                })
+                .0 as usize;
+            scratch.push(slot);
+            refs.push(Value::Ref(Addr {
+                root: Root::Heap(AllocId(slot as u32)),
+                path: Vec::new(),
+            }));
+        }
+        Ok((refs, scratch))
+    }
+
     /// `a == b` by the user `eq` body `name`, which takes both by
     /// reference.
     fn call_eq(&mut self, name: &str, a: &Value, b: &Value) -> R<bool> {
@@ -4861,6 +4932,12 @@ impl<'a> Interp<'a> {
     fn string_at(&mut self, v: &Value) -> R<String> {
         if let Value::Str(s) = v {
             return Ok(s.clone());
+        }
+        // A reference to a `str` view, held in place.
+        if let Value::Ref(a) = v {
+            if let Value::Str(s) = self.slot(a)? {
+                return Ok(s);
+            }
         }
         let id = self.box_behind(v)?;
         match &self.live(id)?.value {
@@ -6112,7 +6189,8 @@ impl<'a> Interp<'a> {
                 let ret = if self.program.bodies.contains_key(&inst.name) {
                     self.call(&inst.name, vals)?
                 } else {
-                    self.native(&inst.name, vals, &arg_tys, ret_ty)?
+                    let v = self.native(&inst.name, vals, &arg_tys, ret_ty)?;
+                    self.inline_str(v, ret_ty)?
                 };
                 self.finish_call(body, destination, target, ret, &inst.name)
             }
@@ -6428,6 +6506,30 @@ impl<'a> Interp<'a> {
                 self.heap.push(Some(obj));
                 AllocId(self.heap.len() as u32 - 1)
             }
+        }
+    }
+
+    /// A native's result as a `str` view when that is its type: the text
+    /// of a `String` it made, held in place, its allocation freed.
+    fn inline_str(&mut self, v: Value, ty: Ty) -> R<Value> {
+        match (self.tys.kind(ty), v) {
+            (TyKind::Str, v @ Value::Box(id)) => {
+                let text = self.string_at(&v)?;
+                self.free_slot(id);
+                Ok(Value::Str(text))
+            }
+            // The payload of an `Option[str]` / `Result[str, E]`.
+            (TyKind::Adt(_), Value::Variant(k, fs)) => {
+                let mut out = Vec::with_capacity(fs.len());
+                for (i, f) in fs.into_iter().enumerate() {
+                    out.push(match self.tys.field_ty(ty, Some(k), i as u32) {
+                        Some(t) => self.inline_str(f, t)?,
+                        None => f,
+                    });
+                }
+                Ok(Value::Variant(k, out))
+            }
+            (_, v) => Ok(v),
         }
     }
 

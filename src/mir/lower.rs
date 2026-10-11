@@ -590,6 +590,22 @@ impl<'a> Lcx<'a> {
                         }
                         _ => None,
                     };
+                    // A target with no definition of its own (`impl Reads
+                    // for Array[i64, 3]`) is the type its methods' `self`
+                    // was checked at.
+                    let prim = prim.or_else(|| {
+                        if target.is_some() || b.generic_params.is_some() {
+                            return None;
+                        }
+                        let impl_span = SpanKey::from_span(&b.span);
+                        b.items.iter().find_map(|it| {
+                            let ImplItem::Method(f) = it else { return None };
+                            let key = (Some(impl_span), SpanKey::from_span(&f.span));
+                            let (ty, _) = self.tc.fn_self_types.get(&key)?;
+                            let hir = self.lower_legacy(ty, &[]).ok()?;
+                            self.mir_ty(hir, &[]).ok()
+                        })
+                    });
                     if target.is_none() && prim.is_none() {
                         continue;
                     }
@@ -1066,9 +1082,9 @@ impl<'a> Lcx<'a> {
                     let args = self.tys.tcx().intern_list(&args);
                     HK::Intrinsic { kind, args }
                 } else if name == "StringSlice" && std {
-                    // A view of a `String`'s text: the interpreter holds
-                    // it as a `String` of its own.
-                    HK::Str
+                    // A view of text (core semantics §5.2): `str`, copied
+                    // like a reference and never dropped.
+                    HK::StaticStr
                 } else {
                     let shared = self.register_adt(def)?;
                     let targs = args.clone();
@@ -4132,7 +4148,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                     unreachable!("a non-place index is a range")
                 };
                 let ot = self.expr_ty(object)?;
-                if matches!(self.strip_ty(ot), HK::Str) {
+                if matches!(self.strip_ty(ot), HK::Str | HK::StaticStr) {
                     let (start, end) = (start.as_deref(), end.as_deref());
                     return self.string_range(object, start, end, *inclusive, dest);
                 }
@@ -4330,7 +4346,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // The condition's temporaries drop once it is evaluated,
                 // before either branch runs (core semantics §7.4).
                 self.push_scope();
-                let c = self.expr_operand(condition)?;
+                // A borrowed `bool` (`for w in v.iter() { if w {..} }`) is read.
+                let bool_t = self.tys().bool();
+                let c = self.owned_operand(condition, bool_t)?;
                 self.pop_scope()?;
                 let then_bb = self.b.new_block();
                 let else_bb = self.b.new_block();
@@ -4453,7 +4471,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.goto(head);
                 self.cur = head;
                 self.push_scope();
-                let c = self.expr_operand(condition)?;
+                // A borrowed `bool` (`for w in v.iter() { if w {..} }`) is read.
+                let bool_t = self.tys().bool();
+                let c = self.owned_operand(condition, bool_t)?;
                 self.pop_scope()?;
                 self.goto_with(
                     TerminatorKind::SwitchInt {
@@ -4947,7 +4967,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             AstBinOp::Shr => BinOp::Shr,
             AstBinOp::And | AstBinOp::Or => {
                 // Short circuit: the right side runs only when it decides.
-                let l = self.expr_operand(left)?;
+                // Either side may be a borrowed `bool`, which is read.
+                let bool_t = self.tys().bool();
+                let l = self.owned_operand(left, bool_t)?;
                 let rhs_bb = self.b.new_block();
                 let short_bb = self.b.new_block();
                 let join = self.b.new_block();
@@ -4964,11 +4986,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                     rhs_bb,
                 );
                 self.push_scope();
-                self.expr_into(right, dest.clone())?;
+                let r = self.owned_operand(right, bool_t)?;
+                self.assign(dest.clone(), Rvalue::Use(r));
                 self.pop_scope()?;
                 self.goto(join);
                 self.cur = short_bb;
-                let bool_t = self.tys().bool();
                 self.assign(
                     dest,
                     Rvalue::Use(Operand::Const(Const {
@@ -4989,7 +5011,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             HK::Ref(t) | HK::MutRef(t) => t,
             _ => lt0,
         };
-        if matches!(self.tys().tcx().kind(lbase), HK::Str) {
+        if matches!(self.tys().tcx().kind(lbase), HK::Str | HK::StaticStr) {
             return self.string_op(left, bin, right, dest);
         }
         // `a + b` on a `distinct type` that derives `Arithmetic`: the
@@ -5265,7 +5287,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 inner,
                 dest,
             ),
-            HK::Str => {
+            HK::Str | HK::StaticStr => {
                 let lo = self.ref_to(l, t);
                 let ro = self.ref_to(r, t);
                 self.call_native("String.cmp", vec![lo, ro], dest);
@@ -5696,7 +5718,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 inner,
                 dest,
             ),
-            HK::Str => {
+            HK::Str | HK::StaticStr => {
                 let lo = self.ref_to(l, t);
                 let ro = self.ref_to(r, t);
                 self.call_native("String.eq", vec![lo, ro], dest);
@@ -6112,6 +6134,14 @@ impl<'l, 'a> Bx<'l, 'a> {
             if let Some((d, args)) = self.user_impl_method(e, "PartialEq", "eq") {
                 self.lcx.instance(d, args);
             }
+        }
+    }
+
+    /// Queue `t`'s user `Ord.cmp`, which the interpreter sorts by.
+    fn queue_user_cmp(&mut self, t: Ty) {
+        let (_, t) = self.strip_ty_full(t);
+        if let Some((d, args)) = self.user_impl_method(t, "Ord", "cmp") {
+            self.lcx.instance(d, args);
         }
     }
 
@@ -6861,13 +6891,13 @@ impl<'l, 'a> Bx<'l, 'a> {
         else {
             // `for c in s` of a `String` walks its chars.
             let t = self.expr_ty(e)?;
-            return Ok(matches!(self.strip_ty(t), HK::Str).then_some(e));
+            return Ok(matches!(self.strip_ty(t), HK::Str | HK::StaticStr).then_some(e));
         };
         if method != "chars" || !args.is_empty() {
             return Ok(None);
         }
         let t = self.expr_ty(object)?;
-        Ok(matches!(self.strip_ty(t), HK::Str).then_some(&**object))
+        Ok(matches!(self.strip_ty(t), HK::Str | HK::StaticStr).then_some(&**object))
     }
 
     /// Walk the chars of the `String` `text`: `each` runs once per char,
@@ -8567,6 +8597,20 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `Log.set_exporter` registers receives each later event through its
     /// `export_event`.
     fn queue_for_native(&mut self, name: &str, args: &[Operand]) {
+        // A sort of elements with a user `Ord` orders them by its `cmp`.
+        if name.ends_with(".sort") || name.ends_with(".sort_unstable") {
+            if let Some(op) = args.first() {
+                let (_, t) = self.strip_ty_full(self.operand_ty(op));
+                let elem = match self.tys().tcx().kind(t) {
+                    HK::Intrinsic { args, .. } => self.tys().tcx().list(args).first().copied(),
+                    HK::Slice { elem, .. } | HK::Array { elem, .. } => Some(elem),
+                    _ => None,
+                };
+                if let Some(e) = elem {
+                    self.queue_user_cmp(e);
+                }
+            }
+        }
         if name.starts_with("Log[") && name.ends_with(".set_exporter") {
             if let Some(op) = args.first() {
                 let (_, t) = self.strip_ty_full(self.operand_ty(op));
@@ -10711,8 +10755,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return self.cmp_places(e.span, lp, rp, lt, dest);
             }
         }
-        if method == "clone" && args.is_empty() && !self.lcx.calls.contains_key(&e.id) {
-            // A tuple's `clone` (the checker records no callee for it).
+        let array_recv = method == "clone" && {
+            let rt = self.expr_ty(object)?;
+            matches!(self.strip_ty(rt), HK::Array { .. })
+        };
+        if method == "clone"
+            && args.is_empty()
+            && (array_recv || !self.lcx.calls.contains_key(&e.id))
+        {
+            // A tuple's `clone` (the checker records no callee for it), and
+            // a fixed array's, element by element.
             let (p, t) = self.deref_place(object, false)?;
             self.clone_into(p, t, dest);
             return Ok(());
@@ -10769,7 +10821,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
             // `"42".parse()` into an `Option[i64]`: the number type's `parse`.
-            if method == "parse" && args.is_empty() && matches!(self.strip_ty(rt), HK::Str) {
+            if method == "parse"
+                && args.is_empty()
+                && matches!(self.strip_ty(rt), HK::Str | HK::StaticStr)
+            {
                 let et = self.expr_ty(e)?;
                 let tcx = self.tys().tcx();
                 let some = tcx
@@ -10816,7 +10871,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let key = format!("{}.{method}", self.lcx.def_name(d));
                 self.builtin_method(e, &key, object, method, args, dest)
             }
-            Callee::Builtin(key) => self.builtin_method(e, &key, object, method, args, dest),
+            Callee::Builtin(key) => {
+                // A user impl on a type with no definition of its own
+                // (`impl Reads for Array[i64, 3]`) is recorded as a builtin.
+                let rt = self.expr_ty(object)?;
+                let (_, base) = self.strip_ty_full(rt);
+                let user = self
+                    .lcx
+                    .fns
+                    .iter()
+                    .any(|(_, i)| i.impl_prim == Some(base) && i.f.name == method);
+                if user {
+                    if let Some((d, inst_args)) = self.method_by_receiver(rt, method) {
+                        return self.user_method_call(e, object, d, inst_args, args, dest);
+                    }
+                }
+                self.builtin_method(e, &key, object, method, args, dest)
+            }
             Callee::Value => self.unsupported(e.span, "this method call"),
         }
     }
@@ -11765,6 +11836,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             let kt = self.expr_ty(body)?;
             !self.is_copy(kt)
         };
+        // A key with a user `Ord` is ordered by its `cmp`.
+        if key {
+            let kt = self.expr_ty(body)?;
+            self.queue_user_cmp(kt);
+        }
         self.lcx.closure_queue.push(ClosureJob {
             def,
             name,
@@ -12430,7 +12506,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.call_native(&name, vec![recv], dest);
                 Ok(())
             }
-            (_, "to_string") if matches!(self.tys().tcx().kind(base), HK::Str) => {
+            (_, "to_string") if matches!(self.tys().tcx().kind(base), HK::Str | HK::StaticStr) => {
                 let recv = self.recv_ref(object, false)?;
                 self.call_native("String.clone", vec![recv], dest);
                 Ok(())
@@ -15751,6 +15827,49 @@ fn main() {
         assert_eq!(
             run_source(src),
             Ok(("abc 1 2 32 41\n".to_string(), Some(3)))
+        );
+    }
+
+    #[test]
+    fn borrowed_bools_array_impls_and_str_views() {
+        let src = r#"
+trait Reads { fn v_get(ref self, i: i64) -> i64; }
+impl Reads for Array[i64, 3] { fn v_get(ref self, i: i64) -> i64 { self[i] } }
+struct Split { rest: StringSlice, done: bool }
+impl Split {
+    fn next(mut ref self) -> Option[StringSlice] {
+        if self.done { return None; }
+        match self.rest.find(",") {
+            Some(k) => {
+                let head = self.rest.slice(0, k);
+                self.rest = self.rest.slice(k + 1, self.rest.len());
+                return Some(head);
+            }
+            None => { self.done = true; return Some(self.rest); }
+        }
+    }
+}
+fn main() {
+    let v: Vec[bool] = vec![true, false, true];
+    let mut n = 0;
+    for w in v.iter() {
+        if w { n += 1; }
+        if w and n > 0 { n += 10; }
+        if n > 100 or w { n += 100; }
+    }
+    let a: Array[i64, 3] = [4, 5, 6];
+    let b: Array[String, 2] = ["x".to_string(), "yz".to_string()];
+    let c = b.clone();
+    let text = "aa,bbb,c";
+    let mut it = Split { rest: text.slice(0, text.len()), done: false };
+    let mut m = 0;
+    while true { match it.next() { None => break, Some(f) => { m = m * 10 + f.len(); } } }
+    println(f"{n} {a.v_get(1)} {c[1]} {b[0]} {m}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("322 5 yz x 231\n".to_string(), Some(0)))
         );
     }
 
