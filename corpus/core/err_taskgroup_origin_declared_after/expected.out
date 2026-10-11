@@ -1,1 +1,1 @@
-ERROR at line 8: `data` drops before `g`, but a task of `g` borrows it (spawned at line 9); declare `data` before `g`
+ERROR at line 10: `data` was moved into a task of `g` (spawned at line 9) because it drops before `g`; declare `data` before `g` to let the task borrow it

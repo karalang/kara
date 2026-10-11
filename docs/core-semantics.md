@@ -258,6 +258,8 @@ A view borrows exactly like a reference.
 
 **Static data has no origins.** A view of data that lives for the whole program, such as a string literal typed `Str` or a `Slice` of a constant, borrows nothing, so none of §5.5–§5.7 limits it.
 
+**A literal where a reference is expected is static.** A literal (string, integer, float, `bool` or `char`) checked against `ref T` is a `ref T` to a constant `T` in static data, not a temporary. Like a `Str` literal, it borrows nothing, so `m.get(k).unwrap_or("")`, `counts.get(k).unwrap_or(0)` and `m.get(k) ?? ""` may be bound, kept and returned. The constant is never dropped and never reachable mutably: a literal checked against `mut ref T` is a temporary, and §5.5 applies. Only literals are promoted. An f-string, `String.new()` or `Vec.new()` in a `ref` slot is a temporary. (Decided by Gowtham, 2026-10-10.)
+
 Only a value whose type can hold a reference has origins: a reference, a view, a closure, and an aggregate or collection containing one. A type the compiler cannot see into counts as one that can; `TaskGroup` is such a type, because it holds its tasks' closures. So an `i64` copied out through a reference borrows nothing.
 
 **5.4 The signature rule.** For a function that returns a reference or a view:
@@ -481,9 +483,18 @@ Reordering that cannot be observed is allowed.
 **9.1 Capture modes** are inferred per captured place, with disjoint field capture as in `design.md` Rule 2¼:
 - **by `ref`** if the body only reads the place;
 - **by `mut ref`** if the body mutates it;
-- **by move** if the body moves it, or if the closure escapes (§9.3).
+- **by move** if the body moves it, if the closure escapes (§9.3), or if the place dies while the closure's borrow of it is still live (below).
 
-A by-move capture of a `Copy` place copies it. A read-only capture of a `Copy` place is still a `ref` capture, so writing the place while the closure is live is an error (§5.6), never a silent read of a stale copy: in `for x in xs.iter().filter(|v| v < lim) { lim = lim - 1; }` the write to `lim` is rejected. To give the closure a snapshot, copy the value into a new binding first. (Decided by Gowtham, 2026-10-09.) `shared` and `sync` handles are counted. A `frozen` handle is never counted, so a closure that captures one is a view (§5.2, §5.7).
+A by-move capture of a `Copy` place copies it. A read-only capture of a `Copy` place is still a `ref` capture, so writing the place while the closure is live is an error (§5.6), never a silent read of a stale copy: in `for x in xs.iter().filter(|v| v < lim) { lim = lim - 1; }` the write to `lim` is rejected. To give the closure a snapshot, copy the value into a new binding first. (Decided by Gowtham, 2026-10-09.)
+
+**A place that dies first is moved in.** Sometimes a `ref` or `mut ref` capture would outlive its place: the place drops at the end of its scope while the closure, or a group holding the closure (§9.5), is still live. Then the capture is by move instead, whatever the type.
+- A non-`Copy` place is moved (§3), so a later use of it is E0500.
+- A `Copy` place is copied, and it still counts as borrowed in the inferred mode until it dies. Writing it afterwards is an error (§5.6), and so is any use after a `mut ref` capture. So the closure never reads a stale copy, and the place never misses the closure's writes.
+- So `while i < n { let c = i; tg.spawn(|| work(c)); i = i + 1; }` and `let name = req.name.clone(); tg.spawn(|| log(name));` compile.
+- This applies to the captured place only. A captured view still borrows its origins, and they must outlive the closure.
+- A place that outlives the closure keeps the capture inferred above.
+
+(Decided by Gowtham, 2026-10-10.) `shared` and `sync` handles are counted. A `frozen` handle is never counted, so a closure that captures one is a view (§5.2, §5.7).
 
 **9.2 Closures as views.** A closure with any `ref` or `mut ref` capture is a view (§5). It can be called and passed down, but not stored where §5.7 forbids it.
 
@@ -511,8 +522,9 @@ Pins: `err_escaping_capture_reused` (today it compiles and prints both lines), `
 - `spawn` borrows its receiver (`self`), so a group can be passed borrowed to the functions and tasks that spawn into it, such as a server's request handlers. Spawns on one group are synchronized.
 - The group then borrows the closure's origins (§5.3) until it drops. Dropping a group joins its tasks, so the drop is the borrow's last use (§5.6). The returned `TaskHandle` borrows nothing; it owns its task's result.
 - So while the group lives, a captured place may not be written, moved or dropped, and a second task may not capture by `mut ref` a place another task already captured.
-- Every origin must outlive the group. A place declared after the group in the same scope drops before it (§7.3), which is an error. Declare the place first, or put the group in an inner block.
-- So a task spawned from inside another task (a request handler, say) can capture that task's own locals only by move: they do not outlive the group.
+- A captured place that drops before the group, such as a loop-body local or a place declared after the group in the same scope (§7.3), is moved into the task (§9.1). Using it afterwards is E0500. To let the task borrow the place instead, declare it before the group, or put the group in an inner block.
+- The origins of a captured view are not moved, so every origin must outlive the group.
+- So a task spawned from inside another task (a request handler, say) takes that task's own locals by move: they do not outlive the group.
 - This is §5.3's rule for a method that stores a reference in its receiver. Nothing about `TaskGroup` is special except that it holds references through a `ref` receiver.
 
 Pins: `ok_taskgroup_borrows`, `err_taskgroup_write_while_borrowed`, `err_taskgroup_origin_declared_after`.
