@@ -7,8 +7,11 @@
 
 Backends: legacy (per entry, its `legacy_backend`), legacy-interp,
 legacy-build (AOT at the default auto-par setting, which is off), mir-interp
-(the MIR builder and interpreter, `karac __mir-run`), and the mir-llvm /
-mir-llvm-asan slots, which have no command until MIR->LLVM lands.
+(the MIR builder and interpreter, `karac __mir-run`), mir-llvm (the same
+MIR compiled to LLVM IR and run under `karac_jit_runner`, `karac
+__mir-llvm-run`; it needs a karac built with `--features llvm` and a
+current `karac_jit_runner` beside it), and the mir-llvm-asan slot, which
+has no command yet.
 
 --filter matches a tag exactly or a substring of the entry path; repeat it to
 widen. Each entry is judged by its meta.toml `expect`:
