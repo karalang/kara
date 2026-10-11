@@ -2594,6 +2594,11 @@ pub struct TypeChecker<'a> {
     /// the whole chain (the overwrite hazard `map_entry_lint` documents for the
     /// same reason), so `s` in `s.r` reads back as the type of `s.r`.
     pub(super) current_fn_ref_params: FxHashSet<String>,
+    /// This function's parameters (and `self`) that borrow only because D5
+    /// reads a bare parameter as a borrow, each with where `own ` would be
+    /// written to make it owned. Feeds the give-away diagnostic in
+    /// `check_expr`.
+    pub(super) current_fn_d5_params: FxHashMap<String, Span>,
     /// Spans at which a `frozen` PARAMETER was read as a value. B-2026-08-08-11.
     ///
     /// `frozen T` lowers to `TypeKind::Ref(T)` at parse time (B-2026-08-01-33 —
@@ -3153,6 +3158,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_is_gpu: false,
             current_fn_frozen_params: FxHashSet::default(),
             current_fn_ref_params: FxHashSet::default(),
+            current_fn_d5_params: FxHashMap::default(),
             frozen_param_use_spans: FxHashSet::default(),
             break_value_types: Vec::new(),
             closure_return_types: Vec::new(),
@@ -5709,15 +5715,22 @@ impl<'a> TypeChecker<'a> {
             // route, which needs none of the other three. So the clone route
             // is strictly harder than the alternative it was printed above,
             // and leading with it walked the reader away from the simpler fix.
-            msg.push_str(
+            // The strict check has no capture prefixes (§9.6), so there the
+            // clone route needs the other three only.
+            let prefix = if self.cli_lint_overrides.strict_core {
+                ""
+            } else {
+                " an `own` capture prefix,"
+            };
+            msg.push_str(&format!(
                 "; help: invoke the closure locally instead of routing it through this \
                  slot, or change the slot type to `OnceFn(...)` if you control its \
                  declaration. Cloning the capture is not a caller-side fix here: it \
-                 additionally needs the clone inside the body, an `own` capture prefix, \
+                 additionally needs the clone inside the body,{prefix} \
                  `Clone` on the captured type, and an `allocates` effect on the slot — \
                  so it requires editing the declaration too, where `OnceFn(...)` is the \
                  smaller change",
-            );
+            ));
             self.type_error(msg, span, TypeErrorKind::OnceFnIntoFnSlot);
             return false;
         }

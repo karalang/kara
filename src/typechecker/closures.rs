@@ -220,9 +220,17 @@ impl<'a> super::TypeChecker<'a> {
         }
         let outer_bindings = &env;
         let mut reason: Option<OnceReason> = None;
+        // v2 core §9.6: the body's value is the closure's result and moves
+        // out to the caller, so a closure whose result is a non-`Copy`
+        // capture (`|| x`) gives it away and can run once.
+        let body_mode = if self.cli_lint_overrides.strict_core {
+            CaptureWalkMode::Consuming
+        } else {
+            CaptureWalkMode::Reading
+        };
         self.walk_capture_consume(
             body,
-            CaptureWalkMode::Reading,
+            body_mode,
             outer_bindings,
             &mut shadow_stack,
             &mut reason,

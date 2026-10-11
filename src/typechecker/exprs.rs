@@ -31,7 +31,7 @@ use super::types::{
 };
 use super::BreakFrame;
 use super::TypeErrorKind;
-use super::{CoreLent, FixIt};
+use super::{class_for_type_error_kind, CoreLent, FixIt, TypeError};
 
 /// Validate an f-string format specifier `{expr:spec}` against the hole's
 /// inferred type (Phase 8 format specifiers). Runs at typecheck so `karac run`
@@ -614,6 +614,9 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        if let Some(ty) = self.d5_give_away(expr, expected) {
+            return ty;
+        }
         let mut ty = self.check_expr_inner(expr, expected);
         // A result whose type only the context decides (`collect`'s `C`)
         // takes the context's type, so the call's type argument is solved.
@@ -671,6 +674,105 @@ impl<'a> super::TypeChecker<'a> {
         self.link_part_node_types(expr);
         self.deny_for_element_drop_copy_in_literal(expr);
         ty
+    }
+
+    /// D5 (core-semantics §4.1): a bare parameter borrows, so handing one
+    /// where an owned value is wanted (returning it, storing it, passing it
+    /// to an `own` parameter) gives away what the function only borrowed.
+    /// Reported at the use, with a machine fix that writes `own` on a
+    /// parameter that borrows only because it is bare. A borrowed receiver
+    /// reads as its value type rather than as `ref Self`, so giving away
+    /// `self` from a `ref self` method is caught here too.
+    fn d5_give_away(&mut self, expr: &Expr, expected: &Type) -> Option<Type> {
+        if !self.cli_lint_overrides.strict_core
+            || matches!(
+                expected,
+                Type::Ref(_) | Type::MutRef(_) | Type::TypeVar(_) | Type::Error
+            )
+        {
+            return None;
+        }
+        let name = match &expr.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return None,
+        };
+        let implied = self.current_fn_d5_params.get(name).copied();
+        let ty = if name == "self" {
+            if !self.current_fn_ref_params.contains("self") {
+                return None;
+            }
+            self.infer_expr(expr)
+        } else {
+            implied?;
+            // Not a borrow here (a binding of its own shadows it): the
+            // ordinary check runs, and reading an identifier twice changes
+            // nothing.
+            match self.infer_expr(expr) {
+                Type::Ref(inner) => *inner,
+                _ => return None,
+            }
+        };
+        if !self.type_cannot_leave_a_borrowed_place(&ty)
+            || !unify_types(
+                &ty,
+                expected,
+                &mut self.env.substitutions,
+                &mut self.env.const_substitutions,
+            )
+        {
+            return None;
+        }
+        let shown = type_display(&ty);
+        let (subject, spelling) = if name == "self" {
+            (
+                "the borrowed receiver `self`".to_string(),
+                "`own self`".to_string(),
+            )
+        } else {
+            (
+                format!("parameter `{name}`"),
+                format!("`{name}: own {shown}`"),
+            )
+        };
+        let why = if implied.is_some() {
+            "a bare parameter borrows (core-semantics §4.1)"
+        } else {
+            "it is borrowed"
+        };
+        self.errors.push(TypeError {
+            message: format!(
+                "cannot give away {subject}: {why}, and an owned '{shown}' is wanted \
+                 here. Take it by value with {spelling}, or hand on a copy with \
+                 `.clone()`"
+            ),
+            span: expr.span,
+            kind: TypeErrorKind::TypeMismatch,
+            lint_name: None,
+            fix_it: implied.map(|at| FixIt {
+                span: at,
+                replacement: "own ".to_string(),
+            }),
+            class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+            expected: Some(type_display(expected)),
+            got: Some(format!("ref {shown}")),
+        });
+        Some(expected.clone())
+    }
+
+    /// Whether an argument builds a fresh value rather than naming a place
+    /// or lending a borrow: see [`builds_a_value_shape`].
+    fn builds_a_value(&self, e: &Expr) -> bool {
+        if let ExprKind::Call { callee, .. } = &e.kind {
+            if let ExprKind::Identifier(n) = &callee.kind {
+                if let Some(sig) = self.env.functions.get(n) {
+                    if matches!(sig.return_type, Type::Ref(_) | Type::MutRef(_)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        builds_a_value_shape(e)
     }
 
     /// Whether `expr` builds a variant of a generic enum (`None`, `O.N`,
@@ -2560,6 +2662,14 @@ impl<'a> super::TypeChecker<'a> {
                         self.check_assignable(param_ty, &t, arg.value.span);
                     }
                     t
+                } else if let (Type::Ref(inner), true) = (param_ty, self.builds_a_value(&arg.value))
+                {
+                    // A value built at the call and lent to a `ref T`
+                    // parameter (core-semantics §4.1: a temporary lives to
+                    // the end of the call) takes its type from `T`, so a
+                    // literal or `default()` infers exactly as it would for
+                    // an owned parameter.
+                    self.check_expr(&arg.value, inner)
                 } else {
                     self.check_expr(&arg.value, param_ty)
                 };
@@ -7968,4 +8078,20 @@ fn is_string_place_type(ty: &Type) -> bool {
         Type::Ref(inner) | Type::MutRef(inner) => matches!(inner.as_ref(), Type::Str),
         _ => false,
     }
+}
+
+/// An argument expression that builds a fresh value (a literal, a
+/// constructor, a call) rather than naming a place. A call to a function
+/// that returns a borrow lends one instead.
+fn builds_a_value_shape(e: &Expr) -> bool {
+    matches!(
+        e.kind,
+        ExprKind::Call { .. }
+            | ExprKind::Tuple(..)
+            | ExprKind::ArrayLiteral(..)
+            | ExprKind::RepeatLiteral { .. }
+            | ExprKind::PrefixCollectionLiteral { .. }
+            | ExprKind::MapLiteral { .. }
+            | ExprKind::StructLiteral { .. }
+    )
 }

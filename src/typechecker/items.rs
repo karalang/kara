@@ -1534,6 +1534,45 @@ impl<'a> super::TypeChecker<'a> {
     /// `env.functions` entry) — the caller falls back to per-arg
     /// defaults (Consuming). Mirrors `ownership::param_modes_from_signature`
     /// without depending on it, by reading directly from `self.env`.
+    /// D5 (core-semantics §4.1): which parameters of the user function or
+    /// method `key` (`name` or `Type.method`) are written `own`. `None` when
+    /// D5 is off, or for a callee with no declaration in this program; a bare
+    /// parameter is then read as before. Under the strict check the bare ones
+    /// were already rewritten to `ref T` before resolution
+    /// ([`crate::d5_params`]), so this matters to the other pipelines.
+    pub(super) fn d5_own_params(&self, key: &str) -> Option<Vec<bool>> {
+        if !crate::d5_params::on() {
+            return None;
+        }
+        let own = |ps: &[Param]| ps.iter().map(|p| p.is_own).collect::<Vec<_>>();
+        let (target, method) = match key.split_once('.') {
+            Some((t, m)) => (Some(t), m),
+            None => (None, key),
+        };
+        for item in &self.program.items {
+            match (item, target) {
+                (Item::Function(f), None) if f.name == method => return Some(own(&f.params)),
+                (Item::ImplBlock(imp), Some(t)) => {
+                    let TypeKind::Path(p) = &imp.target_type.kind else {
+                        continue;
+                    };
+                    if p.segments.last().map(String::as_str) != Some(t) {
+                        continue;
+                    }
+                    for it in &imp.items {
+                        if let ImplItem::Method(m) = it {
+                            if m.name == method {
+                                return Some(own(&m.params));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     pub(super) fn callee_borrow_positions(&self, callee: &Expr) -> Option<Vec<bool>> {
         let key = match &callee.kind {
             ExprKind::Identifier(name) => name.clone(),
@@ -1541,7 +1580,17 @@ impl<'a> super::TypeChecker<'a> {
             _ => return None,
         };
         if let Some(sig) = self.env.functions.get(&key) {
-            return Some(sig.params.iter().map(Self::is_borrow_param_type).collect());
+            let own = self.d5_own_params(&key);
+            return Some(
+                sig.params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        Self::is_borrow_param_type(t)
+                            || own.as_ref().is_some_and(|o| o.get(i) == Some(&false))
+                    })
+                    .collect(),
+            );
         }
         if let Some((target, method)) = key.split_once('.') {
             for imp in &self.env.impls {
@@ -2248,6 +2297,14 @@ impl<'a> super::TypeChecker<'a> {
             }
             set
         });
+        let saved_d5_params = std::mem::replace(
+            &mut self.current_fn_d5_params,
+            if self.cli_lint_overrides.strict_core && crate::d5_params::on() {
+                crate::d5_params::implied_borrows(f)
+            } else {
+                Default::default()
+            },
+        );
         if f.body.final_expr.is_some() {
             if self.cli_lint_overrides.strict_core && !f.stdlib_origin {
                 self.check_core_fresh_ref_return(f);
@@ -2285,6 +2342,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_fn_is_gpu = saved_fn_is_gpu;
         self.current_fn_frozen_params = saved_frozen_params;
         self.current_fn_ref_params = saved_ref_params;
+        self.current_fn_d5_params = saved_d5_params;
         if comptime_fn {
             self.comptime_depth -= 1;
         }

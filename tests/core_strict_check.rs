@@ -895,6 +895,146 @@ fn a_ref_pattern_binding_cannot_borrow_from_a_temporary() {
     );
 }
 
+/// §9.6: a closure whose result is a non-`Copy` capture moves it out, so
+/// it runs once and cannot be handed out as a repeatable `Fn`.
+#[test]
+fn a_closure_returning_its_capture_runs_once() {
+    rejected(
+        "closure-returns-capture",
+        "fn mk(x: own String) -> Fn() -> String { || x }\n\
+         fn main() { let g = mk(\"E\".to_string()); println(g()); println(g()); }\n",
+        "x",
+    );
+    accepted(
+        "closure-returns-capture-once",
+        "fn dup(x: own String) -> String { let g = || x; g() }\n\
+         fn main() { println(dup(\"P\".to_string())); }\n",
+    );
+}
+
+/// `check` under D5 (`KARAC_D5=1`): `Ok(())` when it accepts, else the stderr.
+fn check_d5(tag: &str, src: &str) -> Result<(), String> {
+    let (dir, path) = fixture(tag, src);
+    let out = karac()
+        .env("KARAC_D5", "1")
+        .arg("check")
+        .arg(&path)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).into_owned())
+    }
+}
+
+/// D5 (core-semantics §4.1): a bare parameter borrows and `own T` owns, so
+/// a caller keeps what it passes to a bare parameter, and the callee cannot
+/// give that parameter away.
+#[test]
+fn under_d5_a_bare_parameter_borrows() {
+    let twice = "fn show(s: String) -> i64 { s.len() }\n\
+                 fn main() { let s = \"ab\".to_string(); println(show(s)); println(show(s)); }\n";
+    check_d5("d5-caller-keeps", twice).unwrap();
+    // Without D5 the first call moves `s`.
+    rejected("d5-off-caller-moves", twice, "moved");
+
+    let err = check_d5(
+        "d5-callee-gives-away",
+        "fn keep(s: String) -> String { s }\n\
+         fn main() { println(keep(\"ab\".to_string())); }\n",
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("cannot give away parameter `s`") && err.contains("`s: own String`"),
+        "d5-callee-gives-away: {err}"
+    );
+    // A `ref self` method cannot hand back `self` as owned either.
+    rejected(
+        "ref-self-gives-away",
+        "struct W { s: String }\n\
+         impl W { fn me(ref self) -> W { self } }\n\
+         fn main() { let w = W { s: \"a\".to_string() }; println(w.me().s); println(w.s); }\n",
+        "cannot give away the borrowed receiver `self`",
+    );
+    // `karac fix` writes `own` on the parameter, and on a receiver.
+    for (tag, src, edit) in [
+        (
+            "d5-fix-own",
+            "struct P { s: String }\n\
+             fn keep(p: P) -> P { p }\n\
+             fn main() { let p = P { s: \"a\".to_string() }; println(keep(p).s); }\n",
+            "fn keep(p: own P)",
+        ),
+        (
+            "d5-fix-own-self",
+            "struct W { s: String }\n\
+             impl W { fn me(self) -> W { self } }\n\
+             fn main() { let w = W { s: \"a\".to_string() }; println(w.me().s); }\n",
+            "fn me(own self)",
+        ),
+    ] {
+        let (dir, path) = fixture(tag, src);
+        let d5 = || {
+            let mut c = karac();
+            c.env("KARAC_D5", "1");
+            c
+        };
+        assert!(
+            !d5()
+                .arg("check")
+                .arg(&path)
+                .output()
+                .unwrap()
+                .status
+                .success(),
+            "{tag}"
+        );
+        d5().arg("fix").arg(&path).output().unwrap();
+        let fixed = std::fs::read_to_string(&path).unwrap();
+        let out = d5().arg("check").arg(&path).output().unwrap();
+        assert!(
+            out.status.success() && fixed.contains(edit),
+            "{tag}: fix must write `{edit}` and pass; source now:\n{fixed}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    check_d5(
+        "d5-own-gives-away",
+        "fn keep(s: own String) -> String { s }\n\
+         fn main() { let s = \"ab\".to_string(); println(keep(s)); }\n",
+    )
+    .unwrap();
+    // A bare `self` borrows too, and `own self` consumes.
+    check_d5(
+        "d5-self",
+        "struct W { s: String }\n\
+         impl W {\n\
+             fn n(self) -> i64 { self.s.len() }\n\
+             fn take(own self) -> String { self.s }\n\
+         }\n\
+         fn main() { let w = W { s: \"ab\".to_string() }; println(w.n()); println(w.n()); println(w.take()); }\n",
+    )
+    .unwrap();
+    // A task that hands a loop local to a bare parameter only borrows it,
+    // and the local dies before the group, so the task takes it by move.
+    check_d5(
+        "d5-task-borrow",
+        "struct R { id: i64, tag: String }\n\
+         fn show(r: R) -> i64 { r.id }\n\
+         fn main() {\n\
+             let mut g = TaskGroup.new();\n\
+             let mut hs: Vec[TaskHandle[i64]] = Vec.new();\n\
+             let mut i = 0;\n\
+             while i < 3 { let r = R { id: i, tag: \"t\".to_string() }; hs.push(g.spawn(|| show(r))); i = i + 1; }\n\
+             for h in hs.into_iter() { println(h.join()); }\n\
+         }\n",
+    )
+    .unwrap();
+}
+
 /// "Views at lookup" (Gowtham, 2026-10-11): a String-keyed map or set is
 /// looked up by a `Str`, a `Vec`-keyed one by a `Slice`, with no copy.
 #[test]

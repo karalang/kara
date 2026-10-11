@@ -1143,6 +1143,15 @@ impl Pipeline {
         // the test harnesses go through the same call (B-2026-08-11-34).
         let (target_tombstones, schema_diags) =
             crate::prepare_for_resolve(&mut self.parsed.program);
+        // D5 (core-semantics §4.1): under the strict check a bare parameter
+        // is a borrow. The `own` migration reads the bare spelling, so it
+        // runs without the rewrite.
+        if self.strict_core
+            && crate::d5_params::on()
+            && std::env::var_os("KARAC_D5_MIGRATE").is_none()
+        {
+            crate::d5_params::borrow_bare_params(&mut self.parsed.program);
+        }
         // Keep a copy for the check reporter (B-2026-08-05-29). The resolver
         // consumes the map for reference-site diagnostics, which only fire
         // when something CALLS a stripped item; nothing otherwise records

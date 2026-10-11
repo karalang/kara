@@ -513,8 +513,11 @@ impl Walk<'_, '_> {
             ExprKind::Call { callee, args } => {
                 if let ExprKind::Identifier(f) = &callee.kind {
                     if let Some(sig) = self.tc.env.functions.get(f) {
-                        for (a, p) in args.iter().zip(&sig.params) {
-                            if !matches!(p, Type::Ref(_) | Type::MutRef(_)) {
+                        // D5: only an `own` parameter takes its argument.
+                        let own = self.tc.d5_own_params(f);
+                        for (i, (a, p)) in args.iter().zip(&sig.params).enumerate() {
+                            let borrowed = own.as_ref().is_some_and(|o| o.get(i) == Some(&false));
+                            if !borrowed && !matches!(p, Type::Ref(_) | Type::MutRef(_)) {
                                 if let Some(n) = ident(&a.value) {
                                     out.insert(n);
                                 }
