@@ -98,7 +98,7 @@ fn main() {
 fn a_programs_own_impl_on_a_library_type_is_found() {
     let src = r#"
 impl[T] Option[T] {
-    fn get_or(self, d: T) -> T {
+    fn get_or(own self, d: own T) -> T {
         match self {
             Some(x) => x,
             None => d,
@@ -154,7 +154,7 @@ fn a_variant_in_a_generic_impl_takes_its_contexts_type() {
 enum R2[T, E] { A(T), B(E) }
 enum O2[T] { S(T), N }
 impl[T, E] R2[T, E] {
-    fn err2(self) -> O2[E] {
+    fn err2(own self) -> O2[E] {
         match self {
             A(_) => O2.N,
             B(e) => O2.S(e),

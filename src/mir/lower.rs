@@ -168,6 +168,8 @@ pub fn lower_program<'a>(
         bindings: FxHashMap::default(),
         statics: FxHashMap::default(),
         static_queue: Vec::new(),
+        literal_statics: FxHashMap::default(),
+        literal_queue: Vec::new(),
         eq_queue: Vec::new(),
         eq_queued: FxHashSet::default(),
         self_tys: FxHashMap::default(),
@@ -250,6 +252,8 @@ pub fn lower_program<'a>(
             lcx.lower_closure(job);
         } else if let Some((def, name)) = lcx.static_queue.pop() {
             lcx.lower_static(def, &name);
+        } else if let Some((e, t, name)) = lcx.literal_queue.pop() {
+            lcx.lower_literal_static(e, t, &name);
         } else if let Some((t, name)) = lcx.eq_queue.pop() {
             lcx.lower_derived_eq(t, &name);
         } else {
@@ -419,6 +423,11 @@ struct Lcx<'a> {
     statics: FxHashMap<DefId, (u32, Ty, bool)>,
     /// Statics whose initializer body is still to be built.
     static_queue: Vec<(DefId, String)>,
+    /// The statics holding a literal lent to a `ref T` slot (core
+    /// semantics §5.3), by type and spelling.
+    literal_statics: FxHashMap<(Ty, String), u32>,
+    /// Literal statics whose initializer is still to be built.
+    literal_queue: Vec<(&'a Expr, Ty, String)>,
     /// Derived `==` bodies to build, for types whose comparison reaches
     /// itself (`shared struct Node { next: Option[Node] }`).
     eq_queue: Vec<(Ty, String)>,
@@ -515,15 +524,15 @@ fn retype_const(o: Operand, t: Ty) -> Operand {
     }
 }
 
-/// D5's bare-parameter borrow, on while `KARAC_D5=1` (until the corpus is
-/// migrated to `own T` where a parameter is moved).
+/// D5's bare-parameter borrow (core semantics §8): on, with `KARAC_D5=0`
+/// to take bare parameters by value as before the migration to `own T`.
 fn d5_params() -> bool {
     #[cfg(test)]
     if let Some(on) = tests::D5.with(|c| c.get()) {
         return on;
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("KARAC_D5").is_ok_and(|v| v == "1"))
+    *ON.get_or_init(|| std::env::var("KARAC_D5").map_or(true, |v| v != "0"))
 }
 
 fn at(span: Span) -> String {
@@ -846,6 +855,42 @@ impl<'a> Lcx<'a> {
         self.statics.insert(d, (idx, t, b.is_mut));
         self.static_queue.push((d, init));
         Some((idx, t, b.is_mut))
+    }
+
+    /// The static holding the literal `e` of type `t`: one per type and
+    /// spelling, its value computed before `main` like a module binding's.
+    fn literal_static(&mut self, e: &'a Expr, t: Ty) -> u32 {
+        let key = (t, format!("{:?}", e.kind));
+        if let Some(&i) = self.literal_statics.get(&key) {
+            return i;
+        }
+        let i = self.program.statics.len() as u32;
+        let name = format!("lit{}", self.literal_statics.len());
+        let init = format!("static.{name}");
+        self.program.statics.push(StaticDef {
+            name,
+            ty: t,
+            mutable: false,
+            init: init.clone(),
+        });
+        self.literal_statics.insert(key, i);
+        self.literal_queue.push((e, t, init));
+        i
+    }
+
+    fn lower_literal_static(&mut self, e: &'a Expr, t: Ty, name: &str) {
+        let instance = InstanceId {
+            def: DefId(u32::MAX),
+            args: Vec::new(),
+            name: name.to_string(),
+        };
+        let mut bx = Bx::new(self, instance, t, Vec::new());
+        let _ = bx.lower_literal_init(e, t);
+        let (body, errors) = bx.finish();
+        self.errors.extend(errors);
+        if let Some(body) = body {
+            self.program.add(body);
+        }
     }
 
     /// A static's initializer: a body of no parameters returning its value.
@@ -2473,6 +2518,34 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     // ── functions ───────────────────────────────────────────────────
 
+    /// A literal static's initializer: the literal at `t`, which is the
+    /// type of the `ref` slot it was lent to with the reference removed.
+    fn lower_literal_init(&mut self, e: &'a Expr, t: Ty) -> R<()> {
+        let ret = Place::local(Local::RETURN_PLACE);
+        let op = match &e.kind {
+            ExprKind::StringLit(s) if matches!(self.tys().tcx().kind(t), HK::Str) => {
+                let op = self.static_str(s);
+                self.call_native("String.from", vec![op], ret.clone());
+                None
+            }
+            ExprKind::StringLit(s) => Some(self.static_str(s)),
+            _ => match self.constant(e)? {
+                // The checker may type the literal as the slot (`ref i64`).
+                Some(c) => Some(Operand::Const(Const {
+                    ty: t,
+                    kind: c.kind,
+                })),
+                None => return self.unsupported(e.span, "this literal in a `ref` slot"),
+            },
+        };
+        if let Some(op) = op {
+            self.assign(ret, Rvalue::Use(op));
+        }
+        self.return_exit()?;
+        self.scopes.clear();
+        Ok(())
+    }
+
     fn lower_static_init(&mut self, value: &'a Expr) -> R<()> {
         let ret = Place::local(Local::RETURN_PLACE);
         self.push_scope();
@@ -3983,6 +4056,9 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     fn expr_operand(&mut self, e: &'a Expr) -> R<Operand> {
+        if let Some(op) = self.literal_ref(e, None)? {
+            return Ok(op);
+        }
         if let Some(c) = self.constant(e)? {
             return Ok(Operand::Const(c));
         }
@@ -4013,6 +4089,41 @@ impl<'l, 'a> Bx<'l, 'a> {
         let t = self.expr_ty(e)?;
         let l = self.temp_of(e, t)?;
         Ok(self.use_place(Place::local(l), t))
+    }
+
+    /// A literal lent to a `ref T` slot (the checker typed it `ref T`, or
+    /// `slot` is one): a reference to a constant in static data, with no
+    /// origins, which no statement end ends (core semantics §5.3). A
+    /// `mut ref` slot keeps its temporary.
+    fn literal_ref(&mut self, e: &'a Expr, slot: Option<Ty>) -> R<Option<Operand>> {
+        if !matches!(
+            e.kind,
+            ExprKind::StringLit(_)
+                | ExprKind::Integer(..)
+                | ExprKind::Float(..)
+                | ExprKind::Bool(_)
+                | ExprKind::CharLit(_)
+        ) {
+            return Ok(None);
+        }
+        let et = self.expr_ty(e)?;
+        let t = match (
+            self.tys().tcx().kind(et),
+            slot.map(|s| self.tys().tcx().kind(s)),
+        ) {
+            (HK::Ref(t), _) | (_, Some(HK::Ref(t))) => t,
+            _ => return Ok(None),
+        };
+        if matches!(e.kind, ExprKind::StringLit(_))
+            != matches!(self.tys().tcx().kind(t), HK::Str | HK::StaticStr)
+        {
+            return Ok(None);
+        }
+        let i = self.lcx.literal_static(e, t);
+        Ok(Some(Operand::Const(Const {
+            ty: self.tys().tcx().reference(t, false),
+            kind: ConstKind::Static(i),
+        })))
     }
 
     fn is_local(&self, e: &Expr) -> bool {
@@ -4106,6 +4217,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             let u = self.temp(self.unit());
             self.call_native("process.exit", vec![op], Place::local(u));
             self.diverge(TerminatorKind::Unreachable);
+            return Ok(());
+        }
+        if let Some(op) = self.literal_ref(e, None)? {
+            self.assign(dest, Rvalue::Use(op));
             return Ok(());
         }
         if let Some(mut c) = self.constant(e)? {
@@ -7364,13 +7479,30 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// `inner?`: the success payload, or return the error.
     fn question(&mut self, e: &'a Expr, inner: &'a Expr, dest: Place) -> R<()> {
-        let it = self.expr_ty(inner)?;
+        let mut it = self.expr_ty(inner)?;
+        // A borrowed `Option` / `Result` (a D5 parameter) whose parts are
+        // `Copy` or handles is read through the borrow, a counted copy.
+        let mut through_ref = false;
+        if let HK::Ref(t) = self.tys().tcx().kind(it) {
+            if self.is_place(inner)
+                && self.error_variant(t).is_some()
+                && (self.is_copy(t) || self.is_handle_aggregate(t))
+            {
+                it = t;
+                through_ref = true;
+            }
+        }
         let Some(err) = self.error_variant(it) else {
             return self.unsupported(e.span, "`?` on this type");
         };
         let ok = 1 - err;
         let p = if self.is_place(inner) {
             let p = self.expr_place(inner, false)?;
+            let p = if through_ref {
+                p.project(ProjElem::Deref)
+            } else {
+                p
+            };
             if self.borrowed_place(&p) && (self.is_handle_aggregate(it) || self.is_handle(it)) {
                 // Read out of a shared value or a borrow: a handle
                 // aggregate is copied by counting (core semantics §6.1).
@@ -9566,9 +9698,8 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
-    /// A parameter's type as its body takes it. Under D5 (behind
-    /// `KARAC_D5=1` until the corpus is migrated) a bare parameter of a
-    /// non-`Copy` type borrows; `own T`, the written borrow forms and
+    /// A parameter's type as its body takes it. Under D5 a bare parameter
+    /// of a non-`Copy` type borrows; `own T`, the written borrow forms and
     /// function values keep their type.
     fn param_mode_ty(&self, p: &ast::Param, t: Ty) -> Ty {
         if !d5_params() || p.is_own || self.is_copy(t) {
@@ -9710,6 +9841,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let r = self.temp(pt);
                 self.assign(r, Rvalue::Ref(kind, p));
                 return Ok(Operand::Move(Place::local(r)));
+            }
+        }
+        if borrow == Some(BorrowKind::Shared) && !arg_is_ref {
+            if let Some(op) = self.literal_ref(a, Some(pt))? {
+                return Ok(op);
             }
         }
         match borrow {
@@ -14317,8 +14453,8 @@ impl Drop for R { fn drop(mut ref self) { println(f"drop{self.id}"); } }
 struct S3 { a: R, b: R }
 enum G[T] { X(T), Y }
 impl[T] G[T] {
-    fn id(self) -> Self { return self; }
-    fn alt(self, o: Self) -> Self { match self { G.Y => o, _ => self } }
+    fn id(own self) -> Self { return self; }
+    fn alt(own self, o: own Self) -> Self { match self { G.Y => o, _ => self } }
 }
 fn idx(k: i64) -> i64 { print(f"i{k} "); k }
 fn val(v: i64) -> i64 { print(f"v{v} "); v }
@@ -15871,6 +16007,26 @@ fn main() {
             run_source(src),
             Ok(("322 5 yz x 231\n".to_string(), Some(0)))
         );
+    }
+
+    #[test]
+    fn literals_lent_to_ref_slots_are_static() {
+        let src = r#"
+fn pick(m: ref Map[String, String], k: String) -> i64 {
+    let raw = m.get(k).unwrap_or("");
+    raw.len() as i64
+}
+fn get(m: ref Map[String, i64], k: String) -> ref i64 { m.get(k).unwrap_or(0) }
+fn both(a: ref i64, b: ref String) -> i64 { a + b.len() as i64 }
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    m.insert("a", "xyz");
+    let mut n: Map[String, i64] = Map.new();
+    n.insert("a", 5);
+    println(f"{pick(m, "a")} {pick(m, "b")} {get(n, "a")} {get(n, "b")} {both(7, "four")}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("3 0 5 0 11\n".to_string(), Some(0))));
     }
 
     #[test]

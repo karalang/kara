@@ -33,7 +33,7 @@ impl Iterator for Counter {
         Some(self.n)
     }
 }
-fn total[I: Iterator[Item = i64]](it: I) -> i64 {
+fn total[I: Iterator[Item = i64]](it: own I) -> i64 {
     let mut t = 0;
     for x in it {
         t = t + x;

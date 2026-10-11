@@ -1497,7 +1497,7 @@ fn make() {
     let l = Logger { id: 1 };
 }
 
-fn pass(l: Logger) -> Logger {
+fn pass(l: own Logger) -> Logger {
     l
 }
 

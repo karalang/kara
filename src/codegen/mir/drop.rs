@@ -825,7 +825,7 @@ fn main() {
     let arr: Array[String, 2] = [String.from(\"a\"), String.from(\"b\")];
     cells(OnceLock.new(), None, Atomic.new(0), VecDeque.new(), Map.new(), Set.new());
 }
-fn cells(o: OnceLock[R], f: Option[File], x: Atomic[i64], q: VecDeque[R], m: Map[String, R], s: Set[String]) {}
+fn cells(o: own OnceLock[R], f: own Option[File], x: own Atomic[i64], q: own VecDeque[R], m: own Map[String, R], s: own Set[String]) {}
 ";
 
     /// The type displayed as `name` among the program's locals.

@@ -35,8 +35,8 @@
 //!   `read_len_delim` / `read_string` / `read_fixed64` / `read_fixed32`, with
 //!   `at_end` / `remaining` for framing.
 //! - `#[derive(Message)]` — generates, for a struct of proto3 scalar fields,
-//!   `fn encode(ref self) -> Vec[u8]`, `fn decode(bytes: Vec[u8]) -> Self`, and
-//!   `fn merge(mut ref self, bytes: Vec[u8])`. Field numbers are 1-based
+//!   `fn encode(ref self) -> Vec[u8]`, `fn decode(bytes: own Vec[u8]) -> Self`, and
+//!   `fn merge(mut ref self, bytes: own Vec[u8])`. Field numbers are 1-based
 //!   declaration order. Supported field types (v1): `i32` / `i64` / `u32` /
 //!   `u64` / `bool` (varint), `f64` / `f32` (`double` / `float`, fixed-width),
 //!   `String` / `Vec[u8]` (length-delimited),
@@ -1166,11 +1166,11 @@ comptime fn derive_message(comptime T: own Type) -> Vec[Item] {
         mrg = mrg + " else { reader.skip_field(wire); }";
     }
     let encode_fn = "fn encode(ref self) -> Vec[u8] { " + enc + "out }";
-    let decode_fn = "fn decode(bytes: Vec[u8]) -> " + n
+    let decode_fn = "fn decode(bytes: own Vec[u8]) -> " + n
         + " { let mut reader = ProtoReader.new(bytes); " + decls
         + "while not reader.at_end() { let (field, wire) = reader.read_tag(); " + dec + " } "
         + ctor + " }";
-    let merge_fn = "fn merge(mut ref self, bytes: Vec[u8]) { let mut reader = ProtoReader.new(bytes); while not reader.at_end() { let (field, wire) = reader.read_tag(); "
+    let merge_fn = "fn merge(mut ref self, bytes: own Vec[u8]) { let mut reader = ProtoReader.new(bytes); while not reader.at_end() { let (field, wire) = reader.read_tag(); "
         + mrg + " } }";
     [ast.item("impl " + n + " { " + encode_fn + " " + decode_fn + " " + merge_fn + " }")]
 }
