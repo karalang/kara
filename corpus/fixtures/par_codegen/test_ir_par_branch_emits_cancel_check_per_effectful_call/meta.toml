@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'expected ≥3 mid-branch cancel checks before effectful helper() calls across all par branches, found {total}; IR: {ir}'"
 bucket = "a"
-classified_with = "24f1e2723"
+classified_with = "dd664416b"
 model_rev = "8be6ddd7"
 model_src = "5f97e5b5"

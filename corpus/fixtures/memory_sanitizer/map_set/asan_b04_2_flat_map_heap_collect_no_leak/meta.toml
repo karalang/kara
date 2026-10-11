@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: '3 2 flat-map-payload-charlie-cccccccccccccccccc'"
 bucket = "mir-gap:the items are `ref String`, and collecting them as `String` would move each borr"
-classified_with = "24f1e2723"
+classified_with = "dd664416b"
 model_rev = "8be6ddd7"
 model_src = "0ee12356"

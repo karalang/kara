@@ -11,6 +11,6 @@ rules = []
 backends = []
 env = {}
 bucket = "mir-gap:an expression whose type does not lower (Type(Unsupported(\"impl Trait\")))"
-classified_with = "24f1e2723"
+classified_with = "dd664416b"
 model_rev = "8be6ddd7"
 model_src = "a25eb205"
