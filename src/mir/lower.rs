@@ -15841,6 +15841,32 @@ fn main() {
         assert_eq!(run_source(src), Ok(("ok\n".to_string(), Some(101))));
     }
 
+    /// String- and Vec-keyed tables are looked up by the key's view: a
+    /// `Str` or a `Slice` finds the entry its owned form would.
+    #[test]
+    fn table_lookups_take_the_keys_view() {
+        let src = r#"
+fn main() {
+    let s = "abcd".to_string();
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("abcd".to_string(), 4);
+    let mut st: Set[String] = Set.new();
+    st.insert("x".to_string());
+    let mut sm: SortedMap[String, i64] = SortedMap.new();
+    sm.insert("q".to_string(), 3);
+    let mut vm: Map[Vec[i64], i64] = Map.new();
+    vm.insert([1, 2], 12);
+    let w: Vec[i64] = [1, 2, 3];
+    let q = "q".to_string();
+    println(f"{m.get(s.as_str()) ?? 0} {m.contains_key(s.as_str())} {st.contains(s.as_str())} {sm.get(q.as_str()) ?? 0} {vm.get(w[0..2]) ?? 0} {vm.get(w[1..3]) ?? 0}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("4 true false 3 12 0\n".to_string(), Some(0)))
+        );
+    }
+
     /// An owned place stored in a `ref` field is lent, not moved, and a
     /// tuple literal handed to a tuple of wider integers is built at the
     /// parameter's widths.

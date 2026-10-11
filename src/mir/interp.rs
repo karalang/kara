@@ -4478,6 +4478,16 @@ impl<'a> Interp<'a> {
             Value::Agg(fs) => {
                 Value::Agg(fs.iter().map(|f| self.key_form(f)).collect::<R<Vec<_>>>()?)
             }
+            // A `Slice` key view compares as the `Vec` holding the same
+            // elements (docs/library/collections.md, lookups by view).
+            Value::Slice { base, lo, len } => {
+                let mut fs = Vec::with_capacity(*len as usize);
+                for i in *lo..*lo + *len {
+                    let x = self.slot(&base.child(i))?;
+                    fs.push(self.key_form(&x)?);
+                }
+                Value::Agg(fs)
+            }
             Value::Variant(k, fs) => Value::Variant(
                 *k,
                 fs.iter().map(|f| self.key_form(f)).collect::<R<Vec<_>>>()?,
