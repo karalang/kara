@@ -10026,9 +10026,15 @@ pub unsafe extern "C" fn karac_runtime_i64_to_str(
             val
         };
 
+        // Unchecked indexing on purpose: rustc 1.99's LLVM no longer proves
+        // `i` stays in range, and the `panic_bounds_check` it kept roots
+        // std's whole panic / backtrace / alloc-error cluster under macOS
+        // `-dead_strip` (Vec compute binary 33 KB -> 286 KB, the
+        // B-2026-06-11-8 floor). The bound is the one stated above: at most
+        // 20 digits plus a sign is 21 of 24 bytes.
         loop {
             i -= 1;
-            scratch[i] = b'0' + (mag % 10) as u8;
+            *scratch.get_unchecked_mut(i) = b'0' + (mag % 10) as u8;
             mag /= 10;
             if mag == 0 {
                 break;
@@ -10036,10 +10042,10 @@ pub unsafe extern "C" fn karac_runtime_i64_to_str(
         }
         if negative {
             i -= 1;
-            scratch[i] = b'-';
+            *scratch.get_unchecked_mut(i) = b'-';
         }
 
-        let bytes = &scratch[i..];
+        let bytes = scratch.get_unchecked(i..);
         let n = (bytes.len() as i64).min(buf_len.max(0));
         if !buf.is_null() && n > 0 {
             // SAFETY: as the two formatters above — the caller guarantees
