@@ -32,6 +32,7 @@ mod clone;
 mod drop;
 mod fmt;
 mod key;
+mod seq;
 mod table;
 
 use std::collections::HashMap;

@@ -68,7 +68,11 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(v.try_as_basic_value().unwrap_basic().into_pointer_value())
     }
 
-    fn mrt_i64(&self, name: &str, args: &[BasicMetadataValueEnum<'ctx>]) -> R<IntValue<'ctx>> {
+    pub(super) fn mrt_i64(
+        &self,
+        name: &str,
+        args: &[BasicMetadataValueEnum<'ctx>],
+    ) -> R<IntValue<'ctx>> {
         let tys = self.arg_tys(args);
         let f = self.extern_fn(
             &format!("karac_mir_{name}"),
@@ -512,7 +516,7 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// Stores the `i1` `v` as a `bool` byte at `p`.
-    fn store_i1(&self, p: PointerValue<'ctx>, v: IntValue<'ctx>) -> R<()> {
+    pub(super) fn store_i1(&self, p: PointerValue<'ctx>, v: IntValue<'ctx>) -> R<()> {
         let b = self
             .builder
             .build_int_z_extend(v, self.llcx.i8_type(), "")
@@ -520,7 +524,7 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store(p, b.into())
     }
 
-    fn store_bool(&mut self, dest: &Place, v: IntValue<'ctx>) -> R<()> {
+    pub(super) fn store_bool(&mut self, dest: &Place, v: IntValue<'ctx>) -> R<()> {
         let d = self.place_ptr(dest)?;
         self.store_i1(d, v)
     }

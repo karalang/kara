@@ -328,6 +328,287 @@ pub unsafe extern "C" fn karac_mir_string_push_char(s: *mut RawVec, c: u32) {
     unsafe { karac_mir_string_push_str(s, t.as_ptr(), t.len()) };
 }
 
+/// # Safety
+/// `ptr` is readable for `len` bytes of UTF-8.
+unsafe fn text<'a>(ptr: *const u8, len: usize) -> &'a str {
+    // SAFETY: the caller's contract; a `str` or `String` holds UTF-8.
+    unsafe { std::str::from_utf8_unchecked(bytes(ptr, len)) }
+}
+
+/// A test of `a` against `b`: 0 `contains`, 1 `starts_with`, 2
+/// `ends_with`, 3 `a < b`.
+///
+/// # Safety
+/// Each pointer is readable for its length, of UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_test(
+    op: i32,
+    a: *const u8,
+    an: usize,
+    b: *const u8,
+    bn: usize,
+) -> u8 {
+    // SAFETY: the caller's contract.
+    let (a, b) = unsafe { (text(a, an), text(b, bn)) };
+    u8::from(match op {
+        0 => a.contains(b),
+        1 => a.starts_with(b),
+        2 => a.ends_with(b),
+        _ => a < b,
+    })
+}
+
+/// A new `String` at `out` from `s`: 0 `trim`, 1 `to_uppercase`, 2
+/// `to_lowercase`, 3 `trim_start`, 4 `trim_end`, 5 its chars sorted.
+///
+/// # Safety
+/// `out` is writable for a `String`; `s` readable for `n` bytes of UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_map(out: *mut RawVec, op: i32, s: *const u8, n: usize) {
+    // SAFETY: the caller's contract.
+    let s = unsafe { text(s, n) };
+    let t = match op {
+        0 => s.trim().to_string(),
+        1 => s.to_uppercase(),
+        2 => s.to_lowercase(),
+        3 => s.trim_start().to_string(),
+        4 => s.trim_end().to_string(),
+        _ => {
+            let mut cs: Vec<char> = s.chars().collect();
+            cs.sort_unstable();
+            cs.into_iter().collect()
+        }
+    };
+    // SAFETY: as above.
+    unsafe { string_of(out, t.as_bytes()) };
+}
+
+/// The bytes `lo..hi` of `s` as a new `String` at `out`. Mode 0 is
+/// `substring`, which saturates (an end past the text is its end, an empty
+/// or inverted range is empty); mode 1 is `s[lo..hi]`, which panics when
+/// out of range or inverted. Both panic off a char boundary. Returns 1 for
+/// a panic, with nothing written.
+///
+/// # Safety
+/// `out` is writable for a `String`; `s` readable for `n` bytes of UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_slice(
+    out: *mut RawVec,
+    s: *const u8,
+    n: usize,
+    lo: i64,
+    hi: i64,
+    mode: i32,
+) -> u8 {
+    // SAFETY: the caller's contract.
+    let s = unsafe { text(s, n) };
+    let len = s.len() as i64;
+    let (lo, hi) = if mode == 0 {
+        let hi = hi.min(len);
+        if lo < 0 || lo >= hi {
+            // SAFETY: as above.
+            unsafe { string_of(out, b"") };
+            return 0;
+        }
+        (lo, hi)
+    } else {
+        if !(0 <= lo && lo <= hi && hi <= len) {
+            return 1;
+        }
+        (lo, hi)
+    };
+    let (lo, hi) = (lo as usize, hi as usize);
+    if !s.is_char_boundary(lo) || !s.is_char_boundary(hi) {
+        return 1;
+    }
+    // SAFETY: as above.
+    unsafe { string_of(out, &s.as_bytes()[lo..hi]) };
+    0
+}
+
+/// The char starting at byte `i` of `s`, or -1 (a panic) when `i` is out
+/// of range or not on a char boundary.
+///
+/// # Safety
+/// `s` is readable for `n` bytes of UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_char_at_byte(s: *const u8, n: usize, i: i64) -> i64 {
+    // SAFETY: the caller's contract.
+    let s = unsafe { text(s, n) };
+    if i < 0 || i as usize >= s.len() {
+        return -1;
+    }
+    match s.get(i as usize..).and_then(|t| t.chars().next()) {
+        Some(c) => i64::from(u32::from(c)),
+        None => -1,
+    }
+}
+
+/// `String.from_utf8`: the bytes as a new `String` at `out` and 0, or 1
+/// when the input ends inside a sequence and 2 for an invalid byte, with
+/// nothing written.
+///
+/// # Safety
+/// `out` is writable for a `String`; `p` readable for `n` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_from_utf8(out: *mut RawVec, p: *const u8, n: usize) -> i32 {
+    // SAFETY: the caller's contract.
+    let b = unsafe { bytes(p, n) };
+    match std::str::from_utf8(b) {
+        Ok(_) => {
+            // SAFETY: as above.
+            unsafe { string_of(out, b) };
+            0
+        }
+        Err(e) if e.error_len().is_none() => 1,
+        Err(_) => 2,
+    }
+}
+
+/// `s.replace(a, b)` as a new `String` at `out`.
+///
+/// # Safety
+/// `out` is writable for a `String`; each pointer readable for its length.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_replace(
+    out: *mut RawVec,
+    s: *const u8,
+    sn: usize,
+    a: *const u8,
+    an: usize,
+    b: *const u8,
+    bn: usize,
+) {
+    // SAFETY: the caller's contract.
+    let t = unsafe { text(s, sn).replace(text(a, an), text(b, bn)) };
+    // SAFETY: as above.
+    unsafe { string_of(out, t.as_bytes()) };
+}
+
+/// `s.repeat(n)` (a negative count is 0) as a new `String` at `out`.
+///
+/// # Safety
+/// `out` is writable for a `String`; `s` readable for `sn` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_repeat(out: *mut RawVec, s: *const u8, sn: usize, n: i64) {
+    // SAFETY: the caller's contract.
+    let t = unsafe { text(s, sn).repeat(n.max(0) as usize) };
+    // SAFETY: as above.
+    unsafe { string_of(out, t.as_bytes()) };
+}
+
+/// A new `Vec[String]` at `out` of the parts of `s`: 0 `split(sep)`, 1
+/// `split_whitespace`, 2 `lines`.
+///
+/// # Safety
+/// `out` is writable for a `Vec`; each pointer readable for its length.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_split(
+    out: *mut RawVec,
+    op: i32,
+    s: *const u8,
+    sn: usize,
+    sep: *const u8,
+    sepn: usize,
+) {
+    // SAFETY: the caller's contract.
+    let (s, sep) = unsafe { (text(s, sn), text(sep, sepn)) };
+    let parts: Vec<&str> = match op {
+        0 => s.split(sep).collect(),
+        1 => s.split_whitespace().collect(),
+        _ => s.lines().collect(),
+    };
+    let size = std::mem::size_of::<RawVec>();
+    // SAFETY: as above; the new buffer holds `parts.len()` Strings.
+    unsafe {
+        karac_mir_vec_alloc(out, parts.len(), size);
+        let buf = (*out).ptr as *mut RawVec;
+        for (i, p) in parts.iter().enumerate() {
+            string_of(buf.add(i), p.as_bytes());
+        }
+    }
+}
+
+/// `v.join(sep)` over `n` texts laid out `stride` bytes apart from `elems`
+/// (each starting with its `{ptr, len}`), as a new `String` at `out`.
+///
+/// # Safety
+/// `out` is writable for a `String`; `elems` holds `n` texts; `sep` is
+/// readable for `sepn` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_join(
+    out: *mut RawVec,
+    elems: *const u8,
+    n: usize,
+    stride: usize,
+    sep: *const u8,
+    sepn: usize,
+) {
+    let mut t = String::new();
+    for i in 0..n {
+        // SAFETY: the caller's contract.
+        unsafe {
+            if i > 0 {
+                t.push_str(text(sep, sepn));
+            }
+            let e = elems.add(i * stride) as *const RawVec;
+            t.push_str(text((*e).ptr, (*e).len));
+        }
+    }
+    // SAFETY: as above.
+    unsafe { string_of(out, t.as_bytes()) };
+}
+
+/// A stable sort of `n` elements of `size` bytes at `buf` by `cmp`, which
+/// returns -1, 0 or 1 (the interpreter's bottom-up merge, so equal
+/// elements keep their order).
+///
+/// # Safety
+/// `buf` holds `n` elements; `cmp` is sound on any two of them.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_sort(
+    buf: *mut u8,
+    n: usize,
+    size: usize,
+    cmp: unsafe extern "C" fn(*const u8, *const u8) -> i32,
+) {
+    if n < 2 || size == 0 {
+        return;
+    }
+    let at = |i: usize| unsafe { buf.add(i * size) };
+    let mut order: Vec<usize> = (0..n).collect();
+    let mut width = 1;
+    while width < n {
+        let mut out = Vec::with_capacity(n);
+        for lo in (0..n).step_by(2 * width) {
+            let mid = (lo + width).min(n);
+            let hi = (lo + 2 * width).min(n);
+            let (mut i, mut j) = (lo, mid);
+            while i < mid && j < hi {
+                // SAFETY: both indices are below `n`.
+                if unsafe { cmp(at(order[j]), at(order[i])) } < 0 {
+                    out.push(order[j]);
+                    j += 1;
+                } else {
+                    out.push(order[i]);
+                    i += 1;
+                }
+            }
+            out.extend_from_slice(&order[i..mid]);
+            out.extend_from_slice(&order[j..hi]);
+        }
+        order = out;
+        width *= 2;
+    }
+    let mut copy = vec![0u8; n * size];
+    for (k, &i) in order.iter().enumerate() {
+        // SAFETY: `i < n`; `copy` holds `n` elements.
+        unsafe { std::ptr::copy_nonoverlapping(at(i), copy.as_mut_ptr().add(k * size), size) };
+    }
+    // SAFETY: as above.
+    unsafe { std::ptr::copy_nonoverlapping(copy.as_ptr(), buf, n * size) };
+}
+
 /// Ends a `panic_message` format: its text is the next abort's message.
 #[no_mangle]
 pub extern "C" fn karac_mir_panic_set() {

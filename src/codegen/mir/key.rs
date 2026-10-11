@@ -32,6 +32,8 @@ pub(super) enum KeyOp {
     Cmp,
     /// The order with floats by their bits, whose zero is `eq`.
     Total,
+    /// The order of the type's own `cmp` body.
+    User,
 }
 
 #[derive(Default)]
@@ -60,13 +62,16 @@ impl<'ctx> Cx<'ctx, '_> {
         let fn_ty = match op {
             KeyOp::Hash => c.i64_type().fn_type(&[p.into()], false),
             KeyOp::Eq => c.bool_type().fn_type(&[p.into(), p.into()], false),
-            KeyOp::Cmp | KeyOp::Total => c.i32_type().fn_type(&[p.into(), p.into()], false),
+            KeyOp::Cmp | KeyOp::Total | KeyOp::User => {
+                c.i32_type().fn_type(&[p.into(), p.into()], false)
+            }
         };
         let prefix = match op {
             KeyOp::Hash => "hash",
             KeyOp::Eq => "eq",
             KeyOp::Cmp => "cmp",
             KeyOp::Total => "cmp.total",
+            KeyOp::User => "cmp.user",
         };
         let name = format!("{prefix}.{}", self.tys.display(ty));
         let f = self
@@ -99,6 +104,14 @@ impl<'ctx> Cx<'ctx, '_> {
                     let z = self.is_zero(c)?;
                     self.builder.build_return(Some(&z)).map_err(e)?;
                 }
+                KeyOp::User => {
+                    let b = f
+                        .get_nth_param(1)
+                        .ok_or("cmp glue has one parameter")?
+                        .into_pointer_value();
+                    let c = self.user_cmp_value(a, b, ty)?;
+                    self.builder.build_return(Some(&c)).map_err(e)?;
+                }
                 KeyOp::Cmp | KeyOp::Total => {
                     let b = f
                         .get_nth_param(1)
@@ -129,6 +142,70 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_call(f, &[a.into(), b.into()], "")
             .map_err(e)?;
         Ok(v.try_as_basic_value().unwrap_basic().into_int_value())
+    }
+
+    /// The name of the `cmp` body of `ty` (through references), if it has
+    /// one.
+    pub(super) fn user_cmp_body(&self, ty: Ty) -> Option<String> {
+        let mut ty = ty;
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(ty) {
+            ty = i;
+        }
+        if !matches!(self.tys.kind(ty), TyKind::Adt(_) | TyKind::Shared(_)) {
+            return None;
+        }
+        let name = format!("{}.cmp", self.tys.adt_name(ty));
+        self.program.bodies.contains_key(&name).then_some(name)
+    }
+
+    /// -1, 0 or 1 from the `Ordering` the `cmp` body of `ty` returns for
+    /// `a` and `b`, each passed by reference.
+    fn user_cmp_value(
+        &mut self,
+        a: PointerValue<'ctx>,
+        b: PointerValue<'ctx>,
+        ty: Ty,
+    ) -> R<IntValue<'ctx>> {
+        let name = self
+            .user_cmp_body(ty)
+            .ok_or_else(|| format!("`{}` has no cmp body", self.tys.display(ty)))?;
+        let program = self.program;
+        let ord_ty = program.bodies[&name].return_ty();
+        let f = self.function(&name)?;
+        let ret = self.temp(ord_ty, "ordering")?;
+        let (sa, sb) = (self.entry_slot(8, "a")?, self.entry_slot(8, "b")?);
+        self.store(sa, a.into())?;
+        self.store(sb, b.into())?;
+        self.builder
+            .build_call(f, &[ret.into(), sa.into(), sb.into()], "")
+            .map_err(e)?;
+        let t = self.load_tag(ret, ord_ty)?;
+        let i32t = self.llcx.i32_type();
+        let t = self
+            .builder
+            .build_int_truncate_or_bit_cast(t, i32t, "")
+            .map_err(e)?;
+        let less = self.variant_of(ord_ty, "Less")?;
+        let greater = self.variant_of(ord_ty, "Greater")?;
+        let is_less = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                t,
+                i32t.const_int(u64::from(less), false),
+                "",
+            )
+            .map_err(e)?;
+        let is_greater = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                t,
+                i32t.const_int(u64::from(greater), false),
+                "",
+            )
+            .map_err(e)?;
+        self.ord_of(is_less, is_greater)
     }
 
     fn hash_call(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<IntValue<'ctx>> {

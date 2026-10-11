@@ -95,7 +95,7 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The `{ptr, len}` of a `str`, `ref str` or `String` operand.
-    fn str_parts(
+    pub(super) fn str_parts(
         &mut self,
         a: &Operand,
     ) -> R<(PointerValue<'ctx>, inkwell::values::IntValue<'ctx>)> {
@@ -123,6 +123,14 @@ impl<'ctx> Cx<'ctx, '_> {
         let dty = self.place_type(dest)?;
         if matches!(base, "Map" | "Set" | "SortedMap" | "SortedSet")
             && self.table_native(method, args, dest)?.is_some()
+        {
+            return Ok(());
+        }
+        if base == "String" && self.string_native(method, args, dest)?.is_some() {
+            return Ok(());
+        }
+        if matches!(base, "Vec" | "Slice" | "Array")
+            && self.seq_native(base, method, args, dest)?.is_some()
         {
             return Ok(());
         }
@@ -411,7 +419,7 @@ impl<'ctx> Cx<'ctx, '_> {
         })
     }
 
-    fn non_negative(&self, n: IntValue<'ctx>) -> R<IntValue<'ctx>> {
+    pub(super) fn non_negative(&self, n: IntValue<'ctx>) -> R<IntValue<'ctx>> {
         self.builder
             .build_int_compare(IntPredicate::SGE, n, self.i64(0), "")
             .map_err(e)
@@ -448,7 +456,7 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// The `{ptr, len}` of an array, `Vec` or slice operand, through a
     /// reference.
-    fn view_of(&mut self, a: &Operand) -> R<(PointerValue<'ctx>, IntValue<'ctx>)> {
+    pub(super) fn view_of(&mut self, a: &Operand) -> R<(PointerValue<'ctx>, IntValue<'ctx>)> {
         let mut t = self.operand_type(a)?;
         let mut p = self.operand_ptr(a)?;
         while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
