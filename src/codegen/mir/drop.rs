@@ -34,6 +34,7 @@ use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::IntPredicate;
 
 use super::{fn_symbol, Cx, R};
+use crate::mir::coroutine;
 use crate::mir::layout::{self, SHARED_COUNTS};
 use crate::mir::place_ty::place_ty;
 use crate::mir::ty::{AdtId, IntrinsicTy, TyKind};
@@ -160,6 +161,21 @@ impl<'ctx> Cx<'ctx, '_> {
     fn drop_value(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<()> {
         match self.tys.kind(ty) {
             TyKind::Adt(a) => {
+                let name = self.tys.adt(a).name.clone();
+                if let Some(co) = coroutine::frame_owner(&name) {
+                    // A coroutine frame's fields are initialized only as its
+                    // state says, so its own `drop_frame` drops it.
+                    let slot = self.entry_slot(8, "frame")?;
+                    self.builder
+                        .build_store(slot, p)
+                        .map_err(|e| e.to_string())?;
+                    let f = self.function(&coroutine::drop_frame_name(co))?;
+                    let ret = self.entry_slot(0, "unit")?;
+                    self.builder
+                        .build_call(f, &[ret.into(), slot.into()], "")
+                        .map_err(|e| e.to_string())?;
+                    return Ok(());
+                }
                 if let Some(rt) = self.cell_drop(a) {
                     return self.drop_cell(p, ty, rt);
                 }

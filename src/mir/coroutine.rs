@@ -270,7 +270,12 @@ pub fn frame_name(name: &str) -> String {
 
 /// Whether `adt_name` is a coroutine frame type.
 pub fn is_frame(adt_name: &str) -> bool {
-    adt_name.ends_with("#Frame")
+    frame_owner(adt_name).is_some()
+}
+
+/// The coroutine whose frame type is `adt_name`, if it is a frame.
+pub fn frame_owner(adt_name: &str) -> Option<&str> {
+    adt_name.strip_suffix("#Frame")
 }
 
 /// Whether `body_name` is a coroutine's `resume` body.

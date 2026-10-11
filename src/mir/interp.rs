@@ -348,9 +348,28 @@ enum Tasks {
     CancelAfter(u64),
 }
 
+/// Whether `KARAC_MIR_COROUTINES=1` asks for coroutines to run as state
+/// machines, on both backends.
+pub fn coroutines_flag() -> bool {
+    std::env::var("KARAC_MIR_COROUTINES").is_ok_and(|v| v == "1")
+}
+
+/// `program` with each coroutine replaced by its `resume` and `drop_frame`
+/// bodies (`coroutine::transform`).
+pub fn with_coroutines(program: &Program, tys: &TyInterner) -> Result<Program, String> {
+    let bodies: Vec<Body> = program.bodies.values().cloned().collect();
+    let (bodies, _) = coroutine::transform(&bodies, tys)?;
+    let mut p = program.clone();
+    p.bodies = bodies
+        .into_iter()
+        .map(|b| (b.instance.name.clone(), b))
+        .collect();
+    Ok(p)
+}
+
 /// `KARAC_MIR_COROUTINES=1` runs coroutines under the executor.
 fn tasks_flag() -> Tasks {
-    if std::env::var("KARAC_MIR_COROUTINES").is_ok_and(|v| v == "1") {
+    if coroutines_flag() {
         Tasks::Run
     } else {
         Tasks::Sync
@@ -369,14 +388,8 @@ fn run_with(
     let coroutines = tasks != Tasks::Sync;
     let transformed;
     let program = if coroutines {
-        let bodies: Vec<Body> = program.bodies.values().cloned().collect();
-        match coroutine::transform(&bodies, tys) {
-            Ok((bodies, _)) => {
-                let mut p = program.clone();
-                p.bodies = bodies
-                    .into_iter()
-                    .map(|b| (b.instance.name.clone(), b))
-                    .collect();
+        match with_coroutines(program, tys) {
+            Ok(p) => {
                 transformed = p;
                 &transformed
             }

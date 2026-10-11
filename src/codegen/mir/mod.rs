@@ -38,8 +38,10 @@ use inkwell::module::{Linkage, Module};
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FunctionType};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
+use inkwell::IntPredicate;
 
-use crate::mir::interp::Program;
+use crate::mir::coroutine;
+use crate::mir::interp::{self, Program};
 use crate::mir::layout::{self, Layout};
 use crate::mir::ty::{FloatTy, TyKind};
 use crate::mir::{Body, Place, TerminatorKind, Ty, TyInterner};
@@ -53,13 +55,22 @@ pub fn fn_symbol(name: &str) -> String {
 }
 
 /// Compiles the elaborated `program` into a module named `name`, with a C
-/// `main` that runs the Kāra `main` when the program has one.
+/// `main` that runs the Kāra `main` when the program has one. Under
+/// `KARAC_MIR_COROUTINES=1` each coroutine is compiled as its state
+/// machine, and a coroutine `main` runs as the task root.
 pub fn compile_mir<'ctx>(
     llcx: &'ctx Context,
     name: &str,
     program: &Program,
     tys: &TyInterner,
 ) -> R<Module<'ctx>> {
+    let transformed;
+    let program = if interp::coroutines_flag() {
+        transformed = interp::with_coroutines(program, tys)?;
+        &transformed
+    } else {
+        program
+    };
     let mut cx = Cx::new(llcx, name, program, tys);
     cx.declare_bodies()?;
     for body in program.bodies.values() {
@@ -278,13 +289,22 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             .ok_or_else(|| format!("no local {:?}", place.local))
     }
 
-    /// A C `i32 main()` that runs the Kāra `main` and returns 0.
+    /// A C `i32 main()` that runs the Kāra `main` and returns 0. A
+    /// coroutine `main` is a task root: its frame lives in this function,
+    /// zeroed (state 0, before the first resume), and `main#resume` is
+    /// called until it returns `Ready`. A suspending native yields once and
+    /// makes its call when resumed, so resuming again at once is the whole
+    /// executor until the runtime parks tasks.
     fn c_main(&mut self) -> R<()> {
-        let Some(&kmain) = self.fns.get("main") else {
-            return Ok(());
+        let resume = coroutine::resume_name("main");
+        let (name, task) = match (self.fns.get("main"), self.fns.get(&resume)) {
+            (Some(_), _) => ("main", false),
+            (None, Some(_)) => (resume.as_str(), true),
+            (None, None) => return Ok(()),
         };
-        let body = &self.program.bodies["main"];
-        if body.arg_count != 0 {
+        let kmain = self.function(name)?;
+        let body = &self.program.bodies[name];
+        if body.arg_count != usize::from(task) {
             return Err("`main` takes arguments".into());
         }
         let i32t = self.llcx.i32_type();
@@ -293,17 +313,233 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             .add_function("main", i32t.fn_type(&[], false), None);
         self.builder
             .position_at_end(self.llcx.append_basic_block(f, "entry"));
-        let l = self.layout(body.return_ty())?;
-        let ret = self
-            .builder
-            .build_alloca(self.llcx.i8_type().array_type(l.size as u32), "ret")
-            .map_err(|e| e.to_string())?;
-        self.builder
-            .build_call(kmain, &[ret.into()], "")
-            .map_err(|e| e.to_string())?;
+        let ret_ty = body.return_ty();
+        let ret = self.c_main_slot(ret_ty, "ret")?;
+        if !task {
+            self.builder
+                .build_call(kmain, &[ret.into()], "")
+                .map_err(|e| e.to_string())?;
+        } else {
+            let TyKind::MutRef(frame_ty) = self.tys.kind(body.locals[1].ty) else {
+                return Err(format!("{name} does not take its frame"));
+            };
+            let frame = self.c_main_slot(frame_ty, "frame")?;
+            let size = self.layout(frame_ty)?.size;
+            self.builder
+                .build_memset(frame, 8, self.llcx.i8_type().const_zero(), self.i64(size))
+                .map_err(|e| e.to_string())?;
+            // The resume body's argument slot holds the frame reference.
+            let arg = self.c_main_slot(body.locals[1].ty, "frame.ref")?;
+            self.builder
+                .build_store(arg, frame)
+                .map_err(|e| e.to_string())?;
+            let poll = self.llcx.append_basic_block(f, "poll");
+            let ready = self.llcx.append_basic_block(f, "ready");
+            self.builder
+                .build_unconditional_branch(poll)
+                .map_err(|e| e.to_string())?;
+            self.builder.position_at_end(poll);
+            self.builder
+                .build_call(kmain, &[ret.into(), arg.into()], "")
+                .map_err(|e| e.to_string())?;
+            // `Poll[T]` is `Ready(T) | Pending`: tag 0 is `Ready`.
+            let tag = layout::enum_tag(self.tys, ret_ty)
+                .ok_or_else(|| format!("{name} does not return a Poll"))?;
+            let tag_ty = self.int_ty(tag.size as u32 * 8);
+            let t = self
+                .builder
+                .build_load(tag_ty, ret, "tag")
+                .map_err(|e| e.to_string())?
+                .into_int_value();
+            let is_ready = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, t, tag_ty.const_zero(), "")
+                .map_err(|e| e.to_string())?;
+            self.builder
+                .build_conditional_branch(is_ready, ready, poll)
+                .map_err(|e| e.to_string())?;
+            self.builder.position_at_end(ready);
+        }
+        // What `main` returned is dropped before the process exits; a
+        // returned frame holds nothing.
+        if self.tys.needs_drop(ret_ty) {
+            let glue = self.glue_fn(ret_ty);
+            self.builder
+                .build_call(glue, &[ret.into()], "")
+                .map_err(|e| e.to_string())?;
+        }
         self.builder
             .build_return(Some(&i32t.const_zero()))
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// An 8-aligned stack slot holding a `t`, at the builder's position.
+    fn c_main_slot(&self, t: Ty, name: &str) -> R<PointerValue<'ctx>> {
+        let size = self.layout(t)?.size.max(1);
+        let a = self
+            .builder
+            .build_alloca(self.llcx.i8_type().array_type(size as u32), name)
+            .map_err(|e| e.to_string())?;
+        a.as_instruction()
+            .ok_or("an alloca is not an instruction")?
+            .set_alignment(8)
+            .map_err(|e| e.to_string())?;
+        Ok(a)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mir::parse_module;
+    use inkwell::targets::{InitializationConfig, Target};
+    use inkwell::values::GlobalValue;
+    use inkwell::OptimizationLevel;
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    /// A coroutine `main`: it yields once.
+    const TASK: &str = "
+fn main() -> () {
+    let mut _0: ();
+    let _1: ();
+    bb0: {
+        _1 = __yield_now() -> bb1;
+    }
+    bb1: {
+        return;
+    }
+}
+";
+
+    fn counter<'c>(cx: &Cx<'c, '_>, name: &str) -> GlobalValue<'c> {
+        // Declared here and mapped onto a Rust static by the test.
+        cx.module.add_global(cx.llcx.i64_type(), None, name)
+    }
+
+    /// `*g += by`, at the builder's position.
+    fn bump(cx: &Cx<'_, '_>, g: GlobalValue<'_>, by: IntValue<'_>) -> IntValue<'static> {
+        let i64t = cx.llcx.i64_type();
+        let p = g.as_pointer_value();
+        let old = cx.builder.build_load(i64t, p, "").unwrap().into_int_value();
+        let new = cx.builder.build_int_add(old, by, "").unwrap();
+        cx.builder.build_store(p, new).unwrap();
+        // SAFETY: the value lives as long as the test's context.
+        unsafe { std::mem::transmute::<IntValue<'_>, IntValue<'static>>(new) }
+    }
+
+    static RESUMES: AtomicI64 = AtomicI64::new(0);
+    static STATES: AtomicI64 = AtomicI64::new(0);
+    static DROPS: AtomicI64 = AtomicI64::new(0);
+
+    fn read(a: &AtomicI64) -> i64 {
+        a.load(Ordering::SeqCst)
+    }
+
+    /// The C `main` of a coroutine `main` starts its frame zeroed and
+    /// resumes it until `Ready`; dropping a frame runs its `drop_frame`.
+    #[test]
+    fn mir_llvm_c_main_drives_a_coroutine_main() {
+        Target::initialize_native(&InitializationConfig::default()).unwrap();
+        let m = parse_module(TASK).unwrap();
+        let prog = interp::with_coroutines(&Program::from_module(&m), &m.tys).unwrap();
+        assert!(!prog.bodies.contains_key("main"));
+        let c = Context::create();
+        let mut cx = Cx::new(&c, "task", &prog, &m.tys);
+        cx.declare_bodies().unwrap();
+        let (resumes, states, drops) = (
+            counter(&cx, "resumes"),
+            counter(&cx, "states"),
+            counter(&cx, "drops"),
+        );
+        let i64t = c.i64_type();
+
+        // `main#resume` by hand (its body is `body.rs`'s): `Pending` on the
+        // first two calls, `Ready` on the third, adding up the states it
+        // is handed.
+        let resume = cx.function("main#resume").unwrap();
+        cx.builder
+            .position_at_end(c.append_basic_block(resume, "entry"));
+        let n = bump(&cx, resumes, i64t.const_int(1, false));
+        let slot = resume.get_nth_param(1).unwrap().into_pointer_value();
+        let frame = cx
+            .builder
+            .build_load(cx.ptr_ty(), slot, "")
+            .unwrap()
+            .into_pointer_value();
+        let state = cx
+            .builder
+            .build_load(c.i32_type(), frame, "")
+            .unwrap()
+            .into_int_value();
+        let state = cx.builder.build_int_z_extend(state, i64t, "").unwrap();
+        bump(&cx, states, state);
+        let done = cx
+            .builder
+            .build_int_compare(IntPredicate::UGE, n, i64t.const_int(3, false), "")
+            .unwrap();
+        let tag = cx
+            .builder
+            .build_select(
+                done,
+                c.i8_type().const_zero(),
+                c.i8_type().const_int(1, false),
+                "",
+            )
+            .unwrap();
+        let ret = resume.get_nth_param(0).unwrap().into_pointer_value();
+        cx.builder.build_store(ret, tag).unwrap();
+        // Advance the state, as a real resume does.
+        cx.builder
+            .build_store(frame, c.i32_type().const_int(1, false))
+            .unwrap();
+        cx.builder.build_return(None).unwrap();
+
+        let drop_frame = cx.function("main#drop_frame").unwrap();
+        cx.builder
+            .position_at_end(c.append_basic_block(drop_frame, "entry"));
+        bump(&cx, drops, i64t.const_int(1, false));
+        cx.builder.build_return(None).unwrap();
+
+        for f in cx.fns.values() {
+            if f.count_basic_blocks() == 0 {
+                cx.builder
+                    .position_at_end(c.append_basic_block(*f, "entry"));
+                cx.builder.build_unreachable().unwrap();
+            }
+        }
+        cx.c_main().unwrap();
+        let body = &prog.bodies["main#resume"];
+        let TyKind::MutRef(frame_ty) = m.tys.kind(body.locals[1].ty) else {
+            panic!("main#resume does not take its frame");
+        };
+        let glue = cx.glue_fn(frame_ty);
+        let glue_name = glue.get_name().to_str().unwrap().to_string();
+        cx.finish_glue().unwrap();
+        cx.module.verify().unwrap();
+        let engine = cx
+            .module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .unwrap();
+        for (g, a) in [(resumes, &RESUMES), (states, &STATES), (drops, &DROPS)] {
+            engine.add_global_mapping(&g, a as *const AtomicI64 as usize);
+        }
+
+        // SAFETY: `main` is the module's `i32 main()`.
+        let main: extern "C" fn() -> i32 =
+            unsafe { std::mem::transmute(engine.get_function_address("main").unwrap()) };
+        assert_eq!(main(), 0);
+        assert_eq!(read(&RESUMES), 3);
+        // Zeroed before the first resume, then 1 as the resume left it.
+        assert_eq!(read(&STATES), 2);
+        assert_eq!(read(&DROPS), 0);
+
+        let size = layout::layout(&m.tys, frame_ty).unwrap().size as usize;
+        let mut buf = vec![0u64; size.div_ceil(8).max(1)];
+        // SAFETY: the glue is a `void(ptr)` over a frame of `size` bytes.
+        let g: extern "C" fn(*mut u64) =
+            unsafe { std::mem::transmute(engine.get_function_address(&glue_name).unwrap()) };
+        g(buf.as_mut_ptr());
+        assert_eq!(read(&DROPS), 1);
     }
 }
