@@ -5915,6 +5915,43 @@ impl<'a> TypeChecker<'a> {
                 return false;
             }
         }
+        // A borrow where an owned value is wanted (`let s: String =
+        // p.peek().unwrap()`): the value cannot leave what it borrows from,
+        // so the owned copy is taken explicitly. Copied and counted types
+        // read out of a borrow freely and never reach here as a mismatch.
+        if self.cli_lint_overrides.strict_core {
+            if let Type::Ref(inner) = found {
+                if **inner == *expected
+                    && self.type_cannot_leave_a_borrowed_place(expected)
+                    && self.type_supports_clone(expected)
+                {
+                    let shown = type_display(expected);
+                    self.errors.push(TypeError {
+                        message: format!(
+                            "expected '{shown}', found 'ref {shown}': a borrowed value \
+                             cannot be moved out of what it borrows. Take an owned copy \
+                             with `.clone()`"
+                        ),
+                        span,
+                        kind: TypeErrorKind::TypeMismatch,
+                        lint_name: None,
+                        fix_it: Some(FixIt {
+                            span: Span {
+                                line: span.line,
+                                column: span.column,
+                                offset: span.offset + span.length,
+                                length: 0,
+                            },
+                            replacement: ".clone()".to_string(),
+                        }),
+                        class: class_for_type_error_kind(&TypeErrorKind::TypeMismatch),
+                        expected: Some(shown.clone()),
+                        got: Some(format!("ref {shown}")),
+                    });
+                    return false;
+                }
+            }
+        }
         // design.md §5: `s[a..b]` is a `Str` view. Where an owned `String`
         // is wanted, `.to_string()` takes the copy the view's slice used to
         // allocate implicitly, so the fix keeps the program's meaning.

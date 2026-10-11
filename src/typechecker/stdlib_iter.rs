@@ -1278,9 +1278,19 @@ impl<'a> super::TypeChecker<'a> {
                         self.infer_expr(&arg.value);
                     }
                 }
+                // The library's `peek(mut ref self) -> Option[ref T]` lends
+                // the item it holds, so over `v.iter()` (items `ref T`) it is
+                // `Option[ref ref T]`; nothing collapses the two borrows.
+                // The legacy backends read the item itself.
+                let item =
+                    if self.library_methods_from_source || self.cli_lint_overrides.strict_core {
+                        Type::Ref(Box::new(item.clone()))
+                    } else {
+                        item.clone()
+                    };
                 Type::Named {
                     name: "Option".to_string(),
-                    args: vec![item.clone()],
+                    args: vec![item],
                 }
             }
             _ => self.require_known_method(

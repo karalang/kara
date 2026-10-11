@@ -2865,3 +2865,21 @@ fn str_is_the_string_view() {
          }\n",
     );
 }
+
+/// `peek()` lends the item it holds (iter.kara: `Option[ref T]`), so over
+/// `v.iter()` it is `Option[ref ref T]`: one borrow from the iterator, one
+/// from the vector. Keeping a peeked `String` takes a copy, and `karac fix`
+/// writes it.
+#[test]
+fn a_peeked_item_is_borrowed() {
+    rejected_then_fixed(
+        "peek-borrowed",
+        "fn main() {\n\
+             let v = [\"a\".to_string(), \"b\".to_string()];\n\
+             let mut p = v.iter().map(|s| s.clone()).peekable();\n\
+             let s: String = p.peek().unwrap();\n\
+             println(s);\n\
+         }\n",
+        "found 'ref String'",
+    );
+}
