@@ -751,6 +751,218 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(self.offset(q, 8)?, self.i64(0).into())?;
                 self.drop_moved(&args[1..])?;
             }
+            ("binary_search", [x]) => {
+                let kp = self.key_arg_of(x, el)?;
+                let cmp = self.key_fn(KeyOp::Cmp, el);
+                let i = self.rt_int(
+                    "bsearch",
+                    &[
+                        p.into(),
+                        n.into(),
+                        self.i64(size).into(),
+                        cmp.as_global_value().as_pointer_value().into(),
+                        kp.into(),
+                    ],
+                    64,
+                )?;
+                self.store_opt_int(dest, i)?;
+                self.drop_moved(&args[1..])?;
+            }
+            ("sorted" | "sorted_by" | "sorted_by_key", rest) if is_vec => {
+                // A sorted copy: a receiver moved in is sorted where it
+                // lands; a borrowed one is cloned first.
+                let d = self.place_ptr(dest)?;
+                if matches!(recv, Operand::Move(_))
+                    && !matches!(self.tys.kind(rt), TyKind::Ref(_) | TyKind::MutRef(_))
+                {
+                    let q = self.operand_ptr(recv)?;
+                    self.copy(d, q, rt)?;
+                } else {
+                    self.vec_of_clones(dest, p, n, el)?;
+                }
+                let buf = self.load_ptr(d)?;
+                match rest {
+                    [] => {
+                        let cmp = self.sort_cmp(el);
+                        self.rt(
+                            "sort",
+                            &[buf.into(), n.into(), self.i64(size).into(), cmp.into()],
+                        )?;
+                    }
+                    [f] => {
+                        let (cmp, ctx) = self.sort_by_args(f, method == "sorted_by_key", el)?;
+                        self.rt(
+                            "sort_ctx",
+                            &[
+                                buf.into(),
+                                n.into(),
+                                self.i64(size).into(),
+                                cmp.into(),
+                                ctx.into(),
+                            ],
+                        )?;
+                    }
+                    _ => return Ok(None),
+                }
+                self.drop_moved(rest)?;
+            }
+            ("resize", [k, val]) if is_vec => {
+                // Cut-off elements drop in order; each new slot holds a
+                // clone of the value but the last, which takes it.
+                let k = self.int_arg(k)?;
+                let neg = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, k, self.i64(0), "")
+                    .map_err(e)?;
+                let want = self
+                    .builder
+                    .build_select(neg, self.i64(0), k, "")
+                    .map_err(e)?
+                    .into_int_value();
+                let less = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, want, n, "")
+                    .map_err(e)?;
+                let from = self
+                    .builder
+                    .build_select(less, want, n, "")
+                    .map_err(e)?
+                    .into_int_value();
+                if self.tys.needs_drop(el) {
+                    let cut = self.builder.build_int_sub(n, from, "").map_err(e)?;
+                    self.count_loop(cut, |cx, i| {
+                        let j = cx.builder.build_int_add(from, i, "").map_err(e)?;
+                        let x = cx.elem_ptr(p, j, size)?;
+                        cx.call_glue(x, el)
+                    })?;
+                }
+                let grow = self.builder.build_int_sub(want, from, "").map_err(e)?;
+                let v = self.ref_arg(recv)?;
+                self.rt(
+                    "vec_reserve",
+                    &[v.into(), grow.into(), self.i64(size).into()],
+                )?;
+                let buf = self.load_ptr(v)?;
+                let vp = self.operand_ptr(val)?;
+                let moved = matches!(val, Operand::Move(_)) && self.tys.needs_drop(el);
+                let clones = if moved {
+                    let some = self
+                        .builder
+                        .build_int_compare(IntPredicate::SGT, grow, self.i64(0), "")
+                        .map_err(e)?;
+                    let less1 = self
+                        .builder
+                        .build_int_sub(grow, self.i64(1), "")
+                        .map_err(e)?;
+                    self.builder
+                        .build_select(some, less1, self.i64(0), "")
+                        .map_err(e)?
+                        .into_int_value()
+                } else {
+                    grow
+                };
+                self.count_loop(clones, |cx, i| {
+                    let j = cx.builder.build_int_add(from, i, "").map_err(e)?;
+                    let x = cx.elem_ptr(buf, j, size)?;
+                    cx.clone_into(x, vp, el)
+                })?;
+                if moved {
+                    let none = self.is_zero(grow)?;
+                    let last = self.builder.build_int_add(from, clones, "").map_err(e)?;
+                    let at = self.elem_ptr(buf, last, size)?;
+                    let f = self.cur_fn()?;
+                    let (bt, bf, done) = (
+                        self.llcx.append_basic_block(f, "resize.drop"),
+                        self.llcx.append_basic_block(f, "resize.take"),
+                        self.llcx.append_basic_block(f, "resize.done"),
+                    );
+                    self.builder
+                        .build_conditional_branch(none, bt, bf)
+                        .map_err(e)?;
+                    self.builder.position_at_end(bt);
+                    self.call_glue(vp, el)?;
+                    self.builder.build_unconditional_branch(done).map_err(e)?;
+                    self.builder.position_at_end(bf);
+                    self.copy(at, vp, el)?;
+                    self.builder.build_unconditional_branch(done).map_err(e)?;
+                    self.builder.position_at_end(done);
+                }
+                self.store(self.offset(v, 8)?, want.into())?;
+            }
+            ("split_off", [at]) if is_vec => {
+                let at = self.int_arg(at)?;
+                let ok = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULE, at, n, "")
+                    .map_err(e)?;
+                self.abort_unless(ok, "index out of bounds")?;
+                let tail = self.builder.build_int_sub(n, at, "").map_err(e)?;
+                let d = self.place_ptr(dest)?;
+                self.rt("vec_alloc", &[d.into(), tail.into(), self.i64(size).into()])?;
+                let nb = self.load_ptr(d)?;
+                let from = self.elem_ptr(p, at, size)?;
+                let bytes = self
+                    .builder
+                    .build_int_mul(tail, self.i64(size), "")
+                    .map_err(e)?;
+                self.builder
+                    .build_memcpy(nb, 1, from, 1, bytes)
+                    .map_err(e)?;
+                let v = self.ref_arg(recv)?;
+                self.store(self.offset(v, 8)?, at.into())?;
+            }
+            ("retain", [f]) if is_vec => {
+                // Each rejected element drops right away, in order; the
+                // kept ones close up behind them.
+                let c = self.callee_by_ref(f)?;
+                let w = self.entry_slot(8, "retain.w")?;
+                self.store(w, self.i64(0).into())?;
+                let el_ref = self.tys.intern(TyKind::Ref(el));
+                let arg = self.entry_slot(8, "retain.arg")?;
+                let keep = self.entry_slot(1, "retain.keep")?;
+                self.count_loop(n, |cx, i| {
+                    let x = cx.elem_ptr(p, i, size)?;
+                    cx.store(arg, x.into())?;
+                    cx.call_callee(&c, keep, &[(arg, el_ref)])?;
+                    let k = cx
+                        .builder
+                        .build_load(cx.llcx.i8_type(), keep, "")
+                        .map_err(e)?
+                        .into_int_value();
+                    let k = cx
+                        .builder
+                        .build_int_compare(IntPredicate::NE, k, k.get_type().const_zero(), "")
+                        .map_err(e)?;
+                    let f = cx.cur_fn()?;
+                    let (kb, db, next) = (
+                        cx.llcx.append_basic_block(f, "retain.keep"),
+                        cx.llcx.append_basic_block(f, "retain.drop"),
+                        cx.llcx.append_basic_block(f, "retain.next"),
+                    );
+                    cx.builder.build_conditional_branch(k, kb, db).map_err(e)?;
+                    cx.builder.position_at_end(kb);
+                    let wi = cx.load_i64(w)?;
+                    let y = cx.elem_ptr(p, wi, size)?;
+                    let bytes = cx.i64(size);
+                    cx.builder.build_memmove(y, 1, x, 1, bytes).map_err(e)?;
+                    let wn = cx.builder.build_int_add(wi, cx.i64(1), "").map_err(e)?;
+                    cx.store(w, wn.into())?;
+                    cx.builder.build_unconditional_branch(next).map_err(e)?;
+                    cx.builder.position_at_end(db);
+                    if cx.tys.needs_drop(el) {
+                        cx.call_glue(x, el)?;
+                    }
+                    cx.builder.build_unconditional_branch(next).map_err(e)?;
+                    cx.builder.position_at_end(next);
+                    Ok(())
+                })?;
+                let v = self.ref_arg(recv)?;
+                let wn = self.load_i64(w)?;
+                self.store(self.offset(v, 8)?, wn.into())?;
+                if !Self::consumes(&c) {
+                    self.drop_moved(&args[1..])?;
+                }
+            }
             ("truncate", [k]) if is_vec => {
                 // The tail drops first to last, as a dying Vec's does.
                 let k = self.int_arg(k)?;
@@ -911,6 +1123,40 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         let _ = base;
         Ok(Some(()))
+    }
+
+    /// `Vec.from_fn(n, f)`: a `Vec` of `f(0)`, ..., `f(n - 1)`.
+    pub(super) fn vec_from_fn(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let dty = self.place_type(dest)?;
+        let TyKind::Intrinsic(IntrinsicTy::Vec(el)) = self.tys.kind(dty) else {
+            return Err("Vec.from_fn builds a non-Vec".into());
+        };
+        let size = self.layout(el)?.size;
+        let k = self.int_arg(&args[0])?;
+        let neg = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, k, self.i64(0), "")
+            .map_err(e)?;
+        let n = self
+            .builder
+            .build_select(neg, self.i64(0), k, "")
+            .map_err(e)?
+            .into_int_value();
+        let c = self.callee_by_ref(&args[1])?;
+        let d = self.place_ptr(dest)?;
+        self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+        let buf = self.load_ptr(d)?;
+        let i64t = self.tys.intern(TyKind::Int(crate::mir::IntTy::I64));
+        let arg = self.entry_slot(8, "from_fn.i")?;
+        self.count_loop(n, |cx, i| {
+            cx.store(arg, i.into())?;
+            let x = cx.elem_ptr(buf, i, size)?;
+            cx.call_callee(&c, x, &[(arg, i64t)])
+        })?;
+        if !Self::consumes(&c) {
+            self.drop_moved(&args[1..])?;
+        }
+        Ok(())
     }
 
     /// A new `Vec` at `dest` of clones of `n` elements of `el` from `p`.

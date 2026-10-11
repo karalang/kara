@@ -638,6 +638,28 @@ pub extern "C" fn karac_mir_run_main(body: extern "C" fn() -> i32) -> i32 {
     }
 }
 
+/// `binary_search`: the index std's search over the `n` elements of
+/// `size` bytes at `buf` finds for the value at `key` under `cmp`, or -1.
+///
+/// # Safety
+/// `buf` holds `n` elements; `cmp` is sound on an element and the key.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_bsearch(
+    buf: *const u8,
+    n: usize,
+    size: usize,
+    cmp: unsafe extern "C" fn(*const u8, *const u8) -> i32,
+    key: *const u8,
+) -> i64 {
+    let idx: Vec<usize> = (0..n).collect();
+    idx.binary_search_by(|&i| {
+        // SAFETY: the caller's contract.
+        let o = unsafe { cmp(buf.add(i * size), key) };
+        o.cmp(&0)
+    })
+    .map_or(-1, |i| i as i64)
+}
+
 /// `std.time::sleep_ms`: a real pause; a count of zero or less is a
 /// no-op.
 #[no_mangle]

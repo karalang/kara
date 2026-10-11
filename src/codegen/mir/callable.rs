@@ -208,6 +208,20 @@ impl<'ctx> Cx<'ctx, '_> {
         }
     }
 
+    /// [`Self::callee_of`] for a callee called more than once: an erased
+    /// value is called through a reference, never consumed, so the caller
+    /// drops it once after the last call.
+    pub(super) fn callee_by_ref(&mut self, op: &Operand) -> R<Callee<'ctx>> {
+        Ok(match self.callee_of(op)? {
+            Callee::Erased { at, ty, .. } => Callee::Erased {
+                at,
+                ty,
+                consume: false,
+            },
+            c => c,
+        })
+    }
+
     /// The argument `a` as the parameter of type `want` takes it: a
     /// reference handed to a by-value parameter (`|a: i64, b: i64|` for a
     /// `Fn(ref T, ref T)`) passes a copy of what it points at.

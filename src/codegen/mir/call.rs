@@ -300,6 +300,29 @@ impl<'ctx> Cx<'ctx, '_> {
         if base == "VecDeque" && self.deque_native(method, args, dest)?.is_some() {
             return Ok(());
         }
+        if matches!(
+            base,
+            "Vec" | "VecDeque" | "String" | "Map" | "SortedMap" | "Set" | "SortedSet"
+        ) && method.starts_with("try_")
+            && !matches!(method, "try_into" | "try_from")
+        {
+            // The fallible companions: the allocator aborts rather than
+            // fails, so each is its base method, in `Ok`.
+            let ok = self.variant_of(dty, "Ok")?;
+            let pt = self
+                .tys
+                .field_ty(dty, Some(ok), 0)
+                .ok_or("a try_ result without an Ok payload")?;
+            let payload = dest
+                .project(crate::mir::ProjElem::Downcast(crate::mir::VariantIdx(ok)))
+                .field(0, pt);
+            self.native(&name.replacen(".try_", ".", 1), args, &payload)?;
+            let d = self.place_ptr(dest)?;
+            return self.store_tag(d, dty, ok);
+        }
+        if (base, method) == ("Vec", "from_fn") && args.len() == 2 {
+            return self.vec_from_fn(args, dest);
+        }
         if (base, method) == ("Vec", "from_slice") {
             let (p, n, el) = self.view_parts(&args[0])?;
             return self.vec_of_clones(dest, p, n, el);
@@ -561,7 +584,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     cx.copy(q, at, el)
                 })
             }
-            (_, "as_slice" | "as_mut_slice") if args.len() == 1 => {
+            (_, "as_slice" | "as_mut_slice" | "as_slice_mut") if args.len() == 1 => {
                 let (p, n) = self.view_of(&args[0])?;
                 let d = self.place_ptr(dest)?;
                 self.store(d, p.into())?;
