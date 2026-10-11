@@ -424,7 +424,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             ExprKind::Index { object, index } => ok(object) && ok(index),
             ExprKind::Range { start, end, .. } => {
-                start.as_deref().is_none_or(&ok) && end.as_deref().is_none_or(&ok)
+                start.as_deref().is_none_or(ok) && end.as_deref().is_none_or(ok)
             }
             ExprKind::Call { callee, args } => ok(callee) && args.iter().all(|a| ok(&a.value)),
             ExprKind::MethodCall { object, args, .. } => {

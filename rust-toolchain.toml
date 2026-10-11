@@ -29,7 +29,7 @@
 # pin does not oblige you to raise the floor — only a change that genuinely
 # needs newer rustc does, and the `msrv` job is what tells you.
 [toolchain]
-channel = "1.94.1"
+channel = "1.99.0"
 components = ["rustfmt", "clippy"]
 # Targets the wasm archives need (phase-10 `--target=wasm_wasi` /
 # `wasm_browser`). Declared here so a fresh checkout can build them

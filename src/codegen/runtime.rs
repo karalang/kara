@@ -11378,10 +11378,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // enum it decided the binding has.
         let variant = match &callee.kind {
             ExprKind::Identifier(n) => n.clone(),
-            ExprKind::Path { segments, .. } => match segments.last() {
-                Some(v) => v.clone(),
-                None => return None,
-            },
+            ExprKind::Path { segments, .. } => segments.last()?.clone(),
             _ => return None,
         };
         let generic_params = self.enum_generic_param_names(enum_name);

@@ -4190,6 +4190,9 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    // The receiver is resolved inside a block in the `if let` scrutinee. The
+    // interpreter is frozen (legacy), so keep its drop timing as it is.
+    #[allow(clippy::block_scrutinee)]
     fn set_index(&mut self, object: &Expr, index: &Expr, val: Value) {
         let idx_val = self.eval_expr_inner(index);
         // Phase-11 Tensor element store — `t[i, j] = v`. The index is a

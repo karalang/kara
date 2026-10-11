@@ -428,10 +428,8 @@ fn block_mutates_vec(body: &Block, v: &str) -> bool {
                     bad.set(true);
                 }
             }
-            ExprKind::Call { args, .. } => {
-                if args.iter().any(|a| is_ident(&a.value, v)) {
-                    bad.set(true);
-                }
+            ExprKind::Call { args, .. } if args.iter().any(|a| is_ident(&a.value, v)) => {
+                bad.set(true);
             }
             _ => {}
         }

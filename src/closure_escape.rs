@@ -1671,7 +1671,7 @@ impl EscapeAnalysis {
             return false;
         }
         let is_bound = |e: &Expr| matches!(&e.kind, ExprKind::Identifier(n) if binds.contains(n));
-        if func.body.final_expr.as_deref().is_some_and(&is_bound) {
+        if func.body.final_expr.as_deref().is_some_and(is_bound) {
             return true;
         }
         func.body.stmts.iter().any(|s| match &s.kind {
@@ -1803,7 +1803,7 @@ impl EscapeAnalysis {
             ExprKind::Identifier(n) => owners.get(n).cloned(),
             _ => None,
         };
-        if let Some(fields) = func.body.final_expr.as_deref().and_then(&returned) {
+        if let Some(fields) = func.body.final_expr.as_deref().and_then(returned) {
             return Some(fields);
         }
         func.body.stmts.iter().find_map(|s| match &s.kind {
@@ -1935,7 +1935,7 @@ impl EscapeAnalysis {
             ExprKind::Identifier(n) => owners.get(n).cloned(),
             _ => None,
         };
-        if let Some(idxs) = func.body.final_expr.as_deref().and_then(&returned) {
+        if let Some(idxs) = func.body.final_expr.as_deref().and_then(returned) {
             return Some(idxs);
         }
         func.body.stmts.iter().find_map(|s| match &s.kind {

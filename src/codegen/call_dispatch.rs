@@ -6767,11 +6767,7 @@ impl<'ctx> super::Codegen<'ctx> {
             crate::ast::fn_consumed_param_payload_part_paths(f, arg_index, Some(variant));
         let escaping =
             crate::ast::fn_escaping_param_payload_part_paths(f, arg_index, Some(variant));
-        for path in consumed
-            .into_iter()
-            .map(|(_, path)| path)
-            .chain(escaping.into_iter())
-        {
+        for path in consumed.into_iter().map(|(_, path)| path).chain(escaping) {
             match path.as_slice() {
                 [crate::ast::ParamPart::Field(fname)] => {
                     let idx = names.iter().position(|n| n == fname)?;

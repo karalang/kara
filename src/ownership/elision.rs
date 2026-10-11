@@ -2948,7 +2948,7 @@ fn type_expr_mentions_deep(te: &TypeExpr, name: &str) -> bool {
     match &te.kind {
         TypeKind::Path(p) => {
             p.segments.last().map(String::as_str) == Some(name)
-                || p.generic_args.as_ref().is_some_and(&args_mention)
+                || p.generic_args.as_ref().is_some_and(args_mention)
         }
         TypeKind::Tuple(ts) => ts.iter().any(|t| type_expr_mentions_deep(t, name)),
         TypeKind::Array { element, .. } => type_expr_mentions_deep(element, name),

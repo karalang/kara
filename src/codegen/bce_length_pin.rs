@@ -1525,7 +1525,7 @@ pub(super) fn expr_children_all<F: Fn(&Expr) -> bool + Copy>(e: &Expr, pred: F) 
             pred(scrutinee)
                 && arms
                     .iter()
-                    .all(|arm| arm.guard.as_ref().map(&pred).unwrap_or(true) && pred(&arm.body))
+                    .all(|arm| arm.guard.as_ref().map(pred).unwrap_or(true) && pred(&arm.body))
         }
         ExprKind::While {
             condition, body, ..

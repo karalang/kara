@@ -58,6 +58,13 @@
 //! 4. **Crash-report `parallel_context` field** — co-developed with these
 //!    globals, lands with `std.panic` (separate Phase 8 entry).
 
+// Every in-crate `extern "C"` declaration of a libc allocator or `write`
+// spells pointers as `*mut u8`/`*const u8` rather than `c_void`, so that the
+// declarations agree with each other (`clashing_extern_declarations`,
+// B-2026-06-14-24). The signatures are ABI-identical to libc's, which is the
+// case this rustc lint (new in 1.99) says to allow.
+#![allow(suspicious_runtime_symbol_definitions)]
+
 // Modules carrying `pub unsafe` fns are `pub mod` ON PURPOSE (2026-08-14):
 // clippy's `missing_safety_doc` only checks PUBLICLY REACHABLE functions, so a
 // private module's extern surface — most of this crate — was invisible to the

@@ -7602,20 +7602,15 @@ impl<'a> Interp<'a> {
         while let Some(v) = todo.pop() {
             match v {
                 Value::Agg(fs) | Value::Variant(_, fs) => todo.extend(fs),
-                Value::Box(a) | Value::Shared(a) | Value::Weak(a) => {
-                    if seen.insert(*a) {
-                        if let Some(Some(obj)) = self.heap.get(a.0 as usize) {
-                            todo.push(&obj.value);
-                        }
-                    }
-                }
-                Value::Erased {
+                Value::Box(a)
+                | Value::Shared(a)
+                | Value::Weak(a)
+                | Value::Erased {
                     env: Some((a, _)), ..
                 } => {
-                    if seen.insert(*a) {
-                        if let Some(Some(obj)) = self.heap.get(a.0 as usize) {
-                            todo.push(&obj.value);
-                        }
+                    let first_visit = seen.insert(*a);
+                    if let (true, Some(Some(obj))) = (first_visit, self.heap.get(a.0 as usize)) {
+                        todo.push(&obj.value);
                     }
                 }
                 _ => {}

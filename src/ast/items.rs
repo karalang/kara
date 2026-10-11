@@ -13847,7 +13847,7 @@ pub fn is_param_payload_take(value: &Expr, name: &str) -> bool {
                 && arms.iter().any(|a| yields_binding(&a.body, &a.pattern))
                 && arms
                     .iter()
-                    .all(|a| !m(&a.body) && !a.guard.as_ref().is_some_and(&m))
+                    .all(|a| !m(&a.body) && !a.guard.as_ref().is_some_and(m))
         }
         ExprKind::IfLet {
             pattern,
