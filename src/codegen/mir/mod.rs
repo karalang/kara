@@ -180,7 +180,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             TyKind::Bool => c.i8_type().into(),
             TyKind::Char => c.i32_type().into(),
             TyKind::Int(i) => self.int_ty(i.bits()).into(),
-            TyKind::Float(FloatTy::F16) => c.f16_type().into(),
+            TyKind::Float(FloatTy::F16) => c.i16_type().into(),
             TyKind::Float(FloatTy::BF16) => c.i16_type().into(),
             TyKind::Float(FloatTy::F32) => c.f32_type().into(),
             TyKind::Float(FloatTy::F64) => c.f64_type().into(),

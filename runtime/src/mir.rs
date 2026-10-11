@@ -1090,3 +1090,216 @@ pub unsafe extern "C" fn karac_mir_ipow(
         _ => 1,
     }
 }
+
+/// An `Arena[T]`'s items: a vector of them and the arena's id, which its
+/// `ArenaRef` handles carry.
+#[repr(C)]
+pub struct RawArena {
+    pub items: RawVec,
+    pub id: i64,
+}
+
+static ARENA_IDS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// `Arena.new()`: an empty arena with the next id (from 1, as the
+/// interpreter numbers them).
+#[no_mangle]
+pub extern "C" fn karac_mir_arena_new() -> *mut RawArena {
+    let id = ARENA_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    Box::into_raw(Box::new(RawArena {
+        items: RawVec {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        },
+        id,
+    }))
+}
+
+/// Frees an arena whose items compiled code has dropped.
+///
+/// # Safety
+/// `a` came from [`karac_mir_arena_new`] and is not used again.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_arena_free(a: *mut RawArena) {
+    // SAFETY: the caller's contract.
+    let a = unsafe { Box::from_raw(a) };
+    if a.items.cap != 0 && a.items.cap != usize::MAX {
+        // SAFETY: the buffer came from `karac_realloc_or_panic`.
+        unsafe { free(a.items.ptr.cast()) };
+    }
+}
+
+/// An `Interner`'s strings, each a `String` that stays where it is so
+/// `resolve` can lend it, and their ids. It lives until the process ends,
+/// as the interpreter's do.
+pub struct MirInterner {
+    // Boxed so a lent `String` stays put when the vector grows.
+    #[allow(clippy::vec_box)]
+    strings: Vec<Box<RawVec>>,
+    ids: std::collections::HashMap<Vec<u8>, usize>,
+}
+
+/// `Interner.new()`.
+#[no_mangle]
+pub extern "C" fn karac_mir_interner_new() -> *mut MirInterner {
+    Box::into_raw(Box::new(MirInterner {
+        strings: Vec::new(),
+        ids: std::collections::HashMap::new(),
+    }))
+}
+
+/// `Interner.intern(s)`: the id of `ptr[..len]`, new or not.
+///
+/// # Safety
+/// `h` came from [`karac_mir_interner_new`]; `ptr` is readable for `len`
+/// bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_interner_intern(
+    h: *mut MirInterner,
+    ptr: *const u8,
+    len: usize,
+) -> i64 {
+    // SAFETY: the caller's contract.
+    let (t, b) = unsafe { (&mut *h, bytes(ptr, len)) };
+    if let Some(&id) = t.ids.get(b) {
+        return id as i64;
+    }
+    let mut s = Box::new(RawVec {
+        ptr: std::ptr::null_mut(),
+        len: 0,
+        cap: 0,
+    });
+    // SAFETY: `s` is a writable `String`.
+    unsafe { string_of(&mut *s, b) };
+    t.strings.push(s);
+    t.ids.insert(b.to_vec(), t.strings.len() - 1);
+    t.strings.len() as i64 - 1
+}
+
+/// The empty `String` a foreign symbol resolves to.
+struct EmptyString(RawVec);
+// SAFETY: it is never written; its null buffer is never read.
+unsafe impl Sync for EmptyString {}
+static EMPTY_STRING: EmptyString = EmptyString(RawVec {
+    ptr: std::ptr::null_mut(),
+    len: 0,
+    cap: 0,
+});
+
+/// `Interner.resolve(sym)`: the interned `String`, or an empty one for a
+/// symbol out of range.
+///
+/// # Safety
+/// `h` came from [`karac_mir_interner_new`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_interner_resolve(
+    h: *const MirInterner,
+    id: i64,
+) -> *const RawVec {
+    // SAFETY: the caller's contract.
+    let t = unsafe { &*h };
+    match usize::try_from(id).ok().and_then(|i| t.strings.get(i)) {
+        Some(s) => &**s,
+        None => &EMPTY_STRING.0,
+    }
+}
+
+/// `Interner.len()`.
+///
+/// # Safety
+/// `h` came from [`karac_mir_interner_new`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_interner_len(h: *const MirInterner) -> i64 {
+    // SAFETY: the caller's contract.
+    unsafe { (*h).strings.len() as i64 }
+}
+
+/// `f16` and `bf16` are held as their bits and computed through `f32`;
+/// these round an `f32` to the narrow type, as the interpreter's
+/// `FloatTy::round` (`src/mir/ty.rs`), whose `f16` code this copies.
+#[no_mangle]
+pub extern "C" fn karac_mir_f16_from(x: f32) -> u16 {
+    let b = x.to_bits();
+    let sign = ((b >> 16) & 0x8000) as u16;
+    let exp = ((b >> 23) & 0xFF) as i32;
+    let frac = b & 0x007F_FFFF;
+    if exp == 0xFF {
+        return if frac != 0 {
+            sign | 0x7E00 | ((frac >> 13) as u16)
+        } else {
+            sign | 0x7C00
+        };
+    }
+    if exp == 0 && frac == 0 {
+        return sign;
+    }
+    let e = exp - 127;
+    if e >= 16 {
+        return sign | 0x7C00;
+    }
+    if e >= -14 {
+        let mant = 0x0080_0000 | frac;
+        let base = mant >> 13;
+        let rem = mant & 0x1FFF;
+        let mut r = base;
+        if rem > 0x1000 || (rem == 0x1000 && (base & 1) == 1) {
+            r += 1;
+        }
+        let mut ee = (e + 15) as u32;
+        let mut mm = r & 0x3FF;
+        if r == 0x800 {
+            ee += 1;
+            mm = 0;
+        }
+        if ee >= 31 {
+            return sign | 0x7C00;
+        }
+        return sign | ((ee as u16) << 10) | (mm as u16);
+    }
+    if e < -25 {
+        return sign;
+    }
+    let mant = 0x0080_0000u32 | frac;
+    let shift = (13 + (-14 - e)) as u32;
+    let base = mant >> shift;
+    let rem = mant & ((1u32 << shift) - 1);
+    let half = 1u32 << (shift - 1);
+    let mut r = base as u16;
+    if rem > half || (rem == half && (r & 1) == 1) {
+        r += 1;
+    }
+    sign | r
+}
+
+/// The `f32` an `f16`'s bits stand for (exact).
+#[no_mangle]
+pub extern "C" fn karac_mir_f16_to(h: u16) -> f32 {
+    let neg = h & 0x8000 != 0;
+    let exp = ((h >> 10) & 0x1F) as i32;
+    let mant = f64::from(h & 0x3FF);
+    let v = if exp == 31 {
+        if mant != 0.0 {
+            f64::NAN
+        } else {
+            f64::INFINITY
+        }
+    } else if exp == 0 {
+        mant * (2.0f64).powi(-24)
+    } else {
+        (1.0 + mant / 1024.0) * (2.0f64).powi(exp - 15)
+    };
+    (if neg { -v } else { v }) as f32
+}
+
+/// An `f32` rounded to `bf16` bits: to nearest even, a NaN kept quiet.
+#[no_mangle]
+pub extern "C" fn karac_mir_bf16_from(f: f32) -> u16 {
+    let bits = f.to_bits();
+    if f.is_nan() {
+        ((bits | 0x0040_0000) >> 16) as u16
+    } else {
+        let lsb = (bits >> 16) & 1;
+        (bits.wrapping_add(0x7FFF + lsb) >> 16) as u16
+    }
+}

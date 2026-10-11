@@ -548,8 +548,10 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         match self.tys.kind(ty) {
             TyKind::Float(_) if op == KeyOp::Cmp => {
-                let x = self.load(a, ty)?.into_float_value();
-                let y = self.load(b, ty)?.into_float_value();
+                let x = self.load(a, ty)?;
+                let x = self.float_of(x, ty)?;
+                let y = self.load(b, ty)?;
+                let y = self.float_of(y, ty)?;
                 let lt = self
                     .builder
                     .build_float_compare(inkwell::FloatPredicate::OLT, x, y, "")

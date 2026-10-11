@@ -92,7 +92,7 @@ impl<'ctx> Cx<'ctx, '_> {
     /// in place: integers, and tuples of them of the same arity.
     pub(super) fn widens(&self, from: Ty, to: Ty) -> bool {
         match (self.tys.kind(from), self.tys.kind(to)) {
-            (TyKind::Int(_), TyKind::Int(_)) => true,
+            (TyKind::Int(_), TyKind::Int(_)) | (TyKind::Float(_), TyKind::Float(_)) => true,
             (TyKind::Tuple(a), TyKind::Tuple(b)) => {
                 a.len() == b.len() && a.iter().zip(&b).all(|(x, y)| x == y || self.widens(*x, *y))
             }
@@ -124,6 +124,18 @@ impl<'ctx> Cx<'ctx, '_> {
                     .build_int_cast_sign_flag(v, wt, signed, "")
                     .map_err(e)?;
                 self.store(dst, w.into())
+            }
+            (TyKind::Float(_), TyKind::Float(_)) => {
+                let v = self.load(src, from)?;
+                let f = self.float_of(v, from)?;
+                let w: inkwell::values::BasicValueEnum = match self.narrow_float(to) {
+                    Some(ft) => self.narrow_bits(f, ft)?.into(),
+                    None => {
+                        let ft = self.llvm_ty(to)?.into_float_type();
+                        self.builder.build_float_cast(f, ft, "").map_err(e)?.into()
+                    }
+                };
+                self.store(dst, w)
             }
             (TyKind::Tuple(a), TyKind::Tuple(b)) => {
                 for (i, (x, y)) in a.iter().zip(&b).enumerate() {
@@ -274,6 +286,12 @@ impl<'ctx> Cx<'ctx, '_> {
         if matches!(base, "OnceLock" | "OnceCell")
             && self.once_native(method, args, dest)?.is_some()
         {
+            return Ok(());
+        }
+        if base == "Interner" && self.interner_native(method, args, dest)?.is_some() {
+            return Ok(());
+        }
+        if base == "Arena" && self.arena_native(method, args, dest)?.is_some() {
             return Ok(());
         }
         if base == "VecDeque" && self.deque_native(method, args, dest)?.is_some() {

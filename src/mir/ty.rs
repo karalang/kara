@@ -158,7 +158,7 @@ impl FloatTy {
 
 /// f32 → f16 bit pattern with round-to-nearest-even, handling
 /// Inf/NaN/overflow/subnormals/underflow.
-fn f32_to_f16_bits(x: f32) -> u16 {
+pub(crate) fn f32_to_f16_bits(x: f32) -> u16 {
     let b = x.to_bits();
     let sign = ((b >> 16) & 0x8000) as u16;
     let exp = ((b >> 23) & 0xFF) as i32;

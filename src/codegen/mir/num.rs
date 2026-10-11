@@ -9,7 +9,7 @@ use inkwell::IntPredicate;
 
 use super::{Cx, R};
 use crate::mir::ty::{FloatTy, IntTy};
-use crate::mir::{Operand, Place, TyKind};
+use crate::mir::{Operand, Place, Ty, TyKind};
 
 /// The char methods `karac_mir_char` answers, in its order
 /// (`runtime/src/mir.rs`, `CHAR_OPS`, which must match).
@@ -42,6 +42,68 @@ fn e<T: ToString>(x: T) -> String {
 }
 
 impl<'ctx> Cx<'ctx, '_> {
+    /// `f16` / `bf16`, which are held as their bits and computed through
+    /// `f32`.
+    pub(super) fn narrow_float(&self, ty: Ty) -> Option<FloatTy> {
+        match self.tys.kind(ty) {
+            TyKind::Float(f @ (FloatTy::F16 | FloatTy::BF16)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// The `f32` the narrow float bits `v` stand for.
+    pub(super) fn widen_bits(&self, v: IntValue<'ctx>, ft: FloatTy) -> R<FloatValue<'ctx>> {
+        let f32t = self.llcx.f32_type();
+        if ft == FloatTy::BF16 {
+            let b = &self.builder;
+            let w = b
+                .build_int_z_extend(v, self.llcx.i32_type(), "")
+                .map_err(e)?;
+            let w = b
+                .build_left_shift(w, self.llcx.i32_type().const_int(16, false), "")
+                .map_err(e)?;
+            return Ok(b.build_bit_cast(w, f32t, "").map_err(e)?.into_float_value());
+        }
+        let f = self.extern_fn(
+            "karac_mir_f16_to",
+            f32t.fn_type(&[self.llcx.i16_type().into()], false),
+        );
+        Ok(self
+            .builder
+            .build_call(f, &[v.into()], "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_float_value())
+    }
+
+    /// The `f32` `x` rounded to the narrow float `ft`, as its bits.
+    pub(super) fn narrow_bits(&self, x: FloatValue<'ctx>, ft: FloatTy) -> R<IntValue<'ctx>> {
+        let f32t = self.llcx.f32_type();
+        let x = self.builder.build_float_cast(x, f32t, "").map_err(e)?;
+        let name = if ft == FloatTy::BF16 {
+            "karac_mir_bf16_from"
+        } else {
+            "karac_mir_f16_from"
+        };
+        let f = self.extern_fn(name, self.llcx.i16_type().fn_type(&[f32t.into()], false));
+        Ok(self
+            .builder
+            .build_call(f, &[x.into()], "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value())
+    }
+
+    /// The float value `v` of type `ty`, a narrow one widened to `f32`.
+    pub(super) fn float_of(&self, v: BasicValueEnum<'ctx>, ty: Ty) -> R<FloatValue<'ctx>> {
+        match self.narrow_float(ty) {
+            Some(ft) => self.widen_bits(v.into_int_value(), ft),
+            None => Ok(v.into_float_value()),
+        }
+    }
+
     /// The methods of this file, or `None` for one not lowered here.
     pub(super) fn num_native(
         &mut self,
@@ -308,6 +370,11 @@ impl<'ctx> Cx<'ctx, '_> {
     /// Stores the float `v` at `dest`, converted to its float type.
     fn store_float_as(&mut self, dest: &Place, v: FloatValue<'ctx>) -> R<()> {
         let dty = self.place_type(dest)?;
+        if let Some(ft) = self.narrow_float(dty) {
+            let h = self.narrow_bits(v, ft)?;
+            let d = self.place_ptr(dest)?;
+            return self.store(d, h.into());
+        }
         let ft = self.llvm_ty(dty)?.into_float_type();
         let v = self.builder.build_float_cast(v, ft, "").map_err(e)?;
         let d = self.place_ptr(dest)?;
@@ -417,6 +484,25 @@ impl<'ctx> Cx<'ctx, '_> {
                 let v = self.load_i64(slot)?;
                 self.store_int_as(dest, v, it.signed())?;
             }
+            ("clamp", [l, h]) => {
+                let t = self.operand_type(&args[0])?;
+                if self.operand_type(l)? != t || self.operand_type(h)? != t {
+                    return Ok(None);
+                }
+                let l = self.operand_scalar(l)?.into_int_value();
+                let h = self.operand_scalar(h)?.into_int_value();
+                let (lp, gp) = if it.signed() {
+                    (IntPredicate::SLT, IntPredicate::SGT)
+                } else {
+                    (IntPredicate::ULT, IntPredicate::UGT)
+                };
+                let b = &self.builder;
+                let lt = b.build_int_compare(lp, x, l, "").map_err(e)?;
+                let gt = b.build_int_compare(gp, x, h, "").map_err(e)?;
+                let v = b.build_select(gt, h, x, "").map_err(e)?.into_int_value();
+                let v = b.build_select(lt, l, v, "").map_err(e)?.into_int_value();
+                self.store_int_as(dest, v, it.signed())?;
+            }
             ("bits_as_f64", []) => {
                 let w = self
                     .builder
@@ -482,17 +568,20 @@ impl<'ctx> Cx<'ctx, '_> {
         args: &[Operand],
         dest: &Place,
     ) -> R<Option<()>> {
-        if !matches!(ft, FloatTy::F64 | FloatTy::F32) {
-            return Ok(None);
-        }
-        let x = self.operand_scalar(&args[0])?.into_float_value();
+        let _ = ft;
+        let xt = self.operand_type(&args[0])?;
+        let x = self.operand_scalar(&args[0])?;
+        let x = self.float_of(x, xt)?;
         let f64t = self.llcx.f64_type();
         let f32t = self.llcx.f32_type();
         let b = &self.builder;
         let v: FloatValue = match (method, &args[1..]) {
             ("to_bits", []) => {
-                let w = b.build_float_ext(x, f64t, "").map_err(e)?;
-                let w = if ft == FloatTy::F64 { x } else { w };
+                let w = if x.get_type() == f64t {
+                    x
+                } else {
+                    b.build_float_ext(x, f64t, "").map_err(e)?
+                };
                 let bits = b
                     .build_bit_cast(w, self.llcx.i64_type(), "")
                     .map_err(e)?
@@ -501,7 +590,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 return Ok(Some(()));
             }
             ("to_bits32", []) => {
-                let w = if ft == FloatTy::F32 {
+                let w = if x.get_type() == f32t {
                     x
                 } else {
                     b.build_float_trunc(x, f32t, "").map_err(e)?
@@ -534,11 +623,61 @@ impl<'ctx> Cx<'ctx, '_> {
                 if !matches!(self.tys.kind(yt), TyKind::Float(_)) {
                     return Ok(None);
                 }
-                let y = self.operand_scalar(y)?.into_float_value();
+                let y = self.operand_scalar(y)?;
+                let y = self.float_of(y, yt)?;
                 let x = self.at_dest_width(x, dest)?;
                 let y = self.at_dest_width(y, dest)?;
                 let name = if method == "pow" { "pow" } else { method };
                 self.libm(name, x, Some(y))?
+            }
+            // A narrow float's (a wide one's are `scalar_native`'s).
+            ("abs" | "sqrt" | "floor" | "ceil" | "round", [])
+                if self.narrow_float(xt).is_some() =>
+            {
+                let x = self.at_dest_width(x, dest)?;
+                let name = if method == "abs" { "fabs" } else { method };
+                self.float_intrinsic(name, &[x])?
+            }
+            ("max" | "min", [y]) if self.narrow_float(xt).is_some() => {
+                if self.operand_type(y)? != xt {
+                    return Ok(None);
+                }
+                let y = self.operand_scalar(y)?;
+                let y = self.float_of(y, xt)?;
+                let name = if method == "max" { "maxnum" } else { "minnum" };
+                self.float_intrinsic(name, &[x, y])?
+            }
+            ("signum", []) => {
+                // NaN stays NaN; anything else is 1 with its sign.
+                let x = self.at_dest_width(x, dest)?;
+                let one = x.get_type().const_float(1.0);
+                let s = self.float_intrinsic("copysign", &[one, x])?;
+                let nan = self
+                    .builder
+                    .build_float_compare(inkwell::FloatPredicate::UNO, x, x, "")
+                    .map_err(e)?;
+                self.builder
+                    .build_select(nan, x, s, "")
+                    .map_err(e)?
+                    .into_float_value()
+            }
+            ("clamp", [l, h]) => {
+                if self.operand_type(l)? != xt || self.operand_type(h)? != xt {
+                    return Ok(None);
+                }
+                let l = self.operand_scalar(l)?;
+                let l = self.float_of(l, xt)?;
+                let h = self.operand_scalar(h)?;
+                let h = self.float_of(h, xt)?;
+                let b = &self.builder;
+                let lt = b
+                    .build_float_compare(inkwell::FloatPredicate::OLT, x, l, "")
+                    .map_err(e)?;
+                let gt = b
+                    .build_float_compare(inkwell::FloatPredicate::OGT, x, h, "")
+                    .map_err(e)?;
+                let v = b.build_select(gt, h, x, "").map_err(e)?.into_float_value();
+                b.build_select(lt, l, v, "").map_err(e)?.into_float_value()
             }
             ("recip" | "fract" | "to_degrees" | "to_radians", []) => {
                 let x = self.at_dest_width(x, dest)?;

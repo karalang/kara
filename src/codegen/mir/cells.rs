@@ -352,6 +352,162 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(Some(()))
     }
 
+    /// The place an operand of a (possibly borrowed) value points at, and
+    /// the value's type.
+    fn behind_refs(&mut self, a: &Operand) -> R<(PointerValue<'ctx>, Ty)> {
+        let mut t = self.operand_type(a)?;
+        let mut p = self.operand_ptr(a)?;
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
+            p = self.load_ptr(p)?;
+            t = i;
+        }
+        Ok((p, t))
+    }
+
+    /// `Arena[T]`: a handle to a `RawArena` (`runtime/src/mir.rs`), its
+    /// items in a vector, and `ArenaRef` / `ArenaCheckpoint` values of the
+    /// arena's id and an index, as the interpreter's `arena_method`.
+    pub(super) fn arena_native(
+        &mut self,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let dty = self.place_type(dest)?;
+        if method == "new" {
+            let h = self.mrt_ptr("arena_new", &[])?;
+            let d = self.place_ptr(dest)?;
+            self.store(d, h.into())?;
+            return Ok(Some(()));
+        }
+        let Some(recv) = args.first() else {
+            return Ok(None);
+        };
+        let (ap, at) = self.behind_refs(recv)?;
+        let Some(el) = self
+            .tys
+            .tcx()
+            .adt_of(at)
+            .and_then(|(_, a)| a.first().copied())
+        else {
+            return Ok(None);
+        };
+        let size = self.layout(el)?.size;
+        let h = self.load_ptr(ap)?;
+        let len = self.load_i64(self.offset(h, 8)?)?;
+        let id = self.load_i64(self.offset(h, 24)?)?;
+        // The arena id and index of a handle or checkpoint argument.
+        let pair = |cx: &mut Self, a: &Operand| -> R<(IntValue<'ctx>, IntValue<'ctx>)> {
+            let (p, t) = cx.behind_refs(a)?;
+            let o = cx.load_i64(cx.offset(p, cx.field_offset(t, None, 0)?)?)?;
+            let i = cx.load_i64(cx.offset(p, cx.field_offset(t, None, 1)?)?)?;
+            Ok((o, i))
+        };
+        let owned_in = |cx: &mut Self, o: IntValue<'ctx>, i: IntValue<'ctx>| -> R<IntValue<'ctx>> {
+            let b = &cx.builder;
+            let mine = b
+                .build_int_compare(IntPredicate::EQ, o, id, "")
+                .map_err(e)?;
+            let inb = b
+                .build_int_compare(IntPredicate::ULT, i, len, "")
+                .map_err(e)?;
+            b.build_and(mine, inb, "").map_err(e)
+        };
+        let store_pair = |cx: &mut Self, a: IntValue<'ctx>, b: IntValue<'ctx>| -> R<()> {
+            let d = cx.place_ptr(dest)?;
+            cx.store(cx.offset(d, cx.field_offset(dty, None, 0)?)?, a.into())?;
+            cx.store(cx.offset(d, cx.field_offset(dty, None, 1)?)?, b.into())
+        };
+        match (method, &args[1..]) {
+            ("len", []) => {
+                let d = self.place_ptr(dest)?;
+                let it = self.llvm_ty(dty)?.into_int_type();
+                let n = self
+                    .builder
+                    .build_int_truncate_or_bit_cast(len, it, "")
+                    .map_err(e)?;
+                self.store(d, n.into())?;
+            }
+            ("push", [v]) => {
+                let x = self.operand_ptr(v)?;
+                self.rt("vec_push", &[h.into(), x.into(), self.i64(size).into()])?;
+                store_pair(self, id, len)?;
+            }
+            ("get" | "get_mut", [r]) => {
+                let (o, i) = pair(self, r)?;
+                let ok = owned_in(self, o, i)?;
+                self.abort_unless(ok, "index out of bounds")?;
+                let buf = self.load_ptr(h)?;
+                let at = self.elem_ptr(buf, i, size)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, at.into())?;
+            }
+            ("high_water_mark", []) => store_pair(self, id, len)?,
+            ("rewind_to", [cp]) => {
+                // A checkpoint of another arena is ignored; the items past
+                // the mark drop, last pushed first.
+                let (o, m) = pair(self, cp)?;
+                let ok = owned_in(self, o, m)?;
+                self.if_then(ok, |cx| {
+                    cx.drop_back_to(h, m, len, el)?;
+                    cx.store(cx.offset(h, 8)?, m.into())
+                })?;
+            }
+            _ => return Ok(None),
+        }
+        Ok(Some(()))
+    }
+
+    /// `Interner`: a handle to the runtime's `MirInterner`; a `Symbol` is
+    /// its string's id.
+    pub(super) fn interner_native(
+        &mut self,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let dty = self.place_type(dest)?;
+        if method == "new" {
+            let h = self.mrt_ptr("interner_new", &[])?;
+            let d = self.place_ptr(dest)?;
+            self.store(d, h.into())?;
+            return Ok(Some(()));
+        }
+        let Some(recv) = args.first() else {
+            return Ok(None);
+        };
+        let (ip, _) = self.behind_refs(recv)?;
+        let h = self.load_ptr(ip)?;
+        match (method, &args[1..]) {
+            ("intern", [s]) => {
+                let (p, n) = self.str_parts(s)?;
+                let id = self.mrt_i64("interner_intern", &[h.into(), p.into(), n.into()])?;
+                self.drop_moved(&args[1..])?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, id.into())?;
+            }
+            ("resolve", [sym]) => {
+                let (sp, _) = self.behind_refs(sym)?;
+                let id = self.load_i64(sp)?;
+                let s = self.mrt_ptr("interner_resolve", &[h.into(), id.into()])?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, s.into())?;
+            }
+            ("len", []) => {
+                let n = self.mrt_i64("interner_len", &[h.into()])?;
+                let it = self.llvm_ty(dty)?.into_int_type();
+                let n = self
+                    .builder
+                    .build_int_truncate_or_bit_cast(n, it, "")
+                    .map_err(e)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, n.into())?;
+            }
+            _ => return Ok(None),
+        }
+        Ok(Some(()))
+    }
+
     fn mrt_ptr_named(
         &self,
         name: &str,

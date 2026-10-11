@@ -51,6 +51,9 @@ enum CellDrop {
     /// `karac_runtime_once_get` (null while unset), drops through its own
     /// glue, then `karac_runtime_once_free` frees the cell.
     Once,
+    /// An `Arena`: its items drop through their glue, last pushed first,
+    /// then `karac_mir_arena_free` frees it.
+    Arena,
 }
 
 /// The library cells whose contents live in the runtime, behind a one-word
@@ -72,7 +75,7 @@ const LIBRARY_CELLS: &[(&str, CellDrop)] = &[
     ("OnceLock", CellDrop::Once),
     ("OnceCell", CellDrop::Once),
     ("TaskHandle", CellDrop::Free("karac_runtime_task_detach")),
-    ("Arena", CellDrop::Free("karac_runtime_arena_free")),
+    ("Arena", CellDrop::Arena),
 ];
 
 const ONCE_GET: &str = "karac_runtime_once_get";
@@ -271,6 +274,24 @@ impl<'ctx> Cx<'ctx, '_> {
                     Ok(())
                 })
             }
+            CellDrop::Arena => {
+                let held = self
+                    .tys
+                    .tcx()
+                    .adt_of(ty)
+                    .and_then(|(_, args)| args.first().copied())
+                    .ok_or("an Arena has no item type")?;
+                let free =
+                    self.extern_fn("karac_mir_arena_free", void.fn_type(&[pt.into()], false));
+                self.if_then(some, |cx| {
+                    let n = cx.load_i64(cx.offset(h, 8)?)?;
+                    cx.drop_back_to(h, cx.i64(0), n, held)?;
+                    cx.builder
+                        .build_call(free, &[h.into()], "")
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })
+            }
             CellDrop::Once => {
                 let held = self
                     .tys
@@ -303,6 +324,37 @@ impl<'ctx> Cx<'ctx, '_> {
                 })
             }
         }
+    }
+
+    /// Drops the items `from..to` of the vector at `v`, last first.
+    pub(super) fn drop_back_to(
+        &mut self,
+        v: PointerValue<'ctx>,
+        from: IntValue<'ctx>,
+        to: IntValue<'ctx>,
+        e: Ty,
+    ) -> R<()> {
+        if !self.tys.needs_drop(e) {
+            return Ok(());
+        }
+        let size = self.layout(e)?.size;
+        let buf = self.load_ptr(v)?;
+        let n = self
+            .builder
+            .build_int_sub(to, from, "")
+            .map_err(|e| e.to_string())?;
+        self.count_loop(n, |cx, i| {
+            let j = cx
+                .builder
+                .build_int_sub(to, i, "")
+                .map_err(|e| e.to_string())?;
+            let j = cx
+                .builder
+                .build_int_sub(j, cx.i64(1), "")
+                .map_err(|e| e.to_string())?;
+            let x = cx.elem_ptr(buf, j, size)?;
+            cx.call_glue(x, e)
+        })
     }
 
     /// Drops the elements of the `VecDeque` ring at `p`: `len` of them from

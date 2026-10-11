@@ -161,8 +161,9 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             // An `f32` prints as the `f64` it widens to, as the
             // interpreter's floats are all `f64`.
-            TyKind::Float(FloatTy::F32) => {
-                let v = self.load(p, ty)?.into_float_value();
+            TyKind::Float(FloatTy::F32 | FloatTy::F16 | FloatTy::BF16) => {
+                let v = self.load(p, ty)?;
+                let v = self.float_of(v, ty)?;
                 let w = self
                     .builder
                     .build_float_ext(v, self.llcx.f64_type(), "")
@@ -329,7 +330,8 @@ impl<'ctx> Cx<'ctx, '_> {
                 }
             }
             TyKind::Float(_) => {
-                let x = self.load(p, t)?.into_float_value();
+                let x = self.load(p, t)?;
+                let x = self.float_of(x, t)?;
                 f = self
                     .builder
                     .build_float_cast(x, self.llcx.f64_type(), "")

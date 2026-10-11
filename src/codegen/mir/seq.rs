@@ -842,7 +842,7 @@ impl<'ctx> Cx<'ctx, '_> {
 
 impl<'ctx> Cx<'ctx, '_> {
     /// `llvm.<name>` over the float type of `v`.
-    fn float_intrinsic(
+    pub(super) fn float_intrinsic(
         &self,
         name: &str,
         args: &[inkwell::values::FloatValue<'ctx>],
@@ -876,6 +876,9 @@ impl<'ctx> Cx<'ctx, '_> {
             return Ok(None);
         };
         let t = self.operand_type(first)?;
+        if self.narrow_float(t).is_some() {
+            return Ok(None);
+        }
         let mut vals = Vec::with_capacity(args.len());
         for a in args {
             if self.operand_type(a)? != t {

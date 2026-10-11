@@ -340,6 +340,14 @@ impl<'ctx> Cx<'ctx, '_> {
                 .f64_type()
                 .const_float(f64::from_bits(*bits))
                 .into(),
+            (ConstKind::Float(bits), TyKind::Float(ft @ (FloatTy::F16 | FloatTy::BF16))) => {
+                let v = ft.round(f64::from_bits(*bits));
+                let h = match ft {
+                    FloatTy::F16 => crate::mir::ty::f32_to_f16_bits(v as f32),
+                    _ => ((v as f32).to_bits() >> 16) as u16,
+                };
+                self.llcx.i16_type().const_int(u64::from(h), false).into()
+            }
             (ConstKind::Float(bits), TyKind::Float(FloatTy::F32)) => {
                 // The builder keeps a float constant's `f64` bits.
                 self.llcx
@@ -479,6 +487,14 @@ impl<'ctx> Cx<'ctx, '_> {
                         .map_err(e)?
                         .into(),
                     (UnOp::Not, _) => b.build_not(x.into_int_value(), "").map_err(e)?.into(),
+                    (UnOp::Neg, TyKind::Float(FloatTy::F16 | FloatTy::BF16)) => b
+                        .build_xor(
+                            x.into_int_value(),
+                            self.llcx.i16_type().const_int(0x8000, false),
+                            "",
+                        )
+                        .map_err(e)?
+                        .into(),
                     (UnOp::Neg, TyKind::Float(_)) => b
                         .build_float_neg(x.into_float_value(), "")
                         .map_err(e)?
@@ -559,7 +575,21 @@ impl<'ctx> Cx<'ctx, '_> {
                 .into())
         };
         if let TyKind::Float(_) = self.tys.kind(ty) {
-            let (x, y) = (x.into_float_value(), y.into_float_value());
+            let narrow = self.narrow_float(ty);
+            let (x, y) = (self.float_of(x, ty)?, self.float_of(y, ty)?);
+            if let (Some(ft), BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem) =
+                (narrow, op)
+            {
+                let r = match op {
+                    BinOp::Add => b.build_float_add(x, y, ""),
+                    BinOp::Sub => b.build_float_sub(x, y, ""),
+                    BinOp::Mul => b.build_float_mul(x, y, ""),
+                    BinOp::Div => b.build_float_div(x, y, ""),
+                    _ => b.build_float_rem(x, y, ""),
+                }
+                .map_err(e)?;
+                return Ok(self.narrow_bits(r, ft)?.into());
+            }
             let cmp = |p| -> R<BasicValueEnum<'ctx>> {
                 bool8(b.build_float_compare(p, x, y, "").map_err(e)?)
             };
@@ -715,18 +745,8 @@ impl<'ctx> Cx<'ctx, '_> {
 
     fn cast(&mut self, dst: PointerValue<'ctx>, kind: CastKind, a: &Operand, to: Ty) -> R<()> {
         let from = self.operand_type(a)?;
-        let narrow = |t: Ty| {
-            matches!(
-                self.tys.kind(t),
-                TyKind::Float(FloatTy::F16 | FloatTy::BF16)
-            )
-        };
-        if narrow(from) || narrow(to) {
-            return Err(format!(
-                "MIR to LLVM: a cast from `{}` to `{}` is not lowered yet",
-                self.tys.display(from),
-                self.tys.display(to)
-            ));
+        if self.narrow_float(from).is_some() || self.narrow_float(to).is_some() {
+            return self.narrow_cast(dst, kind, a, from, to);
         }
         match kind {
             CastKind::RefToPtr | CastKind::PtrToPtr => return self.store_operand(dst, a),
@@ -794,6 +814,87 @@ impl<'ctx> Cx<'ctx, '_> {
             _ => unreachable!("handled above"),
         };
         self.store(dst, v)
+    }
+
+    /// A cast from or to `f16` / `bf16`, through `f32` as the interpreter
+    /// rounds: an integer or an `f64` reaches `f32` first.
+    fn narrow_cast(
+        &mut self,
+        dst: PointerValue<'ctx>,
+        kind: CastKind,
+        a: &Operand,
+        from: Ty,
+        to: Ty,
+    ) -> R<()> {
+        let x = self.operand_scalar(a)?;
+        let f32t = self.llcx.f32_type();
+        let f64t = self.llcx.f64_type();
+        // The source as an `f32`, or an integer as it is.
+        let v: BasicValueEnum = match kind {
+            CastKind::IntToFloat => {
+                let signed = self.int_of(from).is_some_and(IntTy::signed);
+                let b = &self.builder;
+                let w = if signed {
+                    b.build_signed_int_to_float(x.into_int_value(), f64t, "")
+                } else {
+                    b.build_unsigned_int_to_float(x.into_int_value(), f64t, "")
+                }
+                .map_err(e)?;
+                b.build_float_trunc(w, f32t, "").map_err(e)?.into()
+            }
+            CastKind::FloatToFloat | CastKind::FloatToInt => {
+                let f = self.float_of(x, from)?;
+                if self.narrow_float(from).is_some() {
+                    f.into()
+                } else {
+                    self.builder
+                        .build_float_cast(f, f32t, "")
+                        .map_err(e)?
+                        .into()
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "MIR to LLVM: a cast from `{}` to `{}` is not lowered yet",
+                    self.tys.display(from),
+                    self.tys.display(to)
+                ))
+            }
+        };
+        if let Some(ft) = self.narrow_float(to) {
+            let h = self.narrow_bits(v.into_float_value(), ft)?;
+            return self.store(dst, h.into());
+        }
+        // From a narrow float to a wider float or an integer: the widened
+        // value, cast on.
+        let f = v.into_float_value();
+        let tt = self.llvm_ty(to)?;
+        let out: BasicValueEnum = match kind {
+            CastKind::FloatToInt => {
+                let signed = self.int_of(to).is_some_and(IntTy::signed);
+                let name = if signed {
+                    "llvm.fptosi.sat"
+                } else {
+                    "llvm.fptoui.sat"
+                };
+                let i = inkwell::intrinsics::Intrinsic::find(name).ok_or("no fpto*i.sat")?;
+                let fd = i
+                    .get_declaration(&self.module, &[tt, f32t.into()])
+                    .ok_or("no fpto*i.sat declaration")?;
+                self.builder
+                    .build_call(fd, &[f.into()], "")
+                    .map_err(e)?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("fpto*i.sat returns nothing")?
+            }
+            _ => self
+                .builder
+                .build_float_cast(f, tt.into_float_type(), "")
+                .map_err(e)?
+                .into(),
+        };
+        self.store(dst, out)
     }
 
     /// A closure or function item as an erased `Fn` value.
