@@ -11,6 +11,6 @@ rules = []
 backends = []
 env = {}
 bucket = "mir-gap:the items are `ref String`, and collecting them as `String` would move each borr"
-classified_with = "4fc16575a+local"
+classified_with = "24f1e2723"
 model_rev = "8be6ddd7"
 model_src = "b5629901"

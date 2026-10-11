@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "e-spec: core-semantics §7.2/§7.3 drop at scope end (h, ov, m, then v first to last); legacy dropped at last use; the drop model has no Vec.as_slice e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
-classified_with = "4fc16575a+local"
+classified_with = "24f1e2723"
 model_rev = "8be6ddd7"
 model_src = "935644c3"

@@ -252,6 +252,10 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
     stderr = r.stderr.decode(errors="replace")
     if r.returncode == 3 and "error[mir]" in stderr:
         return {**res, "class": "e", "bucket": "mir-gap:" + gap_construct(stderr)}
+    # A panic writes its message and place to stderr before exiting 101
+    # (core semantics §10.2), so a silent 101 is wrong whatever stdout says.
+    if r.returncode == 101 and not stderr.strip():
+        return {**res, "class": "e", "bucket": "e-differs:silent-panic"}
     got, code = r.stdout, r.returncode
     legacy = (entry / "legacy.out").read_bytes() if (entry / "legacy.out").exists() else None
     want_exit = int(expect.split(":", 1)[1]) if expect.startswith("panic:") else int(meta.get("exit", 0))
