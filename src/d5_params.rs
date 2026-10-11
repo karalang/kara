@@ -12,11 +12,12 @@
 use crate::ast::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-/// The D5 switch, shared by the strict check and the MIR builder: on while
-/// `KARAC_D5=1`, until every program has been migrated to `own`.
+/// The D5 switch, shared by the strict check and the MIR builder: on, with
+/// `KARAC_D5=0` to read bare parameters by value as before the migration to
+/// `own T`. The legacy backends never read it.
 pub fn on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("KARAC_D5").is_ok_and(|v| v == "1"))
+    *ON.get_or_init(|| std::env::var("KARAC_D5").map_or(true, |v| v != "0"))
 }
 
 const COPY_SCALARS: &[&str] = &[

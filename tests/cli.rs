@@ -1708,7 +1708,7 @@ fn advisory_ownership_diagnostic_reports_same_severity_on_both_lanes() {
     let uam = tmp.join("uam.kara");
     std::fs::write(
         &uam,
-        "fn consume_vec(x: Vec[i64]) -> i64 { return x.len(); }\n\
+        "fn consume_vec(x: own Vec[i64]) -> i64 { return x.len(); }\n\
          fn main() {\n\
          \x20   let mut v: Vec[i64] = Vec.new();\n\
          \x20   v.push(1);\n\
@@ -2263,9 +2263,9 @@ fn test_rc_fallback_site_is_a_maybe_moved_error_under_check() {
         std::process::id()
     ));
     let src = "struct Data { value: i64 }\n\
-               fn consume(d: Data) { }\n\
+               fn consume(d: own Data) { }\n\
                fn use_d(d: Data) -> i64 { d.value }\n\
-               fn process(cond: bool, d: Data) -> i64 {\n\
+               fn process(cond: bool, d: own Data) -> i64 {\n\
                \x20   if cond { consume(d); }\n\
                \x20   use_d(d)\n\
                }\n\
@@ -4885,7 +4885,7 @@ fn test_rc_promoted_param_move_suppression_is_sound_at_o0_and_on_the_jit() {
                \x20   v.push(f\"pay-{n}\");\n\
                \x20   return R { id: n, tag: f\"tag-{n}\", xs: v }\n\
                }\n\
-               fn f(p: R) -> i64 {\n\
+               fn f(p: own R) -> i64 {\n\
                \x20   let mut i: i64 = 0;\n\
                \x20   let mut acc: i64 = 0;\n\
                \x20   while i < 2 {\n\
@@ -4896,7 +4896,7 @@ fn test_rc_promoted_param_move_suppression_is_sound_at_o0_and_on_the_jit() {
                \x20   }\n\
                \x20   return acc\n\
                }\n\
-               fn g(q: R) -> i64 {\n\
+               fn g(q: own R) -> i64 {\n\
                \x20   let mut acc: i64 = 0;\n\
                \x20   for k in 0..3 {\n\
                \x20       let mut o: R = mk(40 + k);\n\
@@ -4977,7 +4977,7 @@ fn test_rc_promoted_param_reached_through_a_let_rebind_frees_once() {
                \x20   v.push(f\"pay-{n}\");\n\
                \x20   return R { id: n, tag: f\"tag-{n}\", xs: v }\n\
                }\n\
-               fn f(p: R) -> i64 {\n\
+               fn f(p: own R) -> i64 {\n\
                \x20   let mut i: i64 = 0;\n\
                \x20   let mut acc: i64 = 0;\n\
                \x20   while i < 2 {\n\
@@ -11442,6 +11442,7 @@ fn test_fix_applies_multiple_corrections_in_one_file() {
 
 #[test]
 fn test_fix_applies_e0412_receiver_rewrite() {
+    // A bare `self` borrows under D5, so E0412 only arises with D5 off.
     // E0412: resource trait method with a bare `self` receiver but a
     // reads-only declared clause. `karac fix` applies the effect
     // checker's `ref self` rewrite at the trait definition; the file
@@ -11453,6 +11454,7 @@ fn test_fix_applies_e0412_receiver_rewrite() {
          pub trait Config { fn get(self, k: i64) -> i64 with reads(Cfg); }\n",
     );
     let out = karac_bin()
+        .env("KARAC_D5", "0")
         .args(["fix", path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -11469,6 +11471,7 @@ fn test_fix_applies_e0412_receiver_rewrite() {
         "expected `self` -> `ref self`, got: {rewritten}"
     );
     let recheck = karac_bin()
+        .env("KARAC_D5", "0")
         .args(["check", path.to_str().unwrap(), "--output=json"])
         .output()
         .unwrap();
@@ -11492,8 +11495,8 @@ fn test_fix_applies_concurrent_plain_struct_migration() {
     let path = fix_scratch_file(
         "concurrent-plain",
         "struct State { id: i64, mut count: i64 }\n\
-         fn use_a(s: State) { }\n\
-         fn use_b(s: State) { }\n\
+         fn use_a(s: own State) { }\n\
+         fn use_b(s: own State) { }\n\
          fn main() {\n\
              let s = State { id: 0, count: 0 };\n\
              par {\n\
@@ -11800,6 +11803,7 @@ fn test_fix_applies_undefined_label_rename() {
 
 #[test]
 fn test_json_e0412_carries_replacement_payload() {
+    // A bare `self` borrows under D5, so E0412 only arises with D5 off.
     // The E0412 JSON diagnostic carries the machine-applicable
     // `replacement` payload (same shape as resolver/ownership fixes)
     // so IDE quick-fix and agent consumers can apply it without
@@ -11813,6 +11817,7 @@ fn test_json_e0412_carries_replacement_payload() {
     )
     .expect("write fixture");
     let out = karac_bin()
+        .env("KARAC_D5", "0")
         .args(["check", fixture.to_str().unwrap(), "--output=json"])
         .output()
         .unwrap();
@@ -14121,7 +14126,7 @@ fn test_ownership_diagnostic_carries_its_class_in_the_json_feed() {
     let file = tmp.join("moved.kara");
     write(
         &file,
-        "fn take(v: Vec[i64]) -> i64 {\n    return v.len();\n}\n\nfn main() {\n    let v = [1, 2, 3];\n    let a = take(v);\n    let b = take(v);\n    println(f\"{a} {b}\");\n}\n",
+        "fn take(v: own Vec[i64]) -> i64 {\n    return v.len();\n}\n\nfn main() {\n    let v = [1, 2, 3];\n    let a = take(v);\n    let b = take(v);\n    println(f\"{a} {b}\");\n}\n",
     );
     let out = karac_bin()
         .args(["check", "--output=json"])
@@ -17666,8 +17671,8 @@ fn test_json_concurrent_plain_struct_carries_fix_diff_array() {
     std::fs::write(
         &fixture,
         "struct State { id: i64, mut count: i64 }\n\
-         fn use_a(s: State) { }\n\
-         fn use_b(s: State) { }\n\
+         fn use_a(s: own State) { }\n\
+         fn use_b(s: own State) { }\n\
          fn main() {\n\
              let s = State { id: 0, count: 0 };\n\
              par {\n\
@@ -31166,7 +31171,7 @@ fn ownership_errors_gate_build_and_check_identically() {
     // output stays the old-behaviour oracle until the v2 middle end lands.
     let (tmp, path) = ownership_gate_fixture(
         "use-after-move",
-        "fn c(v: Vec[i64]) -> i64 { v.len() }\n\
+        "fn c(v: own Vec[i64]) -> i64 { v.len() }\n\
          fn main() { let mut v: Vec[i64] = Vec.new(); v.push(1);\n\
          let a = c(v); let b = c(v); println((a + b).to_string()); }\n",
     );
@@ -31201,7 +31206,7 @@ fn use_after_move_renders_as_error_under_check() {
     // repair the Mend loop applies with `karac fix`.
     let (tmp, path) = ownership_gate_fixture(
         "err-label-uam",
-        "fn c(v: Vec[i64]) -> i64 { v.len() }\n\
+        "fn c(v: own Vec[i64]) -> i64 { v.len() }\n\
          fn main() { let mut v: Vec[i64] = Vec.new(); v.push(1);\n\
          let a = c(v); let b = c(v); println((a + b).to_string()); }\n",
     );

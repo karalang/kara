@@ -1539,9 +1539,12 @@ impl<'a> super::TypeChecker<'a> {
     /// D5 is off, or for a callee with no declaration in this program; a bare
     /// parameter is then read as before. Under the strict check the bare ones
     /// were already rewritten to `ref T` before resolution
-    /// ([`crate::d5_params`]), so this matters to the other pipelines.
+    /// ([`crate::d5_params`]), so this matters to the MIR pipeline. The
+    /// legacy backends take a bare parameter by value and are not asked.
     pub(super) fn d5_own_params(&self, key: &str) -> Option<Vec<bool>> {
-        if !crate::d5_params::on() {
+        if !crate::d5_params::on()
+            || !(self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+        {
             return None;
         }
         let own = |ps: &[Param]| ps.iter().map(|p| p.is_own).collect::<Vec<_>>();

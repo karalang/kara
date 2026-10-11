@@ -83,7 +83,7 @@ fn accepted(tag: &str, src: &str) {
 fn use_after_move_is_an_error() {
     rejected_then_fixed(
         "uam",
-        "fn take(s: String) { println(s); }\n\
+        "fn take(s: own String) { println(s); }\n\
          fn main() {\n\
              let s = \"hi\".to_string();\n\
              take(s);\n\
@@ -97,7 +97,7 @@ fn use_after_move_is_an_error() {
 fn maybe_moved_is_an_error_not_an_rc() {
     rejected_then_fixed(
         "maybe",
-        "fn take(s: String) { println(s); }\n\
+        "fn take(s: own String) { println(s); }\n\
          fn f(c: bool) {\n\
              let s = \"hi\".to_string();\n\
              if c { take(s); }\n\
@@ -112,7 +112,7 @@ fn maybe_moved_is_an_error_not_an_rc() {
 fn moved_in_loop_is_an_error() {
     rejected_then_fixed(
         "loop",
-        "fn take(s: String) { println(s); }\n\
+        "fn take(s: own String) { println(s); }\n\
          fn main() {\n\
              let s = \"hi\".to_string();\n\
              for i in 0..2 { take(s); }\n\
@@ -126,7 +126,7 @@ fn moved_into_a_container_then_used_is_an_error() {
     rejected_then_fixed(
         "container",
         "struct Bag { items: Vec[String] }\n\
-         impl Bag { fn add(mut ref self, s: String) { self.items.push(s); } }\n\
+         impl Bag { fn add(mut ref self, s: own String) { self.items.push(s); } }\n\
          fn main() {\n\
              let mut a = Bag { items: Vec.new() };\n\
              let mut b = Bag { items: Vec.new() };\n\
@@ -210,7 +210,7 @@ fn string_concat_moves_neither_operand() {
 fn allow_rc_fallback_does_not_silence_the_error() {
     let (dir, path) = fixture(
         "allow",
-        "fn take(s: String) { println(s); }\n\
+        "fn take(s: own String) { println(s); }\n\
          #[allow(rc_fallback)]\n\
          fn f(c: bool) {\n\
              let s = \"hi\".to_string();\n\
@@ -306,7 +306,7 @@ fn move_out_of_a_collection_element_is_an_error() {
     // §3.7: the Vec still owns its element, so a by-value read needs a copy.
     rejected_then_fixed(
         "index-arg",
-        "fn take(s: String) { println(s); }\n\
+        "fn take(s: own String) { println(s); }\n\
          fn main() {\n\
              let v = vec![\"a\".to_string(), \"b\".to_string()];\n\
              take(v[0]);\n\
@@ -363,7 +363,7 @@ fn passing_a_bare_for_element_by_value_is_an_error() {
         "for-elem-arg",
         "#[derive(Clone)]\n\
          struct T { name: String }\n\
-         fn render(t: T) -> String { t.name }\n\
+         fn render(t: own T) -> String { t.name }\n\
          fn main() {\n\
              let v = vec![T { name: \"a\".to_string() }];\n\
              for t in v {\n\
@@ -380,7 +380,7 @@ fn passing_an_into_iter_element_by_value_is_accepted() {
     accepted(
         "into-iter-arg",
         "struct S { name: String }\n\
-         fn render(s: S) -> String { s.name }\n\
+         fn render(s: own S) -> String { s.name }\n\
          fn main() {\n\
              let v = vec![S { name: \"a\".to_string() }];\n\
              for s in v.into_iter() {\n\
@@ -474,7 +474,7 @@ fn a_ref_binding_cannot_be_moved() {
     rejected_then_fixed(
         "ref-binding-moved",
         "shared enum H { Z(Vec[String]), N }\n\
-         fn eat(v: Vec[String]) -> i64 { v.len() }\n\
+         fn eat(v: own Vec[String]) -> i64 { v.len() }\n\
          fn main() {\n\
              let h = H.Z([\"a\".to_string()]);\n\
              match h { H.Z(ref v) => println(f\"{eat(v)}\"), H.N => println(\"n\") }\n\
@@ -552,7 +552,7 @@ fn copying_a_ref_binding_copies_the_reference() {
     rejected_then_fixed(
         "ref-copy-moved",
         "shared enum Sh { S(String), N }\n\
-         fn eat(s: String) -> i64 { s.len() }\n\
+         fn eat(s: own String) -> i64 { s.len() }\n\
          fn main() {\n\
              let keep = Sh.S(\"a\".to_string());\n\
              match keep { Sh.S(x) => { let u = x; println(eat(u)); } Sh.N => {} }\n\
@@ -566,7 +566,7 @@ fn a_map_get_payload_is_a_reference() {
     // `Map.get` hands out `Option[ref V]`: moving the payload out is C3.
     rejected_then_fixed(
         "map-get-unwrap",
-        "fn take(s: String) -> i64 { s.len() }\n\
+        "fn take(s: own String) -> i64 { s.len() }\n\
          fn main() {\n\
              let mut m: Map[i64, String] = Map.new();\n\
              m.insert(1, \"a\".to_string());\n\
@@ -589,7 +589,7 @@ fn a_map_get_payload_is_a_reference() {
     // `let s = m.get(k).unwrap();` copies the reference; moving `s` is C3.
     rejected_then_fixed(
         "map-get-let",
-        "fn take(s: String) -> i64 { s.len() }\n\
+        "fn take(s: own String) -> i64 { s.len() }\n\
          fn main() {\n\
              let mut m: Map[i64, String] = Map.new();\n\
              m.insert(1, \"a\".to_string());\n\
@@ -616,13 +616,13 @@ fn a_for_over_a_temporary_collection_binds_refs() {
     rejected_then_fixed(
         "for-temp",
         "fn mk() -> Vec[String] { [\"a\".to_string()] }\n\
-         fn take(s: String) -> i64 { s.len() }\n\
+         fn take(s: own String) -> i64 { s.len() }\n\
          fn main() { for s in mk() { println(take(s)); } }\n",
         "cannot move 's'",
     );
     rejected_then_fixed(
         "for-map-pair",
-        "fn take(s: String) -> i64 { s.len() }\n\
+        "fn take(s: own String) -> i64 { s.len() }\n\
          fn main() {\n\
              let mut m: Map[i64, String] = Map.new();\n\
              m.insert(1, \"a\".to_string());\n\
@@ -633,7 +633,7 @@ fn a_for_over_a_temporary_collection_binds_refs() {
     accepted(
         "for-into-iter",
         "fn mk() -> Vec[String] { [\"a\".to_string()] }\n\
-         fn take(s: String) -> i64 { s.len() }\n\
+         fn take(s: own String) -> i64 { s.len() }\n\
          fn main() { for s in mk().into_iter() { println(take(s)); } }\n",
     );
 }
@@ -666,8 +666,8 @@ fn a_field_read_through_a_ref_binding_or_a_handle_is_a_borrow() {
     rejected_then_fixed(
         "shared-struct-variant",
         "shared enum H { Y { v: Vec[String] }, N }\n\
-         fn eat(v: Vec[String]) -> i64 { v.len() }\n\
-         fn f(h: H) -> i64 { match h { H.Y { v } => eat(v), H.N => 0 } }\n\
+         fn eat(v: own Vec[String]) -> i64 { v.len() }\n\
+         fn f(h: own H) -> i64 { match h { H.Y { v } => eat(v), H.N => 0 } }\n\
          fn main() { println(f(H.N)); }\n",
         "cannot move 'v'",
     );
@@ -725,7 +725,7 @@ fn a_loop_must_reassign_a_moved_place_before_it_loops_back() {
     // an assignment earlier in the body does not count.
     rejected_then_fixed(
         "loop-reassign-before",
-        "fn take(s: String) { println(s); }\n\
+        "fn take(s: own String) { println(s); }\n\
          fn main() {\n\
              let mut t = \"a\".to_string();\n\
              let mut i = 0;\n\
@@ -735,7 +735,7 @@ fn a_loop_must_reassign_a_moved_place_before_it_loops_back() {
     );
     accepted(
         "loop-reassign-after",
-        "fn take(s: String) { println(s); }\n\
+        "fn take(s: own String) { println(s); }\n\
          fn main() {\n\
              let mut t = \"a\".to_string();\n\
              let mut i = 0;\n\
@@ -912,7 +912,8 @@ fn a_closure_returning_its_capture_runs_once() {
     );
 }
 
-/// `check` under D5 (`KARAC_D5=1`): `Ok(())` when it accepts, else the stderr.
+/// `check` under D5 (on by default; `KARAC_D5=1` pins it): `Ok(())` when it
+/// accepts, else the stderr.
 fn check_d5(tag: &str, src: &str) -> Result<(), String> {
     let (dir, path) = fixture(tag, src);
     let out = karac()
@@ -937,8 +938,22 @@ fn under_d5_a_bare_parameter_borrows() {
     let twice = "fn show(s: String) -> i64 { s.len() }\n\
                  fn main() { let s = \"ab\".to_string(); println(show(s)); println(show(s)); }\n";
     check_d5("d5-caller-keeps", twice).unwrap();
-    // Without D5 the first call moves `s`.
-    rejected("d5-off-caller-moves", twice, "moved");
+    // With D5 off (`KARAC_D5=0`) the first call moves `s`.
+    {
+        let (dir, path) = fixture("d5-off-caller-moves", twice);
+        let out = karac()
+            .env("KARAC_D5", "0")
+            .arg("check")
+            .arg(&path)
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success() && err.contains("moved"),
+            "d5-off: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     let err = check_d5(
         "d5-callee-gives-away",
@@ -1182,7 +1197,7 @@ fn destructuring_a_borrowed_place_or_iterating_refs_binds_references() {
     // `c.iter()` hands out references, so its `for` binds them.
     rejected_then_fixed(
         "for-over-iter",
-        "fn take(x: Vec[i64]) -> i64 { return x.len() }\n\
+        "fn take(x: own Vec[i64]) -> i64 { return x.len() }\n\
          fn main() {\n\
              let v: Vec[(Vec[i64], i64)] = [([1], 1)];\n\
              for pair in v.iter() { match pair { (a, j) => println(take(a)) } }\n\
@@ -1457,7 +1472,7 @@ fn an_allow_attribute_does_not_silence_a_core_rule() {
         "allow-field-move",
         &format!(
             "{drop_w}#[allow(partial_move_of_drop_struct)]\n\
-             fn take(w: W) -> R {{ return w.r; }}\n\
+             fn take(w: own W) -> R {{ return w.r; }}\n\
              fn main() {{ let r = take(W {{ r: R {{ name: \"a\" }}, n: 1 }}); println(r.name); }}\n"
         ),
         "`#[allow(partial_move_of_drop_struct)]` here has no effect any more",
@@ -1466,7 +1481,7 @@ fn an_allow_attribute_does_not_silence_a_core_rule() {
         "allow-pattern-move",
         &format!(
             "{drop_w}#[allow(partial_move_of_drop_struct)]\n\
-             fn take(w: W) -> R {{ let W {{ r, n }} = w; r }}\n\
+             fn take(w: own W) -> R {{ let W {{ r, n }} = w; r }}\n\
              fn main() {{ let r = take(W {{ r: R {{ name: \"a\" }}, n: 1 }}); println(r.name); }}\n"
         ),
         "`#[allow(partial_move_of_drop_struct)]` here has no effect any more",
@@ -1621,7 +1636,7 @@ fn a_mut_ref_pattern_writes_through_its_scrutinee() {
 fn fix_clones_every_reused_move_once() {
     rejected_then_fixed_by(
         "uam-every-site",
-        "fn take(s: String) -> i64 { s.len() }\n\
+        "fn take(s: own String) -> i64 { s.len() }\n\
          fn main() {\n\
              let k = \"a\".to_string();\n\
              let a = take(k);\n\
@@ -1635,7 +1650,7 @@ fn fix_clones_every_reused_move_once() {
     rejected_then_fixed_by(
         "uam-and-borrow-move-same-site",
         "enum Cmd { Delete(String), Clear }\n\
-         fn delete(k: String) -> bool { k.len() > 0 }\n\
+         fn delete(k: own String) -> bool { k.len() > 0 }\n\
          fn main() {\n\
              let cmds: Vec[Cmd] = [Cmd.Delete(\"a\".to_string()), Cmd.Clear];\n\
              for cmd in cmds {\n\
@@ -1687,7 +1702,7 @@ fn a_for_element_moves_out_by_into_iter() {
     rejected_then_fixed_by(
         "for-elem-into-iter",
         "struct Job { id: i64 }\n\
-         fn run(j: Job) { println(j.id) }\n\
+         fn run(j: own Job) { println(j.id) }\n\
          fn main() {\n\
              let jobs = vec![Job { id: 1 }, Job { id: 2 }];\n\
              for j in jobs {\n\
@@ -1701,7 +1716,7 @@ fn a_for_element_moves_out_by_into_iter() {
         "for-elem-drop-into-iter",
         "struct Res { id: i64 }\n\
          impl Drop for Res { fn drop(mut ref self) { println(self.id) } }\n\
-         fn take(r: Res) { println(r.id) }\n\
+         fn take(r: own Res) { println(r.id) }\n\
          fn main() {\n\
              let rs = vec![Res { id: 1 }, Res { id: 2 }];\n\
              let mut kept: Vec[Res] = Vec.new();\n\
@@ -1717,7 +1732,7 @@ fn a_for_element_moves_out_by_into_iter() {
     let (dir, path) = fixture(
         "for-elem-borrowed",
         "struct Job { id: i64 }\n\
-         fn run(j: Job) { println(j.id) }\n\
+         fn run(j: own Job) { println(j.id) }\n\
          fn all(jobs: ref Vec[Job]) {\n\
              for j in jobs {\n\
                  run(j);\n\
@@ -1742,7 +1757,7 @@ fn a_reused_all_copy_value_is_fixed_by_derive_copy() {
     rejected_then_fixed_by(
         "derive-copy-struct",
         "pub struct P { x: i64, y: i64 }\n\
-         fn take(p: P) -> i64 { p.x + p.y }\n\
+         fn take(p: own P) -> i64 { p.x + p.y }\n\
          fn main() {\n\
              let p = P { x: 1, y: 2 };\n\
              println(take(p));\n\
@@ -1754,7 +1769,7 @@ fn a_reused_all_copy_value_is_fixed_by_derive_copy() {
     rejected_then_fixed_by(
         "derive-copy-enum",
         "enum Dir { North, South(i64) }\n\
-         fn show(d: Dir) -> i64 { match d { Dir.North => 0, Dir.South(n) => n } }\n\
+         fn show(d: own Dir) -> i64 { match d { Dir.North => 0, Dir.South(n) => n } }\n\
          fn main() {\n\
              let d = Dir.South(3);\n\
              println(show(d));\n\
@@ -1768,14 +1783,14 @@ fn a_reused_all_copy_value_is_fixed_by_derive_copy() {
         (
             "derive-copy-heap-field",
             "struct N { s: String }\n\
-             fn take(n: N) {}\n\
+             fn take(n: own N) {}\n\
              fn main() { let n = N { s: \"a\" }; take(n); take(n); }\n",
         ),
         (
             "derive-copy-drop",
             "struct D { x: i64 }\n\
              impl Drop for D { fn drop(mut ref self) { println(self.x) } }\n\
-             fn take(d: D) {}\n\
+             fn take(d: own D) {}\n\
              fn main() { let d = D { x: 1 }; take(d); take(d); }\n",
         ),
     ] {
@@ -1842,7 +1857,7 @@ fn derive_copy_fixes_loop_and_field_moves() {
     rejected_then_fixed_by(
         "derive-copy-loop",
         "enum Reason { Capacity, Deleted }\n\
-         fn note(r: Reason) -> i64 { match r { Reason.Capacity => 1, Reason.Deleted => 2 } }\n\
+         fn note(r: own Reason) -> i64 { match r { Reason.Capacity => 1, Reason.Deleted => 2 } }\n\
          fn main() {\n\
              let r = Reason.Deleted;\n\
              let mut i = 0;\n\

@@ -531,8 +531,7 @@ fn d5_params() -> bool {
     if let Some(on) = tests::D5.with(|c| c.get()) {
         return on;
     }
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("KARAC_D5").map_or(true, |v| v != "0"))
+    crate::d5_params::on()
 }
 
 fn at(span: Span) -> String {
