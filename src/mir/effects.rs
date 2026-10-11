@@ -727,6 +727,10 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         // `dbg` is transparent (design.md § dbg()): it never changes an
         // effect set or conflicts with anything, its stderr write included.
         ("dbg", "") => vec![],
+        // The message a panic or a failed assertion prints on the way out
+        // (core semantics §10.2). Its stderr write is the panic's own, so
+        // it charges exactly what the abort after it does.
+        ("panic_message", "") => vec![PANICS],
         ("Stdout", "println" | "print" | "flush") => vec![(Writes, "Stdout", None), HEAP],
         ("Stderr", "println" | "print" | "flush") => vec![(Writes, "Stderr", None), HEAP],
         ("format", "") | (_, "to_string") => vec![HEAP],
@@ -1435,6 +1439,44 @@ mod tests {
             !effects(&r, "main").iter().any(|e| e.contains("Stderr")),
             "{:?}",
             effects(&r, "main")
+        );
+    }
+
+    /// A panic's message is part of the panic: it adds no unknown effect
+    /// and no Stderr write, so two `par` branches that can each panic do
+    /// not conflict.
+    #[test]
+    fn effects_panic_message_is_part_of_the_panic() {
+        let r = from_source(
+            "fn pick(v: Vec[i64], i: i64) -> i64 {
+    if i >= v.len() {
+        panic(f\"no item {i}\");
+    }
+    assert(i >= 0);
+    v[i]
+}
+
+fn main() {
+    let v = vec![1, 2];
+    let (a, b) = par {
+        let a = pick(v.clone(), 0);
+        let b = pick(v.clone(), 1);
+        (a, b)
+    };
+    println(a + b);
+}
+",
+        );
+        assert!(!r.summaries["pick"].unknown, "{:?}", effects(&r, "pick"));
+        assert!(
+            !effects(&r, "pick").iter().any(|e| e.contains("Stderr")),
+            "{:?}",
+            effects(&r, "pick")
+        );
+        assert!(
+            par_conflicts_of(&r, "main").is_empty(),
+            "{:?}",
+            par_conflicts_of(&r, "main")
         );
     }
 
