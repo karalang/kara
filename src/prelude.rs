@@ -83,6 +83,8 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Entry",
     "Never",
     "StringSlice",
+    // `Str`, the spec's name for `StringSlice` (docs/library/strings.md).
+    "Str",
     "F32",
     "F64",
     "F16",

@@ -131,6 +131,21 @@ impl<'a> super::TypeChecker<'a> {
     /// Called from `infer_method_call` when the object type is `Type::Str`.
     pub(super) fn infer_str_method(&mut self, method: &str, args: &[CallArg], span: &Span) -> Type {
         match method {
+            // `s.as_str()`: the whole string as a `Str` view
+            // (docs/library/strings.md).
+            "as_str" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("'as_str' takes no arguments, found {}", args.len()),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Named {
+                    name: "StringSlice".to_string(),
+                    args: vec![],
+                }
+            }
             // `String.to_string()` / `.clone()` → owning copy (`String`). The
             // `Display` trait gives every type a `to_string`; on `String`
             // itself it is the identity copy. Both take no arguments.
@@ -732,6 +747,18 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![Type::Str],
                 }
             }
+            "clear" => {
+                // clear() -> (): empties the string, keeping its capacity
+                // (docs/library/strings.md).
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("'clear' takes no arguments, found {}", args.len()),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Unit
+            }
             "push_str" => {
                 // push_str(other: String) -> (). Mutating append; receiver
                 // must be a mutable binding (ownership.rs classifies this
@@ -916,8 +943,10 @@ impl<'a> super::TypeChecker<'a> {
                 "String",
                 method,
                 &[
+                    "as_str",
                     "bytes",
                     "chars",
+                    "clear",
                     "contains",
                     "find",
                     "is_empty",

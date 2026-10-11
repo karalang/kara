@@ -2587,3 +2587,27 @@ fn an_index_assigned_map_key_moves() {
         "value 'k' moved here",
     );
 }
+
+#[test]
+fn str_is_the_string_view() {
+    // docs/library/strings.md, design.md § Strings: `Str` names the view; a
+    // `String` passes as `Str`, borrowed; `s[a..b]` is a `Str`; `as_str`
+    // views the whole string.
+    accepted(
+        "str-view",
+        "fn first_word(s: Str) -> Str {\n\
+             match s.find(\" \") { Some(i) => s[0..i], None => s }\n\
+         }\n\
+         fn main() {\n\
+             let mut line = \"hello world\".to_string();\n\
+             let w = first_word(line);\n\
+             println(w);\n\
+             println(line.len());\n\
+             let v: Str = line.as_str();\n\
+             let h = v[0..2];\n\
+             println(f\"{h} {v.len()}\");\n\
+             line.clear();\n\
+             println(line.is_empty());\n\
+         }\n",
+    );
+}

@@ -77,10 +77,12 @@ pub(super) const MAP_BUILTIN_METHODS: &[&str] = &[
 ];
 
 pub(super) const STRING_BUILTIN_METHODS: &[&str] = &[
+    "as_str",
     "bytes",
     "char_at",
     "char_count",
     "chars",
+    "clear",
     "clone",
     "cmp",
     "contains",

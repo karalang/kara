@@ -3894,6 +3894,16 @@ fn param_modes_from_signature(params: &[Param]) -> Vec<OwnershipMode> {
         .map(|p| match &p.ty.kind {
             TypeKind::Ref(_) => OwnershipMode::Ref,
             TypeKind::MutRef(_) | TypeKind::MutSlice(_) => OwnershipMode::MutRef,
+            // A `Str` parameter is a view: a `String` argument passes
+            // borrowed, as a `Vec[T]` does to `Slice[T]` (design.md § Strings).
+            TypeKind::Path(path)
+                if matches!(
+                    path.segments.last().map(|s| s.as_str()),
+                    Some("Str" | "StringSlice")
+                ) =>
+            {
+                OwnershipMode::Ref
+            }
             _ => match slice_kind_from_type(&p.ty) {
                 Some(false) => OwnershipMode::Ref,
                 // `Some(true)` is unreachable — `mut Slice[T]` is

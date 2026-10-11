@@ -73,7 +73,9 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 // v2 core §5.2: `StringSlice` is `Str`, a shared view, which
                 // copies as the reference it is.
-                if name == "StringSlice" && self.cli_lint_overrides.strict_core {
+                if name == "StringSlice"
+                    && (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+                {
                     return true;
                 }
                 if let Some(info) = self.env.structs.get(name) {

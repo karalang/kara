@@ -1218,6 +1218,12 @@ impl<'a> super::TypeChecker<'a> {
             "bool" => Some(Type::Bool),
             "char" => Some(Type::Char),
             "String" => Some(Type::Str),
+            // `Str` is the spec's name for the string view, `StringSlice`
+            // (docs/library/strings.md; core-semantics §5.2).
+            "Str" => Some(Type::Named {
+                name: "StringSlice".to_string(),
+                args: vec![],
+            }),
             // F32/F64/F16/Bf16 are stdlib total-order wrappers (NaN sorts last, implements Eq/Ord/Hash)
             "F32" => Some(Type::Named {
                 name: "F32".to_string(),

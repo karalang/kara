@@ -2551,7 +2551,18 @@ impl<'a> super::TypeChecker<'a> {
                 let saved_mut_through = self.mut_through_param_arg;
                 self.borrow_context = borrow_context_for_param(param_ty);
                 self.mut_through_param_arg = param_mutates_through(param_ty);
-                let arg_ty = self.check_expr(&arg.value, param_ty);
+                // design.md § Strings: at a call boundary a `String` passes
+                // as a `Str` parameter, borrowed. Elsewhere `as_str()` is
+                // written, so the coercion lives here, not in assignability.
+                let arg_ty = if is_str_view(param_ty) {
+                    let t = self.infer_expr(&arg.value);
+                    if !is_string_place_type(&t) {
+                        self.check_assignable(param_ty, &t, arg.value.span);
+                    }
+                    t
+                } else {
+                    self.check_expr(&arg.value, param_ty)
+                };
                 self.borrow_context = saved_borrow_ctx;
                 self.mut_through_param_arg = saved_mut_through;
                 // B-2026-08-26-37 — a call ARGUMENT is a value position exactly
@@ -2879,7 +2890,9 @@ impl<'a> super::TypeChecker<'a> {
                         &self.env.const_substitutions,
                         &const_id_to_name,
                     ));
-                    self.check_assignable(&resolved, arg_ty, arg.value.span);
+                    if !(is_str_view(&resolved) && is_string_place_type(arg_ty)) {
+                        self.check_assignable(&resolved, arg_ty, arg.value.span);
+                    }
                     // B-2026-08-08-9 — a slot the EXPECTATION bound still owes
                     // the narrowing check. `check_assignable` is permissive
                     // between integer types, which is right when the slot was
@@ -6227,6 +6240,18 @@ impl<'a> super::TypeChecker<'a> {
                     let is_string = matches!(&obj_ty, Type::Str)
                         || matches!(&obj_ty, Type::Ref(inner) | Type::MutRef(inner)
                             if matches!(inner.as_ref(), Type::Str));
+                    let str_view = Type::Named {
+                        name: "StringSlice".to_string(),
+                        args: vec![],
+                    };
+                    // design.md § Strings: `s[a..b]` is a `Str` view, of a
+                    // `String` (under the strict commands) or of a `Str`.
+                    let is_view = matches!(&obj_ty, Type::Named { name, .. } if name == "StringSlice")
+                        || matches!(&obj_ty, Type::Ref(inner) | Type::MutRef(inner)
+                            if matches!(inner.as_ref(), Type::Named { name, .. } if name == "StringSlice"));
+                    if is_view || (is_string && self.cli_lint_overrides.strict_core) {
+                        return str_view;
+                    }
                     if is_string {
                         self.index_read_is_fresh_value
                             .insert(SpanKey::from_span(&expr.span));
@@ -7929,4 +7954,18 @@ fn assoc_eq_bound_is_comparable(ty: &Type) -> bool {
         ty,
         Type::AssocProjection { .. } | Type::TypeParam(_) | Type::TypeVar(_) | Type::Error
     )
+}
+
+/// `Str` (`StringSlice`), the string view a `String` argument passes as.
+fn is_str_view(ty: &Type) -> bool {
+    matches!(ty, Type::Named { name, args } if name == "StringSlice" && args.is_empty())
+}
+
+/// A `String`, or a reference to one: what passes as a `Str` parameter.
+fn is_string_place_type(ty: &Type) -> bool {
+    match ty {
+        Type::Str => true,
+        Type::Ref(inner) | Type::MutRef(inner) => matches!(inner.as_ref(), Type::Str),
+        _ => false,
+    }
 }
