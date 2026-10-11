@@ -184,7 +184,10 @@ A B-tree map, `K: Ord`. Iteration is in ascending key order.
 | `is_empty` | `fn is_empty(self) -> bool` | |
 | `keys` | `fn keys(self) -> impl Iterator[Item = ref K]` | Ascending |
 | `values` | `fn values(self) -> impl Iterator[Item = ref V]` | In key order |
-| `range` | `fn range(self, from: K, to: K) -> impl Iterator[Item = (ref K, ref V)]` | Entries with keys in `[from, to)` |
+| `range` | `fn range(self, from: K, to: K) -> impl Iterator[Item = (ref K, ref V)]` | Entries with keys in `[from, to)`, half-open like `from..to`. Empty if `from >= to` |
+| `range_inclusive` | `fn range_inclusive(self, from: K, to: K) -> impl Iterator[Item = (ref K, ref V)]` | Entries with keys in `[from, to]`, like `from..=to`. Empty if `from > to` |
+| `floor` | `fn floor(self, key: K) -> Option[(ref K, ref V)]` | The entry with the largest key `<= key` |
+| `ceiling` | `fn ceiling(self, key: K) -> Option[(ref K, ref V)]` | The entry with the smallest key `>= key` |
 | `clear` | `fn clear(mut ref self)` | |
 | `[]` | `m[key]` | Index operator through `Index`. Panics if the key is missing |
 | `[]=` | `m[key] = val` | Index assignment through `IndexSet`, as for `Map` |
@@ -201,7 +204,8 @@ A B-tree set, `T: Ord`. Every operation is O(log n), and iteration is in ascendi
 | `contains` | `fn contains(self, val: T) -> bool` | |
 | `min` | `fn min(self) -> Option[ref T]` | Smallest element |
 | `max` | `fn max(self) -> Option[ref T]` | Largest element |
-| `range` | `fn range(self, from: T, to: T) -> impl Iterator[Item = ref T]` | Elements in `[from, to)`, ascending |
+| `range` | `fn range(self, from: T, to: T) -> impl Iterator[Item = ref T]` | Elements in `[from, to)`, ascending, half-open like `from..to`. Empty if `from >= to` |
+| `range_inclusive` | `fn range_inclusive(self, from: T, to: T) -> impl Iterator[Item = ref T]` | Elements in `[from, to]`, ascending, like `from..=to`. Empty if `from > to` |
 | `len` | `fn len(self) -> i64` | |
 | `is_empty` | `fn is_empty(self) -> bool` | |
 | `union` | `fn union(self, other: SortedSet[T]) -> SortedSet[T]` | |
