@@ -1,0 +1,13 @@
+example 1: true
+example 2: false
+example 3: true
+both jugs full: true
+more than both jugs hold: false
+one jug's capacity: true
+equal jugs, their capacity: true
+equal jugs, something else: false
+coprime jugs reach every amount: true
+not a multiple of the gcd: false
+a multiple of the gcd: true
+a one-litre jug: true
+3000 random triples: 1042 measurable, checksum 21582763

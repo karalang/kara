@@ -1,0 +1,225 @@
+// LeetCode #363: differential test. The merge-sort and sorted-Vec arms
+// against an oracle that tries every rectangle, over 1,500 random matrices
+// of up to 6 x 6. The SortedSet arm joins once `SortedSet.range` passes
+// `karac check`. Properties: P1 each arm matches the oracle; P2 no answer
+// exceeds k; P3 transposing the matrix and P4 reversing every row change no
+// answer; P5 lowering k to one below the answer lowers the answer.
+
+fn oracle(matrix: ref Vec[Vec[i64]], k: i64) -> i64 {
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    let mut at = vec![vec![0; cols + 1]; rows + 1];
+    for r in 0..rows {
+        for c in 0..cols {
+            at[r + 1][c + 1] = matrix[r][c] + at[r][c + 1] + at[r + 1][c] - at[r][c];
+        }
+    }
+    let mut best = i64.MIN;
+    for r1 in 0..rows {
+        for r2 in r1 + 1..rows + 1 {
+            for c1 in 0..cols {
+                for c2 in c1 + 1..cols + 1 {
+                    let sum = at[r2][c2] - at[r1][c2] - at[r2][c1] + at[r1][c1];
+                    if sum <= k and sum > best {
+                        best = sum;
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+fn best_pair(p: mut ref Vec[i64], lo: i64, hi: i64, k: i64, scratch: mut ref Vec[i64]) -> i64 {
+    // The best p[j] - p[i] <= k with lo <= i < j < hi; sorts p[lo..hi].
+    if hi - lo < 2 {
+        return i64.MIN;
+    }
+    let mid = (lo + hi) / 2;
+    let mut best = best_pair(p, lo, mid, k, scratch).max(best_pair(p, mid, hi, k, scratch));
+    let mut j = mid;
+    for i in lo..mid {
+        while j < hi and p[j] <= p[i] + k {
+            j += 1;
+        }
+        if j > mid {
+            best = best.max(p[j - 1] - p[i]);
+        }
+    }
+    let mut a = lo;
+    let mut b = mid;
+    let mut out = lo;
+    while a < mid or b < hi {
+        if b == hi or (a < mid and p[a] <= p[b]) {
+            scratch[out] = p[a];
+            a += 1;
+        } else {
+            scratch[out] = p[b];
+            b += 1;
+        }
+        out += 1;
+    }
+    for i in lo..hi {
+        p[i] = scratch[i];
+    }
+    best
+}
+
+fn merge_arm(matrix: ref Vec[Vec[i64]], k: i64) -> i64 {
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    let mut best = i64.MIN;
+    let mut scratch = vec![0; cols + 1];
+    for top in 0..rows {
+        let mut sums = vec![0; cols];
+        for bottom in top..rows {
+            for c in 0..cols {
+                sums[c] += matrix[bottom][c];
+            }
+            let mut prefix = vec![0; cols + 1];
+            for c in 0..cols {
+                prefix[c + 1] = prefix[c] + sums[c];
+            }
+            best = best.max(best_pair(mut prefix, 0, cols + 1, k, mut scratch));
+        }
+    }
+    best
+}
+
+fn lower_bound(v: ref Vec[i64], x: i64) -> i64 {
+    // The first index whose element is at least x.
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if v[mid] < x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn sorted_arm(matrix: ref Vec[Vec[i64]], k: i64) -> i64 {
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    let mut best = i64.MIN;
+    for top in 0..rows {
+        let mut sums = vec![0; cols];
+        for bottom in top..rows {
+            for c in 0..cols {
+                sums[c] += matrix[bottom][c];
+            }
+            let mut seen: Vec[i64] = vec![0];
+            let mut prefix = 0;
+            for c in 0..cols {
+                prefix += sums[c];
+                let at = lower_bound(seen, prefix - k);
+                if at < seen.len() {
+                    best = best.max(prefix - seen[at]);
+                }
+                let place = lower_bound(seen, prefix);
+                seen.insert(place, prefix);
+            }
+        }
+    }
+    best
+}
+
+fn arms(matrix: ref Vec[Vec[i64]], k: i64) -> Vec[i64] {
+    vec![merge_arm(matrix, k), sorted_arm(matrix, k)]
+}
+
+fn transpose(matrix: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for c in 0..matrix[0].len() {
+        let mut row: Vec[i64] = Vec.new();
+        for r in 0..matrix.len() {
+            row.push(matrix[r][c]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn mirror(matrix: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in 0..matrix.len() {
+        let mut row: Vec[i64] = Vec.new();
+        let n = matrix[r].len();
+        for c in 0..n {
+            row.push(matrix[r][n - 1 - c]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn main() {
+    let mut seed: i64 = 3630;
+    let mut cases = 0;
+    let mut checks = 0;
+    let mut failures = 0;
+    for _ in 0..1500 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let rows = 1 + (seed / 65536) % 6;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let cols = 1 + (seed / 65536) % 6;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        // Small values make equal sums, and sums exactly k, common.
+        let span = if (seed / 65536) % 2 == 0 { 3 } else { 100 };
+        let mut matrix: Vec[Vec[i64]] = Vec.new();
+        let mut least = span;
+        for _ in 0..rows {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                seed = (seed * 1103515245 + 12345) % 2147483648;
+                let v = (seed / 65536) % (2 * span + 1) - span;
+                least = least.min(v);
+                row.push(v);
+            }
+            matrix.push(row);
+        }
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let k = least.max((seed / 65536) % (6 * span + 1) - 3 * span);
+        cases += 1;
+        let want = oracle(matrix, k);
+        let got = arms(matrix, k);
+        let flipped = arms(transpose(matrix), k);
+        let mirrored = arms(mirror(matrix), k);
+        for a in 0..got.len() {
+            let r = got[a];
+            checks += 1;
+            if r != want {
+                failures += 1;
+                println(f"P1 arm {a} {matrix} k={k}: {r} vs {want}");
+            }
+            checks += 1;
+            if r > k {
+                failures += 1;
+                println(f"P2 arm {a} {matrix} k={k}: {r}");
+            }
+            checks += 1;
+            if flipped[a] != r {
+                failures += 1;
+                println(f"P3 arm {a} {matrix} k={k}: {flipped[a]} vs {r}");
+            }
+            checks += 1;
+            if mirrored[a] != r {
+                failures += 1;
+                println(f"P4 arm {a} {matrix} k={k}: {mirrored[a]} vs {r}");
+            }
+            // P5: k lowered to just below the answer gives a smaller one.
+            if r > least {
+                checks += 1;
+                let lower = arms(matrix, r - 1)[a];
+                if lower >= r {
+                    failures += 1;
+                    println(f"P5 arm {a} {matrix} k={k}: {lower} at k={r - 1}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, {checks} checks, {failures} failures");
+}

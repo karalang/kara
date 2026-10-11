@@ -1,0 +1,16 @@
+source = "kara-katas/leetcode/301-400/366-find-leaves-of-binary-tree/bench/find_leaves.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["mirror-agrees", "shared", "lib:vecdeque", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "a1bc8de9e+local"
+model_rev = "8be6ddd7"
+model_src = "bf317f1b"

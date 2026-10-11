@@ -1,0 +1,30 @@
+// Benchmark for #365: five million random triples with capacities up to a
+// million, each answered with the kata's gcd test.
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+fn can_measure_water(x: i64, y: i64, target: i64) -> bool {
+    target <= x + y and target % gcd(x, y) == 0
+}
+
+fn main() {
+    let mut seed: i64 = 365;
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for i in 0..5000000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let x = 1 + (seed / 65536) % 1000000;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let y = 1 + (seed / 65536) % 1000000;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        // Mostly multiples of a small number, so both answers are common.
+        let target = ((seed / 65536) % 1000) * (1 + i % 6);
+        if can_measure_water(x, y, target) {
+            yes += 1;
+            checksum = (checksum * 31 + i) % 1000000007;
+        }
+    }
+    println(f"{yes} measurable, checksum {checksum}");
+}

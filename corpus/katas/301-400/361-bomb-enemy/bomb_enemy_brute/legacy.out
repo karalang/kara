@@ -1,0 +1,13 @@
+example 1: 3
+example 2: 1
+empty grid: 0
+one empty cell: 0
+one enemy, nowhere to stand: 0
+walls only: 0
+a wall shields: 1
+a column: 2
+enemies everywhere but one cell: 4
+the best cell is in a corner: 4
+enemies do not block: 4
+two segments in one row: 2
+1000 random grids: 3424 enemies in total, checksum 699896166

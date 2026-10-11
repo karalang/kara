@@ -1,0 +1,83 @@
+// Benchmark for #363: 20 random 100 x 100 matrices (the problem's largest)
+// with k drawn from [-10000, 10000], solved with the kata's merge-sort arm.
+// The SortedSet arm has no C counterpart and does not pass `karac check`
+// yet, so the merge-sort arm is the one every language can run alike.
+
+fn best_pair(p: mut ref Vec[i64], lo: i64, hi: i64, k: i64, scratch: mut ref Vec[i64]) -> i64 {
+    // The best p[j] - p[i] <= k with lo <= i < j < hi; sorts p[lo..hi].
+    if hi - lo < 2 {
+        return i64.MIN;
+    }
+    let mid = (lo + hi) / 2;
+    let mut best = best_pair(p, lo, mid, k, scratch).max(best_pair(p, mid, hi, k, scratch));
+    let mut j = mid;
+    for i in lo..mid {
+        while j < hi and p[j] <= p[i] + k {
+            j += 1;
+        }
+        if j > mid {
+            best = best.max(p[j - 1] - p[i]);
+        }
+    }
+    let mut a = lo;
+    let mut b = mid;
+    let mut out = lo;
+    while a < mid or b < hi {
+        if b == hi or (a < mid and p[a] <= p[b]) {
+            scratch[out] = p[a];
+            a += 1;
+        } else {
+            scratch[out] = p[b];
+            b += 1;
+        }
+        out += 1;
+    }
+    for i in lo..hi {
+        p[i] = scratch[i];
+    }
+    best
+}
+
+fn max_sum_submatrix(matrix: ref Vec[Vec[i64]], k: i64) -> i64 {
+    let rows = matrix.len();
+    let cols = matrix[0].len();
+    let mut best = i64.MIN;
+    let mut scratch = vec![0; cols + 1];
+    for top in 0..rows {
+        let mut sums = vec![0; cols];
+        for bottom in top..rows {
+            for c in 0..cols {
+                sums[c] += matrix[bottom][c];
+            }
+            let mut prefix = vec![0; cols + 1];
+            for c in 0..cols {
+                prefix[c + 1] = prefix[c] + sums[c];
+            }
+            best = best.max(best_pair(mut prefix, 0, cols + 1, k, mut scratch));
+        }
+    }
+    best
+}
+
+fn main() {
+    let mut seed: i64 = 363;
+    let mut checksum: i64 = 0;
+    for _ in 0..20 {
+        let mut matrix: Vec[Vec[i64]] = Vec.new();
+        let mut least = 100;
+        for _ in 0..100 {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..100 {
+                seed = (seed * 1103515245 + 12345) % 2147483648;
+                let v = (seed / 65536) % 201 - 100;
+                least = least.min(v);
+                row.push(v);
+            }
+            matrix.push(row);
+        }
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let k = least.max((seed / 65536) % 20001 - 10000);
+        checksum = (checksum * 31 + max_sum_submatrix(matrix, k) + 1000000) % 1000000007;
+    }
+    println(f"checksum {checksum}");
+}

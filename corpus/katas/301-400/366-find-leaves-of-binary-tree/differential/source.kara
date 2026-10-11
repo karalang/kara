@@ -1,0 +1,344 @@
+// LeetCode #366: differential test. The height, strip and peel arms
+// against an oracle that simulates the rounds on the child links, over
+// 2,000 random trees. Properties: P1 each arm matches the oracle; P2 the
+// groups hold every value exactly once; P3 there is one group per level of
+// height; P4 mirroring the tree reverses every group; P5 the first group
+// is the leaves and the last is the root alone.
+
+shared enum Tree {
+    Empty,
+    Node(i64, Tree, Tree),
+}
+
+// Node ids are positions among the non-null slots, in level order; a child
+// link is an id, or -1 for no child.
+struct Links {
+    vals: Vec[i64],
+    left: Vec[i64],
+    right: Vec[i64],
+}
+
+fn links(items: ref Vec[Option[i64]]) -> Links {
+    let mut l = Links { vals: Vec.new(), left: Vec.new(), right: Vec.new() };
+    if items.is_empty() {
+        return l;
+    }
+    match items[0] {
+        None => { return l; }
+        Some(v) => {
+            l.vals.push(v);
+            l.left.push(-1);
+            l.right.push(-1);
+        }
+    }
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(0);
+    let mut i = 1;
+    while i < items.len() {
+        let parent = match queue.pop_front() {
+            Some(p) => p,
+            None => { break; }
+        };
+        for side in 0..2 {
+            if i < items.len() {
+                match items[i] {
+                    Some(v) => {
+                        let id = l.vals.len();
+                        l.vals.push(v);
+                        l.left.push(-1);
+                        l.right.push(-1);
+                        if side == 0 {
+                            l.left[parent] = id;
+                        } else {
+                            l.right[parent] = id;
+                        }
+                        queue.push_back(id);
+                    }
+                    None => {}
+                }
+                i = i + 1;
+            }
+        }
+    }
+    l
+}
+
+
+fn build_tree(l: ref Links, id: i64) -> Tree {
+    if id < 0 {
+        Tree.Empty
+    } else {
+        Tree.Node(l.vals[id], build_tree(l, l.left[id]), build_tree(l, l.right[id]))
+    }
+}
+
+// Files each node's value under its height and returns the height; an
+// empty tree has height -1.
+fn file_by_height(t: ref Tree, out: mut ref Vec[Vec[i64]]) -> i64 {
+    match t {
+        Empty => -1,
+        Node(v, left, right) => {
+            let h = 1 + file_by_height(left, out).max(file_by_height(right, out));
+            if h == out.len() {
+                out.push(Vec.new());
+            }
+            out[h].push(v);
+            h
+        }
+    }
+}
+
+fn star_arm(items: ref Vec[Option[i64]]) -> Vec[Vec[i64]] {
+    let l = links(items);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if not l.vals.is_empty() {
+        file_by_height(build_tree(l, 0), mut out);
+    }
+    out
+}
+
+fn is_empty(t: ref Tree) -> bool {
+    match t {
+        Empty => true,
+        Node(_, _, _) => false,
+    }
+}
+
+// The tree without its leaves; the leaves go to `leaves`, left to right.
+fn strip(t: ref Tree, leaves: mut ref Vec[i64]) -> Tree {
+    match t {
+        Empty => Tree.Empty,
+        Node(v, left, right) => {
+            if is_empty(left) and is_empty(right) {
+                leaves.push(v);
+                Tree.Empty
+            } else {
+                Tree.Node(v, strip(left, leaves), strip(right, leaves))
+            }
+        }
+    }
+}
+
+fn strip_arm(items: ref Vec[Option[i64]]) -> Vec[Vec[i64]] {
+    let l = links(items);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if l.vals.is_empty() {
+        return out;
+    }
+    let mut tree = build_tree(l, 0);
+    while not is_empty(tree) {
+        let mut leaves: Vec[i64] = Vec.new();
+        tree = strip(tree, mut leaves);
+        out.push(leaves);
+    }
+    out
+}
+
+fn peel_arm(items: ref Vec[Option[i64]]) -> Vec[Vec[i64]] {
+    let l = links(items);
+    let n = l.vals.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if n == 0 {
+        return out;
+    }
+    let mut parent = vec![-1; n];
+    let mut kids = vec![0; n];
+    for id in 0..n {
+        for child in [l.left[id], l.right[id]] {
+            if child >= 0 {
+                parent[child] = id;
+                kids[id] += 1;
+            }
+        }
+    }
+    // Preorder positions, from an explicit stack.
+    let mut rank = vec![0; n];
+    let mut stack: Vec[i64] = vec![0];
+    let mut next_rank = 0;
+    while not stack.is_empty() {
+        let id = stack.pop().unwrap();
+        rank[id] = next_rank;
+        next_rank += 1;
+        if l.right[id] >= 0 {
+            stack.push(l.right[id]);
+        }
+        if l.left[id] >= 0 {
+            stack.push(l.left[id]);
+        }
+    }
+    let mut round: Vec[i64] = Vec.new();
+    for id in 0..n {
+        if kids[id] == 0 {
+            round.push(id);
+        }
+    }
+    while not round.is_empty() {
+        round.sort_by_key(|id| rank[id]);
+        let mut group: Vec[i64] = Vec.new();
+        let mut next_round: Vec[i64] = Vec.new();
+        for id in round.iter() {
+            group.push(l.vals[id]);
+            let p = parent[id];
+            if p >= 0 {
+                kids[p] -= 1;
+                if kids[p] == 0 {
+                    next_round.push(p);
+                }
+            }
+        }
+        out.push(group);
+        round = next_round;
+    }
+    out
+}
+
+// The rounds as the problem states them: each round takes, in preorder,
+// every remaining node whose children are all gone.
+fn oracle(items: ref Vec[Option[i64]]) -> Vec[Vec[i64]] {
+    let l = links(items);
+    let n = l.vals.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut gone = vec![false; n];
+    let mut left_count = n;
+    while left_count > 0 {
+        let mut group: Vec[i64] = Vec.new();
+        let mut taken: Vec[i64] = Vec.new();
+        let mut stack: Vec[i64] = vec![0];
+        while not stack.is_empty() {
+            let id = stack.pop().unwrap();
+            if gone[id] {
+                continue;
+            }
+            let lc = l.left[id];
+            let rc = l.right[id];
+            if (lc < 0 or gone[lc]) and (rc < 0 or gone[rc]) {
+                group.push(l.vals[id]);
+                taken.push(id);
+            }
+            if rc >= 0 {
+                stack.push(rc);
+            }
+            if lc >= 0 {
+                stack.push(lc);
+            }
+        }
+        for id in taken.iter() {
+            gone[id] = true;
+            left_count -= 1;
+        }
+        out.push(group);
+    }
+    out
+}
+
+fn arms(items: ref Vec[Option[i64]]) -> Vec[Vec[Vec[i64]]] {
+    vec![star_arm(items), strip_arm(items), peel_arm(items)]
+}
+
+// The level-order slots of a tree given by links, trailing gaps dropped.
+fn to_items(l: ref Links) -> Vec[Option[i64]] {
+    let mut out: Vec[Option[i64]] = Vec.new();
+    if l.vals.is_empty() {
+        return out;
+    }
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(0);
+    loop {
+        match queue.pop_front() {
+            None => { break; }
+            Some(id) => {
+                if id < 0 {
+                    out.push(None);
+                } else {
+                    out.push(Some(l.vals[id]));
+                    queue.push_back(l.left[id]);
+                    queue.push_back(l.right[id]);
+                }
+            }
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1].is_none() {
+        out.pop();
+    }
+    out
+}
+
+fn height(l: ref Links, id: i64) -> i64 {
+    if id < 0 { -1 } else { 1 + height(l, l.left[id]).max(height(l, l.right[id])) }
+}
+
+fn main() {
+    let mut seed: i64 = 3660;
+    let mut cases = 0;
+    let mut checks = 0;
+    let mut failures = 0;
+    for _ in 0..2000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 1 + (seed / 65536) % 25;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let span = if (seed / 65536) % 2 == 0 { 2 } else { 100 };
+        let mut items: Vec[Option[i64]] = Vec.new();
+        for k in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let r = seed / 65536;
+            if k > 0 and r % 3 == 0 {
+                items.push(None);
+            } else {
+                items.push(Some(r % (2 * span + 1) - span));
+            }
+        }
+        cases += 1;
+        let l = links(items);
+        let want = oracle(items);
+        let got = arms(items);
+        let flipped = Links { vals: l.vals.clone(), left: l.right.clone(), right: l.left.clone() };
+        let mirrored = arms(to_items(flipped));
+        let mut values = l.vals.clone();
+        values.sort();
+        let mut leaves: Vec[i64] = Vec.new();
+        for id in 0..l.vals.len() {
+            if l.left[id] < 0 and l.right[id] < 0 {
+                leaves.push(id);
+            }
+        }
+        for a in 0..got.len() {
+            let r = got[a].clone();
+            checks += 5;
+            if r != want {
+                failures += 1;
+                println(f"P1 arm {a} {items}: {r} vs {want}");
+            }
+            let mut seen: Vec[i64] = Vec.new();
+            for g in r.iter() {
+                for v in g.iter() {
+                    seen.push(v);
+                }
+            }
+            seen.sort();
+            if seen != values {
+                failures += 1;
+                println(f"P2 arm {a} {items}: {r}");
+            }
+            if r.len() != height(l, 0) + 1 {
+                failures += 1;
+                println(f"P3 arm {a} {items}: {r.len()} groups");
+            }
+            let mut flipped_back: Vec[Vec[i64]] = Vec.new();
+            for g in mirrored[a].iter() {
+                let mut rev = g.clone();
+                rev.reverse();
+                flipped_back.push(rev);
+            }
+            if flipped_back != r {
+                failures += 1;
+                println(f"P4 arm {a} {items}: {mirrored[a]} vs {r}");
+            }
+            let last = r[r.len() - 1].clone();
+            if r[0].len() != leaves.len() or last.len() != 1 or last[0] != l.vals[0] {
+                failures += 1;
+                println(f"P5 arm {a} {items}: {r}");
+            }
+        }
+    }
+    println(f"{cases} cases, {checks} checks, {failures} failures");
+}

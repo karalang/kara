@@ -1,0 +1,12 @@
+example: TTFFFT
+no calls: 
+one message once: T
+exactly ten seconds later: TT
+nine seconds later: TF
+same timestamp twice: TF
+refusals do not reset the clock: TFFTFT
+messages are independent: TTFFTT
+empty message: TFT
+prefixes are different messages: TTTF
+large timestamps: TFT
+20000 random calls: 17822 printed, checksum 689371100

@@ -1,0 +1,103 @@
+// LeetCode #358: Rearrange String k Distance Apart -- greedy with a
+// max-heap of the letters that may go next and a queue of the ones cooling
+// down.
+//
+// At every position, write the letter with the most copies left among those
+// whose last copy is at least k positions back, the smallest letter on a tie.
+// A letter that has just been written waits in a first-in-first-out queue
+// until k positions have passed and then rejoins the heap. If the heap is
+// ever empty while letters remain, no arrangement exists and the answer is
+// the empty string. The tie rule makes the answer unique, so every arm and
+// every mirror prints the same string.
+
+fn rearrange(s: ref String, k: i64) -> String {
+    let mut counts: Vec[i64] = vec![0; 26];
+    for b in s.bytes() {
+        counts[(b as i64) - (b'a' as i64)] += 1;
+    }
+    // (copies left, -letter): the largest pops first, so the most copies wins
+    // and, among equal counts, the smallest letter.
+    let mut ready: PriorityQueue[(i64, i64)] = PriorityQueue.max_first();
+    for c in 0..26 {
+        if counts[c] > 0 {
+            ready.push((counts[c], 0 - c));
+        }
+    }
+    // Every letter written goes to the back of `cooling`, even its last copy,
+    // so that the queue's length counts positions. Once it holds k entries
+    // the front one was written k positions ago and may be written again.
+    let mut cooling: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut out = String.new();
+    for _ in 0..s.len() {
+        match ready.pop() {
+            Some((left, neg)) => {
+                let c = 0 - neg;
+                out.push(((c + (b'a' as i64)) as u8) as char);
+                cooling.push_back((left - 1, c));
+            }
+            None => { return String.new(); }
+        }
+        if cooling.len() >= k {
+            match cooling.pop_front() {
+                Some((left, c)) => {
+                    if left > 0 {
+                        ready.push((left, 0 - c));
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+    out
+}
+
+fn show(label: String, s: String, k: i64) {
+    println(f"{label}: \"{rearrange(s, k)}\"");
+}
+
+fn main() {
+    show("example 1", "aabbcc", 3);
+    show("example 2", "aaabc", 3);
+    show("example 3", "aaadbbcc", 2);
+
+    show("k = 0", "aabbbc", 0);
+    show("k = 1", "aaabbc", 1);
+    show("one letter", "z", 5);
+    show("one letter repeated, k = 1", "aaaa", 1);
+    show("one letter repeated, k = 2", "aaaa", 2);
+    show("k equals the length", "abcd", 4);
+    show("k beyond the length", "abc", 9);
+    show("ties go to the smaller letter", "ddccbbaa", 2);
+    show("tight: the most frequent letter just fits", "aaabbbccd", 3);
+    show("every letter fills its slots", "aaabbbcccdd", 4);
+    show("one copy too many", "aaab", 2);
+
+    // A long run: 2,000 random strings of 0 to 24 letters drawn from the first
+    // two to six letters, with k from 0 to 4.
+    let mut seed: i64 = 358;
+    let mut possible = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = (seed / 65536) % 25;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let width = (seed / 65536) % 5 + 2;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let k = (seed / 65536) % 5;
+        let mut s = String.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let c = (seed / 65536) % width;
+            s.push(((c + (b'a' as i64)) as u8) as char);
+        }
+        let r = rearrange(s, k);
+        if r.len() == s.len() {
+            possible += 1;
+        }
+        for b in r.bytes() {
+            checksum = (checksum * 31 + (b as i64)) % 1000000007;
+        }
+        checksum = (checksum * 31 + 7) % 1000000007;
+    }
+    println(f"2000 random strings: {possible} can be arranged, checksum {checksum}");
+}

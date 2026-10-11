@@ -1,0 +1,242 @@
+// Differential test for LeetCode #358: the three arms against an oracle
+// that searches every arrangement.
+//
+// The oracle never uses the greedy rule. It fills positions left to right,
+// trying every letter that still has copies and whose last copy is at least
+// k positions back, and backtracks; an arrangement exists exactly when the
+// search reaches the end. 3,000 random strings of 0 to 8 letters over the
+// first one to four letters, k from 0 to 4.
+//
+//   P1  an arm returns "" exactly when the oracle finds no arrangement
+//   P2  a non-empty answer uses every letter of s exactly as often as s does
+//   P3  a non-empty answer keeps equal letters at least k positions apart
+//   P4  the three arms return the same string
+//   P5  if no arrangement exists for k, none exists for k + 1
+
+fn rearrange_heap(s: ref String, k: i64) -> String {
+    let mut counts: Vec[i64] = vec![0; 26];
+    for b in s.bytes() {
+        counts[(b as i64) - (b'a' as i64)] += 1;
+    }
+    // (copies left, -letter): the largest pops first, so the most copies wins
+    // and, among equal counts, the smallest letter.
+    let mut ready: PriorityQueue[(i64, i64)] = PriorityQueue.max_first();
+    for c in 0..26 {
+        if counts[c] > 0 {
+            ready.push((counts[c], 0 - c));
+        }
+    }
+    // Every letter written goes to the back of `cooling`, even its last copy,
+    // so that the queue's length counts positions. Once it holds k entries
+    // the front one was written k positions ago and may be written again.
+    let mut cooling: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut out = String.new();
+    for _ in 0..s.len() {
+        match ready.pop() {
+            Some((left, neg)) => {
+                let c = 0 - neg;
+                out.push(((c + (b'a' as i64)) as u8) as char);
+                cooling.push_back((left - 1, c));
+            }
+            None => { return String.new(); }
+        }
+        if cooling.len() >= k {
+            match cooling.pop_front() {
+                Some((left, c)) => {
+                    if left > 0 {
+                        ready.push((left, 0 - c));
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+    out
+}
+
+fn rearrange_scan(s: ref String, k: i64) -> String {
+    let mut counts: Vec[i64] = vec![0; 26];
+    for b in s.bytes() {
+        counts[(b as i64) - (b'a' as i64)] += 1;
+    }
+    let mut last: Vec[i64] = vec![0 - 1; 26];
+    let mut out = String.new();
+    for pos in 0..s.len() {
+        let mut best = 0 - 1;
+        for c in 0..26 {
+            if counts[c] == 0 {
+                continue;
+            }
+            if last[c] >= 0 and pos - last[c] < k {
+                continue;
+            }
+            if best < 0 or counts[c] > counts[best] {
+                best = c;
+            }
+        }
+        if best < 0 {
+            return String.new();
+        }
+        out.push(((best + (b'a' as i64)) as u8) as char);
+        counts[best] -= 1;
+        last[best] = pos;
+    }
+    out
+}
+
+fn rearrange_sorted(s: ref String, k: i64) -> String {
+    let mut counts: Vec[i64] = vec![0; 26];
+    for b in s.bytes() {
+        counts[(b as i64) - (b'a' as i64)] += 1;
+    }
+    let mut letters: Vec[(i64, i64, i64)] = Vec.new();
+    for c in 0..26 {
+        if counts[c] > 0 {
+            letters.push((counts[c], c, 0 - k - 1));
+        }
+    }
+    let mut out = String.new();
+    for pos in 0..s.len() {
+        letters.sort_by(|a, b| (b.0, a.1).cmp((a.0, b.1)));
+        let mut pick = 0 - 1;
+        for i in 0..letters.len() {
+            if pos - letters[i].2 >= k {
+                pick = i;
+                break;
+            }
+        }
+        if pick < 0 {
+            return String.new();
+        }
+        let (left, c, _) = letters[pick];
+        out.push(((c + (b'a' as i64)) as u8) as char);
+        if left == 1 {
+            letters.remove(pick);
+        } else {
+            letters[pick] = (left - 1, c, pos);
+        }
+    }
+    out
+}
+
+fn search(counts: mut ref Vec[i64], last: mut ref Vec[i64], pos: i64, n: i64, k: i64) -> bool {
+    if pos == n {
+        return true;
+    }
+    for c in 0..26 {
+        if counts[c] == 0 {
+            continue;
+        }
+        if last[c] >= 0 and pos - last[c] < k {
+            continue;
+        }
+        let before = last[c];
+        counts[c] -= 1;
+        last[c] = pos;
+        let found = search(counts, last, pos + 1, n, k);
+        counts[c] += 1;
+        last[c] = before;
+        if found {
+            return true;
+        }
+    }
+    false
+}
+
+fn arrangeable(s: ref String, k: i64) -> bool {
+    let mut counts: Vec[i64] = vec![0; 26];
+    for b in s.bytes() {
+        counts[(b as i64) - (b'a' as i64)] += 1;
+    }
+    let mut last: Vec[i64] = vec![0 - 1; 26];
+    search(mut counts, mut last, 0, s.len(), k)
+}
+
+fn letter_counts(s: ref String) -> Vec[i64] {
+    let mut counts: Vec[i64] = vec![0; 26];
+    for b in s.bytes() {
+        counts[(b as i64) - (b'a' as i64)] += 1;
+    }
+    counts
+}
+
+fn spaced(r: ref String, k: i64) -> bool {
+    let bytes = r.bytes();
+    for i in 0..bytes.len() {
+        for j in (i + 1)..bytes.len() {
+            if j - i >= k {
+                break;
+            }
+            if bytes[i] == bytes[j] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn main() {
+    let mut seed: i64 = 3580;
+    let mut cases = 0;
+    let mut checks = 0;
+    let mut arrangeable_count = 0;
+    let mut failures = 0;
+    for _ in 0..3000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = (seed / 65536) % 9;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let width = (seed / 65536) % 4 + 1;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let k = (seed / 65536) % 5;
+        let mut s = String.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let c = (seed / 65536) % width;
+            s.push(((c + (b'a' as i64)) as u8) as char);
+        }
+        cases += 1;
+        let ok = arrangeable(s, k);
+        if ok {
+            arrangeable_count += 1;
+        }
+        let answers = vec![rearrange_heap(s, k), rearrange_scan(s, k), rearrange_sorted(s, k)];
+        let want = letter_counts(s);
+        for r in answers.iter() {
+            // P1
+            checks += 1;
+            if (r.len() == s.len() and n > 0) != (ok and n > 0) {
+                failures += 1;
+                println(f"P1 \"{s}\" k={k}: got \"{r}\", oracle {ok}");
+            }
+            if r.len() > 0 {
+                // P2
+                checks += 1;
+                if letter_counts(r) != want {
+                    failures += 1;
+                    println(f"P2 \"{s}\" k={k}: got \"{r}\"");
+                }
+                // P3
+                checks += 1;
+                if not spaced(r, k) {
+                    failures += 1;
+                    println(f"P3 \"{s}\" k={k}: got \"{r}\"");
+                }
+            }
+        }
+        // P4
+        checks += 1;
+        if answers[0] != answers[1] or answers[0] != answers[2] {
+            failures += 1;
+            println(f"P4 \"{s}\" k={k}: {answers[0]} / {answers[1]} / {answers[2]}");
+        }
+        // P5
+        if not ok {
+            checks += 1;
+            if arrangeable(s, k + 1) {
+                failures += 1;
+                println(f"P5 \"{s}\" k={k}");
+            }
+        }
+    }
+    println(f"{cases} cases, {checks} checks, {arrangeable_count} arrangeable, {failures} failures");
+}

@@ -1,0 +1,44 @@
+// Benchmark for #367: three million random numbers below 2^31, half of them
+// squares, each tested with the kata's binary search on the root.
+
+fn is_perfect_square(num: i64) -> bool {
+    let mut lo: i64 = 1;
+    let mut hi = num;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        let sq = mid * mid;
+        if sq == num {
+            return true;
+        }
+        if sq < num {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    false
+}
+
+fn main() {
+    let mut seed: i64 = 367;
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for i in 0..3000000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let high = seed / 65536;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        // 30 random bits from two steps of the generator.
+        let wide = high * 32768 + seed / 65536;
+        let num = if i % 2 == 0 {
+            let r = 1 + wide % 46340;
+            r * r
+        } else {
+            1 + wide + (i / 2 % 2) * 1073741823
+        };
+        if is_perfect_square(num) {
+            yes += 1;
+            checksum = (checksum * 31 + i) % 1000000007;
+        }
+    }
+    println(f"{yes} squares, checksum {checksum}");
+}

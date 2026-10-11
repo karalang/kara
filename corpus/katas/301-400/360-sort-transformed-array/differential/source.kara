@@ -1,0 +1,200 @@
+// Differential test for LeetCode #360: the three arms against an oracle
+// that sorts by insertion.
+//
+// The oracle evaluates the polynomial itself, in Horner form, and inserts
+// each result into place, without using the parabola's shape, the arms' f
+// or the library sort. 3,000 random sorted
+// inputs of 0 to 12 values in -6..=6 (so duplicates and the vertex inside the
+// input are common) with coefficients in -3..=3.
+//
+//   P1  every arm returns the oracle's list
+//   P2  every arm's list is sorted
+//   P3  every arm's list has the input's length
+//   P4  negating a, b and c reverses and negates the list
+//   P5  adding d to c adds d to every value
+
+fn f(x: i64, a: i64, b: i64, c: i64) -> i64 {
+    a * x * x + b * x + c
+}
+
+fn two_pointers(nums: ref Vec[i64], a: i64, b: i64, c: i64) -> Vec[i64] {
+    let n = nums.len();
+    let mut out: Vec[i64] = vec![0; n];
+    let mut lo = 0;
+    let mut hi = n - 1;
+    if a >= 0 {
+        let mut k = n - 1;
+        while lo <= hi {
+            let left = f(nums[lo], a, b, c);
+            let right = f(nums[hi], a, b, c);
+            if left >= right {
+                out[k] = left;
+                lo += 1;
+            } else {
+                out[k] = right;
+                hi -= 1;
+            }
+            k -= 1;
+        }
+    } else {
+        let mut k = 0;
+        while lo <= hi {
+            let left = f(nums[lo], a, b, c);
+            let right = f(nums[hi], a, b, c);
+            if left <= right {
+                out[k] = left;
+                lo += 1;
+            } else {
+                out[k] = right;
+                hi -= 1;
+            }
+            k += 1;
+        }
+    }
+    out
+}
+
+fn transform_and_sort(nums: ref Vec[i64], a: i64, b: i64, c: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = nums.iter().map(|x| f(x, a, b, c)).collect();
+    out.sort();
+    out
+}
+
+fn vertex_merge(nums: ref Vec[i64], a: i64, b: i64, c: i64) -> Vec[i64] {
+    let values: Vec[i64] = nums.iter().map(|x| f(x, a, b, c)).collect();
+    let n = values.len();
+    if n == 0 {
+        return values;
+    }
+    // Normalise to an upward parabola: g = -f when a < 0. Then g first falls
+    // and then rises; a line (a = 0) is the case where one of the two runs is
+    // empty, so it needs no case of its own.
+    let flip = a < 0;
+    let mut g: Vec[i64] = Vec.new();
+    for v in values.iter() {
+        g.push(if flip { 0 - v } else { v });
+    }
+    let mut split = 0;
+    while split + 1 < n and g[split + 1] <= g[split] {
+        split += 1;
+    }
+    // g[0..=split] falls, g[split + 1..] rises. Merge them in ascending order.
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = split + 1;
+    let mut j = split + 1;
+    while i > 0 or j < n {
+        if j >= n or (i > 0 and g[i - 1] <= g[j]) {
+            out.push(g[i - 1]);
+            i -= 1;
+        } else {
+            out.push(g[j]);
+            j += 1;
+        }
+    }
+    if flip {
+        let mut back: Vec[i64] = Vec.new();
+        let mut k = n;
+        while k > 0 {
+            k -= 1;
+            back.push(0 - out[k]);
+        }
+        return back;
+    }
+    out
+}
+
+fn oracle(nums: ref Vec[i64], a: i64, b: i64, c: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in nums.iter() {
+        let v = (a * x + b) * x + c;
+        let mut i = out.len();
+        out.push(v);
+        while i > 0 and out[i - 1] > v {
+            out[i] = out[i - 1];
+            i -= 1;
+        }
+        out[i] = v;
+    }
+    out
+}
+
+fn arms(nums: ref Vec[i64], a: i64, b: i64, c: i64) -> Vec[Vec[i64]] {
+    vec![two_pointers(nums, a, b, c), transform_and_sort(nums, a, b, c), vertex_merge(nums, a, b, c)]
+}
+
+fn main() {
+    let mut seed: i64 = 3600;
+    let mut cases = 0;
+    let mut checks = 0;
+    let mut failures = 0;
+    for _ in 0..3000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = (seed / 65536) % 13;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            nums.push((seed / 65536) % 13 - 6);
+        }
+        nums.sort();
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let a = (seed / 65536) % 7 - 3;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let b = (seed / 65536) % 7 - 3;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let c = (seed / 65536) % 7 - 3;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let d = (seed / 65536) % 41 - 20;
+        cases += 1;
+        let want = oracle(nums, a, b, c);
+        let got = arms(nums, a, b, c);
+        let negated = arms(nums, 0 - a, 0 - b, 0 - c);
+        let shifted = arms(nums, a, b, c + d);
+        for k in 0..got.len() {
+            let r = got[k].clone();
+            // P1
+            checks += 1;
+            if r != want {
+                failures += 1;
+                println(f"P1 arm {k} {nums} a={a} b={b} c={c}: {r} vs {want}");
+            }
+            // P2
+            checks += 1;
+            let mut sorted = true;
+            for i in 1..r.len() {
+                if r[i - 1] > r[i] {
+                    sorted = false;
+                }
+            }
+            if not sorted {
+                failures += 1;
+                println(f"P2 arm {k} {nums} a={a} b={b} c={c}: {r}");
+            }
+            // P3
+            checks += 1;
+            if r.len() != nums.len() {
+                failures += 1;
+                println(f"P3 arm {k} {nums} a={a} b={b} c={c}: {r}");
+            }
+            // P4
+            checks += 1;
+            let mut mirrored: Vec[i64] = Vec.new();
+            let mut i = r.len();
+            while i > 0 {
+                i -= 1;
+                mirrored.push(0 - r[i]);
+            }
+            if negated[k] != mirrored {
+                failures += 1;
+                println(f"P4 arm {k} {nums} a={a} b={b} c={c}: {negated[k]} vs {mirrored}");
+            }
+            // P5
+            checks += 1;
+            let moved: Vec[i64] = r.iter().map(|v| v + d).collect();
+            if shifted[k] != moved {
+                failures += 1;
+                println(f"P5 arm {k} {nums} a={a} b={b} c={c} d={d}");
+            }
+        }
+    }
+    println(f"{cases} cases, {checks} checks, {failures} failures");
+}

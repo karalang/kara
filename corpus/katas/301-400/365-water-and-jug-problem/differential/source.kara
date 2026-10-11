@@ -1,0 +1,150 @@
+// LeetCode #365: differential test. The gcd, set and total arms against
+// the breadth-first search over both jugs' states as the oracle, over 3,000
+// random triples, target 0 included. Properties: P1 each arm matches the
+// oracle; P2 swapping the jugs, P3 scaling all three numbers and P4
+// replacing the target by x + y - target change no answer; P5 the target is
+// measurable when it is x, y or x + y and never when it exceeds x + y.
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+fn gcd_arm(x: i64, y: i64, target: i64) -> bool {
+    target <= x + y and target % gcd(x, y) == 0
+}
+
+fn oracle(x: i64, y: i64, target: i64) -> bool {
+    if target > x + y {
+        return false;
+    }
+    let mut seen = vec![false; (x + 1) * (y + 1)];
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    seen[0] = true;
+    queue.push_back((0, 0));
+    loop {
+        match queue.pop_front() {
+            None => { return false; }
+            Some((a, b)) => {
+                if a + b == target {
+                    return true;
+                }
+                let to_b = a.min(y - b);
+                let to_a = b.min(x - a);
+                let moves = [(x, b), (a, y), (0, b), (a, 0), (a - to_b, b + to_b), (a + to_a, b - to_a)];
+                for (na, nb) in moves.iter() {
+                    let at = na * (y + 1) + nb;
+                    if not seen[at] {
+                        seen[at] = true;
+                        queue.push_back((na, nb));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn set_arm(x: i64, y: i64, target: i64) -> bool {
+    if target > x + y {
+        return false;
+    }
+    let mut seen: Set[(i64, i64)] = Set.new();
+    let mut stack: Vec[(i64, i64)] = vec![(0, 0)];
+    seen.insert((0, 0));
+    while not stack.is_empty() {
+        let (a, b) = stack.pop().unwrap();
+        if a + b == target {
+            return true;
+        }
+        let to_b = a.min(y - b);
+        let to_a = b.min(x - a);
+        for state in [(x, b), (a, y), (0, b), (a, 0), (a - to_b, b + to_b), (a + to_a, b - to_a)] {
+            if seen.insert(state) {
+                stack.push(state);
+            }
+        }
+    }
+    false
+}
+
+fn total_arm(x: i64, y: i64, target: i64) -> bool {
+    if target > x + y {
+        return false;
+    }
+    let cap = x + y;
+    let mut seen = vec![false; cap + 1];
+    let mut stack: Vec[i64] = vec![0];
+    seen[0] = true;
+    while not stack.is_empty() {
+        let t = stack.pop().unwrap();
+        if t == target {
+            return true;
+        }
+        for next in [t + x, t - x, t + y, t - y] {
+            if next >= 0 and next <= cap and not seen[next] {
+                seen[next] = true;
+                stack.push(next);
+            }
+        }
+    }
+    false
+}
+
+fn arms(x: i64, y: i64, target: i64) -> Vec[bool] {
+    vec![gcd_arm(x, y, target), set_arm(x, y, target), total_arm(x, y, target)]
+}
+
+fn main() {
+    let mut seed: i64 = 3650;
+    let mut cases = 0;
+    let mut checks = 0;
+    let mut failures = 0;
+    for _ in 0..3000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let x = 1 + (seed / 65536) % 30;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let y = 1 + (seed / 65536) % 30;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let target = (seed / 65536) % 71;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let c = 2 + (seed / 65536) % 2;
+        cases += 1;
+        let want = oracle(x, y, target);
+        let got = arms(x, y, target);
+        let swapped = arms(y, x, target);
+        let scaled = arms(c * x, c * y, c * target);
+        let complement = if target <= x + y { arms(x, y, x + y - target) } else { got.clone() };
+        let edges = [x, y, x + y, x + y + 1 + target];
+        let mut at_edges: Vec[Vec[bool]] = Vec.new();
+        for e in edges.iter() {
+            at_edges.push(arms(x, y, e));
+        }
+        for a in 0..got.len() {
+            let r = got[a];
+            checks += 4;
+            if r != want {
+                failures += 1;
+                println(f"P1 arm {a} ({x}, {y}, {target}): {r} vs {want}");
+            }
+            if swapped[a] != r {
+                failures += 1;
+                println(f"P2 arm {a} ({x}, {y}, {target})");
+            }
+            if scaled[a] != r {
+                failures += 1;
+                println(f"P3 arm {a} ({x}, {y}, {target}) by {c}");
+            }
+            if complement[a] != r {
+                failures += 1;
+                println(f"P4 arm {a} ({x}, {y}, {target})");
+            }
+            for e in 0..4 {
+                checks += 1;
+                if at_edges[e][a] != (e < 3) {
+                    failures += 1;
+                    println(f"P5 arm {a} ({x}, {y}, {edges[e]})");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, {checks} checks, {failures} failures");
+}

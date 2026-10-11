@@ -1,0 +1,16 @@
+source = "kara-katas/leetcode/301-400/365-water-and-jug-problem/water_jug_bfs.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:vecdeque"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "a1bc8de9e+local"
+model_rev = "8be6ddd7"
+model_src = "11d2c95b"

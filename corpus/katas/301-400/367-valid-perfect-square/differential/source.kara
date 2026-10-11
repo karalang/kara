@@ -1,0 +1,190 @@
+// LeetCode #367: differential test. The binary-search, Newton, odd-number
+// and bit-by-bit arms against an oracle that builds each number around a
+// known root: num = r * r + d with 0 <= d <= 2r lies from r^2 up to just
+// below (r + 1)^2, so it is a square exactly when d is 0. 2,000 cases.
+// Properties: P1 each arm matches the oracle; P2 multiplying num by 4 or 9
+// changes no answer; P3 r^2 is a square and r^2 - 1 (for r >= 2) and
+// r^2 + 1 are not; P4 a product of two squares is a square; P5 for small
+// num, the arm finds exactly r squares in 1..=num.
+
+const LIMIT: i64 = 2147483647;
+
+fn binary_arm(num: i64) -> bool {
+    let mut lo: i64 = 1;
+    let mut hi = num;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        let sq = mid * mid;
+        if sq == num {
+            return true;
+        }
+        if sq < num {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    false
+}
+
+fn newton_arm(num: i64) -> bool {
+    let mut x = num;
+    while x * x > num {
+        x = (x + num / x) / 2;
+    }
+    x * x == num
+}
+
+fn odd_arm(num: i64) -> bool {
+    let mut rest = num;
+    let mut odd: i64 = 1;
+    while rest > 0 {
+        rest -= odd;
+        odd += 2;
+    }
+    rest == 0
+}
+
+fn bits_arm(num: i64) -> bool {
+    let mut rest = num;
+    let mut root: i64 = 0;
+    let mut bit: i64 = 1 << 30;
+    while bit > num {
+        bit >>= 2;
+    }
+    while bit != 0 {
+        if rest >= root + bit {
+            rest -= root + bit;
+            root = (root >> 1) + bit;
+        } else {
+            root >>= 1;
+        }
+        bit >>= 2;
+    }
+    rest == 0
+}
+
+// Arm 2 is the odd-number arm, O(sqrt num): it runs only on numbers below
+// ODD_CAP so the test stays inside the corpus time limit.
+const ODD_CAP: i64 = 1000000;
+
+fn answer(arm: i64, num: i64) -> bool {
+    match arm {
+        0 => binary_arm(num),
+        1 => newton_arm(num),
+        2 => odd_arm(num),
+        _ => bits_arm(num),
+    }
+}
+
+fn runs(arm: i64, num: i64) -> bool {
+    arm != 2 or num < ODD_CAP
+}
+
+fn name(arm: i64) -> String {
+    match arm {
+        0 => "binary",
+        1 => "newton",
+        2 => "odd",
+        _ => "bits",
+    }
+}
+
+fn next(seed: i64) -> i64 {
+    (seed * 1103515245 + 12345) % 2147483648
+}
+
+// A draw in [0, n) for n up to 2^30. One step of the generator gives only
+// 15 good bits, so two steps are joined.
+fn below(seed: mut ref i64, n: i64) -> i64 {
+    seed = next(seed);
+    let high = seed / 65536;
+    seed = next(seed);
+    (high * 32768 + seed / 65536) % n
+}
+
+fn main() {
+    let mut seed: i64 = 367;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut fails = vec![0; 5];
+    for case in 0..2000 {
+        // A root from one of three ranges, so small numbers, mid-sized ones
+        // and ones near the 2^31 bound all turn up.
+        let span = match case % 3 {
+            0 => 30,
+            1 => 2000,
+            _ => 46340,
+        };
+        let r = 1 + below(mut seed, span);
+        // Half the cases are squares, the rest anywhere up to (r + 1)^2 - 1.
+        let d = if case % 2 == 0 { 0 } else { 1 + below(mut seed, 2 * r) };
+        let num = r * r + d;
+        let expected = d == 0;
+        let s = 1 + below(mut seed, 46340);
+        for arm in 0..4 {
+            let mut bad = vec![false; 5];
+            if runs(arm, num) {
+                checks += 1;
+                if answer(arm, num) != expected {
+                    bad[0] = true;
+                }
+                for f in [4, 9] {
+                    if num * f <= LIMIT and runs(arm, num * f) {
+                        checks += 1;
+                        if answer(arm, num * f) != expected {
+                            bad[1] = true;
+                        }
+                    }
+                }
+            }
+            let sq = r * r;
+            if runs(arm, sq + 1) {
+                checks += 2;
+                if not answer(arm, sq) or answer(arm, sq + 1) {
+                    bad[2] = true;
+                }
+                if r >= 2 {
+                    checks += 1;
+                    if answer(arm, sq - 1) {
+                        bad[2] = true;
+                    }
+                }
+            }
+            let rs = r * s;
+            if rs * rs <= LIMIT and runs(arm, rs * rs) {
+                checks += 1;
+                if not answer(arm, rs * rs) {
+                    bad[3] = true;
+                }
+            }
+            if num <= 300 {
+                checks += 1;
+                let mut found = 0;
+                for k in 1..=num {
+                    if answer(arm, k) {
+                        found += 1;
+                    }
+                }
+                if found != r {
+                    bad[4] = true;
+                }
+            }
+            for p in 0..5 {
+                if bad[p] {
+                    fails[p] += 1;
+                    failures += 1;
+                    if failures <= 5 {
+                        println(f"FAIL P{p + 1} {name(arm)} num={num}");
+                    }
+                }
+            }
+        }
+    }
+    for p in 0..5 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    println(f"2000 cases, {checks} checks, {failures} failures");
+}

@@ -1,0 +1,171 @@
+// LeetCode #366: Find Leaves of Binary Tree -- group by height.
+//
+// Collect the leaves, remove them, and repeat until the tree is empty. A
+// node is removed in round h exactly when its height is h, counting a leaf
+// as height 0: it becomes a leaf once everything below it is gone, which
+// takes as many rounds as its longest path down. So one postorder walk that
+// computes each node's height and files its value under that height gives
+// every round at once, each in left-to-right order. O(n).
+
+shared enum Tree {
+    Empty,
+    Node(i64, Tree, Tree),
+}
+
+fn build(l: ref Links, id: i64) -> Tree {
+    if id < 0 {
+        Tree.Empty
+    } else {
+        Tree.Node(l.vals[id], build(l, l.left[id]), build(l, l.right[id]))
+    }
+}
+
+// Files each node's value under its height and returns the height; an
+// empty tree has height -1.
+fn file_by_height(t: ref Tree, out: mut ref Vec[Vec[i64]]) -> i64 {
+    match t {
+        Empty => -1,
+        Node(v, left, right) => {
+            let h = 1 + file_by_height(left, out).max(file_by_height(right, out));
+            if h == out.len() {
+                out.push(Vec.new());
+            }
+            out[h].push(v);
+            h
+        }
+    }
+}
+
+fn find_leaves(items: ref Vec[Option[i64]]) -> Vec[Vec[i64]] {
+    let l = links(items);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if not l.vals.is_empty() {
+        file_by_height(build(l, 0), mut out);
+    }
+    out
+}
+
+// LeetCode's level-order form, "[1,2,3,null,5]", as a list of slots.
+fn parse_level_order(s: ref String) -> Vec[Option[i64]] {
+    let bytes = s.bytes();
+    let mut out: Vec[Option[i64]] = Vec.new();
+    let mut at = 1;
+    while at < bytes.len() - 1 {
+        if bytes[at] == b'n' {
+            out.push(None);
+            at = at + 4;
+        } else {
+            let mut sign = 1;
+            if bytes[at] == b'-' {
+                sign = -1;
+                at = at + 1;
+            }
+            let mut v = 0;
+            while bytes[at] >= b'0' and bytes[at] <= b'9' {
+                v = v * 10 + ((bytes[at] - b'0') as i64);
+                at = at + 1;
+            }
+            out.push(Some(sign * v));
+        }
+        if bytes[at] == b',' {
+            at = at + 1;
+        }
+    }
+    out
+}
+
+// Node ids are positions among the non-null slots, in level order; a child
+// link is an id, or -1 for no child.
+struct Links {
+    vals: Vec[i64],
+    left: Vec[i64],
+    right: Vec[i64],
+}
+
+fn links(items: ref Vec[Option[i64]]) -> Links {
+    let mut l = Links { vals: Vec.new(), left: Vec.new(), right: Vec.new() };
+    if items.is_empty() {
+        return l;
+    }
+    match items[0] {
+        None => { return l; }
+        Some(v) => {
+            l.vals.push(v);
+            l.left.push(-1);
+            l.right.push(-1);
+        }
+    }
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(0);
+    let mut i = 1;
+    while i < items.len() {
+        let parent = match queue.pop_front() {
+            Some(p) => p,
+            None => { break; }
+        };
+        for side in 0..2 {
+            if i < items.len() {
+                match items[i] {
+                    Some(v) => {
+                        let id = l.vals.len();
+                        l.vals.push(v);
+                        l.left.push(-1);
+                        l.right.push(-1);
+                        if side == 0 {
+                            l.left[parent] = id;
+                        } else {
+                            l.right[parent] = id;
+                        }
+                        queue.push_back(id);
+                    }
+                    None => {}
+                }
+                i = i + 1;
+            }
+        }
+    }
+    l
+}
+
+fn show(label: String, text: String) {
+    println(f"{label}: {find_leaves(parse_level_order(text))}");
+}
+
+fn main() {
+    show("example 1", "[1,2,3,4,5]");
+    show("example 2", "[1]");
+    show("an empty tree", "[]");
+    show("a left chain", "[1,2,null,3,null,4]");
+    show("a right chain", "[1,null,2,null,3]");
+    show("a perfect tree", "[1,2,3,4,5,6,7]");
+    show("a shallow leaf beside a deep one", "[1,2,3,null,null,4,5,null,6]");
+    show("negative and repeated values", "[-1,-1,0,null,-100,100,0]");
+    show("a two-node tree", "[5,null,6]");
+    // Random trees: a level-order list of up to 40 slots, a quarter of them
+    // empty. Fold every group into a checksum, with a marker between groups.
+    let mut seed: i64 = 366;
+    let mut checksum: i64 = 0;
+    let mut groups = 0;
+    for _ in 0..400 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 1 + (seed / 65536) % 40;
+        let mut items: Vec[Option[i64]] = Vec.new();
+        for k in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let r = seed / 65536;
+            if k > 0 and r % 4 == 0 {
+                items.push(None);
+            } else {
+                items.push(Some(r % 201 - 100));
+            }
+        }
+        for group in find_leaves(items).iter() {
+            groups += 1;
+            for v in group.iter() {
+                checksum = (checksum * 31 + v + 101) % 1000000007;
+            }
+            checksum = (checksum * 31 + 7) % 1000000007;
+        }
+    }
+    println(f"400 random trees: {groups} groups, checksum {checksum}");
+}

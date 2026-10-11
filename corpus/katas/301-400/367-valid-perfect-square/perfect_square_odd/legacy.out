@@ -1,0 +1,12 @@
+example 1: true
+example 2: false
+one: true
+two: false
+one below a square: false
+a square: true
+one above a square: false
+a million: true
+the largest square in range: true
+one above it: false
+the largest input: false
+1000 random numbers: 500 squares, checksum 458948806

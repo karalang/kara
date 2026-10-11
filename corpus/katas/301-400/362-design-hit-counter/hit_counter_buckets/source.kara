@@ -1,0 +1,85 @@
+// LeetCode #362: Design Hit Counter -- 300 one-second buckets in a ring.
+//
+// Bucket t % 300 holds the second it was last used for and the number of
+// hits in that second; a hit into a bucket that still holds an older second
+// resets it first. get_hits(t) adds the buckets whose second lies in
+// (t - 300, t]. Memory is fixed at 300 buckets however many hits arrive,
+// which is the follow-up's answer for a high hit rate.
+
+struct HitCounter {
+    seconds: Vec[i64],
+    counts: Vec[i64],
+}
+
+impl HitCounter {
+    fn new() -> HitCounter {
+        HitCounter { seconds: vec![0 - 1; 300], counts: vec![0; 300] }
+    }
+
+    fn hit(mut ref self, timestamp: i64) {
+        let slot = timestamp % 300;
+        if self.seconds[slot] != timestamp {
+            self.seconds[slot] = timestamp;
+            self.counts[slot] = 0;
+        }
+        self.counts[slot] += 1;
+    }
+
+    fn get_hits(mut ref self, timestamp: i64) -> i64 {
+        let mut total = 0;
+        for i in 0..300 {
+            if self.seconds[i] > timestamp - 300 and self.seconds[i] <= timestamp {
+                total += self.counts[i];
+            }
+        }
+        total
+    }
+}
+
+// An operation is (true, t) for hit(t) and (false, t) for get_hits(t).
+fn run(label: String, ops: Vec[(bool, i64)]) {
+    let mut counter = HitCounter.new();
+    let mut answers: Vec[i64] = Vec.new();
+    for (is_hit, t) in ops.iter() {
+        if is_hit {
+            counter.hit(t);
+        } else {
+            answers.push(counter.get_hits(t));
+        }
+    }
+    println(f"{label}: {answers}");
+}
+
+fn main() {
+    run("example", vec![(true, 1), (true, 2), (true, 3), (false, 4), (true, 300), (false, 300), (false, 301)]);
+
+    run("no hits", vec![(false, 1), (false, 1000)]);
+    run("a hit is counted at its own second", vec![(true, 5), (false, 5)]);
+    run("299 seconds later", vec![(true, 1), (false, 300)]);
+    run("300 seconds later", vec![(true, 1), (false, 301)]);
+    run("many hits in one second", vec![(true, 7), (true, 7), (true, 7), (false, 7), (false, 306), (false, 307)]);
+    run("a long gap empties the window", vec![(true, 1), (true, 2), (false, 2), (false, 100000)]);
+    run("a sliding window", vec![(true, 100), (true, 200), (true, 300), (false, 399), (false, 400), (false, 499), (false, 500), (false, 599), (false, 600)]);
+    run("queries between hits", vec![(false, 0), (true, 0), (false, 0), (true, 150), (false, 299), (false, 300), (true, 450), (false, 451)]);
+    run("large timestamps", vec![(true, 2000000000), (true, 2000000299), (false, 2000000299), (false, 2000000300)]);
+
+    // A long run: 20,000 calls, timestamps advancing by 0 to 9 seconds, with
+    // one call in three a query.
+    let mut seed: i64 = 362;
+    let mut counter = HitCounter.new();
+    let mut t: i64 = 1;
+    let mut queries = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..20000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        t += (seed / 65536) % 10;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        if (seed / 65536) % 3 == 0 {
+            queries += 1;
+            checksum = (checksum * 31 + counter.get_hits(t)) % 1000000007;
+        } else {
+            counter.hit(t);
+        }
+    }
+    println(f"20000 random calls: {queries} queries, checksum {checksum}");
+}

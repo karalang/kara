@@ -1,0 +1,11 @@
+example: [3, 4, 3]
+no hits: [0, 0]
+a hit is counted at its own second: [1]
+299 seconds later: [1]
+300 seconds later: [0]
+many hits in one second: [3, 3, 0]
+a long gap empties the window: [2, 0]
+a sliding window: [3, 2, 2, 1, 1, 0]
+queries between hits: [0, 1, 2, 1, 1]
+large timestamps: [2, 1]
+20000 random calls: 6659 queries, checksum 78473801

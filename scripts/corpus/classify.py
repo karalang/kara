@@ -60,8 +60,9 @@ from corpus_lib import ROOT, entries, read_toml, write_toml  # noqa: E402
 
 PASSING = {"a", "b", "c"}
 # expected.out that states the spec rather than a legacy record: a core pin,
-# the drop model (drop-matrix/, or an e-spec resolution), an apps mirror.
-SPEC_SOURCES = ("pin", "spec", "mirror", "decision")
+# the drop model (drop-matrix/, or an e-spec resolution), an apps or kata
+# mirror, a ruling, or a kata differential's own all-pass verdict (`oracle`).
+SPEC_SOURCES = ("pin", "spec", "mirror", "decision", "oracle")
 SPEC_VERDICTS = {"SAME", "ORDER", "ORDER-UNSPEC", "DIFF"}
 # What M1 does not promise (gate rules 2026-10-08, item 2).
 POST_M1 = [

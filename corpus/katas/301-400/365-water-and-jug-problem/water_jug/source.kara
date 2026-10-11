@@ -1,0 +1,53 @@
+// LeetCode #365: Water and Jug Problem -- Bézout's identity.
+//
+// Every move keeps the total water a combination a*x + b*y of the two
+// capacities, and by Bézout's identity those combinations are exactly the
+// multiples of gcd(x, y). Every such multiple from 0 to x + y can in fact be
+// left in the two jugs together, so the target is measurable exactly when
+// it is at most x + y and a multiple of gcd(x, y). O(log min(x, y)).
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+fn can_measure_water(x: i64, y: i64, target: i64) -> bool {
+    target <= x + y and target % gcd(x, y) == 0
+}
+
+fn show(label: String, x: i64, y: i64, target: i64) {
+    println(f"{label}: {can_measure_water(x, y, target)}");
+}
+
+fn main() {
+    show("example 1", 3, 5, 4);
+    show("example 2", 2, 6, 5);
+    show("example 3", 1, 2, 3);
+    show("both jugs full", 4, 9, 13);
+    show("more than both jugs hold", 4, 9, 14);
+    show("one jug's capacity", 6, 10, 6);
+    show("equal jugs, their capacity", 7, 7, 7);
+    show("equal jugs, something else", 7, 7, 3);
+    show("coprime jugs reach every amount", 8, 13, 1);
+    show("not a multiple of the gcd", 6, 15, 10);
+    show("a multiple of the gcd", 6, 15, 12);
+    show("a one-litre jug", 1, 1000, 999);
+    // Random triples: count the measurable ones and fold the answers into a
+    // checksum, one bit per triple.
+    let mut seed: i64 = 365;
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..3000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let x = 1 + (seed / 65536) % 60;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let y = 1 + (seed / 65536) % 60;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let target = 1 + (seed / 65536) % 130;
+        let ok = can_measure_water(x, y, target);
+        if ok {
+            yes += 1;
+        }
+        checksum = (checksum * 2 + if ok { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"3000 random triples: {yes} measurable, checksum {checksum}");
+}

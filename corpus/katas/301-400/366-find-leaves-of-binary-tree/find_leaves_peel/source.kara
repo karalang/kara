@@ -1,0 +1,191 @@
+// LeetCode #366: Find Leaves of Binary Tree -- peel by child counts.
+//
+// Work on the child links directly. Count each node's children; the nodes
+// with none are the first round. Removing a node takes one from its
+// parent's count, and a parent whose count reaches zero joins the next
+// round. This is a topological peel from the leaves up, like Kahn's
+// algorithm. Each round is sorted by preorder position so that it reads
+// left to right, as the other arms do. O(n log n) for the sorts.
+
+fn find_leaves(items: ref Vec[Option[i64]]) -> Vec[Vec[i64]] {
+    let l = links(items);
+    let n = l.vals.len();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if n == 0 {
+        return out;
+    }
+    let mut parent = vec![-1; n];
+    let mut kids = vec![0; n];
+    for id in 0..n {
+        for child in [l.left[id], l.right[id]] {
+            if child >= 0 {
+                parent[child] = id;
+                kids[id] += 1;
+            }
+        }
+    }
+    // Preorder positions, from an explicit stack.
+    let mut rank = vec![0; n];
+    let mut stack: Vec[i64] = vec![0];
+    let mut next_rank = 0;
+    while not stack.is_empty() {
+        let id = stack.pop().unwrap();
+        rank[id] = next_rank;
+        next_rank += 1;
+        if l.right[id] >= 0 {
+            stack.push(l.right[id]);
+        }
+        if l.left[id] >= 0 {
+            stack.push(l.left[id]);
+        }
+    }
+    let mut round: Vec[i64] = Vec.new();
+    for id in 0..n {
+        if kids[id] == 0 {
+            round.push(id);
+        }
+    }
+    while not round.is_empty() {
+        round.sort_by_key(|id| rank[id]);
+        let mut group: Vec[i64] = Vec.new();
+        let mut next_round: Vec[i64] = Vec.new();
+        for id in round.iter() {
+            group.push(l.vals[id]);
+            let p = parent[id];
+            if p >= 0 {
+                kids[p] -= 1;
+                if kids[p] == 0 {
+                    next_round.push(p);
+                }
+            }
+        }
+        out.push(group);
+        round = next_round;
+    }
+    out
+}
+
+// LeetCode's level-order form, "[1,2,3,null,5]", as a list of slots.
+fn parse_level_order(s: ref String) -> Vec[Option[i64]] {
+    let bytes = s.bytes();
+    let mut out: Vec[Option[i64]] = Vec.new();
+    let mut at = 1;
+    while at < bytes.len() - 1 {
+        if bytes[at] == b'n' {
+            out.push(None);
+            at = at + 4;
+        } else {
+            let mut sign = 1;
+            if bytes[at] == b'-' {
+                sign = -1;
+                at = at + 1;
+            }
+            let mut v = 0;
+            while bytes[at] >= b'0' and bytes[at] <= b'9' {
+                v = v * 10 + ((bytes[at] - b'0') as i64);
+                at = at + 1;
+            }
+            out.push(Some(sign * v));
+        }
+        if bytes[at] == b',' {
+            at = at + 1;
+        }
+    }
+    out
+}
+
+// Node ids are positions among the non-null slots, in level order; a child
+// link is an id, or -1 for no child.
+struct Links {
+    vals: Vec[i64],
+    left: Vec[i64],
+    right: Vec[i64],
+}
+
+fn links(items: ref Vec[Option[i64]]) -> Links {
+    let mut l = Links { vals: Vec.new(), left: Vec.new(), right: Vec.new() };
+    if items.is_empty() {
+        return l;
+    }
+    match items[0] {
+        None => { return l; }
+        Some(v) => {
+            l.vals.push(v);
+            l.left.push(-1);
+            l.right.push(-1);
+        }
+    }
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(0);
+    let mut i = 1;
+    while i < items.len() {
+        let parent = match queue.pop_front() {
+            Some(p) => p,
+            None => { break; }
+        };
+        for side in 0..2 {
+            if i < items.len() {
+                match items[i] {
+                    Some(v) => {
+                        let id = l.vals.len();
+                        l.vals.push(v);
+                        l.left.push(-1);
+                        l.right.push(-1);
+                        if side == 0 {
+                            l.left[parent] = id;
+                        } else {
+                            l.right[parent] = id;
+                        }
+                        queue.push_back(id);
+                    }
+                    None => {}
+                }
+                i = i + 1;
+            }
+        }
+    }
+    l
+}
+
+fn show(label: String, text: String) {
+    println(f"{label}: {find_leaves(parse_level_order(text))}");
+}
+
+fn main() {
+    show("example 1", "[1,2,3,4,5]");
+    show("example 2", "[1]");
+    show("an empty tree", "[]");
+    show("a left chain", "[1,2,null,3,null,4]");
+    show("a right chain", "[1,null,2,null,3]");
+    show("a perfect tree", "[1,2,3,4,5,6,7]");
+    show("a shallow leaf beside a deep one", "[1,2,3,null,null,4,5,null,6]");
+    show("negative and repeated values", "[-1,-1,0,null,-100,100,0]");
+    show("a two-node tree", "[5,null,6]");
+    // Random trees: a level-order list of up to 40 slots, a quarter of them
+    // empty. Fold every group into a checksum, with a marker between groups.
+    let mut seed: i64 = 366;
+    let mut checksum: i64 = 0;
+    let mut groups = 0;
+    for _ in 0..400 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 1 + (seed / 65536) % 40;
+        let mut items: Vec[Option[i64]] = Vec.new();
+        for k in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let r = seed / 65536;
+            if k > 0 and r % 4 == 0 {
+                items.push(None);
+            } else {
+                items.push(Some(r % 201 - 100));
+            }
+        }
+        for group in find_leaves(items).iter() {
+            groups += 1;
+            for v in group.iter() {
+                checksum = (checksum * 31 + v + 101) % 1000000007;
+            }
+            checksum = (checksum * 31 + 7) % 1000000007;
+        }
+    }
+    println(f"400 random trees: {groups} groups, checksum {checksum}");
+}

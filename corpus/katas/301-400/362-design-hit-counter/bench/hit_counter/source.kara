@@ -1,0 +1,50 @@
+// Benchmark for #362: 2,000,000 calls with timestamps advancing by 0 to 2
+// seconds, one call in four a query, answered by the kata's queue of hit
+// times. The window holds about 300 hits at any moment.
+
+struct HitCounter {
+    hits: VecDeque[i64],
+}
+
+impl HitCounter {
+    fn new() -> HitCounter {
+        HitCounter { hits: VecDeque.new() }
+    }
+
+    fn hit(mut ref self, timestamp: i64) {
+        self.hits.push_back(timestamp);
+    }
+
+    fn get_hits(mut ref self, timestamp: i64) -> i64 {
+        loop {
+            match self.hits.front() {
+                Some(t) => {
+                    if t > timestamp - 300 {
+                        break;
+                    }
+                }
+                None => { break; }
+            }
+            self.hits.pop_front();
+        }
+        self.hits.len()
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 362;
+    let mut counter = HitCounter.new();
+    let mut t: i64 = 1;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        t += (seed / 65536) % 3;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        if (seed / 65536) % 4 == 0 {
+            checksum = (checksum * 31 + counter.get_hits(t)) % 1000000007;
+        } else {
+            counter.hit(t);
+        }
+    }
+    println(f"checksum {checksum}");
+}

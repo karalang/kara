@@ -1,0 +1,63 @@
+// LeetCode #367: Valid Perfect Square -- digit-by-digit square root in base 2.
+//
+// The schoolbook square root, one bit of the root per step: bit runs over
+// the powers of four from the largest at or below num, and the root gains
+// that bit whenever what is left of num can pay for it. What is left at the
+// end is num minus the square of its integer root, so the number is a square
+// exactly when nothing is left. O(log num), no multiplication.
+
+fn is_perfect_square(num: i64) -> bool {
+    let mut rest = num;
+    let mut root: i64 = 0;
+    let mut bit: i64 = 1 << 30;
+    while bit > num {
+        bit >>= 2;
+    }
+    while bit != 0 {
+        if rest >= root + bit {
+            rest -= root + bit;
+            root = (root >> 1) + bit;
+        } else {
+            root >>= 1;
+        }
+        bit >>= 2;
+    }
+    rest == 0
+}
+
+fn show(label: String, num: i64) {
+    println(f"{label}: {is_perfect_square(num)}");
+}
+
+fn main() {
+    show("example 1", 16);
+    show("example 2", 14);
+    show("one", 1);
+    show("two", 2);
+    show("one below a square", 808200);
+    show("a square", 808201);
+    show("one above a square", 808202);
+    show("a million", 1000000);
+    show("the largest square in range", 2147395600);
+    show("one above it", 2147395601);
+    show("the largest input", 2147483647);
+    // Random numbers, half of them squares: count the squares and fold the
+    // answers into a checksum, one bit per number.
+    let mut seed: i64 = 367;
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for i in 0..1000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let r = 1 + (seed / 65536) % 1000;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let high = seed / 65536;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let num = if i % 2 == 0 { r * r } else { 1 + (high * 32768 + seed / 65536) % 1000000 };
+        let ok = is_perfect_square(num);
+        if ok {
+            yes += 1;
+        }
+        checksum = (checksum * 2 + if ok { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"1000 random numbers: {yes} squares, checksum {checksum}");
+}

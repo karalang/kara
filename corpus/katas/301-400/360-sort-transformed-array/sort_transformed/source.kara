@@ -1,0 +1,96 @@
+// LeetCode #360: Sort Transformed Array -- two pointers from the ends.
+//
+// f(x) = a x^2 + b x + c is a parabola, so over a sorted input its values
+// are largest at the ends when a > 0 and smallest at the ends when a < 0
+// (when a = 0 it is a line, and the ends are still the extremes). Compare
+// f at the two ends, take the larger (a >= 0) or smaller (a < 0) one, and
+// fill the output from the back or the front. O(n), no sort.
+
+fn f(x: i64, a: i64, b: i64, c: i64) -> i64 {
+    a * x * x + b * x + c
+}
+
+fn sort_transformed_array(nums: ref Vec[i64], a: i64, b: i64, c: i64) -> Vec[i64] {
+    let n = nums.len();
+    let mut out: Vec[i64] = vec![0; n];
+    let mut lo = 0;
+    let mut hi = n - 1;
+    if a >= 0 {
+        let mut k = n - 1;
+        while lo <= hi {
+            let left = f(nums[lo], a, b, c);
+            let right = f(nums[hi], a, b, c);
+            if left >= right {
+                out[k] = left;
+                lo += 1;
+            } else {
+                out[k] = right;
+                hi -= 1;
+            }
+            k -= 1;
+        }
+    } else {
+        let mut k = 0;
+        while lo <= hi {
+            let left = f(nums[lo], a, b, c);
+            let right = f(nums[hi], a, b, c);
+            if left <= right {
+                out[k] = left;
+                lo += 1;
+            } else {
+                out[k] = right;
+                hi -= 1;
+            }
+            k += 1;
+        }
+    }
+    out
+}
+
+fn show(label: String, nums: Vec[i64], a: i64, b: i64, c: i64) {
+    println(f"{label}: {sort_transformed_array(nums, a, b, c)}");
+}
+
+fn main() {
+    show("example 1", vec![-4, -2, 2, 4], 1, 3, 5);
+    show("example 2", vec![-4, -2, 2, 4], -1, 3, 5);
+
+    show("empty", Vec.new(), 1, 2, 3);
+    show("one element", vec![7], -2, 0, 1);
+    show("a = 0, rising line", vec![-3, 0, 5], 0, 2, 1);
+    show("a = 0, falling line", vec![-3, 0, 5], 0, -2, 1);
+    show("a = b = 0, constant", vec![1, 2, 3], 0, 0, 9);
+    show("vertex inside the input", vec![-5, -1, 0, 1, 2, 6], 1, -2, 0);
+    show("vertex left of the input", vec![2, 3, 9], 1, 4, 0);
+    show("vertex right of the input", vec![-9, -3, -2], -1, 0, 0);
+    show("duplicates", vec![-2, -2, 0, 2, 2], 3, 0, -1);
+    show("large values", vec![-100, -50, 0, 50, 100], 100, -100, 100);
+
+    // A long run: 2,000 random sorted inputs of 0 to 30 values in -100..=100
+    // and coefficients in -10..=10.
+    let mut seed: i64 = 360;
+    let mut checksum: i64 = 0;
+    let mut total = 0;
+    for _ in 0..2000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = (seed / 65536) % 31;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            nums.push((seed / 65536) % 201 - 100);
+        }
+        nums.sort();
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let a = (seed / 65536) % 21 - 10;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let b = (seed / 65536) % 21 - 10;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let c = (seed / 65536) % 21 - 10;
+        let out = sort_transformed_array(nums, a, b, c);
+        total += out.len();
+        for v in out.iter() {
+            checksum = (checksum * 31 + v + 1000000) % 1000000007;
+        }
+    }
+    println(f"2000 random inputs: {total} values, checksum {checksum}");
+}

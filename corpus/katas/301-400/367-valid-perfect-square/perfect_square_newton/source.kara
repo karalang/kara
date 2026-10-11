@@ -1,0 +1,51 @@
+// LeetCode #367: Valid Perfect Square -- Newton's method on integers.
+//
+// Starting above the root, x = (x + num / x) / 2 moves down toward it and
+// never below the floor of the root, so the loop stops at that floor, the
+// first x with x * x <= num. The number is a square when that floor
+// squares back to it. O(log num) steps, quadratic near the root.
+
+fn is_perfect_square(num: i64) -> bool {
+    let mut x = num;
+    while x * x > num {
+        x = (x + num / x) / 2;
+    }
+    x * x == num
+}
+
+fn show(label: String, num: i64) {
+    println(f"{label}: {is_perfect_square(num)}");
+}
+
+fn main() {
+    show("example 1", 16);
+    show("example 2", 14);
+    show("one", 1);
+    show("two", 2);
+    show("one below a square", 808200);
+    show("a square", 808201);
+    show("one above a square", 808202);
+    show("a million", 1000000);
+    show("the largest square in range", 2147395600);
+    show("one above it", 2147395601);
+    show("the largest input", 2147483647);
+    // Random numbers, half of them squares: count the squares and fold the
+    // answers into a checksum, one bit per number.
+    let mut seed: i64 = 367;
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for i in 0..1000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let r = 1 + (seed / 65536) % 1000;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let high = seed / 65536;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let num = if i % 2 == 0 { r * r } else { 1 + (high * 32768 + seed / 65536) % 1000000 };
+        let ok = is_perfect_square(num);
+        if ok {
+            yes += 1;
+        }
+        checksum = (checksum * 2 + if ok { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"1000 random numbers: {yes} squares, checksum {checksum}");
+}

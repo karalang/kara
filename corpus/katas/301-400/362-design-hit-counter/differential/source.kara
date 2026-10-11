@@ -1,0 +1,233 @@
+// Differential test for LeetCode #362: the three arms against an oracle
+// that keeps every hit and counts the window by scanning.
+//
+// 2,000 random call sequences of 0 to 40 calls, timestamps advancing by 0 to
+// 200 seconds per call (so windows both fill and empty), half of the calls
+// queries.
+//
+//   P1  every arm gives the oracle's answer to every query
+//   P2  shifting every timestamp by the same amount changes no answer
+//   P3  a query never counts more hits than have been made
+//   P4  two queries at the same second with no hit between agree
+//   P5  a query 300 or more seconds after the last hit returns 0
+
+struct QueueCounter {
+    hits: VecDeque[i64],
+}
+
+impl QueueCounter {
+    fn new() -> QueueCounter {
+        QueueCounter { hits: VecDeque.new() }
+    }
+
+    fn hit(mut ref self, timestamp: i64) {
+        self.hits.push_back(timestamp);
+    }
+
+    fn get_hits(mut ref self, timestamp: i64) -> i64 {
+        loop {
+            match self.hits.front() {
+                Some(t) => {
+                    if t > timestamp - 300 {
+                        break;
+                    }
+                }
+                None => { break; }
+            }
+            self.hits.pop_front();
+        }
+        self.hits.len()
+    }
+}
+
+struct BucketCounter {
+    seconds: Vec[i64],
+    counts: Vec[i64],
+}
+
+impl BucketCounter {
+    fn new() -> BucketCounter {
+        BucketCounter { seconds: vec![0 - 1; 300], counts: vec![0; 300] }
+    }
+
+    fn hit(mut ref self, timestamp: i64) {
+        let slot = timestamp % 300;
+        if self.seconds[slot] != timestamp {
+            self.seconds[slot] = timestamp;
+            self.counts[slot] = 0;
+        }
+        self.counts[slot] += 1;
+    }
+
+    fn get_hits(mut ref self, timestamp: i64) -> i64 {
+        let mut total = 0;
+        for i in 0..300 {
+            if self.seconds[i] > timestamp - 300 and self.seconds[i] <= timestamp {
+                total += self.counts[i];
+            }
+        }
+        total
+    }
+}
+
+struct SearchCounter {
+    hits: Vec[i64],
+}
+
+impl SearchCounter {
+    fn new() -> SearchCounter {
+        SearchCounter { hits: Vec.new() }
+    }
+
+    fn hit(mut ref self, timestamp: i64) {
+        self.hits.push(timestamp);
+    }
+
+    fn get_hits(mut ref self, timestamp: i64) -> i64 {
+        // The first index whose hit is later than timestamp - 300.
+        let mut lo = 0;
+        let mut hi = self.hits.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.hits[mid] <= timestamp - 300 {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        self.hits.len() - lo
+    }
+}
+
+fn oracle(ops: ref Vec[(bool, i64)]) -> Vec[i64] {
+    let mut seen: Vec[i64] = Vec.new();
+    let mut out: Vec[i64] = Vec.new();
+    for (is_hit, t) in ops.iter() {
+        if is_hit {
+            seen.push(t);
+        } else {
+            let mut n = 0;
+            for h in seen.iter() {
+                if h > t - 300 and h <= t {
+                    n += 1;
+                }
+            }
+            out.push(n);
+        }
+    }
+    out
+}
+
+fn run_queue(ops: ref Vec[(bool, i64)]) -> Vec[i64] {
+    let mut c = QueueCounter.new();
+    let mut out: Vec[i64] = Vec.new();
+    for (is_hit, t) in ops.iter() {
+        if is_hit { c.hit(t); } else { out.push(c.get_hits(t)); }
+    }
+    out
+}
+
+fn run_buckets(ops: ref Vec[(bool, i64)]) -> Vec[i64] {
+    let mut c = BucketCounter.new();
+    let mut out: Vec[i64] = Vec.new();
+    for (is_hit, t) in ops.iter() {
+        if is_hit { c.hit(t); } else { out.push(c.get_hits(t)); }
+    }
+    out
+}
+
+fn run_search(ops: ref Vec[(bool, i64)]) -> Vec[i64] {
+    let mut c = SearchCounter.new();
+    let mut out: Vec[i64] = Vec.new();
+    for (is_hit, t) in ops.iter() {
+        if is_hit { c.hit(t); } else { out.push(c.get_hits(t)); }
+    }
+    out
+}
+
+fn arms(ops: ref Vec[(bool, i64)]) -> Vec[Vec[i64]] {
+    vec![run_queue(ops), run_buckets(ops), run_search(ops)]
+}
+
+fn main() {
+    let mut seed: i64 = 3620;
+    let mut cases = 0;
+    let mut checks = 0;
+    let mut failures = 0;
+    for _ in 0..2000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = (seed / 65536) % 41;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let step = (seed / 65536) % 3;
+        let mut t = 0;
+        let mut ops: Vec[(bool, i64)] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            // Small, medium or large steps, per sequence.
+            let limit = if step == 0 { 3 } else if step == 1 { 60 } else { 201 };
+            t += (seed / 65536) % limit;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            ops.push(((seed / 65536) % 2 == 0, t));
+        }
+        // P4 and P5 need these calls at the end.
+        ops.push((false, t));
+        ops.push((false, t));
+        let last_hit = {
+            let mut last = 0 - 1000;
+            for (is_hit, ht) in ops.iter() {
+                if is_hit { last = ht; }
+            }
+            last
+        };
+        // Calls stay in time order: never earlier than the last call.
+        ops.push((false, (last_hit + 300).max(t) + t % 7));
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let shift = (seed / 65536) % 100000;
+        let mut shifted: Vec[(bool, i64)] = Vec.new();
+        for (is_hit, st) in ops.iter() {
+            shifted.push((is_hit, st + shift));
+        }
+        cases += 1;
+        let want = oracle(ops);
+        let got = arms(ops);
+        let moved = arms(shifted);
+        let mut made = 0;
+        for (is_hit, _) in ops.iter() {
+            if is_hit { made += 1; }
+        }
+        for k in 0..got.len() {
+            let r = got[k].clone();
+            checks += 1;
+            if r != want {
+                failures += 1;
+                println(f"P1 arm {k} {ops}: {r} vs {want}");
+            }
+            checks += 1;
+            if moved[k] != r {
+                failures += 1;
+                println(f"P2 arm {k} shift {shift}");
+            }
+            checks += 1;
+            let mut over = false;
+            for v in r.iter() {
+                if v > made { over = true; }
+            }
+            if over {
+                failures += 1;
+                println(f"P3 arm {k}: {r}");
+            }
+            let q = r.len();
+            checks += 1;
+            if r[q - 3] != r[q - 2] {
+                failures += 1;
+                println(f"P4 arm {k}: {r}");
+            }
+            checks += 1;
+            if r[q - 1] != 0 {
+                failures += 1;
+                println(f"P5 arm {k}: {r}");
+            }
+        }
+    }
+    println(f"{cases} cases, {checks} checks, {failures} failures");
+}

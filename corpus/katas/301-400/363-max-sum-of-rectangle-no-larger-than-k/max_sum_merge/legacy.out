@@ -1,0 +1,12 @@
+example 1: 2
+example 2: 3
+one cell equal to k: 5
+one cell below k: -7
+only a negative run fits: -1
+negative k: -5
+k above the total: 10
+the best fit is not the largest: 10
+one column: 3
+values at the bounds: 0
+a wide row: 7
+300 random matrices: checksum 841578297

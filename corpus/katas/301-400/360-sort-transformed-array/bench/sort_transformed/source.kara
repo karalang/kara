@@ -1,0 +1,70 @@
+// Benchmark for #360: 200 sorted arrays of 50,000 values, each built by
+// random steps of 0 to 80 from -1,000,000, with coefficients a, b, c in
+// -10..=10. Each array is transformed with the kata's two-pointer pass and
+// every output value goes into the checksum.
+
+fn f(x: i64, a: i64, b: i64, c: i64) -> i64 {
+    a * x * x + b * x + c
+}
+
+fn sort_transformed_array(nums: ref Vec[i64], a: i64, b: i64, c: i64) -> Vec[i64] {
+    let n = nums.len();
+    let mut out: Vec[i64] = vec![0; n];
+    let mut lo = 0;
+    let mut hi = n - 1;
+    if a >= 0 {
+        let mut k = n - 1;
+        while lo <= hi {
+            let left = f(nums[lo], a, b, c);
+            let right = f(nums[hi], a, b, c);
+            if left >= right {
+                out[k] = left;
+                lo += 1;
+            } else {
+                out[k] = right;
+                hi -= 1;
+            }
+            k -= 1;
+        }
+    } else {
+        let mut k = 0;
+        while lo <= hi {
+            let left = f(nums[lo], a, b, c);
+            let right = f(nums[hi], a, b, c);
+            if left <= right {
+                out[k] = left;
+                lo += 1;
+            } else {
+                out[k] = right;
+                hi -= 1;
+            }
+            k += 1;
+        }
+    }
+    out
+}
+
+fn main() {
+    let mut seed: i64 = 360;
+    let mut checksum: i64 = 0;
+    let mut nums: Vec[i64] = vec![0; 50000];
+    for _ in 0..200 {
+        let mut x: i64 = 0 - 1000000;
+        for i in 0..50000 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            x += (seed / 65536) % 81;
+            nums[i] = x;
+        }
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let a = (seed / 65536) % 21 - 10;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let b = (seed / 65536) % 21 - 10;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let c = (seed / 65536) % 21 - 10;
+        let out = sort_transformed_array(nums, a, b, c);
+        for v in out.iter() {
+            checksum = (checksum * 31 + v % 1000000007 + 1000000007) % 1000000007;
+        }
+    }
+    println(f"checksum {checksum}");
+}

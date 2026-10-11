@@ -1,0 +1,257 @@
+// LeetCode #368: differential test. The right-to-left DP, memoized and
+// chain-carrying arms against an oracle that tries every subset of up to
+// ten numbers and keeps the largest divisible one, the lexicographically
+// first among equals. 2,000 random sets. Properties: P1 each arm gives the
+// oracle's subset; P2 the answer is drawn from the input, ascending, and
+// each number divides the next; P3 reversing the input changes nothing; P4
+// multiplying every number by 2 or 3 multiplies the answer by the same; P5
+// adding a 1 that is not there puts it in front of the same answer.
+
+fn dp_arm(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut a = nums.clone();
+    a.sort();
+    let n = a.len();
+    let mut size = vec![1; n];
+    let mut next = vec![-1; n];
+    for i in (0..n).rev() {
+        for k in i + 1..n {
+            if a[k] % a[i] == 0 and size[k] + 1 > size[i] {
+                size[i] = size[k] + 1;
+                next[i] = k;
+            }
+        }
+    }
+    let mut start = 0;
+    for i in 1..n {
+        if size[i] > size[start] {
+            start = i;
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut at = start;
+    while at != -1 {
+        out.push(a[at]);
+        at = next[at];
+    }
+    out
+}
+
+fn chain_from(a: ref Vec[i64], at: i64, memo: mut ref Map[i64, (i64, i64)]) -> i64 {
+    let x = a[at];
+    match memo.get(x) {
+        Some((len, _)) => { return len; }
+        None => {}
+    }
+    let mut len = 1;
+    let mut next = 0;
+    for k in at + 1..a.len() {
+        if a[k] % x == 0 {
+            let rest = chain_from(a, k, memo);
+            if rest + 1 > len {
+                len = rest + 1;
+                next = a[k];
+            }
+        }
+    }
+    memo.insert(x, (len, next));
+    len
+}
+
+fn memo_arm(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut a = nums.clone();
+    a.sort();
+    let mut memo: Map[i64, (i64, i64)] = Map.new();
+    let mut best = 0;
+    let mut start = 0;
+    for i in 0..a.len() {
+        let len = chain_from(a, i, mut memo);
+        if len > best {
+            best = len;
+            start = a[i];
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut x = start;
+    while x != 0 {
+        out.push(x);
+        let (_, next) = memo[x];
+        x = next;
+    }
+    out
+}
+
+fn better(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return a.len() > b.len();
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return a[i] < b[i];
+        }
+    }
+    false
+}
+
+fn chains_arm(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut a = nums.clone();
+    a.sort();
+    let mut best: Vec[Vec[i64]] = Vec.new();
+    let mut answer: Vec[i64] = Vec.new();
+    for i in 0..a.len() {
+        let mut chain: Vec[i64] = Vec.new();
+        for j in 0..i {
+            if a[i] % a[j] == 0 and better(best[j], chain) {
+                chain = best[j].clone();
+            }
+        }
+        chain.push(a[i]);
+        if better(chain, answer) {
+            answer = chain.clone();
+        }
+        best.push(chain);
+    }
+    answer
+}
+
+// The oracle's own order on answers, kept apart from the chains arm's
+// `better` so that a fault there cannot hide in both: more numbers first,
+// then the first difference decides.
+fn oracle_prefers(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return a.len() > b.len();
+    }
+    let mut i = 0;
+    while i < a.len() and a[i] == b[i] {
+        i += 1;
+    }
+    i < a.len() and a[i] < b[i]
+}
+
+// Every subset as a bitmask over the sorted numbers. In ascending order a
+// subset is divisible exactly when each number divides the next. The first
+// largest subset in mask order is not the lexicographic first, so the
+// oracle compares candidates itself.
+fn oracle(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut a = nums.clone();
+    a.sort();
+    let n = a.len();
+    let mut answer: Vec[i64] = Vec.new();
+    for mask in 1..(1 << n) {
+        let mut pick: Vec[i64] = Vec.new();
+        let mut ok = true;
+        for i in 0..n {
+            if (mask >> i) % 2 == 1 {
+                if pick.len() > 0 and a[i] % pick[pick.len() - 1] != 0 {
+                    ok = false;
+                }
+                pick.push(a[i]);
+            }
+        }
+        if ok and oracle_prefers(pick, answer) {
+            answer = pick;
+        }
+    }
+    answer
+}
+
+fn answer(arm: i64, nums: ref Vec[i64]) -> Vec[i64] {
+    match arm {
+        0 => dp_arm(nums),
+        1 => memo_arm(nums),
+        _ => chains_arm(nums),
+    }
+}
+
+fn name(arm: i64) -> String {
+    match arm {
+        0 => "dp",
+        1 => "memo",
+        _ => "chains",
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 368;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut fails = vec![0; 5];
+    for case in 0..2000 {
+        // Half the sets from 1..=30, where most pairs share a factor, half
+        // from 1..=200.
+        let top = if case % 2 == 0 { 30 } else { 200 };
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 1 + (seed / 65536) % 10;
+        let mut taken = vec![false; top + 1];
+        let mut nums: Vec[i64] = Vec.new();
+        while nums.len() < n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let v = 1 + (seed / 65536) % top;
+            if not taken[v] {
+                taken[v] = true;
+                nums.push(v);
+            }
+        }
+        let expected = oracle(nums);
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let c = 2 + (seed / 65536) % 2;
+        let mut scaled: Vec[i64] = Vec.new();
+        for v in nums.iter() {
+            scaled.push(v * c);
+        }
+        let mut with_one = nums.clone();
+        with_one.push(1);
+        for arm in 0..3 {
+            let got = answer(arm, nums);
+            let mut bad = vec![false; 5];
+            checks += 1;
+            if got != expected {
+                bad[0] = true;
+            }
+            checks += 1;
+            for i in 0..got.len() {
+                if got[i] > top or not taken[got[i]] or (i > 0 and got[i] % got[i - 1] != 0) or (i > 0 and got[i] <= got[i - 1]) {
+                    bad[1] = true;
+                }
+            }
+            checks += 1;
+            if answer(arm, reversed) != got {
+                bad[2] = true;
+            }
+            checks += 1;
+            let mut times: Vec[i64] = Vec.new();
+            for v in got.iter() {
+                times.push(v * c);
+            }
+            if answer(arm, scaled) != times {
+                bad[3] = true;
+            }
+            if not taken[1] {
+                checks += 1;
+                let mut front = vec![1];
+                for v in got.iter() {
+                    front.push(v);
+                }
+                if answer(arm, with_one) != front {
+                    bad[4] = true;
+                }
+            }
+            for p in 0..5 {
+                if bad[p] {
+                    fails[p] += 1;
+                    failures += 1;
+                    if failures <= 5 {
+                        println(f"FAIL P{p + 1} {name(arm)} nums={nums}");
+                    }
+                }
+            }
+        }
+    }
+    for p in 0..5 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    println(f"2000 cases, {checks} checks, {failures} failures");
+}

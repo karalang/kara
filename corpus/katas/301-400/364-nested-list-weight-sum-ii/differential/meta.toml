@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/364-nested-list-weight-sum-ii/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential"]
+class = "e"
+expected_from = "oracle"
+legacy_backend = "legacy-build"
+legacy_exit = -6
+rules = []
+backends = []
+env = {}
+note = "legacy fails on this program (legacy_exit -6); expected.out is the differential's own verdict with 0 failures, as the kata README records it. e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "a1bc8de9e+local"
+model_rev = "8be6ddd7"
+model_src = "95b298cf"

@@ -1,0 +1,82 @@
+// LeetCode #359: Logger Rate Limiter -- ten one-second buckets in a ring.
+//
+// Bucket t % 10 holds the second it was last used for and the messages
+// printed in that second. A message is refused at time t when some bucket
+// for a second in (t - 10, t] holds it; otherwise it prints into bucket
+// t % 10, which is first cleared if it still holds an older second. Every
+// answer looks at exactly ten buckets, whatever the traffic.
+
+struct Logger {
+    seconds: Vec[i64],
+    buckets: Vec[Set[String]],
+}
+
+impl Logger {
+    fn new() -> Logger {
+        let mut buckets: Vec[Set[String]] = Vec.new();
+        for _ in 0..10 {
+            buckets.push(Set.new());
+        }
+        Logger { seconds: vec![0 - 100; 10], buckets: buckets }
+    }
+
+    fn should_print_message(mut ref self, timestamp: i64, message: own String) -> bool {
+        for i in 0..10 {
+            if self.seconds[i] > timestamp - 10 and self.buckets[i].contains(message) {
+                return false;
+            }
+        }
+        let slot = timestamp % 10;
+        if self.seconds[slot] != timestamp {
+            self.seconds[slot] = timestamp;
+            self.buckets[slot].clear();
+        }
+        self.buckets[slot].insert(message);
+        true
+    }
+}
+
+fn run(label: String, calls: Vec[(i64, String)]) {
+    let mut logger = Logger.new();
+    let mut line = String.new();
+    for (t, m) in calls.iter() {
+        let ok = logger.should_print_message(t, m.clone());
+        line.push_str(if ok { "T" } else { "F" });
+    }
+    println(f"{label}: {line}");
+}
+
+fn main() {
+    run("example", vec![(1, "foo"), (2, "bar"), (3, "foo"), (8, "bar"), (10, "foo"), (11, "foo")]);
+
+    run("no calls", Vec.new());
+    run("one message once", vec![(0, "a")]);
+    run("exactly ten seconds later", vec![(0, "a"), (10, "a")]);
+    run("nine seconds later", vec![(0, "a"), (9, "a")]);
+    run("same timestamp twice", vec![(5, "a"), (5, "a")]);
+    run("refusals do not reset the clock", vec![(0, "a"), (5, "a"), (9, "a"), (10, "a"), (19, "a"), (20, "a")]);
+    run("messages are independent", vec![(0, "a"), (1, "b"), (2, "a"), (3, "b"), (10, "a"), (11, "b")]);
+    run("empty message", vec![(0, ""), (3, ""), (10, "")]);
+    run("prefixes are different messages", vec![(0, "ab"), (1, "a"), (2, "abc"), (3, "ab")]);
+    run("large timestamps", vec![(1000000000, "x"), (1000000009, "x"), (1000000010, "x")]);
+
+    // A long run: 20,000 calls over 50 messages, with timestamps advancing by
+    // 0 to 3 seconds per call.
+    let mut seed: i64 = 359;
+    let mut logger = Logger.new();
+    let mut t: i64 = 0;
+    let mut printed = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..20000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        t += (seed / 65536) % 4;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let id = (seed / 65536) % 50;
+        let ok = logger.should_print_message(t, f"msg{id}");
+        if ok {
+            printed += 1;
+        }
+        checksum = (checksum * 3 + if ok { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"20000 random calls: {printed} printed, checksum {checksum}");
+}

@@ -1,0 +1,60 @@
+// LeetCode #367: Valid Perfect Square -- binary search on the root.
+//
+// The root of a square num lies in [1, num], and mid * mid grows with mid,
+// so halving that range finds it or shows there is none. num is below
+// 2^31, so mid * mid stays below 2^62 and fits an i64. O(log num).
+
+fn is_perfect_square(num: i64) -> bool {
+    let mut lo: i64 = 1;
+    let mut hi = num;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        let sq = mid * mid;
+        if sq == num {
+            return true;
+        }
+        if sq < num {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    false
+}
+
+fn show(label: String, num: i64) {
+    println(f"{label}: {is_perfect_square(num)}");
+}
+
+fn main() {
+    show("example 1", 16);
+    show("example 2", 14);
+    show("one", 1);
+    show("two", 2);
+    show("one below a square", 808200);
+    show("a square", 808201);
+    show("one above a square", 808202);
+    show("a million", 1000000);
+    show("the largest square in range", 2147395600);
+    show("one above it", 2147395601);
+    show("the largest input", 2147483647);
+    // Random numbers, half of them squares: count the squares and fold the
+    // answers into a checksum, one bit per number.
+    let mut seed: i64 = 367;
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for i in 0..1000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let r = 1 + (seed / 65536) % 1000;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let high = seed / 65536;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let num = if i % 2 == 0 { r * r } else { 1 + (high * 32768 + seed / 65536) % 1000000 };
+        let ok = is_perfect_square(num);
+        if ok {
+            yes += 1;
+        }
+        checksum = (checksum * 2 + if ok { 1 } else { 0 }) % 1000000007;
+    }
+    println(f"1000 random numbers: {yes} squares, checksum {checksum}");
+}

@@ -1,0 +1,58 @@
+// Benchmark for #368: 200 random sets of 1,000 distinct numbers up to
+// 100,000, the problem's largest size, each answered with the kata's chain
+// DP from the right.
+
+fn largest_divisible_subset(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut a = nums.clone();
+    a.sort();
+    let n = a.len();
+    let mut size = vec![1; n];
+    let mut next = vec![-1; n];
+    for i in (0..n).rev() {
+        for k in i + 1..n {
+            if a[k] % a[i] == 0 and size[k] + 1 > size[i] {
+                size[i] = size[k] + 1;
+                next[i] = k;
+            }
+        }
+    }
+    let mut start = 0;
+    for i in 1..n {
+        if size[i] > size[start] {
+            start = i;
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut at = start;
+    while at != -1 {
+        out.push(a[at]);
+        at = next[at];
+    }
+    out
+}
+
+fn main() {
+    let mut seed: i64 = 368;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..200 {
+        let mut taken = vec![false; 100001];
+        let mut nums: Vec[i64] = Vec.new();
+        while nums.len() < 1000 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let high = seed / 65536;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let v = 1 + (high * 32768 + seed / 65536) % 100000;
+            if not taken[v] {
+                taken[v] = true;
+                nums.push(v);
+            }
+        }
+        let out = largest_divisible_subset(nums);
+        total += out.len();
+        for v in out.iter() {
+            checksum = (checksum * 31 + v) % 1000000007;
+        }
+    }
+    println(f"{total} numbers in the answers, checksum {checksum}");
+}

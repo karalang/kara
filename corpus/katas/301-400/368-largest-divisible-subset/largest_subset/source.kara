@@ -1,0 +1,85 @@
+// LeetCode #368: Largest Divisible Subset -- a chain DP from the right.
+//
+// In a set where every pair divides one way or the other, the numbers in
+// ascending order form a chain, each dividing the next, and divisibility is
+// transitive, so it is enough that each divides the next. Sort the numbers;
+// size[i] is the longest chain starting at a[i], built from the right as
+// one more than the longest chain starting at a multiple of a[i] further
+// on. Taking the first best multiple at each step, and the first best start,
+// gives the answer that comes first in lexicographic order, so every arm
+// agrees on one answer. O(n^2).
+
+fn largest_divisible_subset(nums: ref Vec[i64]) -> Vec[i64] {
+    let mut a = nums.clone();
+    a.sort();
+    let n = a.len();
+    let mut size = vec![1; n];
+    let mut next = vec![-1; n];
+    for i in (0..n).rev() {
+        for k in i + 1..n {
+            if a[k] % a[i] == 0 and size[k] + 1 > size[i] {
+                size[i] = size[k] + 1;
+                next[i] = k;
+            }
+        }
+    }
+    let mut start = 0;
+    for i in 1..n {
+        if size[i] > size[start] {
+            start = i;
+        }
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut at = start;
+    while at != -1 {
+        out.push(a[at]);
+        at = next[at];
+    }
+    out
+}
+
+fn show(label: String, nums: Vec[i64]) {
+    println(f"{label}: {largest_divisible_subset(nums)}");
+}
+
+fn main() {
+    show("example 1", vec![1, 2, 3]);
+    show("example 2", vec![1, 2, 4, 8]);
+    show("one number", vec![7]);
+    show("primes only", vec![7, 3, 5, 2]);
+    show("unsorted input", vec![8, 4, 1, 2, 16, 3]);
+    show("two chains of equal length", vec![2, 3, 4, 9]);
+    show("the longer chain starts higher", vec![4, 8, 16, 1, 3, 9, 27, 81]);
+    show("no 1, shared factors", vec![6, 12, 24, 36, 18, 9]);
+    show("large values", vec![1000000000, 2000000000, 500000000, 3, 7]);
+    let mut all: Vec[i64] = Vec.new();
+    for v in 1..=1000 {
+        all.push(v);
+    }
+    show("1 to 1000", all);
+    // Random sets of 1 to 40 distinct numbers up to 500: total the answer
+    // sizes and fold every answer into a checksum.
+    let mut seed: i64 = 368;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 1 + (seed / 65536) % 40;
+        let mut taken = vec![false; 501];
+        let mut nums: Vec[i64] = Vec.new();
+        while nums.len() < n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let v = 1 + (seed / 65536) % 500;
+            if not taken[v] {
+                taken[v] = true;
+                nums.push(v);
+            }
+        }
+        let out = largest_divisible_subset(nums);
+        total += out.len();
+        for v in out.iter() {
+            checksum = (checksum * 31 + v) % 1000000007;
+        }
+    }
+    println(f"300 random sets: {total} numbers in the answers, checksum {checksum}");
+}

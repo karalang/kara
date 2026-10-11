@@ -1,0 +1,47 @@
+// Benchmark for #359: 1,000,000 calls over 100 messages, with the clock
+// advancing one second on one call in eight, answered by the kata's map of
+// next-allowed times. A message recurs every 12.5 seconds on average, and
+// the gaps vary enough that 44% of the calls are refused.
+
+struct Logger {
+    next_ok: Map[String, i64],
+}
+
+impl Logger {
+    fn new() -> Logger {
+        Logger { next_ok: Map.new() }
+    }
+
+    fn should_print_message(mut ref self, timestamp: i64, message: own String) -> bool {
+        match self.next_ok.get(message) {
+            Some(t) => {
+                if timestamp < t {
+                    return false;
+                }
+            }
+            None => {}
+        }
+        self.next_ok[message] = timestamp + 10;
+        true
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 359;
+    let mut logger = Logger.new();
+    let mut t: i64 = 0;
+    let mut printed = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..1000000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        t += if (seed / 65536) % 8 == 0 { 1 } else { 0 };
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let id = (seed / 65536) % 100;
+        let ok = logger.should_print_message(t, f"msg{id}");
+        if ok {
+            printed += 1;
+        }
+        checksum = (checksum * 3 + if ok { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"{printed} of 1000000 calls printed, checksum {checksum}");
+}

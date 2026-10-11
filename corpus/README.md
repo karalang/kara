@@ -41,7 +41,7 @@ kata/example file stem. A second distinct program in the same test gets `_2`.
 | `exit` | expected exit code |
 | `tags` | see below |
 | `class` | `a`..`e` once classified against the MIR interpreter; `unknown` until then |
-| `expected_from` | `assert` (the test's own string literal matches), `legacy-run`, `legacy-interp` (legacy-build's codegen declined it, so legacy's interpreter is the baseline), `spec` (the drop model), `pin`, `mirror` (the same-stem Python mirror, `apps/`), or `decision` (a spec ruling recorded in `note`) |
+| `expected_from` | `assert` (the test's own string literal matches), `legacy-run`, `legacy-interp` (legacy-build's codegen declined it, so legacy's interpreter is the baseline), `spec` (the drop model), `pin`, `mirror` (the same-stem Python mirror, `apps/`, or a kata's mirror where legacy cannot run the program), `oracle` (a kata differential's own all-pass verdict line, as the kata README records it), or `decision` (a spec ruling recorded in `note`) |
 | `legacy_backend` | the backend today's suite used: `legacy-interp` for `tests/interpreter`, else `legacy-build` |
 | `rules` | core-semantics sections the program pins |
 | `backends` | empty = all; otherwise the only backends it applies to |

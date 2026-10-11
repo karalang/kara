@@ -1,0 +1,12 @@
+example 1: 8
+example 2: 17
+an empty list: 0
+only empty lists: 0
+one integer: 5
+empty lists below the deepest integer: 1
+a level with no integers: 5
+the deep integer first: 10
+negative integers: -6
+one integer five lists down: 1
+a staircase: 20
+500 random lists: checksum 934838191

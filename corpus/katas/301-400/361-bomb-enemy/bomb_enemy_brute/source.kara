@@ -1,0 +1,83 @@
+// LeetCode #361: Bomb Enemy -- walk out from every empty cell.
+//
+// For each empty cell, walk left, right, up and down until a wall or the
+// edge, counting enemies. O(rows * cols * (rows + cols)): the baseline the
+// cached pass improves on.
+
+fn max_killed_enemies(grid: ref Vec[String]) -> i64 {
+    let rows = grid.len();
+    let mut best = 0;
+    for i in 0..rows {
+        let row = grid[i].bytes();
+        for j in 0..row.len() {
+            if row[j] != b'0' {
+                continue;
+            }
+            let mut hits = 0;
+            // (row step, column step) for left, right, up and down
+            for (di, dj) in [(0, 0 - 1), (0, 1), (0 - 1, 0), (1, 0)] {
+                let mut r = i + di;
+                let mut c = j + dj;
+                while r >= 0 and r < rows and c >= 0 and c < row.len() {
+                    let cell = grid[r].bytes()[c];
+                    if cell == b'W' {
+                        break;
+                    }
+                    if cell == b'E' {
+                        hits += 1;
+                    }
+                    r += di;
+                    c += dj;
+                }
+            }
+            best = best.max(hits);
+        }
+    }
+    best
+}
+
+fn show(label: String, grid: Vec[String]) {
+    println(f"{label}: {max_killed_enemies(grid)}");
+}
+
+fn main() {
+    show("example 1", vec!["0E00", "E0WE", "0E00"]);
+    show("example 2", vec!["WWW", "000", "EEE"]);
+
+    show("empty grid", Vec.new());
+    show("one empty cell", vec!["0"]);
+    show("one enemy, nowhere to stand", vec!["E"]);
+    show("walls only", vec!["WW", "WW"]);
+    show("a wall shields", vec!["E0WE"]);
+    show("a column", vec!["E", "0", "E", "W", "E"]);
+    show("enemies everywhere but one cell", vec!["EEE", "E0E", "EEE"]);
+    show("the best cell is in a corner", vec!["0EE", "EWW", "EWE"]);
+    show("enemies do not block", vec!["0EEEE"]);
+    show("two segments in one row", vec!["0EWEE0"]);
+
+    // A long run: 1,000 random grids of up to 8 by 8 cells, each cell a wall,
+    // an enemy or empty with weights 1, 2, 3.
+    let mut seed: i64 = 361;
+    let mut checksum: i64 = 0;
+    let mut total = 0;
+    for _ in 0..1000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let rows = (seed / 65536) % 8 + 1;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let cols = (seed / 65536) % 8 + 1;
+        let mut grid: Vec[String] = Vec.new();
+        for _ in 0..rows {
+            let mut row = String.new();
+            for _ in 0..cols {
+                seed = (seed * 1103515245 + 12345) % 2147483648;
+                let r = (seed / 65536) % 6;
+                row.push(if r == 0 { 'W' } else if r < 3 { 'E' } else { '0' });
+            }
+            grid.push(row);
+        }
+        let best = max_killed_enemies(grid);
+        total += best;
+        checksum = (checksum * 31 + best) % 1000000007;
+    }
+    println(f"1000 random grids: {total} enemies in total, checksum {checksum}");
+}

@@ -1,0 +1,219 @@
+// Differential test for LeetCode #359: the map and bucket arms against an
+// oracle that keeps the whole history of printed messages.
+//
+// The oracle answers each call by scanning every message it has printed: the
+// call is refused exactly when the same message printed at a time in
+// (t - 10, t]. 2,000 random sequences of 0 to 30 calls over one to four
+// messages, with timestamps advancing by 0 to 6 seconds per call.
+//
+//   P1  each arm gives the oracle's answer to every call
+//   P2  no arm prints a message twice within 10 seconds
+//   P3  the first call with a given message always prints
+//   P4  shifting every timestamp by the same amount changes no answer
+//   P5  renaming every message the same way changes no answer
+//
+// The window arm (logger_window.kara) is not copied in: it peeks its queue
+// with `VecDeque.front`, which `karac check` does not accept yet.
+
+struct MapLogger {
+    next_ok: Map[String, i64],
+}
+
+impl MapLogger {
+    fn new() -> MapLogger {
+        MapLogger { next_ok: Map.new() }
+    }
+
+    fn should_print_message(mut ref self, timestamp: i64, message: own String) -> bool {
+        match self.next_ok.get(message) {
+            Some(t) => {
+                if timestamp < t {
+                    return false;
+                }
+            }
+            None => {}
+        }
+        self.next_ok[message] = timestamp + 10;
+        true
+    }
+}
+
+struct BucketLogger {
+    seconds: Vec[i64],
+    buckets: Vec[Set[String]],
+}
+
+impl BucketLogger {
+    fn new() -> BucketLogger {
+        let mut buckets: Vec[Set[String]] = Vec.new();
+        for _ in 0..10 {
+            buckets.push(Set.new());
+        }
+        BucketLogger { seconds: vec![0 - 100; 10], buckets: buckets }
+    }
+
+    fn should_print_message(mut ref self, timestamp: i64, message: own String) -> bool {
+        for i in 0..10 {
+            if self.seconds[i] > timestamp - 10 and self.buckets[i].contains(message) {
+                return false;
+            }
+        }
+        let slot = timestamp % 10;
+        if self.seconds[slot] != timestamp {
+            self.seconds[slot] = timestamp;
+            self.buckets[slot].clear();
+        }
+        self.buckets[slot].insert(message);
+        true
+    }
+}
+
+struct Oracle {
+    printed: Vec[(i64, String)],
+}
+
+impl Oracle {
+    fn new() -> Oracle {
+        Oracle { printed: Vec.new() }
+    }
+
+    fn should_print_message(mut ref self, timestamp: i64, message: own String) -> bool {
+        for (t, m) in self.printed.iter() {
+            if m == message and t > timestamp - 10 {
+                return false;
+            }
+        }
+        self.printed.push((timestamp, message));
+        true
+    }
+}
+
+fn answers_map(calls: ref Vec[(i64, String)]) -> Vec[bool] {
+    let mut logger = MapLogger.new();
+    let mut out: Vec[bool] = Vec.new();
+    for (t, m) in calls.iter() {
+        out.push(logger.should_print_message(t, m.clone()));
+    }
+    out
+}
+
+fn answers_buckets(calls: ref Vec[(i64, String)]) -> Vec[bool] {
+    let mut logger = BucketLogger.new();
+    let mut out: Vec[bool] = Vec.new();
+    for (t, m) in calls.iter() {
+        out.push(logger.should_print_message(t, m.clone()));
+    }
+    out
+}
+
+fn answers_oracle(calls: ref Vec[(i64, String)]) -> Vec[bool] {
+    let mut logger = Oracle.new();
+    let mut out: Vec[bool] = Vec.new();
+    for (t, m) in calls.iter() {
+        out.push(logger.should_print_message(t, m.clone()));
+    }
+    out
+}
+
+fn main() {
+    let mut seed: i64 = 3590;
+    let mut cases = 0;
+    let mut checks = 0;
+    let mut printed = 0;
+    let mut failures = 0;
+    for _ in 0..2000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = (seed / 65536) % 31;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let width = (seed / 65536) % 4 + 1;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let mut t = (seed / 65536) % 100;
+        let mut calls: Vec[(i64, String)] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            t += (seed / 65536) % 7;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let id = (seed / 65536) % width;
+            calls.push((t, f"m{id}"));
+        }
+        cases += 1;
+        let want = answers_oracle(calls);
+        for w in want.iter() {
+            if w {
+                printed += 1;
+            }
+        }
+        let arms = vec![answers_map(calls), answers_buckets(calls)];
+        for a in 0..arms.len() {
+            // P1
+            checks += 1;
+            if arms[a] != want {
+                failures += 1;
+                println(f"P1 arm {a}: {arms[a]} vs {want}");
+            }
+            // P2
+            checks += 1;
+            let mut last: Map[String, i64] = Map.new();
+            let mut twice = false;
+            for i in 0..calls.len() {
+                if arms[a][i] {
+                    let (ti, mi) = calls[i].clone();
+                    match last.get(mi) {
+                        Some(tp) => {
+                            if ti - tp < 10 {
+                                twice = true;
+                            }
+                        }
+                        None => {}
+                    }
+                    last[mi] = ti;
+                }
+            }
+            if twice {
+                failures += 1;
+                println(f"P2 arm {a}: {arms[a]}");
+            }
+            // P3
+            checks += 1;
+            let mut seen: Set[String] = Set.new();
+            let mut first_refused = false;
+            for i in 0..calls.len() {
+                let m = calls[i].1.clone();
+                if not seen.contains(m) {
+                    if not arms[a][i] {
+                        first_refused = true;
+                    }
+                    seen.insert(m);
+                }
+            }
+            if first_refused {
+                failures += 1;
+                println(f"P3 arm {a}: {arms[a]}");
+            }
+        }
+        // P4 and P5, on every arm
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let shift = (seed / 65536) % 1000;
+        let mut shifted: Vec[(i64, String)] = Vec.new();
+        let mut renamed: Vec[(i64, String)] = Vec.new();
+        for (ct, cm) in calls.iter() {
+            shifted.push((ct + shift, cm.clone()));
+            renamed.push((ct, f"renamed-{cm}"));
+        }
+        let shifted_answers = vec![answers_map(shifted), answers_buckets(shifted)];
+        let renamed_answers = vec![answers_map(renamed), answers_buckets(renamed)];
+        for a in 0..arms.len() {
+            checks += 1;
+            if shifted_answers[a] != arms[a] {
+                failures += 1;
+                println(f"P4 arm {a} shift {shift}");
+            }
+            checks += 1;
+            if renamed_answers[a] != arms[a] {
+                failures += 1;
+                println(f"P5 arm {a}");
+            }
+        }
+    }
+    println(f"{cases} cases, {checks} checks, {printed} printed, {failures} failures");
+}

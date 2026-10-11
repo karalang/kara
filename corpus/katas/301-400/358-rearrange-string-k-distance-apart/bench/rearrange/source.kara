@@ -1,0 +1,73 @@
+// Benchmark for #358: 200 strings of 50,000 letters, each over the first 4 to
+// 26 letters with a skewed draw (one letter in eight is forced to 'a', so the
+// most frequent letter is often too frequent), and k from 1 to 8. Each string
+// is rearranged with the kata's heap-and-queue greedy.
+
+fn rearrange(s: ref String, k: i64) -> String {
+    let mut counts: Vec[i64] = vec![0; 26];
+    for b in s.bytes() {
+        counts[(b as i64) - (b'a' as i64)] += 1;
+    }
+    // (copies left, -letter): the largest pops first, so the most copies wins
+    // and, among equal counts, the smallest letter.
+    let mut ready: PriorityQueue[(i64, i64)] = PriorityQueue.max_first();
+    for c in 0..26 {
+        if counts[c] > 0 {
+            ready.push((counts[c], 0 - c));
+        }
+    }
+    // Every letter written goes to the back of `cooling`, even its last copy,
+    // so that the queue's length counts positions. Once it holds k entries
+    // the front one was written k positions ago and may be written again.
+    let mut cooling: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut out = String.new();
+    for _ in 0..s.len() {
+        match ready.pop() {
+            Some((left, neg)) => {
+                let c = 0 - neg;
+                out.push(((c + (b'a' as i64)) as u8) as char);
+                cooling.push_back((left - 1, c));
+            }
+            None => { return String.new(); }
+        }
+        if cooling.len() >= k {
+            match cooling.pop_front() {
+                Some((left, c)) => {
+                    if left > 0 {
+                        ready.push((left, 0 - c));
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+    out
+}
+
+fn main() {
+    let mut seed: i64 = 358;
+    let mut possible = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..200 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let width = (seed / 65536) % 23 + 4;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let k = (seed / 65536) % 8 + 1;
+        let mut s = String.with_capacity(50000);
+        for _ in 0..50000 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let draw = seed / 65536;
+            let c = if draw % 8 == 0 { 0 } else { (draw / 8) % width };
+            s.push(((c + (b'a' as i64)) as u8) as char);
+        }
+        let r = rearrange(s, k);
+        if r.len() == s.len() {
+            possible += 1;
+        }
+        for b in r.bytes() {
+            checksum = (checksum * 31 + (b as i64)) % 1000000007;
+        }
+        checksum = (checksum * 31 + 7) % 1000000007;
+    }
+    println(f"{possible} of 200 strings can be arranged, checksum {checksum}");
+}

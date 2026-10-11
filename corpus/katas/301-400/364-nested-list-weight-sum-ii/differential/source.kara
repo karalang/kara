@@ -1,0 +1,260 @@
+// LeetCode #364: differential test. The two-pass, level and one-pass arms
+// against an oracle that lists every integer with its depth, over 3,000
+// random nested lists. Properties: P1 each arm matches the oracle; P2
+// wrapping the whole list in another list, P3 reversing every list and P5
+// appending a list of empty lists change no answer; P4 the answer plus the
+// depth-weighted sum (problem 339) is (maxDepth + 1) times the plain sum.
+
+#[derive(Clone)]
+enum Nested {
+    Int(i64),
+    List(Vec[Nested]),
+}
+
+// The depth of the deepest integer in `list`, whose items are at `depth`;
+// 0 when there is no integer at all.
+fn max_depth(list: ref Vec[Nested], depth: i64) -> i64 {
+    let mut deepest = 0;
+    for item in list.iter() {
+        match item {
+            Int(_) => { deepest = deepest.max(depth); }
+            List(inner) => { deepest = deepest.max(max_depth(inner, depth + 1)); }
+        }
+    }
+    deepest
+}
+
+fn weighted(list: ref Vec[Nested], depth: i64, top: i64) -> i64 {
+    let mut total = 0;
+    for item in list.iter() {
+        match item {
+            Int(v) => { total += v * (top - depth + 1); }
+            List(inner) => { total += weighted(inner, depth + 1, top); }
+        }
+    }
+    total
+}
+
+fn star_arm(list: ref Vec[Nested]) -> i64 {
+    let top = max_depth(list, 1);
+    weighted(list, 1, top)
+}
+
+fn levels_arm(list: ref Vec[Nested]) -> i64 {
+    let mut sums: Vec[i64] = Vec.new();
+    // The number of levels up to and including the deepest integer.
+    let mut deepest = 0;
+    let mut level: Vec[Nested] = list.clone();
+    while not level.is_empty() {
+        let mut next_level: Vec[Nested] = Vec.new();
+        let mut sum = 0;
+        let mut any = false;
+        for item in level.iter() {
+            match item {
+                Int(v) => {
+                    sum += v;
+                    any = true;
+                }
+                List(inner) => {
+                    for x in inner.iter() {
+                        next_level.push(x.clone());
+                    }
+                }
+            }
+        }
+        sums.push(sum);
+        if any {
+            deepest = sums.len();
+        }
+        level = next_level;
+    }
+    let mut running = 0;
+    let mut total = 0;
+    for d in 0..deepest {
+        running += sums[d];
+        total += running;
+    }
+    total
+}
+
+struct Totals {
+    plain: i64,
+    by_depth: i64,
+    deepest: i64,
+}
+
+fn gather(list: ref Vec[Nested], depth: i64, totals: mut ref Totals) {
+    for item in list.iter() {
+        match item {
+            Int(v) => {
+                totals.plain += v;
+                totals.by_depth += v * depth;
+                totals.deepest = totals.deepest.max(depth);
+            }
+            List(inner) => { gather(inner, depth + 1, totals); }
+        }
+    }
+}
+
+fn one_pass_arm(list: ref Vec[Nested]) -> i64 {
+    let mut totals = Totals { plain: 0, by_depth: 0, deepest: 0 };
+    gather(list, 1, mut totals);
+    (totals.deepest + 1) * totals.plain - totals.by_depth
+}
+
+// Parses one element starting at bytes[at] and moves `at` past it.
+fn parse_item(bytes: Slice[u8], at: mut ref i64) -> Nested {
+    if bytes[at] == b'[' {
+        at = at + 1;
+        let mut items: Vec[Nested] = Vec.new();
+        while bytes[at] != b']' {
+            items.push(parse_item(bytes, at));
+            if bytes[at] == b',' {
+                at = at + 1;
+            }
+        }
+        at = at + 1;
+        Nested.List(items)
+    } else {
+        let mut sign = 1;
+        if bytes[at] == b'-' {
+            sign = -1;
+            at = at + 1;
+        }
+        let mut v = 0;
+        while bytes[at] >= b'0' and bytes[at] <= b'9' {
+            v = v * 10 + ((bytes[at] - b'0') as i64);
+            at = at + 1;
+        }
+        Nested.Int(sign * v)
+    }
+}
+
+// The input is the whole list, written as in LeetCode: "[[1,1],2,[1,1]]".
+fn parse(s: ref String) -> Vec[Nested] {
+    let bytes = s.bytes();
+    let mut at = 0;
+    match parse_item(bytes, mut at) {
+        List(items) => items,
+        Int(_) => Vec.new(),
+    }
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    seed / 65536
+}
+
+// A random nested list, up to six levels deep, written out as text.
+fn random_list(seed: mut ref i64, depth: i64, out: mut ref String) {
+    out.push_str("[");
+    let n = next(seed) % 5;
+    let span = if next(seed) % 2 == 0 { 3 } else { 100 };
+    for i in 0..n {
+        if i > 0 {
+            out.push_str(",");
+        }
+        if depth < 6 and next(seed) % 3 == 0 {
+            random_list(seed, depth + 1, out);
+        } else {
+            out.push_str(f"{next(seed) % (2 * span + 1) - span}");
+        }
+    }
+    out.push_str("]");
+}
+
+
+// Every integer with its depth.
+fn flatten(list: ref Vec[Nested], depth: i64, out: mut ref Vec[(i64, i64)]) {
+    for item in list.iter() {
+        match item {
+            Int(v) => { out.push((v, depth)); }
+            List(inner) => { flatten(inner, depth + 1, out); }
+        }
+    }
+}
+
+fn oracle(list: ref Vec[Nested]) -> i64 {
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    flatten(list, 1, mut pairs);
+    let mut top = 0;
+    for (_, d) in pairs.iter() {
+        top = top.max(d);
+    }
+    let mut total = 0;
+    for (v, d) in pairs.iter() {
+        total += v * (top - d + 1);
+    }
+    total
+}
+
+fn arms(list: ref Vec[Nested]) -> Vec[i64] {
+    vec![star_arm(list), levels_arm(list), one_pass_arm(list)]
+}
+
+fn reversed(list: ref Vec[Nested]) -> Vec[Nested] {
+    let mut out: Vec[Nested] = Vec.new();
+    let mut i = list.len();
+    while i > 0 {
+        i -= 1;
+        match list[i].clone() {
+            Int(v) => { out.push(Nested.Int(v)); }
+            List(inner) => { out.push(Nested.List(reversed(inner))); }
+        }
+    }
+    out
+}
+
+fn main() {
+    let mut seed: i64 = 3640;
+    let mut cases = 0;
+    let mut checks = 0;
+    let mut failures = 0;
+    for _ in 0..3000 {
+        let mut text = String.new();
+        random_list(mut seed, 1, mut text);
+        let list = parse(text);
+        cases += 1;
+        let want = oracle(list);
+        let got = arms(list);
+        let wrapped = arms(parse(f"[{text}]"));
+        let backwards = arms(reversed(list));
+        let padded = arms(parse(f"{text.substring(0, text.len() - 1)}{if list.is_empty() { "" } else { "," }}[[],[[[]]]]]"));
+        let mut pairs: Vec[(i64, i64)] = Vec.new();
+        flatten(list, 1, mut pairs);
+        let mut top = 0;
+        let mut plain = 0;
+        let mut by_depth = 0;
+        for (v, d) in pairs.iter() {
+            top = top.max(d);
+            plain += v;
+            by_depth += v * d;
+        }
+        for a in 0..got.len() {
+            let r = got[a];
+            checks += 4;
+            if r != want {
+                failures += 1;
+                println(f"P1 arm {a} {text}: {r} vs {want}");
+            }
+            if wrapped[a] != r {
+                failures += 1;
+                println(f"P2 arm {a} {text}: {wrapped[a]} vs {r}");
+            }
+            if backwards[a] != r {
+                failures += 1;
+                println(f"P3 arm {a} {text}: {backwards[a]} vs {r}");
+            }
+            if r + by_depth != (top + 1) * plain {
+                failures += 1;
+                println(f"P4 arm {a} {text}: {r} + {by_depth} vs {(top + 1) * plain}");
+            }
+            checks += 1;
+            if padded[a] != r {
+                failures += 1;
+                println(f"P5 arm {a} {text}: {padded[a]} vs {r}");
+            }
+        }
+    }
+    println(f"{cases} cases, {checks} checks, {failures} failures");
+}

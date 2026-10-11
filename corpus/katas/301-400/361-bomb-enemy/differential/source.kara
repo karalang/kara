@@ -1,0 +1,305 @@
+// Differential test for LeetCode #361: the three arms against an oracle
+// that pairs every empty cell with every enemy.
+//
+// The oracle never walks from a cell. For each empty cell it looks at every
+// enemy in the same row or column and counts it when no wall lies strictly
+// between the two. 2,000 random grids of 1 to 6 by 1 to 6 cells.
+//
+//   P1  every arm returns the oracle's answer
+//   P2  transposing the grid does not change the answer
+//   P3  reversing every row does not change the answer
+//   P4  turning one enemy into a wall never raises the answer
+//   P5  the answer is at most the number of enemies, and 0 with no empty cell
+
+fn cached(grid: ref Vec[String]) -> i64 {
+    let rows = grid.len();
+    if rows == 0 {
+        return 0;
+    }
+    let cells: Vec[Vec[u8]] = grid.iter().map(|r| r.bytes().iter().collect()).collect();
+    let cols = cells[0].len();
+    let mut best = 0;
+    let mut row_hits = 0;
+    let mut col_hits: Vec[i64] = vec![0; cols];
+    for i in 0..rows {
+        for j in 0..cols {
+            if j == 0 or cells[i][j - 1] == b'W' {
+                row_hits = 0;
+                let mut k = j;
+                while k < cols and cells[i][k] != b'W' {
+                    if cells[i][k] == b'E' {
+                        row_hits += 1;
+                    }
+                    k += 1;
+                }
+            }
+            if i == 0 or cells[i - 1][j] == b'W' {
+                col_hits[j] = 0;
+                let mut k = i;
+                while k < rows and cells[k][j] != b'W' {
+                    if cells[k][j] == b'E' {
+                        col_hits[j] += 1;
+                    }
+                    k += 1;
+                }
+            }
+            if cells[i][j] == b'0' {
+                best = best.max(row_hits + col_hits[j]);
+            }
+        }
+    }
+    best
+}
+
+fn brute(grid: ref Vec[String]) -> i64 {
+    let rows = grid.len();
+    let mut best = 0;
+    for i in 0..rows {
+        let row = grid[i].bytes();
+        for j in 0..row.len() {
+            if row[j] != b'0' {
+                continue;
+            }
+            let mut hits = 0;
+            // (row step, column step) for left, right, up and down
+            for (di, dj) in [(0, 0 - 1), (0, 1), (0 - 1, 0), (1, 0)] {
+                let mut r = i + di;
+                let mut c = j + dj;
+                while r >= 0 and r < rows and c >= 0 and c < row.len() {
+                    let cell = grid[r].bytes()[c];
+                    if cell == b'W' {
+                        break;
+                    }
+                    if cell == b'E' {
+                        hits += 1;
+                    }
+                    r += di;
+                    c += dj;
+                }
+            }
+            best = best.max(hits);
+        }
+    }
+    best
+}
+
+fn sweeps(grid: ref Vec[String]) -> i64 {
+    let rows = grid.len();
+    if rows == 0 {
+        return 0;
+    }
+    let mut cells: Vec[Vec[u8]] = Vec.new();
+    for line in grid.iter() {
+        let mut row: Vec[u8] = Vec.new();
+        for b in line.bytes() {
+            row.push(b);
+        }
+        cells.push(row);
+    }
+    let cols = cells[0].len();
+    let mut hits: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        hits.push(vec![0; cols]);
+    }
+    // left to right and right to left
+    for i in 0..rows {
+        let mut run = 0;
+        for j in 0..cols {
+            if cells[i][j] == b'W' { run = 0; } else if cells[i][j] == b'E' { run += 1; } else { hits[i][j] += run; }
+        }
+        run = 0;
+        let mut j = cols;
+        while j > 0 {
+            j -= 1;
+            if cells[i][j] == b'W' { run = 0; } else if cells[i][j] == b'E' { run += 1; } else { hits[i][j] += run; }
+        }
+    }
+    // top to bottom and bottom to top
+    for j in 0..cols {
+        let mut run = 0;
+        for i in 0..rows {
+            if cells[i][j] == b'W' { run = 0; } else if cells[i][j] == b'E' { run += 1; } else { hits[i][j] += run; }
+        }
+        run = 0;
+        let mut i = rows;
+        while i > 0 {
+            i -= 1;
+            if cells[i][j] == b'W' { run = 0; } else if cells[i][j] == b'E' { run += 1; } else { hits[i][j] += run; }
+        }
+    }
+    let mut best = 0;
+    for i in 0..rows {
+        for j in 0..cols {
+            if cells[i][j] == b'0' {
+                best = best.max(hits[i][j]);
+            }
+        }
+    }
+    best
+}
+
+fn clear_between(g: ref Vec[Vec[u8]], r0: i64, c0: i64, r1: i64, c1: i64) -> bool {
+    if r0 == r1 {
+        let lo = c0.min(c1);
+        let hi = c0.max(c1);
+        for c in (lo + 1)..hi {
+            if g[r0][c] == b'W' {
+                return false;
+            }
+        }
+    } else {
+        let lo = r0.min(r1);
+        let hi = r0.max(r1);
+        for r in (lo + 1)..hi {
+            if g[r][c0] == b'W' {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn oracle(grid: ref Vec[String]) -> i64 {
+    let mut g: Vec[Vec[u8]] = Vec.new();
+    for line in grid.iter() {
+        let mut row: Vec[u8] = Vec.new();
+        for b in line.bytes() {
+            row.push(b);
+        }
+        g.push(row);
+    }
+    let mut best = 0;
+    for i in 0..g.len() {
+        for j in 0..g[i].len() {
+            if g[i][j] != b'0' {
+                continue;
+            }
+            let mut hits = 0;
+            for r in 0..g.len() {
+                for c in 0..g[r].len() {
+                    if g[r][c] == b'E' and (r == i or c == j) and clear_between(g, i, j, r, c) {
+                        hits += 1;
+                    }
+                }
+            }
+            best = best.max(hits);
+        }
+    }
+    best
+}
+
+fn answers(grid: ref Vec[String]) -> Vec[i64] {
+    vec![cached(grid), brute(grid), sweeps(grid)]
+}
+
+fn transpose(grid: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let cols = grid[0].len();
+    for j in 0..cols {
+        let mut line = String.new();
+        for row in grid.iter() {
+            line.push(row.bytes()[j] as char);
+        }
+        out.push(line);
+    }
+    out
+}
+
+fn reverse_rows(grid: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for row in grid.iter() {
+        let mut line = String.new();
+        let bytes = row.bytes();
+        let mut k = bytes.len();
+        while k > 0 {
+            k -= 1;
+            line.push(bytes[k] as char);
+        }
+        out.push(line);
+    }
+    out
+}
+
+fn main() {
+    let mut seed: i64 = 3610;
+    let mut cases = 0;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut total = 0;
+    for _ in 0..2000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let rows = (seed / 65536) % 6 + 1;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let cols = (seed / 65536) % 6 + 1;
+        let mut grid: Vec[String] = Vec.new();
+        let mut enemies = 0;
+        let mut empties = 0;
+        for _ in 0..rows {
+            let mut row = String.new();
+            for _ in 0..cols {
+                seed = (seed * 1103515245 + 12345) % 2147483648;
+                let r = (seed / 65536) % 6;
+                if r == 0 {
+                    row.push('W');
+                } else if r < 3 {
+                    row.push('E');
+                    enemies += 1;
+                } else {
+                    row.push('0');
+                    empties += 1;
+                }
+            }
+            grid.push(row);
+        }
+        cases += 1;
+        let want = oracle(grid);
+        total += want;
+        let got = answers(grid);
+        let flipped = answers(transpose(grid));
+        let mirrored = answers(reverse_rows(grid));
+        // P4: the first enemy in row-major order becomes a wall.
+        let mut walled: Vec[String] = Vec.new();
+        let mut done = false;
+        for row in grid.iter() {
+            let mut line = String.new();
+            for b in row.bytes() {
+                if b == b'E' and not done {
+                    line.push('W');
+                    done = true;
+                } else {
+                    line.push(b as char);
+                }
+            }
+            walled.push(line);
+        }
+        let fewer = answers(walled);
+        for k in 0..got.len() {
+            checks += 1;
+            if got[k] != want {
+                failures += 1;
+                println(f"P1 arm {k} {grid}: {got[k]} vs {want}");
+            }
+            checks += 1;
+            if flipped[k] != got[k] {
+                failures += 1;
+                println(f"P2 arm {k} {grid}");
+            }
+            checks += 1;
+            if mirrored[k] != got[k] {
+                failures += 1;
+                println(f"P3 arm {k} {grid}");
+            }
+            checks += 1;
+            if fewer[k] > got[k] {
+                failures += 1;
+                println(f"P4 arm {k} {grid}");
+            }
+            checks += 1;
+            if got[k] > enemies or (empties == 0 and got[k] != 0) {
+                failures += 1;
+                println(f"P5 arm {k} {grid}");
+            }
+        }
+    }
+    println(f"{cases} cases, {checks} checks, {total} enemies in total, {failures} failures");
+}
