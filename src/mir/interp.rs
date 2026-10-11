@@ -6081,6 +6081,21 @@ impl<'a> Interp<'a> {
                         }
                         Value::Agg(vec![v, Value::Bool(overflow)])
                     }
+                    // The commonest right-hand sides, kept out of the
+                    // general `rvalue`.
+                    Rvalue::Use(o) => self.operand(body, o)?.0,
+                    Rvalue::BinaryOp(op, a, b) => {
+                        let (x, ty) = self.operand(body, a)?;
+                        let (y, _) = self.operand(body, b)?;
+                        let (v, overflow) = self.binop(*op, x, y, ty)?;
+                        if overflow {
+                            return err(format!(
+                                "unchecked {} overflowed; the builder must use CheckedBinaryOp",
+                                op.name()
+                            ));
+                        }
+                        v
+                    }
                     _ => self.rvalue(body, rv)?,
                 };
                 let flag = matches!(v, Value::Bool(true));
@@ -6255,6 +6270,18 @@ impl<'a> Interp<'a> {
                         slot.copy()
                     };
                     return Ok((v, body.local(p.local).ty));
+                }
+            }
+            // A scalar field of a local tuple or struct, such as a checked
+            // step's result or flag.
+            if let ([ProjElem::Field(f, fty)], Operand::Copy(_)) = (p.projection.as_slice(), o) {
+                let slot = &self.frames.last().expect("frame").locals[p.local.index()];
+                if let Value::Agg(fs) = slot {
+                    if let Some(v) = fs.get(f.0 as usize) {
+                        if v.is_plain() && !matches!(v, Value::Uninit) {
+                            return Ok((v.copy(), *fty));
+                        }
+                    }
                 }
             }
         }
@@ -6530,6 +6557,9 @@ impl<'a> Interp<'a> {
     /// The result of `op` and whether it overflowed `ty`.
     /// A unary operator; a lane vector's works lane by lane.
     fn unop(&mut self, op: UnOp, x: Value, ty: Ty) -> R<Value> {
+        if let (UnOp::Not, Value::Bool(b)) = (op, &x) {
+            return Ok(Value::Bool(!b));
+        }
         if let (Value::Agg(fs), TyKind::Array(et, _)) = (&x, self.tys.kind(ty)) {
             if self.tys.is_vector(ty) {
                 let mut lanes = Vec::with_capacity(fs.len());
@@ -6592,6 +6622,17 @@ impl<'a> Interp<'a> {
         let Some(it) = int else {
             return err("integer operands of a non-integer type");
         };
+        // The common `i64` step in the machine's own width: its overflow
+        // flag is the type's.
+        if it == IntTy::I64 && matches!(op, Add | Sub | Mul) {
+            let (x, y) = (a as i64, b as i64);
+            let (r, of) = match op {
+                Add => x.overflowing_add(y),
+                Sub => x.overflowing_sub(y),
+                _ => x.overflowing_mul(y),
+            };
+            return Ok((Value::Int(r as i128), of));
+        }
         // In 128 bits, with the 128-bit overflow kept: a narrower
         // type's result then wraps to the right value, and an
         // `i128` one is flagged.
