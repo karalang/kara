@@ -423,6 +423,7 @@ fn run_with(
         frames: Vec::new(),
         next_frame_id: 0,
         spare_locals: Vec::new(),
+        callees: Default::default(),
         heap: Vec::new(),
         free: Vec::new(),
         key_index: Default::default(),
@@ -624,6 +625,10 @@ struct Interp<'a> {
     next_frame_id: u64,
     /// Emptied local vectors of returned frames, reused by the next call.
     spare_locals: Vec<Vec<Value>>,
+    /// The body each call site's function name finds, keyed by the
+    /// address of the name in the program (which outlives the run), so a
+    /// call does not search the body map by string.
+    callees: rustc_hash::FxHashMap<usize, Option<&'a Body>>,
     heap: Vec<Option<HeapObj>>,
     /// Freed slots of `heap`, reused by [`Interp::alloc`].
     free: Vec<u32>,
@@ -828,6 +833,25 @@ impl<'a> Interp<'a> {
                 [v, i] => self.vec_index(name, v, i),
                 _ => err(format!("{name} takes a reference and an index")),
             },
+            // A `chars()` cursor step, which must not copy the text.
+            ("String", "char_at_byte") => {
+                let [recv, Value::Int(i)] = args.as_slice() else {
+                    return err(format!("{name} takes a receiver and an index"));
+                };
+                let i = *i;
+                let s = self.str_ref(recv)?;
+                let c = (0..s.len() as i128)
+                    .contains(&i)
+                    .then(|| s.get(i as usize..).and_then(|t| t.chars().next()))
+                    .flatten();
+                let Some(c) = c else {
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::Panic));
+                    }
+                    return Err(Stop::Abort(AbortReason::Panic));
+                };
+                Ok(Value::Char(c))
+            }
             ("Vec", "push") if args.len() == 2 => {
                 let mut args = args.into_iter();
                 let (Some(v), Some(val)) = (args.next(), args.next()) else {
@@ -1737,7 +1761,8 @@ impl<'a> Interp<'a> {
         arg_tys: &[Ty],
         ret: Ty,
     ) -> R<Value> {
-        let name = format!("{ty_name}.{method}");
+        // Spelled out only when a message needs it.
+        let name = MethodName(ty_name, method);
         let is_vec = ty_name.starts_with("Vec");
         match (is_vec, method, args.as_slice()) {
             (true, "with_capacity" | "filled", [Value::Int(n), ..]) if *n < 0 => {
@@ -1802,7 +1827,7 @@ impl<'a> Interp<'a> {
             }
             (true, "clone", [v]) => {
                 let id = self.box_behind(v)?;
-                let e = self.vec_elem_ty(arg_tys, &name)?;
+                let e = self.vec_elem_ty(arg_tys, &name.to_string())?;
                 let elems = self.vec_elems(id)?.clone();
                 let mut out = Vec::with_capacity(elems.len());
                 for x in &elems {
@@ -1812,7 +1837,7 @@ impl<'a> Interp<'a> {
             }
             (true, "contains", [v, needle]) => {
                 let id = self.box_behind(v)?;
-                let e = self.vec_elem_ty(arg_tys, &name)?;
+                let e = self.vec_elem_ty(arg_tys, &name.to_string())?;
                 let user_eq = self.user_eq(e);
                 let want = self.key_form(needle)?;
                 let elems = self.vec_elems(id)?.clone();
@@ -1829,7 +1854,7 @@ impl<'a> Interp<'a> {
             }
             (true, "truncate", [v, Value::Int(n)]) => {
                 let id = self.box_behind(v)?;
-                let e = self.vec_elem_ty(arg_tys, &name)?;
+                let e = self.vec_elem_ty(arg_tys, &name.to_string())?;
                 let len = self.vec_elems(id)?.len();
                 let keep = (*n).clamp(0, len as i128) as usize;
                 // The tail drops first to last, as a dying Vec does.
@@ -1890,7 +1915,7 @@ impl<'a> Interp<'a> {
             }
             (true, "clear", [v]) => {
                 let id = self.box_behind(v)?;
-                let e = self.vec_elem_ty(arg_tys, &name)?;
+                let e = self.vec_elem_ty(arg_tys, &name.to_string())?;
                 let n = self.vec_elems(id)?.len();
                 // First to last, as when the whole Vec drops.
                 for i in 0..n {
@@ -1905,7 +1930,7 @@ impl<'a> Interp<'a> {
             }
             (true, "index_set", [v, Value::Int(i), val]) => {
                 let id = self.box_behind(v)?;
-                let e = self.vec_elem_ty(arg_tys, &name)?;
+                let e = self.vec_elem_ty(arg_tys, &name.to_string())?;
                 let i = self.bounds(id, *i, false)?;
                 let at = Addr {
                     root: Root::Heap(id),
@@ -5001,6 +5026,27 @@ impl<'a> Interp<'a> {
     }
 
     /// The text of a `String` (owned or behind a reference) or a constant.
+    /// The text of a `String` or `str` value, borrowed: [`Interp::string_at`]
+    /// without the copy.
+    fn str_ref<'s>(&'s mut self, v: &'s Value) -> R<&'s str> {
+        if let Value::Str(s) = v {
+            return Ok(s);
+        }
+        if let Value::Ref(a) = v {
+            if matches!(self.slot_ref(a)?, Value::Str(_)) {
+                let Value::Str(s) = self.slot_ref(a)? else {
+                    unreachable!("just matched")
+                };
+                return Ok(s);
+            }
+        }
+        let id = self.box_behind(v)?;
+        match &self.live(id)?.value {
+            Value::Str(s) => Ok(s),
+            other => err(format!("expected a String, found {other:?}")),
+        }
+    }
+
     fn string_at(&mut self, v: &Value) -> R<String> {
         if let Value::Str(s) = v {
             return Ok(s.clone());
@@ -6444,7 +6490,13 @@ impl<'a> Interp<'a> {
                 };
                 // Only a native reads the argument types.
                 let program: &'a Program = self.program;
-                let found = named.and_then(|n| program.bodies.get(n));
+                let found = match named {
+                    Some(n) => *self
+                        .callees
+                        .entry(n.as_ptr() as usize)
+                        .or_insert_with(|| program.bodies.get(n)),
+                    None => None,
+                };
                 let native = found.is_none();
                 // `v[i]` on a `Vec`, the commonest call of all, without the
                 // argument vectors and the native dispatch.
@@ -8003,6 +8055,15 @@ const STRING_TEXT_METHODS: &[&str] = &[
     "replacen",
     "char_count",
 ];
+
+/// `Type.method`, formatted on demand.
+struct MethodName<'n>(&'n str, &'n str);
+
+impl fmt::Display for MethodName<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}", self.0, self.1)
+    }
+}
 
 /// `char` methods [`Interp::char_method`] implements.
 const CHAR_METHODS: &[&str] = &[
