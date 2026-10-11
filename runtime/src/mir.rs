@@ -622,6 +622,22 @@ pub unsafe extern "C" fn karac_mir_str_replacen(
     unsafe { string_of(out, t.as_bytes()) };
 }
 
+/// Runs a program's `main` body on a thread with a 1 GiB stack (reserved,
+/// committed as it is touched) and returns its exit code, so recursion
+/// reaches the depth the interpreter's does.
+#[no_mangle]
+pub extern "C" fn karac_mir_run_main(body: extern "C" fn() -> i32) -> i32 {
+    match std::thread::Builder::new()
+        .name("main".into())
+        .stack_size(1 << 30)
+        .spawn(move || body())
+    {
+        Ok(h) => h.join().unwrap_or(101),
+        // No thread to be had: run it here, on the process's own stack.
+        Err(_) => body(),
+    }
+}
+
 /// `std.time::sleep_ms`: a real pause; a count of zero or less is a
 /// no-op.
 #[no_mangle]

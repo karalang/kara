@@ -380,7 +380,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         let i32t = self.llcx.i32_type();
         let f = self
             .module
-            .add_function("main", i32t.fn_type(&[], false), None);
+            .add_function("karac.main", i32t.fn_type(&[], false), None);
         self.builder
             .position_at_end(self.llcx.append_basic_block(f, "entry"));
         self.init_statics()?;
@@ -450,6 +450,23 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 .map_err(|e| e.to_string())?;
         }
         self.rt("flush", &[])?;
+        self.builder
+            .build_return(Some(&code))
+            .map_err(|e| e.to_string())?;
+        // The C `main` runs that body on a thread with a deep stack, as the
+        // interpreter's recursion is not bounded by the process's stack.
+        let fty = i32t.fn_type(&[], false);
+        let ptr = self.llcx.ptr_type(inkwell::AddressSpace::default());
+        let run = self.extern_fn("karac_mir_run_main", i32t.fn_type(&[ptr.into()], false));
+        let cmain = self.module.add_function("main", fty, None);
+        self.builder
+            .position_at_end(self.llcx.append_basic_block(cmain, "entry"));
+        let code = self
+            .builder
+            .build_call(run, &[f.as_global_value().as_pointer_value().into()], "")
+            .map_err(|e| e.to_string())?
+            .try_as_basic_value()
+            .unwrap_basic();
         self.builder
             .build_return(Some(&code))
             .map_err(|e| e.to_string())?;
@@ -693,6 +710,11 @@ fn main() -> () {
         extern "C" fn flush() {}
         let f = cx.module.get_function("karac_mir_flush").unwrap();
         engine.add_global_mapping(&f, flush as *const () as usize);
+        extern "C" fn run_main(body: extern "C" fn() -> i32) -> i32 {
+            body()
+        }
+        let f = cx.module.get_function("karac_mir_run_main").unwrap();
+        engine.add_global_mapping(&f, run_main as *const () as usize);
 
         // SAFETY: `main` is the module's `i32 main()`.
         let main: extern "C" fn() -> i32 =
