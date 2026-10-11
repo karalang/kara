@@ -13,5 +13,6 @@ env = {}
 bucket = "mir-gap:typecheck"
 classified_with = "61feb360a+local"
 fixed_by_classify = true
+fixed_src = "6a75b190"
 model_rev = "62bc67d6"
 model_src = "6a75b190"

@@ -14,5 +14,6 @@ note = "first literal of the holding test: '3 3 destructure-map-payload-bravo-bb
 bucket = "b->a"
 classified_with = "61feb360a+local"
 fixed_by_classify = true
+fixed_src = "321d0e1e"
 model_rev = "62bc67d6"
 model_src = "321d0e1e"

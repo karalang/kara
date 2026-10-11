@@ -14,5 +14,6 @@ note = "first literal of the holding test: '5 cycle-take-alpha-aaaaaaaaaaaaaaaaa
 bucket = "mir-gap:typecheck"
 classified_with = "61feb360a+local"
 fixed_by_classify = true
+fixed_src = "e1436ce7"
 model_rev = "62bc67d6"
 model_src = "e1436ce7"

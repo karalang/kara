@@ -11,8 +11,11 @@ For each entry, outside class d (deferred):
 1. `karac check --output=json`. An error from a v2 rule (E05xx, E0288,
    E0289, and the move-from-borrow lints; see `is_v2`) sends the entry to class b: `karac fix`
    runs on a copy to a fixed point; if the copy then checks clean it becomes
-   `source.kara` (the extracted text stays as `source.orig.kara`) and is judged
-   below on its own output; if not, the entry is e. Any other check error on a
+   `source.kara` (the extracted text stays as `source.orig.kara`, and
+   `fixed_src` records a hash of what was written) and is judged below on its
+   own output; if not, the entry is e. A `source.kara` whose hash no longer
+   matches was edited since (a migration): the edit is kept and becomes the
+   text the fix starts from, so a reclassify never reverts it. Any other check error on a
    program the legacy compiler accepted is e (`check-refuses:<code>`).
 2. `karac __mir-run` (a release build by default), at the runner's timeout
    and `KARAC_HASH_SEED`.
@@ -46,6 +49,7 @@ auto-resolved e-spec entries.
 import argparse
 import collections
 import concurrent.futures as cf
+import hashlib
 import json
 import os
 import re
@@ -192,11 +196,14 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
     tags = [t for t in meta.get("tags", []) if not t.startswith(("post-m1:", "lib:", "io:")) and t != "bench"]
     # A class-b entry this script fixed keeps the extracted text in
     # source.orig.kara; apps/ keep their blind draft there, which is not the
-    # program.
-    src_file = entry / ("source.orig.kara" if meta.get("fixed_by_classify") else "source.kara")
+    # program. If source.kara no longer holds the text this script wrote
+    # (`fixed_src`), someone edited the program since (a migration), and the
+    # edit supersedes the stale extracted text: it becomes the input.
+    edited = bool(meta.get("fixed_by_classify")) and src_hash(entry / "source.kara") != meta.get("fixed_src")
+    src_file = entry / ("source.orig.kara" if meta.get("fixed_by_classify") and not edited else "source.kara")
     src = src_file.read_text()
     tags += slice_tags(src, rel)
-    out = {"rel": rel, "tags": tags}
+    out = {"rel": rel, "tags": tags, "edited": edited}
     expect = meta.get("expect", "stdout")
     if meta.get("v2_reject"):
         # Legacy ran it; v2 refuses it (the reason is in `v2_reject`).
@@ -308,6 +315,10 @@ E_SPEC_NOTE = "e-spec: legacy differs from the drop model; v2 matches it"
 C_NOTE = "class c: v2 order unreviewed against core §7"
 
 
+def src_hash(path: Path) -> str:
+    return hashlib.md5(path.read_bytes()).hexdigest()[:8]
+
+
 def write_back(entry: Path, r: dict, sha: str):
     meta = read_toml(entry / "meta.toml")
     meta["tags"] = r["tags"]
@@ -315,15 +326,23 @@ def write_back(entry: Path, r: dict, sha: str):
     meta["bucket"] = r["bucket"]
     meta["classified_with"] = sha
     if r.get("fixed") is not None:
-        if not meta.get("fixed_by_classify"):
+        if not meta.get("fixed_by_classify") or r.get("edited"):
+            # The text the fix starts from: the extracted program, or an
+            # edit made to source.kara since this script last wrote it.
             shutil.copy(entry / "source.kara", entry / "source.orig.kara")
             meta["fixed_by_classify"] = True
         (entry / "source.kara").write_text(r["fixed"])
+        meta["fixed_src"] = src_hash(entry / "source.kara")
     elif meta.get("fixed_by_classify"):
         # No longer fixed (the fix stopped converging, or is not needed):
-        # back to the extracted text.
-        shutil.move(entry / "source.orig.kara", entry / "source.kara")
+        # back to the extracted text, unless source.kara was edited since
+        # this script wrote it, in which case the edit stands.
+        if r.get("edited"):
+            (entry / "source.orig.kara").unlink()
+        else:
+            shutil.move(entry / "source.orig.kara", entry / "source.kara")
         del meta["fixed_by_classify"]
+        meta.pop("fixed_src", None)
     note = meta.get("note", "")
     for n in (C_NOTE, E_SPEC_NOTE):
         note = note.replace(n, "")
@@ -439,7 +458,8 @@ def main() -> int:
     if args.retag:
         for e in entries(corpus):
             meta = read_toml(e / "meta.toml")
-            src = (e / ("source.orig.kara" if meta.get("fixed_by_classify") else "source.kara")).read_text()
+            use_orig = meta.get("fixed_by_classify") and src_hash(e / "source.kara") == meta.get("fixed_src")
+            src = (e / ("source.orig.kara" if use_orig else "source.kara")).read_text()
             tags = [t for t in meta.get("tags", []) if not t.startswith(("post-m1:", "lib:", "io:")) and t != "bench"]
             tags += slice_tags(src, str(e.relative_to(corpus)))
             if tags != meta.get("tags", []):

@@ -14,6 +14,7 @@ note = "first literal of the holding test: 'asan_ref_chain_enum_scrutinee_clone_
 bucket = "b->e-spec"
 classified_with = "61feb360a+local"
 fixed_by_classify = true
+fixed_src = "b7e294e0"
 model_exit = 0
 model_rev = "62bc67d6"
 model_src = "b7e294e0"

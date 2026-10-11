@@ -14,5 +14,6 @@ note = "stmt-par groups (source.orig.kara lines): L332-L335 four fs.write, each 
 bucket = "b->a"
 classified_with = "61feb360a+local"
 fixed_by_classify = true
+fixed_src = "c6cf6aab"
 model_rev = "62bc67d6"
 model_src = "c6cf6aab"

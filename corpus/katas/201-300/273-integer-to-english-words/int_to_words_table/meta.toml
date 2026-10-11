@@ -13,6 +13,7 @@ env = {}
 bucket = "b->a"
 classified_with = "61feb360a+local"
 fixed_by_classify = true
+fixed_src = "ff1720c7"
 model_exit = 0
 model_rev = "62bc67d6"
 model_src = "ff1720c7"

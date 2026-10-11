@@ -14,5 +14,6 @@ note = "first literal of the holding test: 'pair_sum'"
 bucket = "b->a"
 classified_with = "61feb360a+local"
 fixed_by_classify = true
+fixed_src = "5aca9074"
 model_rev = "62bc67d6"
 model_src = "5aca9074"
