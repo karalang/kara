@@ -179,31 +179,26 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder
             .build_call(f, &[ret.into(), sa.into(), sb.into()], "")
             .map_err(e)?;
-        let t = self.load_tag(ret, ord_ty)?;
+        self.ordering_value(ret, ord_ty)
+    }
+
+    /// -1, 0 or 1 for the `Ordering` of type `ord_ty` at `p`.
+    pub(super) fn ordering_value(&mut self, p: PointerValue<'ctx>, ord_ty: Ty) -> R<IntValue<'ctx>> {
+        let t = self.load_tag(p, ord_ty)?;
         let i32t = self.llcx.i32_type();
         let t = self
             .builder
-            .build_int_truncate_or_bit_cast(t, i32t, "")
+            .build_int_cast_sign_flag(t, i32t, false, "")
             .map_err(e)?;
         let less = self.variant_of(ord_ty, "Less")?;
         let greater = self.variant_of(ord_ty, "Greater")?;
         let is_less = self
             .builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                t,
-                i32t.const_int(u64::from(less), false),
-                "",
-            )
+            .build_int_compare(IntPredicate::EQ, t, i32t.const_int(u64::from(less), false), "")
             .map_err(e)?;
         let is_greater = self
             .builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                t,
-                i32t.const_int(u64::from(greater), false),
-                "",
-            )
+            .build_int_compare(IntPredicate::EQ, t, i32t.const_int(u64::from(greater), false), "")
             .map_err(e)?;
         self.ord_of(is_less, is_greater)
     }

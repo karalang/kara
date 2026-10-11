@@ -242,6 +242,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_str_split,
         mir::karac_mir_str_join,
         mir::karac_mir_sort,
+        mir::karac_mir_sort_ctx,
         mir_map::karac_mir_map_find,
         mir_map::karac_mir_map_insert,
         mir_map::karac_mir_map_at,

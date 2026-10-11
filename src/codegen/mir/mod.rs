@@ -28,6 +28,7 @@
 
 mod body;
 mod call;
+mod callable;
 mod clone;
 mod drop;
 mod fmt;
@@ -112,6 +113,7 @@ pub struct Cx<'ctx, 'p> {
     fmt: fmt::Fmt<'ctx>,
     clones: clone::Clones<'ctx>,
     keys: key::Keys<'ctx>,
+    shims: callable::Shims<'ctx>,
     /// Bodies declared and not lowered yet.
     todo: Vec<&'p Body>,
     /// The global holding each static, by index.
@@ -134,6 +136,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             fmt: fmt::Fmt::default(),
             clones: clone::Clones::default(),
             keys: key::Keys::default(),
+            shims: callable::Shims::default(),
             todo: Vec::new(),
             statics: HashMap::new(),
         }
@@ -272,6 +275,8 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 self.finish_clones()?;
             } else if self.keys_pending() {
                 self.finish_keys()?;
+            } else if self.shims_pending() {
+                self.finish_shims()?;
             } else {
                 return Ok(());
             }

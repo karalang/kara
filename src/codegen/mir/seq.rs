@@ -309,7 +309,7 @@ impl<'ctx> Cx<'ctx, '_> {
         let tt = self.int_ty(tag.size as u32 * 8);
         let k = self
             .builder
-            .build_int_truncate_or_bit_cast(k, tt, "")
+            .build_int_cast_sign_flag(k, tt, false, "")
             .map_err(e)?;
         self.store(p, k.into())
     }
@@ -519,6 +519,16 @@ impl<'ctx> Cx<'ctx, '_> {
                     &[p.into(), n.into(), self.i64(size).into(), cmp.into()],
                 )?;
             }
+            ("sort_by" | "sort_unstable_by" | "sort_by_key" | "sort_unstable_by_key"
+            | "sort_by_cached_key", [f]) => {
+                let by_key = method.contains("key");
+                let (cmp, ctx) = self.sort_by_args(f, by_key, el)?;
+                self.rt(
+                    "sort_ctx",
+                    &[p.into(), n.into(), self.i64(size).into(), cmp.into(), ctx.into()],
+                )?;
+                self.drop_moved(&args[1..])?;
+            }
             ("to_vec", []) => self.vec_of_clones(dest, p, n, el)?,
             ("join", [sep]) if is_vec => {
                 let (sp, sn) = self.str_parts(sep)?;
@@ -659,5 +669,146 @@ impl<'ctx> Cx<'ctx, '_> {
             }
         }
         Ok(p)
+    }
+}
+
+impl<'ctx> Cx<'ctx, '_> {
+    /// `llvm.<name>` over the float type of `v`.
+    fn float_intrinsic(
+        &self,
+        name: &str,
+        args: &[inkwell::values::FloatValue<'ctx>],
+    ) -> R<inkwell::values::FloatValue<'ctx>> {
+        let ft = args[0].get_type();
+        let i = inkwell::intrinsics::Intrinsic::find(&format!("llvm.{name}"))
+            .ok_or_else(|| format!("no intrinsic llvm.{name}"))?;
+        let f = i
+            .get_declaration(&self.module, &[ft.into()])
+            .ok_or_else(|| format!("llvm.{name} has no declaration"))?;
+        let vals: Vec<BasicMetadataValueEnum> = args.iter().map(|a| (*a).into()).collect();
+        Ok(self
+            .builder
+            .build_call(f, &vals, "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_float_value())
+    }
+
+    /// The methods of a number or a char by value (`abs`, `max`, `min`,
+    /// `signum`, the wrapping operations, the float roundings, and
+    /// `len_utf8`), or `None` for one not lowered here.
+    pub(super) fn scalar_native(
+        &mut self,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let Some(first) = args.first() else {
+            return Ok(None);
+        };
+        let t = self.operand_type(first)?;
+        let mut vals = Vec::with_capacity(args.len());
+        for a in args {
+            if self.operand_type(a)? != t {
+                return Ok(None);
+            }
+            vals.push(self.operand_scalar(a)?);
+        }
+        let b = &self.builder;
+        let v: inkwell::values::BasicValueEnum = match (self.tys.kind(t), method, vals.as_slice()) {
+            (TyKind::Char, "len_utf8", [c]) => {
+                let c = c.into_int_value();
+                let ct = c.get_type();
+                let mut n = self.i64(4);
+                for (lim, k) in [(0x10000u64, 3u64), (0x800, 2), (0x80, 1)] {
+                    let lt = b
+                        .build_int_compare(IntPredicate::ULT, c, ct.const_int(lim, false), "")
+                        .map_err(e)?;
+                    n = b
+                        .build_select(lt, self.i64(k), n, "")
+                        .map_err(e)?
+                        .into_int_value();
+                }
+                let it = self.llvm_ty(self.place_type(dest)?)?.into_int_type();
+                b.build_int_cast_sign_flag(n, it, false, "").map_err(e)?.into()
+            }
+            (TyKind::Int(it), "abs", [x]) => {
+                let x = x.into_int_value();
+                if it.signed() {
+                    let min = x.get_type().const_int(1u64 << 63, false);
+                    let min = if it.bits() == 64 {
+                        min
+                    } else {
+                        b.build_left_shift(
+                            x.get_type().const_int(1, false),
+                            x.get_type().const_int(u64::from(it.bits() - 1), false),
+                            "",
+                        )
+                        .map_err(e)?
+                    };
+                    let ok = b
+                        .build_int_compare(IntPredicate::NE, x, min, "")
+                        .map_err(e)?;
+                    self.abort_unless(ok, "integer overflow")?;
+                    let b = &self.builder;
+                    let neg = b
+                        .build_int_compare(IntPredicate::SLT, x, x.get_type().const_zero(), "")
+                        .map_err(e)?;
+                    let nx = b.build_int_neg(x, "").map_err(e)?;
+                    b.build_select(neg, nx, x, "").map_err(e)?
+                } else {
+                    x.into()
+                }
+            }
+            (TyKind::Int(it), "signum", [x]) => {
+                let x = x.into_int_value();
+                let z = x.get_type().const_zero();
+                let (lp, gp) = if it.signed() {
+                    (IntPredicate::SLT, IntPredicate::SGT)
+                } else {
+                    (IntPredicate::ULT, IntPredicate::UGT)
+                };
+                let lt = b.build_int_compare(lp, x, z, "").map_err(e)?;
+                let gt = b.build_int_compare(gp, x, z, "").map_err(e)?;
+                let g = b.build_int_z_extend(gt, x.get_type(), "").map_err(e)?;
+                let l = b.build_int_z_extend(lt, x.get_type(), "").map_err(e)?;
+                b.build_int_sub(g, l, "").map_err(e)?.into()
+            }
+            (TyKind::Int(it), "max" | "min", [x, y]) => {
+                let (x, y) = (x.into_int_value(), y.into_int_value());
+                let p = match (method, it.signed()) {
+                    ("max", true) => IntPredicate::SGT,
+                    ("max", false) => IntPredicate::UGT,
+                    (_, true) => IntPredicate::SLT,
+                    _ => IntPredicate::ULT,
+                };
+                let c = b.build_int_compare(p, x, y, "").map_err(e)?;
+                b.build_select(c, x, y, "").map_err(e)?
+            }
+            (TyKind::Int(_), "wrapping_add" | "wrapping_sub" | "wrapping_mul", [x, y]) => {
+                let (x, y) = (x.into_int_value(), y.into_int_value());
+                match method {
+                    "wrapping_add" => b.build_int_add(x, y, ""),
+                    "wrapping_sub" => b.build_int_sub(x, y, ""),
+                    _ => b.build_int_mul(x, y, ""),
+                }
+                .map_err(e)?
+                .into()
+            }
+            (TyKind::Float(_), "abs" | "sqrt" | "floor" | "ceil" | "round", [x]) => {
+                let name = if method == "abs" { "fabs" } else { method };
+                self.float_intrinsic(name, &[x.into_float_value()])?.into()
+            }
+            (TyKind::Float(_), "max" | "min", [x, y]) => {
+                let name = if method == "max" { "maxnum" } else { "minnum" };
+                self.float_intrinsic(name, &[x.into_float_value(), y.into_float_value()])?
+                    .into()
+            }
+            _ => return Ok(None),
+        };
+        let d = self.place_ptr(dest)?;
+        self.store(d, v)?;
+        Ok(Some(()))
     }
 }

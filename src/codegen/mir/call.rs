@@ -26,17 +26,19 @@ impl<'ctx> Cx<'ctx, '_> {
         dest: &Place,
         target: Option<BasicBlock>,
     ) -> R<()> {
-        let Operand::Const(c) = func else {
-            return Err("MIR to LLVM: a call through a function value is not lowered yet".into());
-        };
-        let ConstKind::FnDef(inst) = &c.kind else {
-            return Err("MIR to LLVM: a call to a constant that is not a function".into());
-        };
         let program = self.program;
-        if program.bodies.contains_key(&inst.name) {
-            self.call_body(&inst.name, args, dest)?;
-        } else {
-            self.native(&inst.name, args, dest)?;
+        match func {
+            Operand::Const(c) => {
+                let ConstKind::FnDef(inst) = &c.kind else {
+                    return Err("MIR to LLVM: a call to a constant that is not a function".into());
+                };
+                if program.bodies.contains_key(&inst.name) {
+                    self.call_body(&inst.name, args, dest)?;
+                } else {
+                    self.native(&inst.name, args, dest)?;
+                }
+            }
+            _ => self.call_value(func, args, dest)?,
         }
         match target {
             Some(t) => self
@@ -128,6 +130,18 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         if base == "String" && self.string_native(method, args, dest)?.is_some() {
             return Ok(());
+        }
+        if matches!(
+            base,
+            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
+                | "u128" | "usize" | "f32" | "f64" | "char"
+        ) && self.scalar_native(method, args, dest)?.is_some()
+        {
+            return Ok(());
+        }
+        if (base, method) == ("Vec", "from_slice") {
+            let (p, n, el) = self.view_parts(&args[0])?;
+            return self.vec_of_clones(dest, p, n, el);
         }
         if matches!(base, "Vec" | "Slice" | "Array")
             && self.seq_native(base, method, args, dest)?.is_some()

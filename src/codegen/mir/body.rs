@@ -740,12 +740,8 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// A closure or function item as an erased `Fn` value.
-    fn erase(&mut self, _dst: PointerValue<'ctx>, _a: &Operand, from: Ty, to: Ty) -> R<()> {
-        Err(format!(
-            "MIR to LLVM: erasing a `{}` to `{}` is not lowered yet",
-            self.tys.display(from),
-            self.tys.display(to)
-        ))
+    fn erase(&mut self, dst: PointerValue<'ctx>, a: &Operand, from: Ty, to: Ty) -> R<()> {
+        self.erase_into(dst, a, from, to)
     }
 
     /// `weak T` to `Option[shared T]`: `Some` with one more strong count

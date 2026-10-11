@@ -572,9 +572,39 @@ pub unsafe extern "C" fn karac_mir_sort(
     size: usize,
     cmp: unsafe extern "C" fn(*const u8, *const u8) -> i32,
 ) {
+    // SAFETY: the caller's contract.
+    unsafe { merge_sort(buf, n, size, &mut |a, b| cmp(a, b)) };
+}
+
+/// [`karac_mir_sort`] with a comparator that also takes `ctx` (a
+/// `sort_by` closure's environment).
+///
+/// # Safety
+/// As [`karac_mir_sort`]; `cmp` is sound with `ctx`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_sort_ctx(
+    buf: *mut u8,
+    n: usize,
+    size: usize,
+    cmp: unsafe extern "C" fn(*const u8, *const u8, *const u8) -> i32,
+    ctx: *const u8,
+) {
+    // SAFETY: the caller's contract.
+    unsafe { merge_sort(buf, n, size, &mut |a, b| cmp(ctx, a, b)) };
+}
+
+/// # Safety
+/// `buf` holds `n` elements of `size` bytes; `cmp` is sound on any two.
+unsafe fn merge_sort(
+    buf: *mut u8,
+    n: usize,
+    size: usize,
+    cmp: &mut dyn FnMut(*const u8, *const u8) -> i32,
+) {
     if n < 2 || size == 0 {
         return;
     }
+    // SAFETY: every index passed is below `n`.
     let at = |i: usize| unsafe { buf.add(i * size) };
     let mut order: Vec<usize> = (0..n).collect();
     let mut width = 1;
@@ -585,8 +615,8 @@ pub unsafe extern "C" fn karac_mir_sort(
             let hi = (lo + 2 * width).min(n);
             let (mut i, mut j) = (lo, mid);
             while i < mid && j < hi {
-                // SAFETY: both indices are below `n`.
-                if unsafe { cmp(at(order[j]), at(order[i])) } < 0 {
+                // The right element goes first only when strictly less.
+                if cmp(at(order[j]), at(order[i])) < 0 {
                     out.push(order[j]);
                     j += 1;
                 } else {

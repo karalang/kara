@@ -308,6 +308,69 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(d, at.into())?;
             }
             ("insert", [k, rest @ ..]) => self.table_insert(hp, t, k, rest, dest, dty, unit)?,
+            ("entries", []) if is_map => {
+                let h = self.load_ptr(hp)?;
+                let n = self.mrt_i64("map_len", &[h.into()])?;
+                let size = self.layout(t.entry)?.size;
+                let d = self.place_ptr(dest)?;
+                self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+                let buf = self.load_ptr(d)?;
+                self.count_loop(n, |cx, i| {
+                    let at = cx.entry_at(h, i)?;
+                    let out = cx.elem_ptr(buf, i, size)?;
+                    cx.clone_into(out, at, t.entry)
+                })?;
+            }
+            ("entry_or_insert" | "entry_or_insert_with", [k, val]) if is_map => {
+                // A reference to the stored value, inserting `val` (or what
+                // `val()` returns) when the key is new; a found key drops
+                // the new key and the unused value.
+                let v = t.val.unwrap_or(t.key);
+                let h = self.load_ptr(hp)?;
+                let kp = self.operand_ptr(k)?;
+                let i = self.find(h, kp, t)?;
+                let found = self.found(i)?;
+                let slot = self.entry_slot(8, "stored")?;
+                let f = self.cur_fn()?;
+                let (old, new, done) = (
+                    self.llcx.append_basic_block(f, "entry.found"),
+                    self.llcx.append_basic_block(f, "entry.new"),
+                    self.llcx.append_basic_block(f, "entry"),
+                );
+                self.builder
+                    .build_conditional_branch(found, old, new)
+                    .map_err(e)?;
+                self.builder.position_at_end(old);
+                self.drop_moved(&args[1..])?;
+                let at = self.entry_at(h, i)?;
+                self.store(slot, at.into())?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(new);
+                let tmp = self.temp(t.entry, "entry")?;
+                self.copy(tmp, kp, t.key)?;
+                let vslot = self.offset(tmp, self.val_off(t)?)?;
+                if method == "entry_or_insert_with" {
+                    let c = self.callee_of(val)?;
+                    self.call_callee(&c, vslot, &[])?;
+                    if matches!(val, Operand::Move(_)) {
+                        self.drop_moved(std::slice::from_ref(val))?;
+                    }
+                } else {
+                    self.store_operand(vslot, val)?;
+                }
+                self.insert_entry(hp, tmp, t)?;
+                let h2 = self.load_ptr(hp)?;
+                let i2 = self.find(h2, tmp, t)?;
+                let at = self.entry_at(h2, i2)?;
+                self.store(slot, at.into())?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(done);
+                let at = self.load_ptr(slot)?;
+                let vp = self.offset(at, self.val_off(t)?)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, vp.into())?;
+                let _ = v;
+            }
             ("remove", [k]) => {
                 let h = self.load_ptr(hp)?;
                 let kp = self.key_arg(k, t.key)?;
