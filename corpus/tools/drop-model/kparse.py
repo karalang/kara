@@ -254,6 +254,7 @@ class Param:
     mode: str  # own | ref | mutref
     ty: object
     is_mut: bool = False
+    bare: bool = False  # written `x: T`, with no `own`, `ref` or `mut ref`
 
 
 @dataclass
@@ -652,13 +653,14 @@ class Parser:
                 owned = self.eat("own")
                 t = self.ty()
                 mode = "own" if owned else BARE_MODE
+                bare = not owned
                 if t[0] == "ref":
-                    mode, t = "ref", t[1]
+                    mode, t, bare = "ref", t[1], False
                 elif t[0] == "mutref":
-                    mode, t = "mutref", t[1]
+                    mode, t, bare = "mutref", t[1], False
                 elif t[0] == "app" and t[1] in ("Slice", "StringSlice"):
-                    mode = "ref"
-                params.append(Param(pname, mode, t, is_mut))
+                    mode, bare = "ref", False
+                params.append(Param(pname, mode, t, is_mut, bare))
             if self.at(":") and recv is not None:
                 self.i += 1
                 self.ty()

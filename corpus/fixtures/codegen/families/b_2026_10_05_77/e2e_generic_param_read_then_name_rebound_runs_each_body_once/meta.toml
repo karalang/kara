@@ -13,5 +13,5 @@ env = {}
 note = "class c: v2 order unreviewed against core §7"
 bucket = "c-unreviewed"
 classified_with = "61feb360a+local"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "52c30cd4"

@@ -15,6 +15,6 @@ bucket = "b->e-spec"
 classified_with = "61feb360a+local"
 fixed_by_classify = true
 model_exit = 0
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "b73ca346"
 model_verdict = "ORDER"

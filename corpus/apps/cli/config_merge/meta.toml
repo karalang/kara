@@ -13,5 +13,5 @@ env = {}
 note = "stmt-par groups (source.orig.kara lines): L345-L346 two fs.write of separate files (app.conf, app.local.conf); L347-L348 two fs.read_to_string of those files"
 bucket = "a"
 classified_with = "61feb360a+local"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "737e6304"

@@ -14,5 +14,5 @@ note = "§9.3: a returned closure escapes and captures `s` by move, so v2 runs i
 bucket = "e-spec"
 classified_with = "61feb360a+local"
 legacy_expect = "error:E0508"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "7fd95dfb"

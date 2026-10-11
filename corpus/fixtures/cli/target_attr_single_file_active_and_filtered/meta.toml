@@ -13,6 +13,6 @@ env = {}
 bucket = "check-refuses:check-failed"
 classified_with = "61feb360a+local"
 model_exit = 0
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "e848e5fa"
 model_verdict = "SAME"

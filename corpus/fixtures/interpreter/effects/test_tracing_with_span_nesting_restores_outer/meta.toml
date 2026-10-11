@@ -14,5 +14,5 @@ note = "v2 accepts: core-semantics §9.3, an escaping closure captures by move a
 bucket = "e-spec"
 classified_with = "61feb360a+local"
 legacy_expect = "error:E0508"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "f85d314d"

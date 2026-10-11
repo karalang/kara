@@ -13,7 +13,7 @@ env = {}
 bucket = "a:refused"
 classified_with = "61feb360a+local"
 model_note = "a reference to a temporary outlives its statement (§5.5)"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "4de2e5cb"
 model_verdict = "V2-REJECT"
 v2_reject = "core-semantics §5.5: no temporary lifetime extension; `let d = (if c { mk(5) } else { mk(7) }).first();` keeps a borrow of a temporary Vec dropped at the `;` (kata thread, 2026-10-11)"

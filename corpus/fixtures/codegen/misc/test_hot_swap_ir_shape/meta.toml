@@ -14,6 +14,6 @@ note = "first literal of the holding test: 'parse failed: {:?}'"
 bucket = "a"
 classified_with = "61feb360a+local"
 model_exit = 0
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "f63006d4"
 model_verdict = "SAME"

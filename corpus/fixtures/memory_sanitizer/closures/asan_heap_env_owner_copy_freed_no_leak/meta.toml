@@ -12,6 +12,6 @@ backends = []
 env = {}
 bucket = "a:refused"
 classified_with = "61feb360a+local"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "9e33e5f0"
 v2_reject = "core-semantics §3.2 (E0500) and §1.3: the program uses a value again after moving it into an `own` parameter or binding, and the compiler never inserts a copy (kata thread, 2026-10-10)"

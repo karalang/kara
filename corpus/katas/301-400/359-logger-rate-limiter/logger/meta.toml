@@ -14,6 +14,6 @@ note = "legacy fails on this program (legacy_exit -6); expected.out is the kata'
 bucket = "e-spec"
 classified_with = "61feb360a+local"
 model_exit = 0
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "d8267d1f"
 model_verdict = "DIFF"

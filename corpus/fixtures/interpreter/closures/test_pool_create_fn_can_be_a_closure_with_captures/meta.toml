@@ -14,5 +14,5 @@ note = "v2 accepts: core-semantics §9.3, an escaping closure captures by move a
 bucket = "mir-gap:runtime: in main at bbN[term]: call of unknown function Pool[String].new"
 classified_with = "61feb360a+local"
 legacy_expect = "error:E0508"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "05f8c9e5"

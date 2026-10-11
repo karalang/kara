@@ -14,5 +14,5 @@ note = "first literal of the holding test: '2 zip-adp-left-alpha-aaaaaaaaaaaaaaa
 bucket = "b->a"
 classified_with = "61feb360a+local"
 fixed_by_classify = true
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "9dd70047"

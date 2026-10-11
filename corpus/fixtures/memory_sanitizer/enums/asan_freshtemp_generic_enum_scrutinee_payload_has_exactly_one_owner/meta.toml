@@ -14,6 +14,6 @@ note = "first literal of the holding test: 'av1' e-spec: legacy differs from the
 bucket = "e-spec"
 classified_with = "61feb360a+local"
 model_exit = 0
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "e846f751"
 model_verdict = "DIFF"

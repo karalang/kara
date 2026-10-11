@@ -13,5 +13,5 @@ env = {}
 note = "stmt-par groups (source.orig.kara lines): L285-L286 two fs.write of separate files; L288-L289 load_orders / load_customers, each a read_to_string + parse of its own file"
 bucket = "a"
 classified_with = "61feb360a+local"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "44a22358"

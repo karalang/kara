@@ -58,9 +58,9 @@ ret
 eat
   x
   eat
+  hit7
   dR21
   dR20
-  hit7
 nomatch
   x
   dR23

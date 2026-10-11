@@ -13,5 +13,5 @@ env = {}
 note = "first literal of the holding test: '%__par_result_slots = alloca [2 x { i64, i64, i64, i64, i64, i64 }]'"
 bucket = "a"
 classified_with = "61feb360a+local"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "2a2c6de2"

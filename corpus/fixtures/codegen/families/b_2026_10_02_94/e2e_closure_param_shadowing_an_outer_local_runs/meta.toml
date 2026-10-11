@@ -12,6 +12,6 @@ backends = []
 env = {}
 bucket = "a:refused"
 classified_with = "61feb360a+local"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "087fb77e"
 v2_reject = "core-semantics §9.1 and §3.2: the value is captured by move into a closure and then used again (kata thread, 2026-10-10)"

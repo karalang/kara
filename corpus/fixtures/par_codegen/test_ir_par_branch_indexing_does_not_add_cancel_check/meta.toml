@@ -13,5 +13,5 @@ env = {}
 note = "first literal of the holding test: 'index reads inside par-branch must not add cancel checks; expected exactly 2 (one per helper() call), found {total}; IR:'"
 bucket = "a"
 classified_with = "61feb360a+local"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "97bd0733"

@@ -262,6 +262,12 @@ INT_TYPES = {"i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u6
 class Model:
     def __init__(self, prog: Program):
         self.p = prog
+        # D5 (core-semantics amendment 8): a bare parameter of a `Copy` type is
+        # a copy, not a borrow, so the callee may rebind or assign it.
+        for f in [*prog.fns.values(), *(m for ms in prog.methods.values() for m in ms.values())]:
+            for prm in f.params:
+                if prm.bare and prm.mode == "ref" and self.ty_is_copy(prm.ty, set(f.generics or ())):
+                    prm.mode = "own"
         self.out: list = []
         self.frames: list = []
         self.temps: list = [[]]
@@ -272,6 +278,25 @@ class Model:
         Scope.depth_of = lambda: len(self.frames[-1].loops) if self.frames else 0
 
     # ── type facts ──
+    COPY_PRIMS = {"i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128",
+                  "usize", "f32", "f64", "bool", "char"}
+
+    def ty_is_copy(self, t, generics) -> bool:
+        """Whether a written type is `Copy` (§1.1); a generic parameter is not known to be."""
+        if t is None:
+            return False
+        if t[0] == "tuple":
+            return all(self.ty_is_copy(x, generics) for x in t[1])
+        if t[0] != "app" or t[1] in generics:
+            return False
+        name, args = t[1], t[2]
+        if name in self.COPY_PRIMS:
+            return True
+        if name in ("Option", "Result", "Array"):
+            return bool(args) and all(self.ty_is_copy(x, generics) for x in args)
+        d = self.p.structs.get(name) or self.p.enums.get(name)
+        return bool(d and "Copy" in d.derives)
+
     def is_copy(self, v) -> bool:
         if isinstance(v, (Prim, Ref)):
             return True

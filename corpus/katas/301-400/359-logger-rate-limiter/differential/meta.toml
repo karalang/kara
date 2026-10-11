@@ -13,5 +13,5 @@ env = {}
 note = "legacy fails on this program (legacy_exit -6); expected.out is the differential's own verdict with 0 failures, as the kata README records it. e-spec: legacy differs from the drop model; v2 matches it"
 bucket = "e-spec"
 classified_with = "61feb360a+local"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "66d4675f"

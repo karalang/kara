@@ -6,5 +6,5 @@ fn main() {
     v.push(make(10i64));
     v.push(make(20i64));
     v[0i64] = g;
-    println(f"{(v[0i64])(1i64) + g(1i64) + (v[1i64])(2i64)}");
+    println(f"{(v[0i64])(1i64) + (v[0i64])(1i64) + (v[1i64])(2i64)}");
 }

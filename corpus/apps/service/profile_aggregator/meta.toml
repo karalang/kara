@@ -13,5 +13,5 @@ env = {}
 note = "stmt-par groups (source.orig.kara lines): L257-L259 three backend fetches (accounts, orders, recs), each sleep_ms(3) plus a map lookup"
 bucket = "a"
 classified_with = "61feb360a+local"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "00febf18"

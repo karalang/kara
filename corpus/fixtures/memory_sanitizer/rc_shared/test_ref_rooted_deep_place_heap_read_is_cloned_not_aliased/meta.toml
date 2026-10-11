@@ -13,6 +13,6 @@ env = {}
 bucket = "b-fix-incomplete:borrow_projection_copy"
 classified_with = "61feb360a+local"
 model_note = "move out of a ref place (C3)"
-model_rev = "8be6ddd7"
+model_rev = "62bc67d6"
 model_src = "b48023bf"
 model_verdict = "V2-REJECT"
