@@ -1126,7 +1126,9 @@ fn a_task_group_borrows_what_its_tasks_capture() {
         ),
         "`data` is written while a task of `g` borrows it",
     );
-    rejected(
+    // §9.1 (10-10): a place that drops before the group is moved into the
+    // task, so the program is accepted until the place is used again.
+    accepted(
         "taskgroup-origin-declared-after",
         &format!(
             "{total}fn main() {{\n\
@@ -1136,7 +1138,46 @@ fn a_task_group_borrows_what_its_tasks_capture() {
                  println(h.join());\n\
              }}\n"
         ),
-        "`data` drops before `g`",
+    );
+    rejected(
+        "taskgroup-origin-declared-after-used",
+        &format!(
+            "{total}fn main() {{\n\
+                 let mut g = TaskGroup.new();\n\
+                 let data: Vec[i64] = [1, 2, 3];\n\
+                 let h = g.spawn(|| total(data));\n\
+                 println(data.len());\n\
+                 println(h.join());\n\
+             }}\n"
+        ),
+        "value 'data' was moved into a task of `g`",
+    );
+    accepted(
+        "taskgroup-loop-body-locals",
+        "fn work(s: ref String) -> i64 { s.len() }\n\
+         fn main() {\n\
+             let mut g = TaskGroup.new();\n\
+             let mut hs: Vec[TaskHandle[i64]] = Vec.new();\n\
+             let mut i = 0;\n\
+             while i < 3 {\n\
+                 let name = f\"n{i}\";\n\
+                 let c = i;\n\
+                 hs.push(g.spawn(|| work(name) + c));\n\
+                 i = i + 1;\n\
+             }\n\
+             for h in hs { println(h.join()); }\n\
+         }\n",
+    );
+    rejected(
+        "taskgroup-copy-mut-capture-dies-first",
+        "fn main() {\n\
+             let mut g = TaskGroup.new();\n\
+             let mut n = 1;\n\
+             let h = g.spawn(|| { n = n + 1; n });\n\
+             println(n);\n\
+             println(h.join());\n\
+         }\n",
+        "`n` is used after a task of `g` captured it by `mut ref`",
     );
     rejected(
         "taskgroup-mut-capture-in-loop",

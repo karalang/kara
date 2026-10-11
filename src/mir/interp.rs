@@ -3607,6 +3607,55 @@ impl<'a> Interp<'a> {
                     path: vec![i as u64, 1],
                 }))
             }
+            ("range" | "range_inclusive", [lo, hi]) if !is_map => {
+                // The elements in `[lo, hi)` (`[lo, hi]` inclusive),
+                // ascending, as a `Vec`:
+                // references when the result holds references, else clones.
+                let e = match self.tys.kind(ret) {
+                    TyKind::Intrinsic(IntrinsicTy::Vec(e)) => e,
+                    _ => return err(format!("{name}.range into {}", self.tys.display(ret))),
+                };
+                let by_ref = matches!(self.tys.kind(e), TyKind::Ref(_));
+                let mut bound = |v: &Value| -> R<Value> {
+                    let mut v = v.clone();
+                    while let Value::Ref(a) = &v {
+                        v = self.slot(a)?;
+                    }
+                    self.key_form(&v)
+                };
+                let (lo, hi) = (bound(lo)?, bound(hi)?);
+                let n = self.vec_elems(id)?.len();
+                let mut picked = Vec::new();
+                for i in 0..n {
+                    let k = self.entry_key(id, i, false)?;
+                    let k = self.key_form(&k)?;
+                    use std::cmp::Ordering::*;
+                    let below_hi = match key_order(&k, &hi) {
+                        Less => true,
+                        Equal => method == "range_inclusive",
+                        Greater => false,
+                    };
+                    if key_order(&k, &lo) != Less && below_hi {
+                        picked.push((k, i));
+                    }
+                }
+                picked.sort_by(|a, b| key_order(&a.0, &b.0));
+                let mut out = Vec::with_capacity(picked.len());
+                for (_, i) in picked {
+                    let at = Addr {
+                        root: Root::Heap(id),
+                        path: vec![i as u64],
+                    };
+                    if by_ref {
+                        out.push(Value::Ref(at));
+                    } else {
+                        let v = self.slot(&at)?;
+                        out.push(self.clone_value(&v, key_ty)?);
+                    }
+                }
+                let vname = self.tys.display(ret);
+                Ok(self.alloc_box(&vname, Value::Agg(out)))
+            }
             ("min" | "max" | "first" | "last", []) if !is_map => {
                 // The least / greatest element, in place.
                 let n = self.vec_elems(id)?.len();
@@ -3629,11 +3678,12 @@ impl<'a> Interp<'a> {
                 self.option_of_place(ret, at)
             }
             (
-                "entries" | "range" | "floor" | "ceiling" | "min" | "max" | "first" | "last",
+                "entries" | "range" | "range_inclusive" | "floor" | "ceiling" | "min" | "max"
+                | "first" | "last",
                 rest,
             ) if is_map => {
                 // Clones of entries as `(K, V)` tuples: all of them, the
-                // keys in `lo..=hi`, the greatest key at most / least key
+                // keys in `lo..hi` / `lo..=hi`, the greatest key at most / least key
                 // at least `k`, or the first / last.
                 let n = self.vec_elems(id)?.len();
                 let mut keys = Vec::with_capacity(n);
@@ -3651,12 +3701,19 @@ impl<'a> Interp<'a> {
                 use std::cmp::Ordering::*;
                 let picked: Vec<usize> = match method {
                     "entries" => (0..n).collect(),
-                    "range" => {
+                    "range" | "range_inclusive" => {
+                        // Half-open `[lo, hi)`; `range_inclusive` is `[lo, hi]`
+                        // (docs/library/collections.md).
                         let (lo, hi) = (bound(self, 0)?, bound(self, 1)?);
+                        let closed = method == "range_inclusive";
                         (0..n)
                             .filter(|&i| {
                                 key_order(&keys[i], &lo) != Less
-                                    && key_order(&keys[i], &hi) != Greater
+                                    && match key_order(&keys[i], &hi) {
+                                        Less => true,
+                                        Equal => closed,
+                                        Greater => false,
+                                    }
                             })
                             .collect()
                     }
@@ -3697,7 +3754,7 @@ impl<'a> Interp<'a> {
                         self.clone_value(&v, val_ty)?,
                     ]));
                 }
-                if matches!(method, "entries" | "range") {
+                if matches!(method, "entries" | "range" | "range_inclusive") {
                     let vname = self.tys.display(ret);
                     return Ok(self.alloc_box(&vname, Value::Agg(out)));
                 }

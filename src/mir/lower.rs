@@ -13566,7 +13566,7 @@ fn main() {
     s.insert(1, 10); s.insert(5, 50); s.insert(9, 90);
     println(f"{s.floor(6)} {s.floor(0)} {s.ceiling(6)} {s.ceiling(10)} {s.min()} {s.max()}");
     let mut r: Vec[i64] = Vec.new();
-    for (k, v) in s.range(2, 9) { r.push(k * 1000 + v); }
+    for (k, v) in s.range_inclusive(2, 9) { r.push(k * 1000 + v); }
     println(f"{r}");
     println(f"{'a'.is_alphabetic()} {'1'.is_alphabetic()} {'A'.is_uppercase()} {'7'.is_ascii_digit()} {'Q'.to_lowercase()} {'q'.to_ascii_uppercase()} {'7'.to_digit(10)}");
     let v = vec![3, 1, 2];

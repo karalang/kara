@@ -7,8 +7,10 @@
 //!
 //! - a captured place may not be written or moved;
 //! - a place one task captures by `mut ref` may not be captured by another;
-//! - every origin must outlive the group: a place declared after it in the
-//!   same scope drops first, which is an error.
+//! - a captured place that drops before the group (declared after it, or in
+//!   a loop body) is taken by move instead (§9.1): a non-`Copy` place is
+//!   reported by the ownership pass on its next use (E0500), a `Copy` place
+//!   captured by `mut ref` may not be used again here.
 //!
 //! A source-order pass over each function body, run by the strict commands
 //! only. The group lives from its `let` to the end of the enclosing block.
@@ -69,6 +71,9 @@ struct Capture {
     spawn: Span,
     mutable: bool,
     in_loop: bool,
+    /// The closure passed to `spawn`.
+    closure: Span,
+    copy: bool,
 }
 
 /// A write or move of a place, for checking against the live borrows.
@@ -91,15 +96,23 @@ struct Walk<'t, 'a> {
     groups: Vec<Group>,
     captures: Vec<Capture>,
     writes: Vec<Write>,
+    /// Every use of an outer binding outside the spawned closures.
+    uses: Vec<Write>,
     errors: Vec<(Span, String)>,
+    /// Captures taken by move because the place drops before the group:
+    /// the closure's span, the place and the group.
+    moved: Vec<(Span, String, String)>,
     loop_depth: usize,
 }
 
 impl<'a> TypeChecker<'a> {
-    pub(super) fn emit_core_taskgroup_errors(
+    /// Runs the pass. Returns the captures taken by move, and reports its
+    /// errors when `emit` is set.
+    pub(super) fn core_taskgroup_pass(
         &mut self,
         node_types: &FxHashMap<crate::ids::NodeId, (Type, u32)>,
-    ) {
+        emit: bool,
+    ) -> FxHashMap<SpanKey, Vec<(String, String)>> {
         let mut self_modes: FxHashMap<String, SelfParam> = FxHashMap::default();
         let mut fns: Vec<&Function> = Vec::new();
         for item in &self.program.items {
@@ -123,6 +136,7 @@ impl<'a> TypeChecker<'a> {
             }
         }
         let mut errors = Vec::new();
+        let mut moved: FxHashMap<SpanKey, Vec<(String, String)>> = FxHashMap::default();
         for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
             let mut w = Walk {
                 tc: self,
@@ -139,16 +153,27 @@ impl<'a> TypeChecker<'a> {
                 groups: Vec::new(),
                 captures: Vec::new(),
                 writes: Vec::new(),
+                uses: Vec::new(),
                 errors: Vec::new(),
+                moved: Vec::new(),
                 loop_depth: 0,
             };
             w.block(&f.body);
             w.finish();
             errors.extend(w.errors);
+            for (closure, name, group) in w.moved {
+                moved
+                    .entry(SpanKey::from_span(&closure))
+                    .or_default()
+                    .push((name, group));
+            }
         }
-        for (span, message) in errors {
-            self.type_error(message, span, TypeErrorKind::TypeMismatch);
+        if emit {
+            for (span, message) in errors {
+                self.type_error(message, span, TypeErrorKind::TypeMismatch);
+            }
         }
+        moved
     }
 }
 
@@ -306,7 +331,7 @@ impl Walk<'_, '_> {
                             if let ExprKind::Closure { params, body, .. } = &arg.value.kind {
                                 // The body's writes are the capture itself,
                                 // not writes while the group borrows.
-                                self.spawn(group, e.span, params, body);
+                                self.spawn(group, e.span, arg.value.span, params, body);
                                 spawned = true;
                             }
                         }
@@ -344,6 +369,16 @@ impl Walk<'_, '_> {
                 self.scopes.pop();
             }
             ExprKind::Block(b) => self.block(b),
+            ExprKind::Identifier(n) => {
+                if let Some(decl) = self.lookup(n) {
+                    self.uses.push(Write {
+                        name: n.clone(),
+                        decl,
+                        span: e.span,
+                        what: "used",
+                    });
+                }
+            }
             ExprKind::While {
                 condition, body, ..
             } => {
@@ -385,7 +420,14 @@ impl Walk<'_, '_> {
 
     /// Record what `g.spawn(|| body)` captures: each outer binding the body
     /// names, `mut` when the body writes it.
-    fn spawn(&mut self, group: usize, span: Span, params: &[ClosureParam], body: &Expr) {
+    fn spawn(
+        &mut self,
+        group: usize,
+        span: Span,
+        closure: Span,
+        params: &[ClosureParam],
+        body: &Expr,
+    ) {
         let mut inner = Walk {
             tc: self.tc,
             node_types: self.node_types,
@@ -406,7 +448,9 @@ impl Walk<'_, '_> {
             groups: Vec::new(),
             captures: Vec::new(),
             writes: Vec::new(),
+            uses: Vec::new(),
             errors: Vec::new(),
+            moved: Vec::new(),
             loop_depth: 0,
         };
         inner.expr(body);
@@ -423,16 +467,23 @@ impl Walk<'_, '_> {
         self.moved_in(body, true, &mut moved);
         let mut seen = FxHashSet::default();
         for (name, ident) in names {
-            if !seen.insert(name.clone()) || moved.contains(&name) {
+            if !seen.insert(name.clone()) {
                 continue;
             }
             let Some(decl) = self.lookup(&name) else {
                 continue;
             };
-            if let Some((ty, _)) = self.node_types.get(&ident.id) {
-                if self.tc.is_copy_type_during_check(ty) && !written.contains(&name) {
-                    continue;
-                }
+            let copy = self
+                .node_types
+                .get(&ident.id)
+                .is_some_and(|(ty, _)| self.tc.is_copy_type_during_check(ty));
+            // A `Copy` place the body writes is captured by `mut ref` even
+            // when the body also copies it out.
+            if moved.contains(&name) && !(copy && written.contains(&name)) {
+                continue;
+            }
+            if copy && !written.contains(&name) {
+                continue;
             }
             self.captures.push(Capture {
                 group,
@@ -441,6 +492,8 @@ impl Walk<'_, '_> {
                 decl,
                 spawn: span,
                 in_loop: self.loop_depth > 0,
+                closure,
+                copy,
             });
         }
     }
@@ -528,24 +581,34 @@ impl Walk<'_, '_> {
         let mut seen: FxHashSet<(usize, usize)> = FxHashSet::default();
         for c in &self.captures {
             let g = &self.groups[c.group];
-            if c.decl.offset > g.decl.offset
-                && c.decl.offset != usize::MAX
-                && seen.insert((c.decl.offset, c.group))
-            {
-                let at = self
-                    .decl_spans
-                    .get(&c.decl.offset)
-                    .copied()
-                    .unwrap_or(c.spawn);
-                self.errors.push((
-                    at,
-                    format!(
-                        "`{}` drops before `{}`, but a task of `{}` borrows it (spawned at \
-                         line {}). Declare `{}` before `{}`, or put the group in an inner \
-                         block (core-semantics.md §9.5)",
-                        c.name, g.name, g.name, c.spawn.line, c.name, g.name
-                    ),
-                ));
+            // §9.1: a place that drops before the group is moved into the
+            // task. A non-`Copy` place's next use is the ownership pass's
+            // E0500; a `Copy` place (captured by `mut ref`, or it would not
+            // be here) keeps the borrow, so no use of it may follow.
+            if c.decl.offset > g.decl.offset && c.decl.offset != usize::MAX {
+                if !c.copy {
+                    self.moved.push((c.closure, c.name.clone(), g.name.clone()));
+                    continue;
+                }
+                if seen.insert((c.decl.offset, c.group)) {
+                    if let Some(u) = self
+                        .uses
+                        .iter()
+                        .find(|u| u.decl == c.decl && u.span.offset > c.spawn.offset)
+                    {
+                        self.errors.push((
+                            u.span,
+                            format!(
+                                "`{}` is used after a task of `{}` captured it by `mut ref` \
+                                 (spawned at line {}). It drops before `{}`, so the task holds \
+                                 a copy whose writes this use would not see. Declare `{}` \
+                                 before `{}` to let the task borrow it (core-semantics.md §9.1)",
+                                c.name, g.name, c.spawn.line, g.name, c.name, g.name
+                            ),
+                        ));
+                    }
+                }
+                continue;
             }
             for w in &self.writes {
                 if w.decl == c.decl && w.span.offset > c.spawn.offset && w.span.offset < g.end {

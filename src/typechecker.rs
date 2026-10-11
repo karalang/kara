@@ -1534,6 +1534,10 @@ pub struct TypeCheckResult {
     /// to a task, passed to an `escaping` parameter), keyed by span. They
     /// capture every place by move. Empty outside the strict commands.
     pub core_escaping_closures: FxHashSet<SpanKey>,
+    /// v2 core §9.1/§9.5: places a `TaskGroup.spawn` closure takes by move
+    /// because they drop before the group, keyed by the closure's span, each
+    /// with the group's name. Empty outside the strict commands.
+    pub core_task_moved_captures: FxHashMap<SpanKey, Vec<(String, String)>>,
     /// Receiver `Vector[T, N]` type for each vector **instance**-method call
     /// (`reduce_*` / `dot` / `cross` / `select`), keyed by the method-call
     /// span, recorded as `(element, lane_count)`. A `MethodCall`'s span equals
@@ -3295,6 +3299,7 @@ impl<'a> TypeChecker<'a> {
     /// hard-coded arms. See [`crate::prelude::LIBRARY_SOURCES`].
     pub fn library_methods_from_source(mut self) -> Self {
         self.library_methods_from_source = true;
+        self.env.partial_eq_impl_dispatches = true;
         self
     }
 
@@ -3505,8 +3510,14 @@ impl<'a> TypeChecker<'a> {
         let must_use_functions = self.env.must_use_functions.clone();
         let (node_types, node_call_subs) = self.resolved_node_tables();
         self.emit_core_generic_move_errors(&node_call_subs);
+        let mut core_task_moved_captures = FxHashMap::default();
+        if self.library_methods_from_source && !self.cli_lint_overrides.strict_core {
+            // The MIR builder reads which captures move from this table; its
+            // own borrow check reports the rest.
+            core_task_moved_captures = self.core_taskgroup_pass(&node_types, false);
+        }
         if self.cli_lint_overrides.strict_core {
-            self.emit_core_taskgroup_errors(&node_types);
+            core_task_moved_captures = self.core_taskgroup_pass(&node_types, true);
             self.core_once_calls = self.emit_core_ref_write_errors(&node_types);
         }
         let core_escaping_closures = if self.cli_lint_overrides.strict_core {
@@ -3530,6 +3541,7 @@ impl<'a> TypeChecker<'a> {
             core_borrowed_receivers: self.core_borrowed_receivers,
             core_fresh_index_reads: self.index_read_is_fresh_value.clone(),
             core_escaping_closures,
+            core_task_moved_captures,
             vector_method_receivers: self.vector_method_receivers,
             pointer_method_receiver_pointees: self.pointer_method_receiver_pointees,
             impl_assoc_types: self

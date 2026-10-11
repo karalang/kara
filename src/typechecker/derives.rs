@@ -1834,7 +1834,9 @@ impl super::env::TypeEnv {
                 // to `#[derive(Eq)]`/`#[derive(PartialEq)]` when no impl is
                 // registered (e.g. for compiler-provided structural eq on
                 // built-in enums like `Option`/`Result`).
-                if self.has_impl("Eq", name, args) {
+                if self.has_impl("Eq", name, args)
+                    || (self.partial_eq_impl_dispatches && self.has_impl("PartialEq", name, args))
+                {
                     return true;
                 }
                 if let Some(info) = self.structs.get(name) {
@@ -1847,7 +1849,9 @@ impl super::env::TypeEnv {
             }
             Type::Rc(inner) | Type::Arc(inner) => self.type_supports_partial_eq(inner),
             Type::Shared(name) => {
-                if self.has_impl("Eq", name, &[]) {
+                if self.has_impl("Eq", name, &[])
+                    || (self.partial_eq_impl_dispatches && self.has_impl("PartialEq", name, &[]))
+                {
                     return true;
                 }
                 if let Some(info) = self.structs.get(name) {

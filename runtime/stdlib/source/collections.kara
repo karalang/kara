@@ -36,6 +36,11 @@ impl[T] Vec[T] {
         self.len() == 0
     }
 
+    /// The first element, borrowed, or `None` when the vector is empty.
+    fn first(ref self) -> Option[ref T] {
+        self.get(0)
+    }
+
     /// The elements in reverse order, in place.
     fn reverse(mut ref self) {
         let mut i = 0;
@@ -53,6 +58,18 @@ impl[T] Vec[T] {
         let last = self.len() - 1;
         self.swap(idx, last);
         self.pop().unwrap()
+    }
+}
+
+impl[T: PartialEq] Vec[T] {
+    /// Whether some element equals `x`.
+    fn contains(ref self, x: ref T) -> bool {
+        for e in self.iter() {
+            if e == x {
+                return true;
+            }
+        }
+        false
     }
 }
 

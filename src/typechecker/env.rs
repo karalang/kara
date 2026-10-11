@@ -488,11 +488,17 @@ pub struct TypeEnv {
     /// with its bound value.
     #[allow(dead_code)]
     pub(super) const_substitutions: FxHashMap<ConstVarId, ConstArg>,
+    /// A hand-written `impl PartialEq` satisfies `PartialEq`. Set for the MIR
+    /// pipeline, which dispatches `==` through that impl; the legacy lowering
+    /// compares structurally unless the type also implements `Eq`, so there
+    /// the derive table stays the answer.
+    pub(super) partial_eq_impl_dispatches: bool,
 }
 
 impl TypeEnv {
     pub(super) fn new() -> Self {
         TypeEnv {
+            partial_eq_impl_dispatches: false,
             structs: FxHashMap::default(),
             enums: FxHashMap::default(),
             shape_param_positions: FxHashMap::default(),

@@ -61,3 +61,27 @@ fn main() {
         "x y\n",
     );
 }
+
+/// §9.1/§9.5 (10-10): a place that drops before the `TaskGroup` holding the
+/// task is captured by move. The MIR typecheck records which, for the
+/// builder, as `karac check` does.
+#[test]
+fn the_mir_typecheck_records_task_captures_that_move() {
+    let src = "fn total(v: ref Vec[i64]) -> i64 { v.len() }\n\
+               fn main() {\n\
+                   let early: Vec[i64] = [4];\n\
+                   let mut g = TaskGroup.new();\n\
+                   let data: Vec[i64] = [1, 2, 3];\n\
+                   let h = g.spawn(|| total(data) + total(early));\n\
+                   println(h.join());\n\
+               }\n";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let tc = karac::typecheck_with_library_source(&parsed.program, &resolved);
+    let moved: Vec<&(String, String)> = tc.core_task_moved_captures.values().flatten().collect();
+    assert_eq!(
+        moved,
+        vec![&("data".to_string(), "g".to_string())],
+        "only `data` drops before `g`"
+    );
+}

@@ -232,6 +232,7 @@ pub fn classify_function_body_with(
         closure_span_stack: Vec::new(),
         closure_local_stack: Vec::new(),
         escaping_closure_depth: 0,
+        task_moved_captures: Vec::new(),
         arm_consumed_names: Vec::new(),
     };
     classifier.walk_block(body, Mode::Reading);
@@ -306,6 +307,9 @@ struct UseClassifier<'a> {
     /// an ESCAPING closure. Inside one, every outer binding the body names is
     /// captured by move, so its leaf is classified as a consume.
     escaping_closure_depth: u32,
+    /// v2 core §9.1/§9.5: for each enclosing `TaskGroup.spawn` closure, the
+    /// places it takes by move because they drop before the group.
+    task_moved_captures: Vec<Vec<String>>,
     /// B-2026-08-30-10 — stack of the binding names CONSUMED inside each
     /// currently-open `match` arm body. One frame is pushed per arm; every
     /// `Consume` identifier-leaf recorded while frames are open adds its name
@@ -1219,7 +1223,18 @@ impl<'a> UseClassifier<'a> {
                         .core_escaping_closures
                         .contains(&SpanKey::from_span(&expr.span));
                 self.escaping_closure_depth += u32::from(escaping);
+                let moved: Vec<String> = if crate::ownership::core_rules() {
+                    self.tc
+                        .core_task_moved_captures
+                        .get(&SpanKey::from_span(&expr.span))
+                        .map(|v| v.iter().map(|(n, _)| n.clone()).collect())
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                self.task_moved_captures.push(moved);
                 self.walk_expr(body, Mode::Reading);
+                self.task_moved_captures.pop();
                 self.escaping_closure_depth -= u32::from(escaping);
                 self.closure_local_stack.pop();
                 self.closure_span_stack.pop();
@@ -1500,7 +1515,11 @@ impl<'a> UseClassifier<'a> {
     fn classify_identifier(&self, name: &str, span: &crate::token::Span, mode: Mode) -> UseKind {
         // v2 core §9.3: an escaping closure captures every outer binding by
         // move, whatever its body does with it.
-        let captured_by_move = self.escaping_closure_depth > 0
+        let captured_by_move = (self.escaping_closure_depth > 0
+            || self
+                .task_moved_captures
+                .iter()
+                .any(|m| m.iter().any(|n| n == name)))
             && !self.is_closure_local(name)
             && (self.param_types.contains_key(name) || self.local_types.contains_key(name));
         if mode == Mode::Reading && !captured_by_move {

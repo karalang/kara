@@ -687,6 +687,29 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 sorted_set_elem
             }
+            "range" | "range_inclusive" => {
+                // The elements in `[from, to)` (`[from, to]` inclusive),
+                // ascending, cloned like `min` / `max` and `SortedMap.range`
+                // (docs/library/collections.md).
+                if args.len() != 2 {
+                    self.type_error(
+                        format!(
+                            "SortedSet.{method}() expects 2 arguments, found {}",
+                            args.len()
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&elem, &at, arg.value.span);
+                }
+                Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![elem.clone()],
+                }
+            }
             _ => self.require_known_method(
                 "SortedSet",
                 method,
@@ -699,6 +722,8 @@ impl<'a> super::TypeChecker<'a> {
                     "len",
                     "max",
                     "min",
+                    "range",
+                    "range_inclusive",
                     "remove",
                     "union",
                 ],
@@ -948,11 +973,11 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 option_kv
             }
-            "range" => {
+            "range" | "range_inclusive" => {
                 if args.len() != 2 {
                     self.type_error(
                         format!(
-                            "SortedMap.range() expects 2 arguments, found {}",
+                            "SortedMap.{method}() expects 2 arguments, found {}",
                             args.len()
                         ),
                         *span,
@@ -1009,6 +1034,7 @@ impl<'a> super::TypeChecker<'a> {
                     "merge",
                     "min",
                     "range",
+                    "range_inclusive",
                     "remove",
                     "values",
                 ],

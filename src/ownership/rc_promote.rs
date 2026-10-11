@@ -181,6 +181,21 @@ impl<'a> super::OwnershipChecker<'a> {
                      used again here"
                 ),
                 RcTrigger::ClosureCaptureWithOuterUse
+                    if self
+                        .task_moved_group(&entry.consume_span, &binding)
+                        .is_some() =>
+                {
+                    let group = self
+                        .task_moved_group(&entry.consume_span, &binding)
+                        .unwrap_or_default();
+                    format!(
+                        "value '{binding}' was moved into a task of `{group}` (captured at line \
+                         {line}:{col}), used again here: it drops before `{group}`, so the task \
+                         takes it by move (core-semantics.md §9.1, §9.5). Declare '{binding}' \
+                         before `{group}` to let the task borrow it"
+                    )
+                }
+                RcTrigger::ClosureCaptureWithOuterUse
                     if self.in_escaping_closure(&entry.consume_span) =>
                 {
                     format!(

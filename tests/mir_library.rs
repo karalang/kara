@@ -470,3 +470,57 @@ fn main() {
         "d,c,b,a\nd a,c,b false\ntrue\n",
     );
 }
+
+#[test]
+fn vec_first_and_contains_are_written_in_kara() {
+    // `contains` is bounded on `T: PartialEq`, which a hand-written impl
+    // satisfies as the derive does, and `==` runs that impl: `tag` is not
+    // compared.
+    assert_runs(
+        r#"
+struct P { x: i64, tag: i64 }
+impl PartialEq for P { fn eq(ref self, other: ref P) -> bool { self.x == other.x } }
+fn same[T: PartialEq](a: T, b: T) -> bool { a == b }
+fn main() {
+    let v = vec![3, 1, 4];
+    println(f"{v.first()} {v.last()} {v.contains(4)} {v.contains(9)}");
+    let e: Vec[i64] = Vec.new();
+    println(f"{e.first()} {e.last()} {e.contains(1)}");
+    let s = vec!["a".to_string(), "b".to_string()];
+    let b = "b".to_string();
+    println(f"{s.contains(b)} {s.last().unwrap()}");
+    let ps = vec![P { x: 1, tag: 0 }, P { x: 2, tag: 0 }];
+    println(f"{ps.contains(P { x: 2, tag: 7 })} {ps.first().unwrap().x}");
+    let a = P { x: 1, tag: 5 };
+    let b = P { x: 1, tag: 9 };
+    println(f"{a == b} {a != b} {same(a, b)}");
+}
+"#,
+        "Some(3) Some(4) true false\nNone None false\ntrue b\ntrue 1\ntrue false true\n",
+    );
+}
+
+#[test]
+fn sorted_ranges_are_half_open_and_inclusive_ranges_closed() {
+    // docs/library/collections.md: `range(from, to)` gives the elements (or
+    // entries) in `[from, to)`, ascending, and `range_inclusive` `[from, to]`.
+    assert_runs(
+        r#"
+fn main() {
+    let mut s: SortedSet[i64] = SortedSet.new();
+    for x in [9, 2, 7, 4, 5, 11] { s.insert(x); }
+    let mut out = "".to_string();
+    for x in s.range(4, 9) { out.push_str(f"{x} "); }
+    println(out);
+    let mut w: SortedSet[String] = SortedSet.new();
+    w.insert("pear".to_string()); w.insert("apple".to_string()); w.insert("fig".to_string());
+    println(f"{w.range("b".to_string(), "g".to_string())} {s.range(20, 30).len()}");
+    println(f"{s.range_inclusive(4, 9)} {s.range(9, 4).len()}");
+    let mut m: SortedMap[i64, String] = SortedMap.new();
+    m.insert(3, "c".to_string()); m.insert(1, "a".to_string()); m.insert(5, "e".to_string());
+    println(f"{m.range(1, 5)} {m.range_inclusive(1, 5).len()}");
+}
+"#,
+        "4 5 7 \n[fig] 0\n[4, 5, 7, 9] 0\n[(1, a), (3, c)] 3\n",
+    );
+}
