@@ -144,8 +144,10 @@ pub enum Value {
     Ref(Addr),
     /// A `Slice[T]` view: `len` elements of the sequence at `base` (a
     /// `Vec`'s allocation or an array place), starting at `lo`.
+    /// `base` is boxed to keep every value small: this is the widest
+    /// variant, and values are copied on every step.
     Slice {
-        base: Addr,
+        base: Box<Addr>,
         lo: u64,
         len: u64,
     },
@@ -158,6 +160,9 @@ pub enum Value {
         env: Option<(AllocId, Ty)>,
     },
 }
+
+// Values are copied on every step; keep them to four words of `i128`.
+const _: () = assert!(std::mem::size_of::<Value>() <= 64);
 
 impl Value {
     fn fully_init(&self) -> bool {
@@ -819,26 +824,10 @@ impl<'a> Interp<'a> {
                     other => err(format!("{name} of {other:?}")),
                 }
             }
-            ("Vec", "index" | "index_mut") => {
-                let [v, Value::Int(i)] = args.as_slice() else {
-                    return err(format!("{name} takes a reference and an index"));
-                };
-                let id = self.box_behind(v)?;
-                let len = match &self.live(id)?.value {
-                    Value::Agg(fs) => fs.len() as i128,
-                    other => return err(format!("{name} of {other:?}")),
-                };
-                if *i < 0 || *i >= len {
-                    if self.trace {
-                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
-                    }
-                    return Err(Stop::Abort(AbortReason::BoundsCheck));
-                }
-                Ok(Value::Ref(Addr {
-                    root: Root::Heap(id),
-                    path: vec![*i as u64],
-                }))
-            }
+            ("Vec", "index" | "index_mut") => match args.as_slice() {
+                [v, i] => self.vec_index(name, v, i),
+                _ => err(format!("{name} takes a reference and an index")),
+            },
             ("Vec", "push") if args.len() == 2 => {
                 let mut args = args.into_iter();
                 let (Some(v), Some(val)) = (args.next(), args.next()) else {
@@ -3197,7 +3186,7 @@ impl<'a> Interp<'a> {
                     return err(format!("{name} of an unborrowed value"));
                 };
                 Ok(Value::Slice {
-                    base: at,
+                    base: Box::new(at),
                     lo: 0,
                     len: bytes.len() as u64,
                 })
@@ -3229,7 +3218,11 @@ impl<'a> Interp<'a> {
         };
         let (base, lo, len) = self.view_of(recv)?;
         match (method, &args[1..]) {
-            ("as_slice" | "as_mut_slice", []) => Ok(Value::Slice { base, lo, len }),
+            ("as_slice" | "as_mut_slice", []) => Ok(Value::Slice {
+                base: Box::new(base),
+                lo,
+                len,
+            }),
             ("slice" | "slice_mut", [Value::Int(a), Value::Int(b)]) => {
                 if *a < 0 || a > b || *b > len as i128 {
                     if self.trace {
@@ -3238,7 +3231,7 @@ impl<'a> Interp<'a> {
                     return Err(Stop::Abort(AbortReason::BoundsCheck));
                 }
                 Ok(Value::Slice {
-                    base,
+                    base: Box::new(base),
                     lo: lo + *a as u64,
                     len: (*b - *a) as u64,
                 })
@@ -3269,12 +3262,12 @@ impl<'a> Interp<'a> {
                 let m = *m as u64;
                 Ok(Value::Agg(vec![
                     Value::Slice {
-                        base: base.clone(),
+                        base: Box::new(base.clone()),
                         lo,
                         len: m,
                     },
                     Value::Slice {
-                        base,
+                        base: Box::new(base),
                         lo: lo + m,
                         len: len - m,
                     },
@@ -3294,7 +3287,7 @@ impl<'a> Interp<'a> {
                 let mut at = 0;
                 while at < len && (method == "chunks" || at + n <= len) {
                     views.push(Value::Slice {
-                        base: base.clone(),
+                        base: Box::new(base.clone()),
                         lo: lo + at,
                         len: n.min(len - at),
                     });
@@ -3392,7 +3385,7 @@ impl<'a> Interp<'a> {
                 };
                 Ok((base, 0, n))
             }
-            (_, Value::Slice { base, lo, len }) => Ok((base, lo, len)),
+            (_, Value::Slice { base, lo, len }) => Ok((*base, lo, len)),
             (Some(addr), Value::Agg(fs)) => Ok((addr, 0, fs.len() as u64)),
             (_, other) => err(format!("expected a sequence, found {other:?}")),
         }
@@ -4824,10 +4817,10 @@ impl<'a> Interp<'a> {
                 };
                 self.snapshots.insert(id);
                 Ok(Value::Slice {
-                    base: Addr {
+                    base: Box::new(Addr {
                         root: Root::Heap(id),
                         path: Vec::new(),
-                    },
+                    }),
                     lo: 0,
                     len: n,
                 })
@@ -5149,6 +5142,28 @@ impl<'a> Interp<'a> {
     }
 
     /// The allocation a library value, or a reference to one, owns.
+    /// `Vec.index` and `index_mut`: a reference to element `i`.
+    fn vec_index(&mut self, name: &str, v: &Value, i: &Value) -> R<Value> {
+        let Value::Int(i) = *i else {
+            return err(format!("{name} takes a reference and an index"));
+        };
+        let id = self.box_behind(v)?;
+        let len = match &self.live(id)?.value {
+            Value::Agg(fs) => fs.len() as i128,
+            other => return err(format!("{name} of {other:?}")),
+        };
+        if i < 0 || i >= len {
+            if self.trace {
+                self.events.push(Event::Abort(AbortReason::BoundsCheck));
+            }
+            return Err(Stop::Abort(AbortReason::BoundsCheck));
+        }
+        Ok(Value::Ref(Addr {
+            root: Root::Heap(id),
+            path: vec![i as u64],
+        }))
+    }
+
     fn box_behind(&mut self, v: &Value) -> R<AllocId> {
         match v {
             Value::Box(a) => Ok(*a),
@@ -5810,7 +5825,31 @@ impl<'a> Interp<'a> {
     fn statement(&mut self, body: &Body, s: &StatementKind) -> R<()> {
         match s {
             StatementKind::Assign(p, rv) => {
-                let v = self.rvalue(body, rv)?;
+                let v = match rv {
+                    Rvalue::CheckedBinaryOp(op, a, b) if p.projection.is_empty() => {
+                        let (x, ty) = self.operand(body, a)?;
+                        let (y, _) = self.operand(body, b)?;
+                        let (v, overflow) = self.binop(*op, x, y, ty)?;
+                        // A loop's checked step overwrites the pair it made
+                        // last time round, which holds only scalars: reuse it.
+                        let slot =
+                            &mut self.frames.last_mut().expect("frame").locals[p.local.index()];
+                        if let Value::Agg(fs) = slot {
+                            if fs.len() == 2
+                                && matches!(fs[0], Value::Int(_) | Value::Float(_) | Value::Bool(_))
+                            {
+                                fs[0] = v;
+                                fs[1] = Value::Bool(overflow);
+                                if self.trace {
+                                    self.events.push(Event::Init(self.place_str(body, p)));
+                                }
+                                return Ok(());
+                            }
+                        }
+                        Value::Agg(vec![v, Value::Bool(overflow)])
+                    }
+                    _ => self.rvalue(body, rv)?,
+                };
                 let flag = matches!(v, Value::Bool(true));
                 if p.projection.is_empty() {
                     // A bare local: no address to build.
@@ -6407,6 +6446,18 @@ impl<'a> Interp<'a> {
                 let program: &'a Program = self.program;
                 let found = named.and_then(|n| program.bodies.get(n));
                 let native = found.is_none();
+                // `v[i]` on a `Vec`, the commonest call of all, without the
+                // argument vectors and the native dispatch.
+                if let (true, Some(n), [recv, index]) = (native, named, args.as_slice()) {
+                    if n.starts_with("Vec[")
+                        && (n.ends_with("].index") || n.ends_with("].index_mut"))
+                    {
+                        let (v, _) = self.operand(body, recv)?;
+                        let (i, _) = self.operand(body, index)?;
+                        let ret = self.vec_index(n, &v, &i)?;
+                        return self.finish_call(body, destination, target, ret, n);
+                    }
+                }
                 let mut vals = Vec::with_capacity(args.len());
                 let mut arg_tys = Vec::with_capacity(if native { args.len() } else { 0 });
                 for a in args {
