@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'a Map keyed by a hand-written Hash + Eq must build'"
 bucket = "a"
-classified_with = "fa2007d38+local"
+classified_with = "4fc16575a+local"
 model_rev = "8be6ddd7"
 model_src = "c9af4d96"

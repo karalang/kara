@@ -27,8 +27,8 @@ fn leg_filter() {
 }
 fn leg_project_string() {
     let ps = mkps();
-    let v: Vec[String] = ps.iter().enumerate().map(|q| q.1.0).collect();
-    let w: Vec[String] = ps.iter().map(|q| q.0).collect();
+    let v: Vec[String] = ps.iter().enumerate().map(|q| q.1.0.clone()).collect();
+    let w: Vec[String] = ps.iter().map(|q| q.0.clone()).collect();
     println(f"ps {v[1]} {w[2]} {ps[0].0}");
 }
 fn leg_tuple_literal() {

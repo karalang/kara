@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 struct C { name: String, zip: i64 }
 struct A { c: Option[C], other: String }
 
@@ -20,7 +21,7 @@ fn main() {
             other: "sibling-string-" + i.to_string(),
         });
         let f = match a {
-            Option.Some(x) => { x.c }
+            Option.Some(x) => { x.c.clone() }
             Option.None => { Option.None }
         };
         match f {
@@ -44,7 +45,7 @@ fn main() {
     }
     let e: Option[A] = Option.None;
     let g = match e {
-        Option.Some(z) => { z.c }
+        Option.Some(z) => { z.c.clone() }
         Option.None => { Option.None }
     };
     match g {

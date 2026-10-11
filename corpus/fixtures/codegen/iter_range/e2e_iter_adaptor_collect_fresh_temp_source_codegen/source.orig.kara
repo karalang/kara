@@ -1,0 +1,20 @@
+
+fn mk() -> Vec[String] {
+    return Vec["redxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string(), "grnyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy".to_string()];
+}
+fn nums() -> Vec[i64] {
+    return Vec[10i64, 20i64, 30i64];
+}
+fn main() {
+    let he: Vec[(i64, String)] = mk().iter().enumerate().collect();
+    let e0 = ref he[0];
+    let e1 = ref he[1];
+    println(f"{he.len()} {e0.0} {e0.1} {e1.0} {e1.1}");
+    let hm: Vec[String] = mk().iter().enumerate().map(|p| p.1).collect();
+    println(f"{hm.len()} {hm[0]} {hm[1]}");
+    let hl: Vec[i64] = mk().iter().map(|s| s.len()).collect();
+    println(f"{hl[0]} {hl[1]}");
+    let pe: Vec[(i64, i64)] = nums().iter().enumerate().collect();
+    let p1 = pe[1];
+    println(f"{pe.len()} {p1.0} {p1.1}");
+}

@@ -1,7 +1,7 @@
 
 struct Src { source: ref String, position: i64 }
 struct Outer { inner: Src, k: i64 }
-fn mk(s: ref String) -> ref Src { Src { source: s, position: 0 } }
+fn mk(s: ref String) -> Src { Src { source: s, position: 0 } }
 fn count(p: ref Src) -> i64 { let x = p.source; let mut t = 0; for c in x.chars() { if c == 'a' { t = t + 1; } } t + x.len() }
 fn main() {
     let s = String.from("banana bread");

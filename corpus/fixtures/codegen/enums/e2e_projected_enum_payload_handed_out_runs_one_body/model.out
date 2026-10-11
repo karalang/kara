@@ -1,0 +1,64 @@
+out/local
+  dE
+  dR1
+  got1
+out/temp
+  dE
+  dR2
+  got2
+out_iflet/local
+  dE
+  dR3
+  got3
+out_tail/local
+  dE
+  dR4
+  got4
+out_some/taken
+  dE
+  dR5
+  got5
+out_some/not
+  dE
+  dR6
+  got1
+read/local
+  dE
+  dR7
+  r7
+out2/local
+  dE
+  dR8
+  got8
+p_out/local
+  dE
+  dR9
+  got9
+p_out/temp
+  dE
+  dR10
+  got10
+p_out2/local
+  dE
+  dR11
+  got11
+p_read/local
+  dE
+  dR12
+  r12
+e_out/local
+  dE
+  dR13
+  got13
+end
+  dR13
+  dR11
+  dR10
+  dR9
+  dR8
+  dR1
+  dR5
+  dR4
+  dR3
+  dR2
+  dR1

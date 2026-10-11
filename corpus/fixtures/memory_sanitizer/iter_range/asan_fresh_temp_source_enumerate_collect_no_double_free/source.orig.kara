@@ -1,0 +1,20 @@
+
+fn mk() -> Vec[String] {
+    return Vec[
+        "fresh-temp-enum-payload-alpha-aaaaaaaaaaaaaaaa".to_string(),
+        "fresh-temp-enum-payload-bravo-bbbbbbbbbbbbbbbb".to_string()
+    ];
+}
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let he: Vec[(i64, String)] = mk().iter().enumerate().collect();
+        let e0: (i64, String) = he[0].clone();
+        let e1: (i64, String) = he[1].clone();
+        let hm: Vec[String] = mk().iter().enumerate().map(|p| p.1).collect();
+        let m1: String = hm[1].clone();
+        let hl: Vec[i64] = mk().iter().map(|s| s.len()).collect();
+        println(f"{he.len()} {e0.0} {e0.1} {e1.0} {e1.1} {m1} {hl[0]}");
+        round = round + 1i64;
+    }
+}

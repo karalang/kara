@@ -1,5 +1,6 @@
 
 shared enum Expr { Str(String), Blk(Block), Error }
+#[derive(Clone)]
 struct Block { tail: Option[Expr] }
 fn render_block(b: own Block) -> String {
     let Block { tail } = b;
@@ -7,8 +8,8 @@ fn render_block(b: own Block) -> String {
 }
 fn render_expr(e: Expr) -> String {
     match e {
-        Str(s) => s,
-        Blk(b) => render_block(b),
+        Str(s) => s.clone(),
+        Blk(b) => render_block(b.clone()),
         Error => "error".to_string(),
     }
 }

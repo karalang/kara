@@ -1,9 +1,11 @@
+#[derive(Clone)]
 struct R { id: i64 }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 struct W { id: i64, n2: i64 }
 impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}") } }
 struct S { id: i64, s: String }
 impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+#[derive(Clone)]
 enum Ho[T] { Full(T), Empty }
 enum MoR { Full(R), Empty }
 enum MoS { Full(S), Empty }

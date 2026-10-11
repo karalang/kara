@@ -1,0 +1,29 @@
+
+shared struct Stats { mut count: i64, mut total: i64, active: bool }
+fn reader(s: ref Stats) -> i64 {
+    s.total
+}
+fn read_only(s: Stats) -> i64 {
+    s.count
+}
+impl Stats {
+    fn bump(mut ref self, n: i64) {
+        self.count = self.count + 1;
+        self.total = self.total + n;
+    }
+    fn snapshot(ref self) -> i64 {
+        self.total
+    }
+}
+fn main() {
+    let mut grand = 0;
+    let mut iter = 0;
+    while iter < 64 {
+        let s = Stats { count: 0, total: 0, active: true };
+        s.bump(3);
+        s.bump(4);
+        grand = grand + s.snapshot() + reader(s) + read_only(s);
+        iter = iter + 1;
+    }
+    println(grand);
+}

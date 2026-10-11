@@ -1,0 +1,53 @@
+r/local
+  dE
+  dR1
+  r1
+h/local
+  dE
+  dR2
+  r2
+h/temp
+  dE
+  dR3
+  r3
+let/local
+  dE
+  dR4
+  r4
+iflet/local
+  dE
+  dR5
+  r5
+proj/local
+  dE
+  dR6
+  r6
+deep/local
+  dE
+  dR7
+  r7
+two/local
+  dE
+  dR108
+  dE
+  dR8
+  r8
+hand/local
+  dE
+  dR9
+  r9
+hand/temp
+  dE
+  dR10
+  r10
+end
+  dR10
+  dR9
+  dR8
+  dR7
+  dR6
+  dR5
+  dR4
+  dR3
+  dR2
+  dR1

@@ -1,0 +1,7 @@
+
+fn main() {
+    let a: Vec[String] = Vec["alpha".to_string(), "bravo".to_string(), "charlie".to_string()];
+    let b: Vec[String] = Vec["one".to_string(), "two".to_string()];
+    let z: Vec[(String, String)] = a.iter().zip(b.iter()).collect();
+    println(f"{z.len()} {z[0].0} {z[0].1} {z[1].0} {z[1].1} {a.len()} {b.len()}");
+}

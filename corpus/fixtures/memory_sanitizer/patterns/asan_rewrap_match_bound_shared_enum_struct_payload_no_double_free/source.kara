@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 struct MCall { object: Expr, method: String, args: Vec[i64] }
 shared enum Expr {
     Lit(String),
@@ -13,12 +14,12 @@ fn emit(e: Expr) -> i64 {
 fn process(value: Expr) -> i64 {
     match value {
         Lit(s) => s.len(),
-        MethodCall(mc) => emit(MethodCall(mc)),
+        MethodCall(mc) => emit(MethodCall(mc.clone())),
     }
 }
 fn main() {
-    let mut total = 0i64;
-    let mut i = 0i64;
+    let mut total = 0;
+    let mut i = 0;
     while i < 300 {
         let inner: Expr = Lit("x".to_string());
         let mut a: Vec[i64] = Vec.new();

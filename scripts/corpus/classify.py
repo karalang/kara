@@ -114,12 +114,25 @@ def check_errors(karac, d, env, timeout):
 # (E0200 with these lint names, C1/C3).
 V2_CODES = {"E0288", "E0289"}
 V2_LINTS = {"borrow_projection_copy", "for_element_drop_copy", "partial_move_of_drop_struct"}
-# The v2 named-parameter rule (DESIGN_REVIEW §5: only a parameter after `;`
-# is named and may have a default) reports under the general E0200/E0215
-# codes, so it is told apart by message; `karac fix` inserts the `;` and the
-# call-site labels.
+# Several v2 rules report under general codes, so they are told apart by
+# message:
+# - named parameters (DESIGN_REVIEW §5: only a parameter after `;` is named
+#   and may have a default; E0200/E0215), where `karac fix` inserts the `;`
+#   and the call-site labels;
+# - cloning a collection clones each element, so the element type must be
+#   `Clone` (E0232), where fix adds the derive;
+# - a shared type's methods take a borrowed `self` (core-semantics §4.3;
+#   E0200), where fix rewrites the receiver;
+# - a function declared to return a reference must return a borrow, not a
+#   new value (E0213), where fix drops the `ref`;
+# - a reference to a temporary may not outlive its statement (§5.5; E0200),
+#   which fix does not rewrite.
 V2_MESSAGES = ("only a named parameter can have a default",
-               "and the parameters after it are named")
+               "and the parameters after it are named",
+               "has no `.clone()`: add `#[derive(Clone)]`",
+               "but a shared type's methods take a borrowed",
+               "is declared to return a reference, but its body makes a new value",
+               "a reference to a temporary outlives its statement")
 
 
 def diag_key(e):
@@ -247,15 +260,24 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
         legacy, legacy_exit = legacy_interp
         res["legacy_interp"] = legacy_exit
     spec, spec_exit, as_set = None, want_exit, False
-    if meta.get("expected_from") in SPEC_SOURCES and (entry / "expected.out").exists():
+    model_fresh = meta.get("model_verdict") in SPEC_VERDICTS and meta.get("model_rev") == rev \
+        and (entry / "model.out").exists()
+    # An auto-resolved (`spec`) expected.out is a copy of an earlier model.out.
+    # When the model has judged the current source, its output wins: the
+    # source can change under the copy (a `karac fix` that is no longer
+    # needed, or a different fix), and the copy then goes stale.
+    if meta.get("expected_from") == "spec" and model_fresh:
+        spec = (entry / "model.out").read_bytes()
+        spec_exit = int(meta.get("model_exit", want_exit))
+        as_set = meta.get("model_verdict") == "ORDER-UNSPEC"
+    elif meta.get("expected_from") in SPEC_SOURCES and (entry / "expected.out").exists():
         spec = (entry / "expected.out").read_bytes()
         # An auto-resolved entry's expected.out is the model's output, held
         # to the model's exit, not legacy's.
         if meta.get("expected_from") == "spec" and "model_exit" in meta:
             spec_exit = int(meta["model_exit"])
             as_set = meta.get("model_verdict") == "ORDER-UNSPEC"
-    elif meta.get("model_verdict") in SPEC_VERDICTS and meta.get("model_rev") == rev \
-            and (entry / "model.out").exists():
+    elif model_fresh:
         spec = (entry / "model.out").read_bytes()
         spec_exit = int(meta.get("model_exit", want_exit))
         as_set = meta.get("model_verdict") == "ORDER-UNSPEC"
@@ -301,7 +323,8 @@ def write_back(entry: Path, r: dict, sha: str):
     for n in (C_NOTE, E_SPEC_NOTE):
         note = note.replace(n, "")
     note = " ".join(note.split())
-    if "expected" in r and meta.get("expected_from") not in SPEC_SOURCES:
+    if "expected" in r and (meta.get("expected_from") not in SPEC_SOURCES
+                            or (meta.get("expected_from") == "spec" and r["bucket"].endswith("e-spec"))):
         (entry / "expected.out").write_bytes(r["expected"])
         if r["bucket"].endswith("e-spec"):
             meta["expected_from"] = "spec"

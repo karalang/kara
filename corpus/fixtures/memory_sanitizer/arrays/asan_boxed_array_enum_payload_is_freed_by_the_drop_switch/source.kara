@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 enum E { A(Array[String, 2]), B }
 enum N { A(Array[Vec[String], 2]), B }
 enum G { A(Array[i64, 3]), B }

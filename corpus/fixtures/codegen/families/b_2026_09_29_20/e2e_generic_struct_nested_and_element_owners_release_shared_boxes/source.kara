@@ -1,7 +1,10 @@
 shared struct Sh { k: i64 }
+#[derive(Clone)]
 struct S2 { h: Sh, id: i64 }
 impl Drop for S2 { fn drop(mut ref self) { println(f"dS{self.id}") } }
+#[derive(Clone)]
 struct Q[U] { u: U }
+#[derive(Clone)]
 struct Z[U] { n: i64, s: String, u: U }
 struct T[U] { u: U, id: i64 }
 struct H { xs: Vec[Q[S2]] }

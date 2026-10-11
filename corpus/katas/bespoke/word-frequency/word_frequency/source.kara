@@ -40,7 +40,7 @@ fn main() {
     //    slot. Repeated keys take the occupied (no-adopt) path.
     let mut freq: Map[String, i64] = Map.new();
     for w in words {
-        *freq.entry(w).or_insert(0) += 1;
+        *freq.entry(w.clone()).or_insert(0) += 1;
     }
 
     // 2) Ascending-by-word report; each count read back with get_or.

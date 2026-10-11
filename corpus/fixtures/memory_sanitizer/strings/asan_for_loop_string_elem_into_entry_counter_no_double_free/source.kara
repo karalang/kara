@@ -6,7 +6,7 @@ fn main() {
     words.push("alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
     let mut m: Map[String, i64] = Map.new();
     for w in words {
-        *m.entry(w).or_insert(0_i64) += 1_i64;
+        *m.entry(w.clone()).or_insert(0) += 1;
     }
     println(m.len());
     println(words.len());

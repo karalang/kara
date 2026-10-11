@@ -1,0 +1,13 @@
+row 1 3 5 3
+st 4 6 eps-5-long-enough
+de 27 29
+fi 2 1 2
+ps beta-2-long-enough-to-heap gamma-3-long-enough-to-heap alpha-1-long-enough-to-heap
+tl 7 alpha-1-long-enough-to-heap
+tl 7 beta-2-long-enough-to-heap
+tl 7 gamma-3-long-enough-to-heap
+tl 8 zeta-6-long-enough
+tl eta-7-long-enough-to-heap
+tl 3
+np 1 theta-8-long-enough-to-heap
+done

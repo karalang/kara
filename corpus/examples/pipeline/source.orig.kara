@@ -1,0 +1,95 @@
+// pipeline.kara — a functional log-analytics pipeline in Kāra.
+//
+// A read-only analytics pass over a batch of HTTP request-log records, written
+// the way you would in a functional language: `iter()` chains of `map` /
+// `filter` closures ending in a `fold` (aggregate) or `collect` (materialize).
+// It dogfoods the compiler's SEQUENTIAL ITERATOR + CLOSURE surface — the least-
+// exercised hot path — over heap-bearing element types (`String` fields), which
+// is exactly where run-vs-build divergences hide: every query below runs on the
+// tree-walk interpreter, and the native/JIT build must agree byte-for-byte.
+//
+// Aggregation is expressed with `fold` on purpose (counts as
+// `fold(0, |acc, r| acc + 1)`, sums as `fold(0, |acc, x| acc + x)`, max as a
+// fold with a branch) — a terminal the fused-iterator codegen did not handle
+// until the vm.kara → pipeline.kara dogfooding run added it.
+//
+//   karac run examples/pipeline.kara     # JIT (or tree-walk via KARAC_RUN_JIT=0)
+//   karac build examples/pipeline.kara   # native binary — output byte-identical
+//
+// Expected output: examples/pipeline.expected.
+
+// One request-log line. `method`/`path` are heap `String`s (so the iterator
+// chains carry heap payloads, not just PODs); `status`/`ms`/`bytes` are the
+// numeric dimensions the queries aggregate.
+struct Req {
+    method: String,
+    path: String,
+    status: i64,
+    ms: i64,      // server-side latency, milliseconds
+    bytes: i64,   // response body size
+}
+
+// A fixed batch — the oracle is deterministic, so the numbers below are exact.
+fn sample() -> Vec[Req] {
+    let mut rs: Vec[Req] = Vec.new();
+    rs.push(Req { method: "GET",  path: "/",            status: 200, ms: 12,  bytes: 1024 });
+    rs.push(Req { method: "GET",  path: "/api/users",   status: 200, ms: 45,  bytes: 2048 });
+    rs.push(Req { method: "POST", path: "/api/users",   status: 201, ms: 88,  bytes: 256 });
+    rs.push(Req { method: "GET",  path: "/api/orders",  status: 200, ms: 30,  bytes: 4096 });
+    rs.push(Req { method: "POST", path: "/api/orders",  status: 500, ms: 210, bytes: 64 });
+    rs.push(Req { method: "GET",  path: "/health",      status: 200, ms: 3,   bytes: 128 });
+    rs.push(Req { method: "GET",  path: "/api/orders",  status: 404, ms: 15,  bytes: 512 });
+    rs.push(Req { method: "POST", path: "/api/users",   status: 500, ms: 175, bytes: 64 });
+    rs.push(Req { method: "GET",  path: "/api/users",   status: 200, ms: 52,  bytes: 2048 });
+    rs.push(Req { method: "GET",  path: "/assets/app",  status: 200, ms: 120, bytes: 8192 });
+    rs
+}
+
+fn main() {
+    let reqs = sample();
+
+    // ── counts, all via `fold` over a (possibly filtered) chain ──────────────
+    // The element binding is named but unused in a pure counter — the compiler's
+    // fused-chain codegen rejects a `|_|` wildcard param, so counters name it.
+    let total = reqs.iter().fold(0, |acc, r| acc + 1);
+    let ok = reqs.iter().filter(|r| r.status < 400).fold(0, |acc, r| acc + 1);
+    let server_err = reqs.iter().filter(|r| r.status >= 500).fold(0, |acc, r| acc + 1);
+    let client_err = reqs
+        .iter()
+        .filter(|r| r.status >= 400 and r.status < 500)
+        .fold(0, |acc, r| acc + 1);
+
+    println(f"requests: {total}");
+    println(f"ok: {ok}");
+    println(f"server_err: {server_err}");
+    println(f"client_err: {client_err}");
+
+    // ── sums and a max, via `map` then `fold` ────────────────────────────────
+    let total_bytes = reqs.iter().map(|r| r.bytes).fold(0, |acc, b| acc + b);
+    let max_ms = reqs
+        .iter()
+        .map(|r| r.ms)
+        .fold(0, |acc, m| if m > acc { m } else { acc });
+    println(f"bytes_served: {total_bytes}");
+    println(f"max_latency_ms: {max_ms}");
+
+    // ── a two-stage chain feeding a derived stat: mean latency of the OK set ──
+    let ok_ms = reqs
+        .iter()
+        .filter(|r| r.status < 400)
+        .map(|r| r.ms)
+        .fold(0, |acc, m| acc + m);
+    let avg_ok_ms = ok_ms / ok;
+    println(f"avg_ok_latency_ms: {avg_ok_ms}");
+
+    // ── `collect` terminal: the slow-request paths, materialized then walked ──
+    let slow: Vec[String] = reqs
+        .iter()
+        .filter(|r| r.ms > 100)
+        .map(|r| r.path)
+        .collect();
+    println(f"slow_paths: {slow.len()}");
+    for p in slow {
+        println(f"  {p}");
+    }
+}

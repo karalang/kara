@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 30i64 {
+        let mut v: Vec[String] = Vec[
+            "b05-diff-alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "b05-diff-bravo-bbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()
+        ];
+        let r: Vec[(i64, String)] = v.iter().enumerate().filter(|p| p.0 >= 0i64).inspect(|q| print(q.0)).collect();
+        println(f"{r.len()} {r[1i64].0} {v.len()}");
+        round = round + 1i64;
+    }
+}

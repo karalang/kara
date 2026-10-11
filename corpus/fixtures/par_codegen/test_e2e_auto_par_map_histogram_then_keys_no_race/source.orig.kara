@@ -1,0 +1,19 @@
+
+fn main() {
+    let mut words: Vec[String] = Vec.new();
+    words.push("ccc-key".to_string());
+    words.push("aaa-key".to_string());
+    words.push("ccc-key".to_string());
+    words.push("bbb-key".to_string());
+    words.push("aaa-key".to_string());
+    words.push("ccc-key".to_string());
+    let mut m: Map[String, i64] = Map.new();
+    for w in words {
+        *m.entry(w).or_insert(0_i64) += 1_i64;
+    }
+    let mut ks: Vec[String] = m.keys();
+    ks.sort();
+    for k in ks {
+        println(f"{k}={m.get_or(k.clone(), 0_i64)}");
+    }
+}

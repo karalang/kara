@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 struct Pair { word: String, n: i64 }
 struct Box3 { word: String }
 enum Wrap { Has(String), Non }

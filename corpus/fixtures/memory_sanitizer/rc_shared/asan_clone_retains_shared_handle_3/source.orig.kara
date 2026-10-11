@@ -1,0 +1,9 @@
+
+shared enum E { V(i64) }
+struct Row { e: E, n: i64 }
+fn main() {
+    let mut m: Map[String, Row] = Map.new();
+    m.insert("a", Row { e: E.V(1), n: 5 });
+    let m2 = m.clone();
+    println(m2.len());
+}

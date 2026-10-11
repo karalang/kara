@@ -1,0 +1,93 @@
+
+enum E { A(Array[String, 2]), B }
+enum N { A(Array[Vec[String], 2]), B }
+enum G { A(Array[i64, 3]), B }
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64 }
+enum K { A(Array[String, 2]), C(Wide) }
+enum S { A(Array[i64, 2]), C(String) }
+
+struct Held { e: E, k: i64 }
+
+#[derive(Clone)]
+struct HeldC { e: E, k: i64 }
+
+fn mk(n: i64) -> E {
+    let a: Array[String, 2] = [f"ba-left-aaaaaaaaaaaaaaaa-{n}", f"ba-right-bbbbbbbbbbbbbbbb-{n}"];
+    return E.A(a);
+}
+fn mkn(n: i64) -> N {
+    let mut p: Vec[String] = Vec.new();
+    p.push(f"ba-vec-cccccccccccccccc-{n}");
+    let mut q: Vec[String] = Vec.new();
+    q.push(f"ba-vec-dddddddddddddddd-{n}");
+    let a: Array[Vec[String], 2] = [p, q];
+    return N.A(a);
+}
+fn mkg(n: i64) -> G {
+    let a: Array[i64, 3] = [n, n + 1, n + 2];
+    return G.A(a);
+}
+fn mkk(n: i64) -> K {
+    let a: Array[String, 2] = [f"ba-wide-eeeeeeeeeeeeeeee-{n}", f"ba-wide-ffffffffffffffff-{n}"];
+    return K.A(a);
+}
+fn mks(n: i64) -> S {
+    let a: Array[i64, 2] = [n, n + 10];
+    return S.A(a);
+}
+fn eat(e: E) -> i64 { return 1; }
+
+fn main() {
+    let mut j: i64 = 0;
+    while j < 2 {
+        let h = Held { e: mk(j), k: j };
+        println(f"field:{h.k}");
+
+        let held: E = mk(j);
+        println(f"let:{j}");
+
+        let named: E = mk(j);
+        println(f"named:{eat(named)}");
+        println(f"temp:{eat(mk(j))}");
+
+        match mk(j) {
+            E.A(a) => { println(f"read:{a[0]}"); }
+            E.B => {}
+        }
+
+        match mkk(j) {
+            K.A(a) => { println(f"widearea:{a[0]}"); }
+            K.C(w) => { println(f"wide:{w.a}"); }
+        }
+
+        match mks(j) {
+            S.A(a) => { println(f"inline:{a[0]}"); }
+            S.C(s) => { println(f"str:{s}"); }
+        }
+
+        let hc = HeldC { e: mk(j), k: j };
+        let hc2 = hc.clone();
+        println(f"structclone:{hc2.k}");
+
+        mk(j);
+
+        j = j + 1;
+    }
+
+    let mut v: Vec[E] = Vec.new();
+    let mut vn: Vec[N] = Vec.new();
+    let mut vg: Vec[G] = Vec.new();
+    let mut m: Map[i64, E] = Map.new();
+    let mut i: i64 = 0;
+    while i < 2 {
+        v.push(mk(i));
+        vn.push(mkn(i));
+        vg.push(mkg(i));
+        m.insert(i, mk(i));
+        i = i + 1;
+    }
+    let vc: Vec[E] = v.clone();
+    println(f"vec:{v.len()} vecclone:{vc.len()} nested:{vn.len()} scalar:{vg.len()} map:{m.len()}");
+
+    println("end");
+}

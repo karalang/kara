@@ -4,7 +4,7 @@ fn main() {
     for s in v.iter().rev() {
         println(s);
     }
-    let r: Vec[String] = v.iter().rev().collect();
+    let r: Vec[String] = v.iter().rev().cloned().collect();
     println(r.get(0));
     println(v.get(0));
     println(v.iter().rev().count());

@@ -7,7 +7,7 @@ fn read_only(s: Stats) -> i64 {
     s.count
 }
 impl Stats {
-    fn bump(mut ref self, n: i64) {
+    fn bump(self, n: i64) {
         self.count = self.count + 1;
         self.total = self.total + n;
     }

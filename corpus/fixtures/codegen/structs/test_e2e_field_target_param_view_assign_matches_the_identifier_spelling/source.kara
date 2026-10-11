@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 struct R { id: i64, tag: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
 enum E { A(R), B }
@@ -9,7 +10,7 @@ struct H2 { f: R, g: R }
 #[allow(partial_move_of_drop_enum)]
 fn dies(b: own E) -> i64 {
     let mut h: H = H { f: R { id: 0, tag: f"t0" } };
-    match b { E.A(r) => { h.f = r; } E.B => { } }
+    match b { E.A(ref r) => { h.f = r.clone(); } E.B => { } }
     println("m");
     return h.f.id
 }
@@ -18,7 +19,7 @@ fn dies(b: own E) -> i64 {
 #[allow(partial_move_of_drop_enum)]
 fn refreshed(b: own E) -> i64 {
     let mut h: H = H { f: R { id: 0, tag: f"t0" } };
-    match b { E.A(r) => { h.f = r; } E.B => { } }
+    match b { E.A(ref r) => { h.f = r.clone(); } E.B => { } }
     println("m1");
     h.f = R { id: 5, tag: f"t5" };
     println("m2");
@@ -35,7 +36,7 @@ fn plain() -> i64 {
 #[allow(partial_move_of_drop_enum)]
 fn sibs(b: own E) -> i64 {
     let mut h: H2 = H2 { f: R { id: 30, tag: f"t30" }, g: R { id: 31, tag: f"t31" } };
-    match b { E.A(r) => { h.f = r; } E.B => { } }
+    match b { E.A(ref r) => { h.f = r.clone(); } E.B => { } }
     println("s");
     return h.f.id + h.g.id
 }

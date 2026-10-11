@@ -10,7 +10,8 @@ legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "a"
-classified_with = "fa2007d38+local"
+bucket = "a:refused"
+classified_with = "4fc16575a+local"
 model_rev = "8be6ddd7"
 model_src = "289087a1"
+v2_reject = "core-semantics §9.1: a closure borrows the Copy locals it captures, so `k = 10` while `f` is still used is a write to a borrowed place (E0516); legacy printed the snapshot value (kata thread, 2026-10-11)"

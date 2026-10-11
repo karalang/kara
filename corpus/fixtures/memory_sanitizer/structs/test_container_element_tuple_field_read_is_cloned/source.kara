@@ -1,4 +1,5 @@
 
+#[derive(Clone)]
 struct R { id: i64, name: String }
 struct Box2 { w: String }
 

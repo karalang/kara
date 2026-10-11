@@ -1,0 +1,13 @@
+
+fn main() {
+    let mut words: Vec[String] = Vec.new();
+    words.push("alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    words.push("beta-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string());
+    words.push("alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    let mut m: Map[String, i64] = Map.new();
+    for w in words {
+        *m.entry(w).or_insert(0_i64) += 1_i64;
+    }
+    println(m.len());
+    println(words.len());
+}

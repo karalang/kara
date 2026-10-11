@@ -1,3 +1,4 @@
+#[derive(Clone)]
 enum Ho[T] { Full(T), Empty }
 struct K { k: i64 }
 fn showt(h: own Ho[String]) { match h { Ho.Full(r) => println(f"t{r}"), Ho.Empty => println("e") } }

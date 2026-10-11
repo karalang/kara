@@ -1,5 +1,6 @@
 
 shared struct Cell { mut v: i64 }
+#[derive(Clone)]
 struct Row { c: Cell, n: i64 }
 fn main() {
     let mut v: Vec[Row] = Vec.new();

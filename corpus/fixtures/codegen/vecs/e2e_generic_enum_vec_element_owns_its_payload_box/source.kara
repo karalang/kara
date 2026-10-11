@@ -1,6 +1,7 @@
 shared struct Sh { k: i64 }
 struct S2 { h: Sh, id: i64 }
 struct S3 { h: Sh, id: i64 }
+#[derive(Clone)]
 enum Ho[T] { Full(T), Empty }
 struct P1 { t: String, id: i64 }
 fn mk(i: i64) -> S3 { return S3 { h: Sh { k: i }, id: i } }

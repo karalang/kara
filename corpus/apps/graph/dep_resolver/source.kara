@@ -2,6 +2,7 @@
 // root requirements to concrete versions, detects cycles, and prints an
 // install plan (dependencies first) or the error for each scenario.
 
+#[derive(Copy)]
 struct Version {
     major: i64,
     minor: i64,
@@ -42,6 +43,7 @@ impl Version {
     }
 }
 
+#[derive(Copy)]
 enum Constraint {
     Any,
     Exact(Version),
@@ -94,6 +96,7 @@ impl Constraint {
     }
 }
 
+#[derive(Clone)]
 struct Dep {
     name: String,
     constraint: Constraint,
@@ -231,7 +234,7 @@ impl Resolver {
         self.chosen.insert(name, idx);
         let rel = ref self.releases[idx];
         let who = rel.name + "@" + rel.version.text();
-        for dep in rel.deps {
+        for dep in rel.deps.clone() {
             self.require(dep.name.clone(), dep.constraint, who.clone())?;
         }
         Ok(())

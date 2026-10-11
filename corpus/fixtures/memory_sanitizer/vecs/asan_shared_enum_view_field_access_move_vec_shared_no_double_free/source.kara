@@ -5,7 +5,7 @@ fn ev(e: Expr) -> i64 {
     match e {
         Lit(n) => n,
         Call(c) => {
-            let a = c.args;
+            let a = c.args.clone();
             let mut acc = c.tag;
             for x in a { acc = acc + ev(x); }
             acc

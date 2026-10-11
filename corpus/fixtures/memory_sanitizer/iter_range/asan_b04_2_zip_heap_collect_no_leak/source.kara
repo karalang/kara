@@ -1,7 +1,7 @@
 
 fn main() {
-    let mut round: i64 = 0i64;
-    while round < 40i64 {
+    let mut round: i64 = 0;
+    while round < 40 {
         let mut a: Vec[String] = Vec[
             "zip-heap-collect-left-alpha-aaaaaaaaaaaaaaaa".to_string(),
             "zip-heap-collect-left-bravo-bbbbbbbbbbbbbbbb".to_string()
@@ -10,9 +10,9 @@ fn main() {
             "zip-heap-collect-right-charlie-cccccccccccc".to_string(),
             "zip-heap-collect-right-delta-dddddddddddddd".to_string()
         ];
-        let z: Vec[(String, String)] = a.iter().zip(b.iter()).collect();
-        let p: (String, String) = z[0i64].clone();
+        let z: Vec[(String, String)] = a.iter().cloned().zip(b.iter().cloned()).collect();
+        let p: (String, String) = z[0].clone();
         println(f"{z.len()} {a.len()} {b.len()} {p.0} {p.1}");
-        round = round + 1i64;
+        round = round + 1;
     }
 }

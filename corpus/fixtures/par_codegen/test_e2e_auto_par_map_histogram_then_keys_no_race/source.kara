@@ -9,11 +9,11 @@ fn main() {
     words.push("ccc-key".to_string());
     let mut m: Map[String, i64] = Map.new();
     for w in words {
-        *m.entry(w).or_insert(0_i64) += 1_i64;
+        *m.entry(w.clone()).or_insert(0) += 1;
     }
     let mut ks: Vec[String] = m.keys();
     ks.sort();
     for k in ks {
-        println(f"{k}={m.get_or(k.clone(), 0_i64)}");
+        println(f"{k}={m.get_or(k.clone(), 0)}");
     }
 }

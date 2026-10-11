@@ -1,5 +1,6 @@
 
 shared enum E { V(i64) }
+#[derive(Clone)]
 struct Row { e: E, n: i64 }
 fn main() {
     let mut v: Vec[Row] = Vec.new();

@@ -1,7 +1,10 @@
 
+#[derive(Copy)]
 struct Span { line: i64, column: i64, offset: i64, length: i64 }
+#[derive(Copy)]
 enum Stmt { Empty }
 shared enum Expr { Str(String), Blk(Block), Error }
+#[derive(Clone)]
 struct Block { stmts: Vec[Stmt], tail: Option[Expr], span: Span }
 fn mk() -> Block {
     let s: Vec[Stmt] = [];
@@ -17,8 +20,8 @@ fn render_block(b: own Block) -> String {
 }
 fn render_expr(e: Expr) -> String {
     match e {
-        Str(s) => s,
-        Blk(b) => render_block(b),
+        Str(s) => s.clone(),
+        Blk(b) => render_block(b.clone()),
         Error => "error".to_string(),
     }
 }

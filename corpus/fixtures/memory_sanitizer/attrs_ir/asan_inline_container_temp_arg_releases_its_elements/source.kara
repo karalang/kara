@@ -1,5 +1,6 @@
 
 shared struct Node { label: String }
+#[derive(Clone)]
 struct Holder { n: Node }
 
 fn count_nodes(ns: Vec[Node]) -> i64 { ns.len() }

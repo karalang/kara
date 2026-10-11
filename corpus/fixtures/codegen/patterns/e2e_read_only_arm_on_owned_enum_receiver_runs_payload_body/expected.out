@@ -1,0 +1,65 @@
+read/local
+  dE
+  dR1
+  x1
+read/temp
+  dE
+  dR2
+  x2
+r/local
+  dE
+  dR3
+  y3
+r/temp
+  dE
+  dR4
+  y4
+none/local
+  dE
+  dR5
+  z1
+none/temp
+  dE
+  dR6
+  z1
+print/local
+  p7
+  dE
+  dR7
+print/temp
+  p8
+  dE
+  dR8
+noshell/local
+  dR9
+  w9
+noshell/temp
+  dR10
+  w10
+free/local
+  dE
+  dR11
+  v11
+free/temp
+  dE
+  dR12
+  v12
+iflet/local
+  dE
+  dR21
+  q21
+iflet/temp
+  dE
+  dR22
+  q22
+whilelet/local
+  dE
+  dR23
+  q23
+guard/local
+  dE
+  dR24
+  q25
+end
+  dR4
+  dR3

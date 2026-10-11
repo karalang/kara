@@ -1,0 +1,25 @@
+
+shared enum Expr { Lit(i64), Call(CallNode) }
+struct CallNode { args: Vec[Expr], tag: i64 }
+fn ev(e: Expr) -> i64 {
+    match e {
+        Lit(n) => n,
+        Call(c) => {
+            let a = c.args;
+            let mut acc = c.tag;
+            for x in a { acc = acc + ev(x); }
+            acc
+        }
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let mut v: Vec[Expr] = Vec.new();
+        v.push(Expr.Lit(5)); v.push(Expr.Lit(6)); v.push(Expr.Lit(7));
+        total = total + ev(Expr.Call(CallNode { args: v, tag: 100 }));
+        i = i + 1;
+    }
+    println(total);
+}

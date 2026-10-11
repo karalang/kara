@@ -1,0 +1,35 @@
+wild
+  end
+dR1/t1/1
+wild end
+wildidx
+  end
+dR2/t2/1
+wildidx end
+wildopt
+  end
+dR3/t3/1
+wildopt end
+nested
+  b4/t4
+  end
+dR4/t4/1
+nested end
+owndrop
+  b5/t5
+  end
+dR5/t5/1
+dHd5
+dR5/t5/1
+owndrop end
+plain
+  b6/t6
+  end
+dR6/t6/1
+plain end
+param
+  b7/t7
+  end
+dR7/t7/1
+param end
+done
