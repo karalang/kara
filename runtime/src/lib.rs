@@ -509,6 +509,10 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // Native-only; the wasm schedulers export their own copy.
     #[cfg(feature = "net")]
     keep!(scheduler::karac_runtime_task_detach);
+    // `TcpListener` / `TcpStream` on the MIR backend, over `event_loop`'s
+    // socket calls.
+    #[cfg(feature = "net")]
+    keep!(mir_io::karac_mir_tcp);
     // Tracing spans (`runtime/src/tracing.rs`). Codegen emits calls to the
     // whole surface (span enter/exit bracketing + exporter/min-level
     // plumbing), so all of it must be JIT-resolvable — `karac run` failed

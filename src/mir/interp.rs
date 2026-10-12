@@ -588,6 +588,7 @@ fn run_with(
         channels: Vec::new(),
         files: Vec::new(),
         procs: Procs::default(),
+        sockets: Sockets::default(),
         pools: Vec::new(),
         semaphores: Vec::new(),
         limiters: Vec::new(),
@@ -855,6 +856,7 @@ struct Interp<'a> {
     /// The children `Command.spawn` started and their taken pipes, by
     /// pid, as the runtime's `process.rs` keeps them.
     procs: Procs,
+    sockets: Sockets,
     /// The `Pool[T]`s, by handle - 1. A pool lives until exit, as legacy's
     /// does: `Pool` values are handles, and copies share it.
     pools: Vec<PoolEntry>,
@@ -1472,6 +1474,9 @@ impl<'a> Interp<'a> {
             ("File", _) => self.file_method(name, method, args, arg_tys, ret),
             ("Command", "spawn") | ("Child" | "ChildStdout" | "ChildStderr" | "ChildStdin", _) => {
                 self.process_method(name, base, method, args, arg_tys, ret)
+            }
+            ("TcpListener" | "TcpStream", _) => {
+                self.tcp_method(name, base, method, args, arg_tys, ret)
             }
             ("TaskGroup" | "TaskHandle", _) => self.task_method(name, base, method, args, arg_tys),
             ("Vec", "from_array") => {
@@ -3878,6 +3883,174 @@ impl<'a> Interp<'a> {
         match res {
             Ok(v) => self.variant_named(ret, None, "Ok", vec![v]),
             Err(e) => self.io_err(ret, e),
+        }
+    }
+
+    /// `TcpListener` and `TcpStream`, over `std::net` sockets kept in a table
+    /// by their descriptor, so a handle holds the same `fd` the runtime's
+    /// `event_loop.rs` hands the compiled backend. Construction failures
+    /// carry the runtime's `net_construct_error_code` causes, and `read` /
+    /// `write` report `Interrupted` for EINTR and `Other(errno)` otherwise.
+    fn tcp_method(
+        &mut self,
+        name: &str,
+        base: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
+        use std::io::{Read, Write};
+        use std::os::fd::AsRawFd;
+        // A construction failure: `AddrInUse`, `ConnectionRefused`,
+        // `PermissionDenied`, else `Other(-1)`.
+        let construct = |e: &std::io::Error| match e.kind() {
+            std::io::ErrorKind::AddrInUse => ("AddrInUse", None),
+            std::io::ErrorKind::ConnectionRefused => ("ConnectionRefused", None),
+            std::io::ErrorKind::PermissionDenied => ("PermissionDenied", None),
+            _ => ("Other", Some(-1)),
+        };
+        // A `read` / `write` failure.
+        let syscall = |e: &std::io::Error| match e.raw_os_error() {
+            Some(4) => ("Interrupted", None),
+            Some(n) if n > 0 => ("Other", Some(n)),
+            _ => ("Other", Some(1)),
+        };
+        let res: Result<Value, (&str, Option<i32>)> = match (base, method, args.as_slice()) {
+            ("TcpListener" | "TcpStream", "bind" | "connect", [addr]) => {
+                let text = self.string_at(addr)?;
+                // `addr` is `own String`: spent here.
+                if let (Value::Box(_), Some(&t)) = (addr, arg_tys.first()) {
+                    if !matches!(self.tys.kind(t), TyKind::Ref(_) | TyKind::MutRef(_)) {
+                        self.drop_value(addr.clone(), t)?;
+                    }
+                }
+                // An IP literal and a port, as the runtime parses it.
+                match text.parse::<std::net::SocketAddr>() {
+                    Err(_) => Err(("Other", Some(-1))),
+                    Ok(at) if method == "bind" => match std::net::TcpListener::bind(at) {
+                        Ok(l) => {
+                            if text.rsplit(':').next() == Some("0") {
+                                if let Ok(local) = l.local_addr() {
+                                    self.write_out(
+                                        false,
+                                        &format!("BOUND_PORT={}\n", local.port()),
+                                    );
+                                }
+                            }
+                            let fd = i64::from(l.as_raw_fd());
+                            self.sockets.listeners.insert(fd, l);
+                            Ok(Value::Agg(vec![Value::Int(i128::from(fd))]))
+                        }
+                        Err(e) => Err(construct(&e)),
+                    },
+                    Ok(at) => match std::net::TcpStream::connect(at) {
+                        Ok(s) => Ok(self.sockets.stream(s)),
+                        Err(e) => Err(construct(&e)),
+                    },
+                }
+            }
+            (_, _, [recv, rest @ ..]) => {
+                let fd = match self.struct_value(recv, name)?.as_slice() {
+                    [Value::Int(fd)] => *fd as i64,
+                    other => return err(format!("{name} of a handle holding {other:?}")),
+                };
+                let not_open = || ("Other", Some(9));
+                match (base, method, rest) {
+                    (_, "drop", []) => {
+                        // Closed by going out of scope here.
+                        self.sockets.listeners.remove(&fd);
+                        self.sockets.streams.remove(&fd);
+                        return Ok(Value::Unit);
+                    }
+                    ("TcpListener", "accept", []) => match self.sockets.listeners.get(&fd) {
+                        Some(l) => match l.accept() {
+                            Ok((s, _)) => Ok(self.sockets.stream(s)),
+                            Err(e) => Err(construct(&e)),
+                        },
+                        None => Err(("Other", Some(-1))),
+                    },
+                    ("TcpStream", "try_clone", []) => {
+                        match self.sockets.streams.get(&fd).map(|s| s.try_clone()) {
+                            Some(Ok(s)) => Ok(self.sockets.stream(s)),
+                            _ => Err(("Other", Some(-1))),
+                        }
+                    }
+                    ("TcpStream", "shutdown_write", []) => {
+                        match self
+                            .sockets
+                            .streams
+                            .get(&fd)
+                            .map(|s| s.shutdown(std::net::Shutdown::Write))
+                        {
+                            Some(Ok(())) => Ok(Value::Unit),
+                            _ => Err(("Other", Some(-1))),
+                        }
+                    }
+                    ("TcpStream", "read", [buf]) => {
+                        let (at, lo, len) = self.view_of(buf)?;
+                        let mut bytes = vec![0u8; len as usize];
+                        let got = match self.sockets.streams.get_mut(&fd) {
+                            Some(s) if len > 0 => s.read(&mut bytes).map_err(|e| syscall(&e)),
+                            Some(_) => Ok(0),
+                            None => Err(not_open()),
+                        };
+                        if let Ok(n) = got {
+                            for (i, b) in bytes[..n].iter().enumerate() {
+                                *self.slot_mut(&at.child(lo + i as u64))? =
+                                    Value::Int(i128::from(*b));
+                            }
+                        }
+                        got.map(|n| Value::Int(n as i128))
+                    }
+                    ("TcpStream", "write" | "write_all", [buf]) => {
+                        let (at, lo, len) = self.view_of(buf)?;
+                        let mut bytes = Vec::with_capacity(len as usize);
+                        for i in 0..len {
+                            match self.slot(&at.child(lo + i))? {
+                                Value::Int(b) => bytes.push(b as u8),
+                                other => return err(format!("{name} of a byte holding {other:?}")),
+                            }
+                        }
+                        match self.sockets.streams.get_mut(&fd) {
+                            None => Err(not_open()),
+                            Some(_) if bytes.is_empty() => Ok(Value::Int(0)),
+                            Some(s) if method == "write" => s
+                                .write(&bytes)
+                                .map(|n| Value::Int(n as i128))
+                                .map_err(|e| syscall(&e)),
+                            // Partial writes go round again, and so does EINTR.
+                            Some(s) => {
+                                let mut done = 0;
+                                loop {
+                                    match s.write(&bytes[done..]) {
+                                        Ok(n) => {
+                                            done += n;
+                                            if done == bytes.len() || n == 0 {
+                                                break Ok(Value::Int(done as i128));
+                                            }
+                                        }
+                                        Err(e) if e.raw_os_error() == Some(4) => {}
+                                        Err(e) => break Err(("Other", syscall(&e).1.or(Some(1)))),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => return err(format!("call of unknown function {name}")),
+                }
+            }
+            _ => return err(format!("call of unknown function {name}")),
+        };
+        match res {
+            Ok(v) => self.variant_named(ret, None, "Ok", vec![v]),
+            Err((kind, code)) => {
+                let fields = code
+                    .map(|c| vec![Value::Int(i128::from(c))])
+                    .unwrap_or_default();
+                let payload = self.variant_named(ret, Some("Err"), kind, fields)?;
+                self.variant_named(ret, None, "Err", vec![payload])
+            }
         }
     }
 
@@ -9456,6 +9629,23 @@ struct Procs {
     stdout: rustc_hash::FxHashMap<i64, std::process::ChildStdout>,
     stderr: rustc_hash::FxHashMap<i64, std::process::ChildStderr>,
     stdin: rustc_hash::FxHashMap<i64, std::process::ChildStdin>,
+}
+
+/// The interpreter's sockets, by descriptor (`Interp::tcp_method`).
+#[derive(Default)]
+struct Sockets {
+    listeners: rustc_hash::FxHashMap<i64, std::net::TcpListener>,
+    streams: rustc_hash::FxHashMap<i64, std::net::TcpStream>,
+}
+
+impl Sockets {
+    /// Keeps `s`, and the `TcpStream` value that names it.
+    fn stream(&mut self, s: std::net::TcpStream) -> Value {
+        use std::os::fd::AsRawFd;
+        let fd = i64::from(s.as_raw_fd());
+        self.streams.insert(fd, s);
+        Value::Agg(vec![Value::Int(i128::from(fd))])
+    }
 }
 
 /// `Vec` methods [`Interp::vec_more_method`] implements.

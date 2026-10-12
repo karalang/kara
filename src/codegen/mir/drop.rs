@@ -498,6 +498,11 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             return Ok(());
         }
+        if !program.bodies.contains_key(name)
+            && self.io_drop(&self.tys.adt(a).name.clone(), slot)?
+        {
+            return Ok(());
+        }
         let f = self.function(name)?;
         let ret = self.entry_slot(0, "unit")?;
         self.builder

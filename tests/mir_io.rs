@@ -242,3 +242,113 @@ fn process_natives_match_the_interpreter() {
         assert_eq!(built, interp);
     }
 }
+
+/// A listener and a client on one fixed loopback port, in one thread: the
+/// handshake completes into the backlog before `accept`. Covers each
+/// `TcpError` cause the runtime reports, `try_clone`, a half-close, and the
+/// listener's `Drop` closing its port.
+const SOCKETS: &str = r#"
+fn show(e: TcpError) -> String {
+    match e {
+        TcpError.Interrupted => "interrupted".to_string(),
+        TcpError.Other(n) => f"other {n}",
+        TcpError.AddrInUse => "addr in use".to_string(),
+        TcpError.ConnectionRefused => "refused".to_string(),
+        TcpError.PermissionDenied => "denied".to_string(),
+    }
+}
+
+fn bytes_of(buf: ref Array[u8, 16], n: i64) -> String {
+    let mut s = "".to_string();
+    let mut i = 0;
+    while i < n {
+        s.push(buf[i] as char);
+        i = i + 1;
+    }
+    s
+}
+
+fn main() {
+    match TcpListener.bind("127.0.0.1:47613".to_string()) {
+        Ok(listener) => {
+            println("bound");
+            match TcpListener.bind("127.0.0.1:47613".to_string()) {
+                Ok(_) => println("bound twice"),
+                Err(e) => println(show(e)),
+            }
+            match TcpStream.connect("127.0.0.1:47613".to_string()) {
+                Ok(client) => {
+                    println("connected");
+                    match listener.accept() {
+                        Ok(server) => {
+                            println("accepted");
+                            let msg = "ping".to_string();
+                            match client.write_all(msg.bytes()) {
+                                Ok(n) => println(f"sent {n}"),
+                                Err(e) => println(show(e)),
+                            }
+                            match client.try_clone() {
+                                Ok(other) => {
+                                    match other.write("!".to_string().bytes()) {
+                                        Ok(n) => println(f"clone sent {n}"),
+                                        Err(e) => println(show(e)),
+                                    }
+                                }
+                                Err(e) => println(show(e)),
+                            }
+                            match client.shutdown_write() {
+                                Ok(_) => println("shut"),
+                                Err(e) => println(show(e)),
+                            }
+                            let mut buf: Array[u8, 16] = [0u8; 16];
+                            let mut got = "".to_string();
+                            let mut more = true;
+                            while more {
+                                match server.read(mut buf) {
+                                    Ok(0) => more = false,
+                                    Ok(n) => got.push_str(bytes_of(buf, n)),
+                                    Err(e) => {
+                                        println(show(e));
+                                        more = false;
+                                    }
+                                }
+                            }
+                            println(f"got [{got}]");
+                        }
+                        Err(e) => println(show(e)),
+                    }
+                }
+                Err(e) => println(show(e)),
+            }
+        }
+        Err(e) => println(show(e)),
+    }
+    match TcpStream.connect("127.0.0.1:1".to_string()) {
+        Ok(_) => println("connected to port 1"),
+        Err(e) => println(show(e)),
+    }
+    match TcpStream.connect("not an address".to_string()) {
+        Ok(_) => println("connected to nothing"),
+        Err(e) => println(show(e)),
+    }
+    match TcpListener.bind("127.0.0.1:47613".to_string()) {
+        Ok(_) => println("bound again after the drop"),
+        Err(e) => println(show(e)),
+    }
+}
+"#;
+
+/// TCP on both backends.
+#[test]
+fn tcp_natives_match_the_interpreter() {
+    let dir = Scratch::new("tcp");
+    let (interp, built) = interp_and_build(dir.path(), SOCKETS);
+    assert_eq!(
+        interp,
+        "bound\naddr in use\nconnected\naccepted\nsent 4\nclone sent 1\nshut\n\
+         got [ping!]\nrefused\nother -1\nbound again after the drop\n"
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}

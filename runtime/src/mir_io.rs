@@ -210,3 +210,78 @@ pub unsafe extern "C" fn karac_mir_process(
         io_code(&r, value, msg)
     }
 }
+
+/// `TcpListener` / `TcpStream` over the runtime's blocking socket calls
+/// (`event_loop.rs`): `op` 0 `bind(ptr, len)`, 1 `connect(ptr, len)`,
+/// 2 `accept(fd)`, 3 `try_clone(fd)`, 4 `shutdown_write(fd)`, 5 `read(fd,
+/// ptr, len)`, 6 `write(fd, ptr, len)` and 7 `write_all(fd, ptr, len)`.
+/// A negative return is success, with the descriptor or byte count in
+/// `value`; otherwise it is the `TcpError` variant, 0 `Interrupted`, 1
+/// `Other` (its `i32` in `value`), 2 `AddrInUse`, 3 `ConnectionRefused`
+/// and 4 `PermissionDenied`, as the MIR interpreter's `tcp_method` has them.
+///
+/// # Safety
+///
+/// `ptr` and `len` describe the address or buffer the op reads or writes,
+/// and `value` is writable.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_tcp(
+    op: i32,
+    fd: i64,
+    ptr: *mut u8,
+    len: i64,
+    value: *mut i64,
+) -> i32 {
+    use crate::event_loop as ev;
+    // A construction result: the descriptor, or the runtime's cause code.
+    let built = |r: i64| match r {
+        r if r >= 0 => (-1, r),
+        -2 => (2, 0),
+        -3 => (3, 0),
+        -4 => (4, 0),
+        r => (1, r),
+    };
+    // A `read` / `write` result: the count, or `-errno`.
+    let moved = |n: i64| match n {
+        n if n >= 0 => (-1, n),
+        -4 => (0, 0),
+        n => (1, -n),
+    };
+    // SAFETY: the caller's contract, which is each callee's.
+    let (code, v) = unsafe {
+        match op {
+            0 => built(ev::karac_runtime_tcp_bind(ptr, len)),
+            1 => built(ev::karac_runtime_tcp_connect(ptr, len)),
+            2 => built(ev::karac_runtime_tcp_accept(fd)),
+            3 => match ev::karac_runtime_tcp_try_clone(fd) {
+                r if r >= 0 => (-1, r),
+                _ => (1, -1),
+            },
+            4 => match ev::karac_runtime_tcp_shutdown(fd, 1) {
+                0 => (-1, 0),
+                _ => (1, -1),
+            },
+            5 => moved(ev::karac_runtime_tcp_read(fd, ptr, len)),
+            6 => moved(ev::karac_runtime_tcp_write(fd, ptr, len)),
+            _ => {
+                // Partial writes go round again, and so does EINTR.
+                let mut done = 0;
+                loop {
+                    if done >= len {
+                        break (-1, done);
+                    }
+                    match ev::karac_runtime_tcp_write(fd, ptr.add(done as usize), len - done) {
+                        0 => break (-1, done),
+                        n if n > 0 => done += n,
+                        -4 => {}
+                        n => break (1, -n),
+                    }
+                }
+            }
+        }
+    };
+    // SAFETY: as above.
+    unsafe { *value = v };
+    code
+}

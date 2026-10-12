@@ -1,7 +1,8 @@
-//! The I/O natives: `File` and `Clock`, each a call into the runtime's
-//! blocking implementation through its `karac_mir_*` entry
-//! (`runtime/src/mir_io.rs`). Their reference semantics are the
-//! interpreter's `file_method` and its `Clock.now` arm (`src/mir/interp.rs`).
+//! The I/O natives: `File`, processes, sockets and `Clock`, each a call
+//! into the runtime's blocking implementation through its `karac_mir_*`
+//! entry (`runtime/src/mir_io.rs`). Their reference semantics are the
+//! interpreter's `file_method`, `process_method`, `tcp_method` and its
+//! `Clock.now` arm (`src/mir/interp.rs`).
 //!
 //! A fallible entry reports as `karac_mir_fs` does: a negative return is
 //! success, with the payload in an `i64` out slot; `0..=6` is the `IoError`
@@ -29,6 +30,15 @@ const IO_ERRORS: [&str; 7] = [
     "Other",
 ];
 
+/// The `TcpError` variants by the runtime's code for them.
+const TCP_ERRORS: [&str; 5] = [
+    "Interrupted",
+    "Other",
+    "AddrInUse",
+    "ConnectionRefused",
+    "PermissionDenied",
+];
+
 impl<'ctx> Cx<'ctx, '_> {
     /// Lowers the I/O native `base.method`, or `None` when it is not one.
     pub(super) fn io_native(
@@ -44,6 +54,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("Child" | "ChildStdout" | "ChildStderr" | "ChildStdin", _) => {
                 self.child_native(base, method, args, dest)
             }
+            ("TcpListener" | "TcpStream", _) => self.tcp_native(base, method, args, dest),
             ("Clock", "now") => {
                 let i64t = self.llcx.i64_type();
                 let f = self.extern_fn("karac_runtime_clock_now", i64t.fn_type(&[], false));
@@ -408,5 +419,128 @@ impl<'ctx> Cx<'ctx, '_> {
             self.offset(p, self.field_offset(ty, None, 1)?)?,
             success.into(),
         )
+    }
+
+    /// `TcpListener` / `TcpStream`, through `karac_mir_tcp(op, fd, ptr, len,
+    /// value)`; the `TcpError` cause comes back as its code, in the order
+    /// [`TCP_ERRORS`] lists, `Other`'s `i32` in `value`.
+    fn tcp_native(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let op: u64 = match (base, method) {
+            ("TcpListener", "bind") => 0,
+            ("TcpStream", "connect") => 1,
+            ("TcpListener", "accept") => 2,
+            ("TcpStream", "try_clone") => 3,
+            ("TcpStream", "shutdown_write") => 4,
+            ("TcpStream", "read") => 5,
+            ("TcpStream", "write") => 6,
+            ("TcpStream", "write_all") => 7,
+            _ => return Ok(None),
+        };
+        let null = self.ptr_ty().const_null();
+        let (fd, ptr, len) = if op <= 1 {
+            let (p, n) = self.str_parts(&args[0])?;
+            (self.i64(0), p, n)
+        } else {
+            let (at, _) = self.behind_refs(&args[0])?;
+            let fd = self.load_i64(at)?;
+            if op >= 5 {
+                let (p, n) = self.view_of(&args[1])?;
+                (fd, p, n)
+            } else {
+                (fd, null, self.i64(0))
+            }
+        };
+        let value = self.entry_slot(8, "tcp.value")?;
+        let i32t = self.llcx.i32_type();
+        let code = self.rt_int(
+            "tcp",
+            &[
+                i32t.const_int(op, false).into(),
+                fd.into(),
+                ptr.into(),
+                len.into(),
+                value.into(),
+            ],
+            32,
+        )?;
+        self.drop_moved(args)?;
+        let dty = self.place_type(dest)?;
+        let d = self.place_ptr(dest)?;
+        let (ok, er) = (self.variant_of(dty, "Ok")?, self.variant_of(dty, "Err")?);
+        let okt = self
+            .tys
+            .field_ty(dty, Some(ok), 0)
+            .ok_or("Result.Ok has no payload")?;
+        let et = self
+            .tys
+            .field_ty(dty, Some(er), 0)
+            .ok_or("Result.Err has no payload")?;
+        let ok_off = self.field_offset(dty, Some(ok), 0)?;
+        let ep = self.offset(d, self.field_offset(dty, Some(er), 0)?)?;
+        let v = self.load_i64(value)?;
+        let done = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, code, i32t.const_zero(), "")
+            .map_err(e)?;
+        self.store_tag(d, dty, er)?;
+        self.if_then(done, |cx| {
+            cx.store_tag(d, dty, ok)?;
+            // A `TcpListener` / `TcpStream` is its descriptor, a count is
+            // an `i64`, and `Unit` is nothing.
+            match cx.layout(okt)?.size {
+                0 => Ok(()),
+                8 => cx.store(cx.offset(d, ok_off)?, v.into()),
+                _ => Err(format!("a TCP result of `{}`", cx.tys.display(okt))),
+            }
+        })?;
+        for (k, name) in TCP_ERRORS.iter().enumerate() {
+            let var = self.variant_of(et, name)?;
+            let is = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, code, i32t.const_int(k as u64, false), "")
+                .map_err(e)?;
+            let other = *name == "Other";
+            let off = if other {
+                self.field_offset(et, Some(var), 0)?
+            } else {
+                0
+            };
+            self.if_then(is, |cx| {
+                cx.store_tag(ep, et, var)?;
+                if other {
+                    let c = cx
+                        .builder
+                        .build_int_truncate(v, cx.llcx.i32_type(), "")
+                        .map_err(e)?;
+                    cx.store(cx.offset(ep, off)?, c.into())?;
+                }
+                Ok(())
+            })?;
+        }
+        Ok(Some(()))
+    }
+
+    /// The `#[compiler_builtin]` `Drop` of the I/O type `name`, whose
+    /// `mut ref` is in `slot`: `true` when it is one. A socket closes its
+    /// descriptor.
+    pub(super) fn io_drop(&mut self, name: &str, slot: PointerValue<'ctx>) -> R<bool> {
+        if !matches!(name, "TcpListener" | "TcpStream") {
+            return Ok(false);
+        }
+        let v = self.load_ptr(slot)?;
+        let fd = self.load_i64(v)?;
+        let i64t = self.llcx.i64_type();
+        let f = self.extern_fn(
+            "karac_runtime_tcp_close",
+            self.llcx.i32_type().fn_type(&[i64t.into()], false),
+        );
+        self.builder.build_call(f, &[fd.into()], "").map_err(e)?;
+        Ok(true)
     }
 }
