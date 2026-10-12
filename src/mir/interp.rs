@@ -25,6 +25,9 @@ use super::syntax::*;
 use super::ty::{AdtId, IntTy, IntrinsicTy, Ty, TyInterner, TyKind};
 use super::validate::validate;
 
+#[path = "interp_fast.rs"]
+mod fast;
+
 /// The functions of a program, by instance name, and the `Drop` body of
 /// each ADT that has one.
 #[derive(Debug, Default, Clone)]
@@ -401,9 +404,9 @@ impl RunResult {
 
 const MAX_DEPTH: usize = 200_000;
 /// The default step budget, which only stops a runaway loop: real
-/// programs in the corpus run tens of millions of steps, and the corpus
+/// programs in the corpus run up to billions of steps, and the corpus
 /// runner's timeout bounds wall time. `KARAC_MIR_MAX_STEPS` overrides it.
-const MAX_STEPS: u64 = 4_000_000_000;
+const MAX_STEPS: u64 = 40_000_000_000;
 
 /// The program's file name as `karac __mir-run` was given it, for
 /// `dbg`'s `[file:line]` prefix; `<unknown>` when nothing set it.
@@ -560,9 +563,12 @@ fn run_with(
         next_frame_id: 0,
         spare_locals: Vec::new(),
         callees: Default::default(),
+        decoded: Default::default(),
         heap: Vec::new(),
         free: Vec::new(),
         key_index: Default::default(),
+        key_tys: Default::default(),
+        table_tys_of: Default::default(),
         events: Vec::new(),
         trace,
         stream,
@@ -768,6 +774,9 @@ struct Interp<'a> {
     /// address of the name in the program (which outlives the run), so a
     /// call does not search the body map by string.
     callees: rustc_hash::FxHashMap<usize, Option<&'a Body>>,
+    /// Each body's decoded scalar steps ([`fast`]), keyed by its address,
+    /// made on its first call.
+    decoded: rustc_hash::FxHashMap<usize, std::rc::Rc<[fast::Block]>>,
     heap: Vec<Option<HeapObj>>,
     /// Freed slots of `heap`, reused by [`Interp::alloc`].
     free: Vec<u32>,
@@ -775,7 +784,12 @@ struct Interp<'a> {
     /// its entry's position, built on the first lookup and kept up to date
     /// by the table's own inserts and removes. `None` for a table holding a
     /// key with no hashable form, which is searched entry by entry.
-    key_index: rustc_hash::FxHashMap<AllocId, Option<rustc_hash::FxHashMap<String, usize>>>,
+    key_index: rustc_hash::FxHashMap<AllocId, Option<rustc_hash::FxHashMap<Vec<u8>, usize>>>,
+    /// Per table key type: whether its keys compare by total order (`F64`,
+    /// `F32`), and its user `eq` body if it has one.
+    key_tys: rustc_hash::FxHashMap<Ty, (bool, Option<String>)>,
+    /// [`Interp::table_tys`] by the receiver's type.
+    table_tys_of: rustc_hash::FxHashMap<Ty, (Ty, Ty)>,
     events: Vec<Event>,
     /// Whether `events` is kept. A run outside the tests skips it: one
     /// event per statement is most of the time and memory a long program
@@ -961,6 +975,28 @@ impl<'a> Interp<'a> {
         // `String` methods that only read serve it.
         if base == "str" {
             return self.native(&format!("String.{method}"), args, arg_tys, ret);
+        }
+        // A table's lookups and updates, the commonest natives after a
+        // `Vec`'s, go straight to it: no arm before the table's own takes
+        // these methods.
+        if matches!(base, "Map" | "Set" | "SortedMap" | "SortedSet")
+            && matches!(
+                method,
+                "get"
+                    | "contains"
+                    | "contains_key"
+                    | "insert"
+                    | "remove"
+                    | "len"
+                    | "is_empty"
+                    | "index"
+                    | "index_mut"
+                    | "keys"
+                    | "values"
+                    | "entry"
+            )
+        {
+            return self.table_method(name, ty_name, method, args, arg_tys, ret);
         }
         match (base, method) {
             // The hottest natives first: an arm's place in the match is
@@ -1836,7 +1872,7 @@ impl<'a> Interp<'a> {
                 self.clone_value(&v, t)
             }
             ("Map" | "Set" | "SortedMap" | "SortedSet", _) => {
-                self.table_method(ty_name, method, args, arg_tys, ret)
+                self.table_method(name, ty_name, method, args, arg_tys, ret)
             }
             (
                 _,
@@ -4000,13 +4036,13 @@ impl<'a> Interp<'a> {
     /// lookup compares keys by value, through boxes and references.
     fn table_method(
         &mut self,
+        name: &str,
         ty_name: &str,
         method: &str,
         args: Vec<Value>,
         arg_tys: &[Ty],
         ret: Ty,
     ) -> R<Value> {
-        let name = format!("{ty_name}.{method}");
         let is_map = ty_name.starts_with("Map") || ty_name.starts_with("SortedMap");
         // A sorted table keeps its entries in key order, so iteration and
         // `entry_at` walk keys in ascending order.
@@ -4018,7 +4054,14 @@ impl<'a> Interp<'a> {
             return err(format!("{name} needs a receiver"));
         };
         let id = self.box_behind(recv)?;
-        let (key_ty, val_ty) = self.table_tys(arg_tys, &name)?;
+        let (key_ty, val_ty) = match arg_tys.first().and_then(|t| self.table_tys_of.get(t)) {
+            Some(&kv) => kv,
+            None => {
+                let kv = self.table_tys(arg_tys, name)?;
+                self.table_tys_of.insert(arg_tys[0], kv);
+                kv
+            }
+        };
         match (method, &args[1..]) {
             ("len", []) => Ok(Value::Int(self.vec_elems(id)?.len() as i128)),
             ("is_empty", []) => Ok(Value::Bool(self.vec_elems(id)?.is_empty())),
@@ -4156,6 +4199,25 @@ impl<'a> Interp<'a> {
                 let part = u64::from(method == "values");
                 let part_ty = if method == "values" { val_ty } else { key_ty };
                 let by_ref = matches!(self.tys.kind(e), TyKind::Ref(_));
+                // Plain keys (or values) are copied straight out of the
+                // entries.
+                if !by_ref && self.tys.is_copy(part_ty) {
+                    let copied: Option<Vec<Value>> = self
+                        .vec_elems(id)?
+                        .iter()
+                        .map(|entry| match entry {
+                            Value::Agg(fs) => match fs.get(part as usize)? {
+                                v if v.is_plain() && !matches!(v, Value::Uninit) => Some(v.copy()),
+                                _ => None,
+                            },
+                            _ => None,
+                        })
+                        .collect();
+                    if let Some(out) = copied {
+                        let vname = self.tys.display(ret);
+                        return Ok(self.alloc_box(&vname, Value::Agg(out)));
+                    }
+                }
                 let n = self.vec_elems(id)?.len();
                 let mut out = Vec::with_capacity(n);
                 for i in 0..n as u64 {
@@ -4658,7 +4720,15 @@ impl<'a> Interp<'a> {
 
     /// The index of the entry whose key equals `key`, if any.
     fn find_key(&mut self, id: AllocId, key: &Value, key_ty: Ty, is_map: bool) -> R<Option<usize>> {
-        if self.total_float_key(key_ty) {
+        let (total_float, user_eq) = match self.key_tys.get(&key_ty) {
+            Some(info) => info.clone(),
+            None => {
+                let info = (self.total_float_key(key_ty), self.user_eq(key_ty));
+                self.key_tys.insert(key_ty, info.clone());
+                info
+            }
+        };
+        if total_float {
             // `F64` / `F32` keys are equal by total order: their bits.
             let want = total_form(self.key_form(key)?);
             let n = self.vec_elems(id)?.len();
@@ -4670,7 +4740,6 @@ impl<'a> Interp<'a> {
             }
             return Ok(None);
         }
-        let user_eq = self.user_eq(key_ty);
         if user_eq.is_none() {
             if let Some(r) = self.key_repr(key)? {
                 self.build_key_index(id, is_map)?;
@@ -4719,16 +4788,68 @@ impl<'a> Interp<'a> {
     /// A string that two keys share exactly when they are equal, for the
     /// table index; `None` for a key holding a float, whose equality is not
     /// its representation's (`-0.0 == 0.0`, `NaN != NaN`).
-    fn key_repr(&mut self, k: &Value) -> R<Option<String>> {
-        fn has_float(v: &Value) -> bool {
-            match v {
-                Value::Float(_) => true,
-                Value::Agg(fs) | Value::Variant(_, fs) => fs.iter().any(has_float),
-                _ => false,
+    fn key_repr(&mut self, k: &Value) -> R<Option<Vec<u8>>> {
+        let mut out = Vec::with_capacity(64);
+        let mut float = false;
+        self.key_bytes(k, &mut out, &mut float)?;
+        Ok((!float).then_some(out))
+    }
+
+    /// [`Interp::key_form`] of `v`, written as bytes that are equal exactly
+    /// when the forms are; `float` is set when it holds a float.
+    fn key_bytes(&self, v: &Value, out: &mut Vec<u8>, float: &mut bool) -> R<()> {
+        match v {
+            Value::Ref(addr) => self.key_bytes(self.slot_ref(addr)?, out, float)?,
+            Value::Box(id) | Value::Shared(id) => match self.heap.get(id.0 as usize) {
+                Some(Some(obj)) => self.key_bytes(&obj.value, out, float)?,
+                _ => return err(format!("use of {id} after it was freed")),
+            },
+            Value::Agg(fs) => {
+                out.push(b'A');
+                out.extend_from_slice(&(fs.len() as u64).to_le_bytes());
+                for f in fs {
+                    self.key_bytes(f, out, float)?;
+                }
+            }
+            Value::Slice { base, lo, len } => {
+                out.push(b'A');
+                out.extend_from_slice(&len.to_le_bytes());
+                for i in *lo..*lo + *len {
+                    self.key_bytes(self.slot_ref(&base.child(i))?, out, float)?;
+                }
+            }
+            Value::Variant(k, fs) => {
+                out.push(b'V');
+                out.extend_from_slice(&k.to_le_bytes());
+                out.extend_from_slice(&(fs.len() as u64).to_le_bytes());
+                for f in fs {
+                    self.key_bytes(f, out, float)?;
+                }
+            }
+            Value::Int(i) => {
+                out.push(b'I');
+                out.extend_from_slice(&i.to_le_bytes());
+            }
+            Value::Bool(b) => out.extend_from_slice(&[b'B', *b as u8]),
+            Value::Char(c) => {
+                out.push(b'C');
+                out.extend_from_slice(&(*c as u32).to_le_bytes());
+            }
+            Value::Unit => out.push(b'U'),
+            Value::Str(t) => {
+                out.push(b'S');
+                out.extend_from_slice(&(t.len() as u64).to_le_bytes());
+                out.extend_from_slice(t.as_bytes());
+            }
+            other => {
+                *float |= matches!(other, Value::Float(_));
+                let d = format!("{other:?}");
+                out.push(b'D');
+                out.extend_from_slice(&(d.len() as u64).to_le_bytes());
+                out.extend_from_slice(d.as_bytes());
             }
         }
-        let f = self.key_form(k)?;
-        Ok((!has_float(&f)).then(|| format!("{f:?}")))
+        Ok(())
     }
 
     /// Builds table `id`'s key index unless it has one.
@@ -6087,6 +6208,51 @@ impl<'a> Interp<'a> {
     }
 
     fn run_body(&mut self, body: &'a Body) -> R<Value> {
+        // A traced run logs every step, which the decoded steps do not.
+        if self.trace {
+            return self.run_body_general(body);
+        }
+        let strict = body.phase >= MirPhase::DropsElaborated;
+        let decoded = self.decoded(body);
+        let mut bb = BasicBlock(0);
+        loop {
+            let block = body.block(bb);
+            let fast_block = &decoded[bb.index()];
+            for (i, op) in fast_block.ops.iter().enumerate() {
+                self.tick()?;
+                if self.fast_op(op) {
+                    continue;
+                }
+                let st = &block.statements[i];
+                self.statement(body, &st.kind)
+                    .map_err(|s| self.report_abort(s, st.source_info.span))
+                    .map_err(|s| locate(s, body, format!("{bb}[{i}]")))?;
+            }
+            self.tick()?;
+            if let Some(b) = self.fast_term(&fast_block.term, &block.terminator.kind) {
+                bb = b;
+                continue;
+            }
+            let next = match fast_block.term {
+                fast::Term::Native { ret } => self.native_call(body, &block.terminator.kind, ret),
+                _ => self.terminator(body, &block.terminator.kind, strict),
+            };
+            let next = next
+                .map_err(|s| self.report_abort(s, block.terminator.source_info.span))
+                .map_err(|s| locate(s, body, format!("{bb}[term]")))?;
+            match next {
+                Some(b) => bb = b,
+                None => {
+                    return self
+                        .finish_frame(body)
+                        .map_err(|s| locate(s, body, format!("{bb}[term]")));
+                }
+            }
+        }
+    }
+
+    /// [`Interp::run_body`] step by step through the general statements.
+    fn run_body_general(&mut self, body: &'a Body) -> R<Value> {
         let strict = body.phase >= MirPhase::DropsElaborated;
         let mut bb = BasicBlock(0);
         loop {
@@ -7033,69 +7199,7 @@ impl<'a> Interp<'a> {
     }
 
     fn int_binop(&self, op: BinOp, a: i128, b: i128, ty: Ty) -> R<(Value, bool)> {
-        use BinOp::*;
-        let cmp = |o: std::cmp::Ordering| -> Value {
-            Value::Bool(match op {
-                Eq => o.is_eq(),
-                Ne => o.is_ne(),
-                Lt => o.is_lt(),
-                Le => o.is_le(),
-                Gt => o.is_gt(),
-                Ge => o.is_ge(),
-                _ => unreachable!(),
-            })
-        };
-        let int = self.tys.int_ty(ty);
-        if int == Some(IntTy::U128) {
-            return u128_binop(op, a as u128, b as u128, cmp);
-        }
-        if op.is_comparison() {
-            return Ok((cmp(a.cmp(&b)), false));
-        }
-        let Some(it) = int else {
-            return err("integer operands of a non-integer type");
-        };
-        // The common `i64` step in the machine's own width: its overflow
-        // flag is the type's.
-        if it == IntTy::I64 && matches!(op, Add | Sub | Mul) {
-            let (x, y) = (a as i64, b as i64);
-            let (r, of) = match op {
-                Add => x.overflowing_add(y),
-                Sub => x.overflowing_sub(y),
-                _ => x.overflowing_mul(y),
-            };
-            return Ok((Value::Int(r as i128), of));
-        }
-        // In 128 bits, with the 128-bit overflow kept: a narrower
-        // type's result then wraps to the right value, and an
-        // `i128` one is flagged.
-        let (exact, of) = match op {
-            Add => a.overflowing_add(b),
-            Sub => a.overflowing_sub(b),
-            Mul => a.overflowing_mul(b),
-            Div | Rem if b == 0 => return err("division by zero; the builder must guard it"),
-            Div => a.overflowing_div(b),
-            // `MIN % -1` is 0 mathematically, but it overflows on
-            // the machine exactly as `MIN / -1` does, and C8 traps
-            // both (Rust's `overflowing_rem`).
-            Rem if it.signed() && b == -1 && a == wrap(1 << (it.bits() - 1), it) => {
-                return Ok((Value::Int(0), true));
-            }
-            Rem => a.overflowing_rem(b),
-            BitAnd => (a & b, false),
-            BitOr => (a | b, false),
-            BitXor => (a ^ b, false),
-            Shl | Shr => {
-                if b < 0 || b >= it.bits() as i128 {
-                    return Ok((Value::Int(0), true));
-                }
-                let r = if op == Shl { wrap(a << b, it) } else { a >> b };
-                return Ok((Value::Int(r), false));
-            }
-            _ => unreachable!(),
-        };
-        let wrapped = wrap(exact, it);
-        Ok((Value::Int(wrapped), of || wrapped != exact))
+        int_binop_of(op, a, b, self.tys.int_ty(ty))
     }
 
     fn binop_slow(&self, op: BinOp, x: Value, y: Value, ty: Ty) -> R<(Value, bool)> {
@@ -7387,6 +7491,8 @@ impl<'a> Interp<'a> {
                 };
                 match k {
                     IntrinsicTy::String => {}
+                    // Elements that own nothing are not visited.
+                    IntrinsicTy::Vec(e) | IntrinsicTy::VecDeque(e) if !self.needs_drop(e) => {}
                     IntrinsicTy::Vec(e) | IntrinsicTy::VecDeque(e) => {
                         let n = match &self.live(id)?.value {
                             Value::Agg(fs) => fs.len(),
@@ -8967,6 +9073,73 @@ fn locate(s: Stop, body: &Body, at: String) -> Stop {
         Stop::Error(e) => Stop::Error(format!("in {} at {at}: {e}", body.instance.name)),
         abort => abort,
     }
+}
+
+/// An integer operation on values of type `int`: the result and whether it
+/// overflowed.
+fn int_binop_of(op: BinOp, a: i128, b: i128, int: Option<IntTy>) -> R<(Value, bool)> {
+    use BinOp::*;
+    let cmp = |o: std::cmp::Ordering| -> Value {
+        Value::Bool(match op {
+            Eq => o.is_eq(),
+            Ne => o.is_ne(),
+            Lt => o.is_lt(),
+            Le => o.is_le(),
+            Gt => o.is_gt(),
+            Ge => o.is_ge(),
+            _ => unreachable!(),
+        })
+    };
+    if int == Some(IntTy::U128) {
+        return u128_binop(op, a as u128, b as u128, cmp);
+    }
+    if op.is_comparison() {
+        return Ok((cmp(a.cmp(&b)), false));
+    }
+    let Some(it) = int else {
+        return err("integer operands of a non-integer type");
+    };
+    // The common `i64` step in the machine's own width: its overflow
+    // flag is the type's.
+    if it == IntTy::I64 && matches!(op, Add | Sub | Mul) {
+        let (x, y) = (a as i64, b as i64);
+        let (r, of) = match op {
+            Add => x.overflowing_add(y),
+            Sub => x.overflowing_sub(y),
+            _ => x.overflowing_mul(y),
+        };
+        return Ok((Value::Int(r as i128), of));
+    }
+    // In 128 bits, with the 128-bit overflow kept: a narrower
+    // type's result then wraps to the right value, and an
+    // `i128` one is flagged.
+    let (exact, of) = match op {
+        Add => a.overflowing_add(b),
+        Sub => a.overflowing_sub(b),
+        Mul => a.overflowing_mul(b),
+        Div | Rem if b == 0 => return err("division by zero; the builder must guard it"),
+        Div => a.overflowing_div(b),
+        // `MIN % -1` is 0 mathematically, but it overflows on
+        // the machine exactly as `MIN / -1` does, and C8 traps
+        // both (Rust's `overflowing_rem`).
+        Rem if it.signed() && b == -1 && a == wrap(1 << (it.bits() - 1), it) => {
+            return Ok((Value::Int(0), true));
+        }
+        Rem => a.overflowing_rem(b),
+        BitAnd => (a & b, false),
+        BitOr => (a | b, false),
+        BitXor => (a ^ b, false),
+        Shl | Shr => {
+            if b < 0 || b >= it.bits() as i128 {
+                return Ok((Value::Int(0), true));
+            }
+            let r = if op == Shl { wrap(a << b, it) } else { a >> b };
+            return Ok((Value::Int(r), false));
+        }
+        _ => unreachable!(),
+    };
+    let wrapped = wrap(exact, it);
+    Ok((Value::Int(wrapped), of || wrapped != exact))
 }
 
 /// A `u128` operation. Its values are held as their bits in an `i128`, so
