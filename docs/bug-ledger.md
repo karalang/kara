@@ -96,12 +96,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 604 |
 | leak | 602 |
 | double-free | 427 |
-| codegen-gap | 252 |
-| missing-feature | 226 |
+| codegen-gap | 253 |
+| missing-feature | 227 |
 | other | 171 |
+| perf | 152 |
 | diagnostics | 152 |
-| perf | 151 |
-| false-positive | 147 |
+| false-positive | 148 |
 | crash | 114 |
 | soundness | 99 |
 | use-after-free | 90 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2851 |
+| codegen | 2852 |
 | interp | 899 |
-| typecheck | 363 |
+| typecheck | 366 |
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
@@ -596,6 +596,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-30 | 2026-10-12 | runtime | medium | `Vec.sort` on the MIR compiled backend (`karac_mir_sort`, `runtime/src/mir.rs`) is about 12x slower than legacy codegen's sort: a bottom-up merge sort of an index permutation, a fresh `Vec` per pass, every comparison through a function pointer and a `dyn FnMut`, then a gather copy | — |
 | B-2026-10-12-31 | 2026-10-12 | other | medium | `Option.expect` and `Result.expect` in the stdlib source take `msg: own String`, where the library spec (docs/library/core-types.md) says `msg: Str`, so every `.expect("...")` builds a heap String from its literal on the success path too: 50,000,000 pops through `.expect("x")` take 1.14 s compiled against 0.26 s with `.unwrap()` | — |
 | B-2026-10-12-32 | 2026-10-12 | typecheck | medium | On the MIR backends, `let s: String = cs[1..3].iter().collect();` and `let s: String = cs.into_iter().collect();` (with `cs: Vec[char]`) are refused with "expected 'String', found 'Vec[char]'": `collect` from a slice's iterator or from `into_iter` ignores the `String` target and builds a `Vec`, while `cs.iter().collect()` into the same `String` works | — |
+| B-2026-10-12-33 | 2026-10-12 | typecheck | low | `karac check` refuses `s = cs.iter().collect();` into an existing `String` (also `w.name = ...` and `v.push(cs.iter().collect())` with `v: Vec[String]`), with "expected 'String', found 'Vec[char]'": `collect` takes its target type from a `let` annotation or a return type, but not from an assignment target or an argument, and defaults to `Vec` | — |
+| B-2026-10-12-34 | 2026-10-12 | typecheck | low | On the MIR backends, `v.push(cs.iter().collect())` with `v: Vec[String]` and `cs: Vec[char]` fails to build: "the method call `.collect` with no resolved callee is not lowered yet"; `collect` in argument position gets no target type | — |
+| B-2026-10-12-35 | 2026-10-12 | typecheck | low | `s.chars().rev()` is refused on the MIR backends ("no method 'rev' on type 'StrChars'") while `karac check` and the legacy interpreter accept it; the library spec makes `chars` a plain `Iterator` and lists only the `Vec`/`Array`/`Slice`/`VecDeque` and range iterators as `DoubleEndedIterator`, so either the spec and `StrChars` gain `next_back` or check should refuse | — |
+| B-2026-10-12-36 | 2026-10-12 | codegen | medium | `Vec.push` on the MIR compiled backend is an out-of-line runtime call (`karac_mir_vec_push`, runtime/src/mir.rs) that reserves and then `memcpy`s each element by its runtime size: a loop pushing 1,000,000 `i64` 40 times takes 0.19 s against 0.04 s for Rust and 0.01 s for legacy `karac build`; `s.chars().collect()` into a `Vec[char]` pays it per char, plus an out-of-line `karac_mir_char_at_byte` | — |
 
 ### Relocated
 
