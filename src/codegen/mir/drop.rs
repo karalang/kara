@@ -44,8 +44,8 @@ use crate::mir::{BasicBlock, Place, Ty};
 #[derive(Clone, Copy)]
 enum CellDrop {
     /// `void(ptr handle)`: the runtime owns everything behind the handle.
-    /// A channel end's undelivered payloads are dropped through the glue
-    /// `karac_runtime_channel_set_elem_drop` recorded on the channel.
+    /// A channel's undelivered payloads drop through the glue its
+    /// `karac_mir_chan_new` recorded, once its last end is gone.
     Free(&'static str),
     /// A `OnceLock` / `OnceCell`: the held value, read through
     /// `karac_runtime_once_get` (null while unset), drops through its own
@@ -63,14 +63,8 @@ enum CellDrop {
 /// the task runs on and reaps itself. `Atomic[T]` holds a `T` in place,
 /// which is never a type that owns anything.
 const LIBRARY_CELLS: &[(&str, CellDrop)] = &[
-    (
-        "Sender",
-        CellDrop::Free("karac_runtime_channel_drop_sender"),
-    ),
-    (
-        "Receiver",
-        CellDrop::Free("karac_runtime_channel_drop_receiver"),
-    ),
+    ("Sender", CellDrop::Free("karac_mir_chan_drop_sender")),
+    ("Receiver", CellDrop::Free("karac_mir_chan_drop_receiver")),
     ("File", CellDrop::Free("karac_runtime_file_close")),
     ("CString", CellDrop::Free("karac_mir_cstring_free")),
     ("Interner", CellDrop::Free("karac_mir_interner_free")),
@@ -456,6 +450,17 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.tys.display(ty)
             ));
         };
+        if !program.bodies.contains_key(name) && self.tys.adt(a).name == "BoundedChannel" {
+            // The `#[compiler_builtin]` Drop: both counts of the runtime
+            // channel the first word holds.
+            let v = self.load_ptr(slot)?;
+            let h = self.load_ptr(v)?;
+            let i8t = self.llcx.i8_type();
+            for s in [1, 0] {
+                self.rt("chan_end", &[h.into(), i8t.const_int(s, false).into()])?;
+            }
+            return Ok(());
+        }
         let f = self.function(name)?;
         let ret = self.entry_slot(0, "unit")?;
         self.builder
@@ -925,10 +930,7 @@ fn cells(o: own OnceLock[R], f: own Option[File], x: own Atomic[i64], q: own Vec
             (ONCE_GET, once_get as *const () as usize),
             (ONCE_FREE, once_free as *const () as usize),
             ("karac_runtime_file_close", closed as *const () as usize),
-            (
-                "karac_runtime_channel_drop_sender",
-                closed as *const () as usize,
-            ),
+            ("karac_mir_chan_drop_sender", closed as *const () as usize),
             ("karac_runtime_task_detach", closed as *const () as usize),
         ];
         for (n, a) in stubs {

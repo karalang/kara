@@ -1117,6 +1117,36 @@ impl<'ctx> Cx<'ctx, '_> {
                     cx.rt("vec_reserve", &[v.into(), k.into(), cx.i64(size).into()])
                 })?;
             }
+            ("try_reserve" | "try_reserve_exact", [k]) if is_vec => {
+                // Allocation failure aborts, so the request always succeeds.
+                let k = self.int_arg(k)?;
+                let pos = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, k, self.i64(0), "")
+                    .map_err(e)?;
+                let v = self.ref_arg(recv)?;
+                self.if_then(pos, |cx| {
+                    cx.rt("vec_reserve", &[v.into(), k.into(), cx.i64(size).into()])
+                })?;
+                let ok = self.variant_of(dty, "Ok")?;
+                let d = self.place_ptr(dest)?;
+                self.store_tag(d, dty, ok)?;
+            }
+            ("capacity", []) if is_vec => {
+                // At least the length: a borrowed literal has capacity 0.
+                let v = self.ref_arg(recv)?;
+                let cap = self.load_i64(self.offset(v, 16)?)?;
+                let more = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGT, cap, n, "")
+                    .map_err(e)?;
+                let c = self
+                    .builder
+                    .build_select(more, cap, n, "")
+                    .map_err(e)?
+                    .into_int_value();
+                self.store_int_as(dest, c, false)?;
+            }
             ("shrink_to_fit", []) if is_vec => {}
             ("is_sorted", []) => {
                 let cmp = self.key_fn(KeyOp::Cmp, el);

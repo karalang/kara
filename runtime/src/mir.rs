@@ -1876,3 +1876,157 @@ pub extern "C" fn karac_mir_bf16_from(f: f32) -> u16 {
         (bits.wrapping_add(0x7FFF + lsb) >> 16) as u16
     }
 }
+
+/// A channel of the MIR backend, as the interpreter's `Chan`: a queue of
+/// `size`-byte values, with a capacity (0 is unbounded for a plain
+/// channel, holds nothing for a `BoundedChannel`) and the count of live
+/// ends of each kind. A `recv` never blocks: it finds a value or none,
+/// as the interpreter's does. Queued values drop through `drop` once both
+/// kinds of end are gone.
+pub struct MirChan {
+    queue: std::sync::Mutex<MirChanState>,
+    size: usize,
+    cap: usize,
+    bounded: bool,
+    drop: Option<unsafe extern "C" fn(*mut u8)>,
+}
+
+struct MirChanState {
+    queue: std::collections::VecDeque<Box<[u8]>>,
+    senders: usize,
+    receivers: usize,
+}
+
+/// A new channel with one end of each kind.
+#[no_mangle]
+pub extern "C" fn karac_mir_chan_new(
+    size: usize,
+    cap: i64,
+    bounded: u8,
+    drop: Option<unsafe extern "C" fn(*mut u8)>,
+) -> *mut MirChan {
+    Box::into_raw(Box::new(MirChan {
+        queue: std::sync::Mutex::new(MirChanState {
+            queue: std::collections::VecDeque::new(),
+            senders: 1,
+            receivers: 1,
+        }),
+        size,
+        cap: cap.max(0) as usize,
+        bounded: bounded != 0,
+        drop,
+    }))
+}
+
+/// Queues the `size` bytes at `v`: 0 when queued, 1 when the channel is
+/// full and 2 when no receiver is left (`v` is then left to the caller).
+///
+/// # Safety
+/// `h` is a live channel; `v` is readable for its `size` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_chan_send(h: *mut MirChan, v: *const u8) -> i32 {
+    // SAFETY: the caller's contract.
+    let c = unsafe { &*h };
+    let mut s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
+    if !c.bounded && s.receivers == 0 {
+        return 2;
+    }
+    if (c.bounded || c.cap > 0) && s.queue.len() >= c.cap {
+        return 1;
+    }
+    // SAFETY: as above.
+    s.queue.push_back(unsafe { bytes(v, c.size) }.into());
+    0
+}
+
+/// Moves the oldest value to `out`: 1 when there was one, else 0.
+///
+/// # Safety
+/// `h` is a live channel; `out` is writable for its `size` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_chan_recv(h: *mut MirChan, out: *mut u8) -> u8 {
+    // SAFETY: the caller's contract.
+    let c = unsafe { &*h };
+    let mut s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
+    match s.queue.pop_front() {
+        Some(b) => {
+            // SAFETY: as above.
+            unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), out, c.size) };
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Another end of the kind `sender` names.
+///
+/// # Safety
+/// `h` is a live channel.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_chan_clone(h: *mut MirChan, sender: u8) -> *mut MirChan {
+    // SAFETY: the caller's contract.
+    let c = unsafe { &*h };
+    let mut s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
+    if sender != 0 {
+        s.senders += 1;
+    } else {
+        s.receivers += 1;
+    }
+    h
+}
+
+/// One end of the kind `sender` names is gone; with every end gone, the
+/// queued values drop and the channel is freed.
+///
+/// # Safety
+/// `h` is null or a live channel, and the end is not used again.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_chan_end(h: *mut MirChan, sender: u8) {
+    if h.is_null() {
+        return;
+    }
+    let last = {
+        // SAFETY: the caller's contract.
+        let c = unsafe { &*h };
+        let mut s = c.queue.lock().unwrap_or_else(|p| p.into_inner());
+        let n = if sender != 0 {
+            &mut s.senders
+        } else {
+            &mut s.receivers
+        };
+        *n = n.saturating_sub(1);
+        s.senders == 0 && s.receivers == 0
+    };
+    if !last {
+        return;
+    }
+    // SAFETY: the last end; the channel came from `Box::into_raw`.
+    let c = unsafe { Box::from_raw(h) };
+    let s = c.queue.into_inner().unwrap_or_else(|p| p.into_inner());
+    if let Some(d) = c.drop {
+        for mut b in s.queue {
+            // SAFETY: the bytes are a value the glue drops.
+            unsafe { d(b.as_mut_ptr()) };
+        }
+    }
+}
+
+/// A dropped `Sender`.
+///
+/// # Safety
+/// As [`karac_mir_chan_end`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_chan_drop_sender(h: *mut MirChan) {
+    // SAFETY: the caller's contract.
+    unsafe { karac_mir_chan_end(h, 1) }
+}
+
+/// A dropped `Receiver`.
+///
+/// # Safety
+/// As [`karac_mir_chan_end`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_chan_drop_receiver(h: *mut MirChan) {
+    // SAFETY: the caller's contract.
+    unsafe { karac_mir_chan_end(h, 0) }
+}

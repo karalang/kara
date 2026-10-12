@@ -727,3 +727,214 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(v.try_as_basic_value().unwrap_basic().into_int_value())
     }
 }
+
+impl<'ctx> Cx<'ctx, '_> {
+    /// The channels (`Channel`, its `Sender` and `Receiver` ends, and
+    /// `BoundedChannel`), a handle on the runtime's queue
+    /// (`karac_mir_chan_*`), with the interpreter's `channel_method`
+    /// semantics; `None` for a method not lowered.
+    pub(super) fn chan_native(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let dty = self.place_type(dest)?;
+        let elem_of = |me: &Self, t: Ty| -> R<Ty> {
+            me.tys
+                .tcx()
+                .adt_of(t)
+                .and_then(|(_, a)| a.first().copied())
+                .ok_or_else(|| format!("`{}` needs its element type", me.tys.display(t)))
+        };
+        match (base, method, args) {
+            ("Channel", "new" | "bounded", _) => {
+                let cap = match args {
+                    [] => self.i64(0),
+                    [n] => self.int_arg(n)?,
+                    _ => return Ok(None),
+                };
+                let end = self.tys.field_ty(dty, None, 0).ok_or("a channel pair")?;
+                let el = elem_of(self, end)?;
+                let h = self.chan_new(el, cap, false)?;
+                let d = self.place_ptr(dest)?;
+                for f in 0..2 {
+                    let q = self.offset(d, self.field_offset(dty, None, f)?)?;
+                    self.store(q, h.into())?;
+                }
+            }
+            ("BoundedChannel", "new", [n, _]) => {
+                let n = self.int_arg(n)?;
+                let el = elem_of(self, dty)?;
+                let h = self.chan_new(el, n, true)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, h.into())?;
+                self.drop_moved(&args[1..])?;
+            }
+            (_, "drop", [recv]) => {
+                let h = self.chan_handle(recv)?;
+                let i8t = self.llcx.i8_type();
+                for s in [1, 0] {
+                    self.rt("chan_end", &[h.into(), i8t.const_int(s, false).into()])?;
+                }
+            }
+            ("Sender" | "Receiver", "clone", [recv]) => {
+                let h = self.chan_handle(recv)?;
+                let s = self
+                    .llcx
+                    .i8_type()
+                    .const_int(u64::from(base == "Sender"), false);
+                let h = self.mrt_ptr("chan_clone", &[h.into(), s.into()])?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, h.into())?;
+            }
+            (_, "send" | "try_send", [recv, v]) => {
+                let h = self.chan_handle(recv)?;
+                let (_, t) = self.cell_arg(recv)?;
+                let el = elem_of(self, t)?;
+                let vp = self.operand_ptr(v)?;
+                let r = self.rt_int("chan_send", &[h.into(), vp.into()], 32)?;
+                self.chan_send_result(base, method, dty, dest, r, vp, el)?;
+            }
+            (_, "recv" | "recv_blocking" | "try_recv", [recv]) => {
+                let h = self.chan_handle(recv)?;
+                let d = self.place_ptr(dest)?;
+                if base == "BoundedChannel" || method == "try_recv" {
+                    let (some, none) = self.option_variants(dty)?;
+                    let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
+                    let got = self.rt_flag("chan_recv", &[h.into(), q.into()])?;
+                    let i32t = self.llcx.i32_type();
+                    let k = self
+                        .builder
+                        .build_select(
+                            got,
+                            i32t.const_int(u64::from(some), false),
+                            i32t.const_int(u64::from(none), false),
+                            "",
+                        )
+                        .map_err(e)?
+                        .into_int_value();
+                    self.store_tag_dyn(d, dty, k)?;
+                } else {
+                    let got = self.rt_flag("chan_recv", &[h.into(), d.into()])?;
+                    self.abort_unless(got, "explicit panic")?;
+                }
+            }
+            _ => return Ok(None),
+        }
+        Ok(Some(()))
+    }
+
+    /// A new runtime channel of `el` values holding at most `cap`.
+    fn chan_new(&mut self, el: Ty, cap: IntValue<'ctx>, bounded: bool) -> R<PointerValue<'ctx>> {
+        let size = self.i64(self.layout(el)?.size);
+        let glue = if self.tys.needs_drop(el) {
+            self.glue_fn(el).as_global_value().as_pointer_value()
+        } else {
+            self.ptr_ty().const_null()
+        };
+        let cap = self
+            .builder
+            .build_int_cast_sign_flag(cap, self.llcx.i64_type(), true, "")
+            .map_err(e)?;
+        let b = self.llcx.i8_type().const_int(u64::from(bounded), false);
+        self.mrt_ptr(
+            "chan_new",
+            &[size.into(), cap.into(), b.into(), glue.into()],
+        )
+    }
+
+    /// The runtime channel a channel end or `BoundedChannel` operand holds
+    /// (its first word), through references.
+    fn chan_handle(&mut self, a: &Operand) -> R<PointerValue<'ctx>> {
+        let (cell, _) = self.cell_arg(a)?;
+        self.load_ptr(cell)
+    }
+
+    /// What a send returns, given the runtime's answer `r` (0 queued, 1
+    /// full, 2 closed): `try_send`'s `Result` carrying the value back, a
+    /// `BoundedChannel`'s `Result` dropping it when full, or a `Sender`'s
+    /// panic when closed.
+    #[allow(clippy::too_many_arguments)]
+    fn chan_send_result(
+        &mut self,
+        base: &str,
+        method: &str,
+        dty: Ty,
+        dest: &Place,
+        r: IntValue<'ctx>,
+        vp: PointerValue<'ctx>,
+        el: Ty,
+    ) -> R<()> {
+        let f = self.cur_fn()?;
+        let i32t = self.llcx.i32_type();
+        if method == "try_send" || base == "BoundedChannel" {
+            let d = self.place_ptr(dest)?;
+            let okv = self.variant_of(dty, "Ok")?;
+            let errv = self.variant_of(dty, "Err")?;
+            let et = self
+                .tys
+                .field_ty(dty, Some(errv), 0)
+                .ok_or("an `Err` without a payload")?;
+            let q = self.offset(d, self.field_offset(dty, Some(errv), 0)?)?;
+            let (ok_b, full_b, closed_b, done) = (
+                self.llcx.append_basic_block(f, "send.ok"),
+                self.llcx.append_basic_block(f, "send.full"),
+                self.llcx.append_basic_block(f, "send.closed"),
+                self.llcx.append_basic_block(f, "send"),
+            );
+            self.builder
+                .build_switch(
+                    r,
+                    ok_b,
+                    &[
+                        (i32t.const_int(1, false), full_b),
+                        (i32t.const_int(2, false), closed_b),
+                    ],
+                )
+                .map_err(e)?;
+            self.builder.position_at_end(ok_b);
+            self.store_tag(d, dty, okv)?;
+            self.builder.build_unconditional_branch(done).map_err(e)?;
+            for (b, name) in [(full_b, "Full"), (closed_b, "Closed")] {
+                self.builder.position_at_end(b);
+                if base == "BoundedChannel" && name == "Closed" {
+                    // Never answered: a `BoundedChannel` has no ends.
+                    self.builder.build_unreachable().map_err(e)?;
+                    continue;
+                }
+                let ev = self.variant_of(et, name)?;
+                if method == "try_send" {
+                    let at = self.offset(q, self.field_offset(et, Some(ev), 0)?)?;
+                    self.copy(at, vp, el)?;
+                } else if self.tys.needs_drop(el) {
+                    self.call_glue(vp, el)?;
+                }
+                self.store_tag(q, et, ev)?;
+                self.store_tag(d, dty, errv)?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+            }
+            self.builder.position_at_end(done);
+            return Ok(());
+        }
+        let closed = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, r, i32t.const_int(2, false), "")
+            .map_err(e)?;
+        let (bad, good) = (
+            self.llcx.append_basic_block(f, "send.closed"),
+            self.llcx.append_basic_block(f, "send"),
+        );
+        self.builder
+            .build_conditional_branch(closed, bad, good)
+            .map_err(e)?;
+        self.builder.position_at_end(bad);
+        if self.tys.needs_drop(el) {
+            self.call_glue(vp, el)?;
+        }
+        self.abort_with("explicit panic")?;
+        self.builder.position_at_end(good);
+        Ok(())
+    }
+}

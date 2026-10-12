@@ -316,6 +316,11 @@ impl<'ctx> Cx<'ctx, '_> {
         {
             return Ok(());
         }
+        if matches!(base, "Channel" | "Sender" | "Receiver" | "BoundedChannel")
+            && self.chan_native(base, method, args, dest)?.is_some()
+        {
+            return Ok(());
+        }
         if base == "Entry" && self.entry_native(method, args, dest)?.is_some() {
             return Ok(());
         }
@@ -837,8 +842,85 @@ impl<'ctx> Cx<'ctx, '_> {
                 let (s, n) = self.str_const("main")?;
                 self.rt("string_from", &[buf.into(), s.into(), n.into()])
             }
+            (
+                "Map" | "Set" | "SortedMap" | "SortedSet" | "VecDeque",
+                "reserve" | "reserve_exact" | "shrink_to_fit",
+            ) => {
+                // A hint the tables size themselves without.
+                Ok(())
+            }
+            ("Secret", "expose" | "expose_mut") if args.len() == 1 => {
+                // A reference to the secret's one field.
+                let t = self.operand_type(&args[0])?;
+                let (p, sty) = match self.tys.kind(t) {
+                    TyKind::Ref(i) | TyKind::MutRef(i) => (self.ref_arg(&args[0])?, i),
+                    _ => (self.operand_ptr(&args[0])?, t),
+                };
+                let q = self.offset(p, self.field_offset(sty, None, 0)?)?;
+                let d = self.place_ptr(dest)?;
+                let inner = match self.tys.kind(dty) {
+                    TyKind::Ref(i) | TyKind::MutRef(i) => i,
+                    _ => dty,
+                };
+                if matches!(self.tys.kind(inner), TyKind::Str | TyKind::Slice(_)) {
+                    self.copy(d, q, inner)
+                } else {
+                    self.store(d, q.into())
+                }
+            }
+            ("Secret", "ct_eq") if args.len() == 2 => {
+                // The two secrets' one field, compared by the field type's
+                // equality (no timing to keep constant, as the interpreter).
+                let mut at = Vec::with_capacity(2);
+                let mut sty = None;
+                for a in args {
+                    let t = self.operand_type(a)?;
+                    at.push(match self.tys.kind(t) {
+                        TyKind::Ref(i) | TyKind::MutRef(i) => {
+                            sty = Some(i);
+                            self.ref_arg(a)?
+                        }
+                        _ => {
+                            sty = Some(t);
+                            self.operand_ptr(a)?
+                        }
+                    });
+                }
+                let sty = sty.ok_or("Secret.ct_eq has no receiver")?;
+                let ft = self
+                    .tys
+                    .field_ty(sty, None, 0)
+                    .ok_or("a Secret has no field")?;
+                let off = self.field_offset(sty, None, 0)?;
+                let (x, y) = (self.offset(at[0], off)?, self.offset(at[1], off)?);
+                let eq = self.key_fn(super::key::KeyOp::Eq, ft);
+                let r = self
+                    .builder
+                    .build_call(eq, &[x.into(), y.into()], "")
+                    .map_err(e)?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or("eq glue returns nothing")?
+                    .into_int_value();
+                self.store_bool(dest, r)?;
+                self.drop_moved(&args[1..])
+            }
             (_, "clone") if args.len() == 1 => {
                 let t = self.operand_type(&args[0])?;
+                // A `str` clones to a `String` of its own; a `ref str` is
+                // the two-word view itself, not a pointer to one.
+                let dty = self.place_type(dest)?;
+                if matches!(self.tys.kind(dty), TyKind::Intrinsic(IntrinsicTy::String)) {
+                    let inner = match self.tys.kind(t) {
+                        TyKind::Ref(i) | TyKind::MutRef(i) => i,
+                        _ => t,
+                    };
+                    if matches!(self.tys.kind(inner), TyKind::Str) {
+                        let (p, n) = self.str_parts(&args[0])?;
+                        let d = self.place_ptr(dest)?;
+                        return self.rt("string_from", &[d.into(), p.into(), n.into()]);
+                    }
+                }
                 let (src, t) = match self.tys.kind(t) {
                     TyKind::Ref(i) | TyKind::MutRef(i) => (self.ref_arg(&args[0])?, i),
                     _ => (self.operand_ptr(&args[0])?, t),
