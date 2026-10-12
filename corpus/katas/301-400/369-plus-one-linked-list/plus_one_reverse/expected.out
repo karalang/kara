@@ -1,0 +1,10 @@
+example 1: 124
+example 2: 1
+one nine: 10
+all nines: 1000
+trailing nines: 200
+a carry that stops at an 8: 9000
+zeros before the last digit: 101
+a nine before the last digit: 91
+sixty nines: 1000000000000000000000000000000000000000000000000000000000000
+500 random numbers: 7906 digits, checksum 943087485

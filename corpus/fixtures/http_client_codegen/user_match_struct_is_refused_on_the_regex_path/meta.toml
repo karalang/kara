@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'a user `struct Match` must be REFUSED on the regex path, not crash codegen with a panic'"
 bucket = "d"
-classified_with = "19707a2f2"
+classified_with = "52b89af30"
 extracted_src = "fbf5a463"
