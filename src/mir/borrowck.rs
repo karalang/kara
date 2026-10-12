@@ -70,6 +70,8 @@ struct Loan {
     /// or overwriting `r` itself leaves it valid; its value keeps `r`'s
     /// loans instead.
     through_shared_ref: bool,
+    /// The place is reached through a `mut ref` held in its local.
+    through_mut_ref: bool,
     /// Where it was created: block and statement.
     at: (usize, usize),
 }
@@ -359,10 +361,13 @@ fn collect_loans(body: &Body, tys: &TyInterner) -> Vec<Loan> {
             if let StatementKind::Assign(_, Rvalue::Ref(kind, place)) = &s.kind {
                 let through_shared_ref = place.projection.first() == Some(&ProjElem::Deref)
                     && matches!(tys.kind(body.local(place.local).ty), TyKind::Ref(_));
+                let through_mut_ref = place.projection.first() == Some(&ProjElem::Deref)
+                    && matches!(tys.kind(body.local(place.local).ty), TyKind::MutRef(_));
                 loans.push(Loan {
                     kind: *kind,
                     place: place.clone(),
                     through_shared_ref,
+                    through_mut_ref,
                     at: (bi, si),
                 });
             }
@@ -918,6 +923,15 @@ fn conflicts(loan: &Loan, place: &Place, access: Access) -> bool {
     if loan.through_shared_ref && place.projection.is_empty() {
         return false;
     }
+    // A reborrow through a `mut ref` (`&mut (*x)`) borrows the pointee, so
+    // ending the reference's storage, or dropping it, leaves it valid:
+    // `Some(x) => x` returning a binding out of a `mut ref` scrutinee.
+    if loan.through_mut_ref
+        && place.projection.is_empty()
+        && matches!(access, Access::StorageDead | Access::Drop)
+    {
+        return false;
+    }
     match loan.kind {
         BorrowKind::Mut => true,
         BorrowKind::Shared => !matches!(access, Access::Read | Access::Borrow(BorrowKind::Shared)),
@@ -1196,6 +1210,37 @@ fn main() -> () {
 ",
         );
         one(&tmp, "bb0[3]: end of storage of _1");
+    }
+
+    /// A reborrow through a `mut ref` outlives the reference's storage (a
+    /// binding returned out of a `mut ref` match), but not its pointee's.
+    #[test]
+    fn mir_borrowck_mut_reborrow_outlives_its_reference() {
+        let locals =
+            "    let mut _1: i64;\n    let mut _2: mut ref i64;\n    let mut _3: mut ref i64;\n";
+        let ok = main_with(
+            locals,
+            "        StorageLive(_1);
+        _1 = const 1_i64;
+        StorageLive(_2);
+        _2 = &mut _1;
+        _3 = &mut (*_2);
+        StorageDead(_2);
+        (*_3) = const 2_i64;
+",
+        );
+        assert!(ok.is_empty(), "{ok:?}");
+        let bad = main_with(
+            locals,
+            "        StorageLive(_1);
+        _1 = const 1_i64;
+        _2 = &mut _1;
+        _3 = &mut (*_2);
+        StorageDead(_1);
+        (*_3) = const 2_i64;
+",
+        );
+        one(&bad, "bb0[4]: end of storage of _1");
     }
 
     #[test]
