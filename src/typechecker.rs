@@ -2333,6 +2333,9 @@ pub struct TypeChecker<'a> {
     /// nothing. Set and restored beside
     /// [`Self::current_scrutinee_borrow_projection`].
     pub(super) current_scrutinee_core_borrowed: bool,
+    /// The scrutinee is `self` in a library `mut ref self` method, so its
+    /// bindings are `mut ref` parts of the receiver (`Option.get_or_insert`).
+    pub(super) current_scrutinee_mut_self: bool,
     /// v2 core (strict commands only): while checking the parts of a
     /// pattern over a `shared` value or a type with a `Drop` body, a
     /// description of that type. A plain binding of a non-`Copy` part there
@@ -2616,6 +2619,9 @@ pub struct TypeChecker<'a> {
     /// the whole chain (the overwrite hazard `map_entry_lint` documents for the
     /// same reason), so `s` in `s.r` reads back as the type of `s.r`.
     pub(super) current_fn_ref_params: FxHashSet<String>,
+    /// Whether the function being checked takes `mut ref self` (a library
+    /// method that hands out `mut ref` parts of its receiver).
+    pub(super) current_fn_mut_self: bool,
     /// This function's parameters (and `self`) that borrow only because D5
     /// reads a bare parameter as a borrow, each with where `own ` would be
     /// written to make it owned. Feeds the give-away diagnostic in
@@ -3143,6 +3149,7 @@ impl<'a> TypeChecker<'a> {
             current_arm_body_block: None,
             current_scrutinee_borrow_projection: false,
             current_scrutinee_core_borrowed: false,
+            current_scrutinee_mut_self: false,
             core_no_move_out: Vec::new(),
             core_shorthand_field: false,
             core_shared_depth: 0,
@@ -3182,6 +3189,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_is_gpu: false,
             current_fn_frozen_params: FxHashSet::default(),
             current_fn_ref_params: FxHashSet::default(),
+            current_fn_mut_self: false,
             current_fn_d5_params: FxHashMap::default(),
             frozen_param_use_spans: FxHashSet::default(),
             break_value_types: Vec::new(),

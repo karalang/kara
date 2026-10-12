@@ -2300,6 +2300,10 @@ impl<'a> super::TypeChecker<'a> {
             }
             set
         });
+        let saved_mut_self = std::mem::replace(
+            &mut self.current_fn_mut_self,
+            matches!(f.self_param, Some(SelfParam::MutRef)),
+        );
         let saved_d5_params = std::mem::replace(
             &mut self.current_fn_d5_params,
             if self.cli_lint_overrides.strict_core && crate::d5_params::on() {
@@ -2346,6 +2350,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_fn_frozen_params = saved_frozen_params;
         self.current_fn_ref_params = saved_ref_params;
         self.current_fn_d5_params = saved_d5_params;
+        self.current_fn_mut_self = saved_mut_self;
         if comptime_fn {
             self.comptime_depth -= 1;
         }
@@ -5717,6 +5722,17 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Is `value` the receiver of a library `mut ref self` method? The MIR
+    /// builder matches it through a `mut` reborrow, so a binding of a part
+    /// is a `mut ref` (`match self { Some(x) => x }` in
+    /// `Option.get_or_insert`).
+    pub(super) fn lib_mut_self_scrutinee(&self, value: &Expr) -> bool {
+        self.library_methods_from_source
+            && !self.cli_lint_overrides.strict_core
+            && self.current_fn_mut_self
+            && matches!(value.kind, ExprKind::SelfValue)
+    }
+
     /// A binding's type under [`Self::library_view_scrutinee`]: a part that
     /// is not `Copy` or a handle is a `ref` into the scrutinee.
     pub(super) fn lib_view_binding_ty(&self, mode: ScrutineeMode, ty: Type) -> Type {
@@ -5731,6 +5747,9 @@ impl<'a> super::TypeChecker<'a> {
             || self.reads_as_value(&ty)
         {
             return ty;
+        }
+        if self.current_scrutinee_mut_self {
+            return Type::MutRef(Box::new(ty));
         }
         Type::Ref(Box::new(ty))
     }
@@ -7608,6 +7627,8 @@ impl<'a> super::TypeChecker<'a> {
                     // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
                     let scrut_bp = self.projection_rooted_in_borrow(value);
                     let scrut_core = self.scrutinee_core_borrowed(value);
+                    let scrut_ms = self.lib_mut_self_scrutinee(value);
+                    let prev_ms = std::mem::replace(&mut self.current_scrutinee_mut_self, scrut_ms);
                     let prev_core =
                         std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
                     let prev_bp =
@@ -7615,6 +7636,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_scrutinee_pattern(pattern, &dispatch_ty, mode, value);
                     self.current_scrutinee_borrow_projection = prev_bp;
                     self.current_scrutinee_core_borrowed = prev_core;
+                    self.current_scrutinee_mut_self = prev_ms;
                 }
             }
             StmtKind::LetUninit {
@@ -7681,6 +7703,8 @@ impl<'a> super::TypeChecker<'a> {
                 // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
                 let scrut_bp = self.projection_rooted_in_borrow(value);
                 let scrut_core = self.scrutinee_core_borrowed(value);
+                let scrut_ms = self.lib_mut_self_scrutinee(value);
+                let prev_ms = std::mem::replace(&mut self.current_scrutinee_mut_self, scrut_ms);
                 let prev_core =
                     std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
                 let prev_bp =
@@ -7688,6 +7712,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.check_scrutinee_pattern(pattern, &dispatch_ty, mode, value);
                 self.current_scrutinee_borrow_projection = prev_bp;
                 self.current_scrutinee_core_borrowed = prev_core;
+                self.current_scrutinee_mut_self = prev_ms;
             }
             StmtKind::Defer { body } => {
                 let prev = self.in_defer;

@@ -3603,6 +3603,17 @@ impl<'a> super::TypeChecker<'a> {
                 // lint layer, not the type layer, so callers can still reason
                 // about the deref's result type.
                 Type::Pointer { inner, .. } => *inner,
+                // A library method's receiver is typed at its value type, so
+                // `*self = Some(v)` in a `mut ref self` method (the MIR
+                // pipeline's `Option.get_or_insert`) writes through it.
+                other
+                    if self.library_methods_from_source
+                        && !self.cli_lint_overrides.strict_core
+                        && matches!(operand.kind, ExprKind::SelfValue)
+                        && self.current_fn_ref_params.contains("self") =>
+                {
+                    other
+                }
                 // v2 core: a view (a bare `for` element, a `ref` or map-payload
                 // binding) is a `ref` the checker binds at its element type,
                 // so `*p` reads through it. A non-`Copy` value would move out

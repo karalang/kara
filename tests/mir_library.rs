@@ -797,3 +797,30 @@ f1f0b0b1b2b3b4
 "#,
     );
 }
+
+/// `Option.get_or_insert` / `get_or_insert_with` are Kāra bodies that hand
+/// out a `mut ref` to the stored value: a `match self` in a `mut ref self`
+/// method binds `mut ref` parts, and `*self = Some(v)` writes the receiver.
+/// The value given to `get_or_insert` drops when `self` was already `Some`.
+#[test]
+fn get_or_insert_hands_out_a_mut_ref_to_the_stored_value() {
+    assert_runs(
+        r#"
+fn main() {
+    let mut a: Option[i64] = None;
+    let x = a.get_or_insert(5);
+    *x = *x + 1;
+    println(f"{a.unwrap()}");
+    let mut b: Option[String] = Some("keep".to_string());
+    let y = b.get_or_insert("drop".to_string());
+    y.push_str("!");
+    println(f"{b.unwrap()}");
+    let mut c: Option[Vec[i64]] = None;
+    c.get_or_insert_with(|| Vec.new()).push(3);
+    c.get_or_insert_with(|| Vec.new()).push(4);
+    println(f"{c.unwrap().len()}");
+}
+"#,
+        "6\nkeep!\n2\n",
+    );
+}

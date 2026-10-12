@@ -204,11 +204,14 @@ impl<'a> super::TypeChecker<'a> {
         // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
         let scrut_bp = self.projection_rooted_in_borrow(value);
         let scrut_core = self.scrutinee_core_borrowed(value);
+        let scrut_ms = self.lib_mut_self_scrutinee(value);
+        let prev_ms = std::mem::replace(&mut self.current_scrutinee_mut_self, scrut_ms);
         let prev_core = std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
         let prev_bp = std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
         self.check_scrutinee_pattern(pattern, &dispatch_ty, mode, value);
         self.current_scrutinee_borrow_projection = prev_bp;
         self.current_scrutinee_core_borrowed = prev_core;
+        self.current_scrutinee_mut_self = prev_ms;
         self.current_arm_body_block = prev_blk;
         // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
         if self.block_materializes_scrutinee_copy(pattern, then_block) {
@@ -267,6 +270,8 @@ impl<'a> super::TypeChecker<'a> {
             // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
             let scrut_bp = self.projection_rooted_in_borrow(scrutinee);
             let scrut_core = self.scrutinee_core_borrowed(scrutinee);
+            let scrut_ms = self.lib_mut_self_scrutinee(scrutinee);
+            let prev_ms = std::mem::replace(&mut self.current_scrutinee_mut_self, scrut_ms);
             let prev_core =
                 std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
             let prev_bp =
@@ -274,6 +279,7 @@ impl<'a> super::TypeChecker<'a> {
             self.check_scrutinee_pattern(&arm.pattern, &dispatch_ty, mode, scrutinee);
             self.current_scrutinee_borrow_projection = prev_bp;
             self.current_scrutinee_core_borrowed = prev_core;
+            self.current_scrutinee_mut_self = prev_ms;
             self.current_arm_body = prev_arm_body;
             materializes |= self.arm_materializes_scrutinee_copy(arm);
             scrutinee_mismatch |= self.errors[errs_before..]
@@ -634,6 +640,8 @@ impl<'a> super::TypeChecker<'a> {
             // B-2026-09-16-24 — see `reject_partial_move_variant_pattern`.
             let scrut_bp = self.projection_rooted_in_borrow(scrutinee);
             let scrut_core = self.scrutinee_core_borrowed(scrutinee);
+            let scrut_ms = self.lib_mut_self_scrutinee(scrutinee);
+            let prev_ms = std::mem::replace(&mut self.current_scrutinee_mut_self, scrut_ms);
             let prev_core =
                 std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
             let prev_bp =
@@ -641,6 +649,7 @@ impl<'a> super::TypeChecker<'a> {
             self.check_scrutinee_pattern(&arm.pattern, &dispatch_ty, mode, scrutinee);
             self.current_scrutinee_borrow_projection = prev_bp;
             self.current_scrutinee_core_borrowed = prev_core;
+            self.current_scrutinee_mut_self = prev_ms;
             self.current_arm_body = prev_arm_body;
             materializes |= self.arm_materializes_scrutinee_copy(arm);
             scrutinee_mismatch |= self.errors[errs_before..]

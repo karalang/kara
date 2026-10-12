@@ -147,6 +147,30 @@ impl[T] Option[T] {
             None => None,
         }
     }
+
+    /// Fills a `None` with `value`, then hands out the stored value.
+    /// `value` drops if `self` was already `Some`.
+    fn get_or_insert(mut ref self, value: own T) -> mut ref T {
+        if self.is_none() {
+            *self = Some(value);
+        }
+        match self {
+            Some(x) => x,
+            None => panic("get_or_insert left None"),
+        }
+    }
+
+    /// Fills a `None` with `f()`, then hands out the stored value. `f`
+    /// runs only when `self` is `None`.
+    fn get_or_insert_with(mut ref self, f: own OnceFn() -> T) -> mut ref T {
+        if self.is_none() {
+            *self = Some(f());
+        }
+        match self {
+            Some(x) => x,
+            None => panic("get_or_insert_with left None"),
+        }
+    }
 }
 
 impl[T: Clone] Option[ref T] {
