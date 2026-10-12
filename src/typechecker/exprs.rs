@@ -760,6 +760,34 @@ impl<'a> super::TypeChecker<'a> {
         Some(expected.clone())
     }
 
+    /// D5 for a closure literal's annotated parameter: a bare `|s: String|`
+    /// borrows, as a function's bare parameter does, when the closure goes
+    /// where its parameter is lent (`Fn(ref String) -> i64`, the type a bare
+    /// `Fn(String) -> i64` reads as). Where the slot takes the value
+    /// (`MutFn(own T)`), the annotation keeps its owned reading.
+    fn d5_closure_param_borrows(
+        &self,
+        annotation: &Option<TypeExpr>,
+        ty: Type,
+        expected: &Type,
+    ) -> Type {
+        if annotation.is_none()
+            || !(self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+            || !crate::d5_params::on()
+        {
+            return ty;
+        }
+        match expected {
+            Type::Ref(inner) | Type::MutRef(inner)
+                if !matches!(ty, Type::Ref(_) | Type::MutRef(_))
+                    && resolve_type_var_top(inner, &self.env.substitutions) == ty =>
+            {
+                expected.clone()
+            }
+            _ => ty,
+        }
+    }
+
     /// Whether an argument builds a fresh value rather than naming a place
     /// or lending a borrow: see [`builds_a_value_shape`].
     fn builds_a_value(&self, e: &Expr) -> bool {
@@ -771,6 +799,11 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
+        }
+        // `collect()` builds the collection its context names, so lent to a
+        // borrowed parameter it builds the value the borrow is of.
+        if let ExprKind::MethodCall { method, args, .. } = &e.kind {
+            return method == "collect" && args.is_empty();
         }
         builds_a_value_shape(e)
     }
@@ -1800,6 +1833,7 @@ impl<'a> super::TypeChecker<'a> {
                             .as_ref()
                             .map(|t| self.lower_type_expr(t, &[]))
                             .unwrap_or_else(|| expected_pty.clone());
+                        let ty = self.d5_closure_param_borrows(&p.ty, ty, expected_pty);
                         if !self.is_irrefutable_pattern(&p.pattern, &ty) {
                             self.type_error(
                                 "refutable pattern in closure parameter; use `if let` or `match` for patterns that may not match".to_string(),

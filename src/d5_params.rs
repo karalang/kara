@@ -33,7 +33,7 @@ const COPY_BOUNDS: &[&str] = &["Copy", "Numeric", "Integer", "Float"];
 /// parameters, ones that already name a borrow or a view (`ref T`,
 /// `mut ref T`, `Slice[T]`, `mut Slice[T]`, `Str`), parameters whose type is
 /// copied or is a counted handle (a scalar, a `Copy` type or type parameter,
-/// a `shared` type, an `Option` or tuple of those: [`copy_like`]),
+/// a `shared` or `sync` type, an `Option` or tuple of those: [`copy_like`]),
 /// function-typed and `impl Trait` parameters, functions exported to a
 /// wasm host (`#[target(...)]`), and the standard library's own bodies.
 /// The parameters of function types are rewritten the same way
@@ -47,8 +47,9 @@ pub fn borrow_bare_params(program: &mut Program) {
     let mut copy: FxHashSet<String> = COPY_SCALARS.iter().map(|s| s.to_string()).collect();
     for item in &program.items {
         let (name, attrs, shared) = match item {
-            Item::StructDef(s) => (&s.name, &s.attributes, s.is_shared),
-            Item::EnumDef(e) => (&e.name, &e.attributes, e.is_shared),
+            // A `sync` (`par`) type is a counted handle, as a `shared` one is.
+            Item::StructDef(s) => (&s.name, &s.attributes, s.is_shared || s.is_par),
+            Item::EnumDef(e) => (&e.name, &e.attributes, e.is_shared || e.is_par),
             _ => continue,
         };
         if shared || crate::typechecker::extract_derived_traits(attrs).contains("Copy") {
@@ -192,12 +193,18 @@ impl crate::span_visitor::MutVisitor for FnTypeParams<'_> {
 fn item_copy_bounded(item: &Item) -> Vec<String> {
     let mut out = Vec::new();
     let fun = |f: &Function, out: &mut Vec<String>| {
-        out.extend(copy_bounded(f.generic_params.as_ref(), f.where_clause.as_ref()));
+        out.extend(copy_bounded(
+            f.generic_params.as_ref(),
+            f.where_clause.as_ref(),
+        ));
     };
     match item {
         Item::Function(f) => fun(f, &mut out),
         Item::ImplBlock(imp) => {
-            out.extend(copy_bounded(imp.generic_params.as_ref(), imp.where_clause.as_ref()));
+            out.extend(copy_bounded(
+                imp.generic_params.as_ref(),
+                imp.where_clause.as_ref(),
+            ));
             for it in &imp.items {
                 if let ImplItem::Method(m) = it {
                     fun(m, &mut out);
@@ -205,16 +212,28 @@ fn item_copy_bounded(item: &Item) -> Vec<String> {
             }
         }
         Item::TraitDef(t) => {
-            out.extend(copy_bounded(t.generic_params.as_ref(), t.where_clause.as_ref()));
+            out.extend(copy_bounded(
+                t.generic_params.as_ref(),
+                t.where_clause.as_ref(),
+            ));
             for it in &t.items {
                 if let TraitItem::Method(m) = it {
-                    out.extend(copy_bounded(m.generic_params.as_ref(), m.where_clause.as_ref()));
+                    out.extend(copy_bounded(
+                        m.generic_params.as_ref(),
+                        m.where_clause.as_ref(),
+                    ));
                 }
             }
             out.push("Self".to_string());
         }
-        Item::StructDef(s) => out.extend(copy_bounded(s.generic_params.as_ref(), s.where_clause.as_ref())),
-        Item::EnumDef(e) => out.extend(copy_bounded(e.generic_params.as_ref(), e.where_clause.as_ref())),
+        Item::StructDef(s) => out.extend(copy_bounded(
+            s.generic_params.as_ref(),
+            s.where_clause.as_ref(),
+        )),
+        Item::EnumDef(e) => out.extend(copy_bounded(
+            e.generic_params.as_ref(),
+            e.where_clause.as_ref(),
+        )),
         _ => {}
     }
     out

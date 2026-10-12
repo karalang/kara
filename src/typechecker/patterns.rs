@@ -3157,12 +3157,7 @@ impl<'a> super::TypeChecker<'a> {
                 // same move. `bind_pattern_types` is the let route and never
                 // reaches `check_pattern_against`, so the rule must fire here
                 // too; a `let` destructure is always an OWNED scrutinee.
-                self.reject_partial_move_pattern(
-                    pattern.span,
-                    struct_name,
-                    fields,
-                    mode,
-                );
+                self.reject_partial_move_pattern(pattern.span, struct_name, fields, mode);
 
                 // `#[non_exhaustive]` slice 4 pattern half (let-binding
                 // route) — same check as the match-arm site in
