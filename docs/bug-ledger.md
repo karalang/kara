@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 252 |
 | missing-feature | 225 |
 | other | 171 |
-| diagnostics | 150 |
+| diagnostics | 151 |
 | perf | 148 |
 | false-positive | 139 |
 | crash | 114 |
@@ -119,7 +119,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 59 |
 | parser | 59 |
 | runtime | 56 |
-| resolver | 31 |
+| resolver | 32 |
 | effect | 30 |
 | lexer | 11 |
 ## Current state
@@ -588,6 +588,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-15 | 2026-10-12 | interp | medium | `karac __mir-run` refuses `let x: Str = text[0..2];` (a range index of a `String`, bound with a `Str` annotation) with "typecheck: expected 'StringSlice', found 'String'"; `karac check` accepts it, and docs/design.md says `s[a..b]` on a string yields a `Str` | — |
 | B-2026-10-12-16 | 2026-10-12 | typecheck | low | `karac check` drops the `ref` from a binding matched through a TUPLE scrutinee: `match (m.get("a"), m.get("b")) { (Some(i), Some(j)) => *i + *j, .. }` is refused ("unary '*' requires 'ref T' ... found 'i64'"), while `if let Some(i) = m.get("a") { *i }` passes; `karac __mir-run` runs both and prints the right sum | — |
 | B-2026-10-12-17 | 2026-10-12 | resolver | medium | The MIR pipeline resolves the Kāra library source in the user program's scope: a user `struct Skip`, or an enum variant `Token.Skip`, is refused by `karac __mir-run` as "'Skip' is already defined in this scope" though `karac check` and `karac run --interp` accept it; the same for `Take`, `Chain`, `Zip` and `Peekable`, the adaptor structs in runtime/stdlib/source/iter.kara | — |
+| B-2026-10-12-18 | 2026-10-12 | resolver | medium | `karac fix` rewrites a call to an undefined name into a call of an unrelated local: `abs(a)` (where `abs` is a method, `a.abs()`) gets "undefined name 'abs', did you mean 'a'?" with a machine-applicable replacement, and `karac fix` turns it into `a(a)`, which then fails as "type 'i64' is not callable" | — |
 
 ### Relocated
 
