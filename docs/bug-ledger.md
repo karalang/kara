@@ -94,10 +94,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 727 |
 | run-vs-build | 604 |
-| leak | 601 |
+| leak | 602 |
 | double-free | 427 |
 | codegen-gap | 252 |
-| missing-feature | 223 |
+| missing-feature | 225 |
 | other | 171 |
 | diagnostics | 149 |
 | perf | 147 |
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2851 |
-| interp | 893 |
-| typecheck | 351 |
+| interp | 896 |
+| typecheck | 353 |
 | other | 114 |
 | ownership | 80 |
 | cli | 75 |
@@ -579,6 +579,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-3 | 2026-10-12 | typecheck | medium | `Map.get_mut` / `SortedMap.get_mut`, DOCUMENTED IN docs/library/collections.md AS `fn get_mut(mut ref self, key: K) -> Option[mut ref V]`, DO NOT EXIST: `karac check`, `karac __mir-run` and `karac run --interp` all refuse `m.get_mut(k)` with "no method 'get_mut' on type 'Map'" | — |
 | B-2026-10-12-4 | 2026-10-12 | interp+runtime | high | `Map.remove` / `Set.remove` ARE O(n) ON BOTH MIR BACKENDS: THE INSERTION-ORDERED TABLE CLOSES THE GAP BY SHIFTING EVERY LATER ENTRY, AND THE COMPILED RUNTIME ALSO REBUILDS ITS WHOLE HASH INDEX ON EVERY REMOVE, SO n REMOVES COST O(n^2) (20,000 removes: 98 s on mir-llvm, 2.5 s on mir-interp) | — |
 | B-2026-10-12-5 | 2026-10-12 | typecheck | low | String-receiver `.parse()` (B-2026-07-19-5's type-directed sugar for `T.parse(s)`) works on a `String` but is refused on a `Str` (a `Str` parameter, or a slice `s[a..b]`) with "no method 'parse' on type 'String'", which names the wrong type and gives no hint toward `i64.parse(s)` | — |
+| B-2026-10-12-6 | 2026-10-12 | typecheck+interp | medium | The v1 spec gives every number type `fn parse(s: Str) -> Result[Self, ParseError]` (docs/library/core-types.md § Parsing; strings.md; the error-type list in library/README.md), but the compiler still returns `Option[Self]` and has no `ParseError`: the spec's own example `match i64.parse(line.trim()) { Ok(n) => ..., Err(e) => ... }` is refused by `karac check` and `karac __mir-run` | — |
+| B-2026-10-12-7 | 2026-10-12 | typecheck+interp | medium | `Str.split` / `lines` / `split_whitespace` return an eager `Vec[String]` of copies, but the v1 spec (docs/library/strings.md) gives them `impl Iterator[Item = Str]` of views: strings.md's own example `let parts: Vec[Str] = line.split(",").collect();` is refused by `karac check` ("no method 'collect' on type 'Vec'") | — |
+| B-2026-10-12-8 | 2026-10-12 | interp | medium | `karac __mir-run`: every `Str.bytes()` call allocates a per-byte copy (about 63 bytes of memory per byte) that is kept until the program exits, so a loop that calls `bytes()` grows without bound: kata 388's bench was OOM-killed at 8.6 GB, and a 10,000-byte string read with `bytes()` 400 times peaks at 286 MB against 43 MB for `chars()` | — |
 
 ### Relocated
 
