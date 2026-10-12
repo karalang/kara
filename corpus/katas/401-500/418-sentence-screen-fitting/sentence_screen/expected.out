@@ -1,0 +1,11 @@
+"hello world" on 2x8: 1
+"a bcd e" on 3x6: 2
+"i had apple pie" on 4x5: 1
+"abc" on 5x3: 5
+"abcd" on 5x3: 0
+"a" on 1x1: 1
+"a b" on 1x2: 0
+"a b" on 1x3: 1
+"try to be better" on 10000x9001: 5293333
+"f p a" on 8x7: 10
+1000 random sentences: total 14928, checksum 547816577

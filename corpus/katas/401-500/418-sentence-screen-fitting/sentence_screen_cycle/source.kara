@@ -1,0 +1,106 @@
+// LeetCode #418: Sentence Screen Fitting -- the table's cycle.
+//
+// The table arm's rows follow next[] from word 0, so the first words of
+// the rows repeat with a period at most n. Walk the rows recording the
+// row at which each first word was seen and the count before it; once a
+// first word comes round again, the rows between repeat to the end, so
+// add whole periods at once and walk only the rows left over.
+// O(n * cols) time to build the table, O(n) for the rows, O(n) space.
+
+fn words_typing(sentence: Vec[String], rows: i64, cols: i64) -> i64 {
+    let n = sentence.len();
+    for w in sentence {
+        if w.len() > cols {
+            return 0;
+        }
+    }
+    let mut next = vec![0; n];
+    let mut done = vec![0; n];
+    for i in 0..n {
+        let mut word = i;
+        let mut used = 0;
+        while used + sentence[word].len() <= cols {
+            used += sentence[word].len() + 1;
+            word += 1;
+            if word == n {
+                word = 0;
+                done[i] += 1;
+            }
+        }
+        next[i] = word;
+    }
+    let mut seen_row = vec![-1; n];
+    let mut seen_count = vec![0; n];
+    let mut word = 0;
+    let mut count = 0;
+    let mut row = 0;
+    while row < rows {
+        if seen_row[word] >= 0 {
+            let period = row - seen_row[word];
+            let gain = count - seen_count[word];
+            let periods = (rows - row) / period;
+            count += periods * gain;
+            row += periods * period;
+            while row < rows {
+                count += done[word];
+                word = next[word];
+                row += 1;
+            }
+            return count;
+        }
+        seen_row[word] = row;
+        seen_count[word] = count;
+        count += done[word];
+        word = next[word];
+        row += 1;
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(text: Str, rows: i64, cols: i64) {
+    let sentence = text.split_whitespace();
+    println(f"\"{text}\" on {rows}x{cols}: {words_typing(sentence, rows, cols)}");
+}
+
+fn main() {
+    show("hello world", 2, 8);
+    show("a bcd e", 3, 6);
+    show("i had apple pie", 4, 5);
+    show("abc", 5, 3);
+    show("abcd", 5, 3);
+    show("a", 1, 1);
+    show("a b", 1, 2);
+    show("a b", 1, 3);
+    show("try to be better", 10000, 9001);
+    show("f p a", 8, 7);
+    // 1,000 random sentences of 1 to 8 words of 1 to 6 letters, on
+    // screens of 1 to 40 rows and 1 to 20 columns; some words do not fit.
+    let mut seed: i64 = 418;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..1000 {
+        let n = 1 + step(mut seed) % 8;
+        let mut sentence: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let length = 1 + step(mut seed) % 6;
+            let mut word = String.new();
+            for _ in 0..length {
+                word.push(char.try_from((97 + step(mut seed) % 26) as u32).unwrap());
+            }
+            sentence.push(word);
+        }
+        let rows = 1 + step(mut seed) % 40;
+        let cols = 1 + step(mut seed) % 20;
+        let answer = words_typing(sentence, rows, cols);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"1000 random sentences: total {total}, checksum {checksum}");
+}

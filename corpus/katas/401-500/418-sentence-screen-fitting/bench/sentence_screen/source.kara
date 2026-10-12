@@ -1,0 +1,67 @@
+// LeetCode #418: Sentence Screen Fitting -- one pointer into the text.
+//
+// Join the sentence with a space after every word, so the screen shows
+// a stretch of this text repeated forever. Keep how far into it the
+// screen has reached. Each row adds cols characters; if that lands on a
+// space the space is skipped, otherwise the pointer backs up to the
+// start of the word it split, which moves to the next row. The answer
+// is how many whole texts were passed. If a word is longer than a row,
+// the pointer never advances, and the answer is 0.
+// O(rows * longest word) time, O(total length) space.
+
+fn words_typing(sentence: Vec[String], rows: i64, cols: i64) -> i64 {
+    let text = sentence.join(" ") + " ";
+    let bytes = text.bytes();
+    let length = text.len();
+    let mut at = 0;
+    for _ in 0..rows {
+        at += cols;
+        if bytes[at % length] == b' ' {
+            at += 1;
+        } else {
+            while at > 0 and bytes[(at - 1) % length] != b' ' {
+                at -= 1;
+            }
+        }
+    }
+    at / length
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let calls = 10000;
+    let mut seed: i64 = 418;
+    // A pool of 200 words of 1 to 10 letters.
+    let mut pool: Vec[String] = Vec.new();
+    for _ in 0..200 {
+        let length = 1 + step(mut seed) % 10;
+        let mut w = String.new();
+        for _ in 0..length {
+            w.push(char.try_from((97 + step(mut seed) % 26) as u32).unwrap());
+        }
+        pool.push(w);
+    }
+    // Each call: a sentence of 1 to 100 words from the pool, on a screen
+    // of up to 20,000 rows and 10 to 20,000 columns.
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..calls {
+        let n = 1 + step(mut seed) % 100;
+        let mut sentence: Vec[String] = Vec.new();
+        for _ in 0..n {
+            sentence.push(pool[step(mut seed) % 200].clone());
+        }
+        let rows = 1 + step(mut seed) % 20000;
+        let cols = 10 + step(mut seed) % 19991;
+        let answer = words_typing(sentence, rows, cols);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"{calls} calls: total {total}, checksum {checksum}");
+}
