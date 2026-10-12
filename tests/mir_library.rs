@@ -824,3 +824,40 @@ fn main() {
         "6\nkeep!\n2\n",
     );
 }
+
+/// B-2026-10-12-9: `*` on a `Copy` part of a borrowed item reads it, as
+/// `karac check` accepts: a destructured `Vec[(String, f64)]` iter item, a
+/// `Set` iter item, an undestructured `SortedMap` item and a `floor` entry.
+#[test]
+fn deref_of_a_copy_part_of_a_borrowed_item_reads_it() {
+    assert_runs(
+        r#"
+fn main() {
+    let v: Vec[(String, f64)] = vec![("a".to_string(), 1.5), ("b".to_string(), 2.0)];
+    let mut t = 0.0;
+    for (n, w) in v.iter() {
+        t = t + *w;
+    }
+    println(f"{t}");
+    let mut s: Set[i64] = Set.new();
+    s.insert(3);
+    s.insert(4);
+    let mut u = 0;
+    for k in s.iter() {
+        u += *k;
+    }
+    println(f"{u}");
+    let mut m: SortedMap[i64, i64] = SortedMap.new();
+    m.insert(1, 10);
+    m.insert(5, 50);
+    for p in m.iter() {
+        println(f"{*p.0} {*p.1}");
+    }
+    if let Some((k, x)) = m.floor(4) {
+        println(f"{*k} {*x}");
+    }
+}
+"#,
+        "3.5\n7\n1 10\n5 50\n1 10\n",
+    );
+}

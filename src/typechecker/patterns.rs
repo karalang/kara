@@ -205,6 +205,8 @@ impl<'a> super::TypeChecker<'a> {
         let scrut_bp = self.projection_rooted_in_borrow(value);
         let scrut_core = self.scrutinee_core_borrowed(value);
         let scrut_ms = self.lib_mut_self_scrutinee(value);
+        let scrut_cv = self.lib_clone_view_scrutinee(value);
+        let prev_cv = std::mem::replace(&mut self.current_scrutinee_clone_view, scrut_cv);
         let prev_ms = std::mem::replace(&mut self.current_scrutinee_mut_self, scrut_ms);
         let prev_core = std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
         let prev_bp = std::mem::replace(&mut self.current_scrutinee_borrow_projection, scrut_bp);
@@ -212,6 +214,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_scrutinee_borrow_projection = prev_bp;
         self.current_scrutinee_core_borrowed = prev_core;
         self.current_scrutinee_mut_self = prev_ms;
+        self.current_scrutinee_clone_view = prev_cv;
         self.current_arm_body_block = prev_blk;
         // B-2026-09-06-14 — see `arm_materializes_scrutinee_copy`.
         if self.block_materializes_scrutinee_copy(pattern, then_block) {
@@ -271,6 +274,8 @@ impl<'a> super::TypeChecker<'a> {
             let scrut_bp = self.projection_rooted_in_borrow(scrutinee);
             let scrut_core = self.scrutinee_core_borrowed(scrutinee);
             let scrut_ms = self.lib_mut_self_scrutinee(scrutinee);
+            let scrut_cv = self.lib_clone_view_scrutinee(scrutinee);
+            let prev_cv = std::mem::replace(&mut self.current_scrutinee_clone_view, scrut_cv);
             let prev_ms = std::mem::replace(&mut self.current_scrutinee_mut_self, scrut_ms);
             let prev_core =
                 std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
@@ -280,6 +285,7 @@ impl<'a> super::TypeChecker<'a> {
             self.current_scrutinee_borrow_projection = prev_bp;
             self.current_scrutinee_core_borrowed = prev_core;
             self.current_scrutinee_mut_self = prev_ms;
+            self.current_scrutinee_clone_view = prev_cv;
             self.current_arm_body = prev_arm_body;
             materializes |= self.arm_materializes_scrutinee_copy(arm);
             scrutinee_mismatch |= self.errors[errs_before..]
@@ -641,6 +647,8 @@ impl<'a> super::TypeChecker<'a> {
             let scrut_bp = self.projection_rooted_in_borrow(scrutinee);
             let scrut_core = self.scrutinee_core_borrowed(scrutinee);
             let scrut_ms = self.lib_mut_self_scrutinee(scrutinee);
+            let scrut_cv = self.lib_clone_view_scrutinee(scrutinee);
+            let prev_cv = std::mem::replace(&mut self.current_scrutinee_clone_view, scrut_cv);
             let prev_ms = std::mem::replace(&mut self.current_scrutinee_mut_self, scrut_ms);
             let prev_core =
                 std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
@@ -650,6 +658,7 @@ impl<'a> super::TypeChecker<'a> {
             self.current_scrutinee_borrow_projection = prev_bp;
             self.current_scrutinee_core_borrowed = prev_core;
             self.current_scrutinee_mut_self = prev_ms;
+            self.current_scrutinee_clone_view = prev_cv;
             self.current_arm_body = prev_arm_body;
             materializes |= self.arm_materializes_scrutinee_copy(arm);
             scrutinee_mismatch |= self.errors[errs_before..]
@@ -1196,7 +1205,13 @@ impl<'a> super::TypeChecker<'a> {
                     // at its declared type still binds a copy.
                     self.record_node_type(pattern.id, &binding_ty);
                 }
+                let clone_view = self.current_scrutinee_clone_view
+                    && !matches!(binding_ty, Type::Ref(_) | Type::MutRef(_))
+                    && self.is_copy_type_during_check(&binding_ty);
                 self.local_scope.insert(name.clone(), binding_ty);
+                if clone_view {
+                    self.local_scope.mark_view(name);
+                }
                 // v2 core §4.6: a `ref name` binding, or any binding over a
                 // place the function does not own, borrows its part; moving
                 // it is §3.7's error, which the view rules report.
@@ -3073,6 +3088,17 @@ impl<'a> super::TypeChecker<'a> {
                             for (pat, t) in patterns.iter().zip(types.iter()) {
                                 let field_ty = borrowed_field_binding_ty(t, is_mut);
                                 self.bind_pattern_types(pat, &field_ty);
+                                // On the MIR pipeline a `Copy` field bound by
+                                // value is still a view of the borrowed tuple,
+                                // so `*w` reads it (B-2026-10-12-9).
+                                if self.library_methods_from_source
+                                    && !self.cli_lint_overrides.strict_core
+                                    && !matches!(field_ty, Type::Ref(_) | Type::MutRef(_))
+                                {
+                                    if let PatternKind::Binding(n) = &pat.kind {
+                                        self.local_scope.mark_view(n);
+                                    }
+                                }
                                 // The `let`-route recorder leaves a borrow
                                 // unrecorded, so a `ref String` field would
                                 // reach codegen with no surface name and

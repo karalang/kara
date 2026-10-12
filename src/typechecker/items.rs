@@ -5722,6 +5722,27 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Is `value` a `SortedMap.floor` / `ceiling` call on the MIR pipeline?
+    /// See [`Self::current_scrutinee_clone_view`].
+    pub(super) fn lib_clone_view_scrutinee(&self, value: &Expr) -> bool {
+        if !self.library_methods_from_source || self.cli_lint_overrides.strict_core {
+            return false;
+        }
+        let ExprKind::MethodCall { object, method, .. } = &value.kind else {
+            return false;
+        };
+        if !matches!(method.as_str(), "floor" | "ceiling") {
+            return false;
+        }
+        let Some(mut ty) = self.expr_types.get(&SpanKey::from_span(&object.span)) else {
+            return false;
+        };
+        while let Type::Ref(inner) | Type::MutRef(inner) = ty {
+            ty = inner;
+        }
+        matches!(ty, Type::Named { name, .. } if name == "SortedMap")
+    }
+
     /// Is `value` the receiver of a library `mut ref self` method? The MIR
     /// builder matches it through a `mut` reborrow, so a binding of a part
     /// is a `mut ref` (`match self { Some(x) => x }` in
@@ -5789,7 +5810,7 @@ impl<'a> super::TypeChecker<'a> {
         let ExprKind::MethodCall { object, method, .. } = &e.kind else {
             return false;
         };
-        if method != "get" {
+        if !matches!(method.as_str(), "get" | "floor" | "ceiling") {
             return false;
         }
         let Some(mut ty) = self.expr_types.get(&SpanKey::from_span(&object.span)) else {
@@ -5798,7 +5819,11 @@ impl<'a> super::TypeChecker<'a> {
         while let Type::Ref(inner) | Type::MutRef(inner) = ty {
             ty = inner;
         }
-        matches!(ty, Type::Named { name, .. } if matches!(name.as_str(), "Map" | "SortedMap"))
+        // `SortedMap.floor` / `ceiling` hand out `Option[(ref K, ref V)]`
+        // (docs/library/collections.md), views of the entry like `get`'s.
+        matches!(ty, Type::Named { name, .. }
+            if (method == "get" && matches!(name.as_str(), "Map" | "SortedMap"))
+                || name == "SortedMap")
     }
 
     /// The root of a field / tuple projection chain.
@@ -7628,6 +7653,9 @@ impl<'a> super::TypeChecker<'a> {
                     let scrut_bp = self.projection_rooted_in_borrow(value);
                     let scrut_core = self.scrutinee_core_borrowed(value);
                     let scrut_ms = self.lib_mut_self_scrutinee(value);
+                    let scrut_cv = self.lib_clone_view_scrutinee(value);
+                    let prev_cv =
+                        std::mem::replace(&mut self.current_scrutinee_clone_view, scrut_cv);
                     let prev_ms = std::mem::replace(&mut self.current_scrutinee_mut_self, scrut_ms);
                     let prev_core =
                         std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
@@ -7637,6 +7665,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.current_scrutinee_borrow_projection = prev_bp;
                     self.current_scrutinee_core_borrowed = prev_core;
                     self.current_scrutinee_mut_self = prev_ms;
+                    self.current_scrutinee_clone_view = prev_cv;
                 }
             }
             StmtKind::LetUninit {
@@ -7704,6 +7733,8 @@ impl<'a> super::TypeChecker<'a> {
                 let scrut_bp = self.projection_rooted_in_borrow(value);
                 let scrut_core = self.scrutinee_core_borrowed(value);
                 let scrut_ms = self.lib_mut_self_scrutinee(value);
+                let scrut_cv = self.lib_clone_view_scrutinee(value);
+                let prev_cv = std::mem::replace(&mut self.current_scrutinee_clone_view, scrut_cv);
                 let prev_ms = std::mem::replace(&mut self.current_scrutinee_mut_self, scrut_ms);
                 let prev_core =
                     std::mem::replace(&mut self.current_scrutinee_core_borrowed, scrut_core);
@@ -7713,6 +7744,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.current_scrutinee_borrow_projection = prev_bp;
                 self.current_scrutinee_core_borrowed = prev_core;
                 self.current_scrutinee_mut_self = prev_ms;
+                self.current_scrutinee_clone_view = prev_cv;
             }
             StmtKind::Defer { body } => {
                 let prev = self.in_defer;

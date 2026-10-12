@@ -3350,10 +3350,24 @@ impl<'a> super::TypeChecker<'a> {
     /// its element type, so that `*operand` reads through a borrow?
     fn core_deref_of_view(&self, operand: &Expr) -> bool {
         if !self.cli_lint_overrides.strict_core {
-            return false;
+            // The MIR pipeline binds a `Copy` part of a borrowed tuple by
+            // value and reads `*w` of it as the binding (B-2026-10-12-9).
+            return self.library_methods_from_source
+                && matches!(&operand.kind, ExprKind::Identifier(n) if self.local_scope.is_view(n));
         }
         match &operand.kind {
             ExprKind::Identifier(n) => self.local_scope.is_view(n),
+            // `*p.0` on a view `p` (a `for p in m.iter()` item) reads the
+            // part through the same borrow (B-2026-10-12-9).
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                let mut root = operand;
+                while let ExprKind::FieldAccess { object, .. }
+                | ExprKind::TupleIndex { object, .. } = &root.kind
+                {
+                    root = object;
+                }
+                matches!(&root.kind, ExprKind::Identifier(n) if self.local_scope.is_view(n))
+            }
             _ => self.core_map_get_view(operand, true),
         }
     }

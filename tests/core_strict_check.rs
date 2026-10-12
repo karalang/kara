@@ -3012,3 +3012,26 @@ fn an_owned_receiver_on_a_for_element_moves_the_loop() {
         "for w in v.into_iter()",
     );
 }
+
+/// B-2026-10-12-9: `*p.0` on an undestructured `SortedMap.iter()` item, and
+/// `*k` / `*v` on a `floor` / `ceiling` entry (`Option[(ref K, ref V)]` in
+/// docs/library/collections.md), read through the view.
+#[test]
+fn deref_of_a_map_item_part_and_a_floor_entry_is_accepted() {
+    accepted(
+        "map-item-deref",
+        "fn main() {\n\
+         \x20   let mut m: SortedMap[i64, i64] = SortedMap.new();\n\
+         \x20   m.insert(1, 10);\n\
+         \x20   for p in m.iter() {\n\
+         \x20       println(f\"{*p.0} {*p.1}\");\n\
+         \x20   }\n\
+         \x20   if let Some((k, v)) = m.floor(4) {\n\
+         \x20       println(f\"{*k} {*v}\");\n\
+         \x20   }\n\
+         \x20   if let Some((k, v)) = m.ceiling(0) {\n\
+         \x20       println(f\"{*k} {*v}\");\n\
+         \x20   }\n\
+         }\n",
+    );
+}

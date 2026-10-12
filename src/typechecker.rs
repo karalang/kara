@@ -2336,6 +2336,10 @@ pub struct TypeChecker<'a> {
     /// The scrutinee is `self` in a library `mut ref self` method, so its
     /// bindings are `mut ref` parts of the receiver (`Option.get_or_insert`).
     pub(super) current_scrutinee_mut_self: bool,
+    /// The scrutinee is a `SortedMap.floor` / `ceiling` call on the MIR
+    /// pipeline, whose natives hand out clones of the entry where the spec
+    /// says `(ref K, ref V)`: a `Copy` part binds as a view so `*k` reads it.
+    pub(super) current_scrutinee_clone_view: bool,
     /// v2 core (strict commands only): while checking the parts of a
     /// pattern over a `shared` value or a type with a `Drop` body, a
     /// description of that type. A plain binding of a non-`Copy` part there
@@ -3150,6 +3154,7 @@ impl<'a> TypeChecker<'a> {
             current_scrutinee_borrow_projection: false,
             current_scrutinee_core_borrowed: false,
             current_scrutinee_mut_self: false,
+            current_scrutinee_clone_view: false,
             core_no_move_out: Vec::new(),
             core_shorthand_field: false,
             core_shared_depth: 0,
