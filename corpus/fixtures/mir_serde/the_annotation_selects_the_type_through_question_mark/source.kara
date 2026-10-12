@@ -1,0 +1,21 @@
+
+#[derive(Serialize, Deserialize)]
+struct User { name: String, age: i64, active: bool }
+
+fn load(json: String) -> Result[User, DeserializeError] {
+    let back: User = Json.deserialize(json)?;
+    Ok(back)
+}
+
+fn main() {
+    let user = User { name: "ann".to_string(), age: 41, active: true };
+    let json: String = Json.serialize(user);
+    match load(json) {
+        Ok(u) => println(f"{u.name} {u.age} {u.active}"),
+        Err(e) => println(e.message),
+    }
+    match load("{\"name\": 3}".to_string()) {
+        Ok(_) => println("unexpected"),
+        Err(e) => println(e.message),
+    }
+}

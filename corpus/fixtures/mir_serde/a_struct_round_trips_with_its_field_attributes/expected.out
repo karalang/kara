@@ -1,0 +1,4 @@
+{"server_name":"a \"b\"\n","port":9,"retries":3,"tags":["x"],"nick":null}
+6 0 9 3 x true
+s 8080 0 0 true
+error: missing field `tags`

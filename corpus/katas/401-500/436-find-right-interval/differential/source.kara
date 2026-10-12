@@ -1,0 +1,310 @@
+// Differential test for LeetCode #436: Find Right Interval.
+//
+// Copies of the four arms, each run on 1,500 random sets of 0 to 40
+// intervals with distinct starts in [-100, 100), each 0 to 3, 15 or 40
+// long. Properties known by construction:
+//   P1  the answer is the reference's, which reads a table of starts
+//       by coordinate upwards from each end
+//   P2  the answer meets the problem's definition: each j starts at or
+//       after its interval's end, no start lies between, and -1 only
+//       when no start is at or after the end
+//   P3  shuffling the intervals moves the arm's answers with them,
+//       and shifting every interval leaves them alone
+//   P4  one more interval, at a start not yet used, changes one of the
+//       arm's answers only to point at it
+//   P5  k intervals touching end to start point each to the next, k
+//       points each to itself, k nested ones nowhere, and no
+//       intervals give no answers
+
+// ---- search: right_interval.kara
+
+fn find_right_interval_search(intervals: Vec[(i64, i64)]) -> Vec[i64] {
+    let n = intervals.len();
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..n {
+        order.push(i);
+    }
+    order.sort_by_key(|i| intervals[i].0);
+    let mut right: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let end = intervals[i].1;
+        let mut lo = 0;
+        let mut hi = n;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if intervals[order[mid]].0 < end {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        right.push(if lo < n { order[lo] } else { -1 });
+    }
+    right
+}
+
+// ---- map: right_interval_sorted_map.kara
+
+fn find_right_interval_map(intervals: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut starts: SortedMap[i64, i64] = SortedMap.new();
+    for i in 0..intervals.len() {
+        starts.insert(intervals[i].0, i);
+    }
+    let mut right: Vec[i64] = Vec.new();
+    for iv in intervals {
+        match starts.ceiling(iv.1) {
+            Some((_, j)) => right.push(j),
+            None => right.push(-1),
+        }
+    }
+    right
+}
+
+// ---- sweep: right_interval_sweep.kara
+
+fn find_right_interval_sweep(intervals: Vec[(i64, i64)]) -> Vec[i64] {
+    let n = intervals.len();
+    let mut by_start: Vec[i64] = Vec.new();
+    let mut by_end: Vec[i64] = Vec.new();
+    for i in 0..n {
+        by_start.push(i);
+        by_end.push(i);
+    }
+    by_start.sort_by_key(|i| intervals[i].0);
+    by_end.sort_by_key(|i| intervals[i].1);
+    let mut right: Vec[i64] = Vec.filled(n, -1);
+    let mut at = 0;
+    for i in by_end {
+        while at < n and intervals[by_start[at]].0 < intervals[i].1 {
+            at += 1;
+        }
+        if at < n {
+            right[i] = by_start[at];
+        }
+    }
+    right
+}
+
+// ---- scan: right_interval_scan.kara
+
+fn find_right_interval_scan(intervals: Vec[(i64, i64)]) -> Vec[i64] {
+    let n = intervals.len();
+    let mut right: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let mut best = -1;
+        for j in 0..n {
+            if intervals[j].0 >= intervals[i].1 and (best < 0 or intervals[j].0 < intervals[best].0) {
+                best = j;
+            }
+        }
+        right.push(best);
+    }
+    right
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, intervals: Vec[(i64, i64)]) -> Vec[i64] {
+    if arm == 0 {
+        find_right_interval_search(intervals)
+    } else if arm == 1 {
+        find_right_interval_map(intervals)
+    } else if arm == 2 {
+        find_right_interval_sweep(intervals)
+    } else {
+        find_right_interval_scan(intervals)
+    }
+}
+
+// The reference looks the answer up by coordinate: a table from each
+// coordinate in [-100, 140) to the interval starting there, read
+// upwards from each end. Starts lie in [-100, 100) and ends below 140.
+fn reference(intervals: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut at: Vec[i64] = Vec.filled(240, -1);
+    for i in 0..intervals.len() {
+        at[intervals[i].0 + 100] = i;
+    }
+    let mut right: Vec[i64] = Vec.new();
+    for iv in intervals {
+        let mut found = -1;
+        let mut x = iv.1;
+        while found < 0 and x < 140 {
+            found = at[x + 100];
+            x += 1;
+        }
+        right.push(found);
+    }
+    right
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 0 to 40 intervals with distinct starts in [-100, 100), each 0 to 3,
+// 15 or 40 long.
+fn random_intervals(seed: mut ref i64) -> Vec[(i64, i64)] {
+    let n = next_random(seed) % 41;
+    let longest = [4, 16, 41][next_random(seed) % 3];
+    let mut used: Set[i64] = Set.new();
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    while out.len() < n {
+        let start = next_random(seed) % 200 - 100;
+        if used.insert(start) {
+            out.push((start, start + next_random(seed) % longest));
+        }
+    }
+    out
+}
+
+// Whether `right` answers the problem for `intervals`, by its
+// definition: j starts at or after i's end and no start lies between.
+fn certified(intervals: Vec[(i64, i64)], right: Vec[i64]) -> bool {
+    if right.len() != intervals.len() {
+        return false;
+    }
+    for i in 0..intervals.len() {
+        let end = intervals[i].1;
+        let j = right[i];
+        if j < -1 or j >= intervals.len() {
+            return false;
+        }
+        if j >= 0 and intervals[j].0 < end {
+            return false;
+        }
+        for k in 0..intervals.len() {
+            let s = intervals[k].0;
+            if s >= end and (j < 0 or s < intervals[j].0) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn same(a: Vec[i64], b: Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4360;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let intervals = random_intervals(mut seed);
+        let n = intervals.len();
+        let want = reference(intervals);
+        // A shuffle: shuffled[i] is intervals[place[i]].
+        let mut place: Vec[i64] = Vec.new();
+        for i in 0..n {
+            place.push(i);
+        }
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (n - i);
+            place.swap(i, j);
+        }
+        let mut position: Vec[i64] = Vec.filled(n, 0);
+        let mut shuffled: Vec[(i64, i64)] = Vec.new();
+        for i in 0..n {
+            shuffled.push(intervals[place[i]]);
+            position[place[i]] = i;
+        }
+        // Everything shifted towards an end of the range.
+        let shift = next_random(mut seed) % 1999000 - 999500;
+        let mut moved: Vec[(i64, i64)] = Vec.new();
+        for iv in intervals {
+            moved.push((iv.0 + shift, iv.1 + shift));
+        }
+        // One more interval at a start not yet used.
+        let mut fresh = next_random(mut seed) % 200 - 100;
+        let mut taken = false;
+        for iv in intervals {
+            if iv.0 == fresh {
+                taken = true;
+            }
+        }
+        while taken {
+            fresh += 1;
+            taken = false;
+            for iv in intervals {
+                if iv.0 == fresh {
+                    taken = true;
+                }
+            }
+        }
+        let mut grown = intervals.clone();
+        grown.push((fresh, fresh + next_random(mut seed) % 40));
+        // k intervals touching end to start, listed last first; k points,
+        // each its own right interval; k nested, every end past every
+        // start.
+        let k = 1 + next_random(mut seed) % 20;
+        let mut chain: Vec[(i64, i64)] = Vec.new();
+        let mut points: Vec[(i64, i64)] = Vec.new();
+        let mut nested: Vec[(i64, i64)] = Vec.new();
+        for i in 0..k {
+            chain.push((k - 1 - i, k - i));
+            points.push((3 * i, 3 * i));
+            nested.push((i, 2 * k - i));
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let got = solve(arm, intervals);
+            report(1, arm, case, same(got, want), mut failures);
+            report(2, arm, case, certified(intervals, got), mut failures);
+            let back = solve(arm, shuffled);
+            let mut agree = true;
+            for i in 0..n {
+                let b = back[position[i]];
+                let expect = if got[i] < 0 { -1 } else { position[got[i]] };
+                if b != expect {
+                    agree = false;
+                }
+            }
+            report(3, arm, case, agree and same(solve(arm, moved), got), mut failures);
+            let g = solve(arm, grown);
+            let mut kept = g.len() == n + 1;
+            if kept {
+                for i in 0..n {
+                    if g[i] != got[i] and g[i] != n {
+                        kept = false;
+                    }
+                }
+            }
+            report(4, arm, case, kept, mut failures);
+            let c = solve(arm, chain);
+            let p = solve(arm, points);
+            let q = solve(arm, nested);
+            let mut built = true;
+            for i in 0..k {
+                let chain_want = if i == 0 { -1 } else { i - 1 };
+                if c[i] != chain_want or p[i] != i or q[i] != -1 {
+                    built = false;
+                }
+            }
+            report(5, arm, case, built and solve(arm, Vec.new()).len() == 0, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

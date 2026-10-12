@@ -1,0 +1,52 @@
+
+fn show(e: IoError) -> String {
+    match e {
+        IoError.NotFound => "not found".to_string(),
+        IoError.Other(m) => f"other {m}",
+        _ => "some other error".to_string(),
+    }
+}
+
+fn p() -> String { "DIR/data.txt".to_string() }
+
+fn main() {
+    match File.create(p()) {
+        Ok(f) => {
+            let mut data: Vec[u8] = Vec.new();
+            data.push(65u8); data.push(66u8); data.push(10u8);
+            match f.write(data) { Ok(n) => println(f"wrote {n}"), Err(e) => println(show(e)) }
+            match f.sync_all() { Ok(_) => println("synced"), Err(e) => println(show(e)) }
+            match f.sync_data() { Ok(_) => println("data synced"), Err(e) => println(show(e)) }
+        }
+        Err(e) => println(show(e)),
+    }
+    match File.append(p()) {
+        Ok(f) => {
+            let more = [67u8, 68u8, 10u8];
+            match f.write(more[0..3]) { Ok(n) => println(f"appended {n}"), Err(e) => println(show(e)) }
+            match f.flush() { Ok(_) => println("flushed"), Err(e) => println(show(e)) }
+        }
+        Err(e) => println(show(e)),
+    }
+    match FileSystem.read_to_string(p()) {
+        Ok(s) => println(f"contents {s.len()} {s.trim()}"),
+        Err(e) => println(show(e)),
+    }
+    match File.open(p()) {
+        Ok(g) => {
+            match g.seek(SeekFrom.Start, 1i64) { Ok(p) => println(f"pos {p}"), Err(e) => println(show(e)) }
+            let mut buf = [0u8, 0u8, 0u8];
+            match g.read(mut buf) { Ok(n) => println(f"read {n} {buf[0]} {buf[1]} {buf[2]}"), Err(e) => println(show(e)) }
+            match g.seek(SeekFrom.End, -2i64) { Ok(p) => println(f"end {p}"), Err(e) => println(show(e)) }
+            match g.seek(SeekFrom.Current, 0i64) { Ok(p) => println(f"cur {p}"), Err(e) => println(show(e)) }
+            match g.seek(SeekFrom.Start, -5i64) { Ok(_) => println("unexpected"), Err(e) => println(show(e)) }
+        }
+        Err(e) => println(show(e)),
+    }
+    match File.open("DIR/missing/none.txt".to_string()) {
+        Ok(_) => println("unexpected"),
+        Err(e) => println(show(e)),
+    }
+    let t = Clock.now();
+    println(f"clock {t > 1700000000}");
+}

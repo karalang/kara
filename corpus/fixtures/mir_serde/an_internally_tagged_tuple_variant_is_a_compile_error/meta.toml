@@ -1,0 +1,17 @@
+source = "tests/mir_serde.rs::an_internally_tagged_tuple_variant_is_a_compile_error"
+dedup_of = []
+expect = "error:E0121"
+exit = 1
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "aff614939"
+extracted_src = "9328ac9c"
+model_rev = "1aa23105"
+model_src = "9328ac9c"

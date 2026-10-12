@@ -1,0 +1,359 @@
+// Differential test for LeetCode #438: Find All Anagrams in a String.
+//
+// Copies of the four arms, each run on 1,500 random pairs over a 1, 2,
+// 3 or 26 letter alphabet: s of 0 to 60 letters and p of 1 to 7, half
+// the time a shuffled window of s. Properties known by construction:
+//   P1  the starts are the reference's, which counts each of the 26
+//       letters in every window and in p
+//   P2  renaming the letters of both strings by one permutation of the
+//       alphabet gives the same starts
+//   P3  reversing both strings mirrors the starts, i to n - m - i
+//   P4  appending p reversed to s keeps every start found in s and
+//       adds one at n
+//   P5  a run of k copies of one letter holds a run of j at every one
+//       of its k - j + 1 starts, a shorter s holds a longer p nowhere,
+//       and the empty string holds nothing
+
+// ---- window: find_anagrams.kara
+
+fn find_anagrams_window(s: Str, p: Str) -> Vec[i64] {
+    let sb = s.bytes();
+    let pb = p.bytes();
+    let n = sb.len();
+    let m = pb.len();
+    let mut starts: Vec[i64] = Vec.new();
+    if m > n {
+        return starts;
+    }
+    // need[c] is p's count of c minus the window's.
+    let mut need: Vec[i64] = Vec.filled(26, 0);
+    for i in 0..m {
+        need[(pb[i] - b'a') as i64] += 1;
+    }
+    let mut differ = 0;
+    for c in 0..26 {
+        if need[c] != 0 {
+            differ += 1;
+        }
+    }
+    for i in 0..n {
+        let enter = (sb[i] - b'a') as i64;
+        if need[enter] == 0 {
+            differ += 1;
+        }
+        need[enter] -= 1;
+        if need[enter] == 0 {
+            differ -= 1;
+        }
+        if i >= m {
+            let leave = (sb[i - m] - b'a') as i64;
+            if need[leave] == 0 {
+                differ += 1;
+            }
+            need[leave] += 1;
+            if need[leave] == 0 {
+                differ -= 1;
+            }
+        }
+        if i >= m - 1 and differ == 0 {
+            starts.push(i - m + 1);
+        }
+    }
+    starts
+}
+
+// ---- compare: find_anagrams_compare.kara
+
+fn find_anagrams_compare(s: Str, p: Str) -> Vec[i64] {
+    let sb = s.bytes();
+    let pb = p.bytes();
+    let n = sb.len();
+    let m = pb.len();
+    let mut starts: Vec[i64] = Vec.new();
+    if m > n {
+        return starts;
+    }
+    let mut want: Vec[i64] = Vec.filled(26, 0);
+    let mut have: Vec[i64] = Vec.filled(26, 0);
+    for i in 0..m {
+        want[(pb[i] - b'a') as i64] += 1;
+        have[(sb[i] - b'a') as i64] += 1;
+    }
+    let mut start = 0;
+    loop {
+        if have == want {
+            starts.push(start);
+        }
+        if start + m == n {
+            break;
+        }
+        have[(sb[start] - b'a') as i64] -= 1;
+        have[(sb[start + m] - b'a') as i64] += 1;
+        start += 1;
+    }
+    starts
+}
+
+// ---- sorted: find_anagrams_sorted.kara
+
+fn find_anagrams_sorted(s: Str, p: Str) -> Vec[i64] {
+    let sb = s.bytes();
+    let n = sb.len();
+    let mut key: Vec[u8] = Vec.new();
+    for b in p.bytes() {
+        key.push(b);
+    }
+    key.sort();
+    let m = key.len();
+    let mut starts: Vec[i64] = Vec.new();
+    let mut start = 0;
+    while start + m <= n {
+        let mut window: Vec[u8] = Vec.new();
+        for i in start..start + m {
+            window.push(sb[i]);
+        }
+        window.sort();
+        if window == key {
+            starts.push(start);
+        }
+        start += 1;
+    }
+    starts
+}
+
+// ---- map: find_anagrams_map.kara
+
+fn same_counts(a: Map[u8, i64], b: Map[u8, i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for (letter, count) in a.iter() {
+        if b.get(*letter) != Some(count) {
+            return false;
+        }
+    }
+    true
+}
+
+fn find_anagrams_map(s: Str, p: Str) -> Vec[i64] {
+    let sb = s.bytes();
+    let pb = p.bytes();
+    let n = sb.len();
+    let m = pb.len();
+    let mut starts: Vec[i64] = Vec.new();
+    if m > n {
+        return starts;
+    }
+    let mut want: Map[u8, i64] = Map.new();
+    let mut have: Map[u8, i64] = Map.new();
+    for i in 0..m {
+        *want.entry(pb[i]).or_insert(0) += 1;
+        *have.entry(sb[i]).or_insert(0) += 1;
+    }
+    let mut start = 0;
+    loop {
+        if same_counts(have, want) {
+            starts.push(start);
+        }
+        if start + m == n {
+            break;
+        }
+        let leave = sb[start];
+        *have.entry(leave).or_insert(0) -= 1;
+        if have[leave] == 0 {
+            have.remove(leave);
+        }
+        *have.entry(sb[start + m]).or_insert(0) += 1;
+        start += 1;
+    }
+    starts
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, s: Str, p: Str) -> Vec[i64] {
+    if arm == 0 {
+        find_anagrams_window(s, p)
+    } else if arm == 1 {
+        find_anagrams_compare(s, p)
+    } else if arm == 2 {
+        find_anagrams_sorted(s, p)
+    } else {
+        find_anagrams_map(s, p)
+    }
+}
+
+// The reference checks every window on its own, counting each of the
+// 26 letters in the window and in p.
+fn reference(s: Str, p: Str) -> Vec[i64] {
+    let sb = s.bytes();
+    let pb = p.bytes();
+    let n = sb.len();
+    let m = pb.len();
+    let mut starts: Vec[i64] = Vec.new();
+    let mut start = 0;
+    while start + m <= n {
+        let mut same = true;
+        for c in 0..26 {
+            let letter = b'a' + c as u8;
+            let mut in_window = 0;
+            let mut in_p = 0;
+            for i in 0..m {
+                if sb[start + i] == letter {
+                    in_window += 1;
+                }
+                if pb[i] == letter {
+                    in_p += 1;
+                }
+            }
+            if in_window != in_p {
+                same = false;
+            }
+        }
+        if same {
+            starts.push(start);
+        }
+        start += 1;
+    }
+    starts
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_text(seed: mut ref i64, letters: i64, length: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..length {
+        out.push((b'a' + (next_random(seed) % letters) as u8) as char);
+    }
+    out
+}
+
+// Each letter replaced through `table`.
+fn renamed(s: Str, table: Vec[u8]) -> String {
+    let mut out = String.new();
+    for b in s.bytes() {
+        out.push(table[(b - b'a') as i64] as char);
+    }
+    out
+}
+
+fn reversed(s: Str) -> String {
+    let b = s.bytes();
+    let mut out = String.new();
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        out.push(b[i] as char);
+        i -= 1;
+    }
+    out
+}
+
+fn equal(a: Vec[i64], b: Vec[i64]) -> bool {
+    a == b
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4380;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let letters = [1, 2, 3, 26][next_random(mut seed) % 4];
+        let n = next_random(mut seed) % 61;
+        let m = 1 + next_random(mut seed) % 7;
+        let s = random_text(mut seed, letters, n);
+        // p is a random string half the time, and a shuffled window of s
+        // the other half, so that most cases have an answer.
+        let mut p = random_text(mut seed, letters, m);
+        if n >= m and next_random(mut seed) % 2 == 0 {
+            let at = next_random(mut seed) % (n - m + 1);
+            let sb = s.bytes();
+            let mut picked: Vec[u8] = Vec.new();
+            for i in at..at + m {
+                picked.push(sb[i]);
+            }
+            for i in 0..m {
+                let j = i + next_random(mut seed) % (m - i);
+                picked.swap(i, j);
+            }
+            p = String.new();
+            for b in picked {
+                p.push(b as char);
+            }
+        }
+        let want = reference(s, p);
+        // A random renaming of the alphabet.
+        let mut table: Vec[u8] = Vec.new();
+        for c in 0..26 {
+            table.push(b'a' + c as u8);
+        }
+        for i in 0..26 {
+            let j = i + next_random(mut seed) % (26 - i);
+            table.swap(i, j);
+        }
+        let s2 = renamed(s, table);
+        let p2 = renamed(p, table);
+        let s3 = reversed(s);
+        let p3 = reversed(p);
+        let mut mirrored: Vec[i64] = Vec.new();
+        let mut k = want.len() - 1;
+        while k >= 0 {
+            mirrored.push(n - m - want[k]);
+            k -= 1;
+        }
+        // Appending p reversed keeps every start found in s and adds
+        // one at n, among any that straddle the join.
+        let grown = f"{s}{reversed(p)}";
+        let k2 = 1 + next_random(mut seed) % 40;
+        let mut run = String.new();
+        for _ in 0..k2 {
+            run.push('q');
+        }
+        let short = 1 + next_random(mut seed) % k2;
+        let mut run_p = String.new();
+        for _ in 0..short {
+            run_p.push('q');
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let got = solve(arm, s, p);
+            report(1, arm, case, equal(got, want), mut failures);
+            report(2, arm, case, equal(solve(arm, s2, p2), got), mut failures);
+            report(3, arm, case, equal(solve(arm, s3, p3), mirrored), mut failures);
+            let g = solve(arm, grown, p);
+            let mut prefix_kept = g.len() >= got.len() and g.len() > 0 and g[g.len() - 1] == n;
+            if prefix_kept {
+                for i in 0..got.len() {
+                    if g[i] != got[i] {
+                        prefix_kept = false;
+                    }
+                }
+            }
+            report(4, arm, case, prefix_kept, mut failures);
+            let mut every: Vec[i64] = Vec.new();
+            for i in 0..k2 - short + 1 {
+                every.push(i);
+            }
+            let built = equal(solve(arm, run, run_p), every)
+                and solve(arm, run_p, run).len() == (if short == k2 { 1 } else { 0 })
+                and solve(arm, "", "q").len() == 0;
+            report(5, arm, case, built, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

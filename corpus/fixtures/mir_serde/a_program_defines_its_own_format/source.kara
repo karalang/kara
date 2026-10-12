@@ -1,0 +1,37 @@
+
+struct Outline { out: String }
+
+impl Serializer for Outline {
+    fn serialize_bool(mut ref self, v: bool) { self.out.push_str(f"{v}"); }
+    fn serialize_i64(mut ref self, v: i64) { self.out.push_str(f"{v}"); }
+    fn serialize_u64(mut ref self, v: u64) { self.out.push_str(f"{v}"); }
+    fn serialize_f64(mut ref self, v: f64) { self.out.push_str(f"{v}"); }
+    fn serialize_string(mut ref self, v: String) { self.out.push_str(v); }
+    fn serialize_none(mut ref self) { self.out.push_str("-"); }
+    fn serialize_seq_begin(mut ref self, len: i64) { self.out.push_str(f"<{len}>"); }
+    fn serialize_element(mut ref self) { self.out.push_str(" "); }
+    fn serialize_seq_end(mut ref self) { self.out.push_str(";"); }
+    fn serialize_map_begin(mut ref self, len: i64) { self.out.push_str(f"map{len}"); }
+    fn serialize_key(mut ref self) { self.out.push_str(" "); }
+    fn serialize_value(mut ref self) { self.out.push_str("="); }
+    fn serialize_map_end(mut ref self) { self.out.push_str(";"); }
+    fn serialize_struct_begin(mut ref self, name: String, len: i64) { self.out.push_str(f"{name}/{len}"); }
+    fn serialize_field(mut ref self, name: String) { self.out.push_str(f" {name}:"); }
+    fn serialize_struct_end(mut ref self) { self.out.push_str(";"); }
+    fn serialize_unit_variant(mut ref self, name: String, variant: String) { self.out.push_str(f"{name}.{variant}"); }
+    fn serialize_variant_begin(mut ref self, name: String, variant: String) { self.out.push_str(f"{name}.{variant}("); }
+    fn serialize_variant_end(mut ref self) { self.out.push_str(")"); }
+}
+
+#[derive(Serialize)]
+enum Kind { Small, Big(i64) }
+
+#[derive(Serialize)]
+struct Item { id: u32, kind: Kind, parts: Vec[Kind] }
+
+fn main() {
+    let item = Item { id: 7, kind: Kind.Big(9), parts: vec![Kind.Small] };
+    let mut o = Outline { out: "".to_string() };
+    item.serialize(o);
+    println(o.out);
+}

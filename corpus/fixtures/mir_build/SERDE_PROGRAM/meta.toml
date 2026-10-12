@@ -1,0 +1,17 @@
+source = "tests/mir_build.rs::SERDE_PROGRAM"
+dedup_of = []
+expect = "error:E0121"
+exit = 1
+tags = ["lib:sortedmap"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-not-refused:E0121"
+classified_with = "aff614939"
+extracted_src = "332c52a9"
+model_rev = "1aa23105"
+model_src = "332c52a9"

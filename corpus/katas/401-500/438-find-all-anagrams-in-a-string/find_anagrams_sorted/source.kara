@@ -1,0 +1,90 @@
+// LeetCode #438: Find All Anagrams in a String -- sorted windows.
+//
+// Two strings are anagrams exactly when their letters sorted are the
+// same. Sort p's letters once, then sort the letters of every window
+// of s and compare. O(n m log m) time: the plain reference.
+
+fn find_anagrams(s: Str, p: Str) -> Vec[i64] {
+    let sb = s.bytes();
+    let n = sb.len();
+    let mut key: Vec[u8] = Vec.new();
+    for b in p.bytes() {
+        key.push(b);
+    }
+    key.sort();
+    let m = key.len();
+    let mut starts: Vec[i64] = Vec.new();
+    let mut start = 0;
+    while start + m <= n {
+        let mut window: Vec[u8] = Vec.new();
+        for i in start..start + m {
+            window.push(sb[i]);
+        }
+        window.sort();
+        if window == key {
+            starts.push(start);
+        }
+        start += 1;
+    }
+    starts
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn list(values: Vec[i64]) -> String {
+    let mut out = String.from("[");
+    for i in 0..values.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{values[i]}");
+    }
+    out.push(']');
+    out
+}
+
+fn show(s: Str, p: Str) {
+    println(f"\"{s}\", \"{p}\": {list(find_anagrams(s, p))}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("cbaebabacd", "abc");
+    show("abab", "ab");
+    show("a", "a");
+    show("a", "ab");
+    show("aaaaa", "aa");
+    show("abcdefg", "gfedcba");
+    show("zyxzyxzyx", "xyz");
+    show("abcabc", "d");
+    show("baa", "aa");
+    // 300 random pairs over a 1, 2, 3 or 26 letter alphabet: s of 1 to
+    // 80 letters and p of 1 to 6.
+    let mut seed: i64 = 438;
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let letters = [1, 2, 3, 26][next_random(mut seed) % 4];
+        let mut s = String.new();
+        let mut p = String.new();
+        let n = 1 + next_random(mut seed) % 80;
+        let m = 1 + next_random(mut seed) % 6;
+        for _ in 0..n {
+            s.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+        }
+        for _ in 0..m {
+            p.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+        }
+        let starts = find_anagrams(s, p);
+        for i in starts {
+            found += 1;
+            checksum = (checksum * 31 + i + 1) % 1000000007;
+        }
+        checksum = (checksum * 31) % 1000000007;
+    }
+    println(f"300 random pairs: {found} anagrams, checksum {checksum}");
+}

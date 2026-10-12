@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/437-path-sum-iii/bench/path_sum.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared", "lib:map", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "aff614939"
+extracted_src = "02fc3807"
+model_rev = "1aa23105"
+model_src = "02fc3807"

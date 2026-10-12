@@ -1,0 +1,49 @@
+// Benchmark for #435: the ★ arm (erase_overlap.kara) on 100 windows of
+// 100,000 intervals from one pool of 1,000,000.
+
+fn erase_overlap_intervals(intervals: own Vec[(i64, i64)]) -> i64 {
+    if intervals.len() == 0 {
+        return 0;
+    }
+    intervals.sort_by_key(|iv| iv.1);
+    let mut kept = 1;
+    let mut end = intervals[0].1;
+    for i in 1..intervals.len() {
+        if intervals[i].0 >= end {
+            kept += 1;
+            end = intervals[i].1;
+        }
+    }
+    intervals.len() - kept
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let pool_size = 1000000;
+    let size = 100000;
+    let rounds = 100;
+    let mut seed: i64 = 435;
+    // Starts anywhere in [-50000, 50000), lengths 1 to 200.
+    let mut pool: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..pool_size {
+        let start = (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000 - 50000;
+        pool.push((start, start + 1 + next_random(mut seed) % 200));
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        let at = next_random(mut seed) * 32768 % (pool_size - size + 1);
+        let mut window: Vec[(i64, i64)] = Vec.new();
+        for i in at..at + size {
+            window.push(pool[i]);
+        }
+        let removed = erase_overlap_intervals(window);
+        total += removed;
+        checksum = (checksum * 31 + removed) % 1000000007;
+    }
+    println(f"{rounds} rounds of {size} intervals: {total} removed, checksum {checksum}");
+}

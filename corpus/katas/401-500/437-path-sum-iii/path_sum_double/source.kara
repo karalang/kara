@@ -1,0 +1,119 @@
+// LeetCode #437: Path Sum III -- a walk from every node.
+//
+// Every downward path starts somewhere. For each node, count the paths
+// that start there by walking down from it with the remaining sum, and
+// add the counts over all nodes. O(n * height) time: O(n log n) on a
+// balanced tree, O(n^2) on a chain.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// Paths that start at `node` and sum to `remaining`.
+fn starting_at(node: Option[TreeNode], remaining: i64) -> i64 {
+    match node {
+        None => 0,
+        Some(t) => {
+            let here = if t.val == remaining { 1 } else { 0 };
+            here + starting_at(t.left, remaining - t.val) + starting_at(t.right, remaining - t.val)
+        }
+    }
+}
+
+fn path_sum(root: Option[TreeNode], target: i64) -> i64 {
+    match root {
+        None => 0,
+        Some(t) => starting_at(Some(t.clone()), target) + path_sum(t.left, target) + path_sum(t.right, target),
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+const NULL: i64 = -1000000007;
+
+// The tree from a level-order array with NULL for a missing child.
+fn build(vals: Vec[i64]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0] == NULL {
+        return None;
+    }
+    let root = TreeNode { val: vals[0], left: None, right: None };
+    let mut queue: Vec[TreeNode] = [root.clone()];
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < vals.len() {
+        let cur = queue[head].clone();
+        head += 1;
+        if vals[i] != NULL {
+            let child = TreeNode { val: vals[i], left: None, right: None };
+            cur.left = Some(child.clone());
+            queue.push(child);
+        }
+        i += 1;
+        if i < vals.len() and vals[i] != NULL {
+            let child = TreeNode { val: vals[i], left: None, right: None };
+            cur.right = Some(child.clone());
+            queue.push(child);
+        }
+        i += 1;
+    }
+    Some(root)
+}
+
+fn show(vals: Vec[i64], target: i64) {
+    let mut text = String.from("[");
+    for i in 0..vals.len() {
+        if i > 0 {
+            text.push(',');
+        }
+        if vals[i] == NULL {
+            text.push_str("null");
+        } else {
+            text.push_str(f"{vals[i]}");
+        }
+    }
+    text.push(']');
+    println(f"{text}, target {target}: {path_sum(build(vals), target)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show([10, 5, -3, 3, 2, NULL, 11, 3, -2, NULL, 1], 8);
+    show([5, 4, 8, 11, NULL, 13, 4, 7, 2, NULL, NULL, 5, 1], 22);
+    show([], 0);
+    show([7], 7);
+    show([0, 0, 0, 0], 0);
+    show([1, NULL, -1, NULL, 1, NULL, -1, NULL, 1], 0);
+    show([1000000000, 1000000000, NULL, 1000000000, NULL, 1000000000], 3000000000);
+    show([-1000000000, NULL, -1000000000, NULL, -1000000000], -2000000000);
+    show([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], 15);
+    // 300 random trees of up to 60 nodes with values in [-5, 5], each
+    // node given a free slot of the level order with probability 3/4,
+    // and a target in [-5, 5].
+    let mut seed: i64 = 437;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 61;
+        let mut vals: Vec[i64] = Vec.new();
+        let mut placed = 0;
+        while placed < n {
+            if vals.len() > 0 and next_random(mut seed) % 4 == 0 {
+                vals.push(NULL);
+            } else {
+                vals.push(next_random(mut seed) % 11 - 5);
+                placed += 1;
+            }
+        }
+        let target = next_random(mut seed) % 11 - 5;
+        let count = path_sum(build(vals), target);
+        total += count;
+        checksum = (checksum * 31 + count) % 1000000007;
+    }
+    println(f"300 random trees: {total} paths, checksum {checksum}");
+}

@@ -1,0 +1,33 @@
+
+#[derive(Serialize, Deserialize)]
+enum Shape {
+    Dot,
+    #[serde(rename: "circle")]
+    Circle(f64),
+    Rect(i64, i64),
+    Named { label: String, sides: u32 },
+}
+
+fn show(s: ref Shape) -> String {
+    match s {
+        Shape.Dot => "Dot".to_string(),
+        Shape.Circle(r) => f"Circle({r})",
+        Shape.Rect(a, b) => f"Rect({a}, {b})",
+        Shape.Named { label, sides } => f"Named({label}, {sides})",
+    }
+}
+
+fn main() {
+    let v = vec![Shape.Dot, Shape.Circle(2.5), Shape.Rect(3, 4), Shape.Named { label: "tri".to_string(), sides: 3 }];
+    let j = Json.serialize(v);
+    println(j);
+    let back: Result[Vec[Shape], DeserializeError] = Json.deserialize(j);
+    match back {
+        Ok(v) => { for s in v.iter() { println(show(s)); } }
+        Err(e) => println(f"error: {e.message}"),
+    }
+    let bad: Result[Shape, DeserializeError] = Json.deserialize("\"Hexagon\"");
+    match bad { Ok(s) => println(show(s)), Err(e) => println(f"error: {e.message}") }
+    let long: Result[Shape, DeserializeError] = Json.deserialize("{\"Rect\": [1, 2, 3]}");
+    match long { Ok(s) => println(show(s)), Err(e) => println(f"error: {e.message}") }
+}

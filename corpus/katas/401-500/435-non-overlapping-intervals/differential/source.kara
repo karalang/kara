@@ -1,0 +1,250 @@
+// Differential test for LeetCode #435: Non-overlapping Intervals.
+//
+// Copies of the four arms, each run on 1,500 random sets of 0 to 40
+// intervals, each 1 to 3, 10 or 30 long, starting in [-50, 50).
+// Properties known by construction:
+//   P1  the answer is the reference's, a walk over the coordinates
+//       that never sorts
+//   P2  shuffling the intervals, shifting them all towards an end of
+//       the range, or mirroring them changes nothing
+//   P3  at least depth - 1 go, where depth is the most intervals over
+//       one point; at most n - 1; and none exactly when no two overlap
+//   P4  one more interval removes the same or one more, and a second
+//       copy of every interval removes n more
+//   P5  k side-by-side unit intervals under m that span them all lose
+//       the m, k that touch end to start lose none, m + 1 copies of
+//       one interval lose m, and no intervals lose none
+
+// ---- end: erase_overlap.kara
+
+fn erase_overlap_intervals_end(intervals: own Vec[(i64, i64)]) -> i64 {
+    if intervals.len() == 0 {
+        return 0;
+    }
+    intervals.sort_by_key(|iv| iv.1);
+    let mut kept = 1;
+    let mut end = intervals[0].1;
+    for i in 1..intervals.len() {
+        if intervals[i].0 >= end {
+            kept += 1;
+            end = intervals[i].1;
+        }
+    }
+    intervals.len() - kept
+}
+
+// ---- start: erase_overlap_start.kara
+
+fn erase_overlap_intervals_start(intervals: own Vec[(i64, i64)]) -> i64 {
+    if intervals.len() == 0 {
+        return 0;
+    }
+    intervals.sort();
+    let mut removed = 0;
+    let mut end = intervals[0].1;
+    for i in 1..intervals.len() {
+        if intervals[i].0 < end {
+            removed += 1;
+            end = end.min(intervals[i].1);
+        } else {
+            end = intervals[i].1;
+        }
+    }
+    removed
+}
+
+// ---- dp: erase_overlap_dp.kara
+
+fn erase_overlap_intervals_dp(intervals: own Vec[(i64, i64)]) -> i64 {
+    intervals.sort();
+    let n = intervals.len();
+    let mut chain: Vec[i64] = Vec.filled(n, 1);
+    let mut longest = 0;
+    for i in 0..n {
+        for j in 0..i {
+            if intervals[j].1 <= intervals[i].0 and chain[j] + 1 > chain[i] {
+                chain[i] = chain[j] + 1;
+            }
+        }
+        longest = longest.max(chain[i]);
+    }
+    n - longest
+}
+
+// ---- search: erase_overlap_search.kara
+
+fn erase_overlap_intervals_search(intervals: own Vec[(i64, i64)]) -> i64 {
+    intervals.sort_by_key(|iv| iv.1);
+    let n = intervals.len();
+    let mut best: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        // The number of intervals among the first i that end by start.
+        let start = intervals[i].0;
+        let mut lo = 0;
+        let mut hi = i;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if intervals[mid].1 <= start {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        best[i + 1] = best[i].max(1 + best[lo]);
+    }
+    n - best[n]
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, intervals: own Vec[(i64, i64)]) -> i64 {
+    if arm == 0 {
+        erase_overlap_intervals_end(intervals)
+    } else if arm == 1 {
+        erase_overlap_intervals_start(intervals)
+    } else if arm == 2 {
+        erase_overlap_intervals_dp(intervals)
+    } else {
+        erase_overlap_intervals_search(intervals)
+    }
+}
+
+// The reference walks the coordinates instead of sorting: kept[x] is
+// the most side-by-side intervals that all end by x, so
+// kept[x] = max(kept[x - 1], 1 + kept[start]) over the intervals that
+// end at x. Coordinates lie in [-50, 81) here.
+fn reference(intervals: Vec[(i64, i64)]) -> i64 {
+    let low = -50;
+    let mut kept: Vec[i64] = Vec.filled(132, 0);
+    for x in low + 1..low + 132 {
+        let mut best = kept[x - 1 - low];
+        for iv in intervals {
+            if iv.1 == x {
+                best = best.max(1 + kept[iv.0 - low]);
+            }
+        }
+        kept[x - low] = best;
+    }
+    intervals.len() - kept[131]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_intervals(seed: mut ref i64) -> Vec[(i64, i64)] {
+    let n = next_random(seed) % 41;
+    let longest = [3, 10, 30][next_random(seed) % 3];
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..n {
+        let start = next_random(seed) % 100 - 50;
+        out.push((start, start + 1 + next_random(seed) % longest));
+    }
+    out
+}
+
+// The most intervals that share one point strictly inside them all.
+fn depth(intervals: Vec[(i64, i64)]) -> i64 {
+    let mut most = 0;
+    for x in -50..81 {
+        let mut here = 0;
+        for iv in intervals {
+            if iv.0 <= x and x < iv.1 {
+                here += 1;
+            }
+        }
+        most = most.max(here);
+    }
+    most
+}
+
+fn any_overlap(intervals: Vec[(i64, i64)]) -> bool {
+    for i in 0..intervals.len() {
+        for j in i + 1..intervals.len() {
+            if intervals[i].0 < intervals[j].1 and intervals[j].0 < intervals[i].1 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4350;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let intervals = random_intervals(mut seed);
+        let n = intervals.len();
+        let want = reference(intervals);
+        // A shuffle, a shift towards one end of the range, and a mirror
+        // image.
+        let mut shuffled = intervals.clone();
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (n - i);
+            shuffled.swap(i, j);
+        }
+        let shift = next_random(mut seed) % 99800 - 49900;
+        let mut moved: Vec[(i64, i64)] = Vec.new();
+        let mut mirrored: Vec[(i64, i64)] = Vec.new();
+        for iv in intervals {
+            moved.push((iv.0 + shift, iv.1 + shift));
+            mirrored.push((-iv.1, -iv.0));
+        }
+        let start = next_random(mut seed) % 100 - 50;
+        let mut grown = intervals.clone();
+        grown.push((start, start + 1 + next_random(mut seed) % 30));
+        let mut doubled = intervals.clone();
+        for iv in intervals {
+            doubled.push(iv);
+        }
+        let deep = depth(intervals);
+        let overlapping = any_overlap(intervals);
+        // k unit intervals side by side under m that span them all, k
+        // that touch end to start, and m + 1 copies of one interval at
+        // the edge of the range.
+        let k = 1 + next_random(mut seed) % 20;
+        let m = next_random(mut seed) % 20;
+        let mut covered: Vec[(i64, i64)] = Vec.new();
+        for i in 0..k {
+            covered.push((2 * i, 2 * i + 1));
+        }
+        for i in 0..m {
+            covered.push((-i, 2 * k + i));
+        }
+        let mut touching: Vec[(i64, i64)] = Vec.new();
+        for i in 0..k {
+            touching.push((i - 50, i - 49));
+        }
+        let mut copies: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..m + 1 {
+            copies.push((49999, 50000));
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let r = solve(arm, intervals.clone());
+            report(1, arm, case, r == want, mut failures);
+            report(2, arm, case, solve(arm, shuffled.clone()) == r and solve(arm, moved.clone()) == r and solve(arm, mirrored.clone()) == r, mut failures);
+            let bounded = r >= deep - 1 and (n == 0 or r <= n - 1) and (r == 0) == not overlapping;
+            report(3, arm, case, bounded, mut failures);
+            let g = solve(arm, grown.clone());
+            report(4, arm, case, (g == r or g == r + 1) and solve(arm, doubled.clone()) == n + r, mut failures);
+            report(5, arm, case, solve(arm, covered.clone()) == m and solve(arm, touching.clone()) == 0 and solve(arm, copies.clone()) == m and solve(arm, Vec.new()) == 0, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

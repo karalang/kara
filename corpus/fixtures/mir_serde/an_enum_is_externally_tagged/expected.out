@@ -1,0 +1,7 @@
+["Dot",{"circle":2.5},{"Rect":[3,4]},{"Named":{"label":"tri","sides":3}}]
+Dot
+Circle(2.5)
+Rect(3, 4)
+Named(tri, 3)
+error: unknown variant `Hexagon` of Shape
+error: too many values in Shape.Rect

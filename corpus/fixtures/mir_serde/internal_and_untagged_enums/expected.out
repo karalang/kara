@@ -1,0 +1,13 @@
+[{"type":"Ping"},{"type":"msg","from":"a","body":"hi"},{"type":"Move","x":1,"y":-2}]
+Ping
+Message(a, hi)
+Move(1, -2)
+Move(5, 6)
+error: missing field `type`
+[null,3,"t",[1,"p"],{"x":7,"y":8}]
+Nothing
+Num(3)
+Text(t)
+Pair(1, p)
+Point(7, 8)
+error: the value fits no variant of untagged Value

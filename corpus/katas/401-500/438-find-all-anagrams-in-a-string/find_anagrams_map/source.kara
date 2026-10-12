@@ -1,0 +1,115 @@
+// LeetCode #438: Find All Anagrams in a String -- maps of counts.
+//
+// The window's letters and p's as maps from letter to count, with a
+// letter removed when its count falls to 0, so the two maps hold the
+// same entries exactly when the strings are anagrams. Slide the
+// window, adjusting two entries, and compare the maps at each step:
+// the same size, and every entry of one found in the other. Works for
+// any letters, not only 'a' to 'z'. O(n m) time in the worst case for
+// the comparisons, O(m) space.
+
+fn same_counts(a: Map[u8, i64], b: Map[u8, i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for (letter, count) in a.iter() {
+        if b.get(*letter) != Some(count) {
+            return false;
+        }
+    }
+    true
+}
+
+fn find_anagrams(s: Str, p: Str) -> Vec[i64] {
+    let sb = s.bytes();
+    let pb = p.bytes();
+    let n = sb.len();
+    let m = pb.len();
+    let mut starts: Vec[i64] = Vec.new();
+    if m > n {
+        return starts;
+    }
+    let mut want: Map[u8, i64] = Map.new();
+    let mut have: Map[u8, i64] = Map.new();
+    for i in 0..m {
+        *want.entry(pb[i]).or_insert(0) += 1;
+        *have.entry(sb[i]).or_insert(0) += 1;
+    }
+    let mut start = 0;
+    loop {
+        if same_counts(have, want) {
+            starts.push(start);
+        }
+        if start + m == n {
+            break;
+        }
+        let leave = sb[start];
+        *have.entry(leave).or_insert(0) -= 1;
+        if have[leave] == 0 {
+            have.remove(leave);
+        }
+        *have.entry(sb[start + m]).or_insert(0) += 1;
+        start += 1;
+    }
+    starts
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn list(values: Vec[i64]) -> String {
+    let mut out = String.from("[");
+    for i in 0..values.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{values[i]}");
+    }
+    out.push(']');
+    out
+}
+
+fn show(s: Str, p: Str) {
+    println(f"\"{s}\", \"{p}\": {list(find_anagrams(s, p))}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("cbaebabacd", "abc");
+    show("abab", "ab");
+    show("a", "a");
+    show("a", "ab");
+    show("aaaaa", "aa");
+    show("abcdefg", "gfedcba");
+    show("zyxzyxzyx", "xyz");
+    show("abcabc", "d");
+    show("baa", "aa");
+    // 300 random pairs over a 1, 2, 3 or 26 letter alphabet: s of 1 to
+    // 80 letters and p of 1 to 6.
+    let mut seed: i64 = 438;
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let letters = [1, 2, 3, 26][next_random(mut seed) % 4];
+        let mut s = String.new();
+        let mut p = String.new();
+        let n = 1 + next_random(mut seed) % 80;
+        let m = 1 + next_random(mut seed) % 6;
+        for _ in 0..n {
+            s.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+        }
+        for _ in 0..m {
+            p.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+        }
+        let starts = find_anagrams(s, p);
+        for i in starts {
+            found += 1;
+            checksum = (checksum * 31 + i + 1) % 1000000007;
+        }
+        checksum = (checksum * 31) % 1000000007;
+    }
+    println(f"300 random pairs: {found} anagrams, checksum {checksum}");
+}

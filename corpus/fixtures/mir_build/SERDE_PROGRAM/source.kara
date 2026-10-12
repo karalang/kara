@@ -1,0 +1,56 @@
+
+#[derive(Serialize, Deserialize)]
+struct Config {
+    #[serde(rename: "server_name")]
+    name: String,
+    #[serde(skip)]
+    cache: Vec[i64],
+    #[serde(default: 8080)]
+    port: i64,
+    shapes: Vec[Shape],
+    sorted: SortedMap[i64, String],
+    nick: Option[String],
+}
+
+#[derive(Serialize, Deserialize)]
+enum Shape { Dot, Circle(i64), Rect(i64, i64), Named { label: String } }
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag: "type")]
+enum Event { Ping, Move { x: i64, y: i64 } }
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum Value { Nothing, Num(i64), Text(String) }
+
+fn main() {
+    let mut sorted: SortedMap[i64, String] = SortedMap.new();
+    sorted.insert(2, "two".to_string());
+    sorted.insert(1, "one".to_string());
+    let c = Config {
+        name: "a\"b".to_string(),
+        cache: vec![1],
+        port: 9,
+        shapes: vec![Shape.Dot, Shape.Circle(2), Shape.Rect(3, 4), Shape.Named { label: "t".to_string() }],
+        sorted: sorted,
+        nick: None,
+    };
+    let j = Json.serialize(c);
+    println(j);
+    let back: Result[Config, DeserializeError] = Json.deserialize(j);
+    match back {
+        Ok(b) => println(f"{b.name} {b.cache.len()} {b.port} {b.shapes.len()} {b.sorted.len()}"),
+        Err(e) => println(e.message),
+    }
+    let sparse: Result[Config, DeserializeError] =
+        Json.deserialize("{\"server_name\": \"s\", \"shapes\": [], \"sorted\": {}}");
+    match sparse { Ok(b) => println(f"{b.port}"), Err(e) => println(e.message) }
+    let evs = vec![Event.Ping, Event.Move { x: 1, y: 2 }];
+    let je = Json.serialize(evs);
+    let evs2: Result[Vec[Event], DeserializeError] = Json.deserialize(je);
+    println(f"{je} {evs2.unwrap().len()}");
+    let vs = vec![Value.Nothing, Value.Num(3), Value.Text("t".to_string())];
+    let jv = Json.serialize(vs);
+    let vs2: Result[Vec[Value], DeserializeError] = Json.deserialize(jv);
+    println(f"{jv} {vs2.unwrap().len()}");
+}

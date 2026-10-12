@@ -13,9 +13,9 @@ fn find_the_difference(s: Str, t: Str) -> char {
     for c in s.chars() {
         *count.entry(c).or_insert(0) -= 1;
     }
-    for (c, n) in count {
-        if n > 0 {
-            return c;
+    for (c, n) in count.iter() {
+        if *n > 0 {
+            return *c;
         }
     }
     ' '

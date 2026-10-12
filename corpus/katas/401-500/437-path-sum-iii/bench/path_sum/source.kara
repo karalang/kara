@@ -1,0 +1,69 @@
+// Benchmark for #437: the ★ arm (path_sum.kara) on one random tree of
+// 100,000 nodes, queried for 200 targets.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn count_from(node: Option[TreeNode], prefix: i64, target: i64, seen: mut ref Map[i64, i64]) -> i64 {
+    match node {
+        None => 0,
+        Some(t) => {
+            let sum = prefix + t.val;
+            let mut found = seen.get(sum - target) ?? 0;
+            *seen.entry(sum).or_insert(0) += 1;
+            found += count_from(t.left, sum, target, seen);
+            found += count_from(t.right, sum, target, seen);
+            *seen.entry(sum).or_insert(0) -= 1;
+            found
+        }
+    }
+}
+
+fn path_sum(root: Option[TreeNode], target: i64) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    seen.insert(0, 1);
+    count_from(root, 0, target, mut seen)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let size = 100000;
+    let queries = 200;
+    let mut seed: i64 = 437;
+    // Each node hangs under a random earlier node that still has a free
+    // side, values in [-1000, 1000].
+    let root = TreeNode { val: next_random(mut seed) % 2001 - 1000, left: None, right: None };
+    let mut open: Vec[TreeNode] = [root.clone()];
+    for _ in 1..size {
+        let at = next_random(mut seed) % open.len();
+        let parent = open[at].clone();
+        let child = TreeNode { val: next_random(mut seed) % 2001 - 1000, left: None, right: None };
+        if parent.left.is_none() and (parent.right.is_some() or next_random(mut seed) % 2 == 0) {
+            parent.left = Some(child.clone());
+        } else {
+            parent.right = Some(child.clone());
+        }
+        if parent.left.is_some() and parent.right.is_some() {
+            let last = open.len() - 1;
+            open.swap(at, last);
+            open.pop();
+        }
+        open.push(child);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..queries {
+        let target = next_random(mut seed) % 4001 - 2000;
+        let count = path_sum(Some(root.clone()), target);
+        total += count;
+        checksum = (checksum * 31 + count) % 1000000007;
+    }
+    println(f"{queries} targets on a tree of {size}: {total} paths, checksum {checksum}");
+}

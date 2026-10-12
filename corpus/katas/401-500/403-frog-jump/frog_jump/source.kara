@@ -17,7 +17,7 @@ fn can_cross(stones: Vec[i64]) -> bool {
     for s in stones.iter() {
         let mut sizes: Vec[i64] = Vec.new();
         for k in jumps[*s].iter() {
-            sizes.push(k);
+            sizes.push(*k);
         }
         for k in sizes.iter() {
             for size in *k - 1..*k + 2 {

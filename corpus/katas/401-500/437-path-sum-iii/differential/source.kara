@@ -1,0 +1,306 @@
+// Differential test for LeetCode #437: Path Sum III.
+//
+// Copies of the four arms, sharing one TreeNode, each run on 1,500
+// random trees of up to 50 nodes read from a random level order, with
+// values within 1, 3 or 10 of zero, and a target in [-5, 5].
+// Properties known by construction:
+//   P1  the count is the reference's, which reads the level order
+//       into a table of parents and sums up the parent links
+//   P2  the mirror image of the tree gives the same count
+//   P3  negating every value and the target gives the same count
+//   P4  multiplying every value and the target by one factor up to
+//       1,000,003 gives the same count
+//   P5  a chain of k zeros has k(k + 1)/2 paths summing to 0, a chain
+//       of k ones has k - s + 1 summing to s, a perfect tree of one
+//       value v that is not 0 has one per node summing to v, and the
+//       empty tree has none
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- prefix: path_sum.kara
+
+fn count_from(node: Option[TreeNode], prefix: i64, target: i64, seen: mut ref Map[i64, i64]) -> i64 {
+    match node {
+        None => 0,
+        Some(t) => {
+            let sum = prefix + t.val;
+            let mut found = seen.get(sum - target) ?? 0;
+            *seen.entry(sum).or_insert(0) += 1;
+            found += count_from(t.left, sum, target, seen);
+            found += count_from(t.right, sum, target, seen);
+            *seen.entry(sum).or_insert(0) -= 1;
+            found
+        }
+    }
+}
+
+fn path_sum_prefix(root: Option[TreeNode], target: i64) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    seen.insert(0, 1);
+    count_from(root, 0, target, mut seen)
+}
+
+// ---- double: path_sum_double.kara
+
+// Paths that start at `node` and sum to `remaining`.
+fn starting_at(node: Option[TreeNode], remaining: i64) -> i64 {
+    match node {
+        None => 0,
+        Some(t) => {
+            let here = if t.val == remaining { 1 } else { 0 };
+            here + starting_at(t.left, remaining - t.val) + starting_at(t.right, remaining - t.val)
+        }
+    }
+}
+
+fn path_sum_double(root: Option[TreeNode], target: i64) -> i64 {
+    match root {
+        None => 0,
+        Some(t) => starting_at(Some(t.clone()), target) + path_sum_double(t.left, target) + path_sum_double(t.right, target),
+    }
+}
+
+// ---- suffix: path_sum_suffix.kara
+
+fn walk(node: Option[TreeNode], target: i64, path: mut ref Vec[i64]) -> i64 {
+    match node {
+        None => 0,
+        Some(t) => {
+            path.push(t.val);
+            let mut found = 0;
+            let mut sum = 0;
+            let mut i = path.len() - 1;
+            while i >= 0 {
+                sum += path[i];
+                if sum == target {
+                    found += 1;
+                }
+                i -= 1;
+            }
+            found += walk(t.left, target, path);
+            found += walk(t.right, target, path);
+            path.pop();
+            found
+        }
+    }
+}
+
+fn path_sum_suffix(root: Option[TreeNode], target: i64) -> i64 {
+    let mut path: Vec[i64] = Vec.new();
+    walk(root, target, mut path)
+}
+
+// ---- stack: path_sum_stack.kara
+
+fn path_sum_stack(root: Option[TreeNode], target: i64) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    seen.insert(0, 1);
+    let mut found = 0;
+    // (node, the prefix sum above it, whether this is the exit)
+    let mut stack: Vec[(TreeNode, i64, bool)] = Vec.new();
+    if let Some(t) = root {
+        stack.push((t, 0, false));
+    }
+    while let Some((t, above, leaving)) = stack.pop() {
+        let sum = above + t.val;
+        if leaving {
+            *seen.entry(sum).or_insert(0) -= 1;
+        } else {
+            found += seen.get(sum - target) ?? 0;
+            *seen.entry(sum).or_insert(0) += 1;
+            stack.push((t.clone(), above, true));
+            if let Some(r) = t.right {
+                stack.push((r, sum, false));
+            }
+            if let Some(l) = t.left {
+                stack.push((l, sum, false));
+            }
+        }
+    }
+    found
+}
+
+// ---- harness ----------------------------------------------------------
+
+const NULL: i64 = -1000000007;
+
+fn solve(arm: i64, root: Option[TreeNode], target: i64) -> i64 {
+    if arm == 0 {
+        path_sum_prefix(root, target)
+    } else if arm == 1 {
+        path_sum_double(root, target)
+    } else if arm == 2 {
+        path_sum_suffix(root, target)
+    } else {
+        path_sum_stack(root, target)
+    }
+}
+
+// The tree from a level-order array with NULL for a missing child.
+fn build(vals: Vec[i64]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0] == NULL {
+        return None;
+    }
+    let root = TreeNode { val: vals[0], left: None, right: None };
+    let mut queue: Vec[TreeNode] = [root.clone()];
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < vals.len() {
+        let cur = queue[head].clone();
+        head += 1;
+        if vals[i] != NULL {
+            let child = TreeNode { val: vals[i], left: None, right: None };
+            cur.left = Some(child.clone());
+            queue.push(child);
+        }
+        i += 1;
+        if i < vals.len() and vals[i] != NULL {
+            let child = TreeNode { val: vals[i], left: None, right: None };
+            cur.right = Some(child.clone());
+            queue.push(child);
+        }
+        i += 1;
+    }
+    Some(root)
+}
+
+// The reference never builds a tree: it reads the level order into a
+// table of values and parents, then for each node adds values up the
+// parent links, counting each time the sum hits the target.
+fn reference(vals: Vec[i64], target: i64) -> i64 {
+    let mut value: Vec[i64] = Vec.new();
+    let mut parent: Vec[i64] = Vec.new();
+    if vals.len() > 0 and vals[0] != NULL {
+        value.push(vals[0]);
+        parent.push(-1);
+        let mut head = 0;
+        let mut i = 1;
+        while head < value.len() and i < vals.len() {
+            for _ in 0..2 {
+                if i < vals.len() and vals[i] != NULL {
+                    value.push(vals[i]);
+                    parent.push(head);
+                }
+                i += 1;
+            }
+            head += 1;
+        }
+    }
+    let mut count = 0;
+    for v in 0..value.len() {
+        let mut sum = 0;
+        let mut at = v;
+        while at >= 0 {
+            sum += value[at];
+            if sum == target {
+                count += 1;
+            }
+            at = parent[at];
+        }
+    }
+    count
+}
+
+fn mirror(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(t) => Some(TreeNode { val: t.val, left: mirror(t.right), right: mirror(t.left) }),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A level order of up to 50 nodes, with values in [-spread, spread]
+// and a missing slot one time in 2, 4 or 8.
+fn random_vals(seed: mut ref i64) -> Vec[i64] {
+    let n = next_random(seed) % 51;
+    let spread = [1, 3, 10][next_random(seed) % 3];
+    let gaps = [2, 4, 8][next_random(seed) % 3];
+    let mut vals: Vec[i64] = Vec.new();
+    let mut placed = 0;
+    while placed < n {
+        if vals.len() > 0 and next_random(seed) % gaps == 0 {
+            vals.push(NULL);
+        } else {
+            vals.push(next_random(seed) % (2 * spread + 1) - spread);
+            placed += 1;
+        }
+    }
+    vals
+}
+
+fn mapped(vals: Vec[i64], factor: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for v in vals {
+        out.push(if v == NULL { NULL } else { v * factor });
+    }
+    out
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4370;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let vals = random_vals(mut seed);
+        let target = next_random(mut seed) % 11 - 5;
+        let want = reference(vals, target);
+        let negated = mapped(vals, -1);
+        let factor = 1 + next_random(mut seed) * 31 % 1000003;
+        let scaled = mapped(vals, factor);
+        // k zeros in a chain, k ones in a chain, and a perfect tree of
+        // 2^d - 1 copies of one value that is not 0.
+        let k = 1 + next_random(mut seed) % 30;
+        let s = 1 + next_random(mut seed) % k;
+        let mut zeros: Vec[i64] = Vec.new();
+        let mut ones: Vec[i64] = Vec.new();
+        for i in 0..k {
+            if i > 0 {
+                zeros.push(NULL);
+                ones.push(NULL);
+            }
+            zeros.push(0);
+            ones.push(1);
+        }
+        let d = 1 + next_random(mut seed) % 6;
+        let v = (1 + next_random(mut seed) % 10) * (if next_random(mut seed) % 2 == 0 { 1 } else { -1 });
+        let mut perfect: Vec[i64] = Vec.new();
+        for _ in 0..(1 << d) - 1 {
+            perfect.push(v);
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let got = solve(arm, build(vals), target);
+            report(1, arm, case, got == want, mut failures);
+            report(2, arm, case, solve(arm, mirror(build(vals)), target) == got, mut failures);
+            report(3, arm, case, solve(arm, build(negated), -target) == got, mut failures);
+            report(4, arm, case, solve(arm, build(scaled), target * factor) == got, mut failures);
+            let built = solve(arm, build(zeros), 0) == k * (k + 1) / 2
+                and solve(arm, build(ones), s) == k - s + 1
+                and solve(arm, build(perfect), v) == (1 << d) - 1
+                and solve(arm, None, 0) == 0;
+            report(5, arm, case, built, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

@@ -1,0 +1,10 @@
+"cbaebabacd", "abc": [0,6]
+"abab", "ab": [0,1,2]
+"a", "a": [0]
+"a", "ab": []
+"aaaaa", "aa": [0,1,2,3]
+"abcdefg", "gfedcba": [0]
+"zyxzyxzyx", "xyz": [0,1,2,3,4,5,6]
+"abcabc", "d": []
+"baa", "aa": [1]
+300 random pairs: 4311 anagrams, checksum 353492857

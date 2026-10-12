@@ -1,0 +1,103 @@
+// LeetCode #436: Find Right Interval -- sorted starts and binary search.
+//
+// Sort the interval indices by start once. The right interval of i is
+// the one with the smallest start at or after i's end: the first entry
+// in that order whose start is not below the end, found by binary
+// search. O(n log n) time, O(n) space.
+
+fn find_right_interval(intervals: Vec[(i64, i64)]) -> Vec[i64] {
+    let n = intervals.len();
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..n {
+        order.push(i);
+    }
+    order.sort_by_key(|i| intervals[i].0);
+    let mut right: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let end = intervals[i].1;
+        let mut lo = 0;
+        let mut hi = n;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if intervals[order[mid]].0 < end {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        right.push(if lo < n { order[lo] } else { -1 });
+    }
+    right
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn text(values: Vec[(i64, i64)]) -> String {
+    let mut out = String.new();
+    out.push('[');
+    for i in 0..values.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f"[{values[i].0},{values[i].1}]");
+    }
+    out.push(']');
+    out
+}
+
+fn list(values: Vec[i64]) -> String {
+    let mut out = String.new();
+    out.push('[');
+    for i in 0..values.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{values[i]}");
+    }
+    out.push(']');
+    out
+}
+
+fn show(intervals: Vec[(i64, i64)]) {
+    println(f"{text(intervals)}: {list(find_right_interval(intervals))}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show([(1, 2)]);
+    show([(3, 4), (2, 3), (1, 2)]);
+    show([(1, 4), (2, 3), (3, 4)]);
+    show([(5, 5), (1, 5), (6, 9)]);
+    show([(-1000000, 1000000), (1000000, 1000000), (0, 0)]);
+    show([(0, 10), (1, 2), (3, 4), (5, 6), (7, 8)]);
+    show([(4, 9), (3, 8), (2, 7), (1, 6), (0, 5)]);
+    show([(0, 1), (1, 2), (2, 3), (3, 4)]);
+    // 300 random sets of 1 to 40 intervals with distinct starts in
+    // [-100, 100), each 0 to 39 long.
+    let mut seed: i64 = 436;
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 40;
+        let mut used: Set[i64] = Set.new();
+        let mut intervals: Vec[(i64, i64)] = Vec.new();
+        while intervals.len() < n {
+            let start = next_random(mut seed) % 200 - 100;
+            if used.insert(start) {
+                intervals.push((start, start + next_random(mut seed) % 40));
+            }
+        }
+        let right = find_right_interval(intervals);
+        for j in right {
+            if j >= 0 {
+                found += 1;
+            }
+            checksum = (checksum * 31 + j + 2) % 1000000007;
+        }
+    }
+    println(f"300 random sets: {found} right intervals, checksum {checksum}");
+}

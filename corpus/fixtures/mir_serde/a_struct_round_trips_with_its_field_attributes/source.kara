@@ -1,0 +1,43 @@
+
+#[derive(Serialize, Deserialize)]
+struct Config {
+    #[serde(rename: "server_name")]
+    name: String,
+    #[serde(skip)]
+    internal_cache: Vec[i64],
+    #[serde(default: 8080)]
+    port: i64,
+    #[serde(default)]
+    retries: u32,
+    tags: Vec[String],
+    nick: Option[String],
+}
+
+fn main() {
+    let c = Config {
+        name: "a \"b\"\n".to_string(),
+        internal_cache: vec![1, 2],
+        port: 9,
+        retries: 3,
+        tags: vec!["x".to_string()],
+        nick: None,
+    };
+    let j = Json.serialize(c);
+    println(j);
+    let back: Result[Config, DeserializeError] = Json.deserialize(j);
+    match back {
+        Ok(b) => println(f"{b.name.len()} {b.internal_cache.len()} {b.port} {b.retries} {b.tags[0]} {b.nick.is_none()}"),
+        Err(e) => println(f"error: {e.message}"),
+    }
+    let sparse: Result[Config, DeserializeError] =
+        Json.deserialize("{\"server_name\": \"s\", \"extra\": [1, {\"k\": null}], \"tags\": []}");
+    match sparse {
+        Ok(b) => println(f"{b.name} {b.port} {b.retries} {b.tags.len()} {b.nick.is_none()}"),
+        Err(e) => println(f"error: {e.message}"),
+    }
+    let missing: Result[Config, DeserializeError] = Json.deserialize("{\"server_name\": \"s\"}");
+    match missing {
+        Ok(_) => println("unexpected"),
+        Err(e) => println(f"error: {e.message}"),
+    }
+}

@@ -1,0 +1,6 @@
+{"q":[0,1],"s":["only"],"ss":[2,9],"sm":{"-1":"neg","2":"two"},"m":{"k":true},"nested":[null,[1,2]],"f":0.5}
+2 1 2 2 1 2 0.5
+true
+null
+a	bA
+trailing characters at character 3

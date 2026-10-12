@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/435-non-overlapping-intervals/erase_overlap_dp.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "aff614939"
+extracted_src = "21f0e5b2"
+model_rev = "1aa23105"
+model_src = "21f0e5b2"

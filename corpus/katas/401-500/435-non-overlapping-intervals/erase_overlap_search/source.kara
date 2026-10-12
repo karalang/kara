@@ -1,0 +1,86 @@
+// LeetCode #435: Non-overlapping Intervals -- longest chain with binary
+// search.
+//
+// Sorted by end, let best[i] be the longest chain among the first i
+// intervals. Interval i either stays out, giving best[i], or ends a
+// chain whose earlier links all end by its start: those are a prefix
+// of the sorted order, found by binary search over the ends. So
+// best[i + 1] = max(best[i], 1 + best[k]) with k that prefix's length.
+// The same recurrence weighs intervals in weighted interval
+// scheduling. O(n log n).
+
+fn erase_overlap_intervals(intervals: own Vec[(i64, i64)]) -> i64 {
+    intervals.sort_by_key(|iv| iv.1);
+    let n = intervals.len();
+    let mut best: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        // The number of intervals among the first i that end by start.
+        let start = intervals[i].0;
+        let mut lo = 0;
+        let mut hi = i;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if intervals[mid].1 <= start {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        best[i + 1] = best[i].max(1 + best[lo]);
+    }
+    n - best[n]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn text(intervals: Vec[(i64, i64)]) -> String {
+    let mut out = String.new();
+    out.push('[');
+    for i in 0..intervals.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f"[{intervals[i].0},{intervals[i].1}]");
+    }
+    out.push(']');
+    out
+}
+
+fn show(intervals: own Vec[(i64, i64)]) {
+    let shown = text(intervals);
+    println(f"{shown}: {erase_overlap_intervals(intervals)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show([(1, 2), (2, 3), (3, 4), (1, 3)]);
+    show([(1, 2), (1, 2), (1, 2)]);
+    show([(1, 2), (2, 3)]);
+    show([(-50000, 50000)]);
+    show([(1, 10), (2, 3), (4, 5), (6, 7)]);
+    show([(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]);
+    show([(-50000, 50000), (-50000, -49999), (49999, 50000), (0, 1)]);
+    show([(1, 5), (2, 6), (3, 7), (4, 8), (5, 9)]);
+    show([(3, 4), (1, 2), (2, 4), (1, 3), (0, 5)]);
+    // 300 random sets of 1 to 40 intervals, each 1 to 30 long, starting
+    // in [-50, 50).
+    let mut seed: i64 = 435;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 40;
+        let mut intervals: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            let start = next_random(mut seed) % 100 - 50;
+            intervals.push((start, start + 1 + next_random(mut seed) % 30));
+        }
+        let removed = erase_overlap_intervals(intervals);
+        total += removed;
+        checksum = (checksum * 31 + removed) % 1000000007;
+    }
+    println(f"300 random sets: {total} removed, checksum {checksum}");
+}

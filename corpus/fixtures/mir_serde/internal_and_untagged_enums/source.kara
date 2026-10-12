@@ -1,0 +1,63 @@
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag: "type")]
+enum Event {
+    Ping,
+    #[serde(rename: "msg")]
+    Message { from: String, body: String },
+    Move { x: i64, y: i64 },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum Value {
+    Nothing,
+    Num(i64),
+    Text(String),
+    Pair(i64, String),
+    Point { x: i64, y: i64 },
+}
+
+fn show_e(e: ref Event) -> String {
+    match e {
+        Event.Ping => "Ping".to_string(),
+        Event.Message { from, body } => f"Message({from}, {body})",
+        Event.Move { x, y } => f"Move({x}, {y})",
+    }
+}
+
+fn show(v: ref Value) -> String {
+    match v {
+        Value.Nothing => "Nothing".to_string(),
+        Value.Num(n) => f"Num({n})",
+        Value.Text(t) => f"Text({t})",
+        Value.Pair(a, b) => f"Pair({a}, {b})",
+        Value.Point { x, y } => f"Point({x}, {y})",
+    }
+}
+
+fn main() {
+    let evs = vec![Event.Ping, Event.Message { from: "a".to_string(), body: "hi".to_string() }, Event.Move { x: 1, y: -2 }];
+    let j = Json.serialize(evs);
+    println(j);
+    let back: Result[Vec[Event], DeserializeError] = Json.deserialize(j);
+    match back {
+        Ok(es) => { for e in es.iter() { println(show_e(e)); } }
+        Err(e) => println(f"error: {e.message}"),
+    }
+    let late: Result[Event, DeserializeError] = Json.deserialize("{\"x\": 5, \"y\": 6, \"type\": \"Move\"}");
+    match late { Ok(e) => println(show_e(e)), Err(e) => println(f"error: {e.message}") }
+    let untagged: Result[Event, DeserializeError] = Json.deserialize("{\"x\": 5}");
+    match untagged { Ok(e) => println(show_e(e)), Err(e) => println(f"error: {e.message}") }
+
+    let vs = vec![Value.Nothing, Value.Num(3), Value.Text("t".to_string()), Value.Pair(1, "p".to_string()), Value.Point { x: 7, y: 8 }];
+    let j2 = Json.serialize(vs);
+    println(j2);
+    let back2: Result[Vec[Value], DeserializeError] = Json.deserialize(j2);
+    match back2 {
+        Ok(vs) => { for v in vs.iter() { println(show(v)); } }
+        Err(e) => println(f"error: {e.message}"),
+    }
+    let none: Result[Value, DeserializeError] = Json.deserialize("[true]");
+    match none { Ok(v) => println(show(v)), Err(e) => println(f"error: {e.message}") }
+}

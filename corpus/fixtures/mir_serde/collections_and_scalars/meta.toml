@@ -1,0 +1,15 @@
+source = "tests/mir_serde.rs::collections_and_scalars"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map", "lib:set", "lib:sortedmap", "lib:sortedset", "lib:vecdeque"]
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"
+bucket = "check-refuses:E0104"
+classified_with = "aff614939"
+extracted_src = "86d19167"
+model_rev = "1aa23105"
+model_src = "86d19167"
