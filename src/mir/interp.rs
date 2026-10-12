@@ -4272,7 +4272,7 @@ impl<'a> Interp<'a> {
                             let fty = *arg_tys.get(2).ok_or_else(|| {
                                 Stop::Error(format!("{name} needs its closure's type"))
                             })?;
-                            let mut f = self.hold_callee(val.clone(), fty, &name)?;
+                            let mut f = self.hold_callee(val.clone(), fty, name)?;
                             let v = self.call_callee(&mut f, Vec::new())?;
                             self.release_callee(f, fty)?;
                             v
