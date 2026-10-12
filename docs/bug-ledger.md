@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 226 |
 | other | 171 |
 | diagnostics | 152 |
-| perf | 148 |
+| perf | 149 |
 | false-positive | 146 |
 | crash | 114 |
 | soundness | 99 |
@@ -118,7 +118,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 75 |
 | autopar | 59 |
 | parser | 59 |
-| runtime | 56 |
+| runtime | 57 |
 | resolver | 34 |
 | effect | 30 |
 | lexer | 11 |
@@ -592,6 +592,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-26 | 2026-10-12 | typecheck | medium | `v[i]` of a `Vec[Option[shared]]` or `Vec[(shared, i64)]` passed to a bare parameter is refused with E_INDEX_MOVE_NON_COPY under D5, though a bare parameter borrows; `v[i]` of a `Vec[Vec[T]]`, `Vec[String]` or `Vec[shared]` is accepted | — |
 | B-2026-10-12-27 | 2026-10-12 | ownership | low | `karac check` refuses a write to a `mut` field of a shared value bound by a `let` tuple pattern (`let (s, k) = f(); s.left = x;`, "cannot assign through `s` — declared without `mut`"), against core-semantics §5.9's exception | — |
 | B-2026-10-12-28 | 2026-10-12 | typecheck | low | A `SortedMap.floor`/`ceiling` entry taken out with `.expect()` or `.unwrap()` loses its `ref`s on the MIR backends: `let (k, v) = m.floor(4).expect("an entry"); println(f"{*k}")` passes `karac check` and `karac __mir-run`/`__mir-llvm-run` refuse it ("unary '*' requires 'ref T' ... found 'i64'", no location); the pattern forms fixed under B-2026-10-12-9 work | — |
+| B-2026-10-12-29 | 2026-10-12 | runtime | medium | A hashed `Map` on the MIR compiled backend (`runtime/src/mir_map.rs`) costs about 9x a Rust `HashMap` per lookup: the key is hashed by `karac_hash_word`, then that u64 is hashed AGAIN by the std `HashMap<u64, Vec<usize>>` index, and every new key allocates a `Vec` bucket | — |
 
 ### Relocated
 
