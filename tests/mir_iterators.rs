@@ -869,3 +869,36 @@ fn main() {
 "#;
     assert_runs(src, "3 4 5 5\n");
 }
+
+/// `chain`'s bound `Other: Iterator[Item = Self.Item]` is checked against
+/// the receiver: a side yielding `ref i64` does not chain with one yielding
+/// `i64`, and the error says `.cloned()` is the fix; the fixed spelling runs.
+#[test]
+fn chain_needs_both_sides_to_yield_the_same_item() {
+    let src = r#"
+fn main() {
+    let a = vec![1, 2];
+    let b = vec![10, 20];
+    let r: Vec[i64] = (0..3).chain(b.iter()).collect();
+    println(f"{r.len()}");
+}
+"#;
+    let err = match run(src) {
+        Err(e) => e,
+        other => panic!("want a refusal, got {other:?}"),
+    };
+    assert!(
+        err.contains("`J.Item = i64` is not satisfied") && err.contains("`.cloned()`"),
+        "{err}"
+    );
+    let src = r#"
+fn main() {
+    let a = vec![1, 2];
+    let b = vec![10, 20];
+    let r: Vec[i64] = (0..3).chain(b.iter().cloned()).collect();
+    let s: Vec[i64] = a.iter().chain(b.iter()).cloned().collect();
+    println(f"{r.len()} {r[3]} {s.len()} {s[2]}");
+}
+"#;
+    assert_runs(src, "5 10 4 10\n");
+}

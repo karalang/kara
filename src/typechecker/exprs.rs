@@ -3823,6 +3823,13 @@ impl<'a> super::TypeChecker<'a> {
             // undefined type and emit a spurious diagnostic here, on a line
             // the user did not write.
             let required = self.lower_type_expr(ty, all_param_names);
+            // A method's bound names its receiver as `Self`
+            // (`fn chain[J: Iterator[Item = Self.Item]]`), which the call's
+            // receiver substitution supplies.
+            let required = match &self.call_bound_receiver_subs {
+                Some(receiver_subs) => substitute_type_params(&required, receiver_subs),
+                None => required,
+            };
             let required =
                 self.resolve_assoc_projections(&substitute_type_params(&required, &subs));
             if !assoc_eq_bound_is_comparable(&required) {
@@ -3831,10 +3838,19 @@ impl<'a> super::TypeChecker<'a> {
             if types_compatible(&found, &required) {
                 continue;
             }
+            // `a.iter().chain(b.into_iter())`: one side yields `ref T`, the
+            // other `T`. `cloned()` is the side's fix.
+            let views =
+                |r: &Type, t: &Type| matches!(r, Type::Ref(inner) if types_compatible(inner, t));
+            let help = if views(&found, &required) || views(&required, &found) {
+                "; `.cloned()` turns an iterator of `ref T` into one of `T`"
+            } else {
+                ""
+            };
             self.type_error(
                 format!(
                     "error[E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED]: associated-type \
-                     bound `{}.{} = {}` is not satisfied; `{}` has `{} = {}`",
+                     bound `{}.{} = {}` is not satisfied; `{}` has `{} = {}`{help}",
                     type_name,
                     assoc_name,
                     type_display(&required),
