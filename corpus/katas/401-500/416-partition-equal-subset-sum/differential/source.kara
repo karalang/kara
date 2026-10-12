@@ -1,0 +1,258 @@
+// Differential test for LeetCode #416: Partition Equal Subset Sum.
+//
+// Copies of the four arms, each run on 2,000 random arrays of up to 12
+// numbers. Properties known by construction:
+//   P1  the answer is whether some subset sums to half the total,
+//       trying every subset
+//   P2  the array reversed, or rotated, gives the same answer
+//   P3  doubling every number changes nothing, and adding two equal
+//       numbers never turns a split into none
+//   P4  the numbers joined with numbers of the same total, shuffled,
+//       always split
+//   P5  an odd total never splits, nor does a number larger than all
+//       the others together
+
+// ---- half: can_partition.kara
+
+fn can_partition_half(nums: Vec[i64]) -> bool {
+    let mut total = 0;
+    for x in nums {
+        total += x;
+    }
+    if total % 2 != 0 {
+        return false;
+    }
+    let half = total / 2;
+    let mut reach = vec![false; half + 1];
+    reach[0] = true;
+    for x in nums {
+        let mut s = half;
+        while s >= x {
+            if reach[s - x] {
+                reach[s] = true;
+            }
+            s -= 1;
+        }
+    }
+    reach[half]
+}
+
+// ---- bits: can_partition_bits.kara
+
+fn can_partition_bits(nums: Vec[i64]) -> bool {
+    let mut total = 0;
+    for x in nums {
+        total += x;
+    }
+    if total % 2 != 0 {
+        return false;
+    }
+    let half = total / 2;
+    let words = half / 64 + 1;
+    let mut bits: Vec[u64] = vec![0; words];
+    bits[0] = 1;
+    for x in nums {
+        let whole = x / 64;
+        let part = x % 64;
+        let mut w = words - 1;
+        while w >= whole {
+            let mut moved = bits[w - whole] << part;
+            if part > 0 and w > whole {
+                moved = moved | (bits[w - whole - 1] >> (64 - part));
+            }
+            bits[w] = bits[w] | moved;
+            if w == 0 {
+                break;
+            }
+            w -= 1;
+        }
+    }
+    (bits[half / 64] >> (half % 64)) & 1 == 1
+}
+
+// ---- memo: can_partition_memo.kara
+
+fn can(nums: Vec[i64], i: i64, left: i64, memo: mut ref Vec[i64]) -> bool {
+    if left == 0 {
+        return true;
+    }
+    if i == nums.len() {
+        return false;
+    }
+    let key = i * (memo.len() / nums.len()) + left;
+    if memo[key] != 0 {
+        return memo[key] == 1;
+    }
+    let found = (nums[i] <= left and can(nums, i + 1, left - nums[i], memo)) or can(nums, i + 1, left, memo);
+    memo[key] = if found { 1 } else { 2 };
+    found
+}
+
+fn can_partition_memo(nums: Vec[i64]) -> bool {
+    let mut total = 0;
+    for x in nums {
+        total += x;
+    }
+    if total % 2 != 0 {
+        return false;
+    }
+    let half = total / 2;
+    let mut memo = vec![0; nums.len() * (half + 1)];
+    can(nums, 0, half, mut memo)
+}
+
+// ---- sums: can_partition_sums.kara
+
+fn can_partition_sums(nums: Vec[i64]) -> bool {
+    let mut total = 0;
+    for x in nums {
+        total += x;
+    }
+    if total % 2 != 0 {
+        return false;
+    }
+    let half = total / 2;
+    let mut sums: Set[i64] = Set.new();
+    sums.insert(0);
+    for x in nums {
+        let mut grown: Vec[i64] = Vec.new();
+        for s in sums {
+            if s + x <= half {
+                grown.push(s + x);
+            }
+        }
+        for s in grown {
+            sums.insert(s);
+        }
+    }
+    sums.contains(half)
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, nums: Vec[i64]) -> bool {
+    if arm == 0 {
+        can_partition_half(nums)
+    } else if arm == 1 {
+        can_partition_bits(nums)
+    } else if arm == 2 {
+        can_partition_memo(nums)
+    } else {
+        can_partition_sums(nums)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn sum(nums: Vec[i64]) -> i64 {
+    let mut total = 0;
+    for x in nums {
+        total += x;
+    }
+    total
+}
+
+// Whether some subset sums to exactly half the total, trying every one.
+fn brute(nums: Vec[i64]) -> bool {
+    let total = sum(nums);
+    if total % 2 != 0 {
+        return false;
+    }
+    let n = nums.len();
+    for mask in 0..(1 << n) {
+        let mut part = 0;
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                part += nums[i];
+            }
+        }
+        if 2 * part == total {
+            return true;
+        }
+    }
+    false
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4160;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..2000 {
+        let n = 1 + step(mut seed) % 12;
+        let limit = 1 + step(mut seed) % 100;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(1 + step(mut seed) % limit);
+        }
+        let best = brute(nums);
+        // P2: reversed, and rotated by a random amount.
+        let turn = step(mut seed) % n;
+        let mut reversed: Vec[i64] = Vec.new();
+        let mut rotated: Vec[i64] = Vec.new();
+        for i in 0..n {
+            reversed.push(nums[n - 1 - i]);
+            rotated.push(nums[(i + turn) % n]);
+        }
+        // P3: every number doubled, and a pair of equal numbers added.
+        let mut doubled: Vec[i64] = Vec.new();
+        for i in 0..n {
+            doubled.push(2 * nums[i]);
+        }
+        let mut paired = nums.clone();
+        let extra = 1 + step(mut seed) % limit;
+        paired.insert(step(mut seed) % (n + 1), extra);
+        paired.push(extra);
+        // P4: the numbers, then numbers of the same total cut at random,
+        // all shuffled: always splits.
+        let mut joined = nums.clone();
+        let mut left = sum(nums);
+        while left > 0 {
+            let piece = 1 + step(mut seed) % limit;
+            let take = if piece < left { piece } else { left };
+            joined.push(take);
+            left -= take;
+        }
+        let m = joined.len();
+        for i in 0..m {
+            let j = step(mut seed) % m;
+            let t = joined[i];
+            joined[i] = joined[j];
+            joined[j] = t;
+        }
+        // P5: an odd total never splits, nor does a number larger than
+        // all the others together.
+        let mut odd = nums.clone();
+        if sum(nums) % 2 == 0 {
+            odd.push(1);
+        }
+        let mut heavy = nums.clone();
+        heavy.push(sum(nums) + 2);
+        for arm in 0..4 {
+            checks += 5;
+            let answer = solve(arm, nums);
+            report(1, arm, case, answer == best, mut failures);
+            report(2, arm, case, solve(arm, reversed) == answer and solve(arm, rotated) == answer, mut failures);
+            report(3, arm, case, solve(arm, doubled) == answer and (not answer or solve(arm, paired)), mut failures);
+            report(4, arm, case, solve(arm, joined), mut failures);
+            report(5, arm, case, not solve(arm, odd) and not solve(arm, heavy), mut failures);
+        }
+    }
+    println(f"2000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

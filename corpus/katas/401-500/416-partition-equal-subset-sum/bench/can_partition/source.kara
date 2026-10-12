@@ -1,0 +1,71 @@
+// LeetCode #416: Partition Equal Subset Sum -- sums up to half.
+//
+// Two equal halves each sum to half the total, so the total must be
+// even and some subset must reach exactly half. reach[s] says whether a
+// subset of the numbers seen so far sums to s; each number x makes
+// reach[s] true where reach[s - x] was, walking s downward so that x is
+// used once. O(n * total) time, O(total) space.
+
+fn can_partition(nums: Vec[i64]) -> bool {
+    let mut total = 0;
+    for x in nums {
+        total += x;
+    }
+    if total % 2 != 0 {
+        return false;
+    }
+    let half = total / 2;
+    let mut reach = vec![false; half + 1];
+    reach[0] = true;
+    for x in nums {
+        let mut s = half;
+        while s >= x {
+            if reach[s - x] {
+                reach[s] = true;
+            }
+            s -= 1;
+        }
+    }
+    reach[half]
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let n = 200;
+    let rounds = 2000;
+    let mut seed: i64 = 416;
+    let mut nums: Vec[i64] = Vec.new();
+    let mut total = 0;
+    for _ in 0..n {
+        let x = 1 + step(mut seed) % 100;
+        nums.push(x);
+        total += x;
+    }
+    if total % 2 != 0 {
+        nums[0] += if nums[0] < 100 { 1 } else { -1 };
+    }
+    // Each round moves one unit from one number to another, keeping
+    // every number within 1 to 100 and the total even.
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let i = step(mut seed) % n;
+        let j = step(mut seed) % n;
+        if nums[i] < 100 and nums[j] > 1 {
+            nums[i] += 1;
+            nums[j] -= 1;
+        }
+        let answer = can_partition(nums);
+        if answer {
+            yes += 1;
+        }
+        checksum = (checksum * 31 + nums[i] + if answer { r } else { 0 }) % 1000000007;
+    }
+    println(f"{rounds} rounds on {n} numbers: {yes} can be split, checksum {checksum}");
+}

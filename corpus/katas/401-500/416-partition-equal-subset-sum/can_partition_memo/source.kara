@@ -1,0 +1,90 @@
+// LeetCode #416: Partition Equal Subset Sum -- memoized search.
+//
+// Decide for each number in turn whether it joins the first half:
+// can(i, left) asks whether the numbers from i on hold a subset summing
+// to left. Either nums[i] is taken, if it fits, or it is not. A table
+// keyed by (i, left) remembers each answer, 0 for unknown, 1 for yes
+// and 2 for no. O(n * total) time and space.
+
+fn can(nums: Vec[i64], i: i64, left: i64, memo: mut ref Vec[i64]) -> bool {
+    if left == 0 {
+        return true;
+    }
+    if i == nums.len() {
+        return false;
+    }
+    let key = i * (memo.len() / nums.len()) + left;
+    if memo[key] != 0 {
+        return memo[key] == 1;
+    }
+    let found = (nums[i] <= left and can(nums, i + 1, left - nums[i], memo)) or can(nums, i + 1, left, memo);
+    memo[key] = if found { 1 } else { 2 };
+    found
+}
+
+fn can_partition(nums: Vec[i64]) -> bool {
+    let mut total = 0;
+    for x in nums {
+        total += x;
+    }
+    if total % 2 != 0 {
+        return false;
+    }
+    let half = total / 2;
+    let mut memo = vec![0; nums.len() * (half + 1)];
+    can(nums, 0, half, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut line = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            line.push_str(", ");
+        }
+        line.push_str(f"{nums[i]}");
+    }
+    println(f"[{line}]: {can_partition(nums)}");
+}
+
+fn main() {
+    show(vec![1, 5, 11, 5]);
+    show(vec![1, 2, 3, 5]);
+    show(vec![1]);
+    show(vec![7, 7]);
+    show(vec![1, 2]);
+    show(vec![2, 2, 3, 5]);
+    show(vec![3, 3, 3, 4, 5]);
+    show(vec![100, 100, 100, 100, 99, 1]);
+    show(vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 100]);
+    let mut big: Vec[i64] = Vec.new();
+    for i in 0..200 {
+        big.push(100 - i % 2);
+    }
+    println(f"200 numbers, 100 and 99 in turn: {can_partition(big)}");
+    // 2,000 random arrays of 1 to 40 numbers from 1 to a random limit of
+    // up to 100; the small limits make many sums even and many splits.
+    let mut seed: i64 = 416;
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let n = 1 + step(mut seed) % 40;
+        let limit = 1 + step(mut seed) % 100;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(1 + step(mut seed) % limit);
+        }
+        let answer = can_partition(nums);
+        if answer {
+            yes += 1;
+        }
+        checksum = (checksum * 31 + n + if answer { 1000 } else { 0 }) % 1000000007;
+    }
+    println(f"2000 random arrays: {yes} can be split, checksum {checksum}");
+}

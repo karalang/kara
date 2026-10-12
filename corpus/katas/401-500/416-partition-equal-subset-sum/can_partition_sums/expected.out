@@ -1,0 +1,11 @@
+[1, 5, 11, 5]: true
+[1, 2, 3, 5]: false
+[1]: false
+[7, 7]: true
+[1, 2]: false
+[2, 2, 3, 5]: false
+[3, 3, 3, 4, 5]: true
+[100, 100, 100, 100, 99, 1]: false
+[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 100]: false
+200 numbers, 100 and 99 in turn: true
+2000 random arrays: 841 can be split, checksum 700001259

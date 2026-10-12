@@ -1,0 +1,92 @@
+// LeetCode #416: Partition Equal Subset Sum -- a bitset.
+//
+// The ★ arm's table of reachable sums held as bits, 64 to a word: bit s
+// of the set is 1 when some subset sums to s. A number x adds every
+// reachable sum plus x, which is the whole set shifted up by x bits and
+// ORed in, done word by word from the top so that each word is read
+// before it is written. O(n * total / 64) time, O(total / 64) space.
+
+fn can_partition(nums: Vec[i64]) -> bool {
+    let mut total = 0;
+    for x in nums {
+        total += x;
+    }
+    if total % 2 != 0 {
+        return false;
+    }
+    let half = total / 2;
+    let words = half / 64 + 1;
+    let mut bits: Vec[u64] = vec![0; words];
+    bits[0] = 1;
+    for x in nums {
+        let whole = x / 64;
+        let part = x % 64;
+        let mut w = words - 1;
+        while w >= whole {
+            let mut moved = bits[w - whole] << part;
+            if part > 0 and w > whole {
+                moved = moved | (bits[w - whole - 1] >> (64 - part));
+            }
+            bits[w] = bits[w] | moved;
+            if w == 0 {
+                break;
+            }
+            w -= 1;
+        }
+    }
+    (bits[half / 64] >> (half % 64)) & 1 == 1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut line = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            line.push_str(", ");
+        }
+        line.push_str(f"{nums[i]}");
+    }
+    println(f"[{line}]: {can_partition(nums)}");
+}
+
+fn main() {
+    show(vec![1, 5, 11, 5]);
+    show(vec![1, 2, 3, 5]);
+    show(vec![1]);
+    show(vec![7, 7]);
+    show(vec![1, 2]);
+    show(vec![2, 2, 3, 5]);
+    show(vec![3, 3, 3, 4, 5]);
+    show(vec![100, 100, 100, 100, 99, 1]);
+    show(vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 100]);
+    let mut big: Vec[i64] = Vec.new();
+    for i in 0..200 {
+        big.push(100 - i % 2);
+    }
+    println(f"200 numbers, 100 and 99 in turn: {can_partition(big)}");
+    // 2,000 random arrays of 1 to 40 numbers from 1 to a random limit of
+    // up to 100; the small limits make many sums even and many splits.
+    let mut seed: i64 = 416;
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let n = 1 + step(mut seed) % 40;
+        let limit = 1 + step(mut seed) % 100;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(1 + step(mut seed) % limit);
+        }
+        let answer = can_partition(nums);
+        if answer {
+            yes += 1;
+        }
+        checksum = (checksum * 31 + n + if answer { 1000 } else { 0 }) % 1000000007;
+    }
+    println(f"2000 random arrays: {yes} can be split, checksum {checksum}");
+}
