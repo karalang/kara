@@ -1,0 +1,88 @@
+// LeetCode #419: Battleships in a Board -- count the first cells.
+//
+// Ships are straight lines of 'X' that never touch, not even at a
+// corner along a side, so each ship has exactly one first cell: the one
+// with no 'X' above it and none to its left. Count those in one pass,
+// without changing the board. O(m n) time, O(1) space.
+
+fn count_battleships(board: Vec[Vec[char]]) -> i64 {
+    let mut count = 0;
+    for r in 0..board.len() {
+        for c in 0..board[r].len() {
+            if board[r][c] == 'X' and (r == 0 or board[r - 1][c] != 'X') and (c == 0 or board[r][c - 1] != 'X') {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Whether (r, c) and its four neighbours are all water, or the board
+// edge.
+fn clear(board: Vec[Vec[char]], r: i64, c: i64) -> bool {
+    let n = board.len();
+    let around = [(r, c), (r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)];
+    for (rr, cc) in around {
+        if rr >= 0 and rr < n and cc >= 0 and cc < n and board[rr][cc] == 'X' {
+            return false;
+        }
+    }
+    true
+}
+
+fn main() {
+    let n = 200;
+    let rounds = 20000;
+    let mut seed: i64 = 419;
+    let mut board: Vec[Vec[char]] = Vec.new();
+    for _ in 0..n {
+        board.push(vec!['.'; n]);
+    }
+    // Ships of 1 to 4 cells, each placed only where no cell of it or
+    // beside it already holds a ship.
+    for _ in 0..4000 {
+        let length = 1 + step(mut seed) % 4;
+        let across = step(mut seed) % 2 == 0;
+        let r = step(mut seed) % n;
+        let c = step(mut seed) % n;
+        let (dr, dc) = if across { (0, 1) } else { (1, 0) };
+        let mut fits = r + dr * (length - 1) < n and c + dc * (length - 1) < n;
+        for k in 0..length {
+            if fits and not clear(board, r + dr * k, c + dc * k) {
+                fits = false;
+            }
+        }
+        if fits {
+            for k in 0..length {
+                board[r + dr * k][c + dc * k] = 'X';
+            }
+        }
+    }
+    // Each round places a one-cell ship on a clear cell, or sinks one
+    // that stands alone, and counts the ships again.
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        let r = step(mut seed) % n;
+        let c = step(mut seed) % n;
+        if board[r][c] == 'X' {
+            board[r][c] = '.';
+            if not clear(board, r, c) {
+                board[r][c] = 'X';
+            }
+        } else if clear(board, r, c) {
+            board[r][c] = 'X';
+        }
+        let answer = count_battleships(board);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"{rounds} rounds on a {n}x{n} board: total {total}, checksum {checksum}");
+}

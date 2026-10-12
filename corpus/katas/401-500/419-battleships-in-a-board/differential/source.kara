@@ -1,0 +1,258 @@
+// Differential test for LeetCode #419: Battleships in a Board.
+//
+// Copies of the four arms, each run on 2,000 random boards. Properties
+// known by construction:
+//   P1  the answer is the number of ships the generator placed
+//   P2  the board transposed, or with each row reversed, gives the same
+//       answer
+//   P3  an empty row and then a row with one ship cell, added below,
+//       add one ship
+//   P4  the board twice side by side, a column of water between, gives
+//       twice the answer
+//   P5  one-cell ships on every other cell of every other row number
+//       ceil(rows / 2) * ceil(cols / 2)
+
+// ---- first: battleships.kara
+
+fn count_battleships_first(board: Vec[Vec[char]]) -> i64 {
+    let mut count = 0;
+    for r in 0..board.len() {
+        for c in 0..board[r].len() {
+            if board[r][c] == 'X' and (r == 0 or board[r - 1][c] != 'X') and (c == 0 or board[r][c - 1] != 'X') {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// ---- flood: battleships_flood.kara
+
+fn count_battleships_flood(board: Vec[Vec[char]]) -> i64 {
+    let rows = board.len();
+    let mut visited: Vec[Vec[bool]] = Vec.new();
+    for r in 0..rows {
+        visited.push(vec![false; board[r].len()]);
+    }
+    let mut count = 0;
+    for r in 0..rows {
+        for c in 0..board[r].len() {
+            if board[r][c] != 'X' or visited[r][c] {
+                continue;
+            }
+            count += 1;
+            visited[r][c] = true;
+            let mut stack: Vec[(i64, i64)] = vec![(r, c)];
+            while let Some((sr, sc)) = stack.pop() {
+                let around = [(sr - 1, sc), (sr + 1, sc), (sr, sc - 1), (sr, sc + 1)];
+                for (nr, nc) in around {
+                    if nr >= 0 and nr < rows and nc >= 0 and nc < board[nr].len() and board[nr][nc] == 'X' and not visited[nr][nc] {
+                        visited[nr][nc] = true;
+                        stack.push((nr, nc));
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+
+// ---- union: battleships_union.kara
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut x = x;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn count_battleships_union(board: Vec[Vec[char]]) -> i64 {
+    let rows = board.len();
+    let cols = board[0].len();
+    let mut parent: Vec[i64] = Vec.new();
+    for i in 0..rows * cols {
+        parent.push(i);
+    }
+    let mut size = vec![1; rows * cols];
+    let mut count = 0;
+    for r in 0..rows {
+        for c in 0..cols {
+            if board[r][c] != 'X' {
+                continue;
+            }
+            count += 1;
+            let here = r * cols + c;
+            let neighbours = [(r, c + 1), (r + 1, c)];
+            for (nr, nc) in neighbours {
+                if nr < rows and nc < cols and board[nr][nc] == 'X' {
+                    let a = find(mut parent, here);
+                    let b = find(mut parent, nr * cols + nc);
+                    if a != b {
+                        if size[a] < size[b] {
+                            parent[a] = b;
+                            size[b] += size[a];
+                        } else {
+                            parent[b] = a;
+                            size[a] += size[b];
+                        }
+                        count -= 1;
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+
+// ---- links: battleships_links.kara
+
+fn count_battleships_links(board: Vec[Vec[char]]) -> i64 {
+    let mut cells = 0;
+    let mut links = 0;
+    for r in 0..board.len() {
+        for c in 0..board[r].len() {
+            if board[r][c] != 'X' {
+                continue;
+            }
+            cells += 1;
+            if c + 1 < board[r].len() and board[r][c + 1] == 'X' {
+                links += 1;
+            }
+            if r + 1 < board.len() and board[r + 1][c] == 'X' {
+                links += 1;
+            }
+        }
+    }
+    cells - links
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, board: Vec[Vec[char]]) -> i64 {
+    if arm == 0 {
+        count_battleships_first(board)
+    } else if arm == 1 {
+        count_battleships_flood(board)
+    } else if arm == 2 {
+        count_battleships_union(board)
+    } else {
+        count_battleships_links(board)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4190;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..2000 {
+        let rows = 1 + step(mut seed) % 10;
+        let cols = 1 + step(mut seed) % 10;
+        let mut board: Vec[Vec[char]] = Vec.new();
+        for _ in 0..rows {
+            board.push(vec!['.'; cols]);
+        }
+        // Place ships of 1 to 5 cells where no cell beside or behind them
+        // holds a ship; corners may touch, as the problem allows.
+        let mut placed = 0;
+        let tries = step(mut seed) % 25;
+        for _ in 0..tries {
+            let length = 1 + step(mut seed) % 5;
+            let across = step(mut seed) % 2 == 0;
+            let r = step(mut seed) % rows;
+            let c = step(mut seed) % cols;
+            let (dr, dc) = if across { (0, 1) } else { (1, 0) };
+            let mut fits = r + dr * (length - 1) < rows and c + dc * (length - 1) < cols;
+            if fits {
+                for k in -1..length + 1 {
+                    for side in -1..2 {
+                        let inside = k >= 0 and k < length;
+                        if inside or side == 0 {
+                            let rr = r + dr * k + dc * side;
+                            let cc = c + dc * k + dr * side;
+                            if rr >= 0 and rr < rows and cc >= 0 and cc < cols and board[rr][cc] == 'X' {
+                                fits = false;
+                            }
+                        }
+                    }
+                }
+            }
+            if fits {
+                for k in 0..length {
+                    board[r + dr * k][c + dc * k] = 'X';
+                }
+                placed += 1;
+            }
+        }
+        // P2: transposed, and each row reversed.
+        let mut transposed: Vec[Vec[char]] = Vec.new();
+        for c in 0..cols {
+            let mut row: Vec[char] = Vec.new();
+            for r in 0..rows {
+                row.push(board[r][c]);
+            }
+            transposed.push(row);
+        }
+        let mut mirrored: Vec[Vec[char]] = Vec.new();
+        for r in 0..rows {
+            let mut row = board[r].clone();
+            row.reverse();
+            mirrored.push(row);
+        }
+        // P3: an empty row and a row with one ship cell added below.
+        let mut grown = board.clone();
+        grown.push(vec!['.'; cols]);
+        let mut last = vec!['.'; cols];
+        last[step(mut seed) % cols] = 'X';
+        grown.push(last);
+        // P4: the board twice side by side, a column of water between.
+        let mut doubled: Vec[Vec[char]] = Vec.new();
+        for r in 0..rows {
+            let mut row = board[r].clone();
+            row.push('.');
+            for c in 0..cols {
+                row.push(board[r][c]);
+            }
+            doubled.push(row);
+        }
+        // P5: one-cell ships on every other cell of every other row.
+        let mut dotted: Vec[Vec[char]] = Vec.new();
+        for r in 0..rows {
+            let mut row: Vec[char] = Vec.new();
+            for c in 0..cols {
+                row.push(if r % 2 == 0 and c % 2 == 0 { 'X' } else { '.' });
+            }
+            dotted.push(row);
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let answer = solve(arm, board);
+            report(1, arm, case, answer == placed, mut failures);
+            report(2, arm, case, solve(arm, transposed) == answer and solve(arm, mirrored) == answer, mut failures);
+            report(3, arm, case, solve(arm, grown) == answer + 1, mut failures);
+            report(4, arm, case, solve(arm, doubled) == 2 * answer, mut failures);
+            report(5, arm, case, solve(arm, dotted) == ((rows + 1) / 2) * ((cols + 1) / 2), mut failures);
+        }
+    }
+    println(f"2000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

@@ -1,0 +1,90 @@
+// LeetCode #419: Battleships in a Board -- count the first cells.
+//
+// Ships are straight lines of 'X' that never touch, not even at a
+// corner along a side, so each ship has exactly one first cell: the one
+// with no 'X' above it and none to its left. Count those in one pass,
+// without changing the board. O(m n) time, O(1) space.
+
+fn count_battleships(board: Vec[Vec[char]]) -> i64 {
+    let mut count = 0;
+    for r in 0..board.len() {
+        for c in 0..board[r].len() {
+            if board[r][c] == 'X' and (r == 0 or board[r - 1][c] != 'X') and (c == 0 or board[r][c - 1] != 'X') {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A board written as its rows separated by '/'.
+fn show(text: Str) {
+    let mut board: Vec[Vec[char]] = Vec.new();
+    for row in text.split("/") {
+        board.push(row.chars().collect());
+    }
+    println(f"{text}: {count_battleships(board)}");
+}
+
+fn main() {
+    show("X..X/...X/...X");
+    show(".");
+    show("X");
+    show("XXXX");
+    show("X/X/X");
+    show("X.X.X/...../X.X.X");
+    show("XX.XX/...../XXXXX");
+    show("X..../X.XXX/X..../....X/X...X");
+    show("...../...../.....");
+    // 1,000 random boards of 1 to 12 by 1 to 12 cells, with ships of 1
+    // to 4 cells placed at random where they touch no other ship.
+    let mut seed: i64 = 419;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..1000 {
+        let rows = 1 + step(mut seed) % 12;
+        let cols = 1 + step(mut seed) % 12;
+        let mut board: Vec[Vec[char]] = Vec.new();
+        for _ in 0..rows {
+            board.push(vec!['.'; cols]);
+        }
+        let tries = step(mut seed) % 20;
+        for _ in 0..tries {
+            let length = 1 + step(mut seed) % 4;
+            let across = step(mut seed) % 2 == 0;
+            let r = step(mut seed) % rows;
+            let c = step(mut seed) % cols;
+            let (dr, dc) = if across { (0, 1) } else { (1, 0) };
+            let mut fits = r + dr * (length - 1) < rows and c + dc * (length - 1) < cols;
+            // No cell of the ship, nor any cell beside or behind it, may
+            // already hold a ship.
+            if fits {
+                for k in -1..length + 1 {
+                    for side in -1..2 {
+                        let rr = r + dr * k + dc * side;
+                        let cc = c + dc * k + dr * side;
+                        if rr >= 0 and rr < rows and cc >= 0 and cc < cols and board[rr][cc] == 'X' {
+                            fits = false;
+                        }
+                    }
+                }
+            }
+            if fits {
+                for k in 0..length {
+                    board[r + dr * k][c + dc * k] = 'X';
+                }
+            }
+        }
+        let answer = count_battleships(board);
+        total += answer;
+        checksum = (checksum * 31 + answer + rows * cols) % 1000000007;
+    }
+    println(f"1000 random boards: {total} ships, checksum {checksum}");
+}
