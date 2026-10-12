@@ -112,3 +112,79 @@ fn karac_build_mir_writes_the_executable() {
     let run = Command::new(&exe).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&run.stdout), "hello 30 5 p3\n");
 }
+
+/// `#[derive(Serialize, Deserialize)]` and `Json` compiled: the same text
+/// as on the MIR interpreter (`tests/mir_serde.rs`), at -O0 and -O2.
+const SERDE_PROGRAM: &str = r#"
+#[derive(Serialize, Deserialize)]
+struct Config {
+    #[serde(rename: "server_name")]
+    name: String,
+    #[serde(skip)]
+    cache: Vec[i64],
+    #[serde(default: 8080)]
+    port: i64,
+    shapes: Vec[Shape],
+    sorted: SortedMap[i64, String],
+    nick: Option[String],
+}
+
+#[derive(Serialize, Deserialize)]
+enum Shape { Dot, Circle(i64), Rect(i64, i64), Named { label: String } }
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag: "type")]
+enum Event { Ping, Move { x: i64, y: i64 } }
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum Value { Nothing, Num(i64), Text(String) }
+
+fn main() {
+    let mut sorted: SortedMap[i64, String] = SortedMap.new();
+    sorted.insert(2, "two".to_string());
+    sorted.insert(1, "one".to_string());
+    let c = Config {
+        name: "a\"b".to_string(),
+        cache: vec![1],
+        port: 9,
+        shapes: vec![Shape.Dot, Shape.Circle(2), Shape.Rect(3, 4), Shape.Named { label: "t".to_string() }],
+        sorted: sorted,
+        nick: None,
+    };
+    let j = Json.serialize(c);
+    println(j);
+    let back: Result[Config, DeserializeError] = Json.deserialize(j);
+    match back {
+        Ok(b) => println(f"{b.name} {b.cache.len()} {b.port} {b.shapes.len()} {b.sorted.len()}"),
+        Err(e) => println(e.message),
+    }
+    let sparse: Result[Config, DeserializeError] =
+        Json.deserialize("{\"server_name\": \"s\", \"shapes\": [], \"sorted\": {}}");
+    match sparse { Ok(b) => println(f"{b.port}"), Err(e) => println(e.message) }
+    let evs = vec![Event.Ping, Event.Move { x: 1, y: 2 }];
+    let je = Json.serialize(evs);
+    let evs2: Result[Vec[Event], DeserializeError] = Json.deserialize(je);
+    println(f"{je} {evs2.unwrap().len()}");
+    let vs = vec![Value.Nothing, Value.Num(3), Value.Text("t".to_string())];
+    let jv = Json.serialize(vs);
+    let vs2: Result[Vec[Value], DeserializeError] = Json.deserialize(jv);
+    println(f"{jv} {vs2.unwrap().len()}");
+}
+"#;
+
+#[test]
+fn mir_build_runs_derived_serde() {
+    let want = "{\"server_name\":\"a\\\"b\",\"port\":9,\"shapes\":[\"Dot\",{\"Circle\":2},{\"Rect\":[3,4]},{\"Named\":{\"label\":\"t\"}}],\"sorted\":{\"1\":\"one\",\"2\":\"two\"},\"nick\":null}\n\
+                a\"b 0 9 4 2\n\
+                8080\n\
+                [{\"type\":\"Ping\"},{\"type\":\"Move\",\"x\":1,\"y\":2}] 2\n\
+                [null,3,\"t\"] 3\n";
+    let interp = karac::mir::lower::run_source(SERDE_PROGRAM).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SERDE_PROGRAM, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

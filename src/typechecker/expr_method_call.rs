@@ -58,6 +58,48 @@ pub(super) const SET_BUILTIN_METHODS: &[&str] = &[
     "union",
 ];
 
+/// Every method name `infer_sorted_set_method` answers. Used like
+/// `SET_BUILTIN_METHODS`: a user trait impl on `SortedSet` (the library's
+/// `Serialize`) is consulted only for a name outside this list.
+pub(super) const SORTED_SET_BUILTIN_METHODS: &[&str] = &[
+    "contains",
+    "difference",
+    "insert",
+    "intersection",
+    "is_empty",
+    "len",
+    "max",
+    "min",
+    "range",
+    "range_inclusive",
+    "remove",
+    "union",
+];
+
+/// Every method name `infer_sorted_map_method` answers; the `SortedMap` peer
+/// of `MAP_BUILTIN_METHODS`.
+pub(super) const SORTED_MAP_BUILTIN_METHODS: &[&str] = &[
+    "ceiling",
+    "clear",
+    "contains_key",
+    "entries",
+    "entry",
+    "floor",
+    "get",
+    "get_or",
+    "insert",
+    "is_empty",
+    "keys",
+    "len",
+    "max",
+    "merge",
+    "min",
+    "range",
+    "range_inclusive",
+    "remove",
+    "values",
+];
+
 pub(super) const MAP_BUILTIN_METHODS: &[&str] = &[
     "clear",
     "contains_key",
@@ -1087,6 +1129,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "element_type"
                 | "key_type"
                 | "value_type"
+                | "attributes"
         )
     }
 
@@ -1191,6 +1234,9 @@ impl<'a> super::TypeChecker<'a> {
             "is_struct" | "is_enum" | "is_union" | "is_generic" => Type::Bool,
             "fields" => vec_of(named("Field")),
             "variants" => vec_of(named("Variant")),
+            // The type's own `#[...]` attributes, rendered as `Field.attrs`
+            // renders a field's (`serde(tag: "type")`).
+            "attributes" => vec_of(Type::Str),
             // `element_type()` peels one generic argument (e.g. `Vec[T]` → `T`)
             // and yields it as a `Type` pseudovalue, so a derive can reflect on
             // a repeated field's element. A non-generic type returns itself.

@@ -1107,6 +1107,30 @@ impl<'a> super::TypeChecker<'a> {
                     ("field_count".to_string(), Type::Int(IntSize::I64), true),
                     ("payload".to_string(), Type::Str, true),
                     ("payload_ty".to_string(), type_pseudo(), true),
+                    (
+                        "field_names".to_string(),
+                        Type::Named {
+                            name: "Vec".to_string(),
+                            args: vec![Type::Str],
+                        },
+                        true,
+                    ),
+                    (
+                        "field_types".to_string(),
+                        Type::Named {
+                            name: "Vec".to_string(),
+                            args: vec![Type::Str],
+                        },
+                        true,
+                    ),
+                    (
+                        "attrs".to_string(),
+                        Type::Named {
+                            name: "Vec".to_string(),
+                            args: vec![Type::Str],
+                        },
+                        true,
+                    ),
                 ],
                 field_attrs: std::collections::HashMap::new(),
                 mut_fields: HashSet::new(),

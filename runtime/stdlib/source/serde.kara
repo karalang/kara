@@ -1,0 +1,1457 @@
+// `Serialize` and `Deserialize` (design.md § Serialize and Deserialize;
+// decision D8, redesign M2).
+//
+// The traits are format-independent visitors. A format implements
+// `Serializer` / `Deserializer`; `#[derive(Serialize, Deserialize)]` (the
+// comptime `derive_serialize` / `derive_deserialize` below) writes the
+// traversal as ordinary Kāra. Everything here is Kāra: the MIR interpreter
+// and the compiled backend run the same bodies, and the JSON format at the
+// end needs no runtime support.
+//
+// The MIR pipeline appends this file to a program that names any of its
+// items.
+
+pub struct DeserializeError {
+    pub message: String,
+}
+
+impl DeserializeError {
+    fn new(message: own String) -> DeserializeError {
+        DeserializeError { message: message }
+    }
+}
+
+impl Display for DeserializeError {
+    fn to_string(ref self) -> String {
+        self.message.clone()
+    }
+}
+
+/// A format's writing half. Containers are bracketed by `_begin` / `_end`,
+/// and every element, field, key and value is announced before it is
+/// written, so a format can place its separators.
+pub trait Serializer {
+    fn serialize_bool(mut ref self, v: bool);
+    fn serialize_i64(mut ref self, v: i64);
+    fn serialize_u64(mut ref self, v: u64);
+    fn serialize_f64(mut ref self, v: f64);
+    fn serialize_string(mut ref self, v: String);
+    fn serialize_none(mut ref self);
+    fn serialize_seq_begin(mut ref self, len: i64);
+    fn serialize_element(mut ref self);
+    fn serialize_seq_end(mut ref self);
+    fn serialize_map_begin(mut ref self, len: i64);
+    fn serialize_key(mut ref self);
+    fn serialize_value(mut ref self);
+    fn serialize_map_end(mut ref self);
+    fn serialize_struct_begin(mut ref self, name: String, len: i64);
+    fn serialize_field(mut ref self, name: String);
+    fn serialize_struct_end(mut ref self);
+    fn serialize_unit_variant(mut ref self, name: String, variant: String);
+    fn serialize_variant_begin(mut ref self, name: String, variant: String);
+    fn serialize_variant_end(mut ref self);
+}
+
+pub trait Serialize {
+    fn serialize[S: Serializer](ref self, s: mut ref S);
+}
+
+/// A format's reading half, the mirror of [`Serializer`].
+pub trait Deserializer {
+    fn deserialize_bool(mut ref self) -> Result[bool, DeserializeError];
+    fn deserialize_i64(mut ref self) -> Result[i64, DeserializeError];
+    fn deserialize_u64(mut ref self) -> Result[u64, DeserializeError];
+    fn deserialize_f64(mut ref self) -> Result[f64, DeserializeError];
+    fn deserialize_string(mut ref self) -> Result[String, DeserializeError];
+    /// `true` when a value follows; `false`, with the "none" consumed, when
+    /// there is none.
+    fn deserialize_option(mut ref self) -> Result[bool, DeserializeError];
+    fn deserialize_seq_begin(mut ref self) -> Result[(), DeserializeError];
+    /// `true` when another element follows; `false` at the end.
+    fn deserialize_element(mut ref self) -> Result[bool, DeserializeError];
+    fn deserialize_map_begin(mut ref self) -> Result[(), DeserializeError];
+    /// `true` when another entry follows: its key comes next, then
+    /// `deserialize_value`, then the value.
+    fn deserialize_key(mut ref self) -> Result[bool, DeserializeError];
+    fn deserialize_value(mut ref self) -> Result[(), DeserializeError];
+    fn deserialize_struct_begin(mut ref self, name: String) -> Result[(), DeserializeError];
+    /// The next field's name, or `None` at the end of the struct.
+    fn deserialize_field(mut ref self) -> Result[Option[String], DeserializeError];
+    /// Reads past one value of any shape (a field the type does not have).
+    fn deserialize_skip(mut ref self) -> Result[(), DeserializeError];
+    /// The variant's name, and whether a payload follows it.
+    fn deserialize_variant(mut ref self, name: String) -> Result[(String, bool), DeserializeError];
+    fn deserialize_variant_end(mut ref self) -> Result[(), DeserializeError];
+    /// The current position, to come back to with `deserialize_reset`. An
+    /// internally tagged enum reads ahead for its tag, and an untagged one
+    /// tries its variants in turn, rereading the same value.
+    fn deserialize_mark(mut ref self) -> i64;
+    fn deserialize_reset(mut ref self, mark: i64);
+}
+
+pub trait Deserialize {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[Self, DeserializeError];
+}
+
+/// One value of the type the caller expects; derived code reads fields
+/// through it, as the field's type is written nowhere else.
+fn serde_next[X: Deserialize, D: Deserializer](d: mut ref D) -> Result[X, DeserializeError] {
+    X.deserialize(d)
+}
+
+/// The next element of a variant's payload sequence, which must have one.
+fn serde_element[X: Deserialize, D: Deserializer](d: mut ref D) -> Result[X, DeserializeError] {
+    if not d.deserialize_element()? {
+        return Err(DeserializeError.new("too few values in a variant's payload".to_string()));
+    }
+    X.deserialize(d)
+}
+
+/// A skipped field's value when it names no `default`.
+fn serde_default[X: Default]() -> X {
+    X.default()
+}
+
+/// A missing field's value: `None` for an `Option` field, an error otherwise.
+fn serde_missing[X](field: String, slot: own Option[X]) -> Result[X, DeserializeError] {
+    match slot {
+        Some(v) => Ok(v),
+        None => Err(DeserializeError.new(f"missing field `{field}`")),
+    }
+}
+
+// ── The library's own types ────────────────────────────────────────
+
+impl Serialize for bool {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_bool(self);
+    }
+}
+
+impl Serialize for i8 {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_i64(self as i64);
+    }
+}
+
+impl Serialize for i16 {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_i64(self as i64);
+    }
+}
+
+impl Serialize for i32 {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_i64(self as i64);
+    }
+}
+
+impl Serialize for i64 {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_i64(self);
+    }
+}
+
+impl Serialize for isize {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_i64(self as i64);
+    }
+}
+
+impl Serialize for u8 {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_u64(self as u64);
+    }
+}
+
+impl Serialize for u16 {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_u64(self as u64);
+    }
+}
+
+impl Serialize for u32 {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_u64(self as u64);
+    }
+}
+
+impl Serialize for u64 {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_u64(self);
+    }
+}
+
+impl Serialize for usize {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_u64(self as u64);
+    }
+}
+
+impl Serialize for f32 {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_f64(self as f64);
+    }
+}
+
+impl Serialize for f64 {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_f64(self);
+    }
+}
+
+impl Serialize for char {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_string(self.to_string());
+    }
+}
+
+impl Serialize for String {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_string(self);
+    }
+}
+
+impl[T: Serialize] Serialize for Vec[T] {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_seq_begin(self.len());
+        for x in self.iter() {
+            s.serialize_element();
+            x.serialize(s);
+        }
+        s.serialize_seq_end();
+    }
+}
+
+impl[T: Serialize] Serialize for VecDeque[T] {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_seq_begin(self.len());
+        for x in self.iter() {
+            s.serialize_element();
+            x.serialize(s);
+        }
+        s.serialize_seq_end();
+    }
+}
+
+impl[T: Serialize] Serialize for Set[T] {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_seq_begin(self.len());
+        for x in self.iter() {
+            s.serialize_element();
+            x.serialize(s);
+        }
+        s.serialize_seq_end();
+    }
+}
+
+impl[T: Serialize] Serialize for SortedSet[T] {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_seq_begin(self.len());
+        for x in self.iter() {
+            s.serialize_element();
+            x.serialize(s);
+        }
+        s.serialize_seq_end();
+    }
+}
+
+impl[T: Serialize] Serialize for Option[T] {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        match self {
+            Some(x) => x.serialize(s),
+            None => s.serialize_none(),
+        }
+    }
+}
+
+impl[K: Serialize, V: Serialize] Serialize for Map[K, V] {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_map_begin(self.len());
+        for (k, v) in self.iter() {
+            s.serialize_key();
+            k.serialize(s);
+            s.serialize_value();
+            v.serialize(s);
+        }
+        s.serialize_map_end();
+    }
+}
+
+impl[K: Serialize, V: Serialize] Serialize for SortedMap[K, V] {
+    fn serialize[S: Serializer](ref self, s: mut ref S) {
+        s.serialize_map_begin(self.len());
+        for (k, v) in self.iter() {
+            s.serialize_key();
+            k.serialize(s);
+            s.serialize_value();
+            v.serialize(s);
+        }
+        s.serialize_map_end();
+    }
+}
+
+impl Deserialize for bool {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[bool, DeserializeError] {
+        d.deserialize_bool()
+    }
+}
+
+/// `v` as a narrower integer, or an error naming the type.
+fn serde_narrow(v: i64, lo: i64, hi: i64, ty: String) -> Result[i64, DeserializeError] {
+    if v < lo or v > hi {
+        return Err(DeserializeError.new(f"{v} is out of range for {ty}"));
+    }
+    Ok(v)
+}
+
+impl Deserialize for i8 {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[i8, DeserializeError] {
+        Ok(serde_narrow(d.deserialize_i64()?, -128, 127, "i8")? as i8)
+    }
+}
+
+impl Deserialize for i16 {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[i16, DeserializeError] {
+        Ok(serde_narrow(d.deserialize_i64()?, -32768, 32767, "i16")? as i16)
+    }
+}
+
+impl Deserialize for i32 {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[i32, DeserializeError] {
+        Ok(serde_narrow(d.deserialize_i64()?, -2147483648, 2147483647, "i32")? as i32)
+    }
+}
+
+impl Deserialize for i64 {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[i64, DeserializeError] {
+        d.deserialize_i64()
+    }
+}
+
+impl Deserialize for isize {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[isize, DeserializeError] {
+        Ok(d.deserialize_i64()? as isize)
+    }
+}
+
+impl Deserialize for u8 {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[u8, DeserializeError] {
+        let v = d.deserialize_u64()?;
+        if v > 255 {
+            return Err(DeserializeError.new(f"{v} is out of range for u8"));
+        }
+        Ok(v as u8)
+    }
+}
+
+impl Deserialize for u16 {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[u16, DeserializeError] {
+        let v = d.deserialize_u64()?;
+        if v > 65535 {
+            return Err(DeserializeError.new(f"{v} is out of range for u16"));
+        }
+        Ok(v as u16)
+    }
+}
+
+impl Deserialize for u32 {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[u32, DeserializeError] {
+        let v = d.deserialize_u64()?;
+        if v > 4294967295 {
+            return Err(DeserializeError.new(f"{v} is out of range for u32"));
+        }
+        Ok(v as u32)
+    }
+}
+
+impl Deserialize for u64 {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[u64, DeserializeError] {
+        d.deserialize_u64()
+    }
+}
+
+impl Deserialize for usize {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[usize, DeserializeError] {
+        Ok(d.deserialize_u64()? as usize)
+    }
+}
+
+impl Deserialize for f32 {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[f32, DeserializeError] {
+        Ok(d.deserialize_f64()? as f32)
+    }
+}
+
+impl Deserialize for f64 {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[f64, DeserializeError] {
+        d.deserialize_f64()
+    }
+}
+
+impl Deserialize for char {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[char, DeserializeError] {
+        let s = d.deserialize_string()?;
+        let cs: Vec[char] = s.chars().collect();
+        if cs.len() != 1 {
+            return Err(DeserializeError.new(f"expected one character, found \"{s}\""));
+        }
+        Ok(cs[0])
+    }
+}
+
+impl Deserialize for String {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[String, DeserializeError] {
+        d.deserialize_string()
+    }
+}
+
+impl[T: Deserialize] Deserialize for Vec[T] {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[Vec[T], DeserializeError] {
+        d.deserialize_seq_begin()?;
+        let mut out: Vec[T] = Vec.new();
+        while d.deserialize_element()? {
+            out.push(T.deserialize(d)?);
+        }
+        Ok(out)
+    }
+}
+
+impl[T: Deserialize] Deserialize for VecDeque[T] {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[VecDeque[T], DeserializeError] {
+        d.deserialize_seq_begin()?;
+        let mut out: VecDeque[T] = VecDeque.new();
+        while d.deserialize_element()? {
+            out.push_back(T.deserialize(d)?);
+        }
+        Ok(out)
+    }
+}
+
+impl[T: Deserialize + Hash + Eq] Deserialize for Set[T] {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[Set[T], DeserializeError] {
+        d.deserialize_seq_begin()?;
+        let mut out: Set[T] = Set.new();
+        while d.deserialize_element()? {
+            out.insert(T.deserialize(d)?);
+        }
+        Ok(out)
+    }
+}
+
+impl[T: Deserialize + Ord] Deserialize for SortedSet[T] {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[SortedSet[T], DeserializeError] {
+        d.deserialize_seq_begin()?;
+        let mut out: SortedSet[T] = SortedSet.new();
+        while d.deserialize_element()? {
+            out.insert(T.deserialize(d)?);
+        }
+        Ok(out)
+    }
+}
+
+impl[T: Deserialize] Deserialize for Option[T] {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[Option[T], DeserializeError] {
+        if d.deserialize_option()? {
+            Ok(Some(T.deserialize(d)?))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl[K: Deserialize + Hash + Eq, V: Deserialize] Deserialize for Map[K, V] {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[Map[K, V], DeserializeError] {
+        d.deserialize_map_begin()?;
+        let mut out: Map[K, V] = Map.new();
+        while d.deserialize_key()? {
+            let k = K.deserialize(d)?;
+            d.deserialize_value()?;
+            let v = V.deserialize(d)?;
+            out.insert(k, v);
+        }
+        Ok(out)
+    }
+}
+
+impl[K: Deserialize + Ord, V: Deserialize] Deserialize for SortedMap[K, V] {
+    fn deserialize[D: Deserializer](d: mut ref D) -> Result[SortedMap[K, V], DeserializeError] {
+        d.deserialize_map_begin()?;
+        let mut out: SortedMap[K, V] = SortedMap.new();
+        while d.deserialize_key()? {
+            let k = K.deserialize(d)?;
+            d.deserialize_value()?;
+            let v = V.deserialize(d)?;
+            out.insert(k, v);
+        }
+        Ok(out)
+    }
+}
+
+// ── JSON ───────────────────────────────────────────────────────────
+
+/// Writes compact JSON. A map's keys are written as strings, as JSON
+/// requires: a non-string key is quoted.
+pub struct JsonSerializer {
+    out: String,
+    /// One flag per open container: no element written in it yet.
+    first: Vec[bool],
+    /// The next scalar is a map key.
+    in_key: bool,
+}
+
+impl JsonSerializer {
+    fn new() -> JsonSerializer {
+        JsonSerializer { out: String.new(), first: Vec.new(), in_key: false }
+    }
+
+    fn finish(own self) -> String {
+        self.out
+    }
+
+    fn separate(mut ref self) {
+        let n = self.first.len();
+        if n == 0 {
+            return;
+        }
+        if self.first[n - 1] {
+            self.first[n - 1] = false;
+        } else {
+            self.out.push(',');
+        }
+    }
+
+    fn open(mut ref self, c: char) {
+        self.out.push(c);
+        self.first.push(true);
+    }
+
+    fn close(mut ref self, c: char) {
+        self.out.push(c);
+        self.first.pop();
+    }
+
+    fn scalar(mut ref self, text: String) {
+        if self.in_key {
+            self.out.push('"');
+            self.out.push_str(text);
+            self.out.push('"');
+        } else {
+            self.out.push_str(text);
+        }
+    }
+
+    fn quoted(mut ref self, s: String) {
+        let hex: Vec[char] = "0123456789abcdef".chars().collect();
+        self.out.push('"');
+        for c in s.chars() {
+            match c {
+                '"' => self.out.push_str("\\\""),
+                '\\' => self.out.push_str("\\\\"),
+                '\n' => self.out.push_str("\\n"),
+                '\t' => self.out.push_str("\\t"),
+                '\r' => self.out.push_str("\\r"),
+                _ if (c as u32) < 32 => {
+                    self.out.push_str("\\u00");
+                    self.out.push(hex[(c as u32 / 16) as i64]);
+                    self.out.push(hex[(c as u32 % 16) as i64]);
+                }
+                _ => self.out.push(c),
+            }
+        }
+        self.out.push('"');
+    }
+}
+
+impl Serializer for JsonSerializer {
+    fn serialize_bool(mut ref self, v: bool) {
+        self.scalar(if v { "true" } else { "false" });
+    }
+
+    fn serialize_i64(mut ref self, v: i64) {
+        self.scalar(f"{v}");
+    }
+
+    fn serialize_u64(mut ref self, v: u64) {
+        self.scalar(f"{v}");
+    }
+
+    fn serialize_f64(mut ref self, v: f64) {
+        // JSON has no NaN or infinity.
+        if v != v or v - v != 0.0 {
+            self.scalar("null");
+        } else {
+            self.scalar(f"{v}");
+        }
+    }
+
+    fn serialize_string(mut ref self, v: String) {
+        self.quoted(v);
+    }
+
+    fn serialize_none(mut ref self) {
+        self.out.push_str("null");
+    }
+
+    fn serialize_seq_begin(mut ref self, len: i64) {
+        self.open('[');
+    }
+
+    fn serialize_element(mut ref self) {
+        self.separate();
+    }
+
+    fn serialize_seq_end(mut ref self) {
+        self.close(']');
+    }
+
+    fn serialize_map_begin(mut ref self, len: i64) {
+        self.open('{');
+    }
+
+    fn serialize_key(mut ref self) {
+        self.separate();
+        self.in_key = true;
+    }
+
+    fn serialize_value(mut ref self) {
+        self.in_key = false;
+        self.out.push(':');
+    }
+
+    fn serialize_map_end(mut ref self) {
+        self.close('}');
+    }
+
+    fn serialize_struct_begin(mut ref self, name: String, len: i64) {
+        self.open('{');
+    }
+
+    fn serialize_field(mut ref self, name: String) {
+        self.separate();
+        self.quoted(name);
+        self.out.push(':');
+    }
+
+    fn serialize_struct_end(mut ref self) {
+        self.close('}');
+    }
+
+    fn serialize_unit_variant(mut ref self, name: String, variant: String) {
+        self.quoted(variant);
+    }
+
+    fn serialize_variant_begin(mut ref self, name: String, variant: String) {
+        self.out.push('{');
+        self.quoted(variant);
+        self.out.push(':');
+    }
+
+    fn serialize_variant_end(mut ref self) {
+        self.out.push('}');
+    }
+}
+
+/// Reads JSON text, one value at a time.
+pub struct JsonDeserializer {
+    chars: Vec[char],
+    pos: i64,
+    first: Vec[bool],
+    /// The next scalar is a map key, which JSON writes as a string.
+    in_key: bool,
+    /// The positions `deserialize_mark` handed out: `pos`, the depth of
+    /// `first`, and `in_key`.
+    marks: Vec[(i64, i64, bool)],
+}
+
+impl JsonDeserializer {
+    fn new(text: String) -> JsonDeserializer {
+        JsonDeserializer {
+            chars: text.chars().collect(),
+            pos: 0,
+            first: Vec.new(),
+            in_key: false,
+            marks: Vec.new(),
+        }
+    }
+
+    /// Fails unless only whitespace is left.
+    fn end(mut ref self) -> Result[(), DeserializeError] {
+        self.ws();
+        if self.pos != self.chars.len() {
+            return Err(self.fail("trailing characters"));
+        }
+        Ok(())
+    }
+
+    fn fail(ref self, msg: String) -> DeserializeError {
+        DeserializeError.new(f"{msg} at character {self.pos}")
+    }
+
+    fn peek(ref self) -> Option[char] {
+        if self.pos < self.chars.len() {
+            Some(self.chars[self.pos])
+        } else {
+            None
+        }
+    }
+
+    fn ws(mut ref self) {
+        while self.pos < self.chars.len() {
+            let c = self.chars[self.pos];
+            if c != ' ' and c != '\n' and c != '\t' and c != '\r' {
+                break;
+            }
+            self.pos += 1;
+        }
+    }
+
+    fn eat(mut ref self, c: char) -> bool {
+        self.ws();
+        if self.peek() == Some(c) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect(mut ref self, c: char) -> Result[(), DeserializeError] {
+        if self.eat(c) {
+            Ok(())
+        } else {
+            Err(self.fail(f"expected '{c}'"))
+        }
+    }
+
+    fn word(mut ref self, w: String) -> Result[(), DeserializeError] {
+        self.ws();
+        for c in w.chars() {
+            if self.peek() != Some(c) {
+                return Err(self.fail(f"expected `{w}`"));
+            }
+            self.pos += 1;
+        }
+        Ok(())
+    }
+
+    /// A number's text, quoted when it is a map key.
+    fn number(mut ref self) -> Result[String, DeserializeError] {
+        if self.in_key {
+            return self.string();
+        }
+        self.ws();
+        let mut text = String.new();
+        while self.pos < self.chars.len() {
+            let c = self.chars[self.pos];
+            if (c >= '0' and c <= '9') or c == '-' or c == '+' or c == '.' or c == 'e' or c == 'E' {
+                text.push(c);
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        if text.is_empty() {
+            return Err(self.fail("expected a number"));
+        }
+        Ok(text)
+    }
+
+    fn hex(mut ref self) -> Result[u32, DeserializeError] {
+        let mut code: u32 = 0;
+        for _ in 0..4 {
+            let c = match self.peek() {
+                Some(c) => c,
+                None => return Err(self.fail("unterminated escape")),
+            };
+            let d = if c >= '0' and c <= '9' {
+                c as u32 - '0' as u32
+            } else if c >= 'a' and c <= 'f' {
+                c as u32 - 'a' as u32 + 10
+            } else if c >= 'A' and c <= 'F' {
+                c as u32 - 'A' as u32 + 10
+            } else {
+                return Err(self.fail("bad \\u escape"));
+            };
+            code = code * 16 + d;
+            self.pos += 1;
+        }
+        Ok(code)
+    }
+
+    fn string(mut ref self) -> Result[String, DeserializeError] {
+        self.expect('"')?;
+        let mut out = String.new();
+        loop {
+            let c = match self.peek() {
+                Some(c) => c,
+                None => return Err(self.fail("unterminated string")),
+            };
+            self.pos += 1;
+            if c == '"' {
+                break;
+            }
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            let e = match self.peek() {
+                Some(e) => e,
+                None => return Err(self.fail("unterminated escape")),
+            };
+            self.pos += 1;
+            match e {
+                '"' | '\\' | '/' => out.push(e),
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                'b' => out.push('\u{8}'),
+                'f' => out.push('\u{c}'),
+                'u' => {
+                    let code = self.hex()?;
+                    match char.try_from(code) {
+                        Ok(ch) => out.push(ch),
+                        Err(_) => return Err(self.fail("invalid code point")),
+                    }
+                }
+                _ => return Err(self.fail("unknown escape")),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Past one value of any shape.
+    fn skip_value(mut ref self) -> Result[(), DeserializeError] {
+        self.ws();
+        match self.peek() {
+            Some('"') => {
+                self.string()?;
+            }
+            Some('{') => {
+                self.pos += 1;
+                if not self.eat('}') {
+                    loop {
+                        self.ws();
+                        self.string()?;
+                        self.expect(':')?;
+                        self.skip_value()?;
+                        if self.eat('}') {
+                            break;
+                        }
+                        self.expect(',')?;
+                    }
+                }
+            }
+            Some('[') => {
+                self.pos += 1;
+                if not self.eat(']') {
+                    loop {
+                        self.skip_value()?;
+                        if self.eat(']') {
+                            break;
+                        }
+                        self.expect(',')?;
+                    }
+                }
+            }
+            Some('t') => self.word("true")?,
+            Some('f') => self.word("false")?,
+            Some('n') => self.word("null")?,
+            _ => {
+                self.number()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Before the next entry of the innermost container: `false`, with the
+    /// container closed, at its end.
+    fn next_in(mut ref self, close: char) -> Result[bool, DeserializeError] {
+        if self.eat(close) {
+            self.first.pop();
+            return Ok(false);
+        }
+        let n = self.first.len();
+        if self.first[n - 1] {
+            self.first[n - 1] = false;
+        } else {
+            self.expect(',')?;
+        }
+        Ok(true)
+    }
+}
+
+impl Deserializer for JsonDeserializer {
+    fn deserialize_bool(mut ref self) -> Result[bool, DeserializeError] {
+        self.ws();
+        if self.peek() == Some('t') {
+            self.word("true")?;
+            Ok(true)
+        } else {
+            self.word("false")?;
+            Ok(false)
+        }
+    }
+
+    fn deserialize_i64(mut ref self) -> Result[i64, DeserializeError] {
+        let text = self.number()?;
+        match i64.parse(text) {
+            Some(v) => Ok(v),
+            None => Err(self.fail(f"`{text}` is not an integer")),
+        }
+    }
+
+    fn deserialize_u64(mut ref self) -> Result[u64, DeserializeError] {
+        let text = self.number()?;
+        match u64.parse(text) {
+            Some(v) => Ok(v),
+            None => Err(self.fail(f"`{text}` is not an unsigned integer")),
+        }
+    }
+
+    fn deserialize_f64(mut ref self) -> Result[f64, DeserializeError] {
+        self.ws();
+        if self.peek() == Some('n') {
+            self.word("null")?;
+            return Ok(0.0 / 0.0);
+        }
+        let text = self.number()?;
+        match f64.parse(text) {
+            Some(v) => Ok(v),
+            None => Err(self.fail(f"`{text}` is not a number")),
+        }
+    }
+
+    fn deserialize_string(mut ref self) -> Result[String, DeserializeError] {
+        self.string()
+    }
+
+    fn deserialize_option(mut ref self) -> Result[bool, DeserializeError] {
+        self.ws();
+        if self.peek() == Some('n') {
+            self.word("null")?;
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn deserialize_seq_begin(mut ref self) -> Result[(), DeserializeError] {
+        self.expect('[')?;
+        self.first.push(true);
+        Ok(())
+    }
+
+    fn deserialize_element(mut ref self) -> Result[bool, DeserializeError] {
+        self.next_in(']')
+    }
+
+    fn deserialize_map_begin(mut ref self) -> Result[(), DeserializeError] {
+        self.expect('{')?;
+        self.first.push(true);
+        Ok(())
+    }
+
+    fn deserialize_key(mut ref self) -> Result[bool, DeserializeError] {
+        let more = self.next_in('}')?;
+        self.in_key = more;
+        Ok(more)
+    }
+
+    fn deserialize_value(mut ref self) -> Result[(), DeserializeError] {
+        self.in_key = false;
+        self.expect(':')
+    }
+
+    fn deserialize_struct_begin(mut ref self, name: String) -> Result[(), DeserializeError] {
+        self.expect('{')?;
+        self.first.push(true);
+        Ok(())
+    }
+
+    fn deserialize_field(mut ref self) -> Result[Option[String], DeserializeError] {
+        if not self.next_in('}')? {
+            return Ok(None);
+        }
+        self.ws();
+        let name = self.string()?;
+        self.expect(':')?;
+        Ok(Some(name))
+    }
+
+    fn deserialize_skip(mut ref self) -> Result[(), DeserializeError] {
+        self.skip_value()
+    }
+
+    fn deserialize_variant(mut ref self, name: String) -> Result[(String, bool), DeserializeError] {
+        self.ws();
+        if self.peek() == Some('"') {
+            return Ok((self.string()?, false));
+        }
+        self.expect('{')?;
+        self.ws();
+        let v = self.string()?;
+        self.expect(':')?;
+        Ok((v, true))
+    }
+
+    fn deserialize_variant_end(mut ref self) -> Result[(), DeserializeError] {
+        self.expect('}')
+    }
+
+    fn deserialize_mark(mut ref self) -> i64 {
+        self.marks.push((self.pos, self.first.len(), self.in_key));
+        self.marks.len() - 1
+    }
+
+    fn deserialize_reset(mut ref self, mark: i64) {
+        let (pos, depth, in_key) = self.marks[mark];
+        self.pos = pos;
+        while self.first.len() > depth {
+            self.first.pop();
+        }
+        self.in_key = in_key;
+    }
+}
+
+impl Json {
+    /// `v` as compact JSON text.
+    fn serialize[T: Serialize](v: ref T) -> String {
+        let mut s = JsonSerializer.new();
+        v.serialize(s);
+        s.finish()
+    }
+
+    /// The value of type `T` that `text` holds; the annotation at the call
+    /// selects `T` (`let u: User = Json.deserialize(text)?`).
+    fn deserialize[T: Deserialize](text: String) -> Result[T, DeserializeError] {
+        let mut d = JsonDeserializer.new(text);
+        let v = T.deserialize(d)?;
+        d.end()?;
+        Ok(v)
+    }
+}
+
+// ── The derives ────────────────────────────────────────────────────
+//
+// `#[derive(Serialize)]` / `#[derive(Deserialize)]` write the impls as
+// source. A struct is a struct of named fields. An enum is externally
+// tagged by default: a unit variant is its name, any other is
+// `{ variant: payload }`, where a one-field tuple's payload is that field, a
+// longer tuple's is a sequence and a struct variant's is a struct.
+// `#[serde(tag: "type")]` on the enum tags it internally (a struct holding
+// the variant's name under `type` beside its fields; unit and struct
+// variants only), and `#[serde(untagged)]` writes the payload alone and
+// reads the first variant the value fits. `#[serde(rename: "x")]` on a
+// variant renames it.
+//
+// Field attributes (`#[serde(...)]`): `rename: "name"`, `skip`,
+// `skip_serializing`, `skip_deserializing`, and `default` / `default: expr`
+// (the value of an absent field: the type's `Default`, or expr; an absent
+// `Option` field is `None` without one).
+
+// The `#[serde(...)]` arguments among a field's rendered attributes, one
+// `key` or `key: value` per entry.
+comptime fn serde_args(attrs: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < attrs.len() {
+        let a = attrs[i].clone();
+        if a.starts_with("serde(") and a.ends_with(")") {
+            let inner: Vec[char] = a.substring(6, a.len() - 1).chars().collect();
+            let mut cur = "";
+            let mut depth = 0;
+            let mut quoted = false;
+            let mut j = 0;
+            while j < inner.len() {
+                let c = inner[j];
+                if c == '"' and (j == 0 or inner[j - 1] != '\\') {
+                    quoted = not quoted;
+                }
+                if not quoted and (c == '(' or c == '[' or c == '{') {
+                    depth = depth + 1;
+                }
+                if not quoted and (c == ')' or c == ']' or c == '}') {
+                    depth = depth - 1;
+                }
+                if c == ',' and depth == 0 and not quoted {
+                    out.push(cur.trim().to_string());
+                    cur = "";
+                } else {
+                    cur = cur + c.to_string();
+                }
+                j = j + 1;
+            }
+            if cur.trim() != "" {
+                out.push(cur.trim().to_string());
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// The value of `key: value` among `args`, or "" when absent.
+comptime fn serde_arg(args: ref Vec[String], key: ref String) -> String {
+    let prefix = key + ":";
+    let mut found = "";
+    let mut i = 0;
+    while i < args.len() {
+        if args[i].starts_with(prefix) {
+            found = args[i].substring(prefix.len(), args[i].len()).trim().to_string();
+        }
+        i = i + 1;
+    }
+    found
+}
+
+comptime fn serde_flag(args: ref Vec[String], key: ref String) -> bool {
+    let mut found = false;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == key {
+            found = true;
+        }
+        i = i + 1;
+    }
+    found
+}
+
+// The name a field has in the format: its `rename`, else its own.
+comptime fn serde_key(name: ref String, args: ref Vec[String]) -> String {
+    let r = serde_arg(args, "rename");
+    if r == "" {
+        name.clone()
+    } else if r.starts_with("\"") and r.ends_with("\"") and r.len() >= 2 {
+        r.substring(1, r.len() - 1)
+    } else {
+        compiler.error("serde(rename: ...) takes a string literal, found `" + r + "`");
+        name.clone()
+    }
+}
+
+// Writes the fields of a struct, or of a struct variant whose fields are
+// bound by name (`prefix` is "self." for a struct, "" for a variant). A
+// non-empty `tag` writes `tag: tagval` first (an internally tagged variant).
+comptime fn serde_write_fields(
+    tn: ref String,
+    names: ref Vec[String],
+    attrs: ref Vec[Vec[String]],
+    prefix: ref String,
+    tag: ref String,
+    tagval: ref String,
+) -> String {
+    let mut count = 0;
+    let mut body = "";
+    if tag != "" {
+        count = 1;
+        body = "s.serialize_field(\"" + tag + "\"); s.serialize_string(\"" + tagval + "\"); ";
+    }
+    let mut k = 0;
+    while k < names.len() {
+        let args = serde_args(attrs[k]);
+        if not serde_flag(args, "skip") and not serde_flag(args, "skip_serializing") {
+            count = count + 1;
+            body = body + "s.serialize_field(\"" + serde_key(names[k], args) + "\"); " + prefix
+                + names[k] + ".serialize(s); ";
+        }
+        k = k + 1;
+    }
+    "s.serialize_struct_begin(\"" + tn + "\", " + f"{count}" + "); " + body
+        + "s.serialize_struct_end(); "
+}
+
+// The expression that reads a struct, or a struct variant, whose fields
+// are `fields`, into `ctor { ... }`; it `return`s an error. Fields the type
+// does not have (an internal tag among them) are skipped.
+comptime fn serde_read_fields(
+    tn: ref String,
+    names: ref Vec[String],
+    tys: ref Vec[String],
+    attrs: ref Vec[Vec[String]],
+    ctor: ref String,
+) -> String {
+    let mut decls = "";
+    let mut arms = "";
+    let mut build = ctor + " { ";
+    let mut k = 0;
+    while k < names.len() {
+        let fname = names[k].clone();
+        let args = serde_args(attrs[k]);
+        let slot = "serde_f" + f"{k}";
+        let ty = tys[k].clone();
+        // `default` alone is the field type's `Default`; `default: expr` is expr.
+        let dflt = if serde_flag(args, "default") { "serde_default()" } else { serde_arg(args, "default") };
+        let skipped = serde_flag(args, "skip") or serde_flag(args, "skip_deserializing");
+        if skipped {
+            let value = if dflt != "" { dflt } else { "serde_default()" };
+            build = build + fname + ": " + value + ", ";
+        } else {
+            decls = decls + "let mut " + slot + ": Option[" + ty + "] = None; ";
+            arms = arms + "if serde_k == \"" + serde_key(fname, args) + "\" { let serde_x: Result[" + ty
+                + ", DeserializeError] = serde_next(d); " + slot + " = Some(serde_x?); } else ";
+            let missing = if dflt != "" {
+                "match " + slot + " { Some(v) => v, None => " + dflt + " }"
+            } else if ty.starts_with("Option[") {
+                "match " + slot + " { Some(v) => v, None => None }"
+            } else {
+                "serde_missing(\"" + fname + "\", " + slot + ")?"
+            };
+            build = build + fname + ": " + missing + ", ";
+        }
+        k = k + 1;
+    }
+    "{ d.deserialize_struct_begin(\"" + tn + "\")?; " + decls
+        + "loop { match d.deserialize_field()? { None => break, Some(serde_k) => { " + arms
+        + "{ d.deserialize_skip()?; } } } } " + build + "} }"
+}
+
+// A struct variant's field names, as opposed to a tuple variant's (named
+// `0`, `1`, ...).
+comptime fn serde_named(names: ref Vec[String]) -> bool {
+    names.len() > 0 and names[0] != "0"
+}
+
+// How an enum is tagged: "" (externally), the internal tag's field name, or
+// "untagged" with `untagged` set.
+comptime fn serde_enum_tag(t: ref Type) -> String {
+    let args = serde_args(t.attributes());
+    let tag = serde_arg(args, "tag");
+    if tag == "" {
+        return "";
+    }
+    if tag.starts_with("\"") and tag.ends_with("\"") and tag.len() >= 2 {
+        tag.substring(1, tag.len() - 1)
+    } else {
+        compiler.error("serde(tag: ...) takes a string literal, found `" + tag + "`");
+        ""
+    }
+}
+
+comptime fn serde_untagged(t: ref Type) -> bool {
+    serde_flag(serde_args(t.attributes()), "untagged")
+}
+
+// Empty attribute lists for a struct variant's fields, which carry none.
+comptime fn serde_no_attrs(names: ref Vec[String]) -> Vec[Vec[String]] {
+    let mut out: Vec[Vec[String]] = Vec.new();
+    for f in names {
+        out.push(Vec.new());
+    }
+    out
+}
+
+// Reads a tuple variant's payload into `ctor(...)` (`?` returns its error).
+comptime fn serde_read_tuple(tys: ref Vec[String], ctor: ref String, what: ref String) -> String {
+    if tys.len() == 1 {
+        return "{ let serde_x0: Result[" + tys[0] + ", DeserializeError] = serde_next(d); " + ctor
+            + "(serde_x0?) }";
+    }
+    let mut reads = "";
+    let mut args = "";
+    let mut k = 0;
+    while k < tys.len() {
+        let x = "serde_x" + f"{k}";
+        reads = reads + "let " + x + ": Result[" + tys[k] + ", DeserializeError] = serde_element(d); ";
+        args = args + x + "?, ";
+        k = k + 1;
+    }
+    "{ d.deserialize_seq_begin()?; " + reads + "let serde_r = " + ctor + "(" + args + "); "
+        + "if d.deserialize_element()? { return Err(DeserializeError.new(\"too many values in " + what
+        + "\".to_string())); } serde_r }"
+}
+
+comptime fn derive_serialize(comptime T: own Type) -> Vec[Item] {
+    let n = T.name();
+    if T.is_generic() {
+        compiler.error(
+            "derive(Serialize): `" + n + "` is generic, which the derive does not support yet; "
+                + "write `impl[...] Serialize for " + n + "[...]` by hand",
+        );
+        let empty: Vec[Item] = Vec.new();
+        return empty;
+    }
+    let mut body = "";
+    if T.is_enum() {
+        let tag = serde_enum_tag(T);
+        let untagged = serde_untagged(T);
+        body = "match self { ";
+        for v in T.variants() {
+            let vn = v.name.clone();
+            let key = serde_key(vn, serde_args(v.attrs));
+            let names = v.field_names.clone();
+            let named = serde_named(names);
+            let mut binds = "";
+            for f in names {
+                if named {
+                    binds = binds + f + ", ";
+                } else {
+                    binds = binds + "serde_a" + f + ", ";
+                }
+            }
+            let pat = if v.field_count == 0 {
+                n + "." + vn
+            } else if named {
+                n + "." + vn + " { " + binds + "}"
+            } else {
+                n + "." + vn + "(" + binds + ")"
+            };
+            // The payload alone: a struct, the one field, or a sequence.
+            let mut payload = "";
+            if named {
+                payload = serde_write_fields(vn, names, serde_no_attrs(names), "", "", "");
+            } else if v.field_count == 1 {
+                payload = "serde_a0.serialize(s); ";
+            } else if v.field_count > 1 {
+                payload = "s.serialize_seq_begin(" + f"{v.field_count}" + "); ";
+                for f in names {
+                    payload = payload + "s.serialize_element(); serde_a" + f + ".serialize(s); ";
+                }
+                payload = payload + "s.serialize_seq_end(); ";
+            }
+            let mut write = "";
+            if untagged {
+                write = if v.field_count == 0 { "s.serialize_none(); " } else { payload };
+            } else if tag != "" {
+                if v.field_count == 0 {
+                    write = "s.serialize_struct_begin(\"" + vn + "\", 1); s.serialize_field(\"" + tag
+                        + "\"); s.serialize_string(\"" + key + "\"); s.serialize_struct_end(); ";
+                } else if named {
+                    write = serde_write_fields(vn, names, serde_no_attrs(names), "", tag, key);
+                } else {
+                    compiler.error(
+                        "derive(Serialize): `" + n + "." + vn + "` is a tuple variant, which an "
+                            + "internally tagged enum (`serde(tag: ...)`) cannot hold; "
+                            + "make it a struct variant",
+                    );
+                }
+            } else if v.field_count == 0 {
+                write = "s.serialize_unit_variant(\"" + n + "\", \"" + key + "\"); ";
+            } else {
+                write = "s.serialize_variant_begin(\"" + n + "\", \"" + key + "\"); " + payload
+                    + "s.serialize_variant_end(); ";
+            }
+            body = body + pat + " => { " + write + "} ";
+        }
+        body = body + "}";
+    } else {
+        let mut names: Vec[String] = Vec.new();
+        let mut attrs: Vec[Vec[String]] = Vec.new();
+        for f in T.fields() {
+            names.push(f.name.clone());
+            attrs.push(f.attrs.clone());
+        }
+        body = serde_write_fields(n, names, attrs, "self.", "", "");
+    }
+    [ast.item(
+        "impl Serialize for " + n + " { fn serialize[S: Serializer](ref self, s: mut ref S) { "
+            + body + " } }",
+    )]
+}
+
+comptime fn derive_deserialize(comptime T: own Type) -> Vec[Item] {
+    let n = T.name();
+    let mut items: Vec[Item] = Vec.new();
+    if T.is_generic() {
+        compiler.error(
+            "derive(Deserialize): `" + n + "` is generic, which the derive does not support yet; "
+                + "write `impl[...] Deserialize for " + n + "[...]` by hand",
+        );
+        return items;
+    }
+    let mut body = "";
+    if T.is_enum() and serde_untagged(T) {
+        // Each variant in turn, from the same position, until one fits. A
+        // variant with a payload is read by its own function, whose `?`
+        // ends that attempt rather than the whole read.
+        body = "let serde_m = d.deserialize_mark(); ";
+        let mut k = 0;
+        for v in T.variants() {
+            let ctor = n + "." + v.name;
+            if v.field_count == 0 {
+                body = body + "match d.deserialize_option() { Ok(false) => return Ok(" + ctor
+                    + "), _ => {} } d.deserialize_reset(serde_m); ";
+            } else {
+                let f = "serde_untagged_" + n + "_" + f"{k}";
+                let read = if serde_named(v.field_names) {
+                    serde_read_fields(v.name, v.field_names, v.field_types, serde_no_attrs(v.field_names), ctor)
+                } else {
+                    serde_read_tuple(v.field_types, ctor, ctor)
+                };
+                items.push(ast.item(
+                    "fn " + f + "[D: Deserializer](d: mut ref D) -> Result[" + n
+                        + ", DeserializeError] { Ok(" + read + ") }",
+                ));
+                body = body + "match " + f + "(d) { Ok(serde_r) => return Ok(serde_r), Err(_) => {} } "
+                    + "d.deserialize_reset(serde_m); ";
+            }
+            k = k + 1;
+        }
+        body = body + "Err(DeserializeError.new(\"the value fits no variant of untagged " + n
+            + "\".to_string()))";
+    } else if T.is_enum() and serde_enum_tag(T) != "" {
+        // Read ahead for the tag, then read the value again as that variant.
+        let tag = serde_enum_tag(T);
+        body = "let serde_m = d.deserialize_mark(); d.deserialize_struct_begin(\"" + n + "\")?; "
+            + "let mut serde_t: Option[String] = None; "
+            + "loop { match d.deserialize_field()? { None => break, Some(serde_k) => { "
+            + "if serde_k == \"" + tag + "\" { serde_t = Some(d.deserialize_string()?); } "
+            + "else { d.deserialize_skip()?; } } } } d.deserialize_reset(serde_m); "
+            + "let serde_v = match serde_t { Some(v) => v, None => return Err(DeserializeError.new("
+            + "\"missing field `" + tag + "`\".to_string())) }; ";
+        for v in T.variants() {
+            let ctor = n + "." + v.name;
+            let key = serde_key(v.name, serde_args(v.attrs));
+            body = body + "if serde_v == \"" + key + "\" { ";
+            if v.field_count == 0 {
+                body = body + "d.deserialize_struct_begin(\"" + v.name + "\")?; "
+                    + "loop { match d.deserialize_field()? { None => break, Some(_) => { d.deserialize_skip()?; } } } "
+                    + "return Ok(" + ctor + "); } ";
+            } else if serde_named(v.field_names) {
+                body = body + "return Ok("
+                    + serde_read_fields(v.name, v.field_names, v.field_types, serde_no_attrs(v.field_names), ctor)
+                    + "); } ";
+            } else {
+                compiler.error(
+                    "derive(Deserialize): `" + ctor + "` is a tuple variant, which an internally "
+                        + "tagged enum (`serde(tag: ...)`) cannot hold; make it a struct variant",
+                );
+                body = body + "} ";
+            }
+        }
+        body = body + "Err(DeserializeError.new(f\"unknown variant `{serde_v}` of " + n + "\"))";
+    } else if T.is_enum() {
+        body = "let (serde_v, serde_has) = d.deserialize_variant(\"" + n + "\")?; ";
+        for v in T.variants() {
+            let ctor = n + "." + v.name;
+            let key = serde_key(v.name, serde_args(v.attrs));
+            body = body + "if serde_v == \"" + key + "\" { ";
+            if v.field_count == 0 {
+                body = body + "if serde_has { d.deserialize_skip()?; d.deserialize_variant_end()?; } "
+                    + "return Ok(" + ctor + "); } ";
+            } else {
+                let read = if serde_named(v.field_names) {
+                    serde_read_fields(v.name, v.field_names, v.field_types, serde_no_attrs(v.field_names), ctor)
+                } else {
+                    serde_read_tuple(v.field_types, ctor, ctor)
+                };
+                body = body + "let serde_r = " + read + "; d.deserialize_variant_end()?; return Ok(serde_r); } ";
+            }
+        }
+        body = body + "Err(DeserializeError.new(f\"unknown variant `{serde_v}` of " + n + "\"))";
+    } else {
+        let mut names: Vec[String] = Vec.new();
+        let mut tys: Vec[String] = Vec.new();
+        let mut attrs: Vec[Vec[String]] = Vec.new();
+        for f in T.fields() {
+            names.push(f.name.clone());
+            tys.push(f.ty.name());
+            attrs.push(f.attrs.clone());
+        }
+        body = "Ok(" + serde_read_fields(n, names, tys, attrs, n) + ")";
+    }
+    items.push(ast.item(
+        "impl Deserialize for " + n + " { fn deserialize[D: Deserializer](d: mut ref D) -> Result["
+            + n + ", DeserializeError] { " + body + " } }",
+    ));
+    items
+}

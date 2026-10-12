@@ -24,7 +24,10 @@ use crate::ast::*;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
-use super::expr_method_call::{MAP_BUILTIN_METHODS, SET_BUILTIN_METHODS};
+use super::expr_method_call::{
+    MAP_BUILTIN_METHODS, SET_BUILTIN_METHODS, SORTED_MAP_BUILTIN_METHODS,
+    SORTED_SET_BUILTIN_METHODS,
+};
 use super::types::Type;
 
 impl<'a> super::TypeChecker<'a> {
@@ -92,11 +95,21 @@ impl<'a> super::TypeChecker<'a> {
             args: type_args,
         } = obj_ty_for_named
         {
-            if name == "SortedSet" {
+            // A trait impl on a sorted collection (the library's `Serialize`)
+            // answers the names the builtin surface does not, with the same
+            // builtin-first precedence as the `Map` gate above.
+            let user_impl_method = |this: &Self, builtins: &[&str]| {
+                !builtins.contains(&method)
+                    && !this
+                        .env
+                        .find_methods_with_args(name, type_args, method)
+                        .is_empty()
+            };
+            if name == "SortedSet" && !user_impl_method(self, SORTED_SET_BUILTIN_METHODS) {
                 let element = type_args.first().cloned().unwrap_or(Type::Error);
                 return Some(self.infer_sorted_set_method(&element, method, args, span));
             }
-            if name == "SortedMap" {
+            if name == "SortedMap" && !user_impl_method(self, SORTED_MAP_BUILTIN_METHODS) {
                 let key = type_args.first().cloned().unwrap_or(Type::Error);
                 let value = type_args.get(1).cloned().unwrap_or(Type::Error);
                 return Some(self.infer_sorted_map_method(&key, &value, method, args, span));

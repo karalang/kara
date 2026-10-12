@@ -49,6 +49,9 @@ pub struct ProgramDefs {
     /// listed here too; [`ProgramDefs::impls`] on a method's parent tells which
     /// trait it is from.
     pub methods: HashMap<DefId, HashMap<String, Vec<DefId>>>,
+    /// The methods of impls on a type with no definition (`impl Tw for
+    /// i64`), by the type's name and then the method's.
+    pub builtin_methods: HashMap<String, HashMap<String, Vec<DefId>>>,
     /// Every impl block.
     pub impls: HashMap<DefId, ImplData>,
     /// Per module (indexed by [`ModuleId`]): its impl blocks' DefIds, in the
@@ -408,6 +411,13 @@ impl ProgramDefs {
                 if let Some(t) = target {
                     self.methods
                         .entry(t)
+                        .or_default()
+                        .entry(f.name.clone())
+                        .or_default()
+                        .push(mid);
+                } else if let Some(n) = &target_name {
+                    self.builtin_methods
+                        .entry(n.clone())
                         .or_default()
                         .entry(f.name.clone())
                         .or_default()

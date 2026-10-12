@@ -1560,6 +1560,38 @@ impl<'a> super::TypeChecker<'a> {
     /// The trade-off — a typo'd method on a comptime-derived type isn't flagged
     /// at typecheck — is the price of the post-typecheck expansion model and is
     /// caught when the generated impl fails to provide it.
+    /// Does `type_name` derive `trait_name` through a comptime `derive_*`
+    /// function (`#[derive(Serialize)]`), whose impl is spliced in after
+    /// type checking?
+    pub(super) fn comptime_derives(&self, type_name: &str, trait_name: &str) -> bool {
+        let derives = match self.env.structs.get(type_name) {
+            Some(s) => s.derived_traits.contains(trait_name),
+            None => self
+                .env
+                .enums
+                .get(type_name)
+                .is_some_and(|e| e.derived_traits.contains(trait_name)),
+        };
+        derives
+            && self.is_comptime_derive_fn(&format!(
+                "derive_{}",
+                crate::comptime::to_snake_case(trait_name)
+            ))
+    }
+
+    /// Is `fn_name` a comptime function of the program or the stdlib?
+    fn is_comptime_derive_fn(&self, fn_name: &str) -> bool {
+        let in_items = |items: &[Item]| {
+            items
+                .iter()
+                .any(|it| matches!(it, Item::Function(f) if f.is_comptime && f.name == fn_name))
+        };
+        in_items(&self.program.items)
+            || crate::prelude::STDLIB_PROGRAMS
+                .iter()
+                .any(|(_, p)| in_items(&p.items))
+    }
+
     pub(super) fn type_has_comptime_derive(&self, type_name: &str) -> bool {
         let traits = match self.env.structs.get(type_name) {
             Some(s) => &s.derived_traits,
@@ -1571,19 +1603,8 @@ impl<'a> super::TypeChecker<'a> {
         if traits.is_empty() {
             return false;
         }
-        let is_comptime_derive_fn = |fn_name: &str| -> bool {
-            let in_items = |items: &[Item]| {
-                items
-                    .iter()
-                    .any(|it| matches!(it, Item::Function(f) if f.is_comptime && f.name == fn_name))
-            };
-            in_items(&self.program.items)
-                || crate::prelude::STDLIB_PROGRAMS
-                    .iter()
-                    .any(|(_, p)| in_items(&p.items))
-        };
         traits.iter().any(|t| {
-            is_comptime_derive_fn(&format!("derive_{}", crate::comptime::to_snake_case(t)))
+            self.is_comptime_derive_fn(&format!("derive_{}", crate::comptime::to_snake_case(t)))
         })
     }
 

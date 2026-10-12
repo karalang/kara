@@ -139,7 +139,19 @@ impl HirDefs for ProgramHirDefs<'_> {
             .lookup(self.module, owner)
             .filter(|&d| self.defs.table.get(d).kind != DefKind::Variant)
         else {
-            return builtin();
+            // A method an impl in source gives a type with no definition
+            // (`impl Serialize for i64`), when it is the only one by that
+            // name; otherwise the compiler's own.
+            return match self
+                .defs
+                .builtin_methods
+                .get(owner)
+                .and_then(|ms| ms.get(method))
+                .map(Vec::as_slice)
+            {
+                Some([m]) => Some(Callee::Def(*m)),
+                _ => builtin(),
+            };
         };
         // `Result.Ok(x)` parses as a method call on the enum: a variant
         // constructor.

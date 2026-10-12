@@ -2291,9 +2291,25 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// `inner as T` into `dest`, `T` being `e`'s type.
     fn cast_into(&mut self, e: &'a Expr, inner: &'a Expr, dest: Place) -> R<()> {
-        let from = self.expr_ty(inner)?;
+        let mut from = self.expr_ty(inner)?;
         let to = self.expr_ty(e)?;
-        let o = self.expr_operand(inner)?;
+        // A borrowed scalar (`ref self` in `impl Serialize for i8`) casts
+        // its value: `self as i64` reads through the reference.
+        let pointee = match self.tys().tcx().kind(from) {
+            HK::Ref(t) | HK::MutRef(t)
+                if !matches!(self.tys().tcx().kind(t), HK::RawPtr { .. }) =>
+            {
+                Some(t)
+            }
+            _ => None,
+        };
+        let o = match pointee {
+            Some(t) => {
+                from = t;
+                self.owned_operand(inner, t)?
+            }
+            None => self.expr_operand(inner)?,
+        };
         let kind = {
             let tcx = self.tys().tcx();
             let int = |t| matches!(tcx.kind(t), HK::Int(_) | HK::UInt(_));
@@ -11141,6 +11157,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             if let Some((d, inst_args)) = self.method_by_receiver(rt, method) {
                 return self.user_method_call(e, object, d, inst_args, args, dest);
             }
+            // A generic method (`v.serialize(s)` with `S` the serializer's
+            // type): its own parameters read off the arguments.
+            if let Some((d, inst_args)) = self.generic_method_by_receiver(rt, method, args)? {
+                return self.user_method_call(e, object, d, inst_args, args, dest);
+            }
             // `c.try_into()` into a `Result[K, E]`: the user's `impl TryFrom
             // for K`, given the receiver.
             if method == "try_into" && args.is_empty() {
@@ -11362,6 +11383,74 @@ impl<'l, 'a> Bx<'l, 'a> {
         Some((d, item.impl_args(&targs)?))
     }
 
+    /// The one impl method `method` of `recv` when it has generic parameters
+    /// of its own, each read off an argument.
+    fn generic_method_by_receiver(
+        &mut self,
+        recv: Ty,
+        method: &str,
+        args: &'a [CallArg],
+    ) -> R<Option<(DefId, Vec<Ty>)>> {
+        let (kind, base) = self.strip_ty_full(recv);
+        let generic = |i: &FnItem<'_>| {
+            i.f.generic_params
+                .as_ref()
+                .is_some_and(|g| !g.params.is_empty())
+        };
+        let prim: Vec<DefId> = self
+            .lcx
+            .fns
+            .iter()
+            .filter(|(_, i)| i.impl_prim == Some(base) && i.f.name == method)
+            .map(|(&d, _)| d)
+            .collect();
+        if let [d] = prim.as_slice() {
+            if !generic(&self.lcx.fns[d]) {
+                return Ok(None);
+            }
+            return self.own_generics_from_args(*d, Vec::new(), args);
+        }
+        if !prim.is_empty() {
+            return Ok(None);
+        }
+        let (target, targs) = match kind {
+            HK::Adt { def, args } | HK::Shared { def, args } => (def, self.tys().tcx().list(args)),
+            HK::Intrinsic { kind, args } => {
+                let name = match kind {
+                    IntrinsicKind::Vec => "Vec",
+                    IntrinsicKind::Map => "Map",
+                    IntrinsicKind::Set => "Set",
+                    IntrinsicKind::VecDeque => "VecDeque",
+                    IntrinsicKind::SortedMap => "SortedMap",
+                    IntrinsicKind::SortedSet => "SortedSet",
+                };
+                let Some(d) = self.lcx.defs.lookup(0, name) else {
+                    return Ok(None);
+                };
+                (d, self.tys().tcx().list(args))
+            }
+            _ => return Ok(None),
+        };
+        let found: Vec<DefId> = self
+            .lcx
+            .fns
+            .iter()
+            .filter(|(_, i)| i.impl_target == Some(target) && i.f.name == method)
+            .map(|(&d, _)| d)
+            .collect();
+        let [d] = found.as_slice() else {
+            return Ok(None);
+        };
+        let item = &self.lcx.fns[d];
+        if !generic(item) {
+            return Ok(None);
+        }
+        let Some(inst) = item.impl_args(&targs) else {
+            return Ok(None);
+        };
+        self.own_generics_from_args(*d, inst, args)
+    }
+
     /// The associated function `m` of `t`'s impl when it has generic
     /// parameters of its own (`C.from_iter(it)` with `C` a `Vec`), each read
     /// off the argument its parameter is written as (`iter: own I`).
@@ -11432,17 +11521,24 @@ impl<'l, 'a> Bx<'l, 'a> {
         let Some(own) = f.generic_params.as_ref() else {
             return Ok(None);
         };
-        let mut from: Vec<&'a Expr> = Vec::new();
+        let names = |t: &ast::TypeExpr, name: &str| {
+            matches!(&t.kind, ast::TypeKind::Path(q)
+                if q.generic_args.is_none() && q.segments == [name.to_string()])
+        };
+        // Each parameter read off an argument written as it (`iter: own I`),
+        // or as a borrow of it (`s: mut ref S`), whose pointee it is.
+        let mut from: Vec<(&'a Expr, bool)> = Vec::new();
         for gp in &own.params {
             let at = f
                 .params
                 .iter()
                 .zip(args)
                 .find_map(|(p, a)| match &p.ty.kind {
-                    ast::TypeKind::Path(q)
-                        if q.generic_args.is_none() && q.segments == [gp.name.clone()] =>
+                    _ if names(&p.ty, &gp.name) => Some((&a.value, false)),
+                    ast::TypeKind::Ref(inner) | ast::TypeKind::MutRef(inner)
+                        if names(inner, &gp.name) =>
                     {
-                        Some(&a.value)
+                        Some((&a.value, true))
                     }
                     _ => None,
                 });
@@ -11451,8 +11547,13 @@ impl<'l, 'a> Bx<'l, 'a> {
             };
             from.push(a);
         }
-        for a in from {
-            inst.push(self.expr_ty(a)?);
+        for (a, borrowed) in from {
+            let t = self.expr_ty(a)?;
+            let t = match self.tys().tcx().kind(t) {
+                HK::Ref(inner) | HK::MutRef(inner) if borrowed => inner,
+                _ => t,
+            };
+            inst.push(t);
         }
         Ok(Some((d, inst)))
     }
@@ -13368,6 +13469,29 @@ const BAKED_SOURCES: &[(&str, &[&str])] = &[
         include_str!("../../runtime/stdlib/cli.kara"),
         &["Parser", "Arg"],
     ),
+    (
+        include_str!("../../runtime/stdlib/source/serde.kara"),
+        // A derive list or a bound names a trait (`Serialize,` /
+        // `Serialize)` / `Serialize]`); a comment saying "Serialize and
+        // Deserialize" does not.
+        &[
+            "Serialize,",
+            "Serialize)",
+            "Serialize]",
+            "Serialize +",
+            "Serialize for",
+            "Deserialize,",
+            "Deserialize)",
+            "Deserialize]",
+            "Deserialize +",
+            "Deserialize for",
+            "Serializer",
+            "Deserializer",
+            "DeserializeError",
+            "Json.serialize",
+            "Json.deserialize",
+        ],
+    ),
 ];
 
 /// A library method that keeps its argument (`v.push(x)`, `m.insert(k, v)`,
@@ -13510,8 +13634,14 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
         crate::d5_params::borrow_bare_params(&mut program);
     }
     let r = crate::resolve(&program);
-    if !r.errors.is_empty() {
-        return Err(format!("resolve: {:?}", r.errors[0]));
+    // Lint-backed resolve diagnostics (`float_in_serialized_type`, the
+    // layout lints) are warnings, not errors, so they do not stop the build.
+    if let Some(err) = r
+        .errors
+        .iter()
+        .find(|e| !crate::resolver::resolve_kind_is_note(&e.kind))
+    {
+        return Err(format!("resolve: {err:?}"));
     }
     let mut r = r;
     let mut tc = crate::typecheck_with_library_source(&program, &r);
@@ -13528,8 +13658,12 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
         }
         crate::node_ids::assign_node_ids(&mut program);
         r = crate::resolve(&program);
-        if !r.errors.is_empty() {
-            return Err(format!("resolve: {:?}", r.errors[0]));
+        if let Some(err) = r
+            .errors
+            .iter()
+            .find(|e| !crate::resolver::resolve_kind_is_note(&e.kind))
+        {
+            return Err(format!("resolve: {err:?}"));
         }
         tc = crate::typecheck_with_library_source(&program, &r);
         if !tc.errors.is_empty() {

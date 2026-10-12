@@ -168,3 +168,9 @@ impl[T] Option[Option[T]] {
         }
     }
 }
+
+impl[T] Option[T] {
+    fn default() -> Option[T] {
+        None
+    }
+}

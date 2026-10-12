@@ -4292,7 +4292,7 @@ enum Status {
 
 #### `Serialize` and `Deserialize`
 
-`Serialize` and `Deserialize` generate format-independent traversal code at compile time. There are no macros and no runtime reflection: the derive walks the fields in declaration order, as the other derives do. Not yet implemented.
+`Serialize` and `Deserialize` generate format-independent traversal code at compile time. There are no macros and no runtime reflection: the derive walks the fields in declaration order, as the other derives do. The traits, the `Json` format and the derives are ordinary Kāra in `runtime/stdlib/source/serde.kara`, run by the MIR interpreter and by `karac build --mir`; the derive does not yet accept a generic type.
 
 ```kara
 #[derive(Serialize, Deserialize)]
@@ -4356,8 +4356,8 @@ struct Config {
 }
 ```
 
-- The attributes are `rename`, `skip`, `skip_serializing`, `skip_deserializing` and `default` (deserializing only).
-- Enums are externally tagged by default. `#[serde(tag: "type")]` makes them internally tagged and `#[serde(untagged)]` untagged.
+- The attributes are `rename`, `skip`, `skip_serializing`, `skip_deserializing` and `default` (deserializing only). `default` alone uses the field type's `Default`; a skipped field without one does too.
+- Enums are externally tagged by default. `#[serde(tag: "type")]` makes them internally tagged and `#[serde(untagged)]` untagged. An internally tagged enum holds unit and struct variants only. `rename` also applies to a variant. Reading an internally tagged or untagged enum reads ahead and back, so a `Deserializer` provides `deserialize_mark` and `deserialize_reset`.
 - **`#[serde(default: expr)]`** takes a constant expression, the same class a `const` initializer accepts ([§4 Constants](#constants)): literals, named constants (`i64.MAX`), constant arithmetic (`MAX_PORT - 1`), and struct, array and tuple literals built from constants. A run-time expression (`Vec.new()`, `load_config()`) is a "not a constant expression" error.
 
 ---

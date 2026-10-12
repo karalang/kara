@@ -1082,6 +1082,49 @@ impl<'a> super::TypeChecker<'a> {
                 return result;
             }
         }
+        // `let u: User = Json.deserialize(text)?;` (design.md § Serialize and
+        // Deserialize): the annotation selects the generic call's return
+        // through the `?`. The call's return is seeded with the expectation
+        // wrapped the way the enclosing function's `?` unwraps it —
+        // `Result[User, ?E]` (any error type; `?` converts it) or
+        // `Option[User]` — and seeding is permissive, so a call whose return
+        // does not have that shape infers exactly as it did. The library
+        // pipeline only, where the generic call has no other way to learn `T`.
+        if let ExprKind::Question(inner) = &expr.kind {
+            let seedable = matches!(
+                &inner.kind,
+                ExprKind::Call { callee, .. }
+                    if matches!(&callee.kind, ExprKind::Path { .. } | ExprKind::Identifier(_))
+            );
+            let wrapper = match &self.current_return_type {
+                Some(Type::Named { name, .. }) if name == "Result" || name == "Option" => {
+                    Some(name.clone())
+                }
+                _ => None,
+            };
+            let rigid = !contains_type_var(expected) && !self.mentions_foreign_param(expected);
+            if let (true, true, Some(wrapper)) = (
+                self.library_methods_from_source
+                    && seedable
+                    && self.closure_return_types.is_empty(),
+                *expected != Type::Error && (expectation_is_concrete(expected) || rigid),
+                wrapper,
+            ) {
+                let args = if wrapper == "Result" {
+                    vec![expected.clone(), self.env.fresh_type_var()]
+                } else {
+                    vec![expected.clone()]
+                };
+                self.pending_expected_call_return = Some(Type::Named {
+                    name: wrapper,
+                    args,
+                });
+                let actual = self.infer_expr(expr);
+                self.pending_expected_call_return = None;
+                self.check_assignable(expected, &actual, expr.span);
+                return actual;
+            }
+        }
         // B-2026-08-08-7 — the `.unwrap()` sibling of the `?` arm above.
         // `let v: Vec[i64] = Vec.try_with_capacity(0)?` pinned its element and
         // `let v: Vec[i64] = Vec.try_with_capacity(0).unwrap()` did not, purely
@@ -4516,6 +4559,11 @@ impl<'a> super::TypeChecker<'a> {
         let Some((ty_name, ty_args)) = impl_table_key(ty) else {
             return false;
         };
+        // A `#[derive(X)]` that a comptime `derive_x` expands gets its impl
+        // only after type checking; until then the derive stands for it.
+        if self.comptime_derives(&ty_name, trait_name) {
+            return true;
+        }
         // An aliased imported trait (`import doer.{Doer as D}` + `T: D`) is
         // canonicalized inside `type_satisfies_trait` — see
         // `Env::trait_alias_canonical` (B-2026-07-29-10). Doing it there rather

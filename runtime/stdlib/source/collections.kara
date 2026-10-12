@@ -287,3 +287,43 @@ impl[T] FromIterator[T] for Set[T] {
         out
     }
 }
+
+// The collections' `default()`, empty: what `T: Default` calls (`Default`
+// is a builtin, satisfied by a type's `default` associated function), and
+// what a `#[serde(skip)]` collection field reads back as.
+
+impl[T] Vec[T] {
+    fn default() -> Vec[T] {
+        Vec.new()
+    }
+}
+
+impl[T] VecDeque[T] {
+    fn default() -> VecDeque[T] {
+        VecDeque.new()
+    }
+}
+
+impl[T] Set[T] {
+    fn default() -> Set[T] {
+        Set.new()
+    }
+}
+
+impl[T] SortedSet[T] {
+    fn default() -> SortedSet[T] {
+        SortedSet.new()
+    }
+}
+
+impl[K, V] Map[K, V] {
+    fn default() -> Map[K, V] {
+        Map.new()
+    }
+}
+
+impl[K, V] SortedMap[K, V] {
+    fn default() -> SortedMap[K, V] {
+        SortedMap.new()
+    }
+}

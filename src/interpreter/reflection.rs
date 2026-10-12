@@ -78,6 +78,7 @@ impl Interpreter<'_> {
                 | "element_type"
                 | "key_type"
                 | "value_type"
+                | "attributes"
         )
     }
 
@@ -190,15 +191,39 @@ impl Interpreter<'_> {
             }
             "fields" => Value::array_of(self.reflect_fields(type_name)),
             "variants" => Value::array_of(self.reflect_variants(type_name)),
+            "attributes" => Value::array_of(
+                self.item_attributes(type_name)
+                    .iter()
+                    .map(|a| Value::String(crate::typechecker::render_attribute(a)))
+                    .collect(),
+            ),
             other => self.record_runtime_error(
                 format!(
                     "unknown comptime reflection method `{other}` on type `{type_name}`; \
                      this slice supports name / is_struct / is_enum / is_union / \
-                     is_generic / fields / variants / derives / element_type / key_type / value_type"
+                     is_generic / fields / variants / derives / element_type / key_type / value_type \
+                     / attributes"
                 ),
                 span,
             ),
         }
+    }
+
+    /// The `#[...]` attributes declared on the struct or enum `type_name`.
+    fn item_attributes(&self, type_name: &str) -> &[crate::ast::Attribute] {
+        self.program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                crate::ast::Item::StructDef(s) if s.name == type_name => {
+                    Some(s.attributes.as_slice())
+                }
+                crate::ast::Item::EnumDef(e) if e.name == type_name => {
+                    Some(e.attributes.as_slice())
+                }
+                _ => None,
+            })
+            .unwrap_or(&[])
     }
 
     /// Build the `Vec[Field]` for a struct or union — one `Field { name, ty,
@@ -249,6 +274,10 @@ impl Interpreter<'_> {
         let Some(e) = tc.enum_info.get(type_name) else {
             return Vec::new();
         };
+        let variant_attrs = self.program.items.iter().find_map(|item| match item {
+            crate::ast::Item::EnumDef(ed) if ed.name == type_name => Some(&ed.variants),
+            _ => None,
+        });
         e.variants
             .iter()
             .map(|(vname, vinfo)| {
@@ -273,6 +302,35 @@ impl Interpreter<'_> {
                 // looks up as a non-struct/non-enum.
                 fields.insert("payload_ty".to_string(), Value::TypeVal(payload.clone()));
                 fields.insert("payload".to_string(), Value::String(payload));
+                // A tuple variant's fields are named by position (`0`, `1`,
+                // ...), a struct variant's by name; `field_types` are their
+                // type names, in the same order.
+                let (names, tys): (Vec<Value>, Vec<Value>) = match vinfo {
+                    VariantTypeInfo::Unit => (Vec::new(), Vec::new()),
+                    VariantTypeInfo::Tuple(tys) => tys
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| {
+                            (Value::String(i.to_string()), Value::String(type_display(t)))
+                        })
+                        .unzip(),
+                    VariantTypeInfo::Struct(fs) => fs
+                        .iter()
+                        .map(|(n, t)| (Value::String(n.clone()), Value::String(type_display(t))))
+                        .unzip(),
+                };
+                fields.insert("field_names".to_string(), Value::array_of(names));
+                fields.insert("field_types".to_string(), Value::array_of(tys));
+                let attrs = variant_attrs
+                    .and_then(|vs| vs.iter().find(|v| v.name == *vname))
+                    .map(|v| {
+                        v.attributes
+                            .iter()
+                            .map(|a| Value::String(crate::typechecker::render_attribute(a)))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                fields.insert("attrs".to_string(), Value::array_of(attrs));
                 Value::Struct {
                     name: "Variant".to_string(),
                     fields,

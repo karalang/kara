@@ -109,10 +109,19 @@ use types::{
 /// Render one attribute to a flat string for comptime `Field.attrs` reflection:
 /// the `::`-joined path, plus any identifier/call-callee args in parentheses.
 /// `#[karac::proto(sint64)]` → `"karac::proto(sint64)"`; `#[foo]` → `"foo"`.
-pub(super) fn render_attribute(attr: &Attribute) -> String {
+pub(crate) fn render_attribute(attr: &Attribute) -> String {
     let path = attr.path.join("::");
     let mut arg_names: Vec<String> = Vec::new();
     for arg in &attr.args {
+        // `name: value` renders as written (`serde(rename: "id")`), so a
+        // derive can read the value.
+        if let Some(name) = &arg.name {
+            match &arg.value {
+                Some(v) => arg_names.push(format!("{name}: {}", crate::formatter::render_expr(v))),
+                None => arg_names.push(name.clone()),
+            }
+            continue;
+        }
         match &arg.value {
             Some(Expr {
                 kind: ExprKind::Identifier(name),

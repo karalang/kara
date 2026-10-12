@@ -96,6 +96,11 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     // Recognised here so it does not trip `E_UNKNOWN_ATTRIBUTE`; placement
     // and arg-shape are enforced by `validate_default_attribute`.
     "default",
+    // Derive helper for `#[derive(Serialize, Deserialize)]` (design.md
+    // § Serialize and Deserialize): `rename`, `skip`, `skip_serializing`,
+    // `skip_deserializing`, `default`. Read by the comptime derive in
+    // `runtime/stdlib/source/serde.kara` off the field's rendered attributes.
+    "serde",
     // Phase-8 line 49 — stdlib API stability marker. Use-site
     // emission of the `unstable_api` lint reads the symbol-table
     // payload populated from this attribute. At v1 the spec
