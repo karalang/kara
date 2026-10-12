@@ -1,0 +1,251 @@
+// Differential test for LeetCode #414: Third Maximum Number.
+//
+// Copies of the four arms, each run on 3,000 random arrays with many
+// repeats. Properties known by construction:
+//   P1  the answer is the value with exactly two larger distinct values,
+//       found by looking at every pair, or the largest if there is none
+//   P2  the array reversed, or rotated, gives the same answer
+//   P3  adding a constant to every number adds it to the answer, and
+//       tripling every number triples the answer
+//   P4  every number written twice gives the same answer
+//   P5  on d distinct consecutive values from c, in any order and with
+//       repeats, the answer is c + d - 3 when d >= 3, else c + d - 1
+
+// ---- slots: third_max.kara
+
+fn third_max_slots(nums: Vec[i64]) -> i64 {
+    let mut first: Option[i64] = None;
+    let mut second: Option[i64] = None;
+    let mut third: Option[i64] = None;
+    for x in nums {
+        if first == Some(x) or second == Some(x) or third == Some(x) {
+            continue;
+        }
+        match first {
+            None => {
+                first = Some(x);
+                continue;
+            }
+            Some(a) => {
+                if x > a {
+                    third = second;
+                    second = first;
+                    first = Some(x);
+                    continue;
+                }
+            }
+        }
+        match second {
+            None => {
+                second = Some(x);
+                continue;
+            }
+            Some(b) => {
+                if x > b {
+                    third = second;
+                    second = Some(x);
+                    continue;
+                }
+            }
+        }
+        match third {
+            None => third = Some(x),
+            Some(c) => {
+                if x > c {
+                    third = Some(x);
+                }
+            }
+        }
+    }
+    match third {
+        Some(c) => c,
+        None => first.unwrap(),
+    }
+}
+
+// ---- set: third_max_set.kara
+
+fn third_max_set(nums: Vec[i64]) -> i64 {
+    let mut top: SortedSet[i64] = SortedSet.new();
+    for x in nums {
+        top.insert(x);
+        if top.len() > 3 {
+            let smallest = *top.min().unwrap();
+            top.remove(smallest);
+        }
+    }
+    if top.len() == 3 {
+        *top.min().unwrap()
+    } else {
+        *top.max().unwrap()
+    }
+}
+
+// ---- sort: third_max_sort.kara
+
+fn third_max_sort(nums: Vec[i64]) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let largest = sorted[sorted.len() - 1];
+    let mut found = 1;
+    let mut i = sorted.len() - 1;
+    while i > 0 {
+        i -= 1;
+        if sorted[i] != sorted[i + 1] {
+            found += 1;
+            if found == 3 {
+                return sorted[i];
+            }
+        }
+    }
+    largest
+}
+
+// ---- heap: third_max_heap.kara
+
+fn third_max_heap(nums: Vec[i64]) -> i64 {
+    let mut heap = PriorityQueue.max_first_from(nums.clone());
+    let largest = heap.pop().unwrap();
+    let mut last = largest;
+    let mut found = 1;
+    while let Some(x) = heap.pop() {
+        if x != last {
+            found += 1;
+            if found == 3 {
+                return x;
+            }
+            last = x;
+        }
+    }
+    largest
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, nums: Vec[i64]) -> i64 {
+    if arm == 0 {
+        third_max_slots(nums)
+    } else if arm == 1 {
+        third_max_set(nums)
+    } else if arm == 2 {
+        third_max_sort(nums)
+    } else {
+        third_max_heap(nums)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The value with exactly two larger distinct values, counted by looking
+// at every pair; the largest value if there is none.
+fn brute(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut largest = nums[0];
+    for i in 0..n {
+        if nums[i] > largest {
+            largest = nums[i];
+        }
+    }
+    for i in 0..n {
+        let mut larger = 0;
+        for j in 0..n {
+            let mut first = true;
+            for k in 0..j {
+                if nums[k] == nums[j] {
+                    first = false;
+                }
+            }
+            if first and nums[j] > nums[i] {
+                larger += 1;
+            }
+        }
+        if larger == 2 {
+            return nums[i];
+        }
+    }
+    largest
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4140;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        let n = 1 + step(mut seed) % 30;
+        let width = 1 + step(mut seed) % 12;
+        let centre = step(mut seed) % 2001 - 1000;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(centre + step(mut seed) % width);
+        }
+        // P2: reversed, and rotated by a random amount.
+        let turn = step(mut seed) % n;
+        let mut reversed: Vec[i64] = Vec.new();
+        let mut rotated: Vec[i64] = Vec.new();
+        for i in 0..n {
+            reversed.push(nums[n - 1 - i]);
+            rotated.push(nums[(i + turn) % n]);
+        }
+        // P3: shifted by a constant, and tripled.
+        let shift = step(mut seed) % 2001 - 1000;
+        let mut shifted: Vec[i64] = Vec.new();
+        let mut tripled: Vec[i64] = Vec.new();
+        // P4: every number twice.
+        let mut doubled: Vec[i64] = Vec.new();
+        for i in 0..n {
+            shifted.push(nums[i] + shift);
+            tripled.push(3 * nums[i]);
+            doubled.push(nums[i]);
+        }
+        for i in 0..n {
+            doubled.push(nums[i]);
+        }
+        // P5: exactly d distinct values centre .. centre + d - 1, each at
+        // least once, in a scrambled order with repeats.
+        let d = 1 + step(mut seed) % 6;
+        let mut known: Vec[i64] = Vec.new();
+        for v in 0..d {
+            known.push(centre + v);
+        }
+        let extra = step(mut seed) % 10;
+        for _ in 0..extra {
+            known.push(centre + step(mut seed) % d);
+        }
+        let m = known.len();
+        for i in 0..m {
+            let j = step(mut seed) % m;
+            let t = known[i];
+            known[i] = known[j];
+            known[j] = t;
+        }
+        let expect_known = if d >= 3 { centre + d - 3 } else { centre + d - 1 };
+        let best = brute(nums);
+        for arm in 0..4 {
+            checks += 5;
+            let answer = solve(arm, nums);
+            report(1, arm, case, answer == best, mut failures);
+            report(2, arm, case, solve(arm, reversed) == answer and solve(arm, rotated) == answer, mut failures);
+            report(3, arm, case, solve(arm, shifted) == answer + shift and solve(arm, tripled) == 3 * answer, mut failures);
+            report(4, arm, case, solve(arm, doubled) == answer, mut failures);
+            report(5, arm, case, solve(arm, known) == expect_known, mut failures);
+        }
+    }
+    println(f"3000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

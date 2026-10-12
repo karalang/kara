@@ -1,0 +1,73 @@
+// LeetCode #414: Third Maximum Number -- a sorted set of three.
+//
+// Insert every value into a SortedSet, which keeps one copy of each,
+// and whenever it holds four drop its smallest. At the end it holds the
+// three largest distinct values, or all of them if there are fewer: the
+// answer is its smallest if it holds three, else its largest.
+// O(n) time (the set never passes four), O(1) space.
+
+fn third_max(nums: Vec[i64]) -> i64 {
+    let mut top: SortedSet[i64] = SortedSet.new();
+    for x in nums {
+        top.insert(x);
+        if top.len() > 3 {
+            let smallest = *top.min().unwrap();
+            top.remove(smallest);
+        }
+    }
+    if top.len() == 3 {
+        *top.min().unwrap()
+    } else {
+        *top.max().unwrap()
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut line = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            line.push_str(", ");
+        }
+        line.push_str(f"{nums[i]}");
+    }
+    println(f"[{line}]: {third_max(nums)}");
+}
+
+fn main() {
+    show(vec![3, 2, 1]);
+    show(vec![1, 2]);
+    show(vec![2, 2, 3, 1]);
+    show(vec![5]);
+    show(vec![4, 4, 4, 4]);
+    show(vec![1, 2, 2]);
+    show(vec![1, 1, 2, 2, 3, 3]);
+    show(vec![10, 9, 8, 7, 6, 5]);
+    show(vec![-1, -2, -3, -4]);
+    show(vec![-2147483648, 2147483647, 0]);
+    show(vec![-2147483648, -2147483648, 1, 1]);
+    // 2,000 random arrays of 1 to 40 numbers, drawn from a range of 1 to
+    // 20 values so that repeats are common, around a random centre.
+    let mut seed: i64 = 414;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let n = 1 + step(mut seed) % 40;
+        let width = 1 + step(mut seed) % 20;
+        let centre = step(mut seed) % 2001 - 1000;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(centre + step(mut seed) % width);
+        }
+        let answer = third_max(nums);
+        total += answer;
+        checksum = (checksum * 31 + answer + 2000) % 1000000007;
+    }
+    println(f"2000 random arrays: total {total}, checksum {checksum}");
+}
