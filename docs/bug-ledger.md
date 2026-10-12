@@ -97,11 +97,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 602 |
 | double-free | 427 |
 | codegen-gap | 252 |
-| missing-feature | 225 |
+| missing-feature | 226 |
 | other | 171 |
 | diagnostics | 152 |
 | perf | 148 |
-| false-positive | 142 |
+| false-positive | 143 |
 | crash | 114 |
 | soundness | 99 |
 | use-after-free | 90 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2851 |
-| interp | 898 |
-| typecheck | 359 |
+| codegen | 2852 |
+| interp | 899 |
+| typecheck | 360 |
 | other | 114 |
 | ownership | 82 |
 | cli | 75 |
@@ -590,6 +590,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-21 | 2026-10-12 | resolver | low | The MIR pipeline still resolves the Kāra library source in the user program's scope: a user `struct Peekable` or enum variant `Peekable` is refused by `karac __mir-run` as "'Peekable' is already defined in this scope", with the span in the library, though `karac check` accepts it (remainder of B-2026-10-12-17, whose other names e44d71929c renamed away) | — |
 | B-2026-10-12-22 | 2026-10-12 | typecheck | low | `karac check` accepts `m.get(k) == Some(n)` on a `Map[u8, i64]`, comparing `Option[ref i64]` with `Option[i64]`, which `karac __mir-run` refuses ("cannot compare 'Option[ref i64]' and 'Option[i64]'") and which check itself refuses for `Vec.get`; the legacy interpreter runs it | — |
 | B-2026-10-12-23 | 2026-10-12 | resolver+typecheck | medium | `karac check` refuses every `#[derive(Serialize, Deserialize)]` program that `karac __mir-run` runs: `DeserializeError` and `Serializer` are undefined types to the resolver, and `Json.serialize` / `Json.deserialize` are 'no associated function' to the typechecker | — |
+| B-2026-10-12-24 | 2026-10-12 | typecheck | medium | A method that needs `mut ref self` on a range view of a mutable place is refused: `v[a..b].reverse()` draws `Slice.reverse() requires a mutable slice (mut Slice[T])` from `karac check` and both MIR backends, though design.md says `v[a..b]` is a `mut Slice[T]` where a mutable view is needed; passing `mut v[a..b]` to a `mut Slice[T]` parameter works | — |
+| B-2026-10-12-25 | 2026-10-12 | interp+codegen | low | `Vec.split_at_mut` passes `karac check` but neither MIR backend has it: `__mir-run` says `call of unknown function Vec[i64].split_at_mut`, `__mir-llvm-run` says the native is not lowered yet | — |
 
 ### Relocated
 
