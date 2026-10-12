@@ -303,6 +303,19 @@ impl<'ctx> Cx<'ctx, '_> {
         {
             return Ok(());
         }
+        if matches!(
+            base,
+            "tracing_active_span"
+                | "tracing_level_enabled"
+                | "tracing_set_min_level"
+                | "tracing_reset"
+                | "tracing_emit_event"
+                | "with_span"
+                | "Log"
+        ) && self.tracing_native(base, method, args, dest)?.is_some()
+        {
+            return Ok(());
+        }
         if base == "Vector" && self.vector_native(method, args, dest)?.is_some() {
             return Ok(());
         }

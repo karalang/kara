@@ -739,6 +739,29 @@ pub unsafe extern "C" fn karac_mir_f2i(
     0
 }
 
+thread_local! {
+    /// The ids of the spans `with_span` made active, innermost last.
+    static SPANS: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Makes the span `id` active.
+#[no_mangle]
+pub extern "C" fn karac_mir_span_push(id: i64) {
+    SPANS.with(|s| s.borrow_mut().push(id));
+}
+
+/// Ends the innermost active span.
+#[no_mangle]
+pub extern "C" fn karac_mir_span_pop() {
+    SPANS.with(|s| s.borrow_mut().pop());
+}
+
+/// The innermost active span's id, or 0.
+#[no_mangle]
+pub extern "C" fn karac_mir_span_top() -> i64 {
+    SPANS.with(|s| s.borrow().last().copied().unwrap_or(0))
+}
+
 /// `std.time::sleep_ms`: a real pause; a count of zero or less is a
 /// no-op.
 #[no_mangle]

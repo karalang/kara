@@ -122,7 +122,7 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(())
     }
 
-    fn lit(&mut self, s: &str) -> R<()> {
+    pub(super) fn lit(&mut self, s: &str) -> R<()> {
         let (p, n) = self.str_const(s)?;
         self.rt("fmt_str", &[p.into(), n.into()])
     }

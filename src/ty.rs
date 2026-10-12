@@ -217,7 +217,7 @@ impl IntrinsicKind {
 /// Library structs whose values hold values of their one type argument
 /// that the struct's declared fields do not show (`OnceLock[T]` declares
 /// only a handle): they need dropping exactly when the argument does.
-pub const LIBRARY_CELLS: &[&str] = &["OnceLock", "OnceCell", "Arena", "TaskHandle"];
+pub const LIBRARY_CELLS: &[&str] = &["OnceLock", "OnceCell", "Arena", "TaskHandle", "Mutex"];
 
 /// Library handles that are always dropped, whatever they hold: a dropped
 /// `Channel` end is what closes the channel and frees what is still queued
