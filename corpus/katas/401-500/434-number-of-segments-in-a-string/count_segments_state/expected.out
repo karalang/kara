@@ -1,0 +1,11 @@
+"Hello, my name is John": 5
+"Hello": 1
+"": 0
+" ": 0
+"     ": 0
+"  leading and trailing  ": 3
+"a  b   c    d": 4
+"!@#$%^&*()_+-=',.:": 1
+"x": 1
+" x ": 1
+1000 random strings: 7048 segments, checksum 601292203

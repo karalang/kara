@@ -1,0 +1,62 @@
+// LeetCode #434: Number of Segments in a String -- counting starts.
+//
+// A segment starts at every non-space character that is the first
+// character or follows a space, so count those: one pass over the
+// bytes, O(n) time, O(1) space.
+
+fn count_segments(s: Str) -> i64 {
+    let bytes = s.bytes();
+    let mut count = 0;
+    for i in 0..bytes.len() {
+        if bytes[i] != b' ' and (i == 0 or bytes[i - 1] == b' ') {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(s: Str) {
+    println(f"\"{s}\": {count_segments(s)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("Hello, my name is John");
+    show("Hello");
+    show("");
+    show(" ");
+    show("     ");
+    show("  leading and trailing  ");
+    show("a  b   c    d");
+    show("!@#$%^&*()_+-=',.:");
+    show("x");
+    show(" x ");
+    // 1,000 random strings of up to 60 characters, a third of them
+    // spaces.
+    let symbols = "abcXYZ019!@#,.:-'";
+    let symbol_bytes = symbols.bytes();
+    let mut seed: i64 = 434;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..1000 {
+        let length = next_random(mut seed) % 61;
+        let mut s = String.new();
+        for _ in 0..length {
+            if next_random(mut seed) % 3 == 0 {
+                s.push(' ');
+            } else {
+                s.push(symbol_bytes[next_random(mut seed) % symbol_bytes.len()] as char);
+            }
+        }
+        let n = count_segments(s);
+        total += n;
+        checksum = (checksum * 31 + n) % 1000000007;
+    }
+    println(f"1000 random strings: {total} segments, checksum {checksum}");
+}

@@ -1,0 +1,257 @@
+// LeetCode #432: All O`one Data Structure -- a bucket list in a vector.
+//
+// The bucket list of the ★ arm, with the buckets kept in a vector and
+// linked by index instead of by handle: slot 0 is the head sentinel and
+// slot 1 the tail, and a map takes each key to its bucket's slot.
+// An unlinked bucket's slot goes on a free list for the next new
+// bucket, so the vector never holds more buckets than there are
+// distinct counts, plus the free ones. Every operation is O(1)
+// (hashing aside), with no reference counting.
+
+struct Bucket {
+    count: i64,
+    keys: Set[String],
+    prev: i64,
+    next: i64,
+}
+
+struct AllOne {
+    buckets: Vec[Bucket],
+    free: Vec[i64],
+    slot_of: Map[String, i64],
+}
+
+const HEAD: i64 = 0;
+const TAIL: i64 = 1;
+
+impl AllOne {
+    fn new() -> AllOne {
+        // The tail's count, -1, is never one more than a real count.
+        let mut buckets: Vec[Bucket] = Vec.new();
+        buckets.push(Bucket { count: 0, keys: Set.new(), prev: -1, next: TAIL });
+        buckets.push(Bucket { count: -1, keys: Set.new(), prev: HEAD, next: -1 });
+        AllOne { buckets: buckets, free: Vec.new(), slot_of: Map.new() }
+    }
+
+    // Link a new bucket of `count` in after slot `at`, and return its slot.
+    fn link_after(mut ref self, at: i64, count: i64) -> i64 {
+        let after = self.buckets[at].next;
+        let b = match self.free.pop() {
+            Some(slot) => {
+                self.buckets[slot].count = count;
+                self.buckets[slot].prev = at;
+                self.buckets[slot].next = after;
+                slot
+            }
+            None => {
+                self.buckets.push(Bucket { count: count, keys: Set.new(), prev: at, next: after });
+                self.buckets.len() - 1
+            }
+        };
+        self.buckets[at].next = b;
+        self.buckets[after].prev = b;
+        b
+    }
+
+    fn unlink(mut ref self, b: i64) {
+        let before = self.buckets[b].prev;
+        let after = self.buckets[b].next;
+        self.buckets[before].next = after;
+        self.buckets[after].prev = before;
+        self.free.push(b);
+    }
+
+    fn inc(mut ref self, key: Str) {
+        let cur = match self.slot_of.get(key) {
+            Some(b) => *b,
+            None => HEAD,
+        };
+        let count = self.buckets[cur].count;
+        let after = self.buckets[cur].next;
+        let up = if self.buckets[after].count == count + 1 { after } else { self.link_after(cur, count + 1) };
+        self.buckets[up].keys.insert(key.to_string());
+        self.slot_of.insert(key.to_string(), up);
+        if cur != HEAD {
+            self.buckets[cur].keys.remove(key);
+            if self.buckets[cur].keys.len() == 0 {
+                self.unlink(cur);
+            }
+        }
+    }
+
+    // The key is present, as the problem guarantees.
+    fn dec(mut ref self, key: Str) {
+        let cur = *self.slot_of.get(key).expect("dec of a key that is present");
+        let count = self.buckets[cur].count;
+        if count == 1 {
+            self.slot_of.remove(key);
+        } else {
+            let before = self.buckets[cur].prev;
+            let down = if self.buckets[before].count == count - 1 { before } else { self.link_after(before, count - 1) };
+            self.buckets[down].keys.insert(key.to_string());
+            self.slot_of.insert(key.to_string(), down);
+        }
+        self.buckets[cur].keys.remove(key);
+        if self.buckets[cur].keys.len() == 0 {
+            self.unlink(cur);
+        }
+    }
+
+    // Any key of a slot's bucket; "" for a sentinel.
+    fn any_key(self, b: i64) -> String {
+        for k in self.buckets[b].keys {
+            return k.clone();
+        }
+        String.new()
+    }
+
+    fn get_max_key(self) -> String {
+        self.any_key(self.buckets[TAIL].prev)
+    }
+
+    fn get_min_key(self) -> String {
+        self.any_key(self.buckets[HEAD].next)
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// A max or min answer, checked against `counts`, the harness's own count
+// of every key: the key must have the largest (or smallest) count, and
+// the answer is "" exactly when there are no keys. The problem lets any
+// key with that count be returned, so the key is printed only when it
+// is the only one; otherwise the count and how many keys share it.
+fn check(kind: Str, got: String, counts: ref Map[String, i64]) -> String {
+    if counts.len() == 0 {
+        let mark = if got == "" { "" } else { " FAILED" };
+        return f"{kind} none{mark}";
+    }
+    let mut want = -1;
+    for (_, c) in counts {
+        if want < 0 or (kind == "max" and c > want) or (kind == "min" and c < want) {
+            want = c;
+        }
+    }
+    let mut holders = 0;
+    for (_, c) in counts {
+        if c == want {
+            holders += 1;
+        }
+    }
+    let ok = match counts.get(got) {
+        Some(c) => *c == want,
+        None => false,
+    };
+    let mark = if ok { "" } else { " FAILED" };
+    if holders == 1 {
+        f"{kind} {got}{mark}"
+    } else {
+        f"{kind} one of {holders} at {want}{mark}"
+    }
+}
+
+// Apply one operation, keeping `counts` in step; a query's answer is
+// appended to `answers`.
+fn apply(ds: mut ref AllOne, op: Str, key: Str, counts: mut ref Map[String, i64], answers: mut ref Vec[String]) {
+    if op == "inc" {
+        ds.inc(key);
+        let c = match counts.get(key) {
+            Some(c) => *c,
+            None => 0,
+        };
+        counts.insert(key.to_string(), c + 1);
+    } else if op == "dec" {
+        ds.dec(key);
+        let c = counts.get(key).expect("dec of a key that is present");
+        if *c == 1 {
+            counts.remove(key);
+        } else {
+            counts.insert(key.to_string(), *c - 1);
+        }
+    } else if op == "max" {
+        answers.push(check("max", ds.get_max_key(), counts));
+    } else {
+        answers.push(check("min", ds.get_min_key(), counts));
+    }
+}
+
+// Run a script of operations separated by ", ": "inc k", "dec k", "max"
+// or "min".
+fn run(script: Str) {
+    let mut ds = AllOne.new();
+    let mut counts: Map[String, i64] = Map.new();
+    let mut answers: Vec[String] = Vec.new();
+    for step in script.split(", ") {
+        let words = step.split(" ");
+        let key = if words.len() > 1 { words[1].clone() } else { String.new() };
+        apply(mut ds, words[0], key, mut counts, mut answers);
+    }
+    let mut out = String.new();
+    for i in 0..answers.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(answers[i]);
+    }
+    println(f"{script} -> {out}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    run("inc hello, inc hello, max, min, inc leet, max, min");
+    run("max, min");
+    run("inc a, dec a, max, min");
+    run("inc a, inc b, inc b, inc c, inc c, inc c, max, min, dec c, dec c, max, min");
+    run("inc a, inc a, inc a, dec a, dec a, max, min");
+    run("inc x, inc y, inc z, max, min, inc y, max, min, dec y, dec y, max, min");
+    run("inc a, inc a, inc a, inc b, dec a, max, min, dec a, max, min, dec b, max, min");
+    // 20,000 random operations on 50 keys: an inc, a dec of a key that is
+    // present, or a query.
+    let mut seed: i64 = 432;
+    let mut ds = AllOne.new();
+    let mut counts: Map[String, i64] = Map.new();
+    let mut answers: Vec[String] = Vec.new();
+    for _ in 0..20000 {
+        let roll = next_random(mut seed) % 20;
+        let key = f"k{next_random(mut seed) % 50}";
+        if roll < 4 {
+            apply(mut ds, "max", "", mut counts, mut answers);
+        } else if roll < 8 {
+            apply(mut ds, "min", "", mut counts, mut answers);
+        } else if roll < 13 and counts.len() > 0 {
+            // dec a key that is present: the first present one from a
+            // random start, in key order.
+            let start = next_random(mut seed) % 50;
+            let mut i = 0;
+            loop {
+                let k = f"k{(start + i) % 50}";
+                if counts.contains_key(k) {
+                    apply(mut ds, "dec", k, mut counts, mut answers);
+                    break;
+                }
+                i += 1;
+            }
+        } else {
+            apply(mut ds, "inc", key, mut counts, mut answers);
+        }
+    }
+    let mut failed = 0;
+    let mut checksum: i64 = 0;
+    for a in answers {
+        if a.ends_with(" FAILED") {
+            failed += 1;
+        }
+        for b in a.bytes() {
+            checksum = (checksum * 31 + b as i64) % 1000000007;
+        }
+    }
+    let mut total = 0;
+    for (_, c) in counts {
+        total += c;
+    }
+    println(f"20000 random operations on 50 keys: {answers.len()} queries, {failed} failed, {counts.len()} keys left, total count {total}, checksum {checksum}");
+}

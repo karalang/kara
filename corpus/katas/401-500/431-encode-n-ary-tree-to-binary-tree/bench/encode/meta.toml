@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/431-encode-n-ary-tree-to-binary-tree/bench/encode.kara"
+dedup_of = []
+expect = "panic:-11"
+exit = -11
+tags = ["shared", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -11
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "bea3bb621"
+extracted_src = "10626a23"
+model_rev = "1aa23105"
+model_src = "10626a23"

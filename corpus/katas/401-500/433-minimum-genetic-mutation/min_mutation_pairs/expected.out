@@ -1,0 +1,9 @@
+AACCGGTT -> AACCGGTA, bank of 1: 1
+AACCGGTT -> AAACGGTA, bank of 3: 2
+AAAAACCC -> AACCCCCC, bank of 3: 3
+AACCGGTT -> AACCGGTA, bank of 0: -1
+AACCGGTT -> AACCGGTA, bank of 2: -1
+AAAAAAAA -> CCCCCCCC, bank of 8: 8
+AAAAAAAA -> AAAAAATT, bank of 3: 2
+AAAAAAAA -> TTTTTTTT, bank of 2: -1
+300 random banks: 80 reachable, 206 mutations in all, checksum 189381349

@@ -1,0 +1,150 @@
+// Benchmark for #432: the bucket-list arm (all_one.kara) on 2,000,000
+// random operations over 10,000 keys.
+
+shared struct Bucket {
+    count: i64,
+    mut keys: Set[String],
+    mut prev: weak Bucket,
+    mut next: Option[Bucket],
+}
+
+struct AllOne {
+    head: Bucket,
+    tail: Bucket,
+    bucket_of: Map[String, Bucket],
+}
+
+fn bucket(count: i64) -> Bucket {
+    Bucket { count: count, keys: Set.new(), prev: None, next: None }
+}
+
+// Link a new bucket of `count` in after `at`, and return it.
+fn link_after(at: Bucket, count: i64) -> Bucket {
+    let b = bucket(count);
+    let after = at.next.expect("the tail sentinel ends the list");
+    b.next = Some(after);
+    after.prev = b;
+    at.next = Some(b);
+    b.prev = at;
+    b
+}
+
+fn unlink(b: Bucket) {
+    let before = b.prev.expect("the head sentinel starts the list");
+    let after = b.next.expect("the tail sentinel ends the list");
+    before.next = Some(after);
+    after.prev = before;
+}
+
+// Any key of a bucket; "" for a sentinel.
+fn any_key(b: Bucket) -> String {
+    for k in b.keys {
+        return k.clone();
+    }
+    String.new()
+}
+
+impl AllOne {
+    fn new() -> AllOne {
+        // The tail's count, -1, is never one more than a real count.
+        let head = bucket(0);
+        let tail = bucket(-1);
+        head.next = Some(tail);
+        tail.prev = head;
+        AllOne { head: head, tail: tail, bucket_of: Map.new() }
+    }
+
+    fn inc(mut ref self, key: Str) {
+        let cur = match self.bucket_of.get(key) {
+            Some(b) => b,
+            None => self.head,
+        };
+        let after = cur.next.expect("the tail sentinel ends the list");
+        let up = if after.count == cur.count + 1 { after } else { link_after(cur, cur.count + 1) };
+        up.keys.insert(key.to_string());
+        self.bucket_of.insert(key.to_string(), up);
+        if cur.count > 0 {
+            cur.keys.remove(key);
+            if cur.keys.len() == 0 {
+                unlink(cur);
+            }
+        }
+    }
+
+    // The key is present, as the problem guarantees.
+    fn dec(mut ref self, key: Str) {
+        let cur = self.bucket_of.get(key).expect("dec of a key that is present").clone();
+        if cur.count == 1 {
+            self.bucket_of.remove(key);
+        } else {
+            let before = cur.prev.expect("the head sentinel starts the list");
+            let down = if before.count == cur.count - 1 { before } else { link_after(before, cur.count - 1) };
+            down.keys.insert(key.to_string());
+            self.bucket_of.insert(key.to_string(), down);
+        }
+        cur.keys.remove(key);
+        if cur.keys.len() == 0 {
+            unlink(cur);
+        }
+    }
+
+    fn get_max_key(self) -> String {
+        let tail = self.tail;
+        any_key(tail.prev.expect("the head sentinel starts the list"))
+    }
+
+    fn get_min_key(self) -> String {
+        let head = self.head;
+        any_key(head.next.expect("the tail sentinel ends the list"))
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The key's number: "k123" is 123, and "" is -1.
+fn key_id(key: Str) -> i64 {
+    if key.len() == 0 {
+        return -1;
+    }
+    let mut id = 0;
+    for b in key.bytes() {
+        if b != b'k' {
+            id = id * 10 + (b - b'0') as i64;
+        }
+    }
+    id
+}
+
+fn main() {
+    let keys = 10000;
+    let operations = 2000000;
+    let mut seed: i64 = 432;
+    let mut ds = AllOne.new();
+    // The harness's own counts, to pick present keys for `dec` and to
+    // fold each answer's count, which is the same whichever key of that
+    // count the structure returns.
+    let mut count: Vec[i64] = vec![0; keys];
+    let mut queries = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..operations {
+        let roll = next_random(mut seed) % 10;
+        let id = (next_random(mut seed) * 32768 + next_random(mut seed)) % keys;
+        if roll < 2 {
+            let answer = if roll == 0 { ds.get_max_key() } else { ds.get_min_key() };
+            let id = key_id(answer);
+            let c = if id < 0 { 0 } else { count[id] };
+            queries += 1;
+            checksum = (checksum * 31 + c + 1) % 1000000007;
+        } else if roll < 5 and count[id] > 0 {
+            ds.dec(f"k{id}");
+            count[id] -= 1;
+        } else {
+            ds.inc(f"k{id}");
+            count[id] += 1;
+        }
+    }
+    println(f"{operations} operations on {keys} keys: {queries} queries, checksum {checksum}");
+}

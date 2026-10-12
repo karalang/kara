@@ -1,0 +1,483 @@
+// Differential test for LeetCode #431: Encode N-ary Tree to Binary
+// Tree.
+//
+// Copies of the four arms, each run on 1,500 random trees of 0 to 39
+// nodes, wide or deep, with values below 10 or up to 10,000. The two
+// node types are defined once, before the arms. Properties known by
+// construction:
+//   P1  decoding the encoding gives back the same tree
+//   P2  encoding the decoded tree gives back the same binary tree
+//   P3  the binary tree has n nodes (2n - 1 for the spine arm) and
+//       holds the tree's values, each once
+//   P4  the binary tree is the one the arm describes, drawn straight
+//       from the generator's tables
+//   P5  the empty tree encodes to no binary tree and back; a star of 1
+//       to 200 leaves valued 0 and 10,000, and a chain of 2 to 201
+//       nodes, come back
+
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- lcrs: encode.kara
+
+fn encode_lcrs(root: Option[Node]) -> Option[TreeNode] {
+    match root {
+        Some(node) => Some(encode_node_lcrs(node)),
+        None => None,
+    }
+}
+
+fn encode_node_lcrs(node: Node) -> TreeNode {
+    let t = TreeNode { val: node.val, left: None, right: None };
+    let mut prev: Option[TreeNode] = None;
+    for child in node.children {
+        let c = encode_node_lcrs(child);
+        match prev {
+            Some(p) => p.right = Some(c),
+            None => t.left = Some(c),
+        }
+        prev = Some(c);
+    }
+    t
+}
+
+fn decode_lcrs(root: Option[TreeNode]) -> Option[Node] {
+    match root {
+        Some(t) => Some(decode_node_lcrs(t)),
+        None => None,
+    }
+}
+
+fn decode_node_lcrs(t: TreeNode) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    let mut child = t.left;
+    while let Some(c) = child {
+        children.push(decode_node_lcrs(c));
+        child = c.right;
+    }
+    Node { val: t.val, children: children }
+}
+
+// ---- mirror: encode_mirror.kara
+
+fn encode_mirror(root: Option[Node]) -> Option[TreeNode] {
+    match root {
+        Some(node) => Some(encode_node_mirror(node)),
+        None => None,
+    }
+}
+
+fn encode_node_mirror(node: Node) -> TreeNode {
+    let t = TreeNode { val: node.val, left: None, right: None };
+    let mut prev: Option[TreeNode] = None;
+    for child in node.children {
+        let c = encode_node_mirror(child);
+        match prev {
+            Some(p) => p.left = Some(c),
+            None => t.right = Some(c),
+        }
+        prev = Some(c);
+    }
+    t
+}
+
+fn decode_mirror(root: Option[TreeNode]) -> Option[Node] {
+    match root {
+        Some(t) => Some(decode_node_mirror(t)),
+        None => None,
+    }
+}
+
+fn decode_node_mirror(t: TreeNode) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    let mut child = t.right;
+    while let Some(c) = child {
+        children.push(decode_node_mirror(c));
+        child = c.left;
+    }
+    Node { val: t.val, children: children }
+}
+
+// ---- iter: encode_iter.kara
+
+fn encode_iter(root: own Option[Node]) -> Option[TreeNode] {
+    let mut level: Vec[(Node, TreeNode)] = Vec.new();
+    let top = match root {
+        Some(node) => {
+            let t = TreeNode { val: node.val, left: None, right: None };
+            level.push((node, t));
+            Some(t)
+        }
+        None => None,
+    };
+    while level.len() > 0 {
+        let mut next: Vec[(Node, TreeNode)] = Vec.new();
+        for (node, t) in level.into_iter() {
+            let mut prev: Option[TreeNode] = None;
+            for child in node.children.into_iter() {
+                let c = TreeNode { val: child.val, left: None, right: None };
+                match prev {
+                    Some(p) => p.right = Some(c),
+                    None => t.left = Some(c),
+                }
+                prev = Some(c);
+                next.push((child, c));
+            }
+        }
+        level = next;
+    }
+    top
+}
+
+fn decode_iter(root: Option[TreeNode]) -> Option[Node] {
+    let mut frames: Vec[TreeNode] = Vec.new();
+    let mut decoded: Vec[Vec[Node]] = Vec.new();
+    let mut pending: Vec[Option[TreeNode]] = Vec.new();
+    match root {
+        Some(t) => {
+            frames.push(t);
+            decoded.push(Vec.new());
+            pending.push(t.left);
+        }
+        None => {
+            return None;
+        }
+    }
+    loop {
+        let top = frames.len() - 1;
+        match pending[top] {
+            Some(c) => {
+                pending[top] = c.right;
+                frames.push(c);
+                decoded.push(Vec.new());
+                pending.push(c.left);
+            }
+            None => {
+                let t = frames.pop().unwrap();
+                let children = decoded.pop().unwrap();
+                pending.pop();
+                let node = Node { val: t.val, children: children };
+                if frames.len() == 0 {
+                    return Some(node);
+                }
+                decoded[frames.len() - 1].push(node);
+            }
+        }
+    }
+}
+
+// ---- spine: encode_spine.kara
+
+fn encode_spine(root: Option[Node]) -> Option[TreeNode] {
+    match root {
+        Some(node) => Some(encode_node_spine(node)),
+        None => None,
+    }
+}
+
+fn encode_node_spine(node: Node) -> TreeNode {
+    let t = TreeNode { val: node.val, left: None, right: None };
+    let mut last: Option[TreeNode] = None;
+    for child in node.children {
+        let link = TreeNode { val: -1, left: Some(encode_node_spine(child)), right: None };
+        match last {
+            Some(l) => l.right = Some(link),
+            None => t.left = Some(link),
+        }
+        last = Some(link);
+    }
+    t
+}
+
+fn decode_spine(root: Option[TreeNode]) -> Option[Node] {
+    match root {
+        Some(t) => Some(decode_node_spine(t)),
+        None => None,
+    }
+}
+
+fn decode_node_spine(t: TreeNode) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    let mut link = t.left;
+    while let Some(l) = link {
+        match l.left {
+            Some(c) => children.push(decode_node_spine(c)),
+            None => {}
+        }
+        link = l.right;
+    }
+    Node { val: t.val, children: children }
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn run_encode(arm: i64, root: own Option[Node]) -> Option[TreeNode] {
+    if arm == 0 {
+        encode_lcrs(root)
+    } else if arm == 1 {
+        encode_mirror(root)
+    } else if arm == 2 {
+        encode_iter(root)
+    } else {
+        encode_spine(root)
+    }
+}
+
+fn run_decode(arm: i64, root: Option[TreeNode]) -> Option[Node] {
+    if arm == 0 {
+        decode_lcrs(root)
+    } else if arm == 1 {
+        decode_mirror(root)
+    } else if arm == 2 {
+        decode_iter(root)
+    } else {
+        decode_spine(root)
+    }
+}
+
+fn leaf(val: i64) -> Node {
+    Node { val: val, children: Vec.new() }
+}
+
+fn shape(root: Option[Node]) -> String {
+    let mut out = String.new();
+    match root {
+        Some(node) => draw(node, mut out),
+        None => out.push_str("empty"),
+    }
+    out
+}
+
+fn draw(node: Node, out: mut ref String) {
+    out.push_str(f"{node.val}");
+    if node.children.len() > 0 {
+        out.push('(');
+        for i in 0..node.children.len() {
+            if i > 0 {
+                out.push(' ');
+            }
+            draw(node.children[i], out);
+        }
+        out.push(')');
+    }
+}
+
+fn bshape(root: Option[TreeNode]) -> String {
+    let mut out = String.new();
+    bdraw(root, mut out);
+    out
+}
+
+fn bdraw(root: Option[TreeNode], out: mut ref String) {
+    match root {
+        Some(t) => {
+            out.push_str(f"{t.val}");
+            if t.left.is_some() or t.right.is_some() {
+                out.push('(');
+                bdraw(t.left, out);
+                out.push(',');
+                bdraw(t.right, out);
+                out.push(')');
+            }
+        }
+        None => out.push('-'),
+    }
+}
+
+// The binary tree's node count, and its non-negative values.
+fn census(root: Option[TreeNode], values: mut ref Vec[i64]) -> i64 {
+    match root {
+        Some(t) => {
+            if t.val >= 0 {
+                values.push(t.val);
+            }
+            1 + census(t.left, values) + census(t.right, values)
+        }
+        None => 0,
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random tree as tables: node i's value, and its children in order.
+// Each node after the first hangs under one of the `reach` nodes
+// before it, so the tree is wide or deep.
+struct Table {
+    vals: Vec[i64],
+    kids: Vec[Vec[i64]],
+}
+
+fn random_table(n: i64, top: i64, seed: mut ref i64) -> Table {
+    let mut vals: Vec[i64] = Vec.new();
+    let mut kids: Vec[Vec[i64]] = Vec.new();
+    let reach = 1 + step(seed) % max(n, 1);
+    for i in 0..n {
+        vals.push(step(seed) % top);
+        kids.push(Vec.new());
+        if i > 0 {
+            let back = 1 + step(seed) % min(i, reach);
+            kids[i - back].push(i);
+        }
+    }
+    Table { vals: vals, kids: kids }
+}
+
+fn build_node(i: i64, table: Table) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in table.kids[i] {
+        children.push(build_node(k, table));
+    }
+    Node { val: table.vals[i], children: children }
+}
+
+fn build(table: Table) -> Option[Node] {
+    if table.vals.len() == 0 { None } else { Some(build_node(0, table)) }
+}
+
+// The three encodings drawn straight from the tables, for P4. `first`
+// is a node's first child and `sib` its next sibling, -1 for none.
+fn links(table: Table, first: mut ref Vec[i64], sib: mut ref Vec[i64]) {
+    for i in 0..table.vals.len() {
+        first.push(-1);
+        sib.push(-1);
+    }
+    for i in 0..table.vals.len() {
+        let ks = ref table.kids[i];
+        if ks.len() > 0 {
+            first[i] = ks[0];
+        }
+        for j in 1..ks.len() {
+            sib[ks[j - 1]] = ks[j];
+        }
+    }
+}
+
+fn lcrs_text(i: i64, mirrored: bool, table: Table, first: Vec[i64], sib: Vec[i64], out: mut ref String) {
+    if i < 0 {
+        out.push('-');
+        return;
+    }
+    out.push_str(f"{table.vals[i]}");
+    if first[i] >= 0 or sib[i] >= 0 {
+        out.push('(');
+        if mirrored {
+            lcrs_text(sib[i], mirrored, table, first, sib, out);
+            out.push(',');
+            lcrs_text(first[i], mirrored, table, first, sib, out);
+        } else {
+            lcrs_text(first[i], mirrored, table, first, sib, out);
+            out.push(',');
+            lcrs_text(sib[i], mirrored, table, first, sib, out);
+        }
+        out.push(')');
+    }
+}
+
+fn spine_text(i: i64, table: Table, out: mut ref String) {
+    out.push_str(f"{table.vals[i]}");
+    let ks = ref table.kids[i];
+    if ks.len() > 0 {
+        out.push('(');
+        for j in 0..ks.len() {
+            out.push_str("-1(");
+            spine_text(ks[j], table, out);
+            out.push(',');
+        }
+        out.push('-');
+        for _ in 0..ks.len() {
+            out.push(')');
+        }
+        out.push_str(",-)");
+    }
+}
+
+fn expected_encoding(arm: i64, table: Table) -> String {
+    if table.vals.len() == 0 {
+        return "-".to_string();
+    }
+    let mut out = String.new();
+    if arm == 3 {
+        spine_text(0, table, mut out);
+    } else {
+        let mut first: Vec[i64] = Vec.new();
+        let mut sib: Vec[i64] = Vec.new();
+        links(table, mut first, mut sib);
+        lcrs_text(0, arm == 1, table, first, sib, mut out);
+    }
+    out
+}
+
+fn chain(depth: i64) -> Node {
+    let mut node = leaf(depth);
+    for d in 0..depth {
+        node = Node { val: depth - 1 - d, children: vec![node] };
+    }
+    node
+}
+
+fn star(m: i64) -> Node {
+    let mut points: Vec[Node] = Vec.new();
+    for i in 0..m {
+        points.push(leaf(if i % 2 == 0 { 0 } else { 10000 }));
+    }
+    Node { val: 0, children: points }
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4310;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let n = step(mut seed) % 40;
+        let top = if step(mut seed) % 2 == 0 { 10 } else { 10001 };
+        let table = random_table(n, top, mut seed);
+        let want = shape(build(table));
+        let mut want_values = table.vals.clone();
+        want_values.sort();
+        let m = 1 + step(mut seed) % 200;
+        for arm in 0..4 {
+            checks += 5;
+            let bin = run_encode(arm, build(table));
+            let text = bshape(bin);
+            let back = run_decode(arm, bin);
+            report(1, arm, case, shape(back) == want, mut failures);
+            report(2, arm, case, bshape(run_encode(arm, back)) == text, mut failures);
+            let mut values: Vec[i64] = Vec.new();
+            let count = census(bin, mut values);
+            values.sort();
+            let want_count = if arm == 3 and n > 0 { 2 * n - 1 } else { n };
+            report(3, arm, case, count == want_count and values == want_values, mut failures);
+            report(4, arm, case, text == expected_encoding(arm, table), mut failures);
+            let empty_ok = bshape(run_encode(arm, None)) == "-" and shape(run_decode(arm, None)) == "empty";
+            let star_ok = shape(run_decode(arm, run_encode(arm, Some(star(m))))) == shape(Some(star(m)));
+            let chain_ok = shape(run_decode(arm, run_encode(arm, Some(chain(m))))) == shape(Some(chain(m)));
+            report(5, arm, case, empty_ok and star_ok and chain_ok, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

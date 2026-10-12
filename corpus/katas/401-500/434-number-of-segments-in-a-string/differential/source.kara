@@ -1,0 +1,200 @@
+// Differential test for LeetCode #434: Number of Segments in a String.
+//
+// Copies of the four arms, each run on 1,500 random strings of 0 to 80
+// characters, with a space in every 2, 3 or 8 characters on average.
+// Properties known by construction:
+//   P1  the count is the reference's, which counts segment ends: a
+//       non-space followed by a space or by the end
+//   P2  joining two strings with a space adds their counts
+//   P3  doubling every space and padding both ends with spaces
+//       changes nothing
+//   P4  replacing every non-space with 'x' changes nothing, and a
+//       string of length n has at most (n + 1) / 2 segments
+//   P5  k spaces have no segments, k copies of "w " have k, and k
+//       letters with no space have one (none when k is 0)
+
+// ---- starts: count_segments.kara
+
+fn count_segments_starts(s: Str) -> i64 {
+    let bytes = s.bytes();
+    let mut count = 0;
+    for i in 0..bytes.len() {
+        if bytes[i] != b' ' and (i == 0 or bytes[i - 1] == b' ') {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- split: count_segments_split.kara
+
+fn count_segments_split(s: Str) -> i64 {
+    let mut count = 0;
+    for piece in s.split(" ") {
+        if piece.len() > 0 {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- state: count_segments_state.kara
+
+fn count_segments_state(s: Str) -> i64 {
+    let mut count = 0;
+    let mut inside = false;
+    for c in s.chars() {
+        if c == ' ' {
+            inside = false;
+        } else if not inside {
+            inside = true;
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- gaps: count_segments_gaps.kara
+
+fn count_segments_gaps(s: Str) -> i64 {
+    let bytes = s.bytes();
+    let mut first = 0;
+    while first < bytes.len() and bytes[first] == b' ' {
+        first += 1;
+    }
+    if first == bytes.len() {
+        return 0;
+    }
+    let mut last = bytes.len() - 1;
+    while bytes[last] == b' ' {
+        last -= 1;
+    }
+    let mut gaps = 0;
+    for i in first + 1..last + 1 {
+        if bytes[i] == b' ' and bytes[i - 1] != b' ' {
+            gaps += 1;
+        }
+    }
+    gaps + 1
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, s: Str) -> i64 {
+    if arm == 0 {
+        count_segments_starts(s)
+    } else if arm == 1 {
+        count_segments_split(s)
+    } else if arm == 2 {
+        count_segments_state(s)
+    } else {
+        count_segments_gaps(s)
+    }
+}
+
+// The reference counts segment ENDS: a non-space followed by a space
+// or by the end of the string.
+fn reference(s: Str) -> i64 {
+    let b = s.bytes();
+    let mut count = 0;
+    for i in 0..b.len() {
+        if b[i] != b' ' and (i + 1 == b.len() or b[i + 1] == b' ') {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_text(seed: mut ref i64) -> String {
+    let symbols = "abcXYZ019!@#,.:-'_+=".bytes();
+    let length = next_random(seed) % 81;
+    let density = [2, 3, 8][next_random(seed) % 3];
+    let mut s = String.new();
+    for _ in 0..length {
+        if next_random(seed) % density == 0 {
+            s.push(' ');
+        } else {
+            s.push(symbols[next_random(seed) % symbols.len()] as char);
+        }
+    }
+    s
+}
+
+// Every space doubled, and `pad` spaces added at both ends.
+fn widen(s: Str, pad: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..pad {
+        out.push(' ');
+    }
+    for c in s.chars() {
+        out.push(c);
+        if c == ' ' {
+            out.push(' ');
+        }
+    }
+    for _ in 0..pad {
+        out.push(' ');
+    }
+    out
+}
+
+// Every non-space replaced by 'x'.
+fn flatten(s: Str) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(if c == ' ' { ' ' } else { 'x' });
+    }
+    out
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4340;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let a = random_text(mut seed);
+        let b = random_text(mut seed);
+        let joined = f"{a} {b}";
+        let pad = next_random(mut seed) % 4;
+        let wide = widen(a, pad);
+        let flat = flatten(a);
+        let k = next_random(mut seed) % 12;
+        let mut blanks = String.new();
+        let mut words = String.new();
+        let mut solid = String.new();
+        for _ in 0..k {
+            blanks.push(' ');
+            words.push_str("w ");
+            solid.push('w');
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let n = solve(arm, a);
+            report(1, arm, case, n == reference(a), mut failures);
+            report(2, arm, case, solve(arm, joined) == n + solve(arm, b), mut failures);
+            report(3, arm, case, solve(arm, wide) == n, mut failures);
+            report(4, arm, case, solve(arm, flat) == n and 2 * n <= a.len() + 1, mut failures);
+            let solid_want = if k > 0 { 1 } else { 0 };
+            report(5, arm, case, solve(arm, blanks) == 0 and solve(arm, words) == k and solve(arm, solid) == solid_want, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

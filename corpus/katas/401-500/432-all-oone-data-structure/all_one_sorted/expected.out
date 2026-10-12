@@ -1,0 +1,8 @@
+inc hello, inc hello, max, min, inc leet, max, min -> max hello, min hello, max hello, min leet
+max, min -> max none, min none
+inc a, dec a, max, min -> max none, min none
+inc a, inc b, inc b, inc c, inc c, inc c, max, min, dec c, dec c, max, min -> max c, min a, max b, min one of 2 at 1
+inc a, inc a, inc a, dec a, dec a, max, min -> max a, min a
+inc x, inc y, inc z, max, min, inc y, max, min, dec y, dec y, max, min -> max one of 3 at 1, min one of 3 at 1, max y, min one of 2 at 1, max one of 2 at 1, min one of 2 at 1
+inc a, inc a, inc a, inc b, dec a, max, min, dec a, max, min, dec b, max, min -> max a, min b, max one of 2 at 1, min one of 2 at 1, max a, min a
+20000 random operations on 50 keys: 7958 queries, 0 failed, 50 keys left, total count 1910, checksum 467250969

@@ -1,0 +1,215 @@
+// LeetCode #432: All O`one Data Structure -- a sorted map of counts.
+//
+// Keep each key's count in a map, and the keys at each count in a
+// sorted map from count to a set of keys. `inc` and `dec` move a key
+// from one count's set to the next; the largest count is the sorted
+// map's last entry and the smallest its first. Every operation is
+// O(log n): simpler than the bucket list, one logarithm slower.
+
+struct AllOne {
+    count_of: Map[String, i64],
+    keys_at: SortedMap[i64, Set[String]],
+}
+
+// Any key of a set; "" for none.
+fn any_key(keys: Set[String]) -> String {
+    for k in keys {
+        return k.clone();
+    }
+    String.new()
+}
+
+impl AllOne {
+    fn new() -> AllOne {
+        AllOne { count_of: Map.new(), keys_at: SortedMap.new() }
+    }
+
+    // Move `key` from count `from` to count `to`; 0 means absent.
+    fn shift(mut ref self, key: Str, from: i64, to: i64) {
+        if from > 0 {
+            self.keys_at[from].remove(key);
+            if self.keys_at[from].len() == 0 {
+                self.keys_at.remove(from);
+            }
+        }
+        if to > 0 {
+            if not self.keys_at.contains_key(to) {
+                self.keys_at.insert(to, Set.new());
+            }
+            self.keys_at[to].insert(key.to_string());
+            self.count_of.insert(key.to_string(), to);
+        } else {
+            self.count_of.remove(key);
+        }
+    }
+
+    fn inc(mut ref self, key: Str) {
+        let c = match self.count_of.get(key) {
+            Some(c) => *c,
+            None => 0,
+        };
+        self.shift(key, c, c + 1);
+    }
+
+    // The key is present, as the problem guarantees.
+    fn dec(mut ref self, key: Str) {
+        let c = *self.count_of.get(key).expect("dec of a key that is present");
+        self.shift(key, c, c - 1);
+    }
+
+    fn get_max_key(self) -> String {
+        match self.keys_at.floor(9223372036854775807) {
+            Some((_, keys)) => any_key(keys),
+            None => String.new(),
+        }
+    }
+
+    fn get_min_key(self) -> String {
+        match self.keys_at.ceiling(1) {
+            Some((_, keys)) => any_key(keys),
+            None => String.new(),
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// A max or min answer, checked against `counts`, the harness's own count
+// of every key: the key must have the largest (or smallest) count, and
+// the answer is "" exactly when there are no keys. The problem lets any
+// key with that count be returned, so the key is printed only when it
+// is the only one; otherwise the count and how many keys share it.
+fn check(kind: Str, got: String, counts: ref Map[String, i64]) -> String {
+    if counts.len() == 0 {
+        let mark = if got == "" { "" } else { " FAILED" };
+        return f"{kind} none{mark}";
+    }
+    let mut want = -1;
+    for (_, c) in counts {
+        if want < 0 or (kind == "max" and c > want) or (kind == "min" and c < want) {
+            want = c;
+        }
+    }
+    let mut holders = 0;
+    for (_, c) in counts {
+        if c == want {
+            holders += 1;
+        }
+    }
+    let ok = match counts.get(got) {
+        Some(c) => *c == want,
+        None => false,
+    };
+    let mark = if ok { "" } else { " FAILED" };
+    if holders == 1 {
+        f"{kind} {got}{mark}"
+    } else {
+        f"{kind} one of {holders} at {want}{mark}"
+    }
+}
+
+// Apply one operation, keeping `counts` in step; a query's answer is
+// appended to `answers`.
+fn apply(ds: mut ref AllOne, op: Str, key: Str, counts: mut ref Map[String, i64], answers: mut ref Vec[String]) {
+    if op == "inc" {
+        ds.inc(key);
+        let c = match counts.get(key) {
+            Some(c) => *c,
+            None => 0,
+        };
+        counts.insert(key.to_string(), c + 1);
+    } else if op == "dec" {
+        ds.dec(key);
+        let c = counts.get(key).expect("dec of a key that is present");
+        if *c == 1 {
+            counts.remove(key);
+        } else {
+            counts.insert(key.to_string(), *c - 1);
+        }
+    } else if op == "max" {
+        answers.push(check("max", ds.get_max_key(), counts));
+    } else {
+        answers.push(check("min", ds.get_min_key(), counts));
+    }
+}
+
+// Run a script of operations separated by ", ": "inc k", "dec k", "max"
+// or "min".
+fn run(script: Str) {
+    let mut ds = AllOne.new();
+    let mut counts: Map[String, i64] = Map.new();
+    let mut answers: Vec[String] = Vec.new();
+    for step in script.split(", ") {
+        let words = step.split(" ");
+        let key = if words.len() > 1 { words[1].clone() } else { String.new() };
+        apply(mut ds, words[0], key, mut counts, mut answers);
+    }
+    let mut out = String.new();
+    for i in 0..answers.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(answers[i]);
+    }
+    println(f"{script} -> {out}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    run("inc hello, inc hello, max, min, inc leet, max, min");
+    run("max, min");
+    run("inc a, dec a, max, min");
+    run("inc a, inc b, inc b, inc c, inc c, inc c, max, min, dec c, dec c, max, min");
+    run("inc a, inc a, inc a, dec a, dec a, max, min");
+    run("inc x, inc y, inc z, max, min, inc y, max, min, dec y, dec y, max, min");
+    run("inc a, inc a, inc a, inc b, dec a, max, min, dec a, max, min, dec b, max, min");
+    // 20,000 random operations on 50 keys: an inc, a dec of a key that is
+    // present, or a query.
+    let mut seed: i64 = 432;
+    let mut ds = AllOne.new();
+    let mut counts: Map[String, i64] = Map.new();
+    let mut answers: Vec[String] = Vec.new();
+    for _ in 0..20000 {
+        let roll = next_random(mut seed) % 20;
+        let key = f"k{next_random(mut seed) % 50}";
+        if roll < 4 {
+            apply(mut ds, "max", "", mut counts, mut answers);
+        } else if roll < 8 {
+            apply(mut ds, "min", "", mut counts, mut answers);
+        } else if roll < 13 and counts.len() > 0 {
+            // dec a key that is present: the first present one from a
+            // random start, in key order.
+            let start = next_random(mut seed) % 50;
+            let mut i = 0;
+            loop {
+                let k = f"k{(start + i) % 50}";
+                if counts.contains_key(k) {
+                    apply(mut ds, "dec", k, mut counts, mut answers);
+                    break;
+                }
+                i += 1;
+            }
+        } else {
+            apply(mut ds, "inc", key, mut counts, mut answers);
+        }
+    }
+    let mut failed = 0;
+    let mut checksum: i64 = 0;
+    for a in answers {
+        if a.ends_with(" FAILED") {
+            failed += 1;
+        }
+        for b in a.bytes() {
+            checksum = (checksum * 31 + b as i64) % 1000000007;
+        }
+    }
+    let mut total = 0;
+    for (_, c) in counts {
+        total += c;
+    }
+    println(f"20000 random operations on 50 keys: {answers.len()} queries, {failed} failed, {counts.len()} keys left, total count {total}, checksum {checksum}");
+}

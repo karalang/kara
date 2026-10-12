@@ -1,0 +1,146 @@
+// LeetCode #433: Minimum Genetic Mutation -- breadth first from both
+// ends.
+//
+// Search from the start and from the end at once, always growing the
+// smaller of the two frontiers by a level, and stop when a mutant of
+// one frontier is in the other: the two half-searches each go about
+// half as deep, which matters when genes branch widely. Mutants are
+// generated as in the ★ arm. Same O(24 n) lookups at worst.
+
+fn min_mutation(start_gene: Str, end_gene: Str, bank: Vec[String]) -> i64 {
+    let mut unreached: Set[String] = Set.new();
+    for gene in bank {
+        unreached.insert(gene.clone());
+    }
+    if not unreached.contains(end_gene) {
+        return -1;
+    }
+    if start_gene == end_gene {
+        return 0;
+    }
+    unreached.remove(start_gene);
+    unreached.remove(end_gene);
+    let mut front: Set[String] = Set.new();
+    front.insert(start_gene.to_string());
+    let mut back: Set[String] = Set.new();
+    back.insert(end_gene.to_string());
+    let mut steps = 0;
+    while front.len() > 0 and back.len() > 0 {
+        if front.len() > back.len() {
+            let smaller = back;
+            back = front;
+            front = smaller;
+        }
+        steps += 1;
+        let mut next: Set[String] = Set.new();
+        for gene in front {
+            let letters: Vec[char] = gene.chars().collect();
+            for i in 0..letters.len() {
+                for c in ['A', 'C', 'G', 'T'] {
+                    if c != letters[i] {
+                        let mut mutant = String.new();
+                        for j in 0..letters.len() {
+                            mutant.push(if j == i { c } else { letters[j] });
+                        }
+                        if back.contains(mutant) {
+                            return steps;
+                        }
+                        if unreached.remove(mutant) {
+                            next.insert(mutant);
+                        }
+                    }
+                }
+            }
+        }
+        front = next;
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(start_gene: Str, end_gene: Str, bank: Vec[String]) {
+    println(f"{start_gene} -> {end_gene}, bank of {bank.len()}: {min_mutation(start_gene, end_gene, bank)}");
+}
+
+fn bank_of(genes: Str) -> Vec[String] {
+    if genes.len() == 0 {
+        return Vec.new();
+    }
+    genes.split(" ")
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_gene(seed: mut ref i64) -> String {
+    let mut gene = String.new();
+    for _ in 0..8 {
+        gene.push(['A', 'C', 'G', 'T'][next_random(seed) % 4]);
+    }
+    gene
+}
+
+// One letter of `gene` changed at random.
+fn mutate(gene: Str, seed: mut ref i64) -> String {
+    let at = next_random(seed) % 8;
+    let shift = 1 + next_random(seed) % 3;
+    let mut out = String.new();
+    let mut i = 0;
+    for c in gene.chars() {
+        if i == at {
+            let k = match c {
+                'A' => 0,
+                'C' => 1,
+                'G' => 2,
+                _ => 3,
+            };
+            out.push(['A', 'C', 'G', 'T'][(k + shift) % 4]);
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
+}
+
+fn main() {
+    show("AACCGGTT", "AACCGGTA", bank_of("AACCGGTA"));
+    show("AACCGGTT", "AAACGGTA", bank_of("AACCGGTA AACCGCTA AAACGGTA"));
+    show("AAAAACCC", "AACCCCCC", bank_of("AAAACCCC AAACCCCC AACCCCCC"));
+    show("AACCGGTT", "AACCGGTA", bank_of(""));
+    show("AACCGGTT", "AACCGGTA", bank_of("AACCGGTC AACCGGAA"));
+    show("AAAAAAAA", "CCCCCCCC", bank_of("AAAAAAAC AAAAAACC AAAAACCC AAAACCCC AAACCCCC AACCCCCC ACCCCCCC CCCCCCCC"));
+    show("AAAAAAAA", "AAAAAATT", bank_of("AAAAAAAT AAAAAATT AAAAAAAA"));
+    show("AAAAAAAA", "TTTTTTTT", bank_of("TTTTTTTT AAAAAAAT"));
+    // 300 random banks of up to 30 genes, most of them a few random
+    // mutations from the start, and an end drawn from the bank or not.
+    let mut seed: i64 = 433;
+    let mut reachable = 0;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let start = random_gene(mut seed);
+        let size = next_random(mut seed) % 31;
+        let mut bank: Vec[String] = Vec.new();
+        let mut last = start.clone();
+        for _ in 0..size {
+            if next_random(mut seed) % 5 == 0 {
+                last = random_gene(mut seed);
+            } else {
+                last = mutate(last, mut seed);
+            }
+            bank.push(last.clone());
+        }
+        let end = if size > 0 and next_random(mut seed) % 4 != 0 { bank[next_random(mut seed) % size].clone() } else { random_gene(mut seed) };
+        let answer = min_mutation(start, end, bank);
+        if answer >= 0 {
+            reachable += 1;
+            total += answer;
+        }
+        checksum = (checksum * 31 + answer + 2) % 1000000007;
+    }
+    println(f"300 random banks: {reachable} reachable, {total} mutations in all, checksum {checksum}");
+}

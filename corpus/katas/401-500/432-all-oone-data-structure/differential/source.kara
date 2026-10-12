@@ -1,0 +1,631 @@
+// Differential test for LeetCode #432: All O`one Data Structure.
+//
+// Copies of the four arms, each run on the same 1,500 random scripts of
+// operations, and every max or min answer checked against plain counts
+// kept by the harness: the answer's count must be the largest (or
+// smallest), and the answer "" exactly when no key is present. A script
+// runs in five phases, one per property:
+//   P1  max answers among random incs and decs on 1 to 8 keys
+//   P2  min answers in that same random phase
+//   P3  answers as every key is lowered to nothing, ending empty
+//   P4  answers on a staircase, key i raised to i + 1, then each key
+//       lowered once
+//   P5  answers as a present key is raised past every other count, then
+//       lowered back
+
+// ---- list: all_one.kara
+
+shared struct AllOneListBucket {
+    count: i64,
+    mut keys: Set[String],
+    mut prev: weak AllOneListBucket,
+    mut next: Option[AllOneListBucket],
+}
+
+struct AllOneList {
+    head: AllOneListBucket,
+    tail: AllOneListBucket,
+    bucket_of: Map[String, AllOneListBucket],
+}
+
+fn bucket_list(count: i64) -> AllOneListBucket {
+    AllOneListBucket { count: count, keys: Set.new(), prev: None, next: None }
+}
+
+// Link a new bucket of `count` in after `at`, and return it.
+fn link_after_list(at: AllOneListBucket, count: i64) -> AllOneListBucket {
+    let b = bucket_list(count);
+    let after = at.next.expect("the tail sentinel ends the list");
+    b.next = Some(after);
+    after.prev = b;
+    at.next = Some(b);
+    b.prev = at;
+    b
+}
+
+fn unlink_list(b: AllOneListBucket) {
+    let before = b.prev.expect("the head sentinel starts the list");
+    let after = b.next.expect("the tail sentinel ends the list");
+    before.next = Some(after);
+    after.prev = before;
+}
+
+// Any key of a bucket; "" for a sentinel.
+fn any_key_list(b: AllOneListBucket) -> String {
+    for k in b.keys {
+        return k.clone();
+    }
+    String.new()
+}
+
+impl AllOneList {
+    fn new() -> AllOneList {
+        // The tail's count, -1, is never one more than a real count.
+        let head = bucket_list(0);
+        let tail = bucket_list(-1);
+        head.next = Some(tail);
+        tail.prev = head;
+        AllOneList { head: head, tail: tail, bucket_of: Map.new() }
+    }
+
+    fn inc(mut ref self, key: Str) {
+        let cur = match self.bucket_of.get(key) {
+            Some(b) => b,
+            None => self.head,
+        };
+        let after = cur.next.expect("the tail sentinel ends the list");
+        let up = if after.count == cur.count + 1 { after } else { link_after_list(cur, cur.count + 1) };
+        up.keys.insert(key.to_string());
+        self.bucket_of.insert(key.to_string(), up);
+        if cur.count > 0 {
+            cur.keys.remove(key);
+            if cur.keys.len() == 0 {
+                unlink_list(cur);
+            }
+        }
+    }
+
+    // The key is present, as the problem guarantees.
+    fn dec(mut ref self, key: Str) {
+        let cur = self.bucket_of.get(key).expect("dec of a key that is present").clone();
+        if cur.count == 1 {
+            self.bucket_of.remove(key);
+        } else {
+            let before = cur.prev.expect("the head sentinel starts the list");
+            let down = if before.count == cur.count - 1 { before } else { link_after_list(before, cur.count - 1) };
+            down.keys.insert(key.to_string());
+            self.bucket_of.insert(key.to_string(), down);
+        }
+        cur.keys.remove(key);
+        if cur.keys.len() == 0 {
+            unlink_list(cur);
+        }
+    }
+
+    fn get_max_key(self) -> String {
+        let tail = self.tail;
+        any_key_list(tail.prev.expect("the head sentinel starts the list"))
+    }
+
+    fn get_min_key(self) -> String {
+        let head = self.head;
+        any_key_list(head.next.expect("the tail sentinel ends the list"))
+    }
+}
+
+fn run_list(ops: ref Vec[i64]) -> Vec[String] {
+    let mut ds = AllOneList.new();
+    let mut answers: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < ops.len() {
+        let key = f"k{ops[i + 1]}";
+        if ops[i] == 0 {
+            ds.inc(key);
+        } else if ops[i] == 1 {
+            ds.dec(key);
+        } else if ops[i] == 2 {
+            answers.push(ds.get_max_key());
+        } else {
+            answers.push(ds.get_min_key());
+        }
+        i += 3;
+    }
+    answers
+}
+
+// ---- sorted: all_one_sorted.kara
+
+struct AllOneSorted {
+    count_of: Map[String, i64],
+    keys_at: SortedMap[i64, Set[String]],
+}
+
+// Any key of a set; "" for none.
+fn any_key_sorted(keys: Set[String]) -> String {
+    for k in keys {
+        return k.clone();
+    }
+    String.new()
+}
+
+impl AllOneSorted {
+    fn new() -> AllOneSorted {
+        AllOneSorted { count_of: Map.new(), keys_at: SortedMap.new() }
+    }
+
+    // Move `key` from count `from` to count `to`; 0 means absent.
+    fn shift(mut ref self, key: Str, from: i64, to: i64) {
+        if from > 0 {
+            self.keys_at[from].remove(key);
+            if self.keys_at[from].len() == 0 {
+                self.keys_at.remove(from);
+            }
+        }
+        if to > 0 {
+            if not self.keys_at.contains_key(to) {
+                self.keys_at.insert(to, Set.new());
+            }
+            self.keys_at[to].insert(key.to_string());
+            self.count_of.insert(key.to_string(), to);
+        } else {
+            self.count_of.remove(key);
+        }
+    }
+
+    fn inc(mut ref self, key: Str) {
+        let c = match self.count_of.get(key) {
+            Some(c) => *c,
+            None => 0,
+        };
+        self.shift(key, c, c + 1);
+    }
+
+    // The key is present, as the problem guarantees.
+    fn dec(mut ref self, key: Str) {
+        let c = *self.count_of.get(key).expect("dec of a key that is present");
+        self.shift(key, c, c - 1);
+    }
+
+    fn get_max_key(self) -> String {
+        match self.keys_at.floor(9223372036854775807) {
+            Some((_, keys)) => any_key_sorted(keys),
+            None => String.new(),
+        }
+    }
+
+    fn get_min_key(self) -> String {
+        match self.keys_at.ceiling(1) {
+            Some((_, keys)) => any_key_sorted(keys),
+            None => String.new(),
+        }
+    }
+}
+
+fn run_sorted(ops: ref Vec[i64]) -> Vec[String] {
+    let mut ds = AllOneSorted.new();
+    let mut answers: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < ops.len() {
+        let key = f"k{ops[i + 1]}";
+        if ops[i] == 0 {
+            ds.inc(key);
+        } else if ops[i] == 1 {
+            ds.dec(key);
+        } else if ops[i] == 2 {
+            answers.push(ds.get_max_key());
+        } else {
+            answers.push(ds.get_min_key());
+        }
+        i += 3;
+    }
+    answers
+}
+
+// ---- arena: all_one_arena.kara
+
+struct AllOneArenaBucket {
+    count: i64,
+    keys: Set[String],
+    prev: i64,
+    next: i64,
+}
+
+struct AllOneArena {
+    buckets: Vec[AllOneArenaBucket],
+    free: Vec[i64],
+    slot_of: Map[String, i64],
+}
+
+const ARENA_HEAD: i64 = 0;
+const ARENA_TAIL: i64 = 1;
+
+impl AllOneArena {
+    fn new() -> AllOneArena {
+        // The tail's count, -1, is never one more than a real count.
+        let mut buckets: Vec[AllOneArenaBucket] = Vec.new();
+        buckets.push(AllOneArenaBucket { count: 0, keys: Set.new(), prev: -1, next: ARENA_TAIL });
+        buckets.push(AllOneArenaBucket { count: -1, keys: Set.new(), prev: ARENA_HEAD, next: -1 });
+        AllOneArena { buckets: buckets, free: Vec.new(), slot_of: Map.new() }
+    }
+
+    // Link a new bucket of `count` in after slot `at`, and return its slot.
+    fn link_after(mut ref self, at: i64, count: i64) -> i64 {
+        let after = self.buckets[at].next;
+        let b = match self.free.pop() {
+            Some(slot) => {
+                self.buckets[slot].count = count;
+                self.buckets[slot].prev = at;
+                self.buckets[slot].next = after;
+                slot
+            }
+            None => {
+                self.buckets.push(AllOneArenaBucket { count: count, keys: Set.new(), prev: at, next: after });
+                self.buckets.len() - 1
+            }
+        };
+        self.buckets[at].next = b;
+        self.buckets[after].prev = b;
+        b
+    }
+
+    fn unlink(mut ref self, b: i64) {
+        let before = self.buckets[b].prev;
+        let after = self.buckets[b].next;
+        self.buckets[before].next = after;
+        self.buckets[after].prev = before;
+        self.free.push(b);
+    }
+
+    fn inc(mut ref self, key: Str) {
+        let cur = match self.slot_of.get(key) {
+            Some(b) => *b,
+            None => ARENA_HEAD,
+        };
+        let count = self.buckets[cur].count;
+        let after = self.buckets[cur].next;
+        let up = if self.buckets[after].count == count + 1 { after } else { self.link_after(cur, count + 1) };
+        self.buckets[up].keys.insert(key.to_string());
+        self.slot_of.insert(key.to_string(), up);
+        if cur != ARENA_HEAD {
+            self.buckets[cur].keys.remove(key);
+            if self.buckets[cur].keys.len() == 0 {
+                self.unlink(cur);
+            }
+        }
+    }
+
+    // The key is present, as the problem guarantees.
+    fn dec(mut ref self, key: Str) {
+        let cur = *self.slot_of.get(key).expect("dec of a key that is present");
+        let count = self.buckets[cur].count;
+        if count == 1 {
+            self.slot_of.remove(key);
+        } else {
+            let before = self.buckets[cur].prev;
+            let down = if self.buckets[before].count == count - 1 { before } else { self.link_after(before, count - 1) };
+            self.buckets[down].keys.insert(key.to_string());
+            self.slot_of.insert(key.to_string(), down);
+        }
+        self.buckets[cur].keys.remove(key);
+        if self.buckets[cur].keys.len() == 0 {
+            self.unlink(cur);
+        }
+    }
+
+    // Any key of a slot's bucket; "" for a sentinel.
+    fn any_key(self, b: i64) -> String {
+        for k in self.buckets[b].keys {
+            return k.clone();
+        }
+        String.new()
+    }
+
+    fn get_max_key(self) -> String {
+        self.any_key(self.buckets[ARENA_TAIL].prev)
+    }
+
+    fn get_min_key(self) -> String {
+        self.any_key(self.buckets[ARENA_HEAD].next)
+    }
+}
+
+fn run_arena(ops: ref Vec[i64]) -> Vec[String] {
+    let mut ds = AllOneArena.new();
+    let mut answers: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < ops.len() {
+        let key = f"k{ops[i + 1]}";
+        if ops[i] == 0 {
+            ds.inc(key);
+        } else if ops[i] == 1 {
+            ds.dec(key);
+        } else if ops[i] == 2 {
+            answers.push(ds.get_max_key());
+        } else {
+            answers.push(ds.get_min_key());
+        }
+        i += 3;
+    }
+    answers
+}
+
+// ---- scan: all_one_scan.kara
+
+struct AllOneScan {
+    count_of: Map[String, i64],
+}
+
+impl AllOneScan {
+    fn new() -> AllOneScan {
+        AllOneScan { count_of: Map.new() }
+    }
+
+    fn inc(mut ref self, key: Str) {
+        let c = match self.count_of.get(key) {
+            Some(c) => *c,
+            None => 0,
+        };
+        self.count_of.insert(key.to_string(), c + 1);
+    }
+
+    // The key is present, as the problem guarantees.
+    fn dec(mut ref self, key: Str) {
+        let c = *self.count_of.get(key).expect("dec of a key that is present");
+        if c == 1 {
+            self.count_of.remove(key);
+        } else {
+            self.count_of.insert(key.to_string(), c - 1);
+        }
+    }
+
+    fn get_max_key(self) -> String {
+        let mut best = String.new();
+        let mut best_count = 0;
+        for (k, c) in self.count_of {
+            if c > best_count {
+                best_count = c;
+                best = k.clone();
+            }
+        }
+        best
+    }
+
+    fn get_min_key(self) -> String {
+        let mut best = String.new();
+        let mut best_count = 0;
+        for (k, c) in self.count_of {
+            if best_count == 0 or c < best_count {
+                best_count = c;
+                best = k.clone();
+            }
+        }
+        best
+    }
+}
+
+fn run_scan(ops: ref Vec[i64]) -> Vec[String] {
+    let mut ds = AllOneScan.new();
+    let mut answers: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < ops.len() {
+        let key = f"k{ops[i + 1]}";
+        if ops[i] == 0 {
+            ds.inc(key);
+        } else if ops[i] == 1 {
+            ds.dec(key);
+        } else if ops[i] == 2 {
+            answers.push(ds.get_max_key());
+        } else {
+            answers.push(ds.get_min_key());
+        }
+        i += 3;
+    }
+    answers
+}
+
+// ---- harness ----------------------------------------------------------
+
+// A script is a flat list of triples (op, key, property): op 0 is inc,
+// 1 dec, 2 a max query and 3 a min query; key i is the string "k{i}";
+// the property is the one a query's answer is checked under.
+fn run(arm: i64, ops: ref Vec[i64]) -> Vec[String] {
+    if arm == 0 {
+        run_list(ops)
+    } else if arm == 1 {
+        run_sorted(ops)
+    } else if arm == 2 {
+        run_arena(ops)
+    } else {
+        run_scan(ops)
+    }
+}
+
+// Pick a present key, the first from a random start in key order.
+fn present_key(counts: ref Map[i64, i64], start: i64) -> i64 {
+    let mut k = start;
+    loop {
+        if counts.contains_key(k) {
+            return k;
+        }
+        k = (k + 1) % 200;
+    }
+}
+
+fn extreme(counts: ref Map[i64, i64], largest: bool) -> i64 {
+    let mut want = -1;
+    for (_, c) in counts {
+        if want < 0 or (largest and c > want) or (not largest and c < want) {
+            want = c;
+        }
+    }
+    want
+}
+
+fn push_op(ops: mut ref Vec[i64], counts: mut ref Map[i64, i64], op: i64, key: i64, prop: i64) {
+    ops.push(op);
+    ops.push(key);
+    ops.push(prop);
+    if op == 0 {
+        let c = match counts.get(key) {
+            Some(c) => *c,
+            None => 0,
+        };
+        counts.insert(key, c + 1);
+    } else if op == 1 {
+        let c = *counts.get(key).expect("dec of a key that is present");
+        if c == 1 {
+            counts.remove(key);
+        } else {
+            counts.insert(key, c - 1);
+        }
+    }
+}
+
+fn queries(ops: mut ref Vec[i64], counts: mut ref Map[i64, i64], prop: i64) {
+    push_op(ops, counts, 2, 0, prop);
+    push_op(ops, counts, 3, 0, prop);
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// One case's script, in five phases, one per property.
+fn script(seed: mut ref i64) -> Vec[i64] {
+    let mut ops: Vec[i64] = Vec.new();
+    let mut counts: Map[i64, i64] = Map.new();
+    // P1, P2: random operations on 1 to 8 keys.
+    let keys = 1 + next_random(seed) % 8;
+    let length = next_random(seed) % 60;
+    for _ in 0..length {
+        let roll = next_random(seed) % 20;
+        let key = next_random(seed) % keys;
+        if roll < 3 {
+            push_op(mut ops, mut counts, 2, 0, 1);
+        } else if roll < 6 {
+            push_op(mut ops, mut counts, 3, 0, 2);
+        } else if roll < 10 and counts.len() > 0 {
+            push_op(mut ops, mut counts, 1, present_key(counts, key), 1 + roll % 2);
+        } else {
+            push_op(mut ops, mut counts, 0, key, 1 + roll % 2);
+        }
+    }
+    // P5: a present key raised past every count, then lowered back.
+    if counts.len() > 0 {
+        let k = present_key(counts, next_random(seed) % keys);
+        let d = extreme(counts, true) - counts[k] + 1;
+        for _ in 0..d {
+            push_op(mut ops, mut counts, 0, k, 5);
+        }
+        queries(mut ops, mut counts, 5);
+        for i in 0..d {
+            push_op(mut ops, mut counts, 1, k, 5);
+            if i == 0 {
+                queries(mut ops, mut counts, 5);
+            }
+        }
+        queries(mut ops, mut counts, 5);
+    }
+    // P3: every key lowered to nothing, in key order.
+    for key in 0..keys {
+        while counts.contains_key(key) {
+            push_op(mut ops, mut counts, 1, key, 3);
+        }
+        queries(mut ops, mut counts, 3);
+    }
+    // P4: a staircase, key 100 + i raised to i + 1, then each lowered once.
+    let m = 1 + next_random(seed) % 6;
+    for round in 0..m {
+        for i in round..m {
+            push_op(mut ops, mut counts, 0, 100 + i, 4);
+        }
+    }
+    queries(mut ops, mut counts, 4);
+    for i in 0..m {
+        push_op(mut ops, mut counts, 1, 100 + i, 4);
+        queries(mut ops, mut counts, 4);
+    }
+    ops
+}
+
+// Replay the script on plain counts and check each answer: the key's
+// count must be the largest (or smallest), and "" exactly when no key
+// is present. bad[p] is set when a property-p answer is wrong.
+fn verify(ops: ref Vec[i64], answers: ref Vec[String], bad: mut ref Vec[bool]) {
+    let mut counts: Map[String, i64] = Map.new();
+    let mut next = 0;
+    let mut i = 0;
+    while i < ops.len() {
+        let op = ops[i];
+        let key = f"k{ops[i + 1]}";
+        let prop = ops[i + 2];
+        if op == 0 {
+            let c = match counts.get(key) {
+                Some(c) => *c,
+                None => 0,
+            };
+            counts.insert(key, c + 1);
+        } else if op == 1 {
+            let c = match counts.get(key) {
+                Some(c) => *c,
+                None => 0,
+            };
+            if c <= 1 {
+                counts.remove(key);
+            } else {
+                counts.insert(key, c - 1);
+            }
+        } else {
+            let ok = if next >= answers.len() {
+                false
+            } else if counts.len() == 0 {
+                answers[next] == ""
+            } else {
+                let mut want = -1;
+                for (_, c) in counts {
+                    if want < 0 or (op == 2 and c > want) or (op == 3 and c < want) {
+                        want = c;
+                    }
+                }
+                match counts.get(answers[next]) {
+                    Some(c) => *c == want,
+                    None => false,
+                }
+            };
+            if not ok {
+                bad[prop] = true;
+            }
+            next += 1;
+        }
+        i += 3;
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4320;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let ops = script(mut seed);
+        for arm in 0..4 {
+            let answers = run(arm, ops);
+            let mut bad = vec![false; 6];
+            verify(ops, answers, mut bad);
+            for p in 1..6 {
+                checks += 1;
+                if bad[p] {
+                    failures[0] += 1;
+                    failures[p] += 1;
+                    if failures[0] <= 10 {
+                        println(f"FAIL P{p} arm {arm} case {case}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

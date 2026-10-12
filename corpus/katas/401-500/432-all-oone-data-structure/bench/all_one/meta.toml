@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/432-all-oone-data-structure/bench/all_one.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["shared", "lib:map", "lib:set", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "bea3bb621"
+extracted_src = "1053f328"
+model_rev = "1aa23105"
+model_src = "1053f328"

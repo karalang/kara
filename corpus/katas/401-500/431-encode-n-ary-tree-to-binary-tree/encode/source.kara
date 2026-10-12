@@ -1,0 +1,198 @@
+// LeetCode #431: Encode N-ary Tree to Binary Tree -- left child, right
+// sibling.
+//
+// A node's first child becomes its left child in the binary tree, and
+// each child's next sibling becomes that child's right child: the
+// children of a node hang off its left child as a chain to the right.
+// Decoding walks that chain back into a list of children. Both ways
+// are one recursive walk: O(n) time, O(height) stack.
+
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn encode(root: Option[Node]) -> Option[TreeNode] {
+    match root {
+        Some(node) => Some(encode_node(node)),
+        None => None,
+    }
+}
+
+fn encode_node(node: Node) -> TreeNode {
+    let t = TreeNode { val: node.val, left: None, right: None };
+    let mut prev: Option[TreeNode] = None;
+    for child in node.children {
+        let c = encode_node(child);
+        match prev {
+            Some(p) => p.right = Some(c),
+            None => t.left = Some(c),
+        }
+        prev = Some(c);
+    }
+    t
+}
+
+fn decode(root: Option[TreeNode]) -> Option[Node] {
+    match root {
+        Some(t) => Some(decode_node(t)),
+        None => None,
+    }
+}
+
+fn decode_node(t: TreeNode) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    let mut child = t.left;
+    while let Some(c) = child {
+        children.push(decode_node(c));
+        child = c.right;
+    }
+    Node { val: t.val, children: children }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn leaf(val: i64) -> Node {
+    Node { val: val, children: Vec.new() }
+}
+
+fn tree(val: i64, children: own Vec[Node]) -> Node {
+    Node { val: val, children: children }
+}
+
+// The tree written as value(child child ...), for comparing trees.
+fn shape(root: ref Option[Node]) -> String {
+    let mut out = String.new();
+    match root {
+        Some(node) => draw(node, mut out),
+        None => out.push_str("empty"),
+    }
+    out
+}
+
+fn draw(node: ref Node, out: mut ref String) {
+    out.push_str(f"{node.val}");
+    if node.children.len() > 0 {
+        out.push('(');
+        for i in 0..node.children.len() {
+            if i > 0 {
+                out.push(' ');
+            }
+            draw(node.children[i], out);
+        }
+        out.push(')');
+    }
+}
+
+// The binary tree written as value(left,right), "-" for a missing child.
+fn bshape(root: Option[TreeNode]) -> String {
+    let mut out = String.new();
+    bdraw(root, mut out);
+    out
+}
+
+fn bdraw(root: Option[TreeNode], out: mut ref String) {
+    match root {
+        Some(t) => {
+            out.push_str(f"{t.val}");
+            if t.left.is_some() or t.right.is_some() {
+                out.push('(');
+                bdraw(t.left, out);
+                out.push(',');
+                bdraw(t.right, out);
+                out.push(')');
+            }
+        }
+        None => out.push('-'),
+    }
+}
+
+// Encode, decode, and encode the result again: the tree must come
+// back, and its encoding must be the first one again.
+fn round_trip(root: own Option[Node]) -> String {
+    let before = shape(root);
+    let bin = encode(root);
+    let back = decode(bin);
+    let after = shape(back);
+    let again = encode(back);
+    let ok = after == before and bshape(again) == bshape(bin);
+    let mark = if ok { "" } else { " FAILED" };
+    f"{after}{mark}"
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Node i's children, in order, under a random parent for each node
+// after the first.
+fn build_random(i: i64, vals: ref Vec[i64], kids: ref Vec[Vec[i64]]) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in kids[i] {
+        children.push(build_random(k, vals, kids));
+    }
+    Node { val: vals[i], children: children }
+}
+
+fn random_tree(n: i64, seed: mut ref i64) -> Option[Node] {
+    if n == 0 {
+        return None;
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    let mut kids: Vec[Vec[i64]] = Vec.new();
+    // Wide or deep: the parent is drawn from the last `reach` nodes.
+    let reach = 1 + step(seed) % n;
+    for i in 0..n {
+        vals.push(step(seed) % 10001);
+        kids.push(Vec.new());
+        if i > 0 {
+            let back = 1 + step(seed) % min(i, reach);
+            kids[i - back].push(i);
+        }
+    }
+    Some(build_random(0, vals, kids))
+}
+
+fn main() {
+    println(round_trip(Some(tree(1, vec![tree(3, vec![leaf(5), leaf(6)]), leaf(2), leaf(4)]))));
+    println(round_trip(Some(tree(1, vec![
+        leaf(2),
+        tree(3, vec![leaf(6), tree(7, vec![tree(11, vec![leaf(14)])])]),
+        tree(4, vec![tree(8, vec![leaf(12)])]),
+        tree(5, vec![tree(9, vec![leaf(13)]), leaf(10)]),
+    ]))));
+    println(round_trip(None));
+    println(round_trip(Some(leaf(0))));
+    println(round_trip(Some(leaf(10000))));
+    println(round_trip(Some(tree(1, vec![tree(2, vec![tree(3, vec![tree(4, vec![leaf(5)])])])]))));
+    let mut wide: Vec[Node] = Vec.new();
+    for v in 0..12 {
+        wide.push(leaf(v * 7));
+    }
+    println(round_trip(Some(tree(100, wide))));
+    println(round_trip(Some(tree(0, vec![leaf(0), tree(0, vec![leaf(0)]), leaf(0)]))));
+    // 300 random trees of 0 to 60 nodes.
+    let mut seed: i64 = 431;
+    let mut nodes = 0;
+    let mut failed = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = step(mut seed) % 61;
+        let line = round_trip(random_tree(n, mut seed));
+        nodes += n;
+        if line.ends_with(" FAILED") {
+            failed += 1;
+        }
+        for b in line.bytes() {
+            checksum = (checksum * 31 + b as i64) % 1000000007;
+        }
+    }
+    println(f"300 random trees, {nodes} nodes: {failed} failed, checksum {checksum}");
+}

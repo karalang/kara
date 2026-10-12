@@ -1,0 +1,437 @@
+// Differential test for LeetCode #433: Minimum Genetic Mutation.
+//
+// Copies of the four arms, each run on 1,500 random cases: a start
+// gene, a bank of 0 to 30 genes, most a few random mutations from the
+// start, and an end drawn from the bank or not. Properties known by
+// construction:
+//   P1  the answer is the reference's, a relaxation over every
+//       one-letter pair of genes until nothing changes
+//   P2  with the start added to the bank and the end in it, searching
+//       from the end to the start gives the same answer
+//   P3  a reachable answer is at least the number of places the start
+//       and end differ, and a bank holding a straight path from the
+//       start to a random gene, under noise, gives exactly that number
+//   P4  five more genes never lengthen an answer or lose a path, and
+//       the bank without the end gives -1
+//   P5  renaming the letters and reversing every gene's places leaves
+//       the answer unchanged
+
+// ---- gen: min_mutation.kara
+
+fn min_mutation_gen(start_gene: Str, end_gene: Str, bank: Vec[String]) -> i64 {
+    let mut unreached: Set[String] = Set.new();
+    for gene in bank {
+        unreached.insert(gene.clone());
+    }
+    if not unreached.contains(end_gene) {
+        return -1;
+    }
+    unreached.remove(start_gene);
+    let mut level: Vec[String] = vec![start_gene.to_string()];
+    let mut steps = 0;
+    while level.len() > 0 {
+        let mut next: Vec[String] = Vec.new();
+        for gene in level {
+            if gene == end_gene {
+                return steps;
+            }
+            let letters: Vec[char] = gene.chars().collect();
+            for i in 0..letters.len() {
+                for c in ['A', 'C', 'G', 'T'] {
+                    if c != letters[i] {
+                        let mut mutant = String.new();
+                        for j in 0..letters.len() {
+                            mutant.push(if j == i { c } else { letters[j] });
+                        }
+                        if unreached.remove(mutant) {
+                            next.push(mutant);
+                        }
+                    }
+                }
+            }
+        }
+        level = next;
+        steps += 1;
+    }
+    -1
+}
+
+// ---- pairs: min_mutation_pairs.kara
+
+fn one_apart_pairs(a: Str, b: Str) -> bool {
+    let x = a.bytes();
+    let y = b.bytes();
+    let mut differ = 0;
+    for i in 0..x.len() {
+        if x[i] != y[i] {
+            differ += 1;
+        }
+    }
+    differ == 1
+}
+
+fn min_mutation_pairs(start_gene: Str, end_gene: Str, bank: Vec[String]) -> i64 {
+    let mut in_bank = false;
+    for gene in bank {
+        if gene == end_gene {
+            in_bank = true;
+        }
+    }
+    if not in_bank {
+        return -1;
+    }
+    if start_gene == end_gene {
+        return 0;
+    }
+    let mut reached: Vec[bool] = vec![false; bank.len()];
+    let mut level: Vec[i64] = Vec.new();
+    for i in 0..bank.len() {
+        if not reached[i] and one_apart_pairs(start_gene, bank[i]) {
+            reached[i] = true;
+            level.push(i);
+        }
+    }
+    let mut steps = 1;
+    while level.len() > 0 {
+        let mut next: Vec[i64] = Vec.new();
+        for g in level {
+            if bank[g] == end_gene {
+                return steps;
+            }
+            for i in 0..bank.len() {
+                if not reached[i] and one_apart_pairs(bank[g], bank[i]) {
+                    reached[i] = true;
+                    next.push(i);
+                }
+            }
+        }
+        level = next;
+        steps += 1;
+    }
+    -1
+}
+
+// ---- bidir: min_mutation_bidirectional.kara
+
+fn min_mutation_bidir(start_gene: Str, end_gene: Str, bank: Vec[String]) -> i64 {
+    let mut unreached: Set[String] = Set.new();
+    for gene in bank {
+        unreached.insert(gene.clone());
+    }
+    if not unreached.contains(end_gene) {
+        return -1;
+    }
+    if start_gene == end_gene {
+        return 0;
+    }
+    unreached.remove(start_gene);
+    unreached.remove(end_gene);
+    let mut front: Set[String] = Set.new();
+    front.insert(start_gene.to_string());
+    let mut back: Set[String] = Set.new();
+    back.insert(end_gene.to_string());
+    let mut steps = 0;
+    while front.len() > 0 and back.len() > 0 {
+        if front.len() > back.len() {
+            let smaller = back;
+            back = front;
+            front = smaller;
+        }
+        steps += 1;
+        let mut next: Set[String] = Set.new();
+        for gene in front {
+            let letters: Vec[char] = gene.chars().collect();
+            for i in 0..letters.len() {
+                for c in ['A', 'C', 'G', 'T'] {
+                    if c != letters[i] {
+                        let mut mutant = String.new();
+                        for j in 0..letters.len() {
+                            mutant.push(if j == i { c } else { letters[j] });
+                        }
+                        if back.contains(mutant) {
+                            return steps;
+                        }
+                        if unreached.remove(mutant) {
+                            next.insert(mutant);
+                        }
+                    }
+                }
+            }
+        }
+        front = next;
+    }
+    -1
+}
+
+// ---- bits: min_mutation_bits.kara
+
+fn encode_bits(gene: Str) -> i64 {
+    let mut code = 0;
+    for c in gene.chars() {
+        let bits = match c {
+            'A' => 0,
+            'C' => 1,
+            'G' => 2,
+            _ => 3,
+        };
+        code = code * 4 + bits;
+    }
+    code
+}
+
+fn min_mutation_bits(start_gene: Str, end_gene: Str, bank: Vec[String]) -> i64 {
+    let mut unreached: Set[i64] = Set.new();
+    for gene in bank {
+        unreached.insert(encode_bits(gene));
+    }
+    let target = encode_bits(end_gene);
+    if not unreached.contains(target) {
+        return -1;
+    }
+    let start = encode_bits(start_gene);
+    unreached.remove(start);
+    let mut level: Vec[i64] = vec![start];
+    let mut steps = 0;
+    while level.len() > 0 {
+        let mut next: Vec[i64] = Vec.new();
+        for code in level {
+            if code == target {
+                return steps;
+            }
+            for place in 0..8 {
+                for flip in 1..4 {
+                    let mutant = code ^ (flip << (2 * place));
+                    if unreached.remove(mutant) {
+                        next.push(mutant);
+                    }
+                }
+            }
+        }
+        level = next;
+        steps += 1;
+    }
+    -1
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, start_gene: Str, end_gene: Str, bank: Vec[String]) -> i64 {
+    if arm == 0 {
+        min_mutation_gen(start_gene, end_gene, bank)
+    } else if arm == 1 {
+        min_mutation_pairs(start_gene, end_gene, bank)
+    } else if arm == 2 {
+        min_mutation_bidir(start_gene, end_gene, bank)
+    } else {
+        min_mutation_bits(start_gene, end_gene, bank)
+    }
+}
+
+fn distance(a: Str, b: Str) -> i64 {
+    let x = a.bytes();
+    let y = b.bytes();
+    let mut d = 0;
+    for i in 0..x.len() {
+        if x[i] != y[i] {
+            d += 1;
+        }
+    }
+    d
+}
+
+// The reference: relax every one-letter edge between the start and the
+// bank genes until nothing changes (Bellman-Ford on unit weights).
+fn reference(start_gene: Str, end_gene: Str, bank: Vec[String]) -> i64 {
+    let mut genes: Vec[String] = vec![start_gene.to_string()];
+    for g in bank {
+        genes.push(g.clone());
+    }
+    let n = genes.len();
+    let mut dist: Vec[i64] = vec![-1; n];
+    dist[0] = 0;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for a in 0..n {
+            if dist[a] < 0 {
+                continue;
+            }
+            for b in 1..n {
+                if distance(genes[a], genes[b]) == 1 and (dist[b] < 0 or dist[a] + 1 < dist[b]) {
+                    dist[b] = dist[a] + 1;
+                    changed = true;
+                }
+            }
+        }
+    }
+    let mut best = -1;
+    for b in 1..n {
+        if genes[b] == end_gene and dist[b] >= 0 and (best < 0 or dist[b] < best) {
+            best = dist[b];
+        }
+    }
+    // A start equal to an end in the bank needs no mutation.
+    if start_gene == end_gene and best >= 0 {
+        best = 0;
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_gene(seed: mut ref i64) -> String {
+    let mut gene = String.new();
+    for _ in 0..8 {
+        gene.push(['A', 'C', 'G', 'T'][next_random(seed) % 4]);
+    }
+    gene
+}
+
+fn letter_index(c: char) -> i64 {
+    match c {
+        'A' => 0,
+        'C' => 1,
+        'G' => 2,
+        _ => 3,
+    }
+}
+
+fn mutate(gene: Str, seed: mut ref i64) -> String {
+    let at = next_random(seed) % 8;
+    let shift = 1 + next_random(seed) % 3;
+    let mut out = String.new();
+    let mut i = 0;
+    for c in gene.chars() {
+        if i == at {
+            out.push(['A', 'C', 'G', 'T'][(letter_index(c) + shift) % 4]);
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
+}
+
+// A gene with its letters renamed by `perm` and, if `reverse`, its
+// places read back to front.
+fn relabel(gene: Str, perm: ref Vec[i64], reverse: bool) -> String {
+    let letters: Vec[char] = gene.chars().collect();
+    let mut out = String.new();
+    for i in 0..letters.len() {
+        let c = if reverse { letters[letters.len() - 1 - i] } else { letters[i] };
+        out.push(['A', 'C', 'G', 'T'][perm[letter_index(c)]]);
+    }
+    out
+}
+
+// The genes on a straight path from `a` to `b`, fixing one differing
+// place at a time from the left; `b` is the last.
+fn straight_path(a: Str, b: Str) -> Vec[String] {
+    let x: Vec[char] = a.chars().collect();
+    let y: Vec[char] = b.chars().collect();
+    let mut cur = x.clone();
+    let mut path: Vec[String] = Vec.new();
+    for i in 0..8 {
+        if cur[i] != y[i] {
+            cur[i] = y[i];
+            let mut s = String.new();
+            for c in cur {
+                s.push(c);
+            }
+            path.push(s);
+        }
+    }
+    path
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4330;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let start = random_gene(mut seed);
+        let size = next_random(mut seed) % 31;
+        let mut bank: Vec[String] = Vec.new();
+        let mut last = start.clone();
+        for _ in 0..size {
+            if next_random(mut seed) % 5 == 0 {
+                last = random_gene(mut seed);
+            } else {
+                last = mutate(last, mut seed);
+            }
+            bank.push(last.clone());
+        }
+        let end = if size > 0 and next_random(mut seed) % 4 != 0 { bank[next_random(mut seed) % size].clone() } else { random_gene(mut seed) };
+        let want = reference(start, end, bank);
+        // P2: the bank with the start in it, searched both ways.
+        let mut with_start = bank.clone();
+        with_start.push(start.clone());
+        // P3: a straight path to a random gene, under noise.
+        let far = random_gene(mut seed);
+        let mut path_bank = straight_path(start, far);
+        for _ in 0..next_random(mut seed) % 10 {
+            path_bank.push(random_gene(mut seed));
+        }
+        // P4: more genes, and the bank without the end.
+        let mut bigger = bank.clone();
+        for _ in 0..5 {
+            let pick = if bigger.len() == 0 { start.clone() } else { bigger[next_random(mut seed) % bigger.len()].clone() };
+            bigger.push(mutate(pick, mut seed));
+        }
+        let mut without: Vec[String] = Vec.new();
+        let mut end_in_bank = false;
+        for g in bank {
+            if g != end {
+                without.push(g.clone());
+            } else {
+                end_in_bank = true;
+            }
+        }
+        // P5: letters renamed and places reversed.
+        let mut perm = vec![0, 1, 2, 3];
+        for i in 0..3 {
+            let j = i + next_random(mut seed) % (4 - i);
+            let t = perm[i];
+            perm[i] = perm[j];
+            perm[j] = t;
+        }
+        let reverse = next_random(mut seed) % 2 == 0;
+        let mut renamed: Vec[String] = Vec.new();
+        for g in bank {
+            renamed.push(relabel(g, perm, reverse));
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let got = solve(arm, start, end, bank);
+            report(1, arm, case, got == want, mut failures);
+            let there = solve(arm, start, end, with_start);
+            let back = solve(arm, end, start, with_start);
+            report(2, arm, case, not end_in_bank or there == back, mut failures);
+            let direct = solve(arm, start, far, path_bank);
+            let d = distance(start, far);
+            report(3, arm, case, (got < 0 or got >= distance(start, end)) and (d == 0 or direct == d), mut failures);
+            let more = solve(arm, start, end, bigger);
+            let gone = solve(arm, start, end, without);
+            report(4, arm, case, (got < 0 or (more >= 0 and more <= got)) and gone == -1, mut failures);
+            let r = solve(arm, relabel(start, perm, reverse), relabel(end, perm, reverse), renamed);
+            report(5, arm, case, r == got, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}
