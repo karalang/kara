@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 252 |
 | missing-feature | 225 |
 | other | 171 |
-| diagnostics | 151 |
+| diagnostics | 152 |
 | perf | 148 |
 | false-positive | 139 |
 | crash | 114 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2851 |
 | interp | 898 |
-| typecheck | 356 |
+| typecheck | 357 |
 | other | 114 |
 | ownership | 81 |
 | cli | 75 |
@@ -587,6 +587,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-16 | 2026-10-12 | typecheck | low | `karac check` drops the `ref` from a binding matched through a TUPLE scrutinee: `match (m.get("a"), m.get("b")) { (Some(i), Some(j)) => *i + *j, .. }` is refused ("unary '*' requires 'ref T' ... found 'i64'"), while `if let Some(i) = m.get("a") { *i }` passes; `karac __mir-run` runs both and prints the right sum | — |
 | B-2026-10-12-17 | 2026-10-12 | resolver | medium | The MIR pipeline resolves the Kāra library source in the user program's scope: a user `struct Skip`, or an enum variant `Token.Skip`, is refused by `karac __mir-run` as "'Skip' is already defined in this scope" though `karac check` and `karac run --interp` accept it; the same for `Take`, `Chain`, `Zip` and `Peekable`, the adaptor structs in runtime/stdlib/source/iter.kara | — |
 | B-2026-10-12-18 | 2026-10-12 | resolver | medium | `karac fix` rewrites a call to an undefined name into a call of an unrelated local: `abs(a)` (where `abs` is a method, `a.abs()`) gets "undefined name 'abs', did you mean 'a'?" with a machine-applicable replacement, and `karac fix` turns it into `a(a)`, which then fails as "type 'i64' is not callable" | — |
+| B-2026-10-12-19 | 2026-10-12 | typecheck | medium | `karac fix` answers a move out of `for c in node.children` (a field of an OWNED local) with `#[derive(Clone)]` + `.clone()` instead of `.into_iter()`, turning a consuming walk into a copying one | — |
 
 ### Relocated
 
