@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/430-flatten-a-multilevel-doubly-linked-list/bench/flatten.kara"
+dedup_of = []
+expect = "panic:-11"
+exit = -11
+tags = ["shared", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -11
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "91ae89c3c"
+extracted_src = "027e90b8"
+model_rev = "1aa23105"
+model_src = "027e90b8"

@@ -1,0 +1,407 @@
+// Differential test for LeetCode #428: Serialize and Deserialize N-ary
+// Tree.
+//
+// Copies of the four codecs, each run on 1,500 random trees of 0 to 39
+// nodes, wide or deep, with values below 10 or up to 10,000. The node
+// type is defined once, before the codecs. Properties known by
+// construction:
+//   P1  decoding the encoding gives back the same tree
+//   P2  encoding the decoded tree gives back the same text
+//   P3  two trees get the same text exactly when they are the same tree
+//   P4  the tree grafted 1 to 5 times under a new root comes back, each
+//       copy the same as the tree
+//   P5  the empty tree is the empty text and back; a star of 1 to 200
+//       leaves valued 0 and 10,000, and a chain of 2 to 201 nodes, come
+//       back
+//
+// The harness clones trees, so the node type here derives Clone, which
+// the codecs themselves never use.
+
+#[derive(Clone)]
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+// ---- counts: codec.kara
+
+fn write_counts(node: ref Node, out: mut ref String) {
+    if out.len() > 0 {
+        out.push(' ');
+    }
+    out.push_str(f"{node.val} {node.children.len()}");
+    for child in node.children {
+        write_counts(child, out);
+    }
+}
+
+fn serialize_counts(root: ref Option[Node]) -> String {
+    let mut out = String.new();
+    match root {
+        Some(node) => write_counts(node, mut out),
+        None => {}
+    }
+    out
+}
+
+fn read_counts(words: ref Vec[String], at: mut ref i64) -> Node {
+    let val = i64.parse(words[*at]).unwrap();
+    let count = i64.parse(words[*at + 1]).unwrap();
+    *at += 2;
+    let mut children: Vec[Node] = Vec.new();
+    for _ in 0..count {
+        children.push(read_counts(words, at));
+    }
+    Node { val: val, children: children }
+}
+
+fn deserialize_counts(data: Str) -> Option[Node] {
+    if data.len() == 0 {
+        return None;
+    }
+    let words = data.split(" ");
+    let mut at = 0;
+    Some(read_counts(words, mut at))
+}
+
+// ---- brackets: codec_brackets.kara
+
+fn write_brackets(node: ref Node, out: mut ref String) {
+    out.push_str(f"{node.val}");
+    if node.children.len() > 0 {
+        out.push('[');
+        for i in 0..node.children.len() {
+            if i > 0 {
+                out.push(' ');
+            }
+            write_brackets(node.children[i], out);
+        }
+        out.push(']');
+    }
+}
+
+fn serialize_brackets(root: ref Option[Node]) -> String {
+    let mut out = String.new();
+    match root {
+        Some(node) => write_brackets(node, mut out),
+        None => {}
+    }
+    out
+}
+
+fn read_brackets(bytes: Slice[u8], at: mut ref i64) -> Node {
+    let mut val = 0;
+    while *at < bytes.len() and bytes[*at] >= b'0' and bytes[*at] <= b'9' {
+        val = val * 10 + (bytes[*at] - b'0') as i64;
+        *at += 1;
+    }
+    let mut children: Vec[Node] = Vec.new();
+    if *at < bytes.len() and bytes[*at] == b'[' {
+        *at += 1;
+        loop {
+            children.push(read_brackets(bytes, at));
+            // A space means another child follows; otherwise this is `]`.
+            let sep = bytes[*at];
+            *at += 1;
+            if sep != b' ' {
+                break;
+            }
+        }
+    }
+    Node { val: val, children: children }
+}
+
+fn deserialize_brackets(data: Str) -> Option[Node] {
+    if data.len() == 0 {
+        return None;
+    }
+    let bytes = data.bytes();
+    let mut at = 0;
+    Some(read_brackets(bytes, mut at))
+}
+
+// ---- markers: codec_markers.kara
+
+fn write_markers(node: ref Node, out: mut ref String) {
+    if out.len() > 0 {
+        out.push(' ');
+    }
+    out.push_str(f"{node.val}");
+    for child in node.children {
+        write_markers(child, out);
+    }
+    out.push_str(" #");
+}
+
+fn serialize_markers(root: ref Option[Node]) -> String {
+    let mut out = String.new();
+    match root {
+        Some(node) => write_markers(node, mut out),
+        None => {}
+    }
+    out
+}
+
+fn read_markers(words: ref Vec[String], at: mut ref i64) -> Node {
+    let val = i64.parse(words[*at]).unwrap();
+    *at += 1;
+    let mut children: Vec[Node] = Vec.new();
+    while words[*at] != "#" {
+        children.push(read_markers(words, at));
+    }
+    *at += 1;
+    Node { val: val, children: children }
+}
+
+fn deserialize_markers(data: Str) -> Option[Node] {
+    if data.len() == 0 {
+        return None;
+    }
+    let words = data.split(" ");
+    let mut at = 0;
+    Some(read_markers(words, mut at))
+}
+
+// ---- levels: codec_levels.kara
+
+// Number the nodes in preorder into the table; returns the node's index.
+fn flatten_levels(node: ref Node, vals: mut ref Vec[i64], kids: mut ref Vec[Vec[i64]]) -> i64 {
+    let me = vals.len();
+    vals.push(node.val);
+    kids.push(Vec.new());
+    for child in node.children {
+        let k = flatten_levels(child, vals, kids);
+        kids[me].push(k);
+    }
+    me
+}
+
+fn serialize_levels(root: ref Option[Node]) -> String {
+    let mut words: Vec[String] = Vec.new();
+    match root {
+        Some(node) => {
+            let mut vals: Vec[i64] = Vec.new();
+            let mut kids: Vec[Vec[i64]] = Vec.new();
+            flatten_levels(node, mut vals, mut kids);
+            words.push(f"{vals[0]}");
+            words.push("null".to_string());
+            let mut queue: Vec[i64] = vec![0];
+            let mut at = 0;
+            while at < queue.len() {
+                let i = queue[at];
+                at += 1;
+                for k in kids[i] {
+                    words.push(f"{vals[k]}");
+                    queue.push(k);
+                }
+                words.push("null".to_string());
+            }
+            while words[words.len() - 1] == "null" {
+                words.pop();
+            }
+        }
+        None => {}
+    }
+    words.join(" ")
+}
+
+fn assemble_levels(i: i64, vals: ref Vec[i64], kids: ref Vec[Vec[i64]]) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in kids[i] {
+        children.push(assemble_levels(k, vals, kids));
+    }
+    Node { val: vals[i], children: children }
+}
+
+fn deserialize_levels(data: Str) -> Option[Node] {
+    if data.len() == 0 {
+        return None;
+    }
+    let words = data.split(" ");
+    let mut vals: Vec[i64] = vec![i64.parse(words[0]).unwrap()];
+    let mut kids: Vec[Vec[i64]] = vec![Vec.new()];
+    // words[1] is the null after the root; then each node's children in
+    // breadth-first order, each list closed by a null (the last ones
+    // dropped).
+    let mut at = 2;
+    let mut parent = 0;
+    while at < words.len() {
+        if words[at] == "null" {
+            parent += 1;
+        } else {
+            let k = vals.len();
+            vals.push(i64.parse(words[at]).unwrap());
+            kids.push(Vec.new());
+            kids[parent].push(k);
+        }
+        at += 1;
+    }
+    Some(assemble_levels(0, vals, kids))
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn encode(arm: i64, root: ref Option[Node]) -> String {
+    if arm == 0 {
+        serialize_counts(root)
+    } else if arm == 1 {
+        serialize_brackets(root)
+    } else if arm == 2 {
+        serialize_markers(root)
+    } else {
+        serialize_levels(root)
+    }
+}
+
+fn decode(arm: i64, data: Str) -> Option[Node] {
+    if arm == 0 {
+        deserialize_counts(data)
+    } else if arm == 1 {
+        deserialize_brackets(data)
+    } else if arm == 2 {
+        deserialize_markers(data)
+    } else {
+        deserialize_levels(data)
+    }
+}
+
+fn leaf(val: i64) -> Node {
+    Node { val: val, children: Vec.new() }
+}
+
+fn shape(root: ref Option[Node]) -> String {
+    let mut out = String.new();
+    match root {
+        Some(node) => draw(node, mut out),
+        None => out.push_str("empty"),
+    }
+    out
+}
+
+fn draw(node: ref Node, out: mut ref String) {
+    out.push_str(f"{node.val}");
+    if node.children.len() > 0 {
+        out.push('(');
+        for i in 0..node.children.len() {
+            if i > 0 {
+                out.push(' ');
+            }
+            draw(node.children[i], out);
+        }
+        out.push(')');
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn build_random(i: i64, vals: ref Vec[i64], kids: ref Vec[Vec[i64]]) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in kids[i] {
+        children.push(build_random(k, vals, kids));
+    }
+    Node { val: vals[i], children: children }
+}
+
+// n nodes with values below `top`; each node after the first hangs
+// under one of the `reach` nodes before it.
+fn random_tree(n: i64, top: i64, seed: mut ref i64) -> Option[Node] {
+    if n == 0 {
+        return None;
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    let mut kids: Vec[Vec[i64]] = Vec.new();
+    let reach = 1 + step(seed) % n;
+    for i in 0..n {
+        vals.push(step(seed) % top);
+        kids.push(Vec.new());
+        if i > 0 {
+            let back = 1 + step(seed) % min(i, reach);
+            kids[i - back].push(i);
+        }
+    }
+    Some(build_random(0, vals, kids))
+}
+
+fn chain(depth: i64) -> Node {
+    let mut node = leaf(depth);
+    for d in 0..depth {
+        node = Node { val: depth - 1 - d, children: vec![node] };
+    }
+    node
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4280;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let n = step(mut seed) % 40;
+        let top = if step(mut seed) % 2 == 0 { 10 } else { 10001 };
+        let t = random_tree(n, top, mut seed);
+        let other = random_tree(step(mut seed) % 40, top, mut seed);
+        let width = 1 + step(mut seed) % 5;
+        // P4: the tree grafted `width` times under a new root.
+        let mut copies: Vec[Node] = Vec.new();
+        match t {
+            Some(ref node) => {
+                for _ in 0..width {
+                    copies.push(node.clone());
+                }
+            }
+            None => {}
+        }
+        let graft = Some(Node { val: 10000, children: copies });
+        // P5: a chain, a star, and the extreme values.
+        let depth = 1 + step(mut seed) % 200;
+        let mut points: Vec[Node] = Vec.new();
+        for i in 0..depth {
+            points.push(leaf(if i % 2 == 0 { 0 } else { 10000 }));
+        }
+        let star = Some(Node { val: 0, children: points });
+        let line = Some(chain(depth));
+        for arm in 0..4 {
+            checks += 5;
+            let text = encode(arm, t);
+            let back = decode(arm, text);
+            report(1, arm, case, shape(back) == shape(t), mut failures);
+            report(2, arm, case, encode(arm, back) == text, mut failures);
+            let other_text = encode(arm, other);
+            report(3, arm, case, (shape(other) == shape(t)) == (other_text == text), mut failures);
+            let g = decode(arm, encode(arm, graft));
+            let mut grafted = shape(g) == shape(graft);
+            match g {
+                Some(root) => {
+                    for child in root.children {
+                        if shape(Some(child.clone())) != shape(t) {
+                            grafted = false;
+                        }
+                    }
+                }
+                None => {
+                    grafted = false;
+                }
+            }
+            report(4, arm, case, grafted, mut failures);
+            let empty_ok = encode(arm, None) == "" and shape(decode(arm, "")) == "empty";
+            report(5, arm, case, empty_ok and shape(decode(arm, encode(arm, star))) == shape(star) and shape(decode(arm, encode(arm, line))) == shape(line), mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

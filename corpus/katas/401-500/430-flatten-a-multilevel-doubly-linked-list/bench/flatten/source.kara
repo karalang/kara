@@ -1,0 +1,119 @@
+// Benchmark for #430: the recursive arm (flatten.kara) on 2,000 random
+// multilevel lists of 1,000 nodes.
+
+shared struct Node {
+    val: i64,
+    mut prev: Option[Node],
+    mut next: Option[Node],
+    mut child: Option[Node],
+}
+
+// Flatten the level starting at `head`; returns the flattened tail.
+fn flatten_level(head: Node) -> Node {
+    let mut cur = head;
+    loop {
+        let after = cur.next;
+        match cur.child {
+            Some(c) => {
+                let child_tail = flatten_level(c);
+                cur.next = Some(c);
+                c.prev = Some(cur);
+                cur.child = None;
+                match after {
+                    Some(a) => {
+                        child_tail.next = Some(a);
+                        a.prev = Some(child_tail);
+                    }
+                    None => {
+                        return child_tail;
+                    }
+                }
+            }
+            None => {}
+        }
+        match after {
+            Some(a) => {
+                cur = a;
+            }
+            None => {
+                return cur;
+            }
+        }
+    }
+}
+
+fn flatten(head: Option[Node]) -> Option[Node] {
+    match head {
+        Some(h) => {
+            flatten_level(h);
+            Some(h)
+        }
+        None => None,
+    }
+}
+
+// ---- benchmark harness ----------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A level of up to `length` nodes, each given a child level with
+// probability 1 in 4 while depth allows; values 1, 2, 3, ... in
+// flattened order.
+fn make_level(length: i64, budget: mut ref i64, depth: i64, next_val: mut ref i64, seed: mut ref i64) -> Option[Node] {
+    let mut head: Option[Node] = None;
+    let mut last: Option[Node] = None;
+    for _ in 0..length {
+        if *budget == 0 {
+            break;
+        }
+        *budget -= 1;
+        let node = Node { val: *next_val, prev: None, next: None, child: None };
+        *next_val += 1;
+        if depth < 6 and *budget > 0 and step(seed) % 4 == 0 {
+            let child_length = 1 + step(seed) % 8;
+            node.child = make_level(child_length, budget, depth + 1, next_val, seed);
+        }
+        match last {
+            Some(l) => {
+                l.next = Some(node);
+                node.prev = Some(l);
+            }
+            None => {
+                head = Some(node);
+            }
+        }
+        last = Some(node);
+    }
+    head
+}
+
+fn main() {
+    let n = 1000;
+    let rounds = 2000;
+    let mut seed: i64 = 430;
+    let mut misplaced = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        let mut budget = n;
+        let mut next_val = 1;
+        let head = make_level(n, mut budget, 0, mut next_val, mut seed);
+        // Walk the flattened list, folding the values in and breaking
+        // each node's links so it is freed.
+        let mut cur = flatten(head);
+        let mut expect = 1;
+        while let Some(node) = cur {
+            if node.val != expect {
+                misplaced += 1;
+            }
+            expect += 1;
+            checksum = (checksum * 31 + node.val) % 1000000007;
+            cur = node.next;
+            node.prev = None;
+            node.next = None;
+        }
+    }
+    println(f"{rounds} rounds of {n} nodes: {misplaced} misplaced, checksum {checksum}");
+}

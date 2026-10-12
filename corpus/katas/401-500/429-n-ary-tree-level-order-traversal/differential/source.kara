@@ -1,0 +1,286 @@
+// Differential test for LeetCode #429: N-ary Tree Level Order
+// Traversal.
+//
+// Copies of the four arms, each run on 1,500 random trees of 0 to 39
+// nodes, wide or deep, with values below 10 or up to 10,000. The node
+// type is defined once, before the arms; the harness clones trees for
+// the arms that take theirs by value, so that copy derives Clone.
+// Properties known by construction:
+//   P1  the rows are those read off the generator's table: a preorder
+//       walk of the child lists, each value appended to its depth's row
+//   P2  the rows hold n values in all, one row per level
+//   P3  the tree under a new root gives that root's row, then the
+//       tree's rows
+//   P4  the tree mirrored gives every row reversed
+//   P5  a chain of m gives m rows of one; a star of m leaves gives the
+//       root's row and the leaves' row; the empty tree gives no rows
+
+#[derive(Clone)]
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+// ---- queue: level_order.kara
+
+fn level_order_queue(root: own Option[Node]) -> Vec[Vec[i64]] {
+    let mut levels: Vec[Vec[i64]] = Vec.new();
+    let mut level: Vec[Node] = Vec.new();
+    match root {
+        Some(node) => level.push(node),
+        None => {}
+    }
+    while level.len() > 0 {
+        let mut row: Vec[i64] = Vec.new();
+        let mut next: Vec[Node] = Vec.new();
+        for node in level.into_iter() {
+            row.push(node.val);
+            for child in node.children.into_iter() {
+                next.push(child);
+            }
+        }
+        levels.push(row);
+        level = next;
+    }
+    levels
+}
+
+// ---- depth: level_order_depth.kara
+
+fn visit_depth(node: ref Node, depth: i64, levels: mut ref Vec[Vec[i64]]) {
+    if depth == levels.len() {
+        levels.push(Vec.new());
+    }
+    levels[depth].push(node.val);
+    for child in node.children {
+        visit_depth(child, depth + 1, levels);
+    }
+}
+
+fn level_order_depth(root: ref Option[Node]) -> Vec[Vec[i64]] {
+    let mut levels: Vec[Vec[i64]] = Vec.new();
+    match root {
+        Some(node) => visit_depth(node, 0, mut levels),
+        None => {}
+    }
+    levels
+}
+
+// ---- stack: level_order_stack.kara
+
+fn level_order_stack(root: own Option[Node]) -> Vec[Vec[i64]] {
+    let mut levels: Vec[Vec[i64]] = Vec.new();
+    let mut stack: Vec[(Node, i64)] = Vec.new();
+    match root {
+        Some(node) => stack.push((node, 0)),
+        None => {}
+    }
+    while let Some((node, depth)) = stack.pop() {
+        if depth == levels.len() {
+            levels.push(Vec.new());
+        }
+        levels[depth].push(node.val);
+        let mut children = node.children;
+        while let Some(child) = children.pop() {
+            stack.push((child, depth + 1));
+        }
+    }
+    levels
+}
+
+// ---- table: level_order_table.kara
+
+fn number_table(node: ref Node, vals: mut ref Vec[i64], kids: mut ref Vec[Vec[i64]]) -> i64 {
+    let me = vals.len();
+    vals.push(node.val);
+    kids.push(Vec.new());
+    for child in node.children {
+        let k = number_table(child, vals, kids);
+        kids[me].push(k);
+    }
+    me
+}
+
+fn level_order_table(root: ref Option[Node]) -> Vec[Vec[i64]] {
+    let mut levels: Vec[Vec[i64]] = Vec.new();
+    match root {
+        Some(node) => {
+            let mut vals: Vec[i64] = Vec.new();
+            let mut kids: Vec[Vec[i64]] = Vec.new();
+            number_table(node, mut vals, mut kids);
+            let mut queue: Vec[i64] = vec![0];
+            let mut start = 0;
+            while start < queue.len() {
+                // queue[start..end] is one level.
+                let end = queue.len();
+                let mut row: Vec[i64] = Vec.new();
+                for at in start..end {
+                    let i = queue[at];
+                    row.push(vals[i]);
+                    for k in kids[i] {
+                        queue.push(k);
+                    }
+                }
+                levels.push(row);
+                start = end;
+            }
+        }
+        None => {}
+    }
+    levels
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, root: ref Option[Node]) -> Vec[Vec[i64]] {
+    if arm == 0 {
+        level_order_queue(root.clone())
+    } else if arm == 1 {
+        level_order_depth(root)
+    } else if arm == 2 {
+        level_order_stack(root.clone())
+    } else {
+        level_order_table(root)
+    }
+}
+
+fn leaf(val: i64) -> Node {
+    Node { val: val, children: Vec.new() }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn build_random(i: i64, vals: ref Vec[i64], kids: ref Vec[Vec[i64]]) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in kids[i] {
+        children.push(build_random(k, vals, kids));
+    }
+    Node { val: vals[i], children: children }
+}
+
+// The rows read straight off the generator's table: a preorder walk of
+// the child lists, each value appended to its depth's row.
+fn reference(i: i64, depth: i64, vals: ref Vec[i64], kids: ref Vec[Vec[i64]], rows: mut ref Vec[Vec[i64]]) {
+    while rows.len() <= depth {
+        rows.push(Vec.new());
+    }
+    rows[depth].push(vals[i]);
+    for k in kids[i] {
+        reference(k, depth + 1, vals, kids, rows);
+    }
+}
+
+fn mirror(node: ref Node) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    let mut i = node.children.len();
+    while i > 0 {
+        i -= 1;
+        children.push(mirror(node.children[i]));
+    }
+    Node { val: node.val, children: children }
+}
+
+fn reversed(rows: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for row in rows {
+        let mut r = row.clone();
+        r.reverse();
+        out.push(r);
+    }
+    out
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4290;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // n nodes; each after the first hangs under one of the `reach`
+        // nodes before it. Values below 10 make repeats common.
+        let n = step(mut seed) % 40;
+        let top = if step(mut seed) % 2 == 0 { 10 } else { 10001 };
+        let mut vals: Vec[i64] = Vec.new();
+        let mut kids: Vec[Vec[i64]] = Vec.new();
+        let reach = 1 + step(mut seed) % max(n, 1);
+        for i in 0..n {
+            vals.push(step(mut seed) % top);
+            kids.push(Vec.new());
+            if i > 0 {
+                let back = 1 + step(mut seed) % min(i, reach);
+                kids[i - back].push(i);
+            }
+        }
+        let mut expect: Vec[Vec[i64]] = Vec.new();
+        let mut t: Option[Node] = None;
+        if n > 0 {
+            reference(0, 0, vals, kids, mut expect);
+            t = Some(build_random(0, vals, kids));
+        }
+        // P3: the tree under a new root valued -1.
+        let mut grafted_expect: Vec[Vec[i64]] = vec![vec![-1]];
+        let mut under: Vec[Node] = Vec.new();
+        match t {
+            Some(ref node) => {
+                under.push(node.clone());
+                for row in expect {
+                    grafted_expect.push(row.clone());
+                }
+            }
+            None => {}
+        }
+        let grafted = Some(Node { val: -1, children: under });
+        // P4: the tree mirrored.
+        let flipped = match t {
+            Some(ref node) => Some(mirror(node)),
+            None => None,
+        };
+        // P5: a chain and a star of m nodes.
+        let m = 1 + step(mut seed) % 30;
+        let mut chain = leaf(m);
+        let mut chain_expect: Vec[Vec[i64]] = vec![vec![m]];
+        for d in 1..m {
+            chain = Node { val: m - d, children: vec![chain] };
+            chain_expect.insert(0, vec![m - d]);
+        }
+        let mut points: Vec[Node] = Vec.new();
+        let mut point_vals: Vec[i64] = Vec.new();
+        for i in 0..m {
+            points.push(leaf(i));
+            point_vals.push(i);
+        }
+        let star = Some(Node { val: 99, children: points });
+        let star_expect = vec![vec![99], point_vals];
+        let line = Some(chain);
+        for arm in 0..4 {
+            checks += 5;
+            let rows = solve(arm, t);
+            report(1, arm, case, rows == expect, mut failures);
+            let mut count = 0;
+            for row in rows {
+                count += row.len();
+            }
+            report(2, arm, case, count == n and rows.len() == expect.len(), mut failures);
+            report(3, arm, case, solve(arm, grafted) == grafted_expect, mut failures);
+            report(4, arm, case, solve(arm, flipped) == reversed(rows), mut failures);
+            report(5, arm, case, solve(arm, line) == chain_expect and solve(arm, star) == star_expect and solve(arm, None).len() == 0, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

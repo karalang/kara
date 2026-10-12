@@ -1,0 +1,206 @@
+// LeetCode #428: Serialize and Deserialize N-ary Tree -- level order,
+// LeetCode's own format.
+//
+// Write the root, then `null`, then for each node in breadth-first
+// order its children's values followed by `null`, dropping the nulls at
+// the end: the tree 1(3(5 6) 2 4) becomes "1 null 3 2 4 null 5 6".
+// Reading it back takes the nodes in the same order, each claiming the
+// values up to the next `null` as its children. The children are owned
+// values inside their parent, so both directions go through a flat
+// table of values and child indexes, and the tree is assembled from the
+// table at the end. O(n) both ways.
+
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+// Number the nodes in preorder into the table; returns the node's index.
+fn flatten(node: ref Node, vals: mut ref Vec[i64], kids: mut ref Vec[Vec[i64]]) -> i64 {
+    let me = vals.len();
+    vals.push(node.val);
+    kids.push(Vec.new());
+    for child in node.children {
+        let k = flatten(child, vals, kids);
+        kids[me].push(k);
+    }
+    me
+}
+
+fn serialize(root: ref Option[Node]) -> String {
+    let mut words: Vec[String] = Vec.new();
+    match root {
+        Some(node) => {
+            let mut vals: Vec[i64] = Vec.new();
+            let mut kids: Vec[Vec[i64]] = Vec.new();
+            flatten(node, mut vals, mut kids);
+            words.push(f"{vals[0]}");
+            words.push("null".to_string());
+            let mut queue: Vec[i64] = vec![0];
+            let mut at = 0;
+            while at < queue.len() {
+                let i = queue[at];
+                at += 1;
+                for k in kids[i] {
+                    words.push(f"{vals[k]}");
+                    queue.push(k);
+                }
+                words.push("null".to_string());
+            }
+            while words[words.len() - 1] == "null" {
+                words.pop();
+            }
+        }
+        None => {}
+    }
+    words.join(" ")
+}
+
+fn assemble(i: i64, vals: ref Vec[i64], kids: ref Vec[Vec[i64]]) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in kids[i] {
+        children.push(assemble(k, vals, kids));
+    }
+    Node { val: vals[i], children: children }
+}
+
+fn deserialize(data: Str) -> Option[Node] {
+    if data.len() == 0 {
+        return None;
+    }
+    let words = data.split(" ");
+    let mut vals: Vec[i64] = vec![i64.parse(words[0]).unwrap()];
+    let mut kids: Vec[Vec[i64]] = vec![Vec.new()];
+    // words[1] is the null after the root; then each node's children in
+    // breadth-first order, each list closed by a null (the last ones
+    // dropped).
+    let mut at = 2;
+    let mut parent = 0;
+    while at < words.len() {
+        if words[at] == "null" {
+            parent += 1;
+        } else {
+            let k = vals.len();
+            vals.push(i64.parse(words[at]).unwrap());
+            kids.push(Vec.new());
+            kids[parent].push(k);
+        }
+        at += 1;
+    }
+    Some(assemble(0, vals, kids))
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn leaf(val: i64) -> Node {
+    Node { val: val, children: Vec.new() }
+}
+
+fn tree(val: i64, children: own Vec[Node]) -> Node {
+    Node { val: val, children: children }
+}
+
+// The tree written as value(child child ...), for comparing trees.
+fn shape(root: ref Option[Node]) -> String {
+    let mut out = String.new();
+    match root {
+        Some(node) => draw(node, mut out),
+        None => out.push_str("empty"),
+    }
+    out
+}
+
+fn draw(node: ref Node, out: mut ref String) {
+    out.push_str(f"{node.val}");
+    if node.children.len() > 0 {
+        out.push('(');
+        for i in 0..node.children.len() {
+            if i > 0 {
+                out.push(' ');
+            }
+            draw(node.children[i], out);
+        }
+        out.push(')');
+    }
+}
+
+// Encode, decode, and encode again: the tree must come back, and so
+// must the text.
+fn round_trip(root: Option[Node]) -> String {
+    let text = serialize(root);
+    let back = deserialize(text);
+    let ok = shape(back) == shape(root) and serialize(back) == text;
+    let mark = if ok { "" } else { " FAILED" };
+    f"{shape(back)}{mark}"
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Node i's children, in order, under a random parent for each node
+// after the first.
+fn build_random(i: i64, vals: ref Vec[i64], kids: ref Vec[Vec[i64]]) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in kids[i] {
+        children.push(build_random(k, vals, kids));
+    }
+    Node { val: vals[i], children: children }
+}
+
+fn random_tree(n: i64, seed: mut ref i64) -> Option[Node] {
+    if n == 0 {
+        return None;
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    let mut kids: Vec[Vec[i64]] = Vec.new();
+    // Wide or deep: the parent is drawn from the last `reach` nodes.
+    let reach = 1 + step(seed) % n;
+    for i in 0..n {
+        vals.push(step(seed) % 10001);
+        kids.push(Vec.new());
+        if i > 0 {
+            let back = 1 + step(seed) % min(i, reach);
+            kids[i - back].push(i);
+        }
+    }
+    Some(build_random(0, vals, kids))
+}
+
+fn main() {
+    println(round_trip(Some(tree(1, vec![tree(3, vec![leaf(5), leaf(6)]), leaf(2), leaf(4)]))));
+    println(round_trip(Some(tree(1, vec![
+        leaf(2),
+        tree(3, vec![leaf(6), tree(7, vec![tree(11, vec![leaf(14)])])]),
+        tree(4, vec![tree(8, vec![leaf(12)])]),
+        tree(5, vec![tree(9, vec![leaf(13)]), leaf(10)]),
+    ]))));
+    println(round_trip(None));
+    println(round_trip(Some(leaf(0))));
+    println(round_trip(Some(leaf(10000))));
+    println(round_trip(Some(tree(1, vec![tree(2, vec![tree(3, vec![tree(4, vec![leaf(5)])])])]))));
+    let mut wide: Vec[Node] = Vec.new();
+    for v in 0..12 {
+        wide.push(leaf(v * 7));
+    }
+    println(round_trip(Some(tree(100, wide))));
+    println(round_trip(Some(tree(0, vec![leaf(0), tree(0, vec![leaf(0)]), leaf(0)]))));
+    // 300 random trees of 0 to 60 nodes.
+    let mut seed: i64 = 428;
+    let mut nodes = 0;
+    let mut failed = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = step(mut seed) % 61;
+        let line = round_trip(random_tree(n, mut seed));
+        nodes += n;
+        if line.ends_with(" FAILED") {
+            failed += 1;
+        }
+        for b in line.bytes() {
+            checksum = (checksum * 31 + b as i64) % 1000000007;
+        }
+    }
+    println(f"300 random trees, {nodes} nodes: {failed} failed, checksum {checksum}");
+}

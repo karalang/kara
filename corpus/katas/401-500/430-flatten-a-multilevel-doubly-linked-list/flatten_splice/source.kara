@@ -1,0 +1,214 @@
+// LeetCode #430: Flatten a Multilevel Doubly Linked List -- splice in
+// place.
+//
+// No recursion and no stack: walk the top level, and at a node with a
+// child, find the child level's tail by walking it, then splice the
+// whole child level in between the node and its next. The walk carries
+// on into the spliced level, so deeper children are spliced in turn
+// when it reaches them. Each node is walked at most twice, once to find
+// a tail and once to visit it: O(n) time, O(1) extra space.
+
+shared struct Node {
+    val: i64,
+    mut prev: Option[Node],
+    mut next: Option[Node],
+    mut child: Option[Node],
+}
+
+fn flatten(head: Option[Node]) -> Option[Node] {
+    let mut cur = head;
+    while let Some(n) = cur {
+        match n.child {
+            Some(c) => {
+                let mut tail = c;
+                while let Some(t) = tail.next {
+                    tail = t;
+                }
+                match n.next {
+                    Some(after) => {
+                        tail.next = Some(after);
+                        after.prev = Some(tail);
+                    }
+                    None => {}
+                }
+                n.next = Some(c);
+                c.prev = Some(n);
+                n.child = None;
+            }
+            None => {}
+        }
+        cur = n.next;
+    }
+    head
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// Build a multilevel list from text: values separated by spaces, a
+// node's child list in parentheses straight after it. "1 2(3 4) 5" is
+// 1 <-> 2 <-> 5 with 3 <-> 4 hanging from 2.
+fn parse(bytes: Slice[u8], at: mut ref i64) -> Option[Node] {
+    let mut head: Option[Node] = None;
+    let mut last: Option[Node] = None;
+    while *at < bytes.len() and bytes[*at] != b')' {
+        if bytes[*at] == b' ' {
+            *at += 1;
+            continue;
+        }
+        let mut negative = false;
+        if bytes[*at] == b'-' {
+            negative = true;
+            *at += 1;
+        }
+        let mut val = 0;
+        while *at < bytes.len() and bytes[*at] >= b'0' and bytes[*at] <= b'9' {
+            val = val * 10 + (bytes[*at] - b'0') as i64;
+            *at += 1;
+        }
+        if negative {
+            val = -val;
+        }
+        let node = Node { val: val, prev: None, next: None, child: None };
+        if *at < bytes.len() and bytes[*at] == b'(' {
+            *at += 1;
+            node.child = parse(bytes, at);
+            *at += 1;
+        }
+        match last {
+            Some(l) => {
+                l.next = Some(node);
+                node.prev = Some(l);
+            }
+            None => {
+                head = Some(node);
+            }
+        }
+        last = Some(node);
+    }
+    head
+}
+
+// Walk the flattened list forward, then back from its tail, checking
+// that every node's prev undoes its next and that no child is left;
+// then break every link, since neighbours hold each other strongly.
+fn read(head: Option[Node]) -> String {
+    let mut forward: Vec[i64] = Vec.new();
+    let mut ok = true;
+    let mut tail: Option[Node] = None;
+    let mut cur = head;
+    while let Some(n) = cur {
+        forward.push(n.val);
+        match n.child {
+            Some(_) => {
+                ok = false;
+            }
+            None => {}
+        }
+        match n.next {
+            Some(next) => {
+                match next.prev {
+                    Some(back) => {
+                        if back.val != n.val {
+                            ok = false;
+                        }
+                    }
+                    None => {
+                        ok = false;
+                    }
+                }
+            }
+            None => {
+                tail = Some(n);
+            }
+        }
+        cur = n.next;
+    }
+    // Back from the tail: the same values in reverse, ending at a node
+    // with no prev.
+    let mut backward = 0;
+    let mut cur = tail;
+    while let Some(n) = cur {
+        if backward >= forward.len() or forward[forward.len() - 1 - backward] != n.val {
+            ok = false;
+        }
+        backward += 1;
+        cur = n.prev;
+        n.prev = None;
+        n.next = None;
+        n.child = None;
+    }
+    if backward != forward.len() {
+        ok = false;
+    }
+    let mut out = String.new();
+    for i in 0..forward.len() {
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(f"{forward[i]}");
+    }
+    let mark = if ok { "" } else { " BROKEN" };
+    f"[{out}]{mark}"
+}
+
+fn show(text: Str) {
+    let mut at = 0;
+    let head = parse(text.bytes(), mut at);
+    println(f"{text} -> {read(flatten(head))}");
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random multilevel list as text: up to `budget` values, each node
+// given a child list with probability 1 in 4 while depth allows.
+fn random_text(budget: mut ref i64, depth: i64, next_val: mut ref i64, seed: mut ref i64) -> String {
+    let mut out = String.new();
+    let length = 1 + step(seed) % 5;
+    for i in 0..length {
+        if *budget == 0 {
+            break;
+        }
+        *budget -= 1;
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(f"{*next_val}");
+        *next_val += 1;
+        if depth < 6 and *budget > 0 and step(seed) % 4 == 0 {
+            out.push('(');
+            out.push_str(random_text(budget, depth + 1, next_val, seed));
+            out.push(')');
+        }
+    }
+    out
+}
+
+fn main() {
+    show("1 2 3(7 8(11 12) 9 10) 4 5 6");
+    show("1(3) 2");
+    show("");
+    show("1");
+    show("1(2(3(4(5))))");
+    show("1 2 3 4(5 6 7)");
+    show("1(2) 3(4) 5(6)");
+    show("-5 0(-1(-2) 7) 9");
+    // 300 random lists of up to 50 nodes, valued in creation order.
+    let mut seed: i64 = 430;
+    let mut nodes = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let mut budget = step(mut seed) % 51;
+        let mut next_val = 1;
+        let text = if budget == 0 { String.new() } else { random_text(mut budget, 0, mut next_val, mut seed) };
+        let mut at = 0;
+        let line = read(flatten(parse(text.bytes(), mut at)));
+        nodes += next_val - 1;
+        for b in line.bytes() {
+            checksum = (checksum * 31 + b as i64) % 1000000007;
+        }
+    }
+    println(f"300 random lists, {nodes} nodes: checksum {checksum}");
+}

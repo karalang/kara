@@ -1,0 +1,387 @@
+// Differential test for LeetCode #430: Flatten a Multilevel Doubly
+// Linked List.
+//
+// Copies of the four arms, each run on 1,500 random multilevel lists of
+// 1 to 40 nodes, up to 7 levels deep, valued 1, 2, 3, ... in flattened
+// order. The node type is defined once, before the arms. Properties
+// known by construction:
+//   P1  the flattened values are 1 to k in order
+//   P2  every prev undoes a next, no child is left, the walk back from
+//       the tail gives the same values, and the head has no prev
+//   P3  the head returned is the head given
+//   P4  flattening the result again changes nothing
+//   P5  a one-level list is unchanged, a chain of children becomes
+//       one list, and the empty list stays empty
+
+shared struct Node {
+    val: i64,
+    mut prev: Option[Node],
+    mut next: Option[Node],
+    mut child: Option[Node],
+}
+
+// ---- recursive: flatten.kara
+
+// Flatten the level starting at `head`; returns the flattened tail.
+fn flatten_level_recursive(head: Node) -> Node {
+    let mut cur = head;
+    loop {
+        let after = cur.next;
+        match cur.child {
+            Some(c) => {
+                let child_tail = flatten_level_recursive(c);
+                cur.next = Some(c);
+                c.prev = Some(cur);
+                cur.child = None;
+                match after {
+                    Some(a) => {
+                        child_tail.next = Some(a);
+                        a.prev = Some(child_tail);
+                    }
+                    None => {
+                        return child_tail;
+                    }
+                }
+            }
+            None => {}
+        }
+        match after {
+            Some(a) => {
+                cur = a;
+            }
+            None => {
+                return cur;
+            }
+        }
+    }
+}
+
+fn flatten_recursive(head: Option[Node]) -> Option[Node] {
+    match head {
+        Some(h) => {
+            flatten_level_recursive(h);
+            Some(h)
+        }
+        None => None,
+    }
+}
+
+// ---- stack: flatten_stack.kara
+
+fn flatten_stack(head: Option[Node]) -> Option[Node] {
+    let mut stack: Vec[Node] = Vec.new();
+    let mut cur = head;
+    while let Some(n) = cur {
+        match n.child {
+            Some(c) => {
+                match n.next {
+                    Some(after) => stack.push(after),
+                    None => {}
+                }
+                n.next = Some(c);
+                c.prev = Some(n);
+                n.child = None;
+            }
+            None => {}
+        }
+        match n.next {
+            Some(_) => {}
+            None => {
+                match stack.pop() {
+                    Some(after) => {
+                        n.next = Some(after);
+                        after.prev = Some(n);
+                    }
+                    None => {}
+                }
+            }
+        }
+        cur = n.next;
+    }
+    head
+}
+
+// ---- splice: flatten_splice.kara
+
+fn flatten_splice(head: Option[Node]) -> Option[Node] {
+    let mut cur = head;
+    while let Some(n) = cur {
+        match n.child {
+            Some(c) => {
+                let mut tail = c;
+                while let Some(t) = tail.next {
+                    tail = t;
+                }
+                match n.next {
+                    Some(after) => {
+                        tail.next = Some(after);
+                        after.prev = Some(tail);
+                    }
+                    None => {}
+                }
+                n.next = Some(c);
+                c.prev = Some(n);
+                n.child = None;
+            }
+            None => {}
+        }
+        cur = n.next;
+    }
+    head
+}
+
+// ---- collect: flatten_collect.kara
+
+fn collect_collect(head: Option[Node], order: mut ref Vec[Node]) {
+    let mut cur = head;
+    while let Some(n) = cur {
+        order.push(n);
+        collect_collect(n.child, order);
+        cur = n.next;
+    }
+}
+
+fn flatten_collect(head: Option[Node]) -> Option[Node] {
+    let mut order: Vec[Node] = Vec.new();
+    collect_collect(head, mut order);
+    for i in 0..order.len() {
+        let n = order[i];
+        n.child = None;
+        n.prev = if i > 0 { Some(order[i - 1]) } else { None };
+        n.next = if i + 1 < order.len() { Some(order[i + 1]) } else { None };
+    }
+    head
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, head: Option[Node]) -> Option[Node] {
+    if arm == 0 {
+        flatten_recursive(head)
+    } else if arm == 1 {
+        flatten_stack(head)
+    } else if arm == 2 {
+        flatten_splice(head)
+    } else {
+        flatten_collect(head)
+    }
+}
+
+fn parse(bytes: Slice[u8], at: mut ref i64) -> Option[Node] {
+    let mut head: Option[Node] = None;
+    let mut last: Option[Node] = None;
+    while *at < bytes.len() and bytes[*at] != b')' {
+        if bytes[*at] == b' ' {
+            *at += 1;
+            continue;
+        }
+        let mut val = 0;
+        while *at < bytes.len() and bytes[*at] >= b'0' and bytes[*at] <= b'9' {
+            val = val * 10 + (bytes[*at] - b'0') as i64;
+            *at += 1;
+        }
+        let node = Node { val: val, prev: None, next: None, child: None };
+        if *at < bytes.len() and bytes[*at] == b'(' {
+            *at += 1;
+            node.child = parse(bytes, at);
+            *at += 1;
+        }
+        match last {
+            Some(l) => {
+                l.next = Some(node);
+                node.prev = Some(l);
+            }
+            None => {
+                head = Some(node);
+            }
+        }
+        last = Some(node);
+    }
+    head
+}
+
+fn build(text: ref String) -> Option[Node] {
+    let mut at = 0;
+    parse(text.bytes(), mut at)
+}
+
+// The list read from its head: the values going next, whether every
+// prev undoes a next, no child is left and the walk back from the tail
+// gives the same values. A broken list fails the checks rather than
+// stopping the run; both walks stop after `limit` steps, so a cycle
+// cannot hang them. Breaks the links of the nodes it reached.
+struct Reading {
+    values: Vec[i64],
+    linked: bool,
+}
+
+fn read(head: ref Option[Node], limit: i64) -> Reading {
+    let mut values: Vec[i64] = Vec.new();
+    let mut seen: Vec[Node] = Vec.new();
+    let mut linked = true;
+    let mut tail: Option[Node] = None;
+    let mut cur = head.clone();
+    while let Some(n) = cur {
+        if values.len() == limit {
+            linked = false;
+            break;
+        }
+        values.push(n.val);
+        seen.push(n);
+        match n.child {
+            Some(_) => {
+                linked = false;
+            }
+            None => {}
+        }
+        match n.next {
+            Some(next) => {
+                match next.prev {
+                    Some(back) => {
+                        if back.val != n.val {
+                            linked = false;
+                        }
+                    }
+                    None => {
+                        linked = false;
+                    }
+                }
+            }
+            None => {
+                tail = Some(n);
+            }
+        }
+        cur = n.next;
+    }
+    let mut backward = 0;
+    let mut cur = tail;
+    while let Some(n) = cur {
+        if backward >= values.len() or values[values.len() - 1 - backward] != n.val {
+            linked = false;
+            break;
+        }
+        backward += 1;
+        cur = n.prev;
+    }
+    if backward != values.len() {
+        linked = false;
+    }
+    match head {
+        Some(h) => {
+            match h.prev {
+                Some(_) => {
+                    linked = false;
+                }
+                None => {}
+            }
+        }
+        None => {}
+    }
+    for n in seen {
+        n.prev = None;
+        n.next = None;
+        n.child = None;
+    }
+    Reading { values: values, linked: linked }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random multilevel list as text, valued 1, 2, 3, ... in the order
+// the text is written, which is the flattened order.
+fn random_text(budget: mut ref i64, depth: i64, next_val: mut ref i64, seed: mut ref i64) -> String {
+    let mut out = String.new();
+    let length = 1 + step(seed) % 5;
+    for i in 0..length {
+        if *budget == 0 {
+            break;
+        }
+        *budget -= 1;
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(f"{*next_val}");
+        *next_val += 1;
+        if depth < 6 and *budget > 0 and step(seed) % 4 == 0 {
+            out.push('(');
+            out.push_str(random_text(budget, depth + 1, next_val, seed));
+            out.push(')');
+        }
+    }
+    out
+}
+
+fn ascending(k: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    for i in 1..k + 1 {
+        v.push(i);
+    }
+    v
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4300;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let mut budget = 1 + step(mut seed) % 40;
+        let mut next_val = 1;
+        let text = random_text(mut budget, 0, mut next_val, mut seed);
+        let k = next_val - 1;
+        let expect = ascending(k);
+        // P5: one level, a chain of children, and nothing.
+        let m = 1 + step(mut seed) % 20;
+        let mut flat = String.new();
+        let mut deep = String.new();
+        for i in 1..m + 1 {
+            if i > 1 {
+                flat.push(' ');
+                deep.push('(');
+            }
+            flat.push_str(f"{i}");
+            deep.push_str(f"{i}");
+        }
+        for _ in 1..m {
+            deep.push(')');
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let head = build(text);
+            let out = solve(arm, head);
+            let same_head = match (head, out) {
+                (Some(a), Some(b)) => a.val == b.val and a.val == 1,
+                _ => false,
+            };
+            // P4 reads the result flattened a second time.
+            let again = solve(arm, out);
+            let r = read(again, 4 * k + 4);
+            report(1, arm, case, r.values == expect, mut failures);
+            report(2, arm, case, r.linked, mut failures);
+            report(3, arm, case, same_head, mut failures);
+            let once = read(solve(arm, build(text)), 4 * k + 4);
+            report(4, arm, case, once.values == r.values and once.linked == r.linked, mut failures);
+            let flat_r = read(solve(arm, build(flat)), 4 * m + 4);
+            let deep_r = read(solve(arm, build(deep)), 4 * m + 4);
+            let none_r = read(solve(arm, None), 4);
+            report(5, arm, case, flat_r.values == ascending(m) and flat_r.linked and deep_r.values == ascending(m) and deep_r.linked and none_r.values.len() == 0, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

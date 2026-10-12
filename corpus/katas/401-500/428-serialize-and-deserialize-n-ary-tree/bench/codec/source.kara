@@ -1,0 +1,99 @@
+// Benchmark for #428: the preorder-with-counts codec (codec.kara) on
+// 100 random trees of 10,000 nodes, each encoded and decoded.
+
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+fn write(node: ref Node, out: mut ref String) {
+    if out.len() > 0 {
+        out.push(' ');
+    }
+    out.push_str(f"{node.val} {node.children.len()}");
+    for child in node.children {
+        write(child, out);
+    }
+}
+
+fn serialize(root: ref Option[Node]) -> String {
+    let mut out = String.new();
+    match root {
+        Some(node) => write(node, mut out),
+        None => {}
+    }
+    out
+}
+
+fn read(words: ref Vec[String], at: mut ref i64) -> Node {
+    let val = i64.parse(words[*at]).unwrap();
+    let count = i64.parse(words[*at + 1]).unwrap();
+    *at += 2;
+    let mut children: Vec[Node] = Vec.new();
+    for _ in 0..count {
+        children.push(read(words, at));
+    }
+    Node { val: val, children: children }
+}
+
+fn deserialize(data: Str) -> Option[Node] {
+    if data.len() == 0 {
+        return None;
+    }
+    let words = data.split(" ");
+    let mut at = 0;
+    Some(read(words, mut at))
+}
+
+// ---- benchmark harness ----------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn build_random(i: i64, vals: ref Vec[i64], kids: ref Vec[Vec[i64]]) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in kids[i] {
+        children.push(build_random(k, vals, kids));
+    }
+    Node { val: vals[i], children: children }
+}
+
+fn total(node: ref Node) -> i64 {
+    let mut sum = node.val;
+    for child in node.children {
+        sum += total(child);
+    }
+    sum
+}
+
+fn main() {
+    let n = 10000;
+    let rounds = 100;
+    let mut seed: i64 = 428;
+    let mut chars = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        // Each node after the first hangs under one of the `reach` nodes
+        // before it: a small reach makes a deep tree, a large one a wide
+        // tree.
+        let reach = 1 + step(mut seed) % 1000;
+        let mut vals: Vec[i64] = Vec.new();
+        let mut kids: Vec[Vec[i64]] = Vec.new();
+        for i in 0..n {
+            vals.push(step(mut seed) % 10001);
+            kids.push(Vec.new());
+            if i > 0 {
+                let back = 1 + step(mut seed) % min(i, reach);
+                kids[i - back].push(i);
+            }
+        }
+        let tree = Some(build_random(0, vals, kids));
+        let text = serialize(tree);
+        let back = deserialize(text).expect("the tree is not empty");
+        chars += text.len();
+        checksum = (checksum * 31 + text.len() + total(back)) % 1000000007;
+    }
+    println(f"{rounds} rounds of {n} nodes: {chars} characters, checksum {checksum}");
+}

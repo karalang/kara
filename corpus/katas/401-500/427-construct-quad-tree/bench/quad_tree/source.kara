@@ -1,0 +1,78 @@
+// Benchmark for #427: the divide-then-merge arm (quad_tree.kara) on
+// 20,000 rebuilds of a 64 by 64 grid, each after painting one random
+// aligned block and flipping one cell.
+
+shared enum Quad {
+    Leaf(bool),
+    Split(Quad, Quad, Quad, Quad),
+}
+
+fn build(grid: ref Vec[Vec[i64]], row: i64, col: i64, size: i64) -> Quad {
+    if size == 1 {
+        return Quad.Leaf(grid[row][col] == 1);
+    }
+    let half = size / 2;
+    let top_left = build(grid, row, col, half);
+    let top_right = build(grid, row, col + half, half);
+    let bottom_left = build(grid, row + half, col, half);
+    let bottom_right = build(grid, row + half, col + half, half);
+    match (top_left, top_right, bottom_left, bottom_right) {
+        (Quad.Leaf(a), Quad.Leaf(b), Quad.Leaf(c), Quad.Leaf(d)) => {
+            if a == b and b == c and c == d {
+                return Quad.Leaf(a);
+            }
+        }
+        _ => {}
+    }
+    Quad.Split(top_left, top_right, bottom_left, bottom_right)
+}
+
+fn construct(grid: Vec[Vec[i64]]) -> Quad {
+    build(grid, 0, 0, grid.len())
+}
+
+// ---- benchmark harness ----------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn count(q: Quad) -> i64 {
+    match q {
+        Quad.Leaf(_) => 1,
+        Quad.Split(a, b, c, d) => 1 + count(a) + count(b) + count(c) + count(d),
+    }
+}
+
+fn main() {
+    let n = 64;
+    let rounds = 20000;
+    let mut seed: i64 = 427;
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        grid.push(vec![0; n]);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        // Paint an aligned block of side 1 to 64 one value, then flip a
+        // cell, so the grid keeps some structure for the tree to find.
+        let size = 1 << (step(mut seed) % 7);
+        let top = step(mut seed) % (n / size) * size;
+        let left = step(mut seed) % (n / size) * size;
+        let v = step(mut seed) % 2;
+        for r in top..top + size {
+            for c in left..left + size {
+                grid[r][c] = v;
+            }
+        }
+        let r = step(mut seed) % n;
+        let c = step(mut seed) % n;
+        grid[r][c] = 1 - grid[r][c];
+        let nodes = count(construct(grid));
+        total += nodes;
+        checksum = (checksum * 31 + nodes) % 1000000007;
+    }
+    println(f"{rounds} rounds on a {n} by {n} grid: {total} nodes, checksum {checksum}");
+}

@@ -1,0 +1,394 @@
+// Differential test for LeetCode #427: Construct Quad Tree.
+//
+// Copies of the four arms, each run on 1,500 random grids of side 1 to
+// 32, built from blocks of a random power-of-two size with a few cells
+// flipped. The tree type is defined once, before the arms. Properties
+// known by construction:
+//   P1  the leaves tile the grid: every cell lies in exactly one leaf,
+//       and every leaf's square holds only the leaf's value
+//   P2  no split holds four leaves of one value
+//   P3  flipping every cell flips every leaf and keeps the shape
+//   P4  transposing the grid swaps every split's top right and bottom
+//       left
+//   P5  doubling each cell into a 2 by 2 block gives the same tree; a
+//       grid of one value is one leaf; one cell different in a grid of
+//       side 2^k gives 4k + 1 nodes
+
+shared enum Quad {
+    Leaf(bool),
+    Split(Quad, Quad, Quad, Quad),
+}
+
+// ---- merge: quad_tree.kara
+
+fn build_merge(grid: ref Vec[Vec[i64]], row: i64, col: i64, size: i64) -> Quad {
+    if size == 1 {
+        return Quad.Leaf(grid[row][col] == 1);
+    }
+    let half = size / 2;
+    let top_left = build_merge(grid, row, col, half);
+    let top_right = build_merge(grid, row, col + half, half);
+    let bottom_left = build_merge(grid, row + half, col, half);
+    let bottom_right = build_merge(grid, row + half, col + half, half);
+    match (top_left, top_right, bottom_left, bottom_right) {
+        (Quad.Leaf(a), Quad.Leaf(b), Quad.Leaf(c), Quad.Leaf(d)) => {
+            if a == b and b == c and c == d {
+                return Quad.Leaf(a);
+            }
+        }
+        _ => {}
+    }
+    Quad.Split(top_left, top_right, bottom_left, bottom_right)
+}
+
+fn construct_merge(grid: Vec[Vec[i64]]) -> Quad {
+    build_merge(grid, 0, 0, grid.len())
+}
+
+// ---- uniform: quad_tree_uniform.kara
+
+fn uniform(grid: ref Vec[Vec[i64]], row: i64, col: i64, size: i64) -> bool {
+    let first = grid[row][col];
+    for r in row..row + size {
+        for c in col..col + size {
+            if grid[r][c] != first {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn build_uniform(grid: ref Vec[Vec[i64]], row: i64, col: i64, size: i64) -> Quad {
+    if uniform(grid, row, col, size) {
+        return Quad.Leaf(grid[row][col] == 1);
+    }
+    let half = size / 2;
+    Quad.Split(
+        build_uniform(grid, row, col, half),
+        build_uniform(grid, row, col + half, half),
+        build_uniform(grid, row + half, col, half),
+        build_uniform(grid, row + half, col + half, half),
+    )
+}
+
+fn construct_uniform(grid: Vec[Vec[i64]]) -> Quad {
+    build_uniform(grid, 0, 0, grid.len())
+}
+
+// ---- prefix: quad_tree_prefix.kara
+
+// sums[r][c] is the number of 1s above row r and left of column c.
+fn prefix_sums(grid: ref Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let n = grid.len();
+    let mut sums: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        sums.push(vec![0; n + 1]);
+    }
+    for r in 0..n {
+        for c in 0..n {
+            sums[r + 1][c + 1] = sums[r][c + 1] + sums[r + 1][c] - sums[r][c] + grid[r][c];
+        }
+    }
+    sums
+}
+
+fn build_prefix(sums: ref Vec[Vec[i64]], row: i64, col: i64, size: i64) -> Quad {
+    let ones = sums[row + size][col + size] - sums[row][col + size] - sums[row + size][col] + sums[row][col];
+    if ones == 0 {
+        return Quad.Leaf(false);
+    }
+    if ones == size * size {
+        return Quad.Leaf(true);
+    }
+    let half = size / 2;
+    Quad.Split(
+        build_prefix(sums, row, col, half),
+        build_prefix(sums, row, col + half, half),
+        build_prefix(sums, row + half, col, half),
+        build_prefix(sums, row + half, col + half, half),
+    )
+}
+
+fn construct_prefix(grid: Vec[Vec[i64]]) -> Quad {
+    build_prefix(prefix_sums(grid), 0, 0, grid.len())
+}
+
+// ---- levels: quad_tree_levels.kara
+
+fn merge_levels(top_left: Quad, top_right: Quad, bottom_left: Quad, bottom_right: Quad) -> Quad {
+    match (top_left, top_right, bottom_left, bottom_right) {
+        (Quad.Leaf(a), Quad.Leaf(b), Quad.Leaf(c), Quad.Leaf(d)) => {
+            if a == b and b == c and c == d {
+                return Quad.Leaf(a);
+            }
+        }
+        _ => {}
+    }
+    Quad.Split(top_left, top_right, bottom_left, bottom_right)
+}
+
+fn construct_levels(grid: Vec[Vec[i64]]) -> Quad {
+    let mut n = grid.len();
+    // The level's nodes, row by row.
+    let mut level: Vec[Quad] = Vec.new();
+    for r in 0..n {
+        for c in 0..n {
+            level.push(Quad.Leaf(grid[r][c] == 1));
+        }
+    }
+    while n > 1 {
+        let half = n / 2;
+        let mut next: Vec[Quad] = Vec.new();
+        for r in 0..half {
+            for c in 0..half {
+                let at = 2 * r * n + 2 * c;
+                next.push(merge_levels(level[at], level[at + 1], level[at + n], level[at + n + 1]));
+            }
+        }
+        level = next;
+        n = half;
+    }
+    level[0]
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, grid: ref Vec[Vec[i64]]) -> Quad {
+    if arm == 0 {
+        construct_merge(grid)
+    } else if arm == 1 {
+        construct_uniform(grid)
+    } else if arm == 2 {
+        construct_prefix(grid)
+    } else {
+        construct_levels(grid)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn serialize(root: Quad) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut queue: Vec[Option[Quad]] = vec![Some(root)];
+    let mut at = 0;
+    while at < queue.len() {
+        let item = queue[at].clone();
+        at += 1;
+        match item {
+            Some(Quad.Leaf(v)) => {
+                let bit = if v { 1 } else { 0 };
+                parts.push(f"[1,{bit}]");
+                for _ in 0..4 {
+                    queue.push(None);
+                }
+            }
+            Some(Quad.Split(a, b, c, d)) => {
+                parts.push("[0,1]".to_string());
+                queue.push(Some(a));
+                queue.push(Some(b));
+                queue.push(Some(c));
+                queue.push(Some(d));
+            }
+            None => {
+                parts.push("null".to_string());
+            }
+        }
+    }
+    while parts.len() > 0 and parts[parts.len() - 1] == "null" {
+        parts.pop();
+    }
+    let mut out = "[".to_string();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(parts[i]);
+    }
+    out.push(']');
+    out
+}
+
+fn random_grid(n: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut block = 1;
+    let mut j = step(seed) % 6;
+    while j > 0 and block < n {
+        block *= 2;
+        j -= 1;
+    }
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        grid.push(vec![0; n]);
+    }
+    for br in 0..n / block {
+        for bc in 0..n / block {
+            let v = step(seed) % 2;
+            for r in 0..block {
+                for c in 0..block {
+                    grid[br * block + r][bc * block + c] = v;
+                }
+            }
+        }
+    }
+    let flips = step(seed) % 4;
+    for _ in 0..flips {
+        let r = step(seed) % n;
+        let c = step(seed) % n;
+        grid[r][c] = 1 - grid[r][c];
+    }
+    grid
+}
+
+// Paint each leaf's square onto `painted`, counting the cells a leaf
+// covers; false if a leaf's square holds a cell of the other value.
+fn paint(q: Quad, row: i64, col: i64, size: i64, grid: ref Vec[Vec[i64]], painted: mut ref Vec[Vec[i64]]) -> bool {
+    match q {
+        Quad.Leaf(v) => {
+            let want = if v { 1 } else { 0 };
+            let mut ok = true;
+            for r in row..row + size {
+                for c in col..col + size {
+                    painted[r][c] += 1;
+                    if grid[r][c] != want {
+                        ok = false;
+                    }
+                }
+            }
+            ok
+        }
+        Quad.Split(a, b, c, d) => {
+            if size == 1 {
+                return false;
+            }
+            let half = size / 2;
+            let ok_a = paint(a, row, col, half, grid, painted);
+            let ok_b = paint(b, row, col + half, half, grid, painted);
+            let ok_c = paint(c, row + half, col, half, grid, painted);
+            let ok_d = paint(d, row + half, col + half, half, grid, painted);
+            ok_a and ok_b and ok_c and ok_d
+        }
+    }
+}
+
+// No split holds four leaves of one value.
+fn canonical(q: Quad) -> bool {
+    match q {
+        Quad.Leaf(_) => true,
+        Quad.Split(a, b, c, d) => {
+            match (a, b, c, d) {
+                (Quad.Leaf(w), Quad.Leaf(x), Quad.Leaf(y), Quad.Leaf(z)) => {
+                    if w == x and x == y and y == z {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+            canonical(a) and canonical(b) and canonical(c) and canonical(d)
+        }
+    }
+}
+
+fn complement(q: Quad) -> Quad {
+    match q {
+        Quad.Leaf(v) => Quad.Leaf(not v),
+        Quad.Split(a, b, c, d) => Quad.Split(complement(a), complement(b), complement(c), complement(d)),
+    }
+}
+
+// The tree of the transposed grid: top right and bottom left swap.
+fn transpose(q: Quad) -> Quad {
+    match q {
+        Quad.Leaf(v) => Quad.Leaf(v),
+        Quad.Split(a, b, c, d) => Quad.Split(transpose(a), transpose(c), transpose(b), transpose(d)),
+    }
+}
+
+fn count(q: Quad) -> i64 {
+    match q {
+        Quad.Leaf(_) => 1,
+        Quad.Split(a, b, c, d) => 1 + count(a) + count(b) + count(c) + count(d),
+    }
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4270;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let k = step(mut seed) % 6;
+        let n = 1 << k;
+        let grid = random_grid(n, mut seed);
+        // P3 and P4: the grid with every cell flipped, and transposed.
+        let mut flipped: Vec[Vec[i64]] = Vec.new();
+        let mut transposed: Vec[Vec[i64]] = Vec.new();
+        for r in 0..n {
+            let mut f: Vec[i64] = Vec.new();
+            let mut t: Vec[i64] = Vec.new();
+            for c in 0..n {
+                f.push(1 - grid[r][c]);
+                t.push(grid[c][r]);
+            }
+            flipped.push(f);
+            transposed.push(t);
+        }
+        // P5: the grid with each cell doubled into a 2 by 2 block, one
+        // value everywhere, and one cell different from the rest.
+        let mut doubled: Vec[Vec[i64]] = Vec.new();
+        for r in 0..2 * n {
+            let mut row: Vec[i64] = Vec.new();
+            for c in 0..2 * n {
+                row.push(grid[r / 2][c / 2]);
+            }
+            doubled.push(row);
+        }
+        let v = step(mut seed) % 2;
+        let mut same: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            same.push(vec![v; n]);
+        }
+        let mut odd = same.clone();
+        let odd_r = step(mut seed) % n;
+        let odd_c = step(mut seed) % n;
+        odd[odd_r][odd_c] = 1 - v;
+        for arm in 0..4 {
+            checks += 5;
+            let tree = solve(arm, grid);
+            let mut painted: Vec[Vec[i64]] = Vec.new();
+            for _ in 0..n {
+                painted.push(vec![0; n]);
+            }
+            let mut tiled = paint(tree, 0, 0, n, grid, mut painted);
+            for r in 0..n {
+                for c in 0..n {
+                    if painted[r][c] != 1 {
+                        tiled = false;
+                    }
+                }
+            }
+            report(1, arm, case, tiled, mut failures);
+            report(2, arm, case, canonical(tree), mut failures);
+            let text = serialize(tree);
+            report(3, arm, case, serialize(solve(arm, flipped)) == serialize(complement(tree)), mut failures);
+            report(4, arm, case, serialize(solve(arm, transposed)) == serialize(transpose(tree)), mut failures);
+            report(5, arm, case, serialize(solve(arm, doubled)) == text and count(solve(arm, same)) == 1 and count(solve(arm, odd)) == 4 * k + 1, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

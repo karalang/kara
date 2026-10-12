@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/429-n-ary-tree-level-order-traversal/level_order_stack.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "91ae89c3c"
+extracted_src = "93edcd80"
+model_rev = "1aa23105"
+model_src = "93edcd80"

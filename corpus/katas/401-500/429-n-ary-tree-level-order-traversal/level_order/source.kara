@@ -1,0 +1,131 @@
+// LeetCode #429: N-ary Tree Level Order Traversal -- breadth first, a
+// level at a time.
+//
+// Hold one level's nodes; its values are the next row of the answer,
+// and its nodes' children, in order, are the next level. The tree is
+// taken by value and taken apart as it is walked: each node's children
+// move into the next level, so nothing is copied. O(n).
+
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+fn level_order(root: own Option[Node]) -> Vec[Vec[i64]] {
+    let mut levels: Vec[Vec[i64]] = Vec.new();
+    let mut level: Vec[Node] = Vec.new();
+    match root {
+        Some(node) => level.push(node),
+        None => {}
+    }
+    while level.len() > 0 {
+        let mut row: Vec[i64] = Vec.new();
+        let mut next: Vec[Node] = Vec.new();
+        for node in level.into_iter() {
+            row.push(node.val);
+            for child in node.children.into_iter() {
+                next.push(child);
+            }
+        }
+        levels.push(row);
+        level = next;
+    }
+    levels
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn leaf(val: i64) -> Node {
+    Node { val: val, children: Vec.new() }
+}
+
+fn tree(val: i64, children: own Vec[Node]) -> Node {
+    Node { val: val, children: children }
+}
+
+fn show(levels: ref Vec[Vec[i64]]) -> String {
+    let mut out = "[".to_string();
+    for i in 0..levels.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push('[');
+        for j in 0..levels[i].len() {
+            if j > 0 {
+                out.push(',');
+            }
+            out.push_str(f"{levels[i][j]}");
+        }
+        out.push(']');
+    }
+    out.push(']');
+    out
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn build_random(i: i64, vals: ref Vec[i64], kids: ref Vec[Vec[i64]]) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in kids[i] {
+        children.push(build_random(k, vals, kids));
+    }
+    Node { val: vals[i], children: children }
+}
+
+// n nodes; each node after the first hangs under one of the `reach`
+// nodes before it, so a small reach makes a deep tree.
+fn random_tree(n: i64, seed: mut ref i64) -> Option[Node] {
+    if n == 0 {
+        return None;
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    let mut kids: Vec[Vec[i64]] = Vec.new();
+    let reach = 1 + step(seed) % n;
+    for i in 0..n {
+        vals.push(step(seed) % 10001);
+        kids.push(Vec.new());
+        if i > 0 {
+            let back = 1 + step(seed) % min(i, reach);
+            kids[i - back].push(i);
+        }
+    }
+    Some(build_random(0, vals, kids))
+}
+
+fn main() {
+    println(show(level_order(Some(tree(1, vec![tree(3, vec![leaf(5), leaf(6)]), leaf(2), leaf(4)])))));
+    println(show(level_order(Some(tree(1, vec![
+        leaf(2),
+        tree(3, vec![leaf(6), tree(7, vec![tree(11, vec![leaf(14)])])]),
+        tree(4, vec![tree(8, vec![leaf(12)])]),
+        tree(5, vec![tree(9, vec![leaf(13)]), leaf(10)]),
+    ])))));
+    println(show(level_order(None)));
+    println(show(level_order(Some(leaf(7)))));
+    println(show(level_order(Some(tree(1, vec![tree(2, vec![tree(3, vec![tree(4, vec![leaf(5)])])])])))));
+    let mut wide: Vec[Node] = Vec.new();
+    for v in 0..12 {
+        wide.push(leaf(v * 7));
+    }
+    println(show(level_order(Some(tree(100, wide)))));
+    // Uneven depths: the deepest node is under the last child.
+    println(show(level_order(Some(tree(0, vec![leaf(1), tree(2, vec![leaf(4)]), tree(3, vec![tree(5, vec![leaf(6)])])])))));
+    // 300 random trees of 0 to 60 nodes.
+    let mut seed: i64 = 429;
+    let mut nodes = 0;
+    let mut depth = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = step(mut seed) % 61;
+        let levels = level_order(random_tree(n, mut seed));
+        nodes += n;
+        depth += levels.len();
+        for b in show(levels).bytes() {
+            checksum = (checksum * 31 + b as i64) % 1000000007;
+        }
+    }
+    println(f"300 random trees, {nodes} nodes, {depth} levels: checksum {checksum}");
+}
