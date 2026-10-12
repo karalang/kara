@@ -6955,7 +6955,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                     | IntrinsicKind::Map
                     | IntrinsicKind::SortedMap),
                 args,
-            } if mode == Mode::Ref => {
+            } if mode == Mode::Ref
+                || (mode == Mode::Owned
+                    && self
+                        .tys()
+                        .tcx()
+                        .list(args)
+                        .into_iter()
+                        .all(|t| self.is_copy(t))) =>
+            {
+                // `c.into_iter()` over `Copy` elements reads them as a lent
+                // loop does; the collection goes when its scope ends.
+                mode = Mode::Ref;
                 let tcx = self.tys().tcx();
                 let args = tcx.list(args);
                 match kind {
@@ -12926,10 +12937,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // Only a library value (a pooled connection, a permit) for
                     // now: the natives that take `own` text still read it
                     // through a borrow and would leak it.
+                    // A `Copy` value (an `ArenaRef`) is copied, as any
+                    // owned `Copy` argument is.
                     let declared_own = owns.get(i).copied().unwrap_or(false) && {
                         let at = self.expr_ty(&a.value)?;
                         let (_, b) = self.strip_ty_full(at);
-                        matches!(self.tys().tcx().kind(b), HK::Adt { .. })
+                        matches!(self.tys().tcx().kind(b), HK::Adt { .. }) && !self.is_copy(b)
                     };
                     let stores = stores || declared_own;
                     if self.is_fn_typed(a.value.id)
@@ -16147,6 +16160,42 @@ fn main() {
 fn late(n: i64) -> impl Named { Holder { n: n } }
 "#;
         assert_eq!(run_source(src), Ok(("h3 h45\n".to_string(), Some(0))));
+    }
+
+    /// A `Copy` handle passed to an `own` library parameter is copied: a
+    /// type argument no field holds (`ArenaRef[Node]`) does not make it move.
+    #[test]
+    fn a_copy_handle_to_an_own_library_parameter_is_copied() {
+        let src = r#"
+struct Node { val: i64, kids: i64 }
+fn main() {
+    let a: Arena[Node] = Arena.new();
+    let r = a.push(Node { val: 42, kids: 7 });
+    println(f"{a.get(r).val} {a.get(r).kids}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("42 7\n".to_string(), Some(0))));
+    }
+
+    /// `c.into_iter()` over a map or set of `Copy` entries loops like `c`.
+    #[test]
+    fn into_iter_over_copy_map_and_set_entries() {
+        let src = r#"
+fn main() {
+    let mut count: Map[char, i64] = Map.new();
+    count.insert('a', 2);
+    count.insert('b', 1);
+    let mut t = 0;
+    for (c, n) in count.into_iter() { if c == 'a' { t = t + n * 10; } else { t = t + n; } }
+    let mut s: Set[i64] = Set.new();
+    s.insert(3);
+    s.insert(4);
+    let mut u = 0;
+    for x in s.into_iter() { u = u + x; }
+    println(f"{t} {u}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("21 7\n".to_string(), Some(0))));
     }
 
     /// A variant named like a library type (`Kind.Map`) leaves `Map.new()`

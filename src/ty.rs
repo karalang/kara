@@ -780,11 +780,17 @@ impl TyCtxt {
             TyKind::Array { elem, .. } => self.is_copy(elem),
             TyKind::Vector { .. } => true,
             // A generic type that is `Copy` is so at the instances whose
-            // arguments are (`Option[i64]`, not `Option[String]`).
-            TyKind::Adt { def, args } => {
-                self.adt_def(def).is_some_and(|a| a.is_copy)
-                    && self.list(args).into_iter().all(|t| self.is_copy(t))
-            }
+            // fields are (`Option[i64]`, not `Option[String]`); an argument
+            // no field holds (`ArenaRef[Node]`, a handle) does not count.
+            TyKind::Adt { def, args } => self.adt_def(def).is_some_and(|a| {
+                let args = self.list(args);
+                a.is_copy
+                    && a.variants.iter().all(|v| {
+                        v.fields
+                            .iter()
+                            .all(|(_, t)| self.is_copy(self.subst(*t, &args, &[])))
+                    })
+            }),
             TyKind::Str
             | TyKind::Shared { .. }
             | TyKind::MutRef(_)
