@@ -3107,3 +3107,63 @@ fn a_weak_store_of_a_shared_parameter_moves_nothing() {
          }\n",
     );
 }
+
+#[test]
+fn a_mutating_method_on_a_range_view_of_a_mutable_place_is_accepted() {
+    // B-2026-10-12-24: design.md § Slices — `v[a..b]` is a `mut Slice[T]`
+    // where a mutable view is needed, and a `mut ref self` receiver is one.
+    accepted(
+        "range-view-mut-method",
+        "struct S { v: Vec[i64] }\n\
+         \n\
+         fn flip(v: mut ref Vec[i64]) {\n\
+         \x20   v[1..3].reverse();\n\
+         }\n\
+         \n\
+         fn main() {\n\
+         \x20   let mut v = vec![1, 2, 3, 4];\n\
+         \x20   v[0..2].reverse();\n\
+         \x20   flip(mut v);\n\
+         \x20   v[2..4].swap(0, 1);\n\
+         \x20   v[..].sort_by(|a, b| b.cmp(a));\n\
+         \x20   let mut s = S { v: vec![1, 2, 3] };\n\
+         \x20   s.v[0..2].fill(9);\n\
+         \x20   println(f\"{v[0]} {s.v[0]}\");\n\
+         }\n",
+    );
+    // The view is a write to `v`, which needs `let mut` like `flip(mut v[..])`.
+    rejected_then_fixed_by(
+        "range-view-mut-method-let",
+        "fn main() {\n\
+         \x20   let v = vec![1, 2, 3, 4];\n\
+         \x20   v[0..2].reverse();\n\
+         \x20   println(f\"{v[0]}\");\n\
+         }\n",
+        "cannot call `reverse` on `v`",
+        "let mut v",
+    );
+    // A `ref` base still yields a read-only view.
+    rejected(
+        "range-view-mut-method-ref",
+        "fn f(v: ref Vec[i64]) {\n\
+         \x20   v[0..2].reverse();\n\
+         }\n\
+         \n\
+         fn main() {\n\
+         \x20   let v = vec![1, 2, 3, 4];\n\
+         \x20   f(v);\n\
+         }\n",
+        "requires a mutable slice",
+    );
+    // The view still conflicts with a live slice of the same place.
+    rejected(
+        "range-view-mut-method-live",
+        "fn main() {\n\
+         \x20   let mut v = vec![1, 2, 3, 4];\n\
+         \x20   let s = v.as_slice();\n\
+         \x20   v[0..2].reverse();\n\
+         \x20   println(f\"{s[0]}\");\n\
+         }\n",
+        "while another slice borrow is live",
+    );
+}

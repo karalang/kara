@@ -890,3 +890,32 @@ fn main() {
         "5 6\n",
     );
 }
+
+#[test]
+fn a_mutating_method_on_a_range_view_writes_through_it() {
+    // B-2026-10-12-24.
+    assert_runs(
+        r#"
+struct S { v: Vec[i64] }
+
+fn flip(v: mut ref Vec[i64]) {
+    v[1..3].reverse();
+}
+
+fn main() {
+    let mut v = vec![1, 2, 3, 4];
+    v[0..2].reverse();
+    flip(mut v);
+    println(f"{v[0]} {v[1]} {v[2]} {v[3]}");
+    v[1..4].sort();
+    v[0..2].fill(9);
+    v[2..4].swap(0, 1);
+    println(f"{v[0]} {v[1]} {v[2]} {v[3]}");
+    let mut s = S { v: vec![5, 4, 3] };
+    s.v[0..2].sort_by(|a, b| a.cmp(b));
+    println(f"{s.v[0]} {s.v[1]} {s.v[2]}");
+}
+"#,
+        "2 3 1 4\n9 9 4 3\n4 5 3\n",
+    );
+}

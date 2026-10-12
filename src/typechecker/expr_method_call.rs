@@ -191,6 +191,20 @@ pub(crate) const SLICE_BUILTIN_METHODS: &[&str] = &[
     "to_vec",
     "windows",
 ];
+
+/// The `Slice` methods that take `mut ref self` (`infer_slice_method` refuses
+/// each on a read-only slice). A range-indexed receiver of one of these is a
+/// place where a mutable view is needed, so `v[a..b].reverse()` types the view
+/// as `mut Slice[T]` exactly as `flip(mut v[a..b])` does (B-2026-10-12-24).
+pub(crate) const SLICE_MUTATING_METHODS: &[&str] = &[
+    "fill",
+    "reverse",
+    "sort",
+    "sort_by",
+    "sort_by_key",
+    "split_at_mut",
+    "swap",
+];
 use crate::reduce_kernel::ReduceOp;
 use crate::resolver::{SpanKey, SymbolKind};
 use crate::token::Span;
@@ -1567,10 +1581,18 @@ impl<'a> super::TypeChecker<'a> {
         // non-identifier receiver" — the dispatcher reads exactly that table.
         // The typechecker must admit only what codegen can lower.
         let pinned_receiver = self.pending_unwrap_receiver_expectation.take();
+        let range_view_mutates = SLICE_MUTATING_METHODS.contains(&method)
+            && matches!(&object.kind, ExprKind::Index { index, .. }
+                if matches!(index.kind, ExprKind::Range { .. }));
+        let saved_mut_through = self.mut_through_param_arg;
+        if range_view_mutates {
+            self.mut_through_param_arg = true;
+        }
         let mut obj_ty = match &pinned_receiver {
             Some(wrapped) => self.check_expr(object, wrapped),
             None => self.infer_expr(object),
         };
+        self.mut_through_param_arg = saved_mut_through;
         if obj_ty == Type::Error {
             for arg in args {
                 self.infer_expr(&arg.value);

@@ -6257,7 +6257,15 @@ impl<'a> super::TypeChecker<'a> {
                 // coercion is there to accept. Two ASAN fixtures caught it.
                 // A pure read changes nothing for any existing path.
                 let index_is_lhs = self.assigning_lhs;
+                // B-2026-10-12-24 — whether a RANGE index here yields a
+                // `mut Slice[T]` is decided by the place this index sits in, so
+                // it is read before the base is typed: a field base
+                // (`mut s.v[1..3]`) takes the flag for its own shared-field
+                // gate, and the bounds must not see it at all (`v[s.a..s.b]`
+                // is a read of `s.a`, not a write through it).
+                let range_mut_through = self.mut_through_param_arg;
                 let obj_ty = self.infer_expr(object);
+                self.mut_through_param_arg = false;
                 let idx_ty = self.infer_expr(index);
                 // `t.0[i]` — indexing a `Vec`/`VecDeque` that lives in a TUPLE
                 // element. Codegen resolves the element's storage pointer
@@ -6647,7 +6655,7 @@ impl<'a> super::TypeChecker<'a> {
                             // base and a read-only `Slice[T]` base both
                             // decline, and still report the read-only type
                             // they actually have.
-                            mutable: self.mut_through_param_arg
+                            mutable: range_mut_through
                                 && super::types::types_compatible(
                                     &Type::Slice {
                                         element: Box::new(el),

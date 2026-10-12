@@ -260,6 +260,12 @@ impl<'a> super::OwnershipChecker<'a> {
         matches!(ty, Some(Type::Named { name, .. }) if name == "GpuBuffer")
     }
 
+    /// `v[a..b]`: an index whose index is a range literal, i.e. a slice view.
+    pub(crate) fn is_range_view(expr: &Expr) -> bool {
+        matches!(&expr.kind, ExprKind::Index { index, .. }
+            if matches!(index.kind, ExprKind::Range { .. }))
+    }
+
     pub(crate) fn root_identifier(expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::Identifier(name) => Some(name.clone()),
@@ -695,6 +701,20 @@ impl<'a> super::OwnershipChecker<'a> {
                 // on the FieldAccess receiver would see the method's return
                 // type instead of the field's type. Going via the root
                 // identifier sidesteps the alias entirely.
+                // B-2026-10-12-24 — `v[a..b].reverse()`: a range view as the
+                // receiver of a `mut ref self` slice method is a `mut Slice[T]`
+                // (the typechecker types it so). It is a write to `v`, needing
+                // `let mut` like `flip(mut v[a..b])`, and the view lives for
+                // this call only, so its borrow is taken inside the call's
+                // snapshot rather than outliving the statement.
+                let range_view_write = Self::is_range_view(object)
+                    && crate::typechecker::SLICE_MUTATING_METHODS.contains(&method.as_str());
+                let view_snapshot = range_view_write.then(|| self.snapshot_active_borrow_lens());
+                if range_view_write {
+                    if let ExprKind::Index { object: base, .. } = &object.kind {
+                        self.record_slice_creation(&object.span, base, true);
+                    }
+                }
                 if self.method_call_consumes_receiver(expr) {
                     if let Some(root_name) = Self::root_identifier(object) {
                         self.consume_named_binding(
@@ -722,7 +742,8 @@ impl<'a> super::OwnershipChecker<'a> {
                 // through a shared handle is (see `place_writes_through_shared`):
                 // reference semantics mean `let` freezes the handle, not the
                 // reference-counted object it points at.
-                if matches!(self.method_self_borrow_kind(expr), Some(BorrowKind::MutRef))
+                if (range_view_write
+                    || matches!(self.method_self_borrow_kind(expr), Some(BorrowKind::MutRef)))
                     && !self.receiver_is_shared_handle(object)
                 {
                     if let Some(root_name) = Self::root_identifier(object) {
@@ -758,7 +779,9 @@ impl<'a> super::OwnershipChecker<'a> {
                 // consumes, and unresolved methods (stdlib impls etc.) all
                 // return None from `method_self_borrow_kind` and skip.
                 let receiver_snapshot = self.snapshot_active_borrow_lens();
-                if !matches!(method.as_str(), "as_slice" | "as_slice_mut") {
+                // A range-view receiver's borrow is the `mut Slice[T]` taken
+                // above; a second, whole-`v` push would conflict with it.
+                if !matches!(method.as_str(), "as_slice" | "as_slice_mut") && !range_view_write {
                     if let Some(borrow_kind) = self.method_self_borrow_kind(expr) {
                         if let Some(place) = self.place_expr_root(object) {
                             self.push_active_borrow(borrow_kind, place, expr.span);
@@ -798,6 +821,9 @@ impl<'a> super::OwnershipChecker<'a> {
                 // The `.as_slice` / `.as_slice_mut` slice creation push
                 // happens BEFORE the snapshot so it's preserved.
                 self.restore_active_borrows_to_snapshot(&receiver_snapshot);
+                if let Some(view_snapshot) = view_snapshot {
+                    self.restore_active_borrows_to_snapshot(&view_snapshot);
+                }
             }
             ExprKind::FieldAccess { object, .. } => {
                 self.check_expr_reading(object, states, param_types, param_usage);
