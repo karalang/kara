@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 171 |
 | diagnostics | 150 |
 | perf | 148 |
-| false-positive | 134 |
+| false-positive | 138 |
 | crash | 114 |
 | soundness | 98 |
 | use-after-free | 90 |
@@ -111,10 +111,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2851 |
-| interp | 897 |
-| typecheck | 354 |
+| interp | 898 |
+| typecheck | 356 |
 | other | 114 |
-| ownership | 80 |
+| ownership | 81 |
 | cli | 75 |
 | autopar | 59 |
 | parser | 59 |
@@ -581,10 +581,14 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-6 | 2026-10-12 | typecheck+interp | medium | The v1 spec gives every number type `fn parse(s: Str) -> Result[Self, ParseError]` (docs/library/core-types.md § Parsing; strings.md; the error-type list in library/README.md), but the compiler still returns `Option[Self]` and has no `ParseError`: the spec's own example `match i64.parse(line.trim()) { Ok(n) => ..., Err(e) => ... }` is refused by `karac check` and `karac __mir-run` | — |
 | B-2026-10-12-7 | 2026-10-12 | typecheck+interp | medium | `Str.split` / `lines` / `split_whitespace` return an eager `Vec[String]` of copies, but the v1 spec (docs/library/strings.md) gives them `impl Iterator[Item = Str]` of views: strings.md's own example `let parts: Vec[Str] = line.split(",").collect();` is refused by `karac check` ("no method 'collect' on type 'Vec'") | — |
 | B-2026-10-12-8 | 2026-10-12 | interp | medium | `karac __mir-run`: every `Str.bytes()` call allocates a per-byte copy (about 63 bytes of memory per byte) that is kept until the program exits, so a loop that calls `bytes()` grows without bound: kata 388's bench was OOM-killed at 8.6 GB, and a 10,000-byte string read with `bytes()` 400 times peaks at 286 MB against 43 MB for `chars()` | — |
-| B-2026-10-12-9 | 2026-10-12 | typecheck | medium | `Map`/`SortedMap` `iter()` items are typed `(K, V)`, not the spec's `(ref K, ref V)`: `for (c, n) in m.iter() { if *n > 0 { .. } }` passes `karac check` but `karac __mir-run` refuses it ("unary '*' requires 'ref T' ... found 'i64'", with no location), and `*p.0` on an undestructured item is refused by check as well; `SortedMap.floor` / `ceiling` (spec: `Option[(ref K, ref V)]`) are typed `(K, V)` the same way, so `*v` on their items is refused by check | — |
+| B-2026-10-12-9 | 2026-10-12 | typecheck | medium | `Map`/`SortedMap` `iter()` items are typed `(K, V)`, not the spec's `(ref K, ref V)`: `for (c, n) in m.iter() { if *n > 0 { .. } }` passes `karac check` but `karac __mir-run` refuses it ("unary '*' requires 'ref T' ... found 'i64'", with no location), and `*p.0` on an undestructured item is refused by check as well; `SortedMap.floor` / `ceiling` (spec: `Option[(ref K, ref V)]`) are typed `(K, V)` the same way, so `*v` on their items is refused by check; CORRECTION (kata 399): not specific to Map, a destructured `Vec[(String, f64)]` iter item has the same split, `*w` passing check and refused by `__mir-run` as "found 'f64'" | — |
 | B-2026-10-12-10 | 2026-10-12 | interp | medium | MIR interpreter `VecDeque.push_front` / `pop_front` are O(n): the deque is a plain Vec and front operations `insert(0)` / `remove(0)`, so a queue (push_back + pop_front) is quadratic; 80000 pop_fronts take 8.5 s against 0.2 s at the back | — |
 | B-2026-10-12-11 | 2026-10-12 | parser | low | `distinct`, `shared`, `own`, `where`, `with` and `effect` are still lexed as hard keywords, but the v1 spec (design.md § Keywords) makes them contextual: `let mut distinct = 0;` is refused ("'distinct' is a reserved keyword") where the spec says it is an ordinary identifier | — |
 | B-2026-10-12-12 | 2026-10-12 | parser | low | A parameter mode written before the parameter's NAME (`fn new(own nums: Vec[i64])`, `ref v: T`, `mut v: T`) is reported as "'own' is a reserved keyword and cannot be used as an identifier", with no fix; the spec writes the mode in the type (`nums: own Vec[i64]`), and receivers write it before `self` (`own self`), which is what invites the mistake | — |
+| B-2026-10-12-13 | 2026-10-12 | typecheck | medium | A string literal is not typed as `Str` where a `Str` is expected, except as a call argument or inside `Some(...)`: `let x: Str = "abc";`, `let v: Vec[Str] = vec!["ab", "c"];`, `let t: (Str, i64) = ("ab", 1);` and `fn g() -> Str { "abc" }` are all refused with "expected 'StringSlice', found 'String'" by `karac check` and by the MIR builder; docs/design.md § String literals says a literal is a `Str` wherever one is expected, "the same rule in every scope" | — |
+| B-2026-10-12-14 | 2026-10-12 | ownership | medium | `karac check` treats `Str` as move-only: using a `Str` parameter twice (`String.from(s)` then `String.from(s)`) is refused as "value 's' moved here, used again here", `let y = x;` moves a `Str`, and reading `v[0]` out of a `Vec[Str]` is refused as a move out of a collection element; docs/design.md § Strings says `Str` "is `Copy`", and `karac __mir-run` already runs the twice-used parameter | — |
+| B-2026-10-12-15 | 2026-10-12 | interp | medium | `karac __mir-run` refuses `let x: Str = text[0..2];` (a range index of a `String`, bound with a `Str` annotation) with "typecheck: expected 'StringSlice', found 'String'"; `karac check` accepts it, and docs/design.md says `s[a..b]` on a string yields a `Str` | — |
+| B-2026-10-12-16 | 2026-10-12 | typecheck | low | `karac check` drops the `ref` from a binding matched through a TUPLE scrutinee: `match (m.get("a"), m.get("b")) { (Some(i), Some(j)) => *i + *j, .. }` is refused ("unary '*' requires 'ref T' ... found 'i64'"), while `if let Some(i) = m.get("a") { *i }` passes; `karac __mir-run` runs both and prints the right sum | — |
 
 ### Relocated
 
