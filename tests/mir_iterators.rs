@@ -789,3 +789,59 @@ fn main() {
         "3 1 30\n",
     );
 }
+
+/// A set's, a map's and a sorted collection's `iter()` are library sources
+/// (`SetIter`, `MapIter`, ...) that borrow the collection, so the adaptors
+/// run over them. A sorted one also runs backwards.
+#[test]
+fn set_and_map_iterators_are_library_sources() {
+    let src = r#"
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(3);
+    s.insert(5);
+    let t: i64 = s.iter().map(|x| x * 2).sum();
+    println(f"{t}");
+    let mut ss: SortedSet[String] = SortedSet.new();
+    ss.insert("b".to_string());
+    ss.insert("a".to_string());
+    let back: Vec[String] = ss.iter().rev().cloned().collect();
+    println(f"{back[0]}{back[1]}");
+    let mut m: SortedMap[String, i64] = SortedMap.new();
+    m.insert("a".to_string(), 1);
+    m.insert("b".to_string(), 2);
+    let ks: Vec[String] = m.iter().map(|(k, v)| f"{k}{v}").collect();
+    println(f"{ks[0]}{ks[1]}");
+    let mut h: Map[String, i64] = Map.new();
+    h.insert("x".to_string(), 4);
+    h.insert("y".to_string(), 6);
+    let big = h.iter().filter(|(_, v)| *v > 5).count();
+    println(f"{big}");
+    for (k, v) in m.iter() {
+        println(f"{k}={v}");
+    }
+}
+"#;
+    assert_runs(src, "16\nba\na1b2\n1\na=1\nb=2\n");
+}
+
+/// `String.chars()` is the library's `Chars`: it steps a byte position by
+/// each char's width, so multi-byte chars come out whole.
+#[test]
+fn a_string_s_chars_are_a_library_source() {
+    let src = r#"
+fn main() {
+    let s = "héllo".to_string();
+    let n = s.chars().filter(|c| *c != 'l').count();
+    println(f"{n}");
+    let kept: String = s.chars().filter(|c| *c != 'é').collect();
+    println(kept);
+    let mut w = 0;
+    for c in s.chars() {
+        w = w + c.len_utf8();
+    }
+    println(f"{w}");
+}
+"#;
+    assert_runs(src, "3\nhllo\n6\n");
+}

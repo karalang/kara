@@ -1537,6 +1537,9 @@ impl<'a> super::TypeChecker<'a> {
         // the method's own type arguments like any other source method.
         if self.library_methods_from_source {
             let receiver = receiver_for_method_lookup(&obj_ty);
+            if let Some(ty) = self.library_cursor_method(&receiver, method, args, span) {
+                return ty;
+            }
             if let Some(type_name) = self.library_source_method_owner(&receiver, method) {
                 self.record_method_callee(
                     SpanKey::from_span(span),

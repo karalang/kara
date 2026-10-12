@@ -3646,7 +3646,16 @@ impl<'a> super::TypeChecker<'a> {
         let self_type = {
             let lowered = self.lower_type_expr(&imp.target_type, &gp);
             match &lowered {
-                Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char => lowered,
+                // `String` too: its own variant, which the `Named` fallback
+                // below would replace with a type no `String` annotation
+                // names (`Chars { s: self }` in `impl String` then failed
+                // "expected 'ref String', found 'String'").
+                Type::Int(_)
+                | Type::UInt(_)
+                | Type::Float(_)
+                | Type::Bool
+                | Type::Char
+                | Type::Str => lowered,
                 // A CONCRETE BUILTIN CONTAINER head keeps its args, because
                 // for a container the args ARE the element types the body
                 // needs: `impl Trait for Column[i64]` must keep `i64` or the

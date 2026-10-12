@@ -83,6 +83,167 @@ impl[T] DoubleEndedIterator for VecIter[T] {
     }
 }
 
+/// The elements of a set, in the set's iteration order, each borrowed.
+struct SetIter[T] {
+    s: ref Set[T],
+    front: i64,
+    back: i64,
+}
+
+impl[T] Iterator for SetIter[T] {
+    type Item = ref T;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        Some(self.s.entry_at(i))
+    }
+}
+
+impl[T] Set[T] {
+    /// The elements, in the set's iteration order, each borrowed.
+    fn iter(ref self) -> SetIter[T] {
+        SetIter { s: self, front: 0, back: self.len() }
+    }
+}
+
+/// The elements of a sorted set, in ascending order, each borrowed.
+struct SortedSetIter[T] {
+    s: ref SortedSet[T],
+    front: i64,
+    back: i64,
+}
+
+impl[T] Iterator for SortedSetIter[T] {
+    type Item = ref T;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        Some(self.s.entry_at(i))
+    }
+}
+
+impl[T] DoubleEndedIterator for SortedSetIter[T] {
+    fn next_back(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        self.back = self.back - 1;
+        Some(self.s.entry_at(self.back))
+    }
+}
+
+impl[T] SortedSet[T] {
+    /// The elements, in ascending order, each borrowed.
+    fn iter(ref self) -> SortedSetIter[T] {
+        SortedSetIter { s: self, front: 0, back: self.len() }
+    }
+}
+
+/// The entries of a map, in the map's iteration order: each key and value
+/// borrowed.
+struct MapIter[K, V] {
+    m: ref Map[K, V],
+    front: i64,
+    back: i64,
+}
+
+impl[K, V] Iterator for MapIter[K, V] {
+    type Item = (ref K, ref V);
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        let (k, v) = self.m.entry_at(i);
+        Some((k, v))
+    }
+}
+
+impl[K, V] Map[K, V] {
+    /// The entries, in the map's iteration order, each key and value
+    /// borrowed.
+    fn iter(ref self) -> MapIter[K, V] {
+        MapIter { m: self, front: 0, back: self.len() }
+    }
+}
+
+/// The entries of a sorted map, in ascending key order: each key and value
+/// borrowed.
+struct SortedMapIter[K, V] {
+    m: ref SortedMap[K, V],
+    front: i64,
+    back: i64,
+}
+
+impl[K, V] Iterator for SortedMapIter[K, V] {
+    type Item = (ref K, ref V);
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        let (k, v) = self.m.entry_at(i);
+        Some((k, v))
+    }
+}
+
+impl[K, V] DoubleEndedIterator for SortedMapIter[K, V] {
+    fn next_back(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        self.back = self.back - 1;
+        let (k, v) = self.m.entry_at(self.back);
+        Some((k, v))
+    }
+}
+
+impl[K, V] SortedMap[K, V] {
+    /// The entries, in ascending key order, each key and value borrowed.
+    fn iter(ref self) -> SortedMapIter[K, V] {
+        SortedMapIter { m: self, front: 0, back: self.len() }
+    }
+}
+
+/// The chars of a `String`, front to back. A char is a copy, so the items
+/// are values; the iterator borrows the text.
+struct Chars {
+    s: ref String,
+    pos: i64,
+}
+
+impl Iterator for Chars {
+    type Item = char;
+
+    fn next(mut ref self) -> Option[char] {
+        if self.pos >= self.s.len() {
+            return None;
+        }
+        let c = self.s.char_at_byte(self.pos);
+        self.pos = self.pos + c.len_utf8();
+        Some(c)
+    }
+}
+
+impl String {
+    /// The chars, front to back.
+    fn chars(ref self) -> Chars {
+        Chars { s: self, pos: 0 }
+    }
+}
+
 impl[T] FromIterator[T] for Vec[T] {
     fn from_iter[I: Iterator[Item = T]](iter: own I) -> Vec[T] {
         let mut it = iter;

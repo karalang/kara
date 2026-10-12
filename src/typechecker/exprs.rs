@@ -614,6 +614,9 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        if let Some(ty) = self.lend_borrowed_receiver(expr, expected) {
+            return ty;
+        }
         if let Some(ty) = self.d5_give_away(expr, expected) {
             return ty;
         }
@@ -674,6 +677,35 @@ impl<'a> super::TypeChecker<'a> {
         self.link_part_node_types(expr);
         self.deny_for_element_drop_copy_in_literal(expr);
         ty
+    }
+
+    /// A borrowed receiver reads as its value type, so `self` from a
+    /// `ref self` method lent where a `ref Self` is wanted (`Chars { s: self,
+    /// .. }` in `impl String`) is that borrow, not a value that needs one.
+    fn lend_borrowed_receiver(&mut self, expr: &Expr, expected: &Type) -> Option<Type> {
+        if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+            || !matches!(expr.kind, ExprKind::SelfValue)
+            || !self.current_fn_ref_params.contains("self")
+        {
+            return None;
+        }
+        let Type::Ref(inner) = expected else {
+            return None;
+        };
+        let ty = self.infer_expr(expr);
+        if super::types::contains_type_param(inner)
+            || !unify_types(
+                &ty,
+                inner,
+                &mut self.env.substitutions,
+                &mut self.env.const_substitutions,
+            )
+        {
+            return None;
+        }
+        self.record_expr_type(&expr.span, expected);
+        self.record_node_type(expr.id, expected);
+        Some(expected.clone())
     }
 
     /// D5 (core-semantics §4.1): a bare parameter borrows, so handing one

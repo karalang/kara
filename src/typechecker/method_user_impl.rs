@@ -50,21 +50,63 @@ impl<'a> super::TypeChecker<'a> {
         receiver: &Type,
         method: &str,
     ) -> Option<String> {
-        let Type::Named { name, .. } = receiver else {
-            return None;
+        let name = match receiver {
+            Type::Named { name, .. } => name.as_str(),
+            Type::Str => "String",
+            _ => return None,
         };
-        if !crate::prelude::LIBRARY_SOURCE_TYPES.contains(&name.as_str()) {
+        if !crate::prelude::LIBRARY_SOURCE_TYPES.contains(&name) {
             return None;
         }
         self.env
             .impls
             .iter()
             .any(|imp| {
-                imp.target_type == *name
+                imp.target_type == name
                     && imp.trait_name.is_none()
                     && imp.methods.contains_key(method)
             })
-            .then(|| name.clone())
+            .then(|| name.to_string())
+    }
+
+    /// The position reads the library's iterator sources step with
+    /// (runtime/stdlib/source/collections.kara): `entry_at(i)` borrows the
+    /// `i`th entry of a set or map in iteration order (a map's entry is its
+    /// `(key, value)` pair), `char_at_byte(i)` reads the char starting at byte
+    /// `i` of a `String`, and `len_utf8()` is a char's width in bytes. They
+    /// are natives of the MIR backends, typed on the library pipeline only.
+    pub(super) fn library_cursor_method(
+        &mut self,
+        receiver: &Type,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<Type> {
+        let (owner, params, ret) = match (receiver, method) {
+            (Type::Named { name, args: targs }, "entry_at") => {
+                let entry = match (name.as_str(), targs.as_slice()) {
+                    ("Set" | "SortedSet" | "VecDeque", [t]) => t.clone(),
+                    ("Map" | "SortedMap", [k, v]) => Type::Tuple(vec![k.clone(), v.clone()]),
+                    _ => return None,
+                };
+                (name.clone(), 1, Type::Ref(Box::new(entry)))
+            }
+            (Type::Str, "char_at_byte") => ("String".to_string(), 1, Type::Char),
+            (Type::Char, "len_utf8") => ("char".to_string(), 0, Type::Int(IntSize::I64)),
+            _ => return None,
+        };
+        if args.len() != params {
+            self.type_error(
+                format!("'{method}' takes {params} argument(s)"),
+                *span,
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+        }
+        for arg in args {
+            self.check_expr(&arg.value, &Type::Int(IntSize::I64));
+        }
+        self.record_method_callee(SpanKey::from_span(span), format!("{owner}.{method}"));
+        Some(ret)
     }
 
     fn array_user_impl_declares(&self, method: &str) -> bool {

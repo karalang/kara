@@ -763,7 +763,18 @@ pub fn lookup_exitcode_const(type_name: &str, const_name: &str) -> Option<i32> {
 
 /// The library types whose methods have Kāra bodies in [`LIBRARY_SOURCES`]
 /// (redesign A2).
-pub const LIBRARY_SOURCE_TYPES: &[&str] = &["Option", "Result", "Vec", "Range", "RangeInclusive"];
+pub const LIBRARY_SOURCE_TYPES: &[&str] = &[
+    "Option",
+    "Result",
+    "Vec",
+    "Range",
+    "RangeInclusive",
+    "Set",
+    "SortedSet",
+    "Map",
+    "SortedMap",
+    "String",
+];
 
 /// Library methods written in Kāra (redesign A2), from
 /// `runtime/stdlib/source/`. The MIR pipeline appends them to the program and
