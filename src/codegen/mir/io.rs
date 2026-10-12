@@ -1,8 +1,8 @@
-//! The I/O natives: `File`, processes, sockets and `Clock`, each a call
-//! into the runtime's blocking implementation through its `karac_mir_*`
-//! entry (`runtime/src/mir_io.rs`). Their reference semantics are the
-//! interpreter's `file_method`, `process_method`, `tcp_method` and its
-//! `Clock.now` arm (`src/mir/interp.rs`).
+//! The I/O natives: `File`, processes, sockets, the HTTP client and
+//! `Clock`, each a call into the runtime's blocking implementation through
+//! its `karac_mir_*` entry (`runtime/src/mir_io.rs`). Their reference
+//! semantics are the interpreter's `file_method`, `process_method`,
+//! `tcp_method`, `http_method` and its `Clock.now` arm (`src/mir/interp.rs`).
 //!
 //! A fallible entry reports as `karac_mir_fs` does: a negative return is
 //! success, with the payload in an `i64` out slot; `0..=6` is the `IoError`
@@ -55,6 +55,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.child_native(base, method, args, dest)
             }
             ("TcpListener" | "TcpStream", _) => self.tcp_native(base, method, args, dest),
+            ("Client" | "RequestBuilder" | "Response" | "HttpError", _) => {
+                self.http_native(base, method, args, dest)
+            }
             ("Clock", "now") => {
                 let i64t = self.llcx.i64_type();
                 let f = self.extern_fn("karac_runtime_clock_now", i64t.fn_type(&[], false));
@@ -542,5 +545,231 @@ impl<'ctx> Cx<'ctx, '_> {
         );
         self.builder.build_call(f, &[fd.into()], "").map_err(e)?;
         Ok(true)
+    }
+
+    /// `std.http`'s client: `Client.get` / `post` / `request`, the
+    /// `RequestBuilder` chain, and `Response` / `HttpError`'s readers, as the
+    /// interpreter's `http_method`. Requests go through the runtime's
+    /// client (`karac_runtime_http_client_mir_*`, in the full archive).
+    fn http_native(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let i64t = self.llcx.i64_type();
+        let ptr = self.ptr_ty();
+        let null = ptr.const_null();
+        let string = self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
+        match (base, method) {
+            ("Client", "new") => {}
+            ("Client", "get" | "post") | ("RequestBuilder", "send") => {
+                let (op, (a, an), (b, bn), h) = match (base, method) {
+                    ("Client", "get") => (
+                        0,
+                        self.str_parts(&args[1])?,
+                        (null, self.i64(0)),
+                        self.i64(0),
+                    ),
+                    ("Client", _) => {
+                        let url = self.str_parts(&args[1])?;
+                        (1, url, self.str_parts(&args[2])?, self.i64(0))
+                    }
+                    _ => {
+                        let (at, _) = self.behind_refs(&args[0])?;
+                        let h = self.load_i64(at)?;
+                        (2, (null, self.i64(0)), (null, self.i64(0)), h)
+                    }
+                };
+                let status = self.entry_slot(8, "http.status")?;
+                let out = self.temp(string, "http.out")?;
+                let i32t = self.llcx.i32_type();
+                let ok = self.rt_named(
+                    "karac_runtime_http_client_mir_send",
+                    &[
+                        i32t.const_int(op, false).into(),
+                        a.into(),
+                        an.into(),
+                        b.into(),
+                        bn.into(),
+                        h.into(),
+                        status.into(),
+                        out.into(),
+                    ],
+                    32,
+                )?;
+                self.drop_moved(args)?;
+                let dty = self.place_type(dest)?;
+                let d = self.place_ptr(dest)?;
+                let (okv, erv) = (self.variant_of(dty, "Ok")?, self.variant_of(dty, "Err")?);
+                let rt = self
+                    .tys
+                    .field_ty(dty, Some(okv), 0)
+                    .ok_or("Result.Ok has no payload")?;
+                let et = self
+                    .tys
+                    .field_ty(dty, Some(erv), 0)
+                    .ok_or("Result.Err has no payload")?;
+                let r = self.offset(d, self.field_offset(dty, Some(okv), 0)?)?;
+                let er = self.offset(d, self.field_offset(dty, Some(erv), 0)?)?;
+                let is_ok = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, ok, i32t.const_zero(), "")
+                    .map_err(e)?;
+                self.store_tag(d, dty, erv)?;
+                self.copy(
+                    self.offset(er, self.field_offset(et, None, 0)?)?,
+                    out,
+                    string,
+                )?;
+                self.if_then(is_ok, |cx| {
+                    cx.store_tag(d, dty, okv)?;
+                    let st = cx.load_i64(status)?;
+                    cx.store(cx.offset(r, cx.field_offset(rt, None, 0)?)?, st.into())?;
+                    cx.copy(cx.offset(r, cx.field_offset(rt, None, 1)?)?, out, string)
+                })?;
+            }
+            ("Client", "request") => {
+                let (m, mn) = self.str_parts(&args[1])?;
+                let (u, un) = self.str_parts(&args[2])?;
+                let h = self.rt_named(
+                    "karac_runtime_http_builder_new",
+                    &[m.into(), mn.into(), u.into(), un.into()],
+                    64,
+                )?;
+                self.drop_moved(args)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, h.into())?;
+            }
+            ("RequestBuilder", "header" | "body" | "timeout") => {
+                let (at, ty) = self.behind_refs(&args[0])?;
+                let h = self.load_i64(at)?;
+                let void = self.llcx.void_type();
+                match method {
+                    "header" => {
+                        let (k, kn) = self.str_parts(&args[1])?;
+                        let (v, vn) = self.str_parts(&args[2])?;
+                        let f = self.extern_fn(
+                            "karac_runtime_http_builder_add_header",
+                            void.fn_type(
+                                &[
+                                    i64t.into(),
+                                    ptr.into(),
+                                    i64t.into(),
+                                    ptr.into(),
+                                    i64t.into(),
+                                ],
+                                false,
+                            ),
+                        );
+                        self.builder
+                            .build_call(
+                                f,
+                                &[h.into(), k.into(), kn.into(), v.into(), vn.into()],
+                                "",
+                            )
+                            .map_err(e)?;
+                    }
+                    "body" => {
+                        let (b, bn) = self.str_parts(&args[1])?;
+                        let f = self.extern_fn(
+                            "karac_runtime_http_builder_set_body",
+                            void.fn_type(&[i64t.into(), ptr.into(), i64t.into()], false),
+                        );
+                        self.builder
+                            .build_call(f, &[h.into(), b.into(), bn.into()], "")
+                            .map_err(e)?;
+                    }
+                    _ => {
+                        let ms = self.operand_ptr(&args[1])?;
+                        let ms = self.load_i64(ms)?;
+                        let f = self.extern_fn(
+                            "karac_runtime_http_builder_set_timeout",
+                            void.fn_type(&[i64t.into(), i64t.into()], false),
+                        );
+                        self.builder
+                            .build_call(f, &[h.into(), ms.into()], "")
+                            .map_err(e)?;
+                    }
+                }
+                // The builder goes on as the same request.
+                self.drop_moved(&args[1..])?;
+                let d = self.place_ptr(dest)?;
+                self.copy(d, at, ty)?;
+            }
+            ("Response", "status") => {
+                let (at, ty) = self.behind_refs(&args[0])?;
+                let v = self.load_i64(self.offset(at, self.field_offset(ty, None, 0)?)?)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, v.into())?;
+            }
+            // `bytes` is the body's bytes as a `Vec[u8]`, which a `String`
+            // is laid out as.
+            ("Response", "body" | "bytes") | ("HttpError", "message") => {
+                let (at, ty) = self.behind_refs(&args[0])?;
+                let k = u32::from(base == "Response");
+                let src = self.offset(at, self.field_offset(ty, None, k)?)?;
+                let d = self.place_ptr(dest)?;
+                self.clone_into(d, src, string)?;
+            }
+            ("Response", "header" | "headers") => {
+                let (at, ty) = self.behind_refs(&args[0])?;
+                let body = self.load_ptr(self.offset(at, self.field_offset(ty, None, 1)?)?)?;
+                let d = self.place_ptr(dest)?;
+                if method == "headers" {
+                    let f = self.extern_fn(
+                        "karac_runtime_http_client_mir_headers",
+                        self.llcx
+                            .void_type()
+                            .fn_type(&[ptr.into(), ptr.into()], false),
+                    );
+                    self.builder
+                        .build_call(f, &[body.into(), d.into()], "")
+                        .map_err(e)?;
+                } else {
+                    let (n, nn) = self.str_parts(&args[1])?;
+                    let out = self.temp(string, "http.header")?;
+                    let found = self.rt_named(
+                        "karac_runtime_http_client_mir_header",
+                        &[body.into(), n.into(), nn.into(), out.into()],
+                        32,
+                    )?;
+                    self.drop_moved(&args[1..])?;
+                    let dty = self.place_type(dest)?;
+                    let (some, none) = self.option_variants(dty)?;
+                    let off = self.field_offset(dty, Some(some), 0)?;
+                    let hit = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            found,
+                            self.llcx.i32_type().const_zero(),
+                            "",
+                        )
+                        .map_err(e)?;
+                    self.store_tag(d, dty, none)?;
+                    self.if_then(hit, |cx| {
+                        cx.store_tag(d, dty, some)?;
+                        cx.copy(cx.offset(d, off)?, out, string)
+                    })?;
+                }
+            }
+            _ => return Ok(None),
+        }
+        Ok(Some(()))
+    }
+
+    /// Calls the runtime's `name(args)`, which returns an int of `bits`.
+    fn rt_named(
+        &mut self,
+        name: &str,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        bits: u32,
+    ) -> R<IntValue<'ctx>> {
+        let tys = self.arg_tys(args);
+        let f = self.extern_fn(name, self.int_ty(bits).fn_type(&tys, false));
+        let v = self.builder.build_call(f, args, "").map_err(e)?;
+        Ok(v.try_as_basic_value().unwrap_basic().into_int_value())
     }
 }

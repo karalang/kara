@@ -9,6 +9,11 @@ use crate::alloc::karac_realloc_or_panic;
 use crate::file::{KaracFile, KaracIoResult};
 use crate::mir::RawVec;
 
+#[cfg(feature = "tls")]
+extern "C" {
+    fn free(p: *mut std::ffi::c_void);
+}
+
 /// Writes a fresh `String` holding `b` at `out`.
 ///
 /// # Safety
@@ -284,4 +289,201 @@ pub unsafe extern "C" fn karac_mir_tcp(
     // SAFETY: as above.
     unsafe { *value = v };
     code
+}
+
+/// The headers of each `Response` the MIR backend's client made, by the
+/// address of its body's buffer: a MIR `Response` is its status and body
+/// only, so the runtime's header handle cannot ride in it. Every body gets
+/// a buffer of its own (an empty one is given a byte of capacity), so the
+/// address names one live response. Entries stay until exit, as the
+/// runtime's own header table does.
+#[cfg(feature = "tls")]
+static MIR_RESPONSE_HEADERS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<usize, i64>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// `Client.get` (`op` 0, `a` the URL), `Client.post` (1, `a` the URL and
+/// `b` the body) and `RequestBuilder.send` (2, `handle`). Returns 1 with
+/// the status at `status` and the body as a `String` at `out`, or 0 with
+/// the error's message as a `String` at `out`.
+///
+/// # Safety
+///
+/// `a` / `b` describe readable bytes (or are null with a zero length),
+/// `status` is writable for an `i64` and `out` for a `String`.
+#[cfg(feature = "tls")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_client_mir_send(
+    op: i32,
+    a: *const u8,
+    a_len: usize,
+    b: *const u8,
+    b_len: usize,
+    handle: i64,
+    status: *mut i64,
+    out: *mut RawVec,
+) -> i32 {
+    let mut st = 0i64;
+    let (mut body, mut body_len) = (std::ptr::null_mut::<u8>(), 0i64);
+    let (mut msg, mut msg_len) = (std::ptr::null_mut::<u8>(), 0i64);
+    let mut headers = 0i64;
+    // SAFETY: the caller's contract, which is each callee's; the out
+    // params are locals.
+    unsafe {
+        match op {
+            0 => crate::karac_runtime_http_client_get(
+                a,
+                a_len,
+                &mut st,
+                &mut body,
+                &mut body_len,
+                &mut msg,
+                &mut msg_len,
+                &mut headers,
+            ),
+            1 => crate::karac_runtime_http_client_post(
+                a,
+                a_len,
+                b,
+                b_len,
+                &mut st,
+                &mut body,
+                &mut body_len,
+                &mut msg,
+                &mut msg_len,
+                &mut headers,
+            ),
+            _ => crate::karac_runtime_http_builder_send(
+                handle,
+                &mut st,
+                &mut body,
+                &mut body_len,
+                &mut msg,
+                &mut msg_len,
+                &mut headers,
+            ),
+        }
+    }
+    // Moves a `malloc`'d buffer from the client into a `String`.
+    let take = |p: *mut u8, n: i64| -> RawVec {
+        let n = usize::try_from(n).unwrap_or(0);
+        let cap = n.max(1);
+        let q = karac_realloc_or_panic(std::ptr::null_mut(), cap);
+        if !p.is_null() {
+            // SAFETY: the client wrote `n` bytes at `p` and gave it up.
+            unsafe {
+                std::ptr::copy_nonoverlapping(p, q, n);
+                free(p.cast());
+            }
+        }
+        RawVec {
+            ptr: q,
+            len: n,
+            cap,
+        }
+    };
+    let ok = st > 0;
+    let s = if ok {
+        take(body, body_len)
+    } else {
+        take(msg, msg_len)
+    };
+    if ok {
+        if let Ok(mut t) = MIR_RESPONSE_HEADERS.lock() {
+            t.insert(s.ptr as usize, headers);
+        }
+    }
+    // SAFETY: the caller's contract.
+    unsafe {
+        status.write(st);
+        out.write(s);
+    }
+    i32::from(ok)
+}
+
+/// The runtime's header handle for the `Response` whose body's buffer is
+/// at `body`, or 0.
+#[cfg(feature = "tls")]
+fn mir_response_headers(body: *const u8) -> i64 {
+    MIR_RESPONSE_HEADERS
+        .lock()
+        .ok()
+        .and_then(|t| t.get(&(body as usize)).copied())
+        .unwrap_or(0)
+}
+
+/// `Response.header(name)` for the response whose body's buffer is at
+/// `body`: 1 with the value as a `String` at `out`, or 0 when it has no
+/// such header (names compare without case).
+///
+/// # Safety
+///
+/// `name` describes `name_len` readable bytes and `out` is writable for a
+/// `String`.
+#[cfg(feature = "tls")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_client_mir_header(
+    body: *const u8,
+    name: *const u8,
+    name_len: usize,
+    out: *mut RawVec,
+) -> i32 {
+    let h = mir_response_headers(body);
+    // SAFETY: the caller's contract; a hit is a NUL-terminated string the
+    // header table keeps until exit.
+    unsafe {
+        let v = crate::karac_runtime_http_response_header(h, name, name_len);
+        if v.is_null() {
+            return 0;
+        }
+        string_of(out, std::ffi::CStr::from_ptr(v).to_bytes());
+    }
+    1
+}
+
+/// `Response.headers()` for the response whose body's buffer is at `body`:
+/// a fresh `Vec[(String, String)]` at `out`, in the order they came.
+///
+/// # Safety
+///
+/// `out` is writable for a `Vec`.
+#[cfg(feature = "tls")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_client_mir_headers(body: *const u8, out: *mut RawVec) {
+    let h = mir_response_headers(body);
+    let n = usize::try_from(crate::karac_runtime_http_response_headers_count(h)).unwrap_or(0);
+    let pair = 2 * std::mem::size_of::<RawVec>();
+    let items = if n == 0 {
+        std::ptr::null_mut()
+    } else {
+        karac_realloc_or_panic(std::ptr::null_mut(), n * pair)
+    };
+    for i in 0..n {
+        // SAFETY: `items` has room for `n` pairs; each accessor's hit is a
+        // NUL-terminated string the header table keeps until exit.
+        unsafe {
+            let at = items.add(i * pair).cast::<RawVec>();
+            for (k, key) in [true, false].into_iter().enumerate() {
+                let p = if key {
+                    crate::karac_runtime_http_response_header_key_at(h, i as i64)
+                } else {
+                    crate::karac_runtime_http_response_header_val_at(h, i as i64)
+                };
+                let b = if p.is_null() {
+                    &[][..]
+                } else {
+                    std::ffi::CStr::from_ptr(p).to_bytes()
+                };
+                string_of(at.add(k), b);
+            }
+        }
+    }
+    // SAFETY: the caller's contract.
+    unsafe {
+        out.write(RawVec {
+            ptr: items,
+            len: n,
+            cap: n,
+        })
+    };
 }

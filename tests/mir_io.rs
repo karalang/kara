@@ -1,5 +1,5 @@
-//! The I/O natives on the MIR backend (redesign M2): `File`, `Clock` and
-//! processes.
+//! The I/O natives on the MIR backend (redesign M2): `File`, `Clock`,
+//! processes, TCP and the HTTP client.
 //! The program runs on the MIR interpreter (`karac __mir-run`) and, built
 //! ahead of time (`karac build --mir`), as a native binary; both must print
 //! the same, byte for byte.
@@ -140,6 +140,11 @@ fn main() {
 fn file_and_clock_natives_match_the_interpreter() {
     let dir = Scratch::new("files");
     let src = FILES.replace("DIR", &dir.path().to_string_lossy());
+    // The OS's wording for a refused connection.
+    let refused = std::net::TcpStream::connect("127.0.0.1:1")
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
     let (interp, built) = interp_and_build(dir.path(), &src);
     assert_eq!(
         interp,
@@ -347,6 +352,155 @@ fn tcp_natives_match_the_interpreter() {
         interp,
         "bound\naddr in use\nconnected\naccepted\nsent 4\nclone sent 1\nshut\n\
          got [ping!]\nrefused\nother -1\nbound again after the drop\n"
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}
+
+/// A loopback HTTP/1.1 server for the client test, on its own thread:
+/// `GET /hello` is "hi", `GET /empty` empty, any other `GET` a 404, `POST`
+/// echoes its body and `PUT` its method, body and `X-Echo` header (as a
+/// header too, with a 201). Every response carries `X-Kara: yes`.
+fn http_server() -> u16 {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("port").port();
+    std::thread::spawn(move || {
+        for conn in listener.incoming().flatten() {
+            std::thread::spawn(move || {
+                let mut out = conn.try_clone().expect("clone");
+                let mut r = BufReader::new(conn);
+                loop {
+                    let mut line = String::new();
+                    if r.read_line(&mut line).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let mut words = line.split_whitespace();
+                    let method = words.next().unwrap_or_default().to_string();
+                    let path = words.next().unwrap_or_default().to_string();
+                    let (mut len, mut echo) = (0, String::new());
+                    loop {
+                        let mut h = String::new();
+                        if r.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                            break;
+                        }
+                        if let Some((k, v)) = h.split_once(':') {
+                            match k.trim().to_ascii_lowercase().as_str() {
+                                "content-length" => len = v.trim().parse().unwrap_or(0),
+                                "x-echo" => echo = v.trim().to_string(),
+                                _ => {}
+                            }
+                        }
+                    }
+                    let mut body = vec![0; len];
+                    if r.read_exact(&mut body).is_err() {
+                        return;
+                    }
+                    let body = String::from_utf8_lossy(&body).into_owned();
+                    let (code, text, extra) = match (method.as_str(), path.as_str()) {
+                        ("GET", "/hello") => ("200 OK", "hi".to_string(), String::new()),
+                        ("GET", "/empty") => ("200 OK", String::new(), String::new()),
+                        ("GET", _) => ("404 Not Found", "nope".to_string(), String::new()),
+                        ("POST", _) => ("200 OK", body, String::new()),
+                        _ => (
+                            "201 Created",
+                            format!("{method} {body}"),
+                            format!("X-Echo: {echo}\r\n"),
+                        ),
+                    };
+                    let reply = format!(
+                        "HTTP/1.1 {code}\r\nContent-Length: {}\r\nX-Kara: yes\r\n{extra}\r\n{text}",
+                        text.len()
+                    );
+                    if out.write_all(reply.as_bytes()).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+/// `Client.get` / `post`, the `RequestBuilder` chain, a response's status,
+/// body, bytes and headers, a non-2xx status, and a refused connection.
+const HTTP: &str = r#"
+fn main() {
+    let c = Client.new();
+    let base = "http://127.0.0.1:PORT";
+    match c.get(f"{base}/hello") {
+        Ok(r) => {
+            println(f"get {r.status()} [{r.body()}] {r.bytes().len()} bytes");
+            match r.header("X-KARA".to_string()) {
+                Some(v) => println(f"header {v}"),
+                None => println("no header"),
+            }
+            match r.header("x-absent".to_string()) {
+                Some(v) => println(f"absent {v}"),
+                None => println("no absent header"),
+            }
+            for (k, v) in r.headers() {
+                if k.to_lowercase() == "x-kara" {
+                    println(f"listed {v}");
+                }
+            }
+        }
+        Err(e) => println(f"get failed: {e.message()}"),
+    }
+    match c.post(f"{base}/echo", "posted body".to_string()) {
+        Ok(r) => println(f"post {r.status()} [{r.body()}]"),
+        Err(e) => println(f"post failed: {e.message()}"),
+    }
+    let req = c.request("PUT".to_string(), f"{base}/echo")
+        .header("X-Echo".to_string(), "from builder".to_string())
+        .body("built body".to_string())
+        .timeout(5000);
+    match req.send() {
+        Ok(r) => {
+            println(f"send {r.status()} [{r.body()}]");
+            match r.header("x-echo".to_string()) {
+                Some(v) => println(f"echoed {v}"),
+                None => println("no echo"),
+            }
+        }
+        Err(e) => println(f"send failed: {e.message()}"),
+    }
+    match c.get(f"{base}/missing") {
+        Ok(r) => println(f"missing {r.status()}"),
+        Err(e) => println(f"missing: {e.message()}"),
+    }
+    match c.get(f"{base}/empty") {
+        Ok(r) => println(f"empty {r.status()} [{r.body()}]"),
+        Err(e) => println(f"empty failed: {e.message()}"),
+    }
+    match c.get("http://127.0.0.1:1/") {
+        Ok(r) => println(f"refused? {r.status()}"),
+        Err(e) => println(f"refused: {e.message()}"),
+    }
+}
+"#;
+
+/// The HTTP client on both backends, against a loopback server.
+#[test]
+fn http_client_natives_match_the_interpreter() {
+    let port = http_server();
+    let dir = Scratch::new("http");
+    let src = HTTP.replace("PORT", &port.to_string());
+    // The OS's wording for a refused connection.
+    let refused = std::net::TcpStream::connect("127.0.0.1:1")
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    let (interp, built) = interp_and_build(dir.path(), &src);
+    assert_eq!(
+        interp,
+        format!(
+            "get 200 [hi] 2 bytes\nheader yes\nno absent header\nlisted yes\n\
+             post 200 [posted body]\nsend 201 [PUT built body]\nechoed from builder\n\
+             missing: http://127.0.0.1:{port}/missing: status code 404\nempty 200 []\n\
+             refused: http://127.0.0.1:1/: connect failed: {refused}\n"
+        )
     );
     if let Some(built) = built {
         assert_eq!(built, interp);

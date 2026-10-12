@@ -513,6 +513,13 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // socket calls.
     #[cfg(feature = "net")]
     keep!(mir_io::karac_mir_tcp);
+    // `std.http`'s client on the MIR backend (full archive only).
+    #[cfg(feature = "tls")]
+    keep!(
+        mir_io::karac_runtime_http_client_mir_send,
+        mir_io::karac_runtime_http_client_mir_header,
+        mir_io::karac_runtime_http_client_mir_headers,
+    );
     // Tracing spans (`runtime/src/tracing.rs`). Codegen emits calls to the
     // whole surface (span enter/exit bracketing + exporter/min-level
     // plumbing), so all of it must be JIT-resolvable — `karac run` failed

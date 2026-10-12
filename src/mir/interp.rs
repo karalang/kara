@@ -612,7 +612,7 @@ fn run_with(
         active_spans: Vec::new(),
         interners: Vec::new(),
         http_builders: Vec::new(),
-        http_headers: Vec::new(),
+        http_headers: rustc_hash::FxHashMap::default(),
         cancel_after: match tasks {
             Tasks::CancelAfter(n) => Some(n),
             _ => None,
@@ -902,9 +902,11 @@ struct Interp<'a> {
     interners: Vec<Interned>,
     /// The requests `Client.request` started, by `RequestBuilder` handle - 1.
     http_builders: Vec<HttpBuilder>,
-    /// Each `Response`'s headers, by the id its value carries after its
-    /// fields.
-    http_headers: Vec<Vec<(String, String)>>,
+    /// Each `Response`'s headers, by its body's box: a `Response` is its
+    /// status and body only, as its type says, and its body is a box of its
+    /// own for as long as the response lives (`karac_runtime_http_client_mir_send`
+    /// keys the compiled backend's the same way).
+    http_headers: rustc_hash::FxHashMap<AllocId, Vec<(String, String)>>,
 }
 
 /// A request `RequestBuilder` assembles: method, url, headers in order,
@@ -8668,8 +8670,8 @@ impl<'a> Interp<'a> {
     }
 
     /// `std.http`'s client, through `ureq` as legacy's. A `Response` is its
-    /// status and body, then the id of its headers; a `RequestBuilder` the
-    /// handle of the request it assembles.
+    /// status and body, its headers kept by its body's box; a
+    /// `RequestBuilder` the handle of the request it assembles.
     fn http_method(
         &mut self,
         name: &str,
@@ -8763,12 +8765,8 @@ impl<'a> Interp<'a> {
                 Ok(self.alloc_box("Vec", Value::Agg(bytes)))
             }
             ("Response", "header" | "headers") => {
-                let headers = match field(2) {
-                    Some(Value::Int(id)) => self
-                        .http_headers
-                        .get(id as usize)
-                        .cloned()
-                        .unwrap_or_default(),
+                let headers = match field(1) {
+                    Some(Value::Box(id)) => self.http_headers.get(&id).cloned().unwrap_or_default(),
                     _ => Vec::new(),
                 };
                 if method == "header" {
@@ -8797,6 +8795,19 @@ impl<'a> Interp<'a> {
     /// carrying `ureq`'s message (a non-2xx status is one, as legacy's).
     #[cfg(not(target_arch = "wasm32"))]
     fn http_send(&mut self, req: HttpBuilder, with_body: bool, ret: Ty) -> R<Value> {
+        // A URL without a scheme is a bare authority to the runtime's client
+        // (`hyper::Uri`), so it fails at the connect, as the compiled
+        // program reports it, before `ureq` would refuse it as a bad URL.
+        if !req.url.contains("://") {
+            let authority = req.url.split('/').next().unwrap_or_default();
+            let (host, port) = match authority.rsplit_once(':') {
+                Some((h, p)) => (h, p.parse().unwrap_or(80)),
+                None => (authority, 80),
+            };
+            if let Err(e) = std::net::TcpStream::connect((host, port)) {
+                return self.http_error(format!("{}: connect failed: {e}", req.url), ret);
+            }
+        }
         let mut r = ureq::request(&req.method, &req.url);
         for (k, v) in &req.headers {
             r = r.set(k, v);
@@ -8818,13 +8829,19 @@ impl<'a> Interp<'a> {
                     .filter_map(|n| resp.header(&n).map(|v| (n, v.to_string())))
                     .collect();
                 let body = resp.into_string().unwrap_or_default();
-                self.http_headers.push(headers);
-                let id = self.http_headers.len() as i128 - 1;
                 let body = self.alloc_box("String", Value::Str(body));
-                let response = Value::Agg(vec![Value::Int(status), body, Value::Int(id)]);
+                if let Value::Box(id) = body {
+                    self.http_headers.insert(id, headers);
+                }
+                let response = Value::Agg(vec![Value::Int(status), body]);
                 self.variant_named(ret, None, "Ok", vec![response])
             }
-            Err(ureq::Error::Transport(t)) if t.kind() == ureq::ErrorKind::ConnectionFailed => {
+            Err(ureq::Error::Transport(t))
+                if matches!(
+                    t.kind(),
+                    ureq::ErrorKind::ConnectionFailed | ureq::ErrorKind::Dns
+                ) =>
+            {
                 // The runtime's wording, which the compiled program prints.
                 use std::error::Error;
                 let cause = match t.source() {
