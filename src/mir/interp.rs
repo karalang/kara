@@ -581,6 +581,9 @@ fn run_with(
             .and_then(|v| v.parse().ok())
             .unwrap_or(MAX_STEPS),
         snapshots: Default::default(),
+        snapshot_bytes: 0,
+        sweep_at: SWEEP_FLOOR,
+        calls: 0,
         arenas: 0,
         channels: Vec::new(),
         files: Vec::new(),
@@ -764,6 +767,10 @@ enum Mode {
     Probe,
 }
 
+/// The bytes `String.bytes` copies before the first sweep of the copies
+/// nothing refers to ([`Interp::sweep_snapshots`]).
+const SWEEP_FLOOR: usize = 1 << 20;
+
 /// A table's removed-entry slots ([`Interp::table_holes`]).
 #[derive(Default)]
 struct Holes {
@@ -822,8 +829,16 @@ struct Interp<'a> {
     steps: u64,
     max_steps: u64,
     /// Read-only copies a library method hands out a view of (the bytes
-    /// of a `String`): live until exit, and not leaks.
+    /// of a `String`): not leaks, and kept until nothing refers to them
+    /// ([`Interp::sweep_snapshots`]).
     snapshots: rustc_hash::FxHashSet<AllocId>,
+    /// The bytes `String.bytes` has copied since the last sweep, and the
+    /// count that starts the next one.
+    snapshot_bytes: usize,
+    sweep_at: usize,
+    /// How many [`Interp::call`]s are running: the entry's, and one per
+    /// call back into Kāra from a library method or a drop.
+    calls: u32,
     /// The last `Arena` id handed out.
     arenas: i128,
     /// The queues behind `Channel` ends and `BoundedChannel`s, by id - 1.
@@ -905,7 +920,10 @@ impl<'a> Interp<'a> {
             let unit = self.tys.unit();
             return self.native(name, args, &[], unit);
         };
-        self.call_body(name, body, args)
+        self.calls += 1;
+        let r = self.call_body(name, body, args);
+        self.calls -= 1;
+        r
     }
 
     /// [`Interp::call`] of the body already found for `name`.
@@ -5688,6 +5706,13 @@ impl<'a> Interp<'a> {
                 // A read-only `Slice[u8]` over a snapshot of the bytes.
                 let bytes: Vec<Value> = s.bytes().map(|b| Value::Int(b as i128)).collect();
                 let n = bytes.len() as u64;
+                // Between calls back into Kāra, every value is in a frame,
+                // the heap or the interpreter's own tables, so the copies
+                // nothing refers to can go.
+                self.snapshot_bytes += bytes.len();
+                if self.snapshot_bytes > self.sweep_at && self.calls <= 1 {
+                    self.sweep_snapshots();
+                }
                 let Value::Box(id) = self.alloc_box("bytes", Value::Agg(bytes)) else {
                     unreachable!("alloc_box makes a box")
                 };
@@ -8905,6 +8930,81 @@ impl<'a> Interp<'a> {
     }
 
     /// The heap a static's value reaches: live until exit, like the static.
+    /// Frees the `bytes` snapshots no value refers to (B-2026-10-12-8): a
+    /// view of one is a `Slice` or reference rooted at it, held in a frame,
+    /// on the heap, in a static, a channel or a pool, or under a borrow
+    /// flag. The next sweep waits for twice the bytes still kept.
+    fn sweep_snapshots(&mut self) {
+        let mut used = rustc_hash::FxHashSet::default();
+        let mut mark = |a: &Addr| {
+            if let Root::Heap(id) = a.root {
+                used.insert(id);
+            }
+        };
+        let mut todo: Vec<&Value> = Vec::new();
+        for f in &self.frames {
+            todo.extend(&f.locals);
+            for (_, held) in &f.held {
+                held.iter().for_each(|(a, _)| mark(a));
+            }
+        }
+        self.flags.iter().for_each(|(a, _)| mark(a));
+        for (a, held) in &self.parked_flags {
+            mark(a);
+            for (_, fl) in held {
+                fl.iter().for_each(|(a, _)| mark(a));
+            }
+        }
+        todo.extend(&self.statics);
+        todo.extend(self.tracing_sink.iter().map(|(v, _)| v));
+        for c in &self.channels {
+            todo.extend(&c.queue);
+        }
+        for p in &self.pools {
+            todo.push(&p.create);
+            todo.extend(p.check.iter());
+            todo.extend(&p.slots);
+        }
+        for (i, obj) in self.heap.iter().enumerate() {
+            if let Some(obj) = obj {
+                if !self.snapshots.contains(&AllocId(i as u32)) {
+                    todo.push(&obj.value);
+                }
+            }
+        }
+        while let Some(v) = todo.pop() {
+            match v {
+                Value::Agg(fs) | Value::Variant(_, fs) => todo.extend(fs),
+                Value::Ref(a) => mark(a),
+                Value::Slice { base, .. } => mark(base),
+                _ => {}
+            }
+        }
+        let dead: Vec<AllocId> = self
+            .snapshots
+            .iter()
+            .copied()
+            .filter(|id| !used.contains(id))
+            .collect();
+        for id in dead {
+            self.snapshots.remove(&id);
+            self.free_slot(id);
+        }
+        let kept: usize = self
+            .snapshots
+            .iter()
+            .filter_map(|id| match self.heap.get(id.0 as usize) {
+                Some(Some(HeapObj {
+                    value: Value::Agg(fs),
+                    ..
+                })) => Some(fs.len()),
+                _ => None,
+            })
+            .sum();
+        self.snapshot_bytes = kept;
+        self.sweep_at = (2 * kept).max(SWEEP_FLOOR);
+    }
+
     fn held_by_statics(&self) -> rustc_hash::FxHashSet<AllocId> {
         let mut seen = rustc_hash::FxHashSet::default();
         let mut todo: Vec<&Value> = self

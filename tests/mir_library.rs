@@ -656,3 +656,64 @@ a:9
 "#,
     );
 }
+
+/// B-2026-10-12-8: the copies `String.bytes` hands out a view of are freed
+/// once nothing refers to them. Copies of different strings still viewed
+/// (from a local, a `Vec`, a struct field, a caller's frame) read their own
+/// bytes after the sweeps that 900 calls on dropped 2,000-byte strings set
+/// off; a sweep that freed them would hand their slots to later copies.
+#[test]
+fn bytes_views_in_use_outlive_the_sweeps_of_unused_ones() {
+    let src = r#"
+struct Holder {
+    b: Slice[u8],
+}
+
+fn text(n: i64, c: char) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(c);
+    }
+    return s;
+}
+
+fn tail(b: Slice[u8]) -> i64 {
+    return (b.len() as i64) * 1000 + (b[b.len() - 1] as i64);
+}
+
+// Copies of 300 different strings of 2,000 bytes or so, each dropped at
+// once: enough to set off sweeps.
+fn churn(rounds: i64) -> i64 {
+    let mut t: i64 = 0;
+    for r in 0..rounds {
+        let s = text(2000 + r % 7, if r % 2 == 0 { 'm' } else { 'n' });
+        let c = s.bytes();
+        t += c.len() as i64;
+    }
+    return t;
+}
+
+fn churn_holding(b: Slice[u8], rounds: i64) -> i64 {
+    let t = churn(rounds);
+    return t + tail(b);
+}
+
+fn main() {
+    let strs: Vec[String] = vec![text(10, 'a'), text(20, 'b'), text(30, 'c'), text(40, 'd')];
+    let first = strs[0].bytes();
+    let mut kept: Vec[Slice[u8]] = Vec.new();
+    kept.push(strs[1].bytes());
+    kept.push(strs[2].bytes());
+    let h = Holder { b: strs[3].bytes() };
+    let mut total = churn(300);
+    total += churn_holding(strs[2].bytes(), 300);
+    total += churn(300);
+    let mut tails = String.new();
+    for k in kept {
+        tails.push_str(f"{tail(k)} ");
+    }
+    println(f"{total} {tail(first)} {tails}{tail(h.b)}");
+}
+"#;
+    assert_runs(src, "1832790 10097 20098 30099 40100\n");
+}
