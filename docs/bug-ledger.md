@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 601 |
 | double-free | 427 |
 | codegen-gap | 252 |
-| missing-feature | 222 |
+| missing-feature | 223 |
 | other | 171 |
 | diagnostics | 149 |
 | perf | 147 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2851 |
 | interp | 893 |
-| typecheck | 350 |
+| typecheck | 351 |
 | other | 114 |
 | ownership | 80 |
 | cli | 75 |
@@ -578,6 +578,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-135 | 2026-10-06 | codegen | low | REMAINDER OF B-2026-10-05-27: A GENERIC `shared enum` AT `Option` OF A `shared` TYPE CONSTRUCTED INSIDE A GENERIC FUNCTION STILL LEAKS THE INNER HANDLE -- `fn mkg[T](x: T) -> G[T] { G.Y(x) }` called as `let h: G[Option[M]] = mkg(Some(M.My(mkv("p"))))` loses 40 B + 52 B indirect at -O0, with output matching `--interp` | — |
 | B-2026-10-12-3 | 2026-10-12 | typecheck | medium | `Map.get_mut` / `SortedMap.get_mut`, DOCUMENTED IN docs/library/collections.md AS `fn get_mut(mut ref self, key: K) -> Option[mut ref V]`, DO NOT EXIST: `karac check`, `karac __mir-run` and `karac run --interp` all refuse `m.get_mut(k)` with "no method 'get_mut' on type 'Map'" | — |
 | B-2026-10-12-4 | 2026-10-12 | interp+runtime | high | `Map.remove` / `Set.remove` ARE O(n) ON BOTH MIR BACKENDS: THE INSERTION-ORDERED TABLE CLOSES THE GAP BY SHIFTING EVERY LATER ENTRY, AND THE COMPILED RUNTIME ALSO REBUILDS ITS WHOLE HASH INDEX ON EVERY REMOVE, SO n REMOVES COST O(n^2) (20,000 removes: 98 s on mir-llvm, 2.5 s on mir-interp) | — |
+| B-2026-10-12-5 | 2026-10-12 | typecheck | low | String-receiver `.parse()` (B-2026-07-19-5's type-directed sugar for `T.parse(s)`) works on a `String` but is refused on a `Str` (a `Str` parameter, or a slice `s[a..b]`) with "no method 'parse' on type 'String'", which names the wrong type and gives no hint toward `i64.parse(s)` | — |
 
 ### Relocated
 
