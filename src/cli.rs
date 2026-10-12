@@ -337,6 +337,9 @@ pub enum Command {
         out_path: Option<String>,
         /// See [`Command::Run::lint_overrides`].
         lint_overrides: crate::lints::CliLintOverrides,
+        /// `--mir`: build through the redesign's pipeline (MIR compiled to
+        /// LLVM, M2) instead of the legacy codegen.
+        mir: bool,
     },
     /// Project-mode build: no file argument. Walks up from CWD to find
     /// `kara.toml`, loads the manifest, and (once CR-24 slices 3+ land) runs
@@ -823,6 +826,14 @@ pub fn execute(cmd: Command) {
         Command::Build {
             file,
             output,
+            release,
+            out_path,
+            mir: true,
+            ..
+        } => build_cmds::cmd_build_mir(&file, output, release, out_path.as_deref()),
+        Command::Build {
+            file,
+            output,
             concurrency_report,
             simd_report,
             offline,
@@ -838,6 +849,7 @@ pub fn execute(cmd: Command) {
             crate_type,
             out_path,
             lint_overrides,
+            mir: false,
         } => cmd_build(
             &file,
             output,

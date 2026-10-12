@@ -13,7 +13,8 @@ __mir-llvm-run`; it needs a karac built with `--features llvm` and a
 current `karac_jit_runner` beside it), and mir-llvm-asan (the same IR
 compiled with AddressSanitizer into a native binary, `karac __mir-llvm-asan`;
 a leak, double free or bad access fails the entry with the report's first
-line, whatever the stdout).
+line, whatever the stdout), and mir-build (the same IR compiled ahead of time
+by `karac build --mir`, then the binary run).
 
 --filter matches a tag exactly or a substring of the entry path; repeat it to
 widen. Each entry is judged by its meta.toml `expect`:

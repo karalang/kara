@@ -33,6 +33,7 @@ BACKENDS = {
     "mir-interp": {"check": True, "run": ["__mir-run"]},
     "mir-llvm": {"check": True, "run": ["__mir-llvm-run"]},
     "mir-llvm-asan": {"check": True, "run": ["__mir-llvm-asan"]},
+    "mir-build": {"check": True, "build": ["build", "--mir"]},
 }
 
 

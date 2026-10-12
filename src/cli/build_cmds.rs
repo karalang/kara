@@ -4198,3 +4198,73 @@ pub(super) fn emit_walker_error(e: &walker::WalkerError, output: OutputMode) {
         }
     }
 }
+
+/// `karac build --mir <file>`: the redesign's pipeline ahead of time (M2).
+/// The file's MIR is compiled to LLVM, then to a native object, and linked
+/// with the runtime archive it needs into `<stem>` (or `-o <path>`).
+///
+/// `KARAC_MIR_OPT=<0..3>` sets the IR optimisation level; it defaults to 2.
+pub(super) fn cmd_build_mir(
+    filename: &str,
+    output: OutputMode,
+    release: bool,
+    out_path: Option<&str>,
+) {
+    if release {
+        std::env::set_var("KARAC_STRIP_DBG", "1");
+    }
+    #[cfg(feature = "llvm")]
+    {
+        let fail = |msg: String| -> ! {
+            emit_build_error(&msg, output);
+            process::exit(1);
+        };
+        let src = std::fs::read_to_string(filename)
+            .unwrap_or_else(|e| fail(format!("error: {filename}: {e}")));
+        crate::mir::interp::set_source_name(filename);
+        let ir = crate::mir::lower::build_source(&src)
+            .and_then(|l| {
+                crate::codegen::mir::compile_mir_ir(&l.program, &l.tys)
+                    .map_err(|e| format!("llvm: {e}"))
+            })
+            .unwrap_or_else(|e| fail(format!("error[mir]: {e}")));
+        let opt = match std::env::var("KARAC_MIR_OPT") {
+            Ok(v) => v
+                .parse::<u8>()
+                .ok()
+                .filter(|n| *n <= 3)
+                .unwrap_or_else(|| fail(format!("error: KARAC_MIR_OPT={v}: expected 0 to 3"))),
+            Err(_) => 2,
+        };
+        let stem = std::path::Path::new(filename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("main");
+        let exe_path = out_path
+            .map(str::to_string)
+            .unwrap_or_else(|| stem.to_string());
+        let obj = std::env::temp_dir().join(format!("karac_mir_{}_{stem}.o", process::id()));
+        let built = crate::codegen::mir_aot::compile_object(&ir, &obj, opt)
+            .and_then(|()| crate::codegen::link_executable(&obj.to_string_lossy(), &exe_path));
+        let _ = std::fs::remove_file(&obj);
+        if let Err(e) = built {
+            fail(format!("error[mir]: {e}"));
+        }
+        match output {
+            OutputMode::Text => println!("Built: {exe_path}"),
+            _ => println!(
+                "{{\"status\":\"ok\",\"output\":{}}}",
+                json_string(&exe_path)
+            ),
+        }
+    }
+    #[cfg(not(feature = "llvm"))]
+    {
+        let _ = out_path;
+        emit_build_error(
+            &format!("note: karac build --mir requires the llvm feature; {filename} was not built"),
+            output,
+        );
+        process::exit(1);
+    }
+}

@@ -257,6 +257,10 @@ OPTIONS:
                             optimizer on. Works in both single-file and project
                             mode. Composes (OR) with the KARAC_STRIP_CONTRACTS
                             and KARAC_STRIP_ERROR_TRACE env vars.
+    --mir                   Build through the redesign's pipeline: the
+                            file's MIR compiled to LLVM (single file only).
+                            KARAC_MIR_OPT=0..3 sets the IR optimisation
+                            level, -O2 by default.
     --enable-hot-swap       Emit PLT-style indirection for extern-public
                             module symbols so the AOT artifact format stays
                             forward-compatible with the post-v1 continuous-
