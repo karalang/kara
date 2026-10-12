@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 601 |
 | double-free | 427 |
 | codegen-gap | 252 |
-| missing-feature | 221 |
+| missing-feature | 222 |
 | other | 171 |
 | diagnostics | 149 |
 | perf | 146 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2851 |
 | interp | 892 |
-| typecheck | 349 |
+| typecheck | 350 |
 | other | 114 |
 | ownership | 80 |
 | cli | 75 |
@@ -576,6 +576,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-132 | 2026-10-06 | codegen | medium | A BY-VALUE `Vec` PARAM HANDED BACK ON SOME EXITS NEVER RUNS ITS ELEMENTS' `Drop` BODIES COMPILED ON THE EXIT THAT KEEPS IT -- `dv(v, false)` over `fn dv(s: Vec[P], c: bool) -> Option[Vec[P]] { if c { return Some(s) } return None }`, the wrapped `let o = Some(s)` spelling, the bare `fn rv(s: Vec[P], c: bool) -> Vec[P] { if c { return s } Vec.new() }` and the generic `cg[T]` print no `dP15` on -O0 and -O2 where `--interp` prints it | — |
 | B-2026-10-06-133 | 2026-10-06 | codegen | medium | A GENERIC FN THAT HANDS ITS BARE-`T` PARAM BACK IN AN `Option` ON SOME EXITS NEVER RELEASES A `shared` STRUCT ARGUMENT COMPILED, ON EITHER PATH -- `cg(H { id: 1 }, false)` and `cg(H { id: 2 }, true)` over `fn cg[T](s: T, c: bool) -> Option[T] { let o = Some(s); if c { return o } return None }`, and the unwrapped `if c { return Some(s) } return None`, print no `dH` on -O0 and -O2 and lose 1 block, where `--interp` prints `dH1 _1 false end` and `_2 true end dH2` | — |
 | B-2026-10-06-135 | 2026-10-06 | codegen | low | REMAINDER OF B-2026-10-05-27: A GENERIC `shared enum` AT `Option` OF A `shared` TYPE CONSTRUCTED INSIDE A GENERIC FUNCTION STILL LEAKS THE INNER HANDLE -- `fn mkg[T](x: T) -> G[T] { G.Y(x) }` called as `let h: G[Option[M]] = mkg(Some(M.My(mkv("p"))))` loses 40 B + 52 B indirect at -O0, with output matching `--interp` | — |
+| B-2026-10-12-3 | 2026-10-12 | typecheck | medium | `Map.get_mut` / `SortedMap.get_mut`, DOCUMENTED IN docs/library/collections.md AS `fn get_mut(mut ref self, key: K) -> Option[mut ref V]`, DO NOT EXIST: `karac check`, `karac __mir-run` and `karac run --interp` all refuse `m.get_mut(k)` with "no method 'get_mut' on type 'Map'" | — |
 
 ### Relocated
 
