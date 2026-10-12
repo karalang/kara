@@ -1,0 +1,12 @@
+s = "aaabb", k = 3: 3
+s = "ababbc", k = 2: 5
+s = "a", k = 1: 1
+s = "a", k = 2: 0
+s = "abcde", k = 1: 5
+s = "abcde", k = 2: 0
+s = "aaabbbcdd", k = 3: 6
+s = "bbaaacbd", k = 3: 3
+s = "weitong", k = 2: 0
+s = "aabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz", k = 2: 52
+s = "aaaaaaaaaab", k = 2: 10
+3000 random strings: total 48920, checksum 866567114

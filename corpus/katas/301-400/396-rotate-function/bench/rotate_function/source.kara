@@ -1,0 +1,46 @@
+// Benchmark for #396: the kata's ★ arm (one rotation from the last), with
+// the parameter taken as a Slice[i64] so that windows of one pool are read
+// without copying; the body is the same. Builds a pool of 1,000,000 values
+// from -100 to 100 once, then 2,000 calls, each on a window of 100,000
+// values (the problem's limit) at a random place. The answers go into a
+// sum and a checksum.
+
+fn max_rotate_function(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut sum = 0;
+    let mut f = 0;
+    for i in 0..n {
+        sum += nums[i];
+        f += i * nums[i];
+    }
+    let mut best = f;
+    for k in 1..n {
+        f = f + sum - n * nums[n - k];
+        best = best.max(f);
+    }
+    best
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let windows = 2000;
+    let mut seed: i64 = 396;
+    let mut pool: Vec[i64] = Vec.new();
+    for _ in 0..1000000 {
+        pool.push(step(mut seed) % 201 - 100);
+    }
+    let m = 1000000007;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..windows {
+        let a = (step(mut seed) * 32768 + step(mut seed)) % (1000000 - 100000);
+        let r = max_rotate_function(pool[a..a + 100000]);
+        total += r;
+        checksum = (checksum * 31 + r % m + m) % m;
+    }
+    println(f"{windows} windows: total {total}, checksum {checksum}");
+}

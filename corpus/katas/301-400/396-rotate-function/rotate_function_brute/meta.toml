@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/396-rotate-function/rotate_function_brute.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "e2fb4c5e8"
+extracted_src = "67b5d53a"
+model_rev = "1aa23105"
+model_src = "67b5d53a"

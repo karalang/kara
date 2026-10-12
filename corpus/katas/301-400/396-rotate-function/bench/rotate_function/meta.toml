@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/396-rotate-function/bench/rotate_function.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "e2fb4c5e8"
+extracted_src = "c2f3743d"
+model_rev = "1aa23105"
+model_src = "c2f3743d"

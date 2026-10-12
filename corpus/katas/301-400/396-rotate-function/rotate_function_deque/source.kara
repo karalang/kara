@@ -1,0 +1,73 @@
+// LeetCode #396: Rotate Function -- rotate a deque and keep F current.
+//
+// Hold the current rotation in a VecDeque. Rotating moves the last value
+// to the front; F changes by the sum of all values minus n times the
+// value that moved, the same step as the ★ arm, but read off the deque's
+// back instead of computed from an index. O(n) time, O(n) space.
+
+fn max_rotate_function(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut q: VecDeque[i64] = VecDeque.new();
+    let mut sum = 0;
+    let mut f = 0;
+    for i in 0..n {
+        q.push_back(nums[i]);
+        sum += nums[i];
+        f += i * nums[i];
+    }
+    let mut best = f;
+    for _ in 1..n {
+        let last = q.pop_back().unwrap();
+        q.push_front(last);
+        f = f + sum - n * last;
+        best = best.max(f);
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut text = String.from("[");
+    for i in 0..nums.len() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(f"{nums[i]}");
+    }
+    text.push(']');
+    println(f"{text}: {max_rotate_function(nums)}");
+}
+
+fn main() {
+    show(vec![4, 3, 2, 6]);
+    show(vec![100]);
+    show(vec![-5]);
+    show(vec![1, 2]);
+    show(vec![2, 1]);
+    show(vec![-1, -2, -3, -4]);
+    show(vec![0, 0, 0]);
+    show(vec![7, 7, 7, 7, 7]);
+    show(vec![-100, 100, -100, 100, -100]);
+
+    // 3000 random arrays of 1 to 50 values from -100 to 100.
+    let mut seed: i64 = 396;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..3000 {
+        let n = 1 + step(mut seed) % 50;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(step(mut seed) % 201 - 100);
+        }
+        let r = max_rotate_function(nums);
+        total += r;
+        checksum = (checksum * 31 + r % 1000000007 + 1000000007) % 1000000007;
+    }
+    println(f"3000 random arrays: total {total}, checksum {checksum}");
+}

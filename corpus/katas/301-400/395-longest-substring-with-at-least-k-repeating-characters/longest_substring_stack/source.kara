@@ -1,0 +1,77 @@
+// LeetCode #395: Longest Substring with At Least K Repeating Characters
+// -- divide and conquer without recursion.
+//
+// The ★ arm's splitting, driven by an explicit stack of ranges still to
+// examine. A range whose letters all appear at least k times is an
+// answer; otherwise its pieces between the rare letters go on the stack.
+// O(26 n) time, O(n) stack.
+
+fn longest_substring(s: Str, k: i64) -> i64 {
+    let b = s.bytes();
+    let mut stack: Vec[(i64, i64)] = vec![(0, b.len())];
+    let mut best = 0;
+    while let Some((lo, hi)) = stack.pop() {
+        if hi - lo < k or hi - lo <= best {
+            continue;
+        }
+        let mut count = vec![0; 26];
+        for i in lo..hi {
+            count[(b[i] - 97) as i64] += 1;
+        }
+        let mut start = lo;
+        for i in lo..hi {
+            if count[(b[i] - 97) as i64] < k {
+                stack.push((start, i));
+                start = i + 1;
+            }
+        }
+        if start == lo {
+            best = hi - lo;
+        } else {
+            stack.push((start, hi));
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str, k: i64) {
+    println(f"s = \"{s}\", k = {k}: {longest_substring(s, k)}");
+}
+
+fn main() {
+    show("aaabb", 3);
+    show("ababbc", 2);
+    show("a", 1);
+    show("a", 2);
+    show("abcde", 1);
+    show("abcde", 2);
+    show("aaabbbcdd", 3);
+    show("bbaaacbd", 3);
+    show("weitong", 2);
+    show("aabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz", 2);
+    show("aaaaaaaaaab", 2);
+
+    // 3000 random strings of 1 to 40 letters from "abcd", k from 1 to 5.
+    let mut seed: i64 = 395;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..3000 {
+        let n = 1 + step(mut seed) % 40;
+        let mut s = String.new();
+        for _ in 0..n {
+            s.push((step(mut seed) % 4 + 97) as u8 as char);
+        }
+        let k = 1 + step(mut seed) % 5;
+        let r = longest_substring(s, k);
+        total += r;
+        checksum = (checksum * 41 + r) % 1000000007;
+    }
+    println(f"3000 random strings: total {total}, checksum {checksum}");
+}

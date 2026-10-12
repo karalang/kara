@@ -1,0 +1,231 @@
+// Differential test for LeetCode #395: Longest Substring with At Least K
+// Repeating Characters.
+//
+// Copies of the four arms, run on 3,000 random cases with answers known by
+// construction:
+//   P1  a string in which every letter appears at least k times, in any
+//       order, is its own answer: every arm returns its length
+//   P2  with k = 1 every arm returns the whole length
+//   P3  with k larger than the length every arm returns 0
+//   P4  a 'z' that appears once splits the string: for k >= 2, the answer
+//       for a + "z" + b is the larger of the answers for a and b
+//   P5  reversing the string changes no answer
+
+fn divide_range(b: Slice[u8], lo: i64, hi: i64, k: i64) -> i64 {
+    if hi - lo < k {
+        return 0;
+    }
+    let mut count = vec![0; 26];
+    for i in lo..hi {
+        count[(b[i] - 97) as i64] += 1;
+    }
+    let mut best = 0;
+    let mut start = lo;
+    let mut split = false;
+    for i in lo..hi {
+        if count[(b[i] - 97) as i64] < k {
+            split = true;
+            best = best.max(divide_range(b, start, i, k));
+            start = i + 1;
+        }
+    }
+    if not split {
+        return hi - lo;
+    }
+    best.max(divide_range(b, start, hi, k))
+}
+
+fn ls_divide(s: Str, k: i64) -> i64 {
+    let b = s.bytes();
+    divide_range(b, 0, b.len(), k)
+}
+
+fn ls_window(s: Str, k: i64) -> i64 {
+    let b = s.bytes();
+    let n = b.len();
+    let mut best = 0;
+    for u in 1..27 {
+        let mut count = vec![0; 26];
+        let mut kinds = 0;
+        let mut enough = 0;
+        let mut lo = 0;
+        for hi in 0..n {
+            let c = (b[hi] - 97) as i64;
+            if count[c] == 0 {
+                kinds += 1;
+            }
+            count[c] += 1;
+            if count[c] == k {
+                enough += 1;
+            }
+            while kinds > u {
+                let d = (b[lo] - 97) as i64;
+                if count[d] == k {
+                    enough -= 1;
+                }
+                count[d] -= 1;
+                if count[d] == 0 {
+                    kinds -= 1;
+                }
+                lo += 1;
+            }
+            if kinds == u and enough == u {
+                best = best.max(hi - lo + 1);
+            }
+        }
+    }
+    best
+}
+
+fn ls_brute(s: Str, k: i64) -> i64 {
+    let chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut best = 0;
+    for start in 0..n {
+        let mut count: Map[char, i64] = Map.new();
+        let mut kinds = 0;
+        let mut enough = 0;
+        for end in start..n {
+            let c = chars[end];
+            let seen = count.get(c).cloned() ?? 0;
+            if seen == 0 {
+                kinds += 1;
+            }
+            if seen + 1 == k {
+                enough += 1;
+            }
+            count.insert(c, seen + 1);
+            if kinds == enough {
+                best = best.max(end - start + 1);
+            }
+        }
+    }
+    best
+}
+
+fn ls_stack(s: Str, k: i64) -> i64 {
+    let b = s.bytes();
+    let mut stack: Vec[(i64, i64)] = vec![(0, b.len())];
+    let mut best = 0;
+    while let Some((lo, hi)) = stack.pop() {
+        if hi - lo < k or hi - lo <= best {
+            continue;
+        }
+        let mut count = vec![0; 26];
+        for i in lo..hi {
+            count[(b[i] - 97) as i64] += 1;
+        }
+        let mut start = lo;
+        for i in lo..hi {
+            if count[(b[i] - 97) as i64] < k {
+                stack.push((start, i));
+                start = i + 1;
+            }
+        }
+        if start == lo {
+            best = hi - lo;
+        } else {
+            stack.push((start, hi));
+        }
+    }
+    best
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn solve(arm: i64, s: Str, k: i64) -> i64 {
+    if arm == 0 {
+        ls_divide(s, k)
+    } else if arm == 1 {
+        ls_window(s, k)
+    } else if arm == 2 {
+        ls_brute(s, k)
+    } else {
+        ls_stack(s, k)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_text(n: i64, seed: mut ref i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push((step(seed) % 4 + 97) as u8 as char);
+    }
+    out
+}
+
+fn reversed(text: Str) -> String {
+    let chars: Vec[char] = text.chars().collect();
+    let mut out = String.new();
+    for i in 0..chars.len() {
+        out.push(chars[chars.len() - 1 - i]);
+    }
+    out
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, got: i64, want: i64, failures: mut ref Vec[i64]) {
+    if got != want {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 3950;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        let k = 1 + step(mut seed) % 5;
+
+        // P1: up to four letters, each k to k + 3 times, shuffled.
+        let mut letters: Vec[char] = Vec.new();
+        let kinds = 1 + step(mut seed) % 4;
+        for c in 0..kinds {
+            let times = k + step(mut seed) % 4;
+            for _ in 0..times {
+                letters.push((c + 97) as u8 as char);
+            }
+        }
+        let mut i = letters.len() - 1;
+        while i > 0 {
+            letters.swap(i, step(mut seed) % (i + 1));
+            i -= 1;
+        }
+        let mut full = String.new();
+        for c in letters.iter() {
+            full.push(*c);
+        }
+
+        let a = random_text(step(mut seed) % 20, mut seed);
+        let b = random_text(step(mut seed) % 20, mut seed);
+        let s = random_text(1 + step(mut seed) % 30, mut seed);
+        let mut joined = a.clone();
+        joined.push('z');
+        joined.push_str(b);
+        let big_k = s.len() + 1 + step(mut seed) % 3;
+        let split_k = 2 + step(mut seed) % 4;
+        let rs = reversed(s);
+
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, solve(arm, full, k), full.len(), mut failures);
+            report(2, arm, case, solve(arm, s, 1), s.len(), mut failures);
+            report(3, arm, case, solve(arm, s, big_k), 0, mut failures);
+            let want = solve(arm, a, split_k).max(solve(arm, b, split_k));
+            report(4, arm, case, solve(arm, joined, split_k), want, mut failures);
+            report(5, arm, case, solve(arm, rs, k), solve(arm, s, k), mut failures);
+        }
+    }
+    println(f"3000 cases, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

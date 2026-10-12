@@ -1,0 +1,154 @@
+// Differential test for LeetCode #396: Rotate Function.
+//
+// Copies of the four arms, run on 3,000 random arrays of 1 to 50 values
+// from -100 to 100, with answers known by construction:
+//   P1  n copies of one value c give c * n(n-1)/2, whatever the rotation
+//   P2  one nonzero value v among zeros gives v * (n - 1) if v > 0 (it can
+//       be rotated to the last place) and 0 otherwise (to the first)
+//   P3  rotating the array changes no answer
+//   P4  adding c to every value adds c * n(n-1)/2 to every F(k), so to the
+//       answer too
+//   P5  doubling every value doubles the answer
+
+fn rf_step(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut sum = 0;
+    let mut f = 0;
+    for i in 0..n {
+        sum += nums[i];
+        f += i * nums[i];
+    }
+    let mut best = f;
+    for k in 1..n {
+        f = f + sum - n * nums[n - k];
+        best = best.max(f);
+    }
+    best
+}
+
+fn rf_brute(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut best = 0;
+    for k in 0..n {
+        let mut f = 0;
+        for i in 0..n {
+            f += i * nums[(i - k + n) % n];
+        }
+        if k == 0 or f > best {
+            best = f;
+        }
+    }
+    best
+}
+
+fn rf_windows(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut s = vec![0; 2 * n + 1];
+    let mut w = vec![0; 2 * n + 1];
+    for p in 0..2 * n {
+        let v = nums[p % n];
+        s[p + 1] = s[p] + v;
+        w[p + 1] = w[p] + p * v;
+    }
+    let mut best = 0;
+    for j in 0..n {
+        let f = (w[j + n] - w[j]) - j * (s[j + n] - s[j]);
+        if j == 0 or f > best {
+            best = f;
+        }
+    }
+    best
+}
+
+fn rf_deque(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut q: VecDeque[i64] = VecDeque.new();
+    let mut sum = 0;
+    let mut f = 0;
+    for i in 0..n {
+        q.push_back(nums[i]);
+        sum += nums[i];
+        f += i * nums[i];
+    }
+    let mut best = f;
+    for _ in 1..n {
+        let last = q.pop_back().unwrap();
+        q.push_front(last);
+        f = f + sum - n * last;
+        best = best.max(f);
+    }
+    best
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn solve(arm: i64, nums: Vec[i64]) -> i64 {
+    if arm == 0 {
+        rf_step(nums)
+    } else if arm == 1 {
+        rf_brute(nums)
+    } else if arm == 2 {
+        rf_windows(nums)
+    } else {
+        rf_deque(nums)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, got: i64, want: i64, failures: mut ref Vec[i64]) {
+    if got != want {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 3960;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        let n = 1 + step(mut seed) % 50;
+        let pairs = n * (n - 1) / 2;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(step(mut seed) % 201 - 100);
+        }
+        let c = step(mut seed) % 201 - 100;
+        let same = vec![c; n];
+        let mut one = vec![0; n];
+        one[step(mut seed) % n] = c;
+        let lone = if c > 0 { c * (n - 1) } else { 0 };
+        let r = step(mut seed) % n;
+        let mut rotated: Vec[i64] = Vec.new();
+        for i in 0..n {
+            rotated.push(nums[(i + r) % n]);
+        }
+        let mut shifted: Vec[i64] = Vec.new();
+        let mut doubled: Vec[i64] = Vec.new();
+        for i in 0..n {
+            shifted.push(nums[i] + c);
+            doubled.push(2 * nums[i]);
+        }
+        for arm in 0..4 {
+            let base = solve(arm, nums);
+            checks += 5;
+            report(1, arm, case, solve(arm, same), c * pairs, mut failures);
+            report(2, arm, case, solve(arm, one), lone, mut failures);
+            report(3, arm, case, solve(arm, rotated), base, mut failures);
+            report(4, arm, case, solve(arm, shifted), base + c * pairs, mut failures);
+            report(5, arm, case, solve(arm, doubled), 2 * base, mut failures);
+        }
+    }
+    println(f"3000 arrays, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}
