@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2852 |
+| codegen | 2851 |
 | interp | 899 |
 | typecheck | 361 |
 | other | 114 |
@@ -591,7 +591,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-22 | 2026-10-12 | typecheck | low | `karac check` accepts `m.get(k) == Some(n)` on a `Map[u8, i64]`, comparing `Option[ref i64]` with `Option[i64]`, which `karac __mir-run` refuses ("cannot compare 'Option[ref i64]' and 'Option[i64]'") and which check itself refuses for `Vec.get`; the legacy interpreter runs it | — |
 | B-2026-10-12-23 | 2026-10-12 | resolver+typecheck | medium | `karac check` refuses every `#[derive(Serialize, Deserialize)]` program that `karac __mir-run` runs: `DeserializeError` and `Serializer` are undefined types to the resolver, and `Json.serialize` / `Json.deserialize` are 'no associated function' to the typechecker | — |
 | B-2026-10-12-24 | 2026-10-12 | typecheck | medium | A method that needs `mut ref self` on a range view of a mutable place is refused: `v[a..b].reverse()` draws `Slice.reverse() requires a mutable slice (mut Slice[T])` from `karac check` and both MIR backends, though design.md says `v[a..b]` is a `mut Slice[T]` where a mutable view is needed; passing `mut v[a..b]` to a `mut Slice[T]` parameter works | — |
-| B-2026-10-12-25 | 2026-10-12 | interp+codegen | low | `Vec.split_at_mut` passes `karac check` but neither MIR backend has it: `__mir-run` says `call of unknown function Vec[i64].split_at_mut`, `__mir-llvm-run` says the native is not lowered yet | — |
+| B-2026-10-12-25 | 2026-10-12 | interp | low | `Vec.split_at_mut` passes `karac check` but `__mir-run` has no such function (`call of unknown function Vec[i64].split_at_mut`). CORRECTED: `__mir-llvm-run` has it since 010499d0d5, which landed before this row; the filing measured a binary built before that commit | — |
 | B-2026-10-12-26 | 2026-10-12 | typecheck | medium | `v[i]` of a `Vec[Option[shared]]` or `Vec[(shared, i64)]` passed to a bare parameter is refused with E_INDEX_MOVE_NON_COPY under D5, though a bare parameter borrows; `v[i]` of a `Vec[Vec[T]]`, `Vec[String]` or `Vec[shared]` is accepted | — |
 
 ### Relocated
