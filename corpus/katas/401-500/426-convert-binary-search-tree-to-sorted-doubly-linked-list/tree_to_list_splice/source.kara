@@ -1,0 +1,172 @@
+// LeetCode #426: Convert Binary Search Tree to Sorted Doubly Linked List
+// -- convert the halves and splice.
+//
+// Turn the left subtree into a ring, the right subtree into a ring, and
+// the node itself into a ring of one; then splice the three rings in
+// order. Splicing two rings joins each one's tail to the other's head.
+// O(n) time, O(height) stack.
+
+shared struct Node {
+    val: i64,
+    mut left: Option[Node],
+    mut right: Option[Node],
+}
+
+// Join ring b after ring a and return the joined ring's head.
+fn splice(a: Option[Node], b: Option[Node]) -> Option[Node] {
+    match (a, b) {
+        (Some(ha), Some(hb)) => {
+            let ta = ha.left.expect("a ring's head has a tail");
+            let tb = hb.left.expect("a ring's head has a tail");
+            ta.right = Some(hb);
+            hb.left = Some(ta);
+            tb.right = Some(ha);
+            ha.left = Some(tb);
+            Some(ha)
+        }
+        (Some(ha), None) => Some(ha),
+        (None, rest) => rest,
+    }
+}
+
+fn tree_to_doubly_list(root: Option[Node]) -> Option[Node] {
+    match root {
+        Some(n) => {
+            let left = tree_to_doubly_list(n.left);
+            let right = tree_to_doubly_list(n.right);
+            n.left = Some(n);
+            n.right = Some(n);
+            splice(splice(left, Some(n)), right)
+        }
+        None => None,
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Insert into a binary search tree, returning its root.
+fn insert(root: Option[Node], val: i64) -> Option[Node] {
+    match root {
+        Some(node) => {
+            if val < node.val {
+                node.left = insert(node.left, val);
+            } else {
+                node.right = insert(node.right, val);
+            }
+            Some(node)
+        }
+        None => Some(Node { val: val, left: None, right: None }),
+    }
+}
+
+// Walk the ring both ways from its head: n steps right, then n steps
+// left, checking that each step back undoes a step forward and that
+// both walks come back to the head. Breaks every link afterwards, since
+// a ring of strong handles is never freed.
+fn read(head: Option[Node], n: i64) -> String {
+    let mut forward = String.new();
+    let mut backward = String.new();
+    let mut ok = true;
+    match head {
+        Some(h) => {
+            let mut cur = h;
+            for i in 0..n {
+                if i > 0 {
+                    forward.push(' ');
+                }
+                forward.push_str(f"{cur.val}");
+                let next = cur.right.expect("a ring has no end");
+                match next.left {
+                    Some(back) => {
+                        if back.val != cur.val {
+                            ok = false;
+                        }
+                    }
+                    None => {
+                        ok = false;
+                    }
+                }
+                cur = next;
+            }
+            if cur.val != h.val {
+                ok = false;
+            }
+            for i in 0..n {
+                cur = cur.left.expect("a ring has no end");
+                if i > 0 {
+                    backward.push(' ');
+                }
+                backward.push_str(f"{cur.val}");
+            }
+            if cur.val != h.val {
+                ok = false;
+            }
+            for _ in 0..n {
+                let next = cur.right.expect("a ring has no end");
+                cur.left = None;
+                cur.right = None;
+                cur = next;
+            }
+        }
+        None => {
+            if n != 0 {
+                ok = false;
+            }
+        }
+    }
+    let mark = if ok { "" } else { " BROKEN" };
+    f"[{forward}] back from the tail [{backward}]{mark}"
+}
+
+fn show(text: Str) {
+    let mut root: Option[Node] = None;
+    let mut n = 0;
+    for word in text.split_whitespace() {
+        root = insert(root, i64.parse(word).unwrap());
+        n += 1;
+    }
+    println(f"{text}: {read(tree_to_doubly_list(root), n)}");
+}
+
+fn main() {
+    show("4 2 5 1 3");
+    show("2 1 3");
+    show("");
+    show("1");
+    show("1 2 3 4 5");
+    show("5 4 3 2 1");
+    show("-7 100 0");
+    show("8 4 12 2 6 10 14 1 3 5 7 9 11 13 15");
+    show("3 1 2");
+    show("1 3 2");
+    // 2,000 random trees of 0 to 40 distinct values from -500 to 499,
+    // inserted in random order.
+    let mut seed: i64 = 426;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let n = step(mut seed) % 41;
+        let mut used: Set[i64] = Set.new();
+        let mut root: Option[Node] = None;
+        let mut count = 0;
+        while count < n {
+            let v = step(mut seed) % 1000 - 500;
+            if not used.contains(v) {
+                used.insert(v);
+                root = insert(root, v);
+                count += 1;
+            }
+        }
+        let line = read(tree_to_doubly_list(root), n);
+        total += n;
+        for b in line.bytes() {
+            checksum = (checksum * 31 + b as i64) % 1000000007;
+        }
+    }
+    println(f"2000 random trees, {total} nodes: checksum {checksum}");
+}

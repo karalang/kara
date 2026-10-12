@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/426-convert-binary-search-tree-to-sorted-doubly-linked-list/bench/tree_to_list.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared", "bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "d06c64c9d"
+extracted_src = "5e2072d7"
+model_rev = "1aa23105"
+model_src = "5e2072d7"

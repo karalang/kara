@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/425-word-squares/bench/word_squares.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map", "lib:set", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "d06c64c9d"
+extracted_src = "261c5a0d"
+model_rev = "1aa23105"
+model_src = "261c5a0d"

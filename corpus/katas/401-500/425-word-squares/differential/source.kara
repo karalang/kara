@@ -1,0 +1,380 @@
+// Differential test for LeetCode #425: Word Squares.
+//
+// Copies of the four arms, each run on 1,500 random lists of 2 to 8
+// distinct words of 1 to 3 letters from a, b and c. Each arm's squares
+// are compared as sorted "row/row/row" lines. Properties known by
+// construction:
+//   P1  the squares are those of trying every sequence of words and
+//       keeping the ones that read the same down as across
+//   P2  every square's rows are given words and read the same down as
+//       across, and no square appears twice
+//   P3  renaming the letters (a to b, b to c, c to a) renames the
+//       squares and finds no others
+//   P4  the list reversed gives the same squares; one more word keeps
+//       every square
+//   P5  all four words of two letters over a and b give 8 squares, all
+//       eight of three letters give 64, and the one word ccc gives 1
+
+// ---- prefix: word_squares.kara
+
+fn extend_prefix(rows: mut ref Vec[String], length: i64, by_prefix: ref Map[String, Vec[i64]], words: ref Vec[String], found: mut ref Vec[Vec[String]]) {
+    let r = rows.len();
+    if r == length {
+        found.push(rows.clone());
+        return;
+    }
+    let mut prefix = String.new();
+    for row in rows {
+        prefix.push(row.bytes()[r] as char);
+    }
+    match by_prefix.get(prefix) {
+        Some(candidates) => {
+            for i in candidates {
+                rows.push(words[i].clone());
+                extend_prefix(rows, length, by_prefix, words, found);
+                rows.pop();
+            }
+        }
+        None => {}
+    }
+}
+
+fn word_squares_prefix(words: Vec[String]) -> Vec[Vec[String]] {
+    let length = words[0].len();
+    let mut by_prefix: Map[String, Vec[i64]] = Map.new();
+    for i in 0..words.len() {
+        let bytes = words[i].bytes();
+        let mut prefix = String.new();
+        // Row r looks up a prefix of r letters, and r < length, so the
+        // whole word is never looked up.
+        for k in 0..length {
+            by_prefix.entry(prefix.clone()).or_insert(Vec.new()).push(i);
+            prefix.push(bytes[k] as char);
+        }
+    }
+    let mut found: Vec[Vec[String]] = Vec.new();
+    let mut rows: Vec[String] = Vec.new();
+    extend_prefix(mut rows, length, by_prefix, words, mut found);
+    found
+}
+
+// ---- trie: word_squares_trie.kara
+
+fn extend_trie(rows: mut ref Vec[i64], length: i64, children: ref Vec[i64], below: ref Vec[Vec[i64]], words: ref Vec[String], found: mut ref Vec[Vec[String]]) {
+    let r = rows.len();
+    if r == length {
+        let mut square: Vec[String] = Vec.new();
+        for i in rows {
+            square.push(words[i].clone());
+        }
+        found.push(square);
+        return;
+    }
+    let mut node = 0;
+    for i in rows {
+        let c = (words[i].bytes()[r] - b'a') as i64;
+        node = children[node * 26 + c];
+        if node == 0 {
+            return;
+        }
+    }
+    for i in below[node] {
+        rows.push(i);
+        extend_trie(rows, length, children, below, words, found);
+        rows.pop();
+    }
+}
+
+fn word_squares_trie(words: Vec[String]) -> Vec[Vec[String]] {
+    let length = words[0].len();
+    let mut children: Vec[i64] = vec![0; 26];
+    let mut below: Vec[Vec[i64]] = vec![Vec.new()];
+    for i in 0..words.len() {
+        let mut node = 0;
+        below[0].push(i);
+        for b in words[i].bytes() {
+            let c = (b - b'a') as i64;
+            if children[node * 26 + c] == 0 {
+                children[node * 26 + c] = below.len();
+                for _ in 0..26 {
+                    children.push(0);
+                }
+                below.push(Vec.new());
+            }
+            node = children[node * 26 + c];
+            below[node].push(i);
+        }
+    }
+    let mut found: Vec[Vec[String]] = Vec.new();
+    let mut rows: Vec[i64] = Vec.new();
+    extend_trie(mut rows, length, children, below, words, mut found);
+    found
+}
+
+// ---- scan: word_squares_scan.kara
+
+fn extend_scan(rows: mut ref Vec[i64], length: i64, words: ref Vec[String], found: mut ref Vec[Vec[String]]) {
+    let r = rows.len();
+    if r == length {
+        let mut square: Vec[String] = Vec.new();
+        for i in rows {
+            square.push(words[i].clone());
+        }
+        found.push(square);
+        return;
+    }
+    for w in 0..words.len() {
+        let candidate = words[w].bytes();
+        let mut fits = true;
+        for k in 0..r {
+            if words[rows[k]].bytes()[r] != candidate[k] {
+                fits = false;
+                break;
+            }
+        }
+        if fits {
+            rows.push(w);
+            extend_scan(rows, length, words, found);
+            rows.pop();
+        }
+    }
+}
+
+fn word_squares_scan(words: Vec[String]) -> Vec[Vec[String]] {
+    let mut found: Vec[Vec[String]] = Vec.new();
+    let mut rows: Vec[i64] = Vec.new();
+    extend_scan(mut rows, words[0].len(), words, mut found);
+    found
+}
+
+// ---- sorted: word_squares_sorted.kara
+
+// The first index whose word is not less than `prefix`.
+fn lower_bound(sorted: ref Vec[String], prefix: ref String) -> i64 {
+    let mut low = 0;
+    let mut high = sorted.len();
+    while low < high {
+        let mid = (low + high) / 2;
+        if sorted[mid] < *prefix {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    low
+}
+
+fn extend_sorted(rows: mut ref Vec[String], length: i64, sorted: ref Vec[String], found: mut ref Vec[Vec[String]]) {
+    let r = rows.len();
+    if r == length {
+        found.push(rows.clone());
+        return;
+    }
+    let mut prefix = String.new();
+    for row in rows {
+        prefix.push(row.bytes()[r] as char);
+    }
+    let mut i = lower_bound(sorted, prefix);
+    while i < sorted.len() and sorted[i].starts_with(prefix) {
+        rows.push(sorted[i].clone());
+        extend_sorted(rows, length, sorted, found);
+        rows.pop();
+        i += 1;
+    }
+}
+
+fn word_squares_sorted(words: Vec[String]) -> Vec[Vec[String]] {
+    let mut sorted = words.clone();
+    sorted.sort();
+    let mut found: Vec[Vec[String]] = Vec.new();
+    let mut rows: Vec[String] = Vec.new();
+    extend_sorted(mut rows, words[0].len(), sorted, mut found);
+    found
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, words: Vec[String]) -> Vec[String] {
+    let squares = if arm == 0 {
+        word_squares_prefix(words)
+    } else if arm == 1 {
+        word_squares_trie(words)
+    } else if arm == 2 {
+        word_squares_scan(words)
+    } else {
+        word_squares_sorted(words)
+    };
+    let mut out: Vec[String] = Vec.new();
+    for square in squares {
+        out.push(square.join("/"));
+    }
+    out.sort();
+    out
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Every sequence of `length` words, kept when it reads the same down
+// as across.
+fn brute(words: ref Vec[String]) -> Vec[String] {
+    let n = words.len();
+    let length = words[0].len();
+    let mut total = 1;
+    for _ in 0..length {
+        total *= n;
+    }
+    let mut out: Vec[String] = Vec.new();
+    for code in 0..total {
+        let mut rows: Vec[String] = Vec.new();
+        let mut c = code;
+        for _ in 0..length {
+            rows.push(words[c % n].clone());
+            c = c / n;
+        }
+        let mut symmetric = true;
+        for i in 0..length {
+            for j in 0..length {
+                if rows[i].bytes()[j] != rows[j].bytes()[i] {
+                    symmetric = false;
+                }
+            }
+        }
+        if symmetric {
+            out.push(rows.join("/"));
+        }
+    }
+    out.sort();
+    out
+}
+
+// Every line's rows are given words and read the same down as across,
+// and no line repeats.
+fn well_formed(lines: ref Vec[String], words: ref Vec[String]) -> bool {
+    for i in 0..lines.len() {
+        if i > 0 and lines[i - 1] >= lines[i] {
+            return false;
+        }
+        let rows = lines[i].split("/");
+        for row in rows {
+            if not words.contains(row) {
+                return false;
+            }
+        }
+        for a in 0..rows.len() {
+            for b in 0..rows.len() {
+                if rows[a].bytes()[b] != rows[b].bytes()[a] {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+// Each letter moved one along a, b, c.
+fn rotate(text: ref String) -> String {
+    let mut out = String.new();
+    for b in text.bytes() {
+        let c = if b == b'/' { b } else if b == b'c' { b'a' } else { b + 1 };
+        out.push(c as char);
+    }
+    out
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4250;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    // P5: every word of length 2, and of length 3, over a and b; and
+    // one word of c alone.
+    let mut all2: Vec[String] = Vec.new();
+    let mut all3: Vec[String] = Vec.new();
+    for code in 0..8 {
+        let mut w = String.new();
+        for k in 0..3 {
+            w.push(if code >> (2 - k) & 1 == 0 { 'a' } else { 'b' });
+        }
+        if code < 4 {
+            all2.push(w[1..3].to_string());
+        }
+        all3.push(w);
+    }
+    let mut lone: Vec[String] = Vec.new();
+    let mut ccc = String.new();
+    ccc.push_str("ccc");
+    lone.push(ccc);
+    for case in 0..1500 {
+        let length = 1 + step(mut seed) % 3;
+        let wanted = 2 + step(mut seed) % 7;
+        let mut words: Vec[String] = Vec.new();
+        let mut tries = 0;
+        while words.len() < wanted and tries < 100 {
+            tries += 1;
+            let mut word = String.new();
+            for _ in 0..length {
+                word.push(char.try_from((97 + step(mut seed) % 3) as u32).unwrap());
+            }
+            if not words.contains(word) {
+                words.push(word);
+            }
+        }
+        let expect = brute(words);
+        // P3: the letters renamed a to b, b to c, c to a.
+        let mut renamed: Vec[String] = Vec.new();
+        for w in words {
+            renamed.push(rotate(w));
+        }
+        let mut expect_renamed: Vec[String] = Vec.new();
+        for line in expect {
+            expect_renamed.push(rotate(line));
+        }
+        expect_renamed.sort();
+        // P4: the list reversed, and the list with one more word.
+        let mut reversed: Vec[String] = Vec.new();
+        for i in 0..words.len() {
+            reversed.push(words[words.len() - 1 - i].clone());
+        }
+        let mut longer = words.clone();
+        let mut extra = String.new();
+        for _ in 0..length {
+            extra.push(char.try_from((97 + step(mut seed) % 3) as u32).unwrap());
+        }
+        if not longer.contains(extra) {
+            longer.push(extra);
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let answer = solve(arm, words.clone());
+            report(1, arm, case, answer == expect, mut failures);
+            report(2, arm, case, well_formed(answer, words), mut failures);
+            report(3, arm, case, solve(arm, renamed.clone()) == expect_renamed, mut failures);
+            let more = solve(arm, longer.clone());
+            let mut kept = true;
+            for line in answer {
+                if not more.contains(line) {
+                    kept = false;
+                }
+            }
+            report(4, arm, case, solve(arm, reversed.clone()) == answer and kept, mut failures);
+            report(5, arm, case, solve(arm, all2.clone()).len() == 8 and solve(arm, all3.clone()).len() == 64 and solve(arm, lone.clone()).len() == 1, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

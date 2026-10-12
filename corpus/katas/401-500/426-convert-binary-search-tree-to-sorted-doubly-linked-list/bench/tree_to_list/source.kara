@@ -1,0 +1,107 @@
+// Benchmark for #426: the in-order recursion arm (tree_to_list.kara) on
+// 20 rounds of a 50,000-node tree.
+//
+// An in-order walk visits the values in sorted order. Keep the first
+// node visited and the last; link each new node after the last (its
+// `left` becomes the previous node, the previous node's `right` becomes
+// it). At the end, join the last node to the first to close the ring.
+// The tree's own `left` and `right` fields become the links, so no node
+// is allocated. O(n) time, O(height) stack.
+
+shared struct Node {
+    val: i64,
+    mut left: Option[Node],
+    mut right: Option[Node],
+}
+
+fn link(node: Option[Node], first: mut ref Option[Node], last: mut ref Option[Node]) {
+    match node {
+        Some(n) => {
+            link(n.left, first, last);
+            match *last {
+                Some(prev) => {
+                    prev.right = Some(n);
+                    n.left = Some(prev);
+                }
+                None => {
+                    *first = Some(n);
+                }
+            }
+            *last = Some(n);
+            link(n.right, first, last);
+        }
+        None => {}
+    }
+}
+
+fn tree_to_doubly_list(root: Option[Node]) -> Option[Node] {
+    let mut first: Option[Node] = None;
+    let mut last: Option[Node] = None;
+    link(root, mut first, mut last);
+    match (first, last) {
+        (Some(head), Some(tail)) => {
+            head.left = Some(tail);
+            tail.right = Some(head);
+            Some(head)
+        }
+        _ => None,
+    }
+}
+
+// ---- benchmark harness ----------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn insert(root: Option[Node], val: i64) -> Option[Node] {
+    match root {
+        Some(node) => {
+            if val < node.val {
+                node.left = insert(node.left, val);
+            } else {
+                node.right = insert(node.right, val);
+            }
+            Some(node)
+        }
+        None => Some(Node { val: val, left: None, right: None }),
+    }
+}
+
+fn main() {
+    let n = 50000;
+    let rounds = 20;
+    let mut seed: i64 = 426;
+    let mut order: Vec[i64] = Vec.new();
+    for v in 0..n {
+        order.push(v);
+    }
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        // A fresh random insertion order, then the tree, then the ring.
+        for i in 0..n - 1 {
+            let j = i + (step(mut seed) * 32768 + step(mut seed)) % (n - i);
+            let keep = order[i];
+            order[i] = order[j];
+            order[j] = keep;
+        }
+        let mut root: Option[Node] = None;
+        for v in order {
+            root = insert(root, v);
+        }
+        let head = tree_to_doubly_list(root).expect("the tree is not empty");
+        checksum = (checksum * 31 + head.left.expect("a ring has a tail").val) % 1000000007;
+        // Walk the ring once, folding the values in, and break every link
+        // so the nodes are freed.
+        let mut cur = head;
+        for _ in 0..n {
+            checksum = (checksum * 31 + cur.val) % 1000000007;
+            let next = cur.right.expect("a ring has no end");
+            cur.left = None;
+            cur.right = None;
+            cur = next;
+        }
+    }
+    println(f"{rounds} rounds on {n} nodes: checksum {checksum}");
+}

@@ -1,0 +1,98 @@
+// Benchmark for #425: Word Squares -- a map of prefixes.
+//
+// Build each square a row at a time. Row r must start with the letters
+// already in column r, which the rows above it fix: row 0's letter r,
+// row 1's letter r, and so on. Index every word under each of its
+// prefixes, so the candidates for a row are one lookup away, and
+// backtrack over them. Words may repeat within a square.
+
+fn extend(rows: mut ref Vec[String], length: i64, by_prefix: ref Map[String, Vec[i64]], words: ref Vec[String], found: mut ref Vec[Vec[String]]) {
+    let r = rows.len();
+    if r == length {
+        found.push(rows.clone());
+        return;
+    }
+    let mut prefix = String.new();
+    for row in rows {
+        prefix.push(row.bytes()[r] as char);
+    }
+    match by_prefix.get(prefix) {
+        Some(candidates) => {
+            for i in candidates {
+                rows.push(words[i].clone());
+                extend(rows, length, by_prefix, words, found);
+                rows.pop();
+            }
+        }
+        None => {}
+    }
+}
+
+fn word_squares(words: Vec[String]) -> Vec[Vec[String]] {
+    let length = words[0].len();
+    let mut by_prefix: Map[String, Vec[i64]] = Map.new();
+    for i in 0..words.len() {
+        let bytes = words[i].bytes();
+        let mut prefix = String.new();
+        // Row r looks up a prefix of r letters, and r < length, so the
+        // whole word is never looked up.
+        for k in 0..length {
+            by_prefix.entry(prefix.clone()).or_insert(Vec.new()).push(i);
+            prefix.push(bytes[k] as char);
+        }
+    }
+    let mut found: Vec[Vec[String]] = Vec.new();
+    let mut rows: Vec[String] = Vec.new();
+    extend(mut rows, length, by_prefix, words, mut found);
+    found
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random word of 4 letters from the first 16.
+fn random_word(seed: mut ref i64) -> String {
+    let mut word = String.new();
+    for _ in 0..4 {
+        word.push(char.try_from((97 + step(seed) % 16) as u32).unwrap());
+    }
+    word
+}
+
+fn main() {
+    let n = 1000;
+    let rounds = 20;
+    let mut seed: i64 = 425;
+    let mut seen: Set[String] = Set.new();
+    let mut words: Vec[String] = Vec.new();
+    while words.len() < n {
+        let word = random_word(mut seed);
+        if not seen.contains(word) {
+            seen.insert(word.clone());
+            words.push(word);
+        }
+    }
+    // Each round replaces one word with a new one and searches again.
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let mut word = random_word(mut seed);
+        while seen.contains(word) {
+            word = random_word(mut seed);
+        }
+        let at = r * 389 % n;
+        seen.remove(words[at]);
+        seen.insert(word.clone());
+        words[at] = word;
+        let squares = word_squares(words);
+        total += squares.len();
+        for square in squares {
+            checksum = (checksum * 31 + square[0].bytes()[0] as i64 + square[3].bytes()[3] as i64) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds on {n} words: {total} squares, checksum {checksum}");
+}

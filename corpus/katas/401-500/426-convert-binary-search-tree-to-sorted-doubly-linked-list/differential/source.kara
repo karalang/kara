@@ -1,0 +1,366 @@
+// Differential test for LeetCode #426: Convert Binary Search Tree to
+// Sorted Doubly Linked List.
+//
+// Copies of the four arms, each run on 1,500 random binary search trees
+// of 0 to 29 distinct values from -100 to 99. The node type is defined
+// once, before the arms. Properties known by construction:
+//   P1  reading the ring right from its head gives the values sorted
+//   P2  every step left undoes a step right, and both walks are back
+//       at the head after n steps
+//   P3  the head holds the smallest value and its left neighbour the
+//       largest
+//   P4  the same values inserted in another order give the same ring
+//   P5  1 to m inserted ascending (a right spine), descending (a left
+//       spine) and middle first (a balanced tree) all give 1 to m
+
+shared struct Node {
+    val: i64,
+    mut left: Option[Node],
+    mut right: Option[Node],
+}
+
+// ---- recursive: tree_to_list.kara
+
+fn link_recursive(node: Option[Node], first: mut ref Option[Node], last: mut ref Option[Node]) {
+    match node {
+        Some(n) => {
+            link_recursive(n.left, first, last);
+            match *last {
+                Some(prev) => {
+                    prev.right = Some(n);
+                    n.left = Some(prev);
+                }
+                None => {
+                    *first = Some(n);
+                }
+            }
+            *last = Some(n);
+            link_recursive(n.right, first, last);
+        }
+        None => {}
+    }
+}
+
+fn tree_to_doubly_list_recursive(root: Option[Node]) -> Option[Node] {
+    let mut first: Option[Node] = None;
+    let mut last: Option[Node] = None;
+    link_recursive(root, mut first, mut last);
+    match (first, last) {
+        (Some(head), Some(tail)) => {
+            head.left = Some(tail);
+            tail.right = Some(head);
+            Some(head)
+        }
+        _ => None,
+    }
+}
+
+// ---- stack: tree_to_list_stack.kara
+
+fn tree_to_doubly_list_stack(root: Option[Node]) -> Option[Node] {
+    let mut stack: Vec[Node] = Vec.new();
+    let mut cur = root;
+    let mut head: Option[Node] = None;
+    let mut prev: Option[Node] = None;
+    loop {
+        while let Some(n) = cur {
+            stack.push(n);
+            cur = n.left;
+        }
+        match stack.pop() {
+            Some(n) => {
+                cur = n.right;
+                match prev {
+                    Some(p) => {
+                        p.right = Some(n);
+                        n.left = Some(p);
+                    }
+                    None => {
+                        head = Some(n);
+                    }
+                }
+                prev = Some(n);
+            }
+            None => {
+                break;
+            }
+        }
+    }
+    match (head, prev) {
+        (Some(h), Some(t)) => {
+            h.left = Some(t);
+            t.right = Some(h);
+            Some(h)
+        }
+        _ => None,
+    }
+}
+
+// ---- morris: tree_to_list_morris.kara
+
+fn tree_to_doubly_list_morris(root: Option[Node]) -> Option[Node] {
+    let mut cur = root;
+    let mut head: Option[Node] = None;
+    let mut prev: Option[Node] = None;
+    while let Some(n) = cur {
+        match n.left {
+            Some(l) => {
+                // The predecessor: the rightmost node of the left subtree,
+                // or the node whose thread already points back at n. The
+                // values are distinct, so comparing them compares nodes.
+                let mut pred = l;
+                loop {
+                    match pred.right {
+                        Some(r) => {
+                            if r.val == n.val {
+                                break;
+                            }
+                            pred = r;
+                        }
+                        None => {
+                            break;
+                        }
+                    }
+                }
+                match pred.right {
+                    None => {
+                        pred.right = Some(n);
+                        cur = n.left;
+                        continue;
+                    }
+                    Some(_) => {}
+                }
+            }
+            None => {}
+        }
+        // Visit n: everything left of it is linked already.
+        cur = n.right;
+        match prev {
+            Some(p) => {
+                p.right = Some(n);
+                n.left = Some(p);
+            }
+            None => {
+                head = Some(n);
+            }
+        }
+        prev = Some(n);
+    }
+    match (head, prev) {
+        (Some(h), Some(t)) => {
+            h.left = Some(t);
+            t.right = Some(h);
+            Some(h)
+        }
+        _ => None,
+    }
+}
+
+// ---- splice: tree_to_list_splice.kara
+
+// Join ring b after ring a and return the joined ring's head.
+fn splice_splice(a: Option[Node], b: Option[Node]) -> Option[Node] {
+    match (a, b) {
+        (Some(ha), Some(hb)) => {
+            let ta = ha.left.expect("a ring's head has a tail");
+            let tb = hb.left.expect("a ring's head has a tail");
+            ta.right = Some(hb);
+            hb.left = Some(ta);
+            tb.right = Some(ha);
+            ha.left = Some(tb);
+            Some(ha)
+        }
+        (Some(ha), None) => Some(ha),
+        (None, rest) => rest,
+    }
+}
+
+fn tree_to_doubly_list_splice(root: Option[Node]) -> Option[Node] {
+    match root {
+        Some(n) => {
+            let left = tree_to_doubly_list_splice(n.left);
+            let right = tree_to_doubly_list_splice(n.right);
+            n.left = Some(n);
+            n.right = Some(n);
+            splice_splice(splice_splice(left, Some(n)), right)
+        }
+        None => None,
+    }
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, root: Option[Node]) -> Option[Node] {
+    if arm == 0 {
+        tree_to_doubly_list_recursive(root)
+    } else if arm == 1 {
+        tree_to_doubly_list_stack(root)
+    } else if arm == 2 {
+        tree_to_doubly_list_morris(root)
+    } else {
+        tree_to_doubly_list_splice(root)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn insert(root: Option[Node], val: i64) -> Option[Node] {
+    match root {
+        Some(node) => {
+            if val < node.val {
+                node.left = insert(node.left, val);
+            } else {
+                node.right = insert(node.right, val);
+            }
+            Some(node)
+        }
+        None => Some(Node { val: val, left: None, right: None }),
+    }
+}
+
+fn build(values: ref Vec[i64]) -> Option[Node] {
+    let mut root: Option[Node] = None;
+    for v in values {
+        root = insert(root, v);
+    }
+    root
+}
+
+// The ring read from its head: the values going right, whether every
+// step back undoes a step forward, whether both walks close after n
+// steps, and the head's left neighbour (-1 if none). A broken ring
+// fails the checks rather than stopping the run. Breaks every link of
+// the nodes it reached afterwards.
+struct Reading {
+    values: Vec[i64],
+    linked: bool,
+    closed: bool,
+    before_head: i64,
+}
+
+fn is_node(node: ref Option[Node], val: i64) -> bool {
+    match node {
+        Some(n) => n.val == val,
+        None => false,
+    }
+}
+
+fn read(head: Option[Node], n: i64) -> Reading {
+    let mut values: Vec[i64] = Vec.new();
+    let mut linked = true;
+    let mut closed = n == 0;
+    let mut before_head = -1;
+    if let Some(h) = head {
+        if let Some(t) = h.left {
+            before_head = t.val;
+        }
+        let mut cur: Option[Node] = Some(h);
+        for _ in 0..n {
+            if let Some(c) = cur {
+                values.push(c.val);
+                if let Some(next) = c.right {
+                    if not is_node(next.left, c.val) {
+                        linked = false;
+                    }
+                }
+                cur = c.right;
+            }
+        }
+        closed = is_node(cur, h.val);
+        for _ in 0..n {
+            if let Some(c) = cur {
+                cur = c.left;
+            }
+        }
+        closed = closed and is_node(cur, h.val);
+        let mut cur: Option[Node] = Some(h);
+        for _ in 0..n {
+            if let Some(c) = cur {
+                cur = c.right;
+                c.left = None;
+                c.right = None;
+            }
+        }
+    }
+    Reading { values: values, linked: linked, closed: closed, before_head: before_head }
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4260;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let n = step(mut seed) % 30;
+        let mut values: Vec[i64] = Vec.new();
+        let mut used: Set[i64] = Set.new();
+        while values.len() < n {
+            let v = step(mut seed) % 200 - 100;
+            if not used.contains(v) {
+                used.insert(v);
+                values.push(v);
+            }
+        }
+        let mut sorted = values.clone();
+        sorted.sort();
+        // P4: the same values inserted in another order.
+        let mut shuffled = values.clone();
+        for i in 0..n {
+            let j = i + step(mut seed) % (n - i);
+            let keep = shuffled[i];
+            shuffled[i] = shuffled[j];
+            shuffled[j] = keep;
+        }
+        // P5: 1 to m inserted ascending (a right spine), descending (a
+        // left spine), and middle first (a balanced tree).
+        let m = 1 + step(mut seed) % 20;
+        let mut ascending: Vec[i64] = Vec.new();
+        let mut descending: Vec[i64] = Vec.new();
+        for v in 1..m + 1 {
+            ascending.push(v);
+            descending.push(m + 1 - v);
+        }
+        let mut balanced: Vec[i64] = Vec.new();
+        let mut ranges: Vec[(i64, i64)] = vec![(1, m)];
+        let mut at = 0;
+        while at < ranges.len() {
+            let (lo, hi) = ranges[at];
+            at += 1;
+            if lo <= hi {
+                let mid = (lo + hi) / 2;
+                balanced.push(mid);
+                ranges.push((lo, mid - 1));
+                ranges.push((mid + 1, hi));
+            }
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let r = read(solve(arm, build(values)), n);
+            report(1, arm, case, r.values == sorted, mut failures);
+            report(2, arm, case, r.linked and r.closed, mut failures);
+            report(3, arm, case, n == 0 or (r.values.len() == n and r.values[0] == sorted[0] and r.before_head == sorted[n - 1]), mut failures);
+            report(4, arm, case, read(solve(arm, build(shuffled)), n).values == sorted, mut failures);
+            let up = read(solve(arm, build(ascending)), m);
+            let down = read(solve(arm, build(descending)), m);
+            let even = read(solve(arm, build(balanced)), m);
+            report(5, arm, case, up.values == ascending and down.values == ascending and even.values == ascending and up.closed and down.closed and even.closed, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

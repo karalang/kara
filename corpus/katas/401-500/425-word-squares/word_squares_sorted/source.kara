@@ -1,0 +1,116 @@
+// LeetCode #425: Word Squares -- sorted words and binary search.
+//
+// Sort the words. The words with a given prefix are then one run of the
+// sorted list, from the first word not less than the prefix up to the
+// first word that does not start with it; binary search finds the
+// start, and the run is walked from there.
+
+// The first index whose word is not less than `prefix`.
+fn lower_bound(sorted: ref Vec[String], prefix: ref String) -> i64 {
+    let mut low = 0;
+    let mut high = sorted.len();
+    while low < high {
+        let mid = (low + high) / 2;
+        if sorted[mid] < *prefix {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    low
+}
+
+fn extend(rows: mut ref Vec[String], length: i64, sorted: ref Vec[String], found: mut ref Vec[Vec[String]]) {
+    let r = rows.len();
+    if r == length {
+        found.push(rows.clone());
+        return;
+    }
+    let mut prefix = String.new();
+    for row in rows {
+        prefix.push(row.bytes()[r] as char);
+    }
+    let mut i = lower_bound(sorted, prefix);
+    while i < sorted.len() and sorted[i].starts_with(prefix) {
+        rows.push(sorted[i].clone());
+        extend(rows, length, sorted, found);
+        rows.pop();
+        i += 1;
+    }
+}
+
+fn word_squares(words: Vec[String]) -> Vec[Vec[String]] {
+    let mut sorted = words.clone();
+    sorted.sort();
+    let mut found: Vec[Vec[String]] = Vec.new();
+    let mut rows: Vec[String] = Vec.new();
+    extend(mut rows, words[0].len(), sorted, mut found);
+    found
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The squares as "row/row/row" lines, sorted, since any order is allowed.
+fn lines(squares: ref Vec[Vec[String]]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for square in squares {
+        out.push(square.join("/"));
+    }
+    out.sort();
+    out
+}
+
+fn show(text: Str) {
+    let words = text.split_whitespace();
+    let found = lines(word_squares(words));
+    println(f"\"{text}\": {found.len()} [{found.join(", ")}]");
+}
+
+fn main() {
+    show("area lead wall lady ball");
+    show("abat baba atan atal");
+    show("a");
+    show("ab");
+    show("ab ba");
+    show("aa");
+    show("abc bde cef");
+    show("abc bca cab");
+    show("xy yz");
+    show("ab bc cd");
+    // 300 random lists of 3 to 30 distinct words of 2 to 4 letters
+    // from a three-letter alphabet, so that squares are common.
+    let mut seed: i64 = 425;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let length = 2 + step(mut seed) % 3;
+        let wanted = 3 + step(mut seed) % 28;
+        let mut seen: Set[String] = Set.new();
+        let mut words: Vec[String] = Vec.new();
+        let mut tries = 0;
+        while words.len() < wanted and tries < 200 {
+            tries += 1;
+            let mut word = String.new();
+            for _ in 0..length {
+                word.push(char.try_from((97 + step(mut seed) % 3) as u32).unwrap());
+            }
+            if not seen.contains(word) {
+                seen.insert(word.clone());
+                words.push(word);
+            }
+        }
+        let found = lines(word_squares(words));
+        total += found.len();
+        for line in found {
+            for b in line.bytes() {
+                checksum = (checksum * 31 + b as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"300 random lists: {total} squares, checksum {checksum}");
+}

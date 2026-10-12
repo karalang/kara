@@ -1,0 +1,107 @@
+// LeetCode #425: Word Squares -- scan every word.
+//
+// The same row-by-row search with no index: to fill row r, try every
+// word and keep it when its first r letters match column r of the rows
+// above. Slower by a factor of the word count, but it needs nothing
+// built in advance.
+
+fn extend(rows: mut ref Vec[i64], length: i64, words: ref Vec[String], found: mut ref Vec[Vec[String]]) {
+    let r = rows.len();
+    if r == length {
+        let mut square: Vec[String] = Vec.new();
+        for i in rows {
+            square.push(words[i].clone());
+        }
+        found.push(square);
+        return;
+    }
+    for w in 0..words.len() {
+        let candidate = words[w].bytes();
+        let mut fits = true;
+        for k in 0..r {
+            if words[rows[k]].bytes()[r] != candidate[k] {
+                fits = false;
+                break;
+            }
+        }
+        if fits {
+            rows.push(w);
+            extend(rows, length, words, found);
+            rows.pop();
+        }
+    }
+}
+
+fn word_squares(words: Vec[String]) -> Vec[Vec[String]] {
+    let mut found: Vec[Vec[String]] = Vec.new();
+    let mut rows: Vec[i64] = Vec.new();
+    extend(mut rows, words[0].len(), words, mut found);
+    found
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The squares as "row/row/row" lines, sorted, since any order is allowed.
+fn lines(squares: ref Vec[Vec[String]]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for square in squares {
+        out.push(square.join("/"));
+    }
+    out.sort();
+    out
+}
+
+fn show(text: Str) {
+    let words = text.split_whitespace();
+    let found = lines(word_squares(words));
+    println(f"\"{text}\": {found.len()} [{found.join(", ")}]");
+}
+
+fn main() {
+    show("area lead wall lady ball");
+    show("abat baba atan atal");
+    show("a");
+    show("ab");
+    show("ab ba");
+    show("aa");
+    show("abc bde cef");
+    show("abc bca cab");
+    show("xy yz");
+    show("ab bc cd");
+    // 300 random lists of 3 to 30 distinct words of 2 to 4 letters
+    // from a three-letter alphabet, so that squares are common.
+    let mut seed: i64 = 425;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let length = 2 + step(mut seed) % 3;
+        let wanted = 3 + step(mut seed) % 28;
+        let mut seen: Set[String] = Set.new();
+        let mut words: Vec[String] = Vec.new();
+        let mut tries = 0;
+        while words.len() < wanted and tries < 200 {
+            tries += 1;
+            let mut word = String.new();
+            for _ in 0..length {
+                word.push(char.try_from((97 + step(mut seed) % 3) as u32).unwrap());
+            }
+            if not seen.contains(word) {
+                seen.insert(word.clone());
+                words.push(word);
+            }
+        }
+        let found = lines(word_squares(words));
+        total += found.len();
+        for line in found {
+            for b in line.bytes() {
+                checksum = (checksum * 31 + b as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"300 random lists: {total} squares, checksum {checksum}");
+}

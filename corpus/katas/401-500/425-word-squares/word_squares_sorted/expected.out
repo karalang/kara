@@ -1,0 +1,11 @@
+"area lead wall lady ball": 2 [ball/area/lead/lady, wall/area/lead/lady]
+"abat baba atan atal": 2 [baba/abat/baba/atal, baba/abat/baba/atan]
+"a": 1 [a]
+"ab": 0 []
+"ab ba": 2 [ab/ba, ba/ab]
+"aa": 1 [aa/aa]
+"abc bde cef": 1 [abc/bde/cef]
+"abc bca cab": 3 [abc/bca/cab, bca/cab/abc, cab/abc/bca]
+"xy yz": 1 [xy/yz]
+"ab bc cd": 2 [ab/bc, bc/cd]
+300 random lists: 60815 squares, checksum 838136543
