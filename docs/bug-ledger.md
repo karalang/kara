@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 171 |
 | diagnostics | 152 |
 | perf | 148 |
-| false-positive | 139 |
+| false-positive | 140 |
 | crash | 114 |
 | soundness | 98 |
 | use-after-free | 90 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 898 |
 | typecheck | 357 |
 | other | 114 |
-| ownership | 81 |
+| ownership | 82 |
 | cli | 75 |
 | autopar | 59 |
 | parser | 59 |
@@ -580,7 +580,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-5 | 2026-10-12 | typecheck | low | String-receiver `.parse()` (B-2026-07-19-5's type-directed sugar for `T.parse(s)`) works on a `String` but is refused on a `Str` (a `Str` parameter, or a slice `s[a..b]`) with "no method 'parse' on type 'String'", which names the wrong type and gives no hint toward `i64.parse(s)` | — |
 | B-2026-10-12-6 | 2026-10-12 | typecheck+interp | medium | The v1 spec gives every number type `fn parse(s: Str) -> Result[Self, ParseError]` (docs/library/core-types.md § Parsing; strings.md; the error-type list in library/README.md), but the compiler still returns `Option[Self]` and has no `ParseError`: the spec's own example `match i64.parse(line.trim()) { Ok(n) => ..., Err(e) => ... }` is refused by `karac check` and `karac __mir-run` | — |
 | B-2026-10-12-7 | 2026-10-12 | typecheck+interp | medium | `Str.split` / `lines` / `split_whitespace` return an eager `Vec[String]` of copies, but the v1 spec (docs/library/strings.md) gives them `impl Iterator[Item = Str]` of views: strings.md's own example `let parts: Vec[Str] = line.split(",").collect();` is refused by `karac check` ("no method 'collect' on type 'Vec'") | — |
-| B-2026-10-12-9 | 2026-10-12 | typecheck | medium | `Map`/`SortedMap` `iter()` items are typed `(K, V)`, not the spec's `(ref K, ref V)`: `for (c, n) in m.iter() { if *n > 0 { .. } }` passes `karac check` but `karac __mir-run` refuses it ("unary '*' requires 'ref T' ... found 'i64'", with no location), and `*p.0` on an undestructured item is refused by check as well; `SortedMap.floor` / `ceiling` (spec: `Option[(ref K, ref V)]`) are typed `(K, V)` the same way, so `*v` on their items is refused by check; CORRECTION (kata 399): not specific to Map, a destructured `Vec[(String, f64)]` iter item has the same split, `*w` passing check and refused by `__mir-run` as "found 'f64'"; CORRECTION (kata 403): not specific to tuple items either, an undestructured `Set[i64]` iter item has it too, `for k in s.iter() { t += *k; }` passing check and refused by `__mir-run` as "found 'i64'" (collections.md types `Set.iter()` items `ref T`) | — |
+| B-2026-10-12-9 | 2026-10-12 | typecheck | medium | `Map`/`SortedMap` `iter()` items are typed `(K, V)`, not the spec's `(ref K, ref V)`: `for (c, n) in m.iter() { if *n > 0 { .. } }` passes `karac check` but `karac __mir-run` refuses it ("unary '*' requires 'ref T' ... found 'i64'", with no location), and `*p.0` on an undestructured item is refused by check as well; `SortedMap.floor` / `ceiling` (spec: `Option[(ref K, ref V)]`) are typed `(K, V)` the same way, so `*v` on their items is refused by check; CORRECTION (kata 399): not specific to Map, a destructured `Vec[(String, f64)]` iter item has the same split, `*w` passing check and refused by `__mir-run` as "found 'f64'"; CORRECTION (kata 403): not specific to tuple items either, an undestructured `Set[i64]` iter item has it too, `for k in s.iter() { t += *k; }` passing check and refused by `__mir-run` as "found 'i64'" (collections.md types `Set.iter()` items `ref T`); CORRECTION (kata 432): not specific to `iter()` either, a bare `for (_, c) in counts` over a `Map[String, i64]` (an owned local, or a `ref` parameter) has it too, `*c` passing check and refused by `__mir-run` as "found 'i64'" | — |
 | B-2026-10-12-12 | 2026-10-12 | parser | low | A parameter mode written before the parameter's NAME (`fn new(own nums: Vec[i64])`, `ref v: T`, `mut v: T`) is reported as "'own' is a reserved keyword and cannot be used as an identifier", with no fix; the spec writes the mode in the type (`nums: own Vec[i64]`), and receivers write it before `self` (`own self`), which is what invites the mistake | — |
 | B-2026-10-12-13 | 2026-10-12 | typecheck | medium | A string literal is not typed as `Str` where a `Str` is expected, except as a call argument or inside `Some(...)`: `let x: Str = "abc";`, `let v: Vec[Str] = vec!["ab", "c"];`, `let t: (Str, i64) = ("ab", 1);` and `fn g() -> Str { "abc" }` are all refused with "expected 'StringSlice', found 'String'" by `karac check` and by the MIR builder; docs/design.md § String literals says a literal is a `Str` wherever one is expected, "the same rule in every scope" | — |
 | B-2026-10-12-14 | 2026-10-12 | ownership | medium | `karac check` treats `Str` as move-only: using a `Str` parameter twice (`String.from(s)` then `String.from(s)`) is refused as "value 's' moved here, used again here", `let y = x;` moves a `Str`, and reading `v[0]` out of a `Vec[Str]` is refused as a move out of a collection element; docs/design.md § Strings says `Str` "is `Copy`", and `karac __mir-run` already runs the twice-used parameter | — |
@@ -588,6 +588,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-17 | 2026-10-12 | resolver | medium | The MIR pipeline resolves the Kāra library source in the user program's scope: a user `struct Skip`, or an enum variant `Token.Skip`, is refused by `karac __mir-run` as "'Skip' is already defined in this scope" though `karac check` and `karac run --interp` accept it; the same for `Take`, `Chain`, `Zip` and `Peekable`, the adaptor structs in runtime/stdlib/source/iter.kara | — |
 | B-2026-10-12-18 | 2026-10-12 | resolver | medium | `karac fix` rewrites a call to an undefined name into a call of an unrelated local: `abs(a)` (where `abs` is a method, `a.abs()`) gets "undefined name 'abs', did you mean 'a'?" with a machine-applicable replacement, and `karac fix` turns it into `a(a)`, which then fails as "type 'i64' is not callable" | — |
 | B-2026-10-12-19 | 2026-10-12 | typecheck | medium | `karac fix` answers a move out of `for c in node.children` (a field of an OWNED local) with `#[derive(Clone)]` + `.clone()` instead of `.into_iter()`, turning a consuming walk into a copying one | — |
+| B-2026-10-12-20 | 2026-10-12 | ownership | medium | Storing a PARAMETER of a `shared` type in a `weak` field counts as a MOVE in `karac check`: `fn link(at: N, b: N) { b.prev = at; at.next = Some(b); }` (`prev: weak N`) is refused as `value 'at' moved here, used again here`, for a bare, `ref` or `own` parameter alike, while the same two statements on LOCALS check clean and `karac __mir-run` runs the refused program correctly; the help also claims `at` has no `.clone()` because that exists only on RC types, though `N` is one | — |
 
 ### Relocated
 
