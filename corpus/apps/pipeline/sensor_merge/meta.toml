@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "stmt-par groups (source.orig.kara lines): L302-L304 three fs.write, one per sensor file; L310-L312 three fs.read_to_string of those files"
 bucket = "a"
-classified_with = "52b89af30"
+classified_with = "219b848c9"
 model_rev = "1aa23105"
 model_src = "fc184fd9"

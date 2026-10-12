@@ -12,5 +12,5 @@ backends = []
 env = {}
 note = "first literal of the holding test: 'skip: libkarac_runtime.a not built (run `cargo build -p karac-runtime --release`)' output differs between two legacy runs (a bound port, scheduling or timing)"
 bucket = "skip:first literal of the holding test: 'skip"
-classified_with = "52b89af30"
+classified_with = "219b848c9"
 extracted_src = "bdca71be"
