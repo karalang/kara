@@ -107,6 +107,10 @@ fn res_of(
             None => return builtin(&sym.name, &r.rest),
         },
     };
+    let start_def = match &start {
+        Cursor::Def(d) => Some(*d),
+        Cursor::Module(_) => None,
+    };
     let mut cur = start;
     for seg in &r.rest {
         cur = match cur {
@@ -117,6 +121,12 @@ fn res_of(
                 None if defs.table.get(d).path.segments.first().map(String::as_str)
                     == Some("std") =>
                 {
+                    return builtin(&sym.name, &r.rest)
+                }
+                // A variant spelled like a compiler-provided type
+                // (`Kind.Map` beside `Map.new()`) has no members: the
+                // path names the type.
+                None if Some(d) == start_def && defs.table.get(d).kind == DefKind::Variant => {
                     return builtin(&sym.name, &r.rest)
                 }
                 None => return Res::Err,

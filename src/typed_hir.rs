@@ -131,8 +131,14 @@ impl HirDefs for ProgramHirDefs<'_> {
 
     fn method_callee(&self, owner: &str, method: &str) -> Option<Callee> {
         let builtin = || Some(Callee::Builtin(format!("{owner}.{method}")));
-        let Some(owner_def) = self.defs.lookup(self.module, owner) else {
-            // A primitive or compiler-provided type: `i64.abs`, `String.len`.
+        // A primitive or compiler-provided type: `i64.abs`, `String.len`.
+        // A variant spelled like one (`Kind.Map`) is not the owner of
+        // `Map.new()`.
+        let Some(owner_def) = self
+            .defs
+            .lookup(self.module, owner)
+            .filter(|&d| self.defs.table.get(d).kind != DefKind::Variant)
+        else {
             return builtin();
         };
         // `Result.Ok(x)` parses as a method call on the enum: a variant

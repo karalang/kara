@@ -12853,7 +12853,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                         .unwrap_or_default()
                 };
                 for (i, a) in args.iter().enumerate() {
-                    let stores = stores || owns.get(i).copied().unwrap_or(false);
+                    // Only a library value (a pooled connection, a permit) for
+                    // now: the natives that take `own` text still read it
+                    // through a borrow and would leak it.
+                    let declared_own = owns.get(i).copied().unwrap_or(false) && {
+                        let at = self.expr_ty(&a.value)?;
+                        let (_, b) = self.strip_ty_full(at);
+                        matches!(self.tys().tcx().kind(b), HK::Adt { .. })
+                    };
+                    let stores = stores || declared_own;
                     if self.is_fn_typed(a.value.id)
                         || matches!(a.value.kind, ExprKind::Closure { .. })
                     {
@@ -15966,6 +15974,22 @@ fn main() {
             run_source(src),
             Ok(("4 true false 3 12 0\n".to_string(), Some(0)))
         );
+    }
+
+    /// A variant named like a library type (`Kind.Map`) leaves `Map.new()`
+    /// naming the type.
+    #[test]
+    fn a_variant_named_map_leaves_map_new_alone() {
+        let src = r#"
+struct Holder { index: Map[i64, i64] }
+enum Kind { Map(i64), Other }
+fn main() {
+    let h = Holder { index: Map.new() };
+    let k = Kind.Map(3);
+    match k { Kind.Map(n) => println(f"{n} {h.index.len()}"), Kind.Other => println("other") }
+}
+"#;
+        assert_eq!(run_source(src), Ok(("3 0\n".to_string(), Some(0))));
     }
 
     /// Two impls of one generic trait on one type (`From[A]`, `From[B]`)
