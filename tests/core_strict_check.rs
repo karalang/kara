@@ -2899,6 +2899,36 @@ fn a_peeked_item_is_borrowed() {
     );
 }
 
+/// D5 covers function TYPES as well as items: a bare parameter of
+/// `Fn(String) -> i64` borrows, so calling through it leaves the argument
+/// with the caller, and an item whose parameter borrows has that type.
+/// `own T` in a function type still takes the argument.
+#[test]
+fn a_function_type_parameter_borrows() {
+    accepted(
+        "fn-type-borrows",
+        "fn nlen(s: String) -> i64 { s.len() }\n\
+         fn twice(f: Fn(String) -> i64, s: String) -> i64 { f(s) + f(s) }\n\
+         fn pick() -> Fn(String) -> i64 { nlen }\n\
+         fn main() {\n\
+             let s = \"abc\".to_string();\n\
+             let g = pick();\n\
+             println(twice(nlen, s) + g(s));\n\
+             println(s);\n\
+         }\n",
+    );
+    rejected_then_fixed(
+        "fn-type-own",
+        "fn main() {\n\
+             let f: Fn(own String) -> i64 = |s| s.len();\n\
+             let s = \"abc\".to_string();\n\
+             println(f(s));\n\
+             println(s);\n\
+         }\n",
+        "error[ownership]",
+    );
+}
+
 /// B-2026-10-12-2: `SortedSet.min()` / `.max()` lend the element
 /// (collections.md: `Option[ref T]`), as `iter()` and `range()` do, so an
 /// explicit `*x` reads it (§5.10) and keeping a `String` takes a copy.

@@ -13410,6 +13410,13 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     crate::desugar::with_collect_through_from_iterator(|| {
         crate::prepare_for_resolve(&mut program);
     });
+    // D5: the checker reads a bare parameter as the borrow it is, of a
+    // function item and of a function type alike, as `karac check` does.
+    // Rewriting both keeps an item used as a value (`map(nlen)`, a returned
+    // `shout`) the type its signature has.
+    if d5_params() {
+        crate::d5_params::borrow_bare_params(&mut program);
+    }
     let r = crate::resolve(&program);
     if !r.errors.is_empty() {
         return Err(format!("resolve: {:?}", r.errors[0]));
@@ -14702,10 +14709,9 @@ fn main() { println(f"{f(S { v: 1 })} {g(S { v: 2 })}"); }
 "#;
         let err = run_source(moved).unwrap_err();
         D5.with(|c| c.set(None));
-        assert!(
-            err.contains("move of (*_1) through a shared reference"),
-            "{err}"
-        );
+        // The checker reads the bare parameter as the borrow it is
+        // (`d5_params::borrow_bare_params`), so the move is refused there.
+        assert!(err.contains("expected 'S', found 'ref S'"), "{err}");
     }
 
     /// Under D5 a borrowed handle (or `Option` of one) stored into a field
@@ -15121,7 +15127,7 @@ fn main() {
     fn a_nested_impl_target_types_self() {
         let src = r#"
 impl[T] Option[Option[T]] {
-    fn flat(self) -> Option[T] {
+    fn flat(own self) -> Option[T] {
         match self {
             Some(inner) => inner,
             None => None,

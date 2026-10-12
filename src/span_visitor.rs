@@ -358,6 +358,9 @@ fn visit_trait_bound(b: &crate::ast::TraitBound, visit: &mut impl FnMut(&Span)) 
     if let Some(args) = &b.generic_args {
         visit_generic_args(args, visit);
     }
+    if let Some(sig) = &b.fn_sig {
+        visit_type(sig, visit);
+    }
 }
 
 fn visit_generic_params(g: &crate::ast::GenericParams, visit: &mut impl FnMut(&Span)) {
@@ -873,6 +876,8 @@ pub fn shift_expr_spans(e: &mut Expr, hole_offset: usize, hole_line: usize, hole
 pub trait MutVisitor {
     fn span(&mut self, span: &mut Span);
     fn node_id(&mut self, _id: &mut NodeId) {}
+    /// Every type expression, before its parts are walked.
+    fn type_expr(&mut self, _t: &mut TypeExpr) {}
 }
 
 struct SpanOnly<F>(F);
@@ -894,6 +899,11 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
 /// Visit every span and every expression, pattern and statement id in `item`.
 pub fn walk_item_mut_with(item: &mut Item, visit: &mut impl MutVisitor) {
     walk_item_mut(item, visit);
+}
+
+/// [`walk_item_mut_with`] for one function or method.
+pub fn walk_function_mut_with(f: &mut Function, visit: &mut impl MutVisitor) {
+    visit_function_mut(f, visit);
 }
 
 /// Every expression, pattern and statement id in `e`, in walk order (which
@@ -1575,6 +1585,7 @@ fn visit_ensures_mut(e: &mut EnsuresClause, visit: &mut impl MutVisitor) {
 /// shape dims), and path/generic-arg spans — so a rebase leaves no
 /// file-local offset behind to collide.
 fn visit_type_spans_mut(t: &mut TypeExpr, visit: &mut impl MutVisitor) {
+    visit.type_expr(t);
     visit.span(&mut t.span);
     match &mut t.kind {
         crate::ast::TypeKind::Path(p) => visit_path_expr_mut(p, visit),
@@ -1671,6 +1682,9 @@ fn visit_trait_bound_mut(b: &mut crate::ast::TraitBound, visit: &mut impl MutVis
         for a in args {
             visit_generic_arg_mut(a, visit);
         }
+    }
+    if let Some(sig) = &mut b.fn_sig {
+        visit_type_spans_mut(sig, visit);
     }
 }
 

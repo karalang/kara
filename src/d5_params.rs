@@ -36,6 +36,8 @@ const COPY_BOUNDS: &[&str] = &["Copy", "Numeric", "Integer", "Float"];
 /// a `shared` type, an `Option` or tuple of those: [`copy_like`]),
 /// function-typed and `impl Trait` parameters, functions exported to a
 /// wasm host (`#[target(...)]`), and the standard library's own bodies.
+/// The parameters of function types are rewritten the same way
+/// ([`borrow_fn_type_params`]).
 ///
 /// A trait method's parameters take the modes the trait declares, so an
 /// impl of a user trait follows the trait's rewrite position by position,
@@ -132,6 +134,90 @@ pub fn borrow_bare_params(program: &mut Program) {
             _ => {}
         }
     }
+    borrow_fn_type_params(program, &copy);
+}
+
+/// A function type's bare parameters borrow as an item's do:
+/// `Fn(String) -> i64` reads `Fn(ref String) -> i64`, the type of
+/// `fn f(s: String) -> i64` once its parameter borrows, so an item used as
+/// a value still has the type written for it. An `own T` parameter
+/// (`MutFn(own Self.Item) -> U`) stays owned. Function types in
+/// signatures, bounds, fields, aliases and bodies are all rewritten; the
+/// standard library's own items are not.
+fn borrow_fn_type_params(program: &mut Program, copy: &FxHashSet<String>) {
+    for item in &mut program.items {
+        let skip = match &*item {
+            Item::Function(f) => f.stdlib_origin || exported(&f.attributes),
+            Item::TraitDef(t) => t.stdlib_origin,
+            Item::StructDef(s) => s.stdlib_origin,
+            Item::EnumDef(e) => e.stdlib_origin,
+            Item::UnionDef(u) => u.stdlib_origin,
+            Item::ImplBlock(imp) => imp
+                .items
+                .iter()
+                .any(|it| matches!(it, ImplItem::Method(m) if m.stdlib_origin)),
+            _ => false,
+        };
+        if skip {
+            continue;
+        }
+        let mut copy = copy.clone();
+        copy.extend(item_copy_bounded(item));
+        crate::span_visitor::walk_item_mut_with(item, &mut FnTypeParams { copy: &copy });
+    }
+}
+
+struct FnTypeParams<'a> {
+    copy: &'a FxHashSet<String>,
+}
+
+impl crate::span_visitor::MutVisitor for FnTypeParams<'_> {
+    fn span(&mut self, _: &mut crate::token::Span) {}
+    fn type_expr(&mut self, t: &mut TypeExpr) {
+        let TypeKind::FnType {
+            params, own_params, ..
+        } = &mut t.kind
+        else {
+            return;
+        };
+        for (i, p) in params.iter_mut().enumerate() {
+            if !own_params.get(i).copied().unwrap_or(false) && borrows(p, self.copy) {
+                wrap_ref(p);
+            }
+        }
+    }
+}
+
+/// The type parameters an item's generics, or its methods', bound by `Copy`.
+fn item_copy_bounded(item: &Item) -> Vec<String> {
+    let mut out = Vec::new();
+    let fun = |f: &Function, out: &mut Vec<String>| {
+        out.extend(copy_bounded(f.generic_params.as_ref(), f.where_clause.as_ref()));
+    };
+    match item {
+        Item::Function(f) => fun(f, &mut out),
+        Item::ImplBlock(imp) => {
+            out.extend(copy_bounded(imp.generic_params.as_ref(), imp.where_clause.as_ref()));
+            for it in &imp.items {
+                if let ImplItem::Method(m) = it {
+                    fun(m, &mut out);
+                }
+            }
+        }
+        Item::TraitDef(t) => {
+            out.extend(copy_bounded(t.generic_params.as_ref(), t.where_clause.as_ref()));
+            for it in &t.items {
+                if let TraitItem::Method(m) = it {
+                    out.extend(copy_bounded(m.generic_params.as_ref(), m.where_clause.as_ref()));
+                }
+            }
+            out.push("Self".to_string());
+        }
+        Item::StructDef(s) => out.extend(copy_bounded(s.generic_params.as_ref(), s.where_clause.as_ref())),
+        Item::EnumDef(e) => out.extend(copy_bounded(e.generic_params.as_ref(), e.where_clause.as_ref())),
+        _ => {}
+    }
+    out
 }
 
 fn borrow_fn(f: &mut Function, copy: &FxHashSet<String>) {
@@ -194,22 +280,30 @@ fn copy_bounded(gp: Option<&GenericParams>, wc: Option<&WhereClause>) -> Vec<Str
 
 fn apply(params: &mut [Param], modes: &[bool]) {
     for (p, borrow) in params.iter_mut().zip(modes) {
-        if !*borrow || p.is_own || matches!(p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
-            continue;
+        if *borrow && !p.is_own {
+            wrap_ref(&mut p.ty);
         }
-        let span = p.ty.span;
-        let inner = std::mem::replace(
-            &mut p.ty,
-            TypeExpr {
-                kind: TypeKind::Unit,
-                span,
-            },
-        );
-        p.ty = TypeExpr {
-            span: inner.span,
-            kind: TypeKind::Ref(Box::new(inner)),
-        };
     }
+}
+
+/// `T` becomes `ref T`, keeping `T`'s span: [`implied_borrows`] tells the
+/// rewrite's `ref` from a written one by that.
+fn wrap_ref(ty: &mut TypeExpr) {
+    if matches!(ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
+        return;
+    }
+    let span = ty.span;
+    let inner = std::mem::replace(
+        ty,
+        TypeExpr {
+            kind: TypeKind::Unit,
+            span,
+        },
+    );
+    *ty = TypeExpr {
+        span: inner.span,
+        kind: TypeKind::Ref(Box::new(inner)),
+    };
 }
 
 /// Whether a bare parameter of this type becomes a borrow.
