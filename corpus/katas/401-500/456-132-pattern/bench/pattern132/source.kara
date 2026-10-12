@@ -1,0 +1,70 @@
+// Benchmark for #456: the ★ arm (pattern132.kara) on 10 arrays of
+// 1,000,000 numbers with no 132 pattern, built once: runs of 1 to 1,000
+// rising numbers, each run below the one before it. Each of 5 rounds,
+// for every array, sets one number to a random value from -10^9 to 10^9
+// half the time (which almost always makes a pattern), checks the
+// array, and puts the number back.
+
+fn find132pattern(nums: Vec[i64]) -> bool {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut third = i64.MIN;
+    let mut i = nums.len() - 1;
+    while i >= 0 {
+        if nums[i] < third {
+            return true;
+        }
+        while stack.len() > 0 and stack[stack.len() - 1] < nums[i] {
+            third = stack.pop().expect("a candidate");
+        }
+        stack.push(nums[i]);
+        i -= 1;
+    }
+    false
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let arrays = 10;
+    let n = 1000000;
+    let rounds = 5;
+    let mut seed: i64 = 456;
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..arrays {
+        let mut nums: Vec[i64] = Vec.new();
+        let mut top: i64 = 1000000000;
+        while nums.len() < n {
+            let run = (1 + next_random(mut seed) % 1000).min(n - nums.len());
+            let low = top - run * 10 - 1 - next_random(mut seed) % 100;
+            for t in 0..run {
+                nums.push(low + t * 10 + next_random(mut seed) % 10);
+            }
+            top = low;
+        }
+        all.push(nums);
+    }
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        for a in 0..arrays {
+            let at = (next_random(mut seed) * 65536 + next_random(mut seed)) % n;
+            let old = all[a][at];
+            let value = (next_random(mut seed) * 65536 + next_random(mut seed)) % 2000000001 - 1000000000;
+            if next_random(mut seed) % 2 == 0 {
+                all[a][at] = value;
+            }
+            let has = find132pattern(all[a]);
+            all[a][at] = old;
+            if has {
+                found += 1;
+            }
+            checksum = (checksum * 31 + (if has { at + 1 } else { 0 })) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds on {arrays} arrays of {n}: {found} with the pattern, checksum {checksum}");
+}

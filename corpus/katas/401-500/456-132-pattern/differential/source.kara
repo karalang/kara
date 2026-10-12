@@ -1,0 +1,237 @@
+// Differential test for LeetCode #456: 132 Pattern.
+//
+// Copies of the four arms, each run on 1,500 random cases.
+// Properties:
+//   P1  on 1 to 8 numbers within 0 to 4, the answer is brute force's
+//       over every triple
+//   P2  on 1 to 60 numbers over a mixed spread, scaling by 1 to 5 and
+//       adding a constant keeps the answer
+//   P3  with a number below all of them put first, the pattern exists
+//       exactly when some pair is out of order
+//   P4  a number no larger than the smallest put last keeps the answer
+//   P5  a "1", a "3" and a "2" planted in that order give true
+
+// ---- right: pattern132.kara
+
+fn find132pattern_right(nums: Vec[i64]) -> bool {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut third = i64.MIN;
+    let mut i = nums.len() - 1;
+    while i >= 0 {
+        if nums[i] < third {
+            return true;
+        }
+        while stack.len() > 0 and stack[stack.len() - 1] < nums[i] {
+            third = stack.pop().expect("a candidate");
+        }
+        stack.push(nums[i]);
+        i -= 1;
+    }
+    false
+}
+
+// ---- prefix: pattern132_prefix.kara
+
+fn find132pattern_prefix(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    let mut lowest: Vec[i64] = Vec.new();
+    let mut low = nums[0];
+    for x in nums {
+        low = low.min(x);
+        lowest.push(low);
+    }
+    let mut stack: Vec[i64] = Vec.new();
+    let mut j = n - 1;
+    while j >= 1 {
+        let one = lowest[j - 1];
+        if nums[j] > one {
+            while stack.len() > 0 and stack[stack.len() - 1] <= one {
+                stack.pop();
+            }
+            if stack.len() > 0 and stack[stack.len() - 1] < nums[j] {
+                return true;
+            }
+            stack.push(nums[j]);
+        }
+        j -= 1;
+    }
+    false
+}
+
+// ---- ordered: pattern132_ordered.kara
+
+fn find132pattern_ordered(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    let mut right: SortedMap[i64, i64] = SortedMap.new();
+    for k in 1..n {
+        *right.entry(nums[k]).or_insert(0) += 1;
+    }
+    let mut low = nums[0];
+    for j in 1..n {
+        // nums[j] leaves the right side.
+        right[nums[j]] -= 1;
+        if right[nums[j]] == 0 {
+            right.remove(nums[j]);
+        }
+        if nums[j] > low {
+            if let Some((two, _)) = right.ceiling(low + 1) {
+                if *two < nums[j] {
+                    return true;
+                }
+            }
+        }
+        low = low.min(nums[j]);
+    }
+    false
+}
+
+// ---- scan: pattern132_scan.kara
+
+fn find132pattern_scan(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    let mut low = nums[0];
+    for j in 1..n {
+        if nums[j] > low {
+            for k in j + 1..n {
+                if nums[k] > low and nums[k] < nums[j] {
+                    return true;
+                }
+            }
+        }
+        low = low.min(nums[j]);
+    }
+    false
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn has(arm: i64, nums: Vec[i64]) -> bool {
+    if arm == 0 {
+        find132pattern_right(nums)
+    } else if arm == 1 {
+        find132pattern_prefix(nums)
+    } else if arm == 2 {
+        find132pattern_ordered(nums)
+    } else {
+        find132pattern_scan(nums)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Every triple, tried one by one.
+fn brute(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    for i in 0..n {
+        for j in i + 1..n {
+            for k in j + 1..n {
+                if nums[i] < nums[k] and nums[k] < nums[j] {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn out_of_order(nums: Vec[i64]) -> bool {
+    for j in 0..nums.len() {
+        for k in j + 1..nums.len() {
+            if nums[j] > nums[k] {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn random_nums(n: i64, spread: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let r = next_random(seed) * 65536 + next_random(seed);
+        nums.push(r % spread - spread / 2);
+    }
+    nums
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4560;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // A small array for brute force: 1 to 8 numbers within 0 to 4.
+        let mut small = random_nums(1 + next_random(mut seed) % 8, 5, mut seed);
+        for i in 0..small.len() {
+            small[i] += 2;
+        }
+        let expected = brute(small);
+        // A larger array of 1 to 60 numbers over a mixed spread, sorted
+        // in a third of the cases with a few numbers moved.
+        let n = 1 + next_random(mut seed) % 60;
+        let spread = [2, 5, 50, 2000000001][next_random(mut seed) % 4];
+        let mut nums = random_nums(n, spread, mut seed);
+        if case % 3 == 0 {
+            nums.sort();
+            for _ in 0..next_random(mut seed) % 3 {
+                let at = next_random(mut seed) % n;
+                let to = next_random(mut seed) % n;
+                nums.swap(at, to);
+            }
+        }
+        let mut low = nums[0];
+        for x in nums {
+            low = low.min(x);
+        }
+        // Scaled by 1 to 5 and moved by a constant: the same order.
+        let factor = 1 + next_random(mut seed) % 5;
+        let lift = next_random(mut seed) % 2001 - 1000;
+        let mut scaled: Vec[i64] = Vec.new();
+        for x in nums {
+            scaled.push(x * factor + lift);
+        }
+        // A number below all of them put first.
+        let mut led = vec![low - 1];
+        for x in nums {
+            led.push(x);
+        }
+        // A number no larger than the smallest put last.
+        let mut tailed = nums.clone();
+        tailed.push(low - next_random(mut seed) % 3);
+        // A "1", a "3" and a "2" planted in that order.
+        let mut planted = nums.clone();
+        let base = next_random(mut seed) % 2001 - 1000;
+        let a = next_random(mut seed) % (planted.len() + 1);
+        planted.insert(a, base);
+        let b = a + 1 + next_random(mut seed) % (planted.len() - a);
+        planted.insert(b, base + 2);
+        let c = b + 1 + next_random(mut seed) % (planted.len() - b);
+        planted.insert(c, base + 1);
+        let inverted = out_of_order(nums);
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, has(arm, small) == expected, mut failures);
+            let answer = has(arm, nums);
+            report(2, arm, case, has(arm, scaled) == answer, mut failures);
+            report(3, arm, case, has(arm, led) == inverted, mut failures);
+            report(4, arm, case, has(arm, tailed) == answer, mut failures);
+            report(5, arm, case, has(arm, planted), mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

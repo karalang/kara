@@ -1,0 +1,97 @@
+// Benchmark for #457: the ★ arm (circular_loop.kara) on 10 arrays of
+// 1,000,000 random steps of 1 to 1,000 in either direction, built
+// once; none of them has a loop. Each of 5 rounds, for every array,
+// half the time sets one step to 1 and the next to n - 1, a loop of two
+// forward steps, then checks the array and puts the steps back.
+
+fn next_index(nums: Vec[i64], i: i64) -> i64 {
+    let n = nums.len();
+    ((i + nums[i]) % n + n) % n
+}
+
+fn circular_array_loop(nums: Vec[i64]) -> bool {
+    let mut a = nums.clone();
+    let n = a.len();
+    for start in 0..n {
+        if a[start] == 0 {
+            continue;
+        }
+        let forward = a[start] > 0;
+        let mut slow = start;
+        let mut fast = start;
+        loop {
+            let s = next_index(a, slow);
+            let f1 = next_index(a, fast);
+            if a[f1] == 0 or (a[f1] > 0) != forward {
+                break;
+            }
+            let f2 = next_index(a, f1);
+            if a[f2] == 0 or (a[f2] > 0) != forward {
+                break;
+            }
+            slow = s;
+            fast = f2;
+            if slow == fast {
+                if next_index(a, slow) != slow {
+                    return true;
+                }
+                break;
+            }
+        }
+        // Nothing on this path reaches a valid cycle: clear it.
+        let mut i = start;
+        while a[i] != 0 and (a[i] > 0) == forward {
+            let next = next_index(a, i);
+            a[i] = 0;
+            i = next;
+        }
+    }
+    false
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let arrays = 10;
+    let n = 1000000;
+    let rounds = 5;
+    let mut seed: i64 = 457;
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..arrays {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let step = 1 + next_random(mut seed) % 1000;
+            if next_random(mut seed) % 2 == 0 {
+                nums.push(step);
+            } else {
+                nums.push(-step);
+            }
+        }
+        all.push(nums);
+    }
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        for a in 0..arrays {
+            let k = (next_random(mut seed) * 65536 + next_random(mut seed)) % (n - 1);
+            let (one, two) = (all[a][k], all[a][k + 1]);
+            if next_random(mut seed) % 2 == 0 {
+                all[a][k] = 1;
+                all[a][k + 1] = n - 1;
+            }
+            let has = circular_array_loop(all[a]);
+            all[a][k] = one;
+            all[a][k + 1] = two;
+            if has {
+                found += 1;
+            }
+            checksum = (checksum * 31 + (if has { k + 1 } else { 0 })) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds on {arrays} arrays of {n}: {found} with a loop, checksum {checksum}");
+}

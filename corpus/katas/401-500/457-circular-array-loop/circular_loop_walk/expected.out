@@ -1,0 +1,12 @@
+[2,-1,1,2,2]: true
+[-1,-2,-3,-4,-5,6]: false
+[1,-1,5,1,4]: true
+[1]: false
+[1,1]: true
+[-1,-1]: true
+[1,-1]: false
+[2,2,2]: true
+[3,1,2]: true
+[-2,1,-1,-2,-2]: false
+[1000,-1000,999]: false
+300 random arrays: 131 with a loop, checksum 955908074

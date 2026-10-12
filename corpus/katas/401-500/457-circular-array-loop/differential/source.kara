@@ -1,0 +1,268 @@
+// Differential test for LeetCode #457: Circular Array Loop.
+//
+// Copies of the four arms, each run on 1,500 random cases.
+// Properties:
+//   P1  on 1 to 6 steps of size 1 to 3, the answer is brute force's
+//       over every cycle of the whole step graph
+//   P2  on 1 to 60 steps, rotating the array keeps the answer
+//   P3  reversing the array and negating every step keeps it
+//   P4  lengthening steps by whole turns of the array keeps it
+//   P5  two neighbours set to 1 and n - 1 give true when n > 1
+
+// ---- pointers: circular_loop.kara
+
+fn next_index_pointers(nums: Vec[i64], i: i64) -> i64 {
+    let n = nums.len();
+    ((i + nums[i]) % n + n) % n
+}
+
+fn circular_array_loop_pointers(nums: Vec[i64]) -> bool {
+    let mut a = nums.clone();
+    let n = a.len();
+    for start in 0..n {
+        if a[start] == 0 {
+            continue;
+        }
+        let forward = a[start] > 0;
+        let mut slow = start;
+        let mut fast = start;
+        loop {
+            let s = next_index_pointers(a, slow);
+            let f1 = next_index_pointers(a, fast);
+            if a[f1] == 0 or (a[f1] > 0) != forward {
+                break;
+            }
+            let f2 = next_index_pointers(a, f1);
+            if a[f2] == 0 or (a[f2] > 0) != forward {
+                break;
+            }
+            slow = s;
+            fast = f2;
+            if slow == fast {
+                if next_index_pointers(a, slow) != slow {
+                    return true;
+                }
+                break;
+            }
+        }
+        // Nothing on this path reaches a valid cycle: clear it.
+        let mut i = start;
+        while a[i] != 0 and (a[i] > 0) == forward {
+            let next = next_index_pointers(a, i);
+            a[i] = 0;
+            i = next;
+        }
+    }
+    false
+}
+
+// ---- colour: circular_loop_colour.kara
+
+fn circular_array_loop_colour(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    let mut colour = vec![-1; n];
+    for start in 0..n {
+        if colour[start] != -1 {
+            continue;
+        }
+        let forward = nums[start] > 0;
+        let mut i = start;
+        loop {
+            colour[i] = start;
+            let next = ((i + nums[i]) % n + n) % n;
+            if next == i or (nums[next] > 0) != forward {
+                break;
+            }
+            if colour[next] == start {
+                return true;
+            }
+            if colour[next] != -1 {
+                break;
+            }
+            i = next;
+        }
+    }
+    false
+}
+
+// ---- graph: circular_loop_graph.kara
+
+fn circular_array_loop_graph(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    let mut next = vec![-1; n];
+    let mut ways_in = vec![0; n];
+    for i in 0..n {
+        let j = ((i + nums[i]) % n + n) % n;
+        if j != i and (nums[j] > 0) == (nums[i] > 0) {
+            next[i] = j;
+            ways_in[j] += 1;
+        }
+    }
+    let mut removed = 0;
+    let mut queue: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if ways_in[i] == 0 {
+            queue.push(i);
+        }
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let i = queue[head];
+        head += 1;
+        removed += 1;
+        let j = next[i];
+        if j >= 0 {
+            ways_in[j] -= 1;
+            if ways_in[j] == 0 {
+                queue.push(j);
+            }
+        }
+    }
+    removed < n
+}
+
+// ---- walk: circular_loop_walk.kara
+
+fn circular_array_loop_walk(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    for start in 0..n {
+        let forward = nums[start] > 0;
+        let mut i = start;
+        let mut ok = true;
+        for _ in 0..n {
+            let j = ((i + nums[i]) % n + n) % n;
+            if j == i or (nums[j] > 0) != forward {
+                ok = false;
+                break;
+            }
+            i = j;
+        }
+        if ok {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn looped(arm: i64, nums: Vec[i64]) -> bool {
+    if arm == 0 {
+        circular_array_loop_pointers(nums)
+    } else if arm == 1 {
+        circular_array_loop_colour(nums)
+    } else if arm == 2 {
+        circular_array_loop_graph(nums)
+    } else {
+        circular_array_loop_walk(nums)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Every cycle of the whole step graph, valid steps or not: from each
+// index, n steps land on a cycle; walk it once and check that it is
+// longer than one index and keeps one direction.
+fn brute(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    for start in 0..n {
+        let mut i = start;
+        for _ in 0..n {
+            i = ((i + nums[i]) % n + n) % n;
+        }
+        let first = i;
+        let mut length = 0;
+        let mut one_way = true;
+        loop {
+            if (nums[i] > 0) != (nums[first] > 0) {
+                one_way = false;
+            }
+            i = ((i + nums[i]) % n + n) % n;
+            length += 1;
+            if i == first {
+                break;
+            }
+        }
+        if length > 1 and one_way {
+            return true;
+        }
+    }
+    false
+}
+
+fn random_steps(n: i64, size: i64, backward: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let step = 1 + next_random(seed) % size;
+        if backward > 0 and next_random(seed) % backward == 0 {
+            nums.push(-step);
+        } else {
+            nums.push(step);
+        }
+    }
+    nums
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4570;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // A small array for brute force: 1 to 6 steps of size 1 to 3.
+        let small = random_steps(1 + next_random(mut seed) % 6, 3, [2, 3, 0][next_random(mut seed) % 3], mut seed);
+        let expected = brute(small);
+        // A larger array of 1 to 60 steps.
+        let n = 1 + next_random(mut seed) % 60;
+        let size = [3, 10, 1000][next_random(mut seed) % 3];
+        let nums = random_steps(n, size, [2, 4, 16, 0][next_random(mut seed) % 4], mut seed);
+        // Rotated, reversed with every step negated, and padded by
+        // whole turns.
+        let by = next_random(mut seed) % n;
+        let mut rotated: Vec[i64] = Vec.new();
+        for i in 0..n {
+            rotated.push(nums[(i + by) % n]);
+        }
+        let mut mirrored: Vec[i64] = Vec.new();
+        for i in 0..n {
+            mirrored.push(-nums[n - 1 - i]);
+        }
+        let mut padded: Vec[i64] = Vec.new();
+        for x in nums {
+            let turns = n * (next_random(mut seed) % 3);
+            padded.push(if x > 0 { x + turns } else { x - turns });
+        }
+        // Two neighbours that step onto each other: a loop when n > 1.
+        let mut planted = nums.clone();
+        let k = next_random(mut seed) % n;
+        if n > 1 {
+            planted[k] = 1;
+            planted[(k + 1) % n] = n - 1;
+        }
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, looped(arm, small) == expected, mut failures);
+            let answer = looped(arm, nums);
+            report(2, arm, case, looped(arm, rotated) == answer, mut failures);
+            report(3, arm, case, looped(arm, mirrored) == answer, mut failures);
+            report(4, arm, case, looped(arm, padded) == answer, mut failures);
+            report(5, arm, case, looped(arm, planted) == (n > 1), mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

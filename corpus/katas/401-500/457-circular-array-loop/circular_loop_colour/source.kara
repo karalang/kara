@@ -1,0 +1,96 @@
+// LeetCode #457: Circular Array Loop -- walks coloured by their start.
+//
+// Walk from each index not yet visited, along steps that keep its
+// direction and do not stay put, marking each index with the start it
+// was reached from. A walk that comes back to an index of its own colour
+// has closed a cycle; one that stops, or runs into an earlier walk's
+// colour, has found nothing new. Every index is coloured once. O(n).
+
+fn circular_array_loop(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    let mut colour = vec![-1; n];
+    for start in 0..n {
+        if colour[start] != -1 {
+            continue;
+        }
+        let forward = nums[start] > 0;
+        let mut i = start;
+        loop {
+            colour[i] = start;
+            let next = ((i + nums[i]) % n + n) % n;
+            if next == i or (nums[next] > 0) != forward {
+                break;
+            }
+            if colour[next] == start {
+                return true;
+            }
+            if colour[next] != -1 {
+                break;
+            }
+            i = next;
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn listed(nums: Vec[i64]) -> String {
+    let mut out = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{nums[i]}");
+    }
+    out
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"[{listed(nums)}]: {circular_array_loop(nums)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![2, -1, 1, 2, 2]);
+    show(vec![-1, -2, -3, -4, -5, 6]);
+    show(vec![1, -1, 5, 1, 4]);
+    show(vec![1]);
+    show(vec![1, 1]);
+    show(vec![-1, -1]);
+    show(vec![1, -1]);
+    show(vec![2, 2, 2]);
+    show(vec![3, 1, 2]);
+    show(vec![-2, 1, -1, -2, -2]);
+    show(vec![1000, -1000, 999]);
+    // 300 random arrays of 1 to 200 steps, each of size 1 to 3, 10 or
+    // 1,000, forward with probability 1/2, 3/4, 15/16 or 1.
+    let count = 300;
+    let mut seed: i64 = 457;
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for case in 0..count {
+        let n = 1 + next_random(mut seed) % 200;
+        let size = [3, 10, 1000][next_random(mut seed) % 3];
+        let backward = [2, 4, 16, 0][next_random(mut seed) % 4];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let step = 1 + next_random(mut seed) % size;
+            if backward > 0 and next_random(mut seed) % backward == 0 {
+                nums.push(-step);
+            } else {
+                nums.push(step);
+            }
+        }
+        let has = circular_array_loop(nums);
+        if has {
+            found += 1;
+        }
+        checksum = (checksum * 31 + (if has { case + 1 } else { 0 })) % 1000000007;
+    }
+    println(f"{count} random arrays: {found} with a loop, checksum {checksum}");
+}

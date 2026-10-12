@@ -1,0 +1,86 @@
+// LeetCode #456: 132 Pattern -- the plain reference.
+//
+// For each "3" at j, take the smallest value before it as the "1" and
+// scan everything after it for a "2" strictly between the two.
+// O(n^2).
+
+fn find132pattern(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    let mut low = nums[0];
+    for j in 1..n {
+        if nums[j] > low {
+            for k in j + 1..n {
+                if nums[k] > low and nums[k] < nums[j] {
+                    return true;
+                }
+            }
+        }
+        low = low.min(nums[j]);
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn listed(nums: Vec[i64]) -> String {
+    let mut out = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{nums[i]}");
+    }
+    out
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"[{listed(nums)}]: {find132pattern(nums)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![1, 2, 3, 4]);
+    show(vec![3, 1, 4, 2]);
+    show(vec![-1, 3, 2, 0]);
+    show(vec![5]);
+    show(vec![1, 2]);
+    show(vec![1, 3, 3]);
+    show(vec![1, 3, 1]);
+    show(vec![3, 5, 0, 3, 4]);
+    show(vec![-1000000000, 1000000000, 999999999]);
+    show(vec![9, 8, 7, 6]);
+    // 300 random arrays of 1 to 200 numbers over 2, 5, 50 or every value
+    // from -10^9 to 10^9; the first 100 are sorted upward, except for a
+    // few numbers moved, so that the pattern is not always present.
+    let count = 300;
+    let mut seed: i64 = 456;
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for case in 0..count {
+        let n = 1 + next_random(mut seed) % 200;
+        let spread = [2, 5, 50, 2000000001][next_random(mut seed) % 4];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let r = next_random(mut seed) * 65536 + next_random(mut seed);
+            nums.push(r % spread - spread / 2);
+        }
+        if case < 100 {
+            nums.sort();
+            for _ in 0..next_random(mut seed) % 3 {
+                let at = next_random(mut seed) % n;
+                let to = next_random(mut seed) % n;
+                nums.swap(at, to);
+            }
+        }
+        let has = find132pattern(nums);
+        if has {
+            found += 1;
+        }
+        checksum = (checksum * 31 + (if has { case + 1 } else { 0 })) % 1000000007;
+    }
+    println(f"{count} random arrays: {found} with the pattern, checksum {checksum}");
+}

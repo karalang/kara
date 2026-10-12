@@ -1,0 +1,7 @@
+
+fn main() {
+    let a = vec![1, 2];
+    let b = vec![10, 20];
+    let r: Vec[i64] = (0..3).chain(b.iter()).collect();
+    println(f"{r.len()}");
+}
