@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 171 |
 | diagnostics | 150 |
 | perf | 148 |
-| false-positive | 138 |
+| false-positive | 139 |
 | crash | 114 |
 | soundness | 98 |
 | use-after-free | 90 |
@@ -119,8 +119,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 59 |
 | parser | 59 |
 | runtime | 56 |
+| resolver | 31 |
 | effect | 30 |
-| resolver | 30 |
 | lexer | 11 |
 ## Current state
 
@@ -589,6 +589,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-14 | 2026-10-12 | ownership | medium | `karac check` treats `Str` as move-only: using a `Str` parameter twice (`String.from(s)` then `String.from(s)`) is refused as "value 's' moved here, used again here", `let y = x;` moves a `Str`, and reading `v[0]` out of a `Vec[Str]` is refused as a move out of a collection element; docs/design.md § Strings says `Str` "is `Copy`", and `karac __mir-run` already runs the twice-used parameter | — |
 | B-2026-10-12-15 | 2026-10-12 | interp | medium | `karac __mir-run` refuses `let x: Str = text[0..2];` (a range index of a `String`, bound with a `Str` annotation) with "typecheck: expected 'StringSlice', found 'String'"; `karac check` accepts it, and docs/design.md says `s[a..b]` on a string yields a `Str` | — |
 | B-2026-10-12-16 | 2026-10-12 | typecheck | low | `karac check` drops the `ref` from a binding matched through a TUPLE scrutinee: `match (m.get("a"), m.get("b")) { (Some(i), Some(j)) => *i + *j, .. }` is refused ("unary '*' requires 'ref T' ... found 'i64'"), while `if let Some(i) = m.get("a") { *i }` passes; `karac __mir-run` runs both and prints the right sum | — |
+| B-2026-10-12-17 | 2026-10-12 | resolver | medium | The MIR pipeline resolves the Kāra library source in the user program's scope: a user `struct Skip`, or an enum variant `Token.Skip`, is refused by `karac __mir-run` as "'Skip' is already defined in this scope" though `karac check` and `karac run --interp` accept it; the same for `Take`, `Chain`, `Zip` and `Peekable`, the adaptor structs in runtime/stdlib/source/iter.kara | — |
 
 ### Relocated
 
