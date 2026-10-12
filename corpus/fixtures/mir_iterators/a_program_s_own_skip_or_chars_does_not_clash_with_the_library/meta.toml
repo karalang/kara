@@ -1,0 +1,15 @@
+source = "tests/mir_iterators.rs::a_program_s_own_skip_or_chars_does_not_clash_with_the_library"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"
+bucket = "mir-gap:resolve"
+classified_with = "e44d71929+local"
+extracted_src = "8a919d31"
+model_rev = "1aa23105"
+model_src = "8a919d31"

@@ -1,0 +1,15 @@
+source = "tests/mir_iterators.rs::set_and_map_iterators_are_library_sources"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "lib:map", "lib:set", "lib:sortedmap", "lib:sortedset"]
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"
+bucket = "mir-gap:typecheck"
+classified_with = "e44d71929+local"
+extracted_src = "2a4b8783"
+model_rev = "1aa23105"
+model_src = "2a4b8783"

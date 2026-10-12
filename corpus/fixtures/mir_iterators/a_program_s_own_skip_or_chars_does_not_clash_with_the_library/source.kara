@@ -1,0 +1,15 @@
+
+struct Skip { n: i64 }
+struct Chars { k: i64 }
+enum Token { Letter(u8), Take(i64) }
+fn main() {
+    let s = Skip { n: 3 };
+    let c = Chars { k: 4 };
+    let t = Token.Take(5);
+    let v = vec![1, 2, 3, 4];
+    let total: i64 = v.iter().skip(1).take(2).sum();
+    match t {
+        Token.Take(x) => println(f"{s.n} {c.k} {x} {total}"),
+        Token.Letter(_) => println("letter"),
+    }
+}
