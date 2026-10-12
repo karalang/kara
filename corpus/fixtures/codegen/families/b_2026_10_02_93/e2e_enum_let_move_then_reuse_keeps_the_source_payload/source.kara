@@ -36,7 +36,7 @@ fn main() {
     { let mut m: Map[i64, String] = Map.new(); m.insert(1, hs("m")); let h = Hm.M(m); let g = h.clone(); println(f"c6 {gm(g)} {gm(h)}"); }
     { let h = Ht.T((hs("t"), 2)); let g = h.clone(); println(f"c8 {gt(g)} {gt(h)}"); }
     { let h = Hk.K { a: hs("k"), b: [hs("x")] }; let g = h.clone(); println(f"c10 {gk(g)} {gk(h)}"); }
-    { let h = Hc.Full(hs("ab")); let n = eat(h.clone()); println(f"c11 {n} {gr(h)}"); }
+    { let h = Hc.Full(hs("ab")); let n = eat(h); println(f"c11 {n} {gr(h)}"); }
     { let h = Hc.Full(hs("ab")); let b = Box1 { h: h.clone() }; println(f"c12 {gr(b.h)} {gr(h)}"); }
     { let h = Hc.Empty; let g = h.clone(); println(f"c13 {gr(g)} {gr(h)}"); }
     { let h = Hc.Full(hs("ab")); let g = h.clone(); let k = h.clone(); println(f"c15 {gr(g)} {gr(k)} {gr(h)}"); }

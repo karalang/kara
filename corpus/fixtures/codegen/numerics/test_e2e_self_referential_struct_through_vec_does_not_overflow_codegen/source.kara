@@ -1,5 +1,4 @@
 
-#[derive(Clone)]
 struct Node {
     val: i64,
     mut kids: Vec[Node],
@@ -14,7 +13,7 @@ impl Node {
 fn total(n: Node) -> i64 {
     let mut sum = n.val;
     for k in n.kids {
-        sum = sum + total(k.clone());
+        sum = sum + total(k);
     }
     sum
 }

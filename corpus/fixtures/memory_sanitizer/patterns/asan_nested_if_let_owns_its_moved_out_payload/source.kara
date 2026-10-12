@@ -20,7 +20,7 @@ fn main() {
     let mut total = 0;
     while i < 3 {
         println(f"fstr[{if let Ve.A(ref s) = mkVe(i) { s.clone() } else { "none".to_string() }}]");
-        total = total + sink(if let Ve.A(ref s) = mkVe(i) { s.clone() } else { "none".to_string() });
+        total = total + sink(if let Ve.A(ref s) = mkVe(i) { s } else { "none".to_string() });
         let v = mkVe(i);
         println(f"named[{if let Ve.A(ref s) = v { s.clone() } else { "none".to_string() }}]");
         let out = if let Ve.A(ref s) = mkVe(i) { s.clone() } else { "none".to_string() };

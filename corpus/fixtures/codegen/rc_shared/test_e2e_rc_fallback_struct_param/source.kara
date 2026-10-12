@@ -1,5 +1,4 @@
 
-#[derive(Copy)]
 struct Point { x: i64, y: i64 }
 fn consume_p(p: Point) { }
 fn main() {

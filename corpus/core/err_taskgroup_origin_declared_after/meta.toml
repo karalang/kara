@@ -12,4 +12,4 @@ backends = []
 env = {}
 note = "legacy.out recorded with legacy-build: legacy accepts the program and prints 3 and 6 (re-recorded after the source began using `data` after the spawn). The expected.out wording of an error pin is guidance, not a byte oracle."
 bucket = "a:refused"
-classified_with = "61feb360a+local"
+classified_with = "82243ce78+local"

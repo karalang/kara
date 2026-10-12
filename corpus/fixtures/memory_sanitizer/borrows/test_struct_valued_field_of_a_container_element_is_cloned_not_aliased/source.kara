@@ -27,7 +27,7 @@ fn main() {
     println(o[0].name);
     // already clean before the fix — the callee entry-copies, so this row is
     // the one that fails as a LEAK if the clone carries no cleanup
-    println(takes_r(q[1].r.clone()));
+    println(takes_r(q[1].r));
     println(ret_r(mkq()).name);
     let c = true;
     let d = if c { q[0].r.clone() } else { q[1].r.clone() };
@@ -44,7 +44,7 @@ fn main() {
     let v = mkv();
     let te = v[1].0.clone();
     println(te.name);
-    println(takes_r(v[1].0.clone()));
+    println(takes_r(v[1].0));
     let th = Holder { r: v[0].0.clone() };
     println(th.r.name);
     println(ret_t(mkv()).name);

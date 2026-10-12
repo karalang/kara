@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "legacy_backend is legacy-interp: legacy build double-frees on karac fix's `text: ref text` + .clone() in the second match on an owned cmd (L132/L134); interp agrees (see notes.md); frozen legacy bug"
 bucket = "a"
-classified_with = "61feb360a+local"
+classified_with = "82243ce78+local"
 model_rev = "62bc67d6"
 model_src = "f4140538"

@@ -37,6 +37,6 @@ fn main() {
     println(f"f {f.s}");
 
     let g = mkp(7);
-    { println(f"call {takep(g.clone())}"); }
+    { println(f"call {takep(g)}"); }
     println(f"g {g.s}");
 }

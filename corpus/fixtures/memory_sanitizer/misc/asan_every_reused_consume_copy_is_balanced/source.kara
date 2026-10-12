@@ -33,9 +33,9 @@ fn main() {
     println(f"[{render(e.doc)}] lines={after.lines.len()}");
 
     let b = "betabetabetabeta";
-    let x = eat(b.clone());
-    let y = eat(b.clone());
-    let z = eat(b.clone());
+    let x = eat(b);
+    let y = eat(b);
+    let z = eat(b);
     println(f"{x} {y} {z} {b.len()}");
 
     let mut k = 0;

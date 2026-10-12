@@ -23,7 +23,7 @@ fn main() {
     let mut o: Vec[String] = Vec.new();
     o.push(v[0].0.clone());
     println(o[0]);
-    println(takes(v[1].0.clone()));
+    println(takes(v[1].0));
     let mut b2 = Box2 { w: f"z{0}" };
     b2.w = v[1].0.clone();
     println(b2.w);

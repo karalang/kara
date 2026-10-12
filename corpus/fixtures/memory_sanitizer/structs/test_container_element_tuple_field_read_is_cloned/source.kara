@@ -1,5 +1,4 @@
 
-#[derive(Clone)]
 struct R { id: i64, name: String }
 struct Box2 { w: String }
 
@@ -16,8 +15,8 @@ fn main() {
     let mut o: Vec[String] = Vec.new();
     o.push(v[0].0.name.clone());
     println(o[0]);
-    println(sink(v[0].0.name.clone()));
-    println(take(v.clone()));
+    println(sink(v[0].0.name));
+    println(take(v));
     // non-consuming reads: the clone must free itself
     println(v[0].0.name + "!");
     println(v[0].0.name.len());

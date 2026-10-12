@@ -19,7 +19,7 @@ fn leg_consumers() {
     let t = (v[0].1.0.clone(), 3);
     let mut a = String.new();
     a = v[1].1.0.clone();
-    println(f"co {s} {o.len()} {o[1]} {h.s} {t.0} {a} {take(v[0].1.0.clone())} {pick(v)}");
+    println(f"co {s} {o.len()} {o[1]} {h.s} {t.0} {a} {take(v[0].1.0)} {pick(v)}");
     println(f"co {v[0].1.0} {v[1].1.0}");
 }
 fn leg_three_levels() {

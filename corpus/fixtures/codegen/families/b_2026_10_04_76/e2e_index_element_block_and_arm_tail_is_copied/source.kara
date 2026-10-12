@@ -32,11 +32,11 @@ fn main() {
     println(c6()); println(c7()); println(c8()); println(c9()); println(c10());
     println(c11()); println(c12()); println(c13()); println(c14());
     let t1 = M.My(mkv("r1"));
-    println(match t1 { M.My(x) => x[1], _ => "n" });
+    println(match t1 { M.My(x) => x[1].clone(), _ => "n" });
     let t2 = M.My(mkv("r2"));
     println(match t2 { M.My(x) => { let y = x; y[1].clone() }, _ => "n" });
     let t3 = M.My(mkv("r3"));
-    println(if let M.My(x) = t3 { x[1] } else { "n" });
+    println(if let M.My(x) = t3 { x[1].clone() } else { "n" });
     let m4 = mkv("r4");
     println({ let x = m4; x[1].clone() });
     let m5 = mkv("r5");

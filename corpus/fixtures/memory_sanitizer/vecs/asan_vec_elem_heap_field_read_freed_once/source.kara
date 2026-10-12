@@ -1,5 +1,4 @@
 
-#[derive(Clone)]
 struct Pair { word: String, n: i64 }
 struct Box3 { word: String }
 enum Wrap { Has(String), Non }
@@ -32,7 +31,7 @@ fn main() {
         m.insert(ps[0].word.clone(), 5);
         acc = acc + 1;
         // 6. return out of a callee
-        acc = acc + ret(ps.clone()).len();
+        acc = acc + ret(ps).len();
         // 7. tuple construction
         let t = (ps[0].word.clone(), 1);
         acc = acc + t.0.len();

@@ -11,6 +11,8 @@ bound/local
   dR3
   y3
 ifwild/local
+  dE
+  dR4
   z1
 ifwild/temp
   dE
@@ -45,5 +47,3 @@ localmatch
 end
   dE
   dR12
-  dE
-  dR4

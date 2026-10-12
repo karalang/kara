@@ -27,7 +27,7 @@ fn main() {
     println(o[0]);
     println(h.peek());
     // non-consuming reads: the clone must free itself
-    println(sink(h.xs[0].name.clone()));
+    println(sink(h.xs[0].name));
     println(h.xs[0].name + "!");
     println(h.xs[0].id);
     // the container's element survives all of it

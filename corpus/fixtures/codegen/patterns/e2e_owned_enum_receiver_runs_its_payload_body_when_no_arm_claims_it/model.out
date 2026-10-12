@@ -1,17 +1,17 @@
 none
-  x5
   dE
   dR1
-temp
   x5
+temp
   dE
   dR2
+  x5
 nodrop
-  x5
   dR3
-generic
   x5
+generic
   dR4
+  x5
 matches
   dE
   dR5

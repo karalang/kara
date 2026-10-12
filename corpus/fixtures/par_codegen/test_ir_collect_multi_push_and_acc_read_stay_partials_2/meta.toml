@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "first literal of the holding test: '__karac_reduce_worker_collect_tab_'"
 bucket = "a"
-classified_with = "61feb360a+local"
+classified_with = "82243ce78+local"
 model_rev = "62bc67d6"
 model_src = "fc6b2ec1"

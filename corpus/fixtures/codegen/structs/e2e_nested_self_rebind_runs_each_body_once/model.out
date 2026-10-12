@@ -59,11 +59,11 @@ top_let
   dR15
   v=15
 plain
+  dE
+  dR16
   v=1
 borrowed
   v=1
 end
   dE
   dR17
-  dE
-  dR16
