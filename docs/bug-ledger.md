@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 222 |
 | other | 171 |
 | diagnostics | 149 |
-| perf | 146 |
+| perf | 147 |
 | false-positive | 132 |
 | crash | 114 |
 | soundness | 98 |
@@ -111,14 +111,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2851 |
-| interp | 892 |
+| interp | 893 |
 | typecheck | 350 |
 | other | 114 |
 | ownership | 80 |
 | cli | 75 |
 | autopar | 59 |
 | parser | 57 |
-| runtime | 55 |
+| runtime | 56 |
 | effect | 30 |
 | resolver | 30 |
 | lexer | 11 |
@@ -577,6 +577,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-133 | 2026-10-06 | codegen | medium | A GENERIC FN THAT HANDS ITS BARE-`T` PARAM BACK IN AN `Option` ON SOME EXITS NEVER RELEASES A `shared` STRUCT ARGUMENT COMPILED, ON EITHER PATH -- `cg(H { id: 1 }, false)` and `cg(H { id: 2 }, true)` over `fn cg[T](s: T, c: bool) -> Option[T] { let o = Some(s); if c { return o } return None }`, and the unwrapped `if c { return Some(s) } return None`, print no `dH` on -O0 and -O2 and lose 1 block, where `--interp` prints `dH1 _1 false end` and `_2 true end dH2` | — |
 | B-2026-10-06-135 | 2026-10-06 | codegen | low | REMAINDER OF B-2026-10-05-27: A GENERIC `shared enum` AT `Option` OF A `shared` TYPE CONSTRUCTED INSIDE A GENERIC FUNCTION STILL LEAKS THE INNER HANDLE -- `fn mkg[T](x: T) -> G[T] { G.Y(x) }` called as `let h: G[Option[M]] = mkg(Some(M.My(mkv("p"))))` loses 40 B + 52 B indirect at -O0, with output matching `--interp` | — |
 | B-2026-10-12-3 | 2026-10-12 | typecheck | medium | `Map.get_mut` / `SortedMap.get_mut`, DOCUMENTED IN docs/library/collections.md AS `fn get_mut(mut ref self, key: K) -> Option[mut ref V]`, DO NOT EXIST: `karac check`, `karac __mir-run` and `karac run --interp` all refuse `m.get_mut(k)` with "no method 'get_mut' on type 'Map'" | — |
+| B-2026-10-12-4 | 2026-10-12 | interp+runtime | high | `Map.remove` / `Set.remove` ARE O(n) ON BOTH MIR BACKENDS: THE INSERTION-ORDERED TABLE CLOSES THE GAP BY SHIFTING EVERY LATER ENTRY, AND THE COMPILED RUNTIME ALSO REBUILDS ITS WHOLE HASH INDEX ON EVERY REMOVE, SO n REMOVES COST O(n^2) (20,000 removes: 98 s on mir-llvm, 2.5 s on mir-interp) | — |
 
 ### Relocated
 
