@@ -46,6 +46,7 @@ kata/example file stem. A second distinct program in the same test gets `_2`.
 | `rules` | core-semantics sections the program pins |
 | `backends` | empty = all; otherwise the only backends it applies to |
 | `env` | extra environment for every run |
+| `leaks` | `shared-cycle` when the program builds a cycle of strong `shared` handles, which never frees ([design.md §11](../docs/design.md#cycles-and-weak)); the `mir-llvm-asan` lane then excuses a leak report, but no other sanitizer report |
 | `note` | free text |
 | `bucket` | the classifier rule that decided `class`, or the failure (`mir-gap:<construct>`, `timeout`, `check-refuses:<code>`, ...) |
 | `classified_with` | the karac commit the classification ran at |

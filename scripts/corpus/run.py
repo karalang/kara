@@ -119,9 +119,12 @@ def judge(entry: Path, corpus: Path, args) -> dict:
         if not exp_file.exists():
             exp_file = entry / "legacy.out"  # unclassified: legacy is the baseline
         exp = exp_file.read_bytes() if exp_file.exists() else None
+        if declared_leak(meta, res):
+            # LeakSanitizer replaced the program's exit 0 with its own code.
+            res = {**res, "exit": 0}
         if res["status"] == "refused":
             why = f"refused (exit {res['exit']}): {first_line(res['stderr'])}"
-        elif sanitizer_report(res):
+        elif sanitizer_report(res) and not declared_leak(meta, res):
             why = f"asan: {sanitizer_report(res)}"
         elif exp is None:
             why = "no expected.out"
@@ -161,6 +164,13 @@ def sanitizer_report(res: dict) -> str:
     # Drop addresses and thread ids so equal reports read equal.
     return re.sub(r" on (?:unknown )?address 0x[0-9a-f]+.*| in thread T\d+.*", "",
                   m.group(1).decode(errors="replace")).strip()[:120]
+
+
+def declared_leak(meta: dict, res: dict) -> bool:
+    """A leak the program makes on purpose: a cycle of strong `shared` handles,
+    which design.md §11 says is never freed. Only a leak report is excused; any
+    other sanitizer report still fails the entry."""
+    return meta.get("leaks") == "shared-cycle" and sanitizer_report(res) == "detected memory leaks"
 
 
 def first_line(b: bytes) -> str:

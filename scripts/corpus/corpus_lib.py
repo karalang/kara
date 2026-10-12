@@ -18,7 +18,7 @@ RECORDED = ("legacy.out", "expected.out")  # expected.out only while unclassifie
 
 # Meta keys in the order they are written, so diffs stay small.
 META_ORDER = ["source", "dedup_of", "expect", "exit", "tags", "class",
-              "expected_from", "legacy_backend", "legacy_exit", "rules", "backends", "env", "note"]
+              "expected_from", "legacy_backend", "legacy_exit", "rules", "backends", "leaks", "env", "note"]
 
 # A backend is either a single command that compiles and runs (`run`) or a
 # compile step that leaves ./source behind and is then executed (`build`).
