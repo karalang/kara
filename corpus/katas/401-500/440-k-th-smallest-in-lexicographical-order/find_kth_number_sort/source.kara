@@ -1,0 +1,54 @@
+// LeetCode #440: K-th Smallest in Lexicographical Order -- sorting by
+// the decimal text.
+//
+// The plain reference: list 1 to n, sort them by their decimal text,
+// and take the k-th. O(n log n) time and O(n) space, so only for small
+// n.
+
+fn find_kth_number(n: i64, k: i64) -> i64 {
+    let mut numbers: Vec[i64] = Vec.new();
+    for x in 1..n + 1 {
+        numbers.push(x);
+    }
+    numbers.sort_by_key(|x| f"{x}");
+    numbers[k - 1]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: i64, k: i64) {
+    println(f"n = {n}, k = {k}: {find_kth_number(n, k)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(13, 2);
+    show(1, 1);
+    show(10, 3);
+    show(100, 100);
+    show(1000, 1000);
+    show(10000, 5000);
+    show(99999, 77777);
+    show(100000, 1);
+    // 300 random cases: n of 1 to 4 digits, k anywhere in [1, n].
+    let mut seed: i64 = 440;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let digits = 1 + next_random(mut seed) % 4;
+        let mut top = 1;
+        for _ in 0..digits {
+            top *= 10;
+        }
+        let n = 1 + next_random(mut seed) % (top - 1);
+        let k = 1 + next_random(mut seed) % n;
+        let x = find_kth_number(n, k);
+        total += x;
+        checksum = (checksum * 31 + x) % 1000000007;
+    }
+    println(f"300 random cases: total {total}, checksum {checksum}");
+}

@@ -1,0 +1,220 @@
+// Differential test for LeetCode #442: Find All Duplicates in an Array.
+//
+// Copies of the four arms, each run on 1,500 random arrays of 1 to 60
+// numbers from [1, n], from no duplicates to as many as fit. Each
+// arm's answer is sorted before it is compared, since the problem
+// allows any order. Properties known by construction:
+//   P1  the answer is the reference's, the values a count finds twice
+//   P2  the answer is the values the generator doubled, and shuffling
+//       the array changes nothing
+//   P3  relabelling the values by a permutation of [1, n] relabels the
+//       answer
+//   P4  appending n + 1 changes nothing, and appending a value seen
+//       once adds it to the answer
+//   P5  1..m shuffled has no duplicates, and 1..m twice over, shuffled,
+//       has all of 1..m
+
+// ---- sign: find_duplicates.kara
+
+fn find_duplicates_sign(nums: own Vec[i64]) -> Vec[i64] {
+    let mut duplicates: Vec[i64] = Vec.new();
+    for i in 0..nums.len() {
+        let x = nums[i].abs();
+        if nums[x - 1] < 0 {
+            duplicates.push(x);
+        } else {
+            nums[x - 1] = -nums[x - 1];
+        }
+    }
+    duplicates
+}
+
+// ---- place: find_duplicates_place.kara
+
+fn find_duplicates_place(nums: own Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    for i in 0..n {
+        while nums[nums[i] - 1] != nums[i] {
+            let home = nums[i] - 1;
+            nums.swap(i, home);
+        }
+    }
+    let mut duplicates: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if nums[i] != i + 1 {
+            duplicates.push(nums[i]);
+        }
+    }
+    duplicates
+}
+
+// ---- set: find_duplicates_set.kara
+
+fn find_duplicates_set(nums: Vec[i64]) -> Vec[i64] {
+    let mut seen: Set[i64] = Set.new();
+    let mut duplicates: Vec[i64] = Vec.new();
+    for i in 0..nums.len() {
+        if not seen.insert(nums[i]) {
+            duplicates.push(nums[i]);
+        }
+    }
+    duplicates
+}
+
+// ---- add: find_duplicates_add.kara
+
+fn find_duplicates_add(nums: own Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    for i in 0..n {
+        let x = (nums[i] - 1) % n + 1;
+        nums[x - 1] += n;
+    }
+    let mut duplicates: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if (nums[i] - 1) / n == 2 {
+            duplicates.push(i + 1);
+        }
+    }
+    duplicates
+}
+
+// ---- harness ----------------------------------------------------------
+
+// An arm's answer in ascending order.
+fn solve(arm: i64, nums: Vec[i64]) -> Vec[i64] {
+    let mut found = if arm == 0 {
+        find_duplicates_sign(nums.clone())
+    } else if arm == 1 {
+        find_duplicates_place(nums.clone())
+    } else if arm == 2 {
+        find_duplicates_set(nums)
+    } else {
+        find_duplicates_add(nums.clone())
+    };
+    found.sort();
+    found
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shuffle(values: mut ref Vec[i64], seed: mut ref i64) {
+    let n = values.len();
+    for i in 0..n {
+        let j = i + next_random(seed) % (n - i);
+        values.swap(i, j);
+    }
+}
+
+// The values that appear twice, ascending, from a count of each.
+fn reference(nums: Vec[i64]) -> Vec[i64] {
+    let mut count: Vec[i64] = Vec.filled(nums.len() + 1, 0);
+    for i in 0..nums.len() {
+        count[nums[i]] += 1;
+    }
+    let mut twice: Vec[i64] = Vec.new();
+    for x in 1..nums.len() + 1 {
+        if count[x] == 2 {
+            twice.push(x);
+        }
+    }
+    twice
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4420;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // n numbers from [1, n]: the first d of a shuffled 1..n twice,
+        // the next n - 2d once.
+        let n = 1 + next_random(mut seed) % 60;
+        let d = next_random(mut seed) % (n / 2 + 1);
+        let mut values: Vec[i64] = Vec.new();
+        for x in 1..n + 1 {
+            values.push(x);
+        }
+        shuffle(mut values, mut seed);
+        let mut nums: Vec[i64] = Vec.new();
+        for i in 0..n - d {
+            nums.push(values[i]);
+        }
+        for i in 0..d {
+            nums.push(values[i]);
+        }
+        shuffle(mut nums, mut seed);
+        let want = reference(nums.clone());
+        let mut doubled: Vec[i64] = Vec.new();
+        for i in 0..d {
+            doubled.push(values[i]);
+        }
+        doubled.sort();
+        let mut shuffled = nums.clone();
+        shuffle(mut shuffled, mut seed);
+        // A relabelling of [1, n], and the array and answer under it.
+        let mut label: Vec[i64] = Vec.new();
+        for x in 1..n + 1 {
+            label.push(x);
+        }
+        shuffle(mut label, mut seed);
+        let mut relabelled: Vec[i64] = Vec.new();
+        for i in 0..n {
+            relabelled.push(label[nums[i] - 1]);
+        }
+        let mut relabelled_want: Vec[i64] = Vec.new();
+        for i in 0..want.len() {
+            relabelled_want.push(label[want[i] - 1]);
+        }
+        relabelled_want.sort();
+        // n + 1 appended, which is new; or a value seen once appended,
+        // when there is one.
+        let mut with_new = nums.clone();
+        with_new.push(n + 1);
+        let mut with_second = nums.clone();
+        let mut second_want = want.clone();
+        if n - 2 * d > 0 {
+            let once = values[d + next_random(mut seed) % (n - 2 * d)];
+            with_second.push(once);
+            second_want.push(once);
+            second_want.sort();
+        }
+        // Edge arrays: 1..m once each, then 1..m twice each.
+        let m = 1 + next_random(mut seed) % 30;
+        let mut distinct: Vec[i64] = Vec.new();
+        let mut pairs: Vec[i64] = Vec.new();
+        let mut halves: Vec[i64] = Vec.new();
+        for x in 1..m + 1 {
+            distinct.push(x);
+            pairs.push(x);
+            pairs.push(x);
+            halves.push(x);
+        }
+        shuffle(mut distinct, mut seed);
+        shuffle(mut pairs, mut seed);
+        for arm in 0..4 {
+            checks += 5;
+            let r = solve(arm, nums.clone());
+            report(1, arm, case, r == want, mut failures);
+            report(2, arm, case, r == doubled and solve(arm, shuffled.clone()) == r, mut failures);
+            report(3, arm, case, solve(arm, relabelled.clone()) == relabelled_want, mut failures);
+            report(4, arm, case, solve(arm, with_new.clone()) == r and solve(arm, with_second.clone()) == second_want, mut failures);
+            report(5, arm, case, solve(arm, distinct.clone()).len() == 0 and solve(arm, pairs.clone()) == halves, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

@@ -1,0 +1,107 @@
+// LeetCode #442: Find All Duplicates in an Array -- cyclic sort.
+//
+// Put every value in its own slot, x in slot x - 1, by swapping it
+// there until the slot already holds x. Each swap settles one value
+// for good, so there are fewer than n of them. Afterwards a value that
+// appears twice has one copy at home and the other in a slot whose own
+// value is missing, and that is the only kind of slot not holding its
+// own value. O(n) time and no extra space.
+
+fn find_duplicates(nums: own Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    for i in 0..n {
+        while nums[nums[i] - 1] != nums[i] {
+            let home = nums[i] - 1;
+            nums.swap(i, home);
+        }
+    }
+    let mut duplicates: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if nums[i] != i + 1 {
+            duplicates.push(nums[i]);
+        }
+    }
+    duplicates
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn list(values: Vec[i64]) -> String {
+    let mut out = String.from("[");
+    for i in 0..values.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{values[i]}");
+    }
+    out.push(']');
+    out
+}
+
+// The duplicates in ascending order: the problem allows any order, and
+// the arms find them in different ones.
+fn sorted_duplicates(nums: Vec[i64]) -> Vec[i64] {
+    let mut found = find_duplicates(nums.clone());
+    found.sort();
+    found
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{list(nums.clone())}: {list(sorted_duplicates(nums))}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n numbers from [1, n]: d of them twice and n - 2d once, shuffled.
+fn random_case(seed: mut ref i64, n: i64, d: i64) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    for x in 1..n + 1 {
+        values.push(x);
+    }
+    for i in 0..n {
+        let j = i + next_random(seed) % (n - i);
+        values.swap(i, j);
+    }
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..n - d {
+        nums.push(values[i]);
+    }
+    for i in 0..d {
+        nums.push(values[i]);
+    }
+    for i in 0..n {
+        let j = i + next_random(seed) % (n - i);
+        nums.swap(i, j);
+    }
+    nums
+}
+
+fn main() {
+    show(vec![4, 3, 2, 7, 8, 2, 3, 1]);
+    show(vec![1, 1, 2]);
+    show(vec![1]);
+    show(vec![2, 2]);
+    show(vec![3, 1, 2]);
+    show(vec![1, 1, 2, 2, 3, 3]);
+    show(vec![6, 5, 4, 3, 2, 1, 6, 5, 4, 3]);
+    show(vec![5, 4, 3, 2, 1, 5]);
+    // 300 random arrays of 1 to 200 numbers, from no duplicates to as
+    // many as fit.
+    let mut seed: i64 = 442;
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 200;
+        let d = next_random(mut seed) % (n / 2 + 1);
+        let duplicates = sorted_duplicates(random_case(mut seed, n, d));
+        for x in duplicates {
+            found += 1;
+            checksum = (checksum * 31 + x) % 1000000007;
+        }
+        checksum = (checksum * 31) % 1000000007;
+    }
+    println(f"300 random arrays: {found} duplicates, checksum {checksum}");
+}

@@ -1,0 +1,141 @@
+// Differential test for LeetCode #441: Arranging Coins.
+//
+// Copies of the four arms, each run on 1,500 random n of at most 1 to
+// 10 digits (a draw is below 2^30). Properties known by construction,
+// where T(k) = k (k + 1) / 2 is the coins k rows take:
+//   P1  the answer r has T(r) <= n < T(r + 1)
+//   P2  T(m) coins make m rows and T(m) - 1 make m - 1, for a random m
+//       up to 46,340
+//   P3  one more coin adds a row exactly when n + 1 is T(r + 1)
+//   P4  the coins that complete row r + 1 make r + 1 rows, and one
+//       fewer leave r
+//   P5  more coins never make fewer rows, nor more rows than coins
+//       added
+
+// ---- sqrt: arrange_coins.kara
+
+// The largest r with r * r <= x.
+fn isqrt(x: i64) -> i64 {
+    if x < 2 {
+        return x;
+    }
+    let mut r = x;
+    let mut next = (r + x / r) / 2;
+    while next < r {
+        r = next;
+        next = (r + x / r) / 2;
+    }
+    r
+}
+
+fn arrange_coins_sqrt(n: i64) -> i64 {
+    (isqrt(8 * n + 1) - 1) / 2
+}
+
+// ---- binary: arrange_coins_binary.kara
+
+fn arrange_coins_binary(n: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = n;
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        if mid * (mid + 1) / 2 <= n {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+// ---- rows: arrange_coins_rows.kara
+
+fn arrange_coins_rows(n: i64) -> i64 {
+    let mut rows = 0;
+    let mut left = n;
+    while left > rows {
+        rows += 1;
+        left -= rows;
+    }
+    rows
+}
+
+// ---- float: arrange_coins_float.kara
+
+fn arrange_coins_float(n: i64) -> i64 {
+    let mut k = (((8 * n + 1) as f64).sqrt() as i64 - 1) / 2;
+    while (k + 1) * (k + 2) / 2 <= n {
+        k += 1;
+    }
+    while k * (k + 1) / 2 > n {
+        k -= 1;
+    }
+    k
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, n: i64) -> i64 {
+    if arm == 0 {
+        arrange_coins_sqrt(n)
+    } else if arm == 1 {
+        arrange_coins_binary(n)
+    } else if arm == 2 {
+        arrange_coins_rows(n)
+    } else {
+        arrange_coins_float(n)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The coins k complete rows take.
+fn triangle(k: i64) -> i64 {
+    k * (k + 1) / 2
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4410;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let digits = 1 + next_random(mut seed) % 10;
+        let mut top = 1;
+        for _ in 0..digits {
+            top *= 10;
+        }
+        let n = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+        let m = 1 + next_random(mut seed) % 46340;
+        let bigger = n + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+        for arm in 0..4 {
+            checks += 5;
+            let r = solve(arm, n);
+            report(1, arm, case, triangle(r) <= n and n < triangle(r + 1), mut failures);
+            report(2, arm, case, solve(arm, triangle(m)) == m and solve(arm, triangle(m) - 1) == m - 1, mut failures);
+            let step = if triangle(r + 1) == n + 1 { 1 } else { 0 };
+            report(3, arm, case, solve(arm, n + 1) == r + step, mut failures);
+            // The coins left over after r rows, and what completes the next.
+            let left = n - triangle(r);
+            report(4, arm, case, solve(arm, n + r + 1 - left) == r + 1 and solve(arm, n + r - left) == r, mut failures);
+            let s = solve(arm, bigger);
+            report(5, arm, case, s >= r and s - r <= bigger - n, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

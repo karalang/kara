@@ -1,0 +1,58 @@
+// LeetCode #441: Arranging Coins -- binary search on the row count.
+//
+// The coins k rows take, k (k + 1) / 2, grow with k, so search for the
+// largest k in [0, n] whose rows fit in n. O(log n) time; the product
+// stays below 2^62 for every n the problem allows.
+
+fn arrange_coins(n: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = n;
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        if mid * (mid + 1) / 2 <= n {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: i64) {
+    println(f"n = {n}: {arrange_coins(n)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(5);
+    show(8);
+    show(1);
+    show(3);
+    show(2147483647);
+    show(2147450880);
+    show(2147450879);
+    show(1000000000);
+    // 300 random n of at most 1 to 10 digits; a draw is below 2^30.
+    let mut seed: i64 = 441;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let digits = 1 + next_random(mut seed) % 10;
+        let mut top = 1;
+        for _ in 0..digits {
+            top *= 10;
+        }
+        let draw = next_random(mut seed) * 32768 + next_random(mut seed);
+        let n = 1 + (draw % top.min(2147483647));
+        let rows = arrange_coins(n);
+        total += rows;
+        checksum = (checksum * 31 + rows) % 1000000007;
+    }
+    println(f"300 random n: total {total}, checksum {checksum}");
+}

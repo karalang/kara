@@ -1,0 +1,85 @@
+// LeetCode #439: Ternary Expression Parser -- rewriting the innermost
+// ternary.
+//
+// The rightmost '?' always heads a ternary whose branches are single
+// characters: a longer branch would hold a '?' further right. So
+// overwrite the condition with the branch it picks, remove the four
+// characters after it, and look further left for the next '?'. Each
+// removal shifts the rest of the expression, so this is the plain
+// reference: O(n^2) time.
+
+fn parse_ternary(expression: Str) -> char {
+    let mut e = expression.bytes().to_vec();
+    let mut q = e.len();
+    while q > 0 {
+        q -= 1;
+        if e[q] == b'?' {
+            e[q - 1] = if e[q - 1] == b'T' { e[q + 1] } else { e[q + 3] };
+            for _ in 0..4 {
+                e.remove(q);
+            }
+        }
+    }
+    e[0] as char
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(expression: Str) {
+    println(f"\"{expression}\": {parse_ternary(expression)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Appends a random expression of at most depth levels to out and
+// returns its value. Each branch of a ternary is a lone digit, T or F
+// with chance 1 in 3, so the trees are ragged.
+fn random_expression(seed: mut ref i64, depth: i64, out: mut ref String) -> u8 {
+    if depth == 0 {
+        let r = next_random(seed) % 12;
+        let leaf = if r < 10 { b'0' + r as u8 } else if r == 10 { b'T' } else { b'F' };
+        out.push(leaf as char);
+        return leaf;
+    }
+    let condition = if next_random(seed) % 2 == 0 { b'T' } else { b'F' };
+    out.push(condition as char);
+    out.push('?');
+    let yes = random_expression(seed, if next_random(seed) % 3 == 0 { 0 } else { depth - 1 }, out);
+    out.push(':');
+    let no = random_expression(seed, if next_random(seed) % 3 == 0 { 0 } else { depth - 1 }, out);
+    if condition == b'T' { yes } else { no }
+}
+
+fn main() {
+    show("T?2:3");
+    show("F?1:T?4:5");
+    show("T?T?F:5:3");
+    show("T?F:T");
+    show("F?T?1:2:F?3:4");
+    show("F?1:F?2:F?3:F?4:F?5:F?6:F?7:F?8:9");
+    show("T?T?T?T?T?1:2:3:4:5:6");
+    show("F?T?T?1:2:3:T?F?4:5:6");
+    // 300 random expressions of 1 to 10 levels.
+    let mut seed: i64 = 439;
+    let mut digits = 0;
+    let mut trues = 0;
+    let mut length = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let mut expression = String.new();
+        let depth = 1 + next_random(mut seed) % 10;
+        random_expression(mut seed, depth, mut expression);
+        let value = parse_ternary(expression);
+        if value == 'T' {
+            trues += 1;
+        } else if value != 'F' {
+            digits += 1;
+        }
+        length += expression.len();
+        checksum = (checksum * 31 + value as i64) % 1000000007;
+    }
+    println(f"300 random expressions, {length} characters: {digits} digits, {trues} T, {300 - digits - trues} F, checksum {checksum}");
+}

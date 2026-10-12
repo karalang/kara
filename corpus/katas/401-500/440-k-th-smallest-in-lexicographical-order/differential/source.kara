@@ -1,0 +1,212 @@
+// Differential test for LeetCode #440: K-th Smallest in Lexicographical
+// Order.
+//
+// Copies of the four arms, each run on 1,500 random cases: n of 1 to 3
+// digits and k anywhere in [1, n]. Properties known by construction:
+//   P1  the answer is in [1, n] and exactly k - 1 numbers in [1, n]
+//       come before it by their text
+//   P2  the first is 1, and the last is reached from 9 by stepping to
+//       the largest child at most n while there is one
+//   P3  the k-th comes before the (k + 1)-th by their text
+//   P4  adding n + 1 to the range moves the k-th as inserting n + 1
+//       into the order says: no change after it, n + 1 at it, and the
+//       (k - 1)-th before it
+//   P5  the first d answers are 1, 10, ..., 10^(d - 1), where n has d
+//       digits
+
+// ---- tree: find_kth_number.kara
+
+// The numbers in [1, n] that start with prefix.
+fn count_under(prefix: i64, n: i64) -> i64 {
+    let mut count = 0;
+    let mut first = prefix;
+    let mut last = prefix;
+    while first <= n {
+        count += n.min(last) - first + 1;
+        first *= 10;
+        last = last * 10 + 9;
+    }
+    count
+}
+
+fn find_kth_number_tree(n: i64, k: i64) -> i64 {
+    let mut current = 1;
+    let mut left = k - 1;
+    while left > 0 {
+        let under = count_under(current, n);
+        if under <= left {
+            left -= under;
+            current += 1;
+        } else {
+            left -= 1;
+            current *= 10;
+        }
+    }
+    current
+}
+
+// ---- walk: find_kth_number_walk.kara
+
+fn find_kth_number_walk(n: i64, k: i64) -> i64 {
+    let mut current = 1;
+    for _ in 1..k {
+        if current * 10 <= n {
+            current *= 10;
+        } else {
+            while current % 10 == 9 or current + 1 > n {
+                current /= 10;
+            }
+            current += 1;
+        }
+    }
+    current
+}
+
+// ---- dfs: find_kth_number_dfs.kara
+
+// Visits prefix and the numbers under it; the k-th when it is among
+// them.
+fn visit(prefix: i64, n: i64, left: mut ref i64) -> Option[i64] {
+    *left -= 1;
+    if *left == 0 {
+        return Some(prefix);
+    }
+    for digit in 0..10 {
+        let child = prefix * 10 + digit;
+        if child > n {
+            break;
+        }
+        if let Some(found) = visit(child, n, left) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_kth_number_dfs(n: i64, k: i64) -> i64 {
+    let mut left = k;
+    for first in 1..10 {
+        if first > n {
+            break;
+        }
+        if let Some(found) = visit(first, n, mut left) {
+            return found;
+        }
+    }
+    -1
+}
+
+// ---- sort: find_kth_number_sort.kara
+
+fn find_kth_number_sort(n: i64, k: i64) -> i64 {
+    let mut numbers: Vec[i64] = Vec.new();
+    for x in 1..n + 1 {
+        numbers.push(x);
+    }
+    numbers.sort_by_key(|x| f"{x}");
+    numbers[k - 1]
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, n: i64, k: i64) -> i64 {
+    if arm == 0 {
+        find_kth_number_tree(n, k)
+    } else if arm == 1 {
+        find_kth_number_walk(n, k)
+    } else if arm == 2 {
+        find_kth_number_dfs(n, k)
+    } else {
+        find_kth_number_sort(n, k)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Whether a comes before b in lexicographical order, by their text.
+fn before(a: i64, b: i64) -> bool {
+    f"{a}" < f"{b}"
+}
+
+// How many numbers in [1, n] come before x.
+fn rank(x: i64, n: i64) -> i64 {
+    let mut count = 0;
+    for y in 1..n + 1 {
+        if before(y, x) {
+            count += 1;
+        }
+    }
+    count
+}
+
+// The last number in [1, n] in lexicographical order: from 9 (or n
+// below 9), step to the largest child at most n while there is one.
+fn last_in_order(n: i64) -> i64 {
+    if n < 9 {
+        return n;
+    }
+    let mut x = 9;
+    while x * 10 <= n {
+        x = (x * 10 + 9).min(n);
+    }
+    x
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4400;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let digits = 1 + next_random(mut seed) % 3;
+        let mut top = 1;
+        for _ in 0..digits {
+            top *= 10;
+        }
+        let n = 1 + next_random(mut seed) % (top - 1);
+        let k = 1 + next_random(mut seed) % n;
+        // Where n + 1 falls in the order of [1, n + 1].
+        let place = rank(n + 1, n + 1) + 1;
+        let mut length = 0;
+        let mut rest = n;
+        while rest > 0 {
+            length += 1;
+            rest /= 10;
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let r = solve(arm, n, k);
+            report(1, arm, case, r >= 1 and r <= n and rank(r, n) == k - 1, mut failures);
+            report(2, arm, case, solve(arm, n, 1) == 1 and solve(arm, n, n) == last_in_order(n), mut failures);
+            let ordered = if k < n { before(r, solve(arm, n, k + 1)) } else { k == 1 or before(solve(arm, n, k - 1), r) };
+            report(3, arm, case, ordered, mut failures);
+            let want = if place > k { r } else if place == k { n + 1 } else { solve(arm, n, k - 1) };
+            report(4, arm, case, solve(arm, n + 1, k) == want, mut failures);
+            let mut powers = true;
+            let mut power = 1;
+            for i in 0..length {
+                if solve(arm, n, i + 1) != power {
+                    powers = false;
+                }
+                power *= 10;
+            }
+            report(5, arm, case, powers, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

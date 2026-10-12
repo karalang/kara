@@ -1,0 +1,77 @@
+// LeetCode #440: K-th Smallest in Lexicographical Order -- counting
+// down the denary tree.
+//
+// In lexicographical order the numbers form a tree: 1 above 10..19,
+// 10 above 100..109, and so on, read in preorder. Starting at 1, count
+// the numbers in [1, n] under the current prefix, one span per length
+// (prefix, prefix0..prefix9, ...). If the k-th lies past them all, skip
+// the whole subtree to the next sibling; otherwise step down to the
+// first child. O(log^2 n) time, O(1) space, so n can be 10^9.
+
+// The numbers in [1, n] that start with prefix.
+fn count_under(prefix: i64, n: i64) -> i64 {
+    let mut count = 0;
+    let mut first = prefix;
+    let mut last = prefix;
+    while first <= n {
+        count += n.min(last) - first + 1;
+        first *= 10;
+        last = last * 10 + 9;
+    }
+    count
+}
+
+fn find_kth_number(n: i64, k: i64) -> i64 {
+    let mut current = 1;
+    let mut left = k - 1;
+    while left > 0 {
+        let under = count_under(current, n);
+        if under <= left {
+            left -= under;
+            current += 1;
+        } else {
+            left -= 1;
+            current *= 10;
+        }
+    }
+    current
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: i64, k: i64) {
+    println(f"n = {n}, k = {k}: {find_kth_number(n, k)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(13, 2);
+    show(1, 1);
+    show(10, 3);
+    show(100, 100);
+    show(1000, 1000);
+    show(10000, 5000);
+    show(99999, 77777);
+    show(100000, 1);
+    // 300 random cases: n of 1 to 4 digits, k anywhere in [1, n].
+    let mut seed: i64 = 440;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let digits = 1 + next_random(mut seed) % 4;
+        let mut top = 1;
+        for _ in 0..digits {
+            top *= 10;
+        }
+        let n = 1 + next_random(mut seed) % (top - 1);
+        let k = 1 + next_random(mut seed) % n;
+        let x = find_kth_number(n, k);
+        total += x;
+        checksum = (checksum * 31 + x) % 1000000007;
+    }
+    println(f"300 random cases: total {total}, checksum {checksum}");
+}

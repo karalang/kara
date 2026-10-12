@@ -1,0 +1,53 @@
+// Benchmark for #440: the ★ arm (find_kth_number.kara) on 1,000,000
+// random queries with n up to 10^9.
+
+// The numbers in [1, n] that start with prefix.
+fn count_under(prefix: i64, n: i64) -> i64 {
+    let mut count = 0;
+    let mut first = prefix;
+    let mut last = prefix;
+    while first <= n {
+        count += n.min(last) - first + 1;
+        first *= 10;
+        last = last * 10 + 9;
+    }
+    count
+}
+
+fn find_kth_number(n: i64, k: i64) -> i64 {
+    let mut current = 1;
+    let mut left = k - 1;
+    while left > 0 {
+        let under = count_under(current, n);
+        if under <= left {
+            left -= under;
+            current += 1;
+        } else {
+            left -= 1;
+            current *= 10;
+        }
+    }
+    current
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let queries = 1000000;
+    let mut seed: i64 = 440;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..queries {
+        let n = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000000;
+        let k = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % n;
+        let x = find_kth_number(n, k);
+        total += x;
+        checksum = (checksum * 31 + x) % 1000000007;
+    }
+    println(f"{queries} queries with n up to 10^9: total {total}, checksum {checksum}");
+}

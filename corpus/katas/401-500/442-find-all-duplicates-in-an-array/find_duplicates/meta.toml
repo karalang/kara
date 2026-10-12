@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/442-find-all-duplicates-in-an-array/find_duplicates.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "73e063aee"
+extracted_src = "014f39aa"
+model_rev = "1aa23105"
+model_src = "014f39aa"
