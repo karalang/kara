@@ -1,0 +1,77 @@
+// LeetCode #413: Arithmetic Slices -- maximal runs.
+//
+// Split the array into maximal runs that keep one difference. A run of
+// k numbers holds (k - 1)(k - 2) / 2 slices of length 3 or more, the
+// pairs of a start and an end at least two apart; neighbouring runs
+// share their boundary number. O(n) time, O(1) space.
+
+fn number_of_arithmetic_slices(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut total = 0;
+    let mut start = 0;
+    while start + 2 < n {
+        let diff = nums[start + 1] - nums[start];
+        let mut end = start + 1;
+        while end + 1 < n and nums[end + 1] - nums[end] == diff {
+            end += 1;
+        }
+        let k = end - start + 1;
+        total += (k - 1) * (k - 2) / 2;
+        start = end;
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut line = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            line.push_str(", ");
+        }
+        line.push_str(f"{nums[i]}");
+    }
+    println(f"[{line}]: {number_of_arithmetic_slices(nums)}");
+}
+
+fn main() {
+    show(vec![1, 2, 3, 4]);
+    show(vec![1]);
+    show(vec![1, 2]);
+    show(vec![1, 3, 5]);
+    show(vec![7, 7, 7, 7, 7]);
+    show(vec![3, -1, -5, -9]);
+    show(vec![1, 2, 3, 8, 9, 10]);
+    show(vec![1, 2, 4, 8, 16]);
+    show(vec![1, 2, 3, 5, 7, 9, 11]);
+    show(vec![-1000, 0, 1000, 2000, 2000, 2000]);
+    // 2,000 random arrays of 1 to 60 numbers, built from runs: each run
+    // of 1 to 8 steps keeps one difference from -3 to 3.
+    let mut seed: i64 = 413;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let n = 1 + step(mut seed) % 60;
+        let mut nums: Vec[i64] = vec![step(mut seed) % 21 - 10];
+        while nums.len() < n {
+            let diff = step(mut seed) % 7 - 3;
+            let run = 1 + step(mut seed) % 8;
+            for _ in 0..run {
+                if nums.len() < n {
+                    let last = nums[nums.len() - 1];
+                    nums.push(last + diff);
+                }
+            }
+        }
+        let answer = number_of_arithmetic_slices(nums);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"2000 random arrays: total {total}, checksum {checksum}");
+}

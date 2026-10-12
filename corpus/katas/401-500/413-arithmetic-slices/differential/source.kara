@@ -1,0 +1,204 @@
+// Differential test for LeetCode #413: Arithmetic Slices.
+//
+// Copies of the four arms, each run on 3,000 random arrays built from
+// runs of one difference. Properties known by construction:
+//   P1  one arithmetic array of n numbers holds (n - 1)(n - 2) / 2
+//   P2  the count is that of a check of every (start, end) pair at least
+//       two apart, testing every difference between them
+//   P3  adding a constant to every number, or negating every number,
+//       changes nothing
+//   P4  the array reversed gives the same count
+//   P5  the squares 0, 1, 4, 9, ... hold none, and so does any array
+//       whose differences never repeat twice in a row
+
+// ---- ending: arithmetic_slices.kara
+
+fn number_of_arithmetic_slices_ending(nums: Vec[i64]) -> i64 {
+    let mut ending = 0;
+    let mut total = 0;
+    for i in 2..nums.len() {
+        if nums[i] - nums[i - 1] == nums[i - 1] - nums[i - 2] {
+            ending += 1;
+            total += ending;
+        } else {
+            ending = 0;
+        }
+    }
+    total
+}
+
+// ---- runs: arithmetic_slices_runs.kara
+
+fn number_of_arithmetic_slices_runs(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut total = 0;
+    let mut start = 0;
+    while start + 2 < n {
+        let diff = nums[start + 1] - nums[start];
+        let mut end = start + 1;
+        while end + 1 < n and nums[end + 1] - nums[end] == diff {
+            end += 1;
+        }
+        let k = end - start + 1;
+        total += (k - 1) * (k - 2) / 2;
+        start = end;
+    }
+    total
+}
+
+// ---- extend: arithmetic_slices_extend.kara
+
+fn number_of_arithmetic_slices_extend(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut total = 0;
+    for start in 0..n {
+        if start + 2 >= n {
+            break;
+        }
+        let diff = nums[start + 1] - nums[start];
+        let mut end = start + 2;
+        while end < n and nums[end] - nums[end - 1] == diff {
+            total += 1;
+            end += 1;
+        }
+    }
+    total
+}
+
+// ---- recursive: arithmetic_slices_recursive.kara
+
+fn ending(nums: Vec[i64], i: i64, table: mut ref Vec[i64]) -> i64 {
+    if i < 2 {
+        return 0;
+    }
+    if table[i] >= 0 {
+        return table[i];
+    }
+    let count = if nums[i] - nums[i - 1] == nums[i - 1] - nums[i - 2] {
+        ending(nums, i - 1, table) + 1
+    } else {
+        0
+    };
+    table[i] = count;
+    count
+}
+
+fn number_of_arithmetic_slices_recursive(nums: Vec[i64]) -> i64 {
+    let mut table = vec![-1; nums.len()];
+    let mut total = 0;
+    for i in 0..nums.len() {
+        total += ending(nums, i, mut table);
+    }
+    total
+}
+
+// ---- the checks -------------------------------------------------------------
+
+fn solve(arm: i64, nums: Vec[i64]) -> i64 {
+    if arm == 0 {
+        number_of_arithmetic_slices_ending(nums)
+    } else if arm == 1 {
+        number_of_arithmetic_slices_runs(nums)
+    } else if arm == 2 {
+        number_of_arithmetic_slices_extend(nums)
+    } else {
+        number_of_arithmetic_slices_recursive(nums)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn brute(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut count = 0;
+    for start in 0..n {
+        for end in start + 2..n {
+            let mut same = true;
+            for k in start + 1..end + 1 {
+                if nums[k] - nums[k - 1] != nums[start + 1] - nums[start] {
+                    same = false;
+                }
+            }
+            if same {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4130;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        let n = 1 + step(mut seed) % 40;
+        let mut nums: Vec[i64] = vec![step(mut seed) % 21 - 10];
+        while nums.len() < n {
+            let diff = step(mut seed) % 7 - 3;
+            let run = 1 + step(mut seed) % 8;
+            for _ in 0..run {
+                if nums.len() < n {
+                    let last = nums[nums.len() - 1];
+                    nums.push(last + diff);
+                }
+            }
+        }
+        // P1
+        let start = step(mut seed) % 41 - 20;
+        let diff = step(mut seed) % 11 - 5;
+        let mut line: Vec[i64] = Vec.new();
+        for i in 0..n {
+            line.push(start + i * diff);
+        }
+        // P3, P4
+        let shift = step(mut seed) % 2001 - 1000;
+        let mut shifted: Vec[i64] = Vec.new();
+        let mut negated: Vec[i64] = Vec.new();
+        let mut reversed: Vec[i64] = Vec.new();
+        for i in 0..n {
+            shifted.push(nums[i] + shift);
+            negated.push(-nums[i]);
+            reversed.push(nums[n - 1 - i]);
+        }
+        // P5: the squares, and differences 1, 2, 1, 2, ... from a random
+        // start, which never repeat twice in a row.
+        let mut squares: Vec[i64] = Vec.new();
+        let mut zigzag: Vec[i64] = vec![start];
+        for i in 0..n {
+            squares.push(i * i);
+            if i > 0 {
+                let last = zigzag[i - 1];
+                zigzag.push(last + 1 + i % 2);
+            }
+        }
+        let best = brute(nums);
+        for arm in 0..4 {
+            checks += 5;
+            let answer = solve(arm, nums);
+            report(1, arm, case, solve(arm, line) == (n - 1) * (n - 2) / 2, mut failures);
+            report(2, arm, case, answer == best, mut failures);
+            report(3, arm, case, solve(arm, shifted) == answer and solve(arm, negated) == answer, mut failures);
+            report(4, arm, case, solve(arm, reversed) == answer, mut failures);
+            report(5, arm, case, solve(arm, squares) == 0 and solve(arm, zigzag) == 0, mut failures);
+        }
+    }
+    println(f"3000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}
