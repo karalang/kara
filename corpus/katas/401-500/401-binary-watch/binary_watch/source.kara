@@ -1,0 +1,63 @@
+// LeetCode #401: Binary Watch -- try every time.
+//
+// A binary watch shows the hour (0 to 11) on 4 LEDs and the minute
+// (0 to 59) on 6. Walk all 12 * 60 times in order and keep those whose
+// hour and minute have `turned_on` set bits between them. 720 times,
+// each a popcount of two small numbers: O(1) work for any input.
+
+fn ones(x: i64) -> i64 {
+    let mut count = 0;
+    let mut y = x;
+    while y > 0 {
+        count += y % 2;
+        y = y / 2;
+    }
+    count
+}
+
+fn read_binary_watch(turned_on: i64) -> Vec[String] {
+    let mut times: Vec[String] = Vec.new();
+    for h in 0..12 {
+        for m in 0..60 {
+            if ones(h) + ones(m) == turned_on {
+                times.push(f"{h}:{m:02}");
+            }
+        }
+    }
+    times
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// A polynomial hash of the times joined with commas, to print a long list
+// as one number.
+fn digest(times: Vec[String]) -> i64 {
+    let mut h: i64 = 0;
+    for i in 0..times.len() {
+        if i > 0 {
+            h = (h * 131 + 44) % 1000000007;
+        }
+        for b in times[i].bytes() {
+            h = (h * 131 + b as i64) % 1000000007;
+        }
+    }
+    h
+}
+
+fn main() {
+    for n in 0..11 {
+        let times = read_binary_watch(n);
+        if times.len() <= 10 {
+            let mut text = String.new();
+            for i in 0..times.len() {
+                if i > 0 {
+                    text.push_str(", ");
+                }
+                text.push_str(times[i]);
+            }
+            println(f"{n} LEDs: {times.len()} times [{text}]");
+        } else {
+            println(f"{n} LEDs: {times.len()} times, first {times[0]}, last {times[times.len() - 1]}, digest {digest(times)}");
+        }
+    }
+}

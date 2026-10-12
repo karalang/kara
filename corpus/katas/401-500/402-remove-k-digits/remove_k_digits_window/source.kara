@@ -1,0 +1,79 @@
+// LeetCode #402: Remove K Digits -- pick each kept digit from a window.
+//
+// The answer keeps n - k digits in their order. Its first digit can come
+// from anywhere among the first k + 1 digits (k may go before it), and
+// the smallest choice is best, the leftmost one on a tie so the most
+// digits stay to choose from. Each next digit is the smallest in the
+// window after the last pick, which ends k + 1 places past the number of
+// digits kept so far. O(n * (k + 1)) time, O(n) space.
+
+fn remove_kdigits(num: Str, k: i64) -> String {
+    let b = num.bytes();
+    let n = b.len();
+    let mut out = String.new();
+    let mut from = 0;
+    for kept in 0..n - k {
+        let last = kept + k;
+        let mut best = from;
+        for i in from..last + 1 {
+            if b[i] < b[best] {
+                best = i;
+            }
+        }
+        if not (out.len() == 0 and b[best] == 48) {
+            out.push(b[best] as char);
+        }
+        from = best + 1;
+    }
+    if out.len() == 0 {
+        out.push('0');
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(num: Str, k: i64) {
+    println(f"\"{num}\", k = {k}: \"{remove_kdigits(num, k)}\"");
+}
+
+fn main() {
+    show("1432219", 3);
+    show("10200", 1);
+    show("10", 2);
+    show("9", 1);
+    show("112", 1);
+    show("123456", 3);
+    show("654321", 3);
+    show("100200", 1);
+    show("10001", 4);
+    show("1234567890", 9);
+    show("5337", 2);
+    show("43214321", 4);
+    // 3,000 random numbers of 1 to 40 digits with no leading zero, and k
+    // from 0 to the length.
+    let mut seed: i64 = 402;
+    let mut length: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..3000 {
+        let n = 1 + step(mut seed) % 40;
+        let mut num = String.new();
+        for i in 0..n {
+            let d = if i == 0 { 1 + step(mut seed) % 9 } else { step(mut seed) % 10 };
+            num.push((48 + d) as u8 as char);
+        }
+        let k = step(mut seed) % (n + 1);
+        let r = remove_kdigits(num, k);
+        length += r.len();
+        for b in r.bytes() {
+            checksum = (checksum * 31 + b as i64) % 1000000007;
+        }
+        checksum = (checksum * 31 + 7) % 1000000007;
+    }
+    println(f"3000 random numbers: {length} digits kept, checksum {checksum}");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/402-remove-k-digits/bench/remove_k_digits.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "9364273af"
+extracted_src = "f5490e03"
+model_rev = "1aa23105"
+model_src = "f5490e03"

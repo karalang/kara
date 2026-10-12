@@ -1,0 +1,271 @@
+// Differential test for LeetCode #402: Remove K Digits.
+//
+// Copies of the four arms, each run on 3,000 random cases. Properties
+// known by construction:
+//   P1  k = 0 leaves the number as it is
+//   P2  k = n leaves "0"
+//   P3  the result is a subsequence of the number, of at most n - k
+//       digits, with no leading zero unless it is "0"
+//   P4  for up to 10 digits, the result is the smallest value left by
+//       any choice of n - k digits, found by trying every choice
+//   P5  a number whose digits never fall keeps its first n - k digits
+
+// ---- stack: remove_k_digits.kara
+
+fn remove_kdigits_stack(num: Str, k: i64) -> String {
+    let mut left = k;
+    let mut stack: Vec[u8] = Vec.new();
+    for c in num.bytes() {
+        while left > 0 and stack.len() > 0 and stack[stack.len() - 1] > c {
+            stack.pop();
+            left -= 1;
+        }
+        stack.push(c);
+    }
+    while left > 0 {
+        stack.pop();
+        left -= 1;
+    }
+    let mut out = String.new();
+    for c in stack.iter() {
+        if out.len() == 0 and *c == 48 {
+            continue;
+        }
+        out.push(*c as char);
+    }
+    if out.len() == 0 {
+        out.push('0');
+    }
+    out
+}
+
+// ---- greedy: remove_k_digits_greedy.kara
+
+fn remove_kdigits_greedy(num: Str, k: i64) -> String {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in num.bytes() {
+        digits.push(c);
+    }
+    for _ in 0..k {
+        let mut at = digits.len() - 1;
+        for i in 0..digits.len() - 1 {
+            if digits[i] > digits[i + 1] {
+                at = i;
+                break;
+            }
+        }
+        digits.remove(at);
+        if digits.len() == 0 {
+            break;
+        }
+    }
+    let mut start = 0;
+    while start < digits.len() and digits[start] == 48 {
+        start += 1;
+    }
+    let mut out = String.new();
+    for i in start..digits.len() {
+        out.push(digits[i] as char);
+    }
+    if out.len() == 0 {
+        out.push('0');
+    }
+    out
+}
+
+// ---- window: remove_k_digits_window.kara
+
+fn remove_kdigits_window(num: Str, k: i64) -> String {
+    let b = num.bytes();
+    let n = b.len();
+    let mut out = String.new();
+    let mut from = 0;
+    for kept in 0..n - k {
+        let last = kept + k;
+        let mut best = from;
+        for i in from..last + 1 {
+            if b[i] < b[best] {
+                best = i;
+            }
+        }
+        if not (out.len() == 0 and b[best] == 48) {
+            out.push(b[best] as char);
+        }
+        from = best + 1;
+    }
+    if out.len() == 0 {
+        out.push('0');
+    }
+    out
+}
+
+// ---- next: remove_k_digits_next.kara
+
+fn remove_kdigits_next(num: Str, k: i64) -> String {
+    let b = num.bytes();
+    let n = b.len();
+    let mut next = vec![vec![n; 10]; n + 1];
+    for i in (0..n).rev() {
+        for d in 0..10 {
+            next[i][d] = next[i + 1][d];
+        }
+        next[i][(b[i] - 48) as i64] = i;
+    }
+    let mut out = String.new();
+    let mut from = 0;
+    for kept in 0..n - k {
+        let last = kept + k;
+        let mut d = 0;
+        while next[from][d] > last {
+            d += 1;
+        }
+        if not (out.len() == 0 and d == 0) {
+            out.push((48 + d) as u8 as char);
+        }
+        from = next[from][d] + 1;
+    }
+    if out.len() == 0 {
+        out.push('0');
+    }
+    out
+}
+
+// ---- the checks -------------------------------------------------------------
+
+fn solve(arm: i64, num: Str, k: i64) -> String {
+    if arm == 0 {
+        remove_kdigits_stack(num, k)
+    } else if arm == 1 {
+        remove_kdigits_greedy(num, k)
+    } else if arm == 2 {
+        remove_kdigits_window(num, k)
+    } else {
+        remove_kdigits_next(num, k)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random number of n digits with no leading zero; with rising, its
+// digits never fall.
+fn number(n: i64, rising: bool, seed: mut ref i64) -> String {
+    let mut num = String.new();
+    let mut d = 1 + step(seed) % 9;
+    for i in 0..n {
+        if i > 0 {
+            d = if rising { d + step(seed) % (10 - d) } else { step(seed) % 10 };
+        }
+        num.push((48 + d) as u8 as char);
+    }
+    num
+}
+
+// Whether r is a subsequence of num, at most most digits long, written
+// with no leading zero unless it is "0".
+fn shaped(r: Str, num: Str, most: i64) -> bool {
+    let a = r.bytes();
+    let b = num.bytes();
+    if a.len() == 0 or a.len() > most.max(1) {
+        return false;
+    }
+    if a[0] == 48 {
+        return a.len() == 1;
+    }
+    let mut j = 0;
+    for i in 0..a.len() {
+        while j < b.len() and b[j] != a[i] {
+            j += 1;
+        }
+        if j == b.len() {
+            return false;
+        }
+        j += 1;
+    }
+    true
+}
+
+// The value of a string of digits.
+fn value(r: Str) -> i64 {
+    let mut v = 0;
+    for c in r.bytes() {
+        v = v * 10 + (c - 48) as i64;
+    }
+    v
+}
+
+// The smallest value left by keeping n - k of num's digits, every choice
+// tried.
+fn brute(num: Str, k: i64) -> i64 {
+    let b = num.bytes();
+    let n = b.len();
+    let mut best = -1;
+    for mask in 0..(1 << n) {
+        let mut kept = 0;
+        let mut v = 0;
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                kept += 1;
+                v = v * 10 + (b[i] - 48) as i64;
+            }
+        }
+        if kept == n - k and (best < 0 or v < best) {
+            best = v;
+        }
+    }
+    best
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4020;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        let n = 1 + step(mut seed) % 40;
+        let num = number(n, false, mut seed);
+        let k = step(mut seed) % (n + 1);
+        let small_n = 1 + step(mut seed) % 10;
+        let small = number(small_n, false, mut seed);
+        let small_k = step(mut seed) % (small_n + 1);
+        let want = brute(small, small_k);
+        let rising = number(n, true, mut seed);
+        let mut first = String.new();
+        let rb = rising.bytes();
+        for i in 0..n - k {
+            first.push(rb[i] as char);
+        }
+        if first.len() == 0 {
+            first.push('0');
+        }
+        for arm in 0..4 {
+            let whole = solve(arm, num, 0);
+            let none = solve(arm, num, n);
+            let r = solve(arm, num, k);
+            let s = solve(arm, small, small_k);
+            let kept = solve(arm, rising, k);
+            checks += 5;
+            report(1, arm, case, whole == num, mut failures);
+            report(2, arm, case, none == "0", mut failures);
+            report(3, arm, case, shaped(r, num, n - k), mut failures);
+            report(4, arm, case, shaped(s, small, small_n - small_k) and value(s) == want, mut failures);
+            report(5, arm, case, kept == first, mut failures);
+        }
+    }
+    println(f"3000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

@@ -1,0 +1,81 @@
+// LeetCode #401: Binary Watch -- split the LEDs between hour and minute.
+//
+// Group the hours 0 to 11 and the minutes 0 to 59 by their number of set
+// bits, once. For `turned_on` LEDs, every split into k for the hour and
+// turned_on - k for the minute pairs each hour with k bits with each
+// minute with the rest. The pairs are sorted by (hour, minute) at the
+// end.
+
+fn ones(x: i64) -> i64 {
+    let mut count = 0;
+    let mut y = x;
+    while y > 0 {
+        count += y & 1;
+        y = y >> 1;
+    }
+    count
+}
+
+fn read_binary_watch(turned_on: i64) -> Vec[String] {
+    let mut hours: Vec[Vec[i64]] = vec![Vec.new(); 7];
+    let mut minutes: Vec[Vec[i64]] = vec![Vec.new(); 7];
+    for h in 0..12 {
+        hours[ones(h)].push(h);
+    }
+    for m in 0..60 {
+        minutes[ones(m)].push(m);
+    }
+    let mut found: Vec[(i64, i64)] = Vec.new();
+    for k in 0..7 {
+        let rest = turned_on - k;
+        if rest < 0 or rest > 6 {
+            continue;
+        }
+        for h in hours[k].iter() {
+            for m in minutes[rest].iter() {
+                found.push((*h, *m));
+            }
+        }
+    }
+    found.sort();
+    let mut times: Vec[String] = Vec.new();
+    for (h, m) in found.iter() {
+        times.push(f"{h}:{m:02}");
+    }
+    times
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// A polynomial hash of the times joined with commas, to print a long list
+// as one number.
+fn digest(times: Vec[String]) -> i64 {
+    let mut h: i64 = 0;
+    for i in 0..times.len() {
+        if i > 0 {
+            h = (h * 131 + 44) % 1000000007;
+        }
+        for b in times[i].bytes() {
+            h = (h * 131 + b as i64) % 1000000007;
+        }
+    }
+    h
+}
+
+fn main() {
+    for n in 0..11 {
+        let times = read_binary_watch(n);
+        if times.len() <= 10 {
+            let mut text = String.new();
+            for i in 0..times.len() {
+                if i > 0 {
+                    text.push_str(", ");
+                }
+                text.push_str(times[i]);
+            }
+            println(f"{n} LEDs: {times.len()} times [{text}]");
+        } else {
+            println(f"{n} LEDs: {times.len()} times, first {times[0]}, last {times[times.len() - 1]}, digest {digest(times)}");
+        }
+    }
+}

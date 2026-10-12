@@ -1,0 +1,57 @@
+// Benchmark for #402: the kata's ★ arm (a stack that keeps digits
+// rising). 300 random numbers of 100,000 digits, each with a random k;
+// the digits kept and a checksum over them go into the sink.
+
+fn remove_kdigits(num: Str, k: i64) -> String {
+    let mut left = k;
+    let mut stack: Vec[u8] = Vec.new();
+    for c in num.bytes() {
+        while left > 0 and stack.len() > 0 and stack[stack.len() - 1] > c {
+            stack.pop();
+            left -= 1;
+        }
+        stack.push(c);
+    }
+    while left > 0 {
+        stack.pop();
+        left -= 1;
+    }
+    let mut out = String.new();
+    for c in stack.iter() {
+        if out.len() == 0 and *c == 48 {
+            continue;
+        }
+        out.push(*c as char);
+    }
+    if out.len() == 0 {
+        out.push('0');
+    }
+    out
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let numbers = 300;
+    let n = 100000;
+    let mut seed: i64 = 402;
+    let mut kept: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..numbers {
+        let mut num = String.new();
+        num.push((49 + step(mut seed) % 9) as u8 as char);
+        for _ in 1..n {
+            num.push((48 + step(mut seed) % 10) as u8 as char);
+        }
+        let k = step(mut seed) % (n + 1);
+        let r = remove_kdigits(num, k);
+        kept += r.len();
+        for b in r.bytes() {
+            checksum = (checksum * 31 + b as i64) % 1000000007;
+        }
+    }
+    println(f"{numbers} numbers of {n} digits: {kept} digits kept, checksum {checksum}");
+}

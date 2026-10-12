@@ -1,0 +1,64 @@
+// LeetCode #401: Binary Watch -- every 10-bit display.
+//
+// The ten LEDs together are a 10-bit number: the top 4 bits the hour,
+// the low 6 the minute. Walk the masks 0 to 1023, keep those with
+// `turned_on` set bits whose hour and minute are in range, and sort by
+// (hour, minute). 1,024 masks for any input.
+
+fn read_binary_watch(turned_on: i64) -> Vec[String] {
+    let mut found: Vec[(i64, i64)] = Vec.new();
+    for mask in 0..1024 {
+        let mut bits = 0;
+        let mut y = mask;
+        while y > 0 {
+            y = y & (y - 1);
+            bits += 1;
+        }
+        let hour = mask >> 6;
+        let minute = mask & 63;
+        if bits == turned_on and hour < 12 and minute < 60 {
+            found.push((hour, minute));
+        }
+    }
+    found.sort();
+    let mut times: Vec[String] = Vec.new();
+    for (h, m) in found.iter() {
+        times.push(f"{h}:{m:02}");
+    }
+    times
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// A polynomial hash of the times joined with commas, to print a long list
+// as one number.
+fn digest(times: Vec[String]) -> i64 {
+    let mut h: i64 = 0;
+    for i in 0..times.len() {
+        if i > 0 {
+            h = (h * 131 + 44) % 1000000007;
+        }
+        for b in times[i].bytes() {
+            h = (h * 131 + b as i64) % 1000000007;
+        }
+    }
+    h
+}
+
+fn main() {
+    for n in 0..11 {
+        let times = read_binary_watch(n);
+        if times.len() <= 10 {
+            let mut text = String.new();
+            for i in 0..times.len() {
+                if i > 0 {
+                    text.push_str(", ");
+                }
+                text.push_str(times[i]);
+            }
+            println(f"{n} LEDs: {times.len()} times [{text}]");
+        } else {
+            println(f"{n} LEDs: {times.len()} times, first {times[0]}, last {times[times.len() - 1]}, digest {digest(times)}");
+        }
+    }
+}

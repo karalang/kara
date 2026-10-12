@@ -1,0 +1,39 @@
+// Benchmark for #401: the kata's ★ arm (try every time). 50,000 calls,
+// cycling the LED count through 0 to 10, each building its list of times
+// as strings. The number of times and of characters go into the sink.
+
+fn ones(x: i64) -> i64 {
+    let mut count = 0;
+    let mut y = x;
+    while y > 0 {
+        count += y % 2;
+        y = y / 2;
+    }
+    count
+}
+
+fn read_binary_watch(turned_on: i64) -> Vec[String] {
+    let mut times: Vec[String] = Vec.new();
+    for h in 0..12 {
+        for m in 0..60 {
+            if ones(h) + ones(m) == turned_on {
+                times.push(f"{h}:{m:02}");
+            }
+        }
+    }
+    times
+}
+
+fn main() {
+    let calls = 50000;
+    let mut times_total: i64 = 0;
+    let mut chars: i64 = 0;
+    for c in 0..calls {
+        let times = read_binary_watch(c % 11);
+        times_total += times.len();
+        for t in times.iter() {
+            chars += t.len();
+        }
+    }
+    println(f"{calls} calls: {times_total} times, {chars} characters");
+}

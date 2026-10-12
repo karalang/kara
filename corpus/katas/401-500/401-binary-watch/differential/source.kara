@@ -1,0 +1,238 @@
+// Differential test for LeetCode #401: Binary Watch.
+//
+// Copies of the four arms, each asked for every LED count from 0 to 10,
+// and probed with 3,000 random times. Properties known by construction:
+//   P1  every time listed for n LEDs has n set bits between its hour and
+//       its minute, read back from the text
+//   P2  the eleven lists together hold each of the 720 times exactly once
+//   P3  each list is in time order, with no time twice
+//   P4  each time is written h:mm, an hour from 0 to 11 with no leading
+//       zero and a two-digit minute below 60
+//   P5  a random time is in the list for its own LED count
+
+fn ones_all(x: i64) -> i64 {
+    let mut count = 0;
+    let mut y = x;
+    while y > 0 {
+        count += y % 2;
+        y = y / 2;
+    }
+    count
+}
+
+fn read_binary_watch_all(turned_on: i64) -> Vec[String] {
+    let mut times: Vec[String] = Vec.new();
+    for h in 0..12 {
+        for m in 0..60 {
+            if ones_all(h) + ones_all(m) == turned_on {
+                times.push(f"{h}:{m:02}");
+            }
+        }
+    }
+    times
+}
+
+fn pick(next: i64, left: i64, hour: i64, minute: i64, found: mut ref Vec[(i64, i64)]) {
+    if hour > 11 or minute > 59 {
+        return;
+    }
+    if left == 0 {
+        found.push((hour, minute));
+        return;
+    }
+    for led in next..10 {
+        if led < 4 {
+            pick(led + 1, left - 1, hour + (1 << led), minute, found);
+        } else {
+            pick(led + 1, left - 1, hour, minute + (1 << (led - 4)), found);
+        }
+    }
+}
+
+fn read_binary_watch_choose(turned_on: i64) -> Vec[String] {
+    let mut found: Vec[(i64, i64)] = Vec.new();
+    pick(0, turned_on, 0, 0, mut found);
+    found.sort();
+    let mut times: Vec[String] = Vec.new();
+    for (h, m) in found.iter() {
+        times.push(f"{h}:{m:02}");
+    }
+    times
+}
+
+fn ones_split(x: i64) -> i64 {
+    let mut count = 0;
+    let mut y = x;
+    while y > 0 {
+        count += y & 1;
+        y = y >> 1;
+    }
+    count
+}
+
+fn read_binary_watch_split(turned_on: i64) -> Vec[String] {
+    let mut hours: Vec[Vec[i64]] = vec![Vec.new(); 7];
+    let mut minutes: Vec[Vec[i64]] = vec![Vec.new(); 7];
+    for h in 0..12 {
+        hours[ones_split(h)].push(h);
+    }
+    for m in 0..60 {
+        minutes[ones_split(m)].push(m);
+    }
+    let mut found: Vec[(i64, i64)] = Vec.new();
+    for k in 0..7 {
+        let rest = turned_on - k;
+        if rest < 0 or rest > 6 {
+            continue;
+        }
+        for h in hours[k].iter() {
+            for m in minutes[rest].iter() {
+                found.push((*h, *m));
+            }
+        }
+    }
+    found.sort();
+    let mut times: Vec[String] = Vec.new();
+    for (h, m) in found.iter() {
+        times.push(f"{h}:{m:02}");
+    }
+    times
+}
+
+fn read_binary_watch_masks(turned_on: i64) -> Vec[String] {
+    let mut found: Vec[(i64, i64)] = Vec.new();
+    for mask in 0..1024 {
+        let mut bits = 0;
+        let mut y = mask;
+        while y > 0 {
+            y = y & (y - 1);
+            bits += 1;
+        }
+        let hour = mask >> 6;
+        let minute = mask & 63;
+        if bits == turned_on and hour < 12 and minute < 60 {
+            found.push((hour, minute));
+        }
+    }
+    found.sort();
+    let mut times: Vec[String] = Vec.new();
+    for (h, m) in found.iter() {
+        times.push(f"{h}:{m:02}");
+    }
+    times
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn solve(arm: i64, n: i64) -> Vec[String] {
+    if arm == 0 {
+        read_binary_watch_all(n)
+    } else if arm == 1 {
+        read_binary_watch_choose(n)
+    } else if arm == 2 {
+        read_binary_watch_split(n)
+    } else {
+        read_binary_watch_masks(n)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn bits(x: i64) -> i64 {
+    if x == 0 { 0 } else { x % 2 + bits(x / 2) }
+}
+
+// The time a well-formed "h:mm" names, as minutes since 0:00, or -1.
+fn parse(text: Str) -> i64 {
+    let b = text.bytes();
+    let n = b.len();
+    if n < 4 or n > 5 or b[n - 3] != 58 {
+        return -1;
+    }
+    let mut hour = 0;
+    for i in 0..n - 3 {
+        if b[i] < 48 or b[i] > 57 {
+            return -1;
+        }
+        hour = hour * 10 + (b[i] - 48) as i64;
+    }
+    if n == 5 and b[0] == 48 {
+        return -1;
+    }
+    if b[n - 2] < 48 or b[n - 2] > 57 or b[n - 1] < 48 or b[n - 1] > 57 {
+        return -1;
+    }
+    let minute = (b[n - 2] - 48) as i64 * 10 + (b[n - 1] - 48) as i64;
+    if hour > 11 or minute > 59 {
+        return -1;
+    }
+    hour * 60 + minute
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4010;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for arm in 0..4 {
+        let mut lists: Vec[Vec[String]] = Vec.new();
+        let mut seen = vec![0; 720];
+        for n in 0..11 {
+            let times = solve(arm, n);
+            let mut lit = true;
+            let mut ordered = true;
+            let mut formed = true;
+            let mut last = -1;
+            for t in times.iter() {
+                let at = parse(t);
+                if at < 0 {
+                    formed = false;
+                    continue;
+                }
+                seen[at] += 1;
+                lit = lit and bits(at / 60) + bits(at % 60) == n;
+                ordered = ordered and at > last;
+                last = at;
+            }
+            checks += 3;
+            report(1, arm, n, lit, mut failures);
+            report(3, arm, n, ordered, mut failures);
+            report(4, arm, n, formed, mut failures);
+            lists.push(times);
+        }
+        let mut once = true;
+        for c in seen.iter() {
+            once = once and *c == 1;
+        }
+        checks += 1;
+        report(2, arm, 0, once, mut failures);
+        for case in 0..3000 {
+            let h = step(mut seed) % 12;
+            let m = step(mut seed) % 60;
+            let want = f"{h}:{m:02}";
+            let mut found = false;
+            for t in lists[bits(h) + bits(m)].iter() {
+                found = found or t == want;
+            }
+            checks += 1;
+            report(5, arm, case, found, mut failures);
+        }
+    }
+    println(f"4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}
