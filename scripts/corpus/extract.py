@@ -55,6 +55,7 @@ from corpus_lib import ROOT, write_toml, read_toml, RECORDED  # noqa: E402
 HAS_MAIN = re.compile(r"(?m)^\s*(pub\s+)?fn\s+main\s*\(")
 # `&["a", "b"]`, `vec!["a", "b"]`, `["a", "b"]`: line arrays a test compares
 # against `out.lines()`.
+V2_PIN_NOTE = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"
 ASSERT_RUNS = re.compile(r"assert_runs\(\s*")
 STR_ARRAY = re.compile(r'\[\s*((?:"(?:[^"\\]|\\.)*"\s*,?\s*)+)\]', re.S)
 STR_LIT = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
@@ -339,8 +340,10 @@ def main() -> int:
             shutil.copy(e["pin"], dest / "expected.out")
         if e.get("pin_text") is not None:
             (dest / "expected.out").write_text(e["pin_text"])
-            meta.update({"expect": "stdout", "exit": 0, "expected_from": "pin",
-                         "note": "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"})
+            meta.update({"expect": "stdout", "exit": 0, "expected_from": "pin"})
+            # classify.py appends its own notes to this one; keep them.
+            if not meta.get("note", "").startswith(V2_PIN_NOTE):
+                meta["note"] = V2_PIN_NOTE
         write_toml(dest / "meta.toml", meta)
         written.add(dest)
         manifest.append({"dir": e["dir"], "kind": e["kind"], "candidates": e["candidates"]})

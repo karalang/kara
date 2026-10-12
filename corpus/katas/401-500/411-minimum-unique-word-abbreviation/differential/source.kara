@@ -1,0 +1,446 @@
+// Differential test for LeetCode #411: Minimum Unique Word Abbreviation.
+//
+// Copies of the four arms, each run on 1,500 random targets and
+// dictionaries. Shortest answers can differ between arms, so the
+// properties are about an answer's length and uniqueness:
+//   P1  the answer abbreviates the target and no dictionary word
+//   P2  with no dictionary word of the target's length, the answer has
+//       length 1; it is never longer than the target
+//   P3  for up to 6 letters, the answer's length is the least over every
+//       abbreviation of the target written out and checked as text
+//   P4  a dictionary word of another length changes nothing
+//   P5  one more dictionary word never shortens the answer
+
+// ---- masks: min_abbreviation.kara
+
+// The abbreviation that keeps the letters whose bits are set in mask and
+// replaces each run of the others by its length.
+fn abbreviate(t: Slice[u8], mask: i64) -> String {
+    let mut out = String.new();
+    let mut run = 0;
+    for i in 0..t.len() {
+        if (mask >> i) & 1 == 1 {
+            if run > 0 {
+                out.push_str(f"{run}");
+                run = 0;
+            }
+            out.push(t[i] as char);
+        } else {
+            run += 1;
+        }
+    }
+    if run > 0 {
+        out.push_str(f"{run}");
+    }
+    out
+}
+
+fn mask_length(m: i64, mask: i64) -> i64 {
+    let mut length = 0;
+    let mut in_run = false;
+    for i in 0..m {
+        if (mask >> i) & 1 == 1 {
+            length += 1;
+            in_run = false;
+        } else if not in_run {
+            length += 1;
+            in_run = true;
+        }
+    }
+    length
+}
+
+fn min_abbreviation_masks(target: Str, dictionary: Vec[String]) -> String {
+    let t = target.bytes();
+    let m = t.len();
+    let mut diffs: Vec[i64] = Vec.new();
+    for d in 0..dictionary.len() {
+        let w = dictionary[d].bytes();
+        if w.len() == m {
+            let mut diff = 0;
+            for i in 0..m {
+                if w[i] != t[i] {
+                    diff |= 1 << i;
+                }
+            }
+            diffs.push(diff);
+        }
+    }
+    let mut best_mask = (1 << m) - 1;
+    let mut best_length = m;
+    for mask in 0..(1 << m) {
+        let length = mask_length(m, mask);
+        if length < best_length {
+            let mut unique = true;
+            for d in 0..diffs.len() {
+                if mask & diffs[d] == 0 {
+                    unique = false;
+                    break;
+                }
+            }
+            if unique {
+                best_length = length;
+                best_mask = mask;
+            }
+        }
+    }
+    abbreviate(t, best_mask)
+}
+
+// ---- search: min_abbreviation_search.kara
+
+struct Search {
+    m: i64,
+    diffs: Vec[i64],
+    best_mask: i64,
+    best_length: i64,
+}
+
+fn explore(s: mut ref Search, i: i64, mask: i64, length: i64, after_run: bool) {
+    if length >= s.best_length {
+        return;
+    }
+    if i == s.m {
+        for d in 0..s.diffs.len() {
+            if mask & s.diffs[d] == 0 {
+                return;
+            }
+        }
+        s.best_length = length;
+        s.best_mask = mask;
+        return;
+    }
+    explore(s, i + 1, mask | (1 << i), length + 1, false);
+    if not after_run {
+        for run in 1..s.m - i + 1 {
+            explore(s, i + run, mask, length + 1, true);
+        }
+    }
+}
+
+fn min_abbreviation_search(target: Str, dictionary: Vec[String]) -> String {
+    let t = target.bytes();
+    let m = t.len();
+    let mut diffs: Vec[i64] = Vec.new();
+    for d in 0..dictionary.len() {
+        let w = dictionary[d].bytes();
+        if w.len() == m {
+            let mut diff = 0;
+            for i in 0..m {
+                if w[i] != t[i] {
+                    diff |= 1 << i;
+                }
+            }
+            diffs.push(diff);
+        }
+    }
+    let mut s = Search { m: m, diffs: diffs, best_mask: (1 << m) - 1, best_length: m + 1 };
+    explore(mut s, 0, 0, 0, false);
+    abbreviate(t, s.best_mask)
+}
+
+// ---- levels: min_abbreviation_levels.kara
+
+fn length_of(m: i64, mask: i64) -> i64 {
+    let mut length = 0;
+    for i in 0..m {
+        let kept = (mask >> i) & 1 == 1;
+        if kept or i == 0 or (mask >> (i - 1)) & 1 == 1 {
+            length += 1;
+        }
+    }
+    length
+}
+
+fn min_abbreviation_levels(target: Str, dictionary: Vec[String]) -> String {
+    let t = target.bytes();
+    let m = t.len();
+    let mut same_length: Vec[Vec[u8]] = Vec.new();
+    for d in 0..dictionary.len() {
+        let w = dictionary[d].bytes();
+        if w.len() == m {
+            let mut letters: Vec[u8] = Vec.new();
+            for i in 0..m {
+                letters.push(w[i]);
+            }
+            same_length.push(letters);
+        }
+    }
+    for want in 1..m + 1 {
+        let mut level: Vec[i64] = Vec.new();
+        for mask in 0..(1 << m) {
+            if length_of(m, mask) == want {
+                level.push(mask);
+            }
+        }
+        for k in 0..level.len() {
+            let mask = level[k];
+            let mut clash = false;
+            for d in 0..same_length.len() {
+                let mut agrees = true;
+                for i in 0..m {
+                    if (mask >> i) & 1 == 1 and same_length[d][i] != t[i] {
+                        agrees = false;
+                    }
+                }
+                if agrees {
+                    clash = true;
+                }
+            }
+            if not clash {
+                return abbreviate(t, mask);
+            }
+        }
+    }
+    abbreviate(t, (1 << m) - 1)
+}
+
+// ---- strings: min_abbreviation_strings.kara
+
+fn generate(t: Slice[u8], i: i64, current: own String, after_run: bool, out: mut ref Vec[String]) {
+    if i == t.len() {
+        out.push(current);
+        return;
+    }
+    let mut kept = current.clone();
+    kept.push(t[i] as char);
+    generate(t, i + 1, kept, false, out);
+    if not after_run {
+        for run in 1..t.len() - i + 1 {
+            let mut skipped = current.clone();
+            skipped.push_str(f"{run}");
+            generate(t, i + run, skipped, true, out);
+        }
+    }
+}
+
+fn matches(abbr: Str, word: Str) -> bool {
+    let w = word.bytes();
+    let a = abbr.bytes();
+    let mut i = 0;
+    let mut j = 0;
+    while i < w.len() and j < a.len() {
+        if a[j] >= 48 and a[j] <= 57 {
+            let mut skip = 0;
+            while j < a.len() and a[j] >= 48 and a[j] <= 57 {
+                skip = skip * 10 + (a[j] - 48) as i64;
+                j += 1;
+            }
+            i += skip;
+        } else {
+            if w[i] != a[j] {
+                return false;
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    i == w.len() and j == a.len()
+}
+
+fn text_length(abbr: Str) -> i64 {
+    let a = abbr.bytes();
+    let mut length = 0;
+    for j in 0..a.len() {
+        let digit = a[j] >= 48 and a[j] <= 57;
+        if not digit or j == 0 or a[j - 1] < 48 or a[j - 1] > 57 {
+            length += 1;
+        }
+    }
+    length
+}
+
+fn min_abbreviation_strings(target: Str, dictionary: Vec[String]) -> String {
+    let mut all: Vec[String] = Vec.new();
+    generate(target.bytes(), 0, String.new(), false, mut all);
+    let mut best_length = target.len();
+    let mut best = String.from(target);
+    for k in 0..all.len() {
+        let length = text_length(all[k]);
+        if length < best_length {
+            let mut unique = true;
+            for d in 0..dictionary.len() {
+                if matches(all[k], dictionary[d]) {
+                    unique = false;
+                    break;
+                }
+            }
+            if unique {
+                best = all[k].clone();
+                best_length = length;
+            }
+        }
+    }
+    best
+}
+
+// ---- the checks -------------------------------------------------------------
+
+fn solve(arm: i64, target: Str, dictionary: Vec[String]) -> String {
+    if arm == 0 {
+        min_abbreviation_masks(target, dictionary)
+    } else if arm == 1 {
+        min_abbreviation_search(target, dictionary)
+    } else if arm == 2 {
+        min_abbreviation_levels(target, dictionary)
+    } else {
+        min_abbreviation_strings(target, dictionary)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Whether abbr abbreviates word (kata 408's two pointers).
+fn abbreviates(abbr: Str, word: Str) -> bool {
+    let w = word.bytes();
+    let a = abbr.bytes();
+    let mut i = 0;
+    let mut j = 0;
+    while i < w.len() and j < a.len() {
+        if a[j] >= 48 and a[j] <= 57 {
+            if a[j] == 48 {
+                return false;
+            }
+            let mut skip = 0;
+            while j < a.len() and a[j] >= 48 and a[j] <= 57 {
+                skip = skip * 10 + (a[j] - 48) as i64;
+                j += 1;
+            }
+            i += skip;
+        } else {
+            if w[i] != a[j] {
+                return false;
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    i == w.len() and j == a.len()
+}
+
+// Letters plus numbers.
+fn abbr_length(abbr: Str) -> i64 {
+    let a = abbr.bytes();
+    let mut length = 0;
+    for j in 0..a.len() {
+        if a[j] < 48 or a[j] > 57 or j == 0 or a[j - 1] < 48 or a[j - 1] > 57 {
+            length += 1;
+        }
+    }
+    length
+}
+
+fn unique(target: Str, dictionary: Vec[String], abbr: Str) -> bool {
+    if not abbreviates(abbr, target) {
+        return false;
+    }
+    for d in 0..dictionary.len() {
+        if abbreviates(abbr, dictionary[d]) {
+            return false;
+        }
+    }
+    true
+}
+
+// The least length over every abbreviation of target, each written out
+// from a mask of kept letters and checked as text.
+fn brute(target: Str, dictionary: Vec[String]) -> i64 {
+    let t = target.bytes();
+    let m = t.len();
+    let mut best = m;
+    for mask in 0..(1 << m) {
+        let mut text = String.new();
+        let mut run = 0;
+        for i in 0..m {
+            if (mask >> i) & 1 == 1 {
+                if run > 0 {
+                    text.push_str(f"{run}");
+                    run = 0;
+                }
+                text.push(t[i] as char);
+            } else {
+                run += 1;
+            }
+        }
+        if run > 0 {
+            text.push_str(f"{run}");
+        }
+        if unique(target, dictionary, text) and abbr_length(text) < best {
+            best = abbr_length(text);
+        }
+    }
+    best
+}
+
+fn word(len: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut w = String.new();
+    for _ in 0..len {
+        w.push((97 + step(seed) % letters) as u8 as char);
+    }
+    w
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4110;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // 1 to 8 letters from a and b, or a to c.
+        let m = 1 + step(mut seed) % 8;
+        let letters = 2 + step(mut seed) % 2;
+        let target = word(m, letters, mut seed);
+        let mut dictionary: Vec[String] = Vec.new();
+        let count = step(mut seed) % 9;
+        for _ in 0..count {
+            let w = word(m, letters, mut seed);
+            if w != target {
+                dictionary.push(w);
+            }
+        }
+        // Words of other lengths only.
+        let mut others: Vec[String] = Vec.new();
+        for _ in 0..count {
+            let len = 1 + step(mut seed) % 9;
+            if len != m {
+                others.push(word(len, letters, mut seed));
+            }
+        }
+        let mut mixed = dictionary.clone();
+        mixed.push(word(m + 1, letters, mut seed));
+        let mut more = dictionary.clone();
+        let extra = word(m, letters, mut seed);
+        if extra != target {
+            more.push(extra);
+        }
+        let small = m <= 6;
+        let best = if small { brute(target, dictionary) } else { 0 };
+        for arm in 0..4 {
+            checks += 5;
+            let answer = solve(arm, target, dictionary);
+            let length = abbr_length(answer);
+            report(1, arm, case, unique(target, dictionary, answer), mut failures);
+            report(2, arm, case, abbr_length(solve(arm, target, others)) == 1 and length <= m, mut failures);
+            report(3, arm, case, not small or length == best, mut failures);
+            report(4, arm, case, abbr_length(solve(arm, target, mixed)) == length, mut failures);
+            report(5, arm, case, abbr_length(solve(arm, target, more)) >= length, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

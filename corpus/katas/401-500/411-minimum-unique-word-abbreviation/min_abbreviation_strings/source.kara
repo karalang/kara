@@ -1,0 +1,204 @@
+// LeetCode #411: Minimum Unique Word Abbreviation -- every abbreviation
+// as text.
+//
+// Write out every abbreviation of the target as a string, as in LeetCode
+// #320 (Generalized Abbreviation): at each letter keep it, or start a
+// number there that covers a run and is followed by a letter or the end.
+// Then take the shortest that abbreviates no dictionary word, checking
+// each word with two pointers over the text, as kata 408 does.
+// O(2^m (m + n m)) time, O(2^m m) space for the list.
+
+fn generate(t: Slice[u8], i: i64, current: own String, after_run: bool, out: mut ref Vec[String]) {
+    if i == t.len() {
+        out.push(current);
+        return;
+    }
+    let mut kept = current.clone();
+    kept.push(t[i] as char);
+    generate(t, i + 1, kept, false, out);
+    if not after_run {
+        for run in 1..t.len() - i + 1 {
+            let mut skipped = current.clone();
+            skipped.push_str(f"{run}");
+            generate(t, i + run, skipped, true, out);
+        }
+    }
+}
+
+fn matches(abbr: Str, word: Str) -> bool {
+    let w = word.bytes();
+    let a = abbr.bytes();
+    let mut i = 0;
+    let mut j = 0;
+    while i < w.len() and j < a.len() {
+        if a[j] >= 48 and a[j] <= 57 {
+            let mut skip = 0;
+            while j < a.len() and a[j] >= 48 and a[j] <= 57 {
+                skip = skip * 10 + (a[j] - 48) as i64;
+                j += 1;
+            }
+            i += skip;
+        } else {
+            if w[i] != a[j] {
+                return false;
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    i == w.len() and j == a.len()
+}
+
+fn text_length(abbr: Str) -> i64 {
+    let a = abbr.bytes();
+    let mut length = 0;
+    for j in 0..a.len() {
+        let digit = a[j] >= 48 and a[j] <= 57;
+        if not digit or j == 0 or a[j - 1] < 48 or a[j - 1] > 57 {
+            length += 1;
+        }
+    }
+    length
+}
+
+fn min_abbreviation(target: Str, dictionary: Vec[String]) -> String {
+    let mut all: Vec[String] = Vec.new();
+    generate(target.bytes(), 0, String.new(), false, mut all);
+    let mut best_length = target.len();
+    let mut best = String.from(target);
+    for k in 0..all.len() {
+        let length = text_length(all[k]);
+        if length < best_length {
+            let mut unique = true;
+            for d in 0..dictionary.len() {
+                if matches(all[k], dictionary[d]) {
+                    unique = false;
+                    break;
+                }
+            }
+            if unique {
+                best = all[k].clone();
+                best_length = length;
+            }
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Whether abbr abbreviates word (kata 408's two pointers).
+fn abbreviates(abbr: Str, word: Str) -> bool {
+    let w = word.bytes();
+    let a = abbr.bytes();
+    let mut i = 0;
+    let mut j = 0;
+    while i < w.len() and j < a.len() {
+        if a[j] >= 48 and a[j] <= 57 {
+            if a[j] == 48 {
+                return false;
+            }
+            let mut skip = 0;
+            while j < a.len() and a[j] >= 48 and a[j] <= 57 {
+                skip = skip * 10 + (a[j] - 48) as i64;
+                j += 1;
+            }
+            i += skip;
+        } else {
+            if w[i] != a[j] {
+                return false;
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    i == w.len() and j == a.len()
+}
+
+// Letters plus numbers.
+fn abbr_length(abbr: Str) -> i64 {
+    let a = abbr.bytes();
+    let mut length = 0;
+    for j in 0..a.len() {
+        if a[j] < 48 or a[j] > 57 or j == 0 or a[j - 1] < 48 or a[j - 1] > 57 {
+            length += 1;
+        }
+    }
+    length
+}
+
+// The answer's length, and whether it abbreviates the target and no
+// word of the dictionary. Shortest answers can differ between
+// approaches, so only these are printed.
+fn verdict(target: Str, dictionary: Vec[String], abbr: Str) -> String {
+    let mut ok = abbreviates(abbr, target);
+    for d in 0..dictionary.len() {
+        if abbreviates(abbr, dictionary[d]) {
+            ok = false;
+        }
+    }
+    let label = if ok { "unique" } else { "NOT UNIQUE" };
+    f"length {abbr_length(abbr)}, {label}"
+}
+
+fn show(target: Str, dictionary: Vec[String]) {
+    let mut words = String.new();
+    for d in 0..dictionary.len() {
+        if d > 0 {
+            words.push_str(", ");
+        }
+        words.push_str(dictionary[d]);
+    }
+    let abbr = min_abbreviation(target, dictionary);
+    println(f"{target} [{words}]: {verdict(target, dictionary, abbr)}");
+}
+
+fn main() {
+    show("apple", vec!["blade"]);
+    show("apple", vec!["plain", "amber", "blade"]);
+    show("apple", vec![]);
+    show("apple", vec!["pear", "fig", "banana"]);
+    show("a", vec!["b"]);
+    show("ab", vec!["aa", "bb"]);
+    show("abcd", vec!["abce", "abed", "aecd", "ebcd"]);
+    show("internationalization", vec!["internationalizatiom"]);
+    show("aaaaaaaa", vec!["aaaaaaab", "baaaaaaa", "aaaabaaa"]);
+    // 1,000 random targets of 1 to 8 letters from a and b, each with up to
+    // 10 dictionary words, most of the target's length, none equal to it.
+    let mut seed: i64 = 411;
+    let mut total = 0;
+    let mut unique = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..1000 {
+        let m = 1 + step(mut seed) % 8;
+        let mut target = String.new();
+        for _ in 0..m {
+            target.push((97 + step(mut seed) % 2) as u8 as char);
+        }
+        let mut dictionary: Vec[String] = Vec.new();
+        let count = step(mut seed) % 11;
+        for _ in 0..count {
+            let len = if step(mut seed) % 4 == 0 { 1 + step(mut seed) % 8 } else { m };
+            let mut word = String.new();
+            for _ in 0..len {
+                word.push((97 + step(mut seed) % 2) as u8 as char);
+            }
+            if word != target {
+                dictionary.push(word);
+            }
+        }
+        let abbr = min_abbreviation(target, dictionary);
+        let length = abbr_length(abbr);
+        if verdict(target, dictionary, abbr).ends_with(", unique") {
+            unique += 1;
+        }
+        total += length;
+        checksum = (checksum * 31 + length) % 1000000007;
+    }
+    println(f"1000 random targets: {unique} unique, total length {total}, checksum {checksum}");
+}

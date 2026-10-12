@@ -1,0 +1,10 @@
+apple [blade]: length 2, unique
+apple [plain, amber, blade]: length 3, unique
+apple []: length 1, unique
+apple [pear, fig, banana]: length 1, unique
+a [b]: length 1, unique
+ab [aa, bb]: length 2, unique
+abcd [abce, abed, aecd, ebcd]: length 4, unique
+internationalization [internationalizatiom]: length 2, unique
+aaaaaaaa [aaaaaaab, baaaaaaa, aaaabaaa]: length 5, unique
+1000 random targets: 1000 unique, total length 2405, checksum 669640364
