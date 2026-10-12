@@ -53,7 +53,14 @@ impl KaracBin {
     }
 
     fn output(self) -> std::io::Result<Output> {
-        common::output_with_hang_watchdog(self.0, std::time::Duration::from_secs(15))
+        self.output_within(std::time::Duration::from_secs(15))
+    }
+
+    /// `output` with a longer watchdog, for a build that is slow rather than
+    /// hung: a debug `karac` takes about 18 s to build Plume for
+    /// `wasm_browser` with threads, past the 15 s default.
+    fn output_within(self, timeout: std::time::Duration) -> std::io::Result<Output> {
+        common::output_with_hang_watchdog(self.0, timeout)
             .ok_or_else(|| std::io::Error::other("karac child spawn failed"))
     }
 }
@@ -28303,7 +28310,7 @@ fn plume_example_pointer_steered_flow_e2e() {
         ])
         .current_dir(&tmp)
         .env_remove("KARAC_RUNTIME")
-        .output()
+        .output_within(std::time::Duration::from_secs(120))
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     if let Some(reason) = wasm_build_skip_reason(&out) {
@@ -28418,7 +28425,7 @@ fn plume_example_click_pinned_vortex_e2e() {
         ])
         .current_dir(&tmp)
         .env_remove("KARAC_RUNTIME")
-        .output()
+        .output_within(std::time::Duration::from_secs(120))
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     if let Some(reason) = wasm_build_skip_reason(&out) {
