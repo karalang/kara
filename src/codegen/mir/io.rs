@@ -12,7 +12,7 @@ use inkwell::IntPredicate;
 
 use super::{Cx, R};
 use crate::mir::ty::IntrinsicTy;
-use crate::mir::{Operand, Place, TyKind};
+use crate::mir::{Operand, Place, Ty, TyKind};
 
 fn e<T: ToString>(x: T) -> String {
     x.to_string()
@@ -40,6 +40,10 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<Option<()>> {
         match (base, method) {
             ("File", _) => self.file_native(method, args, dest),
+            ("Command", "spawn") => self.spawn_native(args, dest).map(Some),
+            ("Child" | "ChildStdout" | "ChildStderr" | "ChildStdin", _) => {
+                self.child_native(base, method, args, dest)
+            }
             ("Clock", "now") => {
                 let i64t = self.llcx.i64_type();
                 let f = self.extern_fn("karac_runtime_clock_now", i64t.fn_type(&[], false));
@@ -122,6 +126,133 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(Some(()))
     }
 
+    /// `Command.spawn` through `karac_mir_process_spawn`, handing it the
+    /// `Command`'s fields where they lie.
+    fn spawn_native(&mut self, args: &[Operand], dest: &Place) -> R<()> {
+        let (cmd, ty) = self.behind_refs(&args[0])?;
+        let fields: Vec<String> = self
+            .tys
+            .tcx()
+            .adt_of(ty)
+            .map(|(adt, _)| {
+                adt.variants[0]
+                    .fields
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect()
+            })
+            .ok_or("Command.spawn of a non-struct")?;
+        let field = |cx: &Self, n: &str| -> R<(PointerValue<'ctx>, Ty)> {
+            let k = fields
+                .iter()
+                .position(|f| f == n)
+                .ok_or_else(|| format!("a Command without `{n}`"))? as u32;
+            let t = cx
+                .tys
+                .field_ty(ty, None, k)
+                .ok_or_else(|| format!("`{n}` has no type"))?;
+            Ok((cx.offset(cmd, cx.field_offset(ty, None, k)?)?, t))
+        };
+        let (prog, _) = field(self, "program")?;
+        let (a, _) = field(self, "cmd_args")?;
+        let (env, _) = field(self, "cmd_env")?;
+        let mut vals: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+            prog.into(),
+            self.load_ptr(a)?.into(),
+            self.load_i64(self.offset(a, 8)?)?.into(),
+            self.load_ptr(env)?.into(),
+            self.load_i64(self.offset(env, 8)?)?.into(),
+        ];
+        for n in ["cmd_stdin", "cmd_stdout", "cmd_stderr"] {
+            let (p, t) = field(self, n)?;
+            // The runtime's tag is the variant's index.
+            for (k, v) in ["Inherit", "Null", "Piped"].iter().enumerate() {
+                if self.variant_of(t, v)? != k as u32 {
+                    return Err(format!("Stdio.{v} is not variant {k}"));
+                }
+            }
+            let tag = self.load_tag(p, t)?;
+            let tag = self
+                .builder
+                .build_int_z_extend_or_bit_cast(tag, self.llcx.i64_type(), "")
+                .map_err(e)?;
+            vals.push(tag.into());
+        }
+        self.io_call("process_spawn", &vals, args, dest)
+    }
+
+    /// The methods of a `Child` and its pipes, each a handle holding the
+    /// child's pid: `stdout` / `stderr` / `stdin` take the pipe through
+    /// `karac_runtime_process_take_stream`, the rest go through
+    /// `karac_mir_process`.
+    fn child_native(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let op: u64 = match (base, method) {
+            ("Child", "wait") => 0,
+            ("Child", "try_wait") => 1,
+            ("Child", "kill") => 2,
+            ("ChildStdout", "read_to_string") => 3,
+            ("ChildStderr", "read_to_string") => 4,
+            ("ChildStdin", "write") => 5,
+            ("ChildStdin", "close") => 6,
+            ("Child", "stdout" | "stderr" | "stdin") => 7,
+            _ => return Ok(None),
+        };
+        let (at, _) = self.behind_refs(&args[0])?;
+        let pid = self.load_i64(at)?;
+        let i64t = self.llcx.i64_type();
+        if op == 7 {
+            let which = match method {
+                "stdout" => 0,
+                "stderr" => 1,
+                _ => 2,
+            };
+            let f = self.extern_fn(
+                "karac_runtime_process_take_stream",
+                i64t.fn_type(&[i64t.into(), i64t.into()], false),
+            );
+            let got = self
+                .builder
+                .build_call(f, &[pid.into(), self.i64(which).into()], "")
+                .map_err(e)?
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let dty = self.place_type(dest)?;
+            let d = self.place_ptr(dest)?;
+            let (some, none) = self.option_variants(dty)?;
+            let off = self.field_offset(dty, Some(some), 0)?;
+            let taken = self
+                .builder
+                .build_int_compare(IntPredicate::NE, got, self.i64(0), "")
+                .map_err(e)?;
+            self.store_tag(d, dty, none)?;
+            self.if_then(taken, |cx| {
+                cx.store_tag(d, dty, some)?;
+                cx.store(cx.offset(d, off)?, got.into())
+            })?;
+            return Ok(Some(()));
+        }
+        let data = if op == 5 {
+            self.behind_refs(&args[1])?.0
+        } else {
+            self.ptr_ty().const_null()
+        };
+        let i32t = self.llcx.i32_type();
+        self.io_call(
+            "process",
+            &[i32t.const_int(op, false).into(), pid.into(), data.into()],
+            args,
+            dest,
+        )?;
+        Ok(Some(()))
+    }
+
     /// Calls the fallible `karac_mir_{name}(args.., value, msg)` and writes
     /// its `Result` at `dest`: `Ok` of the `i64` it left in `value` (none
     /// for a `Unit` payload), or `Err` of the `IoError` its code names.
@@ -165,10 +296,6 @@ impl<'ctx> Cx<'ctx, '_> {
             .tys
             .field_ty(dty, Some(er), 0)
             .ok_or("Result.Err has no payload")?;
-        let ok_size = self.layout(okt)?.size;
-        if ok_size != 0 && ok_size != 8 {
-            return Err(format!("an I/O result of `{}`", self.tys.display(okt)));
-        }
         let ok_off = self.field_offset(dty, Some(ok), 0)?;
         let ep = self.offset(d, self.field_offset(dty, Some(er), 0)?)?;
         let i32t = self.llcx.i32_type();
@@ -179,11 +306,8 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store_tag(d, dty, er)?;
         self.if_then(done, |cx| {
             cx.store_tag(d, dty, ok)?;
-            if ok_size == 8 {
-                let v = cx.load_i64(value)?;
-                cx.store(cx.offset(d, ok_off)?, v.into())?;
-            }
-            Ok(())
+            let q = cx.offset(d, ok_off)?;
+            cx.store_io_ok(q, okt, value, msg)
         })?;
         for (k, name) in IO_ERRORS.iter().enumerate() {
             let v = self.variant_of(et, name)?;
@@ -207,5 +331,82 @@ impl<'ctx> Cx<'ctx, '_> {
             })?;
         }
         Ok(())
+    }
+
+    /// Writes the `Ok` payload of type `okt` at `q` from what the runtime
+    /// left: a `String` in `msg`, or a word in `value`, which for an
+    /// `ExitStatus` (in an `Option` or not) is packed as `process.rs`
+    /// packs it.
+    fn store_io_ok(
+        &mut self,
+        q: PointerValue<'ctx>,
+        okt: Ty,
+        value: PointerValue<'ctx>,
+        msg: PointerValue<'ctx>,
+    ) -> R<()> {
+        if matches!(self.tys.kind(okt), TyKind::Intrinsic(IntrinsicTy::String)) {
+            return self.copy(q, msg, okt);
+        }
+        let name = self.tys.tcx().adt_of(okt).map(|(adt, _)| adt.name.clone());
+        let v = self.load_i64(value)?;
+        match name.as_deref() {
+            // `(code << 1) | success`.
+            Some("ExitStatus") => self.store_exit(q, okt, v, 1),
+            // `(code << 2) | (success << 1) | present`.
+            Some("Option") => {
+                let (some, none) = self.option_variants(okt)?;
+                let st = self
+                    .tys
+                    .field_ty(okt, Some(some), 0)
+                    .ok_or("an option without a payload")?;
+                let off = self.field_offset(okt, Some(some), 0)?;
+                let one = self.i64(1);
+                let present = self.builder.build_and(v, one, "").map_err(e)?;
+                let present = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, present, self.i64(0), "")
+                    .map_err(e)?;
+                self.store_tag(q, okt, none)?;
+                self.if_then(present, |cx| {
+                    cx.store_tag(q, okt, some)?;
+                    let v = cx.builder.build_right_shift(v, one, true, "").map_err(e)?;
+                    let p = cx.offset(q, off)?;
+                    cx.store_exit(p, st, v, 1)
+                })
+            }
+            _ => match self.layout(okt)?.size {
+                0 => Ok(()),
+                8 => self.store(q, v.into()),
+                _ => Err(format!("an I/O result of `{}`", self.tys.display(okt))),
+            },
+        }
+    }
+
+    /// An `ExitStatus { code, success }` at `p` from `v`: `success` its low
+    /// bit, `code` the rest, shifted down by `shift`.
+    fn store_exit(
+        &mut self,
+        p: PointerValue<'ctx>,
+        ty: Ty,
+        v: IntValue<'ctx>,
+        shift: u64,
+    ) -> R<()> {
+        let code = self
+            .builder
+            .build_right_shift(v, self.i64(shift), true, "")
+            .map_err(e)?;
+        let bit = self.builder.build_and(v, self.i64(1), "").map_err(e)?;
+        let success = self
+            .builder
+            .build_int_truncate(bit, self.llcx.i8_type(), "")
+            .map_err(e)?;
+        self.store(
+            self.offset(p, self.field_offset(ty, None, 0)?)?,
+            code.into(),
+        )?;
+        self.store(
+            self.offset(p, self.field_offset(ty, None, 1)?)?,
+            success.into(),
+        )
     }
 }

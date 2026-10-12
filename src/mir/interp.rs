@@ -587,6 +587,7 @@ fn run_with(
         arenas: 0,
         channels: Vec::new(),
         files: Vec::new(),
+        procs: Procs::default(),
         pools: Vec::new(),
         semaphores: Vec::new(),
         limiters: Vec::new(),
@@ -851,6 +852,9 @@ struct Interp<'a> {
     channels: Vec<Chan>,
     /// The open files behind `File` values, by id - 1; `None` once closed.
     files: Vec<Option<std::fs::File>>,
+    /// The children `Command.spawn` started and their taken pipes, by
+    /// pid, as the runtime's `process.rs` keeps them.
+    procs: Procs,
     /// The `Pool[T]`s, by handle - 1. A pool lives until exit, as legacy's
     /// does: `Pool` values are handles, and copies share it.
     pools: Vec<PoolEntry>,
@@ -1466,6 +1470,9 @@ impl<'a> Interp<'a> {
                 self.channel_method(name, base, method, args, arg_tys, ret)
             }
             ("File", _) => self.file_method(name, method, args, arg_tys, ret),
+            ("Command", "spawn") | ("Child" | "ChildStdout" | "ChildStderr" | "ChildStdin", _) => {
+                self.process_method(name, base, method, args, arg_tys, ret)
+            }
             ("TaskGroup" | "TaskHandle", _) => self.task_method(name, base, method, args, arg_tys),
             ("Vec", "from_array") => {
                 let [Value::Agg(elems)] = args.as_slice() else {
@@ -3706,6 +3713,186 @@ impl<'a> Interp<'a> {
         match res {
             Ok(v) => self.variant_named(ret, None, "Ok", vec![v]),
             Err(e) => self.io_err(ret, e),
+        }
+    }
+
+    /// `Command.spawn` and the `Child` handle's methods, over pid-keyed
+    /// tables as the runtime's `process.rs` has them: `wait` reaps,
+    /// `try_wait` reaps once the child has exited, `kill` leaves the child
+    /// to be waited for, and each pipe can be taken once.
+    fn process_method(
+        &mut self,
+        name: &str,
+        base: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
+        use std::io::{Read, Write};
+        let Some(recv) = args.first() else {
+            return err(format!("{name} needs its receiver"));
+        };
+        if base == "Command" {
+            let ty = self.deref_ty(arg_tys.first().copied(), name)?;
+            let fields = self.struct_value(recv, name)?;
+            let field = |n: &str| -> R<(Value, Ty)> {
+                let k = self
+                    .tys
+                    .tcx()
+                    .adt_of(ty)
+                    .and_then(|(adt, _)| adt.variants[0].fields.iter().position(|(f, _)| f == n))
+                    .ok_or_else(|| Stop::Error(format!("{name}: a Command without `{n}`")))?;
+                let t = self
+                    .tys
+                    .field_ty(ty, None, k as u32)
+                    .ok_or_else(|| Stop::Error(format!("{name}: `{n}` has no type")))?;
+                Ok((fields[k].clone(), t))
+            };
+            let mut cmd = std::process::Command::new(self.string_at(&field("program")?.0)?);
+            let (args_v, _) = field("cmd_args")?;
+            let id = self.box_behind(&args_v)?;
+            for a in self.vec_elems(id)?.clone() {
+                cmd.arg(self.string_at(&a)?);
+            }
+            let (env_v, _) = field("cmd_env")?;
+            let id = self.box_behind(&env_v)?;
+            for kv in self.vec_elems(id)?.clone() {
+                let Value::Agg(kv) = kv else {
+                    return err(format!("{name}: an EnvVar holding {kv:?}"));
+                };
+                cmd.env(self.string_at(&kv[0])?, self.string_at(&kv[1])?);
+            }
+            for (i, n) in ["cmd_stdin", "cmd_stdout", "cmd_stderr"].iter().enumerate() {
+                let (v, t) = field(n)?;
+                let Value::Variant(k, _) = v else {
+                    return err(format!("{name}: a Stdio holding {v:?}"));
+                };
+                let which = self
+                    .tys
+                    .tcx()
+                    .adt_of(t)
+                    .and_then(|(adt, _)| adt.variants.get(k as usize).map(|v| v.name.clone()));
+                // Inherit leaves the stream at `std::process`'s default.
+                let cfg = match which.as_deref() {
+                    Some("Null") => std::process::Stdio::null(),
+                    Some("Piped") => std::process::Stdio::piped(),
+                    _ => continue,
+                };
+                match i {
+                    0 => cmd.stdin(cfg),
+                    1 => cmd.stdout(cfg),
+                    _ => cmd.stderr(cfg),
+                };
+            }
+            return match cmd.spawn() {
+                Ok(child) => {
+                    let pid = i64::from(child.id());
+                    self.procs.children.insert(pid, child);
+                    let child = Value::Agg(vec![Value::Int(i128::from(pid))]);
+                    self.variant_named(ret, None, "Ok", vec![child])
+                }
+                Err(e) => self.io_err(ret, e),
+            };
+        }
+        let pid = match self.struct_value(recv, name)?.as_slice() {
+            [Value::Int(p)] => *p as i64,
+            other => return err(format!("{name} of a handle holding {other:?}")),
+        };
+        let not_found = || std::io::Error::from(std::io::ErrorKind::NotFound);
+        let exit = |s: std::process::ExitStatus| {
+            Value::Agg(vec![
+                Value::Int(i128::from(s.code().unwrap_or(-1))),
+                Value::Bool(s.success()),
+            ])
+        };
+        let handle = || Value::Agg(vec![Value::Int(i128::from(pid))]);
+        let res: std::io::Result<Value> = match (base, method) {
+            ("Child", "wait") => match self.procs.children.remove(&pid) {
+                Some(mut c) => c.wait().map(exit),
+                None => Err(not_found()),
+            },
+            ("Child", "try_wait") => match self.procs.children.get_mut(&pid) {
+                Some(c) => match c.try_wait() {
+                    Ok(Some(s)) => {
+                        self.procs.children.remove(&pid);
+                        let some = self.payload_ty(ret, "Ok")?;
+                        Ok(self.option(some, Some(exit(s)))?)
+                    }
+                    Ok(None) => {
+                        let some = self.payload_ty(ret, "Ok")?;
+                        Ok(self.option(some, None)?)
+                    }
+                    Err(e) => Err(e),
+                },
+                None => Err(not_found()),
+            },
+            ("Child", "kill") => match self.procs.children.get_mut(&pid) {
+                Some(c) => c.kill().map(|()| Value::Unit),
+                None => Err(not_found()),
+            },
+            ("Child", "stdout" | "stderr" | "stdin") => {
+                let p = &mut self.procs;
+                let taken = p.children.get_mut(&pid).is_some_and(|c| match method {
+                    "stdout" => c.stdout.take().map(|h| p.stdout.insert(pid, h)).is_some(),
+                    "stderr" => c.stderr.take().map(|h| p.stderr.insert(pid, h)).is_some(),
+                    _ => c.stdin.take().map(|h| p.stdin.insert(pid, h)).is_some(),
+                });
+                return self.option(ret, taken.then(handle));
+            }
+            ("ChildStdout" | "ChildStderr", "read_to_string") => {
+                let h: Option<Box<dyn Read>> = if base == "ChildStdout" {
+                    self.procs.stdout.remove(&pid).map(|h| Box::new(h) as _)
+                } else {
+                    self.procs.stderr.remove(&pid).map(|h| Box::new(h) as _)
+                };
+                match h {
+                    Some(mut h) => {
+                        let mut buf = String::new();
+                        h.read_to_string(&mut buf)
+                            .map(|_| self.alloc_box("String", Value::Str(buf)))
+                    }
+                    None => Err(not_found()),
+                }
+            }
+            ("ChildStdin", "write") => {
+                let Some(data) = args.get(1) else {
+                    return err(format!("{name} takes the data"));
+                };
+                let text = self.string_at(data)?;
+                // `data` is `own String`: spent here.
+                if let (Value::Box(_), Some(&t)) = (data, arg_tys.get(1)) {
+                    self.drop_value(data.clone(), t)?;
+                }
+                match self.procs.stdin.get_mut(&pid) {
+                    Some(h) => h.write_all(text.as_bytes()).map(|()| Value::Unit),
+                    None => Err(not_found()),
+                }
+            }
+            ("ChildStdin", "close") => {
+                self.procs.stdin.remove(&pid);
+                Ok(Value::Unit)
+            }
+            _ => return err(format!("call of unknown function {name}")),
+        };
+        match res {
+            Ok(v) => self.variant_named(ret, None, "Ok", vec![v]),
+            Err(e) => self.io_err(ret, e),
+        }
+    }
+
+    /// The fields of the struct a (possibly referenced) value holds.
+    fn struct_value(&mut self, v: &Value, name: &str) -> R<Vec<Value>> {
+        let held = match v {
+            Value::Ref(_) => {
+                let at = self.cell_struct(v, name)?;
+                self.slot(&at)?
+            }
+            other => other.clone(),
+        };
+        match held {
+            Value::Agg(fs) => Ok(fs),
+            other => err(format!("{name} of {other:?}")),
         }
     }
 
@@ -9259,6 +9446,16 @@ const CHAR_METHODS: &[&str] = &[
 fn single_scalar(mut it: impl Iterator<Item = char>) -> Option<char> {
     let first = it.next()?;
     it.next().is_none().then_some(first)
+}
+
+/// The children `Command.spawn` started, by pid, and the pipes taken off
+/// them.
+#[derive(Default)]
+struct Procs {
+    children: rustc_hash::FxHashMap<i64, std::process::Child>,
+    stdout: rustc_hash::FxHashMap<i64, std::process::ChildStdout>,
+    stderr: rustc_hash::FxHashMap<i64, std::process::ChildStderr>,
+    stdin: rustc_hash::FxHashMap<i64, std::process::ChildStdin>,
 }
 
 /// `Vec` methods [`Interp::vec_more_method`] implements.
