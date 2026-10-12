@@ -704,7 +704,17 @@ impl<'a> super::TypeChecker<'a> {
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
-                option_elem
+                // B-2026-10-12-2: the library's `min(self) -> Option[ref T]`
+                // lends the element it holds, as `iter()` and `range()` do.
+                // The legacy backends read the element itself.
+                if self.library_methods_from_source || self.cli_lint_overrides.strict_core {
+                    Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![Type::Ref(Box::new(elem.clone()))],
+                    }
+                } else {
+                    option_elem
+                }
             }
             "union" | "intersection" | "difference" => {
                 for arg in args {

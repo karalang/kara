@@ -2899,6 +2899,35 @@ fn a_peeked_item_is_borrowed() {
     );
 }
 
+/// B-2026-10-12-2: `SortedSet.min()` / `.max()` lend the element
+/// (collections.md: `Option[ref T]`), as `iter()` and `range()` do, so an
+/// explicit `*x` reads it (§5.10) and keeping a `String` takes a copy.
+#[test]
+fn sorted_set_min_and_max_lend_their_element() {
+    accepted(
+        "sorted-set-min-deref",
+        "fn main() {\n\
+             let mut s: SortedSet[i64] = SortedSet.new();\n\
+             s.insert(5);\n\
+             s.insert(2);\n\
+             let mut t = 0;\n\
+             if let Some(x) = s.min() { t += *x; }\n\
+             if let Some(x) = s.max() { t += *x; }\n\
+             println(t);\n\
+         }\n",
+    );
+    rejected_then_fixed(
+        "sorted-set-max-string",
+        "fn main() {\n\
+             let mut s: SortedSet[String] = SortedSet.new();\n\
+             s.insert(\"a\".to_string());\n\
+             let m: String = s.max().unwrap();\n\
+             println(m);\n\
+         }\n",
+        "found 'ref String'",
+    );
+}
+
 /// §4.6: a bare `for` borrows its collection, so a method that takes `self`
 /// by value (`TaskHandle.join(own self)`, a user `own self` method) cannot
 /// run on its element. `karac fix` makes the loop move the elements out.
