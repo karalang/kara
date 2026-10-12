@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 171 |
 | diagnostics | 149 |
 | perf | 147 |
-| false-positive | 132 |
+| false-positive | 133 |
 | crash | 114 |
 | soundness | 98 |
 | use-after-free | 90 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2851 |
 | interp | 896 |
-| typecheck | 353 |
+| typecheck | 354 |
 | other | 114 |
 | ownership | 80 |
 | cli | 75 |
@@ -582,6 +582,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-6 | 2026-10-12 | typecheck+interp | medium | The v1 spec gives every number type `fn parse(s: Str) -> Result[Self, ParseError]` (docs/library/core-types.md § Parsing; strings.md; the error-type list in library/README.md), but the compiler still returns `Option[Self]` and has no `ParseError`: the spec's own example `match i64.parse(line.trim()) { Ok(n) => ..., Err(e) => ... }` is refused by `karac check` and `karac __mir-run` | — |
 | B-2026-10-12-7 | 2026-10-12 | typecheck+interp | medium | `Str.split` / `lines` / `split_whitespace` return an eager `Vec[String]` of copies, but the v1 spec (docs/library/strings.md) gives them `impl Iterator[Item = Str]` of views: strings.md's own example `let parts: Vec[Str] = line.split(",").collect();` is refused by `karac check` ("no method 'collect' on type 'Vec'") | — |
 | B-2026-10-12-8 | 2026-10-12 | interp | medium | `karac __mir-run`: every `Str.bytes()` call allocates a per-byte copy (about 63 bytes of memory per byte) that is kept until the program exits, so a loop that calls `bytes()` grows without bound: kata 388's bench was OOM-killed at 8.6 GB, and a 10,000-byte string read with `bytes()` 400 times peaks at 286 MB against 43 MB for `chars()` | — |
+| B-2026-10-12-9 | 2026-10-12 | typecheck | medium | `Map`/`SortedMap` `iter()` items are typed `(K, V)`, not the spec's `(ref K, ref V)`: `for (c, n) in m.iter() { if *n > 0 { .. } }` passes `karac check` but `karac __mir-run` refuses it ("unary '*' requires 'ref T' ... found 'i64'", with no location), and `*p.0` on an undestructured item is refused by check as well | — |
 
 ### Relocated
 
