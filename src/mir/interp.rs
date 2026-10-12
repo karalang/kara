@@ -3605,7 +3605,16 @@ impl<'a> Interp<'a> {
     ) -> R<Value> {
         use std::io::{Read, Seek, Write};
         if let ("open" | "create" | "append", [path]) = (method, args.as_slice()) {
-            let path = self.string_at(path)?;
+            let text = self.string_at(path)?;
+            // `append` is a method name the builder hands its argument to
+            // by move (`v.append(other)` keeps it), so a path can arrive
+            // owned: it is spent here.
+            if let (Value::Box(_), Some(&t)) = (path, arg_tys.first()) {
+                if !matches!(self.tys.kind(t), TyKind::Ref(_) | TyKind::MutRef(_)) {
+                    self.drop_value(path.clone(), t)?;
+                }
+            }
+            let path = text;
             let mut opts = std::fs::OpenOptions::new();
             match method {
                 "open" => opts.read(true),

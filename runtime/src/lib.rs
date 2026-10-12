@@ -120,6 +120,7 @@ pub mod interner;
 pub mod lazy;
 pub mod map;
 pub mod mir;
+pub mod mir_io;
 pub mod mir_map;
 pub mod mutex;
 pub mod once;
@@ -279,6 +280,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_sort_ctx,
         mir::karac_mir_deque_alloc,
         mir::karac_mir_fs,
+        mir_io::karac_mir_file,
         mir::karac_mir_fmt_spec,
         mir::karac_mir_deque_slot,
         mir::karac_mir_deque_push,

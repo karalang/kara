@@ -34,6 +34,7 @@ mod clone;
 mod deque;
 mod drop;
 mod fmt;
+mod io;
 mod key;
 mod num;
 mod seq;
