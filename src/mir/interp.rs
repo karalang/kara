@@ -594,6 +594,7 @@ fn run_with(
             .map_or(0, |d| d.as_nanos() as u64)
             | 1,
         sorted_tables: Default::default(),
+        table_holes: Default::default(),
         flags: Vec::new(),
         resumes: 0,
         parked_flags: Vec::new(),
@@ -763,6 +764,15 @@ enum Mode {
     Probe,
 }
 
+/// A table's removed-entry slots ([`Interp::table_holes`]).
+#[derive(Default)]
+struct Holes {
+    at: rustc_hash::FxHashSet<usize>,
+    /// The slot of each entry, in order, built by the first `entry_at`
+    /// after a change.
+    live: Option<Vec<usize>>,
+}
+
 struct Interp<'a> {
     program: &'a Program,
     tys: &'a TyInterner,
@@ -790,6 +800,12 @@ struct Interp<'a> {
     key_tys: rustc_hash::FxHashMap<Ty, (bool, Option<String>)>,
     /// [`Interp::table_tys`] by the receiver's type.
     table_tys_of: rustc_hash::FxHashMap<Ty, (Ty, Ty)>,
+    /// Per insertion-ordered table, the slots of removed entries: a remove
+    /// leaves its slot `Uninit` instead of moving every later entry down,
+    /// and the table closes its holes once they outnumber its entries, so a
+    /// remove costs O(1) on average (B-2026-10-12-4). Every reader of a
+    /// table's entries goes through [`Interp::table_slots`] or skips these.
+    table_holes: rustc_hash::FxHashMap<AllocId, Holes>,
     events: Vec<Event>,
     /// Whether `events` is kept. A run outside the tests skips it: one
     /// event per statement is most of the time and memory a long program
@@ -4063,8 +4079,8 @@ impl<'a> Interp<'a> {
             }
         };
         match (method, &args[1..]) {
-            ("len", []) => Ok(Value::Int(self.vec_elems(id)?.len() as i128)),
-            ("is_empty", []) => Ok(Value::Bool(self.vec_elems(id)?.is_empty())),
+            ("len", []) => Ok(Value::Int(self.table_len(id)? as i128)),
+            ("is_empty", []) => Ok(Value::Bool(self.table_len(id)? == 0)),
             ("get" | "contains_key" | "contains", [key]) => {
                 let found = self.find_key(id, key, key_ty, is_map)?;
                 if method != "get" {
@@ -4141,7 +4157,7 @@ impl<'a> Interp<'a> {
                         Ok(Value::Bool(false))
                     };
                 };
-                let removed = self.table_remove(id, i)?;
+                let removed = self.table_remove(id, i, is_map, sorted)?;
                 if !is_map {
                     self.drop_value(removed, key_ty)?;
                     return Ok(Value::Bool(true));
@@ -4157,7 +4173,7 @@ impl<'a> Interp<'a> {
             ("entry_at", [Value::Int(i)]) => {
                 // The `i`th entry in iteration order, for a borrowing `for`:
                 // a `ref (K, V)` into a Map, a `ref T` into a Set.
-                let i = self.bounds(id, *i, false)?;
+                let i = self.table_slot(id, *i)?;
                 Ok(Value::Ref(Addr {
                     root: Root::Heap(id),
                     path: Path::from_slice(&[i as u64]),
@@ -4201,11 +4217,12 @@ impl<'a> Interp<'a> {
                 let by_ref = matches!(self.tys.kind(e), TyKind::Ref(_));
                 // Plain keys (or values) are copied straight out of the
                 // entries.
+                let slots = self.table_slots(id)?;
                 if !by_ref && self.tys.is_copy(part_ty) {
-                    let copied: Option<Vec<Value>> = self
-                        .vec_elems(id)?
+                    let elems = self.vec_elems(id)?;
+                    let copied: Option<Vec<Value>> = slots
                         .iter()
-                        .map(|entry| match entry {
+                        .map(|&i| match &elems[i] {
                             Value::Agg(fs) => match fs.get(part as usize)? {
                                 v if v.is_plain() && !matches!(v, Value::Uninit) => Some(v.copy()),
                                 _ => None,
@@ -4218,12 +4235,11 @@ impl<'a> Interp<'a> {
                         return Ok(self.alloc_box(&vname, Value::Agg(out)));
                     }
                 }
-                let n = self.vec_elems(id)?.len();
-                let mut out = Vec::with_capacity(n);
-                for i in 0..n as u64 {
+                let mut out = Vec::with_capacity(slots.len());
+                for i in slots {
                     let at = Addr {
                         root: Root::Heap(id),
-                        path: Path::from_slice(&[i, part]),
+                        path: Path::from_slice(&[i as u64, part]),
                     };
                     if by_ref {
                         out.push(Value::Ref(at));
@@ -4305,9 +4321,8 @@ impl<'a> Interp<'a> {
                     self.key_form(&v)
                 };
                 let (lo, hi) = (bound(lo)?, bound(hi)?);
-                let n = self.vec_elems(id)?.len();
                 let mut picked = Vec::new();
-                for i in 0..n {
+                for i in self.table_slots(id)? {
                     let k = self.entry_key(id, i, false)?;
                     let k = self.key_form(&k)?;
                     use std::cmp::Ordering::*;
@@ -4339,9 +4354,10 @@ impl<'a> Interp<'a> {
             }
             ("min" | "max" | "first" | "last", []) if !is_map => {
                 // The least / greatest element, in place.
-                let n = self.vec_elems(id)?.len();
+                let slots = self.table_slots(id)?;
+                let n = slots.len();
                 let mut keys = Vec::with_capacity(n);
-                for i in 0..n {
+                for &i in &slots {
                     let k = self.entry_key(id, i, false)?;
                     keys.push(self.key_form(&k)?);
                 }
@@ -4350,10 +4366,10 @@ impl<'a> Interp<'a> {
                 } else {
                     (0..n).max_by(|&a, &b| key_order(&keys[a], &keys[b]))
                 };
-                let at = pick.map(|i| {
+                let at = pick.map(|j| {
                     Value::Ref(Addr {
                         root: Root::Heap(id),
-                        path: Path::from_slice(&[i as u64]),
+                        path: Path::from_slice(&[slots[j] as u64]),
                     })
                 });
                 self.option_of_place(ret, at)
@@ -4366,9 +4382,10 @@ impl<'a> Interp<'a> {
                 // Clones of entries as `(K, V)` tuples: all of them, the
                 // keys in `lo..hi` / `lo..=hi`, the greatest key at most / least key
                 // at least `k`, or the first / last.
-                let n = self.vec_elems(id)?.len();
+                let slots = self.table_slots(id)?;
+                let n = slots.len();
                 let mut keys = Vec::with_capacity(n);
-                for i in 0..n {
+                for &i in &slots {
                     let k = self.entry_key(id, i, true)?;
                     keys.push(self.key_form(&k)?);
                 }
@@ -4424,10 +4441,10 @@ impl<'a> Interp<'a> {
                         .collect(),
                 };
                 let mut out = Vec::with_capacity(picked.len());
-                for i in picked {
+                for j in picked {
                     let e = Addr {
                         root: Root::Heap(id),
-                        path: Path::from_slice(&[i as u64]),
+                        path: Path::from_slice(&[slots[j] as u64]),
                     };
                     let (k, v) = (self.slot(&e.child(0))?, self.slot(&e.child(1))?);
                     out.push(Value::Agg(vec![
@@ -4446,8 +4463,8 @@ impl<'a> Interp<'a> {
             {
                 // A new set of clones, the receiver's elements first.
                 let other = self.box_behind(other)?;
-                let mine = self.vec_elems(id)?.clone();
-                let theirs = self.vec_elems(other)?.clone();
+                let mine = self.table_entries(id)?;
+                let theirs = self.table_entries(other)?;
                 let mut out = Vec::new();
                 for x in &mine {
                     let in_other = self.find_key(other, x, key_ty, false)?.is_some();
@@ -4479,11 +4496,10 @@ impl<'a> Interp<'a> {
                 Ok(self.alloc_box(&vname, Value::Agg(out)))
             }
             ("clear", []) => {
-                let n = self.vec_elems(id)?.len();
-                for i in 0..n as u64 {
+                for i in self.table_slots(id)? {
                     let at = Addr {
                         root: Root::Heap(id),
-                        path: Path::from_slice(&[i]),
+                        path: Path::from_slice(&[i as u64]),
                     };
                     if is_map {
                         self.drop_at(&at.child(0), key_ty)?;
@@ -4494,6 +4510,7 @@ impl<'a> Interp<'a> {
                 }
                 self.vec_elems(id)?.clear();
                 self.key_index.remove(&id);
+                self.table_holes.remove(&id);
                 Ok(Value::Unit)
             }
             _ => err(format!("call of unknown function {name}")),
@@ -4731,8 +4748,7 @@ impl<'a> Interp<'a> {
         if total_float {
             // `F64` / `F32` keys are equal by total order: their bits.
             let want = total_form(self.key_form(key)?);
-            let n = self.vec_elems(id)?.len();
-            for i in 0..n {
+            for i in self.table_slots(id)? {
                 let k = self.entry_key(id, i, is_map)?;
                 if total_form(self.key_form(&k)?) == want {
                     return Ok(Some(i));
@@ -4752,8 +4768,7 @@ impl<'a> Interp<'a> {
             Some(_) => Value::Unit,
             None => self.key_form(key)?,
         };
-        let n = self.vec_elems(id)?.len();
-        for i in 0..n {
+        for i in self.table_slots(id)? {
             let k = self.entry_key(id, i, is_map)?;
             let equal = match &user_eq {
                 Some(eq) => self.call_eq(eq, &k, key)?,
@@ -4801,7 +4816,19 @@ impl<'a> Interp<'a> {
         match v {
             Value::Ref(addr) => self.key_bytes(self.slot_ref(addr)?, out, float)?,
             Value::Box(id) | Value::Shared(id) => match self.heap.get(id.0 as usize) {
-                Some(Some(obj)) => self.key_bytes(&obj.value, out, float)?,
+                // A table with holes compares by its entries alone.
+                Some(Some(obj)) => match (&obj.value, self.table_holes.get(id)) {
+                    (Value::Agg(fs), Some(h)) => {
+                        out.push(b'A');
+                        out.extend_from_slice(&((fs.len() - h.at.len()) as u64).to_le_bytes());
+                        for (i, f) in fs.iter().enumerate() {
+                            if !h.at.contains(&i) {
+                                self.key_bytes(f, out, float)?;
+                            }
+                        }
+                    }
+                    (v, _) => self.key_bytes(v, out, float)?,
+                },
                 _ => return err(format!("use of {id} after it was freed")),
             },
             Value::Agg(fs) => {
@@ -4857,9 +4884,8 @@ impl<'a> Interp<'a> {
         if self.key_index.contains_key(&id) {
             return Ok(());
         }
-        let n = self.vec_elems(id)?.len();
         let mut ix = rustc_hash::FxHashMap::default();
-        for i in 0..n {
+        for i in self.table_slots(id)? {
             let k = self.entry_key(id, i, is_map)?;
             match self.key_repr(&k)? {
                 Some(r) => {
@@ -4883,6 +4909,9 @@ impl<'a> Interp<'a> {
         };
         let len = self.vec_elems(id)?.len();
         self.vec_elems(id)?.insert(at, entry);
+        if let Some(h) = self.table_holes.get_mut(&id) {
+            h.live = None;
+        }
         if let Some(slot) = self.key_index.get_mut(&id) {
             match (slot.as_mut(), r) {
                 (Some(ix), Some(r)) => {
@@ -4901,18 +4930,123 @@ impl<'a> Interp<'a> {
         Ok(())
     }
 
-    /// Removes and returns entry `i` of table `id`.
-    fn table_remove(&mut self, id: AllocId, i: usize) -> R<Value> {
-        let removed = self.vec_elems(id)?.remove(i);
-        if let Some(Some(ix)) = self.key_index.get_mut(&id) {
-            ix.retain(|_, v| *v != i);
-            for v in ix.values_mut() {
-                if *v > i {
-                    *v -= 1;
+    /// Removes and returns the entry in slot `i` of table `id`. A sorted
+    /// table closes the gap; an insertion-ordered one leaves a hole
+    /// ([`Interp::table_holes`]), dropping trailing holes at once and
+    /// closing the rest when they outnumber the entries.
+    fn table_remove(&mut self, id: AllocId, i: usize, is_map: bool, sorted: bool) -> R<Value> {
+        if sorted {
+            let removed = self.vec_elems(id)?.remove(i);
+            if let Some(Some(ix)) = self.key_index.get_mut(&id) {
+                ix.retain(|_, v| *v != i);
+                for v in ix.values_mut() {
+                    if *v > i {
+                        *v -= 1;
+                    }
+                }
+            }
+            return Ok(removed);
+        }
+        let removed = std::mem::replace(&mut self.vec_elems(id)?[i], Value::Uninit);
+        if let Some(Some(_)) = self.key_index.get(&id) {
+            let key = match (is_map, &removed) {
+                (true, Value::Agg(pair)) => &pair[0],
+                _ => &removed,
+            };
+            match self.key_repr(key)? {
+                Some(r) => {
+                    if let Some(Some(ix)) = self.key_index.get_mut(&id) {
+                        ix.remove(&r);
+                    }
+                }
+                None => {
+                    self.key_index.remove(&id);
                 }
             }
         }
+        let mut n = self.vec_elems(id)?.len();
+        let h = self.table_holes.entry(id).or_default();
+        h.at.insert(i);
+        h.live = None;
+        while n > 0 && h.at.remove(&(n - 1)) {
+            n -= 1;
+        }
+        let holes = h.at.len();
+        if holes == 0 {
+            self.table_holes.remove(&id);
+        }
+        self.vec_elems(id)?.truncate(n);
+        if holes * 2 > n {
+            self.close_holes(id)?;
+        }
         Ok(removed)
+    }
+
+    /// Closes table `id`'s holes, keeping its entries in order, and moves
+    /// its key index's positions with them.
+    fn close_holes(&mut self, id: AllocId) -> R<()> {
+        let Some(h) = self.table_holes.remove(&id) else {
+            return Ok(());
+        };
+        let elems = std::mem::take(self.vec_elems(id)?);
+        let mut moved_to = vec![usize::MAX; elems.len()];
+        let mut kept = Vec::with_capacity(elems.len() - h.at.len());
+        for (i, e) in elems.into_iter().enumerate() {
+            if !h.at.contains(&i) {
+                moved_to[i] = kept.len();
+                kept.push(e);
+            }
+        }
+        *self.vec_elems(id)? = kept;
+        if let Some(Some(ix)) = self.key_index.get_mut(&id) {
+            for v in ix.values_mut() {
+                *v = moved_to[*v];
+            }
+        }
+        Ok(())
+    }
+
+    /// The number of entries in table `id`.
+    fn table_len(&mut self, id: AllocId) -> R<usize> {
+        let holes = self.table_holes.get(&id).map_or(0, |h| h.at.len());
+        Ok(self.vec_elems(id)?.len() - holes)
+    }
+
+    /// The slots of table `id`'s entries, in iteration order.
+    fn table_slots(&mut self, id: AllocId) -> R<Vec<usize>> {
+        let n = self.vec_elems(id)?.len();
+        Ok(match self.table_holes.get(&id) {
+            Some(h) => (0..n).filter(|i| !h.at.contains(i)).collect(),
+            None => (0..n).collect(),
+        })
+    }
+
+    /// Table `id`'s entries, in iteration order.
+    fn table_entries(&mut self, id: AllocId) -> R<Vec<Value>> {
+        let slots = self.table_slots(id)?;
+        let elems = self.vec_elems(id)?;
+        Ok(slots.iter().map(|&i| elems[i].clone()).collect())
+    }
+
+    /// The slot of table `id`'s `i`th entry, for `entry_at`.
+    fn table_slot(&mut self, id: AllocId, i: i128) -> R<usize> {
+        if !self.table_holes.contains_key(&id) {
+            return self.bounds(id, i, false);
+        }
+        let n = self.vec_elems(id)?.len();
+        let Some(Holes { at, live }) = self.table_holes.get_mut(&id) else {
+            unreachable!("checked above")
+        };
+        let live = live.get_or_insert_with(|| (0..n).filter(|j| !at.contains(j)).collect());
+        match usize::try_from(i).ok().and_then(|i| live.get(i)) {
+            Some(&slot) => Ok(slot),
+            None => {
+                if self.trace {
+                    self.events.push(Event::Abort(AbortReason::BoundsCheck));
+                }
+                Err(Stop::Abort(AbortReason::BoundsCheck))
+            }
+        }
     }
 
     /// The lowered body of `ty`'s user `PartialEq.eq`, if it has one.
@@ -5025,8 +5159,13 @@ impl<'a> Interp<'a> {
                 self.key_form(&inner)?
             }
             Value::Box(id) | Value::Shared(id) => {
-                // A `shared` key compares by what it holds, as legacy's does.
-                let inner = self.live(*id)?.value.clone();
+                // A `shared` key compares by what it holds, as legacy's does;
+                // a table with holes by its entries alone.
+                let inner = if self.table_holes.contains_key(id) {
+                    Value::Agg(self.table_entries(*id)?)
+                } else {
+                    self.live(*id)?.value.clone()
+                };
                 self.key_form(&inner)?
             }
             Value::Agg(fs) => {
@@ -5106,7 +5245,7 @@ impl<'a> Interp<'a> {
             }
             (TyKind::Intrinsic(IntrinsicTy::Map(k, val) | IntrinsicTy::SortedMap(k, val)), _) => {
                 let id = self.box_behind(v)?;
-                let entries = self.vec_elems(id)?.clone();
+                let entries = self.table_entries(id)?;
                 let mut out = Vec::with_capacity(entries.len());
                 for e in &entries {
                     let Value::Agg(pair) = e else {
@@ -5121,7 +5260,7 @@ impl<'a> Interp<'a> {
             }
             (TyKind::Intrinsic(IntrinsicTy::Set(e) | IntrinsicTy::SortedSet(e)), _) => {
                 let id = self.box_behind(v)?;
-                let elems = self.vec_elems(id)?.clone();
+                let elems = self.table_entries(id)?;
                 let mut out = Vec::with_capacity(elems.len());
                 for x in &elems {
                     out.push(self.clone_value(x, e)?);
@@ -6018,7 +6157,7 @@ impl<'a> Interp<'a> {
             ) => {
                 // `{k: v, ...}` in iteration order, with no type name (the
                 // 2026-10-08 display decision).
-                let entries = self.vec_elems(*id)?.clone();
+                let entries = self.table_entries(*id)?;
                 let mut parts = Vec::with_capacity(entries.len());
                 for e in &entries {
                     let Value::Agg(pair) = e else {
@@ -6034,7 +6173,7 @@ impl<'a> Interp<'a> {
                 TyKind::Intrinsic(IntrinsicTy::Set(e) | IntrinsicTy::SortedSet(e)),
                 Value::Box(id),
             ) => {
-                let fs = self.vec_elems(*id)?.clone();
+                let fs = self.table_entries(*id)?;
                 let tys = vec![e; fs.len()];
                 format!("{{{}}}", list(self, &fs, &tys)?.join(", "))
             }
@@ -7510,20 +7649,20 @@ impl<'a> Interp<'a> {
                     // (unspecified) iteration order; within an entry the
                     // key drops before the value (core-semantics §7).
                     IntrinsicTy::Map(k, val) | IntrinsicTy::SortedMap(k, val) => {
-                        for i in 0..self.vec_elems(id)?.len() as u64 {
+                        for i in self.table_slots(id)? {
                             let entry = Addr {
                                 root: Root::Heap(id),
-                                path: Path::from_slice(&[i]),
+                                path: Path::from_slice(&[i as u64]),
                             };
                             self.drop_at(&entry.child(0), k)?;
                             self.drop_at(&entry.child(1), val)?;
                         }
                     }
                     IntrinsicTy::Set(e) | IntrinsicTy::SortedSet(e) => {
-                        for i in 0..self.vec_elems(id)?.len() as u64 {
+                        for i in self.table_slots(id)? {
                             let at = Addr {
                                 root: Root::Heap(id),
-                                path: Path::from_slice(&[i]),
+                                path: Path::from_slice(&[i as u64]),
                             };
                             self.drop_at(&at, e)?;
                         }
@@ -7767,6 +7906,7 @@ impl<'a> Interp<'a> {
     /// an `Upgrade` cannot reach whatever reuses it.
     fn free_slot(&mut self, id: AllocId) {
         self.key_index.remove(&id);
+        self.table_holes.remove(&id);
         self.caps.remove(&id);
         if self.heap[id.0 as usize].take().is_some() {
             self.free.push(id.0);

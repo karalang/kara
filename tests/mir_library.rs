@@ -524,3 +524,135 @@ fn main() {
         "4 5 7 \n[fig] 0\n[4, 5, 7, 9] 0\n[(1, a), (3, c)] 3\n",
     );
 }
+
+/// B-2026-10-12-4: a removed entry leaves a hole in an insertion-ordered
+/// table instead of moving every later entry down. Every read (iteration,
+/// `keys`, `values`, display, `clone`, set operations, re-insertion, `clear`)
+/// sees the entries in the order it saw before the change, with the holes
+/// still open (a third removed) and after they close (two thirds removed).
+#[test]
+fn a_table_reads_the_same_after_removes_leave_holes() {
+    let src = r#"
+fn show(m: ref Map[i64, String]) {
+    let mut line = String.new();
+    for (k, v) in m {
+        line.push_str(f"{k}={v} ");
+    }
+    println(f"[{m.len()}] {line}");
+}
+fn main() {
+    more();
+    let mut m: Map[i64, String] = Map.new();
+    let mut i: i64 = 0;
+    while i < 40 {
+        m.insert(i, f"v{i}");
+        i = i + 1;
+    }
+    i = 0;
+    while i < 40 {
+        if i % 3 == 0 { m.remove(i); }
+        i = i + 1;
+    }
+    show(m);
+    m.insert(2, "back");
+    m.insert(7, "x");
+    show(m);
+    println(f"{m.get(7)} {m.get(2)} {m.contains_key(4)} {m.contains_key(5)}");
+    let ks = m.keys();
+    println(f"{ks}");
+    let vs = m.values();
+    println(f"{vs}");
+    println(f"{m}");
+    let c = m.clone();
+    println(f"{c} {c.len()}");
+    i = 0;
+    while i < 40 { m.remove(i); i = i + 1; }
+    show(m);
+    m.insert(100, "h");
+    show(m);
+    let mut s: Set[String] = Set.new();
+    i = 0;
+    while i < 30 { s.insert(f"s{i}"); i = i + 1; }
+    i = 0;
+    while i < 30 { if i % 4 == 1 { s.remove(f"s{i}"); } i = i + 1; }
+    println(f"{s} {s.len()}");
+    let mut t: Set[String] = Set.new();
+    t.insert("s4"); t.insert("zz");
+    println(f"{s.union(t)} {s.intersection(t)} {s.difference(t)}");
+    for x in s { println(x); }
+    let mut e: Map[String, i64] = Map.new();
+    e.insert("a", 1); e.insert("b", 2); e.insert("c", 3);
+    e.remove("a");
+    let r = e.entry("a").or_insert(9);
+    println(f"{r}");
+    *e.entry("b").or_insert(0) += 10;
+    println(f"{e}");
+    for (k, v) in e { println(f"{k}:{v}"); }
+}
+fn more() {
+    let mut a: Map[i64, i64] = Map.new();
+    let mut b: Map[i64, i64] = Map.new();
+    let mut i: i64 = 0;
+    while i < 10 { a.insert(i, i * i); i = i + 1; }
+    i = 0;
+    while i < 10 { if i != 4 { b.insert(i, i * i); } i = i + 1; }
+    a.remove(4);
+    println(f"{a} {b} {a.len()}");
+    let mut s: Set[i64] = Set.new();
+    i = 0;
+    while i < 10 { s.insert(i); i = i + 1; }
+    s.remove(0); s.remove(5);
+    println(f"{s} {s.len()} {s.is_empty()} {s.contains(5)} {s.contains(6)}");
+    a.clear();
+    println(f"{a} {a.len()}");
+    a.insert(3, 3);
+    println(f"{a}");
+}
+"#;
+    assert_runs(
+        src,
+        r#"{0: 0, 1: 1, 2: 4, 3: 9, 5: 25, 6: 36, 7: 49, 8: 64, 9: 81} {0: 0, 1: 1, 2: 4, 3: 9, 5: 25, 6: 36, 7: 49, 8: 64, 9: 81} 9
+{1, 2, 3, 4, 6, 7, 8, 9} 8 false false true
+{} 0
+{3: 3}
+[26] 1=v1 2=v2 4=v4 5=v5 7=v7 8=v8 10=v10 11=v11 13=v13 14=v14 16=v16 17=v17 19=v19 20=v20 22=v22 23=v23 25=v25 26=v26 28=v28 29=v29 31=v31 32=v32 34=v34 35=v35 37=v37 38=v38 
+[26] 1=v1 2=back 4=v4 5=v5 7=x 8=v8 10=v10 11=v11 13=v13 14=v14 16=v16 17=v17 19=v19 20=v20 22=v22 23=v23 25=v25 26=v26 28=v28 29=v29 31=v31 32=v32 34=v34 35=v35 37=v37 38=v38 
+Some(x) Some(back) true true
+[1, 2, 4, 5, 7, 8, 10, 11, 13, 14, 16, 17, 19, 20, 22, 23, 25, 26, 28, 29, 31, 32, 34, 35, 37, 38]
+[v1, back, v4, v5, x, v8, v10, v11, v13, v14, v16, v17, v19, v20, v22, v23, v25, v26, v28, v29, v31, v32, v34, v35, v37, v38]
+{1: v1, 2: back, 4: v4, 5: v5, 7: x, 8: v8, 10: v10, 11: v11, 13: v13, 14: v14, 16: v16, 17: v17, 19: v19, 20: v20, 22: v22, 23: v23, 25: v25, 26: v26, 28: v28, 29: v29, 31: v31, 32: v32, 34: v34, 35: v35, 37: v37, 38: v38}
+{1: v1, 2: back, 4: v4, 5: v5, 7: x, 8: v8, 10: v10, 11: v11, 13: v13, 14: v14, 16: v16, 17: v17, 19: v19, 20: v20, 22: v22, 23: v23, 25: v25, 26: v26, 28: v28, 29: v29, 31: v31, 32: v32, 34: v34, 35: v35, 37: v37, 38: v38} 26
+[0] 
+[1] 100=h 
+{s0, s2, s3, s4, s6, s7, s8, s10, s11, s12, s14, s15, s16, s18, s19, s20, s22, s23, s24, s26, s27, s28} 22
+{s0, s2, s3, s4, s6, s7, s8, s10, s11, s12, s14, s15, s16, s18, s19, s20, s22, s23, s24, s26, s27, s28, zz} {s4} {s0, s2, s3, s6, s7, s8, s10, s11, s12, s14, s15, s16, s18, s19, s20, s22, s23, s24, s26, s27, s28}
+s0
+s2
+s3
+s4
+s6
+s7
+s8
+s10
+s11
+s12
+s14
+s15
+s16
+s18
+s19
+s20
+s22
+s23
+s24
+s26
+s27
+s28
+9
+{b: 12, c: 3, a: 9}
+b:12
+c:3
+a:9
+"#,
+    );
+}
