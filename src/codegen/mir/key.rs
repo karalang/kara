@@ -288,11 +288,25 @@ impl<'ctx> Cx<'ctx, '_> {
         let v = self.load(p, ty)?;
         let i64t = self.llcx.i64_type();
         let v = if v.is_float_value() {
+            // Every NaN as one, as the interpreter's total form keys it.
             let f = v.into_float_value();
             let bits = f.get_type().get_bit_width();
             let it = self.int_ty(bits);
-            self.builder
+            let raw = self
+                .builder
                 .build_bit_cast(f, it, "")
+                .map_err(e)?
+                .into_int_value();
+            let nan = self
+                .builder
+                .build_float_compare(inkwell::FloatPredicate::UNO, f, f, "")
+                .map_err(e)?;
+            let canon = match bits {
+                32 => it.const_int(u64::from(f32::NAN.to_bits()), false),
+                _ => it.const_int(f64::NAN.to_bits(), false),
+            };
+            self.builder
+                .build_select(nan, canon, raw, "")
                 .map_err(e)?
                 .into_int_value()
         } else {

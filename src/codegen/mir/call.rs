@@ -6,7 +6,7 @@
 //! result comes back through a temporary that is then copied to the
 //! destination, so neither can alias a place the callee reads.
 
-use inkwell::values::{IntValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, IntValue, PointerValue};
 use inkwell::IntPredicate;
 
 use super::{Cx, R};
@@ -405,6 +405,154 @@ impl<'ctx> Cx<'ctx, '_> {
                     .map_err(e)?;
                 self.rt("exit", &[code.into()])
             }
+            ("F64" | "F32" | "F16" | "Bf16", "from") if args.len() == 1 => {
+                // The total-order wrapper around its one float field.
+                // A literal argument can reach it at another float width
+                // (`F32.from(2.5)` passes an `f64`), so it is cast.
+                let d = self.place_ptr(dest)?;
+                let q = self.offset(d, self.field_offset(dty, None, 0)?)?;
+                let ft = self
+                    .tys
+                    .field_ty(dty, None, 0)
+                    .ok_or("a float wrapper without its field")?;
+                let at = self.operand_type(&args[0])?;
+                if at != ft
+                    && matches!(self.tys.kind(at), TyKind::Float(_))
+                    && matches!(self.tys.kind(ft), TyKind::Float(_))
+                {
+                    let v = self.operand_scalar(&args[0])?.into_float_value();
+                    let want = self.llvm_ty(ft)?.into_float_type();
+                    let v = self.builder.build_float_cast(v, want, "").map_err(e)?;
+                    return self.store(q, v.into());
+                }
+                self.store_operand(q, &args[0])
+            }
+            ("Cpu", "supports") if args.len() == 1 => {
+                let (p, n) = self.str_parts(&args[0])?;
+                let i32t = self.llcx.i32_type();
+                let f = self.extern_fn(
+                    "karac_cpu_supports",
+                    i32t.fn_type(&[self.ptr_ty().into(), self.llcx.i64_type().into()], false),
+                );
+                let v = self
+                    .builder
+                    .build_call(f, &[p.into(), n.into()], "")
+                    .map_err(e)?
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let yes = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, v, i32t.const_zero(), "")
+                    .map_err(e)?;
+                self.store_bool(dest, yes)?;
+                self.drop_moved(args)
+            }
+            ("Env", "var") if args.len() == 1 => {
+                // `Ok(value)`, or `Err(NotPresent)` for an unset variable.
+                let (p, n) = self.str_parts(&args[0])?;
+                let d = self.place_ptr(dest)?;
+                let ok = self.variant_of(dty, "Ok")?;
+                let q = self.offset(d, self.field_offset(dty, Some(ok), 0)?)?;
+                let found = self.rt_flag("env_var", &[q.into(), p.into(), n.into()])?;
+                self.store_result_flag(d, dty, found, Some("NotPresent"))?;
+                self.drop_moved(args)
+            }
+            ("Env", "set") if args.len() == 2 => {
+                let (p, n) = self.str_parts(&args[0])?;
+                let (v, vn) = self.str_parts(&args[1])?;
+                self.rt("env_set", &[p.into(), n.into(), v.into(), vn.into()])?;
+                self.drop_moved(args)
+            }
+            ("f64" | "f32", "total_cmp") if args.len() == 2 => {
+                // `Less`, `Equal` or `Greater` by the IEEE total order.
+                let f64t = self.llcx.f64_type();
+                let mut x = Vec::with_capacity(2);
+                for a in args {
+                    let mut t = self.operand_type(a)?;
+                    let mut p = self.operand_ptr(a)?;
+                    while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
+                        p = self.load_ptr(p)?;
+                        t = i;
+                    }
+                    let v = self.load(p, t)?.into_float_value();
+                    x.push(if v.get_type() == f64t {
+                        v
+                    } else {
+                        self.builder.build_float_ext(v, f64t, "").map_err(e)?
+                    });
+                }
+                let narrow = self
+                    .llcx
+                    .i8_type()
+                    .const_int(u64::from(base == "f32"), false);
+                let i32t = self.llcx.i32_type();
+                let f = self.extern_fn(
+                    "karac_mir_total_cmp",
+                    i32t.fn_type(
+                        &[f64t.into(), f64t.into(), self.llcx.i8_type().into()],
+                        false,
+                    ),
+                );
+                let o = self
+                    .builder
+                    .build_call(f, &[x[0].into(), x[1].into(), narrow.into()], "")
+                    .map_err(e)?
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let d = self.place_ptr(dest)?;
+                let tag_of = |name: &str| self.variant_of(dty, name);
+                let (lt, eq, gt) = (tag_of("Less")?, tag_of("Equal")?, tag_of("Greater")?);
+                let tag = |v: u32| i32t.const_int(u64::from(v), false);
+                let is_lt = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, o, i32t.const_zero(), "")
+                    .map_err(e)?;
+                let is_gt = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGT, o, i32t.const_zero(), "")
+                    .map_err(e)?;
+                let k = self
+                    .builder
+                    .build_select(is_gt, tag(gt), tag(eq), "")
+                    .map_err(e)?;
+                let k = self
+                    .builder
+                    .build_select(is_lt, tag(lt).into(), k, "")
+                    .map_err(e)?
+                    .into_int_value();
+                self.store_tag_dyn(d, dty, k)
+            }
+            ("Stdout" | "Stderr", "print" | "println" | "flush") => {
+                if let [s] = args {
+                    self.rt("fmt_begin", &[])?;
+                    self.fmt_args(std::slice::from_ref(s))?;
+                    let flags = u64::from(method == "println") | (u64::from(base == "Stderr") << 1);
+                    let f = self.llcx.i32_type().const_int(flags, false);
+                    self.rt("print_end", &[f.into()])?;
+                }
+                self.drop_moved(args)
+            }
+            ("Stdin", "read_line" | "read_to_string") => {
+                // `Ok(text)`; an I/O error is an `Err` whose payload is
+                // zeroed, not the interpreter's `IoError` for the error.
+                let d = self.place_ptr(dest)?;
+                let ok = self.variant_of(dty, "Ok")?;
+                let q = self.offset(d, self.field_offset(dty, Some(ok), 0)?)?;
+                let op = self
+                    .llcx
+                    .i32_type()
+                    .const_int(u64::from(method == "read_to_string"), false);
+                let found = self.rt_flag("stdin_read", &[q.into(), op.into()])?;
+                self.store_result_flag(d, dty, found, None)?;
+                self.drop_moved(args)
+            }
+            ("RandomSource", "next_u64") => {
+                let v = self.mrt_i64("rand_next", &[])?;
+                self.store_int_as(dest, v, false)?;
+                self.drop_moved(args)
+            }
             ("String", "from") => {
                 let (s, n) = self.str_parts(&args[0])?;
                 let d = self.place_ptr(dest)?;
@@ -678,6 +826,70 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder.position_at_end(bad);
         self.abort_with(msg)?;
         self.builder.position_at_end(good);
+        Ok(())
+    }
+
+    /// Calls the runtime's `karac_mir_{name}`, which returns a `u8` flag,
+    /// as an `i1`.
+    fn rt_flag(&self, name: &str, args: &[BasicMetadataValueEnum<'ctx>]) -> R<IntValue<'ctx>> {
+        let tys = self.arg_tys(args);
+        let i8t = self.llcx.i8_type();
+        let f = self.extern_fn(&format!("karac_mir_{name}"), i8t.fn_type(&tys, false));
+        let v = self
+            .builder
+            .build_call(f, args, "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        self.builder
+            .build_int_compare(IntPredicate::NE, v, i8t.const_zero(), "")
+            .map_err(e)
+    }
+
+    /// Tags the `Result` at `d` (of type `dty`) `Ok` when `ok`, whose
+    /// payload the runtime wrote, else `Err`: its payload zeroed, then the
+    /// variant `err_variant` of the error enum when named.
+    fn store_result_flag(
+        &mut self,
+        d: PointerValue<'ctx>,
+        dty: Ty,
+        ok: IntValue<'ctx>,
+        err_variant: Option<&str>,
+    ) -> R<()> {
+        let okv = self.variant_of(dty, "Ok")?;
+        let errv = self.variant_of(dty, "Err")?;
+        let f = self.cur_fn()?;
+        let (yes, no, done) = (
+            self.llcx.append_basic_block(f, "result.ok"),
+            self.llcx.append_basic_block(f, "result.err"),
+            self.llcx.append_basic_block(f, "result"),
+        );
+        self.builder
+            .build_conditional_branch(ok, yes, no)
+            .map_err(e)?;
+        self.builder.position_at_end(yes);
+        self.store_tag(d, dty, okv)?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(no);
+        let et = self
+            .tys
+            .field_ty(dty, Some(errv), 0)
+            .ok_or("an `Err` without a payload")?;
+        let q = self.offset(d, self.field_offset(dty, Some(errv), 0)?)?;
+        let size = self.layout(et)?.size;
+        if size > 0 {
+            self.builder
+                .build_memset(q, 1, self.llcx.i8_type().const_zero(), self.i64(size))
+                .map_err(e)?;
+        }
+        if let Some(name) = err_variant {
+            let ev = self.variant_of(et, name)?;
+            self.store_tag(q, et, ev)?;
+        }
+        self.store_tag(d, dty, errv)?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
         Ok(())
     }
 

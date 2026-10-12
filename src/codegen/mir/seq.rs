@@ -444,7 +444,12 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// Writes the tag `k` (an `i32`) of the enum `ty` at `p`.
-    fn store_tag_dyn(&mut self, p: PointerValue<'ctx>, ty: Ty, k: IntValue<'ctx>) -> R<()> {
+    pub(super) fn store_tag_dyn(
+        &mut self,
+        p: PointerValue<'ctx>,
+        ty: Ty,
+        k: IntValue<'ctx>,
+    ) -> R<()> {
         let Some(tag) = crate::mir::layout::enum_tag(self.tys, ty) else {
             return Ok(());
         };

@@ -686,14 +686,16 @@ impl<'ctx> Cx<'ctx, '_> {
             self.llcx.append_basic_block(f, "insert.new"),
             self.llcx.append_basic_block(f, "inserted"),
         );
-        self.builder
-            .build_conditional_branch(found, old, new)
-            .map_err(e)?;
+        // The destination's address is taken before the branch: a
+        // projected one (the `Ok` payload of `try_insert`) emits code.
         let d = if unit {
             None
         } else {
             Some(self.place_ptr(dest)?)
         };
+        self.builder
+            .build_conditional_branch(found, old, new)
+            .map_err(e)?;
         // The key is already there: the new key drops, and a map's value
         // is replaced, handing the old one back.
         self.builder.position_at_end(old);

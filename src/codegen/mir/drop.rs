@@ -194,6 +194,11 @@ impl<'ctx> Cx<'ctx, '_> {
                     }
                     return Ok(());
                 }
+                // The guard of `critical_section.acquire()` restores
+                // nothing: interrupts were never masked.
+                if self.tys.adt(a).name == "CriticalSectionGuard" {
+                    return Ok(());
+                }
                 if self.adt_has_drop_body(a)? {
                     // `fn T.drop(mut ref self)`: its argument slot holds
                     // the reference.

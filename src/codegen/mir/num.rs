@@ -622,6 +622,18 @@ impl<'ctx> Cx<'ctx, '_> {
         let xt = x.get_type();
         let f = self.llcx.bool_type().const_zero();
         match (method, &args[1..]) {
+            ("to_f64" | "to_f32", []) => {
+                let dty = self.place_type(dest)?;
+                let ft = self.llvm_ty(dty)?.into_float_type();
+                let v = if it.signed() {
+                    self.builder.build_signed_int_to_float(x, ft, "")
+                } else {
+                    self.builder.build_unsigned_int_to_float(x, ft, "")
+                }
+                .map_err(e)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, v.into())?;
+            }
             ("trailing_zeros" | "leading_zeros" | "count_ones" | "count_zeros", []) => {
                 let v = match method {
                     "trailing_zeros" => self.int_intrinsic("cttz", &[x.into(), f.into()], xt)?,

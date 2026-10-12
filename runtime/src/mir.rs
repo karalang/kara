@@ -762,6 +762,109 @@ pub extern "C" fn karac_mir_span_top() -> i64 {
     SPANS.with(|s| s.borrow().last().copied().unwrap_or(0))
 }
 
+/// `Env.var(name)`: writes the variable's value to the `String` at `out`
+/// and returns 1, or returns 0 when it is unset (or not UTF-8).
+///
+/// # Safety
+/// `p` is readable for `n` bytes; `out` is writable for a `String`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_env_var(out: *mut RawVec, p: *const u8, n: usize) -> u8 {
+    // SAFETY: the caller's contract.
+    let name = unsafe { std::slice::from_raw_parts(p, n) };
+    let Ok(name) = std::str::from_utf8(name) else {
+        return 0;
+    };
+    match std::env::var(name) {
+        Ok(v) => {
+            // SAFETY: as above.
+            unsafe { string_of(out, v.as_bytes()) };
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
+/// `Stdin.read_line` (op 0) or `read_to_string` (op 1): writes what was
+/// read to the `String` at `out` and returns 1, or returns 0 on an I/O
+/// error.
+///
+/// # Safety
+/// `out` is writable for a `String`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_stdin_read(out: *mut RawVec, op: i32) -> u8 {
+    use std::io::Read;
+    let mut buf = String::new();
+    let r = if op == 0 {
+        std::io::stdin().read_line(&mut buf).map(|_| ())
+    } else {
+        std::io::stdin().read_to_string(&mut buf).map(|_| ())
+    };
+    match r {
+        Ok(()) => {
+            // SAFETY: the caller's contract.
+            unsafe { string_of(out, buf.as_bytes()) };
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
+thread_local! {
+    static RAND: std::cell::Cell<u64> = std::cell::Cell::new(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64)
+            | 1,
+    );
+}
+
+/// `RandomSource.next_u64`: xorshift64 from a clock seed, as the
+/// interpreter's.
+#[no_mangle]
+pub extern "C" fn karac_mir_rand_next() -> u64 {
+    RAND.with(|r| {
+        let mut x = r.get();
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        r.set(x);
+        x
+    })
+}
+
+/// `Env.set(name, value)`.
+///
+/// # Safety
+/// `p` and `v` are readable for `n` and `vn` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_env_set(p: *const u8, n: usize, v: *const u8, vn: usize) {
+    // SAFETY: the caller's contract.
+    let (name, val) = unsafe {
+        (
+            std::slice::from_raw_parts(p, n),
+            std::slice::from_raw_parts(v, vn),
+        )
+    };
+    if let (Ok(name), Ok(val)) = (std::str::from_utf8(name), std::str::from_utf8(val)) {
+        // SAFETY: the program runs its environment edits on one thread,
+        // as the interpreter does.
+        unsafe { std::env::set_var(name, val) };
+    }
+}
+
+/// `f64.total_cmp` (`f32` when `narrow`): -1, 0 or 1. Every NaN orders
+/// as the positive quiet one, as the interpreter canonicalizes it.
+#[no_mangle]
+pub extern "C" fn karac_mir_total_cmp(a: f64, b: f64, narrow: u8) -> i32 {
+    let canon = |f: f64| if f.is_nan() { f64::NAN } else { f };
+    let o = if narrow != 0 {
+        (canon(a) as f32).total_cmp(&(canon(b) as f32))
+    } else {
+        canon(a).total_cmp(&canon(b))
+    };
+    o as i32
+}
+
 /// `std.time::sleep_ms`: a real pause; a count of zero or less is a
 /// no-op.
 #[no_mangle]
