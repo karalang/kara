@@ -120,7 +120,8 @@ fn layout_at(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
 /// How a library cell whose declared fields are not its contents is held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cell {
-    /// A one-word runtime handle (`Sender`, `Receiver`, `File`).
+    /// A one-word runtime handle (`Sender`, `Receiver`, `File`, `CStr`,
+    /// `CString`).
     Handle,
     /// The held value, in place (`Atomic[T]`, `Mutex[T]`).
     Inline(Ty),
@@ -133,7 +134,8 @@ pub fn library_cell(tys: &TyInterner, t: Ty) -> Option<Cell> {
         return None;
     };
     match tys.adt(a).name.as_str() {
-        "Sender" | "Receiver" | "File" => Some(Cell::Handle),
+        // A `CStr` / `CString` is a pointer to NUL-terminated bytes.
+        "Sender" | "Receiver" | "File" | "CStr" | "CString" => Some(Cell::Handle),
         "Atomic" | "Mutex" => Some(Cell::Inline(tys.tcx().adt_of(t)?.1.first().copied()?)),
         _ => None,
     }

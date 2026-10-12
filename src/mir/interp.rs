@@ -7796,7 +7796,8 @@ impl<'a> Interp<'a> {
         // The library cells keep their contents where the type's fields
         // would be (`atomic_method`, `once_method`, `arena_method`).
         let first = match adt.name.as_str() {
-            "Atomic" => return Ok(()),
+            // A `CString` holds its bytes as values.
+            "Atomic" | "CString" | "Interner" => return Ok(()),
             "Sender" | "Receiver" | "File" => {
                 if let Value::Agg(fs) = self.slot(addr)? {
                     if let [Value::Int(id)] = fs.as_slice() {

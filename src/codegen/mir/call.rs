@@ -266,6 +266,16 @@ impl<'ctx> Cx<'ctx, '_> {
         {
             return Ok(());
         }
+        if (matches!(base, "CStr" | "CString") || (base, method) == ("String", "to_cstring"))
+            && self.cstr_native(base, method, args, dest)?.is_some()
+        {
+            return Ok(());
+        }
+        if matches!(base, "Semaphore" | "RateLimiter")
+            && self.limit_native(base, method, args, dest)?.is_some()
+        {
+            return Ok(());
+        }
         if base == "Entry" && self.entry_native(method, args, dest)?.is_some() {
             return Ok(());
         }
@@ -831,7 +841,11 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// Calls the runtime's `karac_mir_{name}`, which returns a `u8` flag,
     /// as an `i1`.
-    fn rt_flag(&self, name: &str, args: &[BasicMetadataValueEnum<'ctx>]) -> R<IntValue<'ctx>> {
+    pub(super) fn rt_flag(
+        &self,
+        name: &str,
+        args: &[BasicMetadataValueEnum<'ctx>],
+    ) -> R<IntValue<'ctx>> {
         let tys = self.arg_tys(args);
         let i8t = self.llcx.i8_type();
         let f = self.extern_fn(&format!("karac_mir_{name}"), i8t.fn_type(&tys, false));
@@ -850,7 +864,7 @@ impl<'ctx> Cx<'ctx, '_> {
     /// Tags the `Result` at `d` (of type `dty`) `Ok` when `ok`, whose
     /// payload the runtime wrote, else `Err`: its payload zeroed, then the
     /// variant `err_variant` of the error enum when named.
-    fn store_result_flag(
+    pub(super) fn store_result_flag(
         &mut self,
         d: PointerValue<'ctx>,
         dty: Ty,

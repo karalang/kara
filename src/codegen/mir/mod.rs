@@ -43,6 +43,7 @@ mod vector;
 
 use std::collections::HashMap;
 
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock as LlBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -222,9 +223,37 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     /// The external function `name` of type `ty`, declared once (a
     /// runtime entry point).
     pub fn extern_fn(&self, name: &str, ty: FunctionType<'ctx>) -> FunctionValue<'ctx> {
-        self.module
-            .get_function(name)
-            .unwrap_or_else(|| self.module.add_function(name, ty, Some(Linkage::External)))
+        self.module.get_function(name).unwrap_or_else(|| {
+            let f = self.module.add_function(name, ty, Some(Linkage::External));
+            self.bool_abi(f, true);
+            f
+        })
+    }
+
+    /// Marks the `i1` return of `f`, and for a runtime function its `i1`,
+    /// `i8` and `i16` parameters (every one a `bool`, `u8` or `u16` on
+    /// the Rust side), as zero-extended, the C ABI those types have: the
+    /// Rust callee may test the whole register, so an optimised caller
+    /// that leaves its upper bits undefined passes `false` as `true`.
+    pub(super) fn bool_abi(&self, f: FunctionValue<'ctx>, params: bool) {
+        let zext = self
+            .llcx
+            .create_enum_attribute(Attribute::get_named_enum_kind_id("zeroext"), 0);
+        let width = |t: BasicTypeEnum| t.is_int_type().then(|| t.into_int_type().get_bit_width());
+        let is_i1 = |t: BasicTypeEnum| width(t) == Some(1);
+        let fty = f.get_type();
+        if fty.get_return_type().is_some_and(is_i1) {
+            f.add_attribute(AttributeLoc::Return, zext);
+        }
+        if params {
+            for (i, t) in fty.get_param_types().into_iter().enumerate() {
+                if let Ok(t) = BasicTypeEnum::try_from(t) {
+                    if matches!(width(t), Some(1 | 8 | 16)) {
+                        f.add_attribute(AttributeLoc::Param(i as u32), zext);
+                    }
+                }
+            }
+        }
     }
 
     /// Declares the function of `body` by the calling convention above.

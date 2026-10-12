@@ -72,11 +72,18 @@ const LIBRARY_CELLS: &[(&str, CellDrop)] = &[
         CellDrop::Free("karac_runtime_channel_drop_receiver"),
     ),
     ("File", CellDrop::Free("karac_runtime_file_close")),
+    ("CString", CellDrop::Free("karac_mir_cstring_free")),
+    ("Interner", CellDrop::Free("karac_mir_interner_free")),
     ("OnceLock", CellDrop::Once),
     ("OnceCell", CellDrop::Once),
     ("TaskHandle", CellDrop::Free("karac_runtime_task_detach")),
     ("Arena", CellDrop::Arena),
 ];
+
+/// Library types whose builtin `Drop` does nothing here, as in the
+/// interpreter: a `critical_section` guard (interrupts were never masked)
+/// and the handles of registries that outlive them.
+const NOOP_DROPS: &[&str] = &["CriticalSectionGuard", "Semaphore", "RateLimiter", "Pool"];
 
 const ONCE_GET: &str = "karac_runtime_once_get";
 const ONCE_FREE: &str = "karac_runtime_once_free";
@@ -194,9 +201,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     }
                     return Ok(());
                 }
-                // The guard of `critical_section.acquire()` restores
-                // nothing: interrupts were never masked.
-                if self.tys.adt(a).name == "CriticalSectionGuard" {
+                if NOOP_DROPS.contains(&self.tys.adt(a).name.as_str()) {
                     return Ok(());
                 }
                 if self.adt_has_drop_body(a)? {

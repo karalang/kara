@@ -215,14 +215,27 @@ impl IntrinsicKind {
 }
 
 /// Library structs whose values hold values of their one type argument
-/// that the struct's declared fields do not show (`OnceLock[T]` declares
-/// only a handle): they need dropping exactly when the argument does.
-pub const LIBRARY_CELLS: &[&str] = &["OnceLock", "OnceCell", "Arena", "TaskHandle", "Mutex"];
+/// in place, where the struct's declared fields do not show them: they
+/// need dropping exactly when the argument does. (The cells that keep
+/// theirs behind a runtime handle are [`HANDLES`].)
+pub const LIBRARY_CELLS: &[&str] = &["Mutex"];
 
 /// Library handles that are always dropped, whatever they hold: a dropped
 /// `Channel` end is what closes the channel and frees what is still queued
-/// in it, and a dropped `File` closes the file.
-pub const HANDLES: &[&str] = &["Sender", "Receiver", "File"];
+/// in it, a dropped `File` closes the file, a dropped `TaskHandle`
+/// detaches its task, and the rest free the runtime allocation behind the
+/// handle (their held values, when those need dropping, go first).
+pub const HANDLES: &[&str] = &[
+    "Sender",
+    "Receiver",
+    "File",
+    "CString",
+    "OnceLock",
+    "OnceCell",
+    "Arena",
+    "TaskHandle",
+    "Interner",
+];
 
 /// A struct or enum definition as the middle end needs it. Field types are
 /// written in the definition's own generic parameters ([`TyKind::Param`] by

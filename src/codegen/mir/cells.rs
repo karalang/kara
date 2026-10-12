@@ -29,6 +29,202 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok((p, t))
     }
 
+    /// `Semaphore` and `RateLimiter`, one-field handles naming the
+    /// runtime's registries; `None` for a method not lowered.
+    pub(super) fn limit_native(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let dty = self.place_type(dest)?;
+        match (base, method, args) {
+            ("Semaphore", "new", [n]) => {
+                let n = self.int_arg(n)?;
+                let id = self.mrt_i64("sem_new", &[n.into()])?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, id.into())?;
+            }
+            ("RateLimiter", "new_token_bucket", [r, c]) => {
+                let (r, c) = (self.int_arg(r)?, self.int_arg(c)?);
+                let id = self.mrt_i64("limiter_new", &[r.into(), c.into()])?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, id.into())?;
+            }
+            ("Semaphore" | "RateLimiter", "drop", _) => {}
+            ("Semaphore", "acquire", [recv, ..]) => {
+                let (cell, _) = self.cell_arg(recv)?;
+                let id = self.load_i64(cell)?;
+                let d = self.place_ptr(dest)?;
+                let ok = self.rt_flag("sem_acquire", &[id.into()])?;
+                self.store_result_flag(d, dty, ok, Some("Timeout"))?;
+            }
+            ("Semaphore", "release", [recv]) => {
+                let (cell, _) = self.cell_arg(recv)?;
+                let id = self.load_i64(cell)?;
+                self.rt("sem_release", &[id.into()])?;
+            }
+            ("RateLimiter", "try_acquire", [recv, key]) => {
+                let (cell, _) = self.cell_arg(recv)?;
+                let id = self.load_i64(cell)?;
+                let (p, n) = self.str_parts(key)?;
+                let ok = self.rt_flag("limiter_try", &[id.into(), p.into(), n.into()])?;
+                self.store_bool(dest, ok)?;
+                self.drop_moved(&args[1..])?;
+            }
+            _ => return Ok(None),
+        }
+        Ok(Some(()))
+    }
+
+    /// `CStr` and `CString` (design.md § C-String Literals), each a pointer
+    /// to NUL-terminated bytes: a literal's in a private constant, a
+    /// `CString`'s in a buffer it owns. `None` for a method not lowered.
+    pub(super) fn cstr_native(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let dty = self.place_type(dest)?;
+        match (base, method) {
+            ("CStr", "from_bytes") => {
+                let mut bytes = Vec::with_capacity(args.len() + 1);
+                for a in args {
+                    let v = self.operand_scalar(a)?.into_int_value();
+                    let Some(b) = v.get_zero_extended_constant() else {
+                        return Err("MIR to LLVM: a `CStr` of non-constant bytes".into());
+                    };
+                    bytes.push(b as u8);
+                }
+                bytes.push(0);
+                let i8t = self.llcx.i8_type();
+                let vals: Vec<_> = bytes
+                    .iter()
+                    .map(|b| i8t.const_int(u64::from(*b), false))
+                    .collect();
+                let arr = i8t.const_array(&vals);
+                let g = self.module.add_global(arr.get_type(), None, "karac.cstr");
+                g.set_initializer(&arr);
+                g.set_constant(true);
+                g.set_linkage(inkwell::module::Linkage::Private);
+                let d = self.place_ptr(dest)?;
+                self.store(d, g.as_pointer_value().into())?;
+                return Ok(Some(()));
+            }
+            ("CStr", "from_ptr") => {
+                // A `ref CStr`: a slot of this call's frame holding the
+                // pointer.
+                let p = self.operand_scalar(&args[0])?;
+                let slot = self.entry_slot(8, "cstr")?;
+                self.store(slot, p)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, slot.into())?;
+                return Ok(Some(()));
+            }
+            ("String", "to_cstring") => {
+                let (p, n) = self.str_parts(&args[0])?;
+                let d = self.place_ptr(dest)?;
+                let ok = self.variant_of(dty, "Ok")?;
+                let q = self.offset(d, self.field_offset(dty, Some(ok), 0)?)?;
+                let made = self.rt_flag("to_cstring", &[q.into(), p.into(), n.into()])?;
+                self.store_result_flag(d, dty, made, Some("InteriorNul"))?;
+                self.drop_moved(args)?;
+                return Ok(Some(()));
+            }
+            ("CStr" | "CString", _) => {}
+            _ => return Ok(None),
+        }
+        let Some(recv) = args.first() else {
+            return Ok(None);
+        };
+        let (cell, _) = self.cell_arg(recv)?;
+        let h = self.load_ptr(cell)?;
+        match method {
+            "len" | "is_empty" => {
+                let n = self.mrt_i64("cstr_len", &[h.into()])?;
+                if method == "len" {
+                    self.store_int_as(dest, n, false)?;
+                } else {
+                    let z = self.is_zero(n)?;
+                    self.store_bool(dest, z)?;
+                }
+            }
+            "as_ptr" => {
+                let d = self.place_ptr(dest)?;
+                self.store(d, h.into())?;
+            }
+            "as_bytes" => {
+                let n = self.mrt_i64("cstr_len", &[h.into()])?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, h.into())?;
+                self.store(self.offset(d, 8)?, n.into())?;
+            }
+            "to_string" | "to_string_slice" if base == "CStr" => {
+                let d = self.place_ptr(dest)?;
+                let ok = self.variant_of(dty, "Ok")?;
+                let q = self.offset(d, self.field_offset(dty, Some(ok), 0)?)?;
+                let view = self
+                    .llcx
+                    .i8_type()
+                    .const_int(u64::from(method == "to_string_slice"), false);
+                let i32t = self.llcx.i32_type();
+                let f = self.extern_fn(
+                    "karac_mir_cstr_to_string",
+                    i32t.fn_type(
+                        &[
+                            self.ptr_ty().into(),
+                            self.ptr_ty().into(),
+                            self.llcx.i8_type().into(),
+                        ],
+                        false,
+                    ),
+                );
+                let r = self
+                    .builder
+                    .build_call(f, &[q.into(), h.into(), view.into()], "")
+                    .map_err(e)?
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let good = self.is_zero(r)?;
+                let incomplete = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, r, i32t.const_int(1, false), "")
+                    .map_err(e)?;
+                let errv = self.variant_of(dty, "Err")?;
+                let et = self
+                    .tys
+                    .field_ty(dty, Some(errv), 0)
+                    .ok_or("an `Err` without a payload")?;
+                let eq = self.offset(d, self.field_offset(dty, Some(errv), 0)?)?;
+                let (inc, bad) = (
+                    self.variant_of(et, "IncompleteSequence")?,
+                    self.variant_of(et, "InvalidByte")?,
+                );
+                self.store_result_flag(d, dty, good, None)?;
+                let not_good = self.builder.build_not(good, "").map_err(e)?;
+                self.if_then(not_good, |cx| {
+                    let k = cx
+                        .builder
+                        .build_select(
+                            incomplete,
+                            cx.i64(u64::from(inc)),
+                            cx.i64(u64::from(bad)),
+                            "",
+                        )
+                        .map_err(e)?
+                        .into_int_value();
+                    cx.store_tag_dyn(eq, et, k)
+                })?;
+            }
+            _ => return Ok(None),
+        }
+        Ok(Some(()))
+    }
+
     /// The methods of `Atomic[T]`, or `None` for one not lowered here.
     pub(super) fn atomic_native(
         &mut self,

@@ -77,6 +77,8 @@ impl<'ctx> Cx<'ctx, '_> {
         let f = self
             .module
             .add_function(&name, fn_ty, Some(Linkage::Internal));
+        // The runtime calls `eq` glue as a Rust `bool` function.
+        self.bool_abi(f, false);
         self.keys.fns.insert((op, ty), f);
         self.keys.todo.push((op, ty, f));
         f

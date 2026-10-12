@@ -770,7 +770,7 @@ pub extern "C" fn karac_mir_span_top() -> i64 {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_env_var(out: *mut RawVec, p: *const u8, n: usize) -> u8 {
     // SAFETY: the caller's contract.
-    let name = unsafe { std::slice::from_raw_parts(p, n) };
+    let name = unsafe { bytes(p, n) };
     let Ok(name) = std::str::from_utf8(name) else {
         return 0;
     };
@@ -839,12 +839,7 @@ pub extern "C" fn karac_mir_rand_next() -> u64 {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_env_set(p: *const u8, n: usize, v: *const u8, vn: usize) {
     // SAFETY: the caller's contract.
-    let (name, val) = unsafe {
-        (
-            std::slice::from_raw_parts(p, n),
-            std::slice::from_raw_parts(v, vn),
-        )
-    };
+    let (name, val) = unsafe { (bytes(p, n), bytes(v, vn)) };
     if let (Ok(name), Ok(val)) = (std::str::from_utf8(name), std::str::from_utf8(val)) {
         // SAFETY: the program runs its environment edits on one thread,
         // as the interpreter does.
@@ -863,6 +858,186 @@ pub extern "C" fn karac_mir_total_cmp(a: f64, b: f64, narrow: u8) -> i32 {
         canon(a).total_cmp(&canon(b))
     };
     o as i32
+}
+
+/// The length of the NUL-terminated bytes at `p` (0 for null): a `CStr`
+/// or `CString` is a pointer to them.
+///
+/// # Safety
+/// `p` is null or points at NUL-terminated bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_cstr_len(p: *const u8) -> i64 {
+    if p.is_null() {
+        return 0;
+    }
+    // SAFETY: the caller's contract.
+    unsafe { std::ffi::CStr::from_ptr(p.cast()) }
+        .to_bytes()
+        .len() as i64
+}
+
+/// `String.to_cstring`: writes a malloc'd NUL-terminated copy of the `n`
+/// bytes at `p` to `*out` and returns 1, or returns 0 (writing nothing)
+/// when they hold a NUL, which C would read as the end.
+///
+/// # Safety
+/// `p` is readable for `n` bytes; `out` is writable for a pointer.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_to_cstring(out: *mut *mut u8, p: *const u8, n: usize) -> u8 {
+    // SAFETY: the caller's contract.
+    let b = unsafe { bytes(p, n) };
+    if b.contains(&0) {
+        return 0;
+    }
+    let buf = crate::alloc::karac_realloc_or_panic(std::ptr::null_mut(), n + 1);
+    // SAFETY: `buf` holds `n + 1` bytes.
+    unsafe {
+        std::ptr::copy_nonoverlapping(b.as_ptr(), buf, n);
+        *buf.add(n) = 0;
+        *out = buf;
+    }
+    1
+}
+
+/// Frees a `CString`'s buffer.
+///
+/// # Safety
+/// `p` came from [`karac_mir_to_cstring`] and is not used after.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_cstring_free(p: *mut u8) {
+    // SAFETY: the caller's contract; the buffer came from the C allocator.
+    unsafe { free(p.cast()) };
+}
+
+/// `CStr.to_string` (`view` 0) or `to_string_slice` (1): validates the
+/// NUL-terminated bytes at `p` as UTF-8; on success writes a `String`
+/// copy (or, for a view, the bytes' `{ptr, len}`) at `out` and returns
+/// 0, else returns 1 for a cut-off final sequence or 2 for any other bad
+/// byte.
+///
+/// # Safety
+/// `p` points at NUL-terminated bytes; `out` is writable for a `String`
+/// (three words) or a view (two).
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_cstr_to_string(out: *mut RawVec, p: *const u8, view: u8) -> i32 {
+    // SAFETY: the caller's contract.
+    let b = unsafe { std::ffi::CStr::from_ptr(p.cast()) }.to_bytes();
+    match std::str::from_utf8(b) {
+        Ok(_) if view != 0 => {
+            let w = out.cast::<usize>();
+            // SAFETY: as above.
+            unsafe {
+                *w = p as usize;
+                *w.add(1) = b.len();
+            }
+            0
+        }
+        Ok(_) => {
+            // SAFETY: as above.
+            unsafe { string_of(out, b) };
+            0
+        }
+        Err(e) if e.error_len().is_none() => 1,
+        Err(_) => 2,
+    }
+}
+
+thread_local! {
+    /// Each `Semaphore`'s `(available, initial)` permits, by id - 1.
+    static SEMAPHORES: std::cell::RefCell<Vec<(i64, i64)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Each `RateLimiter`'s rate, capacity and per-key `(tokens, last)`.
+    static LIMITERS: std::cell::RefCell<Vec<Limiter>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+struct Limiter {
+    rate: f64,
+    capacity: f64,
+    buckets: std::collections::HashMap<Vec<u8>, (f64, std::time::Instant)>,
+}
+
+/// `Semaphore.new(n)`: its id. One task runs at a time, as in the
+/// interpreter, so an `acquire` with no permit left times out at once.
+#[no_mangle]
+pub extern "C" fn karac_mir_sem_new(n: i64) -> i64 {
+    let n = n.max(0);
+    SEMAPHORES.with(|s| {
+        let mut s = s.borrow_mut();
+        s.push((n, n));
+        s.len() as i64
+    })
+}
+
+/// `Semaphore.acquire`: 1 when a permit was taken, 0 (a timeout) when
+/// none is left or the id names no semaphore.
+#[no_mangle]
+pub extern "C" fn karac_mir_sem_acquire(id: i64) -> u8 {
+    SEMAPHORES.with(|s| {
+        let mut s = s.borrow_mut();
+        match usize::try_from(id - 1).ok().and_then(|i| s.get_mut(i)) {
+            Some((avail, _)) if *avail > 0 => {
+                *avail -= 1;
+                1
+            }
+            _ => 0,
+        }
+    })
+}
+
+/// `Semaphore.release`: a permit back, never above the initial count.
+#[no_mangle]
+pub extern "C" fn karac_mir_sem_release(id: i64) {
+    SEMAPHORES.with(|s| {
+        let mut s = s.borrow_mut();
+        if let Some((avail, max)) = usize::try_from(id - 1).ok().and_then(|i| s.get_mut(i)) {
+            if *avail < *max {
+                *avail += 1;
+            }
+        }
+    });
+}
+
+/// `RateLimiter.new_token_bucket(rate, capacity)`: its id.
+#[no_mangle]
+pub extern "C" fn karac_mir_limiter_new(rate: i64, cap: i64) -> i64 {
+    LIMITERS.with(|l| {
+        let mut l = l.borrow_mut();
+        l.push(Limiter {
+            rate: rate.max(0) as f64,
+            capacity: cap.max(0) as f64,
+            buckets: Default::default(),
+        });
+        l.len() as i64
+    })
+}
+
+/// `RateLimiter.try_acquire(key)`: a fresh key's bucket starts full and
+/// refills against the monotonic clock; 1 when a token was taken. An id
+/// that names no limiter fails closed.
+///
+/// # Safety
+/// `p` is readable for `n` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_limiter_try(id: i64, p: *const u8, n: usize) -> u8 {
+    // SAFETY: the caller's contract.
+    let key = unsafe { bytes(p, n) }.to_vec();
+    LIMITERS.with(|l| {
+        let mut l = l.borrow_mut();
+        let Some(l) = usize::try_from(id - 1).ok().and_then(|i| l.get_mut(i)) else {
+            return 0;
+        };
+        let now = std::time::Instant::now();
+        let (rate, cap) = (l.rate, l.capacity);
+        let (tokens, last) = l.buckets.entry(key).or_insert((cap, now));
+        let elapsed = now.saturating_duration_since(*last).as_secs_f64();
+        *tokens = (*tokens + elapsed * rate).min(cap);
+        *last = now;
+        if *tokens >= 1.0 {
+            *tokens -= 1.0;
+            1
+        } else {
+            0
+        }
+    })
 }
 
 /// `std.time::sleep_ms`: a real pause; a count of zero or less is a
@@ -1480,8 +1655,7 @@ pub unsafe extern "C" fn karac_mir_arena_free(a: *mut RawArena) {
 }
 
 /// An `Interner`'s strings, each a `String` that stays where it is so
-/// `resolve` can lend it, and their ids. It lives until the process ends,
-/// as the interpreter's do.
+/// `resolve` can lend it, and their ids. Its drop frees them all.
 pub struct MirInterner {
     // Boxed so a lent `String` stays put when the vector grows.
     #[allow(clippy::vec_box)]
@@ -1551,6 +1725,22 @@ pub unsafe extern "C" fn karac_mir_interner_resolve(
     match usize::try_from(id).ok().and_then(|i| t.strings.get(i)) {
         Some(s) => &**s,
         None => &EMPTY_STRING.0,
+    }
+}
+
+/// Frees an interner and its strings; nothing it lent is still read.
+///
+/// # Safety
+/// `h` came from [`karac_mir_interner_new`] and is not used again.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_interner_free(h: *mut MirInterner) {
+    // SAFETY: the caller's contract; the box came from `Box::into_raw`.
+    let t = unsafe { Box::from_raw(h) };
+    for s in &t.strings {
+        if s.cap != 0 {
+            // SAFETY: the buffer came from `string_of`'s allocator.
+            unsafe { free(s.ptr.cast()) };
+        }
     }
 }
 
