@@ -919,3 +919,32 @@ fn main() {
         "2 3 1 4\n9 9 4 3\n4 5 3\n",
     );
 }
+
+#[test]
+fn an_index_read_of_an_option_of_a_shared_value_retains_it() {
+    // B-2026-10-12-26.
+    assert_runs(
+        r#"
+shared struct Node {
+    val: i64,
+}
+
+fn total(n: Option[Node]) -> i64 {
+    if let Some(x) = n { x.val } else { 0 }
+}
+
+fn pair_total(p: (Node, i64)) -> i64 {
+    p.0.val + p.1
+}
+
+fn main() {
+    let options: Vec[Option[Node]] = vec![Some(Node { val: 2 }), None];
+    let pairs: Vec[(Node, i64)] = vec![(Node { val: 3 }, 4)];
+    let o = options[0];
+    println(f"{total(o)} {total(options[1])} {total(options[0])}");
+    println(f"{pair_total(pairs[0])} {pairs[0].0.val}");
+}
+"#,
+        "2 0 2\n7 3\n",
+    );
+}

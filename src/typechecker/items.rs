@@ -7364,6 +7364,34 @@ impl<'a> super::TypeChecker<'a> {
         true
     }
 
+    /// A value whose every part is copied or is a counted `shared` handle:
+    /// a bare `shared` type, or an `Option` / `Result` / tuple / array of
+    /// such parts (`Option[Node]`, `(Node, i64)`) — the shapes D5 passes to
+    /// a bare parameter by value (`d5_params::copy_like`). Reading one out of
+    /// a container copies or retains each part and leaves no hole
+    /// (B-2026-10-12-26).
+    fn index_read_counts_or_copies(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Shared(_) => true,
+            Type::Named { name, .. } if self.name_is_shared_decl(name) => true,
+            Type::Named { name, args }
+                if matches!(name.as_str(), "Option" | "Result") && !args.is_empty() =>
+            {
+                args.iter()
+                    .all(|t| self.index_read_part_counts_or_copies(t))
+            }
+            Type::Tuple(elems) => elems
+                .iter()
+                .all(|t| self.index_read_part_counts_or_copies(t)),
+            Type::Array { element, .. } => self.index_read_part_counts_or_copies(element),
+            _ => false,
+        }
+    }
+
+    fn index_read_part_counts_or_copies(&self, ty: &Type) -> bool {
+        self.is_copy_type_during_check(ty) || self.index_read_counts_or_copies(ty)
+    }
+
     pub(super) fn reject_index_move_non_copy(&mut self, value: &Expr, ty: &Type) {
         if !matches!(value.kind, ExprKind::Index { .. }) {
             return;
@@ -7422,9 +7450,7 @@ impl<'a> super::TypeChecker<'a> {
         // divergence this row was filed for reachable here: RC decides when
         // a shared value is destroyed, so neither backend runs a user `Drop`
         // body on the read.
-        if matches!(ty, Type::Shared(_))
-            || matches!(ty, Type::Named { name, .. } if self.name_is_shared_decl(name))
-        {
+        if self.index_read_counts_or_copies(ty) {
             return;
         }
         // A function value is a fat pointer, and reading one out of a

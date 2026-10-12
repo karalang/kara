@@ -3226,3 +3226,41 @@ fn a_shared_mut_field_is_writable_through_a_let_tuple_binding() {
         "let mut (p, k)",
     );
 }
+
+#[test]
+fn an_index_read_of_a_counted_handle_composite_is_accepted() {
+    // B-2026-10-12-26: `Option[shared]` and a tuple of handles and `Copy`
+    // parts are passed by value under D5, and reading one out of a `Vec`
+    // retains or copies each part, as a bare `shared` element already does.
+    accepted(
+        "index-read-option-shared",
+        "shared struct Node {\n\
+         \x20   val: i64,\n\
+         }\n\
+         \n\
+         fn total(n: Option[Node]) -> i64 {\n\
+         \x20   if let Some(x) = n { x.val } else { 0 }\n\
+         }\n\
+         \n\
+         fn pair_total(p: (Node, i64)) -> i64 {\n\
+         \x20   p.0.val + p.1\n\
+         }\n\
+         \n\
+         fn main() {\n\
+         \x20   let options: Vec[Option[Node]] = vec![Some(Node { val: 2 }), None];\n\
+         \x20   let pairs: Vec[(Node, i64)] = vec![(Node { val: 3 }, 4)];\n\
+         \x20   let o = options[0];\n\
+         \x20   println(f\"{total(o)} {total(options[1])} {pair_total(pairs[0])}\");\n\
+         }\n",
+    );
+    // An `Option` of an owned heap value is still a move out of the `Vec`.
+    rejected_then_fixed(
+        "index-read-option-string",
+        "fn main() {\n\
+         \x20   let v: Vec[Option[String]] = vec![Some(\"a\".to_string())];\n\
+         \x20   let o = v[0];\n\
+         \x20   println(o.unwrap());\n\
+         }\n",
+        "E_INDEX_MOVE_NON_COPY",
+    );
+}
