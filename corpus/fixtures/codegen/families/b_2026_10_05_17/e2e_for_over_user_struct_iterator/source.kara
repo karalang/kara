@@ -55,8 +55,8 @@ impl Drop for Tok { fn drop(mut ref self) { println(f"drop {self.s}"); } }
 struct Holder { c: CountUp }
 fn mk() -> CountUp { CountUp { current: 0, limit: 3 } }
 fn words(n: i64) -> Words { let mut v: Vec[String] = Vec.new(); for i in 0..n { v.push(f"w{i}"); } Words { items: v, i: 0 } }
-fn sum_it(c: CountUp) -> i64 { let mut s = 0; for v in c { s += v; } s }
-fn first_big(c: CountUp) -> i64 { for v in c { if v > 2 { return v } } -1 }
+fn sum_it(c: own CountUp) -> i64 { let mut s = 0; for v in c { s += v; } s }
+fn first_big(c: own CountUp) -> i64 { for v in c { if v > 2 { return v } } -1 }
 fn stop_at_w1() { for s in words(4) { if s == "w1" { return } println(f"r:{s}"); } }
 fn main() {
     for v in CountUp { current: 0, limit: 3 } { println(f"a:{v}"); }
@@ -92,7 +92,7 @@ fn main() {
     let h = Holder { c: CountUp { current: 2, limit: 4 } };
     for v in h.c { println(f"n:{v}"); }
     let cs = vec![CountUp { current: 0, limit: 2 }];
-    for c2 in cs { for v in c2 { println(f"o:{v}"); } }
+    for c2 in cs.into_iter() { for v in c2 { println(f"o:{v}"); } }
     let x = if total > 0 { CountUp { current: 5, limit: 6 } } else { mk() };
     for v in x { println(f"p:{v}"); }
     for v in { CountUp { current: 9, limit: 10 } } { println(f"q:{v}"); }

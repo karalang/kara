@@ -2,7 +2,7 @@
 fn main() {
     let v = [1, 2];
     let xs: Vec[i64] = v.iter()
-        .flat_map(|n| { let inner = [n, n + 100]; inner.iter() })
+        .flat_map(|n| { let inner = [*n, *n + 100]; inner.into_iter() })
         .map(|x| x * 2)
         .collect();
     for x in xs {
