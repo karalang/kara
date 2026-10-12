@@ -1,0 +1,267 @@
+// Differential test for LeetCode #410: Split Array Largest Sum.
+//
+// Copies of the four arms, each run on 3,000 random arrays. Properties
+// known by construction:
+//   P1  one piece costs the total, and n pieces the largest number
+//   P2  the answer is at least the largest number and the total divided
+//       by k rounded up, and at most the total
+//   P3  one more piece never raises the answer
+//   P4  for up to 10 numbers, the answer is the least largest sum over
+//       every way to cut the array into k pieces, tried one by one
+//   P5  the array reversed, or every number tripled with the answer
+//       tripled, gives the same answer
+
+// ---- search: split_array.kara
+
+fn pieces_needed(nums: Vec[i64], cap: i64) -> i64 {
+    let mut pieces = 1;
+    let mut sum = 0;
+    for i in 0..nums.len() {
+        if sum + nums[i] > cap {
+            pieces += 1;
+            sum = nums[i];
+        } else {
+            sum += nums[i];
+        }
+    }
+    pieces
+}
+
+fn split_array_search(nums: Vec[i64], k: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = 0;
+    for i in 0..nums.len() {
+        if nums[i] > lo {
+            lo = nums[i];
+        }
+        hi += nums[i];
+    }
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if pieces_needed(nums, mid) <= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- dp: split_array_dp.kara
+
+fn split_array_dp(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut prefix = vec![0; n + 1];
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    let none = prefix[n] + 1;
+    let mut best = vec![none; n + 1];
+    best[0] = 0;
+    for _ in 0..k {
+        let mut next = vec![none; n + 1];
+        for i in 1..n + 1 {
+            for p in 0..i {
+                if best[p] < none {
+                    let piece = prefix[i] - prefix[p];
+                    let worst = if best[p] > piece { best[p] } else { piece };
+                    if worst < next[i] {
+                        next[i] = worst;
+                    }
+                }
+            }
+        }
+        best = next;
+    }
+    best[n]
+}
+
+// ---- memo: split_array_memo.kara
+
+fn least(prefix: Vec[i64], start: i64, pieces: i64, memo: mut ref Vec[i64]) -> i64 {
+    let n = prefix.len() - 1;
+    if pieces == 1 {
+        return prefix[n] - prefix[start];
+    }
+    let slot = start * (n + 1) + pieces;
+    if memo[slot] >= 0 {
+        return memo[slot];
+    }
+    let mut best = prefix[n] - prefix[start];
+    for end in start + 1..n - pieces + 2 {
+        let first = prefix[end] - prefix[start];
+        if first >= best {
+            break;
+        }
+        let rest = least(prefix, end, pieces - 1, memo);
+        let worst = if first > rest { first } else { rest };
+        if worst < best {
+            best = worst;
+        }
+    }
+    memo[slot] = best;
+    best
+}
+
+fn split_array_memo(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut prefix = vec![0; n + 1];
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    let mut memo = vec![-1; (n + 1) * (n + 1)];
+    least(prefix, 0, k, mut memo)
+}
+
+// ---- candidates: split_array_candidates.kara
+
+fn fits(nums: Vec[i64], cap: i64, k: i64) -> bool {
+    let mut pieces = 1;
+    let mut sum = 0;
+    for i in 0..nums.len() {
+        if nums[i] > cap {
+            return false;
+        }
+        if sum + nums[i] > cap {
+            pieces += 1;
+            sum = nums[i];
+        } else {
+            sum += nums[i];
+        }
+    }
+    pieces <= k
+}
+
+fn split_array_candidates(nums: Vec[i64], k: i64) -> i64 {
+    let mut sums: Vec[i64] = Vec.new();
+    for i in 0..nums.len() {
+        let mut sum = 0;
+        for j in i..nums.len() {
+            sum += nums[j];
+            sums.push(sum);
+        }
+    }
+    sums.sort();
+    sums.dedup();
+    let mut lo = 0;
+    let mut hi = sums.len() - 1;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if fits(nums, sums[mid], k) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    sums[lo]
+}
+
+// ---- the checks -------------------------------------------------------------
+
+fn solve(arm: i64, nums: Vec[i64], k: i64) -> i64 {
+    if arm == 0 {
+        split_array_search(nums, k)
+    } else if arm == 1 {
+        split_array_dp(nums, k)
+    } else if arm == 2 {
+        split_array_memo(nums, k)
+    } else {
+        split_array_candidates(nums, k)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Every way to cut nums into k pieces: a bit set in mask is a cut after
+// that number. The least largest piece sum over all of them.
+fn brute(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut best = -1;
+    for mask in 0..(1 << (n - 1)) {
+        let mut cuts = 0;
+        for b in 0..n - 1 {
+            cuts += (mask >> b) & 1;
+        }
+        if cuts == k - 1 {
+            let mut largest = 0;
+            let mut sum = 0;
+            for i in 0..n {
+                sum += nums[i];
+                if i == n - 1 or (mask >> i) & 1 == 1 {
+                    if sum > largest {
+                        largest = sum;
+                    }
+                    sum = 0;
+                }
+            }
+            if best < 0 or largest < best {
+                best = largest;
+            }
+        }
+    }
+    best
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4100;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        // 1 to 30 numbers below 1, 10, 100 or 1000, so that some arrays
+        // are all zeros and many hold repeats.
+        let n = 1 + step(mut seed) % 30;
+        let bound = [1, 10, 100, 1000][step(mut seed) % 4];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(step(mut seed) % bound);
+        }
+        let k = 1 + step(mut seed) % n;
+        let mut total = 0;
+        let mut largest = 0;
+        for i in 0..n {
+            total += nums[i];
+            if nums[i] > largest {
+                largest = nums[i];
+            }
+        }
+        let mut reversed: Vec[i64] = Vec.new();
+        let mut tripled: Vec[i64] = Vec.new();
+        for i in 0..n {
+            reversed.push(nums[n - 1 - i]);
+            tripled.push(3 * nums[i]);
+        }
+        let mut small: Vec[i64] = Vec.new();
+        for i in 0..n.min(10) {
+            small.push(nums[i]);
+        }
+        let small_k = 1 + step(mut seed) % small.len();
+        let best = brute(small, small_k);
+        for arm in 0..4 {
+            checks += 5;
+            let answer = solve(arm, nums, k);
+            report(1, arm, case, solve(arm, nums, 1) == total and solve(arm, nums, n) == largest, mut failures);
+            report(2, arm, case, answer >= largest and answer * k >= total and answer <= total, mut failures);
+            report(3, arm, case, k == n or solve(arm, nums, k + 1) <= answer, mut failures);
+            report(4, arm, case, solve(arm, small, small_k) == best, mut failures);
+            report(5, arm, case, solve(arm, reversed, k) == answer and solve(arm, tripled, k) == 3 * answer, mut failures);
+        }
+    }
+    println(f"3000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

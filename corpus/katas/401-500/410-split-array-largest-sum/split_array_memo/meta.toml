@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/410-split-array-largest-sum/split_array_memo.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "f8492661f"
+extracted_src = "432d3159"
+model_rev = "1aa23105"
+model_src = "432d3159"

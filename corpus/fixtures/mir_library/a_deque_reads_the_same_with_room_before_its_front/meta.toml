@@ -1,0 +1,15 @@
+source = "tests/mir_library.rs::a_deque_reads_the_same_with_room_before_its_front"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:vecdeque"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "f8492661f"
+extracted_src = "cc5b803b"

@@ -1,0 +1,54 @@
+
+fn show(d: ref VecDeque[String]) {
+    let mut line = String.new();
+    for x in d {
+        line.push_str(f"{x} ");
+    }
+    println(f"[{d.len()}] {line}");
+}
+
+fn main() {
+    let mut d: VecDeque[String] = VecDeque.new();
+    for i in 0..5 {
+        d.push_front(f"f{i}");
+        d.push_back(f"b{i}");
+    }
+    show(d);
+    println(f"{d.front()} {d.back()} {d.get(3)} {d.get(10)} {d[0]} {d[9]}");
+    for _ in 0..3 {
+        let x = d.pop_front();
+        println(f"{x}");
+    }
+    show(d);
+    let c = d.clone();
+    show(c);
+    for i in 0..30 {
+        d.push_back(f"x{i}");
+        if i % 2 == 0 {
+            d.pop_front();
+        }
+    }
+    show(d);
+    while d.len() > 2 {
+        d.pop_front();
+    }
+    d.push_front("again");
+    show(d);
+    println(f"{d.pop_back()} {d.pop_back()} {d.pop_back()} {d.pop_back()} {d.is_empty()}");
+    d.push_front("solo");
+    show(d);
+    let mut q: VecDeque[i64] = VecDeque.new();
+    let mut total: i64 = 0;
+    for i in 0..1000 {
+        q.push_back(i);
+        if i % 3 == 0 {
+            total += q.pop_front().unwrap();
+        }
+    }
+    println(f"{total} {q.len()} {q.front()} {q.back()}");
+    let mut owned = String.new();
+    for x in c {
+        owned.push_str(x);
+    }
+    println(owned);
+}

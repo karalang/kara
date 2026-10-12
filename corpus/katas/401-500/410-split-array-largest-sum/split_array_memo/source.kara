@@ -1,0 +1,97 @@
+// LeetCode #410: Split Array Largest Sum -- recursion with a memo.
+//
+// The numbers from start on, split into some number of pieces: one piece
+// takes them all; otherwise the first piece ends somewhere leaving at
+// least one number for each later piece, and costs the larger of its own
+// sum and the best for what follows. A first piece already no smaller
+// than the best found ends the search, since longer ones only grow. Each
+// (start, pieces) pair is solved once. O(k n^2) time, O(k n) space.
+
+fn least(prefix: Vec[i64], start: i64, pieces: i64, memo: mut ref Vec[i64]) -> i64 {
+    let n = prefix.len() - 1;
+    if pieces == 1 {
+        return prefix[n] - prefix[start];
+    }
+    let slot = start * (n + 1) + pieces;
+    if memo[slot] >= 0 {
+        return memo[slot];
+    }
+    let mut best = prefix[n] - prefix[start];
+    for end in start + 1..n - pieces + 2 {
+        let first = prefix[end] - prefix[start];
+        if first >= best {
+            break;
+        }
+        let rest = least(prefix, end, pieces - 1, memo);
+        let worst = if first > rest { first } else { rest };
+        if worst < best {
+            best = worst;
+        }
+    }
+    memo[slot] = best;
+    best
+}
+
+fn split_array(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut prefix = vec![0; n + 1];
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    let mut memo = vec![-1; (n + 1) * (n + 1)];
+    least(prefix, 0, k, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn list(nums: Vec[i64]) -> String {
+    let mut out = String.new();
+    out.push('[');
+    for i in 0..nums.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"{nums[i]}");
+    }
+    out.push(']');
+    out
+}
+
+fn show(nums: Vec[i64], k: i64) {
+    println(f"{list(nums)}, k = {k}: {split_array(nums, k)}");
+}
+
+fn main() {
+    show(vec![7, 2, 5, 10, 8], 2);
+    show(vec![1, 2, 3, 4, 5], 2);
+    show(vec![1, 4, 4], 3);
+    show(vec![5], 1);
+    show(vec![0, 0, 0], 2);
+    show(vec![3, 1, 4, 1, 5, 9, 2, 6], 1);
+    show(vec![3, 1, 4, 1, 5, 9, 2, 6], 8);
+    show(vec![1000000, 1000000, 1000000], 2);
+    show(vec![2, 3, 1, 2, 4, 3], 5);
+    show(vec![10, 5, 13, 4, 8, 4, 5, 11, 14, 9, 16, 10, 20, 8], 8);
+    // 2,000 random arrays of 1 to 40 numbers from 0 to 99, each split
+    // into 1 to n pieces.
+    let mut seed: i64 = 410;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let n = 1 + step(mut seed) % 40;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(step(mut seed) % 100);
+        }
+        let k = 1 + step(mut seed) % n;
+        let answer = split_array(nums, k);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"2000 random arrays: total {total}, checksum {checksum}");
+}
