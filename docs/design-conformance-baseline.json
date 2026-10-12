@@ -2,182 +2,168 @@
   "note": "Non-conforming design.md blocks. Shrink me. `reason` says why a block is here; UNTRIAGED means nobody has decided yet.",
   "blocks": {
     "abde1163d62c": {
-      "line": 586,
+      "line": 588,
       "heading": "4. Modules and packages > Imports",
       "outcome": "REJECTED",
       "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
       "first_diagnostic": "'Connection' is already defined in this scope (first defined at 1:22)"
     },
     "84325494409a": {
-      "line": 607,
+      "line": 609,
       "heading": "4. Modules and packages > Imports",
       "outcome": "REJECTED",
       "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
       "first_diagnostic": "'Connection' is already defined in this scope (first defined at 2:26)"
     },
     "ede115d37f80": {
-      "line": 1234,
+      "line": 1236,
       "heading": "5. Types > Collection literals",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): map literals (`[k: v]`, `[:]`)",
       "first_diagnostic": "Expected expression, found Colon"
     },
     "805303f52550": {
-      "line": 2401,
+      "line": 2405,
       "heading": "7. Functions and closures > Binding modes in patterns",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "'ref' is a reserved keyword and cannot be used as an identifier"
     },
     "319695619eff": {
-      "line": 2504,
+      "line": 2508,
       "heading": "7. Functions and closures > Destructuring parameters",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "Expected identifier, found DotDot"
     },
     "00241a981001": {
-      "line": 2532,
+      "line": 2536,
       "heading": "7. Functions and closures > Returns, `ref` returns and views",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `ref` of a named place as an expression (core-semantics §5.1)",
       "first_diagnostic": "`ref` is not written at call sites. The parameter's mode is declared on the callee's signature. Remove the `ref` keyword."
     },
     "6fd07d936666": {
-      "line": 2595,
+      "line": 2599,
       "heading": "7. Functions and closures > `*` and `ref` in expressions",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `get_unchecked` returns a `ref T`, and reads through a `ref` to a `Copy` value (core-semantics §5.10)",
       "first_diagnostic": "cannot move a non-`Copy` value out of a borrow with `*`: the binding already reads the value in place, so drop the `*` (or write `.clone()` for a copy)"
     },
     "015615ccef36": {
-      "line": 2616,
+      "line": 2620,
       "heading": "7. Functions and closures > `*` and `ref` in expressions",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `ref` of a named place as an expression (core-semantics §5.1)",
       "first_diagnostic": "`ref` is not written at call sites. The parameter's mode is declared on the callee's signature. Remove the `ref` keyword."
     },
     "fb3d4f923c49": {
-      "line": 2658,
+      "line": 2662,
       "heading": "7. Functions and closures > Closures",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): typed closure parameters",
       "first_diagnostic": "Expected Equal, found Colon"
     },
     "32f75a25e669": {
-      "line": 2696,
+      "line": 2700,
       "heading": "7. Functions and closures > Function types and kinds",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "parameter `f` is a non-escaping function value and cannot be bound to a variable: a function-typed parameter may only be called or passed to another non-escaping parameter. Declare it `f: escaping Fn(...)` to store or return it (core-semantics.md §9.3)"
     },
-    "74aa69cb82d0": {
-      "line": 3155,
-      "heading": "Declarations and impls > Associated functions",
-      "outcome": "UNDECLARED-NAME",
-      "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): the `Str` type (legacy spells it `StringSlice`)",
-      "first_diagnostic": "undefined type 'Str', did you mean 'CStr'?"
-    },
     "69aa1b4cb1ed": {
-      "line": 3498,
+      "line": 3503,
       "heading": "`impl Trait` > Return-position `impl Trait`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): the library method `RangeFrom.into_iter`",
       "first_diagnostic": "no method 'into_iter' on type 'RangeFrom'"
     },
     "2bc5da29b2b2": {
-      "line": 3689,
+      "line": 3694,
       "heading": "9. Traits > Operator traits",
       "outcome": "REJECTED",
       "reason": "standard-library definition shown for reference; the compiler provides it built in",
       "first_diagnostic": "conflicting impl: `impl Option[Ordering]` redefines methods `is_eq`, `is_ge`, `is_gt`, `is_le`, `is_lt` already provided by an existing `impl Option`; a specialized inherent impl may only ADD new methods, not redefine or specialize an existing one (v1 has no method specialization)"
     },
     "e17f7f14296c": {
-      "line": 3853,
+      "line": 3865,
       "heading": "9. Traits > Conversion traits",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "user-defined `impl Into for T` is not allowed; `Into` is derived from `From` via a blanket impl"
     },
-    "6bf78b2dea1b": {
-      "line": 4336,
-      "heading": "Derive > `Serialize` and `Deserialize`",
-      "outcome": "REJECTED",
-      "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): the `#[serde(...)]` derive helper",
-      "first_diagnostic": "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `serde` — the compiler does not recognise this bare-name attribute. If you intended a diagnostic hint, write `#[diagnostic::serde]`; if you intended a tool attribute, use a namespaced form like `#[your_tool::serde]`."
-    },
     "24642faa9a80": {
-      "line": 4734,
+      "line": 4746,
       "heading": "11. Ownership and sharing > Cycles and `weak`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `own` parameters and receivers (D5, borrow-by-default parameters)",
       "first_diagnostic": "value 'b' moved here, used again here (moved at line 7:22)"
     },
     "ba31bf9dbb51": {
-      "line": 4817,
+      "line": 4829,
       "heading": "11. Ownership and sharing > `sync` types",
       "outcome": "REJECTED",
       "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
       "first_diagnostic": "'Session' is already defined in this scope (first defined at 2:8)"
     },
     "085b3c9ce589": {
-      "line": 5203,
+      "line": 5215,
       "heading": "12. Effects > Inference and declarations",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): a closure argument's effects are charged to the caller, not checked against a pure `Fn` slot (§12); `Row` is the reader's type",
       "first_diagnostic": "undefined type 'Row', did you mean 'rows'?"
     },
     "639e8544f124": {
-      "line": 5341,
+      "line": 5353,
       "heading": "Effect lattice > `#[no_effect]`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `panics` needs no declaration on a public function (§12)",
       "first_diagnostic": "public function 'render_frame' performs effects [panics] but has no effect declaration. Add: with panics to the function signature"
     },
     "e77c3bdf3dea": {
-      "line": 5594,
+      "line": 5606,
       "heading": "13. Concurrency > `par` blocks",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): tuple-valued `par { e1, e2 }` (core-semantics amendment 6)",
       "first_diagnostic": "undefined name 'sum_first_half'"
     },
     "5a485a6c0269": {
-      "line": 5747,
+      "line": 5759,
       "heading": "13. Concurrency > Locks and atomics",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `MutexGuard.value`",
       "first_diagnostic": "no method 'lock' on type 'Mutex'"
     },
     "11755d38072b": {
-      "line": 5955,
+      "line": 5967,
       "heading": "`unsafe` > `undocumented_unsafe` lint",
       "outcome": "REJECTED",
       "reason": "statement fragment (an `unsafe` block) shown on its own",
       "first_diagnostic": "expected `extern` or `fn` after `unsafe` at module scope — `unsafe` may only prefix an `unsafe extern \"ABI\" { ... }` block or an `unsafe fn` declaration."
     },
     "6068a14e526a": {
-      "line": 6000,
+      "line": 6012,
       "heading": "`unsafe` > `unsafe_op_in_unsafe_fn` rule",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): the library method `Slice.as_ptr`",
       "first_diagnostic": "no method 'as_ptr' on type 'Slice'"
     },
     "bfc864dc4a9e": {
-      "line": 6473,
+      "line": 6485,
       "heading": "`extern \"C\"` > Opaque foreign types",
       "outcome": "SIGNATURE-MISSING",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `#[kara_name]` renaming an opaque foreign type (CN-8)",
       "first_diagnostic": "`FILE` is Const-class but struct names must be Type-class (PascalCase); consider renaming to `File`"
     },
     "fcac7ba4a8d6": {
-      "line": 6852,
+      "line": 6864,
       "heading": "Execution model > Bounds checks and `get_unchecked`",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): `get_unchecked` returns a `ref T`, and reads through a `ref` to a `Copy` value (core-semantics §5.10)",
       "first_diagnostic": "unary '*' requires 'ref T', 'mut ref T', or a raw pointer ('*const T' / '*mut T'), found 'i64'"
     },
     "b5e5366b045f": {
-      "line": 6881,
+      "line": 6893,
       "heading": "16. Targets and compilation > Panic handler",
       "outcome": "REJECTED",
       "reason": "spec ahead of the frozen legacy front end (redesign 2026-10-06): the `#[panic_handler]` attribute",

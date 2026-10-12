@@ -173,6 +173,10 @@ fn soft_words_still_start_their_constructs() {
             "where_clause: Some(",
         ),
         (
+            "fn f[T](x: T) -> i64 with blocks where T: Clone { 0 }",
+            "where_clause: Some(",
+        ),
+        (
             "fn f[with E](g: Fn() -> i64 with E) -> i64 with E { g() }",
             "effect_params: [EffectParam",
         ),

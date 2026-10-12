@@ -239,7 +239,11 @@ impl super::Parser {
                 // Try verb first (reads, writes, blocks, user-defined, etc.)
                 if let Some(verb) = self.try_parse_effect_verb() {
                     items.push(EffectItem::Verb(verb));
-                } else if let Token::Identifier { .. } = self.peek_token_ref() {
+                } else if matches!(self.peek_token_ref(), Token::Identifier { .. })
+                    // `where` is contextual: after an effect clause it opens
+                    // the where clause, not another group name.
+                    && !self.at_kw("where")
+                {
                     let name = self.expect_identifier()?;
                     // Named effect variable declared in the function's [with E] params
                     // takes precedence over effect group lookup.
