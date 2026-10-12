@@ -1425,7 +1425,15 @@ impl<'a> super::TypeChecker<'a> {
                     0 => {}
                     1 => {
                         let arg_ty = self.infer_expr(&args[0].value);
-                        if arg_ty != Type::Str && arg_ty != Type::Error {
+                        // A `Str` view (`StringSlice`) is a message too: the
+                        // library's `expect(msg: Str)` passes one through
+                        // (B-2026-10-12-31).
+                        let is_str_view = |t: &Type| matches!(t, Type::Named { name, .. } if name == "StringSlice");
+                        let is_message = match &arg_ty {
+                            Type::Ref(inner) => **inner == Type::Str || is_str_view(inner),
+                            t => *t == Type::Str || is_str_view(t),
+                        };
+                        if !is_message && arg_ty != Type::Error {
                             self.type_error(
                                 format!(
                                     "{}() message must be a 'str', found '{}'",

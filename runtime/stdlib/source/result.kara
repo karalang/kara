@@ -67,7 +67,7 @@ impl[T, E] Result[T, E] {
         }
     }
 
-    fn expect(own self, msg: own String) -> T {
+    fn expect(own self, msg: Str) -> T {
         match self {
             Ok(x) => x,
             Err(_) => panic(msg),

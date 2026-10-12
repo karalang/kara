@@ -46,7 +46,7 @@ impl[T] Option[T] {
         }
     }
 
-    fn expect(own self, msg: own String) -> T {
+    fn expect(own self, msg: Str) -> T {
         match self {
             Some(x) => x,
             None => panic(msg),

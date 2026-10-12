@@ -948,3 +948,25 @@ fn main() {
         "2 0 2\n7 3\n",
     );
 }
+
+#[test]
+fn expect_takes_a_str_message() {
+    // B-2026-10-12-31: docs/library/core-types.md gives `expect(msg: Str)`;
+    // a literal, a `String` and an f-string all pass as the view.
+    assert_runs(
+        r#"
+fn main() {
+    let a: Option[i64] = Some(3);
+    let b: Result[i64, String] = Ok(4);
+    let b2: Result[i64, String] = Ok(5);
+    let name = "ctx".to_string();
+    println(f"{a.expect("x")} {b.expect("y")} {a.expect(f"msg {name}")} {b2.expect(name)}");
+}
+"#,
+        "3 4 3 5\n",
+    );
+    match run("fn main() {\n    let c: Option[i64] = None;\n    let n = 7;\n    let v = c.expect(f\"gone {n}\");\n    println(f\"{v}\");\n}\n") {
+        Ok((out, code)) => assert!(code != 0 && out.is_empty(), "expect on None must panic: {code} {out}"),
+        Err(e) => assert!(e.contains("gone 7"), "expect on None must panic with its message: {e}"),
+    }
+}
