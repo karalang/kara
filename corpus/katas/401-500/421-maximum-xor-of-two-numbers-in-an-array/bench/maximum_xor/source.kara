@@ -1,0 +1,62 @@
+// Benchmark for #421: Maximum XOR of Two Numbers in an Array -- prefix bits.
+//
+// Settle the answer one bit at a time from the top. With the high bits
+// already fixed, ask whether the next bit can be 1 as well: put every
+// number's prefix (its bits down to this one) in a set, and look for a
+// prefix p whose partner p ^ candidate is also there, since a ^ b = c
+// exactly when a ^ c = b. O(31 n) time, O(n) space.
+
+fn find_maximum_xor(nums: Vec[i64]) -> i64 {
+    let mut answer = 0;
+    let mut mask = 0;
+    let mut bit = 30;
+    while bit >= 0 {
+        mask = mask | (1 << bit);
+        let mut prefixes: Set[i64] = Set.new();
+        for x in nums {
+            prefixes.insert(x & mask);
+        }
+        let candidate = answer | (1 << bit);
+        for p in prefixes {
+            if prefixes.contains(p ^ candidate) {
+                answer = candidate;
+                break;
+            }
+        }
+        bit -= 1;
+    }
+    answer
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random31(seed: mut ref i64) -> i64 {
+    let high = step(seed);
+    let low = step(seed);
+    let bit = step(seed) % 2;
+    high * 65536 + low * 2 + bit
+}
+
+fn main() {
+    let n = 20000;
+    let rounds = 100;
+    let mut seed: i64 = 421;
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(random31(mut seed));
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        nums[r * 7919 % n] = random31(mut seed);
+        let answer = find_maximum_xor(nums);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"{rounds} rounds on {n} numbers: total {total}, checksum {checksum}");
+}

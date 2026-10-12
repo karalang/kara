@@ -1,0 +1,119 @@
+// LeetCode #421: Maximum XOR of Two Numbers in an Array -- sort and split.
+//
+// Sorted, the numbers that share their bits above some bit sit in one
+// range, with those that have a 0 there before those that have a 1.
+// The best pair is found where the numbers first split at the top: one
+// from the 0 group, one from the 1 group. To pair two groups, split
+// both at the next bit and prefer crossing pairs (0 with 1, 1 with 0),
+// falling back to matching pairs only when no crossing pair exists.
+// O(31 n) time after the sort, O(n) space.
+
+// The first index in lo..hi whose number has a 1 at `bit`; the range
+// shares every bit above `bit`, so its 0s come first.
+fn split(nums: ref Vec[i64], lo: i64, hi: i64, bit: i64) -> i64 {
+    let mut i = lo;
+    while i < hi and (nums[i] >> bit) & 1 == 0 {
+        i += 1;
+    }
+    i
+}
+
+// The largest a ^ b with a in a_lo..a_hi and b in b_lo..b_hi, both
+// non-empty, each range sharing every bit above `bit`.
+fn cross(nums: ref Vec[i64], a_lo: i64, a_hi: i64, b_lo: i64, b_hi: i64, bit: i64) -> i64 {
+    if bit < 0 {
+        return nums[a_lo] ^ nums[b_lo];
+    }
+    let a_mid = split(nums, a_lo, a_hi, bit);
+    let b_mid = split(nums, b_lo, b_hi, bit);
+    let mut best = -1;
+    if a_mid > a_lo and b_mid < b_hi {
+        best = cross(nums, a_lo, a_mid, b_mid, b_hi, bit - 1);
+    }
+    if a_mid < a_hi and b_mid > b_lo {
+        let x = cross(nums, a_mid, a_hi, b_lo, b_mid, bit - 1);
+        if x > best {
+            best = x;
+        }
+    }
+    if best >= 0 {
+        return best;
+    }
+    if a_mid > a_lo and b_mid > b_lo {
+        best = cross(nums, a_lo, a_mid, b_lo, b_mid, bit - 1);
+    }
+    if a_mid < a_hi and b_mid < b_hi {
+        let x = cross(nums, a_mid, a_hi, b_mid, b_hi, bit - 1);
+        if x > best {
+            best = x;
+        }
+    }
+    best
+}
+
+fn find_maximum_xor(nums: Vec[i64]) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let mut lo = 0;
+    let hi = sorted.len();
+    let mut bit = 30;
+    while bit >= 0 {
+        let mid = split(sorted, lo, hi, bit);
+        if mid > lo and mid < hi {
+            return cross(sorted, lo, mid, mid, hi, bit - 1);
+        }
+        bit -= 1;
+    }
+    0
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut line = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            line.push_str(", ");
+        }
+        line.push_str(f"{nums[i]}");
+    }
+    println(f"[{line}]: {find_maximum_xor(nums)}");
+}
+
+fn main() {
+    show(vec![3, 10, 5, 25, 2, 8]);
+    show(vec![14, 70, 53, 83, 49, 91, 36, 80, 92, 51, 66, 70]);
+    show(vec![0]);
+    show(vec![7, 7, 7]);
+    show(vec![0, 2147483647]);
+    show(vec![1, 2, 4, 8, 16, 32]);
+    show(vec![1073741824, 1073741823, 0]);
+    show(vec![8, 9, 10, 11, 12, 13, 14, 15]);
+    show(vec![5, 6]);
+    show(vec![2147483647, 2147483646, 1073741824, 536870912]);
+    // 2,000 random arrays of 1 to 50 numbers, each array below a random
+    // power of two from 2 to 2^31.
+    let mut seed: i64 = 421;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let n = 1 + step(mut seed) % 50;
+        let limit = 1 << (1 + step(mut seed) % 31);
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let high = step(mut seed);
+            let low = step(mut seed);
+            let bit = step(mut seed) % 2;
+            nums.push((high * 65536 + low * 2 + bit) % limit);
+        }
+        let answer = find_maximum_xor(nums);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"2000 random arrays: total {total}, checksum {checksum}");
+}

@@ -1,0 +1,85 @@
+// Benchmark for #423: Reconstruct Original Digits from English -- unique letters.
+//
+// Count the letters. Five digits have a letter no other digit's word
+// has: z only in zero, w in two, u in four, x in six, g in eight. With
+// those counted, five more letters belong to one remaining digit each:
+// h (three, once eight is gone), f (five, once four is gone), s (seven,
+// once six is gone), o (one, once zero, two and four are gone) and i
+// (nine, once five, six and eight are gone). Write each digit as many
+// times as it occurs, in order. O(n) time, O(1) extra space.
+
+fn original_digits(s: Str) -> String {
+    let mut letters = vec![0; 26];
+    for b in s.bytes() {
+        letters[(b - b'a') as i64] += 1;
+    }
+    let at = |c: u8| (c - b'a') as i64;
+    let mut count = vec![0; 10];
+    count[0] = letters[at(b'z')];
+    count[2] = letters[at(b'w')];
+    count[4] = letters[at(b'u')];
+    count[6] = letters[at(b'x')];
+    count[8] = letters[at(b'g')];
+    count[3] = letters[at(b'h')] - count[8];
+    count[5] = letters[at(b'f')] - count[4];
+    count[7] = letters[at(b's')] - count[6];
+    count[1] = letters[at(b'o')] - count[0] - count[2] - count[4];
+    count[9] = letters[at(b'i')] - count[5] - count[6] - count[8];
+    let mut out = String.new();
+    for d in 0..10 {
+        for _ in 0..count[d] {
+            out.push(char.try_from((48 + d) as u32).unwrap());
+        }
+    }
+    out
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let blocks = 20000;
+    let calls = 100000;
+    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let mut seed: i64 = 423;
+    // One text of 20,000 blocks, each the words of 1 to 8 random digits
+    // with its letters shuffled; ends[b] is where block b ends.
+    let mut text = String.new();
+    let mut ends: Vec[i64] = vec![0];
+    for _ in 0..blocks {
+        let count = 1 + step(mut seed) % 8;
+        let mut pool: Vec[u8] = Vec.new();
+        for _ in 0..count {
+            for b in names[step(mut seed) % 10].bytes() {
+                pool.push(b);
+            }
+        }
+        for i in 0..pool.len() {
+            let j = i + step(mut seed) % (pool.len() - i);
+            let keep = pool[i];
+            pool[i] = pool[j];
+            pool[j] = keep;
+        }
+        for b in pool {
+            text.push(b as char);
+        }
+        ends.push(text.len());
+    }
+    // Each call reads a run of 50 to 249 whole blocks.
+    let mut digits: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..calls {
+        let length = 50 + step(mut seed) % 200;
+        let first = step(mut seed) % (blocks - length);
+        let answer = original_digits(text[ends[first]..ends[first + length]]);
+        digits += answer.len();
+        for b in answer.bytes() {
+            checksum = (checksum * 31 + (b as i64 - 47)) % 1000000007;
+        }
+    }
+    println(f"{calls} calls on {text.len()} letters: {digits} digits, checksum {checksum}");
+}

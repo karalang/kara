@@ -1,0 +1,330 @@
+// Differential test for LeetCode #423: Reconstruct Original Digits from English.
+//
+// Copies of the four arms, each run on 2,000 random strings: 1 to 25
+// digits drawn from a random run of 1 to 10 consecutive digits, their
+// words concatenated and the letters shuffled. Properties known by
+// construction:
+//   P1  the answer is the digits the string was built from, in order
+//   P2  the same digits shuffled another way give the same answer
+//   P3  the answer's words, written out, have exactly the input's
+//       letters
+//   P4  the letters of one more digit added give the answer with that
+//       digit added
+//   P5  k copies of one word give k copies of its digit, and the ten
+//       words in order give 0123456789
+
+// ---- unique: original_digits.kara
+
+fn original_digits_unique(s: Str) -> String {
+    let mut letters = vec![0; 26];
+    for b in s.bytes() {
+        letters[(b - b'a') as i64] += 1;
+    }
+    let at = |c: u8| (c - b'a') as i64;
+    let mut count = vec![0; 10];
+    count[0] = letters[at(b'z')];
+    count[2] = letters[at(b'w')];
+    count[4] = letters[at(b'u')];
+    count[6] = letters[at(b'x')];
+    count[8] = letters[at(b'g')];
+    count[3] = letters[at(b'h')] - count[8];
+    count[5] = letters[at(b'f')] - count[4];
+    count[7] = letters[at(b's')] - count[6];
+    count[1] = letters[at(b'o')] - count[0] - count[2] - count[4];
+    count[9] = letters[at(b'i')] - count[5] - count[6] - count[8];
+    let mut out = String.new();
+    for d in 0..10 {
+        for _ in 0..count[d] {
+            out.push(char.try_from((48 + d) as u32).unwrap());
+        }
+    }
+    out
+}
+
+// ---- peel: original_digits_peel.kara
+
+fn original_digits_peel(s: Str) -> String {
+    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let mut letters = vec![0; 26];
+    for b in s.bytes() {
+        letters[(b - b'a') as i64] += 1;
+    }
+    let mut count = vec![0; 10];
+    for d in [0, 2, 4, 6, 8, 3, 5, 7, 1, 9] {
+        let mut need = vec![0; 26];
+        for b in names[d].bytes() {
+            need[(b - b'a') as i64] += 1;
+        }
+        let mut times = s.len();
+        for c in 0..26 {
+            if need[c] > 0 {
+                times = min(times, letters[c] / need[c]);
+            }
+        }
+        for c in 0..26 {
+            letters[c] -= times * need[c];
+        }
+        count[d] = times;
+    }
+    let mut out = String.new();
+    for d in 0..10 {
+        for _ in 0..count[d] {
+            out.push(char.try_from((48 + d) as u32).unwrap());
+        }
+    }
+    out
+}
+
+// ---- search: original_digits_search.kara
+
+fn search(d: i64, letters: mut ref Vec[i64], need: ref Vec[Vec[i64]], last: ref Vec[i64], count: mut ref Vec[i64]) -> bool {
+    if d == 10 {
+        return true;
+    }
+    let mut most = 1000000;
+    for c in 0..26 {
+        if need[d][c] > 0 {
+            most = min(most, letters[c] / need[d][c]);
+        }
+    }
+    let mut times = most;
+    while times >= 0 {
+        for c in 0..26 {
+            letters[c] -= times * need[d][c];
+        }
+        let mut ok = true;
+        for c in 0..26 {
+            if last[c] <= d and letters[c] != 0 {
+                ok = false;
+            }
+        }
+        if ok and search(d + 1, letters, need, last, count) {
+            count[d] = times;
+            return true;
+        }
+        for c in 0..26 {
+            letters[c] += times * need[d][c];
+        }
+        times -= 1;
+    }
+    false
+}
+
+fn original_digits_search(s: Str) -> String {
+    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let mut need: Vec[Vec[i64]] = Vec.new();
+    // last[c]: the largest digit whose word has letter c, or -1.
+    let mut last = vec![-1; 26];
+    for d in 0..10 {
+        let mut row = vec![0; 26];
+        for b in names[d].bytes() {
+            row[(b - b'a') as i64] += 1;
+            last[(b - b'a') as i64] = d;
+        }
+        need.push(row);
+    }
+    let mut letters = vec![0; 26];
+    for b in s.bytes() {
+        letters[(b - b'a') as i64] += 1;
+    }
+    let mut count = vec![0; 10];
+    search(0, mut letters, need, last, mut count);
+    let mut out = String.new();
+    for d in 0..10 {
+        for _ in 0..count[d] {
+            out.push(char.try_from((48 + d) as u32).unwrap());
+        }
+    }
+    out
+}
+
+// ---- solve: original_digits_solve.kara
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a.abs() } else { gcd(b, a % b) }
+}
+
+fn original_digits_solve(s: Str) -> String {
+    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let mut letters = vec![0; 26];
+    for b in s.bytes() {
+        letters[(b - b'a') as i64] += 1;
+    }
+    // One row per letter: the ten coefficients, then the letter count.
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    for c in 0..26 {
+        let mut row = vec![0; 11];
+        for d in 0..10 {
+            for b in names[d].bytes() {
+                if (b - b'a') as i64 == c {
+                    row[d] += 1;
+                }
+            }
+        }
+        row[10] = letters[c];
+        rows.push(row);
+    }
+    for col in 0..10 {
+        let mut pivot = col;
+        while rows[pivot][col] == 0 {
+            pivot += 1;
+        }
+        let keep = rows[col].clone();
+        rows[col] = rows[pivot].clone();
+        rows[pivot] = keep;
+        for r in 0..26 {
+            if r != col and rows[r][col] != 0 {
+                let scale = rows[col][col];
+                let factor = rows[r][col];
+                let mut g = 0;
+                for k in 0..11 {
+                    rows[r][k] = rows[r][k] * scale - rows[col][k] * factor;
+                    g = gcd(g, rows[r][k]);
+                }
+                if g > 1 {
+                    for k in 0..11 {
+                        rows[r][k] = rows[r][k] / g;
+                    }
+                }
+            }
+        }
+    }
+    let mut out = String.new();
+    for d in 0..10 {
+        let times = rows[d][10] / rows[d][d];
+        for _ in 0..times {
+            out.push(char.try_from((48 + d) as u32).unwrap());
+        }
+    }
+    out
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, s: Str) -> String {
+    if arm == 0 {
+        original_digits_unique(s)
+    } else if arm == 1 {
+        original_digits_peel(s)
+    } else if arm == 2 {
+        original_digits_search(s)
+    } else {
+        original_digits_solve(s)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The digits in increasing order, as text.
+fn sorted_text(digits: ref Vec[i64]) -> String {
+    let mut sorted = digits.clone();
+    sorted.sort();
+    let mut out = String.new();
+    for d in sorted {
+        out.push(char.try_from((48 + d) as u32).unwrap());
+    }
+    out
+}
+
+// The digits' words, concatenated, with the letters shuffled.
+fn scramble(digits: ref Vec[i64], names: ref Vec[String], seed: mut ref i64) -> String {
+    let mut pool: Vec[u8] = Vec.new();
+    for d in digits {
+        for b in names[d].bytes() {
+            pool.push(b);
+        }
+    }
+    for i in 0..pool.len() {
+        let j = i + step(seed) % (pool.len() - i);
+        let keep = pool[i];
+        pool[i] = pool[j];
+        pool[j] = keep;
+    }
+    let mut s = String.new();
+    for b in pool {
+        s.push(b as char);
+    }
+    s
+}
+
+// The letter counts of a text.
+fn tally(s: Str) -> Vec[i64] {
+    let mut letters = vec![0; 26];
+    for b in s.bytes() {
+        letters[(b - b'a') as i64] += 1;
+    }
+    letters
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let mut seed: i64 = 4230;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..2000 {
+        // 1 to 25 digits, sometimes only from a few of the ten, so that
+        // some digits repeat many times and others are absent.
+        let count = 1 + step(mut seed) % 25;
+        let spread = 1 + step(mut seed) % 10;
+        let low = step(mut seed) % (11 - spread);
+        let mut digits: Vec[i64] = Vec.new();
+        for _ in 0..count {
+            digits.push(low + step(mut seed) % spread);
+        }
+        let s = scramble(digits, names, mut seed);
+        let again = scramble(digits, names, mut seed);
+        // P4: one more digit.
+        let extra = step(mut seed) % 10;
+        let mut more = digits.clone();
+        more.push(extra);
+        let s_more = scramble(more, names, mut seed);
+        // P5: k copies of one word, and every word once in order.
+        let k = 1 + step(mut seed) % 6;
+        let d = step(mut seed) % 10;
+        let mut copies = String.new();
+        let mut expect_copies = String.new();
+        for _ in 0..k {
+            copies.push_str(names[d]);
+            expect_copies.push(char.try_from((48 + d) as u32).unwrap());
+        }
+        let mut all = String.new();
+        for w in names {
+            all.push_str(w);
+        }
+        let expect = sorted_text(digits);
+        let expect_more = sorted_text(more);
+        let letters = tally(s);
+        for arm in 0..4 {
+            checks += 5;
+            let answer = solve(arm, s);
+            report(1, arm, case, answer == expect, mut failures);
+            report(2, arm, case, solve(arm, again) == answer, mut failures);
+            // P3: the answer's words have exactly the input's letters.
+            let mut spelled = String.new();
+            for b in answer.bytes() {
+                spelled.push_str(names[(b - b'0') as i64]);
+            }
+            report(3, arm, case, tally(spelled) == letters, mut failures);
+            report(4, arm, case, solve(arm, s_more) == expect_more, mut failures);
+            report(5, arm, case, solve(arm, copies) == expect_copies and solve(arm, all) == "0123456789", mut failures);
+        }
+    }
+    println(f"2000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

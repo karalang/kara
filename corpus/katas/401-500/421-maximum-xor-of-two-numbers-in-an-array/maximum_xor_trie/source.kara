@@ -1,0 +1,108 @@
+// LeetCode #421: Maximum XOR of Two Numbers in an Array -- binary trie.
+//
+// Insert the numbers bit by bit from the top into a binary trie kept
+// in two child tables. Before inserting a number, walk the trie taking
+// the opposite bit wherever that branch exists: that path is the
+// inserted number that differs from it highest up, so it gives the
+// best partner among the numbers before it. O(31 n) time and space.
+
+fn find_maximum_xor(nums: Vec[i64]) -> i64 {
+    // Node 0 is the root; child index 0 means "no child".
+    let mut zero: Vec[i64] = vec![0];
+    let mut one: Vec[i64] = vec![0];
+    let mut best = 0;
+    for i in 0..nums.len() {
+        let x = nums[i];
+        if i > 0 {
+            let mut node = 0;
+            let mut got = 0;
+            let mut bit = 30;
+            while bit >= 0 {
+                let b = (x >> bit) & 1;
+                let want = if b == 1 { zero[node] } else { one[node] };
+                if want != 0 {
+                    got = got | (1 << bit);
+                    node = want;
+                } else {
+                    node = if b == 1 { one[node] } else { zero[node] };
+                }
+                bit -= 1;
+            }
+            if got > best {
+                best = got;
+            }
+        }
+        let mut node = 0;
+        let mut bit = 30;
+        while bit >= 0 {
+            let b = (x >> bit) & 1;
+            let next = if b == 1 { one[node] } else { zero[node] };
+            if next != 0 {
+                node = next;
+            } else {
+                zero.push(0);
+                one.push(0);
+                let made = zero.len() - 1;
+                if b == 1 {
+                    one[node] = made;
+                } else {
+                    zero[node] = made;
+                }
+                node = made;
+            }
+            bit -= 1;
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut line = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            line.push_str(", ");
+        }
+        line.push_str(f"{nums[i]}");
+    }
+    println(f"[{line}]: {find_maximum_xor(nums)}");
+}
+
+fn main() {
+    show(vec![3, 10, 5, 25, 2, 8]);
+    show(vec![14, 70, 53, 83, 49, 91, 36, 80, 92, 51, 66, 70]);
+    show(vec![0]);
+    show(vec![7, 7, 7]);
+    show(vec![0, 2147483647]);
+    show(vec![1, 2, 4, 8, 16, 32]);
+    show(vec![1073741824, 1073741823, 0]);
+    show(vec![8, 9, 10, 11, 12, 13, 14, 15]);
+    show(vec![5, 6]);
+    show(vec![2147483647, 2147483646, 1073741824, 536870912]);
+    // 2,000 random arrays of 1 to 50 numbers, each array below a random
+    // power of two from 2 to 2^31.
+    let mut seed: i64 = 421;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let n = 1 + step(mut seed) % 50;
+        let limit = 1 << (1 + step(mut seed) % 31);
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let high = step(mut seed);
+            let low = step(mut seed);
+            let bit = step(mut seed) % 2;
+            nums.push((high * 65536 + low * 2 + bit) % limit);
+        }
+        let answer = find_maximum_xor(nums);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"2000 random arrays: total {total}, checksum {checksum}");
+}

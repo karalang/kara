@@ -1,0 +1,92 @@
+// LeetCode #424: Longest Repeating Character Replacement -- binary search
+// on the length.
+//
+// If some window of length L can be made one letter, so can a window of
+// any shorter length inside it, so the answer is the largest L that
+// works and can be found by binary search. To test L, slide a window of
+// exactly L letters and check whether L minus its commonest count is at
+// most k. O(26 n log n) time, O(1) space.
+
+fn fits(bytes: Slice[u8], length: i64, k: i64) -> bool {
+    let mut count = vec![0; 26];
+    for i in 0..bytes.len() {
+        count[(bytes[i] - b'A') as i64] += 1;
+        if i >= length {
+            count[(bytes[i - length] - b'A') as i64] -= 1;
+        }
+        if i >= length - 1 {
+            let mut most = 0;
+            for c in count {
+                most = max(most, c);
+            }
+            if length - most <= k {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn character_replacement(s: Str, k: i64) -> i64 {
+    let bytes = s.bytes();
+    // The answer is in low..high + 1, and length low always fits.
+    let mut low = min(1, bytes.len());
+    let mut high = bytes.len();
+    while low < high {
+        let mid = (low + high + 1) / 2;
+        if fits(bytes, mid, k) {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    low
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str, k: i64) {
+    println(f"\"{s}\", k = {k}: {character_replacement(s, k)}");
+}
+
+fn main() {
+    show("ABAB", 2);
+    show("AABABBA", 1);
+    show("A", 0);
+    show("A", 1);
+    show("ABCDE", 0);
+    show("ABCDE", 2);
+    show("AAAA", 0);
+    show("AAAB", 0);
+    show("ABBBA", 1);
+    show("BAAAB", 2);
+    // 2,000 random strings of 1 to 60 letters from the first 1 to 5
+    // letters, written in runs, with k from 0 to 6.
+    let mut seed: i64 = 424;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let n = 1 + step(mut seed) % 60;
+        let alphabet = 1 + step(mut seed) % 5;
+        let mut s = String.new();
+        while s.len() < n {
+            let letter = char.try_from((65 + step(mut seed) % alphabet) as u32).unwrap();
+            let run = 1 + step(mut seed) % 5;
+            for _ in 0..run {
+                if s.len() < n {
+                    s.push(letter);
+                }
+            }
+        }
+        let k = step(mut seed) % 7;
+        let answer = character_replacement(s, k);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"2000 random strings: total {total}, checksum {checksum}");
+}

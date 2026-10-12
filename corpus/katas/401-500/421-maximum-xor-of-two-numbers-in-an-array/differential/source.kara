@@ -1,0 +1,282 @@
+// Differential test for LeetCode #421: Maximum XOR of Two Numbers in an Array.
+//
+// Copies of the four arms, each run on 2,000 random arrays of 1 to 40
+// numbers below a random power of two from 2 to 2^30. Properties known
+// by construction:
+//   P1  the answer is the largest XOR of a brute force that builds each
+//       pair's XOR from its decimal digits in base 2, without ^
+//   P2  XOR-ing every number with one constant, or reversing the
+//       array, gives the same answer
+//   P3  adding a 0 gives the larger of the answer and the largest
+//       number; adding a copy of a number changes nothing
+//   P4  doubling every number doubles the answer; setting bit 30 in
+//       every number changes nothing
+//   P5  the numbers 0 to 2^w - 1 give 2^w - 1, and a number with its
+//       31-bit complement gives 2^31 - 1
+
+// ---- prefix: maximum_xor.kara
+
+fn find_maximum_xor_prefix(nums: Vec[i64]) -> i64 {
+    let mut answer = 0;
+    let mut mask = 0;
+    let mut bit = 30;
+    while bit >= 0 {
+        mask = mask | (1 << bit);
+        let mut prefixes: Set[i64] = Set.new();
+        for x in nums {
+            prefixes.insert(x & mask);
+        }
+        let candidate = answer | (1 << bit);
+        for p in prefixes {
+            if prefixes.contains(p ^ candidate) {
+                answer = candidate;
+                break;
+            }
+        }
+        bit -= 1;
+    }
+    answer
+}
+
+// ---- trie: maximum_xor_trie.kara
+
+fn find_maximum_xor_trie(nums: Vec[i64]) -> i64 {
+    // Node 0 is the root; child index 0 means "no child".
+    let mut zero: Vec[i64] = vec![0];
+    let mut one: Vec[i64] = vec![0];
+    let mut best = 0;
+    for i in 0..nums.len() {
+        let x = nums[i];
+        if i > 0 {
+            let mut node = 0;
+            let mut got = 0;
+            let mut bit = 30;
+            while bit >= 0 {
+                let b = (x >> bit) & 1;
+                let want = if b == 1 { zero[node] } else { one[node] };
+                if want != 0 {
+                    got = got | (1 << bit);
+                    node = want;
+                } else {
+                    node = if b == 1 { one[node] } else { zero[node] };
+                }
+                bit -= 1;
+            }
+            if got > best {
+                best = got;
+            }
+        }
+        let mut node = 0;
+        let mut bit = 30;
+        while bit >= 0 {
+            let b = (x >> bit) & 1;
+            let next = if b == 1 { one[node] } else { zero[node] };
+            if next != 0 {
+                node = next;
+            } else {
+                zero.push(0);
+                one.push(0);
+                let made = zero.len() - 1;
+                if b == 1 {
+                    one[node] = made;
+                } else {
+                    zero[node] = made;
+                }
+                node = made;
+            }
+            bit -= 1;
+        }
+    }
+    best
+}
+
+// ---- pairs: maximum_xor_pairs.kara
+
+fn find_maximum_xor_pairs(nums: Vec[i64]) -> i64 {
+    let mut best = 0;
+    for i in 0..nums.len() {
+        for j in i + 1..nums.len() {
+            let x = nums[i] ^ nums[j];
+            if x > best {
+                best = x;
+            }
+        }
+    }
+    best
+}
+
+// ---- split: maximum_xor_split.kara
+
+// The first index in lo..hi whose number has a 1 at `bit`; the range
+// shares every bit above `bit`, so its 0s come first.
+fn split(nums: ref Vec[i64], lo: i64, hi: i64, bit: i64) -> i64 {
+    let mut i = lo;
+    while i < hi and (nums[i] >> bit) & 1 == 0 {
+        i += 1;
+    }
+    i
+}
+
+// The largest a ^ b with a in a_lo..a_hi and b in b_lo..b_hi, both
+// non-empty, each range sharing every bit above `bit`.
+fn cross(nums: ref Vec[i64], a_lo: i64, a_hi: i64, b_lo: i64, b_hi: i64, bit: i64) -> i64 {
+    if bit < 0 {
+        return nums[a_lo] ^ nums[b_lo];
+    }
+    let a_mid = split(nums, a_lo, a_hi, bit);
+    let b_mid = split(nums, b_lo, b_hi, bit);
+    let mut best = -1;
+    if a_mid > a_lo and b_mid < b_hi {
+        best = cross(nums, a_lo, a_mid, b_mid, b_hi, bit - 1);
+    }
+    if a_mid < a_hi and b_mid > b_lo {
+        let x = cross(nums, a_mid, a_hi, b_lo, b_mid, bit - 1);
+        if x > best {
+            best = x;
+        }
+    }
+    if best >= 0 {
+        return best;
+    }
+    if a_mid > a_lo and b_mid > b_lo {
+        best = cross(nums, a_lo, a_mid, b_lo, b_mid, bit - 1);
+    }
+    if a_mid < a_hi and b_mid < b_hi {
+        let x = cross(nums, a_mid, a_hi, b_mid, b_hi, bit - 1);
+        if x > best {
+            best = x;
+        }
+    }
+    best
+}
+
+fn find_maximum_xor_split(nums: Vec[i64]) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let mut lo = 0;
+    let hi = sorted.len();
+    let mut bit = 30;
+    while bit >= 0 {
+        let mid = split(sorted, lo, hi, bit);
+        if mid > lo and mid < hi {
+            return cross(sorted, lo, mid, mid, hi, bit - 1);
+        }
+        bit -= 1;
+    }
+    0
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, nums: Vec[i64]) -> i64 {
+    if arm == 0 {
+        find_maximum_xor_prefix(nums)
+    } else if arm == 1 {
+        find_maximum_xor_trie(nums)
+    } else if arm == 2 {
+        find_maximum_xor_pairs(nums)
+    } else {
+        find_maximum_xor_split(nums)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The largest XOR, found without XOR: compare the two numbers' binary
+// digits one at a time, building the bits where they differ.
+fn brute(nums: ref Vec[i64]) -> i64 {
+    let mut best = 0;
+    for i in 0..nums.len() {
+        for j in 0..nums.len() {
+            let mut a = nums[i];
+            let mut b = nums[j];
+            let mut value = 0;
+            let mut place = 1;
+            while a > 0 or b > 0 {
+                if a % 2 != b % 2 {
+                    value += place;
+                }
+                a = a / 2;
+                b = b / 2;
+                place = place * 2;
+            }
+            best = max(best, value);
+        }
+    }
+    best
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4210;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..2000 {
+        let n = 1 + step(mut seed) % 40;
+        let width = 1 + step(mut seed) % 30;
+        let limit = 1 << width;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let high = step(mut seed);
+            let low = step(mut seed);
+            nums.push((high * 32768 + low) % limit);
+        }
+        let best = brute(nums);
+        // P2: XOR with one constant, and reversal.
+        let c = (step(mut seed) * 32768 + step(mut seed)) % limit;
+        let mut toggled: Vec[i64] = Vec.new();
+        let mut reversed: Vec[i64] = Vec.new();
+        let mut largest = 0;
+        for k in 0..n {
+            toggled.push(nums[k] ^ c);
+            reversed.push(nums[n - 1 - k]);
+            largest = max(largest, nums[k]);
+        }
+        // P3: a 0 added, and a number repeated.
+        let mut with_zero = nums.clone();
+        with_zero.push(0);
+        let mut repeated = nums.clone();
+        repeated.push(nums[step(mut seed) % n]);
+        // P4: every number doubled, and every number with bit 30 set.
+        let mut doubled: Vec[i64] = Vec.new();
+        let mut topped: Vec[i64] = Vec.new();
+        for k in 0..n {
+            doubled.push(nums[k] * 2);
+            topped.push(nums[k] | 1073741824);
+        }
+        // P5: 0 to 2^w - 1 gives 2^w - 1, and x with its complement gives 2^31 - 1.
+        let w = 1 + step(mut seed) % 8;
+        let mut counting: Vec[i64] = Vec.new();
+        for v in 0..(1 << w) {
+            counting.push(v);
+        }
+        let x = (step(mut seed) * 65536 + step(mut seed)) % 2147483648;
+        let pair = vec![x, 2147483647 - x];
+        for arm in 0..4 {
+            checks += 5;
+            let answer = solve(arm, nums.clone());
+            report(1, arm, case, answer == best, mut failures);
+            report(2, arm, case, solve(arm, toggled.clone()) == answer and solve(arm, reversed.clone()) == answer, mut failures);
+            report(3, arm, case, solve(arm, with_zero.clone()) == max(answer, largest) and solve(arm, repeated.clone()) == answer, mut failures);
+            report(4, arm, case, solve(arm, doubled.clone()) == answer * 2 and solve(arm, topped.clone()) == answer, mut failures);
+            report(5, arm, case, solve(arm, counting.clone()) == (1 << w) - 1 and solve(arm, pair.clone()) == 2147483647, mut failures);
+        }
+    }
+    println(f"2000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

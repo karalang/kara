@@ -1,0 +1,129 @@
+// LeetCode #422: Valid Word Square -- every cell against its mirror.
+//
+// Row i, column j must hold the same letter as row j, column i. For
+// every letter in the rows, check that its mirror cell exists (there is
+// a row j, and it is longer than i) and holds the same letter. A cell
+// whose mirror is missing fails the check from its own side, so every
+// cell checked once covers both directions. O(cells) time, O(1) space.
+
+fn valid_word_square(words: Vec[String]) -> bool {
+    let n = words.len();
+    for i in 0..n {
+        let row = words[i].bytes();
+        for j in 0..row.len() {
+            if j >= n {
+                return false;
+            }
+            let mirror = words[j].bytes();
+            if i >= mirror.len() or mirror[i] != row[j] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(text: Str) {
+    let words = text.split_whitespace();
+    println(f"\"{text}\": {valid_word_square(words)}");
+}
+
+fn main() {
+    show("abcd bnrt crmy dtye");
+    show("abcd bnrt crm dt");
+    show("ball area read lady");
+    show("a");
+    show("ab");
+    show("ab b");
+    show("ab ba");
+    show("abc b");
+    show("aa a a");
+    show("abc bde ce");
+    // 2,000 random word squares of 1 to 12 rows: a symmetric grid of
+    // two letters cut to a staircase of row lengths, then sometimes
+    // spoiled by one changed letter, one row cut short, one row made
+    // longer, or one row added.
+    let mut seed: i64 = 422;
+    let mut valid = 0;
+    let mut checksum: i64 = 0;
+    for case in 0..2000 {
+        let n = 1 + step(mut seed) % 12;
+        let mut grid: Vec[i64] = vec![0; n * n];
+        for i in 0..n {
+            for j in i..n {
+                let c = step(mut seed) % 2;
+                grid[i * n + j] = c;
+                grid[j * n + i] = c;
+            }
+        }
+        // Row lengths that never grow from one row to the next, the first
+        // as long as the number of rows; then keep only the cells whose
+        // mirror is kept too. Row i keeps the columns j < lengths[i]
+        // whose row j is longer than i, which are the first ones.
+        let mut lengths: Vec[i64] = vec![n];
+        for i in 1..n {
+            let last = lengths[i - 1];
+            lengths.push(max(1, last - step(mut seed) % 3));
+        }
+        let mut kept: Vec[i64] = Vec.new();
+        for i in 0..n {
+            let mut height = 0;
+            while height < n and lengths[height] > i {
+                height += 1;
+            }
+            kept.push(min(lengths[i], height));
+        }
+        lengths = kept;
+        let mut words: Vec[String] = Vec.new();
+        for i in 0..n {
+            let mut word = String.new();
+            for j in 0..lengths[i] {
+                let c = grid[i * n + j];
+                word.push(char.try_from((97 + c) as u32).unwrap());
+            }
+            words.push(word);
+        }
+        let spoil = step(mut seed) % 6;
+        let row = step(mut seed) % n;
+        if spoil == 1 {
+            // Change one letter.
+            let at = step(mut seed) % lengths[row];
+            let mut word = String.new();
+            let bytes = words[row].bytes();
+            for j in 0..lengths[row] {
+                let b = if j == at { 195 - bytes[j] as i64 } else { bytes[j] as i64 };
+                word.push(char.try_from(b as u32).unwrap());
+            }
+            words[row] = word;
+        } else if spoil == 2 and lengths[row] > 1 {
+            // Cut one row short.
+            let mut word = String.new();
+            let bytes = words[row].bytes();
+            for j in 0..lengths[row] - 1 {
+                word.push(bytes[j] as char);
+            }
+            words[row] = word;
+        } else if spoil == 3 {
+            // Make one row longer.
+            let mut word = words[row].clone();
+            word.push('a');
+            words[row] = word;
+        } else if spoil == 4 {
+            // Add a row.
+            words.push("a".to_string());
+        }
+        let answer = valid_word_square(words);
+        if answer {
+            valid += 1;
+        }
+        checksum = (checksum * 31 + if answer { case + 1 } else { 0 }) % 1000000007;
+    }
+    println(f"2000 random squares: {valid} valid, checksum {checksum}");
+}

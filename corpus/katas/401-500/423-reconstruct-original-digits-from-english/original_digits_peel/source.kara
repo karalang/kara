@@ -1,0 +1,96 @@
+// LeetCode #423: Reconstruct Original Digits from English -- peel words.
+//
+// Take the words out of the letter counts one digit at a time, in an
+// order where each digit's word, when its turn comes, has a letter no
+// word still to come uses: zero, two, four, six, eight, then three,
+// five, seven, one, nine. The digit occurs as often as its scarcest
+// letter allows; remove that many copies of its word and go on.
+// O(n) time, O(1) extra space.
+
+fn original_digits(s: Str) -> String {
+    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let mut letters = vec![0; 26];
+    for b in s.bytes() {
+        letters[(b - b'a') as i64] += 1;
+    }
+    let mut count = vec![0; 10];
+    for d in [0, 2, 4, 6, 8, 3, 5, 7, 1, 9] {
+        let mut need = vec![0; 26];
+        for b in names[d].bytes() {
+            need[(b - b'a') as i64] += 1;
+        }
+        let mut times = s.len();
+        for c in 0..26 {
+            if need[c] > 0 {
+                times = min(times, letters[c] / need[c]);
+            }
+        }
+        for c in 0..26 {
+            letters[c] -= times * need[c];
+        }
+        count[d] = times;
+    }
+    let mut out = String.new();
+    for d in 0..10 {
+        for _ in 0..count[d] {
+            out.push(char.try_from((48 + d) as u32).unwrap());
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str) {
+    println(f"\"{s}\": \"{original_digits(s)}\"");
+}
+
+fn main() {
+    show("owoztneoer");
+    show("fviefuro");
+    show("zero");
+    show("nine");
+    show("eightthree");
+    show("neninine");
+    show("seeevsixevisnsxn");
+    show("owtowtowt");
+    show("evunhtreoinexfestnvewerthsifieoonegi");
+    show("rofuhteonree");
+    // 2,000 random strings: 1 to 30 digits from 0 to 9, their English
+    // words concatenated and then shuffled.
+    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let mut seed: i64 = 423;
+    let mut letters = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let count = 1 + step(mut seed) % 30;
+        let mut pool: Vec[u8] = Vec.new();
+        for _ in 0..count {
+            let digit = step(mut seed) % 10;
+            for b in names[digit].bytes() {
+                pool.push(b);
+            }
+        }
+        for i in 0..pool.len() {
+            let j = i + step(mut seed) % (pool.len() - i);
+            let keep = pool[i];
+            pool[i] = pool[j];
+            pool[j] = keep;
+        }
+        let mut s = String.new();
+        for b in pool {
+            s.push(b as char);
+        }
+        let answer = original_digits(s);
+        letters += s.len();
+        for b in answer.bytes() {
+            checksum = (checksum * 31 + (b as i64 - 47)) % 1000000007;
+        }
+    }
+    println(f"2000 random strings, {letters} letters: checksum {checksum}");
+}

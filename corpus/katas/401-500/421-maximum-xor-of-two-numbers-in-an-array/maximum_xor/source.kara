@@ -1,0 +1,80 @@
+// LeetCode #421: Maximum XOR of Two Numbers in an Array -- prefix bits.
+//
+// Settle the answer one bit at a time from the top. With the high bits
+// already fixed, ask whether the next bit can be 1 as well: put every
+// number's prefix (its bits down to this one) in a set, and look for a
+// prefix p whose partner p ^ candidate is also there, since a ^ b = c
+// exactly when a ^ c = b. O(31 n) time, O(n) space.
+
+fn find_maximum_xor(nums: Vec[i64]) -> i64 {
+    let mut answer = 0;
+    let mut mask = 0;
+    let mut bit = 30;
+    while bit >= 0 {
+        mask = mask | (1 << bit);
+        let mut prefixes: Set[i64] = Set.new();
+        for x in nums {
+            prefixes.insert(x & mask);
+        }
+        let candidate = answer | (1 << bit);
+        for p in prefixes {
+            if prefixes.contains(p ^ candidate) {
+                answer = candidate;
+                break;
+            }
+        }
+        bit -= 1;
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    let mut line = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            line.push_str(", ");
+        }
+        line.push_str(f"{nums[i]}");
+    }
+    println(f"[{line}]: {find_maximum_xor(nums)}");
+}
+
+fn main() {
+    show(vec![3, 10, 5, 25, 2, 8]);
+    show(vec![14, 70, 53, 83, 49, 91, 36, 80, 92, 51, 66, 70]);
+    show(vec![0]);
+    show(vec![7, 7, 7]);
+    show(vec![0, 2147483647]);
+    show(vec![1, 2, 4, 8, 16, 32]);
+    show(vec![1073741824, 1073741823, 0]);
+    show(vec![8, 9, 10, 11, 12, 13, 14, 15]);
+    show(vec![5, 6]);
+    show(vec![2147483647, 2147483646, 1073741824, 536870912]);
+    // 2,000 random arrays of 1 to 50 numbers, each array below a random
+    // power of two from 2 to 2^31.
+    let mut seed: i64 = 421;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let n = 1 + step(mut seed) % 50;
+        let limit = 1 << (1 + step(mut seed) % 31);
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let high = step(mut seed);
+            let low = step(mut seed);
+            let bit = step(mut seed) % 2;
+            nums.push((high * 65536 + low * 2 + bit) % limit);
+        }
+        let answer = find_maximum_xor(nums);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"2000 random arrays: total {total}, checksum {checksum}");
+}

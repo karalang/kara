@@ -1,0 +1,17 @@
+source = "tests/mir_build.rs::PROGRAM"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "lib:map"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "5129058de"
+extracted_src = "b86fd109"
+model_rev = "1aa23105"
+model_src = "b86fd109"

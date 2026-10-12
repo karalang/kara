@@ -1,0 +1,126 @@
+// LeetCode #423: Reconstruct Original Digits from English -- search.
+//
+// Choose how many times each digit occurs, from 0 to 9, trying the
+// most copies its word's letters allow first, and backtrack when the
+// letters cannot be used up. Nothing about the words is worked out by
+// hand: after choosing digit d, any letter that only digits up to d
+// use must already be used up, which the search reads off a table of
+// the last digit using each letter. The choice is forced at every step
+// for real words, so the search does not branch far.
+
+fn search(d: i64, letters: mut ref Vec[i64], need: ref Vec[Vec[i64]], last: ref Vec[i64], count: mut ref Vec[i64]) -> bool {
+    if d == 10 {
+        return true;
+    }
+    let mut most = 1000000;
+    for c in 0..26 {
+        if need[d][c] > 0 {
+            most = min(most, letters[c] / need[d][c]);
+        }
+    }
+    let mut times = most;
+    while times >= 0 {
+        for c in 0..26 {
+            letters[c] -= times * need[d][c];
+        }
+        let mut ok = true;
+        for c in 0..26 {
+            if last[c] <= d and letters[c] != 0 {
+                ok = false;
+            }
+        }
+        if ok and search(d + 1, letters, need, last, count) {
+            count[d] = times;
+            return true;
+        }
+        for c in 0..26 {
+            letters[c] += times * need[d][c];
+        }
+        times -= 1;
+    }
+    false
+}
+
+fn original_digits(s: Str) -> String {
+    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let mut need: Vec[Vec[i64]] = Vec.new();
+    // last[c]: the largest digit whose word has letter c, or -1.
+    let mut last = vec![-1; 26];
+    for d in 0..10 {
+        let mut row = vec![0; 26];
+        for b in names[d].bytes() {
+            row[(b - b'a') as i64] += 1;
+            last[(b - b'a') as i64] = d;
+        }
+        need.push(row);
+    }
+    let mut letters = vec![0; 26];
+    for b in s.bytes() {
+        letters[(b - b'a') as i64] += 1;
+    }
+    let mut count = vec![0; 10];
+    search(0, mut letters, need, last, mut count);
+    let mut out = String.new();
+    for d in 0..10 {
+        for _ in 0..count[d] {
+            out.push(char.try_from((48 + d) as u32).unwrap());
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str) {
+    println(f"\"{s}\": \"{original_digits(s)}\"");
+}
+
+fn main() {
+    show("owoztneoer");
+    show("fviefuro");
+    show("zero");
+    show("nine");
+    show("eightthree");
+    show("neninine");
+    show("seeevsixevisnsxn");
+    show("owtowtowt");
+    show("evunhtreoinexfestnvewerthsifieoonegi");
+    show("rofuhteonree");
+    // 2,000 random strings: 1 to 30 digits from 0 to 9, their English
+    // words concatenated and then shuffled.
+    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let mut seed: i64 = 423;
+    let mut letters = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let count = 1 + step(mut seed) % 30;
+        let mut pool: Vec[u8] = Vec.new();
+        for _ in 0..count {
+            let digit = step(mut seed) % 10;
+            for b in names[digit].bytes() {
+                pool.push(b);
+            }
+        }
+        for i in 0..pool.len() {
+            let j = i + step(mut seed) % (pool.len() - i);
+            let keep = pool[i];
+            pool[i] = pool[j];
+            pool[j] = keep;
+        }
+        let mut s = String.new();
+        for b in pool {
+            s.push(b as char);
+        }
+        let answer = original_digits(s);
+        letters += s.len();
+        for b in answer.bytes() {
+            checksum = (checksum * 31 + (b as i64 - 47)) % 1000000007;
+        }
+    }
+    println(f"2000 random strings, {letters} letters: checksum {checksum}");
+}

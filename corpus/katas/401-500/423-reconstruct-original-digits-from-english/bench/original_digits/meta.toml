@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/423-reconstruct-original-digits-from-english/bench/original_digits.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 101
+tags = ["closure", "panic", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 101
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "5129058de"
+extracted_src = "e964d6d5"
+model_rev = "1aa23105"
+model_src = "e964d6d5"

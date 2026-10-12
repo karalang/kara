@@ -1,0 +1,255 @@
+// Differential test for LeetCode #424: Longest Repeating Character Replacement.
+//
+// Copies of the four arms, each run on 2,000 random strings of 1 to 30
+// letters from the first 1 to 4 letters, written in runs, with k from
+// 0 to 5. Properties known by construction:
+//   P1  the answer is that of counting every window from scratch
+//   P2  renaming the letters, or reversing the string, gives the same
+//       answer
+//   P3  one more replacement never lowers the answer; the answer is at
+//       least the longest run plus k and at most the commonest letter's
+//       count plus k, both capped at the length
+//   P4  the string written twice gives at least the answer; with as
+//       many replacements as letters other than the commonest, the
+//       answer is the whole length
+//   P5  one letter m times gives m; A and B alternating m times give
+//       the smaller of m and 2k + 1
+
+// ---- grow: character_replacement.kara
+
+fn character_replacement_grow(s: Str, k: i64) -> i64 {
+    let bytes = s.bytes();
+    let mut count = vec![0; 26];
+    let mut best = 0;
+    let mut left = 0;
+    for right in 0..bytes.len() {
+        let c = (bytes[right] - b'A') as i64;
+        count[c] += 1;
+        best = max(best, count[c]);
+        if right - left + 1 - best > k {
+            count[(bytes[left] - b'A') as i64] -= 1;
+            left += 1;
+        }
+    }
+    bytes.len() - left
+}
+
+// ---- shrink: character_replacement_shrink.kara
+
+fn commonest(count: ref Vec[i64]) -> i64 {
+    let mut most = 0;
+    for c in count {
+        most = max(most, c);
+    }
+    most
+}
+
+fn character_replacement_shrink(s: Str, k: i64) -> i64 {
+    let bytes = s.bytes();
+    let mut count = vec![0; 26];
+    let mut answer = 0;
+    let mut left = 0;
+    for right in 0..bytes.len() {
+        count[(bytes[right] - b'A') as i64] += 1;
+        while right - left + 1 - commonest(count) > k {
+            count[(bytes[left] - b'A') as i64] -= 1;
+            left += 1;
+        }
+        answer = max(answer, right - left + 1);
+    }
+    answer
+}
+
+// ---- letter: character_replacement_letter.kara
+
+fn character_replacement_letter(s: Str, k: i64) -> i64 {
+    let bytes = s.bytes();
+    let mut answer = 0;
+    for letter in 0..26 {
+        let target = b'A' + letter as u8;
+        let mut others = 0;
+        let mut left = 0;
+        for right in 0..bytes.len() {
+            if bytes[right] != target {
+                others += 1;
+            }
+            while others > k {
+                if bytes[left] != target {
+                    others -= 1;
+                }
+                left += 1;
+            }
+            answer = max(answer, right - left + 1);
+        }
+    }
+    answer
+}
+
+// ---- binary: character_replacement_binary.kara
+
+fn fits(bytes: Slice[u8], length: i64, k: i64) -> bool {
+    let mut count = vec![0; 26];
+    for i in 0..bytes.len() {
+        count[(bytes[i] - b'A') as i64] += 1;
+        if i >= length {
+            count[(bytes[i - length] - b'A') as i64] -= 1;
+        }
+        if i >= length - 1 {
+            let mut most = 0;
+            for c in count {
+                most = max(most, c);
+            }
+            if length - most <= k {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn character_replacement_binary(s: Str, k: i64) -> i64 {
+    let bytes = s.bytes();
+    // The answer is in low..high + 1, and length low always fits.
+    let mut low = min(1, bytes.len());
+    let mut high = bytes.len();
+    while low < high {
+        let mid = (low + high + 1) / 2;
+        if fits(bytes, mid, k) {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    low
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, s: Str, k: i64) -> i64 {
+    if arm == 0 {
+        character_replacement_grow(s, k)
+    } else if arm == 1 {
+        character_replacement_shrink(s, k)
+    } else if arm == 2 {
+        character_replacement_letter(s, k)
+    } else {
+        character_replacement_binary(s, k)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Every window, counted from scratch.
+fn brute(codes: ref Vec[i64], k: i64) -> i64 {
+    let n = codes.len();
+    let mut best = 0;
+    for start in 0..n {
+        for end in start + 1..n + 1 {
+            let mut count = vec![0; 26];
+            let mut most = 0;
+            for i in start..end {
+                count[codes[i]] += 1;
+                most = max(most, count[codes[i]]);
+            }
+            if end - start - most <= k {
+                best = max(best, end - start);
+            }
+        }
+    }
+    best
+}
+
+fn spell(codes: ref Vec[i64]) -> String {
+    let mut s = String.new();
+    for c in codes {
+        s.push(char.try_from((65 + c) as u32).unwrap());
+    }
+    s
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4240;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..2000 {
+        let n = 1 + step(mut seed) % 30;
+        let alphabet = 1 + step(mut seed) % 4;
+        let mut codes: Vec[i64] = Vec.new();
+        while codes.len() < n {
+            let letter = step(mut seed) % alphabet;
+            let run = 1 + step(mut seed) % 4;
+            for _ in 0..run {
+                if codes.len() < n {
+                    codes.push(letter);
+                }
+            }
+        }
+        let k = step(mut seed) % 6;
+        let expect = brute(codes, k);
+        // P2: the letters renamed (A to Z, B to Y, ...) and the string
+        // reversed.
+        let mut renamed: Vec[i64] = Vec.new();
+        let mut reversed: Vec[i64] = Vec.new();
+        for i in 0..n {
+            renamed.push(25 - codes[i]);
+            reversed.push(codes[n - 1 - i]);
+        }
+        // P3 and P4: the longest run, the commonest letter's count.
+        let mut run_best = 0;
+        let mut run = 0;
+        let mut count = vec![0; 26];
+        let mut most = 0;
+        for i in 0..n {
+            run = if i > 0 and codes[i] == codes[i - 1] { run + 1 } else { 1 };
+            run_best = max(run_best, run);
+            count[codes[i]] += 1;
+            most = max(most, count[codes[i]]);
+        }
+        let mut doubled = codes.clone();
+        for i in 0..n {
+            doubled.push(codes[i]);
+        }
+        // P5: one letter m times, and A and B alternating m times.
+        let m = 1 + step(mut seed) % 30;
+        let mut same: Vec[i64] = Vec.new();
+        let mut alternating: Vec[i64] = Vec.new();
+        for i in 0..m {
+            same.push(7);
+            alternating.push(i % 2);
+        }
+        let s = spell(codes);
+        let s_renamed = spell(renamed);
+        let s_reversed = spell(reversed);
+        let s_doubled = spell(doubled);
+        let s_same = spell(same);
+        let s_alternating = spell(alternating);
+        for arm in 0..4 {
+            checks += 5;
+            let answer = solve(arm, s, k);
+            report(1, arm, case, answer == expect, mut failures);
+            report(2, arm, case, solve(arm, s_renamed, k) == answer and solve(arm, s_reversed, k) == answer, mut failures);
+            let more = solve(arm, s, k + 1);
+            report(3, arm, case, more >= answer and answer >= min(n, run_best + k) and answer <= min(n, most + k), mut failures);
+            report(4, arm, case, solve(arm, s_doubled, k) >= answer and solve(arm, s, n - most) == n, mut failures);
+            report(5, arm, case, solve(arm, s_same, k) == m and solve(arm, s_alternating, k) == min(m, 2 * k + 1), mut failures);
+        }
+    }
+    println(f"2000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

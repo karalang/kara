@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/421-maximum-xor-of-two-numbers-in-an-array/bench/maximum_xor.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:set", "bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "5129058de"
+extracted_src = "ded0920a"
+model_rev = "1aa23105"
+model_src = "ded0920a"

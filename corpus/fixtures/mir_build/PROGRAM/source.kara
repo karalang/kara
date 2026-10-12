@@ -1,0 +1,10 @@
+
+struct P { name: String, n: i64 }
+fn main() {
+    let mut v: Vec[P] = Vec.new();
+    for i in 0..5 { v.push(P { name: f"p{i}", n: i * i }); }
+    let total = v.iter().map(|p| p.n).sum();
+    let mut m: Map[String, i64] = Map.new();
+    for p in v.iter() { m[p.name.clone()] = p.n; }
+    println(f"hello {total} {m.len()} {v[3].name}");
+}

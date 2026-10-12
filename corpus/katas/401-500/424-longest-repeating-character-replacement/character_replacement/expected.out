@@ -1,0 +1,11 @@
+"ABAB", k = 2: 4
+"AABABBA", k = 1: 4
+"A", k = 0: 1
+"A", k = 1: 1
+"ABCDE", k = 0: 1
+"ABCDE", k = 2: 3
+"AAAA", k = 0: 4
+"AAAB", k = 0: 3
+"ABBBA", k = 1: 4
+"BAAAB", k = 2: 5
+2000 random strings: total 32441, checksum 689564674

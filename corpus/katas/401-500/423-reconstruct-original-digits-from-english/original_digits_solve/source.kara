@@ -1,0 +1,124 @@
+// LeetCode #423: Reconstruct Original Digits from English -- linear algebra.
+//
+// The letter counts are a linear function of the digit counts: letter c
+// appears need[d][c] times in digit d's word, so letters[c] is the sum
+// over d of need[d][c] * count[d]. That is 26 equations in 10 unknowns,
+// and the ten words are independent, so Gaussian elimination recovers
+// the counts. It runs on whole numbers: a row is scaled by the pivot
+// before the pivot row is subtracted, then divided by the greatest
+// common divisor of its entries. O(n) to count, O(1) to solve.
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a.abs() } else { gcd(b, a % b) }
+}
+
+fn original_digits(s: Str) -> String {
+    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let mut letters = vec![0; 26];
+    for b in s.bytes() {
+        letters[(b - b'a') as i64] += 1;
+    }
+    // One row per letter: the ten coefficients, then the letter count.
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    for c in 0..26 {
+        let mut row = vec![0; 11];
+        for d in 0..10 {
+            for b in names[d].bytes() {
+                if (b - b'a') as i64 == c {
+                    row[d] += 1;
+                }
+            }
+        }
+        row[10] = letters[c];
+        rows.push(row);
+    }
+    for col in 0..10 {
+        let mut pivot = col;
+        while rows[pivot][col] == 0 {
+            pivot += 1;
+        }
+        let keep = rows[col].clone();
+        rows[col] = rows[pivot].clone();
+        rows[pivot] = keep;
+        for r in 0..26 {
+            if r != col and rows[r][col] != 0 {
+                let scale = rows[col][col];
+                let factor = rows[r][col];
+                let mut g = 0;
+                for k in 0..11 {
+                    rows[r][k] = rows[r][k] * scale - rows[col][k] * factor;
+                    g = gcd(g, rows[r][k]);
+                }
+                if g > 1 {
+                    for k in 0..11 {
+                        rows[r][k] = rows[r][k] / g;
+                    }
+                }
+            }
+        }
+    }
+    let mut out = String.new();
+    for d in 0..10 {
+        let times = rows[d][10] / rows[d][d];
+        for _ in 0..times {
+            out.push(char.try_from((48 + d) as u32).unwrap());
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str) {
+    println(f"\"{s}\": \"{original_digits(s)}\"");
+}
+
+fn main() {
+    show("owoztneoer");
+    show("fviefuro");
+    show("zero");
+    show("nine");
+    show("eightthree");
+    show("neninine");
+    show("seeevsixevisnsxn");
+    show("owtowtowt");
+    show("evunhtreoinexfestnvewerthsifieoonegi");
+    show("rofuhteonree");
+    // 2,000 random strings: 1 to 30 digits from 0 to 9, their English
+    // words concatenated and then shuffled.
+    let names = "zero one two three four five six seven eight nine".split_whitespace();
+    let mut seed: i64 = 423;
+    let mut letters = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let count = 1 + step(mut seed) % 30;
+        let mut pool: Vec[u8] = Vec.new();
+        for _ in 0..count {
+            let digit = step(mut seed) % 10;
+            for b in names[digit].bytes() {
+                pool.push(b);
+            }
+        }
+        for i in 0..pool.len() {
+            let j = i + step(mut seed) % (pool.len() - i);
+            let keep = pool[i];
+            pool[i] = pool[j];
+            pool[j] = keep;
+        }
+        let mut s = String.new();
+        for b in pool {
+            s.push(b as char);
+        }
+        let answer = original_digits(s);
+        letters += s.len();
+        for b in answer.bytes() {
+            checksum = (checksum * 31 + (b as i64 - 47)) % 1000000007;
+        }
+    }
+    println(f"2000 random strings, {letters} letters: checksum {checksum}");
+}
