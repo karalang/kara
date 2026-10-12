@@ -1,0 +1,98 @@
+// LeetCode #443: String Compression -- an anchor and digits written in
+// reverse.
+//
+// Keep an anchor at the start of the current group and close the
+// group when the next character differs or the input ends. Write its
+// count's digits from the lowest up, then reverse them where they lie,
+// so the count needs no text and no extra space at all. O(n) time,
+// O(1) extra space.
+
+fn compress(chars: mut ref Vec[char]) -> i64 {
+    let n = chars.len();
+    let mut anchor = 0;
+    let mut write = 0;
+    for read in 0..n {
+        if read + 1 == n or chars[read + 1] != chars[read] {
+            chars[write] = chars[anchor];
+            write += 1;
+            let mut count = read - anchor + 1;
+            if count > 1 {
+                let first = write;
+                while count > 0 {
+                    chars[write] = (b'0' + (count % 10) as u8) as char;
+                    write += 1;
+                    count /= 10;
+                }
+                let mut lo = first;
+                let mut hi = write - 1;
+                while lo < hi {
+                    chars.swap(lo, hi);
+                    lo += 1;
+                    hi -= 1;
+                }
+            }
+            anchor = read + 1;
+        }
+    }
+    write
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// Compresses the characters of s and returns the compressed text.
+fn compressed(s: Str) -> String {
+    let mut chars: Vec[char] = s.chars().collect();
+    let length = compress(mut chars);
+    let mut out = String.new();
+    for i in 0..length {
+        out.push(chars[i]);
+    }
+    out
+}
+
+fn show(s: Str) {
+    let out = compressed(s);
+    println(f"\"{s}\": {out.len()} \"{out}\"");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("aabbccc");
+    show("a");
+    show("abbbbbbbbbbbb");
+    show("aaaaaaaaaa");
+    show("abc");
+    show("1111222");
+    show("@@@!!a##");
+    show("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+    // 300 random strings of 1 to 300 characters, in runs of 1 to 1, 3,
+    // 15 or 120 from a three-letter alphabet, so that neighbouring runs
+    // often share a letter and merge.
+    let mut seed: i64 = 443;
+    let mut length = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 300;
+        let longest = [1, 3, 15, 120][next_random(mut seed) % 4];
+        let mut s = String.new();
+        while s.len() < n {
+            let c = (b'a' + (next_random(mut seed) % 3) as u8) as char;
+            let run = 1 + next_random(mut seed) % longest;
+            for _ in 0..run {
+                if s.len() < n {
+                    s.push(c);
+                }
+            }
+        }
+        let out = compressed(s);
+        length += out.len();
+        for c in out.chars() {
+            checksum = (checksum * 31 + c as i64) % 1000000007;
+        }
+    }
+    println(f"300 random strings: compressed length {length}, checksum {checksum}");
+}

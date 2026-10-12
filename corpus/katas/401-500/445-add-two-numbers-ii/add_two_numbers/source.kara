@@ -1,0 +1,121 @@
+// LeetCode #445: Add Two Numbers II -- two stacks.
+//
+// The digits come most significant first, but addition starts from the
+// least significant. Push each list's digits onto a stack, then pop
+// both together, adding with a carry, and put each digit of the sum in
+// front of those already made, so that the sum comes out most
+// significant first. The lists are left as they were. O(m + n) time,
+// O(m + n) extra space for the stacks.
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let mut a: Vec[i64] = Vec.new();
+    let mut node = l1;
+    while let Some(n) = node {
+        a.push(n.val);
+        node = n.next;
+    }
+    let mut b: Vec[i64] = Vec.new();
+    node = l2;
+    while let Some(n) = node {
+        b.push(n.val);
+        node = n.next;
+    }
+    let mut sum: Option[ListNode] = None;
+    let mut carry = 0;
+    while a.len() > 0 or b.len() > 0 or carry > 0 {
+        let mut digit = carry;
+        if let Some(d) = a.pop() {
+            digit += d;
+        }
+        if let Some(d) = b.pop() {
+            digit += d;
+        }
+        sum = Some(ListNode { val: digit % 10, next: sum });
+        carry = digit / 10;
+    }
+    sum
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_digits(digits: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = digits.len();
+    while i > 0 {
+        i -= 1;
+        head = Some(ListNode { val: digits[i], next: head });
+    }
+    head
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s = String.from("[");
+    let mut node = list;
+    while let Some(n) = node {
+        if s.len() > 1 {
+            s.push(',');
+        }
+        s.push_str(f"{n.val}");
+        node = n.next;
+    }
+    s.push(']');
+    s
+}
+
+fn show(a: Vec[i64], b: Vec[i64]) {
+    let l1 = from_digits(a);
+    let l2 = from_digits(b);
+    let sum = add_two_numbers(l1, l2);
+    println(f"{to_string(l1)} + {to_string(l2)} = {to_string(sum)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random number of 1 to 100 digits, most significant first, each
+// digit a 9 half the time so that carries run far; no leading zero.
+fn random_digits(seed: mut ref i64) -> Vec[i64] {
+    let length = 1 + next_random(seed) % 100;
+    let mut digits: Vec[i64] = Vec.new();
+    for i in 0..length {
+        let mut d = if next_random(seed) % 2 == 0 { 9 } else { next_random(seed) % 10 };
+        if i == 0 and length > 1 and d == 0 {
+            d = 1;
+        }
+        digits.push(d);
+    }
+    digits
+}
+
+fn main() {
+    show(vec![7, 2, 4, 3], vec![5, 6, 4]);
+    show(vec![2, 4, 3], vec![5, 6, 4]);
+    show(vec![0], vec![0]);
+    show(vec![9, 9, 9, 9], vec![1]);
+    show(vec![1], vec![9, 9, 9]);
+    show(vec![5], vec![5]);
+    show(vec![1, 0, 0, 0], vec![0]);
+    show(vec![8, 9, 9, 9, 9, 5], vec![4, 6]);
+    let count = 300;
+    let mut seed: i64 = 445;
+    let mut digits = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let l1 = from_digits(random_digits(mut seed));
+        let l2 = from_digits(random_digits(mut seed));
+        let mut node = add_two_numbers(l1, l2);
+        while let Some(n) = node {
+            digits += 1;
+            checksum = (checksum * 31 + n.val) % 1000000007;
+            node = n.next;
+        }
+    }
+    println(f"{count} random sums: {digits} digits, checksum {checksum}");
+}

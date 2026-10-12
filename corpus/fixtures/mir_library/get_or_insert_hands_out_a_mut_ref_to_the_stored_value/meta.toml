@@ -1,0 +1,15 @@
+source = "tests/mir_library.rs::get_or_insert_hands_out_a_mut_ref_to_the_stored_value"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"
+bucket = "b-fix-incomplete:E0209"
+classified_with = "ee2f9acb3"
+extracted_src = "8346658c"
+model_rev = "1aa23105"
+model_src = "8346658c"

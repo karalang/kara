@@ -1,0 +1,26 @@
+
+fn main() {
+    let v: Vec[(String, f64)] = vec![("a".to_string(), 1.5), ("b".to_string(), 2.0)];
+    let mut t = 0.0;
+    for (n, w) in v.iter() {
+        t = t + *w;
+    }
+    println(f"{t}");
+    let mut s: Set[i64] = Set.new();
+    s.insert(3);
+    s.insert(4);
+    let mut u = 0;
+    for k in s.iter() {
+        u += *k;
+    }
+    println(f"{u}");
+    let mut m: SortedMap[i64, i64] = SortedMap.new();
+    m.insert(1, 10);
+    m.insert(5, 50);
+    for p in m.iter() {
+        println(f"{*p.0} {*p.1}");
+    }
+    if let Some((k, x)) = m.floor(4) {
+        println(f"{*k} {*x}");
+    }
+}

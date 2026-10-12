@@ -1,0 +1,84 @@
+// LeetCode #447: Number of Boomerangs -- a map of distances per point.
+//
+// A boomerang (i, j, k) has j and k at the same distance from i. For
+// each point i, count the other points at each squared distance; c
+// points at one distance give c * (c - 1) ordered pairs (j, k).
+// Squared distances stay integers and keep equal distances equal.
+// O(n^2) expected time, O(n) extra space.
+
+fn number_of_boomerangs(points: Vec[(i64, i64)]) -> i64 {
+    let mut total = 0;
+    for p in points {
+        let mut counts: Map[i64, i64] = Map.new();
+        for q in points {
+            let dx = p.0 - q.0;
+            let dy = p.1 - q.1;
+            *counts.entry(dx * dx + dy * dy).or_insert(0) += 1;
+        }
+        for (_, c) in counts {
+            total += c * (c - 1);
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(points: Vec[(i64, i64)]) {
+    let mut s = String.from("[");
+    for i in 0..points.len() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(f"[{points[i].0},{points[i].1}]");
+    }
+    s.push(']');
+    println(f"{s}: {number_of_boomerangs(points)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n distinct random points with coordinates in a square of side spread
+// around the origin.
+fn random_points(seed: mut ref i64, n: i64, spread: i64) -> Vec[(i64, i64)] {
+    let mut seen: Set[(i64, i64)] = Set.new();
+    let mut points: Vec[(i64, i64)] = Vec.new();
+    while points.len() < n {
+        let x = next_random(seed) % spread - spread / 2;
+        let y = next_random(seed) % spread - spread / 2;
+        if seen.insert((x, y)) {
+            points.push((x, y));
+        }
+    }
+    points
+}
+
+fn main() {
+    show(vec![(0, 0), (1, 0), (2, 0)]);
+    show(vec![(1, 1), (2, 2), (3, 3)]);
+    show(vec![(1, 1)]);
+    show(vec![(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)]);
+    show(vec![(0, 0), (3, 4), (-4, 3), (5, 0), (0, -5)]);
+    show(vec![(-10000, -10000), (10000, 10000), (10000, -10000), (-10000, 10000)]);
+    // 300 random sets of 1 to 80 distinct points (60 at most on the
+    // smallest grid), on grids of side 10, 20, 1,000 or 20,001: the
+    // small grids repeat distances often.
+    let count = 300;
+    let mut seed: i64 = 447;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let mut n = 1 + next_random(mut seed) % 80;
+        let spread = [10, 20, 1000, 20001][next_random(mut seed) % 4];
+        if spread == 10 {
+            n = n.min(60);
+        }
+        let answer = number_of_boomerangs(random_points(mut seed, n, spread));
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"{count} random point sets: {total} boomerangs, checksum {checksum}");
+}

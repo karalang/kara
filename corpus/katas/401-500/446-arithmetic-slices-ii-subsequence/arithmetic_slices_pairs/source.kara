@@ -1,0 +1,85 @@
+// LeetCode #446: Arithmetic Slices II - Subsequence -- counting by the
+// last two values.
+//
+// slices[j][i], for j < i, counts the arithmetic subsequences of three
+// or more values whose last two are nums[j] and nums[i]. The value
+// before them must be 2 * nums[j] - nums[i]; for each earlier k holding
+// it, (k, j, i) is a slice, and so is every slice ending k, j extended
+// by i. A map from each value to its indexes finds the k's. O(n^2) pairs,
+// each with as many k's as the value repeats.
+
+fn number_of_arithmetic_slices(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut positions: Map[i64, Vec[i64]] = Map.new();
+    for i in 0..n {
+        positions.entry(nums[i]).or_insert(Vec.new()).push(i);
+    }
+    let mut slices: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        slices.push(Vec.filled(n, 0));
+    }
+    let mut total = 0;
+    for i in 0..n {
+        for j in 0..i {
+            let wanted = 2 * nums[j] - nums[i];
+            if let Some(ks) = positions.get(wanted) {
+                for k in ks {
+                    if k < j {
+                        slices[j][i] += slices[k][j] + 1;
+                    }
+                }
+            }
+            total += slices[j][i];
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(nums: Vec[i64]) {
+    let mut s = String.from("[");
+    for i in 0..nums.len() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    s.push(']');
+    println(f"{s}: {number_of_arithmetic_slices(nums)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![2, 4, 6, 8, 10]);
+    show(vec![7, 7, 7, 7, 7]);
+    show(vec![1]);
+    show(vec![1, 2]);
+    show(vec![1, 2, 3]);
+    show(vec![0, 2000000000, -294967296]);
+    show(vec![-2147483648, 0, 2147483647, -2147483648, -1, 2147483646]);
+    show(vec![3, -1, -5, -9, 1, 5, 9]);
+    // 300 random arrays of 1 to 60 values, spread over 3, 10, 100 or
+    // 1,000,000 values around 0: the narrow spreads repeat values and
+    // differences, so their counts run into the millions.
+    let count = 300;
+    let mut seed: i64 = 446;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = 1 + next_random(mut seed) % 60;
+        let spread = [3, 10, 100, 1000000][next_random(mut seed) % 4];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % spread - spread / 2);
+        }
+        let answer = number_of_arithmetic_slices(nums);
+        total += answer;
+        checksum = (checksum * 31 + answer % 1000000007) % 1000000007;
+    }
+    println(f"{count} random arrays: {total} slices, checksum {checksum}");
+}

@@ -1,0 +1,131 @@
+// LeetCode #445: Add Two Numbers II -- recursion on aligned digits.
+//
+// Count both lengths, then recurse down the longer list, stepping the
+// shorter one only once the digits left in both are equal in number,
+// so that each call adds digits of the same place. The calls return
+// on the way back up, least significant first, each with its carry and
+// the sum's digits after it. O(m + n) time, O(max(m, n)) stack.
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+fn length(list: Option[ListNode]) -> i64 {
+    let mut count = 0;
+    let mut node = list;
+    while let Some(n) = node {
+        count += 1;
+        node = n.next;
+    }
+    count
+}
+
+// Adds a and b, where a has `extra` more digits than b: returns the
+// carry out of the most significant place and the sum's digits.
+fn add_aligned(a: Option[ListNode], b: Option[ListNode], extra: i64) -> (i64, Option[ListNode]) {
+    match a {
+        None => (0, None),
+        Some(x) => {
+            let (carry, rest, digit) = if extra > 0 {
+                let (carry, rest) = add_aligned(x.next, b, extra - 1);
+                (carry, rest, x.val)
+            } else {
+                let y = b.expect("as many digits left in b as in a");
+                let (carry, rest) = add_aligned(x.next, y.next, 0);
+                (carry, rest, x.val + y.val)
+            };
+            let sum = digit + carry;
+            (sum / 10, Some(ListNode { val: sum % 10, next: rest }))
+        }
+    }
+}
+
+fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let m = length(l1);
+    let n = length(l2);
+    let (carry, sum) = if m >= n { add_aligned(l1, l2, m - n) } else { add_aligned(l2, l1, n - m) };
+    if carry > 0 {
+        return Some(ListNode { val: carry, next: sum });
+    }
+    sum
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_digits(digits: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = digits.len();
+    while i > 0 {
+        i -= 1;
+        head = Some(ListNode { val: digits[i], next: head });
+    }
+    head
+}
+
+fn to_string(list: Option[ListNode]) -> String {
+    let mut s = String.from("[");
+    let mut node = list;
+    while let Some(n) = node {
+        if s.len() > 1 {
+            s.push(',');
+        }
+        s.push_str(f"{n.val}");
+        node = n.next;
+    }
+    s.push(']');
+    s
+}
+
+fn show(a: Vec[i64], b: Vec[i64]) {
+    let l1 = from_digits(a);
+    let l2 = from_digits(b);
+    let sum = add_two_numbers(l1, l2);
+    println(f"{to_string(l1)} + {to_string(l2)} = {to_string(sum)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random number of 1 to 100 digits, most significant first, each
+// digit a 9 half the time so that carries run far; no leading zero.
+fn random_digits(seed: mut ref i64) -> Vec[i64] {
+    let length = 1 + next_random(seed) % 100;
+    let mut digits: Vec[i64] = Vec.new();
+    for i in 0..length {
+        let mut d = if next_random(seed) % 2 == 0 { 9 } else { next_random(seed) % 10 };
+        if i == 0 and length > 1 and d == 0 {
+            d = 1;
+        }
+        digits.push(d);
+    }
+    digits
+}
+
+fn main() {
+    show(vec![7, 2, 4, 3], vec![5, 6, 4]);
+    show(vec![2, 4, 3], vec![5, 6, 4]);
+    show(vec![0], vec![0]);
+    show(vec![9, 9, 9, 9], vec![1]);
+    show(vec![1], vec![9, 9, 9]);
+    show(vec![5], vec![5]);
+    show(vec![1, 0, 0, 0], vec![0]);
+    show(vec![8, 9, 9, 9, 9, 5], vec![4, 6]);
+    let count = 300;
+    let mut seed: i64 = 445;
+    let mut digits = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let l1 = from_digits(random_digits(mut seed));
+        let l2 = from_digits(random_digits(mut seed));
+        let mut node = add_two_numbers(l1, l2);
+        while let Some(n) = node {
+            digits += 1;
+            checksum = (checksum * 31 + n.val) % 1000000007;
+            node = n.next;
+        }
+    }
+    println(f"{count} random sums: {digits} digits, checksum {checksum}");
+}

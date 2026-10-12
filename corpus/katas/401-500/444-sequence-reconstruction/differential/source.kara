@@ -1,0 +1,366 @@
+// Differential test for LeetCode #444: Sequence Reconstruction.
+//
+// Copies of the four arms, each run on 1,500 random cases: a shuffle of
+// 1 to n for n up to 40, and windows of it of up to 12 values, each
+// value after a window's first left out one time in ten. Properties:
+//   P1  the answer is whether the windows hold every two neighbours in
+//       nums side by side, as the generator recorded while building them
+//   P2  on a second, small case (n up to 5, sequences of distinct values
+//       in random order, half of them sorted into nums's order), the
+//       answer is brute force's: nums is the only order of 1 to n that
+//       keeps every sequence
+//   P3  adding nums itself as a sequence makes the answer true
+//   P4  reversing nums and every sequence keeps the answer
+//   P5  relabelling every value by a random order of 1 to n keeps the
+//       answer
+
+// ---- positions: sequence_reconstruction.kara
+
+fn sequence_reconstruction_positions(nums: Vec[i64], sequences: Vec[Vec[i64]]) -> bool {
+    let n = nums.len();
+    let mut position: Vec[i64] = Vec.filled(n + 1, 0);
+    for i in 0..n {
+        position[nums[i]] = i;
+    }
+    // covered[i]: some sequence holds nums[i] and nums[i + 1] side by side.
+    let mut covered: Vec[bool] = Vec.filled(n, false);
+    for s in sequences {
+        for j in 1..s.len() {
+            let a = position[s[j - 1]];
+            let b = position[s[j]];
+            if a >= b {
+                return false;
+            }
+            if b == a + 1 {
+                covered[a] = true;
+            }
+        }
+    }
+    for i in 0..n - 1 {
+        if not covered[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- kahn: sequence_reconstruction_kahn.kara
+
+fn sequence_reconstruction_kahn(nums: Vec[i64], sequences: Vec[Vec[i64]]) -> bool {
+    let n = nums.len();
+    let mut next: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        next.push(Vec.new());
+    }
+    let mut indegree: Vec[i64] = Vec.filled(n + 1, 0);
+    for s in sequences {
+        for j in 1..s.len() {
+            next[s[j - 1]].push(s[j]);
+            indegree[s[j]] += 1;
+        }
+    }
+    let mut ready: VecDeque[i64] = VecDeque.new();
+    for v in 1..n + 1 {
+        if indegree[v] == 0 {
+            ready.push_back(v);
+        }
+    }
+    let mut placed = 0;
+    while ready.len() > 0 {
+        if ready.len() > 1 {
+            return false;
+        }
+        let v = ready.pop_front().expect("one ready value");
+        if nums[placed] != v {
+            return false;
+        }
+        placed += 1;
+        for w in next[v] {
+            indegree[w] -= 1;
+            if indegree[w] == 0 {
+                ready.push_back(w);
+            }
+        }
+    }
+    placed == n
+}
+
+// ---- dfs: sequence_reconstruction_dfs.kara
+
+// Visits v and everything after it; state 1 is on the path, 2 finished.
+// Returns false on a cycle.
+fn visit(v: i64, next: Vec[Vec[i64]], state: mut ref Vec[i64], finished: mut ref Vec[i64]) -> bool {
+    state[v] = 1;
+    for w in next[v] {
+        if state[w] == 1 {
+            return false;
+        }
+        if state[w] == 0 and not visit(w, next, state, finished) {
+            return false;
+        }
+    }
+    state[v] = 2;
+    finished.push(v);
+    true
+}
+
+fn sequence_reconstruction_dfs(nums: Vec[i64], sequences: Vec[Vec[i64]]) -> bool {
+    let n = nums.len();
+    let mut next: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        next.push(Vec.new());
+    }
+    let mut edges: Set[(i64, i64)] = Set.new();
+    for s in sequences {
+        for j in 1..s.len() {
+            next[s[j - 1]].push(s[j]);
+            edges.insert((s[j - 1], s[j]));
+        }
+    }
+    let mut state: Vec[i64] = Vec.filled(n + 1, 0);
+    let mut finished: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        if state[v] == 0 and not visit(v, next, mut state, mut finished) {
+            return false;
+        }
+    }
+    finished.reverse();
+    for i in 0..n {
+        if finished[i] != nums[i] {
+            return false;
+        }
+        if i > 0 and not edges.contains((finished[i - 1], finished[i])) {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- longest: sequence_reconstruction_longest.kara
+
+fn sequence_reconstruction_longest(nums: Vec[i64], sequences: Vec[Vec[i64]]) -> bool {
+    let n = nums.len();
+    let mut before: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        before.push(Vec.new());
+    }
+    for s in sequences {
+        for j in 1..s.len() {
+            before[s[j]].push(s[j - 1]);
+        }
+    }
+    // longest[v]: values on the longest path ending at v, 0 until v is
+    // reached in nums.
+    let mut longest: Vec[i64] = Vec.filled(n + 1, 0);
+    for v in nums {
+        let mut best = 1;
+        for u in before[v] {
+            if longest[u] == 0 {
+                return false;
+            }
+            best = best.max(longest[u] + 1);
+        }
+        longest[v] = best;
+    }
+    longest[nums[n - 1]] == n
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, nums: Vec[i64], sequences: Vec[Vec[i64]]) -> bool {
+    if arm == 0 {
+        sequence_reconstruction_positions(nums, sequences)
+    } else if arm == 1 {
+        sequence_reconstruction_kahn(nums, sequences)
+    } else if arm == 2 {
+        sequence_reconstruction_dfs(nums, sequences)
+    } else {
+        sequence_reconstruction_longest(nums, sequences)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random order of 1 to n.
+fn shuffled(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    for v in 1..n + 1 {
+        values.push(v);
+    }
+    let mut i = n - 1;
+    while i > 0 {
+        let j = next_random(seed) % (i + 1);
+        values.swap(i, j);
+        i -= 1;
+    }
+    values
+}
+
+// Whether every sequence is a subsequence of order.
+fn keeps_all(order: Vec[i64], sequences: Vec[Vec[i64]]) -> bool {
+    let mut position: Vec[i64] = Vec.filled(order.len() + 1, 0);
+    for i in 0..order.len() {
+        position[order[i]] = i;
+    }
+    for s in sequences {
+        for j in 1..s.len() {
+            if position[s[j - 1]] >= position[s[j]] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// Collects into found the orders of 1 to n that keep every sequence,
+// extending prefix one value at a time.
+fn count_orders(prefix: mut ref Vec[i64], used: mut ref Vec[bool], n: i64, sequences: Vec[Vec[i64]], found: mut ref Vec[Vec[i64]]) {
+    if prefix.len() == n {
+        if keeps_all(prefix, sequences) {
+            found.push(prefix.clone());
+        }
+        return;
+    }
+    for v in 1..n + 1 {
+        if not used[v] {
+            used[v] = true;
+            prefix.push(v);
+            count_orders(prefix, used, n, sequences, found);
+            prefix.pop();
+            used[v] = false;
+        }
+    }
+}
+
+// The brute-force answer: nums is the only order of 1 to n that keeps
+// every sequence. When some value is in no sequence, a shorter
+// supersequence exists and, for n of 2 or more, so do other orders.
+fn brute(nums: Vec[i64], sequences: Vec[Vec[i64]]) -> bool {
+    let n = nums.len();
+    let mut prefix: Vec[i64] = Vec.new();
+    let mut used: Vec[bool] = Vec.filled(n + 1, false);
+    let mut found: Vec[Vec[i64]] = Vec.new();
+    count_orders(mut prefix, mut used, n, sequences, mut found);
+    if found.len() != 1 {
+        return false;
+    }
+    for i in 0..n {
+        if found[0][i] != nums[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4440;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // Windows of a shuffle of 1 to n, each value after a window's
+        // first left out one time in ten, built with the pairs of
+        // neighbours in nums they hold side by side.
+        let n = 1 + next_random(mut seed) % 40;
+        let nums = shuffled(n, mut seed);
+        let mut covered: Vec[bool] = Vec.filled(n, false);
+        let mut sequences: Vec[Vec[i64]] = Vec.new();
+        let windows = 1 + next_random(mut seed) % (n * 2 + 2);
+        for _ in 0..windows {
+            let start = next_random(mut seed) % n;
+            let length = 1 + next_random(mut seed) % 12;
+            let mut s: Vec[i64] = Vec.new();
+            let mut last = 0;
+            for k in start..(start + length).min(n) {
+                if s.len() == 0 or next_random(mut seed) % 10 != 0 {
+                    if s.len() > 0 and last == k - 1 {
+                        covered[last] = true;
+                    }
+                    s.push(nums[k]);
+                    last = k;
+                }
+            }
+            sequences.push(s);
+        }
+        let mut want = true;
+        for i in 0..n - 1 {
+            if not covered[i] {
+                want = false;
+            }
+        }
+        // A small case for brute force, n up to 5: each sequence a
+        // random choice of distinct values in random order, sorted into
+        // nums's order half the time.
+        let small_n = 1 + next_random(mut seed) % 5;
+        let small_nums = shuffled(small_n, mut seed);
+        let mut position: Vec[i64] = Vec.filled(small_n + 1, 0);
+        for i in 0..small_n {
+            position[small_nums[i]] = i;
+        }
+        let mut small_sequences: Vec[Vec[i64]] = Vec.new();
+        let small_count = 1 + next_random(mut seed) % 5;
+        for _ in 0..small_count {
+            let order = shuffled(small_n, mut seed);
+            let take = 1 + next_random(mut seed) % small_n;
+            let mut s: Vec[i64] = Vec.new();
+            for i in 0..take {
+                s.push(order[i]);
+            }
+            if next_random(mut seed) % 2 == 0 {
+                s.sort_by_key(|v| position[v]);
+            }
+            small_sequences.push(s);
+        }
+        let small_want = brute(small_nums, small_sequences);
+        // nums and the sequences reversed, nums added as a sequence,
+        // and every value relabelled by a random order of 1 to n.
+        let mut reversed_nums = nums.clone();
+        reversed_nums.reverse();
+        let mut reversed: Vec[Vec[i64]] = Vec.new();
+        let mut with_nums: Vec[Vec[i64]] = Vec.new();
+        for s in sequences {
+            let mut r = s.clone();
+            r.reverse();
+            reversed.push(r);
+            with_nums.push(s.clone());
+        }
+        with_nums.push(nums.clone());
+        let label = shuffled(n, mut seed);
+        let mut relabelled_nums: Vec[i64] = Vec.new();
+        for v in nums {
+            relabelled_nums.push(label[v - 1]);
+        }
+        let mut relabelled: Vec[Vec[i64]] = Vec.new();
+        for s in sequences {
+            let mut r: Vec[i64] = Vec.new();
+            for v in s {
+                r.push(label[v - 1]);
+            }
+            relabelled.push(r);
+        }
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, solve(arm, nums, sequences) == want, mut failures);
+            report(2, arm, case, solve(arm, small_nums, small_sequences) == small_want, mut failures);
+            report(3, arm, case, solve(arm, nums, with_nums), mut failures);
+            report(4, arm, case, solve(arm, reversed_nums, reversed) == want, mut failures);
+            report(5, arm, case, solve(arm, relabelled_nums, relabelled) == want, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

@@ -1,0 +1,87 @@
+// Benchmark for #445: the ★ arm (add_two_numbers.kara) on 100 random
+// numbers of 1,000 to 2,000 digits, built once; 60 rounds add each to
+// the next.
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+fn add_two_numbers(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let mut a: Vec[i64] = Vec.new();
+    let mut node = l1;
+    while let Some(n) = node {
+        a.push(n.val);
+        node = n.next;
+    }
+    let mut b: Vec[i64] = Vec.new();
+    node = l2;
+    while let Some(n) = node {
+        b.push(n.val);
+        node = n.next;
+    }
+    let mut sum: Option[ListNode] = None;
+    let mut carry = 0;
+    while a.len() > 0 or b.len() > 0 or carry > 0 {
+        let mut digit = carry;
+        if let Some(d) = a.pop() {
+            digit += d;
+        }
+        if let Some(d) = b.pop() {
+            digit += d;
+        }
+        sum = Some(ListNode { val: digit % 10, next: sum });
+        carry = digit / 10;
+    }
+    sum
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 100;
+    let rounds = 60;
+    let mut seed: i64 = 445;
+    // Each number: 1,000 to 2,000 digits, most significant first, each
+    // a 9 half the time; the leading digit is never 0.
+    let mut numbers: Vec[Option[ListNode]] = Vec.new();
+    for _ in 0..count {
+        let length = 1000 + next_random(mut seed) % 1001;
+        let mut digits: Vec[i64] = Vec.new();
+        for i in 0..length {
+            let mut d = if next_random(mut seed) % 2 == 0 { 9 } else { next_random(mut seed) % 10 };
+            if i == 0 and d == 0 {
+                d = 1;
+            }
+            digits.push(d);
+        }
+        let mut head: Option[ListNode] = None;
+        let mut i = length;
+        while i > 0 {
+            i -= 1;
+            head = Some(ListNode { val: digits[i], next: head });
+        }
+        numbers.push(head);
+    }
+    let mut digits = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for i in 0..count {
+            // kara B-2026-10-12-26: an element of a Vec[Option[ListNode]]
+            // passed to a bare parameter is refused as a move; revert to
+            // add_two_numbers(numbers[i], numbers[(i + 1) % count]).
+            let mut node = add_two_numbers(numbers[i].clone(), numbers[(i + 1) % count].clone());
+            while let Some(n) = node {
+                digits += 1;
+                checksum = (checksum * 31 + n.val + round) % 1000000007;
+                node = n.next;
+            }
+        }
+    }
+    println(f"{rounds} rounds on {count} numbers: {digits} digits, checksum {checksum}");
+}

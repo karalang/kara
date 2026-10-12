@@ -1,0 +1,273 @@
+// Differential test for LeetCode #446: Arithmetic Slices II -
+// Subsequence.
+//
+// Copies of the four arms, each run on 1,500 random cases. Properties:
+//   P1  on a small array (1 to 10 values spread over 2, 3, 5 or 100),
+//       the count is brute force's over every choice of indexes
+//   P2  m equal values, m up to 40, hold 2^m - 1 - m - m(m - 1)/2
+//       slices: every choice of three or more
+//   P3  reversing an array of 1 to 40 values (spread over 3, 10, 100 or
+//       1,000,000) keeps its count
+//   P4  mapping each value x to a * x + b, a not 0, keeps the count
+//   P5  an arithmetic progression of m distinct values, with steps up
+//       to 2^31 - 1 so that differences pass 32 bits, holds one slice
+//       for each index step, start and length of 3 or more that fits
+
+// ---- maps: arithmetic_slices.kara
+
+fn number_of_arithmetic_slices_maps(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    // ending[i][d]: subsequences of two or more values ending at i with
+    // difference d.
+    let mut ending: Vec[Map[i64, i64]] = Vec.new();
+    let mut total = 0;
+    for i in 0..n {
+        let mut here: Map[i64, i64] = Map.new();
+        for j in 0..i {
+            let d = nums[i] - nums[j];
+            let before = ending[j].get(d) ?? 0;
+            total += before;
+            *here.entry(d).or_insert(0) += before + 1;
+        }
+        ending.push(here);
+    }
+    total
+}
+
+// ---- pairs: arithmetic_slices_pairs.kara
+
+fn number_of_arithmetic_slices_pairs(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut positions: Map[i64, Vec[i64]] = Map.new();
+    for i in 0..n {
+        positions.entry(nums[i]).or_insert(Vec.new()).push(i);
+    }
+    let mut slices: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        slices.push(Vec.filled(n, 0));
+    }
+    let mut total = 0;
+    for i in 0..n {
+        for j in 0..i {
+            let wanted = 2 * nums[j] - nums[i];
+            if let Some(ks) = positions.get(wanted) {
+                for k in ks {
+                    if k < j {
+                        slices[j][i] += slices[k][j] + 1;
+                    }
+                }
+            }
+            total += slices[j][i];
+        }
+    }
+    total
+}
+
+// ---- sorted: arithmetic_slices_sorted.kara
+
+// The count for difference d in a sorted list of pairs, 0 if absent.
+fn count_for(pairs: Vec[(i64, i64)], d: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = pairs.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if pairs[mid].0 < d {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if lo < pairs.len() and pairs[lo].0 == d {
+        pairs[lo].1
+    } else {
+        0
+    }
+}
+
+fn number_of_arithmetic_slices_sorted(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut ending: Vec[Vec[(i64, i64)]] = Vec.new();
+    let mut total = 0;
+    for i in 0..n {
+        let mut found: Vec[(i64, i64)] = Vec.new();
+        for j in 0..i {
+            let d = nums[i] - nums[j];
+            let before = count_for(ending[j], d);
+            total += before;
+            found.push((d, before + 1));
+        }
+        found.sort_by_key(|p| p.0);
+        let mut merged: Vec[(i64, i64)] = Vec.new();
+        for p in found {
+            let last = merged.len();
+            if last > 0 and merged[last - 1].0 == p.0 {
+                merged[last - 1].1 += p.1;
+            } else {
+                merged.push(p);
+            }
+        }
+        ending.push(merged);
+    }
+    total
+}
+
+// ---- memo: arithmetic_slices_memo.kara
+
+fn from(k: i64, j: i64, nums: Vec[i64], positions: Map[i64, Vec[i64]], memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if let Some(known) = memo.get((k, j)) {
+        return known;
+    }
+    let mut ways = 0;
+    let wanted = 2 * nums[j] - nums[k];
+    if let Some(ls) = positions.get(wanted) {
+        for l in ls {
+            if l > j {
+                ways += 1 + from(j, l, nums, positions, memo);
+            }
+        }
+    }
+    memo.insert((k, j), ways);
+    ways
+}
+
+fn number_of_arithmetic_slices_memo(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut positions: Map[i64, Vec[i64]] = Map.new();
+    for i in 0..n {
+        positions.entry(nums[i]).or_insert(Vec.new()).push(i);
+    }
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    let mut total = 0;
+    for k in 0..n {
+        for j in k + 1..n {
+            total += from(k, j, nums, positions, mut memo);
+        }
+    }
+    total
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, nums: Vec[i64]) -> i64 {
+    if arm == 0 {
+        number_of_arithmetic_slices_maps(nums)
+    } else if arm == 1 {
+        number_of_arithmetic_slices_pairs(nums)
+    } else if arm == 2 {
+        number_of_arithmetic_slices_sorted(nums)
+    } else {
+        number_of_arithmetic_slices_memo(nums)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_array(seed: mut ref i64, longest: i64, spreads: Vec[i64]) -> Vec[i64] {
+    let n = 1 + next_random(seed) % longest;
+    let spread = spreads[next_random(seed) % spreads.len()];
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(seed) % spread - spread / 2);
+    }
+    nums
+}
+
+// Brute force: every choice of three or more indexes, as a bit mask,
+// checked for one difference throughout.
+fn brute(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut count = 0;
+    for mask in 0..(1 << n) {
+        let mut chosen: Vec[i64] = Vec.new();
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                chosen.push(nums[i]);
+            }
+        }
+        if chosen.len() < 3 {
+            continue;
+        }
+        let d = chosen[1] - chosen[0];
+        let mut arithmetic = true;
+        for i in 2..chosen.len() {
+            if chosen[i] - chosen[i - 1] != d {
+                arithmetic = false;
+            }
+        }
+        if arithmetic {
+            count += 1;
+        }
+    }
+    count
+}
+
+// Slices in m equal values: every choice of three or more of them.
+fn equal_count(m: i64) -> i64 {
+    (1 << m) - 1 - m - m * (m - 1) / 2
+}
+
+// Slices in an arithmetic progression of m distinct values: one for
+// each index step d, start s and length of 3 or more that fits.
+fn progression_count(m: i64) -> i64 {
+    let mut count = 0;
+    for d in 1..m {
+        for s in 0..m {
+            count += ((m - 1 - s) / d - 1).max(0);
+        }
+    }
+    count
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4460;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let nums = random_array(mut seed, 40, vec![3, 10, 100, 1000000]);
+        let small = random_array(mut seed, 10, vec![2, 3, 5, 100]);
+        let small_want = brute(small);
+        let m = 1 + next_random(mut seed) % 40;
+        let value = next_random(mut seed) % 2001 - 1000;
+        let equal: Vec[i64] = Vec.filled(m, value);
+        let step = [1, -1, 7, -1000000000, 2147483647][next_random(mut seed) % 5];
+        let start = next_random(mut seed) % 2001 - 1000;
+        let mut progression: Vec[i64] = Vec.new();
+        for i in 0..m {
+            progression.push(start + i * step);
+        }
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        let a = [1, -1, 2, -3, 1000][next_random(mut seed) % 5];
+        let b = next_random(mut seed) % 2001 - 1000;
+        let mut mapped: Vec[i64] = Vec.new();
+        for x in nums {
+            mapped.push(a * x + b);
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let count = solve(arm, nums);
+            report(1, arm, case, solve(arm, small) == small_want, mut failures);
+            report(2, arm, case, solve(arm, equal) == equal_count(m), mut failures);
+            report(3, arm, case, solve(arm, reversed) == count, mut failures);
+            report(4, arm, case, solve(arm, mapped) == count, mut failures);
+            report(5, arm, case, solve(arm, progression) == progression_count(m), mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

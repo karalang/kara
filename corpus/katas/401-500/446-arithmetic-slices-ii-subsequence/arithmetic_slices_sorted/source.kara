@@ -1,0 +1,103 @@
+// LeetCode #446: Arithmetic Slices II - Subsequence -- sorted lists of
+// differences.
+//
+// The map arm's recurrence, with each index's counts kept as a list of
+// (difference, count) pairs sorted by difference instead of a hash
+// map: index i gathers one pair per earlier j, sorts them and merges
+// equal differences, and later indexes find a difference by binary
+// search. O(n^2 log n) time, O(n^2) space.
+
+// The count for difference d in a sorted list of pairs, 0 if absent.
+fn count_for(pairs: Vec[(i64, i64)], d: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = pairs.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if pairs[mid].0 < d {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if lo < pairs.len() and pairs[lo].0 == d {
+        pairs[lo].1
+    } else {
+        0
+    }
+}
+
+fn number_of_arithmetic_slices(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut ending: Vec[Vec[(i64, i64)]] = Vec.new();
+    let mut total = 0;
+    for i in 0..n {
+        let mut found: Vec[(i64, i64)] = Vec.new();
+        for j in 0..i {
+            let d = nums[i] - nums[j];
+            let before = count_for(ending[j], d);
+            total += before;
+            found.push((d, before + 1));
+        }
+        found.sort_by_key(|p| p.0);
+        let mut merged: Vec[(i64, i64)] = Vec.new();
+        for p in found {
+            let last = merged.len();
+            if last > 0 and merged[last - 1].0 == p.0 {
+                merged[last - 1].1 += p.1;
+            } else {
+                merged.push(p);
+            }
+        }
+        ending.push(merged);
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(nums: Vec[i64]) {
+    let mut s = String.from("[");
+    for i in 0..nums.len() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(f"{nums[i]}");
+    }
+    s.push(']');
+    println(f"{s}: {number_of_arithmetic_slices(nums)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![2, 4, 6, 8, 10]);
+    show(vec![7, 7, 7, 7, 7]);
+    show(vec![1]);
+    show(vec![1, 2]);
+    show(vec![1, 2, 3]);
+    show(vec![0, 2000000000, -294967296]);
+    show(vec![-2147483648, 0, 2147483647, -2147483648, -1, 2147483646]);
+    show(vec![3, -1, -5, -9, 1, 5, 9]);
+    // 300 random arrays of 1 to 60 values, spread over 3, 10, 100 or
+    // 1,000,000 values around 0: the narrow spreads repeat values and
+    // differences, so their counts run into the millions.
+    let count = 300;
+    let mut seed: i64 = 446;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = 1 + next_random(mut seed) % 60;
+        let spread = [3, 10, 100, 1000000][next_random(mut seed) % 4];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % spread - spread / 2);
+        }
+        let answer = number_of_arithmetic_slices(nums);
+        total += answer;
+        checksum = (checksum * 31 + answer % 1000000007) % 1000000007;
+    }
+    println(f"{count} random arrays: {total} slices, checksum {checksum}");
+}

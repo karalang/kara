@@ -1,0 +1,228 @@
+// Differential test for LeetCode #447: Number of Boomerangs.
+//
+// Copies of the four arms, each run on 1,500 random sets of 1 to 20
+// distinct points on grids of side 6, 10, 40 or 20,001. Properties:
+//   P1  the count is the reference's: every (point, squared distance)
+//       pair over all the others, sorted, and each run of c equal
+//       pairs counted as c * (c - 1)
+//   P2  turning the points a quarter and moving them keeps the count
+//   P3  mirroring the points and scaling them by 1 to 3 keeps it
+//   P4  listing the points in a random order keeps it
+//   P5  m points in a row (m up to 20), one apart, hold twice the sum
+//       over each point of the number of points to its nearer end
+
+// ---- maps: number_of_boomerangs.kara
+
+fn number_of_boomerangs_maps(points: Vec[(i64, i64)]) -> i64 {
+    let mut total = 0;
+    for p in points {
+        let mut counts: Map[i64, i64] = Map.new();
+        for q in points {
+            let dx = p.0 - q.0;
+            let dy = p.1 - q.1;
+            *counts.entry(dx * dx + dy * dy).or_insert(0) += 1;
+        }
+        for (_, c) in counts {
+            total += c * (c - 1);
+        }
+    }
+    total
+}
+
+// ---- sorted: number_of_boomerangs_sorted.kara
+
+fn number_of_boomerangs_sorted(points: Vec[(i64, i64)]) -> i64 {
+    let n = points.len();
+    let mut total = 0;
+    for i in 0..n {
+        let mut distances: Vec[i64] = Vec.new();
+        for j in 0..n {
+            if j != i {
+                let dx = points[i].0 - points[j].0;
+                let dy = points[i].1 - points[j].1;
+                distances.push(dx * dx + dy * dy);
+            }
+        }
+        distances.sort();
+        let mut start = 0;
+        while start < distances.len() {
+            let mut end = start;
+            while end < distances.len() and distances[end] == distances[start] {
+                end += 1;
+            }
+            let c = end - start;
+            total += c * (c - 1);
+            start = end;
+        }
+    }
+    total
+}
+
+// ---- pairs: number_of_boomerangs_pairs.kara
+
+fn number_of_boomerangs_pairs(points: Vec[(i64, i64)]) -> i64 {
+    let n = points.len();
+    let mut counts: Vec[Map[i64, i64]] = Vec.new();
+    for _ in 0..n {
+        counts.push(Map.new());
+    }
+    let mut total = 0;
+    for i in 0..n {
+        for j in i + 1..n {
+            let dx = points[i].0 - points[j].0;
+            let dy = points[i].1 - points[j].1;
+            let d = dx * dx + dy * dy;
+            for p in [i, j] {
+                let c = counts[p].entry(d).or_insert(0);
+                total += 2 * *c;
+                *c += 1;
+            }
+        }
+    }
+    total
+}
+
+// ---- brute: number_of_boomerangs_brute.kara
+
+fn squared_distance(a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - b.0) * (a.0 - b.0) + (a.1 - b.1) * (a.1 - b.1)
+}
+
+fn number_of_boomerangs_brute(points: Vec[(i64, i64)]) -> i64 {
+    let n = points.len();
+    let mut total = 0;
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                let distinct = i != j and i != k and j != k;
+                if distinct and squared_distance(points[i], points[j]) == squared_distance(points[i], points[k]) {
+                    total += 1;
+                }
+            }
+        }
+    }
+    total
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, points: Vec[(i64, i64)]) -> i64 {
+    if arm == 0 {
+        number_of_boomerangs_maps(points)
+    } else if arm == 1 {
+        number_of_boomerangs_sorted(points)
+    } else if arm == 2 {
+        number_of_boomerangs_pairs(points)
+    } else {
+        number_of_boomerangs_brute(points)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_points(seed: mut ref i64, n: i64, spread: i64) -> Vec[(i64, i64)] {
+    let mut seen: Set[(i64, i64)] = Set.new();
+    let mut points: Vec[(i64, i64)] = Vec.new();
+    while points.len() < n {
+        let x = next_random(seed) % spread - spread / 2;
+        let y = next_random(seed) % spread - spread / 2;
+        if seen.insert((x, y)) {
+            points.push((x, y));
+        }
+    }
+    points
+}
+
+// The reference: every (point, squared distance to another point)
+// pair, sorted, so that each run of c equal pairs is one point with c
+// others at one distance.
+fn reference(points: Vec[(i64, i64)]) -> i64 {
+    let n = points.len();
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                let dx = points[i].0 - points[j].0;
+                let dy = points[i].1 - points[j].1;
+                pairs.push((i, dx * dx + dy * dy));
+            }
+        }
+    }
+    pairs.sort();
+    let mut total = 0;
+    let mut start = 0;
+    while start < pairs.len() {
+        let mut end = start;
+        while end < pairs.len() and pairs[end] == pairs[start] {
+            end += 1;
+        }
+        total += (end - start) * (end - start - 1);
+        start = end;
+    }
+    total
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4470;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let n = 1 + next_random(mut seed) % 20;
+        let spread = [6, 10, 40, 20001][next_random(mut seed) % 4];
+        let points = random_points(mut seed, n.min(spread * spread / 2), spread);
+        let want = reference(points);
+        // Turned a quarter, then moved; mirrored, then scaled.
+        let dx = next_random(mut seed) % 2001 - 1000;
+        let dy = next_random(mut seed) % 2001 - 1000;
+        let scale = 1 + next_random(mut seed) % 3;
+        let mut turned: Vec[(i64, i64)] = Vec.new();
+        let mut mirrored: Vec[(i64, i64)] = Vec.new();
+        for p in points {
+            turned.push((dx - p.1, dy + p.0));
+            mirrored.push((-p.0 * scale, p.1 * scale));
+        }
+        // The same points in a random order.
+        let mut shuffled = points.clone();
+        let mut i = shuffled.len();
+        while i > 1 {
+            i -= 1;
+            let j = next_random(mut seed) % (i + 1);
+            shuffled.swap(i, j);
+        }
+        // m points in a row, one apart: from the i-th, the points k
+        // to each side are at the same distance for k up to the
+        // nearer end, two boomerangs each.
+        let m = 1 + next_random(mut seed) % 20;
+        let mut row: Vec[(i64, i64)] = Vec.new();
+        let mut row_want = 0;
+        for k in 0..m {
+            row.push((k, 7));
+            row_want += 2 * k.min(m - 1 - k);
+        }
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, solve(arm, points) == want, mut failures);
+            report(2, arm, case, solve(arm, turned) == want, mut failures);
+            report(3, arm, case, solve(arm, mirrored) == want, mut failures);
+            report(4, arm, case, solve(arm, shuffled) == want, mut failures);
+            report(5, arm, case, solve(arm, row) == row_want, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

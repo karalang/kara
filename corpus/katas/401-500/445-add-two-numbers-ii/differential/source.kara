@@ -1,0 +1,303 @@
+// Differential test for LeetCode #445: Add Two Numbers II.
+//
+// Copies of the four arms, each run on 1,500 random cases of three
+// numbers a, b and c of 1 to 40 digits (1 to 100 one time in ten), each
+// digit a 9 half the time so that carries run far. Properties:
+//   P1  a + b is the schoolbook sum of the digit lists
+//   P2  b + a is the same
+//   P3  a and b are unchanged afterwards
+//   P4  a + 0 is a, and 0 + b is b
+//   P5  (a + b) + c is a + (b + c), and the schoolbook sum of a + b and c
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+// ---- stacks: add_two_numbers.kara
+
+fn add_two_numbers_stacks(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let mut a: Vec[i64] = Vec.new();
+    let mut node = l1;
+    while let Some(n) = node {
+        a.push(n.val);
+        node = n.next;
+    }
+    let mut b: Vec[i64] = Vec.new();
+    node = l2;
+    while let Some(n) = node {
+        b.push(n.val);
+        node = n.next;
+    }
+    let mut sum: Option[ListNode] = None;
+    let mut carry = 0;
+    while a.len() > 0 or b.len() > 0 or carry > 0 {
+        let mut digit = carry;
+        if let Some(d) = a.pop() {
+            digit += d;
+        }
+        if let Some(d) = b.pop() {
+            digit += d;
+        }
+        sum = Some(ListNode { val: digit % 10, next: sum });
+        carry = digit / 10;
+    }
+    sum
+}
+
+// ---- reverse: add_two_numbers_reverse.kara
+
+// Reverses a list in place and returns its new head.
+fn reversed(list: Option[ListNode]) -> Option[ListNode] {
+    let mut previous: Option[ListNode] = None;
+    let mut node = list;
+    while let Some(n) = node {
+        node = n.next;
+        n.next = previous;
+        previous = Some(n);
+    }
+    previous
+}
+
+fn add_two_numbers_reverse(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let a = reversed(l1);
+    let b = reversed(l2);
+    let mut x = a;
+    let mut y = b;
+    let mut sum: Option[ListNode] = None;
+    let mut carry = 0;
+    while x.is_some() or y.is_some() or carry > 0 {
+        let mut digit = carry;
+        if let Some(n) = x {
+            digit += n.val;
+            x = n.next;
+        }
+        if let Some(n) = y {
+            digit += n.val;
+            y = n.next;
+        }
+        sum = Some(ListNode { val: digit % 10, next: sum });
+        carry = digit / 10;
+    }
+    let _ = reversed(a);
+    let _ = reversed(b);
+    sum
+}
+
+// ---- recursive: add_two_numbers_recursive.kara
+
+fn length(list: Option[ListNode]) -> i64 {
+    let mut count = 0;
+    let mut node = list;
+    while let Some(n) = node {
+        count += 1;
+        node = n.next;
+    }
+    count
+}
+
+// Adds a and b, where a has `extra` more digits than b: returns the
+// carry out of the most significant place and the sum's digits.
+fn add_aligned(a: Option[ListNode], b: Option[ListNode], extra: i64) -> (i64, Option[ListNode]) {
+    match a {
+        None => (0, None),
+        Some(x) => {
+            let (carry, rest, digit) = if extra > 0 {
+                let (carry, rest) = add_aligned(x.next, b, extra - 1);
+                (carry, rest, x.val)
+            } else {
+                let y = b.expect("as many digits left in b as in a");
+                let (carry, rest) = add_aligned(x.next, y.next, 0);
+                (carry, rest, x.val + y.val)
+            };
+            let sum = digit + carry;
+            (sum / 10, Some(ListNode { val: sum % 10, next: rest }))
+        }
+    }
+}
+
+fn add_two_numbers_recursive(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let m = length(l1);
+    let n = length(l2);
+    let (carry, sum) = if m >= n { add_aligned(l1, l2, m - n) } else { add_aligned(l2, l1, n - m) };
+    if carry > 0 {
+        return Some(ListNode { val: carry, next: sum });
+    }
+    sum
+}
+
+// ---- nines: add_two_numbers_nines.kara
+
+fn length_nines(list: Option[ListNode]) -> i64 {
+    let mut count = 0;
+    let mut node = list;
+    while let Some(n) = node {
+        count += 1;
+        node = n.next;
+    }
+    count
+}
+
+fn add_two_numbers_nines(l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    let mut left_a = length_nines(l1);
+    let mut left_b = length_nines(l2);
+    let mut a = l1;
+    let mut b = l2;
+    let top = ListNode { val: 0, next: None };
+    let mut tail = top;
+    let mut below_nine = top;
+    while left_a > 0 or left_b > 0 {
+        let mut digit = 0;
+        let take_a = left_a >= left_b;
+        let take_b = left_b >= left_a;
+        if take_a {
+            let x = a.expect("a digit left in a");
+            digit += x.val;
+            a = x.next;
+            left_a -= 1;
+        }
+        if take_b {
+            let y = b.expect("a digit left in b");
+            digit += y.val;
+            b = y.next;
+            left_b -= 1;
+        }
+        if digit >= 10 {
+            below_nine.val += 1;
+            let mut nine = below_nine.next;
+            while let Some(n) = nine {
+                n.val = 0;
+                nine = n.next;
+            }
+            digit -= 10;
+        }
+        let node = ListNode { val: digit, next: None };
+        tail.next = Some(node);
+        tail = node;
+        if digit < 9 {
+            below_nine = node;
+        }
+    }
+    if top.val > 0 {
+        return Some(top);
+    }
+    top.next
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, l1: Option[ListNode], l2: Option[ListNode]) -> Option[ListNode] {
+    if arm == 0 {
+        add_two_numbers_stacks(l1, l2)
+    } else if arm == 1 {
+        add_two_numbers_reverse(l1, l2)
+    } else if arm == 2 {
+        add_two_numbers_recursive(l1, l2)
+    } else {
+        add_two_numbers_nines(l1, l2)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn from_digits(digits: Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = digits.len();
+    while i > 0 {
+        i -= 1;
+        head = Some(ListNode { val: digits[i], next: head });
+    }
+    head
+}
+
+fn to_digits(list: Option[ListNode]) -> Vec[i64] {
+    let mut digits: Vec[i64] = Vec.new();
+    let mut node = list;
+    while let Some(n) = node {
+        digits.push(n.val);
+        node = n.next;
+    }
+    digits
+}
+
+// A random number of 1 to 40 digits (1 to 100 one time in ten), most
+// significant first, each digit a 9 half the time; no leading zero.
+fn random_digits(seed: mut ref i64) -> Vec[i64] {
+    let length = 1 + next_random(seed) % if next_random(seed) % 10 == 0 { 100 } else { 40 };
+    let mut digits: Vec[i64] = Vec.new();
+    for i in 0..length {
+        let mut d = if next_random(seed) % 2 == 0 { 9 } else { next_random(seed) % 10 };
+        if i == 0 and length > 1 and d == 0 {
+            d = 1;
+        }
+        digits.push(d);
+    }
+    digits
+}
+
+// Schoolbook addition on digit vectors, most significant first.
+fn add_digits(a: Vec[i64], b: Vec[i64]) -> Vec[i64] {
+    let mut reversed_sum: Vec[i64] = Vec.new();
+    let mut carry = 0;
+    let mut k = 0;
+    while k < a.len() or k < b.len() or carry > 0 {
+        let mut digit = carry;
+        if k < a.len() {
+            digit += a[a.len() - 1 - k];
+        }
+        if k < b.len() {
+            digit += b[b.len() - 1 - k];
+        }
+        reversed_sum.push(digit % 10);
+        carry = digit / 10;
+        k += 1;
+    }
+    reversed_sum.reverse();
+    reversed_sum
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4450;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let a = random_digits(mut seed);
+        let b = random_digits(mut seed);
+        let c = random_digits(mut seed);
+        let want = add_digits(a, b);
+        for arm in 0..4 {
+            // Fresh lists for each arm, so that an arm that changed its
+            // inputs fails only its own checks.
+            let l1 = from_digits(a);
+            let l2 = from_digits(b);
+            let l3 = from_digits(c);
+            let zero = from_digits(vec![0]);
+            checks += 5;
+            let sum = solve(arm, l1, l2);
+            report(1, arm, case, to_digits(sum) == want, mut failures);
+            report(2, arm, case, to_digits(solve(arm, l2, l1)) == want, mut failures);
+            report(3, arm, case, to_digits(l1) == a and to_digits(l2) == b, mut failures);
+            report(4, arm, case, to_digits(solve(arm, l1, zero)) == a and to_digits(solve(arm, zero, l2)) == b, mut failures);
+            let left = solve(arm, sum, l3);
+            let right = solve(arm, l1, solve(arm, l2, l3));
+            report(5, arm, case, to_digits(left) == to_digits(right) and to_digits(left) == add_digits(want, c), mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}
