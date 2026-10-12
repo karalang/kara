@@ -1,0 +1,13 @@
+[10] f4 f3 f2 f1 f0 b0 b1 b2 b3 b4 
+Some(f4) Some(b4) Some(f1) None f4 b4
+Some(f4)
+Some(f3)
+Some(f2)
+[7] f1 f0 b0 b1 b2 b3 b4 
+[7] f1 f0 b0 b1 b2 b3 b4 
+[22] x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24 x25 x26 x27 x28 x29 
+[3] again x28 x29 
+Some(x29) Some(x28) Some(again) None true
+[1] solo 
+55611 666 Some(334) Some(999)
+f1f0b0b1b2b3b4

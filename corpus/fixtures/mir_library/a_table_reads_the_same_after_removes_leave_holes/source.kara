@@ -44,7 +44,7 @@ fn main() {
     println(f"{s} {s.len()}");
     let mut t: Set[String] = Set.new();
     t.insert("s4"); t.insert("zz");
-    println(f"{s.union(t)} {s.intersection(t)} {s.difference(t)}");
+    println(f"{s.union(t.clone())} {s.intersection(t.clone())} {s.difference(t)}");
     for x in s { println(x); }
     let mut e: Map[String, i64] = Map.new();
     e.insert("a", 1); e.insert("b", 2); e.insert("c", 3);

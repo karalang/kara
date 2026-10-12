@@ -21,7 +21,11 @@ names the entry and the rest go in `dedup_of`. For a fixture, the string
 literals of the test that holds it are kept as candidate expectations in the
 work manifest (`--work`, default target/corpus-work/manifest.json);
 `record.py` runs each program once on the legacy compiler and keeps a
-candidate as `expected_from = "assert"` only when it matches that run.
+candidate as `expected_from = "assert"` only when it matches that run. A
+program in tests/mir_*.rs that its test runs with `assert_runs(src,
+<literal>)`, or `assert_runs(<program>, <literal>)`, is a v2 pin instead: that helper asserts exit 0 and exactly the
+literal as the MIR pipeline's stdout, so the literal is written as
+expected.out with `expected_from = "pin"`, whatever the legacy run does.
 
 Re-running is safe. An unchanged program keeps its recorded files. A program
 whose corpus copy is still the text extracted last time (meta.toml's
@@ -51,6 +55,7 @@ from corpus_lib import ROOT, write_toml, read_toml, RECORDED  # noqa: E402
 HAS_MAIN = re.compile(r"(?m)^\s*(pub\s+)?fn\s+main\s*\(")
 # `&["a", "b"]`, `vec!["a", "b"]`, `["a", "b"]`: line arrays a test compares
 # against `out.lines()`.
+ASSERT_RUNS = re.compile(r"assert_runs\(\s*")
 STR_ARRAY = re.compile(r'\[\s*((?:"(?:[^"\\]|\\.)*"\s*,?\s*)+)\]', re.S)
 STR_LIT = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
 
@@ -131,6 +136,26 @@ def fixture_programs(tests: Path):
             for m in STR_ARRAY.finditer(text, start, end):
                 items = [unescape(x) for x in STR_LIT.findall(m.group(1))]
                 cands.append("\n".join(items))
+            # A tests/mir_*.rs program run by `assert_runs(src, <literal>)`
+            # is pinned by that literal: the helper asserts exit 0 and exactly
+            # that stdout from the MIR pipeline, so it is a v2 pin, written
+            # for v2, where the legacy run is only a record.
+            pin_text = None
+            if path.name.startswith("mir_") and len(progs) == 1:
+                call = ASSERT_RUNS.search(text, start, end)
+                lits = [t for t in toks if t[0] in ("raw", "str")]
+                at = None
+                if call and text.startswith("src", call.end()):
+                    # `let src = r#"..."#; assert_runs(src, <want>)`
+                    arg = re.compile(r"src\s*,\s*").match(text, call.end())
+                    at = arg.end() if arg else None
+                elif call and progs[0][1] == call.end():
+                    # `assert_runs(r#"<program>"#, <want>)`: the literal after it
+                    later = [t[1] for t in lits if t[1] > call.end()]
+                    at = later[0] if later else None
+                lit = [t for t in lits if t[1] == at]
+                if lit:
+                    pin_text = lit[0][2] if lit[0][0] == "raw" else unescape(lit[0][2])
             for _, off, src in progs:
                 before = text[max(0, off - 40) : off]
                 base = {
@@ -139,6 +164,7 @@ def fixture_programs(tests: Path):
                     "file": str(path.relative_to(tests.parent)),
                     "line": text.count("\n", 0, off) + 1,
                     "candidates": [c for c in dict.fromkeys(cands) if c.strip()],
+                    "pin_text": pin_text,
                 }
                 # A literal the test finishes at run time is not a program:
                 # `format!(r#"..."#, ..)` fills holes, and `String::from(r#"..."#)`
@@ -196,6 +222,7 @@ def main() -> int:
         meta = {"source": source, "dedup_of": [], "tags": list(extra.get("tags", []))}
         meta.update(extra.get("meta", {}))
         entries[h] = {"dir": d, "src": src, "meta": meta, "kind": kind, "pin": extra.get("pin_expected"),
+                      "pin_text": extra.get("pin_text"),
                       "candidates": list(extra.get("candidates", []))}
 
     if args.pins:
@@ -237,7 +264,7 @@ def main() -> int:
     for p in fixture_programs(Path(args.tests)):
         tags = ["format-template"] if p["template"] else []
         add(p["area"], p["holder"], f"{p['file']}::{p['holder']}", p["src"], "fixture",
-            {"tags": tags, "candidates": p["candidates"]})
+            {"tags": tags, "candidates": p["candidates"], "pin_text": p["pin_text"]})
 
     if args.katas:
         kroot = Path(args.katas)
@@ -310,6 +337,10 @@ def main() -> int:
             del meta["note"]
         if e["pin"] is not None:
             shutil.copy(e["pin"], dest / "expected.out")
+        if e.get("pin_text") is not None:
+            (dest / "expected.out").write_text(e["pin_text"])
+            meta.update({"expect": "stdout", "exit": 0, "expected_from": "pin",
+                         "note": "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"})
         write_toml(dest / "meta.toml", meta)
         written.add(dest)
         manifest.append({"dir": e["dir"], "kind": e["kind"], "candidates": e["candidates"]})
