@@ -8,6 +8,6 @@ fn main() {
     let t: Vec[String] = Vec["cc".to_string()];
     let u: Vec[String] = s.iter().chain(t.iter()).cloned().collect();
     println(f"{u.len()} {u[0]}{u[2]} {s.len()} {t.len()}");
-    let c: Vec[i64] = (0..3).chain(b.iter()).collect();
+    let c: Vec[i64] = (0..3).chain(b.iter().cloned()).collect();
     println(f"{c.len()} {c[0]} {c[2]} {c[3]} {c[4]}");
 }
