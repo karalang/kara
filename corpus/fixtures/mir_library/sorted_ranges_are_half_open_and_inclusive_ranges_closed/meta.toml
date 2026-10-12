@@ -1,0 +1,17 @@
+source = "tests/mir_library.rs::sorted_ranges_are_half_open_and_inclusive_ranges_closed"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:sortedmap", "lib:sortedset"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "fb33d3d01"
+extracted_src = "7da92b01"
+model_rev = "1aa23105"
+model_src = "7da92b01"

@@ -1,0 +1,7 @@
+
+fn main() {
+    let a: Option[i64] = Some(4);
+    let x = a.unwrap_or(0);
+    let y = a.map(|v| v + 1).unwrap_or(0);
+    println(f"{x} {y} {a.is_some()}");
+}

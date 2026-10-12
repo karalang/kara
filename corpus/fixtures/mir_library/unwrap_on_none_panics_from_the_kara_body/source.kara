@@ -1,0 +1,6 @@
+
+fn main() {
+    let a: Option[i64] = None;
+    println("before");
+    println(f"{a.expect("never")}");
+}

@@ -1,0 +1,8 @@
+
+struct P { a: i64, b: u8 }
+fn main() {
+    let s: i64 = u32.size_of();
+    let a: i64 = i64.align_of();
+    let v = Vec[i64].size_of();
+    println(f"{s} {a} {P.size_of()} {v > 0}");
+}

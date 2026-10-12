@@ -1,0 +1,17 @@
+source = "tests/mir_library.rs::an_option_of_a_copy_type_is_copied_into_a_by_value_method"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "a"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "fb33d3d01"
+extracted_src = "3cc758c9"
+model_rev = "1aa23105"
+model_src = "3cc758c9"

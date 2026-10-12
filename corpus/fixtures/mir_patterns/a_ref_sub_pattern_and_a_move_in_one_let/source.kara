@@ -1,0 +1,7 @@
+
+struct P { a: String, b: String }
+fn main() {
+    let p = P { a: "x", b: "y" };
+    let P { a: ref a, b } = p;
+    println(f"{a} {b}");
+}

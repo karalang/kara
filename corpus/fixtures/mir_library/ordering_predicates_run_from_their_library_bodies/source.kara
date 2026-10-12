@@ -1,0 +1,6 @@
+
+fn main() {
+    let o = 3.cmp(5);
+    println(f"{o.is_lt()} {o.is_ge()} {5.cmp(5).is_le()} {5.cmp(5).is_eq()}");
+    println(f"{Ordering.Less.is_lt()} {Ordering.Greater.is_le()} {Ordering.Equal.is_ge()}");
+}

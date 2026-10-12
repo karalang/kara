@@ -1,0 +1,35 @@
+// Benchmark for #377: 2,000 cases of 200 distinct values in [125, 1000)
+// and target 1,000, the problem's largest, counted up from 0 with the
+// kata's capped table. Every answer is below 2^31.
+
+const CAP: i64 = 2147483648;
+
+fn combination_sum4(nums: ref Vec[i64], target: i64) -> i64 {
+    let mut ways = vec![0; target + 1];
+    ways[0] = 1;
+    for t in 1..=target {
+        for x in nums.iter() {
+            if x <= t {
+                ways[t] = (ways[t] + ways[t - x]).min(CAP);
+            }
+        }
+    }
+    ways[target]
+}
+
+fn main() {
+    let mut seed: i64 = 377;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let mut nums: Vec[i64] = Vec.new();
+        while nums.len() < 200 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let v = 125 + (seed / 65536) % 875;
+            if not nums.contains(v) {
+                nums.push(v);
+            }
+        }
+        checksum = (checksum * 1009 + combination_sum4(nums, 1000)) % 1000000007;
+    }
+    println(f"checksum {checksum}");
+}

@@ -1,0 +1,10 @@
+
+fn connect(host: String; port: i64 = 443, timeout_ms: i64) -> i64 { port + timeout_ms }
+fn main() {
+    let a = connect(host: "db", timeout_ms: 1);
+    let b = connect("db");
+    let c = connect("db", timeout_ms: 1, timeout_ms: 2);
+    let d = connect("db", tls: 1, timeout_ms: 2);
+    let e = connect("db", 443, 1);
+    println(f"{a}{b}{c}{d}{e}");
+}

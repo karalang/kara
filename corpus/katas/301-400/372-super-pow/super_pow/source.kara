@@ -1,0 +1,67 @@
+// LeetCode #372: Super Pow -- one digit of the exponent at a time.
+//
+// Read the exponent's digits from the most significant: if the digits so
+// far make e, then one more digit d makes 10e + d, and a^(10e + d) =
+// (a^e)^10 * a^d. So the answer so far goes to the 10th power and gains a
+// factor a^d, everything mod 1337. Reducing a mod 1337 first keeps every
+// product below 1337^2. O(len(b)) multiplications of small numbers.
+
+const MODULUS: i64 = 1337;
+
+fn pow_mod(base: i64, exp: i64) -> i64 {
+    let mut out = 1;
+    for _ in 0..exp {
+        out = out * base % MODULUS;
+    }
+    out
+}
+
+fn super_pow(a: i64, b: ref Vec[i64]) -> i64 {
+    let base = a % MODULUS;
+    let mut out = 1;
+    for d in b.iter() {
+        out = pow_mod(out, 10) * pow_mod(base, d) % MODULUS;
+    }
+    out
+}
+
+fn show(label: String, a: i64, b: Vec[i64]) {
+    println(f"{label}: {super_pow(a, b)}");
+}
+
+fn main() {
+    show("example 1", 2, vec![3]);
+    show("example 2", 2, vec![1, 0]);
+    show("example 3", 1, vec![4, 3, 3, 8, 5, 2]);
+    show("example 4", 2147483647, vec![2, 0, 0]);
+    show("a multiple of 1337", 2674, vec![5]);
+    show("one more than 1337", 1338, vec![9, 9, 9]);
+    show("a = 7, a factor of 1337", 7, vec![1, 2, 3, 4]);
+    show("a = 191, the other factor", 191, vec![1, 2, 3, 4]);
+    show("exponent 1", 12345, vec![1]);
+    let mut nines: Vec[i64] = Vec.new();
+    for _ in 0..2000 {
+        nines.push(9);
+    }
+    show("2000 nines", 3, nines);
+    // Random bases up to 2^31 - 1 with exponents of up to 200 digits: fold
+    // every answer into a checksum.
+    let mut seed: i64 = 372;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let high = seed / 65536;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let a = 1 + (high * 65536 + seed / 32768) % 2147483647;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 1 + (seed / 65536) % 200;
+        let mut b: Vec[i64] = Vec.new();
+        for k in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let d = (seed / 65536) % 10;
+            b.push(if k == 0 and d == 0 { 1 } else { d });
+        }
+        checksum = (checksum * 1337 + super_pow(a, b)) % 1000000007;
+    }
+    println(f"300 random cases: checksum {checksum}");
+}

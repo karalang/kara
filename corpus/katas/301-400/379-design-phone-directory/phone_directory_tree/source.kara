@@ -1,0 +1,114 @@
+// LeetCode #379: Design Phone Directory -- a segment tree of free counts.
+//
+// A complete binary tree over the numbers, padded to a power of two, with
+// each node holding how many free numbers lie beneath it (padding counts
+// as not free). get() walks down from the root, going left whenever the
+// left child has a free number, to the smallest free leaf; then it and
+// release() fix the counts on the way back to the root. O(log n) each,
+// O(1) for check, which reads the leaf.
+
+struct PhoneDirectory {
+    size: i64,
+    free: Vec[i64],
+}
+
+impl PhoneDirectory {
+    fn new(max_numbers: i64) -> PhoneDirectory {
+        let mut size = 1;
+        while size < max_numbers {
+            size *= 2;
+        }
+        let mut free = vec![0; 2 * size];
+        for n in 0..max_numbers {
+            free[size + n] = 1;
+        }
+        let mut i = size - 1;
+        while i >= 1 {
+            free[i] = free[2 * i] + free[2 * i + 1];
+            i -= 1;
+        }
+        PhoneDirectory { size, free }
+    }
+
+    fn set(mut ref self, number: i64, value: i64) {
+        let mut i = self.size + number;
+        self.free[i] = value;
+        i /= 2;
+        while i >= 1 {
+            self.free[i] = self.free[2 * i] + self.free[2 * i + 1];
+            i /= 2;
+        }
+    }
+
+    fn get(mut ref self) -> i64 {
+        if self.free[1] == 0 {
+            return -1;
+        }
+        let mut i = 1;
+        while i < self.size {
+            i = if self.free[2 * i] > 0 { 2 * i } else { 2 * i + 1 };
+        }
+        let number = i - self.size;
+        self.set(number, 0);
+        number
+    }
+
+    fn check(ref self, number: i64) -> bool {
+        self.free[self.size + number] == 1
+    }
+
+    fn release(mut ref self, number: i64) {
+        self.set(number, 1);
+    }
+}
+
+fn b(x: bool) -> String {
+    if x { "true" } else { "false" }
+}
+
+fn main() {
+    let mut d = PhoneDirectory.new(3);
+    println(f"example: get {d.get()}, get {d.get()}, check 2 {b(d.check(2))}, get {d.get()}, check 2 {b(d.check(2))}");
+    d.release(2);
+    println(f"after release 2: check 2 {b(d.check(2))}, get {d.get()}");
+    let mut one = PhoneDirectory.new(1);
+    println(f"one number: get {one.get()}, get {one.get()}, check 0 {b(one.check(0))}");
+    one.release(0);
+    one.release(0);
+    println(f"released twice: get {one.get()}, get {one.get()}");
+    let mut e = PhoneDirectory.new(5);
+    e.release(3);
+    println(f"releasing a free number: get {e.get()}, get {e.get()}, get {e.get()}, get {e.get()}, get {e.get()}, get {e.get()}");
+    let mut f = PhoneDirectory.new(6);
+    for _ in 0..6 {
+        f.get();
+    }
+    f.release(4);
+    f.release(1);
+    println(f"smallest free first: get {f.get()}, get {f.get()}, get {f.get()}");
+    // Random directories of up to 1,000 numbers, each driven by 1,000
+    // operations: half gets, a quarter checks, a quarter releases.
+    let mut seed: i64 = 379;
+    let mut checksum: i64 = 0;
+    for _ in 0..100 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let m = 1 + (seed / 65536) % 1000;
+        let mut dir = PhoneDirectory.new(m);
+        for _ in 0..1000 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let op = (seed / 65536) % 4;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let x = (seed / 65536) % m;
+            let v = if op <= 1 {
+                dir.get() + 1
+            } else if op == 2 {
+                if dir.check(x) { 1 } else { 0 }
+            } else {
+                dir.release(x);
+                0
+            };
+            checksum = (checksum * 31 + v) % 1000000007;
+        }
+    }
+    println(f"100 random directories: checksum {checksum}");
+}

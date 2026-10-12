@@ -1,0 +1,18 @@
+
+struct Box2 { name: Option[String], n: Option[i64] }
+impl Box2 {
+    fn name_len(ref self) -> i64 {
+        match self.name { Some(s) => s.len(), None => 0 }
+    }
+}
+fn main() {
+    let b = Box2 { name: Some("abc".to_string()), n: Some(4) };
+    match b.name.as_ref() { Some(s) => println(f"{s}"), None => println("none") }
+    match b.n.as_ref() { Some(k) => println(f"{k}"), None => println("none") }
+    println(f"{b.name_len()}");
+    let mut o: Option[String] = Some("x".to_string());
+    let t = o.take();
+    println(f"{t.is_some()} {o.is_none()}");
+    let old = o.replace("y".to_string());
+    println(f"{old.is_none()} {o.unwrap()}");
+}

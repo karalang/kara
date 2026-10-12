@@ -1,0 +1,6 @@
+
+fn main() {
+    let v: Vec[String] = ["alpha", "beta"];
+    let r: Vec[String] = v.iter().rev().collect();
+    println(f"{r}");
+}

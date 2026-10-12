@@ -1,0 +1,53 @@
+// Benchmark for #369: 20 random numbers of 100,000 digits as linked lists,
+// half of them ending in a run of 50,000 nines, each given plus one 20 times
+// with the kata's last-non-9 walk.
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+fn plus_one(head: Option[ListNode]) -> Option[ListNode] {
+    let front = ListNode { val: 0, next: head };
+    let mut last = front;
+    let mut at = front.next;
+    while let Some(node) = at {
+        if node.val != 9 {
+            last = node;
+        }
+        at = node.next;
+    }
+    last.val += 1;
+    let mut rest = last.next;
+    while let Some(node) = rest {
+        node.val = 0;
+        rest = node.next;
+    }
+    if front.val == 1 { Some(front) } else { front.next }
+}
+
+fn main() {
+    let mut seed: i64 = 369;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for i in 0..20 {
+        // Built from the least significant digit up, so each new node goes
+        // in front.
+        let mut head: Option[ListNode] = None;
+        for k in 0..100000 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let d = if i % 2 == 0 and k < 50000 { 9 } else { (seed / 65536) % 10 };
+            head = Some(ListNode { val: if k == 99999 and d == 0 { 1 } else { d }, next: head });
+        }
+        for _ in 0..20 {
+            head = plus_one(head);
+        }
+        let mut at = head;
+        while let Some(node) = at {
+            total += 1;
+            checksum = (checksum * 31 + node.val) % 1000000007;
+            at = node.next;
+        }
+    }
+    println(f"{total} digits, checksum {checksum}");
+}

@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::an_own_parameter_of_a_bounded_function_moves"
+dedup_of = []
+expect = "error:E0500"
+exit = 1
+tags = ["closure", "uses-moved"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "fb33d3d01"
+extracted_src = "555595c7"
+model_rev = "1aa23105"
+model_src = "555595c7"

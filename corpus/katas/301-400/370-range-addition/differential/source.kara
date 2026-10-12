@@ -1,0 +1,190 @@
+// LeetCode #370: differential test. The difference-array, sweep and Fenwick
+// arms against the brute-force arm, which applies every update cell by
+// cell, as the oracle, over 2,000 random arrays. Properties: P1 each arm
+// gives the oracle's array; P2 the cells add up to the sum of inc times
+// range length over the updates; P3 reversing the order of the updates
+// changes nothing; P4 splitting every update in two changes nothing; P5
+// adding the negation of every update leaves all zeros.
+
+fn diff_arm(length: i64, updates: ref Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut diff = vec![0; length + 1];
+    for (start, end, inc) in updates.iter() {
+        diff[start] += inc;
+        diff[end + 1] -= inc;
+    }
+    let mut out = vec![0; length];
+    let mut running = 0;
+    for i in 0..length {
+        running += diff[i];
+        out[i] = running;
+    }
+    out
+}
+
+fn sweep_arm(length: i64, updates: ref Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut events: Vec[(i64, i64)] = Vec.new();
+    for (start, end, inc) in updates.iter() {
+        events.push((start, inc));
+        events.push((end + 1, -inc));
+    }
+    events.sort_by(|a, b| a.0.cmp(b.0));
+    let mut out = vec![0; length];
+    let mut running = 0;
+    let mut next = 0;
+    for i in 0..length {
+        while next < events.len() and events[next].0 == i {
+            running += events[next].1;
+            next += 1;
+        }
+        out[i] = running;
+    }
+    out
+}
+
+fn add(tree: mut ref Vec[i64], at: i64, delta: i64) {
+    let mut i = at + 1;
+    while i < tree.len() {
+        tree[i] += delta;
+        i += i & (0 - i);
+    }
+}
+
+fn prefix(tree: ref Vec[i64], at: i64) -> i64 {
+    let mut sum = 0;
+    let mut i = at + 1;
+    while i > 0 {
+        sum += tree[i];
+        i -= i & (0 - i);
+    }
+    sum
+}
+
+fn fenwick_arm(length: i64, updates: ref Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut tree = vec![0; length + 2];
+    for (start, end, inc) in updates.iter() {
+        add(mut tree, start, inc);
+        add(mut tree, end + 1, -inc);
+    }
+    let mut out = vec![0; length];
+    for i in 0..length {
+        out[i] = prefix(tree, i);
+    }
+    out
+}
+
+fn oracle(length: i64, updates: ref Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut out = vec![0; length];
+    for (start, end, inc) in updates.iter() {
+        for i in start..=end {
+            out[i] += inc;
+        }
+    }
+    out
+}
+
+fn answer(arm: i64, length: i64, updates: ref Vec[(i64, i64, i64)]) -> Vec[i64] {
+    match arm {
+        0 => diff_arm(length, updates),
+        1 => sweep_arm(length, updates),
+        _ => fenwick_arm(length, updates),
+    }
+}
+
+fn name(arm: i64) -> String {
+    match arm {
+        0 => "diff",
+        1 => "sweep",
+        _ => "fenwick",
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 370;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut fails = vec![0; 5];
+    for case in 0..2000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let length = 1 + (seed / 65536) % 40;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let count = (seed / 65536) % 31;
+        // Half the cases with small increments, so cells cancel to zero often.
+        let spread = if case % 2 == 0 { 5 } else { 1000 };
+        let mut updates: Vec[(i64, i64, i64)] = Vec.new();
+        let mut split: Vec[(i64, i64, i64)] = Vec.new();
+        let mut undone: Vec[(i64, i64, i64)] = Vec.new();
+        let mut total = 0;
+        for _ in 0..count {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let a = (seed / 65536) % length;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let b = (seed / 65536) % length;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let inc = (seed / 65536) % (2 * spread + 1) - spread;
+            let start = a.min(b);
+            let end = a.max(b);
+            updates.push((start, end, inc));
+            total += inc * (end - start + 1);
+            // Split at a cell inside the range: [start, mid] and [mid + 1, end].
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let mid = start + (seed / 65536) % (end - start + 1);
+            split.push((start, mid, inc));
+            if mid < end {
+                split.push((mid + 1, end, inc));
+            }
+        }
+        for u in updates.iter() {
+            undone.push(u);
+        }
+        for (start, end, inc) in updates.iter() {
+            undone.push((start, end, -inc));
+        }
+        let mut reversed = updates.clone();
+        reversed.reverse();
+        let expected = oracle(length, updates);
+        let zeros = vec![0; length];
+        for arm in 0..3 {
+            let got = answer(arm, length, updates);
+            let mut bad = vec![false; 5];
+            checks += 1;
+            if got != expected {
+                bad[0] = true;
+            }
+            checks += 1;
+            let mut sum = 0;
+            for v in got.iter() {
+                sum += v;
+            }
+            if sum != total {
+                bad[1] = true;
+            }
+            checks += 1;
+            if answer(arm, length, reversed) != got {
+                bad[2] = true;
+            }
+            checks += 1;
+            if answer(arm, length, split) != got {
+                bad[3] = true;
+            }
+            checks += 1;
+            if answer(arm, length, undone) != zeros {
+                bad[4] = true;
+            }
+            for p in 0..5 {
+                if bad[p] {
+                    fails[p] += 1;
+                    failures += 1;
+                    if failures <= 5 {
+                        println(f"FAIL P{p + 1} {name(arm)} length={length} updates={updates}");
+                    }
+                }
+            }
+        }
+    }
+    for p in 0..5 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    println(f"2000 cases, {checks} checks, {failures} failures");
+}

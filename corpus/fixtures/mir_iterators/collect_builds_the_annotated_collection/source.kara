@@ -1,0 +1,12 @@
+
+fn main() {
+    let v = vec![1, 2, 2];
+    let s: Set[i64] = v.iter().collect();
+    println(f"{s.len()}");
+    let ks = vec![1, 2];
+    let m: Map[i64, i64] = ks.iter().map(|k| (*k, *k * 10)).collect();
+    println(f"{m.len()} {m[2]}");
+    let cs = vec!['a', 'b'];
+    let st: String = cs.iter().cloned().collect();
+    println(st);
+}

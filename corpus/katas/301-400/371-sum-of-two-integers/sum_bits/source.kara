@@ -1,0 +1,47 @@
+// LeetCode #371: Sum of Two Integers -- a ripple-carry adder, bit by bit.
+//
+// Walk the 64 bits from the lowest: each output bit is the exclusive or of
+// the two input bits and the carry in, and the carry out is set when at
+// least two of those three are. `>>` on an i64 is arithmetic, so bit i of
+// a negative number reads correctly, and setting bit 63 with `1 << 63` is
+// a legal shift. O(64).
+
+fn get_sum(a: i64, b: i64) -> i64 {
+    let mut out: i64 = 0;
+    let mut carry: i64 = 0;
+    for i in 0..64 {
+        let x = (a >> i) & 1;
+        let y = (b >> i) & 1;
+        out = out | ((x ^ y ^ carry) << i);
+        carry = (x & y) | (x & carry) | (y & carry);
+    }
+    out
+}
+
+fn show(label: String, a: i64, b: i64) {
+    println(f"{label}: {get_sum(a, b)}");
+}
+
+fn main() {
+    show("example 1", 1, 2);
+    show("example 2", 2, 3);
+    show("zeros", 0, 0);
+    show("minus one plus one", -1, 1);
+    show("both at the lower bound", -1000, -1000);
+    show("both at the upper bound", 1000, 1000);
+    show("opposite bounds", 1000, -1000);
+    show("a negative result", -7, 3);
+    show("a carry through every bit", -1, -1);
+    show("zero and a negative", 0, -1000);
+    // Random pairs in [-1000, 1000]: fold every sum into a checksum.
+    let mut seed: i64 = 371;
+    let mut checksum: i64 = 0;
+    for _ in 0..5000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let a = (seed / 65536) % 2001 - 1000;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let b = (seed / 65536) % 2001 - 1000;
+        checksum = (checksum * 31 + get_sum(a, b) + 5000) % 1000000007;
+    }
+    println(f"5000 random pairs: checksum {checksum}");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/370-range-addition/bench/range_addition.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["mirror-agrees", "bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "fb33d3d01"
+extracted_src = "b3d613cb"
+model_rev = "1aa23105"
+model_src = "b3d613cb"

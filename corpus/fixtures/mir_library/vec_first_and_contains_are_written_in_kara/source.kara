@@ -1,0 +1,18 @@
+
+struct P { x: i64, tag: i64 }
+impl PartialEq for P { fn eq(ref self, other: ref P) -> bool { self.x == other.x } }
+fn same[T: PartialEq](a: T, b: T) -> bool { a == b }
+fn main() {
+    let v = vec![3, 1, 4];
+    println(f"{v.first()} {v.last()} {v.contains(4)} {v.contains(9)}");
+    let e: Vec[i64] = Vec.new();
+    println(f"{e.first()} {e.last()} {e.contains(1)}");
+    let s = vec!["a".to_string(), "b".to_string()];
+    let b = "b".to_string();
+    println(f"{s.contains(b)} {s.last().unwrap()}");
+    let ps = vec![P { x: 1, tag: 0 }, P { x: 2, tag: 0 }];
+    println(f"{ps.contains(P { x: 2, tag: 7 })} {ps.first().unwrap().x}");
+    let a = P { x: 1, tag: 5 };
+    let b = P { x: 1, tag: 9 };
+    println(f"{a == b} {a != b} {same(a, b)}");
+}

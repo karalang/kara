@@ -1,0 +1,29 @@
+
+fn parse_pos(s: String) -> Result[i64, String] {
+    if s == "x" { Err(f"bad {s}") } else { Ok(s.len()) }
+}
+
+fn main() {
+    let a: Option[i64] = Some(3);
+    let b: Option[i64] = None;
+    println(f"{a.is_some()} {b.is_none()}");
+    println(f"{a.unwrap_or(7)} {b.unwrap_or(7)} {b.unwrap_or_else(|| 9)}");
+    let c = a.map(|x| x * 2);
+    println(f"{c.unwrap()} {b.map_or(-1, |x| x + 1)}");
+    let d = a.and_then(|x| if x > 1 { Some(x.to_string()) } else { None });
+    println(f"{d.unwrap()}");
+    let e: Option[String] = None;
+    println(f"{e.or(Some("z".to_string())).unwrap()}");
+    println(f"{a.filter(|x| x > 5).is_none()}");
+    let r = a.ok_or("none".to_string());
+    println(f"{r.is_ok()}");
+    let p = parse_pos("abc".to_string());
+    let q = parse_pos("x".to_string());
+    println(f"{p.is_ok()} {q.is_err()} {p.unwrap()} {parse_pos("x".to_string()).unwrap_or(0)}");
+    let m = q.map_err(|e| e.len());
+    println(f"{m.unwrap_err()} {parse_pos("abc".to_string()).map(|n| n * 10).unwrap()}");
+    let s = parse_pos("hey".to_string()).and_then(|n| parse_pos(n.to_string()));
+    println(f"{s.ok().unwrap()} {parse_pos("x".to_string()).err().unwrap()}");
+    let t = parse_pos("x".to_string()).unwrap_or_else(|e| e.len() * 100);
+    println(f"{t}");
+}

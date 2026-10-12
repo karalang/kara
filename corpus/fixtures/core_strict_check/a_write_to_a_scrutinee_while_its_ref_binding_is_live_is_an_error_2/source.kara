@@ -1,0 +1,23 @@
+
+struct T { tag: i64 }
+enum E { X(T), Y }
+fn main() {
+    let mut g = E.X(T { tag: 1 });
+    match g {
+        E.X(ref t) => {
+            println(t.tag);
+            g = E.Y;
+        }
+        E.Y => println(0),
+    }
+    let mut i = 0;
+    while let E.X(ref t) = g {
+        i = i + 1;
+        if i > 1 {
+            println(t.tag);
+            g = E.Y;
+        } else {
+            println(t.tag + 1);
+        }
+    }
+}

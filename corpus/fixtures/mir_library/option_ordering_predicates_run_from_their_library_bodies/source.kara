@@ -1,0 +1,7 @@
+
+fn main() {
+    let a: Option[Ordering] = Some(Ordering.Less);
+    let n: Option[Ordering] = None;
+    println(f"{a.is_lt()} {a.is_le()} {a.is_gt()} {a.is_ge()} {a.is_eq()}");
+    println(f"{n.is_lt()} {n.is_le()} {n.is_ge()} {n.is_eq()}");
+}

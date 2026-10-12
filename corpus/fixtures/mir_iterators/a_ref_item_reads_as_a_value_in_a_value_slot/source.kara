@@ -1,0 +1,23 @@
+
+shared struct Node { val: i64 }
+fn mk() -> Vec[(i64, i64)] {
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    let v = vec![6, 5];
+    for j in v.iter() {
+        pairs.push((1, j));
+    }
+    pairs.sort();
+    return pairs;
+}
+fn main() {
+    for p in mk().iter() {
+        let (i, j) = p;
+        print(f"{i}:{j} ");
+    }
+    let xs = vec![Node { val: 3 }];
+    let mut q: Vec[Node] = Vec.new();
+    for x in xs.iter() {
+        q.push(x);
+    }
+    println(f"{q[0].val} {xs[0].val}");
+}

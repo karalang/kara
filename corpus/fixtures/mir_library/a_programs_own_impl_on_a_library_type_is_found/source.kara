@@ -1,0 +1,15 @@
+
+impl[T] Option[T] {
+    fn get_or(own self, d: own T) -> T {
+        match self {
+            Some(x) => x,
+            None => d,
+        }
+    }
+}
+
+fn main() {
+    let a: Option[i64] = Some(3);
+    let b: Option[String] = None;
+    println(f"{a.get_or(7)} {b.get_or("dflt".to_string())}");
+}

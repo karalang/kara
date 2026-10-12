@@ -1,0 +1,47 @@
+// LeetCode #371: Sum of Two Integers -- add without + or -, carry loop.
+//
+// a ^ b adds each bit without its carry, and (a & b) << 1 is the carry,
+// moved to the bit it goes into. Adding those two is the same sum, so
+// repeat until there is no carry. In two's complement this also adds
+// negative numbers; the carry moves one bit left each round, so it is gone
+// after at most 64 rounds. `<<` may shift bits out of an i64 without a
+// trap (only a shift amount out of range traps). O(1), at most 64 rounds.
+
+fn get_sum(a: i64, b: i64) -> i64 {
+    let mut x = a;
+    let mut carry = b;
+    while carry != 0 {
+        let both = x & carry;
+        x = x ^ carry;
+        carry = both << 1;
+    }
+    x
+}
+
+fn show(label: String, a: i64, b: i64) {
+    println(f"{label}: {get_sum(a, b)}");
+}
+
+fn main() {
+    show("example 1", 1, 2);
+    show("example 2", 2, 3);
+    show("zeros", 0, 0);
+    show("minus one plus one", -1, 1);
+    show("both at the lower bound", -1000, -1000);
+    show("both at the upper bound", 1000, 1000);
+    show("opposite bounds", 1000, -1000);
+    show("a negative result", -7, 3);
+    show("a carry through every bit", -1, -1);
+    show("zero and a negative", 0, -1000);
+    // Random pairs in [-1000, 1000]: fold every sum into a checksum.
+    let mut seed: i64 = 371;
+    let mut checksum: i64 = 0;
+    for _ in 0..5000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let a = (seed / 65536) % 2001 - 1000;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let b = (seed / 65536) % 2001 - 1000;
+        checksum = (checksum * 31 + get_sum(a, b) + 5000) % 1000000007;
+    }
+    println(f"5000 random pairs: checksum {checksum}");
+}

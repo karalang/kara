@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/375-guess-number-higher-or-lower-ii/bench/money_amount.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["mirror-differs", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "fb33d3d01"
+extracted_src = "a5b1b85b"
+model_rev = "1aa23105"
+model_src = "a5b1b85b"

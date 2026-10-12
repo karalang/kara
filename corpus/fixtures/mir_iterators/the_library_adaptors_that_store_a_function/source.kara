@@ -1,0 +1,15 @@
+
+struct Counter { n: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] { self.n = self.n + 1; Some(self.n) }
+}
+fn main() {
+    let k = 10;
+    for s in Counter { n: 0 }.map(|x| f"<{x * k}>").take(3) { println(s); }
+    println(Counter { n: 0 }.filter(|x| x % 3 == 0).take(4).fold(0, |a, x| a + x));
+    for y in Counter { n: 0 }.filter_map(|x| if x % 2 == 0 { Some(x * x) } else { None }).take(3) { println(y); }
+    for x in Counter { n: 0 }.skip_while(|x| x < 5).take_while(|x| x < 8) { println(x); }
+    let t = Counter { n: 0 }.take(3).inspect(|x| println(f"saw {x}")).fold(0, |a, x| a + x);
+    println(t);
+}

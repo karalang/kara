@@ -1,0 +1,28 @@
+
+trait It2 {
+    type Item;
+    fn nxt(mut ref self) -> Option[Self.Item];
+    fn fold2[B](mut ref self, init: B, f: MutFn(B, Self.Item) -> B) -> B {
+        let mut acc = init;
+        loop {
+            match self.nxt() {
+                Some(x) => { acc = f(acc, x); }
+                None => break,
+            }
+        }
+        acc
+    }
+}
+struct Counter { n: i64, stop: i64 }
+impl It2 for Counter {
+    type Item = i64;
+    fn nxt(mut ref self) -> Option[i64] {
+        if self.n >= self.stop { return None; }
+        self.n = self.n + 1;
+        Some(self.n)
+    }
+}
+fn main() {
+    let mut d = Counter { n: 0, stop: 4 };
+    println(f"{d.fold2(100, |a, x| a + x)}");
+}

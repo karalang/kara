@@ -1,0 +1,8 @@
+
+shared struct S { t: String }
+fn main() {
+    let j = |q: S| q.t.clone();
+    let k = |q: S| { return q.t.clone(); };
+    println(j(S { t: "a" }));
+    println(k(S { t: "b" }));
+}

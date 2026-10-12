@@ -1,0 +1,47 @@
+// LeetCode #375: Guess Number Higher or Lower II -- interval DP.
+//
+// cost[i][j] is the least money that guarantees a win when the pick is in
+// [i, j]. One number costs nothing. Otherwise guessing k costs k if wrong,
+// and the pick is then in [i, k - 1] or [k + 1, j], whichever the judge
+// likes less for us: cost[i][j] = min over k of k + max(cost[i][k - 1],
+// cost[k + 1][j]). Fill by interval length, shortest first. The table has
+// a spare row and column so that cost[k + 1][j] at k = j and cost[i][k - 1]
+// at k = i read 0. O(n^3) time, O(n^2) space.
+
+fn get_money_amount(n: i64) -> i64 {
+    let mut cost: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 2 {
+        cost.push(vec![0; n + 2]);
+    }
+    for len in 2..n + 1 {
+        for i in 1..n - len + 2 {
+            let j = i + len - 1;
+            let mut best = i64.MAX;
+            for k in i..j + 1 {
+                let worse = cost[i][k - 1].max(cost[k + 1][j]);
+                best = best.min(k + worse);
+            }
+            cost[i][j] = best;
+        }
+    }
+    cost[1][n]
+}
+
+fn main() {
+    println(f"example 1: {get_money_amount(10)}");
+    println(f"example 2: {get_money_amount(1)}");
+    println(f"example 3: {get_money_amount(2)}");
+    let mut first: Vec[i64] = Vec.new();
+    for n in 1..21 {
+        first.push(get_money_amount(n));
+    }
+    println(f"n = 1 to 20: {first}");
+    println(f"n = 100: {get_money_amount(100)}");
+    println(f"n = 200, the largest: {get_money_amount(200)}");
+    // Every n from 1 to 60, folded into a checksum.
+    let mut checksum: i64 = 0;
+    for n in 1..61 {
+        checksum = (checksum * 1009 + get_money_amount(n)) % 1000000007;
+    }
+    println(f"n = 1 to 60: checksum {checksum}");
+}

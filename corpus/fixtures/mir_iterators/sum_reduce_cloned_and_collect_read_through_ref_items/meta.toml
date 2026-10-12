@@ -1,0 +1,17 @@
+source = "tests/mir_iterators.rs::sum_reduce_cloned_and_collect_read_through_ref_items"
+dedup_of = []
+expect = "error:E0209"
+exit = 1
+tags = ["closure", "io:fs"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "fb33d3d01"
+extracted_src = "066587cf"
+model_rev = "1aa23105"
+model_src = "066587cf"

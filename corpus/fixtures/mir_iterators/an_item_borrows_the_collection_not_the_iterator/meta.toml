@@ -1,0 +1,17 @@
+source = "tests/mir_iterators.rs::an_item_borrows_the_collection_not_the_iterator"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["closure"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "fb33d3d01"
+extracted_src = "3fc33e22"
+model_rev = "1aa23105"
+model_src = "3fc33e22"

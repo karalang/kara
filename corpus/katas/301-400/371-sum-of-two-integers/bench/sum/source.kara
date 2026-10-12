@@ -1,0 +1,26 @@
+// Benchmark for #371: five million random pairs in [-1000, 1000], each
+// added with the kata's carry loop.
+
+fn get_sum(a: i64, b: i64) -> i64 {
+    let mut x = a;
+    let mut carry = b;
+    while carry != 0 {
+        let both = x & carry;
+        x = x ^ carry;
+        carry = both << 1;
+    }
+    x
+}
+
+fn main() {
+    let mut seed: i64 = 371;
+    let mut checksum: i64 = 0;
+    for _ in 0..5000000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let a = (seed / 65536) % 2001 - 1000;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let b = (seed / 65536) % 2001 - 1000;
+        checksum = (checksum * 31 + get_sum(a, b) + 5000) % 1000000007;
+    }
+    println(f"checksum {checksum}");
+}

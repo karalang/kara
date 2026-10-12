@@ -1,0 +1,23 @@
+
+struct Counter { n: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] { self.n = self.n + 1; Some(self.n) }
+}
+fn main() {
+    for x in Counter { n: 0 }.take(2).chain(Counter { n: 10 }.take(2)) { println(x); }
+    for (a, b) in Counter { n: 0 }.zip(Counter { n: 100 }.skip(1)).take(2) {
+        println(f"{a} {b}");
+        if a > 1 { break; }
+    }
+    println(Counter { n: 0 }.take(4).fold(0, |acc, x| acc + x));
+    let mut c = Counter { n: 0 };
+    println(c.any(|x| x == 3));
+    println(c.n);
+    println(Counter { n: 0 }.take(5).all(|x| x < 9));
+    println(Counter { n: 0 }.find(|x| *x > 6).unwrap());
+    println(Counter { n: 0 }.position(|x| x == 4).unwrap());
+    let mut total = 0;
+    Counter { n: 0 }.take(3).for_each(|x| { total = total + x; });
+    println(total);
+}

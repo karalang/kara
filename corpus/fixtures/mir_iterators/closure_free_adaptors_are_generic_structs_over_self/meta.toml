@@ -1,0 +1,17 @@
+source = "tests/mir_iterators.rs::closure_free_adaptors_are_generic_structs_over_self"
+dedup_of = []
+expect = "error:codegen"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-interp"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "fb33d3d01"
+extracted_src = "aff245fb"
+model_rev = "1aa23105"
+model_src = "aff245fb"

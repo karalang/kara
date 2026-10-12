@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/378-kth-smallest-element-in-a-sorted-matrix/bench/kth_smallest.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "fb33d3d01"
+extracted_src = "08397299"
+model_rev = "1aa23105"
+model_src = "08397299"

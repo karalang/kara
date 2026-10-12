@@ -1,0 +1,64 @@
+// LeetCode #375: Guess Number Higher or Lower II -- O(n^2) with a deque.
+//
+// Fix j and let i fall from j - 1 to 1. In k + max(cost[i][k - 1],
+// cost[k + 1][j]) the left cost rises with k and the right cost falls, so
+// there is a last guess k0 where the left side is no dearer than the
+// right. Above k0 the left side decides and k + cost[i][k - 1] rises with
+// k, so k0 + 1 is the best of those. At or below k0 the right side decides,
+// and k + cost[k + 1][j] does not involve i at all: keep those values for
+// k in [i, k0] in a deque whose front is the least. As i falls, the left
+// costs grow, so k0 only falls: the window [i, k0] slides left, gaining i
+// at the back and losing guesses above k0 at the front. O(n^2).
+
+fn get_money_amount(n: i64) -> i64 {
+    let mut cost: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 2 {
+        cost.push(vec![0; n + 2]);
+    }
+    for j in 2..n + 1 {
+        let mut k0 = j;
+        let mut window: VecDeque[i64] = VecDeque.new();
+        window.push_back(j);
+        let mut i = j - 1;
+        while i >= 1 {
+            while cost[i][k0 - 1] > cost[k0 + 1][j] {
+                k0 -= 1;
+            }
+            let value = i + cost[i + 1][j];
+            while not window.is_empty() and window.back().unwrap() + cost[window.back().unwrap() + 1][j] >= value {
+                let _gone = window.pop_back();
+            }
+            window.push_back(i);
+            while window.front().unwrap() > k0 {
+                let _gone = window.pop_front();
+            }
+            let front = window.front().unwrap();
+            let mut best = front + cost[front + 1][j];
+            if k0 + 1 <= j {
+                best = best.min(k0 + 1 + cost[i][k0]);
+            }
+            cost[i][j] = best;
+            i -= 1;
+        }
+    }
+    cost[1][n]
+}
+
+fn main() {
+    println(f"example 1: {get_money_amount(10)}");
+    println(f"example 2: {get_money_amount(1)}");
+    println(f"example 3: {get_money_amount(2)}");
+    let mut first: Vec[i64] = Vec.new();
+    for n in 1..21 {
+        first.push(get_money_amount(n));
+    }
+    println(f"n = 1 to 20: {first}");
+    println(f"n = 100: {get_money_amount(100)}");
+    println(f"n = 200, the largest: {get_money_amount(200)}");
+    // Every n from 1 to 60, folded into a checksum.
+    let mut checksum: i64 = 0;
+    for n in 1..61 {
+        checksum = (checksum * 1009 + get_money_amount(n)) % 1000000007;
+    }
+    println(f"n = 1 to 60: checksum {checksum}");
+}

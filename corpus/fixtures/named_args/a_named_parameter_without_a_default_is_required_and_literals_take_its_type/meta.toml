@@ -1,0 +1,17 @@
+source = "tests/named_args.rs::a_named_parameter_without_a_default_is_required_and_literals_take_its_type"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "fb33d3d01"
+extracted_src = "ac65237a"
+model_rev = "1aa23105"
+model_src = "ac65237a"

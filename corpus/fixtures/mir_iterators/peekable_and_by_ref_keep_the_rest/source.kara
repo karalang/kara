@@ -1,0 +1,15 @@
+
+fn main() {
+    let v = vec![1, 2, 3];
+    let mut p = v.iter().peekable();
+    match p.peek() { Some(x) => println(f"peek {x}"), None => println("none") }
+    match p.peek() { Some(x) => println(f"again {x}"), None => println("none") }
+    match p.next() { Some(x) => println(f"next {x}"), None => println("none") }
+    println(f"count {p.count()}");
+    let mut e = v.iter().take(0).peekable();
+    if e.peek().is_none() { println("empty"); }
+    let mut it = v.iter();
+    for x in it.by_ref() { if x == 2 { break; } }
+    let rest: Vec[i64] = it.collect();
+    println(f"{rest}");
+}

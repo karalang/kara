@@ -1,0 +1,3 @@
+
+fn take[F: Fn(own String) -> i64](f: own F, s: own String) -> i64 { f(s) + f(s) }
+fn main() { println(take(|s| s.len(), "ab")); }

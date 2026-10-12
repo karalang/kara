@@ -1,0 +1,8 @@
+
+fn nums() -> Vec[i64] {
+    return Vec[10, 20, 30];
+}
+fn main() {
+    let pf: Vec[(i64, i64)] = nums().iter().enumerate().collect();
+    println(f"{pf.len()} {pf[1].0} {pf[2].1}");
+}

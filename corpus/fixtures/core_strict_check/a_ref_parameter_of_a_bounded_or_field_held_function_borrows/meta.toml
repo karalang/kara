@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::a_ref_parameter_of_a_bounded_or_field_held_function_borrows"
+dedup_of = []
+expect = "error:codegen"
+exit = 0
+tags = ["closure"]
+class = "a"
+expected_from = "legacy-interp"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "fb33d3d01"
+extracted_src = "ada7477c"
+model_rev = "1aa23105"
+model_src = "ada7477c"

@@ -1,0 +1,11 @@
+
+fn main() {
+    let v = vec![1, 2, 3];
+    let mut it = v.iter();
+    let a = it.next();
+    let b = it.next();
+    println(f"{a ?? 0} {b ?? 0}");
+    println(f"{v.iter().nth(1) ?? 0} {v.iter().last() ?? 0}");
+    let f = v.iter().find(|x| *x > 1);
+    println(f"{f ?? 0}");
+}

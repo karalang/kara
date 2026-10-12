@@ -1,0 +1,10 @@
+
+fn pair[A, B](a: A, b: B) -> (A, B) { (a, b) }
+fn make[const N: i64]() -> i64 { N }
+fn main() {
+    let q = pair[i64, bool](1, true);
+    let s = size_of[u32]();
+    let p = ptr.null[u8]();
+    let n = make[4]();
+    println(f"{q.0} {s} {n}");
+}

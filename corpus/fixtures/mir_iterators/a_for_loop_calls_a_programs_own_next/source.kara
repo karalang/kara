@@ -1,0 +1,24 @@
+
+struct Counter { n: i64, stop: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.n >= self.stop { return None; }
+        self.n = self.n + 1;
+        Some(self.n)
+    }
+}
+fn total[I: Iterator[Item = i64]](it: own I) -> i64 {
+    let mut t = 0;
+    for x in it {
+        t = t + x;
+    }
+    t
+}
+fn main() {
+    let c = Counter { n: 0, stop: 4 };
+    for x in c {
+        println(f"{x}");
+    }
+    println(f"{total(Counter { n: 0, stop: 3 })}");
+}

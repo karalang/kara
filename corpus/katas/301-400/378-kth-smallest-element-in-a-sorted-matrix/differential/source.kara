@@ -1,0 +1,206 @@
+// LeetCode #378: differential test. The value-search, heap, sort and
+// row-pointer arms against an oracle that counts, for each entry, how
+// many entries are smaller and how many are no larger, over 1,500 random
+// matrices up to 12 by 12. Properties: P1 each arm gives the oracle's
+// value; P2 transposing the matrix changes nothing; P3 adding a constant
+// to every entry adds it to the answer; P4 the answer never falls as k
+// grows; P5 negating the matrix and turning it half around keeps it
+// sorted, and its k-th smallest is minus the original's (n * n - k + 1)-th.
+
+fn count_at_most(matrix: Vec[Vec[i64]], x: i64) -> i64 {
+    let n = matrix.len();
+    let mut count = 0;
+    let mut row = n - 1;
+    let mut col = 0;
+    while row >= 0 and col < n {
+        if matrix[row][col] <= x {
+            count += row + 1;
+            col += 1;
+        } else {
+            row -= 1;
+        }
+    }
+    count
+}
+
+fn search_arm(matrix: Vec[Vec[i64]], k: i64) -> i64 {
+    let n = matrix.len();
+    let mut lo = matrix[0][0];
+    let mut hi = matrix[n - 1][n - 1];
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if count_at_most(matrix, mid) >= k {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+fn heap_arm(matrix: Vec[Vec[i64]], k: i64) -> i64 {
+    let n = matrix.len();
+    let mut heads: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    for r in 0..n.min(k) {
+        heads.push((matrix[r][0], r, 0));
+    }
+    let mut answer = 0;
+    for _ in 0..k {
+        if let Some((value, r, c)) = heads.pop() {
+            answer = value;
+            if c + 1 < n {
+                heads.push((matrix[r][c + 1], r, c + 1));
+            }
+        }
+    }
+    answer
+}
+
+fn sort_arm(matrix: Vec[Vec[i64]], k: i64) -> i64 {
+    let mut all: Vec[i64] = Vec.new();
+    for row in matrix.iter() {
+        for v in row.iter() {
+            all.push(v);
+        }
+    }
+    all.sort();
+    all[k - 1]
+}
+
+fn pointers_arm(matrix: Vec[Vec[i64]], k: i64) -> i64 {
+    let n = matrix.len();
+    let mut next = vec![0; n];
+    let mut answer = 0;
+    for _ in 0..k {
+        let mut best_row = -1;
+        for r in 0..n {
+            if next[r] < n {
+                if best_row < 0 or matrix[r][next[r]] < matrix[best_row][next[best_row]] {
+                    best_row = r;
+                }
+            }
+        }
+        answer = matrix[best_row][next[best_row]];
+        next[best_row] += 1;
+    }
+    answer
+}
+
+// The k-th smallest is the entry v with fewer than k entries below it and
+// at least k entries no larger than it.
+fn oracle(matrix: ref Vec[Vec[i64]], k: i64) -> i64 {
+    let n = matrix.len();
+    for i in 0..n {
+        for j in 0..n {
+            let v = matrix[i][j];
+            let mut below = 0;
+            let mut at_most = 0;
+            for a in 0..n {
+                for b in 0..n {
+                    if matrix[a][b] < v {
+                        below += 1;
+                    }
+                    if matrix[a][b] <= v {
+                        at_most += 1;
+                    }
+                }
+            }
+            if below < k and k <= at_most {
+                return v;
+            }
+        }
+    }
+    -1
+}
+
+fn answer(arm: i64, matrix: Vec[Vec[i64]], k: i64) -> i64 {
+    match arm {
+        0 => search_arm(matrix, k),
+        1 => heap_arm(matrix, k),
+        2 => sort_arm(matrix, k),
+        _ => pointers_arm(matrix, k),
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 378;
+    let mut checks = 0;
+    let mut fails = vec![0; 5];
+    for case in 0..1500 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 1 + (seed / 65536) % 12;
+        // A third of the matrices step by at most 1, so long runs of equal
+        // values are common.
+        let step = if case % 3 == 0 { 2 } else { 20 };
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let base = (seed / 65536) % 201 - 100;
+        let mut matrix: Vec[Vec[i64]] = Vec.new();
+        for i in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for j in 0..n {
+                seed = (seed * 1103515245 + 12345) % 2147483648;
+                let d = (seed / 65536) % step;
+                let v = if i == 0 and j == 0 {
+                    base
+                } else if i == 0 {
+                    row[j - 1] + d
+                } else if j == 0 {
+                    matrix[i - 1][0] + d
+                } else {
+                    matrix[i - 1][j].max(row[j - 1]) + d
+                };
+                row.push(v);
+            }
+            matrix.push(row);
+        }
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let k = 1 + (seed / 65536) % (n * n);
+        let mut transposed: Vec[Vec[i64]] = Vec.new();
+        let mut shifted: Vec[Vec[i64]] = Vec.new();
+        let mut turned: Vec[Vec[i64]] = Vec.new();
+        for i in 0..n {
+            let mut t_row: Vec[i64] = Vec.new();
+            let mut s_row: Vec[i64] = Vec.new();
+            let mut u_row: Vec[i64] = Vec.new();
+            for j in 0..n {
+                t_row.push(matrix[j][i]);
+                s_row.push(matrix[i][j] + 1000);
+                u_row.push(-matrix[n - 1 - i][n - 1 - j]);
+            }
+            transposed.push(t_row);
+            shifted.push(s_row);
+            turned.push(u_row);
+        }
+        let expected = oracle(matrix, k);
+        for arm in 0..4 {
+            let got = answer(arm, matrix.clone(), k);
+            checks += 4;
+            if got != expected {
+                fails[0] += 1;
+            }
+            if answer(arm, transposed.clone(), k) != got {
+                fails[1] += 1;
+            }
+            if answer(arm, shifted.clone(), k) != got + 1000 {
+                fails[2] += 1;
+            }
+            if k < n * n {
+                checks += 1;
+                if answer(arm, matrix.clone(), k + 1) < got {
+                    fails[3] += 1;
+                }
+            }
+            if answer(arm, turned.clone(), n * n - k + 1) != -got {
+                fails[4] += 1;
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..5 {
+        failures += fails[i];
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+    }
+    println(f"1500 cases, {checks} checks, {failures} failures");
+}

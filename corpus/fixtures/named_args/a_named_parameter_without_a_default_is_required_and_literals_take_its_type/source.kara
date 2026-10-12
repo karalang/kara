@@ -1,0 +1,5 @@
+
+fn small(; n: u8 = 1, m: u8) -> u8 { n + m }
+fn main() {
+    println(f"{small(m: 2)} {small(m: 250, n: 5)}");
+}

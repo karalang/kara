@@ -1,0 +1,24 @@
+
+struct Counter { n: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] { self.n = self.n + 1; Some(self.n) }
+}
+struct Insp[I, F] { it: I, f: F }
+impl[I: Iterator, F: MutFn(ref I.Item)] Iterator for Insp[I, F] {
+    type Item = I.Item;
+    fn next(mut ref self) -> Option[I.Item] {
+        match self.it.next() {
+            Some(x) => { (self.f)(x); Some(x) }
+            None => None,
+        }
+    }
+}
+fn insp[I: Iterator, F: MutFn(ref I.Item)](it: own I, f: own F) -> Insp[I, F] { Insp { it: it, f: f } }
+fn show(x: ref i64) { println(f"<{x}>"); }
+fn main() {
+    let mut t = 0;
+    for x in insp(Counter { n: 0 }, show) { t = t + x; if x == 2 { break; } }
+    for x in insp(Counter { n: 0 }, |x| println(x * 10)) { t = t + x; if x == 2 { break; } }
+    println(t);
+}

@@ -1,0 +1,10 @@
+example 1: [-2, 0, 3, 5, 3]
+example 2: [0, -4, 2, 2, 2, 4, 4, -4, -4, -4]
+no updates: [0, 0, 0, 0]
+one cell: [4]
+the whole array: [5, 5, 5, 5]
+updates that cancel: [0, 0, 0, 0, 0, 0]
+single cells: [1, 0, 2, 0, 3]
+nested ranges: [1, 2, 3, 4, 3, 2, 1]
+large increments: [1000, 0, 1000]
+300 random arrays: 29794 cells, checksum 78728660

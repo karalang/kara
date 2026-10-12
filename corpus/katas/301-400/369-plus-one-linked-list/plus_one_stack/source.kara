@@ -1,0 +1,98 @@
+// LeetCode #369: Plus One Linked List -- the nodes on a stack.
+//
+// Push every node onto a Vec, then pop from the least significant digit,
+// adding the carry until it runs out. A carry left over at the bottom of
+// the stack becomes a new leading 1. O(n), O(n) extra space.
+
+shared struct ListNode {
+    mut val: i64,
+    mut next: Option[ListNode],
+}
+
+fn plus_one(head: Option[ListNode]) -> Option[ListNode] {
+    let mut stack: Vec[ListNode] = Vec.new();
+    let mut at = head;
+    while let Some(node) = at {
+        stack.push(node);
+        at = node.next;
+    }
+    let mut carry = 1;
+    while carry == 1 {
+        match stack.pop() {
+            None => { return Some(ListNode { val: 1, next: head }); }
+            Some(node) => {
+                let sum = node.val + carry;
+                node.val = sum % 10;
+                carry = sum / 10;
+            }
+        }
+    }
+    head
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_digits(digits: ref Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    for i in (0..digits.len()).rev() {
+        head = Some(ListNode { val: digits[i], next: head });
+    }
+    head
+}
+
+fn to_text(list: Option[ListNode]) -> String {
+    let mut out = String.new();
+    let mut at = list;
+    while let Some(node) = at {
+        out.push_str(f"{node.val}");
+        at = node.next;
+    }
+    out
+}
+
+fn show(label: String, digits: Vec[i64]) {
+    println(f"{label}: {to_text(plus_one(from_digits(digits)))}");
+}
+
+fn main() {
+    show("example 1", vec![1, 2, 3]);
+    show("example 2", vec![0]);
+    show("one nine", vec![9]);
+    show("all nines", vec![9, 9, 9]);
+    show("trailing nines", vec![1, 9, 9]);
+    show("a carry that stops at an 8", vec![8, 9, 9, 9]);
+    show("zeros before the last digit", vec![1, 0, 0]);
+    show("a nine before the last digit", vec![9, 0]);
+    let mut nines: Vec[i64] = Vec.new();
+    for _ in 0..60 {
+        nines.push(9);
+    }
+    show("sixty nines", nines);
+    // Random numbers of 1 to 30 digits, ending in a run of nines half the
+    // time: total the result lengths and fold every digit into a checksum.
+    let mut seed: i64 = 369;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for i in 0..500 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 1 + (seed / 65536) % 30;
+        let mut digits: Vec[i64] = Vec.new();
+        for k in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let d = (seed / 65536) % 10;
+            if i % 2 == 0 and k >= n / 2 {
+                digits.push(9);
+            } else if k == 0 and n > 1 and d == 0 {
+                digits.push(1);
+            } else {
+                digits.push(d);
+            }
+        }
+        let text = to_text(plus_one(from_digits(digits)));
+        total += text.len();
+        for b in text.bytes() {
+            checksum = (checksum * 31 + (b as i64 - 48)) % 1000000007;
+        }
+    }
+    println(f"500 random numbers: {total} digits, checksum {checksum}");
+}

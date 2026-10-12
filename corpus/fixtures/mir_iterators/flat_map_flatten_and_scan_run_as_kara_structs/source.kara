@@ -1,0 +1,14 @@
+
+fn main() {
+    let v = vec![1, 2, 3];
+    let w: Vec[Vec[i64]] = vec![vec![1, 2], Vec.new(), vec![3]];
+    let a: Vec[i64] = w.iter().flat_map(|p| p.iter()).collect();
+    println(f"{a}");
+    let mut n = 0;
+    for x in w.iter().map(|p| p.iter()).flatten() { n = n + x; }
+    println(f"{n}");
+    let c: Vec[i64] = v.iter().scan(0, |acc, x| Some((acc + x, acc + x))).collect();
+    println(f"{c}");
+    let d: Vec[i64] = v.iter().scan(0, |acc, x| if x < 3 { Some((acc, x)) } else { None }).collect();
+    println(f"{d}");
+}

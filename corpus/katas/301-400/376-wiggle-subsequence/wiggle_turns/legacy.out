@@ -1,0 +1,11 @@
+example 1: 6
+example 2: 7
+example 3: 2
+one element: 1
+two equal: 1
+two different: 2
+all equal: 1
+plateaus between turns: 5
+strictly falling: 2
+bounds: 5
+300 random arrays: checksum 471818812

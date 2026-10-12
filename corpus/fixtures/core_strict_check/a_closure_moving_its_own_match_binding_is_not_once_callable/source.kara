@@ -1,0 +1,8 @@
+
+enum Ho { Full(String), Empty }
+fn main() {
+    let f = |q: Ho| { match q { Ho.Full(s) => s, Ho.Empty => "e".to_string() } };
+    let a = f(Ho.Full("x".to_string()));
+    let b = f(Ho.Empty);
+    println(f"{a} {b}");
+}

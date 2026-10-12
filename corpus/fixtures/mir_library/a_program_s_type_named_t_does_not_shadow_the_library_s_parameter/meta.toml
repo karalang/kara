@@ -1,0 +1,17 @@
+source = "tests/mir_library.rs::a_program_s_type_named_t_does_not_shadow_the_library_s_parameter"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared", "lib:set"]
+class = "a"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "fb33d3d01"
+extracted_src = "5f1d9239"
+model_rev = "1aa23105"
+model_src = "5f1d9239"

@@ -1,0 +1,16 @@
+
+struct R { n: i64 }
+impl R {
+    fn req(mut ref self, by: own String) { self.n = self.n + by.len(); }
+    fn go(mut ref self) {
+        let who = "w";
+        for i in 0..3 {
+            self.req(who.clone());
+        }
+    }
+}
+fn main() {
+    let mut r = R { n: 0 };
+    r.go();
+    println(f"{r.n}");
+}

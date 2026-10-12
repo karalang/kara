@@ -1,0 +1,50 @@
+// LeetCode #375: Guess Number Higher or Lower II -- memoized recursion.
+//
+// The same recurrence as the star arm, written top down: solve(i, j) tries
+// every guess k and recurses into the two sides, and a table remembers
+// each range once it is solved, so each of the O(n^2) ranges is computed
+// once. -1 marks a range not solved yet. O(n^3) time, O(n^2) space.
+
+fn solve(memo: mut ref Vec[Vec[i64]], i: i64, j: i64) -> i64 {
+    if i >= j {
+        return 0;
+    }
+    if memo[i][j] >= 0 {
+        return memo[i][j];
+    }
+    let mut best = i64.MAX;
+    for k in i..j + 1 {
+        let left = solve(memo, i, k - 1);
+        let right = solve(memo, k + 1, j);
+        best = best.min(k + left.max(right));
+    }
+    memo[i][j] = best;
+    best
+}
+
+fn get_money_amount(n: i64) -> i64 {
+    let mut memo: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 2 {
+        memo.push(vec![-1; n + 2]);
+    }
+    solve(mut memo, 1, n)
+}
+
+fn main() {
+    println(f"example 1: {get_money_amount(10)}");
+    println(f"example 2: {get_money_amount(1)}");
+    println(f"example 3: {get_money_amount(2)}");
+    let mut first: Vec[i64] = Vec.new();
+    for n in 1..21 {
+        first.push(get_money_amount(n));
+    }
+    println(f"n = 1 to 20: {first}");
+    println(f"n = 100: {get_money_amount(100)}");
+    println(f"n = 200, the largest: {get_money_amount(200)}");
+    // Every n from 1 to 60, folded into a checksum.
+    let mut checksum: i64 = 0;
+    for n in 1..61 {
+        checksum = (checksum * 1009 + get_money_amount(n)) % 1000000007;
+    }
+    println(f"n = 1 to 60: checksum {checksum}");
+}

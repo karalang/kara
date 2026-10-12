@@ -1,0 +1,11 @@
+example 1: 8
+example 2: 1024
+example 3: 1
+example 4: 1198
+a multiple of 1337: 0
+one more than 1337: 1
+a = 7, a factor of 1337: 1064
+a = 191, the other factor: 191
+exponent 1: 312
+2000 nines: 272
+300 random cases: checksum 871928181

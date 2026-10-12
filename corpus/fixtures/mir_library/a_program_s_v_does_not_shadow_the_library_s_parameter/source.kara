@@ -1,0 +1,9 @@
+
+struct V { id: i64 }
+enum E { V(i64) }
+fn main() {
+    let v = vec![1, 2, 3];
+    let s: i64 = v.iter().sum();
+    let x = V { id: s };
+    match E.V(x.id) { E.V(n) => println(f"{n}") }
+}

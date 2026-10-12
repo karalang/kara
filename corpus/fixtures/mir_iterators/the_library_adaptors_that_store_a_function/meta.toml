@@ -1,0 +1,17 @@
+source = "tests/mir_iterators.rs::the_library_adaptors_that_store_a_function"
+dedup_of = []
+expect = "error:E0236"
+exit = 1
+tags = ["closure"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "fb33d3d01"
+extracted_src = "5850d41d"
+model_rev = "1aa23105"
+model_src = "5850d41d"

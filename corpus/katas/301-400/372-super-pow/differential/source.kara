@@ -1,0 +1,244 @@
+// LeetCode #372: differential test. The digit-at-a-time, reverse,
+// Carmichael and CRT arms against an oracle that multiplies a by itself
+// b times, for exponents up to 9,999, over 2,000 random cases. Properties:
+// P1 each arm gives the oracle's answer; P2 leading zeros on b change
+// nothing; P3 a and a + 1337 give the same answer; P4 the answer for a
+// product of bases is the product of the answers; P5 b and b + 570 give
+// the same answer, checked on a 60-digit exponent as well.
+
+const MODULUS: i64 = 1337;
+const LAMBDA: i64 = 570;
+
+fn pow_slow(base: i64, exp: i64) -> i64 {
+    let mut out = 1;
+    for _ in 0..exp {
+        out = out * base % MODULUS;
+    }
+    out
+}
+
+fn digit_arm(a: i64, b: ref Vec[i64]) -> i64 {
+    let base = a % MODULUS;
+    let mut out = 1;
+    for d in b.iter() {
+        out = pow_slow(out, 10) * pow_slow(base, d) % MODULUS;
+    }
+    out
+}
+
+fn pow_fast(base: i64, exp: i64) -> i64 {
+    let mut out = 1;
+    let mut b = base % MODULUS;
+    let mut e = exp;
+    while e > 0 {
+        if e % 2 == 1 {
+            out = out * b % MODULUS;
+        }
+        b = b * b % MODULUS;
+        e /= 2;
+    }
+    out
+}
+
+fn reverse_arm(a: i64, b: ref Vec[i64]) -> i64 {
+    let mut base = a % MODULUS;
+    let mut out = 1;
+    let mut i = b.len();
+    while i > 0 {
+        i -= 1;
+        out = out * pow_fast(base, b[i]) % MODULUS;
+        base = pow_fast(base, 10);
+    }
+    out
+}
+
+fn carmichael_arm(a: i64, b: ref Vec[i64]) -> i64 {
+    let mut e = 0;
+    for d in b.iter() {
+        e = (e * 10 + d) % LAMBDA;
+    }
+    if e == 0 {
+        e = LAMBDA;
+    }
+    pow_fast(a, e)
+}
+
+fn pow_mod(base: i64, exp: i64, m: i64) -> i64 {
+    let mut out = 1;
+    let mut b = base % m;
+    let mut e = exp;
+    while e > 0 {
+        if e % 2 == 1 {
+            out = out * b % m;
+        }
+        b = b * b % m;
+        e /= 2;
+    }
+    out
+}
+
+fn pow_mod_prime(a: i64, b: ref Vec[i64], p: i64) -> i64 {
+    if a % p == 0 {
+        return 0;
+    }
+    let mut e = 0;
+    for d in b.iter() {
+        e = (e * 10 + d) % (p - 1);
+    }
+    if e == 0 {
+        e = p - 1;
+    }
+    pow_mod(a, e, p)
+}
+
+fn crt_arm(a: i64, b: ref Vec[i64]) -> i64 {
+    let r7 = pow_mod_prime(a, b, 7);
+    let r191 = pow_mod_prime(a, b, 191);
+    (r7 * 191 * 4 + r191 * 7 * 82) % 1337
+}
+
+fn oracle(a: i64, e: i64) -> i64 {
+    let base = a % MODULUS;
+    let mut out = 1;
+    for _ in 0..e {
+        out = out * base % MODULUS;
+    }
+    out
+}
+
+fn answer(arm: i64, a: i64, b: ref Vec[i64]) -> i64 {
+    match arm {
+        0 => digit_arm(a, b),
+        1 => reverse_arm(a, b),
+        2 => carmichael_arm(a, b),
+        _ => crt_arm(a, b),
+    }
+}
+
+fn name(arm: i64) -> String {
+    match arm {
+        0 => "digit",
+        1 => "reverse",
+        2 => "carmichael",
+        _ => "crt",
+    }
+}
+
+fn digits_of(e: i64) -> Vec[i64] {
+    let mut low_first: Vec[i64] = Vec.new();
+    let mut x = e;
+    while x > 0 {
+        low_first.push(x % 10);
+        x /= 10;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = low_first.len();
+    while i > 0 {
+        i -= 1;
+        out.push(low_first[i]);
+    }
+    out
+}
+
+// The digits of b plus k, for a digit array of any length.
+fn plus(b: ref Vec[i64], k: i64) -> Vec[i64] {
+    let mut low_first: Vec[i64] = Vec.new();
+    let mut carry = k;
+    let mut i = b.len();
+    while i > 0 {
+        i -= 1;
+        let sum = b[i] + carry;
+        low_first.push(sum % 10);
+        carry = sum / 10;
+    }
+    while carry > 0 {
+        low_first.push(carry % 10);
+        carry /= 10;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut j = low_first.len();
+    while j > 0 {
+        j -= 1;
+        out.push(low_first[j]);
+    }
+    out
+}
+
+fn main() {
+    let mut seed: i64 = 372;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut fails = vec![0; 5];
+    for case in 0..2000 {
+        // Half the bases small, a third of those multiples of 7 or 191, which
+        // share a factor with 1337; half anywhere up to 2^31 - 1.
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let high = seed / 65536;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let wide = high * 65536 + seed / 32768;
+        let a = if case % 6 == 0 {
+            7 * (1 + wide % 400)
+        } else if case % 6 == 2 {
+            191 * (1 + wide % 15)
+        } else if case % 2 == 0 {
+            1 + wide % 3000
+        } else {
+            1 + wide % 2147483647
+        };
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let e = 1 + (seed / 65536) % 9999;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let c = 1 + (seed / 65536) % 5000;
+        let b = digits_of(e);
+        let mut padded = vec![0, 0];
+        for d in b.iter() {
+            padded.push(d);
+        }
+        let mut long: Vec[i64] = Vec.new();
+        for k in 0..60 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let d = (seed / 65536) % 10;
+            long.push(if k == 0 and d == 0 { 1 } else { d });
+        }
+        let expected = oracle(a, e);
+        for arm in 0..4 {
+            let got = answer(arm, a, b);
+            let mut bad = vec![false; 5];
+            checks += 1;
+            if got != expected {
+                bad[0] = true;
+            }
+            checks += 1;
+            if answer(arm, a, padded) != got {
+                bad[1] = true;
+            }
+            checks += 1;
+            if answer(arm, a + MODULUS, b) != got {
+                bad[2] = true;
+            }
+            checks += 1;
+            if answer(arm, (a % MODULUS) * c, b) != got * answer(arm, c, b) % MODULUS {
+                bad[3] = true;
+            }
+            checks += 2;
+            if answer(arm, a, plus(b, LAMBDA)) != got or answer(arm, a, plus(long, LAMBDA)) != answer(arm, a, long) {
+                bad[4] = true;
+            }
+            for p in 0..5 {
+                if bad[p] {
+                    fails[p] += 1;
+                    failures += 1;
+                    if failures <= 5 {
+                        println(f"FAIL P{p + 1} {name(arm)} a={a} e={e}");
+                    }
+                }
+            }
+        }
+    }
+    for p in 0..5 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    println(f"2000 cases, {checks} checks, {failures} failures");
+}

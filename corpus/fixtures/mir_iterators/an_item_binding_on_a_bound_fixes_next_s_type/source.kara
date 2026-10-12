@@ -1,0 +1,32 @@
+
+struct Counter { n: i64, stop: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.n >= self.stop { return None; }
+        self.n = self.n + 1;
+        Some(self.n)
+    }
+}
+struct Doubled[I] { inner: I }
+impl[I: Iterator[Item = i64]] Iterator for Doubled[I] {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        match self.inner.next() {
+            Some(x) => Some(x * 2),
+            None => None,
+        }
+    }
+}
+fn main() {
+    let mut c = Counter { n: 0, stop: 3 };
+    let mut d = Doubled { inner: c };
+    let mut t = 0;
+    loop {
+        match d.next() {
+            Some(x) => { t = t + x; }
+            None => break,
+        }
+    }
+    println(f"{t}");
+}

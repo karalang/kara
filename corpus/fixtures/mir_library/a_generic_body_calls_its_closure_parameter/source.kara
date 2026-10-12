@@ -1,0 +1,21 @@
+
+struct W[T] { v: T }
+impl[T] W[T] {
+    fn apply[U](self, f: OnceFn(T) -> U) -> U {
+        f(self.v)
+    }
+}
+fn mapit[T, U](o: Option[T], f: OnceFn(T) -> U) -> Option[U] {
+    match o {
+        Some(x) => Some(f(x)),
+        None => None,
+    }
+}
+fn main() {
+    let w = W { v: 4 };
+    println(f"{w.apply(|x| x + 1)}");
+    match mapit(Some(2), |x| x * 3) {
+        Some(y) => println(f"{y}"),
+        None => {}
+    }
+}

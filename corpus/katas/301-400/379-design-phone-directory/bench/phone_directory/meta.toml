@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/379-design-phone-directory/bench/phone_directory.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["mirror-agrees", "lib:sortedset", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "fb33d3d01"
+extracted_src = "9a6e904c"
+model_rev = "1aa23105"
+model_src = "9a6e904c"

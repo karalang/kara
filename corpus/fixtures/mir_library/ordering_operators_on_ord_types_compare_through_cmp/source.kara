@@ -1,0 +1,35 @@
+
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
+struct Task { pri: i64, name: String }
+
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
+enum Shape { Dot, Line(i64), Box(i64, String) }
+
+struct Rev { k: i64 }
+impl PartialEq for Rev { fn eq(ref self, other: ref Rev) -> bool { self.k == other.k } }
+impl Eq for Rev {}
+impl PartialOrd for Rev { fn partial_cmp(ref self, other: ref Rev) -> Option[Ordering] { Some(self.cmp(other)) } }
+impl Ord for Rev { fn cmp(ref self, other: ref Rev) -> Ordering { other.k.cmp(self.k) } }
+
+fn main() {
+    let a = Task { pri: 1, name: "a".to_string() };
+    let b = Task { pri: 1, name: "b".to_string() };
+    let c = Task { pri: 0, name: "z".to_string() };
+    println(f"{a < b} {a > b} {a <= b} {a.cmp(b).is_lt()} {c < a} {a >= a}");
+    let s1 = Shape.Line(3);
+    let s2 = Shape.Box(1, "x".to_string());
+    let s3 = Shape.Box(1, "y".to_string());
+    println(f"{Shape.Dot < s1} {s1 < s2} {s2 < s3} {s3 > s2} {s1 <= Shape.Line(3)}");
+    let t1 = (1, "b".to_string());
+    let t2 = (1, "a".to_string());
+    println(f"{t1.cmp(t2).is_gt()} {t1 > t2}");
+    println(f"{Rev { k: 1 } < Rev { k: 2 }} {Rev { k: 1 } >= Rev { k: 2 }}");
+    let mut q: PriorityQueue[Task] = PriorityQueue.new();
+    q.push(b);
+    q.push(c);
+    q.push(a);
+    while let Some(t) = q.pop() {
+        print(f"{t.pri}{t.name} ");
+    }
+    println("");
+}

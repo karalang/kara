@@ -1,0 +1,7 @@
+example: get 0, get 1, check 2 true, get 2, check 2 false
+after release 2: check 2 true, get 2
+one number: get 0, get -1, check 0 false
+released twice: get 0, get -1
+releasing a free number: get 0, get 1, get 2, get 3, get 4, get -1
+smallest free first: get 1, get 4, get -1
+100 random directories: checksum 123603536

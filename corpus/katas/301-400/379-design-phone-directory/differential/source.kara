@@ -1,0 +1,324 @@
+// LeetCode #379: differential test. The sorted-set, heap, bitset and
+// segment-tree directories against an oracle that keeps a flag per number
+// and scans for the smallest free one, over 1,000 random directories of up
+// to 40 numbers, each driven by 200 operations. Properties: P1 every
+// operation gives the oracle's result; P2 a number just handed out is no
+// longer free; P3 a number just released is free; P4 get() returns -1
+// exactly when every number is handed out; P5 the numbers handed out and
+// not released are distinct and in range.
+
+struct SetDir {
+    free: SortedSet[i64],
+}
+
+impl SetDir {
+    fn new(max_numbers: i64) -> SetDir {
+        let mut free: SortedSet[i64] = SortedSet.new();
+        for n in 0..max_numbers {
+            free.insert(n);
+        }
+        SetDir { free }
+    }
+
+    fn get(mut ref self) -> i64 {
+        match self.free.min() {
+            Some(n) => {
+                self.free.remove(n);
+                n
+            }
+            None => -1,
+        }
+    }
+
+    fn check(ref self, number: i64) -> bool {
+        self.free.contains(number)
+    }
+
+    fn release(mut ref self, number: i64) {
+        self.free.insert(number);
+    }
+}
+
+struct HeapDir {
+    free: PriorityQueue[i64],
+    used: Vec[bool],
+}
+
+impl HeapDir {
+    fn new(max_numbers: i64) -> HeapDir {
+        let mut free: PriorityQueue[i64] = PriorityQueue.new();
+        for n in 0..max_numbers {
+            free.push(n);
+        }
+        HeapDir { free, used: vec![false; max_numbers] }
+    }
+
+    fn get(mut ref self) -> i64 {
+        match self.free.pop() {
+            Some(n) => {
+                self.used[n] = true;
+                n
+            }
+            None => -1,
+        }
+    }
+
+    fn check(ref self, number: i64) -> bool {
+        not self.used[number]
+    }
+
+    fn release(mut ref self, number: i64) {
+        if self.used[number] {
+            self.used[number] = false;
+            self.free.push(number);
+        }
+    }
+}
+
+struct BitsDir {
+    words: Vec[i64],
+}
+
+impl BitsDir {
+    fn new(max_numbers: i64) -> BitsDir {
+        let count = (max_numbers + 63) / 64;
+        let mut words = vec![0; count];
+        for n in max_numbers..count * 64 {
+            words[n / 64] = words[n / 64] | (1 << (n % 64));
+        }
+        BitsDir { words }
+    }
+
+    fn get(mut ref self) -> i64 {
+        for w in 0..self.words.len() {
+            if self.words[w] != -1 {
+                let bit = (~self.words[w]).trailing_zeros();
+                self.words[w] = self.words[w] | (1 << bit);
+                return w * 64 + bit as i64;
+            }
+        }
+        -1
+    }
+
+    fn check(ref self, number: i64) -> bool {
+        (self.words[number / 64] >> (number % 64)) & 1 == 0
+    }
+
+    fn release(mut ref self, number: i64) {
+        self.words[number / 64] = self.words[number / 64] & ~(1 << (number % 64));
+    }
+}
+
+struct TreeDir {
+    size: i64,
+    free: Vec[i64],
+}
+
+impl TreeDir {
+    fn new(max_numbers: i64) -> TreeDir {
+        let mut size = 1;
+        while size < max_numbers {
+            size *= 2;
+        }
+        let mut free = vec![0; 2 * size];
+        for n in 0..max_numbers {
+            free[size + n] = 1;
+        }
+        let mut i = size - 1;
+        while i >= 1 {
+            free[i] = free[2 * i] + free[2 * i + 1];
+            i -= 1;
+        }
+        TreeDir { size, free }
+    }
+
+    fn set(mut ref self, number: i64, value: i64) {
+        let mut i = self.size + number;
+        self.free[i] = value;
+        i /= 2;
+        while i >= 1 {
+            self.free[i] = self.free[2 * i] + self.free[2 * i + 1];
+            i /= 2;
+        }
+    }
+
+    fn get(mut ref self) -> i64 {
+        if self.free[1] == 0 {
+            return -1;
+        }
+        let mut i = 1;
+        while i < self.size {
+            i = if self.free[2 * i] > 0 { 2 * i } else { 2 * i + 1 };
+        }
+        let number = i - self.size;
+        self.set(number, 0);
+        number
+    }
+
+    fn check(ref self, number: i64) -> bool {
+        self.free[self.size + number] == 1
+    }
+
+    fn release(mut ref self, number: i64) {
+        self.set(number, 1);
+    }
+}
+
+struct OracleDir {
+    used: Vec[bool],
+}
+
+impl OracleDir {
+    fn new(max_numbers: i64) -> OracleDir {
+        OracleDir { used: vec![false; max_numbers] }
+    }
+
+    fn get(mut ref self) -> i64 {
+        for n in 0..self.used.len() {
+            if not self.used[n] {
+                self.used[n] = true;
+                return n;
+            }
+        }
+        -1
+    }
+
+    fn check(ref self, number: i64) -> bool {
+        not self.used[number]
+    }
+
+    fn release(mut ref self, number: i64) {
+        self.used[number] = false;
+    }
+}
+
+// One directory of each kind behind one interface, so that the test loop
+// drives them all the same way.
+enum AnyDir {
+    Set(SetDir),
+    Heap(HeapDir),
+    Bits(BitsDir),
+    Tree(TreeDir),
+}
+
+impl AnyDir {
+    fn new(arm: i64, m: i64) -> AnyDir {
+        match arm {
+            0 => AnyDir.Set(SetDir.new(m)),
+            1 => AnyDir.Heap(HeapDir.new(m)),
+            2 => AnyDir.Bits(BitsDir.new(m)),
+            _ => AnyDir.Tree(TreeDir.new(m)),
+        }
+    }
+
+    fn get(mut ref self) -> i64 {
+        match self {
+            AnyDir.Set(d) => d.get(),
+            AnyDir.Heap(d) => d.get(),
+            AnyDir.Bits(d) => d.get(),
+            AnyDir.Tree(d) => d.get(),
+        }
+    }
+
+    fn check(ref self, number: i64) -> bool {
+        match self {
+            AnyDir.Set(d) => d.check(number),
+            AnyDir.Heap(d) => d.check(number),
+            AnyDir.Bits(d) => d.check(number),
+            AnyDir.Tree(d) => d.check(number),
+        }
+    }
+
+    fn release(mut ref self, number: i64) {
+        match self {
+            AnyDir.Set(d) => d.release(number),
+            AnyDir.Heap(d) => d.release(number),
+            AnyDir.Bits(d) => d.release(number),
+            AnyDir.Tree(d) => d.release(number),
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 379;
+    let mut checks = 0;
+    let mut fails = vec![0; 5];
+    for _ in 0..1000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let m = 1 + (seed / 65536) % 40;
+        let mut oracle = OracleDir.new(m);
+        let mut dirs: Vec[AnyDir] = Vec.new();
+        for arm in 0..4 {
+            dirs.push(AnyDir.new(arm, m));
+        }
+        // held[arm][n] is whether the arm handed out n and has not had it
+        // back, as the test itself has seen it.
+        let mut held: Vec[Vec[bool]] = Vec.new();
+        for _ in 0..4 {
+            held.push(vec![false; m]);
+        }
+        let mut held_count = vec![0; 4];
+        for _ in 0..200 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let op = (seed / 65536) % 4;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let x = (seed / 65536) % m;
+            if op <= 1 {
+                let want = oracle.get();
+                for arm in 0..4 {
+                    let got = dirs[arm].get();
+                    checks += 3;
+                    if got != want {
+                        fails[0] += 1;
+                    }
+                    if (got == -1) != (held_count[arm] == m) {
+                        fails[3] += 1;
+                    }
+                    if got >= 0 {
+                        checks += 1;
+                        if dirs[arm].check(got) {
+                            fails[1] += 1;
+                        }
+                        if got >= m or held[arm][got] {
+                            fails[4] += 1;
+                        } else {
+                            held[arm][got] = true;
+                            held_count[arm] += 1;
+                        }
+                    } else if got < -1 {
+                        fails[4] += 1;
+                    }
+                }
+            } else if op == 2 {
+                let want = oracle.check(x);
+                for arm in 0..4 {
+                    checks += 1;
+                    if dirs[arm].check(x) != want {
+                        fails[0] += 1;
+                    }
+                }
+            } else {
+                oracle.release(x);
+                for arm in 0..4 {
+                    dirs[arm].release(x);
+                    if held[arm][x] {
+                        held[arm][x] = false;
+                        held_count[arm] -= 1;
+                    }
+                    checks += 1;
+                    if not dirs[arm].check(x) {
+                        fails[2] += 1;
+                    }
+                }
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..5 {
+        failures += fails[i];
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+    }
+    println(f"1000 directories, {checks} checks, {failures} failures");
+}

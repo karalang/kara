@@ -1,0 +1,80 @@
+// LeetCode #370: Range Addition -- a Fenwick tree over the differences.
+//
+// The difference array again, but kept in a binary indexed tree, so that a
+// range update is two point updates and any one cell is a prefix sum,
+// O(log n) each. That is the shape to use when cells are read between
+// updates; here every cell is read once at the end. O((k + n) log n).
+
+fn add(tree: mut ref Vec[i64], at: i64, delta: i64) {
+    let mut i = at + 1;
+    while i < tree.len() {
+        tree[i] += delta;
+        i += i & (0 - i);
+    }
+}
+
+fn prefix(tree: ref Vec[i64], at: i64) -> i64 {
+    let mut sum = 0;
+    let mut i = at + 1;
+    while i > 0 {
+        sum += tree[i];
+        i -= i & (0 - i);
+    }
+    sum
+}
+
+fn get_modified_array(length: i64, updates: ref Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut tree = vec![0; length + 2];
+    for (start, end, inc) in updates.iter() {
+        add(mut tree, start, inc);
+        add(mut tree, end + 1, -inc);
+    }
+    let mut out = vec![0; length];
+    for i in 0..length {
+        out[i] = prefix(tree, i);
+    }
+    out
+}
+
+fn show(label: String, length: i64, updates: Vec[(i64, i64, i64)]) {
+    println(f"{label}: {get_modified_array(length, updates)}");
+}
+
+fn main() {
+    show("example 1", 5, vec![(1, 3, 2), (2, 4, 3), (0, 2, -2)]);
+    show("example 2", 10, vec![(2, 4, 6), (5, 6, 8), (1, 9, -4)]);
+    show("no updates", 4, Vec.new());
+    show("one cell", 1, vec![(0, 0, 7), (0, 0, -3)]);
+    show("the whole array", 4, vec![(0, 3, 5)]);
+    show("updates that cancel", 6, vec![(1, 4, 9), (1, 4, -9)]);
+    show("single cells", 5, vec![(0, 0, 1), (2, 2, 2), (4, 4, 3)]);
+    show("nested ranges", 7, vec![(0, 6, 1), (1, 5, 1), (2, 4, 1), (3, 3, 1)]);
+    show("large increments", 3, vec![(0, 2, 1000), (1, 1, -1000)]);
+    // Random arrays of up to 200 cells with up to 300 updates each: fold
+    // every result into a checksum.
+    let mut seed: i64 = 370;
+    let mut checksum: i64 = 0;
+    let mut cells = 0;
+    for _ in 0..300 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let length = 1 + (seed / 65536) % 200;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let count = (seed / 65536) % 301;
+        let mut updates: Vec[(i64, i64, i64)] = Vec.new();
+        for _ in 0..count {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let a = (seed / 65536) % length;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let b = (seed / 65536) % length;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let inc = (seed / 65536) % 2001 - 1000;
+            updates.push((a.min(b), a.max(b), inc));
+        }
+        let out = get_modified_array(length, updates);
+        cells += out.len();
+        for v in out.iter() {
+            checksum = (checksum * 31 + v + 1000000) % 1000000007;
+        }
+    }
+    println(f"300 random arrays: {cells} cells, checksum {checksum}");
+}

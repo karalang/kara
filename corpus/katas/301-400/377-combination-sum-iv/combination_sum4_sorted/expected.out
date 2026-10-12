@@ -1,0 +1,10 @@
+example 1: 7
+example 2: 0
+target below every value: 0
+one value that divides: 1
+one value that does not: 0
+ones and twos to 40: 165580141
+evens to an odd target: 0
+3, 33, 333 to 1000: 0
+large values: 1
+200 random cases: checksum 766547344

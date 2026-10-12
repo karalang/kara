@@ -1,0 +1,28 @@
+
+trait It2 {
+    type Item;
+    fn nxt(mut ref self) -> Option[Self.Item];
+    fn skipn(mut ref self, k: i64) -> i64 {
+        let mut n = 0;
+        while n < k {
+            match self.nxt() {
+                Some(_) => { n = n + 1; }
+                None => break,
+            }
+        }
+        n
+    }
+}
+struct Counter { n: i64, stop: i64 }
+impl It2 for Counter {
+    type Item = i64;
+    fn nxt(mut ref self) -> Option[i64] {
+        if self.n >= self.stop { return None; }
+        self.n = self.n + 1;
+        Some(self.n)
+    }
+}
+fn main() {
+    let mut c = Counter { n: 0, stop: 4 };
+    println(f"{c.skipn(2)}");
+}

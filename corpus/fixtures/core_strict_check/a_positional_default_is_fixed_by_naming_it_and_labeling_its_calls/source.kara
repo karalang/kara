@@ -1,0 +1,14 @@
+
+struct S { id: i64 }
+impl S {
+    fn m(ref self; port: i64 = 8080) -> i64 { self.id + port }
+    fn make(host: i64; port: i64 = 1, n: i64 = 2) -> i64 { host + port + n }
+}
+fn g(; port: i64 = 1, n: i64 = 2) -> i64 { port + n }
+fn main() {
+    let s = S { id: 1 };
+    println(s.m(port: 2));
+    println(S.make(1, port: 5, n: 3));
+    println(g(port: 5, n: 6));
+    println(g());
+}

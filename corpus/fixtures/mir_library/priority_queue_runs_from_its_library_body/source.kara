@@ -1,0 +1,19 @@
+
+fn main() {
+    let mut q: PriorityQueue[i64] = PriorityQueue.new();
+    q.push(5);
+    q.push(1);
+    q.push(3);
+    println(f"{q.len()} {q.peek().unwrap()}");
+    while let Some(x) = q.pop() {
+        print(f"{x} ");
+    }
+    println("");
+    let mut m: PriorityQueue[String] = PriorityQueue.max_first();
+    m.push("b".to_string());
+    m.push("c".to_string());
+    m.push("a".to_string());
+    println(f"{m.len()} {m.pop().unwrap()} {m.pop().unwrap()}");
+    let h = PriorityQueue.from([4, 9, 2, 7]);
+    println(f"{h.into_sorted_vec()}");
+}

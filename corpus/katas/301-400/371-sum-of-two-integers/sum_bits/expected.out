@@ -1,0 +1,11 @@
+example 1: 3
+example 2: 5
+zeros: 0
+minus one plus one: 0
+both at the lower bound: -2000
+both at the upper bound: 2000
+opposite bounds: 0
+a negative result: -4
+a carry through every bit: -2
+zero and a negative: -1000
+5000 random pairs: checksum 552372556

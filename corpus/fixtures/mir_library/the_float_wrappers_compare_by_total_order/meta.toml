@@ -1,0 +1,17 @@
+source = "tests/mir_library.rs::the_float_wrappers_compare_by_total_order"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map"]
+class = "a"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "fb33d3d01"
+extracted_src = "02a328ea"
+model_rev = "1aa23105"
+model_src = "02a328ea"

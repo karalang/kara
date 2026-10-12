@@ -1,0 +1,18 @@
+
+fn tick(label: String, v: i64) -> i64 {
+    println(label);
+    v
+}
+struct M { n: i64 }
+impl M {
+    fn get(ref self, key: i64; fallback: i64 = 0, scale: i64 = 1) -> i64 {
+        (key + fallback + self.n) * scale
+    }
+    fn make(; n: i64) -> M { M { n: n } }
+}
+fn main() {
+    let m = M.make(n: 100);
+    println(f"{m.get(1)}");
+    println(f"{m.get(1, scale: 2)}");
+    println(f"{m.get(1, scale: tick("s", 3), fallback: tick("f", 10))}");
+}

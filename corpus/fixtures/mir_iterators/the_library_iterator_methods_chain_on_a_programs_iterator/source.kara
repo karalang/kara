@@ -1,0 +1,29 @@
+
+fn main() {
+    println(Counter { n: 0 }.take(3).count());
+    for (i, x) in Counter { n: 0 }.skip(2).step_by(3).take(3).enumerate() {
+        println(f"{i}: {x}");
+    }
+    println(Counter { n: 0 }.take(5).last().unwrap());
+    println(Counter { n: 0 }.nth(4).unwrap());
+    for w in Words { n: 0 }.skip(1).take(2) {
+        println(w);
+    }
+    println(Words { n: 0 }.take(3).last().unwrap());
+}
+struct Counter { n: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        self.n = self.n + 1;
+        Some(self.n * 10)
+    }
+}
+struct Words { n: i64 }
+impl Iterator for Words {
+    type Item = String;
+    fn next(mut ref self) -> Option[String] {
+        self.n = self.n + 1;
+        Some(f"w{self.n}")
+    }
+}

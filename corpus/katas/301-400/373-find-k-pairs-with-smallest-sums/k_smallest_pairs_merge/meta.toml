@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/373-find-k-pairs-with-smallest-sums/k_smallest_pairs_merge.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "fb33d3d01"
+extracted_src = "989b9be8"
+model_rev = "1aa23105"
+model_src = "989b9be8"

@@ -1,0 +1,12 @@
+
+struct S { name: String }
+impl S {
+    fn name_ref(ref self) -> ref String { self.name }
+    fn pick[U](ref self, f: own Fn(ref S) -> U) -> U { f(self) }
+}
+fn main() {
+    let mut s = S { name: "a".to_string() };
+    let r = s.pick(|x| x.name_ref());
+    s.name = "b".to_string();
+    println(r);
+}

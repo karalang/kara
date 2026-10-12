@@ -1,0 +1,17 @@
+source = "tests/named_args.rs::check_names_the_label_rule_a_call_breaks"
+dedup_of = []
+expect = "error:E0215"
+exit = 1
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "fb33d3d01"
+extracted_src = "ecfdf3a3"
+model_rev = "1aa23105"
+model_src = "ecfdf3a3"

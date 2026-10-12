@@ -1,0 +1,17 @@
+source = "tests/typechecker.rs::a_function_trait_bound_types_calls_and_closure_arguments"
+dedup_of = []
+expect = "error:E0208"
+exit = 1
+tags = ["closure"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "fb33d3d01"
+extracted_src = "d5780e32"
+model_rev = "1aa23105"
+model_src = "d5780e32"

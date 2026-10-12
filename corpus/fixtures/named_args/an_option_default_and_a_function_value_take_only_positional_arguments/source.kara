@@ -1,0 +1,11 @@
+
+fn find(items: Vec[i64], target: i64; start: Option[i64] = None) -> i64 {
+    match start { Some(s) => s + target, None => target }
+}
+fn connect(host: String; port: i64 = 443) -> i64 { port }
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    println(f"{find(v.clone(), 3)} {find(v, 3, start: Some(10))}");
+    let c = connect;
+    println(f"{c("x")}");
+}

@@ -1,0 +1,118 @@
+// LeetCode #373: Find K Pairs with Smallest Sums -- binary search the k-th sum.
+//
+// For a bound s, two pointers count the pairs with sum at most s in
+// O(n1 + n2): as i rises, the last column with nums1[i] + nums2[j] <= s can
+// only move left. Binary search s for the least bound that admits k pairs
+// (or every pair, if there are fewer than k); that bound is the k-th
+// smallest sum. Every pair below it belongs in the answer, and enough of
+// the pairs equal to it fill the rest. Collect them row by row, then sort
+// by (sum, i, j) so the order matches the heap arms. O((n1 + n2) log R +
+// k log k), R the range of sums.
+
+fn count_at_most(nums1: ref Vec[i64], nums2: ref Vec[i64], s: i64) -> i64 {
+    let mut count = 0;
+    let mut j = nums2.len();
+    for i in 0..nums1.len() {
+        while j > 0 and nums1[i] + nums2[j - 1] > s {
+            j -= 1;
+        }
+        count += j;
+    }
+    count
+}
+
+fn k_smallest_pairs(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    if nums1.is_empty() or nums2.is_empty() {
+        return out;
+    }
+    let want = k.min(nums1.len() * nums2.len());
+    let mut low = nums1[0] + nums2[0];
+    let mut high = nums1[nums1.len() - 1] + nums2[nums2.len() - 1];
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if count_at_most(nums1, nums2, mid) >= want {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    let bound = low;
+    let mut below: Vec[(i64, i64, i64)] = Vec.new();
+    let mut at: Vec[(i64, i64, i64)] = Vec.new();
+    for i in 0..nums1.len() {
+        for j in 0..nums2.len() {
+            let sum = nums1[i] + nums2[j];
+            if sum > bound {
+                break;
+            }
+            if sum < bound {
+                below.push((sum, i, j));
+            } else {
+                at.push((sum, i, j));
+            }
+        }
+    }
+    for t in at.iter() {
+        if below.len() >= want {
+            break;
+        }
+        below.push(t);
+    }
+    below.sort();
+    for (_, i, j) in below.iter() {
+        out.push((nums1[i], nums2[j]));
+    }
+    out
+}
+
+fn show(label: String, nums1: Vec[i64], nums2: Vec[i64], k: i64) {
+    println(f"{label}: {k_smallest_pairs(nums1, nums2, k)}");
+}
+
+fn main() {
+    show("example 1", vec![1, 7, 11], vec![2, 4, 6], 3);
+    show("example 2", vec![1, 1, 2], vec![1, 2, 3], 2);
+    show("k above the pair count", vec![1, 2], vec![3], 3);
+    show("k = 1", vec![-5, 0, 5], vec![-3, 3], 1);
+    show("every pair", vec![1, 2], vec![10, 20], 4);
+    show("negative values", vec![-10, -4, 0], vec![-7, -2, 8], 5);
+    show("all equal", vec![3, 3, 3], vec![4, 4], 4);
+    show("one row", vec![2], vec![1, 3, 5, 7], 3);
+    show("one column", vec![1, 3, 5, 7], vec![2], 3);
+    show("values at the bounds", vec![-1000000000, 1000000000], vec![-1000000000, 1000000000], 3);
+    // Random sorted arrays of up to 300 values with k up to 2,000: fold
+    // every pair into a checksum.
+    let mut seed: i64 = 373;
+    let mut checksum: i64 = 0;
+    let mut pairs = 0;
+    for _ in 0..300 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n1 = 1 + (seed / 65536) % 300;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n2 = 1 + (seed / 65536) % 300;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let k = 1 + (seed / 65536) % 2000;
+        let mut nums1: Vec[i64] = Vec.new();
+        let mut nums2: Vec[i64] = Vec.new();
+        let mut v = -5000;
+        for _ in 0..n1 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            v += (seed / 65536) % 40;
+            nums1.push(v);
+        }
+        v = -5000;
+        for _ in 0..n2 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            v += (seed / 65536) % 40;
+            nums2.push(v);
+        }
+        let out = k_smallest_pairs(nums1, nums2, k);
+        pairs += out.len();
+        for (u, w) in out.iter() {
+            checksum = (checksum * 31 + u + 20000) % 1000000007;
+            checksum = (checksum * 31 + w + 20000) % 1000000007;
+        }
+    }
+    println(f"300 random cases: {pairs} pairs, checksum {checksum}");
+}

@@ -1,0 +1,10 @@
+example 1: 6
+example 2: 1
+example 3: 1
+the top of two: 2
+1 of 2^31 - 1: 1
+2^31 - 1 of 2^31 - 1: 2147483647
+2^30 of 2^31 - 1: 1073741824
+the middle of three: 2
+a power of two minus one: 65535
+1000 random games: checksum 445479275

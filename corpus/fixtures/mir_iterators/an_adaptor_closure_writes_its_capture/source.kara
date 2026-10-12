@@ -1,0 +1,14 @@
+
+struct Counter { n: i64 }
+impl Iterator for Counter {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        self.n = self.n + 1;
+        Some(self.n)
+    }
+}
+fn main() {
+    let mut seen = 0;
+    let total = Counter { n: 0 }.take(4).inspect(|x| { seen = seen + 1; }).fold(0, |a, x| a + x);
+    println(f"{total} {seen}");
+}

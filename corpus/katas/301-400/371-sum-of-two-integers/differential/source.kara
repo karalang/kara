@@ -1,0 +1,124 @@
+// LeetCode #371: differential test. The carry-loop, recursive, ripple-adder
+// and u32 arms against `a + b` as the oracle, over 5,000 random pairs, half
+// within the problem's [-1000, 1000] and half anywhere in (-2^30, 2^30), so
+// every sum still fits the u32 arm's i32. Properties: P1 each arm gives
+// a + b; P2 swapping a and b changes nothing; P3 adding 0 on either side
+// gives the number back; P4 a number plus its negation is 0; P5 the sum is
+// associative.
+
+fn loop_arm(a: i64, b: i64) -> i64 {
+    let mut x = a;
+    let mut carry = b;
+    while carry != 0 {
+        let both = x & carry;
+        x = x ^ carry;
+        carry = both << 1;
+    }
+    x
+}
+
+fn recursive_arm(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { recursive_arm(a ^ b, (a & b) << 1) }
+}
+
+fn bits_arm(a: i64, b: i64) -> i64 {
+    let mut out: i64 = 0;
+    let mut carry: i64 = 0;
+    for i in 0..64 {
+        let x = (a >> i) & 1;
+        let y = (b >> i) & 1;
+        out = out | ((x ^ y ^ carry) << i);
+        carry = (x & y) | (x & carry) | (y & carry);
+    }
+    out
+}
+
+fn u32_arm(a: i64, b: i64) -> i64 {
+    let mut x = a as u32;
+    let mut carry = b as u32;
+    while carry != 0 {
+        let both = x & carry;
+        x = x ^ carry;
+        carry = both << 1;
+    }
+    (x as i32) as i64
+}
+
+fn answer(arm: i64, a: i64, b: i64) -> i64 {
+    match arm {
+        0 => loop_arm(a, b),
+        1 => recursive_arm(a, b),
+        2 => bits_arm(a, b),
+        _ => u32_arm(a, b),
+    }
+}
+
+fn name(arm: i64) -> String {
+    match arm {
+        0 => "loop",
+        1 => "recursive",
+        2 => "bits",
+        _ => "u32",
+    }
+}
+
+// A draw in [-span, span]. One step of the generator gives 15 good bits, so
+// a wide span joins two steps.
+fn draw(seed: mut ref i64, span: i64) -> i64 {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    let high = seed / 65536;
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    (high * 32768 + seed / 65536) % (2 * span + 1) - span
+}
+
+fn main() {
+    let mut seed: i64 = 371;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut fails = vec![0; 5];
+    for case in 0..5000 {
+        let span = if case % 2 == 0 { 1000 } else { 1073741823 / 3 };
+        let a = draw(mut seed, span);
+        let b = draw(mut seed, span);
+        let c = draw(mut seed, span);
+        for arm in 0..4 {
+            let got = answer(arm, a, b);
+            let mut bad = vec![false; 5];
+            checks += 1;
+            if got != a + b {
+                bad[0] = true;
+            }
+            checks += 1;
+            if answer(arm, b, a) != got {
+                bad[1] = true;
+            }
+            checks += 1;
+            if answer(arm, a, 0) != a or answer(arm, 0, a) != a {
+                bad[2] = true;
+            }
+            checks += 1;
+            if answer(arm, a, -a) != 0 {
+                bad[3] = true;
+            }
+            checks += 1;
+            if answer(arm, got, c) != answer(arm, a, answer(arm, b, c)) {
+                bad[4] = true;
+            }
+            for p in 0..5 {
+                if bad[p] {
+                    fails[p] += 1;
+                    failures += 1;
+                    if failures <= 5 {
+                        println(f"FAIL P{p + 1} {name(arm)} a={a} b={b}");
+                    }
+                }
+            }
+        }
+    }
+    for p in 0..5 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    println(f"5000 cases, {checks} checks, {failures} failures");
+}

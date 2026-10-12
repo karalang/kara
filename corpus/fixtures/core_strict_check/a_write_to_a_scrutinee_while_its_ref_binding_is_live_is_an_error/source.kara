@@ -1,0 +1,14 @@
+
+struct T { tag: i64 }
+enum E { X(T), Y }
+impl E { fn clear(mut ref self) { self = E.Y; } }
+fn main() {
+    let mut g = E.X(T { tag: 1 });
+    match g {
+        E.X(ref t) => {
+            g.clear();
+            println(t.tag);
+        }
+        E.Y => println(0),
+    }
+}

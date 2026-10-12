@@ -1,0 +1,11 @@
+
+struct M { n: i64 }
+impl M {
+    fn get(ref self, key: i64; fallback: i64 = 0, scale: i64) -> i64 { key + fallback + scale }
+}
+fn main() {
+    let m = M { n: 1 };
+    let a = m.get(1);
+    let b = m.get(1, 2, 3);
+    println(f"{a}{b}");
+}

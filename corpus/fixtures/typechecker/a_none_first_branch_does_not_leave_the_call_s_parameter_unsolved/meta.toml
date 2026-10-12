@@ -1,0 +1,17 @@
+source = "tests/typechecker.rs::a_none_first_branch_does_not_leave_the_call_s_parameter_unsolved"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "fb33d3d01"
+extracted_src = "86693eb4"
+model_rev = "1aa23105"
+model_src = "86693eb4"

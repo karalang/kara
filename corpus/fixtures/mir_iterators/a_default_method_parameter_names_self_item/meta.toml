@@ -1,0 +1,17 @@
+source = "tests/mir_iterators.rs::a_default_method_parameter_names_self_item"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "e"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "check-refuses:E0200"
+classified_with = "fb33d3d01"
+extracted_src = "1a8ea82e"
+model_rev = "1aa23105"
+model_src = "1a8ea82e"

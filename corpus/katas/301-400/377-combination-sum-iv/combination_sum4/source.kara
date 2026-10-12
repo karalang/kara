@@ -1,0 +1,76 @@
+// LeetCode #377: Combination Sum IV -- count up from 0, capped.
+//
+// ways[t] is the number of ordered sequences of values from nums that sum
+// to t. The last value of such a sequence is some x <= t, and what comes
+// before it sums to t - x, so ways[t] is the sum of ways[t - x]; ways[0]
+// is 1, the empty sequence. O(target * n).
+//
+// The answer fits in 32 bits, but counts for other totals need not: with
+// [2, 4] and an odd target the answer is 0 while the even totals grow
+// like Fibonacci numbers, past the range of i64, and Kāra stops on
+// integer overflow. A count of 2^31 or more cannot feed the answer,
+// because the answer is at least every count it is built from, so each
+// count is capped there. The cap keeps every sum below 2^32.
+
+const CAP: i64 = 2147483648;
+
+fn combination_sum4(nums: Vec[i64], target: i64) -> i64 {
+    let mut ways = vec![0; target + 1];
+    ways[0] = 1;
+    for t in 1..=target {
+        for x in nums.iter() {
+            if x <= t {
+                ways[t] = (ways[t] + ways[t - x]).min(CAP);
+            }
+        }
+    }
+    ways[target]
+}
+
+fn show(label: String, nums: Vec[i64], target: i64) {
+    println(f"{label}: {combination_sum4(nums, target)}");
+}
+
+fn main() {
+    show("example 1", vec![1, 2, 3], 4);
+    show("example 2", vec![9], 3);
+    show("target below every value", vec![5, 6, 7], 4);
+    show("one value that divides", vec![4], 1000);
+    show("one value that does not", vec![3], 1000);
+    show("ones and twos to 40", vec![1, 2], 40);
+    show("evens to an odd target", vec![2, 4], 999);
+    show("3, 33, 333 to 1000", vec![3, 33, 333], 1000);
+    show("large values", vec![997, 998, 999, 1000], 1000);
+    // Half the cases use small values and a target up to 30; the other
+    // half use values from 10 to 199 and a target that is a sum of one to
+    // five of them, so it can always be reached. Every answer is below
+    // 2^31, as the problem promises.
+    let mut seed: i64 = 377;
+    let mut checksum: i64 = 0;
+    for case in 0..200 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let k = 1 + (seed / 65536) % 6;
+        let (lo, span) = if case % 2 == 0 { (1, 15) } else { (10, 190) };
+        let mut nums: Vec[i64] = Vec.new();
+        while nums.len() < k {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let v = lo + (seed / 65536) % span;
+            if not nums.contains(v) {
+                nums.push(v);
+            }
+        }
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let mut target = 0;
+        if case % 2 == 0 {
+            target = 1 + (seed / 65536) % 30;
+        } else {
+            let parts = 1 + (seed / 65536) % 5;
+            for _ in 0..parts {
+                seed = (seed * 1103515245 + 12345) % 2147483648;
+                target += nums[(seed / 65536) % k];
+            }
+        }
+        checksum = (checksum * 1009 + combination_sum4(nums, target)) % 1000000007;
+    }
+    println(f"200 random cases: checksum {checksum}");
+}

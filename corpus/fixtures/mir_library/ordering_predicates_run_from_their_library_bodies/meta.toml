@@ -1,0 +1,17 @@
+source = "tests/mir_library.rs::ordering_predicates_run_from_their_library_bodies"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "fb33d3d01"
+extracted_src = "d011ac41"
+model_rev = "1aa23105"
+model_src = "d011ac41"

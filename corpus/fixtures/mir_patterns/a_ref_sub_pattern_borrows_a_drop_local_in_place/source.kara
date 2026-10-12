@@ -1,0 +1,14 @@
+
+#[derive(Clone)]
+struct R { id: i64 }
+struct W { r: R, n: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"drop W{self.n}") } }
+fn take(w: own W) -> R {
+    let W { r: ref r, n } = w;
+    println(f"n {n}");
+    r.clone()
+}
+fn main() {
+    let r = take(W { r: R { id: 3 }, n: 4 });
+    println(r.id);
+}

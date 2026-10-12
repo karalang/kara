@@ -1,0 +1,14 @@
+
+struct Own { buf: Vec[i64], i: i64 }
+impl Iterator for Own {
+    type Item = ref i64;
+    fn next(mut ref self) -> Option[Self.Item] {
+        let i = self.i;
+        self.i = i + 1;
+        self.buf.get(i)
+    }
+}
+fn main() {
+    let mut o = Own { buf: vec![1, 2], i: 0 };
+    println(f"{o.next() ?? 0}");
+}

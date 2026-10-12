@@ -1,0 +1,23 @@
+
+enum R2[T, E] { A(T), B(E) }
+enum O2[T] { S(T), N }
+impl[T, E] R2[T, E] {
+    fn err2(own self) -> O2[E] {
+        match self {
+            A(_) => O2.N,
+            B(e) => O2.S(e),
+        }
+    }
+}
+fn main() {
+    let r: R2[i64, String] = R2.B("e".to_string());
+    match r.err2() {
+        S(v) => println(v),
+        N => println("none"),
+    }
+    let s: R2[i64, String] = R2.A(1);
+    match s.err2() {
+        S(v) => println(v),
+        N => println("none"),
+    }
+}

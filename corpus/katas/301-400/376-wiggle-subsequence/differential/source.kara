@@ -1,0 +1,209 @@
+// LeetCode #376: differential test. The running-length, turn-counting,
+// quadratic DP and local-extremes arms against an oracle that tries every
+// subsequence, over 2,000 random arrays of up to 10 values. Properties:
+// P1 each arm gives the oracle's length; P2 repeating every value changes
+// nothing; P3 reversing the array changes nothing; P4 reflecting every
+// value (1000 - v) changes nothing; P5 the length is between 1 and n, and
+// at least 2 when two values differ.
+
+fn running_arm(nums: Vec[i64]) -> i64 {
+    if nums.is_empty() {
+        return 0;
+    }
+    let mut up = 1;
+    let mut down = 1;
+    for i in 1..nums.len() {
+        if nums[i] > nums[i - 1] {
+            up = down + 1;
+        } else if nums[i] < nums[i - 1] {
+            down = up + 1;
+        }
+    }
+    up.max(down)
+}
+
+fn turns_arm(nums: Vec[i64]) -> i64 {
+    if nums.is_empty() {
+        return 0;
+    }
+    let mut count = 1;
+    let mut last = 0;
+    for i in 1..nums.len() {
+        let step = if nums[i] > nums[i - 1] {
+            1
+        } else if nums[i] < nums[i - 1] {
+            -1
+        } else {
+            0
+        };
+        if step != 0 and step != last {
+            count += 1;
+            last = step;
+        }
+    }
+    count
+}
+
+fn dp_arm(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut up = vec![1; n];
+    let mut down = vec![1; n];
+    let mut best = 1;
+    for i in 1..n {
+        for j in 0..i {
+            if nums[j] < nums[i] {
+                up[i] = up[i].max(down[j] + 1);
+            } else if nums[j] > nums[i] {
+                down[i] = down[i].max(up[j] + 1);
+            }
+        }
+        best = best.max(up[i]).max(down[i]);
+    }
+    best
+}
+
+fn extrema_arm(nums: Vec[i64]) -> i64 {
+    let mut flat: Vec[i64] = Vec.new();
+    for v in nums.iter() {
+        if flat.is_empty() or flat[flat.len() - 1] != v {
+            flat.push(v);
+        }
+    }
+    let n = flat.len();
+    if n <= 2 {
+        return n;
+    }
+    let mut count = 2;
+    for i in 1..n - 1 {
+        let peak = flat[i] > flat[i - 1] and flat[i] > flat[i + 1];
+        let valley = flat[i] < flat[i - 1] and flat[i] < flat[i + 1];
+        if peak or valley {
+            count += 1;
+        }
+    }
+    count
+}
+
+// Every subsequence, by bitmask: the longest whose steps are all nonzero
+// and alternate in sign.
+fn oracle(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut best = 0;
+    for mask in 1..(1 << n) {
+        let mut picked: Vec[i64] = Vec.new();
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                picked.push(nums[i]);
+            }
+        }
+        let mut ok = true;
+        for k in 1..picked.len() {
+            let d = picked[k] - picked[k - 1];
+            if d == 0 {
+                ok = false;
+            }
+            if k >= 2 {
+                let before = picked[k - 1] - picked[k - 2];
+                if (d > 0) == (before > 0) {
+                    ok = false;
+                }
+            }
+        }
+        if ok {
+            best = best.max(picked.len());
+        }
+    }
+    best
+}
+
+fn answer(arm: i64, nums: Vec[i64]) -> i64 {
+    match arm {
+        0 => running_arm(nums),
+        1 => turns_arm(nums),
+        2 => dp_arm(nums),
+        _ => extrema_arm(nums),
+    }
+}
+
+fn name(arm: i64) -> String {
+    match arm {
+        0 => "running",
+        1 => "turns",
+        2 => "dp",
+        _ => "extrema",
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 376;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut fails = vec![0; 5];
+    for case in 0..2000 {
+        // Half the arrays draw from 0 to 3, so equal neighbours are common.
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 1 + (seed / 65536) % 10;
+        let top = if case % 2 == 0 { 4 } else { 1001 };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            nums.push((seed / 65536) % top);
+        }
+        let mut doubled: Vec[i64] = Vec.new();
+        let mut reversed: Vec[i64] = Vec.new();
+        let mut reflected: Vec[i64] = Vec.new();
+        let mut any_differ = false;
+        for i in 0..n {
+            doubled.push(nums[i]);
+            doubled.push(nums[i]);
+            reversed.push(nums[n - 1 - i]);
+            reflected.push(1000 - nums[i]);
+            if nums[i] != nums[0] {
+                any_differ = true;
+            }
+        }
+        let expected = oracle(nums);
+        for arm in 0..4 {
+            let got = answer(arm, nums.clone());
+            let mut bad = vec![false; 5];
+            checks += 1;
+            if got != expected {
+                bad[0] = true;
+            }
+            checks += 1;
+            if answer(arm, doubled.clone()) != got {
+                bad[1] = true;
+            }
+            checks += 1;
+            if answer(arm, reversed.clone()) != got {
+                bad[2] = true;
+            }
+            checks += 1;
+            if answer(arm, reflected.clone()) != got {
+                bad[3] = true;
+            }
+            checks += 1;
+            if got < 1 or got > n or (any_differ and got < 2) {
+                bad[4] = true;
+            }
+            for p in 0..5 {
+                if bad[p] {
+                    fails[p] += 1;
+                    failures += 1;
+                    if failures <= 5 {
+                        println(f"FAIL P{p + 1} {name(arm)} {nums}");
+                    }
+                }
+            }
+        }
+    }
+    for p in 0..5 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    println(f"2000 cases, {checks} checks, {failures} failures");
+}

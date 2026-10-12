@@ -1,0 +1,36 @@
+
+trait It {
+    type Item;
+    fn nxt(mut ref self) -> Option[Self.Item];
+    fn map2[B](own self, f: own MutFn(Self.Item) -> B) -> MapIt[Self, Self.Item, B] {
+        MapIt { it: self, f: f }
+    }
+    fn count2(own self) -> i64 {
+        let mut it = self;
+        let mut n = 0;
+        while let Some(_) = it.nxt() { n = n + 1; }
+        n
+    }
+}
+struct MapIt[I, T, B] { it: I, f: MutFn(T) -> B }
+impl[I, T, B] It for MapIt[I, T, B] where I: It[Item = T] {
+    type Item = B;
+    fn nxt(mut ref self) -> Option[B] {
+        match self.it.nxt() {
+            Some(x) => Some((self.f)(x)),
+            None => None,
+        }
+    }
+}
+struct Counter { n: i64, stop: i64 }
+impl It for Counter {
+    type Item = i64;
+    fn nxt(mut ref self) -> Option[i64] {
+        if self.n >= self.stop { return None; }
+        self.n = self.n + 1;
+        Some(self.n)
+    }
+}
+fn main() {
+    println(Counter { n: 0, stop: 3 }.map2(|x| x + 1).count2());
+}

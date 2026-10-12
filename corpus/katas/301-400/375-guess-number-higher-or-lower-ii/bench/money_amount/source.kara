@@ -1,0 +1,29 @@
+// Benchmark for #375: the kata's interval DP for every n from 1 to 200,
+// the problem's largest, folded into a checksum.
+
+fn get_money_amount(n: i64) -> i64 {
+    let mut cost: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 2 {
+        cost.push(vec![0; n + 2]);
+    }
+    for len in 2..n + 1 {
+        for i in 1..n - len + 2 {
+            let j = i + len - 1;
+            let mut best = i64.MAX;
+            for k in i..j + 1 {
+                let worse = cost[i][k - 1].max(cost[k + 1][j]);
+                best = best.min(k + worse);
+            }
+            cost[i][j] = best;
+        }
+    }
+    cost[1][n]
+}
+
+fn main() {
+    let mut checksum: i64 = 0;
+    for n in 1..201 {
+        checksum = (checksum * 1009 + get_money_amount(n)) % 1000000007;
+    }
+    println(f"checksum {checksum}");
+}

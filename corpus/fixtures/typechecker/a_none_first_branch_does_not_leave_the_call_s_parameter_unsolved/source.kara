@@ -1,0 +1,7 @@
+
+fn ap[U](f: OnceFn(i64) -> Option[U]) -> Option[U] { f(1) }
+fn main() {
+    let a = ap(|w| if w == 2 { None } else { Some(w) });
+    let b = ap(|w| match w { 2 => None, _ => Some(w) });
+    println(a.unwrap() + b.unwrap());
+}

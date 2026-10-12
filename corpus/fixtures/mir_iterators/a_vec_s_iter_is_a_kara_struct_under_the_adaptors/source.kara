@@ -1,0 +1,22 @@
+
+struct Person { name: String, n: i64 }
+fn main() {
+    let v = vec![1, 2, 3, 4];
+    let d = v.iter().map(|x| x * 2).fold(0, |a, b| a + b);
+    println(f"{d} {v.iter().count()}");
+    for (i, x) in v.iter().enumerate() {
+        print(f"{i}:{x} ");
+    }
+    println("");
+    for x in v.iter().rev() {
+        print(f"{x} ");
+    }
+    println("");
+    let ps = vec![Person { name: "a".to_string(), n: 1 }, Person { name: "bb".to_string(), n: 2 }];
+    for p in ps.iter().filter(|p| p.n > 1) {
+        println(f"{p.name}");
+    }
+    let total = ps.iter().map(|p| p.name.len()).fold(0, |a, b| a + b);
+    println(f"{total}");
+    println(f"{v.iter().any(|x| *x == 3)} {v.iter().position(|x| *x == 3) ?? -1}");
+}

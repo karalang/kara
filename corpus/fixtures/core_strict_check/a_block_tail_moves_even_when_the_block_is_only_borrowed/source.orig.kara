@@ -1,0 +1,6 @@
+
+fn main() {
+    let loc = "abc".to_string();
+    let n = { loc }.len();
+    println(f"{n} {loc}");
+}

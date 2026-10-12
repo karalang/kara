@@ -1,0 +1,263 @@
+// LeetCode #373: differential test. The row-front heap, lazy frontier,
+// threshold and scanning-merge arms against an oracle that sorts every pair
+// by (sum, i, j) and keeps the first k, over 3,000 random cases. Properties:
+// P1 each arm gives the oracle's pairs, in order; P2 it gives min(k, n1 n2)
+// pairs; P3 the sums never fall and every pair takes its first value from
+// nums1 and its second from nums2; P4 swapping the arrays gives the same
+// sums; P5 the answer for k - 1 is the answer for k without its last pair.
+
+fn front_arm(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    if nums1.is_empty() or nums2.is_empty() {
+        return out;
+    }
+    let mut fronts: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    for i in 0..nums1.len().min(k) {
+        fronts.push((nums1[i] + nums2[0], i, 0));
+    }
+    while out.len() < k {
+        match fronts.pop() {
+            Some((_, i, j)) => {
+                out.push((nums1[i], nums2[j]));
+                if j + 1 < nums2.len() {
+                    fronts.push((nums1[i] + nums2[j + 1], i, j + 1));
+                }
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+fn lazy_arm(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    if nums1.is_empty() or nums2.is_empty() {
+        return out;
+    }
+    let mut frontier: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    frontier.push((nums1[0] + nums2[0], 0, 0));
+    while out.len() < k {
+        match frontier.pop() {
+            Some((_, i, j)) => {
+                out.push((nums1[i], nums2[j]));
+                if j + 1 < nums2.len() {
+                    frontier.push((nums1[i] + nums2[j + 1], i, j + 1));
+                }
+                if j == 0 and i + 1 < nums1.len() {
+                    frontier.push((nums1[i + 1] + nums2[0], i + 1, 0));
+                }
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+fn count_at_most(nums1: ref Vec[i64], nums2: ref Vec[i64], s: i64) -> i64 {
+    let mut count = 0;
+    let mut j = nums2.len();
+    for i in 0..nums1.len() {
+        while j > 0 and nums1[i] + nums2[j - 1] > s {
+            j -= 1;
+        }
+        count += j;
+    }
+    count
+}
+
+fn threshold_arm(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    if nums1.is_empty() or nums2.is_empty() {
+        return out;
+    }
+    let want = k.min(nums1.len() * nums2.len());
+    let mut low = nums1[0] + nums2[0];
+    let mut high = nums1[nums1.len() - 1] + nums2[nums2.len() - 1];
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if count_at_most(nums1, nums2, mid) >= want {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    let bound = low;
+    let mut below: Vec[(i64, i64, i64)] = Vec.new();
+    let mut at: Vec[(i64, i64, i64)] = Vec.new();
+    for i in 0..nums1.len() {
+        for j in 0..nums2.len() {
+            let sum = nums1[i] + nums2[j];
+            if sum > bound {
+                break;
+            }
+            if sum < bound {
+                below.push((sum, i, j));
+            } else {
+                at.push((sum, i, j));
+            }
+        }
+    }
+    for t in at.iter() {
+        if below.len() >= want {
+            break;
+        }
+        below.push(t);
+    }
+    below.sort();
+    for (_, i, j) in below.iter() {
+        out.push((nums1[i], nums2[j]));
+    }
+    out
+}
+
+fn merge_arm(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    let rows = nums1.len().min(k);
+    let mut next = vec![0; rows];
+    while out.len() < k {
+        let mut best = -1;
+        let mut best_sum = 0;
+        for i in 0..rows {
+            if next[i] < nums2.len() {
+                let sum = nums1[i] + nums2[next[i]];
+                if best < 0 or sum < best_sum {
+                    best = i;
+                    best_sum = sum;
+                }
+            }
+        }
+        if best < 0 {
+            break;
+        }
+        out.push((nums1[best], nums2[next[best]]));
+        next[best] += 1;
+    }
+    out
+}
+
+fn oracle(nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[(i64, i64)] {
+    let mut all: Vec[(i64, i64, i64)] = Vec.new();
+    for i in 0..nums1.len() {
+        for j in 0..nums2.len() {
+            all.push((nums1[i] + nums2[j], i, j));
+        }
+    }
+    all.sort();
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for (_, i, j) in all.iter() {
+        if out.len() == k {
+            break;
+        }
+        out.push((nums1[i], nums2[j]));
+    }
+    out
+}
+
+fn answer(arm: i64, nums1: ref Vec[i64], nums2: ref Vec[i64], k: i64) -> Vec[(i64, i64)] {
+    match arm {
+        0 => front_arm(nums1, nums2, k),
+        1 => lazy_arm(nums1, nums2, k),
+        2 => threshold_arm(nums1, nums2, k),
+        _ => merge_arm(nums1, nums2, k),
+    }
+}
+
+fn name(arm: i64) -> String {
+    match arm {
+        0 => "front",
+        1 => "lazy",
+        2 => "threshold",
+        _ => "merge",
+    }
+}
+
+fn sums(pairs: ref Vec[(i64, i64)]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for (u, w) in pairs.iter() {
+        out.push(u + w);
+    }
+    out
+}
+
+fn random_sorted(seed: mut ref i64, n: i64, narrow: bool) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    let mut v = if narrow { (seed / 65536) % 7 - 3 } else { (seed / 65536) % 2001 - 1000 };
+    for _ in 0..n {
+        out.push(v);
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        v += if narrow { (seed / 65536) % 3 } else { (seed / 65536) % 200 };
+    }
+    out
+}
+
+fn main() {
+    let mut seed: i64 = 373;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut fails = vec![0; 5];
+    for case in 0..3000 {
+        // Half the cases draw values that rise by 0, 1 or 2, so equal sums
+        // are common; half rise by up to 199.
+        let narrow = case % 2 == 0;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n1 = (seed / 65536) % 10 + if case % 50 == 0 { 0 } else { 1 };
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n2 = 1 + (seed / 65536) % 10;
+        let nums1 = random_sorted(mut seed, n1, narrow);
+        let nums2 = random_sorted(mut seed, n2, narrow);
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let k = 1 + (seed / 65536) % (n1 * n2 + 3);
+        let expected = oracle(nums1, nums2, k);
+        for arm in 0..4 {
+            let got = answer(arm, nums1, nums2, k);
+            let mut bad = vec![false; 5];
+            checks += 1;
+            if got != expected {
+                bad[0] = true;
+            }
+            checks += 1;
+            if got.len() != k.min(n1 * n2) {
+                bad[1] = true;
+            }
+            checks += 1;
+            for p in 0..got.len() {
+                let (u, w) = got[p];
+                if not nums1.contains(u) or not nums2.contains(w) {
+                    bad[2] = true;
+                }
+                if p > 0 and u + w < got[p - 1].0 + got[p - 1].1 {
+                    bad[2] = true;
+                }
+            }
+            checks += 1;
+            if sums(answer(arm, nums2, nums1, k)) != sums(got) {
+                bad[3] = true;
+            }
+            checks += 1;
+            let shorter = answer(arm, nums1, nums2, k - 1);
+            let mut prefix = got.clone();
+            if prefix.len() == k {
+                let _last = prefix.pop();
+            }
+            if shorter != prefix {
+                bad[4] = true;
+            }
+            for p in 0..5 {
+                if bad[p] {
+                    fails[p] += 1;
+                    failures += 1;
+                    if failures <= 5 {
+                        println(f"FAIL P{p + 1} {name(arm)} {nums1} {nums2} k={k}");
+                    }
+                }
+            }
+        }
+    }
+    for p in 0..5 {
+        if fails[p] > 0 {
+            println(f"P{p + 1}: {fails[p]} failures");
+        }
+    }
+    println(f"3000 cases, {checks} checks, {failures} failures");
+}
