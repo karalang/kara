@@ -1693,6 +1693,11 @@ impl super::Parser {
             false
         };
 
+        // A mode written before the parameter's NAME (`own nums: T`), by
+        // analogy with `own self`: report it, then parse on as if the mode
+        // were where it belongs (B-2026-10-12-12).
+        let misplaced_own = self.misplaced_param_mode();
+
         // Focused diagnostic for the anonymous-parameter shape — `fn f(Type)`
         // / `trait T { fn m(self, Type); }`. Try to recognize a TYPE in
         // parameter position with no preceding name+colon; if it succeeds,
@@ -1752,7 +1757,8 @@ impl super::Parser {
                 self.peek_token_ref_at(1),
                 Token::Comma | Token::RightParen | Token::Equal
             )
-            && self.eat_kw("own");
+            && self.eat_kw("own")
+            || misplaced_own;
         let ty = self.parse_type();
         self.frozen_ok = false;
         self.escaping_ok = false;
@@ -1775,6 +1781,97 @@ impl super::Parser {
             is_own,
             is_named: false,
         })
+    }
+
+    /// A parameter mode written before the parameter's name instead of in
+    /// its type: `own nums: T`, `mut ref v: T`, `ref v: T` or `mut v: T`. A
+    /// receiver spells its mode before `self` (`own self`), which is what
+    /// invites the slip; a parameter writes it in the type (`nums: own T`,
+    /// design.md § Parameter modes). Reports it with the machine-applicable
+    /// move where there is one, consumes the mode words so the parameter
+    /// parses on, and returns whether the mode was `own` (B-2026-10-12-12).
+    fn misplaced_param_mode(&mut self) -> bool {
+        let words = match (self.peek_token_ref(), self.peek_token_ref_at(1)) {
+            (Token::Identifier { name, raw: false }, _) if name == "own" => 1,
+            (Token::Mut, Token::Ref) => 2,
+            (Token::Ref | Token::Mut, _) => 1,
+            _ => return false,
+        };
+        let name_at = self.pos + words;
+        let (Some(name_tok), Some(colon)) =
+            (self.tokens.get(name_at), self.tokens.get(name_at + 1))
+        else {
+            return false;
+        };
+        let Token::Identifier { name, raw } = &name_tok.token else {
+            return false;
+        };
+        if colon.token != Token::Colon {
+            return false;
+        }
+        let name = if *raw {
+            format!("r#{name}")
+        } else {
+            name.clone()
+        };
+        let start = self.tokens[self.pos].span;
+        let name_span = name_tok.span;
+        let colon_end = colon.span.offset + colon.span.length;
+        let mode = match words {
+            2 => "mut ref",
+            _ => match self.peek_token_ref() {
+                Token::Ref => "ref",
+                Token::Mut => "mut",
+                _ => "own",
+            },
+        };
+        let (advice, edit) = match mode {
+            // `x: ref T` is the redundant spelling of a bare `T`: drop it.
+            "ref" => (
+                format!("a bare `{name}: T` already borrows, so drop the `ref`"),
+                Some((start.offset, name_span.offset - start.offset, String::new())),
+            ),
+            // `v: mut ref T` borrows mutably and `v: own T` with a `let mut`
+            // owns; which one was meant is not written down, so no edit.
+            "mut" => (
+                format!(
+                    "write `{name}: mut ref T` to change the caller's value, or \
+                     `{name}: own T` and `let mut {name} = {name};` to change your own copy"
+                ),
+                None,
+            ),
+            _ => (
+                format!("write `{name}: {mode} T`"),
+                Some((
+                    start.offset,
+                    colon_end - start.offset,
+                    format!("{name}: {mode}"),
+                )),
+            ),
+        };
+        let receiver = if mode == "mut" { "mut ref" } else { mode };
+        self.errors.push(ParseError {
+            message: format!(
+                "a parameter's mode is written in its type, not before its name \
+                 (only a receiver writes it first, as in `{receiver} self`): {advice}"
+            ),
+            span: start,
+            kind: super::ParseErrorKind::UnexpectedToken,
+        });
+        if let Some((offset, length, replacement)) = edit {
+            self.fix_edits.insert(
+                crate::resolver::SpanKey::from_span(&start),
+                crate::resolver::TextEdit {
+                    offset,
+                    length,
+                    replacement,
+                },
+            );
+        }
+        for _ in 0..words {
+            self.advance();
+        }
+        mode == "own"
     }
 
     /// Speculatively recognize the shape `fn f(TYPE)` — a TYPE in parameter

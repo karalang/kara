@@ -16272,3 +16272,42 @@ fn function_trait_bounds_inline_and_in_where() {
     assert!(out.contains("G: Fn(i64)"), "{out}");
     assert!(parse(&out).errors.is_empty(), "{out}");
 }
+
+/// A mode written before a parameter's name, by analogy with `own self`
+/// (B-2026-10-12-12): one error saying modes go in the type, the edit that
+/// moves `own` / `mut ref` there or drops a redundant `ref`, and no edit for
+/// `mut`, whose meaning is not written down.
+#[test]
+fn a_mode_before_a_parameter_name_is_moved_into_its_type() {
+    for (written, fixed) in [
+        ("own nums: Vec[i64]", Some("nums: own Vec[i64]")),
+        ("mut ref nums: Vec[i64]", Some("nums: mut ref Vec[i64]")),
+        ("ref nums: Vec[i64]", Some("nums: Vec[i64]")),
+        ("mut nums: Vec[i64]", None),
+    ] {
+        let src = format!("fn f(x: i64, {written}) -> i64 {{ x }}\n");
+        let result = parse(&src);
+        assert_eq!(result.errors.len(), 1, "{written}: {:?}", result.errors);
+        assert!(
+            result.errors[0]
+                .message
+                .starts_with("a parameter's mode is written in its type, not before its name"),
+            "{written}: {}",
+            result.errors[0].message
+        );
+        let edits: Vec<_> = result.fix_edits.values().cloned().collect();
+        match fixed {
+            Some(fixed) => {
+                assert_eq!(edits.len(), 1, "{written}: {edits:?}");
+                let e = &edits[0];
+                let mut out = src.clone();
+                out.replace_range(e.offset..e.offset + e.length, &e.replacement);
+                assert_eq!(out, format!("fn f(x: i64, {fixed}) -> i64 {{ x }}\n"));
+                assert!(parse(&out).errors.is_empty(), "{out}");
+            }
+            None => assert!(edits.is_empty(), "{written}: {edits:?}"),
+        }
+    }
+    // A parameter NAMED `own` is a name, not a misplaced mode.
+    assert!(parse("fn f(own: i64) -> i64 { own }").errors.is_empty());
+}
