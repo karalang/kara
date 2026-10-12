@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 226 |
 | other | 171 |
 | diagnostics | 152 |
-| perf | 150 |
+| perf | 151 |
 | false-positive | 146 |
 | crash | 114 |
 | soundness | 99 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 2851 |
 | interp | 899 |
 | typecheck | 362 |
-| other | 114 |
+| other | 115 |
 | ownership | 83 |
 | cli | 75 |
 | autopar | 59 |
@@ -594,6 +594,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-28 | 2026-10-12 | typecheck | low | A `SortedMap.floor`/`ceiling` entry taken out with `.expect()` or `.unwrap()` loses its `ref`s on the MIR backends: `let (k, v) = m.floor(4).expect("an entry"); println(f"{*k}")` passes `karac check` and `karac __mir-run`/`__mir-llvm-run` refuse it ("unary '*' requires 'ref T' ... found 'i64'", no location); the pattern forms fixed under B-2026-10-12-9 work | — |
 | B-2026-10-12-29 | 2026-10-12 | runtime | medium | A hashed `Map` on the MIR compiled backend (`runtime/src/mir_map.rs`) costs about 9x a Rust `HashMap` per lookup: the key is hashed by `karac_hash_word`, then that u64 is hashed AGAIN by the std `HashMap<u64, Vec<usize>>` index, and every new key allocates a `Vec` bucket | — |
 | B-2026-10-12-30 | 2026-10-12 | runtime | medium | `Vec.sort` on the MIR compiled backend (`karac_mir_sort`, `runtime/src/mir.rs`) is about 12x slower than legacy codegen's sort: a bottom-up merge sort of an index permutation, a fresh `Vec` per pass, every comparison through a function pointer and a `dyn FnMut`, then a gather copy | — |
+| B-2026-10-12-31 | 2026-10-12 | other | medium | `Option.expect` and `Result.expect` in the stdlib source take `msg: own String`, where the library spec (docs/library/core-types.md) says `msg: Str`, so every `.expect("...")` builds a heap String from its literal on the success path too: 50,000,000 pops through `.expect("x")` take 1.14 s compiled against 0.26 s with `.unwrap()` | — |
 
 ### Relocated
 
