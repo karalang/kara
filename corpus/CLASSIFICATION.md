@@ -9,6 +9,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - Every classified non-deferred program (context): 6866 / 7514 = 91.4%.
 - Bench variants (outside the gate): 62 / 399 = 15.5%; timeouts 331.
 - Deferred (class d): 237; outside the slice (`post-m1:*`): 485.
+- mir-llvm (`karac __mir-llvm-run`), measured at 12dd92cc55: 6260 / 6630 = 94.4% of the slice; 6239 pass on both backends. Every executed program: 6883 / 7514.
 
 ## Denominator by bucket (slice)
 

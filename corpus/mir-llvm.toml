@@ -1,0 +1,10 @@
+# The corpus on mir-llvm, from `scripts/corpus/run.py --backend mir-llvm` with a
+# debug llvm karac; classify.py's report quotes it. slice_pass counts the M1
+# slice entries the runner passed; both also need the mir-interp gate's pass.
+karac = "12dd92cc55"
+date = "2026-10-12"
+slice = 6630
+slice_pass = 6260
+both = 6239
+executed = 7514
+pass = 6883

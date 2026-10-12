@@ -405,6 +405,17 @@ def report(corpus: Path) -> str:
         f"{sum(m.get('bucket') == 'timeout' for _, m in bench)}.",
         f"- Deferred (class d): {sum(m.get('class') == 'd' for _, m in rows)}; "
         f"outside the slice (`post-m1:*`): {sum(not in_slice(m.get('tags', [])) and 'bench' not in m.get('tags', []) for _, m in allc)}.",
+    ]
+    # mir-llvm is measured separately (`run.py --backend mir-llvm`, judged as
+    # the runner judges); its slice count is recorded in mir-llvm.toml.
+    ll = corpus / "mir-llvm.toml"
+    if ll.exists():
+        t = read_toml(ll)
+        lines.append(
+            f"- mir-llvm (`karac __mir-llvm-run`), measured at {t['karac']}: {t['slice_pass']} / {t['slice']} = "
+            f"{100 * t['slice_pass'] / t['slice']:.1f}% of the slice; {t['both']} pass on both backends. "
+            f"Every executed program: {t['pass']} / {t['executed']}.")
+    lines += [
         "",
         "## Denominator by bucket (slice)",
         "",
