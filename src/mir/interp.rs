@@ -3903,7 +3903,6 @@ impl<'a> Interp<'a> {
         ret: Ty,
     ) -> R<Value> {
         use std::io::{Read, Write};
-        use std::os::fd::AsRawFd;
         // A construction failure: `AddrInUse`, `ConnectionRefused`,
         // `PermissionDenied`, else `Other(-1)`.
         let construct = |e: &std::io::Error| match e.kind() {
@@ -3940,7 +3939,7 @@ impl<'a> Interp<'a> {
                                     );
                                 }
                             }
-                            let fd = i64::from(l.as_raw_fd());
+                            let fd = socket_fd(&l);
                             self.sockets.listeners.insert(fd, l);
                             Ok(Value::Agg(vec![Value::Int(i128::from(fd))]))
                         }
@@ -9649,6 +9648,25 @@ struct Procs {
     stdin: rustc_hash::FxHashMap<i64, std::process::ChildStdin>,
 }
 
+/// A socket's descriptor, as the runtime's `event_loop.rs` hands it to
+/// the compiled backend (a Windows `SOCKET` handle there).
+#[cfg(unix)]
+fn socket_fd(s: &impl std::os::fd::AsRawFd) -> i64 {
+    i64::from(s.as_raw_fd())
+}
+
+#[cfg(windows)]
+fn socket_fd(s: &impl std::os::windows::io::AsRawSocket) -> i64 {
+    s.as_raw_socket() as i64
+}
+
+/// Elsewhere a socket has no descriptor to show, so it is numbered.
+#[cfg(not(any(unix, windows)))]
+fn socket_fd<T>(_: &T) -> i64 {
+    static NEXT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(3);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The interpreter's sockets, by descriptor (`Interp::tcp_method`).
 #[derive(Default)]
 struct Sockets {
@@ -9659,8 +9677,7 @@ struct Sockets {
 impl Sockets {
     /// Keeps `s`, and the `TcpStream` value that names it.
     fn stream(&mut self, s: std::net::TcpStream) -> Value {
-        use std::os::fd::AsRawFd;
-        let fd = i64::from(s.as_raw_fd());
+        let fd = socket_fd(&s);
         self.streams.insert(fd, s);
         Value::Agg(vec![Value::Int(i128::from(fd))])
     }
