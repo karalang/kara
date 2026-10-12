@@ -1,0 +1,209 @@
+// Differential test for LeetCode #392: Is Subsequence.
+//
+// Copies of the four arms, run on 3,000 random strings t of 0 to 40
+// letters from "abc", with answers known by construction:
+//   P1  every arm says true for s made by keeping a random subset of t's
+//       letters in order
+//   P2  every arm says false for that s with a 'z' (absent from t) put in
+//       at a random place
+//   P3  every arm says false for s = t with one more letter put in, since
+//       s is then longer than t
+//   P4  for a random s, putting extra letters into t never turns a true
+//       answer false
+//   P5  reversing both strings changes no answer
+
+fn sub_pointers(s: Str, t: Str) -> bool {
+    let a = s.bytes();
+    let mut i = 0;
+    for b in t.bytes() {
+        if i < a.len() and a[i] == b {
+            i += 1;
+        }
+    }
+    i == a.len()
+}
+
+fn sub_dp(s: Str, t: Str) -> bool {
+    let a = s.bytes();
+    let b = t.bytes();
+    let mut prev = vec![0; b.len() + 1];
+    for i in 0..a.len() {
+        let mut cur = vec![0; b.len() + 1];
+        for j in 0..b.len() {
+            cur[j + 1] = if a[i] == b[j] { prev[j] + 1 } else { prev[j + 1].max(cur[j]) };
+        }
+        prev = cur;
+    }
+    prev[b.len()] == a.len()
+}
+
+fn sub_next(s: Str, t: Str) -> bool {
+    let b = t.bytes();
+    let n = b.len();
+    let mut next: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        next.push(vec![n; 256]);
+    }
+    let mut i = n - 1;
+    while i >= 0 {
+        next[i] = next[i + 1].clone();
+        next[i][b[i] as i64] = i;
+        i -= 1;
+    }
+    let mut p = 0;
+    for c in s.bytes() {
+        let at = next[p][c as i64];
+        if at == n {
+            return false;
+        }
+        p = at + 1;
+    }
+    true
+}
+
+fn first_after(positions: Vec[i64], after: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = positions.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if positions[mid] <= after {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if lo < positions.len() { positions[lo] } else { -1 }
+}
+
+fn sub_search(s: Str, t: Str) -> bool {
+    let mut positions: Map[char, Vec[i64]] = Map.new();
+    let mut i = 0;
+    for c in t.chars() {
+        positions.entry(c).or_insert(Vec.new()).push(i);
+        i += 1;
+    }
+    let mut last = -1;
+    for c in s.chars() {
+        match positions.get(c) {
+            Some(list) => {
+                let at = first_after(list, last);
+                if at < 0 {
+                    return false;
+                }
+                last = at;
+            },
+            None => {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn sub(arm: i64, s: Str, t: Str) -> bool {
+    if arm == 0 {
+        sub_pointers(s, t)
+    } else if arm == 1 {
+        sub_dp(s, t)
+    } else if arm == 2 {
+        sub_next(s, t)
+    } else {
+        sub_search(s, t)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(seed: mut ref i64) -> char {
+    (step(seed) % 3 + 97) as u8 as char
+}
+
+// `text` with `c` put in at a random place.
+fn put_in(text: Str, c: char, seed: mut ref i64) -> String {
+    let chars: Vec[char] = text.chars().collect();
+    let at = step(seed) % (chars.len() + 1);
+    let mut out = String.new();
+    for i in 0..chars.len() + 1 {
+        if i == at {
+            out.push(c);
+        }
+        if i < chars.len() {
+            out.push(chars[i]);
+        }
+    }
+    out
+}
+
+fn reversed(text: Str) -> String {
+    let chars: Vec[char] = text.chars().collect();
+    let mut out = String.new();
+    for i in 0..chars.len() {
+        out.push(chars[chars.len() - 1 - i]);
+    }
+    out
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, got: bool, want: bool, failures: mut ref Vec[i64]) {
+    if got != want {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 3920;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        let mut t = String.new();
+        let tn = step(mut seed) % 41;
+        for _ in 0..tn {
+            t.push(letter(mut seed));
+        }
+        let mut kept = String.new();
+        for c in t.chars() {
+            if step(mut seed) % 2 == 0 {
+                kept.push(c);
+            }
+        }
+        let with_z = put_in(kept, 'z', mut seed);
+        let longer = put_in(t, letter(mut seed), mut seed);
+        let mut s = String.new();
+        let sn = step(mut seed) % 16;
+        for _ in 0..sn {
+            s.push(letter(mut seed));
+        }
+        let mut wider = t.clone();
+        let extra = step(mut seed) % 6;
+        for _ in 0..extra {
+            wider = put_in(wider, letter(mut seed), mut seed);
+        }
+        let rs = reversed(s);
+        let rt = reversed(t);
+        for arm in 0..4 {
+            checks += 4;
+            report(1, arm, case, sub(arm, kept, t), true, mut failures);
+            report(2, arm, case, sub(arm, with_z, t), false, mut failures);
+            report(3, arm, case, sub(arm, longer, t), false, mut failures);
+            let got = sub(arm, s, t);
+            if got {
+                checks += 1;
+                report(4, arm, case, sub(arm, s, wider), true, mut failures);
+            }
+            report(5, arm, case, sub(arm, rs, rt), got, mut failures);
+        }
+    }
+    println(f"3000 strings, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

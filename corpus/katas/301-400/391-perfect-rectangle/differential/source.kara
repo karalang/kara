@@ -1,0 +1,302 @@
+// Differential test for LeetCode #391: Perfect Rectangle.
+//
+// Copies of the four arms, run on 3,000 random tilings: a box cut into up
+// to 10 pieces by straight cuts, which covers the box exactly by
+// construction. Each tiling is then edited (a piece dropped, moved one
+// step, or grown one step), and the properties are:
+//   P1  every arm says true for the tiling
+//   P2  every arm says false for the tiling with one or two copies of one
+//       piece added
+//   P3  every arm agrees with painting unit cells, on the edited tiling
+//   P4  shifting every rectangle of the edited tiling by the same amount
+//       changes no answer
+//   P5  swapping x and y in every rectangle and reversing their order
+//       changes no answer
+
+fn cover_corners(rects: Vec[Vec[i64]]) -> bool {
+    let mut min_x = rects[0][0];
+    let mut min_y = rects[0][1];
+    let mut max_x = rects[0][2];
+    let mut max_y = rects[0][3];
+    let mut area: i64 = 0;
+    let mut corners: Set[(i64, i64)] = Set.new();
+    for r in rects.iter() {
+        min_x = min_x.min(r[0]);
+        min_y = min_y.min(r[1]);
+        max_x = max_x.max(r[2]);
+        max_y = max_y.max(r[3]);
+        area += (r[2] - r[0]) * (r[3] - r[1]);
+        for p in [(r[0], r[1]), (r[0], r[3]), (r[2], r[1]), (r[2], r[3])] {
+            if not corners.remove(p) {
+                corners.insert(p);
+            }
+        }
+    }
+    area == (max_x - min_x) * (max_y - min_y)
+        and corners.len() == 4
+        and corners.contains((min_x, min_y))
+        and corners.contains((min_x, max_y))
+        and corners.contains((max_x, min_y))
+        and corners.contains((max_x, max_y))
+}
+
+fn cover_pairs(rects: Vec[Vec[i64]]) -> bool {
+    let n = rects.len();
+    let mut min_x = rects[0][0];
+    let mut min_y = rects[0][1];
+    let mut max_x = rects[0][2];
+    let mut max_y = rects[0][3];
+    let mut area: i64 = 0;
+    for i in 0..n {
+        let a = rects[i].clone();
+        min_x = min_x.min(a[0]);
+        min_y = min_y.min(a[1]);
+        max_x = max_x.max(a[2]);
+        max_y = max_y.max(a[3]);
+        area += (a[2] - a[0]) * (a[3] - a[1]);
+        for j in i + 1..n {
+            let b = rects[j].clone();
+            // The two overlap when they overlap on both axes.
+            if a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3] {
+                return false;
+            }
+        }
+    }
+    area == (max_x - min_x) * (max_y - min_y)
+}
+
+fn cover_sweep(rects: Vec[Vec[i64]]) -> bool {
+    let mut min_x = rects[0][0];
+    let mut min_y = rects[0][1];
+    let mut max_x = rects[0][2];
+    let mut max_y = rects[0][3];
+    let mut area: i64 = 0;
+    // (x, 0 = close or 1 = open, bottom, top)
+    let mut events: Vec[(i64, i64, i64, i64)] = Vec.new();
+    for r in rects.iter() {
+        min_x = min_x.min(r[0]);
+        min_y = min_y.min(r[1]);
+        max_x = max_x.max(r[2]);
+        max_y = max_y.max(r[3]);
+        area += (r[2] - r[0]) * (r[3] - r[1]);
+        events.push((r[0], 1, r[1], r[3]));
+        events.push((r[2], 0, r[1], r[3]));
+    }
+    events.sort();
+    let mut open: SortedMap[i64, i64] = SortedMap.new();
+    for (_, kind, bottom, top) in events {
+        if kind == 0 {
+            open.remove(bottom);
+        } else {
+            if let Some((_, reach)) = open.floor(top - 1) {
+                if reach > bottom {
+                    return false;
+                }
+            }
+            open.insert(bottom, top);
+        }
+    }
+    area == (max_x - min_x) * (max_y - min_y)
+}
+
+fn grid_index(sorted: ref Vec[i64], v: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if sorted[mid] < v {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn cover_grid(rects: Vec[Vec[i64]]) -> bool {
+    let mut xs: SortedSet[i64] = SortedSet.new();
+    let mut ys: SortedSet[i64] = SortedSet.new();
+    for r in rects.iter() {
+        xs.insert(r[0]);
+        xs.insert(r[2]);
+        ys.insert(r[1]);
+        ys.insert(r[3]);
+    }
+    let mut xv: Vec[i64] = Vec.new();
+    for x in xs {
+        xv.push(x);
+    }
+    let mut yv: Vec[i64] = Vec.new();
+    for y in ys {
+        yv.push(y);
+    }
+    let xs = xv;
+    let ys = yv;
+    let w = xs.len() - 1;
+    let h = ys.len() - 1;
+    let mut painted = vec![0; w * h];
+    for r in rects.iter() {
+        for i in grid_index(xs, r[0])..grid_index(xs, r[2]) {
+            for j in grid_index(ys, r[1])..grid_index(ys, r[3]) {
+                painted[i * h + j] += 1;
+            }
+        }
+    }
+    for c in painted {
+        if c != 1 {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- reference and harness ------------------------------------------------
+
+// The definition, cell by cell: every unit cell of the bounding box is
+// covered by exactly one rectangle.
+fn paint(rects: ref Vec[Vec[i64]]) -> bool {
+    let mut min_x = rects[0][0];
+    let mut min_y = rects[0][1];
+    let mut max_x = rects[0][2];
+    let mut max_y = rects[0][3];
+    for r in rects.iter() {
+        min_x = min_x.min(r[0]);
+        min_y = min_y.min(r[1]);
+        max_x = max_x.max(r[2]);
+        max_y = max_y.max(r[3]);
+    }
+    let w = max_x - min_x;
+    let h = max_y - min_y;
+    let mut count = vec![0; w * h];
+    for r in rects.iter() {
+        for x in r[0]..r[2] {
+            for y in r[1]..r[3] {
+                count[(x - min_x) * h + (y - min_y)] += 1;
+            }
+        }
+    }
+    for c in count {
+        if c != 1 {
+            return false;
+        }
+    }
+    true
+}
+
+fn cover(arm: i64, rects: ref Vec[Vec[i64]]) -> bool {
+    let copy = rects.clone();
+    if arm == 0 {
+        cover_corners(copy)
+    } else if arm == 1 {
+        cover_pairs(copy)
+    } else if arm == 2 {
+        cover_sweep(copy)
+    } else {
+        cover_grid(copy)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Cut [x1, x2) x [y1, y2) into up to `pieces` rectangles by straight cuts
+// across the whole piece, appending them to `out`: a tiling, so a perfect
+// rectangle.
+fn tile(x1: i64, y1: i64, x2: i64, y2: i64, pieces: i64, seed: mut ref i64, out: mut ref Vec[Vec[i64]]) {
+    let w = x2 - x1;
+    let h = y2 - y1;
+    if pieces <= 1 or (w < 2 and h < 2) {
+        out.push(vec![x1, y1, x2, y2]);
+        return;
+    }
+    let left = 1 + step(seed) % (pieces - 1);
+    let across = if w < 2 { false } else if h < 2 { true } else { step(seed) % 2 == 0 };
+    if across {
+        let cut = x1 + 1 + step(seed) % (w - 1);
+        tile(x1, y1, cut, y2, left, seed, out);
+        tile(cut, y1, x2, y2, pieces - left, seed, out);
+    } else {
+        let cut = y1 + 1 + step(seed) % (h - 1);
+        tile(x1, y1, x2, cut, left, seed, out);
+        tile(x1, cut, x2, y2, pieces - left, seed, out);
+    }
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, got: bool, want: bool, failures: mut ref Vec[i64]) {
+    if got != want {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 3910;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    let mut perfect = 0;
+    for case in 0..3000 {
+        let x1 = step(mut seed) % 21 - 10;
+        let y1 = step(mut seed) % 21 - 10;
+        let w = 1 + step(mut seed) % 12;
+        let h = 1 + step(mut seed) % 12;
+        let pieces = 1 + step(mut seed) % 10;
+        let mut rects: Vec[Vec[i64]] = Vec.new();
+        tile(x1, y1, x1 + w, y1 + h, pieces, mut seed, mut rects);
+        let at = step(mut seed) % rects.len();
+
+        // One or two extra copies of a piece: two copies pair up their own
+        // corners, so only the area can tell.
+        let mut doubled = rects.clone();
+        let copies = 1 + step(mut seed) % 2;
+        for _ in 0..copies {
+            doubled.push(rects[at].clone());
+        }
+
+        let mut edited = rects.clone();
+        let edit = step(mut seed) % 3;
+        if edit == 0 and edited.len() > 1 {
+            edited.remove(at);
+        } else if edit == 1 {
+            edited[at][0] += 1;
+            edited[at][2] += 1;
+        } else {
+            edited[at][3] += 1;
+        }
+        let want = paint(edited);
+        if want {
+            perfect += 1;
+        }
+
+        let dx = step(mut seed) % 41 - 20;
+        let dy = step(mut seed) % 41 - 20;
+        let mut shifted: Vec[Vec[i64]] = Vec.new();
+        let mut swapped: Vec[Vec[i64]] = Vec.new();
+        for r in edited.iter() {
+            shifted.push(vec![r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy]);
+        }
+        for i in 0..edited.len() {
+            let r = edited[edited.len() - 1 - i].clone();
+            swapped.push(vec![r[1], r[0], r[3], r[2]]);
+        }
+
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, cover(arm, rects), true, mut failures);
+            report(2, arm, case, cover(arm, doubled), false, mut failures);
+            let got = cover(arm, edited);
+            report(3, arm, case, got, want, mut failures);
+            report(4, arm, case, cover(arm, shifted), got, mut failures);
+            report(5, arm, case, cover(arm, swapped), got, mut failures);
+        }
+    }
+    println(f"3000 tilings, {perfect} still perfect after the edit, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

@@ -1,0 +1,92 @@
+// Benchmark for #391: the kata's ★ arm (corners and area). Builds 50
+// tilings of a 100,000 x 100,000 box, each cut into 20,000 pieces (the
+// problem's limit) by straight cuts, once. Then 300 rounds: pick a tiling,
+// leave it alone or move one piece one step or grow one piece one step,
+// check it, and undo the edit. The answers go into a count and a checksum.
+
+fn is_rectangle_cover(rects: Vec[Vec[i64]]) -> bool {
+    let mut min_x = rects[0][0];
+    let mut min_y = rects[0][1];
+    let mut max_x = rects[0][2];
+    let mut max_y = rects[0][3];
+    let mut area: i64 = 0;
+    let mut corners: Set[(i64, i64)] = Set.new();
+    for r in rects.iter() {
+        min_x = min_x.min(r[0]);
+        min_y = min_y.min(r[1]);
+        max_x = max_x.max(r[2]);
+        max_y = max_y.max(r[3]);
+        area += (r[2] - r[0]) * (r[3] - r[1]);
+        for p in [(r[0], r[1]), (r[0], r[3]), (r[2], r[1]), (r[2], r[3])] {
+            if not corners.remove(p) {
+                corners.insert(p);
+            }
+        }
+    }
+    area == (max_x - min_x) * (max_y - min_y)
+        and corners.len() == 4
+        and corners.contains((min_x, min_y))
+        and corners.contains((min_x, max_y))
+        and corners.contains((max_x, min_y))
+        and corners.contains((max_x, max_y))
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn tile(x1: i64, y1: i64, x2: i64, y2: i64, pieces: i64, seed: mut ref i64, out: mut ref Vec[Vec[i64]]) {
+    let w = x2 - x1;
+    let h = y2 - y1;
+    if pieces <= 1 or (w < 2 and h < 2) {
+        out.push(vec![x1, y1, x2, y2]);
+        return;
+    }
+    let left = 1 + step(seed) % (pieces - 1);
+    let across = if w < 2 { false } else if h < 2 { true } else { step(seed) % 2 == 0 };
+    if across {
+        let cut = x1 + 1 + (step(seed) * 32768 + step(seed)) % (w - 1);
+        tile(x1, y1, cut, y2, left, seed, out);
+        tile(cut, y1, x2, y2, pieces - left, seed, out);
+    } else {
+        let cut = y1 + 1 + (step(seed) * 32768 + step(seed)) % (h - 1);
+        tile(x1, y1, x2, cut, left, seed, out);
+        tile(x1, cut, x2, y2, pieces - left, seed, out);
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 391;
+    let mut tilings: Vec[Vec[Vec[i64]]] = Vec.new();
+    for _ in 0..50 {
+        let mut rects: Vec[Vec[i64]] = Vec.new();
+        tile(0, 0, 100000, 100000, 20000, mut seed, mut rects);
+        tilings.push(rects);
+    }
+    let mut perfect = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..300 {
+        let t = round % 50;
+        let at = (step(mut seed) * 32768 + step(mut seed)) % tilings[t].len();
+        let edit = step(mut seed) % 3;
+        if edit == 1 {
+            tilings[t][at][0] += 1;
+            tilings[t][at][2] += 1;
+        } else if edit == 2 {
+            tilings[t][at][3] += 1;
+        }
+        let ok = is_rectangle_cover(tilings[t]);
+        if edit == 1 {
+            tilings[t][at][0] -= 1;
+            tilings[t][at][2] -= 1;
+        } else if edit == 2 {
+            tilings[t][at][3] -= 1;
+        }
+        if ok {
+            perfect += 1;
+        }
+        checksum = (checksum * 3 + if ok { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"300 rounds over 50 tilings of 20000 pieces: {perfect} perfect, checksum {checksum}");
+}

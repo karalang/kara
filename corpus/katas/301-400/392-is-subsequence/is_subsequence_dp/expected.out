@@ -1,0 +1,11 @@
+s = "abc", t = "ahbgdc": true
+s = "axc", t = "ahbgdc": false
+s = "", t = "": true
+s = "", t = "abc": true
+s = "a", t = "": false
+s = "abc", t = "abc": true
+s = "aaa", t = "aa": false
+s = "aa", t = "baba": true
+s = "cba", t = "abc": false
+s = "ace", t = "abcde": true
+3000 random pairs: 1423 subsequences, checksum 170411359

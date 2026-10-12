@@ -1,0 +1,139 @@
+// LeetCode #391: Perfect Rectangle -- paint a compressed grid.
+//
+// Only the coordinates the rectangles use matter, so number the distinct
+// x values and the distinct y values in order; they cut the bounding box
+// into cells. Paint every rectangle's cells, counting how many times each
+// is painted. The cover is perfect when every cell is painted exactly
+// once. O(n * cells) time, which is O(n^3) at worst, and O(n^2) space.
+
+fn index_of(sorted: ref Vec[i64], v: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = sorted.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if sorted[mid] < v {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn is_rectangle_cover(rects: Vec[Vec[i64]]) -> bool {
+    let mut xs: SortedSet[i64] = SortedSet.new();
+    let mut ys: SortedSet[i64] = SortedSet.new();
+    for r in rects.iter() {
+        xs.insert(r[0]);
+        xs.insert(r[2]);
+        ys.insert(r[1]);
+        ys.insert(r[3]);
+    }
+    let mut xv: Vec[i64] = Vec.new();
+    for x in xs {
+        xv.push(x);
+    }
+    let mut yv: Vec[i64] = Vec.new();
+    for y in ys {
+        yv.push(y);
+    }
+    let xs = xv;
+    let ys = yv;
+    let w = xs.len() - 1;
+    let h = ys.len() - 1;
+    let mut painted = vec![0; w * h];
+    for r in rects.iter() {
+        for i in index_of(xs, r[0])..index_of(xs, r[2]) {
+            for j in index_of(ys, r[1])..index_of(ys, r[3]) {
+                painted[i * h + j] += 1;
+            }
+        }
+    }
+    for c in painted {
+        if c != 1 {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Cut [x1, x2) x [y1, y2) into up to `pieces` rectangles by straight cuts
+// across the whole piece, appending them to `out`: a tiling, so a perfect
+// rectangle.
+fn tile(x1: i64, y1: i64, x2: i64, y2: i64, pieces: i64, seed: mut ref i64, out: mut ref Vec[Vec[i64]]) {
+    let w = x2 - x1;
+    let h = y2 - y1;
+    if pieces <= 1 or (w < 2 and h < 2) {
+        out.push(vec![x1, y1, x2, y2]);
+        return;
+    }
+    let left = 1 + step(seed) % (pieces - 1);
+    let across = if w < 2 { false } else if h < 2 { true } else { step(seed) % 2 == 0 };
+    if across {
+        let cut = x1 + 1 + step(seed) % (w - 1);
+        tile(x1, y1, cut, y2, left, seed, out);
+        tile(cut, y1, x2, y2, pieces - left, seed, out);
+    } else {
+        let cut = y1 + 1 + step(seed) % (h - 1);
+        tile(x1, y1, x2, cut, left, seed, out);
+        tile(x1, cut, x2, y2, pieces - left, seed, out);
+    }
+}
+
+fn show(name: Str, rects: Vec[Vec[i64]]) {
+    println(f"{name}: {is_rectangle_cover(rects)}");
+}
+
+fn main() {
+    show("example 1", vec![vec![1, 1, 3, 3], vec![3, 1, 4, 2], vec![3, 2, 4, 4], vec![1, 3, 2, 4], vec![2, 3, 3, 4]]);
+    show("example 2", vec![vec![1, 1, 2, 3], vec![1, 3, 2, 4], vec![3, 1, 4, 2], vec![3, 2, 4, 4]]);
+    show("example 3", vec![vec![1, 1, 3, 3], vec![3, 1, 4, 2], vec![1, 3, 2, 4], vec![2, 2, 4, 4]]);
+    show("one rectangle", vec![vec![-5, -5, 7, 2]]);
+    show("the same rectangle twice", vec![vec![0, 0, 2, 2], vec![0, 0, 2, 2]]);
+    show("two pairs on top of each other", vec![vec![0, 0, 1, 1], vec![0, 0, 1, 1], vec![1, 1, 2, 2], vec![1, 1, 2, 2]]);
+    show("an overlap and a gap of the same area", vec![vec![0, 0, 2, 1], vec![1, 0, 3, 1], vec![0, 1, 2, 2]]);
+    show("a plus sign over four corners", vec![vec![0, 0, 1, 1], vec![2, 0, 3, 1], vec![0, 2, 1, 3], vec![2, 2, 3, 3], vec![1, 0, 2, 3], vec![0, 1, 3, 2]]);
+    show("a row of strips", vec![vec![0, 0, 1, 5], vec![1, 0, 2, 5], vec![2, 0, 3, 5], vec![3, 0, 4, 5]]);
+
+    // 2000 random cases: a tiling of a random box, then one of five edits
+    // (none, drop a piece, copy a piece, move a piece one step, grow a
+    // piece one step).
+    let mut seed: i64 = 391;
+    let mut covers = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let x1 = step(mut seed) % 21 - 10;
+        let y1 = step(mut seed) % 21 - 10;
+        let w = 1 + step(mut seed) % 12;
+        let h = 1 + step(mut seed) % 12;
+        let pieces = 1 + step(mut seed) % 10;
+        let mut rects: Vec[Vec[i64]] = Vec.new();
+        tile(x1, y1, x1 + w, y1 + h, pieces, mut seed, mut rects);
+        let edit = step(mut seed) % 5;
+        let at = step(mut seed) % rects.len();
+        if edit == 1 and rects.len() > 1 {
+            rects.remove(at);
+        } else if edit == 2 {
+            let copy = rects[at].clone();
+            rects.push(copy);
+        } else if edit == 3 {
+            rects[at][0] += 1;
+            rects[at][2] += 1;
+        } else if edit == 4 {
+            rects[at][3] += 1;
+        }
+        let ok = is_rectangle_cover(rects);
+        if ok {
+            covers += 1;
+        }
+        checksum = (checksum * 3 + if ok { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"2000 random cases: {covers} perfect, checksum {checksum}");
+}

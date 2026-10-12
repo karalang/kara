@@ -1,0 +1,68 @@
+// LeetCode #392: Is Subsequence -- longest common subsequence.
+//
+// s is a subsequence of t exactly when the longest common subsequence of
+// the two is all of s. Fill the usual table row by row, keeping only the
+// previous row: cur[j] is the LCS length of s[..i] and t[..j].
+// O(|s| * |t|) time, O(|t|) space.
+
+fn is_subsequence(s: Str, t: Str) -> bool {
+    let a = s.bytes();
+    let b = t.bytes();
+    let mut prev = vec![0; b.len() + 1];
+    for i in 0..a.len() {
+        let mut cur = vec![0; b.len() + 1];
+        for j in 0..b.len() {
+            cur[j + 1] = if a[i] == b[j] { prev[j] + 1 } else { prev[j + 1].max(cur[j]) };
+        }
+        prev = cur;
+    }
+    prev[b.len()] == a.len()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str, t: Str) {
+    println(f"s = \"{s}\", t = \"{t}\": {is_subsequence(s, t)}");
+}
+
+fn main() {
+    show("abc", "ahbgdc");
+    show("axc", "ahbgdc");
+    show("", "");
+    show("", "abc");
+    show("a", "");
+    show("abc", "abc");
+    show("aaa", "aa");
+    show("aa", "baba");
+    show("cba", "abc");
+    show("ace", "abcde");
+
+    // 3000 random pairs over a three-letter alphabet, so that both answers
+    // are common: t of 0 to 40 letters, s of 0 to 15.
+    let mut seed: i64 = 392;
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..3000 {
+        let mut t = String.new();
+        let tn = step(mut seed) % 41;
+        for _ in 0..tn {
+            t.push((step(mut seed) % 3 + 97) as u8 as char);
+        }
+        let mut s = String.new();
+        let sn = step(mut seed) % 16;
+        for _ in 0..sn {
+            s.push((step(mut seed) % 3 + 97) as u8 as char);
+        }
+        let r = is_subsequence(s, t);
+        if r {
+            yes += 1;
+        }
+        checksum = (checksum * 3 + if r { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"3000 random pairs: {yes} subsequences, checksum {checksum}");
+}

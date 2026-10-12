@@ -1,0 +1,66 @@
+// LeetCode #392: Is Subsequence -- two pointers.
+//
+// Walk t once, keeping a pointer into s. Each byte of t that equals the
+// next unmatched byte of s moves the pointer on. s is a subsequence of t
+// exactly when the pointer reaches the end of s; taking the earliest
+// match each time never loses one that a later choice would find.
+// O(|t|) time, O(1) space.
+
+fn is_subsequence(s: Str, t: Str) -> bool {
+    let a = s.bytes();
+    let mut i = 0;
+    for b in t.bytes() {
+        if i < a.len() and a[i] == b {
+            i += 1;
+        }
+    }
+    i == a.len()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str, t: Str) {
+    println(f"s = \"{s}\", t = \"{t}\": {is_subsequence(s, t)}");
+}
+
+fn main() {
+    show("abc", "ahbgdc");
+    show("axc", "ahbgdc");
+    show("", "");
+    show("", "abc");
+    show("a", "");
+    show("abc", "abc");
+    show("aaa", "aa");
+    show("aa", "baba");
+    show("cba", "abc");
+    show("ace", "abcde");
+
+    // 3000 random pairs over a three-letter alphabet, so that both answers
+    // are common: t of 0 to 40 letters, s of 0 to 15.
+    let mut seed: i64 = 392;
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..3000 {
+        let mut t = String.new();
+        let tn = step(mut seed) % 41;
+        for _ in 0..tn {
+            t.push((step(mut seed) % 3 + 97) as u8 as char);
+        }
+        let mut s = String.new();
+        let sn = step(mut seed) % 16;
+        for _ in 0..sn {
+            s.push((step(mut seed) % 3 + 97) as u8 as char);
+        }
+        let r = is_subsequence(s, t);
+        if r {
+            yes += 1;
+        }
+        checksum = (checksum * 3 + if r { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"3000 random pairs: {yes} subsequences, checksum {checksum}");
+}

@@ -1,0 +1,10 @@
+example 1: true
+example 2: false
+example 3: false
+one rectangle: true
+the same rectangle twice: false
+two pairs on top of each other: false
+an overlap and a gap of the same area: false
+a plus sign over four corners: false
+a row of strips: true
+2000 random cases: 659 perfect, checksum 52584382
