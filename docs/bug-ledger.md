@@ -576,8 +576,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-132 | 2026-10-06 | codegen | medium | A BY-VALUE `Vec` PARAM HANDED BACK ON SOME EXITS NEVER RUNS ITS ELEMENTS' `Drop` BODIES COMPILED ON THE EXIT THAT KEEPS IT -- `dv(v, false)` over `fn dv(s: Vec[P], c: bool) -> Option[Vec[P]] { if c { return Some(s) } return None }`, the wrapped `let o = Some(s)` spelling, the bare `fn rv(s: Vec[P], c: bool) -> Vec[P] { if c { return s } Vec.new() }` and the generic `cg[T]` print no `dP15` on -O0 and -O2 where `--interp` prints it | — |
 | B-2026-10-06-133 | 2026-10-06 | codegen | medium | A GENERIC FN THAT HANDS ITS BARE-`T` PARAM BACK IN AN `Option` ON SOME EXITS NEVER RELEASES A `shared` STRUCT ARGUMENT COMPILED, ON EITHER PATH -- `cg(H { id: 1 }, false)` and `cg(H { id: 2 }, true)` over `fn cg[T](s: T, c: bool) -> Option[T] { let o = Some(s); if c { return o } return None }`, and the unwrapped `if c { return Some(s) } return None`, print no `dH` on -O0 and -O2 and lose 1 block, where `--interp` prints `dH1 _1 false end` and `_2 true end dH2` | — |
 | B-2026-10-06-135 | 2026-10-06 | codegen | low | REMAINDER OF B-2026-10-05-27: A GENERIC `shared enum` AT `Option` OF A `shared` TYPE CONSTRUCTED INSIDE A GENERIC FUNCTION STILL LEAKS THE INNER HANDLE -- `fn mkg[T](x: T) -> G[T] { G.Y(x) }` called as `let h: G[Option[M]] = mkg(Some(M.My(mkv("p"))))` loses 40 B + 52 B indirect at -O0, with output matching `--interp` | — |
-| B-2026-10-12-1 | 2026-10-12 | parser+typecheck | medium | `karac fix` REWRITES AN INTEGER `!x` (RUST'S BITWISE NOT) TO `not x`, WHICH THEN FAILS TYPECHECK WITH NO HINT TOWARD `~` | — |
-| B-2026-10-12-2 | 2026-10-12 | typecheck | low | `SortedSet.min()` / `.max()` ARE TYPED `Option[T]`, NOT THE DOCUMENTED `Option[ref T]`, SO AN EXPLICIT `*x` ON THE RESULT IS REFUSED (ITS SIBLINGS ACCEPT IT) | — |
 
 ### Relocated
 
@@ -3901,6 +3899,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-129 | interp+codegen | high | SINCE B-2026-10-05-107 (a360d0f79), A GENERIC FN THAT WRAPS ITS BARE-`T` PARAM IN AN `Option` / `Result` LOCAL AND HANDS THAT LOCAL BACK ON SOME EXIT… | 38dbe8501 |
 | B-2026-10-06-134 | codegen | medium | A NON-GENERIC `shared enum` WITH AN `Option[shared]` PAYLOAD RELEASES THE WRONG OBJECT: IT LEAKS THE HANDLE AND A `None` PAYLOAD'S BOX, AND A BINDING… | 6a960dffa |
 | B-2026-10-07-1 | cli | medium | `karac fmt` DROPS THE PARENTHESES AROUND A CALLED FIELD: `(h.f)()` IS PRINTED AS `h.f()`, A METHOD CALL THAT NO LONGER RESOLVES (OR CALLS A SAME-NAME… | 74096e3f1 |
+| B-2026-10-12-1 | parser+typecheck | medium | `karac fix` REWRITES AN INTEGER `!x` (RUST'S BITWISE NOT) TO `not x`, WHICH THEN FAILS TYPECHECK WITH NO HINT TOWARD `~` | 9cd9a722d5 |
+| B-2026-10-12-2 | typecheck | low | `SortedSet.min()` / `.max()` ARE TYPED `Option[T]`, NOT THE DOCUMENTED `Option[ref T]`, SO AN EXPLICIT `*x` ON THE RESULT IS REFUSED (ITS SIBLINGS AC… | b2194a848c |
 
 </details>
 
