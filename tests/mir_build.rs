@@ -189,6 +189,90 @@ fn mir_build_runs_derived_serde() {
     }
 }
 
+/// `for x in v.into_iter()` takes each element out of the `Vec` once,
+/// front to back, without moving the rest up each round; what a `break` or
+/// a `return` leaves drops front to back, compiled as interpreted.
+const INTO_ITER_PROGRAM: &str = r#"
+struct D { n: i64 }
+impl Drop for D {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+fn first_big(v: Vec[D]) -> i64 {
+    for d in v.into_iter() {
+        if d.n > 1 { return d.n; }
+    }
+    -1
+}
+fn first_own(v: own Vec[D]) -> i64 {
+    for d in v.into_iter() {
+        if d.n > 1 { return d.n; }
+    }
+    -1
+}
+fn main() {
+    let mut v: Vec[D] = Vec.new();
+    for i in 0..5 { v.push(D { n: i }); }
+    for d in v.into_iter() {
+        println(f"got {d.n}");
+        if d.n == 2 { break; }
+    }
+    let mut w: Vec[D] = Vec.new();
+    for i in 0..4 { w.push(D { n: 10 + i }); }
+    for (i, d) in w.into_iter().enumerate() {
+        if i == 1 { continue; }
+        println(f"at {i} {d.n}");
+    }
+    let mut u: Vec[D] = Vec.new();
+    for i in 0..4 { u.push(D { n: i }); }
+    println(f"fb {first_big(u)}");
+    let mut o: Vec[D] = Vec.new();
+    for i in 0..4 { o.push(D { n: 20 + i }); }
+    println(f"fo {first_own(o)}");
+    let mut big: Vec[Vec[i64]] = Vec.new();
+    for i in 0..1000 { big.push(vec![i, i]); }
+    let mut s = 0;
+    for x in big.into_iter() { s = s + x[0] + x[1]; }
+    println(f"sum {s}");
+}
+"#;
+
+#[test]
+fn mir_build_into_iter_takes_front_to_back() {
+    let want = "got 0\n\
+                drop 0\n\
+                got 1\n\
+                drop 1\n\
+                got 2\n\
+                drop 2\n\
+                drop 3\n\
+                drop 4\n\
+                at 0 10\n\
+                drop 10\n\
+                drop 11\n\
+                at 2 12\n\
+                drop 12\n\
+                at 3 13\n\
+                drop 13\n\
+                fb 2\n\
+                drop 20\n\
+                drop 21\n\
+                drop 22\n\
+                drop 23\n\
+                fo 20\n\
+                sum 999000\n\
+                drop 0\n\
+                drop 1\n\
+                drop 2\n\
+                drop 3\n";
+    let interp = karac::mir::lower::run_source(INTO_ITER_PROGRAM).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(INTO_ITER_PROGRAM, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 /// `karac build --mir` of `src`, saved as `main.kara` in `dir`, with `envs`
 /// set: the executable, or `None` to skip when there is no runtime to link.
 fn cli_build(dir: &Scratch, src: &str, envs: &[(&str, &str)]) -> Option<PathBuf> {

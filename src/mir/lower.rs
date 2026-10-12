@@ -1521,6 +1521,11 @@ enum ScopeEntry<'a> {
     ErrDefer(&'a Block, Option<(&'a str, NodeId)>),
     /// A local whose storage ends with the scope.
     Storage(Local),
+    /// A `Vec` that `for x in v.into_iter()` takes from the back, reversed
+    /// on entry: reversed again on any exit, so what a `break` leaves
+    /// drops front to back. The `reverse` native, and the `mut ref` type
+    /// it takes.
+    Unreverse(Local, Ty, String),
 }
 
 /// An iterator type's `next`, instantiated for a `for` loop: its definition,
@@ -2558,9 +2563,23 @@ impl<'l, 'a> Bx<'l, 'a> {
                     let bb = self.cur;
                     self.b.push(bb, StatementKind::StorageDead(*l));
                 }
+                ScopeEntry::Unreverse(v, mt, native) => self.reverse_vec(*v, *mt, native),
             }
         }
         Ok(())
+    }
+
+    /// `v.reverse()` of the `Vec` in `v`, through `native`.
+    fn reverse_vec(&mut self, v: Local, mt: Ty, native: &str) {
+        let r = self.temp(mt);
+        self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(v)));
+        let t = self.unit();
+        let u = self.temp(t);
+        self.call_native(
+            native,
+            vec![Operand::Move(Place::local(r))],
+            Place::local(u),
+        );
     }
 
     fn defer_body(&mut self, body: &'a Block) -> R<()> {
@@ -7054,7 +7073,17 @@ impl<'l, 'a> Bx<'l, 'a> {
         // The loop's scope holds the collection (or the borrow of it).
         self.push_scope();
         let handle = match mode {
-            Mode::Owned => self.temp_of(src, coll)?,
+            // Taken from the back, which moves nothing up: reversed first,
+            // so the elements still come front to back.
+            Mode::Owned => {
+                let v = self.temp_of(src, coll)?;
+                let native = format!("{coll_name}.reverse");
+                self.reverse_vec(v, mut_coll, &native);
+                if self.needs_drop(elem) {
+                    self.schedule(ScopeEntry::Unreverse(v, mut_coll, native));
+                }
+                v
+            }
             Mode::Ref | Mode::Mut => {
                 let mutable = mode == Mode::Mut;
                 let ht = if mutable { mut_coll } else { ref_coll };
@@ -7125,8 +7154,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             },
             body_bb,
         );
-        // A moved collection is read from its front, so its count only
-        // numbers the rounds for `enumerate`.
+        // A moved collection is taken from its (reversed) back, so its
+        // count only numbers the rounds for `enumerate`.
         let continue_bb = step;
         self.loops.push(LoopCx {
             label: label.clone(),
@@ -7139,7 +7168,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             pattern,
             idx,
             body,
-            mode == Mode::Owned,
+            (mode == Mode::Owned).then_some(n),
             mode == Mode::Mut,
             handle,
             i,
@@ -7484,7 +7513,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         pattern: &'a Pattern,
         idx: Option<&'a Pattern>,
         body: &'a Block,
-        owned: bool,
+        owned: Option<Local>,
         mutable: bool,
         handle: Local,
         i: Local,
@@ -7492,8 +7521,21 @@ impl<'l, 'a> Bx<'l, 'a> {
     ) -> R<()> {
         self.push_scope();
         let usize_t = self.b.local_ty(i);
-        let (place, by_ref) = if owned {
+        let (place, by_ref) = if let Some(n) = owned {
+            // The last of the `n` left: the reversed `Vec`'s front.
             let x = self.scoped_temp(elem);
+            let last = self.temp(usize_t);
+            self.assign(
+                last,
+                Rvalue::BinaryOp(
+                    BinOp::Sub,
+                    Operand::Copy(Place::local(n)),
+                    Operand::Const(Const {
+                        ty: usize_t,
+                        kind: ConstKind::Scalar(1),
+                    }),
+                ),
+            );
             let mt = self.tys().tcx().reference(coll, true);
             let r = self.temp(mt);
             self.assign(r, Rvalue::Ref(BorrowKind::Mut, Place::local(handle)));
@@ -7501,10 +7543,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 &format!("{coll_name}.remove"),
                 vec![
                     Operand::Move(Place::local(r)),
-                    Operand::Const(Const {
-                        ty: usize_t,
-                        kind: ConstKind::Scalar(0),
-                    }),
+                    Operand::Copy(Place::local(last)),
                 ],
                 Place::local(x),
             );
@@ -13586,11 +13625,13 @@ fn mark_library_builtins(program: &mut ast::Program, user_len: usize) {
     }
 }
 
-/// Check one source file, build its MIR and elaborate drops; or the first
-/// stage that refused it.
-pub fn build_source(src: &str) -> Result<Lowered, String> {
-    // The library's Kāra methods go after the program, so the program's own
-    // line numbers and spans are unchanged (redesign A2).
+/// The program `src` with the Kāra library appended: the methods every
+/// program gets, then the baked modules it names. Also the length of `src`,
+/// where the library starts. The library goes after the program, so the
+/// program's own line numbers and spans are unchanged (redesign A2). `karac
+/// check` checks this text, as the build does, so a program using a
+/// library-only feature (`#[derive(Serialize)]`) checks as it builds.
+pub fn library_source(src: &str) -> (String, usize) {
     let mut src = src.to_string();
     let user_len = src.len();
     // Baked modules whose bodies are Kāra, for a program that names them
@@ -13617,6 +13658,13 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
             }
         }
     }
+    (src, user_len)
+}
+
+/// Check one source file, build its MIR and elaborate drops; or the first
+/// stage that refused it.
+pub fn build_source(src: &str) -> Result<Lowered, String> {
+    let (src, user_len) = library_source(src);
     let parsed = crate::parse(&src);
     if !parsed.errors.is_empty() {
         return Err(format!("parse: {:?}", parsed.errors[0]));
