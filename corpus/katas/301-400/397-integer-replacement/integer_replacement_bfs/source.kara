@@ -1,0 +1,66 @@
+// LeetCode #397: Integer Replacement -- breadth-first search.
+//
+// Each value is a node with one edge (n / 2) if even and two (n - 1,
+// n + 1) if odd; the answer is the shortest path from n to 1. A queue
+// visits the values in order of distance and a set skips repeats. The
+// values reached at one distance stay within a few of n >> k, so each
+// level holds only a handful. O(log n) levels.
+
+fn integer_replacement(n: i64) -> i64 {
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut seen: Set[i64] = Set.new();
+    queue.push_back((n, 0));
+    seen.insert(n);
+    while let Some((v, d)) = queue.pop_front() {
+        if v == 1 {
+            return d;
+        }
+        let mut next: Vec[i64] = Vec.new();
+        if v % 2 == 0 {
+            next.push(v / 2);
+        } else {
+            next.push(v - 1);
+            next.push(v + 1);
+        }
+        for w in next {
+            if seen.insert(w) {
+                queue.push_back((w, d + 1));
+            }
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64) {
+    println(f"{n}: {integer_replacement(n)}");
+}
+
+fn main() {
+    show(8);
+    show(7);
+    show(4);
+    show(1);
+    show(2);
+    show(3);
+    show(15);
+    show(65535);
+    show(1073741824);
+    show(2147483647);
+    let mut seed: i64 = 397;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..3000 {
+        let n = 1 + (step(mut seed) * 32768 + step(mut seed)) % 2147483647;
+        let r = integer_replacement(n);
+        total += r;
+        checksum = (checksum * 31 + r) % 1000000007;
+    }
+    println(f"3000 random values: total {total}, checksum {checksum}");
+}

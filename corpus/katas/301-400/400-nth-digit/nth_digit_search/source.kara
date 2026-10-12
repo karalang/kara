@@ -1,0 +1,65 @@
+// LeetCode #400: Nth Digit -- binary search on the digits written so far.
+//
+// digits_upto(x), the number of digits in 1, 2, ..., x, has a closed form:
+// every number up to x has at least one digit, every number from 10 on a
+// second, from 100 on a third, and so on. Binary search for the smallest x
+// with digits_upto(x) >= n; the nth digit is in x, at position
+// n - digits_upto(x - 1) - 1 from the left. O(log^2 n) time, O(1) space.
+
+fn digits_upto(x: i64) -> i64 {
+    let mut total = 0;
+    let mut power = 1;
+    while power <= x {
+        total += x - power + 1;
+        power *= 10;
+    }
+    total
+}
+
+fn find_nth_digit(n: i64) -> i64 {
+    let mut lo = 1;
+    let mut hi = n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if digits_upto(mid) >= n {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    let text = f"{lo}";
+    let at = n - digits_upto(lo - 1) - 1;
+    (text.bytes()[at] - 48) as i64
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64) {
+    println(f"{n}: {find_nth_digit(n)}");
+}
+
+fn main() {
+    for n in [3, 11, 1, 9, 10, 12, 189, 190, 191, 192, 2889, 2890, 1000000000, 2147483647] {
+        show(n);
+    }
+    let mut prefix = String.new();
+    for n in 1..61 {
+        prefix.push_str(f"{find_nth_digit(n)}");
+    }
+    println(f"digits 1 to 60: {prefix}");
+    let mut seed: i64 = 400;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..3000 {
+        let n = 1 + (step(mut seed) * 32768 + step(mut seed)) % 2147483647;
+        let d = find_nth_digit(n);
+        total += d;
+        checksum = (checksum * 31 + d) % 1000000007;
+    }
+    println(f"3000 random positions: total {total}, checksum {checksum}");
+}

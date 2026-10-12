@@ -1,0 +1,7 @@
+example [1, 2, 3, 3, 3], pick(3) 30000 draws: fair true
+example, pick(1): always 0 true
+one value [7], pick(7): always 0 true
+ten equal values, pick(5): fair true
+[-1, 4, -1, -1, 4], pick(-1): fair true, pick(4): fair true
+1000 values of 4 kinds, pick(2): fair true
+200 random arrays, 6609 values: 200 fair

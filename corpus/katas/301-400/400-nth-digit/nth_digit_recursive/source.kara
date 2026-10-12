@@ -1,0 +1,56 @@
+// LeetCode #400: Nth Digit -- the block skip as a recursion.
+//
+// nth(n, digits, count, start) answers within the blocks from the one of
+// `digits`-digit numbers on: if n lies past that block, recurse into the
+// next with n reduced by the block's length; otherwise the digit is in
+// the number start + (n - 1) / digits. The digit itself is found by a
+// second recursion that drops the last digit of a number `shift` times.
+// O(log n) time and stack.
+
+fn drop_digits(x: i64, shift: i64) -> i64 {
+    if shift == 0 { x } else { drop_digits(x / 10, shift - 1) }
+}
+
+fn nth(n: i64, digits: i64, count: i64, start: i64) -> i64 {
+    if n > digits * count {
+        return nth(n - digits * count, digits + 1, count * 10, start * 10);
+    }
+    let number = start + (n - 1) / digits;
+    drop_digits(number, digits - 1 - (n - 1) % digits) % 10
+}
+
+fn find_nth_digit(n: i64) -> i64 {
+    nth(n, 1, 9, 1)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64) {
+    println(f"{n}: {find_nth_digit(n)}");
+}
+
+fn main() {
+    for n in [3, 11, 1, 9, 10, 12, 189, 190, 191, 192, 2889, 2890, 1000000000, 2147483647] {
+        show(n);
+    }
+    let mut prefix = String.new();
+    for n in 1..61 {
+        prefix.push_str(f"{find_nth_digit(n)}");
+    }
+    println(f"digits 1 to 60: {prefix}");
+    let mut seed: i64 = 400;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..3000 {
+        let n = 1 + (step(mut seed) * 32768 + step(mut seed)) % 2147483647;
+        let d = find_nth_digit(n);
+        total += d;
+        checksum = (checksum * 31 + d) % 1000000007;
+    }
+    println(f"3000 random positions: total {total}, checksum {checksum}");
+}

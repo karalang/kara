@@ -1,0 +1,325 @@
+// Differential test for LeetCode #399: Evaluate Division.
+//
+// Copies of the four arms, run on 3,000 random systems. Each system splits
+// 2 to 12 variables into up to three groups, gives every variable a
+// hidden power of two, and joins each group with a random spanning tree
+// of equations plus a few more, all consistent, so every answer is
+// exactly 2^k on every backend. Properties known by construction:
+//   P1  a query inside a group is 2^(hidden[a] - hidden[b]) exactly
+//   P2  a query across groups, or naming a variable no equation has,
+//       is -1
+//   P3  a / a is 1 for every variable an equation has
+//   P4  answering b / a gives the reciprocal of a / b
+//   P5  writing every equation the other way round (b / a = 1 / v)
+//       changes no answer
+
+fn find_uf(parent: mut ref Vec[i64], weight: mut ref Vec[f64], i: i64) -> i64 {
+    let p = parent[i];
+    if p == i {
+        return i;
+    }
+    let root = find_uf(parent, weight, p);
+    weight[i] = weight[i] * weight[p];
+    parent[i] = root;
+    root
+}
+
+// The index of `name`, given a new one (its own root, ratio 1) when unseen.
+fn intern_uf(index: mut ref Map[String, i64], parent: mut ref Vec[i64], weight: mut ref Vec[f64], name: String) -> i64 {
+    if let Some(i) = index.get(name) {
+        return *i;
+    }
+    let i = parent.len();
+    index.insert(name.clone(), i);
+    parent.push(i);
+    weight.push(1.0);
+    i
+}
+
+fn ed_uf(equations: Vec[(String, String)], values: Vec[f64], queries: Vec[(String, String)]) -> Vec[f64] {
+    let mut index: Map[String, i64] = Map.new();
+    let mut parent: Vec[i64] = Vec.new();
+    let mut weight: Vec[f64] = Vec.new();
+    for k in 0..equations.len() {
+        let a = intern_uf(mut index, mut parent, mut weight, equations[k].0);
+        let b = intern_uf(mut index, mut parent, mut weight, equations[k].1);
+        let ra = find_uf(mut parent, mut weight, a);
+        let rb = find_uf(mut parent, mut weight, b);
+        if ra != rb {
+            weight[ra] = values[k] * weight[b] / weight[a];
+            parent[ra] = rb;
+        }
+    }
+    let mut answers: Vec[f64] = Vec.new();
+    for (a, b) in queries.iter() {
+        let mut answer = -1.0;
+        if let Some(i) = index.get(a) {
+            if let Some(j) = index.get(b) {
+                let (i, j) = (*i, *j);
+                if find_uf(mut parent, mut weight, i) == find_uf(mut parent, mut weight, j) {
+                    answer = weight[i] / weight[j];
+                }
+            }
+        }
+        answers.push(answer);
+    }
+    answers
+}
+
+fn walk_dfs(graph: Map[String, Vec[(String, f64)]], at: String, goal: String, product: f64, seen: mut ref Set[String]) -> f64 {
+    if at == goal {
+        return product;
+    }
+    seen.insert(at.clone());
+    for (next, w) in graph[at].iter() {
+        if not seen.contains(next) {
+            let r = walk_dfs(graph, next, goal, product * w, seen);
+            if r >= 0.0 {
+                return r;
+            }
+        }
+    }
+    -1.0
+}
+
+fn ed_dfs(equations: Vec[(String, String)], values: Vec[f64], queries: Vec[(String, String)]) -> Vec[f64] {
+    let mut graph: Map[String, Vec[(String, f64)]] = Map.new();
+    for k in 0..equations.len() {
+        let a = equations[k].0.clone();
+        let b = equations[k].1.clone();
+        graph.entry(a.clone()).or_insert(Vec.new()).push((b.clone(), values[k]));
+        graph.entry(b).or_insert(Vec.new()).push((a, 1.0 / values[k]));
+    }
+    let mut answers: Vec[f64] = Vec.new();
+    for (a, b) in queries.iter() {
+        if graph.contains_key(a) and graph.contains_key(b) {
+            let mut seen: Set[String] = Set.new();
+            answers.push(walk_dfs(graph, a, b, 1.0, mut seen));
+        } else {
+            answers.push(-1.0);
+        }
+    }
+    answers
+}
+
+fn ed_bfs(equations: Vec[(String, String)], values: Vec[f64], queries: Vec[(String, String)]) -> Vec[f64] {
+    let mut graph: Map[String, Vec[(String, f64)]] = Map.new();
+    for k in 0..equations.len() {
+        let a = equations[k].0.clone();
+        let b = equations[k].1.clone();
+        graph.entry(a.clone()).or_insert(Vec.new()).push((b.clone(), values[k]));
+        graph.entry(b).or_insert(Vec.new()).push((a, 1.0 / values[k]));
+    }
+    let mut answers: Vec[f64] = Vec.new();
+    for (a, b) in queries.iter() {
+        let mut answer = -1.0;
+        if graph.contains_key(a) and graph.contains_key(b) {
+            let mut queue: VecDeque[(String, f64)] = VecDeque.new();
+            let mut seen: Set[String] = Set.new();
+            queue.push_back((a.clone(), 1.0));
+            seen.insert(a.clone());
+            while let Some((at, product)) = queue.pop_front() {
+                if at == b {
+                    answer = product;
+                    break;
+                }
+                for (next, w) in graph[at].iter() {
+                    if seen.insert(next.clone()) {
+                        queue.push_back((next.clone(), product * w));
+                    }
+                }
+            }
+        }
+        answers.push(answer);
+    }
+    answers
+}
+
+fn ed_floyd(equations: Vec[(String, String)], values: Vec[f64], queries: Vec[(String, String)]) -> Vec[f64] {
+    let mut index: Map[String, i64] = Map.new();
+    for (a, b) in equations.iter() {
+        if not index.contains_key(a) {
+            index.insert(a.clone(), index.len());
+        }
+        if not index.contains_key(b) {
+            index.insert(b.clone(), index.len());
+        }
+    }
+    let n = index.len();
+    let mut ratio = vec![vec![-1.0; n]; n];
+    for i in 0..n {
+        ratio[i][i] = 1.0;
+    }
+    for k in 0..equations.len() {
+        let i = index[equations[k].0];
+        let j = index[equations[k].1];
+        ratio[i][j] = values[k];
+        ratio[j][i] = 1.0 / values[k];
+    }
+    for k in 0..n {
+        for i in 0..n {
+            if ratio[i][k] < 0.0 {
+                continue;
+            }
+            for j in 0..n {
+                if ratio[i][j] < 0.0 and ratio[k][j] >= 0.0 {
+                    ratio[i][j] = ratio[i][k] * ratio[k][j];
+                }
+            }
+        }
+    }
+    let mut answers: Vec[f64] = Vec.new();
+    for (a, b) in queries.iter() {
+        if index.contains_key(a) and index.contains_key(b) {
+            answers.push(ratio[index[a]][index[b]]);
+        } else {
+            answers.push(-1.0);
+        }
+    }
+    answers
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn solve(arm: i64, equations: Vec[(String, String)], values: Vec[f64], queries: Vec[(String, String)]) -> Vec[f64] {
+    if arm == 0 {
+        ed_uf(equations, values, queries)
+    } else if arm == 1 {
+        ed_dfs(equations, values, queries)
+    } else if arm == 2 {
+        ed_bfs(equations, values, queries)
+    } else {
+        ed_floyd(equations, values, queries)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn pow2(k: i64) -> f64 {
+    let mut x = 1.0;
+    for _ in 0..k.abs() {
+        x = x * 2.0;
+    }
+    if k < 0 { 1.0 / x } else { x }
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 3990;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        let m = 2 + step(mut seed) % 11;
+        let groups = 1 + step(mut seed) % 3;
+        let mut group: Vec[i64] = Vec.new();
+        let mut hidden: Vec[i64] = Vec.new();
+        for _ in 0..m {
+            group.push(step(mut seed) % groups);
+            hidden.push(step(mut seed) % 9 - 4);
+        }
+        // A spanning tree of each group: every variable after a group's
+        // first joins a random earlier variable of the same group.
+        let mut equations: Vec[(String, String)] = Vec.new();
+        let mut values: Vec[f64] = Vec.new();
+        let mut used = vec![false; m];
+        for v in 0..m {
+            let mut earlier: Vec[i64] = Vec.new();
+            for u in 0..v {
+                if group[u] == group[v] {
+                    earlier.push(u);
+                }
+            }
+            if earlier.len() > 0 {
+                let u = earlier[step(mut seed) % earlier.len()];
+                equations.push((f"v{v}", f"v{u}"));
+                values.push(pow2(hidden[v] - hidden[u]));
+                used[u] = true;
+                used[v] = true;
+            }
+        }
+        for _ in 0..step(mut seed) % 4 {
+            let a = step(mut seed) % m;
+            let b = step(mut seed) % m;
+            if group[a] == group[b] {
+                equations.push((f"v{a}", f"v{b}"));
+                values.push(pow2(hidden[a] - hidden[b]));
+                used[a] = true;
+                used[b] = true;
+            }
+        }
+        let mut queries: Vec[(String, String)] = Vec.new();
+        let mut flipped: Vec[(String, String)] = Vec.new();
+        let mut want: Vec[f64] = Vec.new();
+        for _ in 0..8 {
+            let a = step(mut seed) % (m + 2);
+            let b = step(mut seed) % (m + 2);
+            queries.push((f"v{a}", f"v{b}"));
+            flipped.push((f"v{b}", f"v{a}"));
+            if a < m and b < m and used[a] and used[b] and group[a] == group[b] {
+                want.push(pow2(hidden[a] - hidden[b]));
+            } else {
+                want.push(-1.0);
+            }
+        }
+        let mut selves: Vec[(String, String)] = Vec.new();
+        for v in 0..m {
+            if used[v] {
+                selves.push((f"v{v}", f"v{v}"));
+            }
+        }
+        let mut reversed: Vec[(String, String)] = Vec.new();
+        let mut inverse: Vec[f64] = Vec.new();
+        for k in 0..equations.len() {
+            reversed.push((equations[k].1.clone(), equations[k].0.clone()));
+            inverse.push(1.0 / values[k]);
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let got = solve(arm, equations, values, queries);
+            let mut inside = true;
+            let mut across = true;
+            for q in 0..8 {
+                if want[q] > 0.0 {
+                    inside = inside and got[q] == want[q];
+                } else {
+                    across = across and got[q] == -1.0;
+                }
+            }
+            report(1, arm, case, inside, mut failures);
+            report(2, arm, case, across, mut failures);
+            let mut ones = true;
+            for x in solve(arm, equations, values, selves) {
+                ones = ones and x == 1.0;
+            }
+            report(3, arm, case, ones, mut failures);
+            let back = solve(arm, equations, values, flipped);
+            let mut reciprocal = true;
+            for q in 0..8 {
+                if got[q] > 0.0 {
+                    reciprocal = reciprocal and got[q] * back[q] == 1.0;
+                } else {
+                    reciprocal = reciprocal and back[q] == -1.0;
+                }
+            }
+            report(4, arm, case, reciprocal, mut failures);
+            report(5, arm, case, solve(arm, reversed, inverse, queries) == got, mut failures);
+        }
+    }
+    println(f"3000 systems, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

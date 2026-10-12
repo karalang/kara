@@ -1,0 +1,80 @@
+// LeetCode #400: Nth Digit -- count down number by number, a block at a time.
+//
+// Walk the numbers 1, 2, 3, ... and subtract each one's length from n
+// until n lands inside a number. Taken one number at a time this is
+// O(n), too slow for n near 2^31, so the walk jumps: while the next
+// 10^j numbers all have the same length and fit inside n, it takes them
+// in one step, trying the largest jump first. Every jump is a run of
+// equal-length numbers, so the walk is the brute force with its loop
+// unrolled by powers of ten. O(log^2 n) time, O(1) space.
+
+fn length(x: i64) -> i64 {
+    let mut d = 1;
+    let mut y = x;
+    while y >= 10 {
+        y = y / 10;
+        d += 1;
+    }
+    d
+}
+
+fn find_nth_digit(n: i64) -> i64 {
+    let mut rest = n;
+    let mut x = 1;
+    loop {
+        let d = length(x);
+        // The largest jump of 10^j numbers that stays inside the block of
+        // d-digit numbers and inside n.
+        let mut jump = 1;
+        while x + jump * 10 - 1 < pow10(d) and jump * 10 * d < rest {
+            jump *= 10;
+        }
+        if jump * d < rest {
+            rest -= jump * d;
+            x += jump;
+        } else {
+            let text = f"{x}";
+            return (text.bytes()[rest - 1] - 48) as i64;
+        }
+    }
+}
+
+fn pow10(d: i64) -> i64 {
+    let mut p = 1;
+    for _ in 0..d {
+        p *= 10;
+    }
+    p
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64) {
+    println(f"{n}: {find_nth_digit(n)}");
+}
+
+fn main() {
+    for n in [3, 11, 1, 9, 10, 12, 189, 190, 191, 192, 2889, 2890, 1000000000, 2147483647] {
+        show(n);
+    }
+    let mut prefix = String.new();
+    for n in 1..61 {
+        prefix.push_str(f"{find_nth_digit(n)}");
+    }
+    println(f"digits 1 to 60: {prefix}");
+    let mut seed: i64 = 400;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..3000 {
+        let n = 1 + (step(mut seed) * 32768 + step(mut seed)) % 2147483647;
+        let d = find_nth_digit(n);
+        total += d;
+        checksum = (checksum * 31 + d) % 1000000007;
+    }
+    println(f"3000 random positions: total {total}, checksum {checksum}");
+}

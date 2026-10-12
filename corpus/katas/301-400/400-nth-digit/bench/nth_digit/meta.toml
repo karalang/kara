@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/400-nth-digit/bench/nth_digit.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "6b8ac5ebd"
+extracted_src = "c64d8d84"
+model_rev = "1aa23105"
+model_src = "c64d8d84"

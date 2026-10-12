@@ -1,0 +1,122 @@
+// Benchmark for #399: the kata's ★ arm (union-find with weights). 100,000
+// systems, each of 20 equations and 20 queries (the problem's limits)
+// over up to 40 variables named v0, v1, ..., built from an LCG. Every
+// variable holds a hidden power of two, so every answer is exactly 2^k;
+// the answers go into a count and a checksum of their exponents.
+
+fn find(parent: mut ref Vec[i64], weight: mut ref Vec[f64], i: i64) -> i64 {
+    let p = parent[i];
+    if p == i {
+        return i;
+    }
+    let root = find(parent, weight, p);
+    weight[i] = weight[i] * weight[p];
+    parent[i] = root;
+    root
+}
+
+// The index of `name`, given a new one (its own root, ratio 1) when unseen.
+fn intern(index: mut ref Map[String, i64], parent: mut ref Vec[i64], weight: mut ref Vec[f64], name: String) -> i64 {
+    if let Some(i) = index.get(name) {
+        return *i;
+    }
+    let i = parent.len();
+    index.insert(name.clone(), i);
+    parent.push(i);
+    weight.push(1.0);
+    i
+}
+
+fn calc_equation(equations: Vec[(String, String)], values: Vec[f64], queries: Vec[(String, String)]) -> Vec[f64] {
+    let mut index: Map[String, i64] = Map.new();
+    let mut parent: Vec[i64] = Vec.new();
+    let mut weight: Vec[f64] = Vec.new();
+    for k in 0..equations.len() {
+        let a = intern(mut index, mut parent, mut weight, equations[k].0);
+        let b = intern(mut index, mut parent, mut weight, equations[k].1);
+        let ra = find(mut parent, mut weight, a);
+        let rb = find(mut parent, mut weight, b);
+        if ra != rb {
+            weight[ra] = values[k] * weight[b] / weight[a];
+            parent[ra] = rb;
+        }
+    }
+    let mut answers: Vec[f64] = Vec.new();
+    for (a, b) in queries.iter() {
+        let mut answer = -1.0;
+        if let Some(i) = index.get(a) {
+            if let Some(j) = index.get(b) {
+                let (i, j) = (*i, *j);
+                if find(mut parent, mut weight, i) == find(mut parent, mut weight, j) {
+                    answer = weight[i] / weight[j];
+                }
+            }
+        }
+        answers.push(answer);
+    }
+    answers
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn pow2(k: i64) -> f64 {
+    let mut x = 1.0;
+    for _ in 0..k.abs() {
+        x = x * 2.0;
+    }
+    if k < 0 { 1.0 / x } else { x }
+}
+
+fn exponent(x: f64) -> i64 {
+    let mut v = x;
+    let mut k = 0;
+    while v >= 2.0 {
+        v = v / 2.0;
+        k += 1;
+    }
+    while v < 1.0 {
+        v = v * 2.0;
+        k -= 1;
+    }
+    k
+}
+
+fn main() {
+    let systems = 100000;
+    let mut seed: i64 = 3991;
+    let mut answered: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..systems {
+        let m = 2 + step(mut seed) % 39;
+        let mut hidden: Vec[i64] = Vec.new();
+        for _ in 0..m {
+            hidden.push(step(mut seed) % 9 - 4);
+        }
+        let mut equations: Vec[(String, String)] = Vec.new();
+        let mut values: Vec[f64] = Vec.new();
+        for _ in 0..20 {
+            let a = step(mut seed) % m;
+            let b = step(mut seed) % m;
+            equations.push((f"v{a}", f"v{b}"));
+            values.push(pow2(hidden[a] - hidden[b]));
+        }
+        let mut queries: Vec[(String, String)] = Vec.new();
+        for _ in 0..20 {
+            let a = step(mut seed) % (m + 2);
+            let b = step(mut seed) % (m + 2);
+            queries.push((f"v{a}", f"v{b}"));
+        }
+        for x in calc_equation(equations, values, queries) {
+            if x < 0.0 {
+                checksum = (checksum * 31 + 1) % 1000000007;
+            } else {
+                answered += 1;
+                checksum = (checksum * 31 + exponent(x) + 50) % 1000000007;
+            }
+        }
+    }
+    println(f"{systems} systems: {answered} answered, checksum {checksum}");
+}

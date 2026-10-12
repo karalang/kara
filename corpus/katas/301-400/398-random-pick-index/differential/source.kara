@@ -1,0 +1,299 @@
+// Differential test for LeetCode #398: Random Pick Index.
+//
+// Copies of the four arms behind one enum, run on 300 random arrays of 1
+// to 12 values from -3 to 3, so that values repeat, each with a target
+// taken from the array. Properties known by construction:
+//   P1  every draw is an index that holds the target
+//   P2  a value held at one index only always gives that index
+//   P3  every index that holds the target comes up within 60 draws per
+//       such index
+//   P4  over 100 draws per such index, the chi-square statistic of how
+//       often each came up is below a bound far out in its tail
+//   P5  changing values other than the target to other non-target values
+//       leaves the draws as they were: every arm spends its random
+//       numbers on the target's indices only
+
+struct Reservoir {
+    nums: Vec[i64],
+    seed: i64,
+}
+
+impl Reservoir {
+    fn new(nums: own Vec[i64]) -> Reservoir {
+        Reservoir { nums, seed: 398 }
+    }
+
+    // A number from 0 to n - 1.
+    fn below(mut ref self, n: i64) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        (self.seed / 65536) % n
+    }
+
+    fn pick(mut ref self, target: i64) -> i64 {
+        let mut kept = -1;
+        let mut seen = 0;
+        for i in 0..self.nums.len() {
+            if self.nums[i] == target {
+                seen += 1;
+                if self.below(seen) == 0 {
+                    kept = i;
+                }
+            }
+        }
+        kept
+    }
+}
+
+struct Positions {
+    positions: Map[i64, Vec[i64]],
+    seed: i64,
+}
+
+impl Positions {
+    fn new(nums: own Vec[i64]) -> Positions {
+        let mut positions: Map[i64, Vec[i64]] = Map.new();
+        for i in 0..nums.len() {
+            positions.entry(nums[i]).or_insert(Vec.new()).push(i);
+        }
+        Positions { positions, seed: 398 }
+    }
+
+    // A number from 0 to n - 1.
+    fn below(mut ref self, n: i64) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        (self.seed / 65536) % n
+    }
+
+    fn pick(mut ref self, target: i64) -> i64 {
+        let count = match self.positions.get(target) {
+            Some(list) => list.len(),
+            None => return -1,
+        };
+        let k = self.below(count);
+        self.positions[target][k]
+    }
+}
+
+struct Sorted {
+    pairs: Vec[(i64, i64)],
+    seed: i64,
+}
+
+impl Sorted {
+    fn new(nums: own Vec[i64]) -> Sorted {
+        let mut pairs: Vec[(i64, i64)] = Vec.new();
+        for i in 0..nums.len() {
+            pairs.push((nums[i], i));
+        }
+        pairs.sort();
+        Sorted { pairs, seed: 398 }
+    }
+
+    // A number from 0 to n - 1.
+    fn below(mut ref self, n: i64) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        (self.seed / 65536) % n
+    }
+
+    // The first position whose value is at least `value`.
+    fn first_at_least(ref self, value: i64) -> i64 {
+        let mut lo = 0;
+        let mut hi = self.pairs.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.pairs[mid].0 < value {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+
+    fn pick(mut ref self, target: i64) -> i64 {
+        let start = self.first_at_least(target);
+        let end = self.first_at_least(target + 1);
+        if start == end {
+            return -1;
+        }
+        let k = self.below(end - start);
+        self.pairs[start + k].1
+    }
+}
+
+struct Counted {
+    nums: Vec[i64],
+    seed: i64,
+}
+
+impl Counted {
+    fn new(nums: own Vec[i64]) -> Counted {
+        Counted { nums, seed: 398 }
+    }
+
+    // A number from 0 to n - 1.
+    fn below(mut ref self, n: i64) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        (self.seed / 65536) % n
+    }
+
+    fn pick(mut ref self, target: i64) -> i64 {
+        let mut count = 0;
+        for v in self.nums.iter() {
+            if *v == target {
+                count += 1;
+            }
+        }
+        if count == 0 {
+            return -1;
+        }
+        let mut k = self.below(count);
+        for i in 0..self.nums.len() {
+            if self.nums[i] == target {
+                if k == 0 {
+                    return i;
+                }
+                k -= 1;
+            }
+        }
+        -1
+    }
+}
+
+enum Picker {
+    R(Reservoir),
+    P(Positions),
+    S(Sorted),
+    C(Counted),
+}
+
+impl Picker {
+    fn new(arm: i64, nums: own Vec[i64]) -> Picker {
+        if arm == 0 {
+            Picker.R(Reservoir.new(nums))
+        } else if arm == 1 {
+            Picker.P(Positions.new(nums))
+        } else if arm == 2 {
+            Picker.S(Sorted.new(nums))
+        } else {
+            Picker.C(Counted.new(nums))
+        }
+    }
+
+    fn pick(mut ref self, target: i64) -> i64 {
+        match self {
+            Picker.R(s) => s.pick(target),
+            Picker.P(s) => s.pick(target),
+            Picker.S(s) => s.pick(target),
+            Picker.C(s) => s.pick(target),
+        }
+    }
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn draws(arm: i64, nums: Vec[i64], target: i64, count: i64) -> Vec[i64] {
+    let mut s = Picker.new(arm, nums.clone());
+    let mut out: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        out.push(s.pick(target));
+    }
+    out
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 3980;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..300 {
+        let n = 1 + step(mut seed) % 12;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(step(mut seed) % 7 - 3);
+        }
+        let target = nums[step(mut seed) % n];
+        let mut held = 0;
+        for v in nums.iter() {
+            if *v == target {
+                held += 1;
+            }
+        }
+        // P2: a value no other index holds, put in at a random place.
+        let at = step(mut seed) % (n + 1);
+        let mut unique = nums.clone();
+        unique.insert(at, 99);
+        // P5: every non-target value moved to another non-target value.
+        let mut changed: Vec[i64] = Vec.new();
+        for v in nums.iter() {
+            if *v == target {
+                changed.push(*v);
+            } else {
+                changed.push(10 + (*v + 3) % 7);
+            }
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let many = draws(arm, nums, target, 100 * held);
+            let mut valid = true;
+            let mut got = vec![0; n];
+            for x in many.iter() {
+                if *x < 0 or *x >= n or nums[*x] != target {
+                    valid = false;
+                } else {
+                    got[*x] += 1;
+                }
+            }
+            report(1, arm, case, valid, mut failures);
+            let mut always = true;
+            for x in draws(arm, unique, 99, 20).iter() {
+                always = always and *x == at;
+            }
+            report(2, arm, case, always, mut failures);
+            let first = draws(arm, nums, target, 60 * held);
+            let mut hit = vec![false; n];
+            for x in first.iter() {
+                if *x >= 0 and *x < n {
+                    hit[*x] = true;
+                }
+            }
+            let mut all = true;
+            for i in 0..n {
+                if nums[i] == target and not hit[i] {
+                    all = false;
+                }
+            }
+            report(3, arm, case, all, mut failures);
+            let e = 100.0;
+            let mut chi = 0.0;
+            for i in 0..n {
+                if nums[i] == target {
+                    let d = got[i] as f64 - e;
+                    chi += d * d / e;
+                }
+            }
+            let dof = (held - 1) as f64;
+            report(4, arm, case, valid and chi <= dof + 6.0 * (2.0 * dof).sqrt() + 12.0, mut failures);
+            report(5, arm, case, draws(arm, changed, target, 50) == draws(arm, nums, target, 50), mut failures);
+        }
+    }
+    println(f"300 arrays, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

@@ -1,0 +1,179 @@
+// Differential test for LeetCode #397: Integer Replacement.
+//
+// Copies of the four arms, run on 3,000 random cases with answers known by
+// construction:
+//   P1  2^m takes m steps: every step is a forced halving
+//   P2  2n takes one step more than n: its first step is a forced halving
+//   P3  an odd n > 1 takes one step more than the cheaper of n - 1 and n + 1
+//   P4  2^m - 1 takes m + 1 steps for m >= 3: add 1, then halve m times
+//   P5  with n of b bits and p ones, the answer is at least b - 1 (each
+//       step shortens n by at most one bit) and at most (b - 1) + (p - 1)
+//       (subtract 1 at every odd value)
+
+fn ir_greedy(n: i64) -> i64 {
+    let mut v = n;
+    let mut ops = 0;
+    while v != 1 {
+        if v % 2 == 0 {
+            v = v / 2;
+        } else if v == 3 or v % 4 == 1 {
+            v -= 1;
+        } else {
+            v += 1;
+        }
+        ops += 1;
+    }
+    ops
+}
+
+fn memo_replace(v: i64, memo: mut ref Map[i64, i64]) -> i64 {
+    if v == 1 {
+        return 0;
+    }
+    if let Some(known) = memo.get(v) {
+        return *known;
+    }
+    let r = if v % 2 == 0 {
+        1 + memo_replace(v / 2, memo)
+    } else {
+        2 + memo_replace((v - 1) / 2, memo).min(memo_replace((v + 1) / 2, memo))
+    };
+    memo.insert(v, r);
+    r
+}
+
+fn ir_memo(n: i64) -> i64 {
+    let mut memo: Map[i64, i64] = Map.new();
+    memo_replace(n, mut memo)
+}
+
+fn ir_bfs(n: i64) -> i64 {
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut seen: Set[i64] = Set.new();
+    queue.push_back((n, 0));
+    seen.insert(n);
+    while let Some((v, d)) = queue.pop_front() {
+        if v == 1 {
+            return d;
+        }
+        let mut next: Vec[i64] = Vec.new();
+        if v % 2 == 0 {
+            next.push(v / 2);
+        } else {
+            next.push(v - 1);
+            next.push(v + 1);
+        }
+        for w in next {
+            if seen.insert(w) {
+                queue.push_back((w, d + 1));
+            }
+        }
+    }
+    -1
+}
+
+fn ir_carry(n: i64) -> i64 {
+    let none = i64.MAX;
+    let mut cost = [0, none];
+    let mut best = none;
+    let mut k = 0;
+    while cost[0] != none or cost[1] != none {
+        let high = n >> k;
+        if high == 1 and cost[0] != none {
+            best = best.min(cost[0]);
+        }
+        if high == 0 and cost[1] != none {
+            best = best.min(cost[1]);
+        }
+        if high == 0 {
+            break;
+        }
+        let b = high % 2;
+        let mut next = [none, none];
+        for c in 0..2 {
+            if cost[c] == none or high + c == 1 {
+                continue;
+            }
+            let low = b + c;
+            if low % 2 == 0 {
+                next[low / 2] = next[low / 2].min(cost[c] + 1);
+            } else {
+                next[0] = next[0].min(cost[c] + 2);
+                next[1] = next[1].min(cost[c] + 2);
+            }
+        }
+        cost = next;
+        k += 1;
+    }
+    best
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn solve(arm: i64, n: i64) -> i64 {
+    if arm == 0 {
+        ir_greedy(n)
+    } else if arm == 1 {
+        ir_memo(n)
+    } else if arm == 2 {
+        ir_bfs(n)
+    } else {
+        ir_carry(n)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_value(seed: mut ref i64, limit: i64) -> i64 {
+    1 + (step(seed) * 32768 + step(seed)) % limit
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, got: i64, want: i64, failures: mut ref Vec[i64]) {
+    if got != want {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 3970;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        let m = step(mut seed) % 31;
+        let power = 1 << m;
+        let half = random_value(mut seed, 1073741823);
+        let odd = 2 * random_value(mut seed, 1073741822) + 1;
+        let ones = 3 + step(mut seed) % 29;
+        let n = random_value(mut seed, 2147483647);
+        let mut bits = 0;
+        let mut set = 0;
+        let mut v = n;
+        while v > 0 {
+            bits += 1;
+            set += v % 2;
+            v = v / 2;
+        }
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, solve(arm, power), m, mut failures);
+            report(2, arm, case, solve(arm, 2 * half), solve(arm, half) + 1, mut failures);
+            let cheaper = solve(arm, odd - 1).min(solve(arm, odd + 1));
+            report(3, arm, case, solve(arm, odd), cheaper + 1, mut failures);
+            report(4, arm, case, solve(arm, (1 << ones) - 1), ones + 1, mut failures);
+            let got = solve(arm, n);
+            report(5, arm, case, got, got.max(bits - 1).min(bits + set - 2), mut failures);
+        }
+    }
+    println(f"3000 cases, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

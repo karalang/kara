@@ -1,0 +1,156 @@
+// LeetCode #399: Evaluate Division -- every ratio at once.
+//
+// Number the variables and fill a table ratio[i][j] = i / j, -1 where
+// unknown: 1 on the diagonal, v and 1 / v for each equation. Then, as in
+// Floyd-Warshall, let each variable k in turn join known ratios: if
+// i / k and k / j are known, so is i / j = (i / k) * (k / j). A query
+// reads the table. O(V^3 + Q) time, O(V^2) space.
+
+fn calc_equation(equations: Vec[(String, String)], values: Vec[f64], queries: Vec[(String, String)]) -> Vec[f64] {
+    let mut index: Map[String, i64] = Map.new();
+    for (a, b) in equations.iter() {
+        if not index.contains_key(a) {
+            index.insert(a.clone(), index.len());
+        }
+        if not index.contains_key(b) {
+            index.insert(b.clone(), index.len());
+        }
+    }
+    let n = index.len();
+    let mut ratio = vec![vec![-1.0; n]; n];
+    for i in 0..n {
+        ratio[i][i] = 1.0;
+    }
+    for k in 0..equations.len() {
+        let i = index[equations[k].0];
+        let j = index[equations[k].1];
+        ratio[i][j] = values[k];
+        ratio[j][i] = 1.0 / values[k];
+    }
+    for k in 0..n {
+        for i in 0..n {
+            if ratio[i][k] < 0.0 {
+                continue;
+            }
+            for j in 0..n {
+                if ratio[i][j] < 0.0 and ratio[k][j] >= 0.0 {
+                    ratio[i][j] = ratio[i][k] * ratio[k][j];
+                }
+            }
+        }
+    }
+    let mut answers: Vec[f64] = Vec.new();
+    for (a, b) in queries.iter() {
+        if index.contains_key(a) and index.contains_key(b) {
+            answers.push(ratio[index[a]][index[b]]);
+        } else {
+            answers.push(-1.0);
+        }
+    }
+    answers
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn pairs(names: Vec[String]) -> Vec[(String, String)] {
+    let mut out: Vec[(String, String)] = Vec.new();
+    let mut i = 0;
+    while i + 1 < names.len() {
+        out.push((names[i].clone(), names[i + 1].clone()));
+        i += 2;
+    }
+    out
+}
+
+fn show(equations: Vec[String], values: Vec[f64], queries: Vec[String]) {
+    let answers = calc_equation(pairs(equations), values, pairs(queries));
+    let mut text = String.from("[");
+    for i in 0..answers.len() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(f"{answers[i]:.5}");
+    }
+    text.push(']');
+    println(text);
+}
+
+fn pow2(k: i64) -> f64 {
+    let mut x = 1.0;
+    for _ in 0..k.abs() {
+        x = x * 2.0;
+    }
+    if k < 0 { 1.0 / x } else { x }
+}
+
+// The exponent k of an answer that is exactly 2^k.
+fn exponent(x: f64) -> i64 {
+    let mut v = x;
+    let mut k = 0;
+    while v >= 2.0 {
+        v = v / 2.0;
+        k += 1;
+    }
+    while v < 1.0 {
+        v = v * 2.0;
+        k -= 1;
+    }
+    k
+}
+
+fn main() {
+    show(vec!["a", "b", "b", "c"], vec![2.0, 3.0], vec!["a", "c", "b", "a", "a", "e", "a", "a", "x", "x"]);
+    show(vec!["a", "b", "b", "c", "bc", "cd"], vec![1.5, 2.5, 5.0], vec!["a", "c", "c", "b", "bc", "cd", "cd", "bc"]);
+    show(vec!["a", "b"], vec![0.5], vec!["a", "b", "b", "a", "a", "c", "x", "y"]);
+    show(vec!["a", "b", "c", "d"], vec![2.0, 4.0], vec!["a", "d", "d", "c", "b", "a", "c", "c"]);
+    show(vec!["a", "b", "b", "c", "a", "c"], vec![2.0, 2.0, 4.0], vec!["a", "c", "c", "a", "b", "b"]);
+    let mut chain: Vec[String] = Vec.new();
+    for i in 0..9 {
+        chain.push(f"x{i}");
+        chain.push(f"x{i + 1}");
+    }
+    show(chain, vec![2.0; 9], vec!["x0", "x9", "x9", "x0", "x3", "x7", "x5", "x5"]);
+    // 300 random systems over 2 to 12 variables, each holding a hidden
+    // power of two, so that every answer is exactly 2^k on every backend.
+    let mut seed: i64 = 399;
+    let mut answered = 0;
+    let mut unknown = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let m = 2 + step(mut seed) % 11;
+        let mut hidden: Vec[i64] = Vec.new();
+        for _ in 0..m {
+            hidden.push(step(mut seed) % 9 - 4);
+        }
+        let count = 1 + step(mut seed) % 15;
+        let mut equations: Vec[(String, String)] = Vec.new();
+        let mut values: Vec[f64] = Vec.new();
+        for _ in 0..count {
+            let a = step(mut seed) % m;
+            let b = step(mut seed) % m;
+            equations.push((f"v{a}", f"v{b}"));
+            values.push(pow2(hidden[a] - hidden[b]));
+        }
+        let mut queries: Vec[(String, String)] = Vec.new();
+        for _ in 0..10 {
+            let a = step(mut seed) % (m + 2);
+            let b = step(mut seed) % (m + 2);
+            queries.push((f"v{a}", f"v{b}"));
+        }
+        for x in calc_equation(equations, values, queries) {
+            if x < 0.0 {
+                unknown += 1;
+                checksum = (checksum * 31 + 1) % 1000000007;
+            } else {
+                answered += 1;
+                checksum = (checksum * 31 + exponent(x) + 50) % 1000000007;
+            }
+        }
+    }
+    println(f"300 random systems: {answered} answered, {unknown} unknown, checksum {checksum}");
+}

@@ -1,0 +1,80 @@
+// LeetCode #397: Integer Replacement -- dynamic programming over the bits
+// with a carry.
+//
+// After k halvings the value is always (n >> k) + c with c = 0 or 1, so
+// keep the cheapest cost of each c and read n's bits from the bottom.
+// With b the next bit, the value's last bit is b + c: if that is even the
+// value halves into carry (b + c) / 2 for one step; if odd it first steps
+// down (carry 0) or up (carry 1), then halves, for two. A value of 1
+// stops: n >> k = 1 with c = 0, or n >> k = 0 with c = 1. O(log n) time,
+// O(1) space.
+
+fn integer_replacement(n: i64) -> i64 {
+    let none = i64.MAX;
+    let mut cost = [0, none];
+    let mut best = none;
+    let mut k = 0;
+    while cost[0] != none or cost[1] != none {
+        let high = n >> k;
+        if high == 1 and cost[0] != none {
+            best = best.min(cost[0]);
+        }
+        if high == 0 and cost[1] != none {
+            best = best.min(cost[1]);
+        }
+        if high == 0 {
+            break;
+        }
+        let b = high % 2;
+        let mut next = [none, none];
+        for c in 0..2 {
+            if cost[c] == none or high + c == 1 {
+                continue;
+            }
+            let low = b + c;
+            if low % 2 == 0 {
+                next[low / 2] = next[low / 2].min(cost[c] + 1);
+            } else {
+                next[0] = next[0].min(cost[c] + 2);
+                next[1] = next[1].min(cost[c] + 2);
+            }
+        }
+        cost = next;
+        k += 1;
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64) {
+    println(f"{n}: {integer_replacement(n)}");
+}
+
+fn main() {
+    show(8);
+    show(7);
+    show(4);
+    show(1);
+    show(2);
+    show(3);
+    show(15);
+    show(65535);
+    show(1073741824);
+    show(2147483647);
+    let mut seed: i64 = 397;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..3000 {
+        let n = 1 + (step(mut seed) * 32768 + step(mut seed)) % 2147483647;
+        let r = integer_replacement(n);
+        total += r;
+        checksum = (checksum * 31 + r) % 1000000007;
+    }
+    println(f"3000 random values: total {total}, checksum {checksum}");
+}

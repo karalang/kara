@@ -1,0 +1,130 @@
+// LeetCode #398: Random Pick Index -- count, then walk to a random one.
+//
+// One walk counts the indices holding the target; draw a number k below
+// the count; a second walk stops at the k-th such index. Two walks per
+// pick, O(n) time and no extra space.
+
+struct Solution {
+    nums: Vec[i64],
+    seed: i64,
+}
+
+impl Solution {
+    fn new(nums: own Vec[i64]) -> Solution {
+        Solution { nums, seed: 398 }
+    }
+
+    // A number from 0 to n - 1.
+    fn below(mut ref self, n: i64) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        (self.seed / 65536) % n
+    }
+
+    fn pick(mut ref self, target: i64) -> i64 {
+        let mut count = 0;
+        for v in self.nums.iter() {
+            if *v == target {
+                count += 1;
+            }
+        }
+        if count == 0 {
+            return -1;
+        }
+        let mut k = self.below(count);
+        for i in 0..self.nums.len() {
+            if self.nums[i] == target {
+                if k == 0 {
+                    return i;
+                }
+                k -= 1;
+            }
+        }
+        -1
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn b(x: bool) -> String {
+    if x { "true" } else { "false" }
+}
+
+// Draws `draws` indices for `target` and checks them: true when every
+// draw is an index holding `target` and the chi-square statistic of how
+// often each such index came up is below a bound far out in the tail for
+// its degrees of freedom, so a fair sampler passes and a biased one does
+// not.
+fn fair(nums: Vec[i64], target: i64, draws: i64) -> bool {
+    let n = nums.len();
+    let mut count = 0;
+    for i in 0..n {
+        if nums[i] == target {
+            count += 1;
+        }
+    }
+    let mut got = vec![0; n];
+    let mut s = Solution.new(nums.clone());
+    for _ in 0..draws {
+        let x = s.pick(target);
+        if x < 0 or x >= n or nums[x] != target {
+            return false;
+        }
+        got[x] += 1;
+    }
+    let e = draws as f64 / count as f64;
+    let mut chi = 0.0;
+    for i in 0..n {
+        if nums[i] == target {
+            let d = got[i] as f64 - e;
+            chi += d * d / e;
+        }
+    }
+    let dof = (count - 1) as f64;
+    chi <= dof + 6.0 * (2.0 * dof).sqrt() + 12.0
+}
+
+fn main() {
+    let example = vec![1, 2, 3, 3, 3];
+    println(f"example [1, 2, 3, 3, 3], pick(3) 30000 draws: fair {b(fair(example, 3, 30000))}");
+    let mut s = Solution.new(example.clone());
+    let mut always = true;
+    for _ in 0..100 {
+        always = always and s.pick(1) == 0;
+    }
+    println(f"example, pick(1): always 0 {b(always)}");
+    let mut one = Solution.new(vec![7]);
+    let mut only = true;
+    for _ in 0..100 {
+        only = only and one.pick(7) == 0;
+    }
+    println(f"one value [7], pick(7): always 0 {b(only)}");
+    println(f"ten equal values, pick(5): fair {b(fair(vec![5; 10], 5, 30000))}");
+    let mixed = vec![-1, 4, -1, -1, 4];
+    println(f"[-1, 4, -1, -1, 4], pick(-1): fair {b(fair(mixed, -1, 30000))}, pick(4): fair {b(fair(mixed, 4, 30000))}");
+    let mut long: Vec[i64] = Vec.new();
+    for i in 0..1000 {
+        long.push(i * i % 7);
+    }
+    println(f"1000 values of 4 kinds, pick(2): fair {b(fair(long, 2, 5000))}");
+    // 200 random arrays of 1 to 60 values from -5 to 4, each with a
+    // target taken from the array and drawn 20 times per value.
+    let mut seed: i64 = 398;
+    let mut passed = 0;
+    let mut values = 0;
+    for _ in 0..200 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 1 + (seed / 65536) % 60;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            nums.push((seed / 65536) % 10 - 5);
+        }
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let target = nums[(seed / 65536) % n];
+        values += n;
+        if fair(nums, target, 20 * n) {
+            passed += 1;
+        }
+    }
+    println(f"200 random arrays, {values} values: {passed} fair");
+}

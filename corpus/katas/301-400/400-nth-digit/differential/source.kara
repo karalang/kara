@@ -1,0 +1,193 @@
+// Differential test for LeetCode #400: Nth Digit.
+//
+// Copies of the four arms, run on 3,000 random cases with answers known
+// by construction:
+//   P1  the first 3,000 digits match the sequence written out as text
+//   P2  10^k starts right after all the numbers below it, so its digits
+//       are a 1 and k zeros
+//   P3  the last digit of the block of d-digit numbers is the 9 of
+//       10^d - 1
+//   P4  position digits(1..x-1) + i + 1 is digit i of x, read from text
+//   P5  position digits(1..x) is the last digit of x, x % 10
+// where digits(1..x) counts the digits of 1, 2, ..., x one power of ten
+// at a time.
+
+fn find_nth_digit_blocks(n: i64) -> i64 {
+    let mut rest = n;
+    let mut digits = 1;
+    let mut count = 9;
+    let mut start = 1;
+    while rest > digits * count {
+        rest -= digits * count;
+        digits += 1;
+        count *= 10;
+        start *= 10;
+    }
+    let number = start + (rest - 1) / digits;
+    let mut shift = digits - 1 - (rest - 1) % digits;
+    let mut x = number;
+    while shift > 0 {
+        x = x / 10;
+        shift -= 1;
+    }
+    x % 10
+}
+
+fn digits_upto_search(x: i64) -> i64 {
+    let mut total = 0;
+    let mut power = 1;
+    while power <= x {
+        total += x - power + 1;
+        power *= 10;
+    }
+    total
+}
+
+fn find_nth_digit_search(n: i64) -> i64 {
+    let mut lo = 1;
+    let mut hi = n;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if digits_upto_search(mid) >= n {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    let text = f"{lo}";
+    let at = n - digits_upto_search(lo - 1) - 1;
+    (text.bytes()[at] - 48) as i64
+}
+
+fn drop_digits_rec(x: i64, shift: i64) -> i64 {
+    if shift == 0 { x } else { drop_digits_rec(x / 10, shift - 1) }
+}
+
+fn nth_rec(n: i64, digits: i64, count: i64, start: i64) -> i64 {
+    if n > digits * count {
+        return nth_rec(n - digits * count, digits + 1, count * 10, start * 10);
+    }
+    let number = start + (n - 1) / digits;
+    drop_digits_rec(number, digits - 1 - (n - 1) % digits) % 10
+}
+
+fn find_nth_digit_rec(n: i64) -> i64 {
+    nth_rec(n, 1, 9, 1)
+}
+
+fn length_count(x: i64) -> i64 {
+    let mut d = 1;
+    let mut y = x;
+    while y >= 10 {
+        y = y / 10;
+        d += 1;
+    }
+    d
+}
+
+fn find_nth_digit_count(n: i64) -> i64 {
+    let mut rest = n;
+    let mut x = 1;
+    loop {
+        let d = length_count(x);
+        // The largest jump of 10^j numbers that stays inside the block of
+        // d-digit numbers and inside n.
+        let mut jump = 1;
+        while x + jump * 10 - 1 < pow10_count(d) and jump * 10 * d < rest {
+            jump *= 10;
+        }
+        if jump * d < rest {
+            rest -= jump * d;
+            x += jump;
+        } else {
+            let text = f"{x}";
+            return (text.bytes()[rest - 1] - 48) as i64;
+        }
+    }
+}
+
+fn pow10_count(d: i64) -> i64 {
+    let mut p = 1;
+    for _ in 0..d {
+        p *= 10;
+    }
+    p
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn solve(arm: i64, n: i64) -> i64 {
+    if arm == 0 {
+        find_nth_digit_blocks(n)
+    } else if arm == 1 {
+        find_nth_digit_search(n)
+    } else if arm == 2 {
+        find_nth_digit_rec(n)
+    } else {
+        find_nth_digit_count(n)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The number of digits in 1, 2, ..., x.
+fn written(x: i64) -> i64 {
+    let mut total = 0;
+    let mut power = 1;
+    while power <= x {
+        total += x - power + 1;
+        power *= 10;
+    }
+    total
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, got: i64, want: i64, failures: mut ref Vec[i64]) {
+    if got != want {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}: got {got}, want {want}");
+        }
+    }
+}
+
+fn main() {
+    let mut text = String.new();
+    let mut x = 1;
+    while text.len() < 3000 {
+        text.push_str(f"{x}");
+        x += 1;
+    }
+    let sequence = text.bytes();
+    let mut seed: i64 = 4000;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        let k = 1 + step(mut seed) % 8;
+        let mut power = 1;
+        for _ in 0..k {
+            power *= 10;
+        }
+        let i = step(mut seed) % (k + 1);
+        let x = 1 + (step(mut seed) * 32768 + step(mut seed)) % 200000000;
+        let shown = f"{x}";
+        let digits = shown.bytes();
+        let j = step(mut seed) % digits.len();
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, solve(arm, case + 1), (sequence[case] - 48) as i64, mut failures);
+            report(2, arm, case, solve(arm, written(power - 1) + 1 + i), if i == 0 { 1 } else { 0 }, mut failures);
+            report(3, arm, case, solve(arm, written(power - 1)), 9, mut failures);
+            report(4, arm, case, solve(arm, written(x - 1) + j + 1), (digits[j] - 48) as i64, mut failures);
+            report(5, arm, case, solve(arm, written(x)), x % 10, mut failures);
+        }
+    }
+    println(f"3000 cases, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}
