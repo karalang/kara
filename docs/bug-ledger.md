@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 148 |
 | false-positive | 141 |
 | crash | 114 |
-| soundness | 98 |
+| soundness | 99 |
 | use-after-free | 90 |
 
 ### By surface
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2851 |
 | interp | 898 |
-| typecheck | 357 |
+| typecheck | 358 |
 | other | 114 |
 | ownership | 82 |
 | cli | 75 |
@@ -588,6 +588,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-19 | 2026-10-12 | typecheck | medium | `karac fix` answers a move out of `for c in node.children` (a field of an OWNED local) with `#[derive(Clone)]` + `.clone()` instead of `.into_iter()`, turning a consuming walk into a copying one | — |
 | B-2026-10-12-20 | 2026-10-12 | ownership | medium | Storing a PARAMETER of a `shared` type in a `weak` field counts as a MOVE in `karac check`: `fn link(at: N, b: N) { b.prev = at; at.next = Some(b); }` (`prev: weak N`) is refused as `value 'at' moved here, used again here`, for a bare, `ref` or `own` parameter alike, while the same two statements on LOCALS check clean and `karac __mir-run` runs the refused program correctly; the help also claims `at` has no `.clone()` because that exists only on RC types, though `N` is one | — |
 | B-2026-10-12-21 | 2026-10-12 | resolver | low | The MIR pipeline still resolves the Kāra library source in the user program's scope: a user `struct Peekable` or enum variant `Peekable` is refused by `karac __mir-run` as "'Peekable' is already defined in this scope", with the span in the library, though `karac check` accepts it (remainder of B-2026-10-12-17, whose other names e44d71929c renamed away) | — |
+| B-2026-10-12-22 | 2026-10-12 | typecheck | low | `karac check` accepts `m.get(k) == Some(n)` on a `Map[u8, i64]`, comparing `Option[ref i64]` with `Option[i64]`, which `karac __mir-run` refuses ("cannot compare 'Option[ref i64]' and 'Option[i64]'") and which check itself refuses for `Vec.get`; the legacy interpreter runs it | — |
 
 ### Relocated
 
