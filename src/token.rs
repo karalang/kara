@@ -117,24 +117,20 @@ pub enum Token {
     And,
     Or,
     Not,
-    // Ownership
-    Own,
+    // Ownership (`own` is a contextual keyword: an identifier the parser
+    // reads as a mode only before a parameter's type or `self`)
     Ref,
     // Closure capture (kept reserved for future ref/mut-ref capture work; bare `|...|` is owned-by-default and `move` is not used)
     Move,
-    // Effects
-    Effect,
-    With,
+    // Effects (`effect` and `with` are contextual keywords, lexed as
+    // identifiers)
     Yield,
     // Type system
     As,
-    Where,
     Dyn,
     // Safety
     Unsafe,
     Extern,
-    // Shared
-    Shared,
     // Literals
     True,
     False,
@@ -158,8 +154,7 @@ pub enum Token {
     // "providers" is followed by `{`. This frees the bareword for module
     // names, function names, variable bindings, etc. (e.g.,
     // `examples/parallax/src/providers.kara`).
-    // Other
-    Distinct,
+    // Other (`distinct`, `shared` and `where` are contextual keywords)
     SelfValue, // self
     SelfType,  // Self
 
@@ -377,7 +372,6 @@ impl Token {
             Token::Import => "import",
             Token::Const => "const",
             Token::Type => "type",
-            Token::Distinct => "distinct",
             Token::Pub => "pub",
             Token::Private => "private",
             Token::If => "if",
@@ -400,21 +394,16 @@ impl Token {
             Token::And => "and",
             Token::Or => "or",
             Token::Not => "not",
-            Token::Own => "own",
             Token::Ref => "ref",
             Token::Move => "move",
-            Token::Effect => "effect",
-            Token::With => "with",
             Token::Yield => "yield",
             Token::As => "as",
-            Token::Where => "where",
             Token::Dyn => "dyn",
             Token::Requires => "requires",
             Token::Ensures => "ensures",
             Token::Invariant => "invariant",
             Token::Unsafe => "unsafe",
             Token::Extern => "extern",
-            Token::Shared => "shared",
             Token::Comptime => "comptime",
             Token::True => "true",
             Token::False => "false",

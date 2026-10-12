@@ -5,7 +5,7 @@
 use karac::parse;
 use karac::token::Token;
 
-/// The 24 words that stopped being reserved.
+/// The 30 words that stopped being reserved.
 const SOFT_WORDS: &[&str] = &[
     "union",
     "marker",
@@ -31,6 +31,13 @@ const SOFT_WORDS: &[&str] = &[
     "group",
     "alias",
     "independent",
+    // B-2026-10-12-11: the spec's remaining contextual words.
+    "distinct",
+    "shared",
+    "own",
+    "where",
+    "with",
+    "effect",
 ];
 
 /// Parses `source`, asserting no errors; returns the program's debug dump so
@@ -148,6 +155,26 @@ fn soft_words_still_start_their_constructs() {
         (
             "fn f() with writes(Db) reads(Cache) allocates panics { }",
             "Writes",
+        ),
+        ("distinct type Meters = f64;", "DistinctType("),
+        (
+            "shared enum Tree { Leaf, Node(Tree, Tree) }",
+            "is_shared: true",
+        ),
+        ("effect resource Db;", "EffectResource("),
+        (
+            "struct S {}\nimpl S { fn eat(own self) { } }",
+            "self_is_own: true",
+        ),
+        ("fn f(x: own String) { }", "is_own: true"),
+        ("fn f(g: Fn(own String) -> i64) { }", "own_params: [true]"),
+        (
+            "fn f[T](x: T) -> T where T: Clone { x }",
+            "where_clause: Some(",
+        ),
+        (
+            "fn f[with E](g: Fn() -> i64 with E) -> i64 with E { g() }",
+            "effect_params: [EffectParam",
         ),
     ] {
         assert_has(&parse_ok(src), construct, src);

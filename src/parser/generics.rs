@@ -48,7 +48,14 @@ impl super::Parser {
                 break;
             }
             // `with E[, F]` — `with` enters effect-vars mode (sticky).
-            if self.check(&Token::With) {
+            // A type parameter is never named `with` (PascalCase), so the
+            // word starts the effect params unless it ends the entry.
+            if self.at_kw("with")
+                && !matches!(
+                    self.peek_token_ref_at(1),
+                    Token::Comma | Token::RightBracket | Token::Colon
+                )
+            {
                 self.advance();
                 in_effect_params = true;
             }
@@ -279,7 +286,7 @@ impl super::Parser {
     }
 
     pub(crate) fn parse_optional_where_clause(&mut self) -> Option<WhereClause> {
-        if !self.eat(&Token::Where) {
+        if !self.eat_kw("where") {
             return None;
         }
         let start = self.current_span();

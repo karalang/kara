@@ -1615,7 +1615,6 @@ impl<'a> Lexer<'a> {
             "import" => Token::Import,
             "const" => Token::Const,
             "type" => Token::Type,
-            "distinct" => Token::Distinct,
             // Visibility
             "pub" => Token::Pub,
             "private" => Token::Private,
@@ -1642,20 +1641,19 @@ impl<'a> Lexer<'a> {
             "and" => Token::And,
             "or" => Token::Or,
             "not" => Token::Not,
-            // Ownership
-            "own" => Token::Own,
+            // Ownership. `own`, like `distinct`, `shared`, `where`, `with` and
+            // `effect`, is a contextual keyword (design.md § Keywords): it
+            // lexes as an identifier and the parser reads it as a keyword only
+            // where it introduces syntax.
             "ref" => Token::Ref,
             // Closure capture: `own |...|` is the explicit capture-by-value
             // prefix (see Rule 2½). `move` is reserved against the Rust idiom
             // and is rejected by the parser with a redirect to `own`.
             "move" => Token::Move,
             // Effects
-            "effect" => Token::Effect,
-            "with" => Token::With,
             "yield" => Token::Yield,
             // Type system
             "as" => Token::As,
-            "where" => Token::Where,
             "dyn" => Token::Dyn,
             // Contracts
             "requires" => Token::Requires,
@@ -1664,7 +1662,6 @@ impl<'a> Lexer<'a> {
             // Safety
             "unsafe" => Token::Unsafe,
             "extern" => Token::Extern,
-            "shared" => Token::Shared,
             // Comptime — compile-time evaluation (see deferred.md § Comptime).
             "comptime" => Token::Comptime,
             // Literals

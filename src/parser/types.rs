@@ -253,7 +253,6 @@ impl super::Parser {
                         | Token::Star
                         | Token::Ref
                         | Token::Mut
-                        | Token::Shared
                 ) =>
             {
                 self.advance();
@@ -431,7 +430,7 @@ impl super::Parser {
                 // `FnType` arm above — `parse_effect_list` itself
                 // consumes the `with` keyword, so we peek-only and
                 // dispatch on the token immediately following `with`.
-                let use_effects = if !return_tail && self.check(&Token::With) {
+                let use_effects = if !return_tail && self.at_kw("with") {
                     let saved = self.pos;
                     if let Some(token) = self.tokens.get(self.pos + 1) {
                         if matches!(token.token, Token::Underscore) {
@@ -493,7 +492,14 @@ impl super::Parser {
                 let mut own_params = Vec::new();
                 while !self.check(&Token::RightParen) && !self.is_at_end() {
                     // `Fn(own T)` (D5): an owned parameter of the function type.
-                    own_params.push(self.eat(&Token::Own));
+                    own_params.push(
+                        self.at_kw("own")
+                            && !matches!(
+                                self.peek_token_ref_at(1),
+                                Token::Comma | Token::RightParen
+                            )
+                            && self.eat_kw("own"),
+                    );
                     params.push(self.parse_type()?);
                     if !self.eat(&Token::Comma) {
                         break;
@@ -511,7 +517,7 @@ impl super::Parser {
                     None
                 };
 
-                let effect_spec = if !return_tail && self.check(&Token::With) {
+                let effect_spec = if !return_tail && self.at_kw("with") {
                     // Peek-only: `parse_effect_list` consumes the `with`
                     // keyword itself and then handles `_` / verbs / named
                     // effect variables / group names uniformly. Pre-

@@ -102,7 +102,12 @@ impl super::Parser {
             Token::Enum => Some(Item::EnumDef(
                 self.parse_enum_def(attributes, is_pub, is_private, false, false)?,
             )),
-            Token::Shared => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "shared"
+                && matches!(self.peek_token_ref_at(1), Token::Struct | Token::Enum) =>
+            {
                 let shared_kw_span = self.current_span();
                 self.advance();
                 match self.peek_token_ref() {
@@ -173,7 +178,12 @@ impl super::Parser {
                 Item::MarkerTrait(self.parse_marker_trait(attributes, is_pub, is_private)?),
             ),
             Token::Impl => Some(Item::ImplBlock(self.parse_impl_block(attributes)?)),
-            Token::Effect => self.parse_effect_decl(is_pub, false, false),
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "effect" && self.effect_decl_follows() => {
+                self.parse_effect_decl(is_pub, false, false)
+            }
             // Bare `resource Db;` — shorthand for `effect resource Db;`
             // (the form the effect-system tests and docs use). Previously
             // this had NO arm and was SILENTLY DROPPED by item recovery
@@ -195,7 +205,7 @@ impl super::Parser {
             Token::Identifier {
                 ref name,
                 raw: false,
-            } if name == "stable" && matches!(self.peek_token_ref_at(1), Token::Effect) => {
+            } if name == "stable" && self.at_kw_at(1, "effect") => {
                 self.advance();
                 // stable effect group ...
                 self.parse_effect_decl(is_pub, true, false)
@@ -203,7 +213,7 @@ impl super::Parser {
             Token::Identifier {
                 ref name,
                 raw: false,
-            } if name == "transparent" && matches!(self.peek_token_ref_at(1), Token::Effect) => {
+            } if name == "transparent" && self.at_kw_at(1, "effect") => {
                 self.advance();
                 self.parse_effect_decl(is_pub, false, true)
             }
@@ -363,7 +373,10 @@ impl super::Parser {
                 let decl = self.parse_host_function(attributes, is_pub, is_private)?;
                 Some(Item::ExternFunction(decl))
             }
-            Token::Distinct => {
+            Token::Identifier {
+                ref name,
+                raw: false,
+            } if name == "distinct" && matches!(self.peek_token_ref_at(1), Token::Type) => {
                 let def = self.parse_distinct_type(attributes, is_pub, is_private)?;
                 Some(Item::DistinctType(def))
             }
@@ -1533,7 +1546,7 @@ impl super::Parser {
             && matches!(self.peek_token_ref_at(1), Token::SelfValue);
         if frozen_self
             || self.check(&Token::SelfValue)
-            || self.check(&Token::Own)
+            || (self.at_kw("own") && matches!(self.peek_token_ref_at(1), Token::SelfValue))
             || self.check(&Token::Ref)
             || self.check(&Token::Mut)
         {
@@ -1609,7 +1622,8 @@ impl super::Parser {
         // `own self` — the owned/consuming receiver (core semantics
         // amendment 8, D5). Until a bare `self` flips to borrowed it is the
         // same receiver as `self`; the spelling is recorded for `karac fmt`.
-        if self.eat(&Token::Own) {
+        if self.at_kw("own") && matches!(self.peek_token_ref_at(1), Token::SelfValue) {
+            self.advance();
             if self.eat(&Token::SelfValue) {
                 self.own_self_consumed = true;
                 return Some((SelfParam::Owned, self.span_from(&start)));
@@ -1733,7 +1747,12 @@ impl super::Parser {
         self.escaping_ok = true;
         self.frozen_consumed = false;
         // `x: own T` (D5): owned, which a bare `T` also means until the flip.
-        let is_own = self.eat(&Token::Own);
+        let is_own = self.at_kw("own")
+            && !matches!(
+                self.peek_token_ref_at(1),
+                Token::Comma | Token::RightParen | Token::Equal
+            )
+            && self.eat_kw("own");
         let ty = self.parse_type();
         self.frozen_ok = false;
         self.escaping_ok = false;
@@ -2046,7 +2065,7 @@ impl super::Parser {
                 self.advance();
             }
         }
-        if self.check(&Token::Where) {
+        if self.at_kw("where") {
             self.error(
                 "error[E_UNION_WHERE_FORBIDDEN]: where-clauses are not allowed \
                  on union declarations; v1 FFI unions are non-generic so there \
@@ -2803,7 +2822,7 @@ impl super::Parser {
         let generic_params = self.parse_optional_generic_params();
         self.expect(&Token::Equal)?;
         let ty = self.parse_type()?;
-        let refinement = if self.eat(&Token::Where) {
+        let refinement = if self.eat_kw("where") {
             Some(self.parse_expression()?)
         } else {
             None
@@ -2838,7 +2857,7 @@ impl super::Parser {
         is_private: bool,
     ) -> Option<DistinctTypeDef> {
         let start = self.current_span();
-        self.expect(&Token::Distinct)?;
+        self.expect_kw("distinct")?;
         if !self.eat(&Token::Type) {
             self.error("Expected 'type' after 'distinct'");
             return None;
@@ -2849,7 +2868,7 @@ impl super::Parser {
         let generic_params = self.parse_optional_generic_params();
         self.expect(&Token::Equal)?;
         let base_type = self.parse_type()?;
-        let refinement = if self.eat(&Token::Where) {
+        let refinement = if self.eat_kw("where") {
             Some(self.parse_expression()?)
         } else {
             None

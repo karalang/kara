@@ -44,7 +44,6 @@ pub enum Token {
     Import,
     Const,
     Type,
-    Distinct,
     // Visibility
     Pub,
     Private,
@@ -71,17 +70,14 @@ pub enum Token {
     And,
     Or,
     Not,
-    // Ownership
-    Own,
+    // Ownership (`own`, `distinct`, `shared`, `where`, `with` and `effect`
+    // are contextual keywords: they lex as identifiers, B-2026-10-12-11)
     Ref,
     Move,
     // Effects
-    Effect,
-    With,
     Yield,
     // Type system
     As,
-    Where,
     Dyn,
     // Contracts
     Requires,
@@ -90,7 +86,6 @@ pub enum Token {
     // Safety
     Unsafe,
     Extern,
-    Shared,
     // Comptime
     Comptime,
     // Literals (keyword)

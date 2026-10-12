@@ -150,7 +150,10 @@ fn test_trait_and_impl() {
 
     let tokens = tokens_only(source);
     assert_eq!(tokens[0], Token::Trait);
-    assert!(tokens.contains(&Token::With));
+    assert!(tokens.contains(&Token::Identifier {
+        name: "with".into(),
+        raw: false
+    }));
     assert!(tokens.contains(&Token::Underscore));
     assert!(tokens.contains(&Token::Impl));
 }
@@ -164,7 +167,13 @@ fn test_effect_declarations() {
     "#;
 
     let tokens = tokens_only(source);
-    assert_eq!(tokens[0], Token::Effect);
+    assert_eq!(
+        tokens[0],
+        Token::Identifier {
+            name: "effect".into(),
+            raw: false
+        }
+    );
     assert!(tokens.contains(&Token::Identifier {
         name: "transparent".into(),
         raw: false
@@ -995,7 +1004,13 @@ fn test_visibility_private() {
 #[test]
 fn test_ownership_keywords_full() {
     let tokens = tokens_only("own ref weak lock");
-    assert_eq!(tokens[0], Token::Own);
+    assert_eq!(
+        tokens[0],
+        Token::Identifier {
+            name: "own".into(),
+            raw: false
+        }
+    );
     assert_eq!(tokens[1], Token::Ref);
     assert_eq!(
         tokens[2],
@@ -1018,7 +1033,13 @@ fn test_effect_keywords_full() {
     let tokens = tokens_only(
         "effect resource verb reads writes sends receives allocates panics blocks suspends",
     );
-    assert_eq!(tokens[0], Token::Effect);
+    assert_eq!(
+        tokens[0],
+        Token::Identifier {
+            name: "effect".into(),
+            raw: false
+        }
+    );
     assert_eq!(
         tokens[1],
         Token::Identifier {
@@ -1094,7 +1115,13 @@ fn test_effect_keywords_full() {
 #[test]
 fn test_effect_modifier_keywords() {
     let tokens = tokens_only("with transparent stable seq par yield");
-    assert_eq!(tokens[0], Token::With);
+    assert_eq!(
+        tokens[0],
+        Token::Identifier {
+            name: "with".into(),
+            raw: false
+        }
+    );
     assert_eq!(
         tokens[1],
         Token::Identifier {

@@ -1677,19 +1677,19 @@ fn test_keyword_as_identifier_names_the_keyword() {
     // keyword must report the keyword by spelling, not the internal Debug token
     // name ("Expected pattern, found Group"). Covers the four identifier-context
     // error sites: let-pattern, parameter pattern, expression, and the generic
-    // expect_identifier path. (`group` itself is a contextual keyword now, so
-    // the pin uses `where`, which stays reserved.)
+    // expect_identifier path. (`group` and `where` are contextual keywords
+    // now, so the pin uses `trait`, which is hard.)
     for src in [
-        "fn main() { let mut where = 0; }", // let pattern
-        "fn f(where: i64) -> i64 { 0 }",    // parameter pattern
-        "fn main() { let x = where; }",     // expression position
+        "fn main() { let mut trait = 0; }", // let pattern
+        "fn f(trait: i64) -> i64 { 0 }",    // parameter pattern
+        "fn main() { let x = trait; }",     // expression position
     ] {
         let (_prog, errors) = parse_with_errors(src);
         assert!(!errors.is_empty(), "expected a parse error for: {src}");
         assert!(
             errors.iter().any(|e| e.message
-                == "'where' is a reserved keyword and cannot be used as an identifier; \
-                    write `r#where` to use it as an ordinary identifier"),
+                == "'trait' is a reserved keyword and cannot be used as an identifier; \
+                    write `r#trait` to use it as an ordinary identifier"),
             "message should name the reserved keyword; got {:?} for: {src}",
             errors.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
@@ -1713,34 +1713,36 @@ fn test_keyword_as_identifier_names_the_keyword() {
 /// `distinct type` item ("Expected 'type' after 'distinct'"), and no site
 /// carried an edit, so `karac fix` stopped on the parse errors having applied
 /// nothing. Applying the edits must leave a program that parses clean.
+/// (`distinct` is a contextual keyword now, B-2026-10-12-11, so the pin uses
+/// the hard keyword `type`, which starts an item the same way.)
 #[test]
 fn test_keyword_named_local_reports_each_use_and_fixes_to_raw_ident() {
     let src = "fn count(s: ref String) -> i64 {\n\
-                   let mut distinct = 0;\n\
+                   let mut type = 0;\n\
                    for c in s.chars() {\n\
                        if c == 'a' {\n\
-                           distinct += 1;\n\
+                           type += 1;\n\
                        }\n\
                    }\n\
-                   distinct = distinct + 0;\n\
-                   while distinct > 100 {\n\
-                       distinct -= 1;\n\
+                   type = type + 0;\n\
+                   while type > 100 {\n\
+                       type -= 1;\n\
                    }\n\
-                   return distinct;\n\
+                   return type;\n\
                }\n\
                fn main() { println(count(\"abca\")); }\n";
     let result = parse(src);
     let msgs: Vec<&str> = result.errors.iter().map(|e| e.message.as_str()).collect();
-    let kw = "'distinct' is a reserved keyword and cannot be used as an identifier; \
-              write `r#distinct` to use it as an ordinary identifier";
+    let kw = "'type' is a reserved keyword and cannot be used as an identifier; \
+              write `r#type` to use it as an ordinary identifier";
     assert_eq!(
         msgs,
         vec![kw; 7],
-        "one error per use of `distinct`, and no cascade"
+        "one error per use of `type`, and no cascade"
     );
     let mut edits: Vec<_> = result.fix_edits.values().cloned().collect();
     assert_eq!(edits.len(), 7, "each use carries its edit: {edits:?}");
-    assert!(edits.iter().all(|e| e.replacement == "r#distinct"));
+    assert!(edits.iter().all(|e| e.replacement == "r#type"));
     edits.sort_by_key(|e| std::cmp::Reverse(e.offset));
     let mut fixed = src.to_string();
     for e in &edits {
@@ -15559,11 +15561,11 @@ fn reserved_future_and_active_keywords_are_worded_differently() {
         "got {:?}",
         future[0].message,
     );
-    let (_p, active) = parse_with_errors("fn main() { let where = 1; }");
+    let (_p, active) = parse_with_errors("fn main() { let trait = 1; }");
     assert!(
         active[0]
             .message
-            .starts_with("'where' is a reserved keyword"),
+            .starts_with("'trait' is a reserved keyword"),
         "got {:?}",
         active[0].message,
     );
@@ -15574,7 +15576,7 @@ fn reserved_future_and_active_keywords_are_worded_differently() {
 /// apply it mechanically. Before the fix, 0 of 18 mentioned it.
 #[test]
 fn reserved_keyword_diagnostics_name_the_raw_identifier_escape() {
-    for kw in ["where", "effect", "with", "match", "async", "typeof", "gen"] {
+    for kw in ["trait", "enum", "impl", "match", "async", "typeof", "gen"] {
         let (_p, errors) = parse_with_errors(&format!("fn main() {{ let {kw} = 1; }}"));
         assert!(
             errors
@@ -15617,7 +15619,7 @@ fn a_reserved_keyword_yields_one_diagnostic_per_occurrence() {
     let two = parse_with_errors(r#"fn main() { let async = 1; println(f"{async}"); }"#).1;
     assert_eq!(two.len(), 2, "got {:?}", two);
     // Same shape for an active keyword — no future-reserved-specific cascade.
-    let active = parse_with_errors(r#"fn main() { let where = 1; println(f"{where}"); }"#).1;
+    let active = parse_with_errors(r#"fn main() { let trait = 1; println(f"{trait}"); }"#).1;
     assert_eq!(active.len(), 2, "got {:?}", active);
 }
 

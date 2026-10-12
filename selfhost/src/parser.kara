@@ -2419,7 +2419,6 @@ impl Parser {
                 Star => true,
                 Ref => true,
                 Mut => true,
-                Shared => true,
                 _ => false,
             };
             if type_follows {
@@ -2984,14 +2983,15 @@ impl Parser {
         if w == "union" and self.word_at(1) != "" {
             return self.parse_union_def(is_pub, attrs, doc);
         }
-        if (w == "par" or w == "sync") and self.pos + 1 < self.tokens.len() {
+        if (w == "par" or w == "sync" or w == "shared") and self.pos + 1 < self.tokens.len() {
             let par_item = match self.tokens[self.pos + 1].token {
                 Struct => true,
                 Enum => true,
                 _ => false,
             };
             if par_item {
-                return self.parse_shared_or_par(is_pub, false, true, attrs, doc);
+                let is_shared = w == "shared";
+                return self.parse_shared_or_par(is_pub, is_shared, not is_shared, attrs, doc);
             }
         }
         match self.tokens[self.pos].token {
@@ -3002,7 +3002,6 @@ impl Parser {
             Type => self.parse_type_alias_decl(is_pub, attrs, doc),
             Struct => self.parse_struct_def(is_pub, false, false, attrs, doc),
             Enum => self.parse_enum_def(is_pub, false, false, attrs, doc),
-            Shared => self.parse_shared_or_par(is_pub, true, false, attrs, doc),
             Fn => self.parse_fn_def(is_pub, attrs, doc),
             Trait => self.parse_trait_def(is_pub, attrs, doc),
             // `impl` carries no visibility (the seed's `Token::Impl` arm ignores a
@@ -3486,13 +3485,7 @@ impl Parser {
 
     // `with` — the leading token of a function-signature effect clause.
     fn at_with(ref self) -> bool {
-        if self.pos >= self.tokens.len() {
-            return false;
-        }
-        match self.tokens[self.pos].token {
-            With => true,
-            _ => false,
-        }
+        self.word_at(0) == "with"
     }
 
     // `with EFFECT_LIST` — a function-signature effect clause (design.md § Effects).
@@ -3771,10 +3764,7 @@ impl Parser {
         }
         // `own self` (D5): the owned receiver, the same as a bare `self` until
         // the flip.
-        let is_own = match self.tokens[self.pos].token {
-            Own => true,
-            _ => false,
-        };
+        let is_own = self.word_at(0) == "own";
         if is_own and self.pos + 1 < self.tokens.len() {
             let next_self = match self.tokens[self.pos + 1].token {
                 SelfValue => true,
@@ -3876,12 +3866,15 @@ impl Parser {
             let name = self.take_member_name();
             self.eat_colon();
             // `x: own T` (D5): owned, as a bare `T` is until the flip.
-            if self.pos < self.tokens.len() {
-                let is_own = match self.tokens[self.pos].token {
-                    Own => true,
-                    _ => false,
+            // `own` is contextual: a keyword only when a type follows it.
+            if self.word_at(0) == "own" and self.pos + 1 < self.tokens.len() {
+                let type_follows = match self.tokens[self.pos + 1].token {
+                    Comma => false,
+                    RightParen => false,
+                    Equal => false,
+                    _ => true,
                 };
-                if is_own {
+                if type_follows {
                     self.advance();
                 }
             }

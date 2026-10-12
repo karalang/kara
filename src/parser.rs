@@ -1018,6 +1018,12 @@ impl Parser {
         self.at_kw_at(0, kw)
     }
 
+    /// Whether the `effect` here starts an effect declaration: a name
+    /// follows it (`effect resource Db;`, `effect group G = …`).
+    fn effect_decl_follows(&self) -> bool {
+        matches!(self.peek_token_ref_at(1), Token::Identifier { .. })
+    }
+
     fn eat_kw(&mut self, kw: &str) -> bool {
         if self.at_kw(kw) {
             self.advance();
@@ -1453,12 +1459,10 @@ impl Parser {
                 | Token::Enum
                 | Token::Trait
                 | Token::Impl
-                | Token::Effect
                 | Token::Import
                 | Token::Const
                 | Token::Extern
                 | Token::Type
-                | Token::Distinct
                 | Token::Pub
                 | Token::Pound => return,
                 // A contextual keyword resyncs only where it starts an item
@@ -1467,7 +1471,12 @@ impl Parser {
                     if matches!(name.as_str(), "union" | "layout" | "alias" | "independent")
                         && matches!(self.peek_token_ref_at(1), Token::Identifier { .. })
                         || matches!(name.as_str(), "transparent" | "stable")
-                            && matches!(self.peek_token_ref_at(1), Token::Effect) =>
+                            && self.at_kw_at(1, "effect")
+                        || name == "effect" && self.effect_decl_follows()
+                        || name == "distinct"
+                            && matches!(self.peek_token_ref_at(1), Token::Type)
+                        || name == "shared"
+                            && matches!(self.peek_token_ref_at(1), Token::Struct | Token::Enum) =>
                 {
                     return
                 }

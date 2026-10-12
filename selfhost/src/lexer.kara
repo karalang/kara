@@ -1859,7 +1859,6 @@ fn keyword_or_ident(text: String) -> Token {
         "import" => Token.Import,
         "const" => Token.Const,
         "type" => Token.Type,
-        "distinct" => Token.Distinct,
         // Visibility
         "pub" => Token.Pub,
         "private" => Token.Private,
@@ -1887,16 +1886,12 @@ fn keyword_or_ident(text: String) -> Token {
         "or" => Token.Or,
         "not" => Token.Not,
         // Ownership
-        "own" => Token.Own,
         "ref" => Token.Ref,
         "move" => Token.Move,
         // Effects
-        "effect" => Token.Effect,
-        "with" => Token.With,
         "yield" => Token.Yield,
         // Type system
         "as" => Token.As,
-        "where" => Token.Where,
         "dyn" => Token.Dyn,
         // Contracts
         "requires" => Token.Requires,
@@ -1905,7 +1900,6 @@ fn keyword_or_ident(text: String) -> Token {
         // Safety
         "unsafe" => Token.Unsafe,
         "extern" => Token.Extern,
-        "shared" => Token.Shared,
         // Literals
         "true" => Token.True,
         "false" => Token.False,

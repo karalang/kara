@@ -17,7 +17,7 @@ impl super::Parser {
         is_transparent: bool,
     ) -> Option<Item> {
         let start = self.current_span();
-        self.expect(&Token::Effect)?;
+        self.expect_kw("effect")?;
 
         if is_transparent {
             if !self.eat_kw("verb") {
@@ -213,7 +213,7 @@ impl super::Parser {
     }
 
     fn is_effect_start(&self) -> bool {
-        self.check(&Token::With) || self.kw_here().is_some_and(|w| EFFECT_VERBS.contains(&w))
+        self.at_kw("with") || self.kw_here().is_some_and(|w| EFFECT_VERBS.contains(&w))
     }
 
     pub(crate) fn parse_effect_list(
@@ -225,7 +225,7 @@ impl super::Parser {
         let mut items = Vec::new();
 
         // Handle `with` keyword
-        if self.eat(&Token::With) {
+        if self.eat_kw("with") {
             // with _ (anonymous polymorphic)
             if self.eat(&Token::Underscore) {
                 return Some(EffectList {

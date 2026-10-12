@@ -283,7 +283,7 @@ impl super::Parser {
 
         // `trait Foo = ;` — empty bound list rejected at parse with a
         // focused diagnostic.
-        if self.check(&Token::Semicolon) || self.check(&Token::Where) {
+        if self.check(&Token::Semicolon) || self.at_kw("where") {
             self.error(
                 "trait alias requires at least one trait bound on the right-hand side; \
                  write `trait Foo = SomeTrait;` instead of `trait Foo = ;`",
@@ -566,7 +566,7 @@ impl super::Parser {
         // — plus a CASCADED "Expected expression, found RightBrace" once the
         // block's tail desynchronized. Consuming the clause is what removes
         // the cascade.
-        if self.check(&Token::With) {
+        if self.at_kw("with") {
             let effect_vars: Vec<String> = generic_params
                 .as_ref()
                 .map(|g| g.effect_params.iter().map(|ep| ep.name.clone()).collect())

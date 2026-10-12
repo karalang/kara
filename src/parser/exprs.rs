@@ -1817,7 +1817,10 @@ impl super::Parser {
             // `own |...|` — explicit capture-by-value prefix (Rule 2½). Same
             // lookahead rule as the borrow prefixes: only consume `own` when a
             // closure follows, since `own` may appear elsewhere in v2+.
-            Token::Own if matches!(self.peek_token_ref_at(1), Token::Pipe | Token::PipePipe) => {
+            Token::Identifier { name, raw: false }
+                if name == "own"
+                    && matches!(self.peek_token_ref_at(1), Token::Pipe | Token::PipePipe) =>
+            {
                 let prefix_start = self.current_span();
                 self.advance();
                 let prefix_span = self.span_from(&prefix_start);
@@ -2142,7 +2145,10 @@ impl super::Parser {
     fn peeks_closure_start(&self) -> bool {
         match self.peek_token_ref() {
             Token::Pipe | Token::PipePipe => true,
-            Token::Own | Token::Ref | Token::Move => {
+            Token::Ref | Token::Move => {
+                matches!(self.peek_token_ref_at(1), Token::Pipe | Token::PipePipe)
+            }
+            Token::Identifier { name, raw: false } if name == "own" => {
                 matches!(self.peek_token_ref_at(1), Token::Pipe | Token::PipePipe)
             }
             Token::Mut => {
