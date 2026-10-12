@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 171 |
 | diagnostics | 152 |
 | perf | 148 |
-| false-positive | 145 |
+| false-positive | 146 |
 | crash | 114 |
 | soundness | 99 |
 | use-after-free | 90 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2851 |
 | interp | 899 |
-| typecheck | 361 |
+| typecheck | 362 |
 | other | 114 |
 | ownership | 83 |
 | cli | 75 |
@@ -591,6 +591,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-25 | 2026-10-12 | interp | low | `Vec.split_at_mut` passes `karac check` but `__mir-run` has no such function (`call of unknown function Vec[i64].split_at_mut`). CORRECTED: `__mir-llvm-run` has it since 010499d0d5, which landed before this row; the filing measured a binary built before that commit | — |
 | B-2026-10-12-26 | 2026-10-12 | typecheck | medium | `v[i]` of a `Vec[Option[shared]]` or `Vec[(shared, i64)]` passed to a bare parameter is refused with E_INDEX_MOVE_NON_COPY under D5, though a bare parameter borrows; `v[i]` of a `Vec[Vec[T]]`, `Vec[String]` or `Vec[shared]` is accepted | — |
 | B-2026-10-12-27 | 2026-10-12 | ownership | low | `karac check` refuses a write to a `mut` field of a shared value bound by a `let` tuple pattern (`let (s, k) = f(); s.left = x;`, "cannot assign through `s` — declared without `mut`"), against core-semantics §5.9's exception | — |
+| B-2026-10-12-28 | 2026-10-12 | typecheck | low | A `SortedMap.floor`/`ceiling` entry taken out with `.expect()` or `.unwrap()` loses its `ref`s on the MIR backends: `let (k, v) = m.floor(4).expect("an entry"); println(f"{*k}")` passes `karac check` and `karac __mir-run`/`__mir-llvm-run` refuse it ("unary '*' requires 'ref T' ... found 'i64'", no location); the pattern forms fixed under B-2026-10-12-9 work | — |
 
 ### Relocated
 
