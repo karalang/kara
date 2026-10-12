@@ -458,6 +458,12 @@ pub enum StatementKind {
     /// semantics §6.2). Only the flag pass inserts these, after drop
     /// elaboration; the builder never does.
     BorrowFlag(FlagOp),
+    /// Frees the box a compiled backend keeps a boxed field in
+    /// ([`super::layout::boxed_field`]), if it still holds one. Only drop
+    /// elaboration inserts these, after an opened drop has dropped what is
+    /// left of the field's parts; the interpreter, which boxes nothing,
+    /// does nothing.
+    FreeBox(Place),
     Nop,
 }
 

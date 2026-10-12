@@ -39,6 +39,7 @@ impl<'ctx> Cx<'ctx, '_> {
             // Storage is the function's for its whole life, and the borrow
             // flags are the interpreter's dynamic check of what the borrow
             // checker proved; neither emits anything.
+            StatementKind::FreeBox(place) => self.free_box_of(place),
             StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_)
             | StatementKind::BorrowFlag(_)
@@ -146,7 +147,18 @@ impl<'ctx> Cx<'ctx, '_> {
     // ── places ─────────────────────────────────────────────────────
 
     pub(super) fn projected_place_ptr(&mut self, place: &Place) -> R<PointerValue<'ctx>> {
+        Ok(self.place_box(place)?.0)
+    }
+
+    /// A pointer to `place`'s storage, and the slot holding its box when
+    /// the place is a boxed field ([`layout::boxed_field`]). An empty box
+    /// slot on the way is filled, for a write after a move.
+    pub(super) fn place_box(
+        &mut self,
+        place: &Place,
+    ) -> R<(PointerValue<'ctx>, Option<PointerValue<'ctx>>)> {
         let body = self.cur()?;
+        let mut slot = None;
         let mut ptr = self
             .locals
             .get(place.local.index())
@@ -168,12 +180,19 @@ impl<'ctx> Cx<'ctx, '_> {
                         let at = layout::shared_body_offset(self.tys, ty).unwrap_or(SHARED_COUNTS);
                         ptr = self.offset(b, at)?;
                     }
+                    let boxed = layout::boxed_field(self.tys, ty, variant, f.0);
                     ptr = self.offset(ptr, off)?;
+                    slot = None;
+                    if boxed {
+                        slot = Some(ptr);
+                        ptr = self.box_at(ptr, fty)?;
+                    }
                     ty = fty;
                     variant = None;
                 }
                 ProjElem::Downcast(v) => variant = Some(v.0),
                 ProjElem::Deref => {
+                    slot = None;
                     let (p, t) = self.deref(ptr, ty)?;
                     ptr = p;
                     ty = t;
@@ -183,19 +202,41 @@ impl<'ctx> Cx<'ctx, '_> {
                     let lp = self.locals[l.index()];
                     let i = self.load_i64(lp)?;
                     let (p, t) = self.index(ptr, ty, i)?;
+                    slot = None;
                     ptr = p;
                     ty = t;
                     variant = None;
                 }
                 ProjElem::ConstIndex(k) => {
                     let (p, t) = self.index(ptr, ty, self.i64(k))?;
+                    slot = None;
                     ptr = p;
                     ty = t;
                     variant = None;
                 }
             }
         }
-        Ok(ptr)
+        Ok((ptr, slot))
+    }
+
+    /// `free_box(place)`: frees the box of the boxed field `place`, if it
+    /// still holds one. Unlike [`Self::place_box`] it never makes one.
+    fn free_box_of(&mut self, place: &Place) -> R<()> {
+        let n = place.projection.len();
+        let Some(&ProjElem::Field(f, _)) = place.projection.last() else {
+            return Err("free_box of a place that is not a field".into());
+        };
+        let parent = Place {
+            local: place.local,
+            projection: place.projection[..n - 1].to_vec(),
+        };
+        let pt = place_ty(self.cur()?, self.tys, &parent)?;
+        if !layout::boxed_field(self.tys, pt.ty, pt.variant, f.0) {
+            return Ok(());
+        }
+        let p = self.place_ptr(&parent)?;
+        let slot = self.offset(p, self.field_offset(pt.ty, pt.variant, f.0)?)?;
+        self.free_box(slot)
     }
 
     /// The place `*p` for a `p` of type `ty` stored at `ptr`, and its type.
@@ -263,6 +304,20 @@ impl<'ctx> Cx<'ctx, '_> {
     /// the constant.
     pub(super) fn operand_ptr(&mut self, op: &Operand) -> R<PointerValue<'ctx>> {
         match op {
+            Operand::Move(p) if !p.projection.is_empty() => {
+                // Moving a boxed field out frees its box: the value goes
+                // to a temporary first.
+                let (q, slot) = self.place_box(p)?;
+                let Some(slot) = slot else {
+                    return Ok(q);
+                };
+                let ty = self.place_type(p)?;
+                let size = self.layout(ty)?.size;
+                let t = self.entry_slot(size.max(1) as u32, "unboxed")?;
+                self.copy(t, q, ty)?;
+                self.free_box(slot)?;
+                Ok(t)
+            }
             Operand::Copy(p) | Operand::Move(p) => self.place_ptr(p),
             Operand::Const(c) => {
                 let size = self.layout(c.ty)?.size;
@@ -279,8 +334,12 @@ impl<'ctx> Cx<'ctx, '_> {
             Operand::Const(c) => self.store_const(dst, c),
             Operand::Copy(p) | Operand::Move(p) => {
                 let ty = self.place_type(p)?;
-                let src = self.place_ptr(p)?;
-                self.copy(dst, src, ty)
+                let (src, slot) = self.place_box(p)?;
+                self.copy(dst, src, ty)?;
+                match (op, slot) {
+                    (Operand::Move(_), Some(slot)) => self.free_box(slot),
+                    _ => Ok(()),
+                }
             }
         }
     }
@@ -1121,7 +1180,14 @@ impl<'ctx> Cx<'ctx, '_> {
         let var = enum_.then_some(v);
         for (i, op) in ops.iter().enumerate() {
             let off = self.field_offset(ty, var, i as u32)?;
-            let at = self.offset(dst, off)?;
+            let mut at = self.offset(dst, off)?;
+            if layout::boxed_field(self.tys, ty, var, i as u32) {
+                let fty = self
+                    .tys
+                    .field_ty(ty, var, i as u32)
+                    .ok_or("a boxed field has no type")?;
+                at = self.new_box(at, fty)?;
+            }
             self.store_operand(at, op)?;
         }
         if enum_ {

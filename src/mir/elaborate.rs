@@ -413,9 +413,10 @@ pub(super) fn statement_effects(paths: &MovePaths, s: &StatementKind) -> Vec<Eff
             .map(Effect::Uninit)
             .into_iter()
             .collect(),
-        StatementKind::SetDiscriminant(..) | StatementKind::BorrowFlag(_) | StatementKind::Nop => {
-            Vec::new()
-        }
+        StatementKind::SetDiscriminant(..)
+        | StatementKind::BorrowFlag(_)
+        | StatementKind::FreeBox(_)
+        | StatementKind::Nop => Vec::new(),
     }
 }
 
@@ -758,6 +759,17 @@ impl Elaborator<'_> {
         // Build back to front so the last field runs first.
         let mut next = succ;
         for (fp, fty) in fields {
+            // A boxed field's box goes once what is left of it is dropped:
+            // the field may be moved out whole, in part or not at all.
+            if self.boxed(fp)? {
+                next = self.new_block(
+                    vec![Statement {
+                        kind: StatementKind::FreeBox(fp.clone()),
+                        source_info: SourceInfo::dummy(),
+                    }],
+                    TerminatorKind::Goto { target: next },
+                );
+            }
             if !self.tys.needs_drop(*fty) {
                 continue;
             }
@@ -765,6 +777,21 @@ impl Elaborator<'_> {
             next = self.drop_node(st, fp, own, owner, next)?;
         }
         Ok(next)
+    }
+
+    /// Whether the field place `fp` is one a compiled backend boxes
+    /// ([`super::layout::boxed_field`]).
+    fn boxed(&self, fp: &Place) -> Result<bool, String> {
+        let n = fp.projection.len();
+        let Some(&ProjElem::Field(f, _)) = fp.projection.last() else {
+            return Ok(false);
+        };
+        let parent = Place {
+            local: fp.local,
+            projection: fp.projection[..n - 1].to_vec(),
+        };
+        let pt = place_ty(self.body, self.tys, &parent)?;
+        Ok(super::layout::boxed_field(self.tys, pt.ty, pt.variant, f.0))
     }
 
     /// Makes `bb0` set every flag (false, or true for a parameter's paths)

@@ -748,6 +748,10 @@ impl Parser {
         let mut c = Cur::new(code);
         let kind = if c.eat_kw("nop") {
             StatementKind::Nop
+        } else if c.eat("free_box(") {
+            let p = self.place(body, &mut c)?;
+            c.expect(")")?;
+            StatementKind::FreeBox(p)
         } else if c.eat("StorageLive(") {
             let l = c.local()?;
             c.expect(")")?;

@@ -100,6 +100,7 @@ pub fn statement(body: &Body, tys: &TyInterner, s: &StatementKind) -> String {
         StatementKind::BorrowFlag(FlagOp::Check { place: p, kind }) => {
             format!("flag_check({}{})", ref_sigil(*kind), place(body, tys, p))
         }
+        StatementKind::FreeBox(p) => format!("free_box({})", place(body, tys, p)),
         StatementKind::Nop => "nop".to_string(),
     }
 }

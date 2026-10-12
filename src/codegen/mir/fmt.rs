@@ -506,7 +506,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 .tys
                 .field_ty(ty, k, i as u32)
                 .ok_or("a variant field has no type")?;
-            let q = self.offset(p, self.field_offset(ty, k, i as u32)?)?;
+            let q = self.field_ptr(p, ty, k, i as u32)?;
             self.fmt_call(q, ft)?;
         }
         self.lit(if named { " }" } else { ")" })

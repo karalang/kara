@@ -11,6 +11,8 @@
 //!   its alignment, in order; the whole is padded to its largest alignment.
 //! - An enum is a tag (the smallest unsigned integer that counts its
 //!   variants) followed by the largest variant laid out as a struct.
+//! - A field whose type holds its own ADT again by value is boxed: a
+//!   pointer to a malloc'd value ([`boxed_field`]).
 //! - A `shared` handle points at a box: two `u64` counts (strong, then
 //!   weak) and then the type's body, laid out as the plain struct or enum.
 //! - `String` and `Vec` are `{ptr, len, cap}`; `VecDeque` is a ring,
@@ -150,7 +152,15 @@ fn adt_body(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
     let variant = |v: usize| -> Option<Vec<Layout>> {
         let fields = adt.variants[v].fields.len() as u32;
         let var = adt.is_enum.then_some(v as u32);
-        (0..fields).map(|f| of(tys.field_ty(t, var, f)?)).collect()
+        (0..fields)
+            .map(|f| {
+                if boxed_field(tys, t, var, f) {
+                    Some(WORD)
+                } else {
+                    of(tys.field_ty(t, var, f)?)
+                }
+            })
+            .collect()
     };
     if !adt.is_enum {
         return Some(record(ZST, variant(0).unwrap_or_default()));
@@ -227,11 +237,70 @@ pub fn field_offset(tys: &TyInterner, t: Ty, variant: Option<u32>, f: u32) -> Op
     }
     let mut at = start.size;
     for i in 0..=f {
-        let l = layout(tys, tys.field_ty(t, variant, i)?)?;
+        let l = if boxed_field(tys, t, variant, i) {
+            WORD
+        } else {
+            layout(tys, tys.field_ty(t, variant, i)?)?
+        };
         at = align_up(at, l.align);
         if i < f {
             at += l.size;
         }
     }
     Some(at)
+}
+
+/// Whether field `f` of the plain ADT `t` (seen as `variant` for an enum)
+/// is held in a box of its own: a pointer to a malloc'd value of the
+/// field's type. A field is boxed when its type holds `t` again by value
+/// (`struct Node { next: Option[Node] }`, `enum Expr { Add(Expr, Expr) }`),
+/// which would otherwise have no size. `Option` and `Result` never box
+/// their payloads: the user type they hold boxes its own field instead.
+pub fn boxed_field(tys: &TyInterner, t: Ty, variant: Option<u32>, f: u32) -> bool {
+    let TyKind::Adt(a) = tys.kind(t) else {
+        return false;
+    };
+    if matches!(tys.adt(a).name.as_str(), "Option" | "Result") || library_cell(tys, t).is_some() {
+        return false;
+    }
+    let Some(ft) = tys.field_ty(t, variant, f) else {
+        return false;
+    };
+    let mut seen = Vec::new();
+    holds(tys, ft, t, &mut seen)
+}
+
+/// Whether a value of `x` holds a `target` in place, through fields,
+/// tuple and array elements and captures (never through a pointer).
+fn holds(tys: &TyInterner, x: Ty, target: Ty, seen: &mut Vec<Ty>) -> bool {
+    if x == target {
+        return true;
+    }
+    if seen.contains(&x) {
+        return false;
+    }
+    seen.push(x);
+    match tys.kind(x) {
+        TyKind::Tuple(ts) | TyKind::Closure(_, ts) => {
+            ts.into_iter().any(|t| holds(tys, t, target, seen))
+        }
+        TyKind::Array(e, _) => holds(tys, e, target, seen),
+        TyKind::Adt(_) => match library_cell(tys, x) {
+            Some(Cell::Handle) => false,
+            Some(Cell::Inline(h)) => holds(tys, h, target, seen),
+            None => {
+                let Some((adt, _)) = tys.tcx().adt_of(x) else {
+                    return false;
+                };
+                let adt = adt.clone();
+                (0..adt.variants.len()).any(|v| {
+                    let var = adt.is_enum.then_some(v as u32);
+                    (0..adt.variants[v].fields.len() as u32)
+                        .filter_map(|f| tys.field_ty(x, var, f))
+                        .any(|ft| holds(tys, ft, target, seen))
+                })
+            }
+        },
+        _ => false,
+    }
 }

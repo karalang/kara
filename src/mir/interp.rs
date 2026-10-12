@@ -7359,7 +7359,8 @@ impl<'a> Interp<'a> {
                 Ok(())
             }
             StatementKind::BorrowFlag(op) => self.borrow_flag(body, op),
-            StatementKind::Nop => Ok(()),
+            // Nothing here is boxed.
+            StatementKind::FreeBox(_) | StatementKind::Nop => Ok(()),
         }
     }
 

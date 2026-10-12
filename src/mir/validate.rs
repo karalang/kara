@@ -237,6 +237,9 @@ impl Validator<'_> {
                     }
                 }
             }
+            StatementKind::FreeBox(place) => {
+                self.place(place);
+            }
             StatementKind::BorrowFlag(FlagOp::Release { .. }) | StatementKind::Nop => {}
         }
     }

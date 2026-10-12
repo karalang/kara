@@ -110,9 +110,13 @@ impl<'ctx> Cx<'ctx, '_> {
     /// in a `Drop` body aborts (core semantics §10).
     pub(super) fn drop_terminator(&mut self, place: &Place, target: BasicBlock) -> R<()> {
         let ty = place_ty(self.cur()?, self.tys, place)?.ty;
+        // A boxed field's box goes with its value.
+        let (p, slot) = self.place_box(place)?;
         if self.tys.needs_drop(ty) {
-            let p = self.place_ptr(place)?;
             self.call_glue(p, ty)?;
+        }
+        if let Some(slot) = slot {
+            self.free_box(slot)?;
         }
         self.builder
             .build_unconditional_branch(self.blocks[target.index()])
@@ -570,8 +574,20 @@ impl<'ctx> Cx<'ctx, '_> {
             let Some(fty) = self.tys.field_ty(ty, v, i) else {
                 return err(format!("`{}` has no field {i}", self.tys.display(ty)));
             };
-            if self.tys.needs_drop(fty) {
-                let q = self.offset(p, self.field_offset(ty, v, i)?)?;
+            let q = self.offset(p, self.field_offset(ty, v, i)?)?;
+            if layout::boxed_field(self.tys, ty, v, i) {
+                let b = self.load_ptr(q)?;
+                let live = self
+                    .builder
+                    .build_is_not_null(b, "")
+                    .map_err(|e| e.to_string())?;
+                self.if_then(live, |cx| {
+                    if cx.tys.needs_drop(fty) {
+                        cx.call_glue(b, fty)?;
+                    }
+                    cx.free(b)
+                })?;
+            } else if self.tys.needs_drop(fty) {
                 self.call_glue(q, fty)?;
             }
         }
@@ -743,6 +759,60 @@ impl<'ctx> Cx<'ctx, '_> {
     pub(super) fn field_offset(&self, ty: Ty, v: Option<u32>, f: u32) -> R<u64> {
         layout::field_offset(self.tys, ty, v, f)
             .ok_or_else(|| format!("`{}` has no field {f}", self.tys.display(ty)))
+    }
+
+    /// The address of field `f` of the value of type `ty` (seen as `v`)
+    /// at `p`: through its box when the field is boxed
+    /// ([`layout::boxed_field`]). For reading a live value only.
+    pub(super) fn field_ptr(
+        &mut self,
+        p: PointerValue<'ctx>,
+        ty: Ty,
+        v: Option<u32>,
+        f: u32,
+    ) -> R<PointerValue<'ctx>> {
+        let q = self.offset(p, self.field_offset(ty, v, f)?)?;
+        if layout::boxed_field(self.tys, ty, v, f) {
+            self.load_ptr(q)
+        } else {
+            Ok(q)
+        }
+    }
+
+    /// A fresh box for a value of `fty`, its pointer stored at `slot`.
+    pub(super) fn new_box(&mut self, slot: PointerValue<'ctx>, fty: Ty) -> R<PointerValue<'ctx>> {
+        let n = self.layout(fty)?.size.max(1);
+        let malloc = self.libc_fn("malloc");
+        let b = self
+            .builder
+            .build_call(malloc, &[self.i64(n).into()], "box")
+            .map_err(|e| e.to_string())?
+            .try_as_basic_value()
+            .basic()
+            .ok_or("malloc returns nothing")?
+            .into_pointer_value();
+        self.store(slot, b.into())?;
+        Ok(b)
+    }
+
+    /// The box at `slot` for a value of `fty`, made now if the slot is
+    /// empty (the field was moved out or dropped, and is being written).
+    pub(super) fn box_at(&mut self, slot: PointerValue<'ctx>, fty: Ty) -> R<PointerValue<'ctx>> {
+        let b = self.load_ptr(slot)?;
+        let empty = self
+            .builder
+            .build_is_null(b, "")
+            .map_err(|e| e.to_string())?;
+        self.if_then(empty, |cx| cx.new_box(slot, fty).map(|_| ()))?;
+        self.load_ptr(slot)
+    }
+
+    /// Frees the box at `slot` and empties the slot: its value was moved
+    /// out or dropped.
+    pub(super) fn free_box(&mut self, slot: PointerValue<'ctx>) -> R<()> {
+        let b = self.load_ptr(slot)?;
+        self.free(b)?;
+        self.store(slot, self.ptr_ty().const_null().into())
     }
 
     pub(super) fn cur_fn(&self) -> R<FunctionValue<'ctx>> {

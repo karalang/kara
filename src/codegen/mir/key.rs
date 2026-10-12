@@ -395,8 +395,8 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The fields of the struct or tuple `ty`, or of variant `v` of the
-    /// enum `ty`, as offsets and types.
-    fn parts_of(&self, ty: Ty, v: Option<u32>) -> R<Vec<(u64, Ty)>> {
+    /// enum `ty`, as offsets, types and whether the part is boxed.
+    fn parts_of(&self, ty: Ty, v: Option<u32>) -> R<Vec<(u64, Ty, bool)>> {
         let n = match self.tys.kind(ty) {
             TyKind::Tuple(ts) => ts.len(),
             _ => {
@@ -414,9 +414,20 @@ impl<'ctx> Cx<'ctx, '_> {
                     .tys
                     .field_ty(ty, v, i)
                     .ok_or_else(|| format!("`{}` has no field {i}", self.tys.display(ty)))?;
-                Ok((self.field_offset(ty, v, i)?, t))
+                let boxed = layout::boxed_field(self.tys, ty, v, i);
+                Ok((self.field_offset(ty, v, i)?, t, boxed))
             })
             .collect()
+    }
+
+    /// Where a part [`Self::parts_of`] found lives in the value at `p`.
+    fn part_ptr(&mut self, p: PointerValue<'ctx>, off: u64, boxed: bool) -> R<PointerValue<'ctx>> {
+        let q = self.offset(p, off)?;
+        if boxed {
+            self.load_ptr(q)
+        } else {
+            Ok(q)
+        }
     }
 
     fn hash_value(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<IntValue<'ctx>> {
@@ -487,8 +498,8 @@ impl<'ctx> Cx<'ctx, '_> {
         v: Option<u32>,
         mut h: IntValue<'ctx>,
     ) -> R<IntValue<'ctx>> {
-        for (off, t) in self.parts_of(ty, v)? {
-            let q = self.offset(p, off)?;
+        for (off, t, boxed) in self.parts_of(ty, v)? {
+            let q = self.part_ptr(p, off, boxed)?;
             let x = self.hash_call(q, t)?;
             h = self.mix(h, x)?;
         }
@@ -691,13 +702,17 @@ impl<'ctx> Cx<'ctx, '_> {
         op: KeyOp,
         a: PointerValue<'ctx>,
         b: PointerValue<'ctx>,
-        parts: Vec<(u64, Ty)>,
+        parts: Vec<(u64, Ty, bool)>,
     ) -> R<IntValue<'ctx>> {
         let i32t = self.llcx.i32_type();
         let res = self.entry_slot(4, "ord")?;
         self.store(res, i32t.const_zero().into())?;
-        for (off, t) in parts {
-            let part: Part = (self.offset(a, off)?, self.offset(b, off)?, t);
+        for (off, t, boxed) in parts {
+            let part: Part = (
+                self.part_ptr(a, off, boxed)?,
+                self.part_ptr(b, off, boxed)?,
+                t,
+            );
             let cur = self
                 .builder
                 .build_load(i32t, res, "")

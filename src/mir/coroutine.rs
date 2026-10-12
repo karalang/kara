@@ -664,6 +664,7 @@ impl<'a> Resume<'a> {
                     kind: *kind,
                 },
             }),
+            StatementKind::FreeBox(p) => StatementKind::FreeBox(self.place(p)?),
             StatementKind::Nop => StatementKind::Nop,
         };
         Ok(Statement {

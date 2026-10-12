@@ -871,9 +871,10 @@ pub(super) fn statement_accesses(s: &StatementKind) -> Vec<(Place, Access)> {
         }
         StatementKind::SetDiscriminant(p, _) => vec![(p.clone(), Access::Write)],
         StatementKind::StorageDead(l) => vec![(Place::local(*l), Access::StorageDead)],
-        StatementKind::StorageLive(_) | StatementKind::BorrowFlag(_) | StatementKind::Nop => {
-            Vec::new()
-        }
+        StatementKind::StorageLive(_)
+        | StatementKind::BorrowFlag(_)
+        | StatementKind::FreeBox(_)
+        | StatementKind::Nop => Vec::new(),
     }
 }
 

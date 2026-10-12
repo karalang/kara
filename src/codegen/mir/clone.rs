@@ -270,7 +270,14 @@ impl<'ctx> Cx<'ctx, '_> {
             let Some(fty) = self.tys.field_ty(ty, v, i) else {
                 return Err(format!("`{}` has no field {i}", self.tys.display(ty)));
             };
-            if !self.tys.is_copy(fty) {
+            if layout::boxed_field(self.tys, ty, v, i) {
+                // The copy has a box of its own.
+                let off = self.field_offset(ty, v, i)?;
+                let d = self.offset(dst, off)?;
+                let d = self.new_box(d, fty)?;
+                let s = self.load_ptr(self.offset(src, off)?)?;
+                self.clone_into(d, s, fty)?;
+            } else if !self.tys.is_copy(fty) {
                 let off = self.field_offset(ty, v, i)?;
                 let (d, s) = (self.offset(dst, off)?, self.offset(src, off)?);
                 self.clone_into(d, s, fty)?;
