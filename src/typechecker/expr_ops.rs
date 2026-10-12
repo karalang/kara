@@ -1260,9 +1260,24 @@ impl<'a> super::TypeChecker<'a> {
                         // never touches `method_callee_types`, so the check
                         // keys directly off the resolved `(type_name, member)`.
                         self.check_method_stability(type_name, member, span);
+                        // `fn new() -> Self` in an inherent impl: `Self` names
+                        // the impl target here as it does in the body, written
+                        // with the impl's own params (`Pair[T]`), the same
+                        // shape a spelled-out `-> Pair[T]` lowers to.
+                        let target = Type::Named {
+                            name: type_name.clone(),
+                            args: imp.target_generic_args.clone(),
+                        };
                         return Type::Function {
-                            params: sig.params.clone(),
-                            return_type: Box::new(sig.return_type.clone()),
+                            params: sig
+                                .params
+                                .iter()
+                                .map(|p| Self::resolve_self_in_type(p.clone(), &target))
+                                .collect(),
+                            return_type: Box::new(Self::resolve_self_in_type(
+                                sig.return_type.clone(),
+                                &target,
+                            )),
                         };
                     }
                 }

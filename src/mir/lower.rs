@@ -16008,6 +16008,28 @@ fn main() {
         assert_eq!(run_source(src), Ok(("e:ab\n".to_string(), Some(0))));
     }
 
+    /// `-> Self` on an associated function names the impl target at the
+    /// call site, generic impls included.
+    #[test]
+    fn self_returning_assoc_fns_name_the_impl_target() {
+        let src = r#"
+struct Widget { v: i64 }
+impl Widget { fn new() -> Self { Widget { v: 7 } } }
+struct Pair[T] { a: T, b: T }
+impl[T] Pair[T] {
+    fn new(a: own T, b: own T) -> Self { Pair { a: a, b: b } }
+    fn twin(x: own T) -> Option[Self] where T: Clone { Some(Pair { a: x.clone(), b: x }) }
+}
+fn main() {
+    let w: Widget = Widget.new();
+    let p = Pair.new(1, 2);
+    let q: Pair[String] = Pair.new("x", "y");
+    match Pair.twin(5) { Some(t) => println(f"{w.v} {p.a + p.b} {q.b} {t.a + t.b}"), None => println("none") }
+}
+"#;
+        assert_eq!(run_source(src), Ok(("7 3 y 10\n".to_string(), Some(0))));
+    }
+
     /// A variant named like a library type (`Kind.Map`) leaves `Map.new()`
     /// naming the type.
     #[test]
