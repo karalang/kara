@@ -2515,6 +2515,11 @@ pub struct TypeChecker<'a> {
     /// `pending_existential_call_subs` — resolved into `pattern_binding_types`
     /// at export. B-2026-08-22-12.
     pub(super) pending_existential_pattern_bindings: Vec<(SpanKey, SpanKey)>,
+    /// Method calls on an EXISTENTIAL receiver whose result still names one
+    /// of the trait's associated types: `(call node, trait name, existential
+    /// origin)`. The projection stays opaque to the checker; at export the
+    /// node's typed-HIR type is resolved through the origin's witness.
+    pub(super) pending_existential_projections: Vec<(crate::ids::NodeId, String, SpanKey)>,
     /// Origins that saw two or more DISTINCT witnesses across the program and
     /// so must never be rewritten. Tracked separately from the map above
     /// because a later single-witness function must not resurrect an origin an
@@ -3161,6 +3166,7 @@ impl<'a> TypeChecker<'a> {
             current_return_impl_trait: None,
             impl_trait_return_witnesses: FxHashMap::default(),
             pending_existential_call_subs: Vec::new(),
+            pending_existential_projections: Vec::new(),
             pending_existential_pattern_bindings: Vec::new(),
             impl_trait_contested_origins: FxHashSet::default(),
             return_impl_trait_witnesses: Vec::new(),
@@ -3482,6 +3488,16 @@ impl<'a> TypeChecker<'a> {
                     .entry(call)
                     .or_default()
                     .insert(param, tok);
+            }
+        }
+        for (node, trait_name, origin) in std::mem::take(&mut self.pending_existential_projections)
+        {
+            let Some(witness) = self.impl_trait_return_witnesses.get(&origin).cloned() else {
+                continue;
+            };
+            if let Some((ty, frame)) = self.node_types.get(&node).cloned() {
+                let ty = self.project_through_witness(&ty, &trait_name, &witness);
+                self.node_types.insert(node, (ty, frame));
             }
         }
         for (binding, origin) in std::mem::take(&mut self.pending_existential_pattern_bindings) {

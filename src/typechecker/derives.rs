@@ -1060,7 +1060,13 @@ impl<'a> super::TypeChecker<'a> {
     /// Validate that #[derive(Copy)] structs/enums have all-Copy fields, and
     /// that distinct types with #[derive(Copy)] have a Copy base type.
     pub(super) fn validate_derive_copy(&mut self) {
-        self.validate_derived_trait("Copy", |this, ty| this.is_type_copy(ty));
+        // On the MIR pipeline a derived `Copy` on a generic struct is
+        // conditional, as the MIR's own copy test reads it: `Range[T]` copies
+        // when its `T` does.
+        self.validate_derived_trait("Copy", |this, ty| {
+            this.is_type_copy(ty)
+                || (this.library_methods_from_source && matches!(ty, Type::TypeParam(_)))
+        });
         // Check distinct types: base type must be Copy.
         let distinct_items: Vec<_> = self
             .program

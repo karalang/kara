@@ -1,0 +1,245 @@
+// The ranges `a..b` and `a..=b` as values, as Kāra (redesign A2;
+// docs/library/iterators.md).
+//
+// The MIR pipeline appends this file to the program, and the checker types
+// the range syntax as these structs. A `for` loop straight over a range
+// literal is lowered as a counting loop and never builds one; a range held,
+// passed or adapted (`(0..n).rev()`) is one of these. The legacy backends do
+// not read it.
+
+/// A type a range counts through, one step at a time.
+trait RangeStep {
+    /// The next value up.
+    fn step_forward(ref self) -> Self;
+
+    /// The next value down.
+    fn step_backward(ref self) -> Self;
+}
+
+impl RangeStep for i8 {
+    fn step_forward(ref self) -> i8 {
+        self + 1
+    }
+
+    fn step_backward(ref self) -> i8 {
+        self - 1
+    }
+}
+
+impl RangeStep for i16 {
+    fn step_forward(ref self) -> i16 {
+        self + 1
+    }
+
+    fn step_backward(ref self) -> i16 {
+        self - 1
+    }
+}
+
+impl RangeStep for i32 {
+    fn step_forward(ref self) -> i32 {
+        self + 1
+    }
+
+    fn step_backward(ref self) -> i32 {
+        self - 1
+    }
+}
+
+impl RangeStep for i64 {
+    fn step_forward(ref self) -> i64 {
+        self + 1
+    }
+
+    fn step_backward(ref self) -> i64 {
+        self - 1
+    }
+}
+
+impl RangeStep for i128 {
+    fn step_forward(ref self) -> i128 {
+        self + 1
+    }
+
+    fn step_backward(ref self) -> i128 {
+        self - 1
+    }
+}
+
+impl RangeStep for isize {
+    fn step_forward(ref self) -> isize {
+        self + 1
+    }
+
+    fn step_backward(ref self) -> isize {
+        self - 1
+    }
+}
+
+impl RangeStep for u8 {
+    fn step_forward(ref self) -> u8 {
+        self + 1
+    }
+
+    fn step_backward(ref self) -> u8 {
+        self - 1
+    }
+}
+
+impl RangeStep for u16 {
+    fn step_forward(ref self) -> u16 {
+        self + 1
+    }
+
+    fn step_backward(ref self) -> u16 {
+        self - 1
+    }
+}
+
+impl RangeStep for u32 {
+    fn step_forward(ref self) -> u32 {
+        self + 1
+    }
+
+    fn step_backward(ref self) -> u32 {
+        self - 1
+    }
+}
+
+impl RangeStep for u64 {
+    fn step_forward(ref self) -> u64 {
+        self + 1
+    }
+
+    fn step_backward(ref self) -> u64 {
+        self - 1
+    }
+}
+
+impl RangeStep for u128 {
+    fn step_forward(ref self) -> u128 {
+        self + 1
+    }
+
+    fn step_backward(ref self) -> u128 {
+        self - 1
+    }
+}
+
+impl RangeStep for usize {
+    fn step_forward(ref self) -> usize {
+        self + 1
+    }
+
+    fn step_backward(ref self) -> usize {
+        self - 1
+    }
+}
+
+/// The values from `start` up to, but not including, `end`. A range is a
+/// pair of bounds, so it copies like one: `for i in r { for j in r {..} }`
+/// walks `r` twice.
+#[derive(Copy, Clone)]
+struct Range[T] {
+    start: T,
+    end: T,
+}
+
+impl[T: RangeStep + PartialOrd + Copy] Iterator for Range[T] {
+    type Item = T;
+
+    fn next(mut ref self) -> Option[T] {
+        if self.start >= self.end {
+            return None;
+        }
+        let v = self.start;
+        self.start = v.step_forward();
+        Some(v)
+    }
+}
+
+impl[T: RangeStep + PartialOrd + Copy] DoubleEndedIterator for Range[T] {
+    fn next_back(mut ref self) -> Option[T] {
+        if self.start >= self.end {
+            return None;
+        }
+        self.end = self.end.step_backward();
+        Some(self.end)
+    }
+}
+
+impl[T: PartialOrd + Copy] Range[T] {
+    /// The range itself: a range is already an iterator.
+    fn iter(ref self) -> Range[T] {
+        self
+    }
+
+    /// Whether `x` lies in the range.
+    fn contains(ref self, x: ref T) -> bool {
+        *x >= self.start and *x < self.end
+    }
+
+    /// Whether the range holds no values.
+    fn is_empty(ref self) -> bool {
+        not (self.start < self.end)
+    }
+}
+
+/// The values from `start` up to and including `end`.
+#[derive(Copy, Clone)]
+struct RangeInclusive[T] {
+    start: T,
+    end: T,
+    /// Set once the last value has been given out, since `start` cannot step
+    /// past `end` when `end` is the type's largest value.
+    exhausted: bool,
+}
+
+impl[T: RangeStep + PartialOrd + Copy] Iterator for RangeInclusive[T] {
+    type Item = T;
+
+    fn next(mut ref self) -> Option[T] {
+        if self.exhausted or self.start > self.end {
+            return None;
+        }
+        let v = self.start;
+        if v >= self.end {
+            self.exhausted = true;
+        } else {
+            self.start = v.step_forward();
+        }
+        Some(v)
+    }
+}
+
+impl[T: RangeStep + PartialOrd + Copy] DoubleEndedIterator for RangeInclusive[T] {
+    fn next_back(mut ref self) -> Option[T] {
+        if self.exhausted or self.start > self.end {
+            return None;
+        }
+        let v = self.end;
+        if v <= self.start {
+            self.exhausted = true;
+        } else {
+            self.end = v.step_backward();
+        }
+        Some(v)
+    }
+}
+
+impl[T: PartialOrd + Copy] RangeInclusive[T] {
+    /// The range itself: a range is already an iterator.
+    fn iter(ref self) -> RangeInclusive[T] {
+        self
+    }
+
+    /// Whether `x` lies in the range.
+    fn contains(ref self, x: ref T) -> bool {
+        *x >= self.start and *x <= self.end
+    }
+
+    /// Whether the range holds no values.
+    fn is_empty(ref self) -> bool {
+        self.exhausted or self.start > self.end
+    }
+}

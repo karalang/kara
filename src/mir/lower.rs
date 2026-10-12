@@ -4417,6 +4417,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.assign(dest, Rvalue::Use(op));
                 Ok(())
             }
+            ExprKind::Binary {
+                op: op @ (AstBinOp::Range | AstBinOp::RangeInclusive),
+                left,
+                right,
+            } => self.range_value(e, left, right, *op == AstBinOp::RangeInclusive, dest),
+            ExprKind::Range {
+                start: Some(left),
+                end: Some(right),
+                inclusive,
+            } => self.range_value(e, left, right, *inclusive, dest),
             ExprKind::Binary { op, left, right } => self.binary(op.clone(), left, right, dest),
             ExprKind::Unary { op, operand } => {
                 let mop = match op {
@@ -4785,6 +4795,32 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.unsupported(e.span, &format!("the expression kind `{kind}`"))
             }
         }
+    }
+
+    /// `a..b` or `a..=b` as a value: the library's `Range` or
+    /// `RangeInclusive`, which a held or adapted range iterates through.
+    fn range_value(
+        &mut self,
+        e: &'a Expr,
+        left: &'a Expr,
+        right: &'a Expr,
+        inclusive: bool,
+        dest: Place,
+    ) -> R<()> {
+        let t = self.expr_ty(e)?;
+        let (Some((_, st)), Some((_, et))) = (
+            self.field_of(t, None, "start"),
+            self.field_of(t, None, "end"),
+        ) else {
+            return self.unsupported(e.span, "a range value");
+        };
+        let mut ops = vec![self.operand_at(left, st)?, self.operand_at(right, et)?];
+        if inclusive {
+            ops.push(bool_const(self.tys().bool(), false));
+        }
+        let kind = self.adt_aggregate(t, 0);
+        self.assign(dest, Rvalue::Aggregate(kind, ops));
+        Ok(())
     }
 
     /// A path naming a value: a unit variant (`None`, `E.A`) or a constant.
@@ -6783,6 +6819,27 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         self.loop_body(label, body, step, exit, None)?;
         self.cur = step;
+        // `a..=b` stops at `b` before stepping, since `b` may be the type's
+        // largest value (`250u8..=255u8`).
+        if inclusive {
+            let last = self.temp(bool_t);
+            self.assign(
+                last,
+                Rvalue::BinaryOp(
+                    BinOp::Eq,
+                    Operand::Copy(Place::local(i)),
+                    Operand::Copy(Place::local(end_t)),
+                ),
+            );
+            let bump = self.b.new_block();
+            self.goto_with(
+                TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(Place::local(last)),
+                    targets: SwitchTargets::if_else(exit, bump),
+                },
+                bump,
+            );
+        }
         let one = Operand::Const(Const {
             ty: t,
             kind: ConstKind::Scalar(1),
@@ -16034,6 +16091,62 @@ fn main() {
 }
 "#;
         assert_eq!(run_source(src), Ok(("7 3 y 10\n".to_string(), Some(0))));
+    }
+
+    /// A range held, passed or adapted is the library's `Range` /
+    /// `RangeInclusive`; it copies, and `a..=b` stops at a type's top value.
+    #[test]
+    fn ranges_are_library_values() {
+        let src = r#"
+fn total(r: own Range[i64]) -> i64 {
+    let mut s = 0;
+    for x in r { s = s + x; }
+    s
+}
+fn main() {
+    let r = 0..5;
+    let mut down = 0;
+    for i in (0..5).rev() { down = down * 10 + i; }
+    let sq: Vec[i64] = (1..=4).map(|x| x * x).collect();
+    let st: i64 = (1..=10).step_by(3).sum();
+    let mut k = 0;
+    for i in r { for j in r { k = k + 1; } }
+    let top: Vec[u8] = (250u8..=255u8).collect();
+    let mut c: u32 = 0;
+    for x in 250u8..=255u8 { c = c + (x as u32); }
+    let none: Vec[i32] = (3i32..=1i32).rev().collect();
+    println(f"{total(r)} {down} {sq[3]} {st} {k} {top.len()} {c} {none.len()} {(2..7).contains(3)}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("10 43210 16 22 25 6 1515 0 true\n".to_string(), Some(0)))
+        );
+    }
+
+    /// `impl Named` without an inline binding: `b.label()` is the witness's
+    /// `Label`, whether its function comes before or after the call.
+    #[test]
+    fn an_unbound_impl_trait_projection_is_its_witness_binding() {
+        let src = r#"
+trait Named {
+    type Label;
+    fn label(ref self) -> Self.Label;
+}
+struct Holder { n: i64 }
+impl Named for Holder {
+    type Label = String;
+    fn label(ref self) -> String { f"h{self.n}" }
+}
+fn early(n: i64) -> impl Named { Holder { n: n } }
+fn main() {
+    let a: String = early(3).label();
+    let b: String = late(45).label();
+    println(f"{a} {b}");
+}
+fn late(n: i64) -> impl Named { Holder { n: n } }
+"#;
+        assert_eq!(run_source(src), Ok(("h3 h45\n".to_string(), Some(0))));
     }
 
     /// A variant named like a library type (`Kind.Map`) leaves `Map.new()`

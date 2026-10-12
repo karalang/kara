@@ -171,9 +171,9 @@ struct ResidentField<'a> {
     temporary: bool,
 }
 use super::types::{
-    method_callee_type_name, receiver_for_method_lookup, substitute_existential_assoc_bindings,
-    type_display, type_mentions_assoc_projection_on, ConstArg, FloatSize, IntSize, SubstValue,
-    Type, UIntSize,
+    impl_table_key, method_callee_type_name, receiver_for_method_lookup,
+    substitute_existential_assoc_bindings, type_display, type_mentions_assoc_projection_on,
+    ConstArg, FloatSize, IntSize, SubstValue, Type, UIntSize,
 };
 use super::TypeErrorKind;
 
@@ -648,16 +648,18 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
-        let (trait_name, tait_alias, assoc_bindings) = match receiver {
+        let (trait_name, tait_alias, assoc_bindings, origin) = match receiver {
             Type::Existential {
                 trait_name,
                 tait_alias,
                 assoc_bindings,
+                origin,
                 ..
             } => (
                 trait_name.clone(),
                 tait_alias.clone(),
                 assoc_bindings.clone(),
+                *origin,
             ),
             // Only an existential reaches this dispatcher (its single caller
             // matches on `Type::Existential`); anything else is a caller bug,
@@ -690,6 +692,21 @@ impl<'a> super::TypeChecker<'a> {
             // apply it here (B-2026-08-22-4). Without a binding the projection
             // is left intact and the old behaviour stands.
             let ret = substitute_existential_assoc_bindings(&ret, trait_name, assoc_bindings);
+            // With no inline binding the projection stays opaque to the
+            // caller, but the typed HIR needs the type the value really has:
+            // the witness's own binding (`fn bare() -> impl Named` returning a
+            // `Holder` whose `Label` is `String`), as an existential lowers to
+            // its witness there. Every witness is known at export.
+            if type_mentions_assoc_projection_on(&ret, trait_name) {
+                let key = SpanKey::from_span(span);
+                if let Some((node, _)) = self.current_call_node.filter(|(_, k)| *k == key) {
+                    self.pending_existential_projections.push((
+                        node,
+                        trait_name.to_string(),
+                        origin,
+                    ));
+                }
+            }
             // B-2026-08-22-15 — `-> Self` ON AN EXISTENTIAL RECEIVER IS THAT
             // EXISTENTIAL. `dispatch_trait_assoc_fn` substituted
             // `Self -> TypeParam(trait_name)`, which is right for a type
@@ -765,6 +782,39 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         Type::Error
+    }
+
+    /// `ty` with each `trait_name.Assoc` projection replaced by `witness`'s
+    /// binding of `Assoc`, where its impl gives one.
+    pub(super) fn project_through_witness(
+        &mut self,
+        ty: &Type,
+        trait_name: &str,
+        witness: &Type,
+    ) -> Type {
+        let Some((name, args)) = impl_table_key(witness) else {
+            return ty.clone();
+        };
+        let assocs = self
+            .env
+            .traits
+            .get(trait_name)
+            .map(|t| t.assoc_types.clone())
+            .unwrap_or_default();
+        let bindings: Vec<(String, Type)> = assocs
+            .into_iter()
+            .filter_map(|assoc| {
+                let p = Type::AssocProjection {
+                    param: name.clone(),
+                    assoc: assoc.clone(),
+                    args: Vec::new(),
+                    receiver_args: args.clone(),
+                };
+                let t = self.resolve_assoc_projections(&p);
+                (!matches!(t, Type::AssocProjection { .. })).then_some((assoc, t))
+            })
+            .collect();
+        substitute_existential_assoc_bindings(ty, trait_name, &bindings)
     }
 
     /// Receiver-form `self.method(args)` dispatch inside a trait default

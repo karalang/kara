@@ -169,11 +169,11 @@ impl<'a> super::TypeChecker<'a> {
             args: type_args,
         } = obj_ty
         {
-            // On the MIR pipeline `Peekable` is the library's Kāra struct.
+            // On the MIR pipeline `Peekable` and the ranges are the
+            // library's Kāra structs.
+            let library = self.library_methods_from_source;
             if name == "Iterator"
-                || (name == "Peekable" && !self.library_methods_from_source)
-                || name == "Range"
-                || name == "RangeInclusive"
+                || (matches!(name.as_str(), "Peekable" | "Range" | "RangeInclusive") && !library)
             {
                 let item_ty = type_args.first().cloned().unwrap_or(Type::Error);
                 let is_peekable = name == "Peekable";
