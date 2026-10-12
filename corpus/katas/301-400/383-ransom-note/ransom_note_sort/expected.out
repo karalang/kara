@@ -1,0 +1,11 @@
+"a" from "b": false
+"aa" from "ab": false
+"aa" from "aab": true
+"" from "abc": true
+"" from "": true
+"a" from "": false
+"abc" from "cba": true
+"zzz" from "zzzz": true
+"zzzz" from "zzz": false
+"thequickbrownfox" from "xofnworbkciuqeht": true
+2000 random pairs: 1041 can be built, checksum 659693631

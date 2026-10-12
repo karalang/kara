@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/383-ransom-note/bench/ransom_note.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 101
+tags = ["mirror-differs", "panic", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 101
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "19707a2f2"
+extracted_src = "c51f709a"
+model_rev = "1aa23105"
+model_src = "c51f709a"

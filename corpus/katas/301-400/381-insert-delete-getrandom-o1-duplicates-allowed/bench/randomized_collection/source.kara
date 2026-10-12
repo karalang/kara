@@ -1,0 +1,85 @@
+// Benchmark for #381: one collection driven by 20,000,000 random
+// operations over values from 0 to 99,999 (a third insert, a third
+// remove, a third get_random), on the kata's ★ arm: a Vec of elements, a
+// Map from each value to its positions, and each position's index in its
+// value's list.
+
+struct RandomizedCollection {
+    vals: Vec[i64],
+    slot: Vec[i64],
+    positions: Map[i64, Vec[i64]],
+    seed: i64,
+}
+
+impl RandomizedCollection {
+    fn new() -> RandomizedCollection {
+        RandomizedCollection { vals: Vec.new(), slot: Vec.new(), positions: Map.new(), seed: 381 }
+    }
+
+    // True when val was not present before.
+    fn insert(mut ref self, val: i64) -> bool {
+        let p = self.vals.len();
+        self.vals.push(val);
+        let list = self.positions.entry(val).or_insert(Vec.new());
+        self.slot.push(list.len());
+        list.push(p);
+        list.len() == 1
+    }
+
+    // Removes one copy of val; true when there was one.
+    fn remove(mut ref self, val: i64) -> bool {
+        if not self.positions.contains_key(val) {
+            return false;
+        }
+        let p = self.positions[val].pop().unwrap();
+        if self.positions[val].is_empty() {
+            self.positions.remove(val);
+        }
+        let last = self.vals.len() - 1;
+        if p < last {
+            let moved = self.vals[last];
+            let k = self.slot[last];
+            self.vals[p] = moved;
+            self.slot[p] = k;
+            self.positions[moved][k] = p;
+        }
+        self.vals.pop();
+        self.slot.pop();
+        true
+    }
+
+    // Each element is equally likely, so a value is drawn in proportion
+    // to its count. A seeded LCG picks the position, so that every arm,
+    // and every run, draws the same values.
+    fn get_random(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.vals[(self.seed / 65536) % self.vals.len()]
+    }
+
+    fn len(self) -> i64 {
+        self.vals.len()
+    }
+}
+
+fn main() {
+    let mut rc = RandomizedCollection.new();
+    let mut seed: i64 = 381;
+    let mut checksum: i64 = 0;
+    for _ in 0..20000000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let op = (seed / 65536) % 3;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let x = (seed / 64) % 100000;
+        let v = if op == 0 {
+            if rc.insert(x) { 1 } else { 0 }
+        } else if op == 1 {
+            if rc.remove(x) { 1 } else { 0 }
+        } else if rc.len() > 0 {
+            rc.get_random() + 2
+        } else {
+            7
+        };
+        checksum = (checksum * 31 + v) % 1000000007;
+    }
+    println(f"checksum {checksum} size {rc.len()}");
+}

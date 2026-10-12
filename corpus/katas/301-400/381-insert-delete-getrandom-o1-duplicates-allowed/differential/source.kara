@@ -1,0 +1,436 @@
+// LeetCode #381: differential test. The Map, SortedMap, scanning and
+// linked-list arms against a counting oracle, over 1,000 random
+// workloads of 300 operations on values from -5 to 4, so that most
+// values have several copies. Properties: P1 insert and remove answer as
+// the oracle does; P2 get_random returns a value with a copy present; P3
+// all four arms draw the same value, since they lay the elements out the
+// same way; P4 len() is the oracle's total; P5 after each workload, every
+// arm holds exactly the oracle's number of copies of each value.
+
+struct MapArm {
+    vals: Vec[i64],
+    slot: Vec[i64],
+    positions: Map[i64, Vec[i64]],
+    seed: i64,
+}
+
+impl MapArm {
+    fn new() -> MapArm {
+        MapArm { vals: Vec.new(), slot: Vec.new(), positions: Map.new(), seed: 381 }
+    }
+
+    // True when val was not present before.
+    fn insert(mut ref self, val: i64) -> bool {
+        let p = self.vals.len();
+        self.vals.push(val);
+        let list = self.positions.entry(val).or_insert(Vec.new());
+        self.slot.push(list.len());
+        list.push(p);
+        list.len() == 1
+    }
+
+    // Removes one copy of val; true when there was one.
+    fn remove(mut ref self, val: i64) -> bool {
+        if not self.positions.contains_key(val) {
+            return false;
+        }
+        let p = self.positions[val].pop().unwrap();
+        if self.positions[val].is_empty() {
+            self.positions.remove(val);
+        }
+        let last = self.vals.len() - 1;
+        if p < last {
+            let moved = self.vals[last];
+            let k = self.slot[last];
+            self.vals[p] = moved;
+            self.slot[p] = k;
+            self.positions[moved][k] = p;
+        }
+        self.vals.pop();
+        self.slot.pop();
+        true
+    }
+
+    // Each element is equally likely, so a value is drawn in proportion
+    // to its count. A seeded LCG picks the position, so that every arm,
+    // and every run, draws the same values.
+    fn get_random(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.vals[(self.seed / 65536) % self.vals.len()]
+    }
+
+    fn len(self) -> i64 {
+        self.vals.len()
+    }
+
+    // Test helper: the number of copies of v.
+    fn count(self, v: i64) -> i64 {
+        let mut n = 0;
+        for x in self.vals.iter() {
+            if *x == v {
+                n += 1;
+            }
+        }
+        n
+    }
+}
+
+struct SortedArm {
+    vals: Vec[i64],
+    slot: Vec[i64],
+    positions: SortedMap[i64, Vec[i64]],
+    seed: i64,
+}
+
+impl SortedArm {
+    fn new() -> SortedArm {
+        SortedArm { vals: Vec.new(), slot: Vec.new(), positions: SortedMap.new(), seed: 381 }
+    }
+
+    // True when val was not present before.
+    fn insert(mut ref self, val: i64) -> bool {
+        let p = self.vals.len();
+        self.vals.push(val);
+        let list = self.positions.entry(val).or_insert(Vec.new());
+        self.slot.push(list.len());
+        list.push(p);
+        list.len() == 1
+    }
+
+    // Removes one copy of val; true when there was one.
+    fn remove(mut ref self, val: i64) -> bool {
+        if not self.positions.contains_key(val) {
+            return false;
+        }
+        let p = self.positions[val].pop().unwrap();
+        if self.positions[val].is_empty() {
+            self.positions.remove(val);
+        }
+        let last = self.vals.len() - 1;
+        if p < last {
+            let moved = self.vals[last];
+            let k = self.slot[last];
+            self.vals[p] = moved;
+            self.slot[p] = k;
+            self.positions[moved][k] = p;
+        }
+        self.vals.pop();
+        self.slot.pop();
+        true
+    }
+
+    // Each element is equally likely, so a value is drawn in proportion
+    // to its count. A seeded LCG picks the position, so that every arm,
+    // and every run, draws the same values.
+    fn get_random(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.vals[(self.seed / 65536) % self.vals.len()]
+    }
+
+    fn len(self) -> i64 {
+        self.vals.len()
+    }
+
+    // Test helper: the number of copies of v.
+    fn count(self, v: i64) -> i64 {
+        let mut n = 0;
+        for x in self.vals.iter() {
+            if *x == v {
+                n += 1;
+            }
+        }
+        n
+    }
+}
+
+struct ScanArm {
+    vals: Vec[i64],
+    stamp: Vec[i64],
+    inserts: i64,
+    seed: i64,
+}
+
+impl ScanArm {
+    fn new() -> ScanArm {
+        ScanArm { vals: Vec.new(), stamp: Vec.new(), inserts: 0, seed: 381 }
+    }
+
+    // True when val was not present before.
+    fn insert(mut ref self, val: i64) -> bool {
+        let fresh = not self.vals.contains(val);
+        self.vals.push(val);
+        self.stamp.push(self.inserts);
+        self.inserts += 1;
+        fresh
+    }
+
+    // Removes the newest copy of val; true when there was one.
+    fn remove(mut ref self, val: i64) -> bool {
+        let mut p = -1;
+        for i in 0..self.vals.len() {
+            if self.vals[i] == val and (p < 0 or self.stamp[i] > self.stamp[p]) {
+                p = i;
+            }
+        }
+        if p < 0 {
+            return false;
+        }
+        let last = self.vals.len() - 1;
+        self.vals[p] = self.vals[last];
+        self.stamp[p] = self.stamp[last];
+        self.vals.pop();
+        self.stamp.pop();
+        true
+    }
+
+    // Each element is equally likely, so a value is drawn in proportion
+    // to its count. A seeded LCG picks the position, so that every arm,
+    // and every run, draws the same values.
+    fn get_random(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.vals[(self.seed / 65536) % self.vals.len()]
+    }
+
+    fn len(self) -> i64 {
+        self.vals.len()
+    }
+
+    // Test helper: the number of copies of v.
+    fn count(self, v: i64) -> i64 {
+        let mut n = 0;
+        for x in self.vals.iter() {
+            if *x == v {
+                n += 1;
+            }
+        }
+        n
+    }
+}
+
+struct LinkedArm {
+    vals: Vec[i64],
+    older: Vec[i64],
+    newer: Vec[i64],
+    newest: Map[i64, i64],
+    seed: i64,
+}
+
+impl LinkedArm {
+    fn new() -> LinkedArm {
+        LinkedArm { vals: Vec.new(), older: Vec.new(), newer: Vec.new(), newest: Map.new(), seed: 381 }
+    }
+
+    // True when val was not present before.
+    fn insert(mut ref self, val: i64) -> bool {
+        let p = self.vals.len();
+        let h = self.newest.get(val) ?? -1;
+        self.vals.push(val);
+        self.older.push(h);
+        self.newer.push(-1);
+        if h >= 0 {
+            self.newer[h] = p;
+        }
+        self.newest.insert(val, p);
+        h < 0
+    }
+
+    // Removes the newest copy of val; true when there was one.
+    fn remove(mut ref self, val: i64) -> bool {
+        let p = self.newest.get(val) ?? -1;
+        if p < 0 {
+            return false;
+        }
+        let o = self.older[p];
+        if o >= 0 {
+            self.newer[o] = -1;
+            self.newest.insert(val, o);
+        } else {
+            self.newest.remove(val);
+        }
+        let last = self.vals.len() - 1;
+        if p < last {
+            let moved = self.vals[last];
+            let before = self.older[last];
+            let after = self.newer[last];
+            self.vals[p] = moved;
+            self.older[p] = before;
+            self.newer[p] = after;
+            if before >= 0 {
+                self.newer[before] = p;
+            }
+            if after >= 0 {
+                self.older[after] = p;
+            } else {
+                self.newest.insert(moved, p);
+            }
+        }
+        self.vals.pop();
+        self.older.pop();
+        self.newer.pop();
+        true
+    }
+
+    // Each element is equally likely, so a value is drawn in proportion
+    // to its count. A seeded LCG picks the position, so that every arm,
+    // and every run, draws the same values.
+    fn get_random(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.vals[(self.seed / 65536) % self.vals.len()]
+    }
+
+    fn len(self) -> i64 {
+        self.vals.len()
+    }
+
+    // Test helper: the number of copies of v.
+    fn count(self, v: i64) -> i64 {
+        let mut n = 0;
+        for x in self.vals.iter() {
+            if *x == v {
+                n += 1;
+            }
+        }
+        n
+    }
+}
+
+enum AnyArm {
+    Map(MapArm),
+    Sorted(SortedArm),
+    Scan(ScanArm),
+    Linked(LinkedArm),
+}
+
+impl AnyArm {
+    fn new(arm: i64) -> AnyArm {
+        match arm {
+            0 => AnyArm.Map(MapArm.new()),
+            1 => AnyArm.Sorted(SortedArm.new()),
+            2 => AnyArm.Scan(ScanArm.new()),
+            _ => AnyArm.Linked(LinkedArm.new()),
+        }
+    }
+
+    fn insert(mut ref self, val: i64) -> bool {
+        match self {
+            AnyArm.Map(s) => s.insert(val),
+            AnyArm.Sorted(s) => s.insert(val),
+            AnyArm.Scan(s) => s.insert(val),
+            AnyArm.Linked(s) => s.insert(val),
+        }
+    }
+
+    fn remove(mut ref self, val: i64) -> bool {
+        match self {
+            AnyArm.Map(s) => s.remove(val),
+            AnyArm.Sorted(s) => s.remove(val),
+            AnyArm.Scan(s) => s.remove(val),
+            AnyArm.Linked(s) => s.remove(val),
+        }
+    }
+
+    fn get_random(mut ref self) -> i64 {
+        match self {
+            AnyArm.Map(s) => s.get_random(),
+            AnyArm.Sorted(s) => s.get_random(),
+            AnyArm.Scan(s) => s.get_random(),
+            AnyArm.Linked(s) => s.get_random(),
+        }
+    }
+
+    fn len(self) -> i64 {
+        match self {
+            AnyArm.Map(s) => s.len(),
+            AnyArm.Sorted(s) => s.len(),
+            AnyArm.Scan(s) => s.len(),
+            AnyArm.Linked(s) => s.len(),
+        }
+    }
+
+    fn count(self, v: i64) -> i64 {
+        match self {
+            AnyArm.Map(s) => s.count(v),
+            AnyArm.Sorted(s) => s.count(v),
+            AnyArm.Scan(s) => s.count(v),
+            AnyArm.Linked(s) => s.count(v),
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 381;
+    let mut checks = 0;
+    let mut fails = vec![0; 5];
+    for _ in 0..1000 {
+        // The oracle: a count per value, offset by 5.
+        let mut copies = vec![0; 10];
+        let mut total = 0;
+        let mut arms: Vec[AnyArm] = Vec.new();
+        for arm in 0..4 {
+            arms.push(AnyArm.new(arm));
+        }
+        for _ in 0..300 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let op = (seed / 65536) % 10;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let x = (seed / 65536) % 10 - 5;
+            if op < 4 {
+                let want = copies[x + 5] == 0;
+                copies[x + 5] += 1;
+                total += 1;
+                for arm in 0..4 {
+                    checks += 1;
+                    if arms[arm].insert(x) != want {
+                        fails[0] += 1;
+                    }
+                }
+            } else if op < 7 {
+                let want = copies[x + 5] > 0;
+                if want {
+                    copies[x + 5] -= 1;
+                    total -= 1;
+                }
+                for arm in 0..4 {
+                    checks += 1;
+                    if arms[arm].remove(x) != want {
+                        fails[0] += 1;
+                    }
+                }
+            } else if total > 0 {
+                let first = arms[0].get_random();
+                for arm in 0..4 {
+                    let got = if arm == 0 { first } else { arms[arm].get_random() };
+                    checks += 2;
+                    if got < -5 or got >= 5 or copies[got + 5] == 0 {
+                        fails[1] += 1;
+                    }
+                    if got != first {
+                        fails[2] += 1;
+                    }
+                }
+            }
+            for arm in 0..4 {
+                checks += 1;
+                if arms[arm].len() != total {
+                    fails[3] += 1;
+                }
+            }
+        }
+        for arm in 0..4 {
+            for v in -5..5 {
+                checks += 1;
+                if arms[arm].count(v) != copies[v + 5] {
+                    fails[4] += 1;
+                }
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..5 {
+        failures += fails[i];
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+    }
+    println(f"1000 workloads, {checks} checks, {failures} failures");
+}

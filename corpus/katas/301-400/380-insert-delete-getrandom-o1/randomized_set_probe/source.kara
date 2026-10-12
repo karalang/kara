@@ -1,0 +1,175 @@
+// LeetCode #380: Insert Delete GetRandom O(1) -- a hand-rolled hash table.
+//
+// The ★ arm's layout with the positions in an open-addressing table
+// written out: slots hold (value, position) pairs, a value's home slot
+// comes from a multiplicative hash, and collisions probe forward one slot
+// at a time. Deleting shifts later entries of the same run back into the
+// gap, so no tombstones are needed and every lookup stops at the first
+// empty slot. The table doubles when it is half full. O(1) expected.
+
+struct RandomizedSet {
+    vals: Vec[i64],
+    // Each slot is None or Some((value, position in vals)).
+    slots: Vec[Option[(i64, i64)]],
+    seed: i64,
+}
+
+impl RandomizedSet {
+    fn new() -> RandomizedSet {
+        RandomizedSet { vals: Vec.new(), slots: vec![None; 8], seed: 380 }
+    }
+
+    fn home(self, val: i64) -> i64 {
+        let h = val.wrapping_mul(-7046029254386353131);
+        (h >> 32) & (self.slots.len() - 1)
+    }
+
+    // The slot holding val, or the empty slot where it would go.
+    fn find(self, val: i64) -> i64 {
+        let mask = self.slots.len() - 1;
+        let mut i = self.home(val);
+        loop {
+            match self.slots[i] {
+                None => return i,
+                Some((v, _)) => {
+                    if v == val {
+                        return i;
+                    }
+                }
+            }
+            i = (i + 1) & mask;
+        }
+    }
+
+    fn set_position(mut ref self, val: i64, pos: i64) {
+        let i = self.find(val);
+        self.slots[i] = Some((val, pos));
+    }
+
+    fn grow(mut ref self) {
+        let old = self.slots.clone();
+        self.slots = vec![None; 2 * old.len()];
+        for slot in old.iter() {
+            if let Some((v, p)) = slot {
+                self.set_position(v, p);
+            }
+        }
+    }
+
+    fn insert(mut ref self, val: i64) -> bool {
+        if self.slots[self.find(val)].is_some() {
+            return false;
+        }
+        if 2 * (self.vals.len() + 1) > self.slots.len() {
+            self.grow();
+        }
+        self.set_position(val, self.vals.len());
+        self.vals.push(val);
+        true
+    }
+
+    // Empties slot i, then walks the rest of its run and moves back any
+    // entry whose home is not strictly inside the gap it would skip.
+    fn delete_slot(mut ref self, i: i64) {
+        let mask = self.slots.len() - 1;
+        let mut gap = i;
+        let mut j = (i + 1) & mask;
+        self.slots[gap] = None;
+        loop {
+            match self.slots[j] {
+                None => return,
+                Some((v, p)) => {
+                    let h = self.home(v);
+                    // v may move into the gap unless its home lies in
+                    // (gap, j], cyclically.
+                    let stays = if gap <= j { gap < h and h <= j } else { gap < h or h <= j };
+                    if not stays {
+                        self.slots[gap] = Some((v, p));
+                        self.slots[j] = None;
+                        gap = j;
+                    }
+                }
+            }
+            j = (j + 1) & mask;
+        }
+    }
+
+    fn remove(mut ref self, val: i64) -> bool {
+        let i = self.find(val);
+        let pos = match self.slots[i] {
+            None => return false,
+            Some((_, p)) => p,
+        };
+        self.delete_slot(i);
+        let last = self.vals.pop().unwrap();
+        if pos < self.vals.len() {
+            self.vals[pos] = last;
+            self.set_position(last, pos);
+        }
+        true
+    }
+
+    // LeetCode wants each value equally likely; a seeded LCG picks the
+    // position, so that every arm, and every run, draws the same values.
+    fn get_random(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.vals[(self.seed / 65536) % self.vals.len()]
+    }
+
+    fn len(self) -> i64 {
+        self.vals.len()
+    }
+}
+
+fn b(x: bool) -> String {
+    if x { "true" } else { "false" }
+}
+
+fn main() {
+    let mut s = RandomizedSet.new();
+    println(f"example: insert 1 {b(s.insert(1))}, remove 2 {b(s.remove(2))}, insert 2 {b(s.insert(2))}");
+    let r = s.get_random();
+    println(f"get_random is 1 or 2: {b(r == 1 or r == 2)}");
+    println(f"remove 1 {b(s.remove(1))}, insert 2 {b(s.insert(2))}, get_random {s.get_random()}");
+    let mut t = RandomizedSet.new();
+    println(f"remove from empty: {b(t.remove(5))}");
+    println(f"negative values: insert -7 {b(t.insert(-7))}, insert -7 {b(t.insert(-7))}, get_random {t.get_random()}");
+    println(f"remove the last value: remove -7 {b(t.remove(-7))}, insert -7 {b(t.insert(-7))}");
+    let mut u = RandomizedSet.new();
+    for v in 0..10 {
+        u.insert(v * v);
+    }
+    u.remove(0);
+    u.remove(81);
+    u.remove(25);
+    let mut total = 0;
+    for _ in 0..100 {
+        total += u.get_random();
+    }
+    println(f"after removing from both ends and the middle: sum of 100 draws {total}");
+    // Random workloads: 100 sets driven by 1,000 operations each over
+    // values from -50 to 49, a third insert, a third remove, a third
+    // get_random (only when the set is not empty).
+    let mut seed: i64 = 380;
+    let mut checksum: i64 = 0;
+    for _ in 0..100 {
+        let mut rs = RandomizedSet.new();
+        for _ in 0..1000 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let op = (seed / 65536) % 3;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let x = (seed / 65536) % 100 - 50;
+            let v = if op == 0 {
+                if rs.insert(x) { 1 } else { 0 }
+            } else if op == 1 {
+                if rs.remove(x) { 1 } else { 0 }
+            } else if rs.len() > 0 {
+                rs.get_random() + 100
+            } else {
+                7
+            };
+            checksum = (checksum * 31 + v) % 1000000007;
+        }
+    }
+    println(f"100 random workloads: checksum {checksum}");
+}

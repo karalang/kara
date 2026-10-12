@@ -1,0 +1,18 @@
+cases 521 squares 22 bulbs 135460 prefix-rounds 2485 big-n 409
+P1 newton-vs-simulation disagreements 0
+P2 count-vs-simulation disagreements 0
+P3 divisors-vs-simulation disagreements 0
+P4 monotonicity failures 0
+P5 step-at-squares failures 0
+P6 isqrt-bracket failures 0
+P7 f(k*k)==k newton failures 0
+P7 f(k*k)==k count failures 0
+P7 f(k*k-1)==k-1 newton failures 0
+P7 f(k*k-1)==k-1 count failures 0
+P8 final-state-is-squares failures 0
+P9 odd-divisors-iff-square failures 0
+P10 partial-state failures 0
+P11 reversed-order failures 0
+P11 shuffled-order failures 0
+P12 double-pass-clears failures 0
+DIFFERENTIAL OK

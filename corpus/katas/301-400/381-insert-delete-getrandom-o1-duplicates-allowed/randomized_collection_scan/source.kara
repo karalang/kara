@@ -1,0 +1,139 @@
+// LeetCode #381: Insert Delete GetRandom O(1) - Duplicates allowed -- the
+// Vec alone.
+//
+// No index: each element carries the number of the insert that added
+// it, and remove scans for the copy of the value with the largest
+// number, the most recently inserted one still present, then moves the
+// last element into its position as the ★ arm does. The baseline the
+// index exists to beat: insert and remove are O(n), get_random is O(1).
+
+struct RandomizedCollection {
+    vals: Vec[i64],
+    stamp: Vec[i64],
+    inserts: i64,
+    seed: i64,
+}
+
+impl RandomizedCollection {
+    fn new() -> RandomizedCollection {
+        RandomizedCollection { vals: Vec.new(), stamp: Vec.new(), inserts: 0, seed: 381 }
+    }
+
+    // True when val was not present before.
+    fn insert(mut ref self, val: i64) -> bool {
+        let fresh = not self.vals.contains(val);
+        self.vals.push(val);
+        self.stamp.push(self.inserts);
+        self.inserts += 1;
+        fresh
+    }
+
+    // Removes the newest copy of val; true when there was one.
+    fn remove(mut ref self, val: i64) -> bool {
+        let mut p = -1;
+        for i in 0..self.vals.len() {
+            if self.vals[i] == val and (p < 0 or self.stamp[i] > self.stamp[p]) {
+                p = i;
+            }
+        }
+        if p < 0 {
+            return false;
+        }
+        let last = self.vals.len() - 1;
+        self.vals[p] = self.vals[last];
+        self.stamp[p] = self.stamp[last];
+        self.vals.pop();
+        self.stamp.pop();
+        true
+    }
+
+    // Each element is equally likely, so a value is drawn in proportion
+    // to its count. A seeded LCG picks the position, so that every arm,
+    // and every run, draws the same values.
+    fn get_random(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.vals[(self.seed / 65536) % self.vals.len()]
+    }
+
+    fn len(self) -> i64 {
+        self.vals.len()
+    }
+}
+
+fn b(x: bool) -> String {
+    if x { "true" } else { "false" }
+}
+
+fn main() {
+    let mut c = RandomizedCollection.new();
+    println(f"example: insert 1 {b(c.insert(1))}, insert 1 {b(c.insert(1))}, insert 2 {b(c.insert(2))}");
+    let r = c.get_random();
+    println(f"get_random is 1 or 2: {b(r == 1 or r == 2)}");
+    println(f"remove 1 {b(c.remove(1))}, get_random {c.get_random()}");
+    let mut e = RandomizedCollection.new();
+    println(f"remove from empty: {b(e.remove(5))}");
+    let a1 = e.insert(-4);
+    let a2 = e.insert(-4);
+    let a3 = e.insert(-4);
+    println(f"three copies: insert {b(a1)} {b(a2)} {b(a3)}, len {e.len()}");
+    let r1 = e.remove(-4);
+    let r2 = e.remove(-4);
+    let r3 = e.remove(-4);
+    let r4 = e.remove(-4);
+    println(f"remove them: {b(r1)} {b(r2)} {b(r3)} {b(r4)}, len {e.len()}, insert again {b(e.insert(-4))}");
+    // One 1 and three 2s: about three draws in four are a 2.
+    let mut w = RandomizedCollection.new();
+    w.insert(1);
+    for _ in 0..3 {
+        w.insert(2);
+    }
+    let mut twos = 0;
+    for _ in 0..400 {
+        if w.get_random() == 2 {
+            twos += 1;
+        }
+    }
+    println(f"one 1 and three 2s: {twos} of 400 draws are 2");
+    // Removing copies from the front, the middle and the end of the Vec.
+    let mut m = RandomizedCollection.new();
+    for v in 0..12 {
+        m.insert(v % 4);
+    }
+    m.remove(0);
+    m.remove(3);
+    m.remove(1);
+    m.remove(0);
+    let mut total = 0;
+    for _ in 0..100 {
+        total += m.get_random();
+    }
+    println(f"after four removals: len {m.len()}, sum of 100 draws {total}");
+    // Random workloads: 100 collections driven by 1,000 operations each
+    // over values from -10 to 9, so that most values have several copies:
+    // 2 in 5 insert, 3 in 10 remove, 3 in 10 get_random (only when the
+    // collection is not empty).
+    let mut seed: i64 = 381;
+    let mut checksum: i64 = 0;
+    let mut most = 0;
+    for _ in 0..100 {
+        let mut rc = RandomizedCollection.new();
+        for _ in 0..1000 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let op = (seed / 65536) % 10;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let x = (seed / 65536) % 20 - 10;
+            let v = if op < 4 {
+                if rc.insert(x) { 1 } else { 0 }
+            } else if op < 7 {
+                if rc.remove(x) { 1 } else { 0 }
+            } else if rc.len() > 0 {
+                rc.get_random() + 100
+            } else {
+                7
+            };
+            checksum = (checksum * 31 + v) % 1000000007;
+            most = most.max(rc.len());
+        }
+    }
+    println(f"100 random workloads: checksum {checksum}, largest size {most}");
+}

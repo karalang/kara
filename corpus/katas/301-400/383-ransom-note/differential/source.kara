@@ -1,0 +1,171 @@
+// LeetCode #383: differential test. The counting, Map, sorting and
+// removing arms against answers known by construction, over 3,000 random
+// magazines of up to 40 letters from a to h. Properties: P1 a note drawn
+// from the magazine's own letters can be built; P2 that note with one
+// letter more than the magazine has cannot; P3 all four arms agree on a
+// random note; P4 a note that can be built still can after the magazine
+// gains a letter; P5 every string can be built from itself, and not with
+// one more letter.
+
+fn can_count(ransom_note: Str, magazine: Str) -> bool {
+    let mut count = vec![0; 26];
+    for b in magazine.bytes() {
+        count[(b - b'a') as i64] += 1;
+    }
+    for b in ransom_note.bytes() {
+        let k = (b - b'a') as i64;
+        count[k] -= 1;
+        if count[k] < 0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn can_map(ransom_note: Str, magazine: Str) -> bool {
+    let mut count: Map[char, i64] = Map.new();
+    for c in magazine.chars() {
+        *count.entry(c).or_insert(0) += 1;
+    }
+    for c in ransom_note.chars() {
+        let left = count.get(c) ?? 0;
+        if left == 0 {
+            return false;
+        }
+        count[c] = left - 1;
+    }
+    true
+}
+
+fn can_sort(ransom_note: Str, magazine: Str) -> bool {
+    let mut note: Vec[u8] = ransom_note.bytes().to_vec();
+    let mut mag: Vec[u8] = magazine.bytes().to_vec();
+    note.sort();
+    mag.sort();
+    let mut j = 0;
+    for b in note.iter() {
+        while j < mag.len() and mag[j] < *b {
+            j += 1;
+        }
+        if j == mag.len() or mag[j] != *b {
+            return false;
+        }
+        j += 1;
+    }
+    true
+}
+
+fn can_remove(ransom_note: Str, magazine: Str) -> bool {
+    let mut left: Vec[u8] = magazine.bytes().to_vec();
+    for b in ransom_note.bytes() {
+        match left.iter().position(|x| *x == b) {
+            Some(i) => {
+                left.swap_remove(i);
+            }
+            None => return false,
+        }
+    }
+    true
+}
+
+fn can(arm: i64, note: Str, magazine: Str) -> bool {
+    match arm {
+        0 => can_count(note, magazine),
+        1 => can_map(note, magazine),
+        2 => can_sort(note, magazine),
+        _ => can_remove(note, magazine),
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 383;
+    let mut checks = 0;
+    let mut fails = vec![0; 5];
+    for _ in 0..3000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let m = (seed / 65536) % 41;
+        let mut magazine = String.new();
+        let mut letters: Vec[char] = Vec.new();
+        for _ in 0..m {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let c = ((seed / 65536) % 8 + 97) as u8 as char;
+            magazine.push(c);
+            letters.push(c);
+        }
+        // A note made of a random part of the magazine's letters, in a
+        // random order: each letter is taken with probability 1/2, then
+        // the taken letters are shuffled.
+        let mut taken: Vec[char] = Vec.new();
+        for c in letters.iter() {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            if (seed / 65536) % 2 == 0 {
+                taken.push(*c);
+            }
+        }
+        let mut i = taken.len() - 1;
+        while i > 0 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let j = (seed / 65536) % (i + 1);
+            taken.swap(i, j);
+            i -= 1;
+        }
+        let mut note = String.new();
+        for c in taken.iter() {
+            note.push(*c);
+        }
+        // One letter more than the magazine has of it.
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let extra = ((seed / 65536) % 8 + 97) as u8 as char;
+        let mut have = 0;
+        for c in letters.iter() {
+            if *c == extra {
+                have += 1;
+            }
+        }
+        let mut too_many = String.new();
+        for _ in 0..have + 1 {
+            too_many.push(extra);
+        }
+        // A random note, not drawn from the magazine.
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = (seed / 65536) % 12;
+        let mut random = String.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            random.push(((seed / 65536) % 8 + 97) as u8 as char);
+        }
+        let mut grown = magazine.clone();
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        grown.push(((seed / 65536) % 8 + 97) as u8 as char);
+        let mut longer = magazine.clone();
+        longer.push('a');
+        let first = can(0, random, magazine);
+        for arm in 0..4 {
+            checks += 5;
+            if not can(arm, note, magazine) {
+                fails[0] += 1;
+            }
+            if can(arm, too_many, magazine) {
+                fails[1] += 1;
+            }
+            let r = can(arm, random, magazine);
+            if r != first {
+                fails[2] += 1;
+            }
+            if r and not can(arm, random, grown) {
+                fails[3] += 1;
+            }
+            if not can(arm, magazine, magazine) or can(arm, longer, magazine) {
+                fails[4] += 1;
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..5 {
+        failures += fails[i];
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+    }
+    println(f"3000 magazines, {checks} checks, {failures} failures");
+}

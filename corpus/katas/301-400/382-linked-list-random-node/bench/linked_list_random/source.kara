@@ -1,0 +1,54 @@
+// Benchmark for #382: one list of 10,000 nodes, the problem's largest,
+// with values from an LCG, and 20,000 draws by the kata's ★ arm (reservoir
+// sampling, one walk of the list per draw), folded into a checksum.
+
+shared struct ListNode {
+    val: i64,
+    next: Option[ListNode],
+}
+
+struct Solution {
+    head: Option[ListNode],
+    seed: i64,
+}
+
+impl Solution {
+    fn new(head: Option[ListNode]) -> Solution {
+        Solution { head, seed: 382 }
+    }
+
+    // A number from 0 to n - 1.
+    fn below(mut ref self, n: i64) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        (self.seed / 65536) % n
+    }
+
+    fn get_random(mut ref self) -> i64 {
+        let mut kept = 0;
+        let mut i = 0;
+        let mut at = self.head;
+        while let Some(node) = at {
+            i += 1;
+            if self.below(i) == 0 {
+                kept = node.val;
+            }
+            at = node.next;
+        }
+        kept
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 7;
+    let mut head: Option[ListNode] = None;
+    for _ in 0..10000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        head = Some(ListNode { val: (seed / 65536) % 20001 - 10000, next: head });
+    }
+    let mut s = Solution.new(head);
+    let mut checksum: i64 = 0;
+    for _ in 0..20000 {
+        checksum = (checksum * 31 + s.get_random() + 10000) % 1000000007;
+    }
+    println(f"checksum {checksum}");
+}

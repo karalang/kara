@@ -12,6 +12,6 @@ backends = []
 env = {}
 note = "class c: v2 order unreviewed against core §7"
 bucket = "c-unreviewed"
-classified_with = "fb33d3d01"
+classified_with = "19707a2f2"
 model_rev = "1aa23105"
 model_src = "99b5a65e"

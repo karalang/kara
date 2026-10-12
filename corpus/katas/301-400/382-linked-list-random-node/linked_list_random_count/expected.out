@@ -1,0 +1,6 @@
+example [1, 2, 3], 30000 draws: fair true
+one node: always 7 true
+duplicates [4, 4, 9]: fair true
+negative values [-5, 0, 5, -5]: fair true
+1000 nodes of 37 values: fair true
+200 random lists, 6160 nodes: 200 fair

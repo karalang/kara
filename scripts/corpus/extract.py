@@ -24,9 +24,11 @@ work manifest (`--work`, default target/corpus-work/manifest.json);
 candidate as `expected_from = "assert"` only when it matches that run.
 
 Re-running is safe. An unchanged program keeps its recorded files. A program
-whose corpus copy differs from its test or kata text is kept as it is, because
-a migration or a classify fix edits the corpus copy on purpose; the run lists
-such entries in <work>/kept.txt. With --overwrite-changed, an entry whose test
+whose corpus copy is still the text extracted last time (meta.toml's
+`extracted_src`) follows its test or kata when that changes. A copy that
+differs from both is kept as it is, because a migration or a classify fix
+edits the corpus copy on purpose; the run lists such entries in
+<work>/kept.txt. With --overwrite-changed, an entry whose test
 or kata text changed since it was extracted (meta.toml's `extracted_src`, an
 md5 prefix of that text, differs or is missing) is replaced and loses its
 recorded files. Directories no source produces any more are reported (removed
@@ -274,6 +276,11 @@ def main() -> int:
             state = "new"
         elif e["src"] in (old, orig):
             state = "same"
+        elif (prev.get("extracted_src") and orig is None
+              and hashlib.md5(old.encode()).hexdigest()[:8] == prev["extracted_src"]):
+            # The corpus copy is still the text extracted last time, so no
+            # one edited it; the test or kata moved on, and the copy follows.
+            state = "changed"
         elif prev.get("extracted_src") == src_hash or not args.overwrite_changed:
             # The source in the corpus differs from the one the test or kata
             # holds, but the test text is what was extracted last time (or

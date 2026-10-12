@@ -1,0 +1,278 @@
+// LeetCode #382: differential test. The reservoir, copy, count-and-walk
+// and recursive arms against the list's own values, over 300 random lists
+// of 1 to 12 nodes with values from -3 to 3, so that values repeat.
+// Properties: P1 every draw is a value of the list; P2 a one-node list
+// always gives its value; P3 every node's value comes up within 60 draws
+// per node; P4 over 100 draws per node, a chi-square statistic against
+// the list's own counts stays below a bound far in the tail; P5 drawing
+// leaves the list as it was.
+
+shared struct ListNode {
+    val: i64,
+    next: Option[ListNode],
+}
+
+struct ReservoirArm {
+    head: Option[ListNode],
+    seed: i64,
+}
+
+impl ReservoirArm {
+    fn new(head: Option[ListNode]) -> ReservoirArm {
+        ReservoirArm { head, seed: 382 }
+    }
+
+    // A number from 0 to n - 1.
+    fn below(mut ref self, n: i64) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        (self.seed / 65536) % n
+    }
+
+    fn get_random(mut ref self) -> i64 {
+        let mut kept = 0;
+        let mut i = 0;
+        let mut at = self.head;
+        while let Some(node) = at {
+            i += 1;
+            if self.below(i) == 0 {
+                kept = node.val;
+            }
+            at = node.next;
+        }
+        kept
+    }
+}
+
+
+struct CopyArm {
+    vals: Vec[i64],
+    seed: i64,
+}
+
+impl CopyArm {
+    fn new(head: Option[ListNode]) -> CopyArm {
+        let mut vals: Vec[i64] = Vec.new();
+        let mut at = head;
+        while let Some(node) = at {
+            vals.push(node.val);
+            at = node.next;
+        }
+        CopyArm { vals, seed: 382 }
+    }
+
+    // A number from 0 to n - 1.
+    fn below(mut ref self, n: i64) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        (self.seed / 65536) % n
+    }
+
+    fn get_random(mut ref self) -> i64 {
+        let i = self.below(self.vals.len());
+        self.vals[i]
+    }
+}
+
+
+struct CountArm {
+    head: Option[ListNode],
+    len: i64,
+    seed: i64,
+}
+
+impl CountArm {
+    fn new(head: Option[ListNode]) -> CountArm {
+        let mut len = 0;
+        let mut at = head;
+        while let Some(node) = at {
+            len += 1;
+            at = node.next;
+        }
+        CountArm { head, len, seed: 382 }
+    }
+
+    // A number from 0 to n - 1.
+    fn below(mut ref self, n: i64) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        (self.seed / 65536) % n
+    }
+
+    fn get_random(mut ref self) -> i64 {
+        let mut steps = self.below(self.len);
+        let mut at = self.head;
+        while let Some(node) = at {
+            if steps == 0 {
+                return node.val;
+            }
+            steps -= 1;
+            at = node.next;
+        }
+        0
+    }
+}
+
+
+struct RecursiveArm {
+    head: Option[ListNode],
+    seed: i64,
+}
+
+impl RecursiveArm {
+    fn new(head: Option[ListNode]) -> RecursiveArm {
+        RecursiveArm { head, seed: 382 }
+    }
+
+    // A number from 0 to n - 1.
+    fn below(mut ref self, n: i64) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        (self.seed / 65536) % n
+    }
+
+    fn pick(mut ref self, at: Option[ListNode], i: i64, kept: i64) -> i64 {
+        match at {
+            None => kept,
+            Some(node) => {
+                let kept = if self.below(i) == 0 { node.val } else { kept };
+                self.pick(node.next, i + 1, kept)
+            }
+        }
+    }
+
+    fn get_random(mut ref self) -> i64 {
+        // `head` is a second handle to the shared first node, so the walk
+        // does not borrow `self` while `pick` changes the seed.
+        let head = self.head;
+        self.pick(head, 1, 0)
+    }
+}
+
+enum AnyArm {
+    Reservoir(ReservoirArm),
+    Copy(CopyArm),
+    Count(CountArm),
+    Recursive(RecursiveArm),
+}
+
+impl AnyArm {
+    fn new(arm: i64, head: Option[ListNode]) -> AnyArm {
+        match arm {
+            0 => AnyArm.Reservoir(ReservoirArm.new(head)),
+            1 => AnyArm.Copy(CopyArm.new(head)),
+            2 => AnyArm.Count(CountArm.new(head)),
+            _ => AnyArm.Recursive(RecursiveArm.new(head)),
+        }
+    }
+
+    fn get_random(mut ref self) -> i64 {
+        match self {
+            AnyArm.Reservoir(s) => s.get_random(),
+            AnyArm.Copy(s) => s.get_random(),
+            AnyArm.Count(s) => s.get_random(),
+            AnyArm.Recursive(s) => s.get_random(),
+        }
+    }
+}
+
+fn from_values(values: ref Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    for v in values.iter().rev() {
+        head = Some(ListNode { val: *v, next: head });
+    }
+    head
+}
+
+fn to_values(head: Option[ListNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut at = head;
+    while let Some(node) = at {
+        out.push(node.val);
+        at = node.next;
+    }
+    out
+}
+
+fn main() {
+    let mut seed: i64 = 382;
+    let mut checks = 0;
+    let mut fails = vec![0; 5];
+    for _ in 0..300 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 1 + (seed / 65536) % 12;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            values.push((seed / 65536) % 7 - 3);
+        }
+        // The oracle: how many nodes hold each value, offset by 3.
+        let mut want = vec![0; 7];
+        for v in values.iter() {
+            want[*v + 3] += 1;
+        }
+        for arm in 0..4 {
+            let head = from_values(values);
+            let mut s = AnyArm.new(arm, head);
+            // P1 and P3: 60 draws per node, every one in the list, every
+            // value seen.
+            let mut seen = vec![false; 7];
+            for _ in 0..60 * n {
+                let x = s.get_random();
+                checks += 1;
+                if x < -3 or x > 3 or want[x + 3] == 0 {
+                    fails[0] += 1;
+                } else {
+                    seen[x + 3] = true;
+                }
+                if n == 1 {
+                    checks += 1;
+                    if x != values[0] {
+                        fails[1] += 1;
+                    }
+                }
+            }
+            for k in 0..7 {
+                if want[k] > 0 {
+                    checks += 1;
+                    if not seen[k] {
+                        fails[2] += 1;
+                    }
+                }
+            }
+            // P4: 100 draws per node against the list's own counts.
+            let draws = 100 * n;
+            let mut got = vec![0; 7];
+            for _ in 0..draws {
+                let x = s.get_random();
+                if x >= -3 and x <= 3 {
+                    got[x + 3] += 1;
+                }
+            }
+            let mut chi = 0.0;
+            let mut kinds = 0;
+            for k in 0..7 {
+                if want[k] > 0 {
+                    kinds += 1;
+                    let e = (draws * want[k]) as f64 / n as f64;
+                    let d = got[k] as f64 - e;
+                    chi += d * d / e;
+                }
+            }
+            let dof = (kinds - 1) as f64;
+            checks += 1;
+            if chi > dof + 6.0 * (2.0 * dof).sqrt() + 12.0 {
+                fails[3] += 1;
+            }
+            // P5: the list is unchanged.
+            checks += 1;
+            if to_values(head) != values {
+                fails[4] += 1;
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..5 {
+        failures += fails[i];
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+    }
+    println(f"300 lists, {checks} checks, {failures} failures");
+}

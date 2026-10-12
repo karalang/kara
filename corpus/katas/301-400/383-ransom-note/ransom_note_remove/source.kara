@@ -1,0 +1,66 @@
+// LeetCode #383: Ransom Note -- take each letter out of the magazine.
+//
+// Keep the magazine's bytes in a Vec; for each byte of the note, find an
+// equal byte and remove it with swap_remove, failing when there is none.
+// The baseline the counting arms improve on: O(m * n) time, O(m) space.
+
+fn can_construct(ransom_note: Str, magazine: Str) -> bool {
+    let mut left: Vec[u8] = magazine.bytes().to_vec();
+    for b in ransom_note.bytes() {
+        match left.iter().position(|x| *x == b) {
+            Some(i) => {
+                left.swap_remove(i);
+            }
+            None => return false,
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(note: Str, magazine: Str) {
+    let answer = if can_construct(note, magazine) { "true" } else { "false" };
+    println(f"\"{note}\" from \"{magazine}\": {answer}");
+}
+
+fn main() {
+    show("a", "b");
+    show("aa", "ab");
+    show("aa", "aab");
+    show("", "abc");
+    show("", "");
+    show("a", "");
+    show("abc", "cba");
+    show("zzz", "zzzz");
+    show("zzzz", "zzz");
+    show("thequickbrownfox", "xofnworbkciuqeht");
+    // Random notes and magazines over a small alphabet, so that both
+    // answers come up: count the true answers and fold them into a
+    // checksum in order.
+    let mut seed: i64 = 383;
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let m = (seed / 65536) % 40;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = (seed / 65536) % 15;
+        let mut magazine = String.new();
+        for _ in 0..m {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            magazine.push(((seed / 65536) % 6 + 97) as u8 as char);
+        }
+        let mut note = String.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            note.push(((seed / 65536) % 6 + 97) as u8 as char);
+        }
+        let ok = can_construct(note, magazine);
+        if ok {
+            yes += 1;
+        }
+        checksum = (checksum * 3 + if ok { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"2000 random pairs: {yes} can be built, checksum {checksum}");
+}

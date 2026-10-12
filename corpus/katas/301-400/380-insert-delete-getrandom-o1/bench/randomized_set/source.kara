@@ -1,0 +1,141 @@
+// Benchmark for #380: one set driven by 20,000,000 random operations over
+// values from 0 to 199,999 (a third insert, a third remove, a third
+// get_random), on the kata's open-addressing arm. That arm is the one
+// every mirror language can write the same way: the others lean on each
+// language's own hash map, whose hashing and probing differ.
+struct RandomizedSet {
+    vals: Vec[i64],
+    // Each slot is None or Some((value, position in vals)).
+    slots: Vec[Option[(i64, i64)]],
+    seed: i64,
+}
+
+impl RandomizedSet {
+    fn new() -> RandomizedSet {
+        RandomizedSet { vals: Vec.new(), slots: vec![None; 8], seed: 380 }
+    }
+
+    fn home(self, val: i64) -> i64 {
+        let h = val.wrapping_mul(-7046029254386353131);
+        (h >> 32) & (self.slots.len() - 1)
+    }
+
+    // The slot holding val, or the empty slot where it would go.
+    fn find(self, val: i64) -> i64 {
+        let mask = self.slots.len() - 1;
+        let mut i = self.home(val);
+        loop {
+            match self.slots[i] {
+                None => return i,
+                Some((v, _)) => {
+                    if v == val {
+                        return i;
+                    }
+                }
+            }
+            i = (i + 1) & mask;
+        }
+    }
+
+    fn set_position(mut ref self, val: i64, pos: i64) {
+        let i = self.find(val);
+        self.slots[i] = Some((val, pos));
+    }
+
+    fn grow(mut ref self) {
+        let old = self.slots.clone();
+        self.slots = vec![None; 2 * old.len()];
+        for slot in old.iter() {
+            if let Some((v, p)) = slot {
+                self.set_position(v, p);
+            }
+        }
+    }
+
+    fn insert(mut ref self, val: i64) -> bool {
+        if self.slots[self.find(val)].is_some() {
+            return false;
+        }
+        if 2 * (self.vals.len() + 1) > self.slots.len() {
+            self.grow();
+        }
+        self.set_position(val, self.vals.len());
+        self.vals.push(val);
+        true
+    }
+
+    // Empties slot i, then walks the rest of its run and moves back any
+    // entry whose home is not strictly inside the gap it would skip.
+    fn delete_slot(mut ref self, i: i64) {
+        let mask = self.slots.len() - 1;
+        let mut gap = i;
+        let mut j = (i + 1) & mask;
+        self.slots[gap] = None;
+        loop {
+            match self.slots[j] {
+                None => return,
+                Some((v, p)) => {
+                    let h = self.home(v);
+                    // v may move into the gap unless its home lies in
+                    // (gap, j], cyclically.
+                    let stays = if gap <= j { gap < h and h <= j } else { gap < h or h <= j };
+                    if not stays {
+                        self.slots[gap] = Some((v, p));
+                        self.slots[j] = None;
+                        gap = j;
+                    }
+                }
+            }
+            j = (j + 1) & mask;
+        }
+    }
+
+    fn remove(mut ref self, val: i64) -> bool {
+        let i = self.find(val);
+        let pos = match self.slots[i] {
+            None => return false,
+            Some((_, p)) => p,
+        };
+        self.delete_slot(i);
+        let last = self.vals.pop().unwrap();
+        if pos < self.vals.len() {
+            self.vals[pos] = last;
+            self.set_position(last, pos);
+        }
+        true
+    }
+
+    // LeetCode wants each value equally likely; a seeded LCG picks the
+    // position, so that every arm, and every run, draws the same values.
+    fn get_random(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.vals[(self.seed / 65536) % self.vals.len()]
+    }
+
+    fn len(self) -> i64 {
+        self.vals.len()
+    }
+}
+
+fn main() {
+    let mut s = RandomizedSet.new();
+    let mut seed: i64 = 380;
+    let mut checksum: i64 = 0;
+    for _ in 0..20000000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let op = (seed / 65536) % 3;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let x = (seed / 64) % 200000;
+        let v = if op == 0 {
+            if s.insert(x) { 1 } else { 0 }
+        } else if op == 1 {
+            if s.remove(x) { 1 } else { 0 }
+        } else if s.len() > 0 {
+            s.get_random()
+        } else {
+            7
+        };
+        checksum = (checksum * 31 + v) % 1000000007;
+    }
+    println(f"checksum {checksum} size {s.len()}");
+}

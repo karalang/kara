@@ -23,6 +23,7 @@ impl SetDir {
     fn get(mut ref self) -> i64 {
         match self.free.min() {
             Some(n) => {
+                let n = *n;
                 self.free.remove(n);
                 n
             }

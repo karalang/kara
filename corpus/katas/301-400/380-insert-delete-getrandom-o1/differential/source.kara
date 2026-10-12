@@ -1,0 +1,407 @@
+// LeetCode #380: differential test. The Map, SortedMap, scanning and
+// open-addressing arms against a membership oracle, over 1,000 random
+// workloads of 300 operations on values from -50 to 49. Properties: P1
+// insert and remove answer as the oracle does; P2 get_random returns a
+// value in the set; P3 all four arms draw the same value, since they lay
+// the values out the same way; P4 len() is the oracle's count; P5 after
+// each workload, 20 draws per value reach every value in the set.
+
+struct MapArm {
+    vals: Vec[i64],
+    index: Map[i64, i64],
+    seed: i64,
+}
+
+impl MapArm {
+    fn new() -> MapArm {
+        MapArm { vals: Vec.new(), index: Map.new(), seed: 380 }
+    }
+
+    fn insert(mut ref self, val: i64) -> bool {
+        if self.index.contains_key(val) {
+            return false;
+        }
+        self.index.insert(val, self.vals.len());
+        self.vals.push(val);
+        true
+    }
+
+    fn remove(mut ref self, val: i64) -> bool {
+        match self.index.remove(val) {
+            None => false,
+            Some(i) => {
+                let last = self.vals.pop().unwrap();
+                if i < self.vals.len() {
+                    self.vals[i] = last;
+                    self.index.insert(last, i);
+                }
+                true
+            }
+        }
+    }
+
+    // LeetCode wants each value equally likely; a seeded LCG picks the
+    // position, so that every arm, and every run, draws the same values.
+    fn get_random(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.vals[(self.seed / 65536) % self.vals.len()]
+    }
+
+    fn len(self) -> i64 {
+        self.vals.len()
+    }
+}
+
+struct SortedArm {
+    vals: Vec[i64],
+    index: SortedMap[i64, i64],
+    seed: i64,
+}
+
+impl SortedArm {
+    fn new() -> SortedArm {
+        SortedArm { vals: Vec.new(), index: SortedMap.new(), seed: 380 }
+    }
+
+    fn insert(mut ref self, val: i64) -> bool {
+        if self.index.contains_key(val) {
+            return false;
+        }
+        self.index.insert(val, self.vals.len());
+        self.vals.push(val);
+        true
+    }
+
+    fn remove(mut ref self, val: i64) -> bool {
+        match self.index.remove(val) {
+            None => false,
+            Some(i) => {
+                let last = self.vals.pop().unwrap();
+                if i < self.vals.len() {
+                    self.vals[i] = last;
+                    self.index.insert(last, i);
+                }
+                true
+            }
+        }
+    }
+
+    // LeetCode wants each value equally likely; a seeded LCG picks the
+    // position, so that every arm, and every run, draws the same values.
+    fn get_random(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.vals[(self.seed / 65536) % self.vals.len()]
+    }
+
+    fn len(self) -> i64 {
+        self.vals.len()
+    }
+}
+
+struct ScanArm {
+    vals: Vec[i64],
+    seed: i64,
+}
+
+impl ScanArm {
+    fn new() -> ScanArm {
+        ScanArm { vals: Vec.new(), seed: 380 }
+    }
+
+    fn position(self, val: i64) -> i64 {
+        for i in 0..self.vals.len() {
+            if self.vals[i] == val {
+                return i;
+            }
+        }
+        -1
+    }
+
+    fn insert(mut ref self, val: i64) -> bool {
+        if self.position(val) >= 0 {
+            return false;
+        }
+        self.vals.push(val);
+        true
+    }
+
+    fn remove(mut ref self, val: i64) -> bool {
+        let i = self.position(val);
+        if i < 0 {
+            return false;
+        }
+        let last = self.vals.pop().unwrap();
+        if i < self.vals.len() {
+            self.vals[i] = last;
+        }
+        true
+    }
+
+    // LeetCode wants each value equally likely; a seeded LCG picks the
+    // position, so that every arm, and every run, draws the same values.
+    fn get_random(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.vals[(self.seed / 65536) % self.vals.len()]
+    }
+
+    fn len(self) -> i64 {
+        self.vals.len()
+    }
+}
+
+struct ProbeArm {
+    vals: Vec[i64],
+    // Each slot is None or Some((value, position in vals)).
+    slots: Vec[Option[(i64, i64)]],
+    seed: i64,
+}
+
+impl ProbeArm {
+    fn new() -> ProbeArm {
+        ProbeArm { vals: Vec.new(), slots: vec![None; 8], seed: 380 }
+    }
+
+    fn home(self, val: i64) -> i64 {
+        let h = val.wrapping_mul(-7046029254386353131);
+        (h >> 32) & (self.slots.len() - 1)
+    }
+
+    // The slot holding val, or the empty slot where it would go.
+    fn find(self, val: i64) -> i64 {
+        let mask = self.slots.len() - 1;
+        let mut i = self.home(val);
+        loop {
+            match self.slots[i] {
+                None => return i,
+                Some((v, _)) => {
+                    if v == val {
+                        return i;
+                    }
+                }
+            }
+            i = (i + 1) & mask;
+        }
+    }
+
+    fn set_position(mut ref self, val: i64, pos: i64) {
+        let i = self.find(val);
+        self.slots[i] = Some((val, pos));
+    }
+
+    fn grow(mut ref self) {
+        let old = self.slots.clone();
+        self.slots = vec![None; 2 * old.len()];
+        for slot in old.iter() {
+            if let Some((v, p)) = slot {
+                self.set_position(v, p);
+            }
+        }
+    }
+
+    fn insert(mut ref self, val: i64) -> bool {
+        if self.slots[self.find(val)].is_some() {
+            return false;
+        }
+        if 2 * (self.vals.len() + 1) > self.slots.len() {
+            self.grow();
+        }
+        self.set_position(val, self.vals.len());
+        self.vals.push(val);
+        true
+    }
+
+    // Empties slot i, then walks the rest of its run and moves back any
+    // entry whose home is not strictly inside the gap it would skip.
+    fn delete_slot(mut ref self, i: i64) {
+        let mask = self.slots.len() - 1;
+        let mut gap = i;
+        let mut j = (i + 1) & mask;
+        self.slots[gap] = None;
+        loop {
+            match self.slots[j] {
+                None => return,
+                Some((v, p)) => {
+                    let h = self.home(v);
+                    // v may move into the gap unless its home lies in
+                    // (gap, j], cyclically.
+                    let stays = if gap <= j { gap < h and h <= j } else { gap < h or h <= j };
+                    if not stays {
+                        self.slots[gap] = Some((v, p));
+                        self.slots[j] = None;
+                        gap = j;
+                    }
+                }
+            }
+            j = (j + 1) & mask;
+        }
+    }
+
+    fn remove(mut ref self, val: i64) -> bool {
+        let i = self.find(val);
+        let pos = match self.slots[i] {
+            None => return false,
+            Some((_, p)) => p,
+        };
+        self.delete_slot(i);
+        let last = self.vals.pop().unwrap();
+        if pos < self.vals.len() {
+            self.vals[pos] = last;
+            self.set_position(last, pos);
+        }
+        true
+    }
+
+    // LeetCode wants each value equally likely; a seeded LCG picks the
+    // position, so that every arm, and every run, draws the same values.
+    fn get_random(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.vals[(self.seed / 65536) % self.vals.len()]
+    }
+
+    fn len(self) -> i64 {
+        self.vals.len()
+    }
+}
+
+enum AnyArm {
+    Map(MapArm),
+    Sorted(SortedArm),
+    Scan(ScanArm),
+    Probe(ProbeArm),
+}
+
+impl AnyArm {
+    fn new(arm: i64) -> AnyArm {
+        match arm {
+            0 => AnyArm.Map(MapArm.new()),
+            1 => AnyArm.Sorted(SortedArm.new()),
+            2 => AnyArm.Scan(ScanArm.new()),
+            _ => AnyArm.Probe(ProbeArm.new()),
+        }
+    }
+
+    fn insert(mut ref self, val: i64) -> bool {
+        match self {
+            AnyArm.Map(s) => s.insert(val),
+            AnyArm.Sorted(s) => s.insert(val),
+            AnyArm.Scan(s) => s.insert(val),
+            AnyArm.Probe(s) => s.insert(val),
+        }
+    }
+
+    fn remove(mut ref self, val: i64) -> bool {
+        match self {
+            AnyArm.Map(s) => s.remove(val),
+            AnyArm.Sorted(s) => s.remove(val),
+            AnyArm.Scan(s) => s.remove(val),
+            AnyArm.Probe(s) => s.remove(val),
+        }
+    }
+
+    fn get_random(mut ref self) -> i64 {
+        match self {
+            AnyArm.Map(s) => s.get_random(),
+            AnyArm.Sorted(s) => s.get_random(),
+            AnyArm.Scan(s) => s.get_random(),
+            AnyArm.Probe(s) => s.get_random(),
+        }
+    }
+
+    fn len(self) -> i64 {
+        match self {
+            AnyArm.Map(s) => s.len(),
+            AnyArm.Sorted(s) => s.len(),
+            AnyArm.Scan(s) => s.len(),
+            AnyArm.Probe(s) => s.len(),
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 380;
+    let mut checks = 0;
+    let mut fails = vec![0; 5];
+    for _ in 0..1000 {
+        // The oracle: one flag per value, offset by 50.
+        let mut member = vec![false; 100];
+        let mut count = 0;
+        let mut arms: Vec[AnyArm] = Vec.new();
+        for arm in 0..4 {
+            arms.push(AnyArm.new(arm));
+        }
+        for _ in 0..300 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let op = (seed / 65536) % 3;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let x = (seed / 65536) % 100 - 50;
+            if op == 0 {
+                let want = not member[x + 50];
+                if want {
+                    member[x + 50] = true;
+                    count += 1;
+                }
+                for arm in 0..4 {
+                    checks += 1;
+                    if arms[arm].insert(x) != want {
+                        fails[0] += 1;
+                    }
+                }
+            } else if op == 1 {
+                let want = member[x + 50];
+                if want {
+                    member[x + 50] = false;
+                    count -= 1;
+                }
+                for arm in 0..4 {
+                    checks += 1;
+                    if arms[arm].remove(x) != want {
+                        fails[0] += 1;
+                    }
+                }
+            } else if count > 0 {
+                let first = arms[0].get_random();
+                for arm in 0..4 {
+                    let got = if arm == 0 { first } else { arms[arm].get_random() };
+                    checks += 2;
+                    if got < -50 or got >= 50 or not member[got + 50] {
+                        fails[1] += 1;
+                    }
+                    if got != first {
+                        fails[2] += 1;
+                    }
+                }
+            }
+            for arm in 0..4 {
+                checks += 1;
+                if arms[arm].len() != count {
+                    fails[3] += 1;
+                }
+            }
+        }
+        for arm in 0..4 {
+            let mut seen = vec![false; 100];
+            for _ in 0..20 * count {
+                let got = arms[arm].get_random();
+                if got >= -50 and got < 50 {
+                    seen[got + 50] = true;
+                }
+            }
+            for v in 0..100 {
+                if member[v] {
+                    checks += 1;
+                    if not seen[v] {
+                        fails[4] += 1;
+                    }
+                }
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..5 {
+        failures += fails[i];
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+    }
+    println(f"1000 workloads, {checks} checks, {failures} failures");
+}

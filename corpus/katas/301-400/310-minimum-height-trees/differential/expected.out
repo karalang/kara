@@ -1,0 +1,9 @@
+trees 4800
+P1 arm disagreements 0
+P2 centre-size failures 0
+P3 adjacency failures 0
+P4 eccentricity-argmin failures 0
+P5 half-diameter failures 0
+P6 relabelling failures 0
+P7 fixed-shape failures 0
+DIFFERENTIAL OK

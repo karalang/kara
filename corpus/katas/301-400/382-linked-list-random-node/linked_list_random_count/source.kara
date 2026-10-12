@@ -1,0 +1,136 @@
+// LeetCode #382: Linked List Random Node -- count once, then walk.
+//
+// The constructor counts the nodes; a draw picks a random index and
+// walks that far. O(1) extra space and O(n) per draw, like reservoir
+// sampling, but it needs the length up front.
+
+shared struct ListNode {
+    val: i64,
+    next: Option[ListNode],
+}
+
+struct Solution {
+    head: Option[ListNode],
+    len: i64,
+    seed: i64,
+}
+
+impl Solution {
+    fn new(head: Option[ListNode]) -> Solution {
+        let mut len = 0;
+        let mut at = head;
+        while let Some(node) = at {
+            len += 1;
+            at = node.next;
+        }
+        Solution { head, len, seed: 382 }
+    }
+
+    // A number from 0 to n - 1.
+    fn below(mut ref self, n: i64) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        (self.seed / 65536) % n
+    }
+
+    fn get_random(mut ref self) -> i64 {
+        let mut steps = self.below(self.len);
+        let mut at = self.head;
+        while let Some(node) = at {
+            if steps == 0 {
+                return node.val;
+            }
+            steps -= 1;
+            at = node.next;
+        }
+        0
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn from_values(values: ref Vec[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    for v in values.iter().rev() {
+        head = Some(ListNode { val: *v, next: head });
+    }
+    head
+}
+
+fn b(x: bool) -> String {
+    if x { "true" } else { "false" }
+}
+
+// Draws `draws` values and checks them against the list's own counts with
+// a chi-square statistic: true when every draw is in the list and the
+// statistic is below a bound far out in the tail for its degrees of
+// freedom, so a fair sampler passes and a biased one does not.
+fn fair(values: Vec[i64], draws: i64) -> bool {
+    let mut lo = values[0];
+    let mut hi = values[0];
+    for v in values.iter() {
+        lo = lo.min(*v);
+        hi = hi.max(*v);
+    }
+    let mut want = vec![0; hi - lo + 1];
+    for v in values.iter() {
+        want[*v - lo] += 1;
+    }
+    let mut got = vec![0; hi - lo + 1];
+    let mut s = Solution.new(from_values(values));
+    for _ in 0..draws {
+        let x = s.get_random();
+        if x < lo or x > hi or want[x - lo] == 0 {
+            return false;
+        }
+        got[x - lo] += 1;
+    }
+    let n = values.len();
+    let mut chi = 0.0;
+    let mut kinds = 0;
+    for k in 0..want.len() {
+        if want[k] > 0 {
+            kinds += 1;
+            let e = (draws * want[k]) as f64 / n as f64;
+            let d = got[k] as f64 - e;
+            chi += d * d / e;
+        }
+    }
+    let dof = (kinds - 1) as f64;
+    chi <= dof + 6.0 * (2.0 * dof).sqrt() + 12.0
+}
+
+fn main() {
+    println(f"example [1, 2, 3], 30000 draws: fair {b(fair(vec![1, 2, 3], 30000))}");
+    let mut one = Solution.new(from_values(vec![7]));
+    let mut always = true;
+    for _ in 0..100 {
+        always = always and one.get_random() == 7;
+    }
+    println(f"one node: always 7 {b(always)}");
+    println(f"duplicates [4, 4, 9]: fair {b(fair(vec![4, 4, 9], 30000))}");
+    println(f"negative values [-5, 0, 5, -5]: fair {b(fair(vec![-5, 0, 5, -5], 30000))}");
+    let mut long: Vec[i64] = Vec.new();
+    for i in 0..1000 {
+        long.push(i % 37);
+    }
+    println(f"1000 nodes of 37 values: fair {b(fair(long, 5000))}");
+    // 200 random lists of 1 to 60 nodes with values from -20 to 19, each
+    // drawn 20 times per node.
+    let mut seed: i64 = 382;
+    let mut passed = 0;
+    let mut nodes = 0;
+    for _ in 0..200 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 1 + (seed / 65536) % 60;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            values.push((seed / 65536) % 40 - 20);
+        }
+        nodes += n;
+        if fair(values, 20 * n) {
+            passed += 1;
+        }
+    }
+    println(f"200 random lists, {nodes} nodes: {passed} fair");
+}

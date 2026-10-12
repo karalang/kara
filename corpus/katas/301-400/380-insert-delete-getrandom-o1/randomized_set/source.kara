@@ -1,0 +1,110 @@
+// LeetCode #380: Insert Delete GetRandom O(1) -- a Vec and a Map.
+//
+// The values live in a Vec, so a random one is a random position, and a
+// Map gives each value's position. Removing a value moves the last value
+// into its slot and pops the end, so the Vec never has a hole, and only
+// the moved value's position changes. Every operation is O(1) on
+// average.
+//
+// Every arm keeps the values in a Vec laid out this way, so that the
+// same draws give the same values in every arm; they differ in how a
+// value's position is found.
+
+struct RandomizedSet {
+    vals: Vec[i64],
+    index: Map[i64, i64],
+    seed: i64,
+}
+
+impl RandomizedSet {
+    fn new() -> RandomizedSet {
+        RandomizedSet { vals: Vec.new(), index: Map.new(), seed: 380 }
+    }
+
+    fn insert(mut ref self, val: i64) -> bool {
+        if self.index.contains_key(val) {
+            return false;
+        }
+        self.index.insert(val, self.vals.len());
+        self.vals.push(val);
+        true
+    }
+
+    fn remove(mut ref self, val: i64) -> bool {
+        match self.index.remove(val) {
+            None => false,
+            Some(i) => {
+                let last = self.vals.pop().unwrap();
+                if i < self.vals.len() {
+                    self.vals[i] = last;
+                    self.index.insert(last, i);
+                }
+                true
+            }
+        }
+    }
+
+    // LeetCode wants each value equally likely; a seeded LCG picks the
+    // position, so that every arm, and every run, draws the same values.
+    fn get_random(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.vals[(self.seed / 65536) % self.vals.len()]
+    }
+
+    fn len(self) -> i64 {
+        self.vals.len()
+    }
+}
+
+fn b(x: bool) -> String {
+    if x { "true" } else { "false" }
+}
+
+fn main() {
+    let mut s = RandomizedSet.new();
+    println(f"example: insert 1 {b(s.insert(1))}, remove 2 {b(s.remove(2))}, insert 2 {b(s.insert(2))}");
+    let r = s.get_random();
+    println(f"get_random is 1 or 2: {b(r == 1 or r == 2)}");
+    println(f"remove 1 {b(s.remove(1))}, insert 2 {b(s.insert(2))}, get_random {s.get_random()}");
+    let mut t = RandomizedSet.new();
+    println(f"remove from empty: {b(t.remove(5))}");
+    println(f"negative values: insert -7 {b(t.insert(-7))}, insert -7 {b(t.insert(-7))}, get_random {t.get_random()}");
+    println(f"remove the last value: remove -7 {b(t.remove(-7))}, insert -7 {b(t.insert(-7))}");
+    let mut u = RandomizedSet.new();
+    for v in 0..10 {
+        u.insert(v * v);
+    }
+    u.remove(0);
+    u.remove(81);
+    u.remove(25);
+    let mut total = 0;
+    for _ in 0..100 {
+        total += u.get_random();
+    }
+    println(f"after removing from both ends and the middle: sum of 100 draws {total}");
+    // Random workloads: 100 sets driven by 1,000 operations each over
+    // values from -50 to 49, a third insert, a third remove, a third
+    // get_random (only when the set is not empty).
+    let mut seed: i64 = 380;
+    let mut checksum: i64 = 0;
+    for _ in 0..100 {
+        let mut rs = RandomizedSet.new();
+        for _ in 0..1000 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let op = (seed / 65536) % 3;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let x = (seed / 65536) % 100 - 50;
+            let v = if op == 0 {
+                if rs.insert(x) { 1 } else { 0 }
+            } else if op == 1 {
+                if rs.remove(x) { 1 } else { 0 }
+            } else if rs.len() > 0 {
+                rs.get_random() + 100
+            } else {
+                7
+            };
+            checksum = (checksum * 31 + v) % 1000000007;
+        }
+    }
+    println(f"100 random workloads: checksum {checksum}");
+}

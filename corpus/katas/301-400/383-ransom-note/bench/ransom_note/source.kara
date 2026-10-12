@@ -1,0 +1,47 @@
+// Benchmark for #383: a pool of 1,000,000 random lowercase letters built
+// once, and 10,000 pairs of windows of it: a note of 30,000 to 69,999
+// letters and a magazine of 40,000 to 79,999, the problem's largest
+// inputs being 100,000. Each pair runs the kata's ★ arm (26 counts); the
+// answers are counted and folded into a checksum.
+
+fn can_construct(ransom_note: Str, magazine: Str) -> bool {
+    let mut count = vec![0; 26];
+    for b in magazine.bytes() {
+        count[(b - b'a') as i64] += 1;
+    }
+    for b in ransom_note.bytes() {
+        let k = (b - b'a') as i64;
+        count[k] -= 1;
+        if count[k] < 0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn main() {
+    let mut seed: i64 = 383;
+    let mut pool = String.new();
+    for _ in 0..1000000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        pool.push(((seed / 65536) % 26 + 97) as u8 as char);
+    }
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..10000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 30000 + (seed / 64) % 40000;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let m = 40000 + (seed / 64) % 40000;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let a = (seed / 64) % (1000000 - n);
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let b = (seed / 64) % (1000000 - m);
+        let ok = can_construct(pool[a..a + n], pool[b..b + m]);
+        if ok {
+            yes += 1;
+        }
+        checksum = (checksum * 3 + if ok { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"{yes} of 10000 can be built, checksum {checksum}");
+}
