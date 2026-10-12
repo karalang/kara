@@ -4224,6 +4224,9 @@ pub(super) fn cmd_build_mir(
         crate::mir::interp::set_source_name(filename);
         let ir = crate::mir::lower::build_source(&src)
             .and_then(|l| {
+                // Conflicting `par` branches are refused, as on every MIR
+                // backend.
+                crate::mir::lower::par_check(&l)?;
                 crate::codegen::mir::compile_mir_ir(&l.program, &l.tys)
                     .map_err(|e| format!("llvm: {e}"))
             })

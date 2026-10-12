@@ -31,6 +31,7 @@ mod call;
 mod callable;
 mod cells;
 mod clone;
+mod debug;
 mod deque;
 mod drop;
 mod fmt;
@@ -87,8 +88,12 @@ pub fn compile_mir<'ctx>(
         program
     };
     let mut cx = Cx::new(llcx, name, program, tys);
+    if let Some(source) = interp::source_name() {
+        cx.debug_init(source);
+    }
     cx.c_main()?;
     cx.drain()?;
+    cx.debug_finish();
     cx.module.verify().map_err(|e| e.to_string())?;
     Ok(cx.module)
 }
@@ -126,6 +131,12 @@ pub struct Cx<'ctx, 'p> {
     todo: Vec<&'p Body>,
     /// The global holding each static, by index.
     statics: HashMap<u32, PointerValue<'ctx>>,
+    /// Line tables, when the program has a source file (`debug.rs`).
+    debug: Option<debug::Debug<'ctx>>,
+    /// Where the statement or terminator being lowered is (`debug.rs`).
+    site: crate::token::Span,
+    /// Whether each body can abort, as found so far (`debug.rs`).
+    aborts: HashMap<String, bool>,
 }
 
 impl<'ctx, 'p> Cx<'ctx, 'p> {
@@ -147,6 +158,9 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             shims: callable::Shims::default(),
             todo: Vec::new(),
             statics: HashMap::new(),
+            debug: None,
+            site: crate::token::Span::default(),
+            aborts: HashMap::new(),
         }
     }
 
@@ -326,6 +340,9 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         let f = self.function(&body.instance.name)?;
         let entry = self.llcx.append_basic_block(f, "entry");
         self.builder.position_at_end(entry);
+        let name = &body.instance.name;
+        let start = self.body_start(body);
+        self.debug_enter(name, &fn_symbol(name), start, f);
         self.body = Some(body);
         self.locals.clear();
         for (i, decl) in body.locals.iter().enumerate() {
@@ -359,8 +376,11 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         for (i, block) in body.blocks.iter().enumerate() {
             self.builder.position_at_end(self.blocks[i]);
             for s in &block.statements {
+                self.locate(s.source_info.span);
                 self.statement(s)?;
             }
+            self.locate(block.terminator.source_info.span);
+            self.note_call_site(&block.terminator.kind)?;
             match &block.terminator.kind {
                 TerminatorKind::Drop { place, target, .. } => {
                     self.drop_terminator(place, *target)?
@@ -368,6 +388,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                 kind => self.terminator(kind)?,
             }
         }
+        self.debug_leave();
         self.body = None;
         Ok(())
     }
@@ -415,7 +436,12 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             .add_function("karac.main", i32t.fn_type(&[], false), None);
         self.builder
             .position_at_end(self.llcx.append_basic_block(f, "entry"));
+        let start = self.body_start(body);
+        self.debug_enter("karac.main", "karac.main", start, f);
         self.init_statics()?;
+        // A static's initializer may be lowered meanwhile, leaving no
+        // location set.
+        self.debug_at(start);
         let ret_ty = body.return_ty();
         let ret = self.c_main_slot(ret_ty, "ret")?;
         if !task {
@@ -485,6 +511,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         self.builder
             .build_return(Some(&code))
             .map_err(|e| e.to_string())?;
+        self.debug_leave();
         // The C `main` runs that body on a thread with a deep stack, as the
         // interpreter's recursion is not bounded by the process's stack.
         let fty = i32t.fn_type(&[], false);

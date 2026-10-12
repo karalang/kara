@@ -103,18 +103,21 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(())
     }
 
-    /// `karac_mir_abort(msg)`, which does not return.
+    /// `karac_mir_abort_at(msg, at)`, which does not return: `msg` (or a
+    /// `panic`'s own message), at the place `debug.rs` names.
     pub(super) fn abort_with(&mut self, msg: &str) -> R<()> {
         let (s, n) = self.str_const(msg)?;
+        let (at, at_n) = self.abort_site()?;
         let pt = self.ptr_ty();
+        let i64t = self.llcx.i64_type();
         let f = self.extern_fn(
-            "karac_mir_abort",
+            "karac_mir_abort_at",
             self.llcx
                 .void_type()
-                .fn_type(&[pt.into(), self.llcx.i64_type().into()], false),
+                .fn_type(&[pt.into(), i64t.into(), pt.into(), i64t.into()], false),
         );
         self.builder
-            .build_call(f, &[s.into(), n.into()], "")
+            .build_call(f, &[s.into(), n.into(), at.into(), at_n.into()], "")
             .map_err(e)?;
         self.builder.build_unreachable().map_err(e)?;
         Ok(())

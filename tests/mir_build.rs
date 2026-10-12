@@ -188,3 +188,115 @@ fn mir_build_runs_derived_serde() {
         }
     }
 }
+
+/// `karac build --mir` of `src`, saved as `main.kara` in `dir`, with `envs`
+/// set: the executable, or `None` to skip when there is no runtime to link.
+fn cli_build(dir: &Scratch, src: &str, envs: &[(&str, &str)]) -> Option<PathBuf> {
+    let file = dir.path().join("main.kara");
+    std::fs::write(&file, src).unwrap();
+    let exe = dir.path().join("main");
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args([
+            "build",
+            "--mir",
+            file.to_str().unwrap(),
+            "-o",
+            exe.to_str().unwrap(),
+        ])
+        .envs(envs.iter().copied())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    common::link_or_skip(if out.status.success() {
+        Ok(())
+    } else {
+        Err(stderr.to_string())
+    })?;
+    Some(exe)
+}
+
+/// A compiled runtime error says where it happened, as the MIR interpreter
+/// does: the statement in the program's own code, or, for a panic inside
+/// the library (`unwrap`), the program's call into it.
+#[test]
+fn mir_build_reports_where_a_panic_happened() {
+    let cases = [
+        (
+            "fn pick(v: ref Vec[i64], i: i64) -> i64 {\n    v[i]\n}\n\
+             fn main() {\n    let v = vec![1, 2, 3];\n    println(f\"{pick(v, 7)}\");\n}\n",
+            "runtime error: index out of bounds\n  at {f}:2:5\nError return trace:\n  {f}:2:5\n",
+        ),
+        (
+            "fn main() {\n    let o: Option[i64] = None;\n    println(\"before\");\n    \
+             let x = o.unwrap();\n    println(f\"{x}\");\n}\n",
+            "runtime error: called unwrap() on None\n  at {f}:4:13\nError return trace:\n  {f}:4:13\n",
+        ),
+        (
+            "fn main() {\n    let x = 3;\n    if x > 2 { panic(\"too big\"); }\n}\n",
+            "runtime error: too big\n  at {f}:3:16\nError return trace:\n  {f}:3:16\n",
+        ),
+    ];
+    for (src, want) in cases {
+        for opt in ["0", "2"] {
+            let dir = Scratch::new();
+            let Some(exe) = cli_build(&dir, src, &[("KARAC_MIR_OPT", opt)]) else {
+                return;
+            };
+            let run = Command::new(&exe).output().unwrap();
+            assert_eq!(run.status.code(), Some(101), "at -O{opt}");
+            let f = dir.path().join("main.kara");
+            let want = want.replace("{f}", &f.to_string_lossy());
+            assert_eq!(String::from_utf8_lossy(&run.stderr), want, "at -O{opt}");
+        }
+    }
+}
+
+/// `KARAC_DEBUG_INFO=1` gives the compiled program line tables: gdb stops
+/// at a Kāra line and its backtrace names the Kāra lines of each frame, at
+/// -O0 and through -O2's inlining. Skipped without a usable gdb.
+#[test]
+fn mir_build_line_tables_drive_gdb() {
+    let gdb_ok = Command::new("gdb")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gdb_ok {
+        eprintln!("skipping: no gdb");
+        return;
+    }
+    let src = "fn pick(v: ref Vec[i64], i: i64) -> i64 {\n    v[i]\n}\n\n\
+               fn main() {\n    let v = vec![1, 2, 3];\n    println(f\"{pick(v, 1)}\");\n}\n";
+    for opt in ["0", "2"] {
+        let dir = Scratch::new();
+        let envs = [("KARAC_MIR_OPT", opt), ("KARAC_DEBUG_INFO", "1")];
+        let Some(exe) = cli_build(&dir, src, &envs) else {
+            return;
+        };
+        let out = Command::new("gdb")
+            .args([
+                "-batch",
+                "-ex",
+                "break main.kara:2",
+                "-ex",
+                "run",
+                "-ex",
+                "bt",
+            ])
+            .arg(&exe)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        if text.contains("ptrace") || text.contains("Operation not permitted") {
+            eprintln!("skipping: gdb cannot trace here\n{text}");
+            return;
+        }
+        let frames: Vec<&str> = text.lines().filter(|l| l.starts_with('#')).collect();
+        assert!(
+            frames.len() >= 2
+                && frames[0].ends_with("main.kara:2")
+                && frames[1].ends_with("main.kara:7"),
+            "at -O{opt}:\n{text}"
+        );
+    }
+}

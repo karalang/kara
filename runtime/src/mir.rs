@@ -1463,6 +1463,34 @@ pub unsafe extern "C" fn karac_mir_abort(ptr: *const u8, len: usize) -> ! {
     karac_mir_exit(101)
 }
 
+/// A runtime error at a place in the source: the message, then `at`
+/// (`file:line:col`), as the MIR interpreter reports one; then exit 101.
+/// An empty `at` reports the message alone.
+///
+/// # Safety
+/// `ptr` is readable for `len` bytes and `at` for `at_len`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_abort_at(
+    ptr: *const u8,
+    len: usize,
+    at: *const u8,
+    at_len: usize,
+) -> ! {
+    // SAFETY: the caller's contract.
+    let msg = PANIC
+        .with(|p| p.borrow_mut().take())
+        .unwrap_or_else(|| String::from_utf8_lossy(unsafe { bytes(ptr, len) }).into_owned());
+    // SAFETY: the caller's contract.
+    let at = String::from_utf8_lossy(unsafe { bytes(at, at_len) });
+    let report = if at.is_empty() {
+        format!("runtime error: {msg}\n")
+    } else {
+        format!("runtime error: {msg}\n  at {at}\nError return trace:\n  {at}\n")
+    };
+    write(true, report.as_bytes());
+    karac_mir_exit(101)
+}
+
 /// A string in Rust's `Debug` form (`"a\n"`), for `dbg`.
 ///
 /// # Safety
