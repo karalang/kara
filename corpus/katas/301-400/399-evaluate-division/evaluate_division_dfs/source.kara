@@ -12,7 +12,7 @@ fn walk(graph: Map[String, Vec[(String, f64)]], at: String, goal: String, produc
     seen.insert(at.clone());
     for (next, w) in graph[at].iter() {
         if not seen.contains(next) {
-            let r = walk(graph, next, goal, product * w, seen);
+            let r = walk(graph, next, goal, product * *w, seen);
             if r >= 0.0 {
                 return r;
             }

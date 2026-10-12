@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/450-delete-node-in-a-bst/delete_node_predecessor.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared", "lib:set"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "132d75f4b+local"
+extracted_src = "2861d255"
+model_rev = "1aa23105"
+model_src = "2861d255"

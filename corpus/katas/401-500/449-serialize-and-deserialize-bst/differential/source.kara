@@ -1,0 +1,348 @@
+// Differential test for LeetCode #449: Serialize and Deserialize BST.
+//
+// Copies of the four codecs, each run on 1,500 random search trees of
+// distinct values from 0 to 10,000: up to 2, 19 or 119 values, inserted
+// in random order or one time in five in ascending order (a chain).
+// Properties:
+//   P1  deserializing the text gives back the same tree
+//   P2  serializing that tree again gives the same text
+//   P3  the rebuilt tree's inorder is the values, sorted
+//   P4  the same values inserted in another order give the same text
+//       exactly when they give the same tree
+//   P5  a tree of up to 30 consecutive values, at an end of the range
+//       two times in three, comes back the same
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- preorder: codec.kara
+
+fn write_preorder_preorder(node: Option[TreeNode], out: mut ref String) {
+    if let Some(n) = node {
+        if out.len() > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{n.val}");
+        write_preorder_preorder(n.left, out);
+        write_preorder_preorder(n.right, out);
+    }
+}
+
+fn serialize_preorder(root: Option[TreeNode]) -> String {
+    let mut out = String.new();
+    write_preorder_preorder(root, mut out);
+    out
+}
+
+// Builds the subtree of values from low to high, both inclusive, taking
+// them from values[*at] onward.
+fn build_preorder(values: Vec[i64], at: mut ref i64, low: i64, high: i64) -> Option[TreeNode] {
+    if *at == values.len() or values[*at] < low or values[*at] > high {
+        return None;
+    }
+    let v = values[*at];
+    *at += 1;
+    let left = build_preorder(values, at, low, v - 1);
+    let right = build_preorder(values, at, v + 1, high);
+    Some(TreeNode { val: v, left: left, right: right })
+}
+
+fn deserialize_preorder(data: Str) -> Option[TreeNode] {
+    let mut values: Vec[i64] = Vec.new();
+    if data.len() > 0 {
+        for token in data.split(",") {
+            values.push(i64.parse(token).expect("a number"));
+        }
+    }
+    let mut at = 0;
+    build_preorder(values, mut at, i64.MIN, i64.MAX)
+}
+
+// ---- postorder: codec_postorder.kara
+
+fn write_postorder_postorder(node: Option[TreeNode], out: mut ref String) {
+    if let Some(n) = node {
+        write_postorder_postorder(n.left, out);
+        write_postorder_postorder(n.right, out);
+        if out.len() > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{n.val}");
+    }
+}
+
+fn serialize_postorder(root: Option[TreeNode]) -> String {
+    let mut out = String.new();
+    write_postorder_postorder(root, mut out);
+    out
+}
+
+// Builds the subtree of values from low to high, both inclusive, taking
+// them from values[*at] backwards; *at is -1 once all are taken.
+fn build_postorder(values: Vec[i64], at: mut ref i64, low: i64, high: i64) -> Option[TreeNode] {
+    if *at < 0 or values[*at] < low or values[*at] > high {
+        return None;
+    }
+    let v = values[*at];
+    *at -= 1;
+    let right = build_postorder(values, at, v + 1, high);
+    let left = build_postorder(values, at, low, v - 1);
+    Some(TreeNode { val: v, left: left, right: right })
+}
+
+fn deserialize_postorder(data: Str) -> Option[TreeNode] {
+    let mut values: Vec[i64] = Vec.new();
+    if data.len() > 0 {
+        for token in data.split(",") {
+            values.push(i64.parse(token).expect("a number"));
+        }
+    }
+    let mut at = values.len() - 1;
+    build_postorder(values, mut at, i64.MIN, i64.MAX)
+}
+
+// ---- insert: codec_insert.kara
+
+fn write_preorder_insert(node: Option[TreeNode], out: mut ref String) {
+    if let Some(n) = node {
+        if out.len() > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{n.val}");
+        write_preorder_insert(n.left, out);
+        write_preorder_insert(n.right, out);
+    }
+}
+
+fn serialize_insert(root: Option[TreeNode]) -> String {
+    let mut out = String.new();
+    write_preorder_insert(root, mut out);
+    out
+}
+
+fn deserialize_insert(data: Str) -> Option[TreeNode] {
+    if data.len() == 0 {
+        return None;
+    }
+    let mut root: Option[TreeNode] = None;
+    for token in data.split(",") {
+        let v = i64.parse(token).expect("a number");
+        let fresh = TreeNode { val: v, left: None, right: None };
+        match root {
+            None => root = Some(fresh),
+            Some(top) => {
+                let mut node = top;
+                loop {
+                    let next = if v < node.val { node.left } else { node.right };
+                    match next {
+                        Some(child) => node = child,
+                        None => {
+                            if v < node.val {
+                                node.left = Some(fresh);
+                            } else {
+                                node.right = Some(fresh);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// ---- compact: codec_compact.kara
+
+const OFFSET: u32 = 256;
+
+fn write_preorder_compact(node: Option[TreeNode], out: mut ref String) {
+    if let Some(n) = node {
+        out.push(char.try_from(n.val as u32 + OFFSET).expect("a value from 0 to 10,000"));
+        write_preorder_compact(n.left, out);
+        write_preorder_compact(n.right, out);
+    }
+}
+
+fn serialize_compact(root: Option[TreeNode]) -> String {
+    let mut out = String.new();
+    write_preorder_compact(root, mut out);
+    out
+}
+
+fn deserialize_compact(data: Str) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    let mut path: Vec[TreeNode] = Vec.new();
+    for c in data.chars() {
+        let v = (c as u32 - OFFSET) as i64;
+        let fresh = TreeNode { val: v, left: None, right: None };
+        if path.len() == 0 {
+            root = Some(fresh);
+        } else if v < path[path.len() - 1].val {
+            path[path.len() - 1].left = Some(fresh);
+        } else {
+            let mut parent = path.pop().expect("a node on the path");
+            while path.len() > 0 and path[path.len() - 1].val < v {
+                parent = path.pop().expect("a node on the path");
+            }
+            parent.right = Some(fresh);
+        }
+        path.push(fresh);
+    }
+    root
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn round(arm: i64, root: Option[TreeNode]) -> (String, Option[TreeNode]) {
+    if arm == 0 {
+        let text = serialize_preorder(root);
+        let back = deserialize_preorder(text);
+        (text, back)
+    } else if arm == 1 {
+        let text = serialize_postorder(root);
+        let back = deserialize_postorder(text);
+        (text, back)
+    } else if arm == 2 {
+        let text = serialize_insert(root);
+        let back = deserialize_insert(text);
+        (text, back)
+    } else {
+        let text = serialize_compact(root);
+        let back = deserialize_compact(text);
+        (text, back)
+    }
+}
+
+fn reserialize(arm: i64, root: Option[TreeNode]) -> String {
+    let (text, _) = round(arm, root);
+    text
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    let fresh = TreeNode { val: v, left: None, right: None };
+    let Some(top) = root else {
+        return Some(fresh);
+    };
+    let mut node = top;
+    loop {
+        let next = if v < node.val { node.left } else { node.right };
+        match next {
+            Some(child) => node = child,
+            None => {
+                if v < node.val {
+                    node.left = Some(fresh);
+                } else {
+                    node.right = Some(fresh);
+                }
+                break;
+            }
+        }
+    }
+    Some(top)
+}
+
+fn tree_of(values: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    for v in values {
+        root = insert(root, v);
+    }
+    root
+}
+
+fn same(a: Option[TreeNode], b: Option[TreeNode]) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.val == y.val and same(x.left, y.left) and same(x.right, y.right),
+        _ => false,
+    }
+}
+
+fn inorder(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        inorder(n.left, out);
+        out.push(n.val);
+        inorder(n.right, out);
+    }
+}
+
+fn shuffle(values: mut ref Vec[i64], seed: mut ref i64) {
+    let n = values.len();
+    for i in 0..n {
+        let j = i + next_random(seed) % (n - i);
+        values.swap(i, j);
+    }
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4490;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // Distinct values from 0 to 10,000 in random order, sometimes
+        // few, sometimes sorted into a chain.
+        let n = next_random(mut seed) % [3, 20, 120][next_random(mut seed) % 3];
+        let mut used: Set[i64] = Set.new();
+        let mut values: Vec[i64] = Vec.new();
+        while values.len() < n {
+            let v = next_random(mut seed) % 10001;
+            if used.insert(v) {
+                values.push(v);
+            }
+        }
+        if next_random(mut seed) % 5 == 0 {
+            values.sort();
+        }
+        let root = tree_of(values);
+        let mut sorted = values.clone();
+        sorted.sort();
+        // The same values inserted in another order.
+        let mut other_order = values.clone();
+        shuffle(mut other_order, mut seed);
+        let other = tree_of(other_order);
+        // Consecutive values, at an end of the range one time in two.
+        let k = 1 + next_random(mut seed) % 30;
+        let start = [0, 10001 - k, next_random(mut seed) % (10002 - k)][next_random(mut seed) % 3];
+        let mut run: Vec[i64] = Vec.new();
+        for v in start..start + k {
+            run.push(v);
+        }
+        shuffle(mut run, mut seed);
+        let run_tree = tree_of(run);
+        for arm in 0..4 {
+            checks += 5;
+            let (text, back) = round(arm, root);
+            report(1, arm, case, same(root, back), mut failures);
+            report(2, arm, case, reserialize(arm, back) == text, mut failures);
+            let mut walked: Vec[i64] = Vec.new();
+            inorder(back, mut walked);
+            report(3, arm, case, walked == sorted, mut failures);
+            let other_text = reserialize(arm, other);
+            report(4, arm, case, (other_text == text) == same(root, other), mut failures);
+            let (_, run_back) = round(arm, run_tree);
+            report(5, arm, case, same(run_tree, run_back), mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

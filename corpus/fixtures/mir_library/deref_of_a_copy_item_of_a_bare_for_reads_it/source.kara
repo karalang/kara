@@ -1,0 +1,19 @@
+
+fn total(vals: Vec[i64]) -> i64 {
+    let mut t = 0;
+    for v in vals {
+        t += *v;
+    }
+    t
+}
+
+fn main() {
+    let mut counts: Map[char, i64] = Map.new();
+    counts.insert('a', 2);
+    counts.insert('b', 3);
+    let mut s = 0;
+    for (_, c) in counts {
+        s += *c;
+    }
+    println(f"{s} {total(vec![1, 2, 3])}");
+}

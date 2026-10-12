@@ -1,0 +1,8 @@
+source = "tests/mir_library.rs::a_mutating_method_on_a_range_view_writes_through_it"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+expected_from = "pin"
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"
+extracted_src = "9d797c91"

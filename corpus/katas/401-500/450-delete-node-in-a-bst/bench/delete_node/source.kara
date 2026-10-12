@@ -1,0 +1,111 @@
+// Benchmark for #450: the ★ arm (delete_node.kara) on one random search
+// tree of 1,000,000 values, built once, then 1,000,000 deletes of
+// random keys.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn delete_node(root: Option[TreeNode], key: i64) -> Option[TreeNode] {
+    let Some(node) = root else {
+        return None;
+    };
+    if key < node.val {
+        node.left = delete_node(node.left, key);
+        return Some(node);
+    }
+    if key > node.val {
+        node.right = delete_node(node.right, key);
+        return Some(node);
+    }
+    match (node.left, node.right) {
+        (None, right) => right,
+        (left, None) => left,
+        (Some(_), Some(right)) => {
+            let mut successor = right;
+            while let Some(smaller) = successor.left {
+                successor = smaller;
+            }
+            node.val = successor.val;
+            node.right = delete_node(node.right, successor.val);
+            Some(node)
+        }
+    }
+}
+
+// ---- benchmark --------------------------------------------------------
+
+// Inserts v into the search tree rooted at root (v not already there)
+// and returns the root.
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    let fresh = TreeNode { val: v, left: None, right: None };
+    let Some(top) = root else {
+        return Some(fresh);
+    };
+    let mut node = top;
+    loop {
+        if v < node.val {
+            match node.left {
+                Some(l) => node = l,
+                None => {
+                    node.left = Some(fresh);
+                    break;
+                }
+            }
+        } else {
+            match node.right {
+                Some(r) => node = r,
+                None => {
+                    node.right = Some(fresh);
+                    break;
+                }
+            }
+        }
+    }
+    Some(top)
+}
+
+fn walk(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        walk(n.left, out);
+        out.push(n.val);
+        walk(n.right, out);
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let n = 1000000;
+    let deletes = 1000000;
+    let mut seed: i64 = 450;
+    // A shuffle of the even numbers below 2n.
+    let mut values: Vec[i64] = Vec.new();
+    for i in 0..n {
+        values.push(i * 2);
+    }
+    for i in 0..n {
+        let r = next_random(mut seed) * 32768 + next_random(mut seed);
+        values.swap(i, i + r % (n - i));
+    }
+    let mut root: Option[TreeNode] = None;
+    for v in values {
+        root = insert(root, v);
+    }
+    for _ in 0..deletes {
+        let key = (next_random(mut seed) * 32768 + next_random(mut seed)) % (2 * n);
+        root = delete_node(root, key);
+    }
+    let mut left: Vec[i64] = Vec.new();
+    walk(root, mut left);
+    let mut checksum: i64 = 0;
+    for v in left {
+        checksum = (checksum * 31 + v) % 1000000007;
+    }
+    println(f"{deletes} deletes from {n} values: {left.len()} nodes left, checksum {checksum}");
+}

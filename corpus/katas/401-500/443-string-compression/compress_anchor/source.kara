@@ -23,13 +23,7 @@ fn compress(chars: mut ref Vec[char]) -> i64 {
                     write += 1;
                     count /= 10;
                 }
-                let mut lo = first;
-                let mut hi = write - 1;
-                while lo < hi {
-                    chars.swap(lo, hi);
-                    lo += 1;
-                    hi -= 1;
-                }
+                chars[first..write].reverse();
             }
             anchor = read + 1;
         }

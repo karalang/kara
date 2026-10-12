@@ -1,0 +1,9 @@
+"tree" -> "eert", valid true
+"cccaaa" -> "aaaccc", valid true
+"Aabb" -> "bbAa", valid true
+"" -> "", valid true
+"z" -> "z", valid true
+"dcba" -> "abcd", valid true
+"2a1b2c1" -> "1122abc", valid true
+"mississippi" -> "iiiissssppm", valid true
+300 random strings: 28459 characters, all valid true, checksum 223547160

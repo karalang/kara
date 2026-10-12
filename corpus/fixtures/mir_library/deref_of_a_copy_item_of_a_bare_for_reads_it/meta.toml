@@ -1,0 +1,8 @@
+source = "tests/mir_library.rs::deref_of_a_copy_item_of_a_bare_for_reads_it"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+expected_from = "pin"
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"
+extracted_src = "464f6104"

@@ -1,0 +1,126 @@
+// Benchmark for #449: the ★ arm (codec.kara) on 10 random search trees
+// of 50,000 values, built once, then serialized and deserialized 20
+// times over.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn write_preorder(node: Option[TreeNode], out: mut ref String) {
+    if let Some(n) = node {
+        if out.len() > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{n.val}");
+        write_preorder(n.left, out);
+        write_preorder(n.right, out);
+    }
+}
+
+fn serialize(root: Option[TreeNode]) -> String {
+    let mut out = String.new();
+    write_preorder(root, mut out);
+    out
+}
+
+// Builds the subtree of values from low to high, both inclusive, taking
+// them from values[*at] onward.
+fn build(values: Vec[i64], at: mut ref i64, low: i64, high: i64) -> Option[TreeNode] {
+    if *at == values.len() or values[*at] < low or values[*at] > high {
+        return None;
+    }
+    let v = values[*at];
+    *at += 1;
+    let left = build(values, at, low, v - 1);
+    let right = build(values, at, v + 1, high);
+    Some(TreeNode { val: v, left: left, right: right })
+}
+
+fn deserialize(data: Str) -> Option[TreeNode] {
+    let mut values: Vec[i64] = Vec.new();
+    if data.len() > 0 {
+        for token in data.split(",") {
+            values.push(i64.parse(token).expect("a number"));
+        }
+    }
+    let mut at = 0;
+    build(values, mut at, i64.MIN, i64.MAX)
+}
+
+// ---- benchmark --------------------------------------------------------
+
+// Inserts v into the search tree rooted at root (v not already there)
+// and returns the root.
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    let fresh = TreeNode { val: v, left: None, right: None };
+    let Some(top) = root else {
+        return Some(fresh);
+    };
+    let mut node = top;
+    loop {
+        if v < node.val {
+            match node.left {
+                Some(l) => node = l,
+                None => {
+                    node.left = Some(fresh);
+                    break;
+                }
+            }
+        } else {
+            match node.right {
+                Some(r) => node = r,
+                None => {
+                    node.right = Some(fresh);
+                    break;
+                }
+            }
+        }
+    }
+    Some(top)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let trees = 10;
+    let n = 50000;
+    let rounds = 20;
+    let mut seed: i64 = 449;
+    let mut roots: Vec[Option[TreeNode]] = Vec.new();
+    for t in 0..trees {
+        // A shuffle of 0 to n - 1, spread out and shifted per tree.
+        let mut values: Vec[i64] = Vec.new();
+        for i in 0..n {
+            values.push(i * 3 + t);
+        }
+        for i in 0..n {
+            let r = next_random(mut seed) * 32768 + next_random(mut seed);
+            values.swap(i, i + r % (n - i));
+        }
+        let mut root: Option[TreeNode] = None;
+        for v in values {
+            root = insert(root, v);
+        }
+        roots.push(root);
+    }
+    let mut characters: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        for root in roots {
+            let text = serialize(root);
+            let back = deserialize(text);
+            let top = match back {
+                Some(node) => node.val,
+                None => -1,
+            };
+            characters += text.len();
+            checksum = (checksum * 31 + text.len() + top) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds on {trees} trees of {n}: {characters} characters, checksum {checksum}");
+}

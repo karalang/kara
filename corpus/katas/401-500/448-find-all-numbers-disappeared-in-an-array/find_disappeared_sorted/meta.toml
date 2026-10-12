@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/448-find-all-numbers-disappeared-in-an-array/find_disappeared_sorted.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "132d75f4b+local"
+extracted_src = "d8088f42"
+model_rev = "1aa23105"
+model_src = "d8088f42"

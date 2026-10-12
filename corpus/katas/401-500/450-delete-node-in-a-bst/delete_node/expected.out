@@ -1,0 +1,10 @@
+[5,3,6,2,4,7] delete 3: [2,4,5,6,7], search tree true
+[5,3,6,2,4,7] delete 0: [2,3,4,5,6,7], search tree true
+[] delete 0: [], search tree true
+[5,3,6,2,4,7] delete 5: [2,3,4,6,7], search tree true
+[5,3,6,2,4,7] delete 7: [2,3,4,5,6], search tree true
+[1] delete 1: [], search tree true
+[1,2,3,4,5,6] delete 1: [2,3,4,5,6], search tree true
+[6,5,4,3,2,1] delete 6: [1,2,3,4,5], search tree true
+[50,30,70,20,40,60,80,35,45,65] delete 30: [20,35,40,45,50,60,65,70,80], search tree true
+300 random trees: 1426 keys found, 4574 missed, 14039 nodes left, search trees true, checksum 353514523

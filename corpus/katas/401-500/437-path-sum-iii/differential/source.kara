@@ -239,7 +239,7 @@ fn random_vals(seed: mut ref i64) -> Vec[i64] {
 fn mapped(vals: Vec[i64], factor: i64) -> Vec[i64] {
     let mut out: Vec[i64] = Vec.new();
     for v in vals {
-        out.push(if v == NULL { NULL } else { v * factor });
+        out.push(if *v == NULL { NULL } else { *v * factor });
     }
     out
 }

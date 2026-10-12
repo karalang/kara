@@ -73,7 +73,7 @@ fn walk_dfs(graph: Map[String, Vec[(String, f64)]], at: String, goal: String, pr
     seen.insert(at.clone());
     for (next, w) in graph[at].iter() {
         if not seen.contains(next) {
-            let r = walk_dfs(graph, next, goal, product * w, seen);
+            let r = walk_dfs(graph, next, goal, product * *w, seen);
             if r >= 0.0 {
                 return r;
             }
@@ -125,7 +125,7 @@ fn ed_bfs(equations: Vec[(String, String)], values: Vec[f64], queries: Vec[(Stri
                 }
                 for (next, w) in graph[at].iter() {
                     if seen.insert(next.clone()) {
-                        queue.push_back((next.clone(), product * w));
+                        queue.push_back((next.clone(), product * *w));
                     }
                 }
             }

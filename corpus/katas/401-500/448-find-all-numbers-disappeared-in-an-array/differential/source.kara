@@ -1,0 +1,200 @@
+// Differential test for LeetCode #448: Find All Numbers Disappeared in
+// an Array.
+//
+// Copies of the four arms, each run on 1,500 random cases: arrays of 1
+// to 60 numbers built from a random set of present values (each of 1
+// to n kept with chance 1, 1/2, 1/10 or 1/1,000), each placed at least
+// once and the other slots filled from the set, shuffled. Properties:
+//   P1  the answer is the numbers left out of the set, ascending
+//   P2  the answer is strictly ascending, within 1 to n, and as long as
+//       n minus the number of values present
+//   P3  the same numbers in another order give the same answer
+//   P4  renaming every value through a shuffle of 1 to n renames the
+//       answer
+//   P5  n copies of one value miss every other number, and a shuffle
+//       of 1 to n misses none
+
+// ---- marks: find_disappeared.kara
+
+fn find_disappeared_numbers_marks(nums: own Vec[i64]) -> Vec[i64] {
+    for i in 0..nums.len() {
+        let x = nums[i].abs();
+        if nums[x - 1] > 0 {
+            nums[x - 1] = -nums[x - 1];
+        }
+    }
+    let mut missing: Vec[i64] = Vec.new();
+    for i in 0..nums.len() {
+        if nums[i] > 0 {
+            missing.push(i + 1);
+        }
+    }
+    missing
+}
+
+// ---- cyclic: find_disappeared_cyclic.kara
+
+fn find_disappeared_numbers_cyclic(nums: own Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut i = 0;
+    while i < n {
+        let home = nums[i] - 1;
+        if nums[home] != nums[i] {
+            nums.swap(i, home);
+        } else {
+            i += 1;
+        }
+    }
+    let mut missing: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if nums[i] != i + 1 {
+            missing.push(i + 1);
+        }
+    }
+    missing
+}
+
+// ---- seen: find_disappeared_seen.kara
+
+fn find_disappeared_numbers_seen(nums: own Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut seen: Vec[bool] = Vec.filled(n + 1, false);
+    for x in nums {
+        seen[x] = true;
+    }
+    let mut missing: Vec[i64] = Vec.new();
+    for x in 1..n + 1 {
+        if not seen[x] {
+            missing.push(x);
+        }
+    }
+    missing
+}
+
+// ---- sorted: find_disappeared_sorted.kara
+
+fn find_disappeared_numbers_sorted(nums: own Vec[i64]) -> Vec[i64] {
+    nums.sort();
+    let n = nums.len();
+    let mut missing: Vec[i64] = Vec.new();
+    let mut at = 0;
+    for x in 1..n + 1 {
+        while at < n and nums[at] < x {
+            at += 1;
+        }
+        if at == n or nums[at] != x {
+            missing.push(x);
+        }
+    }
+    missing
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, nums: Vec[i64]) -> Vec[i64] {
+    if arm == 0 {
+        find_disappeared_numbers_marks(nums.clone())
+    } else if arm == 1 {
+        find_disappeared_numbers_cyclic(nums.clone())
+    } else if arm == 2 {
+        find_disappeared_numbers_seen(nums.clone())
+    } else {
+        find_disappeared_numbers_sorted(nums.clone())
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shuffle(values: mut ref Vec[i64], seed: mut ref i64) {
+    let n = values.len();
+    for i in 0..n {
+        let j = i + next_random(seed) % (n - i);
+        values.swap(i, j);
+    }
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4480;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // A random set of present values, each placed at least once and
+        // the remaining slots filled from the set, shuffled: the missing
+        // numbers are the rest of 1 to n.
+        let n = 1 + next_random(mut seed) % 60;
+        let keep = [1, 2, 10, 1000][next_random(mut seed) % 4];
+        let mut present: Vec[i64] = Vec.new();
+        let mut want: Vec[i64] = Vec.new();
+        for x in 1..n + 1 {
+            if next_random(mut seed) % keep == 0 or (x == n and present.len() == 0) {
+                present.push(x);
+            } else {
+                want.push(x);
+            }
+        }
+        let mut nums = present.clone();
+        while nums.len() < n {
+            nums.push(present[next_random(mut seed) % present.len()]);
+        }
+        shuffle(mut nums, mut seed);
+        // The same numbers in another order.
+        let mut reordered = nums.clone();
+        shuffle(mut reordered, mut seed);
+        // Every value x renamed label[x - 1], label a shuffle of 1 to n.
+        let mut label: Vec[i64] = Vec.new();
+        for x in 1..n + 1 {
+            label.push(x);
+        }
+        shuffle(mut label, mut seed);
+        let mut renamed: Vec[i64] = Vec.new();
+        for x in nums {
+            renamed.push(label[x - 1]);
+        }
+        let mut renamed_want: Vec[i64] = Vec.new();
+        for x in want {
+            renamed_want.push(label[x - 1]);
+        }
+        renamed_want.sort();
+        // n copies of one value: every other number is missing.
+        let k = 1 + next_random(mut seed) % n;
+        let same: Vec[i64] = Vec.filled(n, k);
+        let mut same_want: Vec[i64] = Vec.new();
+        for x in 1..n + 1 {
+            if x != k {
+                same_want.push(x);
+            }
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let got = solve(arm, nums);
+            report(1, arm, case, got == want, mut failures);
+            let mut ascending = true;
+            for i in 0..got.len() {
+                if got[i] < 1 or got[i] > n or (i > 0 and got[i - 1] >= got[i]) {
+                    ascending = false;
+                }
+            }
+            report(2, arm, case, ascending and got.len() == n - present.len(), mut failures);
+            report(3, arm, case, solve(arm, reordered) == want, mut failures);
+            report(4, arm, case, solve(arm, renamed) == renamed_want, mut failures);
+            report(5, arm, case, solve(arm, same) == same_want and solve(arm, label).len() == 0, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

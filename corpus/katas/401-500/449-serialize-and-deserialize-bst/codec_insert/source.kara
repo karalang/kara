@@ -1,0 +1,198 @@
+// LeetCode #449: Serialize and Deserialize BST -- preorder, rebuilt by
+// insertion.
+//
+// Inserting a search tree's values into an empty tree in preorder puts
+// each one back where it was: a node's value goes in before anything
+// below it, and comparisons from the root lead it to its old place.
+// Write the preorder and rebuild by plain insertion, iteratively. O(n)
+// to write; O(n * height) to rebuild, so O(n^2) on a chain.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn write_preorder(node: Option[TreeNode], out: mut ref String) {
+    if let Some(n) = node {
+        if out.len() > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{n.val}");
+        write_preorder(n.left, out);
+        write_preorder(n.right, out);
+    }
+}
+
+fn serialize(root: Option[TreeNode]) -> String {
+    let mut out = String.new();
+    write_preorder(root, mut out);
+    out
+}
+
+fn deserialize(data: Str) -> Option[TreeNode] {
+    if data.len() == 0 {
+        return None;
+    }
+    let mut root: Option[TreeNode] = None;
+    for token in data.split(",") {
+        let v = i64.parse(token).expect("a number");
+        let fresh = TreeNode { val: v, left: None, right: None };
+        match root {
+            None => root = Some(fresh),
+            Some(top) => {
+                let mut node = top;
+                loop {
+                    let next = if v < node.val { node.left } else { node.right };
+                    match next {
+                        Some(child) => node = child,
+                        None => {
+                            if v < node.val {
+                                node.left = Some(fresh);
+                            } else {
+                                node.right = Some(fresh);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// Inserts v into the search tree rooted at root (v not already there)
+// and returns the root.
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    let fresh = TreeNode { val: v, left: None, right: None };
+    let Some(top) = root else {
+        return Some(fresh);
+    };
+    let mut node = top;
+    loop {
+        if v < node.val {
+            match node.left {
+                Some(l) => node = l,
+                None => {
+                    node.left = Some(fresh);
+                    break;
+                }
+            }
+        } else {
+            match node.right {
+                Some(r) => node = r,
+                None => {
+                    node.right = Some(fresh);
+                    break;
+                }
+            }
+        }
+    }
+    Some(top)
+}
+
+fn same(a: Option[TreeNode], b: Option[TreeNode]) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.val == y.val and same(x.left, y.left) and same(x.right, y.right),
+        _ => false,
+    }
+}
+
+fn height(node: Option[TreeNode]) -> i64 {
+    match node {
+        Some(n) => 1 + height(n.left).max(height(n.right)),
+        None => 0,
+    }
+}
+
+fn visit(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        out.push(n.val);
+        visit(n.left, out);
+        visit(n.right, out);
+    }
+}
+
+// Serializes, deserializes and serializes again: whether the tree came
+// back the same, and whether the text did.
+fn round_trip(root: Option[TreeNode]) -> (bool, bool) {
+    let text = serialize(root);
+    let back = deserialize(text);
+    (same(root, back), serialize(back) == text)
+}
+
+fn show(values: Vec[i64]) {
+    let mut root: Option[TreeNode] = None;
+    for v in values {
+        root = insert(root, v);
+    }
+    let mut order: Vec[i64] = Vec.new();
+    visit(root, mut order);
+    let (tree_back, text_back) = round_trip(root);
+    let mut listed = String.new();
+    for i in 0..order.len() {
+        if i > 0 {
+            listed.push(',');
+        }
+        listed.push_str(f"{order[i]}");
+    }
+    println(f"[{listed}]: {order.len()} nodes, height {height(root)}, tree back {tree_back}, text back {text_back}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![2, 1, 3]);
+    show(Vec.new());
+    show(vec![0]);
+    show(vec![10000, 0]);
+    show(vec![1, 2, 3, 4, 5, 6]);
+    show(vec![6, 5, 4, 3, 2, 1]);
+    show(vec![50, 30, 70, 20, 40, 60, 80, 35, 45, 65]);
+    // 300 random search trees of 0 to 200 distinct values from 0 to
+    // 10,000, inserted in random order, or one time in five in
+    // ascending order, which makes a chain.
+    let count = 300;
+    let mut seed: i64 = 449;
+    let mut nodes = 0;
+    let mut heights = 0;
+    let mut round_trips = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = next_random(mut seed) % 201;
+        let mut used: Set[i64] = Set.new();
+        let mut values: Vec[i64] = Vec.new();
+        while values.len() < n {
+            let v = next_random(mut seed) % 10001;
+            if used.insert(v) {
+                values.push(v);
+            }
+        }
+        if next_random(mut seed) % 5 == 0 {
+            values.sort();
+        }
+        let mut root: Option[TreeNode] = None;
+        for v in values {
+            root = insert(root, v);
+        }
+        let (tree_back, text_back) = round_trip(root);
+        if tree_back and text_back {
+            round_trips += 1;
+        }
+        let mut order: Vec[i64] = Vec.new();
+        visit(root, mut order);
+        nodes += order.len();
+        heights += height(root);
+        for v in order {
+            checksum = (checksum * 31 + v) % 1000000007;
+        }
+    }
+    println(f"{count} random trees: {nodes} nodes, heights {heights}, {round_trips} round trips, checksum {checksum}");
+}

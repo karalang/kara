@@ -1,0 +1,111 @@
+// LeetCode #451: Sort Characters By Frequency -- counting array and
+// buckets.
+//
+// The characters are digits and letters, all ASCII, so count them in an
+// array of 128. A count is at most n, so put each character in the
+// bucket of its count, walking the codes upward so each bucket holds its
+// characters in order, then write the buckets from the largest count
+// down. O(n) time, no sort.
+
+fn frequency_sort(s: Str) -> String {
+    let mut counts = vec![0; 128];
+    for c in s.chars() {
+        counts[c as i64] += 1;
+    }
+    let mut buckets: Vec[Vec[char]] = Vec.new();
+    for _ in 0..s.len() + 1 {
+        buckets.push(Vec.new());
+    }
+    for code in 0..128 {
+        if counts[code] > 0 {
+            buckets[counts[code]].push(char.try_from(code as u32).expect("an ASCII code"));
+        }
+    }
+    let mut out = String.new();
+    let mut n = s.len();
+    while n > 0 {
+        for c in buckets[n] {
+            for _ in 0..n {
+                out.push(c);
+            }
+        }
+        n -= 1;
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// Whether out is a correct answer for s: the same characters, each
+// character's copies together, and runs that never grow longer.
+fn valid(s: Str, out: Str) -> bool {
+    let mut a: Vec[char] = s.chars().collect();
+    let mut b: Vec[char] = out.chars().collect();
+    let chars = b.clone();
+    a.sort();
+    b.sort();
+    if a != b {
+        return false;
+    }
+    let mut seen: Set[char] = Set.new();
+    let mut last_run = i64.MAX;
+    let mut i = 0;
+    while i < chars.len() {
+        let mut j = i;
+        while j < chars.len() and chars[j] == chars[i] {
+            j += 1;
+        }
+        if not seen.insert(chars[i]) or j - i > last_run {
+            return false;
+        }
+        last_run = j - i;
+        i = j;
+    }
+    true
+}
+
+fn show(s: Str) {
+    let out = frequency_sort(s);
+    println(f"\"{s}\" -> \"{out}\", valid {valid(s, out)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("tree");
+    show("cccaaa");
+    show("Aabb");
+    show("");
+    show("z");
+    show("dcba");
+    show("2a1b2c1");
+    show("mississippi");
+    // 300 random strings of 0 to 200 characters, drawn from the first
+    // 1, 3, 10 or all 62 of the digits and the letters.
+    let alphabet: Vec[char] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".chars().collect();
+    let count = 300;
+    let mut seed: i64 = 451;
+    let mut total = 0;
+    let mut all_valid = true;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = next_random(mut seed) % 201;
+        let k = [1, 3, 10, 62][next_random(mut seed) % 4];
+        let mut s = String.new();
+        for _ in 0..n {
+            s.push(alphabet[next_random(mut seed) % k]);
+        }
+        let out = frequency_sort(s);
+        total += out.len();
+        if not valid(s, out) {
+            all_valid = false;
+        }
+        for c in out.chars() {
+            checksum = (checksum * 31 + c as i64) % 1000000007;
+        }
+    }
+    println(f"{count} random strings: {total} characters, all valid {all_valid}, checksum {checksum}");
+}

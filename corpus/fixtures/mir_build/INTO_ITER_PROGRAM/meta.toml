@@ -1,0 +1,4 @@
+source = "tests/mir_build.rs::INTO_ITER_PROGRAM"
+dedup_of = []
+tags = []
+extracted_src = "96463f74"

@@ -1,0 +1,347 @@
+// Differential test for LeetCode #450: Delete Node in a BST.
+//
+// Copies of the four arms, each run on 1,500 random search trees of
+// distinct values from 0 to 3n + 2: up to 2, 19 or 119 values, inserted
+// in random order or one time in five in ascending order (a chain).
+// Properties:
+//   P1  deleting a key (present one time in two) leaves the other
+//       values, in order
+//   P2  the result is a search tree
+//   P3  deleting an absent key leaves the tree as it was
+//   P4  deleting every value in a random order keeps a search tree of
+//       the values left at each step and ends empty
+//   P5  deleting a leaf gives the tree the values make without it
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- successor: delete_node.kara
+
+fn delete_node_successor(root: Option[TreeNode], key: i64) -> Option[TreeNode] {
+    let Some(node) = root else {
+        return None;
+    };
+    if key < node.val {
+        node.left = delete_node_successor(node.left, key);
+        return Some(node);
+    }
+    if key > node.val {
+        node.right = delete_node_successor(node.right, key);
+        return Some(node);
+    }
+    match (node.left, node.right) {
+        (None, right) => right,
+        (left, None) => left,
+        (Some(_), Some(right)) => {
+            let mut successor = right;
+            while let Some(smaller) = successor.left {
+                successor = smaller;
+            }
+            node.val = successor.val;
+            node.right = delete_node_successor(node.right, successor.val);
+            Some(node)
+        }
+    }
+}
+
+// ---- splice: delete_node_splice.kara
+
+// The subtree that takes the place of node once node is gone.
+fn without_splice(node: TreeNode) -> Option[TreeNode] {
+    let Some(right) = node.right else {
+        return node.left;
+    };
+    let mut lowest = right;
+    while let Some(smaller) = lowest.left {
+        lowest = smaller;
+    }
+    lowest.left = node.left;
+    Some(right)
+}
+
+fn delete_node_splice(root: Option[TreeNode], key: i64) -> Option[TreeNode] {
+    let mut parent: Option[TreeNode] = None;
+    let mut current = root;
+    while let Some(node) = current {
+        if node.val == key {
+            break;
+        }
+        parent = Some(node);
+        current = if key < node.val { node.left } else { node.right };
+    }
+    let Some(target) = current else {
+        return root;
+    };
+    let replacement = without_splice(target);
+    match parent {
+        None => replacement,
+        Some(above) => {
+            if key < above.val {
+                above.left = replacement;
+            } else {
+                above.right = replacement;
+            }
+            root
+        }
+    }
+}
+
+// ---- predecessor: delete_node_predecessor.kara
+
+fn delete_node_predecessor(root: Option[TreeNode], key: i64) -> Option[TreeNode] {
+    let Some(node) = root else {
+        return None;
+    };
+    if key < node.val {
+        node.left = delete_node_predecessor(node.left, key);
+        Some(node)
+    } else if key > node.val {
+        node.right = delete_node_predecessor(node.right, key);
+        Some(node)
+    } else if node.left.is_none() {
+        node.right
+    } else if node.right.is_none() {
+        node.left
+    } else {
+        let mut predecessor = node.left.expect("a left child");
+        while let Some(larger) = predecessor.right {
+            predecessor = larger;
+        }
+        node.val = predecessor.val;
+        node.left = delete_node_predecessor(node.left, predecessor.val);
+        Some(node)
+    }
+}
+
+// ---- relink: delete_node_relink.kara
+
+// Unlinks the smallest node of the tree at node and returns it with the
+// rest of that tree.
+fn take_smallest_relink(node: TreeNode) -> (TreeNode, Option[TreeNode]) {
+    match node.left {
+        None => (node, node.right),
+        Some(smaller) => {
+            let (smallest, rest) = take_smallest_relink(smaller);
+            node.left = rest;
+            (smallest, Some(node))
+        }
+    }
+}
+
+fn delete_node_relink(root: Option[TreeNode], key: i64) -> Option[TreeNode] {
+    let Some(node) = root else {
+        return None;
+    };
+    if key < node.val {
+        node.left = delete_node_relink(node.left, key);
+        return Some(node);
+    }
+    if key > node.val {
+        node.right = delete_node_relink(node.right, key);
+        return Some(node);
+    }
+    let Some(right) = node.right else {
+        return node.left;
+    };
+    // `let (successor, rest)` once B-2026-10-12-27 is fixed: check
+    // refuses writing a shared value's `mut` field through a name bound
+    // by a `let` tuple pattern.
+    let mut (successor, rest) = take_smallest_relink(right);
+    successor.left = node.left;
+    successor.right = rest;
+    Some(successor)
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn delete(arm: i64, root: Option[TreeNode], key: i64) -> Option[TreeNode] {
+    if arm == 0 {
+        delete_node_successor(root, key)
+    } else if arm == 1 {
+        delete_node_splice(root, key)
+    } else if arm == 2 {
+        delete_node_predecessor(root, key)
+    } else {
+        delete_node_relink(root, key)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn insert(root: Option[TreeNode], v: i64) -> Option[TreeNode] {
+    let fresh = TreeNode { val: v, left: None, right: None };
+    let Some(top) = root else {
+        return Some(fresh);
+    };
+    let mut node = top;
+    loop {
+        let next = if v < node.val { node.left } else { node.right };
+        match next {
+            Some(child) => node = child,
+            None => {
+                if v < node.val {
+                    node.left = Some(fresh);
+                } else {
+                    node.right = Some(fresh);
+                }
+                break;
+            }
+        }
+    }
+    Some(top)
+}
+
+fn tree_of(values: Vec[i64]) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    for v in values {
+        root = insert(root, v);
+    }
+    root
+}
+
+fn same(a: Option[TreeNode], b: Option[TreeNode]) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.val == y.val and same(x.left, y.left) and same(x.right, y.right),
+        _ => false,
+    }
+}
+
+fn walk(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        walk(n.left, out);
+        out.push(n.val);
+        walk(n.right, out);
+    }
+}
+
+fn search_tree(node: Option[TreeNode], low: i64, high: i64) -> bool {
+    match node {
+        Some(n) => low < n.val and n.val < high and search_tree(n.left, low, n.val) and search_tree(n.right, n.val, high),
+        None => true,
+    }
+}
+
+fn leaves(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        if n.left.is_none() and n.right.is_none() {
+            out.push(n.val);
+        }
+        leaves(n.left, out);
+        leaves(n.right, out);
+    }
+}
+
+fn shuffle(values: mut ref Vec[i64], seed: mut ref i64) {
+    let n = values.len();
+    for i in 0..n {
+        let j = i + next_random(seed) % (n - i);
+        values.swap(i, j);
+    }
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4500;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // Distinct values from 0 to 3n + 2 in random order, sometimes
+        // few, sometimes sorted into a chain.
+        let n = next_random(mut seed) % [3, 20, 120][next_random(mut seed) % 3];
+        let mut used: Set[i64] = Set.new();
+        let mut values: Vec[i64] = Vec.new();
+        while values.len() < n {
+            let v = next_random(mut seed) % (3 * n + 3);
+            if used.insert(v) {
+                values.push(v);
+            }
+        }
+        if next_random(mut seed) % 5 == 0 {
+            values.sort();
+        }
+        // A key that is present one time in two when there is one, and
+        // a key that is absent.
+        let key = if n > 0 and next_random(mut seed) % 2 == 0 {
+            values[next_random(mut seed) % n]
+        } else {
+            next_random(mut seed) % (3 * n + 3)
+        };
+        let mut absent = next_random(mut seed) % (3 * n + 4);
+        while used.contains(absent) {
+            absent += 1;
+        }
+        let mut expected: Vec[i64] = Vec.new();
+        for v in values {
+            if v != key {
+                expected.push(v);
+            }
+        }
+        expected.sort();
+        let mut order = values.clone();
+        shuffle(mut order, mut seed);
+        let mut found_leaves: Vec[i64] = Vec.new();
+        leaves(tree_of(values), mut found_leaves);
+        let leaf = if found_leaves.len() > 0 {
+            found_leaves[next_random(mut seed) % found_leaves.len()]
+        } else {
+            0
+        };
+        let mut without_leaf: Vec[i64] = Vec.new();
+        for v in values {
+            if v != leaf {
+                without_leaf.push(v);
+            }
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let after = delete(arm, tree_of(values), key);
+            let mut walked: Vec[i64] = Vec.new();
+            walk(after, mut walked);
+            report(1, arm, case, walked == expected, mut failures);
+            report(2, arm, case, search_tree(after, i64.MIN, i64.MAX), mut failures);
+            let kept = delete(arm, tree_of(values), absent);
+            report(3, arm, case, same(kept, tree_of(values)), mut failures);
+            // Every value deleted in turn, in random order.
+            let mut root = tree_of(values);
+            let mut ok = true;
+            let mut remaining = values.clone();
+            remaining.sort();
+            for v in order {
+                root = delete(arm, root, v);
+                let mut i = 0;
+                while remaining[i] != v {
+                    i += 1;
+                }
+                remaining.remove(i);
+                let mut now: Vec[i64] = Vec.new();
+                walk(root, mut now);
+                if now != remaining or not search_tree(root, i64.MIN, i64.MAX) {
+                    ok = false;
+                }
+            }
+            report(4, arm, case, ok and root.is_none(), mut failures);
+            let pruned = delete(arm, tree_of(values), leaf);
+            report(5, arm, case, n == 0 or same(pruned, tree_of(without_leaf)), mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}
