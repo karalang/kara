@@ -10,8 +10,10 @@ legacy-build (AOT at the default auto-par setting, which is off), mir-interp
 (the MIR builder and interpreter, `karac __mir-run`), mir-llvm (the same
 MIR compiled to LLVM IR and run under `karac_jit_runner`, `karac
 __mir-llvm-run`; it needs a karac built with `--features llvm` and a
-current `karac_jit_runner` beside it), and the mir-llvm-asan slot, which
-has no command yet.
+current `karac_jit_runner` beside it), and mir-llvm-asan (the same IR
+compiled with AddressSanitizer into a native binary, `karac __mir-llvm-asan`;
+a leak, double free or bad access fails the entry with the report's first
+line, whatever the stdout).
 
 --filter matches a tag exactly or a substring of the entry path; repeat it to
 widen. Each entry is judged by its meta.toml `expect`:
@@ -45,6 +47,7 @@ matches nothing must not read as a pass.
 import argparse
 import concurrent.futures as cf
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -117,6 +120,8 @@ def judge(entry: Path, corpus: Path, args) -> dict:
         exp = exp_file.read_bytes() if exp_file.exists() else None
         if res["status"] == "refused":
             why = f"refused (exit {res['exit']}): {first_line(res['stderr'])}"
+        elif sanitizer_report(res):
+            why = f"asan: {sanitizer_report(res)}"
         elif exp is None:
             why = "no expected.out"
         elif as_set and sorted(res["stdout"].splitlines()) == sorted(exp.splitlines()):
@@ -143,6 +148,18 @@ def check_codes(entry: Path, args) -> list:
         return [d.get("code") or d.get("phase") for d in json.loads(r.stdout).get("diagnostics", [])]
     except json.JSONDecodeError:
         return []
+
+
+def sanitizer_report(res: dict) -> str:
+    """The kind of AddressSanitizer or LeakSanitizer report on stderr, or ""."""
+    if res["exit"] != 86:
+        return ""
+    m = re.search(rb"ERROR: (?:Address|Leak)Sanitizer: ([^\n]*)", res["stderr"])
+    if not m:
+        return ""
+    # Drop addresses and thread ids so equal reports read equal.
+    return re.sub(r" on (?:unknown )?address 0x[0-9a-f]+.*| in thread T\d+.*", "",
+                  m.group(1).decode(errors="replace")).strip()[:120]
 
 
 def first_line(b: bytes) -> str:

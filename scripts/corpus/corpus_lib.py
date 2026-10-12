@@ -32,7 +32,7 @@ BACKENDS = {
     "legacy-build": {"build": ["build"], "env": {"KARAC_AUTO_PAR": "0"}},
     "mir-interp": {"check": True, "run": ["__mir-run"]},
     "mir-llvm": {"check": True, "run": ["__mir-llvm-run"]},
-    "mir-llvm-asan": None,
+    "mir-llvm-asan": {"check": True, "run": ["__mir-llvm-asan"]},
 }
 
 

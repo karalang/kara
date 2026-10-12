@@ -177,6 +177,62 @@ pub fn parse_args(args: &[String]) -> Command {
                 }
             }
         }
+        // Hidden plumbing for the corpus runner's `mir-llvm-asan` backend
+        // (redesign M2): the same IR as `__mir-llvm-run`, compiled with
+        // AddressSanitizer into a native binary linked with `-fsanitize=address`
+        // and run. A sanitizer report exits 86 with the report on stderr;
+        // otherwise the program's own code, or 3 with the refusing stage.
+        #[cfg(feature = "llvm")]
+        "__mir-llvm-asan" => {
+            let Some(path) = args.get(2) else {
+                eprintln!("error: __mir-llvm-asan requires a file argument");
+                process::exit(1);
+            };
+            let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
+                eprintln!("error: {path}: {e}");
+                process::exit(1);
+            });
+            crate::mir::interp::set_source_name(path);
+            let fail = |e: String| -> ! {
+                eprintln!("error[mir]: {e}");
+                process::exit(3);
+            };
+            let ir = crate::mir::lower::build_source(&src)
+                .and_then(|l| {
+                    crate::codegen::mir::compile_mir_ir(&l.program, &l.tys)
+                        .map_err(|e| format!("llvm: {e}"))
+                })
+                .unwrap_or_else(|e| fail(e));
+            let dir = std::env::temp_dir().join(format!("karac-mir-asan-{}", process::id()));
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                fail(format!("asan: {}: {e}", dir.display()));
+            }
+            let obj = dir.join("main.o");
+            let exe = dir.join("main");
+            let built = crate::codegen::mir_asan::compile_asan_object(&ir, &obj).and_then(|()| {
+                crate::codegen::link_executable_with_sanitizer(
+                    &obj.to_string_lossy(),
+                    &exe.to_string_lossy(),
+                    &["-fsanitize=address"],
+                )
+            });
+            if let Err(e) = built {
+                let _ = std::fs::remove_dir_all(&dir);
+                fail(format!("asan: {e}"));
+            }
+            let mut cmd = process::Command::new(&exe);
+            for var in ["ASAN_OPTIONS", "LSAN_OPTIONS"] {
+                if std::env::var_os(var).is_none() {
+                    cmd.env(var, "exitcode=86");
+                }
+            }
+            let status = cmd.status();
+            let _ = std::fs::remove_dir_all(&dir);
+            match status {
+                Ok(s) => process::exit(s.code().unwrap_or(101)),
+                Err(e) => fail(format!("asan: {}: {e}", exe.display())),
+            }
+        }
         // Hidden plumbing for the C10 effect pass (redesign M1): check one
         // file, build and elaborate its MIR, and print every instance's
         // effects as JSON. Exits 3 with the stage that refused it on stderr.
