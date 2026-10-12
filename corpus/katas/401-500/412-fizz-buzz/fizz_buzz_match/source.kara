@@ -1,0 +1,69 @@
+// LeetCode #412: Fizz Buzz -- match on the remainders.
+//
+// Match the pair (i % 3, i % 5): (0, 0) is "FizzBuzz", (0, _) "Fizz",
+// (_, 0) "Buzz", and the rest the number. The arms are checked in order,
+// so the first one needs no exclusion. O(n) time, O(n) space.
+
+fn fizz_buzz(n: i64) -> Vec[String] {
+    let mut answer: Vec[String] = Vec.new();
+    for i in 1..n + 1 {
+        let entry = match (i % 3, i % 5) {
+            (0, 0) => String.from("FizzBuzz"),
+            (0, _) => String.from("Fizz"),
+            (_, 0) => String.from("Buzz"),
+            _ => f"{i}",
+        };
+        answer.push(entry);
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64) {
+    let answer = fizz_buzz(n);
+    let mut line = String.new();
+    for i in 0..answer.len() {
+        if i > 0 {
+            line.push(' ');
+        }
+        line.push_str(answer[i]);
+    }
+    println(f"{n}: {line}");
+}
+
+fn main() {
+    show(1);
+    show(3);
+    show(5);
+    show(15);
+    show(16);
+    show(31);
+    // 100 random n from 1 to 10,000 (the limit): the words, the numbers
+    // and a checksum over every byte.
+    let mut seed: i64 = 412;
+    let mut words = 0;
+    let mut numbers = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..100 {
+        let n = 1 + (step(mut seed) * 32768 + step(mut seed)) % 10000;
+        let answer = fizz_buzz(n);
+        for i in 0..answer.len() {
+            let b = answer[i].bytes();
+            if b[0] >= 65 {
+                words += 1;
+            } else {
+                numbers += 1;
+            }
+            for j in 0..b.len() {
+                checksum = (checksum * 31 + b[j] as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"100 random n: {words} words, {numbers} numbers, checksum {checksum}");
+}

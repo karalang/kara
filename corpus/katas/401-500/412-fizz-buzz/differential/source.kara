@@ -1,0 +1,219 @@
+// Differential test for LeetCode #412: Fizz Buzz.
+//
+// Copies of the four arms, each run on 1,000 random n from 1 to 300.
+// Properties known by construction:
+//   P1  the answer has n entries
+//   P2  the words stand exactly at the multiples, marked by stepping
+//       through the multiples of 3 and of 5 with no division
+//   P3  every other entry is its number in decimal, read back digit by
+//       digit
+//   P4  the answer for n is the start of the answer for n + k
+//   P5  there are n / 15 "FizzBuzz", n / 3 - n / 15 "Fizz" and
+//       n / 5 - n / 15 "Buzz"
+
+// ---- cases: fizz_buzz.kara
+
+fn fizz_buzz_cases(n: i64) -> Vec[String] {
+    let mut answer: Vec[String] = Vec.new();
+    for i in 1..n + 1 {
+        if i % 15 == 0 {
+            answer.push("FizzBuzz");
+        } else if i % 3 == 0 {
+            answer.push("Fizz");
+        } else if i % 5 == 0 {
+            answer.push("Buzz");
+        } else {
+            answer.push(f"{i}");
+        }
+    }
+    answer
+}
+
+// ---- concat: fizz_buzz_concat.kara
+
+fn fizz_buzz_concat(n: i64) -> Vec[String] {
+    let mut answer: Vec[String] = Vec.new();
+    for i in 1..n + 1 {
+        let mut entry = String.new();
+        if i % 3 == 0 {
+            entry.push_str("Fizz");
+        }
+        if i % 5 == 0 {
+            entry.push_str("Buzz");
+        }
+        if entry.is_empty() {
+            entry.push_str(f"{i}");
+        }
+        answer.push(entry);
+    }
+    answer
+}
+
+// ---- counters: fizz_buzz_counters.kara
+
+fn fizz_buzz_counters(n: i64) -> Vec[String] {
+    let mut answer: Vec[String] = Vec.new();
+    let mut three = 0;
+    let mut five = 0;
+    for i in 1..n + 1 {
+        three += 1;
+        five += 1;
+        let fizz = three == 3;
+        let buzz = five == 5;
+        if fizz {
+            three = 0;
+        }
+        if buzz {
+            five = 0;
+        }
+        if fizz and buzz {
+            answer.push("FizzBuzz");
+        } else if fizz {
+            answer.push("Fizz");
+        } else if buzz {
+            answer.push("Buzz");
+        } else {
+            answer.push(f"{i}");
+        }
+    }
+    answer
+}
+
+// ---- match: fizz_buzz_match.kara
+
+fn fizz_buzz_match(n: i64) -> Vec[String] {
+    let mut answer: Vec[String] = Vec.new();
+    for i in 1..n + 1 {
+        let entry = match (i % 3, i % 5) {
+            (0, 0) => String.from("FizzBuzz"),
+            (0, _) => String.from("Fizz"),
+            (_, 0) => String.from("Buzz"),
+            _ => f"{i}",
+        };
+        answer.push(entry);
+    }
+    answer
+}
+
+// ---- the checks -------------------------------------------------------------
+
+fn solve(arm: i64, n: i64) -> Vec[String] {
+    if arm == 0 {
+        fizz_buzz_cases(n)
+    } else if arm == 1 {
+        fizz_buzz_concat(n)
+    } else if arm == 2 {
+        fizz_buzz_counters(n)
+    } else {
+        fizz_buzz_match(n)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The number an entry spells in decimal, or -1 if it is not digits.
+fn read_number(entry: Str) -> i64 {
+    let b = entry.bytes();
+    if b.len() == 0 {
+        return -1;
+    }
+    let mut value = 0;
+    for j in 0..b.len() {
+        if b[j] < 48 or b[j] > 57 {
+            return -1;
+        }
+        value = value * 10 + (b[j] - 48) as i64;
+    }
+    value
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4120;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1000 {
+        let n = 1 + step(mut seed) % 300;
+        let k = 1 + step(mut seed) % 50;
+        // Multiples marked by stepping, no division.
+        let mut by3 = vec![false; n + 1];
+        let mut by5 = vec![false; n + 1];
+        let mut j = 3;
+        while j <= n {
+            by3[j] = true;
+            j += 3;
+        }
+        j = 5;
+        while j <= n {
+            by5[j] = true;
+            j += 5;
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let answer = solve(arm, n);
+            report(1, arm, case, answer.len() == n, mut failures);
+            let mut words_ok = answer.len() == n;
+            let mut numbers_ok = answer.len() == n;
+            let mut counts = vec![0; 3];
+            for i in 1..answer.len() + 1 {
+                if i > n {
+                    break;
+                }
+                let entry = answer[i - 1].clone();
+                let want = if by3[i] and by5[i] {
+                    "FizzBuzz"
+                } else if by3[i] {
+                    "Fizz"
+                } else if by5[i] {
+                    "Buzz"
+                } else {
+                    ""
+                };
+                if want.len() > 0 {
+                    if entry != want {
+                        words_ok = false;
+                    }
+                } else if read_number(entry) != i {
+                    numbers_ok = false;
+                }
+                if entry == "FizzBuzz" {
+                    counts[0] += 1;
+                } else if entry == "Fizz" {
+                    counts[1] += 1;
+                } else if entry == "Buzz" {
+                    counts[2] += 1;
+                }
+            }
+            report(2, arm, case, words_ok, mut failures);
+            report(3, arm, case, numbers_ok, mut failures);
+            let longer = solve(arm, n + k);
+            let mut prefix = longer.len() >= answer.len();
+            if prefix {
+                for i in 0..answer.len() {
+                    if longer[i] != answer[i] {
+                        prefix = false;
+                    }
+                }
+            }
+            report(4, arm, case, prefix, mut failures);
+            report(5, arm, case, counts[0] == n / 15 and counts[1] == n / 3 - n / 15 and counts[2] == n / 5 - n / 15, mut failures);
+        }
+    }
+    println(f"1000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

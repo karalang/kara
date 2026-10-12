@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/412-fizz-buzz/bench/fizz_buzz.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "e0feb36a4"
+extracted_src = "42202144"
+model_rev = "1aa23105"
+model_src = "42202144"
