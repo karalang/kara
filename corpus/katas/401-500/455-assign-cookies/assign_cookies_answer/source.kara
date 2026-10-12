@@ -1,0 +1,96 @@
+// LeetCode #455: Assign Cookies -- binary search on the answer.
+//
+// If k children can be fed at all, the k least greedy can be fed by the
+// k largest cookies, smallest to least greedy: pairing two sorted lists
+// in order is the best any pairing of them can do. So k is feasible
+// exactly when that pairing works, feasibility only gets harder as k
+// grows, and the answer is the largest feasible k.
+// O((n + m) log(n + m) + n log n).
+
+fn feeds(greed: Vec[i64], sizes: Vec[i64], k: i64) -> bool {
+    let first = sizes.len() - k;
+    for i in 0..k {
+        if sizes[first + i] < greed[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn find_content_children(g: Vec[i64], s: Vec[i64]) -> i64 {
+    let mut greed = g.clone();
+    greed.sort();
+    let mut sizes = s.clone();
+    sizes.sort();
+    let mut low = 0;
+    let mut high = greed.len().min(sizes.len());
+    while low < high {
+        let mid = (low + high + 1) / 2;
+        if feeds(greed, sizes, mid) {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    low
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn listed(nums: Vec[i64]) -> String {
+    let mut out = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{nums[i]}");
+    }
+    out
+}
+
+fn show(g: Vec[i64], s: Vec[i64]) {
+    let fed = find_content_children(g, s);
+    println(f"g [{listed(g)}] s [{listed(s)}]: {fed} content");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_nums(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let r = next_random(seed) * 65536 + next_random(seed);
+        nums.push(1 + r % top);
+    }
+    nums
+}
+
+fn main() {
+    show(vec![1, 2, 3], vec![1, 1]);
+    show(vec![1, 2], vec![1, 2, 3]);
+    show(vec![1, 2, 3], vec![]);
+    show(vec![5], vec![4]);
+    show(vec![2147483647], vec![2147483647, 1]);
+    show(vec![10, 9, 8, 7], vec![5, 6, 7, 8]);
+    show(vec![1, 1, 1, 1], vec![1, 1]);
+    show(vec![3, 1, 2], vec![2, 3, 1]);
+    // 300 random cases of 1 to 200 children and 0 to 200 cookies, with
+    // greed and sizes from 1 up to 5, 100, 10,000 or 2^31 - 1.
+    let count = 300;
+    let mut seed: i64 = 455;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let children = 1 + next_random(mut seed) % 200;
+        let cookies = next_random(mut seed) % 201;
+        let top = [5, 100, 10000, 2147483647][next_random(mut seed) % 4];
+        let g = random_nums(children, top, mut seed);
+        let s = random_nums(cookies, top, mut seed);
+        let fed = find_content_children(g, s);
+        total += fed;
+        checksum = (checksum * 31 + fed) % 1000000007;
+    }
+    println(f"{count} random cases: {total} content, checksum {checksum}");
+}

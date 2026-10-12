@@ -1,0 +1,54 @@
+// Benchmark for #455: the ★ arm (assign_cookies.kara) on 1,000,000
+// children and 1,000,000 cookies with greed and sizes from 1 to 10^9,
+// built once. Each of 10 rounds sets one greed and one size to new
+// random values, then counts the content children; each count copies
+// and sorts both lists.
+
+fn find_content_children(g: Vec[i64], s: Vec[i64]) -> i64 {
+    let mut greed = g.clone();
+    greed.sort();
+    let mut sizes = s.clone();
+    sizes.sort();
+    let mut child = 0;
+    for size in sizes {
+        if child < greed.len() and size >= greed[child] {
+            child += 1;
+        }
+    }
+    child
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_value(seed: mut ref i64) -> i64 {
+    1 + (next_random(seed) * 65536 + next_random(seed)) % 1000000000
+}
+
+fn main() {
+    let n = 1000000;
+    let rounds = 10;
+    let mut seed: i64 = 455;
+    let mut g: Vec[i64] = Vec.new();
+    let mut s: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        g.push(random_value(mut seed));
+        s.push(random_value(mut seed));
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        let at = (next_random(mut seed) * 65536 + next_random(mut seed)) % n;
+        g[at] = random_value(mut seed);
+        let at = (next_random(mut seed) * 65536 + next_random(mut seed)) % n;
+        s[at] = random_value(mut seed);
+        let fed = find_content_children(g, s);
+        total += fed;
+        checksum = (checksum * 31 + fed) % 1000000007;
+    }
+    println(f"{rounds} rounds on {n} children and {n} cookies: {total} content, checksum {checksum}");
+}

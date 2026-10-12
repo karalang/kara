@@ -1,0 +1,57 @@
+// Benchmark for #454: the ★ arm (four_sum.kara) on 4 random arrays of
+// 1,000 numbers from -50,000 to 50,000, built once. Each of 10 rounds
+// sets one number in every array to a new random value, then counts the
+// tuples, so each count makes and fills a map of 1,000,000 pair sums.
+
+fn four_sum_count(nums1: Vec[i64], nums2: Vec[i64], nums3: Vec[i64], nums4: Vec[i64]) -> i64 {
+    let mut sums: Map[i64, i64] = Map.new();
+    for a in nums1 {
+        for b in nums2 {
+            *sums.entry(a + b).or_insert(0) += 1;
+        }
+    }
+    let mut count = 0;
+    for c in nums3 {
+        for d in nums4 {
+            count += sums.get(-(c + d)).unwrap_or(0);
+        }
+    }
+    count
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_value(seed: mut ref i64) -> i64 {
+    (next_random(seed) * 65536 + next_random(seed)) % 100001 - 50000
+}
+
+fn main() {
+    let n = 1000;
+    let rounds = 10;
+    let mut seed: i64 = 454;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..4 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(random_value(mut seed));
+        }
+        arrays.push(nums);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        for a in 0..4 {
+            let at = next_random(mut seed) % n;
+            arrays[a][at] = random_value(mut seed);
+        }
+        let tuples = four_sum_count(arrays[0], arrays[1], arrays[2], arrays[3]);
+        total += tuples;
+        checksum = (checksum * 31 + tuples) % 1000000007;
+    }
+    println(f"{rounds} rounds on 4 arrays of {n}: {total} tuples, checksum {checksum}");
+}

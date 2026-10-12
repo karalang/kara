@@ -1,0 +1,216 @@
+// Differential test for LeetCode #455: Assign Cookies.
+//
+// Copies of the four arms, each run on 1,500 random cases.
+// Properties:
+//   P1  on 1 to 5 children and 0 to 5 cookies, greed and sizes 1 to 5,
+//       the count is brute force's over every assignment
+//   P2  on 1 to 40 children and 0 to 40 cookies, shuffling both lists
+//       keeps the count
+//   P3  one more cookie adds 0 or 1
+//   P4  one child fewer takes away 0 or 1
+//   P5  scaling every greed and size by 1 to 5 and adding one constant
+//       keeps it
+
+// ---- small: assign_cookies.kara
+
+fn find_content_children_small(g: Vec[i64], s: Vec[i64]) -> i64 {
+    let mut greed = g.clone();
+    greed.sort();
+    let mut sizes = s.clone();
+    sizes.sort();
+    let mut child = 0;
+    for size in sizes {
+        if child < greed.len() and size >= greed[child] {
+            child += 1;
+        }
+    }
+    child
+}
+
+// ---- largest: assign_cookies_largest.kara
+
+fn find_content_children_largest(g: Vec[i64], s: Vec[i64]) -> i64 {
+    let mut greed = g.clone();
+    greed.sort();
+    let mut sizes = s.clone();
+    sizes.sort();
+    let mut cookie = sizes.len() - 1;
+    let mut fed = 0;
+    let mut child = greed.len() - 1;
+    while child >= 0 and cookie >= 0 {
+        if sizes[cookie] >= greed[child] {
+            fed += 1;
+            cookie -= 1;
+        }
+        child -= 1;
+    }
+    fed
+}
+
+// ---- ceiling: assign_cookies_ceiling.kara
+
+fn find_content_children_ceiling(g: Vec[i64], s: Vec[i64]) -> i64 {
+    let mut cookies: SortedMap[i64, i64] = SortedMap.new();
+    for size in s {
+        *cookies.entry(size).or_insert(0) += 1;
+    }
+    let mut greed = g.clone();
+    greed.sort();
+    let mut fed = 0;
+    for want in greed {
+        let Some((size, _)) = cookies.ceiling(want) else {
+            break;
+        };
+        let size = *size;
+        cookies[size] -= 1;
+        if cookies[size] == 0 {
+            cookies.remove(size);
+        }
+        fed += 1;
+    }
+    fed
+}
+
+// ---- answer: assign_cookies_answer.kara
+
+fn feeds_answer(greed: Vec[i64], sizes: Vec[i64], k: i64) -> bool {
+    let first = sizes.len() - k;
+    for i in 0..k {
+        if sizes[first + i] < greed[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn find_content_children_answer(g: Vec[i64], s: Vec[i64]) -> i64 {
+    let mut greed = g.clone();
+    greed.sort();
+    let mut sizes = s.clone();
+    sizes.sort();
+    let mut low = 0;
+    let mut high = greed.len().min(sizes.len());
+    while low < high {
+        let mid = (low + high + 1) / 2;
+        if feeds_answer(greed, sizes, mid) {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    low
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn content(arm: i64, g: Vec[i64], s: Vec[i64]) -> i64 {
+    if arm == 0 {
+        find_content_children_small(g, s)
+    } else if arm == 1 {
+        find_content_children_largest(g, s)
+    } else if arm == 2 {
+        find_content_children_ceiling(g, s)
+    } else {
+        find_content_children_answer(g, s)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The most children fed by brute force: child i either goes without or
+// takes any unused cookie that satisfies it.
+fn brute(g: Vec[i64], s: Vec[i64], i: i64, used: i64) -> i64 {
+    if i == g.len() {
+        return 0;
+    }
+    let mut best = brute(g, s, i + 1, used);
+    for j in 0..s.len() {
+        if (used >> j) & 1 == 0 and s[j] >= g[i] {
+            best = best.max(1 + brute(g, s, i + 1, used | (1 << j)));
+        }
+    }
+    best
+}
+
+fn random_nums(n: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let r = next_random(seed) * 65536 + next_random(seed);
+        nums.push(1 + r % top);
+    }
+    nums
+}
+
+fn shuffled(nums: Vec[i64], seed: mut ref i64) -> Vec[i64] {
+    let mut out = nums.clone();
+    for i in 0..out.len() {
+        out.swap(i, i + next_random(seed) % (out.len() - i));
+    }
+    out
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4550;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // A small case for brute force: 1 to 5 children and 0 to 5
+        // cookies, greed and sizes 1 to 5.
+        let small_g = random_nums(1 + next_random(mut seed) % 5, 5, mut seed);
+        let small_s = random_nums(next_random(mut seed) % 6, 5, mut seed);
+        let expected = brute(small_g, small_s, 0, 0);
+        // A larger case: 1 to 40 children and 0 to 40 cookies.
+        let top = [3, 20, 1000, 2147483647][next_random(mut seed) % 4];
+        let g = random_nums(1 + next_random(mut seed) % 40, top, mut seed);
+        let s = random_nums(next_random(mut seed) % 41, top, mut seed);
+        let mixed_g = shuffled(g, mut seed);
+        let mixed_s = shuffled(s, mut seed);
+        // One more cookie, anywhere.
+        let mut more = s.clone();
+        let extra = random_nums(1, top, mut seed)[0];
+        more.insert(next_random(mut seed) % (s.len() + 1), extra);
+        // One child fewer.
+        let mut fewer = g.clone();
+        fewer.remove(next_random(mut seed) % g.len());
+        // Every greed and size scaled by 1 to 5 and moved up by one
+        // constant: the same comparisons.
+        let factor = 1 + next_random(mut seed) % 5;
+        let lift = next_random(mut seed) % 1000;
+        let mut scaled_g: Vec[i64] = Vec.new();
+        for x in g {
+            scaled_g.push(x * factor + lift);
+        }
+        let mut scaled_s: Vec[i64] = Vec.new();
+        for x in s {
+            scaled_s.push(x * factor + lift);
+        }
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, content(arm, small_g, small_s) == expected, mut failures);
+            let base = content(arm, g, s);
+            report(2, arm, case, content(arm, mixed_g, mixed_s) == base, mut failures);
+            let with_more = content(arm, g, more);
+            report(3, arm, case, with_more == base or with_more == base + 1, mut failures);
+            let with_fewer = content(arm, fewer, s);
+            report(4, arm, case, with_fewer == base or with_fewer == base - 1, mut failures);
+            report(5, arm, case, content(arm, scaled_g, scaled_s) == base, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

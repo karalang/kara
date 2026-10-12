@@ -1,0 +1,98 @@
+// LeetCode #454: 4Sum II -- one list of pair sums sorted, searched
+// for each pair sum of the other two arrays.
+//
+// Sort the sums of the first two arrays. For each sum s of the last
+// two, the matching sums are the run equal to -s, found by two binary
+// searches: the first index not below -s and the first above it.
+// O(n^2 log n) time, O(n^2) space.
+
+fn first_not_below(sorted: Vec[i64], target: i64) -> i64 {
+    let mut low = 0;
+    let mut high = sorted.len();
+    while low < high {
+        let mid = (low + high) / 2;
+        if sorted[mid] < target {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    low
+}
+
+fn four_sum_count(nums1: Vec[i64], nums2: Vec[i64], nums3: Vec[i64], nums4: Vec[i64]) -> i64 {
+    let mut sums: Vec[i64] = Vec.new();
+    for a in nums1 {
+        for b in nums2 {
+            sums.push(a + b);
+        }
+    }
+    sums.sort();
+    let mut count = 0;
+    for c in nums3 {
+        for d in nums4 {
+            let target = -(c + d);
+            count += first_not_below(sums, target + 1) - first_not_below(sums, target);
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn listed(nums: Vec[i64]) -> String {
+    let mut out = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{nums[i]}");
+    }
+    out
+}
+
+fn show(nums1: Vec[i64], nums2: Vec[i64], nums3: Vec[i64], nums4: Vec[i64]) {
+    let count = four_sum_count(nums1, nums2, nums3, nums4);
+    println(f"[{listed(nums1)}] [{listed(nums2)}] [{listed(nums3)}] [{listed(nums4)}]: {count} tuples");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_nums(n: i64, spread: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let r = next_random(seed) * 65536 + next_random(seed);
+        nums.push(r % spread - spread / 2);
+    }
+    nums
+}
+
+fn main() {
+    show(vec![1, 2], vec![-2, -1], vec![-1, 2], vec![0, 2]);
+    show(vec![0], vec![0], vec![0], vec![0]);
+    show(vec![1], vec![1], vec![1], vec![1]);
+    show(vec![0, 0, 0], vec![0, 0, 0], vec![0, 0, 0], vec![0, 0, 0]);
+    show(vec![268435456, -268435456], vec![268435456, -268435456], vec![-268435456], vec![-268435456, 268435456]);
+    show(vec![1, -1, 2], vec![-2, 1, 0], vec![3, -3, 0], vec![0, 1, -1]);
+    // 300 random cases of 1 to 40 numbers in each array, spread over 3,
+    // 11, 101 or every value from -2^28 to 2^28.
+    let count = 300;
+    let mut seed: i64 = 454;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = 1 + next_random(mut seed) % 40;
+        let spread = [3, 11, 101, 536870913][next_random(mut seed) % 4];
+        let nums1 = random_nums(n, spread, mut seed);
+        let nums2 = random_nums(n, spread, mut seed);
+        let nums3 = random_nums(n, spread, mut seed);
+        let nums4 = random_nums(n, spread, mut seed);
+        let tuples = four_sum_count(nums1, nums2, nums3, nums4);
+        total += tuples;
+        checksum = (checksum * 31 + tuples) % 1000000007;
+    }
+    println(f"{count} random cases: {total} tuples, checksum {checksum}");
+}
