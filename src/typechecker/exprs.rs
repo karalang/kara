@@ -3025,6 +3025,18 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        // An associated-type binding on a bound (`I: Iterator[Item = T]`,
+        // hoisted to `where I.Item = T`) solves its right side once the
+        // arguments solve `I`: `Vec.from_iter(0..3)` is a `Vec[i64]`.
+        if self.library_methods_from_source {
+            self.solve_from_assoc_type_eqs(
+                where_clause,
+                &name_to_id,
+                &id_to_name,
+                &const_id_to_name,
+                formal_generic_params,
+            );
+        }
         // Pass 2: check each arg against the resolved slot. For
         // closure args, the resolved slot may be a concrete
         // `Fn(i64) -> i64` (when T solved) and check_expr's pushdown
@@ -3631,6 +3643,75 @@ impl<'a> super::TypeChecker<'a> {
             all_param_names,
             discharge_span,
         );
+    }
+
+    /// Unify each `where I.Assoc = X` of a generic call with what `I`'s
+    /// solution says its `Assoc` is, so the call's metavariables in `X` are
+    /// solved from it.
+    fn solve_from_assoc_type_eqs(
+        &mut self,
+        where_clause: Option<&WhereClause>,
+        name_to_id: &HashMap<String, super::types::TypeVarId>,
+        id_to_name: &HashMap<super::types::TypeVarId, String>,
+        const_id_to_name: &HashMap<super::types::ConstVarId, String>,
+        formal_generic_params: Option<&[String]>,
+    ) {
+        let Some(where_clause) = where_clause else {
+            return;
+        };
+        let mut scope: Vec<String> = name_to_id.keys().cloned().collect();
+        for p in formal_generic_params.unwrap_or(&[]) {
+            if !name_to_id.contains_key(p) {
+                scope.push(p.clone());
+            }
+        }
+        let metas: HashMap<String, SubstValue> = name_to_id
+            .iter()
+            .map(|(n, id)| (n.clone(), SubstValue::Type(Type::TypeVar(*id))))
+            .collect();
+        for constraint in &where_clause.constraints {
+            let WhereConstraint::AssocTypeEq {
+                type_name,
+                assoc_name,
+                ty,
+                ..
+            } = constraint
+            else {
+                continue;
+            };
+            let Some(&id) = name_to_id.get(type_name) else {
+                continue;
+            };
+            let solved = resolve_type_vars(
+                &Type::TypeVar(id),
+                &self.env.substitutions,
+                id_to_name,
+                &self.env.const_substitutions,
+                const_id_to_name,
+            );
+            if matches!(solved, Type::TypeParam(_) | Type::TypeVar(_) | Type::Error) {
+                continue;
+            }
+            let subs: HashMap<String, SubstValue> =
+                std::iter::once((type_name.clone(), SubstValue::Type(solved))).collect();
+            let projection = Type::AssocProjection {
+                param: type_name.clone(),
+                assoc: assoc_name.clone(),
+                args: Vec::new(),
+                receiver_args: Vec::new(),
+            };
+            let found = self.resolve_assoc_projections(&substitute_type_params(&projection, &subs));
+            if !assoc_eq_bound_is_comparable(&found) {
+                continue;
+            }
+            let required = substitute_type_params(&self.lower_type_expr(ty, &scope), &metas);
+            unify_types(
+                &required,
+                &found,
+                &mut self.env.substitutions,
+                &mut self.env.const_substitutions,
+            );
+        }
     }
 
     /// B-2026-08-22-3 — discharge `WhereConstraint::AssocTypeEq`

@@ -1848,10 +1848,13 @@ impl<'a> super::TypeChecker<'a> {
         // "exact alias" discipline `Vec.extend` / `extend_from_slice` follow,
         // rather than a second code path that has to be kept in step.
         if let ExprKind::Path { segments, .. } = &callee.kind {
+            // On the MIR pipeline `Vec.from_iter` is the library's own
+            // `FromIterator` impl, which `collect` calls too.
             if segments.len() == 2
                 && segments[0] == "Vec"
                 && segments[1] == "from_iter"
                 && args.len() == 1
+                && !self.library_methods_from_source
             {
                 let synthetic = Expr {
                     id: crate::ids::NodeId::DUMMY,

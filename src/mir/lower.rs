@@ -8966,6 +8966,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             }
         }
+        // `Vec.try_from_iter(it)`: the library's `Vec.from_iter`, as an `Ok`
+        // (an allocation here does not fail).
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if let ([v, m], [_]) = (segments.as_slice(), args) {
+                if v == "Vec" && m == "try_from_iter" && !self.lcx.calls.contains_key(&e.id) {
+                    let rt = self.expr_ty(e)?;
+                    let tcx = self.tys().tcx();
+                    let ok = tcx
+                        .adt_of(rt)
+                        .and_then(|(adt, _)| adt.variants.iter().position(|v| v.name == "Ok"))
+                        .map(|i| i as u32);
+                    if let Some((idx, vt)) =
+                        ok.and_then(|i| Some((i, tcx.field_ty(rt, Some(i), 0)?)))
+                    {
+                        let built = self.temp(vt);
+                        self.type_param_call(e, vt, "from_iter", args, Place::local(built))?;
+                        self.build_variant(rt, idx, vec![Operand::Move(Place::local(built))], dest);
+                        return Ok(());
+                    }
+                }
+            }
+        }
         let rc = self.lcx.calls.get(&e.id);
         // `T.m(..)` with `T` a type parameter of this body goes to the
         // instance's type, also where the program has a type or value named
@@ -16216,6 +16238,45 @@ fn main() {
             run_source(src),
             Ok(("ab 2 cd b,c 4 true\n".to_string(), Some(0)))
         );
+    }
+
+    /// `Option.and`, `map_or_else` and `flatten` are library methods.
+    #[test]
+    fn option_and_map_or_else_and_flatten() {
+        let src = r#"
+fn main() {
+    let a: Option[i64] = Some(2);
+    let n: Option[i64] = None;
+    let both = a.and(Some("x".to_string()));
+    let none = n.and(Some(5));
+    let m = a.map_or_else(|| 0, |x| x * 10);
+    let d = n.map_or_else(|| 7, |x| x * 10);
+    let nested: Option[Option[i64]] = Some(Some(4));
+    let empty: Option[Option[i64]] = Some(None);
+    println(f"{both.unwrap()} {none.is_none()} {m} {d} {nested.flatten().unwrap()} {empty.flatten().is_none()}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("x true 20 7 4 true\n".to_string(), Some(0)))
+        );
+    }
+
+    /// `Vec.from_iter` is the library's `FromIterator` impl, its element
+    /// type solved through `Item = T`; `Vec.try_from_iter` wraps it in `Ok`.
+    #[test]
+    fn vec_from_iter_and_try_from_iter() {
+        let src = r#"
+fn firsts[I: Iterator[Item = i64]](it: own I) -> Vec[i64] { Vec.from_iter(it) }
+fn main() {
+    let v = Vec.from_iter(0..3);
+    let names = vec!["a".to_string(), "b".to_string()];
+    let w: Vec[String] = Vec.from_iter(names.iter().map(|s| s.clone()));
+    let r = Vec.try_from_iter(1..=4);
+    println(f"{v.len()} {firsts(5..9).len()} {w[1]} {r.unwrap().len()}");
+}
+"#;
+        assert_eq!(run_source(src), Ok(("3 4 b 4\n".to_string(), Some(0))));
     }
 
     /// A variant named like a library type (`Kind.Map`) leaves `Map.new()`

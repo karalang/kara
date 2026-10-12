@@ -81,6 +81,21 @@ impl[T] Option[T] {
         }
     }
 
+    fn map_or_else[U](own self, default: own OnceFn() -> U, f: own OnceFn(own T) -> U) -> U {
+        match self {
+            Some(x) => f(x),
+            None => default(),
+        }
+    }
+
+    /// `None` if `self` is; otherwise `other`. `self`'s value drops.
+    fn and[U](own self, other: own Option[U]) -> Option[U] {
+        match self {
+            Some(_) => other,
+            None => None,
+        }
+    }
+
     fn and_then[U](own self, f: own OnceFn(own T) -> Option[U]) -> Option[U] {
         match self {
             Some(x) => f(x),
@@ -139,6 +154,16 @@ impl[T: Clone] Option[ref T] {
     fn cloned(own self) -> Option[T] {
         match self {
             Some(x) => Some(x.clone()),
+            None => None,
+        }
+    }
+}
+
+impl[T] Option[Option[T]] {
+    /// The inner option: `Some(Some(x))` is `Some(x)`, anything else `None`.
+    fn flatten(own self) -> Option[T] {
+        match self {
+            Some(inner) => inner,
             None => None,
         }
     }
