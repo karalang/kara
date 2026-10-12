@@ -11264,6 +11264,46 @@ fn test_fix_applies_did_you_mean_correction() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// B-2026-10-12-1 — a Rust-style `!x` on an integer. The first pass turns
+/// `!` into `not` (the parser cannot see the operand's type); the second
+/// turns `not` on an integer into `~`, and the result checks clean.
+#[test]
+fn test_fix_integer_bang_reaches_bitwise_not() {
+    let path = fix_scratch_file(
+        "int-bang",
+        "fn low_zero(w: i64) -> i64 { (!w).trailing_zeros() as i64 }\n\
+         fn clear(w: i64, n: i64) -> i64 { w & !(1 << n) }\n\
+         fn main() { println(f\"{low_zero(7)} {clear(7, 1)}\"); }\n",
+    );
+    for _ in 0..2 {
+        let out = karac_bin()
+            .args(["fix", path.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "fix failed: stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !rewritten.contains("not") && rewritten.matches('~').count() == 2,
+        "expected both `!` to become `~`, got: {rewritten}"
+    );
+    let check = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "fixed file does not check: {}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 /// B-2026-08-17-11 — E0200's widening repair is machine-applicable: the
 /// mixed-int diagnostic carries an ` as <wide>` insertion at the narrow
 /// operand, and `karac fix` applies it. The fixed program computes the

@@ -3490,7 +3490,34 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             UnaryOp::Not => {
-                if ty != Type::Bool {
+                let int_lanes = matches!(
+                    &ty,
+                    Type::Vector { element, .. }
+                        if matches!(**element, Type::Int(_) | Type::UInt(_))
+                );
+                if ty != Type::Bool && (is_integer(&ty) || int_lanes) {
+                    // B-2026-10-12-1: an integer complement is `~`. `karac fix`
+                    // turns a Rust-style `!x` into `not x` before the operand's
+                    // type is known, so this fix finishes that rewrite on the
+                    // next pass, and covers a hand-written `not x` too.
+                    self.type_error_with_fix_it(
+                        format!(
+                            "unary 'not' requires 'bool', found '{}'; the bitwise \
+                             complement of an integer is `~`",
+                            type_display(&ty)
+                        ),
+                        *span,
+                        TypeErrorKind::InvalidUnaryOp,
+                        FixIt {
+                            span: Span {
+                                length: "not".len(),
+                                ..*span
+                            },
+                            replacement: "~".to_string(),
+                        },
+                    );
+                    Type::Error
+                } else if ty != Type::Bool {
                     self.type_error(
                         // B-2026-08-25-30 — spell the operator the way the
                         // user must write it. The PARSER rejects `!` with "the
