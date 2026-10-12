@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 171 |
 | diagnostics | 149 |
 | perf | 148 |
-| false-positive | 133 |
+| false-positive | 134 |
 | crash | 114 |
 | soundness | 98 |
 | use-after-free | 90 |
@@ -117,7 +117,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 80 |
 | cli | 75 |
 | autopar | 59 |
-| parser | 57 |
+| parser | 58 |
 | runtime | 56 |
 | effect | 30 |
 | resolver | 30 |
@@ -583,6 +583,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-8 | 2026-10-12 | interp | medium | `karac __mir-run`: every `Str.bytes()` call allocates a per-byte copy (about 63 bytes of memory per byte) that is kept until the program exits, so a loop that calls `bytes()` grows without bound: kata 388's bench was OOM-killed at 8.6 GB, and a 10,000-byte string read with `bytes()` 400 times peaks at 286 MB against 43 MB for `chars()` | — |
 | B-2026-10-12-9 | 2026-10-12 | typecheck | medium | `Map`/`SortedMap` `iter()` items are typed `(K, V)`, not the spec's `(ref K, ref V)`: `for (c, n) in m.iter() { if *n > 0 { .. } }` passes `karac check` but `karac __mir-run` refuses it ("unary '*' requires 'ref T' ... found 'i64'", with no location), and `*p.0` on an undestructured item is refused by check as well; `SortedMap.floor` / `ceiling` (spec: `Option[(ref K, ref V)]`) are typed `(K, V)` the same way, so `*v` on their items is refused by check | — |
 | B-2026-10-12-10 | 2026-10-12 | interp | medium | MIR interpreter `VecDeque.push_front` / `pop_front` are O(n): the deque is a plain Vec and front operations `insert(0)` / `remove(0)`, so a queue (push_back + pop_front) is quadratic; 80000 pop_fronts take 8.5 s against 0.2 s at the back | — |
+| B-2026-10-12-11 | 2026-10-12 | parser | low | `distinct`, `shared`, `own`, `where`, `with` and `effect` are still lexed as hard keywords, but the v1 spec (design.md § Keywords) makes them contextual: `let mut distinct = 0;` is refused ("'distinct' is a reserved keyword") where the spec says it is an ordinary identifier | — |
 
 ### Relocated
 
