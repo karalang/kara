@@ -861,3 +861,32 @@ fn main() {
         "3.5\n7\n1 10\n5 50\n1 10\n",
     );
 }
+
+/// B-2026-10-12-9: a bare `for` over a collection borrows it (core semantics
+/// §4.6), so `*v` reads a `Copy` item, whole or destructured.
+#[test]
+fn deref_of_a_copy_item_of_a_bare_for_reads_it() {
+    assert_runs(
+        r#"
+fn total(vals: Vec[i64]) -> i64 {
+    let mut t = 0;
+    for v in vals {
+        t += *v;
+    }
+    t
+}
+
+fn main() {
+    let mut counts: Map[char, i64] = Map.new();
+    counts.insert('a', 2);
+    counts.insert('b', 3);
+    let mut s = 0;
+    for (_, c) in counts {
+        s += *c;
+    }
+    println(f"{s} {total(vec![1, 2, 3])}");
+}
+"#,
+        "5 6\n",
+    );
+}

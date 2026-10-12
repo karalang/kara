@@ -7109,6 +7109,28 @@ impl<'a> super::TypeChecker<'a> {
                         self.local_scope.mark_view(&n);
                     }
                 }
+                // On the MIR pipeline a bare `for` over a collection binds a
+                // `Copy` item (or part of one) by value; it is still a view
+                // of the borrowed collection, so `*v` reads it, as the
+                // builder does (B-2026-10-12-9).
+                if self.library_methods_from_source
+                    && !self.cli_lint_overrides.strict_core
+                    && Self::for_iterable_is_core_collection(&iter_ty)
+                {
+                    let views: Vec<String> = pattern
+                        .binding_names()
+                        .into_iter()
+                        .filter(|n| {
+                            self.local_scope.lookup(n).is_some_and(|t| {
+                                !matches!(t, Type::Ref(_) | Type::MutRef(_))
+                                    && self.is_copy_type_during_check(t)
+                            })
+                        })
+                        .collect();
+                    for n in views {
+                        self.local_scope.mark_view(&n);
+                    }
+                }
                 // B-2026-09-27-69 — a bare `for` over a collection PLACE
                 // borrows it (design.md § `for` loops), so its element is a
                 // view: materializing it (`let h = g`, `w.push(g)`) copies,
