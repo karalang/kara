@@ -3191,3 +3191,38 @@ fn get_or_insert_hands_out_a_mut_ref_under_check() {
          }\n",
     );
 }
+
+#[test]
+fn a_shared_mut_field_is_writable_through_a_let_tuple_binding() {
+    // B-2026-10-12-27: core-semantics §5.9 — a `mut` field of a shared value
+    // is writable through any handle, including one a tuple pattern bound.
+    accepted(
+        "let-tuple-shared-write",
+        "shared struct N { mut val: i64, mut next: Option[N] }\n\
+         \n\
+         fn pair() -> (N, i64) {\n\
+         \x20   (N { val: 1, next: None }, 2)\n\
+         }\n\
+         \n\
+         fn main() {\n\
+         \x20   let (b, k) = pair();\n\
+         \x20   b.val = 6 + k;\n\
+         \x20   let (c, j): (N, i64) = pair();\n\
+         \x20   c.next = Some(b);\n\
+         \x20   println(f\"{c.next.unwrap().val} {j}\");\n\
+         }\n",
+    );
+    // A plain struct bound the same way still needs `let mut`.
+    rejected_then_fixed_by(
+        "let-tuple-plain-write",
+        "struct P { val: i64 }\n\
+         \n\
+         fn main() {\n\
+         \x20   let (p, k) = (P { val: 1 }, 2);\n\
+         \x20   p.val = k;\n\
+         \x20   println(f\"{p.val}\");\n\
+         }\n",
+        "cannot assign through `p`",
+        "let mut (p, k)",
+    );
+}

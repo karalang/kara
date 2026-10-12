@@ -121,9 +121,8 @@ impl<'a> super::OwnershipChecker<'a> {
                     .expr_types
                     .get(&SpanKey::from_span(&value.span))
                 {
-                    for name in pattern.binding_names() {
-                        self.binding_types.insert(name.clone(), rhs_ty.clone());
-                    }
+                    let rhs_ty = rhs_ty.clone();
+                    self.record_let_binding_types(pattern, &rhs_ty);
                 }
 
                 // Slice 1: escape-from-temp detection. When the RHS is a
@@ -433,6 +432,26 @@ impl<'a> super::OwnershipChecker<'a> {
 }
 
 impl super::OwnershipChecker<'_> {
+    /// Record each name a `let` pattern binds with ITS type: a tuple pattern
+    /// takes its elements' types, so `let (s, k) = pair();` types `s` as the
+    /// shared struct it is rather than as the whole `(N, i64)` — which hid the
+    /// shared-handle exemption from writes through `s` (B-2026-10-12-27).
+    /// Any other pattern gives each name the value's type, as before.
+    fn record_let_binding_types(&mut self, pattern: &Pattern, ty: &Type) {
+        match (&pattern.kind, ty) {
+            (PatternKind::Tuple(items), Type::Tuple(elems)) if items.len() == elems.len() => {
+                for (item, elem) in items.iter().zip(elems) {
+                    self.record_let_binding_types(item, elem);
+                }
+            }
+            _ => {
+                for name in pattern.binding_names() {
+                    self.binding_types.insert(name.clone(), ty.clone());
+                }
+            }
+        }
+    }
+
     /// `m[k]` as an assignment target over a `Map` or `SortedMap`, under the
     /// v2 core or the D5 migration: the map and the key expressions.
     fn map_index_assign_key<'e>(&self, target: &'e Expr) -> Option<(&'e Expr, &'e Expr)> {
