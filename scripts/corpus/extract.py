@@ -23,9 +23,14 @@ work manifest (`--work`, default target/corpus-work/manifest.json);
 `record.py` runs each program once on the legacy compiler and keeps a
 candidate as `expected_from = "assert"` only when it matches that run.
 
-Re-running is safe: an unchanged program keeps its recorded files, a changed
-one loses them, and directories no source produces any more are reported
-(removed with --prune).
+Re-running is safe. An unchanged program keeps its recorded files. A program
+whose corpus copy differs from its test or kata text is kept as it is, because
+a migration or a classify fix edits the corpus copy on purpose; the run lists
+such entries in <work>/kept.txt. With --overwrite-changed, an entry whose test
+or kata text changed since it was extracted (meta.toml's `extracted_src`, an
+md5 prefix of that text, differs or is missing) is replaced and loses its
+recorded files. Directories no source produces any more are reported (removed
+with --prune).
 """
 
 import argparse
@@ -164,6 +169,9 @@ def main() -> int:
     ap.add_argument("--corpus", default=str(ROOT / "corpus"))
     ap.add_argument("--work", default=str(ROOT / "target/corpus-work"))
     ap.add_argument("--prune", action="store_true")
+    ap.add_argument("--overwrite-changed", action="store_true",
+                    help="replace a corpus source whose test or kata text changed since it was "
+                         "extracted, dropping its recorded files (default: keep it and list it)")
     args = ap.parse_args()
 
     corpus = Path(args.corpus)
@@ -250,7 +258,8 @@ def main() -> int:
             if HAS_MAIN.search(src):
                 add("examples", f.stem, f"examples/{f.name}", src, "example", {})
 
-    states = {"new": 0, "changed": 0, "same": 0}
+    states = {"new": 0, "changed": 0, "same": 0, "kept": 0}
+    kept = []
     manifest = []
     written = set()
     for e in entries.values():
@@ -258,19 +267,40 @@ def main() -> int:
         dest.mkdir(parents=True, exist_ok=True)
         sp = dest / "source.kara"
         old = sp.read_text() if sp.exists() else None
-        state = "new" if old is None else ("same" if old == e["src"] else "changed")
+        orig = (dest / "source.orig.kara").read_text() if (dest / "source.orig.kara").exists() else None
+        src_hash = hashlib.md5(e["src"].encode()).hexdigest()[:8]
+        prev = read_toml(dest / "meta.toml") if (dest / "meta.toml").exists() else {}
+        if old is None:
+            state = "new"
+        elif e["src"] in (old, orig):
+            state = "same"
+        elif prev.get("extracted_src") == src_hash or not args.overwrite_changed:
+            # The source in the corpus differs from the one the test or kata
+            # holds, but the test text is what was extracted last time (or
+            # there is no record of it): the corpus copy was edited on
+            # purpose (a migration, a `karac fix` that classify keeps), so it
+            # stays. Only --overwrite-changed replaces such a copy.
+            state = "kept"
+            kept.append(e["dir"])
+        else:
+            state = "changed"
         states[state] += 1
         meta = e["meta"]
-        if state != "same":
+        if state != "kept":
+            meta["extracted_src"] = src_hash
+        elif "extracted_src" in prev:
+            meta["extracted_src"] = prev["extracted_src"]
+        if state in ("new", "changed"):
             sp.write_text(e["src"])
             for f in RECORDED:
                 if (dest / f).exists():
                     (dest / f).unlink()
         else:
-            prev = read_toml(dest / "meta.toml")
             for k, v in prev.items():
-                if k not in ("source", "dedup_of"):
-                    meta[k] = v if k != "tags" else sorted(set(v) | set(meta["tags"]))
+                if k not in ("source", "dedup_of", "extracted_src"):
+                    meta[k] = v if k != "tags" else list(v) + sorted(set(meta["tags"]) - set(v))
+        if meta.get("note") == "":
+            del meta["note"]
         if e["pin"] is not None:
             shutil.copy(e["pin"], dest / "expected.out")
         write_toml(dest / "meta.toml", meta)
@@ -290,6 +320,10 @@ def main() -> int:
     print(f"corpus-extract: {len(entries)} entries after dedup; "
           + " ".join(f"{k}={v}" for k, v in states.items())
           + f"; {len(stale)} stale" + (" (pruned)" if args.prune else ""))
+    if kept:
+        (work / "kept.txt").write_text("\n".join(kept) + "\n")
+        print(f"corpus-extract: {len(kept)} corpus sources differ from their test or kata text and were "
+              f"kept (listed in {work / 'kept.txt'}); --overwrite-changed replaces them")
     return 0
 
 

@@ -1347,10 +1347,15 @@ class Model:
             r = p | q
         elif op == "^":
             r = p ^ q
-        elif op == "<<":
-            r = p << q
-        elif op == ">>":
-            r = p >> q
+        elif op in ("<<", ">>"):
+            # design.md § integer operators: only the shift amount traps; a
+            # left shift drops the bits it moves past bit 63 and may change
+            # the sign, like the hardware, so it never overflows.
+            if kind == "int" and not 0 <= q < 64:
+                raise KPanic("shift amount out of range")
+            r = p << q if op == "<<" else p >> q
+            if kind == "int":
+                r = (r + 2 ** 63) % 2 ** 64 - 2 ** 63
         else:
             raise Unsupported(op)
         if kind == "int" and not (-(2 ** 63) <= r < 2 ** 63):
