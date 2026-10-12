@@ -18,7 +18,9 @@ Methods that can panic (`unwrap`, `expect`, `unwrap_err`) report the caller's so
 | `unwrap_or_default` | `fn unwrap_or_default(own self) -> T where T: Default` | |
 | `map` | `fn map[U](own self, f: own OnceFn(own T) -> U) -> Option[U]` | |
 | `map_or` | `fn map_or[U](own self, default: own U, f: own OnceFn(own T) -> U) -> U` | |
+| `map_or_else` | `fn map_or_else[U](own self, default: own OnceFn() -> U, f: own OnceFn(own T) -> U) -> U` | `default` runs only on `None` |
 | `and_then` | `fn and_then[U](own self, f: own OnceFn(own T) -> Option[U]) -> Option[U]` | |
+| `and` | `fn and[U](own self, other: own Option[U]) -> Option[U]` | `None` if `self` is; otherwise `other`. `self`'s value drops |
 | `or` | `fn or(own self, other: own Option[T]) -> Option[T]` | |
 | `or_else` | `fn or_else(own self, f: own OnceFn() -> Option[T]) -> Option[T]` | |
 | `filter` | `fn filter(own self, pred: own OnceFn(T) -> bool) -> Option[T]` | `None` unless the value passes |
@@ -27,6 +29,7 @@ Methods that can panic (`unwrap`, `expect`, `unwrap_err`) report the caller's so
 | `zip` | `fn zip[U](own self, other: own Option[U]) -> Option[(T, U)]` | `Some` only if both are |
 | `take` | `fn take(mut ref self) -> Option[T]` | Moves the value out and leaves `None` |
 | `replace` | `fn replace(mut ref self, value: own T) -> Option[T]` | Stores `value` and returns the old contents |
+| `get_or_insert` | `fn get_or_insert(mut ref self, value: own T) -> mut ref T` | Fills a `None` with `value`, then returns a reference to the value; `value` drops if `self` was `Some` |
 | `get_or_insert_with` | `fn get_or_insert_with(mut ref self, f: own OnceFn() -> T) -> mut ref T` | Fills a `None` with `f()`, then returns a reference to the value |
 | `as_ref` | `fn as_ref(self) -> Option[ref T]` | A view of the value, without moving it |
 | `cloned` | `fn cloned(own self) -> Option[T]` on `Option[ref T]`, `where T: Clone` | An owned copy of a viewed value: `m.get(k).cloned() ?? d` gives a default for a non-`Copy` value |
