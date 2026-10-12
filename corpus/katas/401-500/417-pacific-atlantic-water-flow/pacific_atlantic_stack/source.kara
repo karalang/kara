@@ -1,0 +1,109 @@
+// LeetCode #417: Pacific Atlantic Water Flow -- one stack, two bits.
+//
+// One grid of flags, bit 1 for the Pacific and bit 2 for the Atlantic,
+// and one explicit stack of (row, column, bit). Each edge cell is pushed
+// with its ocean's bit; popping a cell spreads that bit to every
+// neighbour no lower that lacks it. The answer is every cell holding
+// both bits, in row-major order. O(m n) time and space.
+
+fn pacific_atlantic(heights: Vec[Vec[i64]]) -> Vec[(i64, i64)] {
+    let rows = heights.len();
+    let cols = heights[0].len();
+    let mut flags: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        flags.push(vec![0; cols]);
+    }
+    let mut stack: Vec[(i64, i64, i64)] = Vec.new();
+    for r in 0..rows {
+        stack.push((r, 0, 1));
+        stack.push((r, cols - 1, 2));
+    }
+    for c in 0..cols {
+        stack.push((0, c, 1));
+        stack.push((rows - 1, c, 2));
+    }
+    for k in 0..stack.len() {
+        let (r, c, bit) = stack[k];
+        flags[r][c] = flags[r][c] | bit;
+    }
+    while let Some((r, c, bit)) = stack.pop() {
+        let around = [(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)];
+        for (nr, nc) in around {
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and flags[nr][nc] & bit == 0 and heights[nr][nc] >= heights[r][c] {
+                flags[nr][nc] = flags[nr][nc] | bit;
+                stack.push((nr, nc, bit));
+            }
+        }
+    }
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if flags[r][c] == 3 {
+                cells.push((r, c));
+            }
+        }
+    }
+    cells
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(heights: Vec[Vec[i64]]) {
+    let cells = pacific_atlantic(heights);
+    let mut line = String.new();
+    for k in 0..cells.len() {
+        if k > 0 {
+            line.push_str(" ");
+        }
+        let (r, c) = cells[k];
+        line.push_str(f"({r},{c})");
+    }
+    println(f"{heights.len()}x{heights[0].len()}: {cells.len()} cells: {line}");
+}
+
+fn main() {
+    show(vec![
+        vec![1, 2, 2, 3, 5],
+        vec![3, 2, 3, 4, 4],
+        vec![2, 4, 5, 3, 1],
+        vec![6, 7, 1, 4, 5],
+        vec![5, 1, 1, 2, 4],
+    ]);
+    show(vec![vec![1]]);
+    show(vec![vec![3, 3, 3], vec![3, 3, 3]]);
+    show(vec![vec![1, 2, 3, 4, 5]]);
+    show(vec![vec![5], vec![1], vec![4]]);
+    show(vec![vec![9, 9, 9], vec![9, 1, 9], vec![9, 9, 9]]);
+    show(vec![vec![1, 1, 1], vec![1, 9, 1], vec![1, 1, 1]]);
+    show(vec![vec![1, 2, 3], vec![8, 9, 4], vec![7, 6, 5]]);
+    show(vec![vec![10, 1, 10], vec![1, 1, 1], vec![10, 1, 10]]);
+    // 1,000 random grids of 1 to 12 by 1 to 12 cells, heights from 0 to
+    // a random limit of up to 9, so that plateaus are common.
+    let mut seed: i64 = 417;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..1000 {
+        let rows = 1 + step(mut seed) % 12;
+        let cols = 1 + step(mut seed) % 12;
+        let limit = 1 + step(mut seed) % 10;
+        let mut heights: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                row.push(step(mut seed) % limit);
+            }
+            heights.push(row);
+        }
+        let cells = pacific_atlantic(heights);
+        total += cells.len();
+        for (r, c) in cells {
+            checksum = (checksum * 31 + r * 13 + c + 1) % 1000000007;
+        }
+    }
+    println(f"1000 random grids: {total} cells, checksum {checksum}");
+}

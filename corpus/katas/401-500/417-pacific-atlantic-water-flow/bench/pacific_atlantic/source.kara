@@ -1,0 +1,105 @@
+// LeetCode #417: Pacific Atlantic Water Flow -- search up from each ocean.
+//
+// Water flows from a cell to a neighbour no higher. Turn it around: the
+// cells that drain into the Pacific are those reached from its edge
+// (the top row and the left column) by stepping to neighbours no lower.
+// A breadth-first search from each ocean's edge marks its cells; the
+// answer is every cell both mark, in row-major order.
+// O(m n) time and space.
+
+fn climb(heights: Vec[Vec[i64]], queue: own VecDeque[(i64, i64)]) -> Vec[Vec[bool]] {
+    let rows = heights.len();
+    let cols = heights[0].len();
+    let mut seen: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..rows {
+        seen.push(vec![false; cols]);
+    }
+    let mut queue = queue;
+    for (r, c) in queue.iter() {
+        seen[r][c] = true;
+    }
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    while let Some((r, c)) = queue.pop_front() {
+        for k in 0..4 {
+            let nr = r + dr[k];
+            let nc = c + dc[k];
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and not seen[nr][nc] and heights[nr][nc] >= heights[r][c] {
+                seen[nr][nc] = true;
+                queue.push_back((nr, nc));
+            }
+        }
+    }
+    seen
+}
+
+fn pacific_atlantic(heights: Vec[Vec[i64]]) -> Vec[(i64, i64)] {
+    let rows = heights.len();
+    let cols = heights[0].len();
+    let mut pacific: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut atlantic: VecDeque[(i64, i64)] = VecDeque.new();
+    for r in 0..rows {
+        pacific.push_back((r, 0));
+        atlantic.push_back((r, cols - 1));
+    }
+    for c in 0..cols {
+        pacific.push_back((0, c));
+        atlantic.push_back((rows - 1, c));
+    }
+    let to_pacific = climb(heights, pacific);
+    let to_atlantic = climb(heights, atlantic);
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if to_pacific[r][c] and to_atlantic[r][c] {
+                cells.push((r, c));
+            }
+        }
+    }
+    cells
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// How many steps (r, c) is from the nearer of the corners (0, 0) and
+// (n - 1, n - 1).
+fn ridge(r: i64, c: i64, n: i64) -> i64 {
+    let a = r + c;
+    let b = 2 * n - 2 - r - c;
+    if a < b { a } else { b }
+}
+
+fn main() {
+    let n = 200;
+    let rounds = 3000;
+    let mut seed: i64 = 417;
+    let mut heights: Vec[Vec[i64]] = Vec.new();
+    // A ridge along the anti-diagonal, rising three units a step from the
+    // top-left and bottom-right corners, with a little noise: each search
+    // climbs to it and covers half the grid.
+    for r in 0..n {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..n {
+            row.push(3 * ridge(r, c, n) + step(mut seed) % 3);
+        }
+        heights.push(row);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        let r = step(mut seed) % n;
+        let c = step(mut seed) % n;
+        // Dig a pit: any height from 0 up to the cell's own level.
+        heights[r][c] = step(mut seed) % (3 * ridge(r, c, n) + 3);
+        let cells = pacific_atlantic(heights);
+        total += cells.len();
+        let (lr, lc) = cells[cells.len() - 1];
+        checksum = (checksum * 31 + cells.len() + lr * n + lc) % 1000000007;
+    }
+    println(f"{rounds} rounds on a {n}x{n} grid: {total} cells, checksum {checksum}");
+}

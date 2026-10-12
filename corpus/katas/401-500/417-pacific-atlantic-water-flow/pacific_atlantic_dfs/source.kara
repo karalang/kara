@@ -1,0 +1,122 @@
+// LeetCode #417: Pacific Atlantic Water Flow -- recursive depth-first.
+//
+// As the ★ arm, search uphill from each ocean's edge, here by recursion:
+// visit(r, c) marks the cell and visits every unmarked neighbour no
+// lower. The answer is every cell both searches mark, in row-major
+// order. O(m n) time and space, recursion up to m n deep.
+
+fn visit(heights: Vec[Vec[i64]], r: i64, c: i64, seen: mut ref Vec[Vec[bool]]) {
+    seen[r][c] = true;
+    let rows = heights.len();
+    let cols = heights[0].len();
+    if r > 0 and not seen[r - 1][c] and heights[r - 1][c] >= heights[r][c] {
+        visit(heights, r - 1, c, seen);
+    }
+    if r + 1 < rows and not seen[r + 1][c] and heights[r + 1][c] >= heights[r][c] {
+        visit(heights, r + 1, c, seen);
+    }
+    if c > 0 and not seen[r][c - 1] and heights[r][c - 1] >= heights[r][c] {
+        visit(heights, r, c - 1, seen);
+    }
+    if c + 1 < cols and not seen[r][c + 1] and heights[r][c + 1] >= heights[r][c] {
+        visit(heights, r, c + 1, seen);
+    }
+}
+
+fn pacific_atlantic(heights: Vec[Vec[i64]]) -> Vec[(i64, i64)] {
+    let rows = heights.len();
+    let cols = heights[0].len();
+    let mut pacific: Vec[Vec[bool]] = Vec.new();
+    let mut atlantic: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..rows {
+        pacific.push(vec![false; cols]);
+        atlantic.push(vec![false; cols]);
+    }
+    for r in 0..rows {
+        if not pacific[r][0] {
+            visit(heights, r, 0, mut pacific);
+        }
+        if not atlantic[r][cols - 1] {
+            visit(heights, r, cols - 1, mut atlantic);
+        }
+    }
+    for c in 0..cols {
+        if not pacific[0][c] {
+            visit(heights, 0, c, mut pacific);
+        }
+        if not atlantic[rows - 1][c] {
+            visit(heights, rows - 1, c, mut atlantic);
+        }
+    }
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if pacific[r][c] and atlantic[r][c] {
+                cells.push((r, c));
+            }
+        }
+    }
+    cells
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(heights: Vec[Vec[i64]]) {
+    let cells = pacific_atlantic(heights);
+    let mut line = String.new();
+    for k in 0..cells.len() {
+        if k > 0 {
+            line.push_str(" ");
+        }
+        let (r, c) = cells[k];
+        line.push_str(f"({r},{c})");
+    }
+    println(f"{heights.len()}x{heights[0].len()}: {cells.len()} cells: {line}");
+}
+
+fn main() {
+    show(vec![
+        vec![1, 2, 2, 3, 5],
+        vec![3, 2, 3, 4, 4],
+        vec![2, 4, 5, 3, 1],
+        vec![6, 7, 1, 4, 5],
+        vec![5, 1, 1, 2, 4],
+    ]);
+    show(vec![vec![1]]);
+    show(vec![vec![3, 3, 3], vec![3, 3, 3]]);
+    show(vec![vec![1, 2, 3, 4, 5]]);
+    show(vec![vec![5], vec![1], vec![4]]);
+    show(vec![vec![9, 9, 9], vec![9, 1, 9], vec![9, 9, 9]]);
+    show(vec![vec![1, 1, 1], vec![1, 9, 1], vec![1, 1, 1]]);
+    show(vec![vec![1, 2, 3], vec![8, 9, 4], vec![7, 6, 5]]);
+    show(vec![vec![10, 1, 10], vec![1, 1, 1], vec![10, 1, 10]]);
+    // 1,000 random grids of 1 to 12 by 1 to 12 cells, heights from 0 to
+    // a random limit of up to 9, so that plateaus are common.
+    let mut seed: i64 = 417;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..1000 {
+        let rows = 1 + step(mut seed) % 12;
+        let cols = 1 + step(mut seed) % 12;
+        let limit = 1 + step(mut seed) % 10;
+        let mut heights: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                row.push(step(mut seed) % limit);
+            }
+            heights.push(row);
+        }
+        let cells = pacific_atlantic(heights);
+        total += cells.len();
+        for (r, c) in cells {
+            checksum = (checksum * 31 + r * 13 + c + 1) % 1000000007;
+        }
+    }
+    println(f"1000 random grids: {total} cells, checksum {checksum}");
+}

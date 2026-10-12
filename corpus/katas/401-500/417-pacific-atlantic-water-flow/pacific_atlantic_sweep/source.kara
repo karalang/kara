@@ -1,0 +1,122 @@
+// LeetCode #417: Pacific Atlantic Water Flow -- sweeps downhill.
+//
+// The question as asked, without turning it around: a cell drains into
+// an ocean if it touches that ocean's edge, or if a neighbour no higher
+// drains into it. Start from the edge cells and sweep the whole grid
+// again and again, marking each cell whose neighbour qualifies, until a
+// sweep marks nothing new. The answer is every cell marked for both.
+// O((m n)^2) time at worst, O(m n) space.
+
+fn drains(heights: Vec[Vec[i64]], pacific: bool) -> Vec[Vec[bool]] {
+    let rows = heights.len();
+    let cols = heights[0].len();
+    let mut marked: Vec[Vec[bool]] = Vec.new();
+    for r in 0..rows {
+        let mut row: Vec[bool] = Vec.new();
+        for c in 0..cols {
+            if pacific {
+                row.push(r == 0 or c == 0);
+            } else {
+                row.push(r == rows - 1 or c == cols - 1);
+            }
+        }
+        marked.push(row);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for r in 0..rows {
+            for c in 0..cols {
+                if marked[r][c] {
+                    continue;
+                }
+                let h = heights[r][c];
+                let up = r > 0 and marked[r - 1][c] and heights[r - 1][c] <= h;
+                let down = r + 1 < rows and marked[r + 1][c] and heights[r + 1][c] <= h;
+                let left = c > 0 and marked[r][c - 1] and heights[r][c - 1] <= h;
+                let right = c + 1 < cols and marked[r][c + 1] and heights[r][c + 1] <= h;
+                if up or down or left or right {
+                    marked[r][c] = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+    marked
+}
+
+fn pacific_atlantic(heights: Vec[Vec[i64]]) -> Vec[(i64, i64)] {
+    let to_pacific = drains(heights, true);
+    let to_atlantic = drains(heights, false);
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    for r in 0..heights.len() {
+        for c in 0..heights[0].len() {
+            if to_pacific[r][c] and to_atlantic[r][c] {
+                cells.push((r, c));
+            }
+        }
+    }
+    cells
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(heights: Vec[Vec[i64]]) {
+    let cells = pacific_atlantic(heights);
+    let mut line = String.new();
+    for k in 0..cells.len() {
+        if k > 0 {
+            line.push_str(" ");
+        }
+        let (r, c) = cells[k];
+        line.push_str(f"({r},{c})");
+    }
+    println(f"{heights.len()}x{heights[0].len()}: {cells.len()} cells: {line}");
+}
+
+fn main() {
+    show(vec![
+        vec![1, 2, 2, 3, 5],
+        vec![3, 2, 3, 4, 4],
+        vec![2, 4, 5, 3, 1],
+        vec![6, 7, 1, 4, 5],
+        vec![5, 1, 1, 2, 4],
+    ]);
+    show(vec![vec![1]]);
+    show(vec![vec![3, 3, 3], vec![3, 3, 3]]);
+    show(vec![vec![1, 2, 3, 4, 5]]);
+    show(vec![vec![5], vec![1], vec![4]]);
+    show(vec![vec![9, 9, 9], vec![9, 1, 9], vec![9, 9, 9]]);
+    show(vec![vec![1, 1, 1], vec![1, 9, 1], vec![1, 1, 1]]);
+    show(vec![vec![1, 2, 3], vec![8, 9, 4], vec![7, 6, 5]]);
+    show(vec![vec![10, 1, 10], vec![1, 1, 1], vec![10, 1, 10]]);
+    // 1,000 random grids of 1 to 12 by 1 to 12 cells, heights from 0 to
+    // a random limit of up to 9, so that plateaus are common.
+    let mut seed: i64 = 417;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..1000 {
+        let rows = 1 + step(mut seed) % 12;
+        let cols = 1 + step(mut seed) % 12;
+        let limit = 1 + step(mut seed) % 10;
+        let mut heights: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                row.push(step(mut seed) % limit);
+            }
+            heights.push(row);
+        }
+        let cells = pacific_atlantic(heights);
+        total += cells.len();
+        for (r, c) in cells {
+            checksum = (checksum * 31 + r * 13 + c + 1) % 1000000007;
+        }
+    }
+    println(f"1000 random grids: {total} cells, checksum {checksum}");
+}

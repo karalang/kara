@@ -1,0 +1,373 @@
+// Differential test for LeetCode #417: Pacific Atlantic Water Flow.
+//
+// Copies of the four arms, each run on 1,000 random grids of up to 9 by
+// 9 cells. Properties known by construction:
+//   P1  a cell is in the answer exactly when a search downhill from it
+//       alone reaches both oceans' edges
+//   P2  the grid transposed gives the answer transposed (each ocean's
+//       edges map onto its own)
+//   P3  the grid turned half a turn gives the answer turned half a turn
+//       (the two oceans swap, and the answer needs both)
+//   P4  every height h replaced by 3h + 7 changes nothing
+//   P5  the top-right and bottom-left corners touch both oceans and are
+//       always in the answer, and a flat grid's answer is every cell
+
+// ---- bfs: pacific_atlantic.kara
+
+fn climb(heights: Vec[Vec[i64]], queue: own VecDeque[(i64, i64)]) -> Vec[Vec[bool]] {
+    let rows = heights.len();
+    let cols = heights[0].len();
+    let mut seen: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..rows {
+        seen.push(vec![false; cols]);
+    }
+    let mut queue = queue;
+    for (r, c) in queue.iter() {
+        seen[r][c] = true;
+    }
+    let dr = [-1, 1, 0, 0];
+    let dc = [0, 0, -1, 1];
+    while let Some((r, c)) = queue.pop_front() {
+        for k in 0..4 {
+            let nr = r + dr[k];
+            let nc = c + dc[k];
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and not seen[nr][nc] and heights[nr][nc] >= heights[r][c] {
+                seen[nr][nc] = true;
+                queue.push_back((nr, nc));
+            }
+        }
+    }
+    seen
+}
+
+fn pacific_atlantic_bfs(heights: Vec[Vec[i64]]) -> Vec[(i64, i64)] {
+    let rows = heights.len();
+    let cols = heights[0].len();
+    let mut pacific: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut atlantic: VecDeque[(i64, i64)] = VecDeque.new();
+    for r in 0..rows {
+        pacific.push_back((r, 0));
+        atlantic.push_back((r, cols - 1));
+    }
+    for c in 0..cols {
+        pacific.push_back((0, c));
+        atlantic.push_back((rows - 1, c));
+    }
+    let to_pacific = climb(heights, pacific);
+    let to_atlantic = climb(heights, atlantic);
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if to_pacific[r][c] and to_atlantic[r][c] {
+                cells.push((r, c));
+            }
+        }
+    }
+    cells
+}
+
+// ---- dfs: pacific_atlantic_dfs.kara
+
+fn visit(heights: Vec[Vec[i64]], r: i64, c: i64, seen: mut ref Vec[Vec[bool]]) {
+    seen[r][c] = true;
+    let rows = heights.len();
+    let cols = heights[0].len();
+    if r > 0 and not seen[r - 1][c] and heights[r - 1][c] >= heights[r][c] {
+        visit(heights, r - 1, c, seen);
+    }
+    if r + 1 < rows and not seen[r + 1][c] and heights[r + 1][c] >= heights[r][c] {
+        visit(heights, r + 1, c, seen);
+    }
+    if c > 0 and not seen[r][c - 1] and heights[r][c - 1] >= heights[r][c] {
+        visit(heights, r, c - 1, seen);
+    }
+    if c + 1 < cols and not seen[r][c + 1] and heights[r][c + 1] >= heights[r][c] {
+        visit(heights, r, c + 1, seen);
+    }
+}
+
+fn pacific_atlantic_dfs(heights: Vec[Vec[i64]]) -> Vec[(i64, i64)] {
+    let rows = heights.len();
+    let cols = heights[0].len();
+    let mut pacific: Vec[Vec[bool]] = Vec.new();
+    let mut atlantic: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..rows {
+        pacific.push(vec![false; cols]);
+        atlantic.push(vec![false; cols]);
+    }
+    for r in 0..rows {
+        if not pacific[r][0] {
+            visit(heights, r, 0, mut pacific);
+        }
+        if not atlantic[r][cols - 1] {
+            visit(heights, r, cols - 1, mut atlantic);
+        }
+    }
+    for c in 0..cols {
+        if not pacific[0][c] {
+            visit(heights, 0, c, mut pacific);
+        }
+        if not atlantic[rows - 1][c] {
+            visit(heights, rows - 1, c, mut atlantic);
+        }
+    }
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if pacific[r][c] and atlantic[r][c] {
+                cells.push((r, c));
+            }
+        }
+    }
+    cells
+}
+
+// ---- stack: pacific_atlantic_stack.kara
+
+fn pacific_atlantic_stack(heights: Vec[Vec[i64]]) -> Vec[(i64, i64)] {
+    let rows = heights.len();
+    let cols = heights[0].len();
+    let mut flags: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        flags.push(vec![0; cols]);
+    }
+    let mut stack: Vec[(i64, i64, i64)] = Vec.new();
+    for r in 0..rows {
+        stack.push((r, 0, 1));
+        stack.push((r, cols - 1, 2));
+    }
+    for c in 0..cols {
+        stack.push((0, c, 1));
+        stack.push((rows - 1, c, 2));
+    }
+    for k in 0..stack.len() {
+        let (r, c, bit) = stack[k];
+        flags[r][c] = flags[r][c] | bit;
+    }
+    while let Some((r, c, bit)) = stack.pop() {
+        let around = [(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)];
+        for (nr, nc) in around {
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and flags[nr][nc] & bit == 0 and heights[nr][nc] >= heights[r][c] {
+                flags[nr][nc] = flags[nr][nc] | bit;
+                stack.push((nr, nc, bit));
+            }
+        }
+    }
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if flags[r][c] == 3 {
+                cells.push((r, c));
+            }
+        }
+    }
+    cells
+}
+
+// ---- sweep: pacific_atlantic_sweep.kara
+
+fn drains(heights: Vec[Vec[i64]], pacific: bool) -> Vec[Vec[bool]] {
+    let rows = heights.len();
+    let cols = heights[0].len();
+    let mut marked: Vec[Vec[bool]] = Vec.new();
+    for r in 0..rows {
+        let mut row: Vec[bool] = Vec.new();
+        for c in 0..cols {
+            if pacific {
+                row.push(r == 0 or c == 0);
+            } else {
+                row.push(r == rows - 1 or c == cols - 1);
+            }
+        }
+        marked.push(row);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for r in 0..rows {
+            for c in 0..cols {
+                if marked[r][c] {
+                    continue;
+                }
+                let h = heights[r][c];
+                let up = r > 0 and marked[r - 1][c] and heights[r - 1][c] <= h;
+                let down = r + 1 < rows and marked[r + 1][c] and heights[r + 1][c] <= h;
+                let left = c > 0 and marked[r][c - 1] and heights[r][c - 1] <= h;
+                let right = c + 1 < cols and marked[r][c + 1] and heights[r][c + 1] <= h;
+                if up or down or left or right {
+                    marked[r][c] = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+    marked
+}
+
+fn pacific_atlantic_sweep(heights: Vec[Vec[i64]]) -> Vec[(i64, i64)] {
+    let to_pacific = drains(heights, true);
+    let to_atlantic = drains(heights, false);
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    for r in 0..heights.len() {
+        for c in 0..heights[0].len() {
+            if to_pacific[r][c] and to_atlantic[r][c] {
+                cells.push((r, c));
+            }
+        }
+    }
+    cells
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn solve(arm: i64, heights: Vec[Vec[i64]]) -> Vec[(i64, i64)] {
+    if arm == 0 {
+        pacific_atlantic_bfs(heights)
+    } else if arm == 1 {
+        pacific_atlantic_dfs(heights)
+    } else if arm == 2 {
+        pacific_atlantic_stack(heights)
+    } else {
+        pacific_atlantic_sweep(heights)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The cells as a grid of marks, so that answers can be compared
+// whatever order they come in.
+fn marks(cells: Vec[(i64, i64)], rows: i64, cols: i64) -> Vec[Vec[bool]] {
+    let mut grid: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..rows {
+        grid.push(vec![false; cols]);
+    }
+    for (r, c) in cells {
+        grid[r][c] = true;
+    }
+    grid
+}
+
+// Whether water from (r, c), stepping only to neighbours no higher,
+// reaches the Pacific edge and the Atlantic edge: a search downhill from
+// this one cell, as the problem states it.
+fn reaches_both(heights: Vec[Vec[i64]], r0: i64, c0: i64) -> bool {
+    let rows = heights.len();
+    let cols = heights[0].len();
+    let mut seen: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..rows {
+        seen.push(vec![false; cols]);
+    }
+    let mut todo: Vec[(i64, i64)] = vec![(r0, c0)];
+    seen[r0][c0] = true;
+    let mut pacific = false;
+    let mut atlantic = false;
+    while let Some((r, c)) = todo.pop() {
+        if r == 0 or c == 0 {
+            pacific = true;
+        }
+        if r == rows - 1 or c == cols - 1 {
+            atlantic = true;
+        }
+        let around = [(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)];
+        for (nr, nc) in around {
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and not seen[nr][nc] and heights[nr][nc] <= heights[r][c] {
+                seen[nr][nc] = true;
+                todo.push((nr, nc));
+            }
+        }
+    }
+    pacific and atlantic
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4170;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1000 {
+        let rows = 1 + step(mut seed) % 9;
+        let cols = 1 + step(mut seed) % 9;
+        let limit = 1 + step(mut seed) % 8;
+        let mut heights: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                row.push(step(mut seed) % limit);
+            }
+            heights.push(row);
+        }
+        // P1
+        let mut brute: Vec[Vec[bool]] = Vec.new();
+        for r in 0..rows {
+            let mut row: Vec[bool] = Vec.new();
+            for c in 0..cols {
+                row.push(reaches_both(heights, r, c));
+            }
+            brute.push(row);
+        }
+        // P2: transposed; P3: turned half a turn; P4: 3h + 7.
+        let mut transposed: Vec[Vec[i64]] = Vec.new();
+        for c in 0..cols {
+            let mut row: Vec[i64] = Vec.new();
+            for r in 0..rows {
+                row.push(heights[r][c]);
+            }
+            transposed.push(row);
+        }
+        let mut turned: Vec[Vec[i64]] = Vec.new();
+        let mut scaled: Vec[Vec[i64]] = Vec.new();
+        let mut flat: Vec[Vec[i64]] = Vec.new();
+        for r in 0..rows {
+            let mut row: Vec[i64] = Vec.new();
+            let mut row3: Vec[i64] = Vec.new();
+            for c in 0..cols {
+                row.push(heights[rows - 1 - r][cols - 1 - c]);
+                row3.push(3 * heights[r][c] + 7);
+            }
+            turned.push(row);
+            scaled.push(row3);
+            flat.push(vec![limit; cols]);
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let cells = solve(arm, heights);
+            let got = marks(cells, rows, cols);
+            report(1, arm, case, got == brute, mut failures);
+            let got_t = marks(solve(arm, transposed), cols, rows);
+            let got_turn = marks(solve(arm, turned), rows, cols);
+            let mut p2 = true;
+            let mut p3 = true;
+            for r in 0..rows {
+                for c in 0..cols {
+                    if got_t[c][r] != got[r][c] {
+                        p2 = false;
+                    }
+                    if got_turn[rows - 1 - r][cols - 1 - c] != got[r][c] {
+                        p3 = false;
+                    }
+                }
+            }
+            report(2, arm, case, p2, mut failures);
+            report(3, arm, case, p3, mut failures);
+            report(4, arm, case, marks(solve(arm, scaled), rows, cols) == got, mut failures);
+            report(5, arm, case, got[0][cols - 1] and got[rows - 1][0] and solve(arm, flat).len() == rows * cols, mut failures);
+        }
+    }
+    println(f"1000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

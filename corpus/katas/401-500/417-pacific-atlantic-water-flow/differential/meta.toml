@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/417-pacific-atlantic-water-flow/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:vecdeque"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "b53734856"
+extracted_src = "b2e8a4d1"
+model_rev = "1aa23105"
+model_src = "b2e8a4d1"
