@@ -2065,3 +2065,223 @@ pub unsafe extern "C" fn karac_mir_string_from_chars(out: *mut RawVec, c: *const
     // SAFETY: the caller's contract.
     unsafe { string_of(out, text.as_bytes()) };
 }
+
+/// An erased function value of the MIR backend: `{code, env, drop}`.
+type MirFnBytes = [usize; 3];
+
+/// Drops an erased function value: its captures through their glue, then
+/// their block (a null environment owns nothing).
+///
+/// # Safety
+/// `f` is a live erased function value, not used again.
+unsafe fn drop_mir_fn(f: &MirFnBytes) {
+    let env = f[1] as *mut u8;
+    if env.is_null() {
+        return;
+    }
+    if f[2] != 0 {
+        // SAFETY: `drop` is the glue of the captures at `env`.
+        let d: unsafe extern "C" fn(*mut u8) = unsafe { std::mem::transmute(f[2]) };
+        unsafe { d(env) };
+    }
+    // SAFETY: the captures' block came from `malloc`.
+    unsafe { free(env.cast()) };
+}
+
+/// A `Pool[T]` of the MIR backend, as the interpreter's `PoolEntry`: the
+/// factory and health check (erased function values), the idle values
+/// (`size` bytes each), the count minted and not evicted, its bound and the
+/// checked-out connection ids. Every `Pool` value and checked-out
+/// connection holds a reference; the last one gone drops the idle values
+/// and the functions and frees it.
+pub struct MirPool {
+    refs: usize,
+    size: usize,
+    drop: Option<unsafe extern "C" fn(*mut u8)>,
+    create: MirFnBytes,
+    check: Option<MirFnBytes>,
+    slots: Vec<Box<[u8]>>,
+    active: i64,
+    max: i64,
+    out: std::collections::HashSet<i64>,
+    next_conn: i64,
+}
+
+/// A new pool of `size`-byte values minted by the erased function at
+/// `create` (moved in), at most `max` at once.
+///
+/// # Safety
+/// `create` is a live erased function value, which the pool now owns.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_pool_new(
+    size: usize,
+    max: i64,
+    create: *const MirFnBytes,
+    drop: Option<unsafe extern "C" fn(*mut u8)>,
+) -> *mut MirPool {
+    Box::into_raw(Box::new(MirPool {
+        refs: 1,
+        size,
+        drop,
+        // SAFETY: the caller's contract.
+        create: unsafe { create.read_unaligned() },
+        check: None,
+        slots: Vec::new(),
+        active: 0,
+        max,
+        out: Default::default(),
+        next_conn: 1,
+    }))
+}
+
+/// Another `Pool` value for `h`; `check` (when not null, moved in)
+/// replaces its health check.
+///
+/// # Safety
+/// `h` is a live pool; `check` is null or a live erased function value.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_pool_share(
+    h: *mut MirPool,
+    check: *const MirFnBytes,
+) -> *mut MirPool {
+    // SAFETY: the caller's contract.
+    let p = unsafe { &mut *h };
+    p.refs += 1;
+    if !check.is_null() {
+        // SAFETY: as above.
+        if let Some(old) = p.check.replace(unsafe { check.read_unaligned() }) {
+            unsafe { drop_mir_fn(&old) };
+        }
+    }
+    h
+}
+
+/// Where the pool's factory (`which` 0) or health check (1, null when
+/// none) is held.
+///
+/// # Safety
+/// `h` is a live pool.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_pool_fn(h: *mut MirPool, which: u8) -> *const MirFnBytes {
+    // SAFETY: the caller's contract.
+    let p = unsafe { &*h };
+    match (which, &p.check) {
+        (0, _) => &p.create,
+        (_, Some(c)) => c,
+        _ => std::ptr::null(),
+    }
+}
+
+/// Moves the newest idle value to `out`: 1 when there was one, else 0.
+///
+/// # Safety
+/// `h` is a live pool; `out` is writable for its value size.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_pool_pop(h: *mut MirPool, out: *mut u8) -> u8 {
+    // SAFETY: the caller's contract.
+    let p = unsafe { &mut *h };
+    match p.slots.pop() {
+        Some(b) => {
+            // SAFETY: as above.
+            unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), out, p.size) };
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Counts the pool's live values: `delta` -1 for an evicted one, +1 for
+/// one minted; 0 answers whether another may be minted (1) or not (0).
+///
+/// # Safety
+/// `h` is a live pool.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_pool_count(h: *mut MirPool, delta: i64) -> u8 {
+    // SAFETY: the caller's contract.
+    let p = unsafe { &mut *h };
+    if delta == 0 {
+        return u8::from(p.active < p.max);
+    }
+    p.active = (p.active + delta).max(0);
+    1
+}
+
+/// A new connection id, recorded as checked out; the connection holds a
+/// reference on the pool.
+///
+/// # Safety
+/// `h` is a live pool.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_pool_check_out(h: *mut MirPool) -> i64 {
+    // SAFETY: the caller's contract.
+    let p = unsafe { &mut *h };
+    let c = p.next_conn;
+    p.next_conn += 1;
+    p.out.insert(c);
+    p.refs += 1;
+    c
+}
+
+/// Hands back the value at `val` of connection `conn` from pool `h`, to
+/// the pool `into` (null for `h`): 1 when the pool took it (it was
+/// checked out there), else 0 and the caller drops it. The connection's
+/// reference on `h` is gone either way.
+///
+/// # Safety
+/// `h` is a live pool the connection holds a reference on; `val` is
+/// readable for its value size.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_pool_return(
+    h: *mut MirPool,
+    into: *mut MirPool,
+    conn: i64,
+    val: *const u8,
+) -> u8 {
+    let took = {
+        // SAFETY: the caller's contract.
+        let p = unsafe { &mut *h };
+        if (into.is_null() || into == h) && p.out.remove(&conn) {
+            // SAFETY: as above.
+            p.slots.push(unsafe { bytes(val, p.size) }.into());
+            1
+        } else {
+            0
+        }
+    };
+    // SAFETY: the connection's reference.
+    unsafe { karac_mir_pool_drop(h) };
+    took
+}
+
+/// A `Pool` value (or a connection's reference) is gone; with the last
+/// one, the idle values and the functions drop and the pool is freed.
+///
+/// # Safety
+/// `h` is null or a live pool, and this reference is not used again.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_pool_drop(h: *mut MirPool) {
+    if h.is_null() {
+        return;
+    }
+    {
+        // SAFETY: the caller's contract.
+        let p = unsafe { &mut *h };
+        p.refs -= 1;
+        if p.refs > 0 {
+            return;
+        }
+    }
+    // SAFETY: the last reference; the pool came from `Box::into_raw`.
+    let p = unsafe { Box::from_raw(h) };
+    if let Some(d) = p.drop {
+        for mut b in p.slots {
+            // SAFETY: the bytes are a value the glue drops.
+            unsafe { d(b.as_mut_ptr()) };
+        }
+    }
+    // SAFETY: the pool owned both functions.
+    unsafe { drop_mir_fn(&p.create) };
+    if let Some(c) = &p.check {
+        unsafe { drop_mir_fn(c) };
+    }
+}

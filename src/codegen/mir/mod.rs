@@ -37,6 +37,7 @@ mod fmt;
 mod io;
 mod key;
 mod num;
+mod pool;
 mod seq;
 mod table;
 mod tracing;

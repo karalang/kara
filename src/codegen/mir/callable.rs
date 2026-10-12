@@ -237,6 +237,15 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.copy(tmp, q, inner)?;
                 Ok(tmp)
             }
+            // A value handed to a borrowing parameter (`|c| c > 0` for a
+            // `Fn(i64) -> bool`) is lent where it is.
+            _ if matches!(self.tys.kind(want), TyKind::Ref(i) | TyKind::MutRef(i) if i == t)
+                && self.layout(want)?.size == 8 =>
+            {
+                let slot = self.entry_slot(8, "arg")?;
+                self.store(slot, p.into())?;
+                Ok(slot)
+            }
             _ => {
                 let tmp = self.temp(t, "arg")?;
                 self.copy(tmp, p, t)?;

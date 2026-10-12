@@ -79,14 +79,13 @@ const LIBRARY_CELLS: &[(&str, CellDrop)] = &[
 ];
 
 /// Library types whose builtin `Drop` does nothing here, as in the
-/// interpreter: a `critical_section` guard (interrupts were never masked)
+/// interpreter: a `critical_section` guard (interrupts were never masked),
 /// the handles of registries that outlive them, and a `TaskGroup`, whose
 /// tasks all ran when they were spawned.
 const NOOP_DROPS: &[&str] = &[
     "CriticalSectionGuard",
     "Semaphore",
     "RateLimiter",
-    "Pool",
     "TaskGroup",
 ];
 
@@ -205,6 +204,19 @@ impl<'ctx> Cx<'ctx, '_> {
                         }
                     }
                     return Ok(());
+                }
+                match self.tys.adt(a).name.as_str() {
+                    // The pool's own reference, or the connection's value
+                    // back to its pool (`pool.rs`).
+                    "Pool" => {
+                        let h = self.load_ptr(p)?;
+                        return self.rt("pool_drop", &[h.into()]);
+                    }
+                    "PooledConnection" => {
+                        let null = self.ptr_ty().const_null();
+                        return self.pool_conn_return(p, ty, null);
+                    }
+                    _ => {}
                 }
                 if NOOP_DROPS.contains(&self.tys.adt(a).name.as_str()) {
                     return Ok(());
