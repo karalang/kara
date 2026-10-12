@@ -2030,3 +2030,38 @@ pub unsafe extern "C" fn karac_mir_chan_drop_receiver(h: *mut MirChan) {
     // SAFETY: the caller's contract.
     unsafe { karac_mir_chan_end(h, 0) }
 }
+
+/// Writes the chars of `s[..n]` to `out` (room for `n` chars) and returns
+/// how many there are.
+///
+/// # Safety
+/// `s` is readable for `n` bytes of UTF-8; `out` is writable for `n`
+/// `u32`s.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_decode(out: *mut u32, s: *const u8, n: usize) -> usize {
+    // SAFETY: the caller's contract.
+    let text = unsafe { std::str::from_utf8_unchecked(bytes(s, n)) };
+    let mut k = 0;
+    for c in text.chars() {
+        // SAFETY: a string of `n` bytes has at most `n` chars.
+        unsafe { out.add(k).write(u32::from(c)) };
+        k += 1;
+    }
+    k
+}
+
+/// The chars `c[..k]` as a new `String` at `out`.
+///
+/// # Safety
+/// `c` holds `k` valid chars; `out` is writable for a `String`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_string_from_chars(out: *mut RawVec, c: *const u32, k: usize) {
+    let mut text = String::with_capacity(k);
+    for i in 0..k {
+        // SAFETY: the caller's contract.
+        let v = unsafe { c.add(i).read() };
+        text.push(char::from_u32(v).unwrap_or(char::REPLACEMENT_CHARACTER));
+    }
+    // SAFETY: the caller's contract.
+    unsafe { string_of(out, text.as_bytes()) };
+}

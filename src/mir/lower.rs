@@ -13406,7 +13406,7 @@ pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
 
 /// Core §11.2: conflicting `par` branches are a compile error.
 /// `KARAC_MIR_EFFECTS=0` skips the check.
-fn par_check(lowered: &Lowered) -> Result<(), String> {
+pub fn par_check(lowered: &Lowered) -> Result<(), String> {
     let has_par = lowered
         .program
         .bodies

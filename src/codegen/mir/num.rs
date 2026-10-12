@@ -147,6 +147,21 @@ impl<'ctx> Cx<'ctx, '_> {
             (t, "try_from") if crate::numeric_conv::is_int_target(t) => {
                 return self.int_try_from(t, args, dest)
             }
+            (t, "from") if crate::numeric_conv::is_int_target(t) && args.len() == 1 => {
+                // A widening conversion (`i64.from(x)`), as the source's sign
+                // extends it.
+                let at = self.operand_type(&args[0])?;
+                let signed = matches!(self.tys.kind(at), TyKind::Int(it) if it.signed());
+                if !matches!(
+                    self.tys.kind(at),
+                    TyKind::Int(_) | TyKind::Bool | TyKind::Char
+                ) {
+                    return Ok(None);
+                }
+                let v = self.operand_scalar(&args[0])?.into_int_value();
+                self.store_int_as(dest, v, signed)?;
+                return Ok(Some(()));
+            }
             (_, "parse" | "from_str_radix") => return self.parse_num(base, method, args, dest),
             _ => {}
         }
@@ -614,7 +629,184 @@ impl<'ctx> Cx<'ctx, '_> {
             .into_int_value())
     }
 
+    /// The integer argument `y` as a peer of the receiver `x`: the same
+    /// type, or an unsuffixed literal (typed `i64`) cast to it.
+    fn int_peer(&mut self, x: IntValue<'ctx>, xty: Ty, y: &Operand) -> R<Option<IntValue<'ctx>>> {
+        let yt = self.operand_type(y)?;
+        let v = self.operand_scalar(y)?.into_int_value();
+        if yt == xty {
+            return Ok(Some(v));
+        }
+        match (self.tys.kind(yt), y) {
+            (TyKind::Int(from), Operand::Const(_)) => Ok(Some(
+                self.builder
+                    .build_int_cast_sign_flag(v, x.get_type(), from.signed(), "")
+                    .map_err(e)?,
+            )),
+            _ => Ok(None),
+        }
+    }
+
+    /// `x op y` and whether it overflowed, through
+    /// `llvm.{s,u}{add,sub,mul}.with.overflow`.
+    fn with_overflow(
+        &mut self,
+        op: &str,
+        signed: bool,
+        x: IntValue<'ctx>,
+        y: IntValue<'ctx>,
+    ) -> R<(IntValue<'ctx>, IntValue<'ctx>)> {
+        let name = format!("llvm.{}{op}.with.overflow", if signed { "s" } else { "u" });
+        let i = inkwell::intrinsics::Intrinsic::find(&name)
+            .ok_or_else(|| format!("no intrinsic {name}"))?;
+        let f = i
+            .get_declaration(&self.module, &[x.get_type().into()])
+            .ok_or_else(|| format!("{name} has no declaration"))?;
+        let r = self
+            .builder
+            .build_call(f, &[x.into(), y.into()], "")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_struct_value();
+        let v = self
+            .builder
+            .build_extract_value(r, 0, "")
+            .map_err(e)?
+            .into_int_value();
+        let o = self
+            .builder
+            .build_extract_value(r, 1, "")
+            .map_err(e)?
+            .into_int_value();
+        Ok((v, o))
+    }
+
+    /// `checked_`, `saturating_` and `overflowing_` `add` / `sub` / `mul`,
+    /// at any width; `None` for another method.
+    fn int_overflow_op(
+        &mut self,
+        it: IntTy,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let Some((family, op)) = method.split_once('_') else {
+            return Ok(None);
+        };
+        let ([a, y], "checked" | "saturating" | "overflowing", "add" | "sub" | "mul") =
+            (args, family, op)
+        else {
+            return Ok(None);
+        };
+        let xty = self.operand_type(a)?;
+        let x = self.operand_scalar(a)?.into_int_value();
+        let Some(y) = self.int_peer(x, xty, y)? else {
+            return Ok(None);
+        };
+        let signed = it.signed();
+        let (v, o) = self.with_overflow(op, signed, x, y)?;
+        let dty = self.place_type(dest)?;
+        let d = self.place_ptr(dest)?;
+        match family {
+            "checked" => {
+                let (some, none) = self.option_variants(dty)?;
+                let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
+                self.store(q, v.into())?;
+                let i32t = self.llcx.i32_type();
+                let k = self
+                    .builder
+                    .build_select(
+                        o,
+                        i32t.const_int(u64::from(none), false),
+                        i32t.const_int(u64::from(some), false),
+                        "",
+                    )
+                    .map_err(e)?
+                    .into_int_value();
+                self.store_tag_dyn(d, dty, k)?;
+            }
+            "overflowing" => {
+                self.store(d, v.into())?;
+                let q = self.offset(d, self.field_offset(dty, None, 1)?)?;
+                let b = self
+                    .builder
+                    .build_int_z_extend(o, self.llcx.i8_type(), "")
+                    .map_err(e)?;
+                self.store(q, b.into())?;
+            }
+            _ => {
+                // The bound the true result passed: below zero for an
+                // unsigned `sub`, else by the signs for a signed one.
+                let xt = x.get_type();
+                let bits = it.bits();
+                let (min, max) = if signed {
+                    let min = xt
+                        .const_int(1, false)
+                        .const_shl(xt.const_int(u64::from(bits - 1), false));
+                    (min, min.const_not())
+                } else {
+                    (xt.const_zero(), xt.const_all_ones())
+                };
+                let b = &self.builder;
+                let high = if !signed {
+                    xt.get_context()
+                        .bool_type()
+                        .const_int(u64::from(op != "sub"), false)
+                } else {
+                    let z = xt.const_zero();
+                    let xn = b
+                        .build_int_compare(IntPredicate::SLT, x, z, "")
+                        .map_err(e)?;
+                    let yn = b
+                        .build_int_compare(IntPredicate::SLT, y, z, "")
+                        .map_err(e)?;
+                    match op {
+                        // Overflow past MAX when both are non-negative.
+                        "add" => b.build_not(xn, "").map_err(e)?,
+                        // `x - y` passes MAX when x >= 0 (and y < 0).
+                        "sub" => b.build_not(xn, "").map_err(e)?,
+                        // A product passes MAX when the signs agree.
+                        _ => {
+                            let differ = b.build_xor(xn, yn, "").map_err(e)?;
+                            b.build_not(differ, "").map_err(e)?
+                        }
+                    }
+                };
+                let bound = b
+                    .build_select(high, max, min, "")
+                    .map_err(e)?
+                    .into_int_value();
+                let r = b.build_select(o, bound, v, "").map_err(e)?.into_int_value();
+                self.store(d, r.into())?;
+            }
+        }
+        Ok(Some(()))
+    }
+
     fn int_op(&mut self, it: IntTy, method: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
+        if self.int_overflow_op(it, method, args, dest)?.is_some() {
+            return Ok(Some(()));
+        }
+        if method == "abs_diff" && args.len() == 2 {
+            let xty = self.operand_type(&args[0])?;
+            let x = self.operand_scalar(&args[0])?.into_int_value();
+            let Some(y) = self.int_peer(x, xty, &args[1])? else {
+                return Ok(None);
+            };
+            let b = &self.builder;
+            let p = if it.signed() {
+                IntPredicate::SGT
+            } else {
+                IntPredicate::UGT
+            };
+            let gt = b.build_int_compare(p, x, y, "").map_err(e)?;
+            let d1 = b.build_int_sub(x, y, "").map_err(e)?;
+            let d2 = b.build_int_sub(y, x, "").map_err(e)?;
+            let v = b.build_select(gt, d1, d2, "").map_err(e)?.into_int_value();
+            self.store_int_as(dest, v, false)?;
+            return Ok(Some(()));
+        }
         if it.bits() > 64 {
             return Ok(None);
         }
@@ -668,23 +860,6 @@ impl<'ctx> Cx<'ctx, '_> {
                 let v = b.build_and(pos, single, "").map_err(e)?;
                 self.store_bool(dest, v)?;
             }
-            ("abs_diff", [y]) => {
-                if self.operand_type(y)? != self.operand_type(&args[0])? {
-                    return Ok(None);
-                }
-                let y = self.operand_scalar(y)?.into_int_value();
-                let b = &self.builder;
-                let p = if it.signed() {
-                    IntPredicate::SGT
-                } else {
-                    IntPredicate::UGT
-                };
-                let gt = b.build_int_compare(p, x, y, "").map_err(e)?;
-                let d1 = b.build_int_sub(x, y, "").map_err(e)?;
-                let d2 = b.build_int_sub(y, x, "").map_err(e)?;
-                let v = b.build_select(gt, d1, d2, "").map_err(e)?.into_int_value();
-                self.store_int_as(dest, v, false)?;
-            }
             ("pow", [y]) => {
                 let a = self
                     .builder
@@ -711,11 +886,9 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("clamp", [l, h]) => {
                 let t = self.operand_type(&args[0])?;
-                if self.operand_type(l)? != t || self.operand_type(h)? != t {
+                let (Some(l), Some(h)) = (self.int_peer(x, t, l)?, self.int_peer(x, t, h)?) else {
                     return Ok(None);
-                }
-                let l = self.operand_scalar(l)?.into_int_value();
-                let h = self.operand_scalar(h)?.into_int_value();
+                };
                 let (lp, gp) = if it.signed() {
                     (IntPredicate::SLT, IntPredicate::SGT)
                 } else {
@@ -740,10 +913,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(d, v.into())?;
             }
             ("rem_euclid" | "div_euclid", [y]) => {
-                if self.operand_type(y)? != self.operand_type(&args[0])? {
+                let t = self.operand_type(&args[0])?;
+                let Some(y) = self.int_peer(x, t, y)? else {
                     return Ok(None);
-                }
-                let y = self.operand_scalar(y)?.into_int_value();
+                };
                 let z = xt.const_zero();
                 let nz = self
                     .builder
@@ -865,6 +1038,40 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(call.try_as_basic_value().unwrap_basic().into_float_value())
     }
 
+    /// The float argument `y` as a peer of the receiver `x` (of type
+    /// `xt`): the same type, or a literal (`f64` or an unsuffixed integer)
+    /// converted to `x`'s width.
+    fn float_peer(
+        &mut self,
+        x: FloatValue<'ctx>,
+        xt: Ty,
+        y: &Operand,
+    ) -> R<Option<FloatValue<'ctx>>> {
+        let yt = self.operand_type(y)?;
+        let v = self.operand_scalar(y)?;
+        if yt == xt {
+            return Ok(Some(self.float_of(v, xt)?));
+        }
+        let to = x.get_type();
+        Ok(match (self.tys.kind(yt), y) {
+            (TyKind::Float(_), Operand::Const(_)) => {
+                let v = self.float_of(v, yt)?;
+                Some(self.builder.build_float_cast(v, to, "").map_err(e)?)
+            }
+            (TyKind::Int(it), Operand::Const(_)) => Some(
+                if it.signed() {
+                    self.builder
+                        .build_signed_int_to_float(v.into_int_value(), to, "")
+                } else {
+                    self.builder
+                        .build_unsigned_int_to_float(v.into_int_value(), to, "")
+                }
+                .map_err(e)?,
+            ),
+            _ => None,
+        })
+    }
+
     fn float_op(
         &mut self,
         ft: FloatTy,
@@ -948,11 +1155,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.float_intrinsic(name, &[x])?
             }
             ("max" | "min", [y]) if self.narrow_float(xt).is_some() => {
-                if self.operand_type(y)? != xt {
+                let Some(y) = self.float_peer(x, xt, y)? else {
                     return Ok(None);
-                }
-                let y = self.operand_scalar(y)?;
-                let y = self.float_of(y, xt)?;
+                };
                 let name = if method == "max" { "maxnum" } else { "minnum" };
                 self.float_intrinsic(name, &[x, y])?
             }
@@ -971,13 +1176,10 @@ impl<'ctx> Cx<'ctx, '_> {
                     .into_float_value()
             }
             ("clamp", [l, h]) => {
-                if self.operand_type(l)? != xt || self.operand_type(h)? != xt {
+                let (Some(l), Some(h)) = (self.float_peer(x, xt, l)?, self.float_peer(x, xt, h)?)
+                else {
                     return Ok(None);
-                }
-                let l = self.operand_scalar(l)?;
-                let l = self.float_of(l, xt)?;
-                let h = self.operand_scalar(h)?;
-                let h = self.float_of(h, xt)?;
+                };
                 let b = &self.builder;
                 let lt = b
                     .build_float_compare(inkwell::FloatPredicate::OLT, x, l, "")
@@ -989,11 +1191,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 b.build_select(lt, l, v, "").map_err(e)?.into_float_value()
             }
             ("rem_euclid" | "div_euclid", [y]) => {
-                if self.operand_type(y)? != xt {
+                let Some(y) = self.float_peer(x, xt, y)? else {
                     return Ok(None);
-                }
-                let y = self.operand_scalar(y)?;
-                let y = self.float_of(y, xt)?;
+                };
                 let x = self.at_dest_width(x, dest)?;
                 let y = self.at_dest_width(y, dest)?;
                 let t = x.get_type();

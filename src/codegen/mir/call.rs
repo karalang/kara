@@ -316,6 +316,11 @@ impl<'ctx> Cx<'ctx, '_> {
         {
             return Ok(());
         }
+        if matches!(base, "TaskGroup" | "TaskHandle")
+            && self.task_native(base, method, args, dest)?.is_some()
+        {
+            return Ok(());
+        }
         if matches!(base, "Channel" | "Sender" | "Receiver" | "BoundedChannel")
             && self.chan_native(base, method, args, dest)?.is_some()
         {

@@ -238,6 +238,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_str_map,
         mir::karac_mir_str_slice,
         mir::karac_mir_str_view,
+        mir::karac_mir_str_decode,
+        mir::karac_mir_string_from_chars,
         mir::karac_mir_chan_new,
         mir::karac_mir_chan_send,
         mir::karac_mir_chan_recv,

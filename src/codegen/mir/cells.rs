@@ -938,3 +938,68 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(())
     }
 }
+
+impl<'ctx> Cx<'ctx, '_> {
+    /// `TaskGroup` and `TaskHandle`, as the interpreter's `task_method`:
+    /// one task runs at a time, so `spawn` runs the closure at once and
+    /// its handle points at a malloc'd block holding the result, which
+    /// `join` moves out (leaving a handle lent to it null) and the
+    /// handle's glue drops otherwise. `None` for a method not lowered.
+    pub(super) fn task_native(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let dty = self.place_type(dest)?;
+        match (base, method, args) {
+            ("TaskGroup", "new", []) => {
+                let d = self.place_ptr(dest)?;
+                self.store(d, self.i64(0).into())?;
+            }
+            ("TaskGroup", "cancel" | "drop", _) => {}
+            ("TaskGroup", "spawn", [_, f]) => {
+                let held = self
+                    .tys
+                    .tcx()
+                    .adt_of(dty)
+                    .and_then(|(_, a)| a.first().copied())
+                    .ok_or("a TaskHandle without its result type")?;
+                let c = self.callee_of(f)?;
+                let size = self.layout(held)?.size;
+                let malloc = self.libc_fn("malloc");
+                let block = self
+                    .builder
+                    .build_call(malloc, &[self.i64(size.max(1)).into()], "task")
+                    .map_err(e)?
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                let rt = self.callee_ret(&c)?;
+                if rt != held && self.widens(rt, held) {
+                    let t = self.temp(rt, "task.ret")?;
+                    self.call_callee(&c, t, &[])?;
+                    self.widen_into(block, t, rt, held)?;
+                } else {
+                    self.call_callee(&c, block, &[])?;
+                }
+                if !Self::consumes(&c) {
+                    self.drop_moved(&args[1..])?;
+                }
+                let d = self.place_ptr(dest)?;
+                self.store(d, block.into())?;
+            }
+            ("TaskHandle", "join", [h]) => {
+                let (cell, _) = self.cell_arg(h)?;
+                let block = self.load_ptr(cell)?;
+                let d = self.place_ptr(dest)?;
+                self.copy(d, block, dty)?;
+                self.free(block)?;
+                self.store(cell, self.ptr_ty().const_null().into())?;
+            }
+            _ => return Ok(None),
+        }
+        Ok(Some(()))
+    }
+}

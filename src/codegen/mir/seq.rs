@@ -125,6 +125,40 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.rt("str_map", &[d.into(), op.into(), p.into(), n.into()])?;
             }
+            ("sorted_by", [s, f]) => {
+                // The chars, sorted by the comparator, as a new String.
+                let (p, n) = self.str_parts(s)?;
+                let malloc = self.libc_fn("malloc");
+                let room = self.builder.build_int_mul(n, self.i64(4), "").map_err(e)?;
+                let room = self
+                    .builder
+                    .build_int_add(room, self.i64(4), "")
+                    .map_err(e)?;
+                let buf = self
+                    .builder
+                    .build_call(malloc, &[room.into()], "chars")
+                    .map_err(e)?
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                let k = self.mrt_i64("str_decode", &[buf.into(), p.into(), n.into()])?;
+                let ch = self.tys.intern(TyKind::Char);
+                let (cmp, ctx) = self.sort_by_args(f, false, ch)?;
+                self.rt(
+                    "sort_ctx",
+                    &[
+                        buf.into(),
+                        k.into(),
+                        self.i64(4).into(),
+                        cmp.into(),
+                        ctx.into(),
+                    ],
+                )?;
+                let d = self.place_ptr(dest)?;
+                self.rt("string_from_chars", &[d.into(), buf.into(), k.into()])?;
+                self.free(buf)?;
+                self.drop_moved(&args[1..])?;
+            }
             ("cmp", [a, b]) => {
                 let (ap, an) = self.str_parts(a)?;
                 let (bp, bn) = self.str_parts(b)?;
@@ -618,6 +652,41 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, start.into())?;
                 self.store(self.offset(d, 8)?, len.into())?;
+            }
+            ("split_at" | "split_at_mut", [m]) => {
+                let m = self.int_arg(m)?;
+                let ok = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULE, m, n, "")
+                    .map_err(e)?;
+                self.abort_unless(ok, "index out of bounds")?;
+                let d = self.place_ptr(dest)?;
+                let rest = self.builder.build_int_sub(n, m, "").map_err(e)?;
+                let mid = self.elem_ptr(p, m, size)?;
+                for (f, (at, len)) in [(p, m), (mid, rest)].into_iter().enumerate() {
+                    let q = self.offset(d, self.field_offset(dty, None, f as u32)?)?;
+                    self.store(q, at.into())?;
+                    self.store(self.offset(q, 8)?, len.into())?;
+                }
+            }
+            ("fill", [v]) => {
+                // Each element drops and becomes a clone of the value, which
+                // drops once every slot holds its own.
+                let mut vt = self.operand_type(v)?;
+                let mut vp = self.operand_ptr(v)?;
+                while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(vt) {
+                    vp = self.load_ptr(vp)?;
+                    vt = i;
+                }
+                let drops = self.tys.needs_drop(el);
+                self.count_loop(n, |cx, i| {
+                    let x = cx.elem_ptr(p, i, size)?;
+                    if drops {
+                        cx.call_glue(x, el)?;
+                    }
+                    cx.clone_into(x, vp, el)
+                })?;
+                self.drop_moved(&args[1..])?;
             }
             ("swap", [i, j]) => {
                 let (i, j) = (self.int_arg(i)?, self.int_arg(j)?);
@@ -1407,10 +1476,42 @@ impl<'ctx> Cx<'ctx, '_> {
         }
         let mut vals = Vec::with_capacity(args.len());
         for a in args {
-            if self.operand_type(a)? != t {
-                return Ok(None);
+            let at = self.operand_type(a)?;
+            if at == t {
+                vals.push(self.operand_scalar(a)?);
+                continue;
             }
-            vals.push(self.operand_scalar(a)?);
+            // An unsuffixed literal argument typed `i64` or `f64`
+            // (`x.wrapping_add(1)` on an `i32`) is the receiver's number.
+            match (self.tys.kind(at), self.tys.kind(t), a) {
+                (TyKind::Int(from), TyKind::Int(_), Operand::Const(_)) => {
+                    let v = self.operand_scalar(a)?.into_int_value();
+                    let to = vals[0].into_int_value().get_type();
+                    let v = self
+                        .builder
+                        .build_int_cast_sign_flag(v, to, from.signed(), "")
+                        .map_err(e)?;
+                    vals.push(v.into());
+                }
+                (TyKind::Float(_), TyKind::Float(_), Operand::Const(_)) => {
+                    let v = self.operand_scalar(a)?.into_float_value();
+                    let to = vals[0].into_float_value().get_type();
+                    let v = self.builder.build_float_cast(v, to, "").map_err(e)?;
+                    vals.push(v.into());
+                }
+                (TyKind::Int(from), TyKind::Float(_), Operand::Const(_)) => {
+                    let v = self.operand_scalar(a)?.into_int_value();
+                    let to = vals[0].into_float_value().get_type();
+                    let v = if from.signed() {
+                        self.builder.build_signed_int_to_float(v, to, "")
+                    } else {
+                        self.builder.build_unsigned_int_to_float(v, to, "")
+                    }
+                    .map_err(e)?;
+                    vals.push(v.into());
+                }
+                _ => return Ok(None),
+            }
         }
         let b = &self.builder;
         let v: inkwell::values::BasicValueEnum = match (self.tys.kind(t), method, vals.as_slice()) {

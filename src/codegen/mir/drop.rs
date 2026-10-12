@@ -51,6 +51,10 @@ enum CellDrop {
     /// `karac_runtime_once_get` (null while unset), drops through its own
     /// glue, then `karac_runtime_once_free` frees the cell.
     Once,
+    /// A `TaskHandle`: a malloc'd block holding its task's result (null
+    /// once joined), which drops through its glue before the block is
+    /// freed.
+    Boxed,
     /// An `Arena`: its items drop through their glue, last pushed first,
     /// then `karac_mir_arena_free` frees it.
     Arena,
@@ -59,8 +63,8 @@ enum CellDrop {
 /// The library cells whose contents live in the runtime, behind a one-word
 /// handle at offset 0 (the interpreter drops them by hand in
 /// `Interp::drop_adt`), with how the runtime drops one. A null handle (a
-/// hand-built literal) owns nothing. An unjoined `TaskHandle` is detached:
-/// the task runs on and reaps itself. `Atomic[T]` holds a `T` in place,
+/// hand-built literal) owns nothing. An unjoined `TaskHandle` drops the
+/// result its task left. `Atomic[T]` holds a `T` in place,
 /// which is never a type that owns anything.
 const LIBRARY_CELLS: &[(&str, CellDrop)] = &[
     ("Sender", CellDrop::Free("karac_mir_chan_drop_sender")),
@@ -70,14 +74,21 @@ const LIBRARY_CELLS: &[(&str, CellDrop)] = &[
     ("Interner", CellDrop::Free("karac_mir_interner_free")),
     ("OnceLock", CellDrop::Once),
     ("OnceCell", CellDrop::Once),
-    ("TaskHandle", CellDrop::Free("karac_runtime_task_detach")),
+    ("TaskHandle", CellDrop::Boxed),
     ("Arena", CellDrop::Arena),
 ];
 
 /// Library types whose builtin `Drop` does nothing here, as in the
 /// interpreter: a `critical_section` guard (interrupts were never masked)
-/// and the handles of registries that outlive them.
-const NOOP_DROPS: &[&str] = &["CriticalSectionGuard", "Semaphore", "RateLimiter", "Pool"];
+/// the handles of registries that outlive them, and a `TaskGroup`, whose
+/// tasks all ran when they were spawned.
+const NOOP_DROPS: &[&str] = &[
+    "CriticalSectionGuard",
+    "Semaphore",
+    "RateLimiter",
+    "Pool",
+    "TaskGroup",
+];
 
 const ONCE_GET: &str = "karac_runtime_once_get";
 const ONCE_FREE: &str = "karac_runtime_once_free";
@@ -290,6 +301,20 @@ impl<'ctx> Cx<'ctx, '_> {
                         .build_call(f, &[h.into()], "")
                         .map_err(|e| e.to_string())?;
                     Ok(())
+                })
+            }
+            CellDrop::Boxed => {
+                let held = self
+                    .tys
+                    .tcx()
+                    .adt_of(ty)
+                    .and_then(|(_, args)| args.first().copied())
+                    .ok_or("a TaskHandle has no result type")?;
+                self.if_then(some, |cx| {
+                    if cx.tys.needs_drop(held) {
+                        cx.call_glue(h, held)?;
+                    }
+                    cx.free(h)
                 })
             }
             CellDrop::Arena => {
@@ -914,7 +939,7 @@ fn cells(o: own OnceLock[R], f: own Option[File], x: own Atomic[i64], q: own Vec
         engine.add_global_mapping(&free, logged_free as *const () as usize);
         engine.add_global_mapping(&log, logged_drop as *const () as usize);
         use karac_runtime::mir_map as rt;
-        let stubs: [(&str, usize); 8] = [
+        let stubs: [(&str, usize); 7] = [
             (
                 "karac_mir_map_len",
                 rt::karac_mir_map_len as *const () as usize,
@@ -931,7 +956,6 @@ fn cells(o: own OnceLock[R], f: own Option[File], x: own Atomic[i64], q: own Vec
             (ONCE_FREE, once_free as *const () as usize),
             ("karac_runtime_file_close", closed as *const () as usize),
             ("karac_mir_chan_drop_sender", closed as *const () as usize),
-            ("karac_runtime_task_detach", closed as *const () as usize),
         ];
         for (n, a) in stubs {
             if let Some(f) = cx.module.get_function(n) {
