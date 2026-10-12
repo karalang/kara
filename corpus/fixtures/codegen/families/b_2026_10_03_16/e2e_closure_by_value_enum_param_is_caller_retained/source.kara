@@ -11,7 +11,7 @@ enum Hp { Full(P), Empty }
 fn mkw(s: own String) -> W { return W { s: s + "-heap-string-long-enough" }; }
 fn mko(s: own String) -> Option[String] { return Some(s + "-heap-string-long-enough"); }
 fn mkr(s: own String) -> Result[String, String] { return Ok(s + "-heap-string-long-enough"); }
-fn mk() -> Fn(Ho[String]) -> i64 { |q: Ho[String]| keep(q) }
+fn mk() -> Fn(own Ho[String]) -> i64 { |q: Ho[String]| keep(q) }
 fn k1() { let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; println(f"k1 {f(mkh("a"))}"); }
 fn k2() { let h = mkh("bb"); let f = |q: Ho[String]| { match q { Ho.Full(s) => s.len(), Ho.Empty => 0 } }; println(f"k2 {f(h)}"); }
 fn k3() { let f = |q: Ho[String]| 5; println(f"k3 {f(mkh("c"))}"); }
