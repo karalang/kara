@@ -180,6 +180,20 @@ impl<'ctx> Cx<'ctx, '_> {
                 if self.tys.adt(a).name == "Atomic" {
                     return Ok(());
                 }
+                if self.tys.adt(a).name == "Mutex" {
+                    // A `Mutex[T]` holds its `T` in place.
+                    if let Some(held) = self
+                        .tys
+                        .tcx()
+                        .adt_of(ty)
+                        .and_then(|(_, a)| a.first().copied())
+                    {
+                        if self.tys.needs_drop(held) {
+                            self.call_glue(p, held)?;
+                        }
+                    }
+                    return Ok(());
+                }
                 if self.adt_has_drop_body(a)? {
                     // `fn T.drop(mut ref self)`: its argument slot holds
                     // the reference.

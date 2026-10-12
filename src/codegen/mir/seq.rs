@@ -376,7 +376,22 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             ("split" | "split_whitespace" | "lines", [s, rest @ ..]) => {
                 let (sp, sn) = self.str_parts(s)?;
+                let mut sep_buf = None;
                 let (op, (pp, pn)) = match (method, rest) {
+                    ("split", [sep]) if self.is_char(sep)? => {
+                        // A `char` separator, encoded into a scratch
+                        // `String` that drops after the split.
+                        let string = self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
+                        let tmp = self.temp(string, "sep")?;
+                        self.store(tmp, self.llvm_ty(string)?.const_zero())?;
+                        let c = self.operand_scalar(sep)?;
+                        self.rt("string_push_char", &[tmp.into(), c.into()])?;
+                        sep_buf = Some((tmp, string));
+                        (
+                            0,
+                            (self.load_ptr(tmp)?, self.load_i64(self.offset(tmp, 8)?)?),
+                        )
+                    }
                     ("split", [sep]) => {
                         if !self.is_text(sep)? {
                             return Ok(None);
@@ -400,11 +415,20 @@ impl<'ctx> Cx<'ctx, '_> {
                         pn.into(),
                     ],
                 )?;
+                if let Some((tmp, string)) = sep_buf {
+                    self.call_glue(tmp, string)?;
+                }
                 self.drop_moved(rest)?;
             }
             _ => return Ok(None),
         }
         Ok(Some(()))
+    }
+
+    /// Whether an operand is a `char`.
+    fn is_char(&self, a: &Operand) -> R<bool> {
+        let t = self.operand_type(a)?;
+        Ok(matches!(self.tys.kind(t), TyKind::Char))
     }
 
     /// Whether an operand is text (`str`, `String`, or a reference to one).

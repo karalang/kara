@@ -283,6 +283,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir_map::karac_mir_map_remove,
         mir_map::karac_mir_map_clear,
         mir_map::karac_mir_map_free,
+        mir_map::karac_mir_map_pick,
         mir::karac_mir_vec_push,
         mir::karac_mir_string_push_str,
         mir::karac_mir_string_push_char,

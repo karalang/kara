@@ -506,6 +506,160 @@ impl<'ctx> Cx<'ctx, '_> {
                     }
                 })?;
             }
+            ("entry", [k]) if is_map => {
+                // `Occupied` lends the stored value; `Vacant` keeps the key
+                // and the map handle's address, its low bit set for a
+                // sorted map (an `Entry` names a `Map` either way).
+                let h = self.load_ptr(hp)?;
+                let kp = self.key_arg(k, t.key)?;
+                let i = self.find(h, kp, t)?;
+                let found = self.found(i)?;
+                let d = self.place_ptr(dest)?;
+                let occ = self.variant_of(dty, "Occupied")?;
+                let vac = self.variant_of(dty, "Vacant")?;
+                let f = self.cur_fn()?;
+                let (old, new, done) = (
+                    self.llcx.append_basic_block(f, "entry.occupied"),
+                    self.llcx.append_basic_block(f, "entry.vacant"),
+                    self.llcx.append_basic_block(f, "entry.made"),
+                );
+                self.builder
+                    .build_conditional_branch(found, old, new)
+                    .map_err(e)?;
+                self.builder.position_at_end(old);
+                self.drop_moved(&args[1..])?;
+                self.store_tag(d, dty, occ)?;
+                let at = self.entry_at(h, i)?;
+                let v = self.offset(at, self.val_off(t)?)?;
+                let q = self.offset(d, self.field_offset(dty, Some(occ), 0)?)?;
+                self.store(q, v.into())?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(new);
+                self.store_tag(d, dty, vac)?;
+                let q = self.offset(d, self.field_offset(dty, Some(vac), 0)?)?;
+                self.copy(q, kp, t.key)?;
+                let q = self.offset(d, self.field_offset(dty, Some(vac), 1)?)?;
+                let i64t = self.llcx.i64_type();
+                let bits = self.builder.build_ptr_to_int(hp, i64t, "").map_err(e)?;
+                let bits = self
+                    .builder
+                    .build_or(bits, i64t.const_int(u64::from(t.sorted), false), "")
+                    .map_err(e)?;
+                let tagged = self
+                    .builder
+                    .build_int_to_ptr(bits, self.ptr_ty(), "")
+                    .map_err(e)?;
+                self.store(q, tagged.into())?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(done);
+            }
+            ("min" | "max" | "first" | "last", []) => {
+                let h = self.load_ptr(hp)?;
+                let op = if matches!(method, "min" | "first") {
+                    0
+                } else {
+                    1
+                };
+                let null = self.ptr_ty().const_null();
+                let i = self.pick(h, null, t, op)?;
+                self.store_picked(dest, dty, h, i, t)?;
+            }
+            ("floor" | "ceiling", [k]) if is_map => {
+                let h = self.load_ptr(hp)?;
+                let kp = self.key_arg(k, t.key)?;
+                let i = self.pick(h, kp, t, if method == "floor" { 2 } else { 3 })?;
+                self.store_picked(dest, dty, h, i, t)?;
+                self.drop_moved(&args[1..])?;
+            }
+            ("range" | "range_inclusive", [lo, hi]) if t.sorted => {
+                // The entries with keys in `[lo, hi)` (`[lo, hi]`
+                // inclusive), in key order: references when the `Vec`
+                // holds them, else clones.
+                let TyKind::Intrinsic(IntrinsicTy::Vec(el)) = self.tys.kind(dty) else {
+                    return Err(format!("{method} into a `{}`", self.tys.display(dty)));
+                };
+                let by_ref = matches!(self.tys.kind(el), TyKind::Ref(_));
+                let h = self.load_ptr(hp)?;
+                let lp = self.key_arg(lo, t.key)?;
+                let start = self.pick(h, lp, t, 4)?;
+                let up = self.key_arg(hi, t.key)?;
+                let end = self.pick(h, up, t, if method == "range" { 4 } else { 5 })?;
+                let n = self.builder.build_int_sub(end, start, "").map_err(e)?;
+                let neg = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, n, self.i64(0), "")
+                    .map_err(e)?;
+                let n = self
+                    .builder
+                    .build_select(neg, self.i64(0), n, "")
+                    .map_err(e)?
+                    .into_int_value();
+                let size = self.layout(el)?.size;
+                let d = self.place_ptr(dest)?;
+                self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+                let buf = self.load_ptr(d)?;
+                self.count_loop(n, |cx, i| {
+                    let j = cx.builder.build_int_add(start, i, "").map_err(e)?;
+                    let at = cx.entry_at(h, j)?;
+                    let out = cx.elem_ptr(buf, i, size)?;
+                    if by_ref {
+                        cx.store_ref(out, at, t.entry)
+                    } else {
+                        cx.clone_into(out, at, t.entry)
+                    }
+                })?;
+                self.drop_moved(&args[1..])?;
+            }
+            ("union" | "intersection" | "difference" | "symmetric_difference", [other])
+                if !is_map =>
+            {
+                // A new set of clones, the receiver's elements first (key
+                // order for a sorted one, which its inserts keep).
+                let h = self.load_ptr(hp)?;
+                let ot = self.operand_type(other)?;
+                let op = if matches!(self.tys.kind(ot), TyKind::Ref(_) | TyKind::MutRef(_)) {
+                    self.ref_arg(other)?
+                } else {
+                    self.operand_ptr(other)?
+                };
+                let oh = self.load_ptr(op)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, self.ptr_ty().const_null().into())?;
+                let tmp = self.temp(t.entry, "elem")?;
+                let mine = self.mrt_i64("map_len", &[h.into()])?;
+                self.count_loop(mine, |cx, i| {
+                    let at = cx.entry_at(h, i)?;
+                    let j = cx.find(oh, at, t)?;
+                    let keep = match method {
+                        "union" => cx.llcx.bool_type().const_all_ones(),
+                        "intersection" => cx.found(j)?,
+                        _ => cx
+                            .builder
+                            .build_int_compare(IntPredicate::SLT, j, cx.i64(0), "")
+                            .map_err(e)?,
+                    };
+                    cx.if_then(keep, |cx| {
+                        cx.clone_into(tmp, at, t.entry)?;
+                        cx.insert_entry(d, tmp, t)
+                    })
+                })?;
+                if matches!(method, "union" | "symmetric_difference") {
+                    let theirs = self.mrt_i64("map_len", &[oh.into()])?;
+                    self.count_loop(theirs, |cx, i| {
+                        let at = cx.entry_at(oh, i)?;
+                        let j = cx.find(h, at, t)?;
+                        let new = cx
+                            .builder
+                            .build_int_compare(IntPredicate::SLT, j, cx.i64(0), "")
+                            .map_err(e)?;
+                        cx.if_then(new, |cx| {
+                            cx.clone_into(tmp, at, t.entry)?;
+                            cx.insert_entry(d, tmp, t)
+                        })
+                    })?;
+                }
+                self.drop_moved(&args[1..])?;
+            }
             _ => return Ok(None),
         }
         Ok(Some(()))
@@ -594,6 +748,201 @@ impl<'ctx> Cx<'ctx, '_> {
         self.builder.build_unconditional_branch(done).map_err(e)?;
         self.builder.position_at_end(done);
         Ok(())
+    }
+
+    /// The natives of `Entry[K, V]`, the view `Map.entry` returns:
+    /// `and_modify`, `or_insert` and `or_insert_with`.
+    pub(super) fn entry_native(
+        &mut self,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let Some(recv) = args.first() else {
+            return Ok(None);
+        };
+        let mut ety = self.operand_type(recv)?;
+        let mut ep = self.operand_ptr(recv)?;
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(ety) {
+            ep = self.load_ptr(ep)?;
+            ety = i;
+        }
+        // A user type named `Entry` keeps its own methods.
+        let (Ok(occ), Ok(vac)) = (
+            self.variant_of(ety, "Occupied"),
+            self.variant_of(ety, "Vacant"),
+        ) else {
+            return Ok(None);
+        };
+        let vref = self
+            .tys
+            .field_ty(ety, Some(occ), 0)
+            .ok_or("an `Occupied` without its value")?;
+        let mty = self
+            .tys
+            .field_ty(ety, Some(vac), 1)
+            .ok_or("a `Vacant` without its map")?;
+        let t = self
+            .table_of(mty)
+            .ok_or("a `Vacant` whose map is not a table")?;
+        let tag = self.load_tag(ep, ety)?;
+        let occupied = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                tag.get_type().const_int(u64::from(occ), false),
+                "",
+            )
+            .map_err(e)?;
+        let at_occ = self.offset(ep, self.field_offset(ety, Some(occ), 0)?)?;
+        match (method, &args[1..]) {
+            ("and_modify", [f]) => {
+                let d = self.place_ptr(dest)?;
+                self.copy(d, ep, ety)?;
+                let c = self.callee_of(f)?;
+                let fd = self.cur_fn()?;
+                let (yes, no, done) = (
+                    self.llcx.append_basic_block(fd, "modify"),
+                    self.llcx.append_basic_block(fd, "modify.skip"),
+                    self.llcx.append_basic_block(fd, "modified"),
+                );
+                self.builder
+                    .build_conditional_branch(occupied, yes, no)
+                    .map_err(e)?;
+                self.builder.position_at_end(yes);
+                let ret = self.entry_slot(16, "modify.ret")?;
+                self.call_callee(&c, ret, &[(at_occ, vref)])?;
+                if !Self::consumes(&c) {
+                    self.drop_moved(std::slice::from_ref(f))?;
+                }
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(no);
+                self.drop_moved(std::slice::from_ref(f))?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(done);
+            }
+            ("or_insert" | "or_insert_with", [val]) => {
+                let d = self.place_ptr(dest)?;
+                let fd = self.cur_fn()?;
+                let (yes, no, done) = (
+                    self.llcx.append_basic_block(fd, "or_insert.found"),
+                    self.llcx.append_basic_block(fd, "or_insert.new"),
+                    self.llcx.append_basic_block(fd, "or_insert"),
+                );
+                self.builder
+                    .build_conditional_branch(occupied, yes, no)
+                    .map_err(e)?;
+                self.builder.position_at_end(yes);
+                let v = self.load_ptr(at_occ)?;
+                self.store(d, v.into())?;
+                self.drop_moved(std::slice::from_ref(val))?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(no);
+                let kq = self.offset(ep, self.field_offset(ety, Some(vac), 0)?)?;
+                let mq = self.offset(ep, self.field_offset(ety, Some(vac), 1)?)?;
+                let tagged = self.load_ptr(mq)?;
+                let i64t = self.llcx.i64_type();
+                let bits = self.builder.build_ptr_to_int(tagged, i64t, "").map_err(e)?;
+                let low = self
+                    .builder
+                    .build_and(bits, i64t.const_int(1, false), "")
+                    .map_err(e)?;
+                let sorted = self.is_zero(low)?;
+                let sorted = self.builder.build_not(sorted, "").map_err(e)?;
+                let bits = self
+                    .builder
+                    .build_and(bits, i64t.const_int(!1, false), "")
+                    .map_err(e)?;
+                let hp = self
+                    .builder
+                    .build_int_to_ptr(bits, self.ptr_ty(), "")
+                    .map_err(e)?;
+                let tmp = self.temp(t.entry, "entry")?;
+                self.copy(tmp, kq, t.key)?;
+                let vslot = self.offset(tmp, self.val_off(t)?)?;
+                if method == "or_insert_with" {
+                    let c = self.callee_of(val)?;
+                    self.call_callee(&c, vslot, &[])?;
+                    if !Self::consumes(&c) {
+                        self.drop_moved(std::slice::from_ref(val))?;
+                    }
+                } else {
+                    self.store_operand(vslot, val)?;
+                }
+                let hashed = Table { sorted: false, ..t };
+                let sorted_t = Table { sorted: true, ..t };
+                let [hf, _, _] = self.glue_ptrs(hashed);
+                let [_, _, cf] = self.glue_ptrs(sorted_t);
+                let null = self.ptr_ty().const_null();
+                let hf = self.builder.build_select(sorted, null, hf, "").map_err(e)?;
+                let cf = self.builder.build_select(sorted, cf, null, "").map_err(e)?;
+                let size = self.layout(t.entry)?.size.max(1);
+                let i = self.mrt_i64(
+                    "map_insert",
+                    &[
+                        hp.into(),
+                        self.i64(size).into(),
+                        tmp.into(),
+                        hf.into(),
+                        cf.into(),
+                    ],
+                )?;
+                let h = self.load_ptr(hp)?;
+                let at = self.entry_at(h, i)?;
+                let v = self.offset(at, self.val_off(t)?)?;
+                self.store(d, v.into())?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(done);
+            }
+            _ => return Ok(None),
+        }
+        Ok(Some(()))
+    }
+
+    /// [`karac_mir_map_pick`]'s index into `h` for `op` (see the runtime).
+    fn pick(
+        &mut self,
+        h: PointerValue<'ctx>,
+        key: PointerValue<'ctx>,
+        t: Table,
+        op: u64,
+    ) -> R<IntValue<'ctx>> {
+        let cmp = self.key_fn(KeyOp::Cmp, t.key);
+        let cmp = cmp.as_global_value().as_pointer_value();
+        let sorted = self.llcx.bool_type().const_int(u64::from(t.sorted), false);
+        self.mrt_i64(
+            "map_pick",
+            &[
+                h.into(),
+                key.into(),
+                cmp.into(),
+                sorted.into(),
+                self.i64(op).into(),
+            ],
+        )
+    }
+
+    /// Writes `Some` of the entry at index `i` of `h` to the option
+    /// `dest` (a reference or a clone, as its payload type has it), or
+    /// `None` when `i` is -1.
+    fn store_picked(
+        &mut self,
+        dest: &Place,
+        dty: Ty,
+        h: PointerValue<'ctx>,
+        i: IntValue<'ctx>,
+        t: Table,
+    ) -> R<()> {
+        let d = self.place_ptr(dest)?;
+        let (some, none) = self.option_variants(dty)?;
+        self.store_tag(d, dty, none)?;
+        let found = self.found(i)?;
+        self.if_then(found, |cx| {
+            let at = cx.entry_at(h, i)?;
+            cx.store_tag(d, dty, some)?;
+            cx.store_found(d, dty, some, at, t.entry)
+        })
     }
 
     fn found(&self, i: IntValue<'ctx>) -> R<IntValue<'ctx>> {

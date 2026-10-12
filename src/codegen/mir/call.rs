@@ -266,6 +266,9 @@ impl<'ctx> Cx<'ctx, '_> {
         {
             return Ok(());
         }
+        if base == "Entry" && self.entry_native(method, args, dest)?.is_some() {
+            return Ok(());
+        }
         if matches!(base, "String" | "str") && self.string_native(method, args, dest)?.is_some() {
             return Ok(());
         }
@@ -295,7 +298,10 @@ impl<'ctx> Cx<'ctx, '_> {
         if base == "FileSystem" && self.fs_native(method, args, dest)?.is_some() {
             return Ok(());
         }
-        if base == "Atomic" && self.atomic_native(method, args, dest)?.is_some() {
+        if (base == "Atomic"
+            || (base == "Mutex" && matches!(method, "new" | "get_mut" | "into_inner")))
+            && self.atomic_native(method, args, dest)?.is_some()
+        {
             return Ok(());
         }
         if matches!(base, "OnceLock" | "OnceCell")

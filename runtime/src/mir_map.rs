@@ -194,6 +194,81 @@ pub unsafe extern "C" fn karac_mir_map_len(h: *const MirMap) -> i64 {
     }
 }
 
+/// An index into the table at `h` picked by `op` under the key order
+/// `cmp`: 0 the least entry, 1 the greatest, 2 the greatest at most `key`
+/// (floor), 3 the least at least `key` (ceiling), or -1 when there is
+/// none; 4 and 5 (a sorted table only) the number of entries less than,
+/// or at most, `key`, the bounds of a range. A sorted table is bisected,
+/// a hashed one scanned.
+///
+/// # Safety
+/// `h` is null or a live table; `key` points at a key of its type when
+/// `op` is 2 or more; `cmp` is the key type's order.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_map_pick(
+    h: *const MirMap,
+    key: *const u8,
+    cmp: CmpFn,
+    sorted: bool,
+    op: i64,
+) -> i64 {
+    if h.is_null() {
+        return if op >= 4 { 0 } else { -1 };
+    }
+    // SAFETY: the caller's contract.
+    let m = unsafe { &*h };
+    let n = m.len;
+    if sorted {
+        // SAFETY: as above.
+        let at = |k| unsafe { search(m, k, cmp) };
+        return match op {
+            0 if n > 0 => 0,
+            1 if n > 0 => n as i64 - 1,
+            2 => match at(key) {
+                Ok(i) => i as i64,
+                Err(i) => i as i64 - 1,
+            },
+            3 => match at(key) {
+                Ok(i) => i as i64,
+                Err(i) if i < n => i as i64,
+                Err(_) => -1,
+            },
+            4 => at(key).unwrap_or_else(|i| i) as i64,
+            5 => match at(key) {
+                Ok(i) => i as i64 + 1,
+                Err(i) => i as i64,
+            },
+            _ => -1,
+        };
+    }
+    let mut best: Option<usize> = None;
+    for i in 0..n {
+        // SAFETY: as above.
+        let c = |a: *const u8, b: *const u8| unsafe { cmp(a, b) };
+        let ok = match op {
+            2 => c(m.at(i), key) <= 0,
+            3 => c(m.at(i), key) >= 0,
+            _ => true,
+        };
+        if !ok {
+            continue;
+        }
+        best = match best {
+            None => Some(i),
+            Some(b) => {
+                let o = c(m.at(i), m.at(b));
+                let greater = matches!(op, 1 | 2);
+                if (greater && o > 0) || (!greater && o < 0) {
+                    Some(i)
+                } else {
+                    Some(b)
+                }
+            }
+        };
+    }
+    best.map_or(-1, |i| i as i64)
+}
+
 /// Moves the entry at index `i` to `out` and closes the gap, keeping the
 /// order of the rest.
 ///

@@ -122,7 +122,7 @@ fn layout_at(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
 pub enum Cell {
     /// A one-word runtime handle (`Sender`, `Receiver`, `File`).
     Handle,
-    /// The held value, in place (`Atomic[T]`).
+    /// The held value, in place (`Atomic[T]`, `Mutex[T]`).
     Inline(Ty),
 }
 
@@ -134,7 +134,7 @@ pub fn library_cell(tys: &TyInterner, t: Ty) -> Option<Cell> {
     };
     match tys.adt(a).name.as_str() {
         "Sender" | "Receiver" | "File" => Some(Cell::Handle),
-        "Atomic" => Some(Cell::Inline(tys.tcx().adt_of(t)?.1.first().copied()?)),
+        "Atomic" | "Mutex" => Some(Cell::Inline(tys.tcx().adt_of(t)?.1.first().copied()?)),
         _ => None,
     }
 }
