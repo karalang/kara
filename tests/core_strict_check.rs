@@ -3080,3 +3080,30 @@ fn moving_out_of_a_field_of_an_owned_local_is_fixed_with_into_iter() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-10-12-20: storing a `shared` parameter into a `weak` field
+/// downgrades it and moves nothing, so the parameter stays usable, as a
+/// local does.
+#[test]
+fn a_weak_store_of_a_shared_parameter_moves_nothing() {
+    accepted(
+        "weak-store-param",
+        "shared struct N {\n\
+         \x20   v: i64,\n\
+         \x20   mut prev: weak N,\n\
+         \x20   mut next: Option[N],\n\
+         }\n\
+         \n\
+         fn link(at: N, b: N) {\n\
+         \x20   b.prev = at;\n\
+         \x20   at.next = Some(b);\n\
+         \x20   println(f\"{at.v}\");\n\
+         }\n\
+         \n\
+         fn main() {\n\
+         \x20   let a = N { v: 1, prev: None, next: None };\n\
+         \x20   let b = N { v: 2, prev: None, next: None };\n\
+         \x20   link(a, b);\n\
+         }\n",
+    );
+}

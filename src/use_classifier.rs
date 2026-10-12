@@ -1562,6 +1562,11 @@ impl<'a> UseClassifier<'a> {
             .or_else(|| self.local_types.get(name))
             .or_else(|| self.tc.expr_types.get(&SpanKey::from_span(span)));
         match ty {
+            // A `weak` slot holds a counted handle: storing a `shared` value
+            // into one (`b.prev = at`, typed `weak N` at `at` by the
+            // downgrade) or copying a `weak` value moves nothing
+            // (B-2026-10-12-20).
+            Some(Type::Weak(_)) => UseKind::Read,
             Some(t) if !self.is_copy_type(t) => UseKind::Consume,
             _ => UseKind::Read,
         }
