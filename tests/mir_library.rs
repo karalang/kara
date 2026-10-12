@@ -717,3 +717,83 @@ fn main() {
 "#;
     assert_runs(src, "1832790 10097 20098 30099 40100\n");
 }
+
+/// B-2026-10-12-10: a `VecDeque` keeps empty slots before its front, so
+/// `push_front` and `pop_front` are O(1) on average. Every read (`len`,
+/// `front`, `back`, `get`, indexing, iteration, `clone`, display, an owned
+/// walk) sees the elements it saw when the deque was a plain `Vec`.
+#[test]
+fn a_deque_reads_the_same_with_room_before_its_front() {
+    let src = r#"
+fn show(d: ref VecDeque[String]) {
+    let mut line = String.new();
+    for x in d {
+        line.push_str(f"{x} ");
+    }
+    println(f"[{d.len()}] {line}");
+}
+
+fn main() {
+    let mut d: VecDeque[String] = VecDeque.new();
+    for i in 0..5 {
+        d.push_front(f"f{i}");
+        d.push_back(f"b{i}");
+    }
+    show(d);
+    println(f"{d.front()} {d.back()} {d.get(3)} {d.get(10)} {d[0]} {d[9]}");
+    for _ in 0..3 {
+        let x = d.pop_front();
+        println(f"{x}");
+    }
+    show(d);
+    let c = d.clone();
+    show(c);
+    for i in 0..30 {
+        d.push_back(f"x{i}");
+        if i % 2 == 0 {
+            d.pop_front();
+        }
+    }
+    show(d);
+    while d.len() > 2 {
+        d.pop_front();
+    }
+    d.push_front("again");
+    show(d);
+    println(f"{d.pop_back()} {d.pop_back()} {d.pop_back()} {d.pop_back()} {d.is_empty()}");
+    d.push_front("solo");
+    show(d);
+    let mut q: VecDeque[i64] = VecDeque.new();
+    let mut total: i64 = 0;
+    for i in 0..1000 {
+        q.push_back(i);
+        if i % 3 == 0 {
+            total += q.pop_front().unwrap();
+        }
+    }
+    println(f"{total} {q.len()} {q.front()} {q.back()}");
+    let mut owned = String.new();
+    for x in c {
+        owned.push_str(x);
+    }
+    println(owned);
+}
+"#;
+    assert_runs(
+        src,
+        r#"[10] f4 f3 f2 f1 f0 b0 b1 b2 b3 b4 
+Some(f4) Some(b4) Some(f1) None f4 b4
+Some(f4)
+Some(f3)
+Some(f2)
+[7] f1 f0 b0 b1 b2 b3 b4 
+[7] f1 f0 b0 b1 b2 b3 b4 
+[22] x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24 x25 x26 x27 x28 x29 
+[3] again x28 x29 
+Some(x29) Some(x28) Some(again) None true
+[1] solo 
+55611 666 Some(334) Some(999)
+f1f0b0b1b2b3b4
+"#,
+    );
+}

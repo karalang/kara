@@ -598,6 +598,7 @@ fn run_with(
             | 1,
         sorted_tables: Default::default(),
         table_holes: Default::default(),
+        deque_front: Default::default(),
         flags: Vec::new(),
         resumes: 0,
         parked_flags: Vec::new(),
@@ -813,6 +814,11 @@ struct Interp<'a> {
     /// remove costs O(1) on average (B-2026-10-12-4). Every reader of a
     /// table's entries goes through [`Interp::table_slots`] or skips these.
     table_holes: rustc_hash::FxHashMap<AllocId, Holes>,
+    /// Per `VecDeque`, the empty slots before its front: `pop_front` leaves
+    /// one, `push_front` fills one (making room for as many as the deque
+    /// holds when there is none), so both ends cost O(1) on average
+    /// (B-2026-10-12-10). Readers start at this slot ([`Interp::deque_off`]).
+    deque_front: rustc_hash::FxHashMap<AllocId, usize>,
     events: Vec<Event>,
     /// Whether `events` is kept. A run outside the tests skips it: one
     /// event per statement is most of the time and memory a long program
@@ -4585,28 +4591,56 @@ impl<'a> Interp<'a> {
             return err(format!("{name} needs a receiver"));
         };
         let id = self.box_behind(recv)?;
+        let off = self.deque_off(id);
         match (method, &args[1..]) {
-            ("len", []) => Ok(Value::Int(self.vec_elems(id)?.len() as i128)),
-            ("is_empty", []) => Ok(Value::Bool(self.vec_elems(id)?.is_empty())),
+            ("len", []) => Ok(Value::Int((self.vec_elems(id)?.len() - off) as i128)),
+            ("is_empty", []) => Ok(Value::Bool(self.vec_elems(id)?.len() == off)),
             ("push_back", [v]) => {
                 self.vec_elems(id)?.push(v.clone());
                 Ok(Value::Unit)
             }
             ("push_front", [v]) => {
-                self.vec_elems(id)?.insert(0, v.clone());
+                let elems = self.vec_elems(id)?;
+                let at = if off > 0 {
+                    off - 1
+                } else {
+                    // Room for as many more as the deque holds.
+                    let room = elems.len().max(8);
+                    elems.splice(0..0, std::iter::repeat_n(Value::Uninit, room));
+                    room - 1
+                };
+                elems[at] = v.clone();
+                self.set_deque_off(id, at);
                 Ok(Value::Unit)
             }
             ("pop_back", []) => {
-                let v = self.vec_elems(id)?.pop();
+                let elems = self.vec_elems(id)?;
+                let v = if elems.len() > off { elems.pop() } else { None };
+                if elems.len() == off {
+                    elems.clear();
+                    self.set_deque_off(id, 0);
+                }
                 self.option(ret, v)
             }
             ("pop_front", []) => {
                 let elems = self.vec_elems(id)?;
-                let v = (!elems.is_empty()).then(|| elems.remove(0));
+                let v =
+                    (elems.len() > off).then(|| std::mem::replace(&mut elems[off], Value::Uninit));
+                let n = elems.len();
+                let mut off = off + usize::from(v.is_some());
+                if off == n {
+                    elems.clear();
+                    off = 0;
+                } else if off >= 8 && off * 2 > n {
+                    // The empty slots outnumber the elements: drop them.
+                    elems.drain(..off);
+                    off = 0;
+                }
+                self.set_deque_off(id, off);
                 self.option(ret, v)
             }
             ("front" | "back", []) => {
-                let n = self.vec_elems(id)?.len();
+                let n = self.vec_elems(id)?.len() - off;
                 let i = if method == "front" {
                     0
                 } else {
@@ -4615,23 +4649,27 @@ impl<'a> Interp<'a> {
                 let at = (n > 0).then(|| {
                     Value::Ref(Addr {
                         root: Root::Heap(id),
-                        path: Path::from_slice(&[i as u64]),
+                        path: Path::from_slice(&[(off + i) as u64]),
                     })
                 });
                 self.option_of_place(ret, at)
             }
             ("get", [Value::Int(i)]) => {
-                let n = self.vec_elems(id)?.len() as i128;
+                let n = (self.vec_elems(id)?.len() - off) as i128;
                 let at = (0..n).contains(i).then(|| {
                     Value::Ref(Addr {
                         root: Root::Heap(id),
-                        path: Path::from_slice(&[*i as u64]),
+                        path: Path::from_slice(&[(off as i128 + *i) as u64]),
                     })
                 });
                 self.option_of_place(ret, at)
             }
             ("entry_at" | "index" | "index_mut", [Value::Int(i)]) => {
-                let i = self.bounds(id, *i, false)?;
+                let i = if *i < 0 {
+                    self.bounds(id, *i, false)?
+                } else {
+                    self.bounds(id, *i + off as i128, false)?
+                };
                 Ok(Value::Ref(Addr {
                     root: Root::Heap(id),
                     path: Path::from_slice(&[i as u64]),
@@ -4845,6 +4883,14 @@ impl<'a> Interp<'a> {
                             }
                         }
                     }
+                    (Value::Agg(fs), None) if self.deque_front.contains_key(id) => {
+                        let fs = &fs[self.deque_off(*id)..];
+                        out.push(b'A');
+                        out.extend_from_slice(&(fs.len() as u64).to_le_bytes());
+                        for f in fs {
+                            self.key_bytes(f, out, float)?;
+                        }
+                    }
                     (v, _) => self.key_bytes(v, out, float)?,
                 },
                 _ => return err(format!("use of {id} after it was freed")),
@@ -5024,6 +5070,20 @@ impl<'a> Interp<'a> {
         Ok(())
     }
 
+    /// The empty slots before `VecDeque` `id`'s front ([`Interp::deque_front`]);
+    /// zero for any other allocation.
+    fn deque_off(&self, id: AllocId) -> usize {
+        self.deque_front.get(&id).copied().unwrap_or(0)
+    }
+
+    fn set_deque_off(&mut self, id: AllocId, off: usize) {
+        if off == 0 {
+            self.deque_front.remove(&id);
+        } else {
+            self.deque_front.insert(id, off);
+        }
+    }
+
     /// The number of entries in table `id`.
     fn table_len(&mut self, id: AllocId) -> R<usize> {
         let holes = self.table_holes.get(&id).map_or(0, |h| h.at.len());
@@ -5181,6 +5241,9 @@ impl<'a> Interp<'a> {
                 // a table with holes by its entries alone.
                 let inner = if self.table_holes.contains_key(id) {
                     Value::Agg(self.table_entries(*id)?)
+                } else if self.deque_front.contains_key(id) {
+                    let off = self.deque_off(*id);
+                    Value::Agg(self.vec_elems(*id)?[off..].to_vec())
                 } else {
                     self.live(*id)?.value.clone()
                 };
@@ -5222,7 +5285,8 @@ impl<'a> Interp<'a> {
             }
             (TyKind::Intrinsic(IntrinsicTy::Vec(e) | IntrinsicTy::VecDeque(e)), _) => {
                 let id = self.box_behind(v)?;
-                let elems = self.vec_elems(id)?.clone();
+                let off = self.deque_off(id);
+                let elems = self.vec_elems(id)?[off..].to_vec();
                 let mut out = Vec::with_capacity(elems.len());
                 for x in &elems {
                     out.push(self.clone_value(x, e)?);
@@ -6151,7 +6215,8 @@ impl<'a> Interp<'a> {
                 }
             }
             (TyKind::Intrinsic(IntrinsicTy::Vec(e) | IntrinsicTy::VecDeque(e)), Value::Box(id)) => {
-                let fs = self.vec_elems(*id)?.clone();
+                let off = self.deque_off(*id);
+                let fs = self.vec_elems(*id)?[off..].to_vec();
                 let tys = vec![e; fs.len()];
                 format!("[{}]", list(self, &fs, &tys)?.join(", "))
             }
@@ -7666,7 +7731,7 @@ impl<'a> Interp<'a> {
                             root: Root::Heap(id),
                             path: Path::new(),
                         };
-                        for i in 0..n {
+                        for i in self.deque_off(id)..n {
                             self.drop_at(&root.child(i as u64), e)?;
                         }
                     }
@@ -7933,6 +7998,7 @@ impl<'a> Interp<'a> {
     fn free_slot(&mut self, id: AllocId) {
         self.key_index.remove(&id);
         self.table_holes.remove(&id);
+        self.deque_front.remove(&id);
         self.caps.remove(&id);
         if self.heap[id.0 as usize].take().is_some() {
             self.free.push(id.0);
