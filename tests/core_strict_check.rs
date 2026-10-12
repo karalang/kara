@@ -2929,6 +2929,30 @@ fn a_function_type_parameter_borrows() {
     );
 }
 
+/// §4.6 under D5: a bare struct parameter borrows, so a struct pattern in
+/// its place destructures through the borrow: a Copy field is a copy, any
+/// other a borrow. Moving a borrowed field out is still refused.
+#[test]
+fn a_struct_pattern_parameter_destructures_through_the_borrow() {
+    accepted(
+        "struct-param-pattern",
+        "struct P { a: String, b: i64 }\n\
+         fn take(P { a, b }: P) -> i64 { a.len() + b }\n\
+         fn main() {\n\
+             let p = P { a: \"abc\".to_string(), b: 4 };\n\
+             println(take(p));\n\
+             println(p.a);\n\
+         }\n",
+    );
+    rejected_then_fixed(
+        "struct-param-pattern-move",
+        "struct P { a: String, b: i64 }\n\
+         fn keep(P { a, b }: P) -> String { a }\n\
+         fn main() { println(keep(P { a: \"abc\".to_string(), b: 4 })); }\n",
+        "found 'ref String'",
+    );
+}
+
 /// B-2026-10-12-2: `SortedSet.min()` / `.max()` lend the element
 /// (collections.md: `Option[ref T]`), as `iter()` and `range()` do, so an
 /// explicit `*x` reads it (§5.10) and keeping a `String` takes a copy.

@@ -3124,10 +3124,31 @@ impl<'a> super::TypeChecker<'a> {
                 has_rest,
             } => {
                 let struct_name = path.last().map(String::as_str).unwrap_or("");
+                // §4.6: a struct pattern over a BORROWED struct destructures
+                // through the borrow, as the tuple arm above does: a Copy
+                // field binds by value, any other as a borrow of the same
+                // form. Under D5 every bare parameter of a struct type is
+                // such a borrow (`fn take(P { a, b }: P)`).
+                let (mode, ty) = match ty {
+                    Type::Ref(inner) | Type::MutRef(inner)
+                        if matches!(
+                            strip_refinement(inner),
+                            Type::Named { name, .. } if name == struct_name
+                        ) =>
+                    {
+                        let mode = if matches!(ty, Type::MutRef(_)) {
+                            ScrutineeMode::MutRef
+                        } else {
+                            ScrutineeMode::Ref
+                        };
+                        (mode, strip_refinement(inner))
+                    }
+                    _ => (ScrutineeMode::Owned, ty),
+                };
                 // v2 core §3.7: inside a type with a `Drop` body every binding
                 // that would move a part out is an error (reported at the
                 // binding, with a `ref` fix).
-                let no_move_out = self.core_no_move_out_reason(struct_name, ScrutineeMode::Owned);
+                let no_move_out = self.core_no_move_out_reason(struct_name, mode);
                 if let Some(reason) = &no_move_out {
                     self.core_no_move_out.push(reason.clone());
                 }
@@ -3140,7 +3161,7 @@ impl<'a> super::TypeChecker<'a> {
                     pattern.span,
                     struct_name,
                     fields,
-                    crate::typechecker::types::ScrutineeMode::Owned,
+                    mode,
                 );
 
                 // `#[non_exhaustive]` slice 4 pattern half (let-binding
@@ -3261,6 +3282,11 @@ impl<'a> super::TypeChecker<'a> {
                     } else {
                         Type::Error
                     };
+                    let field_ty = match mode {
+                        ScrutineeMode::Owned => field_ty,
+                        ScrutineeMode::Ref => borrowed_field_binding_ty(&field_ty, false),
+                        ScrutineeMode::MutRef => borrowed_field_binding_ty(&field_ty, true),
+                    };
                     if let Some(ref sub) = field.pattern {
                         self.bind_pattern_types(sub, &field_ty);
                     } else {
@@ -3269,7 +3295,7 @@ impl<'a> super::TypeChecker<'a> {
                             &field.name,
                             &field.span,
                             &field_ty,
-                            ScrutineeMode::Owned,
+                            mode,
                         );
                         self.core_shorthand_field = false;
                         self.local_scope.insert(field.name.clone(), field_ty);
