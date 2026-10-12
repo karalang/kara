@@ -57,6 +57,7 @@ let fields: Vec[String] = line.split(",").map(|p| p.to_string()).collect();  // 
 | `to_lowercase` | `fn to_lowercase(self) -> String` | Unicode lowercasing |
 | `normalize` | `fn normalize(self, form: NormalizationForm) -> String` | See [Equality and normalization](#equality-and-normalization) |
 | `to_string` | `fn to_string(self) -> String` | An owned copy of a `Str`. For a `String`, use `clone()` |
+| `clone` | `fn clone(self) -> String` | The same owned copy as `to_string()`. A `Str` is a view, so `clone()` copies the text it views, not the view |
 | `[]` | `s[a..b]` | A `Str` over the byte range `[a, b)`, through `Index` ([design.md §5](../design.md#5-types)). Panics if either end falls inside a multi-byte code point |
 
 Byte offsets (`len`, `find`, `s[a..b]`, `bytes()`) count bytes, not characters. Locate a valid cut with `find`, or work in characters with `chars()` and `char_at`.
