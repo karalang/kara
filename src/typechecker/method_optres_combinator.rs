@@ -271,7 +271,16 @@ impl<'a> super::TypeChecker<'a> {
                             );
                         }
                         record_src(self, &t_ty);
-                        Some(resolve_type_var_top(&t_ty, &self.env.substitutions))
+                        let payload = resolve_type_var_top(&t_ty, &self.env.substitutions);
+                        // Under `karac check` the result is the `mut ref T` the
+                        // Kāra body in `runtime/stdlib/source/option.kara`
+                        // returns, which the MIR pipeline types it as; the
+                        // by-value model above is the legacy backends'.
+                        if self.cli_lint_overrides.strict_core {
+                            Some(Type::MutRef(Box::new(payload)))
+                        } else {
+                            Some(payload)
+                        }
                     }
                     _ => None,
                 };
@@ -301,7 +310,8 @@ impl<'a> super::TypeChecker<'a> {
                 | "and_then"
                 | "or_else"
                 | "filter"
-        ) {
+        ) || (method == "get_or_insert_with" && self.cli_lint_overrides.strict_core)
+        {
             let optres = |ty: &Type| -> Option<(bool, Type, Option<Type>)> {
                 match ty {
                     Type::Named { name, args } if name == "Option" && args.len() == 1 => {
@@ -416,6 +426,15 @@ impl<'a> super::TypeChecker<'a> {
                     // `unwrap_or_else(f)` — present payload, else `f()`/`f(e)`. → T.
                     // Return is the known payload `T`, so `check_closure` seeds
                     // the absent-branch param (`E` for Result) precisely.
+                    // `Option.get_or_insert_with(f)` under `karac check` — the
+                    // Kāra body's `mut ref T` (see `get_or_insert` above).
+                    "get_or_insert_with" if !is_result => {
+                        let t = resolve_type_var_top(&t_ty, &self.env.substitutions);
+                        if let Some(a) = args.first() {
+                            check_closure(self, a, vec![], t.clone());
+                        }
+                        Some(Type::MutRef(Box::new(t)))
+                    }
                     "unwrap_or_else" => {
                         let t = resolve_type_var_top(&t_ty, &self.env.substitutions);
                         if let Some(a) = args.first() {

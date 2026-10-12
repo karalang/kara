@@ -3167,3 +3167,27 @@ fn a_mutating_method_on_a_range_view_of_a_mutable_place_is_accepted() {
         "while another slice borrow is live",
     );
 }
+
+#[test]
+fn get_or_insert_hands_out_a_mut_ref_under_check() {
+    // `runtime/stdlib/source/option.kara`'s bodies return `mut ref T`, and
+    // the MIR pipeline types them so; `karac check` must agree, or the
+    // corpus's `*x = *x + 1` on the result is refused before it runs.
+    accepted(
+        "get-or-insert-mut-ref",
+        "fn main() {\n\
+         \x20   let mut a: Option[i64] = None;\n\
+         \x20   let x = a.get_or_insert(5);\n\
+         \x20   *x = *x + 1;\n\
+         \x20   println(f\"{a.unwrap()}\");\n\
+         \x20   let mut b: Option[String] = Some(\"keep\".to_string());\n\
+         \x20   let y = b.get_or_insert(\"new\".to_string());\n\
+         \x20   y.push('!');\n\
+         \x20   println(b.unwrap());\n\
+         \x20   let mut c: Option[i64] = None;\n\
+         \x20   let z = c.get_or_insert_with(|| 2);\n\
+         \x20   *z += 1;\n\
+         \x20   println(f\"{c.unwrap()}\");\n\
+         }\n",
+    );
+}
