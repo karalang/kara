@@ -1553,6 +1553,10 @@ struct Bx<'l, 'a> {
     /// The next closure literal lowered goes to a library call, so its
     /// parameters borrow.
     closure_ref_params: bool,
+    /// `Copy` bindings read through a shared reference, with the place
+    /// they copied: a `ref` to the binding views that place instead, so it
+    /// outlives the binding's arm.
+    copy_views: FxHashMap<Local, Place>,
     /// The closure being lowered is a library sort's key function.
     closure_key: bool,
     /// The closure being lowered is a task handed to `TaskGroup.spawn`,
@@ -1603,6 +1607,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             captured: FxHashMap::default(),
             closure_count: 0,
             closure_ref_params: false,
+            copy_views: FxHashMap::default(),
             closure_key: false,
             closure_task: false,
             closure_escapes: false,
@@ -8794,6 +8799,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // A `shared` handle binds a counted copy (§6.1).
                 self.count_copy(place, t, Place::local(l));
             } else {
+                if by_ref && place.projection.contains(&ProjElem::Deref) {
+                    self.copy_views.insert(l, place.clone());
+                }
                 let op = self.use_place(place, t);
                 self.assign(l, Rvalue::Use(op));
             }
@@ -9938,7 +9946,12 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         match borrow {
             Some(kind) if !arg_is_ref => {
-                let p = self.expr_place(a, kind == BorrowKind::Mut)?;
+                let mut p = self.expr_place(a, kind == BorrowKind::Mut)?;
+                if kind == BorrowKind::Shared && p.projection.is_empty() {
+                    if let Some(v) = self.copy_views.get(&p.local) {
+                        p = v.clone();
+                    }
+                }
                 let r = self.temp(pt);
                 self.assign(r, Rvalue::Ref(kind, p));
                 Ok(Operand::Move(Place::local(r)))
@@ -15974,6 +15987,25 @@ fn main() {
             run_source(src),
             Ok(("4 true false 3 12 0\n".to_string(), Some(0)))
         );
+    }
+
+    /// A `Copy` part bound through a shared reference, then lent out of
+    /// its arm, lends the matched place rather than the arm's copy.
+    #[test]
+    fn a_lent_copy_binding_views_the_matched_place() {
+        let src = r#"
+enum Cnt[T] { More(T, i64), Done }
+fn f[T: Clone](e: ref Cnt[T]) -> Option[T] {
+    let (v, n) = match e { Cnt.More(v, n) => (v.clone(), n), Cnt.Done => return None };
+    let w = v.clone();
+    Some(w)
+}
+fn main() {
+    let c = Cnt.More("ab".to_string(), 2);
+    match f(c) { Some(s) => println(f"e:{s}"), None => println("e:none") }
+}
+"#;
+        assert_eq!(run_source(src), Ok(("e:ab\n".to_string(), Some(0))));
     }
 
     /// A variant named like a library type (`Kind.Map`) leaves `Map.new()`
