@@ -16198,6 +16198,26 @@ fn main() {
         assert_eq!(run_source(src), Ok(("21 7\n".to_string(), Some(0))));
     }
 
+    /// `text[a..b]` on a `String` is a `Str` view (design.md § Strings):
+    /// bound with a `Str` annotation, passed, compared and copied out.
+    #[test]
+    fn a_string_range_index_is_a_str_view() {
+        let src = r#"
+fn take(s: Str) -> i64 { s.len() }
+fn main() {
+    let text = String.from("ab,cd");
+    let x: Str = text[0..2];
+    let owned: String = text[1..4].to_string();
+    let same = text[0..1] == "a";
+    println(f"{x} {x.len()} {text[3..5]} {owned} {take(text[0..4])} {same}");
+}
+"#;
+        assert_eq!(
+            run_source(src),
+            Ok(("ab 2 cd b,c 4 true\n".to_string(), Some(0)))
+        );
+    }
+
     /// A variant named like a library type (`Kind.Map`) leaves `Map.new()`
     /// naming the type.
     #[test]

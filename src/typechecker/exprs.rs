@@ -6414,11 +6414,14 @@ impl<'a> super::TypeChecker<'a> {
                         args: vec![],
                     };
                     // design.md § Strings: `s[a..b]` is a `Str` view, of a
-                    // `String` (under the strict commands) or of a `Str`.
+                    // `String` (under the strict commands and on the MIR
+                    // pipeline) or of a `Str`.
                     let is_view = matches!(&obj_ty, Type::Named { name, .. } if name == "StringSlice")
                         || matches!(&obj_ty, Type::Ref(inner) | Type::MutRef(inner)
                             if matches!(inner.as_ref(), Type::Named { name, .. } if name == "StringSlice"));
-                    if is_view || (is_string && self.cli_lint_overrides.strict_core) {
+                    let views =
+                        self.cli_lint_overrides.strict_core || self.library_methods_from_source;
+                    if is_view || (is_string && views) {
                         return str_view;
                     }
                     if is_string {

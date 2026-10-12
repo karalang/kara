@@ -248,7 +248,7 @@ impl<'a> super::TypeChecker<'a> {
     /// the other way round. Both are read, neither moves.
     fn core_text_compare(&self, a: &Type, b: &Type) -> bool {
         let view = |t: &Type| matches!(t, Type::Named { name, args } if name == "StringSlice" && args.is_empty());
-        self.cli_lint_overrides.strict_core
+        (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
             && ((view(a) && matches!(b, Type::Str)) || (matches!(a, Type::Str) && view(b)))
     }
 
