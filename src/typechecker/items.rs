@@ -6046,6 +6046,29 @@ impl<'a> super::TypeChecker<'a> {
             }
             // A call returns a temporary nobody else can reuse.
             ExprKind::Call { .. } | ExprKind::MethodCall { .. } => collection,
+            // A field of an owned local (`for c in node.children` with `node`
+            // consumed by an outer `into_iter()` walk) can be moved out the
+            // same way (B-2026-10-12-19); a field reached through a borrow
+            // or a `shared` handle cannot.
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                let mut root = iterable;
+                while let ExprKind::FieldAccess { object, .. }
+                | ExprKind::TupleIndex { object, .. } = &root.kind
+                {
+                    if self.expr_is_shared_handle(object) {
+                        return false;
+                    }
+                    root = object;
+                }
+                collection
+                    && matches!(&root.kind, ExprKind::Identifier(n)
+                    if !self.local_scope.is_view(n)
+                        && !self.current_fn_ref_params.contains(n.as_str())
+                        && matches!(
+                            self.local_scope.lookup(n),
+                            Some(Type::Named { name, .. }) if !self.name_is_shared_decl(name)
+                        ))
+            }
             _ => false,
         }
     }

@@ -3035,3 +3035,48 @@ fn deref_of_a_map_item_part_and_a_floor_entry_is_accepted() {
          }\n",
     );
 }
+
+/// B-2026-10-12-19: moving the elements out of `for c in node.children`,
+/// with `node` an owned element of an outer `into_iter()` walk, is fixed by
+/// consuming the field, not by deriving `Clone` and copying every subtree.
+#[test]
+fn moving_out_of_a_field_of_an_owned_local_is_fixed_with_into_iter() {
+    let src = "struct Node { val: i64, children: Vec[Node] }\n\
+               \n\
+               fn flatten(root: own Node) -> Vec[i64] {\n\
+               \x20   let mut out: Vec[i64] = Vec.new();\n\
+               \x20   let mut level: Vec[Node] = vec![root];\n\
+               \x20   while level.len() > 0 {\n\
+               \x20       let mut next: Vec[Node] = Vec.new();\n\
+               \x20       for node in level.into_iter() {\n\
+               \x20           out.push(node.val);\n\
+               \x20           for child in node.children {\n\
+               \x20               next.push(child);\n\
+               \x20           }\n\
+               \x20       }\n\
+               \x20       level = next;\n\
+               \x20   }\n\
+               \x20   out\n\
+               }\n\
+               \n\
+               fn main() {\n\
+               \x20   println(f\"{flatten(Node { val: 1, children: Vec.new() }).len()}\");\n\
+               }\n";
+    rejected_then_fixed_in(
+        "field-into-iter",
+        src,
+        "cannot move 'child'",
+        "for child in node.children.into_iter() {",
+        2,
+    );
+    let (dir, path) = fixture("field-into-iter-no-clone", src);
+    for _ in 0..2 {
+        karac().arg("fix").arg(&path).output().unwrap();
+    }
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !fixed.contains("Clone"),
+        "fix must not derive Clone: {fixed}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
