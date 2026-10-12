@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/452-minimum-number-of-arrows-to-burst-balloons/bench/min_arrows.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "4c5442982"
+extracted_src = "4c3d0e89"
+model_rev = "1aa23105"
+model_src = "4c3d0e89"

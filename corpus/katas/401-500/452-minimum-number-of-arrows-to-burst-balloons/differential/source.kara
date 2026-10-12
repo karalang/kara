@@ -1,0 +1,233 @@
+// Differential test for LeetCode #452: Minimum Number of Arrows to
+// Burst Balloons.
+//
+// Copies of the four arms, each run on 1,500 random cases.
+// Properties:
+//   P1  on 1 to 8 balloons within 0 to 19, the count is brute force's
+//       over every subset of the right ends
+//   P2  on 1 to 40 balloons over a mixed range, moving every balloon by
+//       up to 1,000 keeps the count
+//   P3  mirroring the balloons about 0 keeps it
+//   P4  listing them in another order keeps it
+//   P5  k clusters 1,000 apart, each of balloons around a shared point,
+//       take exactly k arrows
+
+// ---- end: min_arrows.kara
+
+fn find_min_arrow_shots_end(points: Vec[(i64, i64)]) -> i64 {
+    let mut by_end = points.clone();
+    by_end.sort_by_key(|p| p.1);
+    let mut arrows = 0;
+    let mut arrow = 0;
+    for (start, end) in by_end {
+        if arrows == 0 or start > arrow {
+            arrows += 1;
+            arrow = end;
+        }
+    }
+    arrows
+}
+
+// ---- start: min_arrows_start.kara
+
+fn find_min_arrow_shots_start(points: Vec[(i64, i64)]) -> i64 {
+    let mut by_start = points.clone();
+    by_start.sort();
+    let mut arrows = 0;
+    let mut reach = 0;
+    for (start, end) in by_start {
+        if arrows == 0 or start > reach {
+            arrows += 1;
+            reach = end;
+        } else {
+            reach = reach.min(end);
+        }
+    }
+    arrows
+}
+
+// ---- events: min_arrows_events.kara
+
+fn find_min_arrow_shots_events(points: Vec[(i64, i64)]) -> i64 {
+    // (position, 0 for an opening or 1 for a closing, balloon)
+    let mut events: Vec[(i64, i64, i64)] = Vec.new();
+    for i in 0..points.len() {
+        events.push((points[i].0, 0, i));
+        events.push((points[i].1, 1, i));
+    }
+    events.sort();
+    let mut burst = vec![false; points.len()];
+    let mut open: Vec[i64] = Vec.new();
+    let mut arrows = 0;
+    for (_, kind, i) in events {
+        if kind == 0 {
+            open.push(i);
+        } else if not burst[i] {
+            arrows += 1;
+            for j in open {
+                burst[j] = true;
+            }
+            open.clear();
+        }
+    }
+    arrows
+}
+
+// ---- select: min_arrows_select.kara
+
+fn find_min_arrow_shots_select(points: Vec[(i64, i64)]) -> i64 {
+    let n = points.len();
+    let mut burst = vec![false; n];
+    let mut left = n;
+    let mut arrows = 0;
+    while left > 0 {
+        let mut first = -1;
+        for i in 0..n {
+            if not burst[i] and (first < 0 or points[i].1 < points[first].1) {
+                first = i;
+            }
+        }
+        let x = points[first].1;
+        arrows += 1;
+        for i in 0..n {
+            if not burst[i] and points[i].0 <= x and x <= points[i].1 {
+                burst[i] = true;
+                left -= 1;
+            }
+        }
+    }
+    arrows
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn arrows(arm: i64, points: Vec[(i64, i64)]) -> i64 {
+    if arm == 0 {
+        find_min_arrow_shots_end(points)
+    } else if arm == 1 {
+        find_min_arrow_shots_start(points)
+    } else if arm == 2 {
+        find_min_arrow_shots_events(points)
+    } else {
+        find_min_arrow_shots_select(points)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The fewest arrows by brute force: some best set of arrows can be moved
+// right until each sits on a balloon's right end, so try every subset
+// of the right ends, smallest first.
+fn brute(points: Vec[(i64, i64)]) -> i64 {
+    let n = points.len();
+    let mut best = n;
+    for mask in 0..(1 << n) {
+        let mut used = 0;
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                used += 1;
+            }
+        }
+        if used >= best {
+            continue;
+        }
+        let mut all = true;
+        for i in 0..n {
+            let mut hit = false;
+            for j in 0..n {
+                if (mask >> j) & 1 == 1 and points[i].0 <= points[j].1 and points[j].1 <= points[i].1 {
+                    hit = true;
+                }
+            }
+            if not hit {
+                all = false;
+            }
+        }
+        if all {
+            best = used;
+        }
+    }
+    best
+}
+
+fn random_points(n: i64, span: i64, width: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut points: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..n {
+        let r = (next_random(seed) * 65536 + next_random(seed)) * 2 + next_random(seed) % 2;
+        let start = r % span - span / 2;
+        let w = (next_random(seed) * 65536 + next_random(seed)) % width;
+        points.push((start, (start + w).min(2147483647)));
+    }
+    points
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4520;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // A small set for brute force: 1 to 8 balloons within 0 to 19.
+        let small_n = 1 + next_random(mut seed) % 8;
+        let mut small = random_points(small_n, 20, [1, 4, 10][next_random(mut seed) % 3], mut seed);
+        for i in 0..small.len() {
+            small[i] = (small[i].0 + 10, small[i].1 + 10);
+        }
+        let expected = brute(small);
+        // A larger set of 1 to 40 balloons over a mixed range.
+        let n = 1 + next_random(mut seed) % 40;
+        let span = [10, 100, 10000, 4294967296][next_random(mut seed) % 4];
+        let width = [1, 6, 51, 2147483648][next_random(mut seed) % 4];
+        let points = random_points(n, span, width, mut seed);
+        // Moved by a constant, and mirrored about 0.
+        let shift = next_random(mut seed) % 2001 - 1000;
+        let mut moved: Vec[(i64, i64)] = Vec.new();
+        let mut mirrored: Vec[(i64, i64)] = Vec.new();
+        for (a, b) in points {
+            moved.push((a + shift, b + shift));
+            mirrored.push((-b, -a));
+        }
+        let mut shuffled = points.clone();
+        for i in 0..n {
+            shuffled.swap(i, i + next_random(mut seed) % (n - i));
+        }
+        // k clusters, 1,000 apart, each of 1 to 5 balloons around a
+        // shared point: exactly k arrows.
+        let k = 1 + next_random(mut seed) % 10;
+        let mut clusters: Vec[(i64, i64)] = Vec.new();
+        for c in 0..k {
+            let centre = c * 1000;
+            for _ in 0..1 + next_random(mut seed) % 5 {
+                clusters.push((centre - next_random(mut seed) % 400, centre + next_random(mut seed) % 400));
+            }
+        }
+        for i in 0..clusters.len() {
+            clusters.swap(i, i + next_random(mut seed) % (clusters.len() - i));
+        }
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, arrows(arm, small) == expected, mut failures);
+            let base = arrows(arm, points);
+            report(2, arm, case, arrows(arm, moved) == base, mut failures);
+            report(3, arm, case, arrows(arm, mirrored) == base, mut failures);
+            report(4, arm, case, arrows(arm, shuffled) == base, mut failures);
+            report(5, arm, case, arrows(arm, clusters) == k, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

@@ -1,0 +1,52 @@
+// Benchmark for #452: the ★ arm (min_arrows.kara) on 10 random sets of
+// 100,000 balloons over the 32-bit range, built once, then each counted
+// 10 times.
+
+fn find_min_arrow_shots(points: Vec[(i64, i64)]) -> i64 {
+    let mut by_end = points.clone();
+    by_end.sort_by_key(|p| p.1);
+    let mut arrows = 0;
+    let mut arrow = 0;
+    for (start, end) in by_end {
+        if arrows == 0 or start > arrow {
+            arrows += 1;
+            arrow = end;
+        }
+    }
+    arrows
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let sets = 10;
+    let n = 100000;
+    let rounds = 10;
+    let mut seed: i64 = 452;
+    let mut all: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..sets {
+        let mut points: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            let r = (next_random(mut seed) * 65536 + next_random(mut seed)) * 2 + next_random(mut seed) % 2;
+            let start = r - 2147483648;
+            let w = (next_random(mut seed) * 65536 + next_random(mut seed)) % 100000;
+            points.push((start, (start + w).min(2147483647)));
+        }
+        all.push(points);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        for points in all {
+            let arrows = find_min_arrow_shots(points);
+            total += arrows;
+            checksum = (checksum * 31 + arrows) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds on {sets} sets of {n}: {total} arrows, checksum {checksum}");
+}

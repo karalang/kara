@@ -1,0 +1,52 @@
+// Benchmark for #453: the ★ arm (min_moves.kara) on 10 random arrays of
+// 1,000,000 numbers from -10^9 to 10^9, built once. Each of 20 rounds
+// sets one number in every array to a new random value, then counts the
+// moves for every array.
+
+fn min_moves(nums: Vec[i64]) -> i64 {
+    let mut smallest = nums[0];
+    let mut total = 0;
+    for x in nums {
+        smallest = smallest.min(x);
+        total += x;
+    }
+    total - nums.len() * smallest
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_value(seed: mut ref i64) -> i64 {
+    (next_random(seed) * 65536 + next_random(seed)) % 2000000001 - 1000000000
+}
+
+fn main() {
+    let arrays = 10;
+    let n = 1000000;
+    let rounds = 20;
+    let mut seed: i64 = 453;
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..arrays {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(random_value(mut seed));
+        }
+        all.push(nums);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        for a in 0..arrays {
+            let at = (next_random(mut seed) * 65536 + next_random(mut seed)) % n;
+            all[a][at] = random_value(mut seed);
+            let moves = min_moves(all[a]);
+            total += moves;
+            checksum = (checksum * 31 + moves % 1000000007) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds on {arrays} arrays of {n}: {total} moves, checksum {checksum}");
+}

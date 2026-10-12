@@ -1,0 +1,70 @@
+// LeetCode #453: Minimum Moves to Equal Array Elements -- the gaps
+// between neighbours, sorted.
+//
+// Sort, and walk the gaps between neighbours from the bottom: every
+// element above a gap must come down across it, so the gap between
+// sorted[i - 1] and sorted[i] costs (sorted[i] - sorted[i - 1]) times
+// the n - i elements from i up. O(n log n).
+
+fn min_moves(nums: Vec[i64]) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let n = sorted.len();
+    let mut moves = 0;
+    for i in 1..n {
+        moves += (sorted[i] - sorted[i - 1]) * (n - i);
+    }
+    moves
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn listed(nums: Vec[i64]) -> String {
+    let mut out = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{nums[i]}");
+    }
+    out
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"[{listed(nums)}]: {min_moves(nums)} moves");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![1, 2, 3]);
+    show(vec![1, 1, 1]);
+    show(vec![5]);
+    show(vec![3, 1]);
+    show(vec![-1000000000, 1000000000]);
+    show(vec![1000000000, 1000000000, -1000000000]);
+    show(vec![0, 0, 0, 0, 100]);
+    show(vec![7, 3, 9, 3, 12, 5]);
+    // 300 random arrays of 1 to 200 numbers, spread over 1, 10, 1,000
+    // or the full range from -10^9 to 10^9.
+    let count = 300;
+    let mut seed: i64 = 453;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = 1 + next_random(mut seed) % 200;
+        let spread = [1, 10, 1000, 2000000001][next_random(mut seed) % 4];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let r = next_random(mut seed) * 65536 + next_random(mut seed);
+            nums.push(r % spread - spread / 2);
+        }
+        let moves = min_moves(nums);
+        total += moves;
+        checksum = (checksum * 31 + moves % 1000000007) % 1000000007;
+    }
+    println(f"{count} random arrays: {total} moves, checksum {checksum}");
+}

@@ -1,0 +1,237 @@
+// Differential test for LeetCode #453: Minimum Moves to Equal Array
+// Elements.
+//
+// Copies of the four arms, each run on 1,500 random cases.
+// Properties:
+//   P1  on 1 to 4 numbers within 0 to 3, the count is a breadth-first
+//       search's over the moves themselves
+//   P2  on 1 to 40 numbers over a mixed spread, adding a constant to
+//       every number keeps the count
+//   P3  multiplying every number by 1 to 5 multiplies the count by it
+//   P4  listing them in another order keeps it
+//   P5  one more number v, at or above the smallest m, adds v - m
+
+// ---- sum: min_moves.kara
+
+fn min_moves_sum(nums: Vec[i64]) -> i64 {
+    let mut smallest = nums[0];
+    let mut total = 0;
+    for x in nums {
+        smallest = smallest.min(x);
+        total += x;
+    }
+    total - nums.len() * smallest
+}
+
+// ---- sorted: min_moves_sorted.kara
+
+fn min_moves_sorted(nums: Vec[i64]) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let mut moves = 0;
+    for x in sorted {
+        moves += x - sorted[0];
+    }
+    moves
+}
+
+// ---- steps: min_moves_steps.kara
+
+fn min_moves_steps(nums: Vec[i64]) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let n = sorted.len();
+    let mut moves = 0;
+    for i in 1..n {
+        moves += (sorted[i] - sorted[i - 1]) * (n - i);
+    }
+    moves
+}
+
+// ---- levels: min_moves_levels.kara
+
+fn min_moves_levels(nums: Vec[i64]) -> i64 {
+    let mut levels: SortedMap[i64, i64] = SortedMap.new();
+    for x in nums {
+        *levels.entry(x).or_insert(0) += 1;
+    }
+    let mut moves = 0;
+    while levels.len() > 1 {
+        // let-else, not `.expect(...)` then `*top`: on the MIR backends
+        // the entry taken out through `expect` loses its refs
+        // (B-2026-10-12-28). Revert to the `expect` form once it is fixed.
+        let Some((top, _)) = levels.floor(i64.MAX) else {
+            panic("no top level");
+        };
+        let top = *top;
+        let Some((below, _)) = levels.floor(top - 1) else {
+            panic("no level below");
+        };
+        let below = *below;
+        let count = levels.remove(top).expect("the top level");
+        moves += (top - below) * count;
+        levels[below] += count;
+    }
+    moves
+}
+
+// ---- harness ----------------------------------------------------------
+
+fn moves(arm: i64, nums: Vec[i64]) -> i64 {
+    if arm == 0 {
+        min_moves_sum(nums)
+    } else if arm == 1 {
+        min_moves_sorted(nums)
+    } else if arm == 2 {
+        min_moves_steps(nums)
+    } else {
+        min_moves_levels(nums)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The fewest moves by breadth-first search over the moves themselves.
+// Only the differences to the smallest element matter, so a state is
+// those differences, one base-8 digit each. Leaving out a largest
+// element never widens the spread, so a shortest path stays within the
+// starting spread, and states spread wider than 6 are not needed.
+fn brute(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut size = 1;
+    for _ in 0..n {
+        size *= 8;
+    }
+    let mut dist = vec![-1; size];
+    let mut low = nums[0];
+    for x in nums {
+        low = low.min(x);
+    }
+    let mut start = 0;
+    for i in 0..n {
+        start = start * 8 + (nums[i] - low);
+    }
+    dist[start] = 0;
+    let mut queue: Vec[i64] = vec![start];
+    let mut head = 0;
+    while head < queue.len() {
+        let state = queue[head];
+        head += 1;
+        let mut digits = vec![0; n];
+        let mut rest = state;
+        for i in 0..n {
+            digits[n - 1 - i] = rest % 8;
+            rest /= 8;
+        }
+        let mut equal = true;
+        for i in 0..n {
+            if digits[i] != digits[0] {
+                equal = false;
+            }
+        }
+        if equal {
+            return dist[state];
+        }
+        for j in 0..n {
+            let mut next = digits.clone();
+            for i in 0..n {
+                if i != j {
+                    next[i] += 1;
+                }
+            }
+            let mut least = next[0];
+            let mut most = next[0];
+            for d in next {
+                least = least.min(d);
+                most = most.max(d);
+            }
+            if most - least > 6 {
+                continue;
+            }
+            let mut code = 0;
+            for d in next {
+                code = code * 8 + (d - least);
+            }
+            if dist[code] < 0 {
+                dist[code] = dist[state] + 1;
+                queue.push(code);
+            }
+        }
+    }
+    -1
+}
+
+fn random_nums(n: i64, spread: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let r = next_random(seed) * 65536 + next_random(seed);
+        nums.push(r % spread - spread / 2);
+    }
+    nums
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4530;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // A small array for the search: 1 to 4 numbers within 0 to 3.
+        let small_n = 1 + next_random(mut seed) % 4;
+        let mut small: Vec[i64] = Vec.new();
+        for _ in 0..small_n {
+            small.push(next_random(mut seed) % 4);
+        }
+        let expected = brute(small);
+        // A larger array of 1 to 40 numbers over a mixed spread.
+        let n = 1 + next_random(mut seed) % 40;
+        let spread = [1, 10, 1000, 2000000001][next_random(mut seed) % 4];
+        let nums = random_nums(n, spread, mut seed);
+        let mut low = nums[0];
+        for x in nums {
+            low = low.min(x);
+        }
+        // Moved by a constant, and scaled by 1 to 5.
+        let shift = (next_random(mut seed) * 65536 + next_random(mut seed)) % 2000000001 - 1000000000;
+        let factor = 1 + next_random(mut seed) % 5;
+        let mut moved: Vec[i64] = Vec.new();
+        let mut scaled: Vec[i64] = Vec.new();
+        for x in nums {
+            moved.push(x + shift);
+            scaled.push(x * factor);
+        }
+        let mut shuffled = nums.clone();
+        for i in 0..n {
+            shuffled.swap(i, i + next_random(mut seed) % (n - i));
+        }
+        // One more number, at or above the smallest, at a random place.
+        let extra = low + next_random(mut seed) % [1, 3, 100, 1000000][next_random(mut seed) % 4];
+        let mut grown = nums.clone();
+        grown.insert(next_random(mut seed) % (n + 1), extra);
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, moves(arm, small) == expected, mut failures);
+            let base = moves(arm, nums);
+            report(2, arm, case, moves(arm, moved) == base, mut failures);
+            report(3, arm, case, moves(arm, scaled) == base * factor, mut failures);
+            report(4, arm, case, moves(arm, shuffled) == base, mut failures);
+            report(5, arm, case, moves(arm, grown) == base + (extra - low), mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

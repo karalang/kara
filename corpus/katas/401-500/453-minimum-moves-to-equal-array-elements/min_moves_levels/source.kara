@@ -1,0 +1,84 @@
+// LeetCode #453: Minimum Moves to Equal Array Elements -- levels from
+// the top down.
+//
+// Count how many elements hold each value in a sorted map, then bring
+// the highest level down to the next one at a cost of its count times
+// the drop, merging the two, until one level is left. `floor` finds the
+// highest level and the one below it. O(n log n).
+
+fn min_moves(nums: Vec[i64]) -> i64 {
+    let mut levels: SortedMap[i64, i64] = SortedMap.new();
+    for x in nums {
+        *levels.entry(x).or_insert(0) += 1;
+    }
+    let mut moves = 0;
+    while levels.len() > 1 {
+        // let-else, not `.expect(...)` then `*top`: on the MIR backends
+        // the entry taken out through `expect` loses its refs
+        // (B-2026-10-12-28). Revert to the `expect` form once it is fixed.
+        let Some((top, _)) = levels.floor(i64.MAX) else {
+            panic("no top level");
+        };
+        let top = *top;
+        let Some((below, _)) = levels.floor(top - 1) else {
+            panic("no level below");
+        };
+        let below = *below;
+        let count = levels.remove(top).expect("the top level");
+        moves += (top - below) * count;
+        levels[below] += count;
+    }
+    moves
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn listed(nums: Vec[i64]) -> String {
+    let mut out = String.new();
+    for i in 0..nums.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f"{nums[i]}");
+    }
+    out
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"[{listed(nums)}]: {min_moves(nums)} moves");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![1, 2, 3]);
+    show(vec![1, 1, 1]);
+    show(vec![5]);
+    show(vec![3, 1]);
+    show(vec![-1000000000, 1000000000]);
+    show(vec![1000000000, 1000000000, -1000000000]);
+    show(vec![0, 0, 0, 0, 100]);
+    show(vec![7, 3, 9, 3, 12, 5]);
+    // 300 random arrays of 1 to 200 numbers, spread over 1, 10, 1,000
+    // or the full range from -10^9 to 10^9.
+    let count = 300;
+    let mut seed: i64 = 453;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = 1 + next_random(mut seed) % 200;
+        let spread = [1, 10, 1000, 2000000001][next_random(mut seed) % 4];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let r = next_random(mut seed) * 65536 + next_random(mut seed);
+            nums.push(r % spread - spread / 2);
+        }
+        let moves = min_moves(nums);
+        total += moves;
+        checksum = (checksum * 31 + moves % 1000000007) % 1000000007;
+    }
+    println(f"{count} random arrays: {total} moves, checksum {checksum}");
+}

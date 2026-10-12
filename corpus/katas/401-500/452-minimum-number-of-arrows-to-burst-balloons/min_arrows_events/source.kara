@@ -1,0 +1,92 @@
+// LeetCode #452: Minimum Number of Arrows to Burst Balloons -- a sweep
+// over events.
+//
+// Turn every balloon into an opening event at its left end and a
+// closing event at its right end, sorted by position with openings
+// first at a tie, since an arrow at x bursts a balloon starting at x.
+// Keep the balloons open but not yet burst. When a balloon closes
+// unburst, it is the last chance to hit it: shoot there, which bursts
+// every balloon open at that moment. O(n log n).
+
+fn find_min_arrow_shots(points: Vec[(i64, i64)]) -> i64 {
+    // (position, 0 for an opening or 1 for a closing, balloon)
+    let mut events: Vec[(i64, i64, i64)] = Vec.new();
+    for i in 0..points.len() {
+        events.push((points[i].0, 0, i));
+        events.push((points[i].1, 1, i));
+    }
+    events.sort();
+    let mut burst = vec![false; points.len()];
+    let mut open: Vec[i64] = Vec.new();
+    let mut arrows = 0;
+    for (_, kind, i) in events {
+        if kind == 0 {
+            open.push(i);
+        } else if not burst[i] {
+            arrows += 1;
+            for j in open {
+                burst[j] = true;
+            }
+            open.clear();
+        }
+    }
+    arrows
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn listed(points: Vec[(i64, i64)]) -> String {
+    let mut out = String.new();
+    for i in 0..points.len() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(f"[{points[i].0},{points[i].1}]");
+    }
+    out
+}
+
+fn show(points: Vec[(i64, i64)]) {
+    println(f"[{listed(points)}]: arrows {find_min_arrow_shots(points)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![(10, 16), (2, 8), (1, 6), (7, 12)]);
+    show(vec![(1, 2), (3, 4), (5, 6), (7, 8)]);
+    show(vec![(1, 2), (2, 3), (3, 4), (4, 5)]);
+    show(vec![(5, 5)]);
+    show(vec![(1, 10), (2, 9), (3, 8), (4, 7)]);
+    show(vec![(-2147483648, 2147483647)]);
+    show(vec![(-2147483648, -2147483648), (2147483647, 2147483647)]);
+    show(vec![(1, 3), (2, 4), (5, 7), (6, 8), (3, 5)]);
+    // 300 random sets of 1 to 200 balloons. Starts lie in a range of
+    // 10, 100, 10,000 or the whole 32-bit range, and widths are up to
+    // 0, 5, 50 or 2^31 - 1, kept within 32 bits.
+    let count = 300;
+    let mut seed: i64 = 452;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = 1 + next_random(mut seed) % 200;
+        let span = [10, 100, 10000, 4294967296][next_random(mut seed) % 4];
+        let width = [1, 6, 51, 2147483648][next_random(mut seed) % 4];
+        let mut points: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            // r is uniform over 0 to 2^32 - 1.
+            let r = (next_random(mut seed) * 65536 + next_random(mut seed)) * 2 + next_random(mut seed) % 2;
+            let start = r % span - span / 2;
+            let w = (next_random(mut seed) * 65536 + next_random(mut seed)) % width;
+            let end = (start + w).min(2147483647);
+            points.push((start, end));
+        }
+        let arrows = find_min_arrow_shots(points);
+        total += arrows;
+        checksum = (checksum * 31 + arrows) % 1000000007;
+    }
+    println(f"{count} random sets: {total} arrows, checksum {checksum}");
+}
