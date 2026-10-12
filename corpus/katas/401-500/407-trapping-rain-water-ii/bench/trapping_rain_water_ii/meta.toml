@@ -1,0 +1,15 @@
+source = "kara-katas/leetcode/401-500/407-trapping-rain-water-ii/bench/trapping_rain_water_ii.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+extracted_src = "463d47e1"
+model_rev = "1aa23105"
+model_src = "463d47e1"

@@ -1,0 +1,300 @@
+// Differential test for LeetCode #407: Trapping Rain Water II.
+//
+// Copies of the four arms, each run on 2,000 random cases. Properties
+// known by construction:
+//   P1  a bowl, a border all of height H around cells below H, holds
+//       the sum of H - h over its inner cells
+//   P2  a grid of fewer than 3 rows or columns holds nothing
+//   P3  raising every cell by the same amount changes nothing
+//   P4  the grid turned on its side (transposed) holds the same water
+//   P5  raising one border cell never lowers the water
+
+// ---- heap: trapping_rain_water_ii.kara
+
+fn trap_rain_water_heap(height: Vec[Vec[i64]]) -> i64 {
+    let m = height.len();
+    if m < 3 or height[0].len() < 3 {
+        return 0;
+    }
+    let n = height[0].len();
+    let mut seen = vec![vec![false; n]; m];
+    let mut heap: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    for r in 0..m {
+        for c in 0..n {
+            if r == 0 or c == 0 or r == m - 1 or c == n - 1 {
+                heap.push((height[r][c], r, c));
+                seen[r][c] = true;
+            }
+        }
+    }
+    let dr = [1, -1, 0, 0];
+    let dc = [0, 0, 1, -1];
+    let mut water = 0;
+    while let Some((level, r, c)) = heap.pop() {
+        for d in 0..4 {
+            let nr = r + dr[d];
+            let nc = c + dc[d];
+            if nr >= 0 and nr < m and nc >= 0 and nc < n and not seen[nr][nc] {
+                seen[nr][nc] = true;
+                if height[nr][nc] < level {
+                    water += level - height[nr][nc];
+                }
+                heap.push((level.max(height[nr][nc]), nr, nc));
+            }
+        }
+    }
+    water
+}
+
+// ---- sorted: trapping_rain_water_ii_sorted.kara
+
+fn trap_rain_water_sorted(height: Vec[Vec[i64]]) -> i64 {
+    let m = height.len();
+    if m < 3 or height[0].len() < 3 {
+        return 0;
+    }
+    let n = height[0].len();
+    let mut seen = vec![vec![false; n]; m];
+    let mut frontier: SortedSet[(i64, i64, i64)] = SortedSet.new();
+    for r in 0..m {
+        for c in 0..n {
+            if r == 0 or c == 0 or r == m - 1 or c == n - 1 {
+                frontier.insert((height[r][c], r, c));
+                seen[r][c] = true;
+            }
+        }
+    }
+    let dr = [1, -1, 0, 0];
+    let dc = [0, 0, 1, -1];
+    let mut water = 0;
+    loop {
+        let (level, r, c) = match frontier.min() {
+            Some(t) => *t,
+            None => break,
+        };
+        frontier.remove((level, r, c));
+        for d in 0..4 {
+            let nr = r + dr[d];
+            let nc = c + dc[d];
+            if nr >= 0 and nr < m and nc >= 0 and nc < n and not seen[nr][nc] {
+                seen[nr][nc] = true;
+                water += (level - height[nr][nc]).max(0);
+                frontier.insert((level.max(height[nr][nc]), nr, nc));
+            }
+        }
+    }
+    water
+}
+
+// ---- relax: trapping_rain_water_ii_relax.kara
+
+fn trap_rain_water_relax(height: Vec[Vec[i64]]) -> i64 {
+    let m = height.len();
+    if m < 3 or height[0].len() < 3 {
+        return 0;
+    }
+    let n = height[0].len();
+    let mut top = 0;
+    for r in 0..m {
+        for c in 0..n {
+            top = top.max(height[r][c]);
+        }
+    }
+    let mut level = vec![vec![top; n]; m];
+    for r in 0..m {
+        for c in 0..n {
+            if r == 0 or c == 0 or r == m - 1 or c == n - 1 {
+                level[r][c] = height[r][c];
+            }
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for r in 1..m - 1 {
+            for c in 1..n - 1 {
+                let lowest = level[r - 1][c].min(level[r + 1][c]).min(level[r][c - 1]).min(level[r][c + 1]);
+                let want = height[r][c].max(lowest);
+                if want < level[r][c] {
+                    level[r][c] = want;
+                    changed = true;
+                }
+            }
+        }
+    }
+    let mut water = 0;
+    for r in 0..m {
+        for c in 0..n {
+            water += level[r][c] - height[r][c];
+        }
+    }
+    water
+}
+
+// ---- layers: trapping_rain_water_ii_layers.kara
+
+fn trap_rain_water_layers(height: Vec[Vec[i64]]) -> i64 {
+    let m = height.len();
+    if m < 3 or height[0].len() < 3 {
+        return 0;
+    }
+    let n = height[0].len();
+    let mut levels: Vec[i64] = Vec.new();
+    for r in 0..m {
+        for c in 0..n {
+            levels.push(height[r][c]);
+        }
+    }
+    levels.sort();
+    levels.dedup();
+    let dr = [1, -1, 0, 0];
+    let dc = [0, 0, 1, -1];
+    let mut water = 0;
+    for i in 1..levels.len() {
+        let below = levels[i - 1];
+        let top = levels[i];
+        // Cells below `top` that drain to the border through cells below
+        // `top`.
+        let mut drains = vec![vec![false; n]; m];
+        let mut stack: Vec[(i64, i64)] = Vec.new();
+        for r in 0..m {
+            for c in 0..n {
+                if (r == 0 or c == 0 or r == m - 1 or c == n - 1) and height[r][c] < top {
+                    drains[r][c] = true;
+                    stack.push((r, c));
+                }
+            }
+        }
+        while let Some((r, c)) = stack.pop() {
+            for d in 0..4 {
+                let nr = r + dr[d];
+                let nc = c + dc[d];
+                if nr >= 0 and nr < m and nc >= 0 and nc < n and not drains[nr][nc] and height[nr][nc] < top {
+                    drains[nr][nc] = true;
+                    stack.push((nr, nc));
+                }
+            }
+        }
+        // A trapped cell no higher than `below` holds the whole layer
+        // from `below` to `top`.
+        for r in 0..m {
+            for c in 0..n {
+                if height[r][c] <= below and not drains[r][c] {
+                    water += top - below;
+                }
+            }
+        }
+    }
+    water
+}
+
+// ---- the checks -------------------------------------------------------------
+
+fn solve(arm: i64, grid: Vec[Vec[i64]]) -> i64 {
+    if arm == 0 {
+        trap_rain_water_heap(grid)
+    } else if arm == 1 {
+        trap_rain_water_sorted(grid)
+    } else if arm == 2 {
+        trap_rain_water_relax(grid)
+    } else {
+        trap_rain_water_layers(grid)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_grid(m: i64, n: i64, top: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(step(seed) % top);
+        }
+        grid.push(row);
+    }
+    grid
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4070;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..2000 {
+        // P1: a bowl.
+        let m = 3 + step(mut seed) % 8;
+        let n = 3 + step(mut seed) % 8;
+        let wall = 1 + step(mut seed) % 20;
+        let mut bowl = random_grid(m, n, wall, mut seed);
+        let mut held = 0;
+        for r in 0..m {
+            for c in 0..n {
+                if r == 0 or c == 0 or r == m - 1 or c == n - 1 {
+                    bowl[r][c] = wall;
+                } else {
+                    held += wall - bowl[r][c];
+                }
+            }
+        }
+        // P2: one or two rows, or one or two columns.
+        let thin = if step(mut seed) % 2 == 0 {
+            random_grid(1 + step(mut seed) % 2, 1 + step(mut seed) % 10, 10, mut seed)
+        } else {
+            random_grid(1 + step(mut seed) % 10, 1 + step(mut seed) % 2, 10, mut seed)
+        };
+        // P3 to P5: a random grid, raised, transposed, and with one border
+        // cell raised.
+        let rows = 1 + step(mut seed) % 10;
+        let cols = 1 + step(mut seed) % 10;
+        let grid = random_grid(rows, cols, 10, mut seed);
+        let lift = 1 + step(mut seed) % 50;
+        let mut raised: Vec[Vec[i64]] = Vec.new();
+        for r in 0..rows {
+            let mut row: Vec[i64] = Vec.new();
+            for c in 0..cols {
+                row.push(grid[r][c] + lift);
+            }
+            raised.push(row);
+        }
+        let mut turned: Vec[Vec[i64]] = Vec.new();
+        for c in 0..cols {
+            let mut row: Vec[i64] = Vec.new();
+            for r in 0..rows {
+                row.push(grid[r][c]);
+            }
+            turned.push(row);
+        }
+        let mut walled = grid.clone();
+        let side = step(mut seed) % 4;
+        let r = if side == 0 { 0 } else if side == 1 { rows - 1 } else { step(mut seed) % rows };
+        let c = if side == 2 { 0 } else if side == 3 { cols - 1 } else { step(mut seed) % cols };
+        walled[r][c] += 1 + step(mut seed) % 10;
+        for arm in 0..4 {
+            let w = solve(arm, grid);
+            checks += 5;
+            report(1, arm, case, solve(arm, bowl) == held, mut failures);
+            report(2, arm, case, solve(arm, thin) == 0, mut failures);
+            report(3, arm, case, solve(arm, raised) == w, mut failures);
+            report(4, arm, case, solve(arm, turned) == w, mut failures);
+            report(5, arm, case, solve(arm, walled) >= w, mut failures);
+        }
+    }
+    println(f"2000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

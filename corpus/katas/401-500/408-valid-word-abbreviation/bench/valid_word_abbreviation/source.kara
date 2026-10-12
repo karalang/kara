@@ -1,0 +1,82 @@
+// Benchmark for #408: the two-pointer arm, verbatim, on 20,000 words of
+// 20 letters from a and b, each abbreviated once at random. Each of 1,000
+// rounds checks word i against abbreviation (i + round) mod 20,000, so
+// round 0 is all valid and the others mostly not.
+
+fn valid_word_abbreviation(word: Str, abbr: Str) -> bool {
+    let w = word.bytes();
+    let a = abbr.bytes();
+    let mut i = 0;
+    let mut j = 0;
+    while i < w.len() and j < a.len() {
+        if a[j] >= 48 and a[j] <= 57 {
+            if a[j] == 48 {
+                return false;
+            }
+            let mut skip = 0;
+            while j < a.len() and a[j] >= 48 and a[j] <= 57 {
+                skip = skip * 10 + (a[j] - 48) as i64;
+                j += 1;
+            }
+            i += skip;
+        } else {
+            if w[i] != a[j] {
+                return false;
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    i == w.len() and j == a.len()
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 20000;
+    let rounds = 1000;
+    let n = 20;
+    let mut seed: i64 = 408;
+    let mut words: Vec[String] = Vec.new();
+    let mut abbrs: Vec[String] = Vec.new();
+    for _ in 0..count {
+        let mut word = String.new();
+        for _ in 0..n {
+            word.push((97 + step(mut seed) % 2) as u8 as char);
+        }
+        let w = word.bytes();
+        let mut abbr = String.new();
+        let mut i = 0;
+        let mut number = false;
+        while i < n {
+            if number or step(mut seed) % 2 == 0 {
+                abbr.push(w[i] as char);
+                i += 1;
+                number = false;
+            } else {
+                let run = 1 + step(mut seed) % (n - i);
+                abbr.push_str(f"{run}");
+                i += run;
+                number = true;
+            }
+        }
+        words.push(word);
+        abbrs.push(abbr);
+    }
+    let mut valid: i64 = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let mut found: i64 = 0;
+        for i in 0..count {
+            if valid_word_abbreviation(words[i], abbrs[(i + r) % count]) {
+                found += 1;
+            }
+        }
+        valid += found;
+        checksum = (checksum * 31 + found) % 1000000007;
+    }
+    println(f"{count} words, {rounds} rounds: {valid} valid, checksum {checksum}");
+}

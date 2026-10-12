@@ -1,0 +1,65 @@
+// LeetCode #409: Longest Palindrome -- letter counts.
+//
+// A palindrome built from the letters uses every letter in pairs, one
+// on each side of the middle, and may put one more letter in the
+// middle. Count each letter: a letter seen c times gives c / 2 pairs,
+// and if any count is odd one letter is left over for the middle.
+// O(n) time, O(1) space (one count per byte value).
+
+fn longest_palindrome(s: Str) -> i64 {
+    let mut counts = vec![0; 128];
+    for b in s.bytes() {
+        counts[b as i64] += 1;
+    }
+    let mut length = 0;
+    let mut odd = false;
+    for i in 0..128 {
+        length += counts[i] / 2 * 2;
+        if counts[i] % 2 == 1 {
+            odd = true;
+        }
+    }
+    if odd { length + 1 } else { length }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str) {
+    println(f"\"{s}\": {longest_palindrome(s)}");
+}
+
+fn main() {
+    show("abccccdd");
+    show("a");
+    show("Aa");
+    show("bb");
+    show("ccc");
+    show("abc");
+    show("AAAAAA");
+    show("aaabbbccc");
+    show("racecar");
+    show("aAbBcCdD");
+    show("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+    show("civilwartestingwhetherthatnationoranynationsoconceivedandsodedicated");
+    // 3,000 random strings of 1 to 60 letters from a, b, c, A, B and C.
+    let alphabet = "abcABC".bytes();
+    let mut seed: i64 = 409;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..3000 {
+        let n = 1 + step(mut seed) % 60;
+        let mut s = String.new();
+        for _ in 0..n {
+            s.push(alphabet[step(mut seed) % 6] as char);
+        }
+        let answer = longest_palindrome(s);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"3000 random strings: total {total}, checksum {checksum}");
+}

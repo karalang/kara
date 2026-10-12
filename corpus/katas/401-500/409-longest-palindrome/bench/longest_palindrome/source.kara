@@ -1,0 +1,45 @@
+// Benchmark for #409: the letter-count arm, verbatim, on 300,000 random
+// slices of 1,000 to 2,000 letters (the problem's limit) of one text of
+// 2,000,000 letters from a to z and A to Z.
+
+fn longest_palindrome(s: Str) -> i64 {
+    let mut counts = vec![0; 128];
+    for b in s.bytes() {
+        counts[b as i64] += 1;
+    }
+    let mut length = 0;
+    let mut odd = false;
+    for i in 0..128 {
+        length += counts[i] / 2 * 2;
+        if counts[i] % 2 == 1 {
+            odd = true;
+        }
+    }
+    if odd { length + 1 } else { length }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let size = 2000000;
+    let queries = 300000;
+    let letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".bytes();
+    let mut seed: i64 = 409;
+    let mut text = String.new();
+    for _ in 0..size {
+        text.push(letters[step(mut seed) % 52] as char);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..queries {
+        let len = 1000 + step(mut seed) % 1001;
+        let start = (step(mut seed) * 32768 + step(mut seed)) % (size - len + 1);
+        let answer = longest_palindrome(text[start..start + len]);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"{queries} slices of a {size}-letter text: total {total}, checksum {checksum}");
+}

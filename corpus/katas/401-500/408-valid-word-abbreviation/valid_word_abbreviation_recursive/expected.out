@@ -1,0 +1,17 @@
+"internationalization", "i12iz4n": true
+"apple", "a2e": false
+"word", "4": true
+"word", "04": false
+"word", "w0rd": false
+"a", "2": false
+"ab", "1b": true
+"abc", "a1c": true
+"abc", "a01": false
+"hi", "hi1": false
+"substitution", "s10n": true
+"substitution", "sub4u4": true
+"substitution", "12": true
+"substitution", "s55n": false
+"a", "a": true
+"abcdefghijklmnopqrstuvwxyz", "a24z": true
+3000 random abbreviations: 882 valid, checksum 735979202

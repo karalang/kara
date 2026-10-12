@@ -1,0 +1,248 @@
+// Differential test for LeetCode #409: Longest Palindrome.
+//
+// Copies of the four arms, each run on 3,000 random strings and strings
+// built from them. Properties known by construction:
+//   P1  a string followed by its reverse gives its whole length, and so
+//       does one with a single letter between the two
+//   P2  the answer is at most the length, and is odd exactly when some
+//       letter occurs an odd number of times
+//   P3  two more copies of any letter add exactly 2
+//   P4  the letters shuffled give the same answer
+//   P5  for up to 10 letters, the answer is the size of the largest set
+//       of positions whose letters could stand as a palindrome, found by
+//       trying all 2^n sets
+
+// ---- counts: longest_palindrome.kara
+
+fn longest_palindrome_counts(s: Str) -> i64 {
+    let mut counts = vec![0; 128];
+    for b in s.bytes() {
+        counts[b as i64] += 1;
+    }
+    let mut length = 0;
+    let mut odd = false;
+    for i in 0..128 {
+        length += counts[i] / 2 * 2;
+        if counts[i] % 2 == 1 {
+            odd = true;
+        }
+    }
+    if odd { length + 1 } else { length }
+}
+
+// ---- set: longest_palindrome_set.kara
+
+fn longest_palindrome_set(s: Str) -> i64 {
+    let mut unpaired: Set[u8] = Set.new();
+    let mut pairs = 0;
+    for b in s.bytes() {
+        if unpaired.contains(b) {
+            unpaired.remove(b);
+            pairs += 1;
+        } else {
+            unpaired.insert(b);
+        }
+    }
+    if unpaired.len() > 0 { 2 * pairs + 1 } else { 2 * pairs }
+}
+
+// ---- sort: longest_palindrome_sort.kara
+
+fn longest_palindrome_sort(s: Str) -> i64 {
+    let mut letters: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        letters.push(b);
+    }
+    letters.sort();
+    let mut length = 0;
+    let mut odd = false;
+    let mut i = 0;
+    while i < letters.len() {
+        let mut j = i;
+        while j < letters.len() and letters[j] == letters[i] {
+            j += 1;
+        }
+        let run = j - i;
+        length += run - run % 2;
+        if run % 2 == 1 {
+            odd = true;
+        }
+        i = j;
+    }
+    if odd { length + 1 } else { length }
+}
+
+// ---- odd: longest_palindrome_odd.kara
+
+fn longest_palindrome_odd(s: Str) -> i64 {
+    let mut counts: Map[u8, i64] = Map.new();
+    for b in s.bytes() {
+        *counts.entry(b).or_insert(0) += 1;
+    }
+    let mut odd = 0;
+    for (_, c) in counts.iter() {
+        if c % 2 == 1 {
+            odd += 1;
+        }
+    }
+    if odd > 0 { s.len() - odd + 1 } else { s.len() }
+}
+
+// ---- the checks -------------------------------------------------------------
+
+fn solve(arm: i64, s: Str) -> i64 {
+    if arm == 0 {
+        longest_palindrome_counts(s)
+    } else if arm == 1 {
+        longest_palindrome_set(s)
+    } else if arm == 2 {
+        longest_palindrome_sort(s)
+    } else {
+        longest_palindrome_odd(s)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn text(bytes: Vec[u8]) -> String {
+    let mut out = String.new();
+    for i in 0..bytes.len() {
+        out.push(bytes[i] as char);
+    }
+    out
+}
+
+// Whether some letter occurs an odd number of times, counted by scanning
+// the string once for each position's letter.
+fn has_odd(letters: Vec[u8]) -> bool {
+    for i in 0..letters.len() {
+        let mut seen = 0;
+        for j in 0..letters.len() {
+            if letters[j] == letters[i] {
+                seen += 1;
+            }
+        }
+        if seen % 2 == 1 {
+            return true;
+        }
+    }
+    false
+}
+
+// The largest set of positions whose letters could stand as a
+// palindrome: at most one letter occurring an odd number of times.
+fn brute(letters: Vec[u8]) -> i64 {
+    let n = letters.len();
+    let mut best = 0;
+    for mask in 0..(1 << n) {
+        let mut chosen: Vec[u8] = Vec.new();
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                chosen.push(letters[i]);
+            }
+        }
+        let mut odd = 0;
+        for i in 0..chosen.len() {
+            let mut first = true;
+            for j in 0..i {
+                if chosen[j] == chosen[i] {
+                    first = false;
+                }
+            }
+            if first {
+                let mut seen = 0;
+                for j in 0..chosen.len() {
+                    if chosen[j] == chosen[i] {
+                        seen += 1;
+                    }
+                }
+                odd += seen % 2;
+            }
+        }
+        if odd <= 1 and chosen.len() > best {
+            best = chosen.len();
+        }
+    }
+    best
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let alphabet = "abcABCxyz".bytes();
+    let mut seed: i64 = 4090;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        // 1 to 30 letters from the first 1 to 9 letters of the alphabet.
+        let n = 1 + step(mut seed) % 30;
+        let kinds = 1 + step(mut seed) % 9;
+        let mut letters: Vec[u8] = Vec.new();
+        for _ in 0..n {
+            letters.push(alphabet[step(mut seed) % kinds]);
+        }
+        let s = text(letters.clone());
+        // P1
+        let mut mirrored = letters.clone();
+        for i in 0..n {
+            mirrored.push(letters[n - 1 - i]);
+        }
+        let mut centred = letters.clone();
+        centred.push(alphabet[step(mut seed) % 9]);
+        for i in 0..n {
+            centred.push(letters[n - 1 - i]);
+        }
+        let mirrored_text = text(mirrored);
+        let centred_text = text(centred);
+        // P3
+        let extra = alphabet[step(mut seed) % 9];
+        let mut doubled = letters.clone();
+        doubled.insert(step(mut seed) % (n + 1), extra);
+        doubled.insert(step(mut seed) % (n + 2), extra);
+        let doubled_text = text(doubled);
+        // P4
+        let mut shuffled = letters.clone();
+        let mut i = n - 1;
+        while i > 0 {
+            let j = step(mut seed) % (i + 1);
+            let t = shuffled[i];
+            shuffled[i] = shuffled[j];
+            shuffled[j] = t;
+            i -= 1;
+        }
+        let shuffled_text = text(shuffled);
+        // P5
+        let mut small: Vec[u8] = Vec.new();
+        for i in 0..n.min(10) {
+            small.push(letters[i]);
+        }
+        let small_text = text(small.clone());
+        let best = brute(small);
+        let odd = has_odd(letters);
+        for arm in 0..4 {
+            checks += 5;
+            let answer = solve(arm, s);
+            report(1, arm, case, solve(arm, mirrored_text) == 2 * n and solve(arm, centred_text) == 2 * n + 1, mut failures);
+            report(2, arm, case, answer <= n and (answer % 2 == 1) == odd, mut failures);
+            report(3, arm, case, solve(arm, doubled_text) == answer + 2, mut failures);
+            report(4, arm, case, solve(arm, shuffled_text) == answer, mut failures);
+            report(5, arm, case, solve(arm, small_text) == best, mut failures);
+        }
+    }
+    println(f"3000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

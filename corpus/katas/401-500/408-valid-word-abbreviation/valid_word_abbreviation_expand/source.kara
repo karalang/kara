@@ -1,0 +1,132 @@
+// LeetCode #408: Valid Word Abbreviation -- expand, then compare.
+//
+// Expand the abbreviation into the word it stands for, with a wildcard
+// for every letter a number stands for: "i3n" becomes i, ?, ?, ?, n. The
+// abbreviation is valid if it has no number with a leading zero and its
+// expansion is as long as the word and agrees with it at every letter.
+// O(n + m) time, O(n) space for the expansion.
+
+fn valid_word_abbreviation(word: Str, abbr: Str) -> bool {
+    let a = abbr.bytes();
+    let mut expanded: Vec[Option[u8]] = Vec.new();
+    let mut j = 0;
+    while j < a.len() {
+        if a[j] >= 48 and a[j] <= 57 {
+            if a[j] == 48 {
+                return false;
+            }
+            let mut count = 0;
+            while j < a.len() and a[j] >= 48 and a[j] <= 57 {
+                count = count * 10 + (a[j] - 48) as i64;
+                j += 1;
+            }
+            if expanded.len() + count > word.len() {
+                return false;
+            }
+            for _ in 0..count {
+                expanded.push(None);
+            }
+        } else {
+            expanded.push(Some(a[j]));
+            j += 1;
+        }
+    }
+    let w = word.bytes();
+    if expanded.len() != w.len() {
+        return false;
+    }
+    for i in 0..w.len() {
+        if let Some(c) = expanded[i] {
+            if c != w[i] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(word: Str, abbr: Str) {
+    let verdict = if valid_word_abbreviation(word, abbr) { "true" } else { "false" };
+    println(f"\"{word}\", \"{abbr}\": {verdict}");
+}
+
+fn text(bytes: Vec[u8]) -> String {
+    let mut out = String.new();
+    for i in 0..bytes.len() {
+        out.push(bytes[i] as char);
+    }
+    out
+}
+
+fn main() {
+    show("internationalization", "i12iz4n");
+    show("apple", "a2e");
+    show("word", "4");
+    show("word", "04");
+    show("word", "w0rd");
+    show("a", "2");
+    show("ab", "1b");
+    show("abc", "a1c");
+    show("abc", "a01");
+    show("hi", "hi1");
+    show("substitution", "s10n");
+    show("substitution", "sub4u4");
+    show("substitution", "12");
+    show("substitution", "s55n");
+    show("a", "a");
+    show("abcdefghijklmnopqrstuvwxyz", "a24z");
+    // 3,000 random words of 1 to 20 letters from a to c, each abbreviated
+    // at random; three in four abbreviations are then broken by changing,
+    // inserting or deleting one character.
+    let mut seed: i64 = 408;
+    let mut valid = 0;
+    let mut checksum: i64 = 0;
+    for case in 0..3000 {
+        let n = 1 + step(mut seed) % 20;
+        let mut word: Vec[u8] = Vec.new();
+        for _ in 0..n {
+            word.push((97 + step(mut seed) % 3) as u8);
+        }
+        let mut abbr: Vec[u8] = Vec.new();
+        let mut i = 0;
+        let mut number = false;
+        while i < n {
+            if number or step(mut seed) % 2 == 0 {
+                abbr.push(word[i]);
+                i += 1;
+                number = false;
+            } else {
+                let run = 1 + step(mut seed) % (n - i);
+                let digits = f"{run}";
+                for b in digits.bytes() {
+                    abbr.push(b);
+                }
+                i += run;
+                number = true;
+            }
+        }
+        let kind = step(mut seed) % 4;
+        if kind == 1 {
+            let at = step(mut seed) % abbr.len();
+            abbr[at] = (97 + step(mut seed) % 3) as u8;
+        } else if kind == 2 {
+            let at = step(mut seed) % (abbr.len() + 1);
+            abbr.insert(at, (48 + step(mut seed) % 3) as u8);
+        } else if kind == 3 {
+            let at = step(mut seed) % abbr.len();
+            abbr.remove(at);
+        }
+        if valid_word_abbreviation(text(word), text(abbr)) {
+            valid += 1;
+            checksum = (checksum * 31 + case + 1) % 1000000007;
+        }
+    }
+    println(f"3000 random abbreviations: {valid} valid, checksum {checksum}");
+}

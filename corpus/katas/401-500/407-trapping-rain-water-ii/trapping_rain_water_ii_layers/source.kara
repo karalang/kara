@@ -1,0 +1,106 @@
+// LeetCode #407: Trapping Rain Water II -- one flood per layer of water.
+//
+// Cut the water into layers between consecutive distinct heights a < b.
+// A cell holds the whole layer from a to b when its own height is at
+// most a and it cannot drain: no path of cells below b leads from it to
+// the border. One flood fill from the border per layer finds the cells
+// that drain; every other cell no higher than a holds b - a. O(H mn)
+// time for H distinct heights, O(mn) space.
+
+fn trap_rain_water(height: Vec[Vec[i64]]) -> i64 {
+    let m = height.len();
+    if m < 3 or height[0].len() < 3 {
+        return 0;
+    }
+    let n = height[0].len();
+    let mut levels: Vec[i64] = Vec.new();
+    for r in 0..m {
+        for c in 0..n {
+            levels.push(height[r][c]);
+        }
+    }
+    levels.sort();
+    levels.dedup();
+    let dr = [1, -1, 0, 0];
+    let dc = [0, 0, 1, -1];
+    let mut water = 0;
+    for i in 1..levels.len() {
+        let below = levels[i - 1];
+        let top = levels[i];
+        // Cells below `top` that drain to the border through cells below
+        // `top`.
+        let mut drains = vec![vec![false; n]; m];
+        let mut stack: Vec[(i64, i64)] = Vec.new();
+        for r in 0..m {
+            for c in 0..n {
+                if (r == 0 or c == 0 or r == m - 1 or c == n - 1) and height[r][c] < top {
+                    drains[r][c] = true;
+                    stack.push((r, c));
+                }
+            }
+        }
+        while let Some((r, c)) = stack.pop() {
+            for d in 0..4 {
+                let nr = r + dr[d];
+                let nc = c + dc[d];
+                if nr >= 0 and nr < m and nc >= 0 and nc < n and not drains[nr][nc] and height[nr][nc] < top {
+                    drains[nr][nc] = true;
+                    stack.push((nr, nc));
+                }
+            }
+        }
+        // A trapped cell no higher than `below` holds the whole layer
+        // from `below` to `top`.
+        for r in 0..m {
+            for c in 0..n {
+                if height[r][c] <= below and not drains[r][c] {
+                    water += top - below;
+                }
+            }
+        }
+    }
+    water
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(name: Str, grid: Vec[Vec[i64]]) {
+    println(f"{name}: {trap_rain_water(grid)}");
+}
+
+fn main() {
+    show("example 1", vec![vec![1, 4, 3, 1, 3, 2], vec![3, 2, 1, 3, 2, 4], vec![2, 3, 3, 2, 3, 1]]);
+    show("example 2", vec![vec![3, 3, 3, 3, 3], vec![3, 2, 2, 2, 3], vec![3, 2, 1, 2, 3], vec![3, 2, 2, 2, 3], vec![3, 3, 3, 3, 3]]);
+    show("one cell", vec![vec![5]]);
+    show("one row", vec![vec![3, 0, 3, 0, 3]]);
+    show("two by two", vec![vec![1, 0], vec![0, 1]]);
+    show("a pit", vec![vec![5, 5, 5], vec![5, 0, 5], vec![5, 5, 5]]);
+    show("a leaky wall", vec![vec![5, 5, 5, 5], vec![5, 0, 0, 1], vec![5, 5, 5, 5]]);
+    show("a lower rim", vec![vec![9, 9, 9, 9, 9], vec![9, 1, 4, 1, 9], vec![9, 4, 2, 4, 9], vec![9, 1, 4, 1, 9], vec![9, 9, 3, 9, 9]]);
+    show("two basins", vec![vec![6, 6, 6, 6, 6, 6, 6], vec![6, 1, 6, 8, 2, 2, 8], vec![6, 6, 6, 8, 8, 8, 8]]);
+    // 1,000 random grids of 1 to 12 rows and columns, heights 0 to 9.
+    let mut seed: i64 = 407;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..1000 {
+        let m = 1 + step(mut seed) % 12;
+        let n = 1 + step(mut seed) % 12;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                row.push(step(mut seed) % 10);
+            }
+            grid.push(row);
+        }
+        let w = trap_rain_water(grid);
+        total += w;
+        checksum = (checksum * 31 + w + 1) % 1000000007;
+    }
+    println(f"1000 random grids: {total} units of water, checksum {checksum}");
+}

@@ -1,0 +1,315 @@
+// Differential test for LeetCode #408: Valid Word Abbreviation.
+//
+// Copies of the four arms, each run on 3,000 random words with
+// abbreviations built from them. Properties known by construction:
+//   P1  an abbreviation built by replacing runs of the word with their
+//       lengths, never two numbers in a row, is valid
+//   P2  the word itself, and its length written out, are valid
+//   P3  an abbreviation with a number that starts with 0 is invalid
+//   P4  an abbreviation with one number made 1 larger or 1 smaller is
+//       invalid
+//   P5  an abbreviation with one letter changed to another is invalid
+
+// ---- pointers: valid_word_abbreviation.kara
+
+fn valid_word_abbreviation_pointers(word: Str, abbr: Str) -> bool {
+    let w = word.bytes();
+    let a = abbr.bytes();
+    let mut i = 0;
+    let mut j = 0;
+    while i < w.len() and j < a.len() {
+        if a[j] >= 48 and a[j] <= 57 {
+            if a[j] == 48 {
+                return false;
+            }
+            let mut skip = 0;
+            while j < a.len() and a[j] >= 48 and a[j] <= 57 {
+                skip = skip * 10 + (a[j] - 48) as i64;
+                j += 1;
+            }
+            i += skip;
+        } else {
+            if w[i] != a[j] {
+                return false;
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    i == w.len() and j == a.len()
+}
+
+// ---- expand: valid_word_abbreviation_expand.kara
+
+fn valid_word_abbreviation_expand(word: Str, abbr: Str) -> bool {
+    let a = abbr.bytes();
+    let mut expanded: Vec[Option[u8]] = Vec.new();
+    let mut j = 0;
+    while j < a.len() {
+        if a[j] >= 48 and a[j] <= 57 {
+            if a[j] == 48 {
+                return false;
+            }
+            let mut count = 0;
+            while j < a.len() and a[j] >= 48 and a[j] <= 57 {
+                count = count * 10 + (a[j] - 48) as i64;
+                j += 1;
+            }
+            if expanded.len() + count > word.len() {
+                return false;
+            }
+            for _ in 0..count {
+                expanded.push(None);
+            }
+        } else {
+            expanded.push(Some(a[j]));
+            j += 1;
+        }
+    }
+    let w = word.bytes();
+    if expanded.len() != w.len() {
+        return false;
+    }
+    for i in 0..w.len() {
+        if let Some(c) = expanded[i] {
+            if c != w[i] {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ---- recursive: valid_word_abbreviation_recursive.kara
+
+fn walk(w: Slice[u8], a: Slice[u8], i: i64, j: i64) -> bool {
+    if j == a.len() {
+        return i == w.len();
+    }
+    if i >= w.len() {
+        return false;
+    }
+    if a[j] < 48 or a[j] > 57 {
+        return w[i] == a[j] and walk(w, a, i + 1, j + 1);
+    }
+    if a[j] == 48 {
+        return false;
+    }
+    let mut end = j;
+    let mut skip = 0;
+    while end < a.len() and a[end] >= 48 and a[end] <= 57 {
+        skip = skip * 10 + (a[end] - 48) as i64;
+        end += 1;
+    }
+    walk(w, a, i + skip, end)
+}
+
+fn valid_word_abbreviation_recursive(word: Str, abbr: Str) -> bool {
+    walk(word.bytes(), abbr.bytes(), 0, 0)
+}
+
+// ---- tokens: valid_word_abbreviation_tokens.kara
+
+enum Token {
+    Letter(u8),
+    Skip(i64),
+}
+
+fn tokens(abbr: Str) -> Option[Vec[Token]] {
+    let a = abbr.bytes();
+    let mut out: Vec[Token] = Vec.new();
+    let mut j = 0;
+    while j < a.len() {
+        if a[j] >= 48 and a[j] <= 57 {
+            if a[j] == 48 {
+                return None;
+            }
+            let mut count = 0;
+            while j < a.len() and a[j] >= 48 and a[j] <= 57 {
+                count = count * 10 + (a[j] - 48) as i64;
+                j += 1;
+            }
+            out.push(Token.Skip(count));
+        } else {
+            out.push(Token.Letter(a[j]));
+            j += 1;
+        }
+    }
+    Some(out)
+}
+
+fn valid_word_abbreviation_tokens(word: Str, abbr: Str) -> bool {
+    let w = word.bytes();
+    match tokens(abbr) {
+        None => false,
+        Some(list) => {
+            let mut i = 0;
+            for t in list.iter() {
+                match t {
+                    Token.Letter(c) => {
+                        if i >= w.len() or w[i] != c {
+                            return false;
+                        }
+                        i += 1;
+                    }
+                    Token.Skip(count) => {
+                        i += count;
+                    }
+                }
+            }
+            i == w.len()
+        }
+    }
+}
+
+// ---- the checks -------------------------------------------------------------
+
+fn solve(arm: i64, word: Str, abbr: Str) -> bool {
+    if arm == 0 {
+        valid_word_abbreviation_pointers(word, abbr)
+    } else if arm == 1 {
+        valid_word_abbreviation_expand(word, abbr)
+    } else if arm == 2 {
+        valid_word_abbreviation_recursive(word, abbr)
+    } else {
+        valid_word_abbreviation_tokens(word, abbr)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn text(bytes: Vec[u8]) -> String {
+    let mut out = String.new();
+    for i in 0..bytes.len() {
+        out.push(bytes[i] as char);
+    }
+    out
+}
+
+// An abbreviation of word as pieces: a letter is (letter, 0) and a run
+// of n letters is (0, n); never two runs in a row.
+fn pieces(word: Vec[u8], seed: mut ref i64) -> Vec[(u8, i64)] {
+    let mut out: Vec[(u8, i64)] = Vec.new();
+    let mut i = 0;
+    let mut number = false;
+    while i < word.len() {
+        if number or step(seed) % 2 == 0 {
+            out.push((word[i], 0));
+            i += 1;
+            number = false;
+        } else {
+            let run = 1 + step(seed) % (word.len() - i);
+            out.push((0, run));
+            i += run;
+            number = true;
+        }
+    }
+    out
+}
+
+fn write(parts: Vec[(u8, i64)]) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if parts[i].1 == 0 {
+            out.push(parts[i].0 as char);
+        } else {
+            out.push_str(f"{parts[i].1}");
+        }
+    }
+    out
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4080;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        let n = 1 + step(mut seed) % 20;
+        let mut letters: Vec[u8] = Vec.new();
+        for _ in 0..n {
+            letters.push((97 + step(mut seed) % 3) as u8);
+        }
+        let word = text(letters);
+        let parts = pieces(letters, mut seed);
+        let good = write(parts);
+        let whole = f"{n}";
+        // P3: a 0 written before one number, or a lone 0 inserted.
+        let mut zeroed = String.new();
+        let mut put = false;
+        for i in 0..parts.len() {
+            if parts[i].1 > 0 and not put {
+                zeroed.push('0');
+                put = true;
+            }
+            if parts[i].1 == 0 {
+                zeroed.push(parts[i].0 as char);
+            } else {
+                zeroed.push_str(f"{parts[i].1}");
+            }
+        }
+        if not put {
+            zeroed.push('0');
+        }
+        // P4: one number 1 larger or 1 smaller (never 0); if there is no
+        // number, a 1 is appended, which makes the word one letter long.
+        let mut off = parts.clone();
+        let mut runs: Vec[i64] = Vec.new();
+        for i in 0..off.len() {
+            if off[i].1 > 0 {
+                runs.push(i);
+            }
+        }
+        if runs.len() == 0 {
+            off.push((0, 1));
+        } else {
+            let at = runs[step(mut seed) % runs.len()];
+            if off[at].1 > 1 and step(mut seed) % 2 == 0 {
+                off[at].1 -= 1;
+            } else {
+                off[at].1 += 1;
+            }
+        }
+        let wrong_length = write(off);
+        // P5: one letter changed, if there is one.
+        let mut changed = parts.clone();
+        let mut kept: Vec[i64] = Vec.new();
+        for i in 0..changed.len() {
+            if changed[i].1 == 0 {
+                kept.push(i);
+            }
+        }
+        let has_letter = kept.len() > 0;
+        if has_letter {
+            let at = kept[step(mut seed) % kept.len()];
+            let shift = 1 + step(mut seed) % 2;
+            changed[at].0 = (97 + ((changed[at].0 - 97) as i64 + shift) % 3) as u8;
+        }
+        let wrong_letter = write(changed);
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, solve(arm, word, good), mut failures);
+            report(2, arm, case, solve(arm, word, word) and solve(arm, word, whole), mut failures);
+            report(3, arm, case, not solve(arm, word, zeroed), mut failures);
+            report(4, arm, case, not solve(arm, word, wrong_length), mut failures);
+            report(5, arm, case, not has_letter or not solve(arm, word, wrong_letter), mut failures);
+        }
+    }
+    println(f"3000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}
