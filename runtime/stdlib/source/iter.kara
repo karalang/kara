@@ -52,33 +52,33 @@ trait Iterator {
     }
 
     /// At most `n` items.
-    fn take(own self, n: i64) -> Take[Self] {
-        Take { it: self, left: n }
+    fn take(own self, n: i64) -> IterTake[Self] {
+        IterTake { it: self, left: n }
     }
 
     /// Drops the first `n` items.
-    fn skip(own self, n: i64) -> Skip[Self] {
-        Skip { it: self, left: n }
+    fn skip(own self, n: i64) -> IterSkip[Self] {
+        IterSkip { it: self, left: n }
     }
 
     /// Pairs each item with its index, from 0.
-    fn enumerate(own self) -> Enumerate[Self] {
-        Enumerate { it: self, i: 0 }
+    fn enumerate(own self) -> IterEnumerate[Self] {
+        IterEnumerate { it: self, i: 0 }
     }
 
     /// The first item, then every `step`-th.
-    fn step_by(own self, step: i64) -> StepBy[Self] {
-        StepBy { it: self, step: step, first: true }
+    fn step_by(own self, step: i64) -> IterStepBy[Self] {
+        IterStepBy { it: self, step: step, first: true }
     }
 
     /// This iterator's items, then `other`'s.
-    fn chain[J: Iterator[Item = Self.Item]](own self, other: own J) -> Chain[Self, J] {
-        Chain { a: self, b: other, a_done: false }
+    fn chain[J: Iterator[Item = Self.Item]](own self, other: own J) -> IterChain[Self, J] {
+        IterChain { a: self, b: other, a_done: false }
     }
 
     /// Pairs of items, one from each, until either runs out.
-    fn zip[J: Iterator](own self, other: own J) -> Zip[Self, J] {
-        Zip { a: self, b: other }
+    fn zip[J: Iterator](own self, other: own J) -> IterZip[Self, J] {
+        IterZip { a: self, b: other }
     }
 
     /// `f` applied to each item.
@@ -133,8 +133,8 @@ trait Iterator {
     }
 
     /// Borrows the iterator instead of consuming it.
-    fn by_ref(mut ref self) -> ByRef[Self] {
-        ByRef { it: self }
+    fn by_ref(mut ref self) -> IterByRef[Self] {
+        IterByRef { it: self }
     }
 
     /// Folds every item into an accumulator, front to back.
@@ -237,12 +237,12 @@ trait Iterator {
     }
 }
 
-struct Take[I] {
+struct IterTake[I] {
     it: I,
     left: i64,
 }
 
-impl[I: Iterator] Iterator for Take[I] {
+impl[I: Iterator] Iterator for IterTake[I] {
     type Item = I.Item;
 
     fn next(mut ref self) -> Option[I.Item] {
@@ -254,12 +254,12 @@ impl[I: Iterator] Iterator for Take[I] {
     }
 }
 
-struct Skip[I] {
+struct IterSkip[I] {
     it: I,
     left: i64,
 }
 
-impl[I: Iterator] Iterator for Skip[I] {
+impl[I: Iterator] Iterator for IterSkip[I] {
     type Item = I.Item;
 
     fn next(mut ref self) -> Option[I.Item] {
@@ -273,12 +273,12 @@ impl[I: Iterator] Iterator for Skip[I] {
     }
 }
 
-struct Enumerate[I] {
+struct IterEnumerate[I] {
     it: I,
     i: i64,
 }
 
-impl[I: Iterator] Iterator for Enumerate[I] {
+impl[I: Iterator] Iterator for IterEnumerate[I] {
     type Item = (i64, I.Item);
 
     fn next(mut ref self) -> Option[(i64, I.Item)] {
@@ -293,13 +293,13 @@ impl[I: Iterator] Iterator for Enumerate[I] {
     }
 }
 
-struct StepBy[I] {
+struct IterStepBy[I] {
     it: I,
     step: i64,
     first: bool,
 }
 
-impl[I: Iterator] Iterator for StepBy[I] {
+impl[I: Iterator] Iterator for IterStepBy[I] {
     type Item = I.Item;
 
     fn next(mut ref self) -> Option[I.Item] {
@@ -318,13 +318,13 @@ impl[I: Iterator] Iterator for StepBy[I] {
     }
 }
 
-struct Chain[A, B] {
+struct IterChain[A, B] {
     a: A,
     b: B,
     a_done: bool,
 }
 
-impl[A: Iterator, B: Iterator[Item = A.Item]] Iterator for Chain[A, B] {
+impl[A: Iterator, B: Iterator[Item = A.Item]] Iterator for IterChain[A, B] {
     type Item = A.Item;
 
     fn next(mut ref self) -> Option[A.Item] {
@@ -338,12 +338,12 @@ impl[A: Iterator, B: Iterator[Item = A.Item]] Iterator for Chain[A, B] {
     }
 }
 
-struct Zip[A, B] {
+struct IterZip[A, B] {
     a: A,
     b: B,
 }
 
-impl[A: Iterator, B: Iterator] Iterator for Zip[A, B] {
+impl[A: Iterator, B: Iterator] Iterator for IterZip[A, B] {
     type Item = (A.Item, B.Item);
 
     fn next(mut ref self) -> Option[(A.Item, B.Item)] {
@@ -649,11 +649,11 @@ impl[I: Iterator[Item = T], T] Peekable[I, T] {
     }
 }
 
-struct ByRef[I] {
+struct IterByRef[I] {
     it: mut ref I,
 }
 
-impl[I: Iterator] Iterator for ByRef[I] {
+impl[I: Iterator] Iterator for IterByRef[I] {
     type Item = I.Item;
 
     fn next(mut ref self) -> Option[I.Item] {

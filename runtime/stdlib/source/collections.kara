@@ -219,12 +219,12 @@ impl[K, V] SortedMap[K, V] {
 
 /// The chars of a `String`, front to back. A char is a copy, so the items
 /// are values; the iterator borrows the text.
-struct Chars {
+struct StrChars {
     s: ref String,
     pos: i64,
 }
 
-impl Iterator for Chars {
+impl Iterator for StrChars {
     type Item = char;
 
     fn next(mut ref self) -> Option[char] {
@@ -239,8 +239,8 @@ impl Iterator for Chars {
 
 impl String {
     /// The chars, front to back.
-    fn chars(ref self) -> Chars {
-        Chars { s: self, pos: 0 }
+    fn chars(ref self) -> StrChars {
+        StrChars { s: self, pos: 0 }
     }
 }
 

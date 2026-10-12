@@ -845,3 +845,27 @@ fn main() {
 "#;
     assert_runs(src, "3\nhllo\n6\n");
 }
+
+/// A program's own `Skip`, `Chars` or `Take` (a struct, or a variant) does
+/// not clash with the library's adaptor structs, which are named apart
+/// (`IterSkip`, `StrChars`, ...).
+#[test]
+fn a_program_s_own_skip_or_chars_does_not_clash_with_the_library() {
+    let src = r#"
+struct Skip { n: i64 }
+struct Chars { k: i64 }
+enum Token { Letter(u8), Take(i64) }
+fn main() {
+    let s = Skip { n: 3 };
+    let c = Chars { k: 4 };
+    let t = Token.Take(5);
+    let v = vec![1, 2, 3, 4];
+    let total: i64 = v.iter().skip(1).take(2).sum();
+    match t {
+        Token.Take(x) => println(f"{s.n} {c.k} {x} {total}"),
+        Token.Letter(_) => println("letter"),
+    }
+}
+"#;
+    assert_runs(src, "3 4 5 5\n");
+}
