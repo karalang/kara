@@ -1,0 +1,10 @@
+324 -> 324 (depth 0, 1 integers, sum 324)
+[123,[456,[789]]] -> [123,[456,[789]]] (depth 3, 3 integers, sum 1368)
+[] -> [] (depth 1, 0 integers, sum 0)
+-3 -> -3 (depth 0, 1 integers, sum -3)
+0 -> 0 (depth 0, 1 integers, sum 0)
+[-1,[],[[]],0] -> [-1,[],[[]],0] (depth 3, 2 integers, sum -1)
+[[[[[5]]]]] -> [[[[[5]]]]] (depth 5, 1 integers, sum 5)
+[1000000,-1000000] -> [1000000,-1000000] (depth 1, 2 integers, sum 0)
+[[],[[],[]],[[[]]]] -> [[],[[],[]],[[[]]]] (depth 4, 0 integers, sum 0)
+2000 random values: 2000 round-trip, 14396 integers, checksum 760437564

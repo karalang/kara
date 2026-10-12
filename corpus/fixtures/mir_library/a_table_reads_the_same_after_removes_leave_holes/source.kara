@@ -1,0 +1,76 @@
+
+fn show(m: ref Map[i64, String]) {
+    let mut line = String.new();
+    for (k, v) in m {
+        line.push_str(f"{k}={v} ");
+    }
+    println(f"[{m.len()}] {line}");
+}
+fn main() {
+    more();
+    let mut m: Map[i64, String] = Map.new();
+    let mut i: i64 = 0;
+    while i < 40 {
+        m.insert(i, f"v{i}");
+        i = i + 1;
+    }
+    i = 0;
+    while i < 40 {
+        if i % 3 == 0 { m.remove(i); }
+        i = i + 1;
+    }
+    show(m);
+    m.insert(2, "back");
+    m.insert(7, "x");
+    show(m);
+    println(f"{m.get(7)} {m.get(2)} {m.contains_key(4)} {m.contains_key(5)}");
+    let ks = m.keys();
+    println(f"{ks}");
+    let vs = m.values();
+    println(f"{vs}");
+    println(f"{m}");
+    let c = m.clone();
+    println(f"{c} {c.len()}");
+    i = 0;
+    while i < 40 { m.remove(i); i = i + 1; }
+    show(m);
+    m.insert(100, "h");
+    show(m);
+    let mut s: Set[String] = Set.new();
+    i = 0;
+    while i < 30 { s.insert(f"s{i}"); i = i + 1; }
+    i = 0;
+    while i < 30 { if i % 4 == 1 { s.remove(f"s{i}"); } i = i + 1; }
+    println(f"{s} {s.len()}");
+    let mut t: Set[String] = Set.new();
+    t.insert("s4"); t.insert("zz");
+    println(f"{s.union(t)} {s.intersection(t)} {s.difference(t)}");
+    for x in s { println(x); }
+    let mut e: Map[String, i64] = Map.new();
+    e.insert("a", 1); e.insert("b", 2); e.insert("c", 3);
+    e.remove("a");
+    let r = e.entry("a").or_insert(9);
+    println(f"{r}");
+    *e.entry("b").or_insert(0) += 10;
+    println(f"{e}");
+    for (k, v) in e { println(f"{k}:{v}"); }
+}
+fn more() {
+    let mut a: Map[i64, i64] = Map.new();
+    let mut b: Map[i64, i64] = Map.new();
+    let mut i: i64 = 0;
+    while i < 10 { a.insert(i, i * i); i = i + 1; }
+    i = 0;
+    while i < 10 { if i != 4 { b.insert(i, i * i); } i = i + 1; }
+    a.remove(4);
+    println(f"{a} {b} {a.len()}");
+    let mut s: Set[i64] = Set.new();
+    i = 0;
+    while i < 10 { s.insert(i); i = i + 1; }
+    s.remove(0); s.remove(5);
+    println(f"{s} {s.len()} {s.is_empty()} {s.contains(5)} {s.contains(6)}");
+    a.clear();
+    println(f"{a} {a.len()}");
+    a.insert(3, 3);
+    println(f"{a}");
+}

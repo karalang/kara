@@ -1,0 +1,53 @@
+// LeetCode #390: Elimination Game -- play it out.
+//
+// Keep the numbers still in the game in a Vec. Each pass copies every
+// second number into a new Vec, starting with the second number counted
+// from the side the pass begins on; passes alternate sides. Each pass
+// halves the list, so the work is n + n/2 + ... = O(n), with O(n) space.
+
+fn last_remaining(n: i64) -> i64 {
+    let mut nums: Vec[i64] = Vec.new();
+    for x in 1..n + 1 {
+        nums.push(x);
+    }
+    let mut from_left = true;
+    while nums.len() > 1 {
+        let len = nums.len();
+        let mut next: Vec[i64] = Vec.new();
+        // From the left the survivors sit at positions 1, 3, 5, ...; from
+        // the right they sit at len - 2, len - 4, ..., so their parity is
+        // the opposite of len - 1's.
+        let first = if from_left { 1 } else { (len - 2) % 2 };
+        let mut i = first;
+        while i < len {
+            next.push(nums[i]);
+            i += 2;
+        }
+        nums = next;
+        from_left = not from_left;
+    }
+    nums[0]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    println(f"n = 9: {last_remaining(9)}");
+    println(f"n = 1: {last_remaining(1)}");
+    let mut s = String.from("n = 1 to 24:");
+    for n in 1..25 {
+        s.push_str(f" {last_remaining(n)}");
+    }
+    println(s);
+    for n in [2, 3, 4, 8, 16, 1024, 65536, 99999, 100000] {
+        println(f"n = {n}: {last_remaining(n)}");
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for n in 1..2001 {
+        let r = last_remaining(n);
+        total += r;
+        checksum = (checksum * 31 + r) % 1000000007;
+    }
+    println(f"n = 1 to 2000: sum {total}, checksum {checksum}");
+}

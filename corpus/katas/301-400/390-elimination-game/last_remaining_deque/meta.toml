@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/390-elimination-game/last_remaining_deque.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:vecdeque"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "3b85cca7e"
+extracted_src = "c564fb5b"
+model_rev = "1aa23105"
+model_src = "c564fb5b"

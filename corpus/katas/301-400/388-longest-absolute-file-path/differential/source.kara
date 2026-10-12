@@ -1,0 +1,300 @@
+// LeetCode #388: differential test. The by-depth, splitting, tree and map
+// arms against listings whose answer is known by construction, 2,000
+// random listings of 1 to 30 entries. Properties: P1 every arm gives the
+// longest file path the generator built; P2 moving everything one level
+// down under a new directory `root` adds 5 (`root/`) to a non-zero answer
+// and leaves 0 alone; P3 a file `x.y` added at the top gives the larger of
+// the answer and 3; P4 with the files taken out the answer is 0; P5
+// reversing the order of the top-level entries (each with everything
+// below it) changes nothing.
+
+fn length_longest_path_depths(input: Str) -> i64 {
+    let b = input.bytes();
+    let mut len: Vec[i64] = vec![0];
+    let mut best = 0;
+    let mut i = 0;
+    while i < b.len() {
+        let mut depth = 0;
+        while i < b.len() and b[i] == b'\t' {
+            depth += 1;
+            i += 1;
+        }
+        let start = i;
+        let mut is_file = false;
+        while i < b.len() and b[i] != b'\n' {
+            if b[i] == b'.' {
+                is_file = true;
+            }
+            i += 1;
+        }
+        let path = len[depth] + (i - start);
+        if is_file {
+            if path > best {
+                best = path;
+            }
+        } else {
+            if depth + 1 < len.len() {
+                len[depth + 1] = path + 1;
+            } else {
+                len.push(path + 1);
+            }
+        }
+        i += 1;
+    }
+    best
+}
+
+fn length_longest_path_split(input: Str) -> i64 {
+    let mut stack: Vec[i64] = Vec.new();
+    let mut best = 0;
+    for line in input.split("\n") {
+        let mut depth = 0;
+        for c in line.chars() {
+            if c != '\t' {
+                break;
+            }
+            depth += 1;
+        }
+        let name_len = line.len() - depth;
+        while stack.len() > depth {
+            stack.pop();
+        }
+        let above = if stack.len() > 0 { stack[stack.len() - 1] } else { 0 };
+        let path = above + name_len;
+        if line.contains(".") {
+            if path > best {
+                best = path;
+            }
+        } else {
+            stack.push(path + 1);
+        }
+    }
+    best
+}
+
+struct Node {
+    name_len: i64,
+    is_file: bool,
+    children: Vec[i64],
+}
+
+fn longest_below(nodes: ref Vec[Node], at: i64, prefix: i64) -> i64 {
+    let path = prefix + nodes[at].name_len;
+    if nodes[at].is_file {
+        return path;
+    }
+    let mut best = 0;
+    for c in nodes[at].children.iter() {
+        let got = longest_below(nodes, *c, path + 1);
+        if got > best {
+            best = got;
+        }
+    }
+    best
+}
+
+fn length_longest_path_tree(input: Str) -> i64 {
+    let b = input.bytes();
+    // Node 0 is an invisible root above depth 0, with no name and no `/`.
+    let mut nodes: Vec[Node] = vec![Node { name_len: 0, is_file: false, children: Vec.new() }];
+    let mut parent_at: Vec[i64] = vec![0];
+    let mut i = 0;
+    while i < b.len() {
+        let mut depth = 0;
+        while b[i] == b'\t' {
+            depth += 1;
+            i += 1;
+        }
+        let start = i;
+        let mut is_file = false;
+        while i < b.len() and b[i] != b'\n' {
+            if b[i] == b'.' {
+                is_file = true;
+            }
+            i += 1;
+        }
+        let id = nodes.len();
+        nodes.push(Node { name_len: i - start, is_file: is_file, children: Vec.new() });
+        let parent = parent_at[depth];
+        nodes[parent].children.push(id);
+        parent_at.truncate(depth + 1);
+        parent_at.push(id);
+        i += 1;
+    }
+    let mut best = 0;
+    for c in nodes[0].children.iter() {
+        let got = longest_below(nodes, *c, 0);
+        if got > best {
+            best = got;
+        }
+    }
+    best
+}
+
+fn length_longest_path_map(input: Str) -> i64 {
+    let mut open: Map[i64, i64] = Map.new();
+    open.insert(0, 0);
+    let mut best = 0;
+    for line in input.split("\n") {
+        let mut depth = 0;
+        for c in line.chars() {
+            if c != '\t' {
+                break;
+            }
+            depth += 1;
+        }
+        let path = open[depth] + line.len() - depth;
+        if line.contains(".") {
+            if path > best {
+                best = path;
+            }
+        } else {
+            open.insert(depth + 1, path + 1);
+        }
+    }
+    best
+}
+
+fn length_longest_path(arm: i64, input: Str) -> i64 {
+    if arm == 0 {
+        length_longest_path_depths(input)
+    } else if arm == 1 {
+        length_longest_path_split(input)
+    } else if arm == 2 {
+        length_longest_path_tree(input)
+    } else {
+        length_longest_path_map(input)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random listing and the length of its longest file path, worked out
+// while building it: `prefix[d]` is the length of the path to the open
+// directory at depth d with its `/`.
+struct Built {
+    text: String,
+    longest: i64,
+}
+
+fn listing(seed: mut ref i64, entries: i64) -> Built {
+    let mut out = String.new();
+    let mut prefix: Vec[i64] = vec![0];
+    let mut longest = 0;
+    let mut open = 0;
+    let mut depth = 0;
+    for k in 0..entries {
+        let r = step(seed) % 100;
+        if r < 35 {
+            depth = open;
+        } else if r >= 70 {
+            let up = (r - 70) / 10 + 1;
+            depth = if up > depth { 0 } else { depth - up };
+        }
+        if depth > open {
+            depth = open;
+        }
+        let name_len = step(seed) % 12 + 1;
+        let file = step(seed) % 3 == 0;
+        if k > 0 {
+            out.push('\n');
+        }
+        for _ in 0..depth {
+            out.push('\t');
+        }
+        for _ in 0..name_len {
+            out.push((step(seed) % 26 + 97) as u8 as char);
+        }
+        prefix.truncate(depth + 1);
+        if file {
+            out.push_str(".ext");
+            let path = prefix[depth] + name_len + 4;
+            if path > longest {
+                longest = path;
+            }
+            open = depth;
+        } else {
+            prefix.push(prefix[depth] + name_len + 1);
+            open = if depth < 6 { depth + 1 } else { depth };
+        }
+    }
+    Built { text: out, longest: longest }
+}
+
+fn main() {
+    let mut seed: i64 = 388;
+    let mut checks = 0;
+    let mut fails = vec![0; 5];
+    for _ in 0..2000 {
+        let entries = step(mut seed) % 30 + 1;
+        let built = listing(mut seed, entries);
+        let lines = built.text.split("\n");
+        let mut rooted = String.from("root");
+        let mut no_files = String.new();
+        for line in lines.iter() {
+            rooted.push_str("\n\t");
+            rooted.push_str(line);
+            if not line.contains(".") {
+                if no_files.len() > 0 {
+                    no_files.push('\n');
+                }
+                no_files.push_str(line);
+            }
+        }
+        let mut with_file = built.text.clone();
+        with_file.push_str("\nx.y");
+        // The top-level entries, each a block of lines, in reverse order.
+        let mut blocks: Vec[String] = Vec.new();
+        for line in lines.iter() {
+            if not line.starts_with("\t") {
+                blocks.push(String.new());
+            }
+            let last = blocks.len() - 1;
+            if blocks[last].len() > 0 {
+                blocks[last].push('\n');
+            }
+            blocks[last].push_str(line);
+        }
+        let mut reversed = String.new();
+        let mut b = blocks.len();
+        while b > 0 {
+            b -= 1;
+            if reversed.len() > 0 {
+                reversed.push('\n');
+            }
+            reversed.push_str(blocks[b]);
+        }
+        let want = built.longest;
+        for arm in 0..4 {
+            checks += 5;
+            if length_longest_path(arm, built.text) != want {
+                fails[0] += 1;
+            }
+            let deeper = if want > 0 { want + 5 } else { 0 };
+            if length_longest_path(arm, rooted) != deeper {
+                fails[1] += 1;
+            }
+            let plus = if want > 3 { want } else { 3 };
+            if length_longest_path(arm, with_file) != plus {
+                fails[2] += 1;
+            }
+            if no_files.len() > 0 and length_longest_path(arm, no_files) != 0 {
+                fails[3] += 1;
+            }
+            if length_longest_path(arm, reversed) != want {
+                fails[4] += 1;
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..5 {
+        failures += fails[i];
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+    }
+    println(f"2000 listings, {checks} checks, {failures} failures");
+}

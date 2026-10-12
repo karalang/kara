@@ -1,0 +1,38 @@
+// LeetCode #390: Elimination Game -- recursion on the half that survives.
+//
+// After the first pass from the left only the even numbers 2, 4, ..., 2m
+// are left (m = n / 2), and the game goes on from the right. Played from
+// the right on 1..m, the game ends on the mirror of where it ends from the
+// left, m + 1 - f(m); doubling maps 1..m back onto the evens. So
+// f(n) = 2 * (m + 1 - f(m)), with f(1) = 1. O(log n) time and stack.
+
+fn last_remaining(n: i64) -> i64 {
+    if n == 1 {
+        return 1;
+    }
+    let m = n / 2;
+    2 * (m + 1 - last_remaining(m))
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    println(f"n = 9: {last_remaining(9)}");
+    println(f"n = 1: {last_remaining(1)}");
+    let mut s = String.from("n = 1 to 24:");
+    for n in 1..25 {
+        s.push_str(f" {last_remaining(n)}");
+    }
+    println(s);
+    for n in [2, 3, 4, 8, 16, 1024, 65536, 99999, 100000] {
+        println(f"n = {n}: {last_remaining(n)}");
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for n in 1..2001 {
+        let r = last_remaining(n);
+        total += r;
+        checksum = (checksum * 31 + r) % 1000000007;
+    }
+    println(f"n = 1 to 2000: sum {total}, checksum {checksum}");
+}

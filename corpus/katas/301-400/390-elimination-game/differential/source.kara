@@ -1,0 +1,190 @@
+// Differential test for LeetCode #390: Elimination Game.
+//
+// Copies of the four arms, checked against answers known by construction:
+//   P1  every arm gives the answer of a direct sweep over an array of
+//       still-alive flags, for n = 1 to 300
+//   P2  f(2m + 1) == f(2m): an odd n loses its last number in the first
+//       pass, leaving the same list as n - 1
+//   P3  f(2m) == 2 * (m + 1 - f(m)): the evens left after the first pass,
+//       played from the right, end on the mirror of the game on 1..m
+//   P4  for n >= 2 the answer is even and at most n
+//   P5  the two O(log n) arms agree for 2,000 random n up to 2^45, which
+//       also get P2, P3 and P4
+// The two arms that play the game out only see n up to 300 (P1 to P4).
+
+fn last_remaining_head(n: i64) -> i64 {
+    let mut head = 1;
+    let mut step = 1;
+    let mut left = n;
+    let mut from_left = true;
+    while left > 1 {
+        if from_left or left % 2 == 1 {
+            head += step;
+        }
+        left /= 2;
+        step *= 2;
+        from_left = not from_left;
+    }
+    head
+}
+
+fn last_remaining_recursive(n: i64) -> i64 {
+    if n == 1 {
+        return 1;
+    }
+    let m = n / 2;
+    2 * (m + 1 - last_remaining_recursive(m))
+}
+
+fn last_remaining_simulate(n: i64) -> i64 {
+    let mut nums: Vec[i64] = Vec.new();
+    for x in 1..n + 1 {
+        nums.push(x);
+    }
+    let mut from_left = true;
+    while nums.len() > 1 {
+        let len = nums.len();
+        let mut next: Vec[i64] = Vec.new();
+        // From the left the survivors sit at positions 1, 3, 5, ...; from
+        // the right they sit at len - 2, len - 4, ..., so their parity is
+        // the opposite of len - 1's.
+        let first = if from_left { 1 } else { (len - 2) % 2 };
+        let mut i = first;
+        while i < len {
+            next.push(nums[i]);
+            i += 2;
+        }
+        nums = next;
+        from_left = not from_left;
+    }
+    nums[0]
+}
+
+fn last_remaining_deque(n: i64) -> i64 {
+    let mut q: VecDeque[i64] = VecDeque.new();
+    for x in 1..n + 1 {
+        q.push_back(x);
+    }
+    let mut from_left = true;
+    while q.len() > 1 {
+        let len = q.len();
+        for i in 0..len {
+            if from_left {
+                let x = q.pop_front().unwrap();
+                if i % 2 == 1 {
+                    q.push_back(x);
+                }
+            } else {
+                let x = q.pop_back().unwrap();
+                if i % 2 == 1 {
+                    q.push_front(x);
+                }
+            }
+        }
+        from_left = not from_left;
+    }
+    q.pop_front().unwrap()
+}
+
+// ---- reference and harness ------------------------------------------------
+
+// The rules as written: alive flags, each pass walking from its side and
+// removing every other number still alive, starting with the first.
+fn sweep(n: i64) -> i64 {
+    let mut alive = vec![true; n + 1];
+    let mut left = n;
+    let mut from_left = true;
+    while left > 1 {
+        let mut remove = true;
+        let mut i = if from_left { 1 } else { n };
+        while i >= 1 and i <= n {
+            if alive[i] {
+                if remove {
+                    alive[i] = false;
+                    left -= 1;
+                }
+                remove = not remove;
+            }
+            i = if from_left { i + 1 } else { i - 1 };
+        }
+        from_left = not from_left;
+    }
+    let mut answer = 0;
+    for i in 1..n + 1 {
+        if alive[i] {
+            answer = i;
+        }
+    }
+    answer
+}
+
+fn last(arm: i64, n: i64) -> i64 {
+    if arm == 0 {
+        last_remaining_head(n)
+    } else if arm == 1 {
+        last_remaining_recursive(n)
+    } else if arm == 2 {
+        last_remaining_simulate(n)
+    } else {
+        last_remaining_deque(n)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, n: i64, got: i64, want: i64, failures: mut ref Vec[i64]) {
+    if got != want {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} n = {n}: got {got}, want {want}");
+        }
+    }
+}
+
+// P2, P3 and P4 for one arm at one n (n >= 2).
+fn laws(arm: i64, n: i64, checks: mut ref i64, failures: mut ref Vec[i64]) {
+    let f = last(arm, n);
+    let m = n / 2;
+    *checks += 2;
+    if n % 2 == 1 {
+        report(2, arm, n, f, last(arm, n - 1), failures);
+    } else {
+        report(3, arm, n, f, 2 * (m + 1 - last(arm, m)), failures);
+    }
+    let ok = if f % 2 == 0 and f >= 2 and f <= n { 1 } else { 0 };
+    report(4, arm, n, ok, 1, failures);
+}
+
+fn main() {
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for n in 1..301 {
+        let want = sweep(n);
+        for arm in 0..4 {
+            checks += 1;
+            report(1, arm, n, last(arm, n), want, mut failures);
+            if n >= 2 {
+                laws(arm, n, mut checks, mut failures);
+            }
+        }
+    }
+    let mut seed: i64 = 390;
+    for _ in 0..2000 {
+        // n up to 2^45: three draws of 15 bits.
+        let n = 2 + (step(mut seed) * 32768 + step(mut seed)) * 32768 + step(mut seed);
+        checks += 1;
+        report(5, 1, n, last(1, n), last(0, n), mut failures);
+        for arm in 0..2 {
+            laws(arm, n, mut checks, mut failures);
+        }
+    }
+    println(f"{checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

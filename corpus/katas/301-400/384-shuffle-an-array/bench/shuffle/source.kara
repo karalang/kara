@@ -1,0 +1,49 @@
+// Benchmark for #384: 1,000 values built once, then 250,000 calls to the
+// kata's ★ arm (copy the original, Fisher-Yates from the end). Each
+// shuffle is folded into a checksum through a position-weighted sum of
+// all its values, so none of the work can be skipped.
+
+struct Solution {
+    original: Vec[i64],
+    seed: i64,
+}
+
+impl Solution {
+    fn new(nums: own Vec[i64]) -> Solution {
+        Solution { original: nums, seed: 384 }
+    }
+
+    fn below(mut ref self, n: i64) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        (self.seed / 65536) % n
+    }
+
+    fn shuffle(mut ref self) -> Vec[i64] {
+        let mut a = self.original.clone();
+        let mut i = a.len() - 1;
+        while i > 0 {
+            let j = self.below(i + 1);
+            a.swap(i, j);
+            i -= 1;
+        }
+        a
+    }
+}
+
+fn main() {
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..1000 {
+        nums.push(i * 7 % 1000);
+    }
+    let mut s = Solution.new(nums);
+    let mut checksum: i64 = 0;
+    for _ in 0..250000 {
+        let a = s.shuffle();
+        let mut sum = 0;
+        for k in 0..a.len() {
+            sum += a[k] * (k + 1);
+        }
+        checksum = (checksum * 31 + sum) % 1000000007;
+    }
+    println(f"250000 shuffles of 1000 values, checksum {checksum}");
+}

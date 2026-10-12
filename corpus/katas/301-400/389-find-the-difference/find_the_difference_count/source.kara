@@ -1,0 +1,71 @@
+// LeetCode #389: Find the Difference -- count the letters.
+//
+// Count each letter of s in 26 slots, then spend one count per letter of
+// t; the first letter of t with no count left is the added one. O(m + n)
+// time and O(1) space.
+
+fn find_the_difference(s: Str, t: Str) -> char {
+    let mut count = vec![0; 26];
+    for c in s.chars() {
+        count[(c as i64) - 97] += 1;
+    }
+    for c in t.chars() {
+        let k = (c as i64) - 97;
+        if count[k] == 0 {
+            return c;
+        }
+        count[k] -= 1;
+    }
+    ' '
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    println(f"\"abcd\", \"abcde\" -> {find_the_difference("abcd", "abcde")}");
+    println(f"\"\", \"y\" -> {find_the_difference("", "y")}");
+    println(f"\"a\", \"aa\" -> {find_the_difference("a", "aa")}");
+    println(f"\"ae\", \"aea\" -> {find_the_difference("ae", "aea")}");
+    println(f"\"zzz\", \"zzzz\" -> {find_the_difference("zzz", "zzzz")}");
+    println(f"\"abc\", \"zcba\" -> {find_the_difference("abc", "zcba")}");
+    // 3000 random pairs: s of 0 to 60 letters, t its shuffle with one
+    // letter added at a random place.
+    let mut seed: i64 = 389;
+    let mut right = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..3000 {
+        let n = step(mut seed) % 61;
+        let mut letters: Vec[char] = Vec.new();
+        for _ in 0..n {
+            letters.push((step(mut seed) % 26 + 97) as u8 as char);
+        }
+        let mut s = String.new();
+        for c in letters.iter() {
+            s.push(*c);
+        }
+        let added = (step(mut seed) % 26 + 97) as u8 as char;
+        let at = step(mut seed) % (n + 1);
+        letters.insert(at, added);
+        let mut i = letters.len() - 1;
+        while i > 0 {
+            let j = step(mut seed) % (i + 1);
+            letters.swap(i, j);
+            i -= 1;
+        }
+        let mut t = String.new();
+        for c in letters.iter() {
+            t.push(*c);
+        }
+        let got = find_the_difference(s, t);
+        if got == added {
+            right += 1;
+        }
+        checksum = (checksum * 31 + got as i64) % 1000000007;
+    }
+    println(f"3000 random pairs: {right} right, checksum {checksum}");
+}

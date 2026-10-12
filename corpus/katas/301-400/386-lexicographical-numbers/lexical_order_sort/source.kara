@@ -1,0 +1,75 @@
+// LeetCode #386: Lexicographical Numbers -- sort the decimal strings.
+//
+// Write every number from 1 to n as text, sort the texts, and read them
+// back. Strings compare byte by byte, which for digits is exactly
+// dictionary order. O(n log n) comparisons of up to d digits each, and
+// O(n) strings; the problem asks for better, but it is the definition.
+
+fn lexical_order(n: i64) -> Vec[i64] {
+    let mut texts: Vec[String] = Vec.new();
+    for x in 1..n + 1 {
+        texts.push(f"{x}");
+    }
+    texts.sort();
+    let mut out: Vec[i64] = Vec.new();
+    for t in texts.iter() {
+        out.push(i64.parse(t).unwrap());
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: i64) {
+    let v = lexical_order(n);
+    let mut s = String.from("[");
+    for i in 0..v.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{v[i]}");
+    }
+    s.push(']');
+    println(f"n = {n}: {s}");
+}
+
+// True when a comes before b in dictionary order of their decimal text.
+fn before(a: i64, b: i64) -> bool {
+    f"{a}" < f"{b}"
+}
+
+// The length, a checksum over positions, and whether every neighbouring
+// pair is in dictionary order with every number from 1 to n present.
+fn summary(n: i64) -> String {
+    let v = lexical_order(n);
+    let mut seen = vec![false; n + 1];
+    let mut ok = v.len() == n;
+    let mut checksum: i64 = 0;
+    for i in 0..v.len() {
+        let x = v[i];
+        if x < 1 or x > n or seen[x] {
+            ok = false;
+        } else {
+            seen[x] = true;
+        }
+        if i > 0 and not before(v[i - 1], x) {
+            ok = false;
+        }
+        checksum = (checksum * 31 + x) % 1000000007;
+    }
+    let last = if v.len() > 0 { v[v.len() - 1] } else { 0 };
+    f"n = {n}: {v.len()} numbers, last {last}, in order {ok}, checksum {checksum}"
+}
+
+fn main() {
+    show(13);
+    show(2);
+    show(1);
+    show(9);
+    show(10);
+    show(21);
+    show(100);
+    for n in [99, 101, 199, 999, 1000, 4321, 9999, 10000, 50000] {
+        println(summary(n));
+    }
+}

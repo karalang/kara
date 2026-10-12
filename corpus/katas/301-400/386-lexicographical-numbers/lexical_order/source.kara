@@ -1,0 +1,81 @@
+// LeetCode #386: Lexicographical Numbers -- step to the next number.
+//
+// Walk the numbers in dictionary order without building or sorting any
+// strings. From `cur`, the next number is `cur * 10` if that is still at
+// most n (go one digit deeper); otherwise drop trailing digits while the
+// last digit is 9 or `cur + 1` would pass n, then add one. Each step is
+// O(1) amortized, so the whole list is O(n) time with O(1) extra space
+// besides the answer.
+
+fn lexical_order(n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut cur = 1;
+    for _ in 0..n {
+        out.push(cur);
+        if cur * 10 <= n {
+            cur *= 10;
+        } else {
+            while cur % 10 == 9 or cur + 1 > n {
+                cur /= 10;
+            }
+            cur += 1;
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: i64) {
+    let v = lexical_order(n);
+    let mut s = String.from("[");
+    for i in 0..v.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"{v[i]}");
+    }
+    s.push(']');
+    println(f"n = {n}: {s}");
+}
+
+// True when a comes before b in dictionary order of their decimal text.
+fn before(a: i64, b: i64) -> bool {
+    f"{a}" < f"{b}"
+}
+
+// The length, a checksum over positions, and whether every neighbouring
+// pair is in dictionary order with every number from 1 to n present.
+fn summary(n: i64) -> String {
+    let v = lexical_order(n);
+    let mut seen = vec![false; n + 1];
+    let mut ok = v.len() == n;
+    let mut checksum: i64 = 0;
+    for i in 0..v.len() {
+        let x = v[i];
+        if x < 1 or x > n or seen[x] {
+            ok = false;
+        } else {
+            seen[x] = true;
+        }
+        if i > 0 and not before(v[i - 1], x) {
+            ok = false;
+        }
+        checksum = (checksum * 31 + x) % 1000000007;
+    }
+    let last = if v.len() > 0 { v[v.len() - 1] } else { 0 };
+    f"n = {n}: {v.len()} numbers, last {last}, in order {ok}, checksum {checksum}"
+}
+
+fn main() {
+    show(13);
+    show(2);
+    show(1);
+    show(9);
+    show(10);
+    show(21);
+    show(100);
+    for n in [99, 101, 199, 999, 1000, 4321, 9999, 10000, 50000] {
+        println(summary(n));
+    }
+}

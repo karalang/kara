@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/385-mini-parser/bench/mini_parser.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "3b85cca7e"
+extracted_src = "94df94ae"
+model_rev = "1aa23105"
+model_src = "94df94ae"

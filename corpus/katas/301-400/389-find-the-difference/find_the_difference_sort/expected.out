@@ -1,0 +1,7 @@
+"abcd", "abcde" -> e
+"", "y" -> y
+"a", "aa" -> a
+"ae", "aea" -> a
+"zzz", "zzzz" -> z
+"abc", "zcba" -> z
+3000 random pairs: 3000 right, checksum 967984152

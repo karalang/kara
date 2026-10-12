@@ -1,0 +1,114 @@
+// LeetCode #388: Longest Absolute File Path -- a map from depth to length.
+//
+// The ★ arm's idea with a `Map[i64, i64]` from depth to the length of the
+// path to the directory open there (with its `/`), and the lines taken
+// from `split`. A line at depth d reads entry d (0 at the root) and a
+// directory writes entry d + 1. O(n) expected time.
+
+fn length_longest_path(input: Str) -> i64 {
+    let mut open: Map[i64, i64] = Map.new();
+    open.insert(0, 0);
+    let mut best = 0;
+    for line in input.split("\n") {
+        let mut depth = 0;
+        for c in line.chars() {
+            if c != '\t' {
+                break;
+            }
+            depth += 1;
+        }
+        let path = open[depth] + line.len() - depth;
+        if line.contains(".") {
+            if path > best {
+                best = path;
+            }
+        } else {
+            open.insert(depth + 1, path + 1);
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(label: Str, input: Str) {
+    println(f"{label}: {length_longest_path(input)}");
+}
+
+// A random listing of `entries` entries in a tree at most 7 deep, with
+// names of 1 to 12 letters, a third of them files (ending in `.ext`).
+// `open` is how many directories enclose the next entry at most: an entry
+// can sit at any depth up to `open`, a directory then opens one more level,
+// and a file opens none, since files have no children.
+fn listing(seed: mut ref i64, entries: i64) -> String {
+    let mut out = String.new();
+    let mut open = 0;
+    let mut depth = 0;
+    for k in 0..entries {
+        *seed = (*seed * 1103515245 + 12345) % 2147483648;
+        let r = (*seed / 65536) % 100;
+        // A child of the deepest open directory, a sibling of the last
+        // entry, or one to three levels shallower than it.
+        if r < 35 {
+            depth = open;
+        } else if r >= 70 {
+            let up = (r - 70) / 10 + 1;
+            depth = if up > depth { 0 } else { depth - up };
+        }
+        if depth > open {
+            depth = open;
+        }
+        *seed = (*seed * 1103515245 + 12345) % 2147483648;
+        let name_len = (*seed / 65536) % 12 + 1;
+        *seed = (*seed * 1103515245 + 12345) % 2147483648;
+        let file = (*seed / 65536) % 3 == 0;
+        if k > 0 {
+            out.push('\n');
+        }
+        for _ in 0..depth {
+            out.push('\t');
+        }
+        for _ in 0..name_len {
+            *seed = (*seed * 1103515245 + 12345) % 2147483648;
+            out.push(((*seed / 65536) % 26 + 97) as u8 as char);
+        }
+        if file {
+            out.push_str(".ext");
+            open = depth;
+        } else {
+            open = if depth < 6 { depth + 1 } else { depth };
+        }
+    }
+    out
+}
+
+fn main() {
+    show("example 1", "dir\n\tsubdir1\n\tsubdir2\n\t\tfile.ext");
+    show("example 2", "dir\n\tsubdir1\n\t\tfile1.ext\n\t\tsubsubdir1\n\tsubdir2\n\t\tsubsubdir2\n\t\t\tfile2.ext");
+    show("no files", "a");
+    show("one file at the root", "file.txt");
+    show("three files at the root", "file1.txt\nfile2.txt\nlongfile.txt");
+    show("a name with a dot is a file", "dir\n\ta.b\n\tsub\n\t\tc");
+    show("deep file loses to a long shallow one", "d\n\te\n\t\tf\n\t\t\tg.h\nverylongname.txt");
+    show("empty directories", "a\n\tb\n\t\tc\nd");
+    show("file after a deep dir", "a\n\tb\n\t\tc\n\t\t\td\nx.y");
+    show("names with spaces", "dir\n\t a b.txt\n\tsub dir \n\t\t c");
+    let mut seed: i64 = 388;
+    let mut checksum: i64 = 0;
+    let mut longest = 0;
+    let mut none = 0;
+    for _ in 0..2000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let entries = (seed / 65536) % 30 + 1;
+        let s = listing(mut seed, entries);
+        let r = length_longest_path(s);
+        if r == 0 {
+            none += 1;
+        }
+        if r > longest {
+            longest = r;
+        }
+        checksum = (checksum * 31 + r) % 1000000007;
+    }
+    println(f"2000 random listings: longest {longest}, {none} without files, checksum {checksum}");
+}

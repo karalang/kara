@@ -1,0 +1,171 @@
+// LeetCode #389: differential test. The XOR, sum, counting, sorting and
+// map arms against pairs whose answer is known by construction, 3,000
+// random strings of 0 to 60 letters. Properties: P1 every arm finds a
+// random letter added at a random place, then shuffled; P2 it finds a
+// letter put in front of s without shuffling; P3 it finds an added copy
+// of a letter s already has; P4 it finds the letter of a run of one
+// letter grown by one; P5 adding a second letter to t is found from t.
+
+fn find_the_difference_xor(s: Str, t: Str) -> char {
+    let mut x: u8 = 0;
+    for b in s.bytes() {
+        x = x ^ b;
+    }
+    for b in t.bytes() {
+        x = x ^ b;
+    }
+    x as char
+}
+
+fn find_the_difference_sum(s: Str, t: Str) -> char {
+    let mut total: i64 = 0;
+    for b in t.bytes() {
+        total += b as i64;
+    }
+    for b in s.bytes() {
+        total -= b as i64;
+    }
+    total as u8 as char
+}
+
+fn find_the_difference_count(s: Str, t: Str) -> char {
+    let mut count = vec![0; 26];
+    for c in s.chars() {
+        count[(c as i64) - 97] += 1;
+    }
+    for c in t.chars() {
+        let k = (c as i64) - 97;
+        if count[k] == 0 {
+            return c;
+        }
+        count[k] -= 1;
+    }
+    ' '
+}
+
+fn find_the_difference_sort(s: Str, t: Str) -> char {
+    let mut a: Vec[char] = s.chars().collect();
+    let mut b: Vec[char] = t.chars().collect();
+    a.sort();
+    b.sort();
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return b[i];
+        }
+    }
+    b[b.len() - 1]
+}
+
+fn find_the_difference_map(s: Str, t: Str) -> char {
+    let mut count: Map[char, i64] = Map.new();
+    for c in t.chars() {
+        *count.entry(c).or_insert(0) += 1;
+    }
+    for c in s.chars() {
+        *count.entry(c).or_insert(0) -= 1;
+    }
+    for (c, n) in count {
+        if n > 0 {
+            return c;
+        }
+    }
+    ' '
+}
+
+fn find(arm: i64, s: Str, t: Str) -> char {
+    if arm == 0 {
+        find_the_difference_xor(s, t)
+    } else if arm == 1 {
+        find_the_difference_sum(s, t)
+    } else if arm == 2 {
+        find_the_difference_count(s, t)
+    } else if arm == 3 {
+        find_the_difference_sort(s, t)
+    } else {
+        find_the_difference_map(s, t)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn text(letters: ref Vec[char]) -> String {
+    let mut out = String.new();
+    for c in letters.iter() {
+        out.push(*c);
+    }
+    out
+}
+
+// `letters` with `c` put at a random place, then shuffled.
+fn grown(seed: mut ref i64, letters: ref Vec[char], c: char) -> Vec[char] {
+    let mut v = letters.clone();
+    let at = step(seed) % (v.len() + 1);
+    v.insert(at, c);
+    let mut i = v.len() - 1;
+    while i > 0 {
+        let j = step(seed) % (i + 1);
+        v.swap(i, j);
+        i -= 1;
+    }
+    v
+}
+
+fn main() {
+    let mut seed: i64 = 389;
+    let mut checks = 0;
+    let mut fails = vec![0; 5];
+    for _ in 0..3000 {
+        let n = step(mut seed) % 61;
+        let mut letters: Vec[char] = Vec.new();
+        for _ in 0..n {
+            letters.push((step(mut seed) % 26 + 97) as u8 as char);
+        }
+        let s = text(letters);
+        let added = (step(mut seed) % 26 + 97) as u8 as char;
+        let t1 = grown(mut seed, letters, added);
+        let t = text(t1);
+        let mut front = String.new();
+        front.push(added);
+        front.push_str(s);
+        let copy = if n > 0 { letters[step(mut seed) % n] } else { 'q' };
+        let t_copy = text(grown(mut seed, letters, copy));
+        let run_letter = (step(mut seed) % 26 + 97) as u8 as char;
+        let mut run = String.new();
+        for _ in 0..n {
+            run.push(run_letter);
+        }
+        let mut run_plus = run.clone();
+        run_plus.push(run_letter);
+        let second = (step(mut seed) % 26 + 97) as u8 as char;
+        let t2 = text(grown(mut seed, t1, second));
+        for arm in 0..5 {
+            checks += 5;
+            if find(arm, s, t) != added {
+                fails[0] += 1;
+            }
+            if find(arm, s, front) != added {
+                fails[1] += 1;
+            }
+            if find(arm, s, t_copy) != copy {
+                fails[2] += 1;
+            }
+            if find(arm, run, run_plus) != run_letter {
+                fails[3] += 1;
+            }
+            if find(arm, t, t2) != second {
+                fails[4] += 1;
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..5 {
+        failures += fails[i];
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+    }
+    println(f"3000 strings, {checks} checks, {failures} failures");
+}

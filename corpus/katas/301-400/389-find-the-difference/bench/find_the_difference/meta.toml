@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/389-find-the-difference/bench/find_the_difference.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 101
+tags = ["panic", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 101
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "3b85cca7e"
+extracted_src = "033d383c"
+model_rev = "1aa23105"
+model_src = "033d383c"

@@ -1,0 +1,312 @@
+// LeetCode #384: differential test. The Fisher-Yates, sorting, drawing
+// and inside-out arms, each taking its random numbers from a source the
+// test controls, over 300 random arrays of up to 12 values with repeats.
+// Properties: P1 every arm returns a permutation of its input; P2 always
+// choosing the largest number allowed gives a known order (the input for
+// three arms, the input reversed when drawing); P3 always choosing 0 gives
+// a known order (a rotation for the two Fisher-Yates arms, the input for
+// the other two); P4 for 1 to 6 values, the choices an arm can make give
+// each of the n! orders exactly once, the exact form of "every order is
+// equally likely"; P5 with the seeded LCG, 12,000 shuffles of 4 values
+// pass a chi-square test over the 24 orders.
+
+// Where the arms get their random numbers. Mode 0 is the seeded LCG;
+// mode 1 plays back `script`, then 0 once it runs out; mode 2 always
+// gives the largest number allowed; mode 3 always gives 0. Every call
+// records its bound in `bounds`.
+struct Rng {
+    mode: i64,
+    seed: i64,
+    script: Vec[i64],
+    bounds: Vec[i64],
+}
+
+impl Rng {
+    fn below(mut ref self, n: i64) -> i64 {
+        let k = self.bounds.len();
+        self.bounds.push(n);
+        if self.mode == 0 {
+            self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+            (self.seed / 65536) % n
+        } else if self.mode == 1 {
+            if k < self.script.len() { self.script[k] } else { 0 }
+        } else if self.mode == 2 {
+            n - 1
+        } else {
+            0
+        }
+    }
+}
+
+fn rng(mode: i64) -> Rng {
+    Rng { mode: mode, seed: 384, script: Vec.new(), bounds: Vec.new() }
+}
+
+fn shuffle_fy(original: ref Vec[i64], r: mut ref Rng) -> Vec[i64] {
+    let mut a = original.clone();
+    let mut i = a.len() - 1;
+    while i > 0 {
+        let j = r.below(i + 1);
+        a.swap(i, j);
+        i -= 1;
+    }
+    a
+}
+
+fn shuffle_sort(original: ref Vec[i64], r: mut ref Rng) -> Vec[i64] {
+    let mut keyed: Vec[(i64, i64)] = Vec.new();
+    for x in original.clone() {
+        keyed.push((r.below(2147483647), x));
+    }
+    keyed.sort_by_key(|p| p.0);
+    let mut a: Vec[i64] = Vec.new();
+    for p in keyed {
+        a.push(p.1);
+    }
+    a
+}
+
+fn shuffle_draw(original: ref Vec[i64], r: mut ref Rng) -> Vec[i64] {
+    let mut hat = original.clone();
+    let mut a: Vec[i64] = Vec.new();
+    while hat.len() > 0 {
+        let j = r.below(hat.len());
+        a.push(hat.remove(j));
+    }
+    a
+}
+
+fn shuffle_inside_out(original: ref Vec[i64], r: mut ref Rng) -> Vec[i64] {
+    let mut a: Vec[i64] = Vec.new();
+    for i in 0..original.len() {
+        let j = r.below(i + 1);
+        if j == i {
+            a.push(original[i]);
+        } else {
+            a.push(a[j]);
+            a[j] = original[i];
+        }
+    }
+    a
+}
+
+fn shuffle(arm: i64, original: ref Vec[i64], r: mut ref Rng) -> Vec[i64] {
+    if arm == 0 {
+        shuffle_fy(original, r)
+    } else if arm == 1 {
+        shuffle_sort(original, r)
+    } else if arm == 2 {
+        shuffle_draw(original, r)
+    } else {
+        shuffle_inside_out(original, r)
+    }
+}
+
+fn same_values(a: ref Vec[i64], original: ref Vec[i64]) -> bool {
+    let mut x = a.clone();
+    let mut y = original.clone();
+    x.sort();
+    y.sort();
+    x == y
+}
+
+// The rank of an order of 0..n among all n! orders (the Lehmer code).
+fn rank(a: ref Vec[i64]) -> i64 {
+    let mut r = 0;
+    for i in 0..a.len() {
+        let mut smaller = 0;
+        for j in i + 1..a.len() {
+            if a[j] < a[i] {
+                smaller += 1;
+            }
+        }
+        r = r * (a.len() - i) + smaller;
+    }
+    r
+}
+
+// The order of rank `r` among the orders of 0..n.
+fn unrank(n: i64, r: i64) -> Vec[i64] {
+    let mut left: Vec[i64] = Vec.new();
+    for i in 0..n {
+        left.push(i);
+    }
+    let mut f = 1;
+    for k in 2..n {
+        f *= k;
+    }
+    let mut r = r;
+    let mut a: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let d = r / f;
+        r = r % f;
+        a.push(left.remove(d));
+        if n - 1 - i > 0 {
+            f /= n - 1 - i;
+        }
+    }
+    a
+}
+
+fn factorial(n: i64) -> i64 {
+    let mut f = 1;
+    for k in 2..n + 1 {
+        f *= k;
+    }
+    f
+}
+
+// P4 for one arm and n values: true when every sequence of choices the
+// arm can make gives a different order and there are exactly n! of them.
+// The sorting arm's choices are keys from 0 to 2^31 - 2, too many to walk,
+// so it is fed every order of the keys 0..n instead.
+fn exact(arm: i64, n: i64) -> bool {
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..n {
+        nums.push(i);
+    }
+    let orders = factorial(n);
+    let mut seen = vec![0; orders];
+    if arm == 1 {
+        for k in 0..orders {
+            let mut r = rng(1);
+            r.script = unrank(n, k);
+            let a = shuffle(arm, nums, mut r);
+            if not same_values(a, nums) {
+                return false;
+            }
+            seen[rank(a)] += 1;
+        }
+    } else {
+        // Walk every sequence of choices like an odometer: run with the
+        // script, then turn the last position that can still go up and
+        // drop the ones after it.
+        let mut script: Vec[i64] = Vec.new();
+        let mut runs = 0;
+        loop {
+            let mut r = rng(1);
+            r.script = script.clone();
+            let a = shuffle(arm, nums, mut r);
+            runs += 1;
+            if runs > orders or not same_values(a, nums) {
+                return false;
+            }
+            seen[rank(a)] += 1;
+            while script.len() < r.bounds.len() {
+                script.push(0);
+            }
+            let mut k = r.bounds.len();
+            while k > 0 and script[k - 1] + 1 >= r.bounds[k - 1] {
+                k -= 1;
+            }
+            if k == 0 {
+                break;
+            }
+            script.truncate(k);
+            script[k - 1] += 1;
+        }
+    }
+    for k in 0..orders {
+        if seen[k] != 1 {
+            return false;
+        }
+    }
+    true
+}
+
+// P5 for one arm: 12,000 LCG shuffles of 0..4, chi-square over the 24
+// orders below a bound far out in the tail.
+fn fair(arm: i64, seed: i64) -> bool {
+    let nums = vec![0, 1, 2, 3];
+    let mut r = rng(0);
+    r.seed = seed;
+    let mut got = vec![0; 24];
+    for _ in 0..12000 {
+        got[rank(shuffle(arm, nums, mut r))] += 1;
+    }
+    let mut chi = 0.0;
+    for k in 0..24 {
+        let d = got[k] as f64 - 500.0;
+        chi += d * d / 500.0;
+    }
+    chi <= 23.0 + 6.0 * 46.0.sqrt() + 12.0
+}
+
+fn rotated_left(a: ref Vec[i64]) -> Vec[i64] {
+    let mut b: Vec[i64] = Vec.new();
+    for i in 1..a.len() {
+        b.push(a[i]);
+    }
+    if a.len() > 0 {
+        b.push(a[0]);
+    }
+    b
+}
+
+fn rotated_right(a: ref Vec[i64]) -> Vec[i64] {
+    let mut b: Vec[i64] = Vec.new();
+    if a.len() > 0 {
+        b.push(a[a.len() - 1]);
+    }
+    for i in 0..a.len() - 1 {
+        b.push(a[i]);
+    }
+    b
+}
+
+fn main() {
+    let mut seed: i64 = 384;
+    let mut checks = 0;
+    let mut fails = vec![0; 5];
+    for _ in 0..300 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = (seed / 65536) % 13;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            nums.push((seed / 65536) % 7 - 3);
+        }
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        let top = vec![nums.clone(), nums.clone(), reversed, nums.clone()];
+        let zero = vec![rotated_left(nums), nums.clone(), nums.clone(), rotated_right(nums)];
+        for arm in 0..4 {
+            checks += 3;
+            let mut r = rng(0);
+            r.seed = seed;
+            if not same_values(shuffle(arm, nums, mut r), nums) {
+                fails[0] += 1;
+            }
+            let mut t = rng(2);
+            if shuffle(arm, nums, mut t) != top[arm] {
+                fails[1] += 1;
+            }
+            let mut z = rng(3);
+            if shuffle(arm, nums, mut z) != zero[arm] {
+                fails[2] += 1;
+            }
+        }
+    }
+    for arm in 0..4 {
+        for n in 1..7 {
+            checks += factorial(n);
+            if not exact(arm, n) {
+                fails[3] += 1;
+            }
+        }
+        for s in 0..3 {
+            checks += 1;
+            if not fair(arm, 384 + s) {
+                fails[4] += 1;
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..5 {
+        failures += fails[i];
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+    }
+    println(f"300 arrays, {checks} checks, {failures} failures");
+}

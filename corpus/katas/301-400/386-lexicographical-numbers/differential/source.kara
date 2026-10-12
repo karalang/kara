@@ -1,0 +1,223 @@
+// LeetCode #386: differential test. The stepping, depth-first, sorting
+// and stack arms for every n from 1 to 400 and 12 random n up to 50,000.
+// Dictionary order is checked with an arithmetic comparison that builds
+// no strings. Properties: P1 all four arms agree; P2 the list holds every
+// number from 1 to n once; P3 every neighbouring pair is in dictionary
+// order; P4 a number's position is the count of numbers before it in
+// dictionary order, for 20 sampled numbers (5 when n is above 2,000);
+// P5 the list for n is the list for n + 1 without n + 1.
+
+fn lexical_order_step(n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut cur = 1;
+    for _ in 0..n {
+        out.push(cur);
+        if cur * 10 <= n {
+            cur *= 10;
+        } else {
+            while cur % 10 == 9 or cur + 1 > n {
+                cur /= 10;
+            }
+            cur += 1;
+        }
+    }
+    out
+}
+
+fn visit_dfs(x: i64, n: i64, out: mut ref Vec[i64]) {
+    out.push(x);
+    for d in 0..10 {
+        let child = x * 10 + d;
+        if child > n {
+            return;
+        }
+        visit_dfs(child, n, out);
+    }
+}
+
+fn lexical_order_dfs(n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in 1..10 {
+        if x > n {
+            break;
+        }
+        visit_dfs(x, n, mut out);
+    }
+    out
+}
+
+fn lexical_order_sort(n: i64) -> Vec[i64] {
+    let mut texts: Vec[String] = Vec.new();
+    for x in 1..n + 1 {
+        texts.push(f"{x}");
+    }
+    texts.sort();
+    let mut out: Vec[i64] = Vec.new();
+    for t in texts.iter() {
+        out.push(i64.parse(t).unwrap());
+    }
+    out
+}
+
+fn lexical_order_stack(n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[i64] = Vec.new();
+    let mut x = 9;
+    while x >= 1 {
+        if x <= n {
+            stack.push(x);
+        }
+        x -= 1;
+    }
+    while stack.len() > 0 {
+        let top = stack.pop().unwrap();
+        out.push(top);
+        let mut d = 9;
+        while d >= 0 {
+            let child = top * 10 + d;
+            if child <= n {
+                stack.push(child);
+            }
+            d -= 1;
+        }
+    }
+    out
+}
+
+fn lexical_order(arm: i64, n: i64) -> Vec[i64] {
+    if arm == 0 {
+        lexical_order_step(n)
+    } else if arm == 1 {
+        lexical_order_dfs(n)
+    } else if arm == 2 {
+        lexical_order_sort(n)
+    } else {
+        lexical_order_stack(n)
+    }
+}
+
+// How many decimal digits x has.
+fn width(x: i64) -> i64 {
+    let mut w = 1;
+    let mut y = x;
+    while y >= 10 {
+        y /= 10;
+        w += 1;
+    }
+    w
+}
+
+// True when a comes strictly before b in dictionary order. Pad the
+// shorter number with zeros on the right to the same width: if the padded
+// numbers differ, the first differing digit decides, and the smaller
+// padded number has the smaller digit; if they are equal, one is a prefix
+// of the other and the shorter comes first.
+fn before(a: i64, b: i64) -> bool {
+    let wa = width(a);
+    let wb = width(b);
+    let mut pa = a;
+    let mut pb = b;
+    for _ in wa..wb {
+        pa *= 10;
+    }
+    for _ in wb..wa {
+        pb *= 10;
+    }
+    if pa != pb {
+        return pa < pb;
+    }
+    wa < wb
+}
+
+fn next(seed: mut ref i64, n: i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    (*seed / 65536) % n
+}
+
+fn main() {
+    let mut seed: i64 = 386;
+    let mut ns: Vec[i64] = Vec.new();
+    for n in 1..401 {
+        ns.push(n);
+    }
+    for _ in 0..12 {
+        ns.push(1 + next(mut seed, 50000));
+    }
+    let mut checks = 0;
+    let mut fails = vec![0; 5];
+    for n in ns.iter() {
+        let n = *n;
+        let first = lexical_order(0, n);
+        for arm in 0..4 {
+            let v = lexical_order(arm, n);
+            checks += 4;
+            if v != first {
+                fails[0] += 1;
+            }
+            let mut seen = vec![0; n + 1];
+            let mut all = v.len() == n;
+            for x in v.iter() {
+                if *x < 1 or *x > n {
+                    all = false;
+                } else {
+                    seen[*x] += 1;
+                }
+            }
+            for x in 1..n + 1 {
+                if seen[x] != 1 {
+                    all = false;
+                }
+            }
+            if not all {
+                fails[1] += 1;
+            }
+            let mut ordered = true;
+            for i in 1..v.len() {
+                if not before(v[i - 1], v[i]) {
+                    ordered = false;
+                }
+            }
+            if not ordered {
+                fails[2] += 1;
+            }
+            if arm == 0 or n <= 2000 {
+                checks += 1;
+                let mut bigger = lexical_order(arm, n + 1);
+                let mut k = 0;
+                while k < bigger.len() and bigger[k] != n + 1 {
+                    k += 1;
+                }
+                if k < bigger.len() {
+                    bigger.remove(k);
+                }
+                if bigger != v {
+                    fails[4] += 1;
+                }
+            }
+        }
+        // P4 on the first arm's list, which P1 ties to the others.
+        let samples = if n <= 2000 { 20 } else { 5 };
+        for _ in 0..samples {
+            checks += 1;
+            let i = next(mut seed, n);
+            let x = first[i];
+            let mut count = 0;
+            for y in 1..n + 1 {
+                if before(y, x) {
+                    count += 1;
+                }
+            }
+            if count != i {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut failures = 0;
+    for i in 0..5 {
+        failures += fails[i];
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+    }
+    println(f"{ns.len()} values of n, {checks} checks, {failures} failures");
+}

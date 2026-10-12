@@ -1,0 +1,56 @@
+// LeetCode #390: Elimination Game -- play it out on a deque.
+//
+// A pass from the left pops numbers off the front: drop one, keep one,
+// pushing the kept ones on the back, until the pass has seen every number.
+// A pass from the right does the same from the back onto the front. The
+// deque then holds the survivors in their original order, ready for the
+// next pass. O(n) time in all, O(n) space.
+
+fn last_remaining(n: i64) -> i64 {
+    let mut q: VecDeque[i64] = VecDeque.new();
+    for x in 1..n + 1 {
+        q.push_back(x);
+    }
+    let mut from_left = true;
+    while q.len() > 1 {
+        let len = q.len();
+        for i in 0..len {
+            if from_left {
+                let x = q.pop_front().unwrap();
+                if i % 2 == 1 {
+                    q.push_back(x);
+                }
+            } else {
+                let x = q.pop_back().unwrap();
+                if i % 2 == 1 {
+                    q.push_front(x);
+                }
+            }
+        }
+        from_left = not from_left;
+    }
+    q.pop_front().unwrap()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    println(f"n = 9: {last_remaining(9)}");
+    println(f"n = 1: {last_remaining(1)}");
+    let mut s = String.from("n = 1 to 24:");
+    for n in 1..25 {
+        s.push_str(f" {last_remaining(n)}");
+    }
+    println(s);
+    for n in [2, 3, 4, 8, 16, 1024, 65536, 99999, 100000] {
+        println(f"n = {n}: {last_remaining(n)}");
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for n in 1..2001 {
+        let r = last_remaining(n);
+        total += r;
+        checksum = (checksum * 31 + r) % 1000000007;
+    }
+    println(f"n = 1 to 2000: sum {total}, checksum {checksum}");
+}

@@ -1,0 +1,173 @@
+// LeetCode #385: Mini Parser -- tokens first.
+//
+// Split the string into tokens first (open, close and numbers; commas
+// only separate, so they are dropped), then build the value from the
+// tokens with a recursion that returns the value and the index of the
+// next token. Two passes, O(n) time and O(n) space for the tokens.
+
+enum NestedInteger {
+    Int(i64),
+    List(Vec[NestedInteger]),
+}
+
+enum Token {
+    Open,
+    Close,
+    Number(i64),
+}
+
+fn tokenize(s: Str) -> Vec[Token] {
+    let b = s.bytes();
+    let mut tokens: Vec[Token] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'[' {
+            tokens.push(Token.Open);
+            i += 1;
+        } else if b[i] == b']' {
+            tokens.push(Token.Close);
+            i += 1;
+        } else if b[i] == b',' {
+            i += 1;
+        } else {
+            let mut sign = 1;
+            if b[i] == b'-' {
+                sign = -1;
+                i += 1;
+            }
+            let mut n: i64 = 0;
+            while i < b.len() and b[i] >= b'0' and b[i] <= b'9' {
+                n = n * 10 + (b[i] - b'0') as i64;
+                i += 1;
+            }
+            tokens.push(Token.Number(sign * n));
+        }
+    }
+    tokens
+}
+
+// The value starting at token `at`, and the index of the token after it.
+fn build(tokens: ref Vec[Token], at: i64) -> (NestedInteger, i64) {
+    match tokens[at] {
+        Token.Number(n) => (NestedInteger.Int(n), at + 1),
+        Token.Close => (NestedInteger.List(Vec.new()), at + 1),
+        Token.Open => {
+            let mut items: Vec[NestedInteger] = Vec.new();
+            let mut next = at + 1;
+            loop {
+                match tokens[next] {
+                    Token.Close => return (NestedInteger.List(items), next + 1),
+                    _ => {
+                        let (item, after) = build(tokens, next);
+                        items.push(item);
+                        next = after;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn deserialize(s: Str) -> NestedInteger {
+    let tokens = tokenize(s);
+    let (x, _) = build(tokens, 0);
+    x
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn serialize(x: ref NestedInteger) -> String {
+    match x {
+        NestedInteger.Int(n) => f"{n}",
+        NestedInteger.List(items) => {
+            let mut out = String.from("[");
+            for i in 0..items.len() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(serialize(items[i]));
+            }
+            out.push(']');
+            out
+        }
+    }
+}
+
+// The deepest nesting of lists, the number of integers and their sum.
+fn shape(x: ref NestedInteger) -> (i64, i64, i64) {
+    match x {
+        NestedInteger.Int(n) => (0, 1, *n),
+        NestedInteger.List(items) => {
+            let mut depth = 0;
+            let mut count = 0;
+            let mut sum = 0;
+            for item in items.iter() {
+                let (d, c, s) = shape(item);
+                if d > depth {
+                    depth = d;
+                }
+                count += c;
+                sum += s;
+            }
+            (depth + 1, count, sum)
+        }
+    }
+}
+
+fn show(s: Str) {
+    let x = deserialize(s);
+    let (depth, count, sum) = shape(x);
+    println(f"{s} -> {serialize(x)} (depth {depth}, {count} integers, sum {sum})");
+}
+
+// A random value: an integer, or a list of up to 4 values, never deeper
+// than `depth` more levels.
+fn random_value(seed: mut ref i64, depth: i64) -> String {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    let r = (*seed / 65536) % 10;
+    if depth == 0 or r < 4 {
+        *seed = (*seed * 1103515245 + 12345) % 2147483648;
+        let v = (*seed / 65536) % 2000001 - 1000000;
+        return f"{v}";
+    }
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    let n = (*seed / 65536) % 5;
+    let mut out = String.from("[");
+    for i in 0..n {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(random_value(seed, depth - 1));
+    }
+    out.push(']');
+    out
+}
+
+fn main() {
+    show("324");
+    show("[123,[456,[789]]]");
+    show("[]");
+    show("-3");
+    show("0");
+    show("[-1,[],[[]],0]");
+    show("[[[[[5]]]]]");
+    show("[1000000,-1000000]");
+    show("[[],[[],[]],[[[]]]]");
+    // 2000 random values: each must serialize back to the string it was
+    // parsed from.
+    let mut seed: i64 = 385;
+    let mut same = 0;
+    let mut integers = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let s = random_value(mut seed, 6);
+        let x = deserialize(s);
+        if serialize(x) == s {
+            same += 1;
+        }
+        let (depth, count, sum) = shape(x);
+        integers += count;
+        checksum = ((checksum * 31 + depth * 7 + count) % 1000000007 + sum % 1000000007 + 1000000007) % 1000000007;
+    }
+    println(f"2000 random values: {same} round-trip, {integers} integers, checksum {checksum}");
+}

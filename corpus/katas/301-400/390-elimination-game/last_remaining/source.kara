@@ -1,0 +1,47 @@
+// LeetCode #390: Elimination Game -- follow the head of the list.
+//
+// The list 1..n stays an arithmetic progression after every pass, so it
+// is enough to track its first element `head`, the gap `step` between
+// neighbours, and how many numbers are left. A pass from the left always
+// removes the head; a pass from the right removes it only when an odd
+// count is left (the removals then reach the front). Either way half the
+// numbers go and the gap doubles. O(log n) time, O(1) space.
+
+fn last_remaining(n: i64) -> i64 {
+    let mut head = 1;
+    let mut step = 1;
+    let mut left = n;
+    let mut from_left = true;
+    while left > 1 {
+        if from_left or left % 2 == 1 {
+            head += step;
+        }
+        left /= 2;
+        step *= 2;
+        from_left = not from_left;
+    }
+    head
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    println(f"n = 9: {last_remaining(9)}");
+    println(f"n = 1: {last_remaining(1)}");
+    let mut s = String.from("n = 1 to 24:");
+    for n in 1..25 {
+        s.push_str(f" {last_remaining(n)}");
+    }
+    println(s);
+    for n in [2, 3, 4, 8, 16, 1024, 65536, 99999, 100000] {
+        println(f"n = {n}: {last_remaining(n)}");
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for n in 1..2001 {
+        let r = last_remaining(n);
+        total += r;
+        checksum = (checksum * 31 + r) % 1000000007;
+    }
+    println(f"n = 1 to 2000: sum {total}, checksum {checksum}");
+}

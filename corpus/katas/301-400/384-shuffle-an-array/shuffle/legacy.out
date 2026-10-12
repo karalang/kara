@@ -1,0 +1,11 @@
+example: shuffle is a permutation of [1, 2, 3] true
+reset gives [1, 2, 3] true
+shuffle again is a permutation true
+one element: 42
+no elements: 0
+repeated values: 1000 shuffles keep them true
+3 elements, 60000 shuffles: all 6 orders equally likely true
+4 elements, 48000 shuffles: all 24 orders equally likely true
+5 elements, 60000 shuffles: all 120 orders equally likely true
+50 elements, 20000 shuffles: element 0 lands evenly true
+reset after 20000 shuffles gives 0..49 true

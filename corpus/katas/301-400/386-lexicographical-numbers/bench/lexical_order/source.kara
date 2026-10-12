@@ -1,0 +1,33 @@
+// Benchmark for #386: the kata's ★ arm (step to the next number) for
+// 6,000 values of n from 49,001 to 50,000 (the problem's limit), each
+// list folded into a checksum through a position-weighted sum.
+
+fn lexical_order(n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut cur = 1;
+    for _ in 0..n {
+        out.push(cur);
+        if cur * 10 <= n {
+            cur *= 10;
+        } else {
+            while cur % 10 == 9 or cur + 1 > n {
+                cur /= 10;
+            }
+            cur += 1;
+        }
+    }
+    out
+}
+
+fn main() {
+    let mut checksum: i64 = 0;
+    for q in 0..6000 {
+        let v = lexical_order(50000 - q % 1000);
+        let mut sum: i64 = 0;
+        for k in 0..v.len() {
+            sum += v[k] * (k + 1);
+        }
+        checksum = (checksum * 31 + sum) % 1000000007;
+    }
+    println(f"6000 lists, checksum {checksum}");
+}

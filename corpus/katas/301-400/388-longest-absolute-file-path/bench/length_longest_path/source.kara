@@ -1,0 +1,106 @@
+// Benchmark for #388: 200 random listings of 800 entries each (about
+// 10,000 bytes, the problem's limit) built once, then the kata's ★ arm
+// (path lengths by depth) run over all of them 150 times. The answers are
+// folded into a checksum.
+
+fn length_longest_path(input: Str) -> i64 {
+    let b = input.bytes();
+    let mut len: Vec[i64] = vec![0];
+    let mut best = 0;
+    let mut i = 0;
+    while i < b.len() {
+        let mut depth = 0;
+        while i < b.len() and b[i] == b'\t' {
+            depth += 1;
+            i += 1;
+        }
+        let start = i;
+        let mut is_file = false;
+        while i < b.len() and b[i] != b'\n' {
+            if b[i] == b'.' {
+                is_file = true;
+            }
+            i += 1;
+        }
+        let path = len[depth] + (i - start);
+        if is_file {
+            if path > best {
+                best = path;
+            }
+        } else {
+            if depth + 1 < len.len() {
+                len[depth + 1] = path + 1;
+            } else {
+                len.push(path + 1);
+            }
+        }
+        i += 1;
+    }
+    best
+}
+
+// A random listing of `entries` entries in a tree at most 7 deep, with
+// names of 1 to 12 letters, a third of them files (ending in `.ext`).
+// `open` is how many directories enclose the next entry at most: an entry
+// can sit at any depth up to `open`, a directory then opens one more level,
+// and a file opens none, since files have no children.
+fn listing(seed: mut ref i64, entries: i64) -> String {
+    let mut out = String.new();
+    let mut open = 0;
+    let mut depth = 0;
+    for k in 0..entries {
+        *seed = (*seed * 1103515245 + 12345) % 2147483648;
+        let r = (*seed / 65536) % 100;
+        // A child of the deepest open directory, a sibling of the last
+        // entry, or one to three levels shallower than it.
+        if r < 35 {
+            depth = open;
+        } else if r >= 70 {
+            let up = (r - 70) / 10 + 1;
+            depth = if up > depth { 0 } else { depth - up };
+        }
+        if depth > open {
+            depth = open;
+        }
+        *seed = (*seed * 1103515245 + 12345) % 2147483648;
+        let name_len = (*seed / 65536) % 12 + 1;
+        *seed = (*seed * 1103515245 + 12345) % 2147483648;
+        let file = (*seed / 65536) % 3 == 0;
+        if k > 0 {
+            out.push('\n');
+        }
+        for _ in 0..depth {
+            out.push('\t');
+        }
+        for _ in 0..name_len {
+            *seed = (*seed * 1103515245 + 12345) % 2147483648;
+            out.push(((*seed / 65536) % 26 + 97) as u8 as char);
+        }
+        if file {
+            out.push_str(".ext");
+            open = depth;
+        } else {
+            open = if depth < 6 { depth + 1 } else { depth };
+        }
+    }
+    out
+}
+
+fn main() {
+    let mut seed: i64 = 388;
+    let mut listings: Vec[String] = Vec.new();
+    let mut bytes = 0;
+    for _ in 0..200 {
+        let s = listing(mut seed, 800);
+        bytes += s.len();
+        listings.push(s);
+    }
+    let mut checksum: i64 = 0;
+    for round in 0..150 {
+        for k in 0..listings.len() {
+            let r = length_longest_path(listings[k]);
+            checksum = (checksum * 31 + r + round) % 1000000007;
+        }
+    }
+    println(f"{bytes} bytes in 200 listings, 150 rounds, checksum {checksum}");
+}

@@ -1,0 +1,17 @@
+source = "tests/mir_library.rs::a_table_reads_the_same_after_removes_leave_holes"
+dedup_of = []
+expect = "error:E0500"
+exit = 1
+tags = ["uses-moved", "lib:map", "lib:set"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "3b85cca7e"
+extracted_src = "a691f73d"
+model_rev = "1aa23105"
+model_src = "a691f73d"

@@ -1,0 +1,11 @@
+example 1: 20
+example 2: 32
+no files: 0
+one file at the root: 8
+three files at the root: 12
+a name with a dot is a file: 7
+deep file loses to a long shallow one: 16
+empty directories: 0
+file after a deep dir: 3
+names with spaces: 12
+2000 random listings: longest 84, 120 without files, checksum 808734270

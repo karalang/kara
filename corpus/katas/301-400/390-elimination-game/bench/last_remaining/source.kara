@@ -1,0 +1,38 @@
+// Benchmark for #390: the kata's ★ arm (follow the head of the list) on
+// 10,000,000 values of n drawn from an LCG, each between 1 and 2^30 (the
+// problem allows up to 10^9). A fresh n per call keeps the compiler from
+// reusing an answer; the answers are folded into a sum and a checksum.
+
+fn last_remaining(n: i64) -> i64 {
+    let mut head = 1;
+    let mut step = 1;
+    let mut left = n;
+    let mut from_left = true;
+    while left > 1 {
+        if from_left or left % 2 == 1 {
+            head += step;
+        }
+        left /= 2;
+        step *= 2;
+        from_left = not from_left;
+    }
+    head
+}
+
+fn next(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed: i64 = 390;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..10000000 {
+        let n = next(mut seed) * 32768 + next(mut seed) + 1;
+        let r = last_remaining(n);
+        total += r;
+        checksum = (checksum * 31 + r) % 1000000007;
+    }
+    println(f"10000000 values of n, sum {total}, checksum {checksum}");
+}

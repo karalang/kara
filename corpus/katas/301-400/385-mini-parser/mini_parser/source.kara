@@ -1,0 +1,147 @@
+// LeetCode #385: Mini Parser -- recursive descent.
+//
+// One function per piece of the grammar: a value is either an integer,
+// an optional minus sign and digits, or a list, `[` then values separated
+// by commas then `]`. The parser walks the bytes once with a position it
+// moves forward, so it is O(n) for a string of n bytes, plus O(d) stack
+// for d levels of nesting.
+
+enum NestedInteger {
+    Int(i64),
+    List(Vec[NestedInteger]),
+}
+
+fn deserialize(s: Str) -> NestedInteger {
+    let b = s.bytes();
+    let mut pos = 0;
+    parse_value(b, mut pos)
+}
+
+fn parse_value(b: Slice[u8], pos: mut ref i64) -> NestedInteger {
+    if b[*pos] == b'[' {
+        *pos += 1;
+        let mut items: Vec[NestedInteger] = Vec.new();
+        if b[*pos] == b']' {
+            *pos += 1;
+            return NestedInteger.List(items);
+        }
+        loop {
+            items.push(parse_value(b, pos));
+            if b[*pos] == b',' {
+                *pos += 1;
+            } else {
+                *pos += 1;
+                return NestedInteger.List(items);
+            }
+        }
+    }
+    let mut negative = false;
+    if b[*pos] == b'-' {
+        negative = true;
+        *pos += 1;
+    }
+    let mut n: i64 = 0;
+    while *pos < b.len() and b[*pos] >= b'0' and b[*pos] <= b'9' {
+        n = n * 10 + (b[*pos] - b'0') as i64;
+        *pos += 1;
+    }
+    NestedInteger.Int(if negative { -n } else { n })
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn serialize(x: ref NestedInteger) -> String {
+    match x {
+        NestedInteger.Int(n) => f"{n}",
+        NestedInteger.List(items) => {
+            let mut out = String.from("[");
+            for i in 0..items.len() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(serialize(items[i]));
+            }
+            out.push(']');
+            out
+        }
+    }
+}
+
+// The deepest nesting of lists, the number of integers and their sum.
+fn shape(x: ref NestedInteger) -> (i64, i64, i64) {
+    match x {
+        NestedInteger.Int(n) => (0, 1, *n),
+        NestedInteger.List(items) => {
+            let mut depth = 0;
+            let mut count = 0;
+            let mut sum = 0;
+            for item in items.iter() {
+                let (d, c, s) = shape(item);
+                if d > depth {
+                    depth = d;
+                }
+                count += c;
+                sum += s;
+            }
+            (depth + 1, count, sum)
+        }
+    }
+}
+
+fn show(s: Str) {
+    let x = deserialize(s);
+    let (depth, count, sum) = shape(x);
+    println(f"{s} -> {serialize(x)} (depth {depth}, {count} integers, sum {sum})");
+}
+
+// A random value: an integer, or a list of up to 4 values, never deeper
+// than `depth` more levels.
+fn random_value(seed: mut ref i64, depth: i64) -> String {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    let r = (*seed / 65536) % 10;
+    if depth == 0 or r < 4 {
+        *seed = (*seed * 1103515245 + 12345) % 2147483648;
+        let v = (*seed / 65536) % 2000001 - 1000000;
+        return f"{v}";
+    }
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    let n = (*seed / 65536) % 5;
+    let mut out = String.from("[");
+    for i in 0..n {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(random_value(seed, depth - 1));
+    }
+    out.push(']');
+    out
+}
+
+fn main() {
+    show("324");
+    show("[123,[456,[789]]]");
+    show("[]");
+    show("-3");
+    show("0");
+    show("[-1,[],[[]],0]");
+    show("[[[[[5]]]]]");
+    show("[1000000,-1000000]");
+    show("[[],[[],[]],[[[]]]]");
+    // 2000 random values: each must serialize back to the string it was
+    // parsed from.
+    let mut seed: i64 = 385;
+    let mut same = 0;
+    let mut integers = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let s = random_value(mut seed, 6);
+        let x = deserialize(s);
+        if serialize(x) == s {
+            same += 1;
+        }
+        let (depth, count, sum) = shape(x);
+        integers += count;
+        checksum = ((checksum * 31 + depth * 7 + count) % 1000000007 + sum % 1000000007 + 1000000007) % 1000000007;
+    }
+    println(f"2000 random values: {same} round-trip, {integers} integers, checksum {checksum}");
+}

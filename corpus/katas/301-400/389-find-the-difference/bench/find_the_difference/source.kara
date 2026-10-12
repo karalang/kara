@@ -1,0 +1,43 @@
+// Benchmark for #389: a pool of 1,000,000 random letters built once, then
+// 8,000,000 pairs read out of it without copying: s is a window of 0 to
+// 1,000 letters (the problem's limit) at a random place and t the same
+// window one letter longer, so the added letter is the one after s. Each
+// pair runs the kata's ★ arm (XOR of every byte); the answers are checked
+// and folded into a checksum.
+
+fn find_the_difference(s: Str, t: Str) -> char {
+    let mut x: u8 = 0;
+    for b in s.bytes() {
+        x = x ^ b;
+    }
+    for b in t.bytes() {
+        x = x ^ b;
+    }
+    x as char
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed: i64 = 389;
+    let mut pool = String.new();
+    for _ in 0..1000000 {
+        pool.push((step(mut seed) % 26 + 97) as u8 as char);
+    }
+    let bytes = pool.bytes();
+    let mut right = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..8000000 {
+        let len = step(mut seed) % 1001;
+        let a = step(mut seed) % (1000000 - len - 1);
+        let c = find_the_difference(pool[a..a + len], pool[a..a + len + 1]);
+        if c == bytes[a + len] as char {
+            right += 1;
+        }
+        checksum = (checksum * 31 + c as i64) % 1000000007;
+    }
+    println(f"8000000 pairs, {right} right, checksum {checksum}");
+}

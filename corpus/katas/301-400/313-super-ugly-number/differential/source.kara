@@ -201,7 +201,10 @@ fn solve_d(n: i64, primes: ref Vec[i64]) -> i64 {
     let mut last = 0;
     while emitted < n {
         match frontier.min() {
-            Some(x) => {
+            Some(m) => {
+                // `min` lends the element; copy it out before `remove`
+                // changes the set.
+                let x = *m;
                 frontier.remove(x);
                 last = x;
                 emitted = emitted + 1;

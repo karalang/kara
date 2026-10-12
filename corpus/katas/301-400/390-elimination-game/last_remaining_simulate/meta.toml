@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/301-400/390-elimination-game/last_remaining_simulate.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "3b85cca7e"
+extracted_src = "072d0592"
+model_rev = "1aa23105"
+model_src = "072d0592"

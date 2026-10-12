@@ -1,0 +1,149 @@
+// LeetCode #384: Shuffle an Array -- Fisher-Yates.
+//
+// Walk the positions from the last down to the second; swap each one
+// with a position chosen uniformly from it and the ones before it. Every
+// one of the n! orders comes out with probability 1/n!, since there are
+// n * (n - 1) * ... * 2 equally likely choices and each order has exactly
+// one sequence of them. O(n) per shuffle; reset gives back the original.
+//
+// The random numbers come from a seeded LCG, so every run shuffles the
+// same way. The arms spend their random numbers differently, so they
+// print properties of the shuffles rather than the shuffles themselves.
+
+struct Solution {
+    original: Vec[i64],
+    seed: i64,
+}
+
+impl Solution {
+    fn new(nums: own Vec[i64]) -> Solution {
+        Solution { original: nums, seed: 384 }
+    }
+
+    // A number from 0 to n - 1.
+    fn below(mut ref self, n: i64) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        (self.seed / 65536) % n
+    }
+
+    fn reset(self) -> Vec[i64] {
+        self.original.clone()
+    }
+
+    fn shuffle(mut ref self) -> Vec[i64] {
+        let mut a = self.original.clone();
+        let mut i = a.len() - 1;
+        while i > 0 {
+            let j = self.below(i + 1);
+            a.swap(i, j);
+            i -= 1;
+        }
+        a
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn b(x: bool) -> String {
+    if x { "true" } else { "false" }
+}
+
+// True when `a` holds the same values as `original`, each as often.
+fn same_values(a: ref Vec[i64], original: ref Vec[i64]) -> bool {
+    let mut x = a.clone();
+    let mut y = original.clone();
+    x.sort();
+    y.sort();
+    x == y
+}
+
+// The rank of an order of 0..n among all n! orders (the Lehmer code).
+fn rank(a: ref Vec[i64]) -> i64 {
+    let mut r = 0;
+    for i in 0..a.len() {
+        let mut smaller = 0;
+        for j in i + 1..a.len() {
+            if a[j] < a[i] {
+                smaller += 1;
+            }
+        }
+        r = r * (a.len() - i) + smaller;
+    }
+    r
+}
+
+// Shuffles 0..n `draws` times and checks the n! orders with a chi-square
+// statistic: true when every shuffle is a permutation and the statistic is
+// below a bound far out in the tail for its degrees of freedom.
+fn fair(n: i64, draws: i64) -> bool {
+    let mut orders = 1;
+    for k in 2..n + 1 {
+        orders *= k;
+    }
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..n {
+        nums.push(i);
+    }
+    let mut s = Solution.new(nums.clone());
+    let mut got = vec![0; orders];
+    for _ in 0..draws {
+        let a = s.shuffle();
+        if not same_values(a, nums) {
+            return false;
+        }
+        got[rank(a)] += 1;
+    }
+    let e = draws as f64 / orders as f64;
+    let mut chi = 0.0;
+    for k in 0..orders {
+        let d = got[k] as f64 - e;
+        chi += d * d / e;
+    }
+    let dof = (orders - 1) as f64;
+    chi <= dof + 6.0 * (2.0 * dof).sqrt() + 12.0
+}
+
+fn main() {
+    let mut s = Solution.new(vec![1, 2, 3]);
+    let first = s.shuffle();
+    println(f"example: shuffle is a permutation of [1, 2, 3] {b(same_values(first, vec![1, 2, 3]))}");
+    println(f"reset gives [1, 2, 3] {b(s.reset() == vec![1, 2, 3])}");
+    let again = s.shuffle();
+    println(f"shuffle again is a permutation {b(same_values(again, vec![1, 2, 3]))}");
+    let mut one = Solution.new(vec![42]);
+    println(f"one element: {one.shuffle()[0]}");
+    let mut empty = Solution.new(Vec.new());
+    println(f"no elements: {empty.shuffle().len()}");
+    let mut dup = Solution.new(vec![5, 5, 7, 7, 7]);
+    let mut ok = true;
+    for _ in 0..1000 {
+        ok = ok and same_values(dup.shuffle(), vec![5, 5, 7, 7, 7]);
+    }
+    println(f"repeated values: 1000 shuffles keep them {b(ok)}");
+    println(f"3 elements, 60000 shuffles: all 6 orders equally likely {b(fair(3, 60000))}");
+    println(f"4 elements, 48000 shuffles: all 24 orders equally likely {b(fair(4, 48000))}");
+    println(f"5 elements, 60000 shuffles: all 120 orders equally likely {b(fair(5, 60000))}");
+    // Where the first element lands, over 20000 shuffles of 0..49: each of
+    // the 50 positions about 400 times.
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..50 {
+        nums.push(i);
+    }
+    let mut big = Solution.new(nums);
+    let mut lands = vec![0; 50];
+    for _ in 0..20000 {
+        let a = big.shuffle();
+        for p in 0..50 {
+            if a[p] == 0 {
+                lands[p] += 1;
+            }
+        }
+    }
+    let mut chi = 0.0;
+    for p in 0..50 {
+        let d = lands[p] as f64 - 400.0;
+        chi += d * d / 400.0;
+    }
+    println(f"50 elements, 20000 shuffles: element 0 lands evenly {b(chi <= 49.0 + 6.0 * 98.0.sqrt() + 12.0)}");
+    println(f"reset after 20000 shuffles gives 0..49 {b(big.reset()[0] == 0 and big.reset()[49] == 49)}");
+}
