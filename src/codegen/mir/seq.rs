@@ -146,7 +146,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let mode = self.llcx.i32_type().const_int(2, false);
                 let d = self.place_ptr(dest)?;
                 self.rt_int(
-                    "str_slice",
+                    self.str_cut(dty),
                     &[
                         d.into(),
                         p.into(),
@@ -171,7 +171,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     .const_int(u64::from(method == "index_range"), false);
                 let d = self.place_ptr(dest)?;
                 let r = self.rt_int(
-                    "str_slice",
+                    self.str_cut(dty),
                     &[
                         d.into(),
                         p.into(),
@@ -197,7 +197,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let d = self.place_ptr(dest)?;
                 self.store(d, c.into())?;
             }
-            ("bytes", [s]) => {
+            ("bytes" | "as_str", [s]) => {
                 // A view of the text's own bytes; the borrow keeps it alive
                 // and unchanged for as long as the view is used.
                 let (p, n) = self.str_parts(s)?;
@@ -423,6 +423,17 @@ impl<'ctx> Cx<'ctx, '_> {
             _ => return Ok(None),
         }
         Ok(Some(()))
+    }
+
+    /// The runtime cut of a text whose result has type `dty`: a `str`
+    /// result (a `StringSlice`) is a view into the text, which nothing
+    /// drops; a `String` result is a copy of its own.
+    fn str_cut(&self, dty: Ty) -> &'static str {
+        if matches!(self.tys.kind(dty), TyKind::Str) {
+            "str_view"
+        } else {
+            "str_slice"
+        }
     }
 
     /// Whether an operand is a `char`.
@@ -1248,10 +1259,25 @@ impl<'ctx> Cx<'ctx, '_> {
         let buf = self.load_ptr(d)?;
         let i64t = self.tys.intern(TyKind::Int(crate::mir::IntTy::I64));
         let arg = self.entry_slot(8, "from_fn.i")?;
+        // The closure's result as it returns it: an integer literal body
+        // (`|i| 7`) returns an `i64` for a `Vec[i32]`, cast into the slot.
+        let rt = self.callee_ret(&c)?;
+        let cast = rt != el && self.widens(rt, el);
+        let tmp = if cast {
+            Some(self.temp(rt, "from_fn.x")?)
+        } else {
+            None
+        };
         self.count_loop(n, |cx, i| {
             cx.store(arg, i.into())?;
             let x = cx.elem_ptr(buf, i, size)?;
-            cx.call_callee(&c, x, &[(arg, i64t)])
+            match tmp {
+                Some(t) => {
+                    cx.call_callee(&c, t, &[(arg, i64t)])?;
+                    cx.widen_into(x, t, rt, el)
+                }
+                None => cx.call_callee(&c, x, &[(arg, i64t)]),
+            }
         })?;
         if !Self::consumes(&c) {
             self.drop_moved(&args[1..])?;

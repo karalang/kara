@@ -424,10 +424,39 @@ pub unsafe extern "C" fn karac_mir_str_map(out: *mut RawVec, op: i32, s: *const 
     unsafe { string_of(out, t.as_bytes()) };
 }
 
-/// The bytes `lo..hi` of `s` as a new `String` at `out`. Mode 0 is
-/// `substring`, which saturates (an end past the text is its end, an empty
-/// or inverted range is empty); mode 1 is `s[lo..hi]`, which panics when
-/// out of range or inverted. Both panic off a char boundary. Returns 1 for
+/// The bytes `lo..hi` of `s` that mode `mode` picks, or `None` for a
+/// panic. Mode 0 is `substring`, which saturates (an end past the text is
+/// its end, an empty or inverted range is empty); mode 1 is `s[lo..hi]`,
+/// which panics when out of range or inverted; both panic off a char
+/// boundary. Mode 2 is `String.slice`: a start out of range is empty, the
+/// end clamps, and a cut inside a char is lossy, so its text may be new.
+fn str_range(s: &str, lo: i64, hi: i64, mode: i32) -> Option<std::borrow::Cow<'_, str>> {
+    let len = s.len() as i64;
+    if mode == 2 {
+        if lo < 0 || lo > len {
+            return Some("".into());
+        }
+        let end = hi.clamp(lo, len);
+        return Some(String::from_utf8_lossy(
+            &s.as_bytes()[lo as usize..end as usize],
+        ));
+    }
+    let (lo, hi) = if mode == 0 {
+        let hi = hi.min(len);
+        if lo < 0 || lo >= hi {
+            return Some("".into());
+        }
+        (lo, hi)
+    } else {
+        if !(0 <= lo && lo <= hi && hi <= len) {
+            return None;
+        }
+        (lo, hi)
+    };
+    s.get(lo as usize..hi as usize).map(Into::into)
+}
+
+/// The text [`str_range`] picks as a new `String` at `out`. Returns 1 for
 /// a panic, with nothing written.
 ///
 /// # Safety
@@ -443,40 +472,45 @@ pub unsafe extern "C" fn karac_mir_str_slice(
 ) -> u8 {
     // SAFETY: the caller's contract.
     let s = unsafe { text(s, n) };
-    let len = s.len() as i64;
-    if mode == 2 {
-        // `String.slice`: a start out of range is empty, the end clamps,
-        // and a cut inside a char is lossy.
-        let t = if lo < 0 || lo > len {
-            String::new()
-        } else {
-            let end = hi.clamp(lo, len);
-            String::from_utf8_lossy(&s.as_bytes()[lo as usize..end as usize]).into_owned()
-        };
+    match str_range(s, lo, hi, mode) {
         // SAFETY: as above.
-        unsafe { string_of(out, t.as_bytes()) };
-        return 0;
+        Some(t) => unsafe { string_of(out, t.as_bytes()) },
+        None => return 1,
     }
-    let (lo, hi) = if mode == 0 {
-        let hi = hi.min(len);
-        if lo < 0 || lo >= hi {
-            // SAFETY: as above.
-            unsafe { string_of(out, b"") };
-            return 0;
+    0
+}
+
+/// The text [`str_range`] picks as a `str` view `{ptr, len}` at `out`:
+/// a view into `s` itself, so nothing to drop. Text that is new (a
+/// `String.slice` cut inside a char, made lossy) is leaked, as a view
+/// cannot own it. Returns 1 for a panic, with nothing written.
+///
+/// # Safety
+/// `out` is writable for two words; `s` readable for `n` bytes of UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_str_view(
+    out: *mut usize,
+    s: *const u8,
+    n: usize,
+    lo: i64,
+    hi: i64,
+    mode: i32,
+) -> u8 {
+    // SAFETY: the caller's contract.
+    let s = unsafe { text(s, n) };
+    let (p, len) = match str_range(s, lo, hi, mode) {
+        Some(std::borrow::Cow::Borrowed(t)) => (t.as_ptr(), t.len()),
+        Some(std::borrow::Cow::Owned(t)) => {
+            let t = t.leak();
+            (t.as_ptr(), t.len())
         }
-        (lo, hi)
-    } else {
-        if !(0 <= lo && lo <= hi && hi <= len) {
-            return 1;
-        }
-        (lo, hi)
+        None => return 1,
     };
-    let (lo, hi) = (lo as usize, hi as usize);
-    if !s.is_char_boundary(lo) || !s.is_char_boundary(hi) {
-        return 1;
-    }
     // SAFETY: as above.
-    unsafe { string_of(out, &s.as_bytes()[lo..hi]) };
+    unsafe {
+        out.write(p as usize);
+        out.add(1).write(len);
+    }
     0
 }
 

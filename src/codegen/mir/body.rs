@@ -5,6 +5,7 @@
 //! assignment copies `size` bytes. A scalar is loaded only to compute with
 //! it. The calls themselves are `call.rs`'s.
 
+use inkwell::module::Linkage;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValue, BasicValueEnum, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
@@ -393,7 +394,14 @@ impl<'ctx> Cx<'ctx, '_> {
         if s.is_empty() {
             return Ok((self.ptr_ty().const_null(), n));
         }
-        let g = self.builder.build_global_string_ptr(s, "str").map_err(e)?;
+        // Byte by byte: `build_global_string_ptr` goes through a C string
+        // and so stops at an interior NUL (`"x\u{0}y"`).
+        let arr = self.llcx.const_string(s.as_bytes(), true);
+        let g = self.module.add_global(arr.get_type(), None, "str");
+        g.set_initializer(&arr);
+        g.set_constant(true);
+        g.set_linkage(Linkage::Private);
+        g.set_unnamed_addr(true);
         Ok((g.as_pointer_value(), n))
     }
 
@@ -1060,6 +1068,19 @@ impl<'ctx> Cx<'ctx, '_> {
             }
             AggregateKind::Array(el) => {
                 let size = self.layout(*el)?.size;
+                // A repeat literal (`[0; 65536]`) comes as N copies of one
+                // place: a loop, not N stores.
+                if ops.len() > 16
+                    && matches!(&ops[0], Operand::Copy(_))
+                    && ops.iter().all(|o| o == &ops[0])
+                {
+                    let src = self.operand_ptr(&ops[0])?;
+                    let n = self.i64(ops.len() as u64);
+                    return self.count_loop(n, |cx, i| {
+                        let at = cx.elem_ptr(dst, i, size)?;
+                        cx.copy(at, src, *el)
+                    });
+                }
                 for (i, op) in ops.iter().enumerate() {
                     let at = self.offset(dst, size * i as u64)?;
                     self.store_operand(at, op)?;

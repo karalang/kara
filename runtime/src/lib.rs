@@ -236,6 +236,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_str_test,
         mir::karac_mir_str_map,
         mir::karac_mir_str_slice,
+        mir::karac_mir_str_view,
         mir::karac_mir_char_at_byte,
         mir::karac_mir_str_from_utf8,
         mir::karac_mir_str_replace,

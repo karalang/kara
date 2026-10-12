@@ -96,8 +96,41 @@ impl<'ctx> Cx<'ctx, '_> {
             (TyKind::Tuple(a), TyKind::Tuple(b)) => {
                 a.len() == b.len() && a.iter().zip(&b).all(|(x, y)| x == y || self.widens(*x, *y))
             }
+            (TyKind::Adt(_), TyKind::Adt(_)) => self.unit_instance(from, to),
             _ => false,
         }
+    }
+
+    /// Where the operand `a` is as a `want`: in place, or widened into a
+    /// temporary when its type is narrower (see [`Self::widens`]).
+    pub(super) fn operand_as(&mut self, a: &Operand, want: Ty) -> R<PointerValue<'ctx>> {
+        let t = self.operand_type(a)?;
+        let src = self.operand_ptr(a)?;
+        if t == want || !self.widens(t, want) {
+            return Ok(src);
+        }
+        let slot = self.temp(want, "wide")?;
+        self.widen_into(slot, src, t, want)?;
+        Ok(slot)
+    }
+
+    /// Whether `from` is the enum `to` with some type arguments left at
+    /// `()` (or `!`), as the builder types a payload-less variant built
+    /// with nothing to infer its arguments from (`v.push(Ho.Empty)` gives
+    /// `Ho[()]` for a `Vec[Ho[String]]`). Its tag sits where `to`'s does
+    /// and its payloads hold nothing, so it widens by zero-filling.
+    fn unit_instance(&self, from: Ty, to: Ty) -> bool {
+        let tcx = self.tys.tcx();
+        let (Some((fa, fargs)), Some((ta, targs))) = (tcx.adt_of(from), tcx.adt_of(to)) else {
+            return false;
+        };
+        fa.def == ta.def
+            && fa.is_enum
+            && fargs.len() == targs.len()
+            && fargs
+                .iter()
+                .zip(targs.iter())
+                .all(|(f, t)| f == t || matches!(self.tys.kind(*f), TyKind::Unit | TyKind::Never))
     }
 
     /// Writes the `from` at `src` as a `to` at `dst` (see [`Self::widens`]).
@@ -145,6 +178,13 @@ impl<'ctx> Cx<'ctx, '_> {
                     self.widen_into(dp, sp, *x, *y)?;
                 }
                 Ok(())
+            }
+            (TyKind::Adt(_), TyKind::Adt(_)) => {
+                let n = self.layout(to)?.size;
+                self.builder
+                    .build_memset(dst, 1, self.llcx.i8_type().const_zero(), self.i64(n))
+                    .map_err(e)?;
+                self.copy(dst, src, from)
             }
             _ => self.copy(dst, src, to),
         }
@@ -368,8 +408,11 @@ impl<'ctx> Cx<'ctx, '_> {
             return self.vec_from_fn(args, dest);
         }
         if (base, method) == ("Vec", "from_slice") {
+            // The source may come moved (a `Vec` handed over whole): its
+            // elements are cloned, then it drops.
             let (p, n, el) = self.view_parts(&args[0])?;
-            return self.vec_of_clones(dest, p, n, el);
+            self.vec_of_clones(dest, p, n, el)?;
+            return self.drop_moved(args);
         }
         if matches!(base, "Vec" | "Slice" | "Array")
             && self.seq_native(base, method, args, dest)?.is_some()
@@ -605,7 +648,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let v = self.ref_arg(&args[0])?;
                 let et = self.vec_elem(name, &args[0])?;
                 let size = self.layout(et)?.size;
-                let x = self.operand_ptr(&args[1])?;
+                let x = self.operand_as(&args[1], et)?;
                 self.rt("vec_push", &[v.into(), x.into(), self.i64(size).into()])
             }
             ("String", "push_str") => {

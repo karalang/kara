@@ -853,13 +853,16 @@ impl<'ctx> Cx<'ctx, '_> {
         if let Some(y) = y {
             vals.push(y.into());
         }
-        Ok(self
-            .builder
-            .build_call(f, &vals, "")
-            .map_err(e)?
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_float_value())
+        let call = self.builder.build_call(f, &vals, "").map_err(e)?;
+        // Not a builtin: LLVM would fold a constant argument with its own
+        // correctly rounded math, where libm (and the interpreter, which
+        // calls it) can differ by an ulp.
+        let nobuiltin = self.llcx.create_enum_attribute(
+            inkwell::attributes::Attribute::get_named_enum_kind_id("nobuiltin"),
+            0,
+        );
+        call.add_attribute(inkwell::attributes::AttributeLoc::Function, nobuiltin);
+        Ok(call.try_as_basic_value().unwrap_basic().into_float_value())
     }
 
     fn float_op(

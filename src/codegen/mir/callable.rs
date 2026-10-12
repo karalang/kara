@@ -495,7 +495,7 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// The return type of what `c` calls.
-    fn callee_ret(&self, c: &Callee<'ctx>) -> R<Ty> {
+    pub(super) fn callee_ret(&self, c: &Callee<'ctx>) -> R<Ty> {
         match c {
             Callee::Body { name, .. } => Ok(self.program.bodies[name].return_ty()),
             Callee::Erased { ty, .. } => match self.tys.kind(*ty) {

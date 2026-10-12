@@ -513,10 +513,18 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         };
         let name = self.tys.adt(a).name.clone();
         if name == "ExitCode" {
-            let n = self.load_i64(self.offset(p, self.field_offset(t, None, 0)?)?)?;
+            // The code's own width (`u8`), not a word: read as an `i64` it
+            // ran past the slot.
+            let ft = self
+                .tys
+                .field_ty(t, None, 0)
+                .ok_or("ExitCode has no field")?;
+            let n = self
+                .load(self.offset(p, self.field_offset(t, None, 0)?)?, ft)?
+                .into_int_value();
             return self
                 .builder
-                .build_int_truncate(n, i32t, "")
+                .build_int_cast_sign_flag(n, i32t, false, "")
                 .map_err(|e| e.to_string());
         }
         if name != "Result" {
