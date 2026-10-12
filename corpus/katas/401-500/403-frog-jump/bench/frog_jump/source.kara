@@ -1,0 +1,51 @@
+// Benchmark for #403: the kata's ★ arm (the jump sizes that reach each
+// stone). 600 random rivers of 2,000 stones, the gaps after the first
+// stone from 1 to 3; the rivers crossed and a checksum of their numbers
+// go into the sink.
+
+fn can_cross(stones: Vec[i64]) -> bool {
+    let mut jumps: Map[i64, Set[i64]] = Map.new();
+    for s in stones.iter() {
+        jumps.insert(*s, Set.new());
+    }
+    jumps[stones[0]].insert(0);
+    for s in stones.iter() {
+        let mut sizes: Vec[i64] = Vec.new();
+        for k in jumps[*s].iter() {
+            sizes.push(k);
+        }
+        for k in sizes.iter() {
+            for size in *k - 1..*k + 2 {
+                if size > 0 and jumps.contains_key(*s + size) {
+                    jumps[*s + size].insert(size);
+                }
+            }
+        }
+    }
+    jumps[stones[stones.len() - 1]].len() > 0
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let rivers = 600;
+    let n = 2000;
+    let mut seed: i64 = 403;
+    let mut crossed = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rivers {
+        let mut stones = vec![0, 1];
+        while stones.len() < n {
+            let last = stones[stones.len() - 1];
+            stones.push(last + 1 + step(mut seed) % 3);
+        }
+        if can_cross(stones) {
+            crossed += 1;
+            checksum = (checksum * 31 + r + 1) % 1000000007;
+        }
+    }
+    println(f"{rivers} rivers of {n} stones: {crossed} crossed, checksum {checksum}");
+}

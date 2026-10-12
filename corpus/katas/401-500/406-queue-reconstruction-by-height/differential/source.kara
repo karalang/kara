@@ -1,0 +1,229 @@
+// Differential test for LeetCode #406: Queue Reconstruction by Height.
+//
+// Copies of the four arms, each run on 3,000 random cases. Properties
+// known by construction:
+//   P1  a random queue's people, shuffled, rebuild that queue exactly
+//   P2  the output holds the same people as the input
+//   P3  in the output, each person's k is the number of earlier people
+//       of their height or more
+//   P4  two shuffles of the same people give the same output
+//   P5  people of one height come out in order of k, and people with
+//       k = 0 and distinct heights come out shortest first
+
+// ---- tallest: queue_reconstruction.kara
+
+fn reconstruct_queue_tallest(people: own Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut people = people;
+    people.sort_by_key(|p| (-p.0, p.1));
+    let mut queue: Vec[(i64, i64)] = Vec.new();
+    for p in people.iter() {
+        queue.insert(p.1, *p);
+    }
+    queue
+}
+
+// ---- slots: queue_reconstruction_slots.kara
+
+fn reconstruct_queue_slots(people: own Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut people = people;
+    people.sort_by_key(|p| (p.0, -p.1));
+    let n = people.len();
+    let mut slots: Vec[Option[(i64, i64)]] = vec![None; n];
+    for p in people.iter() {
+        let mut empty = p.1;
+        let mut at = 0;
+        while slots[at].is_some() or empty > 0 {
+            if slots[at].is_none() {
+                empty -= 1;
+            }
+            at += 1;
+        }
+        slots[at] = Some(*p);
+    }
+    let mut queue: Vec[(i64, i64)] = Vec.new();
+    for s in slots.iter() {
+        if let Some(p) = s {
+            queue.push(*p);
+        }
+    }
+    queue
+}
+
+// ---- fenwick: queue_reconstruction_fenwick.kara
+
+fn reconstruct_queue_fenwick(people: own Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut people = people;
+    people.sort_by_key(|p| (p.0, -p.1));
+    let n = people.len();
+    // tree[i] covers slots i - (i & -i) + 1 ..= i, counted from 1.
+    let mut tree = vec![0; n + 1];
+    for i in 1..n + 1 {
+        tree[i] += 1;
+        let up = i + (i & -i);
+        if up <= n {
+            tree[up] += tree[i];
+        }
+    }
+    let mut top = 1;
+    while top * 2 <= n {
+        top *= 2;
+    }
+    let mut queue = vec![(0, 0); n];
+    for p in people.iter() {
+        // The largest position whose prefix holds at most k empty slots;
+        // the slot after it is the (k + 1)th empty one.
+        let mut pos = 0;
+        let mut left = p.1;
+        let mut size = top;
+        while size > 0 {
+            if pos + size <= n and tree[pos + size] <= left {
+                pos += size;
+                left -= tree[pos];
+            }
+            size /= 2;
+        }
+        queue[pos] = *p;
+        let mut i = pos + 1;
+        while i <= n {
+            tree[i] -= 1;
+            i += i & -i;
+        }
+    }
+    queue
+}
+
+// ---- front: queue_reconstruction_front.kara
+
+fn reconstruct_queue_front(people: own Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let n = people.len();
+    let mut placed = vec![false; n];
+    let mut ahead = vec![0; n];
+    let mut queue: Vec[(i64, i64)] = Vec.new();
+    for _ in 0..n {
+        let mut best = -1;
+        for i in 0..n {
+            if not placed[i] and ahead[i] == people[i].1 and (best == -1 or people[i].0 < people[best].0) {
+                best = i;
+            }
+        }
+        placed[best] = true;
+        queue.push(people[best]);
+        for i in 0..n {
+            if not placed[i] and people[i].0 <= people[best].0 {
+                ahead[i] += 1;
+            }
+        }
+    }
+    queue
+}
+
+// ---- the checks -------------------------------------------------------------
+
+fn solve(arm: i64, people: own Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    if arm == 0 {
+        reconstruct_queue_tallest(people)
+    } else if arm == 1 {
+        reconstruct_queue_slots(people)
+    } else if arm == 2 {
+        reconstruct_queue_fenwick(people)
+    } else {
+        reconstruct_queue_front(people)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shuffle(people: Vec[(i64, i64)], seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut out = people.clone();
+    for i in (1..out.len()).rev() {
+        let j = step(seed) % (i + 1);
+        out.swap(i, j);
+    }
+    out
+}
+
+// Whether every person's k counts the earlier people of their height or
+// more.
+fn valid(queue: Vec[(i64, i64)]) -> bool {
+    for i in 0..queue.len() {
+        let mut k = 0;
+        for j in 0..i {
+            if queue[j].0 >= queue[i].0 {
+                k += 1;
+            }
+        }
+        if k != queue[i].1 {
+            return false;
+        }
+    }
+    true
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4060;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        // A random queue of 0 to 40 people, heights from 1 to 12.
+        let n = step(mut seed) % 41;
+        let mut line: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            let h = 1 + step(mut seed) % 12;
+            let mut k = 0;
+            for j in 0..line.len() {
+                if line[j].0 >= h {
+                    k += 1;
+                }
+            }
+            line.push((h, k));
+        }
+        let first = shuffle(line, mut seed);
+        let second = shuffle(line, mut seed);
+        let mut people = first.clone();
+        people.sort();
+        // P5: one height, and k = 0 with distinct heights.
+        let m = 1 + step(mut seed) % 20;
+        let h = 1 + step(mut seed) % 100;
+        let mut same: Vec[(i64, i64)] = Vec.new();
+        for k in 0..m {
+            same.push((h, k));
+        }
+        let mut rising: Vec[(i64, i64)] = Vec.new();
+        let mut top = 0;
+        for _ in 0..m {
+            top += 1 + step(mut seed) % 5;
+            rising.push((top, 0));
+        }
+        let same_in = shuffle(same, mut seed);
+        let rising_in = shuffle(rising, mut seed);
+        for arm in 0..4 {
+            let q = solve(arm, first.clone());
+            let mut held = q.clone();
+            held.sort();
+            checks += 5;
+            report(1, arm, case, q == line, mut failures);
+            report(2, arm, case, held == people, mut failures);
+            report(3, arm, case, valid(q), mut failures);
+            report(4, arm, case, solve(arm, second.clone()) == q, mut failures);
+            report(5, arm, case, solve(arm, same_in.clone()) == same and solve(arm, rising_in.clone()) == rising, mut failures);
+        }
+    }
+    println(f"3000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

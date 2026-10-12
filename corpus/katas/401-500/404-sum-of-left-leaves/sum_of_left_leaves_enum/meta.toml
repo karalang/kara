@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/404-sum-of-left-leaves/sum_of_left_leaves_enum.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "d8238a1b8"
+extracted_src = "fe5e874b"
+model_rev = "1aa23105"
+model_src = "fe5e874b"

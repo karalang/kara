@@ -1,0 +1,68 @@
+// Benchmark for #404: the kata's ★ arm (recursion that knows which side
+// it came from). 50 random trees of 30,000 nodes, each node hung on a
+// random free child slot of an earlier one, each tree summed 50 times
+// with one node's value raised by 1 before each round, so that no
+// compiler can hoist the sum out of the loop; the sums and a checksum go
+// into the sink. `val` is `mut` here for that, unlike in the kata.
+
+struct Node {
+    mut val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn visit(nodes: Vec[Node], node: i64, is_left: bool) -> i64 {
+    if node == -1 {
+        return 0;
+    }
+    if nodes[node].left == -1 and nodes[node].right == -1 {
+        return if is_left { nodes[node].val } else { 0 };
+    }
+    visit(nodes, nodes[node].left, true) + visit(nodes, nodes[node].right, false)
+}
+
+fn sum_of_left_leaves(nodes: Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    visit(nodes, 0, false)
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let trees = 50;
+    let n = 30000;
+    let rounds = 50;
+    let mut seed: i64 = 404;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..trees {
+        let mut nodes: Vec[Node] = Vec.new();
+        nodes.push(Node { val: step(mut seed) % 201 - 100, left: -1, right: -1 });
+        for i in 1..n {
+            let mut p = step(mut seed) % i;
+            let mut side = 1 + step(mut seed) % 2;
+            while (side == 1 and nodes[p].left != -1) or (side == 2 and nodes[p].right != -1) {
+                p = step(mut seed) % i;
+                side = 1 + step(mut seed) % 2;
+            }
+            nodes.push(Node { val: step(mut seed) % 201 - 100, left: -1, right: -1 });
+            if side == 1 {
+                nodes[p].left = i;
+            } else {
+                nodes[p].right = i;
+            }
+        }
+        for r in 0..rounds {
+            nodes[r].val += 1;
+            let s = sum_of_left_leaves(nodes);
+            total += s;
+            checksum = (checksum * 31 + s + 10000000 + r) % 1000000007;
+        }
+    }
+    println(f"{trees} trees of {n} nodes, {rounds} rounds: total {total}, checksum {checksum}");
+}

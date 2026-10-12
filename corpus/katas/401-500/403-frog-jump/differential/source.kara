@@ -1,0 +1,246 @@
+// Differential test for LeetCode #403: Frog Jump.
+//
+// Copies of the four arms, each run on 3,000 random cases. Properties
+// known by construction:
+//   P1  a river of stones 0, 1, 2, ..., n - 1 is crossed
+//   P2  a river with a gap after stone i wider than i + 1 is not crossed:
+//       the jump leaving stone i is at most i + 1
+//   P3  a river laid along a random legal path of jumps, with extra
+//       stones added off the path, is crossed
+//   P4  for up to 12 stones, the answer is that of a search that tries
+//       every sequence of jumps
+//   P5  a crossed river stays crossed when stones are added before its
+//       last stone
+
+// ---- sets: frog_jump.kara
+
+fn can_cross_sets(stones: Vec[i64]) -> bool {
+    let mut jumps: Map[i64, Set[i64]] = Map.new();
+    for s in stones.iter() {
+        jumps.insert(*s, Set.new());
+    }
+    jumps[stones[0]].insert(0);
+    for s in stones.iter() {
+        let mut sizes: Vec[i64] = Vec.new();
+        for k in jumps[*s].iter() {
+            sizes.push(k);
+        }
+        for k in sizes.iter() {
+            for size in *k - 1..*k + 2 {
+                if size > 0 and jumps.contains_key(*s + size) {
+                    jumps[*s + size].insert(size);
+                }
+            }
+        }
+    }
+    jumps[stones[stones.len() - 1]].len() > 0
+}
+
+// ---- memo: frog_jump_memo.kara
+
+fn reach_memo(stones: Vec[i64], index: Map[i64, i64], at: i64, k: i64, dead: mut ref Set[(i64, i64)]) -> bool {
+    if at == stones.len() - 1 {
+        return true;
+    }
+    if dead.contains((at, k)) {
+        return false;
+    }
+    for size in k - 1..k + 2 {
+        if size > 0 {
+            if let Some(next) = index.get(stones[at] + size) {
+                if reach_memo(stones, index, *next, size, dead) {
+                    return true;
+                }
+            }
+        }
+    }
+    dead.insert((at, k));
+    false
+}
+
+fn can_cross_memo(stones: Vec[i64]) -> bool {
+    let mut index: Map[i64, i64] = Map.new();
+    for i in 0..stones.len() {
+        index.insert(stones[i], i);
+    }
+    let mut dead: Set[(i64, i64)] = Set.new();
+    reach_memo(stones, index, 0, 0, mut dead)
+}
+
+// ---- table: frog_jump_table.kara
+
+fn can_cross_table(stones: Vec[i64]) -> bool {
+    let n = stones.len();
+    let mut reached = vec![vec![false; n + 1]; n];
+    reached[0][0] = true;
+    for i in 1..n {
+        for j in 0..i {
+            let k = stones[i] - stones[j];
+            if k <= j + 1 and (reached[j][k - 1] or reached[j][k] or reached[j][k + 1]) {
+                reached[i][k] = true;
+            }
+        }
+    }
+    for k in 0..n + 1 {
+        if reached[n - 1][k] {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- bfs: frog_jump_bfs.kara
+
+fn can_cross_bfs(stones: Vec[i64]) -> bool {
+    let mut index: Map[i64, i64] = Map.new();
+    for i in 0..stones.len() {
+        index.insert(stones[i], i);
+    }
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut seen: Set[(i64, i64)] = Set.new();
+    queue.push_back((0, 0));
+    seen.insert((0, 0));
+    while let Some((at, k)) = queue.pop_front() {
+        if at == stones.len() - 1 {
+            return true;
+        }
+        for size in k - 1..k + 2 {
+            if size > 0 {
+                if let Some(next) = index.get(stones[at] + size) {
+                    if seen.insert((*next, size)) {
+                        queue.push_back((*next, size));
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+// ---- the checks -------------------------------------------------------------
+
+fn solve(arm: i64, stones: Vec[i64]) -> bool {
+    if arm == 0 {
+        can_cross_sets(stones)
+    } else if arm == 1 {
+        can_cross_memo(stones)
+    } else if arm == 2 {
+        can_cross_table(stones)
+    } else {
+        can_cross_bfs(stones)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random river of n stones: 0, 1, then gaps from 1 to widest.
+fn river(n: i64, widest: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut stones = vec![0, 1];
+    while stones.len() < n {
+        let last = stones[stones.len() - 1];
+        stones.push(last + 1 + step(seed) % widest);
+    }
+    stones
+}
+
+// The stones of river with up to count random stones added before its
+// last one, in order.
+fn add_stones(stones: Vec[i64], count: i64, seed: mut ref i64) -> Vec[i64] {
+    let last = stones[stones.len() - 1];
+    let mut on = vec![false; last + 1];
+    for s in stones.iter() {
+        on[*s] = true;
+    }
+    for _ in 0..count {
+        on[step(seed) % (last + 1)] = true;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for p in 0..last + 1 {
+        if on[p] {
+            out.push(p);
+        }
+    }
+    out
+}
+
+// Whether the frog on stone at, having jumped k, can reach the last
+// stone, trying every jump with no memo.
+fn brute(stones: Vec[i64], at: i64, k: i64) -> bool {
+    if at == stones.len() - 1 {
+        return true;
+    }
+    for size in k - 1..k + 2 {
+        if size > 0 {
+            for next in at + 1..stones.len() {
+                if stones[next] == stones[at] + size and brute(stones, next, size) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4030;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        // P1: every stone from 0 to n - 1.
+        let n = 2 + step(mut seed) % 40;
+        let mut row: Vec[i64] = Vec.new();
+        for i in 0..n {
+            row.push(i);
+        }
+        // P2: a random river whose gap after stone wide is too wide.
+        let m = 2 + step(mut seed) % 30;
+        let wide = step(mut seed) % (m - 1);
+        let mut blocked = vec![0];
+        for i in 0..m - 1 {
+            let gap = if i == wide { i + 2 + step(mut seed) % 3 } else if i == 0 { 1 } else { 1 + step(mut seed) % 4 };
+            let last = blocked[blocked.len() - 1];
+            blocked.push(last + gap);
+        }
+        // P3: stones along a random legal path, plus stones off it.
+        let mut path = vec![0];
+        let mut k = 1;
+        for _ in 0..1 + step(mut seed) % 20 {
+            let last = path[path.len() - 1];
+            path.push(last + k);
+            k = (k + step(mut seed) % 3 - 1).max(1);
+        }
+        let laid = add_stones(path, step(mut seed) % 10, mut seed);
+        // P4: a small random river.
+        let small = river(2 + step(mut seed) % 11, 3, mut seed);
+        let want = brute(small, 0, 0);
+        // P5: a random river and the same with stones added.
+        let r = river(2 + step(mut seed) % 30, 3, mut seed);
+        let more = add_stones(r, 1 + step(mut seed) % 10, mut seed);
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, solve(arm, row), mut failures);
+            report(2, arm, case, not solve(arm, blocked), mut failures);
+            report(3, arm, case, solve(arm, laid), mut failures);
+            report(4, arm, case, solve(arm, small) == want, mut failures);
+            report(5, arm, case, not solve(arm, r) or solve(arm, more), mut failures);
+        }
+    }
+    println(f"3000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

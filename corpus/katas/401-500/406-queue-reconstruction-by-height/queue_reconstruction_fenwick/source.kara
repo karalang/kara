@@ -1,0 +1,116 @@
+// LeetCode #406: Queue Reconstruction by Height -- empty slots found with
+// a Fenwick tree.
+//
+// The shortest-first order of the slots arm, with the (k + 1)th empty
+// slot found in O(log n) instead of by a scan. A Fenwick tree holds a 1
+// for every empty slot; descending its powers of two from the top finds
+// the first prefix that holds k + 1 empty slots. O(n log n) time after
+// the sort, O(n) space.
+
+fn reconstruct_queue(people: own Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut people = people;
+    people.sort_by_key(|p| (p.0, -p.1));
+    let n = people.len();
+    // tree[i] covers slots i - (i & -i) + 1 ..= i, counted from 1.
+    let mut tree = vec![0; n + 1];
+    for i in 1..n + 1 {
+        tree[i] += 1;
+        let up = i + (i & -i);
+        if up <= n {
+            tree[up] += tree[i];
+        }
+    }
+    let mut top = 1;
+    while top * 2 <= n {
+        top *= 2;
+    }
+    let mut queue = vec![(0, 0); n];
+    for p in people.iter() {
+        // The largest position whose prefix holds at most k empty slots;
+        // the slot after it is the (k + 1)th empty one.
+        let mut pos = 0;
+        let mut left = p.1;
+        let mut size = top;
+        while size > 0 {
+            if pos + size <= n and tree[pos + size] <= left {
+                pos += size;
+                left -= tree[pos];
+            }
+            size /= 2;
+        }
+        queue[pos] = *p;
+        let mut i = pos + 1;
+        while i <= n {
+            tree[i] -= 1;
+            i += i & -i;
+        }
+    }
+    queue
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn text(people: Vec[(i64, i64)]) -> String {
+    let mut out = String.from("[");
+    for i in 0..people.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"[{people[i].0}, {people[i].1}]");
+    }
+    out.push(']');
+    out
+}
+
+fn show(people: own Vec[(i64, i64)]) {
+    let before = text(people);
+    println(f"{before} -> {text(reconstruct_queue(people))}");
+}
+
+fn main() {
+    show(vec![(7, 0), (4, 4), (7, 1), (5, 0), (6, 1), (5, 2)]);
+    show(vec![(6, 0), (5, 0), (4, 0), (3, 2), (2, 2), (1, 4)]);
+    show(Vec.new());
+    show(vec![(5, 0)]);
+    show(vec![(3, 2), (3, 0), (3, 1)]);
+    show(vec![(3, 0), (2, 0), (1, 0)]);
+    show(vec![(1, 2), (3, 0), (2, 1)]);
+    show(vec![(2, 0), (1, 1), (2, 1), (1, 0)]);
+    // 2,000 random queues of 1 to 50 people, heights from 1 to 20, each
+    // person's k counted from the queue, then shuffled.
+    let mut seed: i64 = 406;
+    let mut rebuilt = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let n = 1 + step(mut seed) % 50;
+        let mut line: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            let h = 1 + step(mut seed) % 20;
+            let mut k = 0;
+            for j in 0..line.len() {
+                if line[j].0 >= h {
+                    k += 1;
+                }
+            }
+            line.push((h, k));
+        }
+        let mut shuffled = line.clone();
+        for i in (1..n).rev() {
+            let j = step(mut seed) % (i + 1);
+            shuffled.swap(i, j);
+        }
+        let q = reconstruct_queue(shuffled);
+        if q == line {
+            rebuilt += 1;
+        }
+        for i in 0..q.len() {
+            checksum = (checksum * 31 + q[i].0 * 100 + q[i].1) % 1000000007;
+        }
+    }
+    println(f"2000 random queues: {rebuilt} rebuilt, checksum {checksum}");
+}

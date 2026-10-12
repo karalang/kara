@@ -1,0 +1,100 @@
+// LeetCode #406: Queue Reconstruction by Height -- shortest first, into
+// empty slots.
+//
+// Take the people shortest first, and among equal heights largest k
+// first. Everyone placed later is at least as tall, so a person with k
+// must have exactly k empty slots in front: they go into the (k + 1)th
+// empty slot, counted from the front. An equal height placed later has a
+// smaller k and lands in front, where it counts. O(n^2) time, O(n) space.
+
+fn reconstruct_queue(people: own Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut people = people;
+    people.sort_by_key(|p| (p.0, -p.1));
+    let n = people.len();
+    let mut slots: Vec[Option[(i64, i64)]] = vec![None; n];
+    for p in people.iter() {
+        let mut empty = p.1;
+        let mut at = 0;
+        while slots[at].is_some() or empty > 0 {
+            if slots[at].is_none() {
+                empty -= 1;
+            }
+            at += 1;
+        }
+        slots[at] = Some(*p);
+    }
+    let mut queue: Vec[(i64, i64)] = Vec.new();
+    for s in slots.iter() {
+        if let Some(p) = s {
+            queue.push(*p);
+        }
+    }
+    queue
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn text(people: Vec[(i64, i64)]) -> String {
+    let mut out = String.from("[");
+    for i in 0..people.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"[{people[i].0}, {people[i].1}]");
+    }
+    out.push(']');
+    out
+}
+
+fn show(people: own Vec[(i64, i64)]) {
+    let before = text(people);
+    println(f"{before} -> {text(reconstruct_queue(people))}");
+}
+
+fn main() {
+    show(vec![(7, 0), (4, 4), (7, 1), (5, 0), (6, 1), (5, 2)]);
+    show(vec![(6, 0), (5, 0), (4, 0), (3, 2), (2, 2), (1, 4)]);
+    show(Vec.new());
+    show(vec![(5, 0)]);
+    show(vec![(3, 2), (3, 0), (3, 1)]);
+    show(vec![(3, 0), (2, 0), (1, 0)]);
+    show(vec![(1, 2), (3, 0), (2, 1)]);
+    show(vec![(2, 0), (1, 1), (2, 1), (1, 0)]);
+    // 2,000 random queues of 1 to 50 people, heights from 1 to 20, each
+    // person's k counted from the queue, then shuffled.
+    let mut seed: i64 = 406;
+    let mut rebuilt = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let n = 1 + step(mut seed) % 50;
+        let mut line: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            let h = 1 + step(mut seed) % 20;
+            let mut k = 0;
+            for j in 0..line.len() {
+                if line[j].0 >= h {
+                    k += 1;
+                }
+            }
+            line.push((h, k));
+        }
+        let mut shuffled = line.clone();
+        for i in (1..n).rev() {
+            let j = step(mut seed) % (i + 1);
+            shuffled.swap(i, j);
+        }
+        let q = reconstruct_queue(shuffled);
+        if q == line {
+            rebuilt += 1;
+        }
+        for i in 0..q.len() {
+            checksum = (checksum * 31 + q[i].0 * 100 + q[i].1) % 1000000007;
+        }
+    }
+    println(f"2000 random queues: {rebuilt} rebuilt, checksum {checksum}");
+}

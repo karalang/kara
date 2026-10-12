@@ -1,0 +1,287 @@
+// Differential test for LeetCode #404: Sum of Left Leaves.
+//
+// Copies of the four arms, each run on 3,000 random cases. Properties
+// known by construction:
+//   P1  a tree with no left children, a chain of right children, sums
+//       to 0
+//   P2  a tree's sum plus its mirror image's sum is the sum of all its
+//       leaves but the root
+//   P3  a perfect tree of depth d >= 2 sums to the values at the even
+//       positions of its last level
+//   P4  hanging a new leaf v as the left child of a leaf w changes the
+//       sum by v, less w if w was a left leaf
+//   P5  the sum is that of every leaf whose parent's left index names it,
+//       found by a scan of the index pool with no tree walk
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+// ---- rec: sum_of_left_leaves.kara
+
+fn visit_rec(nodes: Vec[Node], node: i64, is_left: bool) -> i64 {
+    if node == -1 {
+        return 0;
+    }
+    if nodes[node].left == -1 and nodes[node].right == -1 {
+        return if is_left { nodes[node].val } else { 0 };
+    }
+    visit_rec(nodes, nodes[node].left, true) + visit_rec(nodes, nodes[node].right, false)
+}
+
+fn sum_of_left_leaves_rec(nodes: Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    visit_rec(nodes, 0, false)
+}
+
+// ---- stack: sum_of_left_leaves_stack.kara
+
+fn sum_of_left_leaves_stack(nodes: Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    let mut sum = 0;
+    let mut stack: Vec[(i64, bool)] = vec![(0, false)];
+    while let Some((node, is_left)) = stack.pop() {
+        let left = nodes[node].left;
+        let right = nodes[node].right;
+        if left == -1 and right == -1 {
+            if is_left {
+                sum += nodes[node].val;
+            }
+            continue;
+        }
+        if right != -1 {
+            stack.push((right, false));
+        }
+        if left != -1 {
+            stack.push((left, true));
+        }
+    }
+    sum
+}
+
+// ---- linked: sum_of_left_leaves_linked.kara
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn link(nodes: Vec[Node], i: i64) -> Option[TreeNode] {
+    if i == -1 {
+        return None;
+    }
+    Some(TreeNode { val: nodes[i].val, left: link(nodes, nodes[i].left), right: link(nodes, nodes[i].right) })
+}
+
+fn is_leaf(node: TreeNode) -> bool {
+    node.left.is_none() and node.right.is_none()
+}
+
+fn left_leaves(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let mut sum = 0;
+            if let Some(l) = n.left {
+                if is_leaf(l) {
+                    sum += l.val;
+                } else {
+                    sum += left_leaves(n.left);
+                }
+            }
+            sum + left_leaves(n.right)
+        }
+    }
+}
+
+fn sum_of_left_leaves_linked(nodes: Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    left_leaves(link(nodes, 0))
+}
+
+// ---- enum: sum_of_left_leaves_enum.kara
+
+shared enum Tree {
+    Empty,
+    Branch(i64, Tree, Tree),
+}
+
+fn grow(nodes: Vec[Node], i: i64) -> Tree {
+    if i == -1 {
+        return Tree.Empty;
+    }
+    Tree.Branch(nodes[i].val, grow(nodes, nodes[i].left), grow(nodes, nodes[i].right))
+}
+
+fn count(tree: Tree, is_left: bool) -> i64 {
+    match tree {
+        Tree.Empty => 0,
+        Tree.Branch(val, Tree.Empty, Tree.Empty) => if is_left { val } else { 0 },
+        Tree.Branch(_, left, right) => count(left, true) + count(right, false),
+    }
+}
+
+fn sum_of_left_leaves_enum(nodes: Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    count(grow(nodes, 0), false)
+}
+
+// ---- the checks -------------------------------------------------------------
+
+fn solve(arm: i64, nodes: Vec[Node]) -> i64 {
+    if arm == 0 {
+        sum_of_left_leaves_rec(nodes)
+    } else if arm == 1 {
+        sum_of_left_leaves_stack(nodes)
+    } else if arm == 2 {
+        sum_of_left_leaves_linked(nodes)
+    } else {
+        sum_of_left_leaves_enum(nodes)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn value(seed: mut ref i64) -> i64 {
+    step(seed) % 201 - 100
+}
+
+// A random tree of n nodes, each hung on a random free child slot of an
+// earlier one.
+fn random_tree(n: i64, seed: mut ref i64) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    nodes.push(Node { val: value(seed), left: -1, right: -1 });
+    for i in 1..n {
+        let mut p = step(seed) % i;
+        let mut side = 1 + step(seed) % 2;
+        while (side == 1 and nodes[p].left != -1) or (side == 2 and nodes[p].right != -1) {
+            p = step(seed) % i;
+            side = 1 + step(seed) % 2;
+        }
+        nodes.push(Node { val: value(seed), left: -1, right: -1 });
+        if side == 1 {
+            nodes[p].left = i;
+        } else {
+            nodes[p].right = i;
+        }
+    }
+    nodes
+}
+
+fn pool_leaf(nodes: Vec[Node], i: i64) -> bool {
+    nodes[i].left == -1 and nodes[i].right == -1
+}
+
+// The perfect tree of depth d, in level order: node i has children
+// 2i + 1 and 2i + 2.
+fn perfect(vals: Vec[i64]) -> Vec[Node] {
+    let n = vals.len();
+    let mut nodes: Vec[Node] = Vec.new();
+    for i in 0..n {
+        let left = if 2 * i + 1 < n { 2 * i + 1 } else { -1 };
+        let right = if 2 * i + 2 < n { 2 * i + 2 } else { -1 };
+        nodes.push(Node { val: vals[i], left: left, right: right });
+    }
+    nodes
+}
+
+// failures[0] counts every failure, failures[p] those of property Pp.
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4040;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..3000 {
+        // P1: a chain of right children.
+        let c = 1 + step(mut seed) % 30;
+        let mut chain: Vec[Node] = Vec.new();
+        for i in 0..c {
+            chain.push(Node { val: value(mut seed), left: -1, right: if i + 1 < c { i + 1 } else { -1 } });
+        }
+        // P2: a random tree and its mirror image.
+        let tree = random_tree(1 + step(mut seed) % 60, mut seed);
+        let mut mirror: Vec[Node] = Vec.new();
+        let mut leaves = 0;
+        for i in 0..tree.len() {
+            mirror.push(Node { val: tree[i].val, left: tree[i].right, right: tree[i].left });
+            if i > 0 and pool_leaf(tree, i) {
+                leaves += tree[i].val;
+            }
+        }
+        // P3: a perfect tree of depth 2 to 6.
+        let d = 2 + step(mut seed) % 5;
+        let mut vals: Vec[i64] = Vec.new();
+        for _ in 0..(1 << d) - 1 {
+            vals.push(value(mut seed));
+        }
+        let mut bottom = 0;
+        let mut j = (1 << (d - 1)) - 1;
+        while j < vals.len() {
+            bottom += vals[j];
+            j += 2;
+        }
+        let full = perfect(vals);
+        // P4: a random tree and the same with a new left leaf under a leaf.
+        let before = random_tree(1 + step(mut seed) % 60, mut seed);
+        let mut after: Vec[Node] = Vec.new();
+        for i in 0..before.len() {
+            after.push(Node { val: before[i].val, left: before[i].left, right: before[i].right });
+        }
+        let mut under = step(mut seed) % before.len();
+        while not pool_leaf(before, under) {
+            under = step(mut seed) % before.len();
+        }
+        let v = value(mut seed);
+        after.push(Node { val: v, left: -1, right: -1 });
+        after[under].left = before.len();
+        let mut was_left = false;
+        for i in 0..before.len() {
+            was_left = was_left or before[i].left == under;
+        }
+        let change = if was_left { v - before[under].val } else { v };
+        // P5: the definition, by a scan of the pool.
+        let mut scan = 0;
+        for i in 0..tree.len() {
+            let l = tree[i].left;
+            if l != -1 and pool_leaf(tree, l) {
+                scan += tree[l].val;
+            }
+        }
+        for arm in 0..4 {
+            let t = solve(arm, tree);
+            checks += 5;
+            report(1, arm, case, solve(arm, chain) == 0, mut failures);
+            report(2, arm, case, t + solve(arm, mirror) == leaves, mut failures);
+            report(3, arm, case, solve(arm, full) == bottom, mut failures);
+            report(4, arm, case, solve(arm, after) == solve(arm, before) + change, mut failures);
+            report(5, arm, case, t == scan, mut failures);
+        }
+    }
+    println(f"3000 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

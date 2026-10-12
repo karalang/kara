@@ -1,0 +1,53 @@
+// Benchmark for #406: the kata's ★ arm (tallest first, each inserted at
+// its k). 1,000 random queues of 2,000 people with heights from 1 to 50,
+// each person's k counted from the queue, shuffled and rebuilt; the
+// queues rebuilt and a checksum over them go into the sink.
+
+fn reconstruct_queue(people: own Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut people = people;
+    people.sort_by_key(|p| (-p.0, p.1));
+    let mut queue: Vec[(i64, i64)] = Vec.new();
+    for p in people.iter() {
+        queue.insert(p.1, *p);
+    }
+    queue
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let queues = 1000;
+    let n = 2000;
+    let mut seed: i64 = 406;
+    let mut rebuilt = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..queues {
+        let mut count = vec![0; 51];
+        let mut line: Vec[(i64, i64)] = Vec.new();
+        for _ in 0..n {
+            let h = 1 + step(mut seed) % 50;
+            let mut k = 0;
+            for g in h..51 {
+                k += count[g];
+            }
+            count[h] += 1;
+            line.push((h, k));
+        }
+        let mut people = line.clone();
+        for i in (1..n).rev() {
+            let j = step(mut seed) % (i + 1);
+            people.swap(i, j);
+        }
+        let q = reconstruct_queue(people);
+        if q == line {
+            rebuilt += 1;
+        }
+        for i in 0..q.len() {
+            checksum = (checksum * 31 + q[i].0 * 10000 + q[i].1) % 1000000007;
+        }
+    }
+    println(f"{queues} queues of {n} people: {rebuilt} rebuilt, checksum {checksum}");
+}

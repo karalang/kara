@@ -1,0 +1,87 @@
+// LeetCode #403: Frog Jump -- breadth-first search over states.
+//
+// The same states as the memo arm, the stone and the last jump, visited
+// in order of the number of jumps from a queue, each state once. The
+// river is crossed as soon as a state on the last stone comes off the
+// queue. O(n^2) states.
+
+fn can_cross(stones: Vec[i64]) -> bool {
+    let mut index: Map[i64, i64] = Map.new();
+    for i in 0..stones.len() {
+        index.insert(stones[i], i);
+    }
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut seen: Set[(i64, i64)] = Set.new();
+    queue.push_back((0, 0));
+    seen.insert((0, 0));
+    while let Some((at, k)) = queue.pop_front() {
+        if at == stones.len() - 1 {
+            return true;
+        }
+        for size in k - 1..k + 2 {
+            if size > 0 {
+                if let Some(next) = index.get(stones[at] + size) {
+                    if seen.insert((*next, size)) {
+                        queue.push_back((*next, size));
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(stones: Vec[i64]) {
+    let mut text = String.from("[");
+    for i in 0..stones.len() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(f"{stones[i]}");
+    }
+    text.push_str("]: ");
+    text.push_str(if can_cross(stones) { "true" } else { "false" });
+    println(text);
+}
+
+fn main() {
+    show(vec![0, 1, 3, 5, 6, 8, 12, 17]);
+    show(vec![0, 1, 2, 3, 4, 8, 9, 11]);
+    show(vec![0, 1]);
+    show(vec![0, 2]);
+    show(vec![0, 1, 3, 6, 10, 15, 21]);
+    show(vec![0, 1, 3, 6, 10, 13, 14]);
+    show(vec![0, 1, 2, 4, 7, 11, 16, 22, 29]);
+    show(vec![0, 1, 3, 4, 5, 7, 9, 10, 12]);
+    show(vec![0, 1, 1000]);
+    let mut row: Vec[i64] = Vec.new();
+    for i in 0..20 {
+        row.push(i);
+    }
+    show(row);
+    // 2,000 random rivers of 2 to 60 stones, the gaps after the first
+    // stone from 1 to 4.
+    let mut seed: i64 = 403;
+    let mut crossed = 0;
+    let mut checksum: i64 = 0;
+    for case in 0..2000 {
+        let n = 2 + step(mut seed) % 59;
+        let mut stones = vec![0, 1];
+        while stones.len() < n {
+            let last = stones[stones.len() - 1];
+            stones.push(last + 1 + step(mut seed) % 4);
+        }
+        if can_cross(stones) {
+            crossed += 1;
+            checksum = (checksum * 31 + case + 1) % 1000000007;
+        }
+    }
+    println(f"2000 random rivers: {crossed} crossed, checksum {checksum}");
+}

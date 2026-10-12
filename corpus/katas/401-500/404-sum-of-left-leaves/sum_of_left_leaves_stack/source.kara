@@ -1,0 +1,142 @@
+// LeetCode #404: Sum of Left Leaves -- an explicit stack.
+//
+// The recursive walk with the call stack made explicit: a stack of
+// (node, is left child) pairs, popped until empty. A popped leaf that is
+// a left child adds its value; any other node pushes its children.
+//
+// The tree is the corpus index pool (`Vec[Node]`, child indices, -1 =
+// none). O(n) time, O(height) stack entries for a depth-first order.
+
+struct Node {
+    val: i64,
+    mut left: i64,
+    mut right: i64,
+}
+
+fn sum_of_left_leaves(nodes: Vec[Node]) -> i64 {
+    if nodes.len() == 0 {
+        return 0;
+    }
+    let mut sum = 0;
+    let mut stack: Vec[(i64, bool)] = vec![(0, false)];
+    while let Some((node, is_left)) = stack.pop() {
+        let left = nodes[node].left;
+        let right = nodes[node].right;
+        if left == -1 and right == -1 {
+            if is_left {
+                sum += nodes[node].val;
+            }
+            continue;
+        }
+        if right != -1 {
+            stack.push((right, false));
+        }
+        if left != -1 {
+            stack.push((left, true));
+        }
+    }
+    sum
+}
+
+// ---- test harness ---------------------------------------------------------
+
+const NULL: i64 = -1000000007;
+
+// The index pool from a level-order array with NULL for a missing child;
+// the root is index 0.
+fn build(vals: Vec[i64]) -> Vec[Node] {
+    let mut nodes: Vec[Node] = Vec.new();
+    if vals.len() == 0 or vals[0] == NULL {
+        return nodes;
+    }
+    nodes.push(Node { val: vals[0], left: -1, right: -1 });
+    let mut queue: Vec[i64] = Vec.new();
+    queue.push(0);
+    let mut head = 0;
+    let mut i = 1;
+    while head < queue.len() and i < vals.len() {
+        let cur = queue[head];
+        head += 1;
+        if vals[i] != NULL {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let id = nodes.len() - 1;
+            nodes[cur].left = id;
+            queue.push(id);
+        }
+        i += 1;
+        if i < vals.len() and vals[i] != NULL {
+            nodes.push(Node { val: vals[i], left: -1, right: -1 });
+            let id = nodes.len() - 1;
+            nodes[cur].right = id;
+            queue.push(id);
+        }
+        i += 1;
+    }
+    nodes
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(vals: Vec[i64]) {
+    let mut text = String.from("[");
+    for i in 0..vals.len() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        if vals[i] == NULL {
+            text.push_str("null");
+        } else {
+            text.push_str(f"{vals[i]}");
+        }
+    }
+    println(f"{text}]: {sum_of_left_leaves(build(vals))}");
+}
+
+fn main() {
+    show(vec![3, 9, 20, NULL, NULL, 15, 7]);
+    show(vec![1]);
+    show(Vec.new());
+    show(vec![1, 2]);
+    show(vec![1, NULL, 2]);
+    show(vec![1, 2, 3, 4, 5]);
+    show(vec![1, NULL, 2, NULL, 3]);
+    show(vec![1, 2, NULL, 3, NULL, 4]);
+    show(vec![1, NULL, 2, 3]);
+    show(vec![-1, -2, -3, -4, NULL, -5, -6]);
+    let mut full: Vec[i64] = Vec.new();
+    for v in 1..16 {
+        full.push(v);
+    }
+    show(full);
+    // 2,000 random trees of 1 to 60 nodes, values from -100 to 100, each
+    // node hung on a random free child slot of an earlier one.
+    let mut seed: i64 = 404;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..2000 {
+        let n = 1 + step(mut seed) % 60;
+        let mut nodes: Vec[Node] = Vec.new();
+        nodes.push(Node { val: step(mut seed) % 201 - 100, left: -1, right: -1 });
+        for i in 1..n {
+            let mut p = step(mut seed) % i;
+            let mut side = 1 + step(mut seed) % 2;
+            while (side == 1 and nodes[p].left != -1) or (side == 2 and nodes[p].right != -1) {
+                p = step(mut seed) % i;
+                side = 1 + step(mut seed) % 2;
+            }
+            nodes.push(Node { val: step(mut seed) % 201 - 100, left: -1, right: -1 });
+            if side == 1 {
+                nodes[p].left = i;
+            } else {
+                nodes[p].right = i;
+            }
+        }
+        let s = sum_of_left_leaves(nodes);
+        total += s;
+        checksum = (checksum * 31 + s + 10000) % 1000000007;
+    }
+    println(f"2000 random trees: total {total}, checksum {checksum}");
+}
