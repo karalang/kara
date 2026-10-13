@@ -1,0 +1,143 @@
+// Benchmark for #463: the ★ arm (four sides per land cell, less two per
+// shared edge) on a large workload.
+
+fn island_perimeter(grid: Vec[Vec[i64]]) -> i64 {
+    let mut land = 0;
+    let mut shared = 0;
+    for i in 0..grid.len() {
+        for j in 0..grid[i].len() {
+            if grid[i][j] == 1 {
+                land += 1;
+                if j + 1 < grid[i].len() and grid[i][j + 1] == 1 {
+                    shared += 1;
+                }
+                if i + 1 < grid.len() and grid[i + 1][j] == 1 {
+                    shared += 1;
+                }
+            }
+        }
+    }
+    4 * land - 2 * shared
+}
+
+// ---- bench ------------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random walk of land on a rows x cols sea, then every lake (water
+// the outer sea cannot reach) filled in, as the problem promises.
+fn random_island(rows: i64, cols: i64, steps: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        grid.push(vec![0; cols]);
+    }
+    let mut i = next_random(seed) % rows;
+    let mut j = next_random(seed) % cols;
+    grid[i][j] = 1;
+    for _ in 0..steps {
+        let d = next_random(seed) % 4;
+        if d == 0 and i > 0 {
+            i -= 1;
+        } else if d == 1 and i + 1 < rows {
+            i += 1;
+        } else if d == 2 and j > 0 {
+            j -= 1;
+        } else if d == 3 and j + 1 < cols {
+            j += 1;
+        }
+        grid[i][j] = 1;
+    }
+    // Water reachable from the border, breadth first.
+    let mut sea: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..rows {
+        sea.push(vec![false; cols]);
+    }
+    let mut queue: Vec[(i64, i64)] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if (r == 0 or c == 0 or r == rows - 1 or c == cols - 1) and grid[r][c] == 0 {
+                sea[r][c] = true;
+                queue.push((r, c));
+            }
+        }
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let (r, c) = queue[head];
+        head += 1;
+        for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and grid[nr][nc] == 0 and not sea[nr][nc] {
+                sea[nr][nc] = true;
+                queue.push((nr, nc));
+            }
+        }
+    }
+    for r in 0..rows {
+        for c in 0..cols {
+            if not sea[r][c] {
+                grid[r][c] = 1;
+            }
+        }
+    }
+    grid
+}
+
+fn main() {
+    let size = 1000;
+    let islands = 2;
+    let rounds = 200;
+    let mut seed: i64 = 463;
+    // Each island grows on the inside of the sea, which keeps a ring of
+    // water around it.
+    let mut grids: Vec[Vec[Vec[i64]]] = Vec.new();
+    let mut tops: Vec[i64] = Vec.new();
+    let mut shores: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..islands {
+        let inner = random_island(size - 2, size - 2, (size - 2) * (size - 2), mut seed);
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        grid.push(vec![0; size]);
+        for row in inner {
+            let mut wide = vec![0];
+            for c in row {
+                wide.push(c);
+            }
+            wide.push(0);
+            grid.push(wide);
+        }
+        grid.push(vec![0; size]);
+        // The topmost row with land, and its land columns: a cell put
+        // above one of them joins the island and closes off no water.
+        let mut top = 0;
+        while not grid[top].contains(1) {
+            top += 1;
+        }
+        let mut shore: Vec[i64] = Vec.new();
+        for j in 0..size {
+            if grid[top][j] == 1 {
+                shore.push(j);
+            }
+        }
+        grids.push(grid);
+        tops.push(top);
+        shores.push(shore);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        for g in 0..islands {
+            let j = shores[g][next_random(mut seed) % shores[g].len()];
+            let above = tops[g] - 1;
+            grids[g][above][j] = 1;
+            let perimeter = island_perimeter(grids[g]);
+            grids[g][above][j] = 0;
+            total += perimeter;
+            checksum = (checksum * 31 + perimeter) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds on {islands} islands of {size}x{size}: perimeter {total} in all, checksum {checksum}");
+}

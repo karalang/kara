@@ -1,0 +1,345 @@
+// Differential test for LeetCode #463: Island Perimeter.
+//
+// Copies of the four arms, each run on 1,500 random islands.
+// Properties:
+//   P1  on seas up to 6 by 6, the answer is brute force's: every unit
+//       edge of the grid, inside or on its border, with land on exactly
+//       one side
+//   P2  transposing, flipping upside down and mirroring keep the answer
+//   P3  blowing every cell up to a k x k block multiplies it by k
+//   P4  a border of water around the sea keeps it
+//   P5  a solid a x b rectangle anywhere in the sea gives 2 (a + b)
+
+// ---- shared: island_perimeter.kara
+
+fn perimeter_shared(grid: Vec[Vec[i64]]) -> i64 {
+    let mut land = 0;
+    let mut shared = 0;
+    for i in 0..grid.len() {
+        for j in 0..grid[i].len() {
+            if grid[i][j] == 1 {
+                land += 1;
+                if j + 1 < grid[i].len() and grid[i][j + 1] == 1 {
+                    shared += 1;
+                }
+                if i + 1 < grid.len() and grid[i + 1][j] == 1 {
+                    shared += 1;
+                }
+            }
+        }
+    }
+    4 * land - 2 * shared
+}
+
+// ---- sides: island_perimeter_sides.kara
+
+fn land_at(grid: Vec[Vec[i64]], i: i64, j: i64) -> bool {
+    i >= 0 and i < grid.len() and j >= 0 and j < grid[i].len() and grid[i][j] == 1
+}
+
+fn perimeter_sides(grid: Vec[Vec[i64]]) -> i64 {
+    let mut perimeter = 0;
+    for i in 0..grid.len() {
+        for j in 0..grid[i].len() {
+            if grid[i][j] == 1 {
+                for (di, dj) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                    if not land_at(grid, i + di, j + dj) {
+                        perimeter += 1;
+                    }
+                }
+            }
+        }
+    }
+    perimeter
+}
+
+// ---- walk: island_perimeter_walk.kara
+
+fn perimeter_walk(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut seen: Vec[Vec[bool]] = Vec.new();
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    for i in 0..rows {
+        seen.push(vec![false; cols]);
+        for j in 0..cols {
+            if stack.is_empty() and grid[i][j] == 1 {
+                stack.push((i, j));
+            }
+        }
+    }
+    if stack.is_empty() {
+        return 0;
+    }
+    let (i0, j0) = stack[0];
+    seen[i0][j0] = true;
+    let mut perimeter = 0;
+    while let Some((i, j)) = stack.pop() {
+        for (di, dj) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let ni = i + di;
+            let nj = j + dj;
+            if ni < 0 or ni >= rows or nj < 0 or nj >= cols or grid[ni][nj] == 0 {
+                perimeter += 1;
+            } else if not seen[ni][nj] {
+                seen[ni][nj] = true;
+                stack.push((ni, nj));
+            }
+        }
+    }
+    perimeter
+}
+
+// ---- crossings: island_perimeter_crossings.kara
+
+fn perimeter_crossings(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut crossings = 0;
+    for i in 0..rows {
+        let mut last = 0;
+        for j in 0..cols {
+            if grid[i][j] != last {
+                crossings += 1;
+            }
+            last = grid[i][j];
+        }
+        crossings += last;
+    }
+    for j in 0..cols {
+        let mut last = 0;
+        for i in 0..rows {
+            if grid[i][j] != last {
+                crossings += 1;
+            }
+            last = grid[i][j];
+        }
+        crossings += last;
+    }
+    crossings
+}
+
+// ---- harness
+
+fn perimeter(arm: i64, grid: Vec[Vec[i64]]) -> i64 {
+    if arm == 0 {
+        perimeter_shared(grid)
+    } else if arm == 1 {
+        perimeter_sides(grid)
+    } else if arm == 2 {
+        perimeter_walk(grid)
+    } else {
+        perimeter_crossings(grid)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random walk of land on a rows x cols sea, then every lake (water
+// the outer sea cannot reach) filled in, as the problem promises.
+fn random_island(rows: i64, cols: i64, steps: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        grid.push(vec![0; cols]);
+    }
+    let mut i = next_random(seed) % rows;
+    let mut j = next_random(seed) % cols;
+    grid[i][j] = 1;
+    for _ in 0..steps {
+        let d = next_random(seed) % 4;
+        if d == 0 and i > 0 {
+            i -= 1;
+        } else if d == 1 and i + 1 < rows {
+            i += 1;
+        } else if d == 2 and j > 0 {
+            j -= 1;
+        } else if d == 3 and j + 1 < cols {
+            j += 1;
+        }
+        grid[i][j] = 1;
+    }
+    // Water reachable from the border, breadth first.
+    let mut sea: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..rows {
+        sea.push(vec![false; cols]);
+    }
+    let mut queue: Vec[(i64, i64)] = Vec.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if (r == 0 or c == 0 or r == rows - 1 or c == cols - 1) and grid[r][c] == 0 {
+                sea[r][c] = true;
+                queue.push((r, c));
+            }
+        }
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let (r, c) = queue[head];
+        head += 1;
+        for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < rows and nc >= 0 and nc < cols and grid[nr][nc] == 0 and not sea[nr][nc] {
+                sea[nr][nc] = true;
+                queue.push((nr, nc));
+            }
+        }
+    }
+    for r in 0..rows {
+        for c in 0..cols {
+            if not sea[r][c] {
+                grid[r][c] = 1;
+            }
+        }
+    }
+    grid
+}
+
+fn cell(grid: Vec[Vec[i64]], i: i64, j: i64) -> i64 {
+    if i < 0 or i >= grid.len() or j < 0 or j >= grid[0].len() {
+        0
+    } else {
+        grid[i][j]
+    }
+}
+
+fn brute(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut edges = 0;
+    // Edges along rows: between (i - 1, j) and (i, j).
+    for i in 0..rows + 1 {
+        for j in 0..cols {
+            if cell(grid, i - 1, j) != cell(grid, i, j) {
+                edges += 1;
+            }
+        }
+    }
+    // Edges along columns: between (i, j - 1) and (i, j).
+    for i in 0..rows {
+        for j in 0..cols + 1 {
+            if cell(grid, i, j - 1) != cell(grid, i, j) {
+                edges += 1;
+            }
+        }
+    }
+    edges
+}
+
+fn transposed(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for j in 0..grid[0].len() {
+        let mut row: Vec[i64] = Vec.new();
+        for i in 0..grid.len() {
+            row.push(grid[i][j]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn flipped(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out = grid.clone();
+    out.reverse();
+    out
+}
+
+fn mirrored(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for row in grid {
+        let mut copy = row.clone();
+        copy.reverse();
+        out.push(copy);
+    }
+    out
+}
+
+fn blown_up(grid: Vec[Vec[i64]], k: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..grid.len() * k {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..grid[0].len() * k {
+            row.push(grid[i / k][j / k]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn bordered(grid: Vec[Vec[i64]], top: i64, bottom: i64, left: i64, right: i64) -> Vec[Vec[i64]] {
+    let width = left + grid[0].len() + right;
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..top {
+        out.push(vec![0; width]);
+    }
+    for row in grid {
+        let mut wide = vec![0; left];
+        for c in row {
+            wide.push(c);
+        }
+        for _ in 0..right {
+            wide.push(0);
+        }
+        out.push(wide);
+    }
+    for _ in 0..bottom {
+        out.push(vec![0; width]);
+    }
+    out
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4630;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let rows = 1 + next_random(mut seed) % 6;
+        let cols = 1 + next_random(mut seed) % 6;
+        let steps = next_random(mut seed) % (rows * cols + 1);
+        let small = random_island(rows, cols, steps, mut seed);
+        let expected = brute(small);
+        let rows = 1 + next_random(mut seed) % 20;
+        let cols = 1 + next_random(mut seed) % 20;
+        let steps = next_random(mut seed) % (rows * cols + 1);
+        let grid = random_island(rows, cols, steps, mut seed);
+        let k = 2 + next_random(mut seed) % 3;
+        let big = blown_up(grid, k);
+        let top = next_random(mut seed) % 3;
+        let bottom = next_random(mut seed) % 3;
+        let left = next_random(mut seed) % 3;
+        let right = next_random(mut seed) % 3;
+        let wide = bordered(grid, top, bottom, left, right);
+        let a = 1 + next_random(mut seed) % 8;
+        let b = 1 + next_random(mut seed) % 8;
+        let mut sea: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..a {
+            sea.push(vec![1; b]);
+        }
+        let block = bordered(sea, next_random(mut seed) % 4, next_random(mut seed) % 4, next_random(mut seed) % 4, next_random(mut seed) % 4);
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, perimeter(arm, small) == expected, mut failures);
+            let answer = perimeter(arm, grid);
+            report(2, arm, case, perimeter(arm, transposed(grid)) == answer and perimeter(arm, flipped(grid)) == answer and perimeter(arm, mirrored(grid)) == answer, mut failures);
+            report(3, arm, case, perimeter(arm, big) == k * answer, mut failures);
+            report(4, arm, case, perimeter(arm, wide) == answer, mut failures);
+            report(5, arm, case, perimeter(arm, block) == 2 * (a + b), mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

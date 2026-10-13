@@ -1,0 +1,233 @@
+// Differential test for LeetCode #464: Can I Win.
+//
+// Copies of the four arms, each run on 1,500 random cases.
+// Properties:
+//   P1  on numbers up to 7, the answer is brute force's: every line of
+//       play, with no memo
+//   P2  a total of at most m is a win: take it at once
+//   P3  a total of m + 1, for m of at least 2, is a loss: the second
+//       player answers every number with one that reaches it
+//   P4  a total of all m numbers is a win exactly when m is odd, and
+//       anything more is a loss
+//   P5  on numbers up to 10, every arm agrees with the map arm
+
+// ---- map: can_i_win.kara
+
+fn from_map(used: i64, left: i64, m: i64, memo: mut ref Map[i64, bool]) -> bool {
+    if let Some(known) = memo.get(used) {
+        return known;
+    }
+    let mut result = false;
+    for n in 1..m + 1 {
+        let bit = 1 << (n - 1);
+        if used & bit == 0 and (n >= left or not from_map(used | bit, left - n, m, memo)) {
+            result = true;
+            break;
+        }
+    }
+    memo.insert(used, result);
+    result
+}
+
+fn wins_map(max_choosable: i64, desired_total: i64) -> bool {
+    if desired_total <= 0 {
+        return true;
+    }
+    if max_choosable * (max_choosable + 1) / 2 < desired_total {
+        return false;
+    }
+    let mut memo: Map[i64, bool] = Map.new();
+    from_map(0, desired_total, max_choosable, mut memo)
+}
+
+// ---- array: can_i_win_array.kara
+
+fn from_array(used: i64, left: i64, m: i64, memo: mut ref Vec[i64]) -> bool {
+    if memo[used] != 0 {
+        return memo[used] == 1;
+    }
+    let mut result = false;
+    for n in 1..m + 1 {
+        let bit = 1 << (n - 1);
+        if used & bit == 0 and (n >= left or not from_array(used | bit, left - n, m, memo)) {
+            result = true;
+            break;
+        }
+    }
+    memo[used] = if result { 1 } else { 2 };
+    result
+}
+
+fn wins_array(max_choosable: i64, desired_total: i64) -> bool {
+    if desired_total <= 0 {
+        return true;
+    }
+    if max_choosable * (max_choosable + 1) / 2 < desired_total {
+        return false;
+    }
+    let mut memo = vec![0; 1 << max_choosable];
+    from_array(0, desired_total, max_choosable, mut memo)
+}
+
+// ---- table: can_i_win_table.kara
+
+fn wins_table(max_choosable: i64, desired_total: i64) -> bool {
+    if desired_total <= 0 {
+        return true;
+    }
+    let m = max_choosable;
+    if m * (m + 1) / 2 < desired_total {
+        return false;
+    }
+    let full = 1 << m;
+    let mut sum = vec![0; full];
+    for mask in 1..full {
+        // The lowest number in the mask, plus the rest.
+        let mut n = 1;
+        while mask & (1 << (n - 1)) == 0 {
+            n += 1;
+        }
+        sum[mask] = sum[mask & (mask - 1)] + n;
+    }
+    let mut win = vec![false; full];
+    let mut mask = full - 1;
+    while mask >= 0 {
+        let left = desired_total - sum[mask];
+        for n in 1..m + 1 {
+            let bit = 1 << (n - 1);
+            if mask & bit == 0 and (n >= left or not win[mask | bit]) {
+                win[mask] = true;
+                break;
+            }
+        }
+        mask -= 1;
+    }
+    win[0]
+}
+
+// ---- free: can_i_win_free.kara
+
+fn from_free(free: Vec[i64], left: i64, memo: mut ref Map[Vec[i64], bool]) -> bool {
+    if let Some(known) = memo.get(free) {
+        return known;
+    }
+    let mut result = false;
+    for i in 0..free.len() {
+        let n = free[i];
+        if n >= left {
+            result = true;
+            break;
+        }
+        let mut rest = free.clone();
+        rest.remove(i);
+        if not from_free(rest, left - n, memo) {
+            result = true;
+            break;
+        }
+    }
+    memo.insert(free.clone(), result);
+    result
+}
+
+fn wins_free(max_choosable: i64, desired_total: i64) -> bool {
+    if desired_total <= 0 {
+        return true;
+    }
+    if max_choosable * (max_choosable + 1) / 2 < desired_total {
+        return false;
+    }
+    let mut free: Vec[i64] = Vec.new();
+    for n in 1..max_choosable + 1 {
+        free.push(n);
+    }
+    let mut memo: Map[Vec[i64], bool] = Map.new();
+    from_free(free, desired_total, mut memo)
+}
+
+// ---- harness
+
+fn wins(arm: i64, m: i64, total: i64) -> bool {
+    if arm == 0 {
+        wins_map(m, total)
+    } else if arm == 1 {
+        wins_array(m, total)
+    } else if arm == 2 {
+        wins_table(m, total)
+    } else {
+        wins_free(m, total)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Every line of play: the player to move wins if some free number
+// reaches what is left, or leaves the other player no win.
+fn brute_from(used: Vec[bool], left: i64) -> bool {
+    for n in 1..used.len() {
+        if not used[n] {
+            if n >= left {
+                return true;
+            }
+            let mut next = used.clone();
+            next[n] = true;
+            if not brute_from(next, left - n) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn brute(m: i64, total: i64) -> bool {
+    if total <= 0 {
+        return true;
+    }
+    if m * (m + 1) / 2 < total {
+        return false;
+    }
+    brute_from(vec![false; m + 1], total)
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4640;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let m1 = 1 + next_random(mut seed) % 7;
+        let t1 = next_random(mut seed) % (m1 * (m1 + 1) / 2 + 3);
+        let expected = brute(m1, t1);
+        let m2 = 1 + next_random(mut seed) % 12;
+        let t2 = next_random(mut seed) % (m2 + 1);
+        let m3 = 2 + next_random(mut seed) % 11;
+        let m4 = 1 + next_random(mut seed) % 12;
+        let over = next_random(mut seed) % 3;
+        let m5 = 1 + next_random(mut seed) % 10;
+        let t5 = next_random(mut seed) % (m5 * (m5 + 1) / 2 + 3);
+        let reference = wins_map(m5, t5);
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, wins(arm, m1, t1) == expected, mut failures);
+            report(2, arm, case, wins(arm, m2, t2), mut failures);
+            report(3, arm, case, not wins(arm, m3, m3 + 1), mut failures);
+            report(4, arm, case, wins(arm, m4, m4 * (m4 + 1) / 2 + over) == (over == 0 and m4 % 2 == 1), mut failures);
+            report(5, arm, case, wins(arm, m5, t5) == reference, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

@@ -1,0 +1,84 @@
+// LeetCode #464: Can I Win -- every position, bottom up.
+//
+// Positions only ever gain numbers, so work through the bitmasks from
+// the full one down: by the time a mask is reached, every position one
+// number on is settled. The player to move at a mask wins if a free
+// number reaches the total or leads to a lost position. The first
+// player wins if the empty mask is a win. Always O(2^m x m).
+
+fn can_i_win(max_choosable: i64, desired_total: i64) -> bool {
+    if desired_total <= 0 {
+        return true;
+    }
+    let m = max_choosable;
+    if m * (m + 1) / 2 < desired_total {
+        return false;
+    }
+    let full = 1 << m;
+    let mut sum = vec![0; full];
+    for mask in 1..full {
+        // The lowest number in the mask, plus the rest.
+        let mut n = 1;
+        while mask & (1 << (n - 1)) == 0 {
+            n += 1;
+        }
+        sum[mask] = sum[mask & (mask - 1)] + n;
+    }
+    let mut win = vec![false; full];
+    let mut mask = full - 1;
+    while mask >= 0 {
+        let left = desired_total - sum[mask];
+        for n in 1..m + 1 {
+            let bit = 1 << (n - 1);
+            if mask & bit == 0 and (n >= left or not win[mask | bit]) {
+                win[mask] = true;
+                break;
+            }
+        }
+        mask -= 1;
+    }
+    win[0]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(max_choosable: i64, desired_total: i64) {
+    let wins = can_i_win(max_choosable, desired_total);
+    println(f"max_choosable {max_choosable}, desired_total {desired_total} -> {wins}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(10, 11);
+    show(10, 0);
+    show(10, 1);
+    show(1, 1);
+    show(1, 2);
+    show(2, 3);
+    show(3, 4);
+    show(4, 6);
+    show(5, 15);
+    show(6, 21);
+    show(10, 40);
+    show(12, 50);
+    show(12, 79);
+    // 300 random games: numbers 1 to m for m up to 12, and a total from
+    // 0 to a little past what all of them add up to.
+    let count = 300;
+    let mut seed: i64 = 464;
+    let mut won = 0;
+    let mut checksum: i64 = 0;
+    for case in 0..count {
+        let m = 1 + next_random(mut seed) % 12;
+        let total = next_random(mut seed) % (m * (m + 1) / 2 + 6);
+        if can_i_win(m, total) {
+            won += 1;
+            checksum = (checksum * 31 + case + 1) % 1000000007;
+        }
+    }
+    println(f"{count} random games: the first player wins {won}, checksum {checksum}");
+}

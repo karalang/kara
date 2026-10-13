@@ -1,0 +1,75 @@
+// LeetCode #464: Can I Win -- search with a memo array.
+//
+// The same search as the ★ arm, with each position's answer kept in a
+// Vec of 2^m entries indexed by the bitmask: 0 not yet known, 1 a win
+// for the player to move, 2 a loss. O(2^m x m).
+
+fn wins_from(used: i64, left: i64, m: i64, memo: mut ref Vec[i64]) -> bool {
+    if memo[used] != 0 {
+        return memo[used] == 1;
+    }
+    let mut result = false;
+    for n in 1..m + 1 {
+        let bit = 1 << (n - 1);
+        if used & bit == 0 and (n >= left or not wins_from(used | bit, left - n, m, memo)) {
+            result = true;
+            break;
+        }
+    }
+    memo[used] = if result { 1 } else { 2 };
+    result
+}
+
+fn can_i_win(max_choosable: i64, desired_total: i64) -> bool {
+    if desired_total <= 0 {
+        return true;
+    }
+    if max_choosable * (max_choosable + 1) / 2 < desired_total {
+        return false;
+    }
+    let mut memo = vec![0; 1 << max_choosable];
+    wins_from(0, desired_total, max_choosable, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(max_choosable: i64, desired_total: i64) {
+    let wins = can_i_win(max_choosable, desired_total);
+    println(f"max_choosable {max_choosable}, desired_total {desired_total} -> {wins}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(10, 11);
+    show(10, 0);
+    show(10, 1);
+    show(1, 1);
+    show(1, 2);
+    show(2, 3);
+    show(3, 4);
+    show(4, 6);
+    show(5, 15);
+    show(6, 21);
+    show(10, 40);
+    show(12, 50);
+    show(12, 79);
+    // 300 random games: numbers 1 to m for m up to 12, and a total from
+    // 0 to a little past what all of them add up to.
+    let count = 300;
+    let mut seed: i64 = 464;
+    let mut won = 0;
+    let mut checksum: i64 = 0;
+    for case in 0..count {
+        let m = 1 + next_random(mut seed) % 12;
+        let total = next_random(mut seed) % (m * (m + 1) / 2 + 6);
+        if can_i_win(m, total) {
+            won += 1;
+            checksum = (checksum * 31 + case + 1) % 1000000007;
+        }
+    }
+    println(f"{count} random games: the first player wins {won}, checksum {checksum}");
+}

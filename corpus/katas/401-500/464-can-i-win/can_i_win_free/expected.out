@@ -1,0 +1,14 @@
+max_choosable 10, desired_total 11 -> false
+max_choosable 10, desired_total 0 -> true
+max_choosable 10, desired_total 1 -> true
+max_choosable 1, desired_total 1 -> true
+max_choosable 1, desired_total 2 -> false
+max_choosable 2, desired_total 3 -> false
+max_choosable 3, desired_total 4 -> false
+max_choosable 4, desired_total 6 -> true
+max_choosable 5, desired_total 15 -> true
+max_choosable 6, desired_total 21 -> false
+max_choosable 10, desired_total 40 -> false
+max_choosable 12, desired_total 50 -> true
+max_choosable 12, desired_total 79 -> false
+300 random games: the first player wins 175, checksum 16345247
