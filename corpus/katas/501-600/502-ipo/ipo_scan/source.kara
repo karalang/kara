@@ -1,0 +1,68 @@
+// LeetCode #502: IPO -- a scan per round.
+//
+// Each round, look at every project not yet done and take the most
+// profitable one the capital affords; stop when none is affordable or
+// k are done. No sorting and no heap: O(k n) time.
+
+fn find_maximized_capital(k: i64, w: i64, profits: Vec[i64], capital: Vec[i64]) -> i64 {
+    let n = profits.len();
+    let mut done = vec![false; n];
+    let mut money = w;
+    for _ in 0..k {
+        let mut best = -1;
+        for i in 0..n {
+            if not done[i] and capital[i] <= money and (best < 0 or profits[i] > profits[best]) {
+                best = i;
+            }
+        }
+        if best < 0 {
+            break;
+        }
+        done[best] = true;
+        money += profits[best];
+    }
+    money
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(name: Str, k: i64, w: i64, profits: Vec[i64], capital: Vec[i64]) {
+    let got = find_maximized_capital(k, w, profits, capital);
+    println(f"{name}: k={k} w={w} profits={profits} capital={capital} -> {got}");
+}
+
+fn main() {
+    show("example 1", 2, 0, vec![1, 2, 3], vec![0, 1, 1]);
+    show("example 2", 3, 0, vec![1, 2, 3], vec![0, 1, 2]);
+    show("nothing affordable", 1, 0, vec![5], vec![1]);
+    show("k beyond n", 10, 1, vec![1, 2, 3], vec![1, 1, 1]);
+    show("the small one first", 2, 0, vec![1, 100], vec![0, 1]);
+    show("no profit", 3, 5, vec![0, 0, 0], vec![0, 1, 2]);
+    show("the largest numbers", 2, 1000000000, vec![10000, 10000], vec![1000000000, 1000000000]);
+    // 300 random cases: 1 to 20 projects of profit 0 to 20 needing 0 to
+    // 40, k from 1 to 25 and w from 0 to 10.
+    let count = 300;
+    let mut seed: i64 = 502;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = 1 + next_random(mut seed) % 20;
+        let k = 1 + next_random(mut seed) % 25;
+        let w = next_random(mut seed) % 11;
+        let mut profits: Vec[i64] = Vec.new();
+        let mut capital: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            profits.push(next_random(mut seed) % 21);
+            capital.push(next_random(mut seed) % 41);
+        }
+        let got = find_maximized_capital(k, w, profits, capital);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"{count} random cases: total capital {total}, checksum {checksum}");
+}

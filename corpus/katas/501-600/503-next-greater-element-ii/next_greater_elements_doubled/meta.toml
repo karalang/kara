@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/503-next-greater-element-ii/next_greater_elements_doubled.kara"
+dedup_of = []
+expect = "error:E0236"
+exit = 1
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "937bde7ae"
+extracted_src = "3c038a62"
+model_rev = "1aa23105"
+model_src = "3c038a62"

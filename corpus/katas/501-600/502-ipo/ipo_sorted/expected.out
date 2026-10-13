@@ -1,0 +1,8 @@
+example 1: k=2 w=0 profits=[1, 2, 3] capital=[0, 1, 1] -> 4
+example 2: k=3 w=0 profits=[1, 2, 3] capital=[0, 1, 2] -> 6
+nothing affordable: k=1 w=0 profits=[5] capital=[1] -> 0
+k beyond n: k=10 w=1 profits=[1, 2, 3] capital=[1, 1, 1] -> 7
+the small one first: k=2 w=0 profits=[1, 100] capital=[0, 1] -> 101
+no profit: k=3 w=5 profits=[0, 0, 0] capital=[0, 1, 2] -> 5
+the largest numbers: k=2 w=1000000000 profits=[10000, 10000] capital=[1000000000, 1000000000] -> 1000020000
+300 random cases: total capital 21218, checksum 999665554

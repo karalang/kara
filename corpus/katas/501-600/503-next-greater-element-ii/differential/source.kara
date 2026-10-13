@@ -1,0 +1,264 @@
+// Differential test for LeetCode #503: Next Greater Element II.
+//
+// Copies of the four arms, on 1,500 random arrays of 1 to 25 numbers
+// from 0 to 2, from 0 to 9, or from the whole range -10^9 to 10^9.
+// Properties:
+//   P1  the answers are the reference's, which walks each number's steps
+//       1 to n - 1 around the circle for the nearest greater one
+//   P2  rotating the array rotates the answers
+//   P3  a number's answer is -1 when it is the largest, else greater
+//       than it
+//   P4  doubling every number doubles every answer
+//   P5  the array written twice answers twice
+
+// ---- star: next_greater_elements.kara
+
+fn next_greater_elements_star(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut answer = vec![-1; n];
+    let mut waiting: Vec[i64] = Vec.new();
+    for i in 0..2 * n {
+        let x = nums[i % n];
+        while let Some(top) = waiting.last() {
+            if nums[*top] >= x {
+                break;
+            }
+            answer[*top] = x;
+            waiting.pop();
+        }
+        if i < n {
+            waiting.push(i);
+        }
+    }
+    answer
+}
+
+// ---- brute: next_greater_elements_brute.kara
+
+fn next_greater_elements_brute(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut answer: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let mut found = -1;
+        for step in 1..n {
+            let y = nums[(i + step) % n];
+            if y > nums[i] {
+                found = y;
+                break;
+            }
+        }
+        answer.push(found);
+    }
+    answer
+}
+
+// ---- backward: next_greater_elements_backward.kara
+
+fn next_greater_elements_backward(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut answer = vec![-1; n];
+    let mut candidates: Vec[i64] = Vec.new();
+    for i in (0..2 * n).rev() {
+        let x = nums[i % n];
+        while not candidates.is_empty() and candidates[candidates.len() - 1] <= x {
+            candidates.pop();
+        }
+        if i < n and not candidates.is_empty() {
+            answer[i] = candidates[candidates.len() - 1];
+        }
+        candidates.push(x);
+    }
+    answer
+}
+
+// ---- doubled: next_greater_elements_doubled.kara
+
+fn next_greater_elements_doubled(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut doubled = nums.clone();
+    doubled.extend(nums.iter().cloned());
+    let mut next = vec![-1; 2 * n];
+    let mut stack: Vec[i64] = Vec.new();
+    for i in (0..2 * n).rev() {
+        while let Some(top) = stack.last() {
+            if *top > doubled[i] {
+                break;
+            }
+            stack.pop();
+        }
+        if let Some(top) = stack.last() {
+            next[i] = *top;
+        }
+        stack.push(doubled[i]);
+    }
+    next.truncate(n);
+    next
+}
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, nums: Vec[i64]) -> Vec[i64] {
+    match which {
+        0 => next_greater_elements_star(nums),
+        1 => next_greater_elements_brute(nums),
+        2 => next_greater_elements_backward(nums),
+        _ => next_greater_elements_doubled(nums),
+    }
+}
+
+// The reference: for each number, the nearest step around the circle,
+// 1 to n - 1, that lands on a greater number.
+fn reference(nums: Vec[i64]) -> Vec[i64] {
+    let n = nums.len();
+    let mut answer: Vec[i64] = Vec.new();
+    for i in 0..n {
+        let mut best = -1;
+        let mut step = n - 1;
+        while step >= 1 {
+            if nums[(i + step) % n] > nums[i] {
+                best = nums[(i + step) % n];
+            }
+            step -= 1;
+        }
+        answer.push(best);
+    }
+    answer
+}
+
+fn main() {
+    let names = vec!["star", "brute", "backward", "doubled"];
+    let cases = 1500;
+    let mut seed: i64 = 5030;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // 1 to 25 numbers from 0 to 2, from 0 to 9, or from the whole
+        // range -10^9 to 10^9, in turn.
+        let size = 1 + next_random(mut seed) % 25;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            if c % 3 == 0 {
+                nums.push(next_random(mut seed) % 3);
+            } else if c % 3 == 1 {
+                nums.push(next_random(mut seed) % 10);
+            } else {
+                nums.push((next_random(mut seed) * 65536 + next_random(mut seed)) % 2000000001 - 1000000000);
+            }
+        }
+        let want = reference(nums);
+        let mut most = nums[0];
+        for i in 0..size {
+            if nums[i] > most {
+                most = nums[i];
+            }
+        }
+        // The array turned by r, every number doubled, and the array
+        // written twice.
+        let r = next_random(mut seed) % size;
+        let mut turned: Vec[i64] = Vec.new();
+        for i in 0..size {
+            turned.push(nums[(i + r) % size]);
+        }
+        let mut twice: Vec[i64] = Vec.new();
+        for i in 0..size {
+            twice.push(nums[i] * 2);
+        }
+        let mut repeated = nums.clone();
+        for i in 0..size {
+            repeated.push(nums[i]);
+        }
+        for which in 0..4 {
+            let got = arm(which, nums);
+            // P1: the reference's answers.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {nums} gave {got}, want {want}");
+                }
+            }
+            // P2: turning the array turns the answers.
+            checks += 1;
+            let other = arm(which, turned);
+            let mut ok = other.len() == size and got.len() == size;
+            if ok {
+                for i in 0..size {
+                    if other[i] != got[(i + r) % size] {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {turned} gave {other}, unturned {got}");
+                }
+            }
+            // P3: a number's answer is -1 when it is the largest, else greater than it.
+            checks += 1;
+            let mut ok = got.len() == size;
+            if ok {
+                for i in 0..size {
+                    if nums[i] == most {
+                        if got[i] != -1 {
+                            ok = false;
+                        }
+                    } else if got[i] <= nums[i] {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {nums} gave {got}");
+                }
+            }
+            // P4: doubling every number doubles every answer.
+            checks += 1;
+            let other = arm(which, twice);
+            let mut ok = other.len() == size and got.len() == size;
+            if ok {
+                for i in 0..size {
+                    let expect = if nums[i] == most { -1 } else { got[i] * 2 };
+                    if other[i] != expect {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {twice} gave {other}, halves {got}");
+                }
+            }
+            // P5: the array written twice answers twice.
+            checks += 1;
+            let other = arm(which, repeated);
+            let mut both = got.clone();
+            for i in 0..got.len() {
+                both.push(got[i]);
+            }
+            if other != both {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {repeated} gave {other}, want {both}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}
