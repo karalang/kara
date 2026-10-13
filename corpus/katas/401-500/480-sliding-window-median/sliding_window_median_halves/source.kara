@@ -1,0 +1,162 @@
+// LeetCode #480: Sliding Window Median -- two ordered multisets.
+//
+// The window's lower half and upper half, each a `SortedMap` from a
+// number to how many times it is there, with their sizes alongside. The
+// largest of the lower half is its `floor` of anything, the smallest of
+// the upper half its `ceiling`, and both give up an element in O(log k)
+// when the halves are rebalanced. The low half holds the extra element
+// when k is odd. O(n log k).
+
+struct Half {
+    counts: SortedMap[i64, i64],
+    size: i64,
+}
+
+impl Half {
+    fn new() -> Half {
+        Half { counts: SortedMap.new(), size: 0 }
+    }
+
+    fn add(mut ref self, x: i64) {
+        self.counts[x] = (self.counts.get(x) ?? 0) + 1;
+        self.size += 1;
+    }
+
+    // Takes one `x` out; false if there is none.
+    fn take(mut ref self, x: i64) -> bool {
+        let n = self.counts.get(x) ?? 0;
+        if n == 0 {
+            return false;
+        }
+        if n == 1 {
+            let _ = self.counts.remove(x);
+        } else {
+            self.counts[x] = n - 1;
+        }
+        self.size -= 1;
+        true
+    }
+
+    fn largest(self) -> i64 {
+        match self.counts.floor(i64.MAX) {
+            Some((key, _)) => *key,
+            None => i64.MIN,
+        }
+    }
+
+    fn smallest(self) -> i64 {
+        match self.counts.ceiling(i64.MIN) {
+            Some((key, _)) => *key,
+            None => i64.MAX,
+        }
+    }
+}
+
+fn median_sliding_window(nums: Vec[i64], k: i64) -> Vec[f64] {
+    let mut low = Half.new();
+    let mut high = Half.new();
+    let mut medians: Vec[f64] = Vec.new();
+    for i in 0..nums.len() {
+        let x = nums[i];
+        if low.size == 0 or x <= low.largest() {
+            low.add(x);
+        } else {
+            high.add(x);
+        }
+        if i >= k {
+            let out = nums[i - k];
+            if not low.take(out) {
+                let _ = high.take(out);
+            }
+        }
+        // Keep every number in low at most every number in high, and low
+        // as large as high or one larger.
+        while low.size > high.size + 1 {
+            let top = low.largest();
+            let _ = low.take(top);
+            high.add(top);
+        }
+        while low.size < high.size {
+            let bottom = high.smallest();
+            let _ = high.take(bottom);
+            low.add(bottom);
+        }
+        if i >= k - 1 {
+            if k % 2 == 1 {
+                medians.push(low.largest() as f64);
+            } else {
+                medians.push((low.largest() + high.smallest()) as f64 / 2.0);
+            }
+        }
+    }
+    medians
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn list_ints(v: Vec[i64]) -> String {
+    let mut line = String.new();
+    for x in v {
+        if not line.is_empty() {
+            line.push_str(", ");
+        }
+        line.push_str(f"{x}");
+    }
+    line
+}
+
+fn list_floats(v: Vec[f64]) -> String {
+    let mut line = String.new();
+    for x in v {
+        if not line.is_empty() {
+            line.push_str(", ");
+        }
+        line.push_str(f"{x}");
+    }
+    line
+}
+
+fn show(nums: Vec[i64], k: i64) {
+    println(f"[{list_ints(nums)}], k = {k} -> [{list_floats(median_sliding_window(nums, k))}]");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![1, 3, -1, -3, 5, 3, 6, 7], 3);
+    show(vec![1, 2, 3, 4, 2, 3, 1, 4, 2], 3);
+    show(vec![1, 3, -1, -3, 5, 3, 6, 7], 4);
+    show(vec![5], 1);
+    show(vec![2147483647, 2147483647], 2);
+    show(vec![-2147483648, -2147483648, 2147483647], 2);
+    show(vec![4, 4, 4, 4, 4], 2);
+    show(vec![9, 8, 7, 6, 5, 4], 6);
+    // 300 random cases: 1 to 40 numbers from -50 to 50 (from -2^31 to
+    // 2^31 - 1 for one case in five) and k from 1 to the length. Twice
+    // each median is a whole number, and goes into the checksum.
+    let count = 300;
+    let mut seed: i64 = 480;
+    let mut windows = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let wide = c % 5 == 4;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 40 {
+            let r = next_random(mut seed) * 32768 + next_random(mut seed);
+            if wide {
+                nums.push(r * 4 + next_random(mut seed) % 4 - 2147483648);
+            } else {
+                nums.push(r % 101 - 50);
+            }
+        }
+        let k = 1 + next_random(mut seed) % nums.len();
+        for m in median_sliding_window(nums, k) {
+            windows += 1;
+            checksum = (checksum * 31 + (m * 2.0) as i64 % 1000000007 + 1000000007) % 1000000007;
+        }
+    }
+    println(f"{count} random cases: {windows} windows, checksum {checksum}");
+}

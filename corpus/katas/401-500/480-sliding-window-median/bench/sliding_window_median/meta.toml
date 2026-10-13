@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/480-sliding-window-median/bench/sliding_window_median.kara"
+dedup_of = []
+expect = "panic:-11"
+exit = -11
+tags = ["lib:map", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -11
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "139b95bcf"
+extracted_src = "46787295"
+model_rev = "1aa23105"
+model_src = "46787295"

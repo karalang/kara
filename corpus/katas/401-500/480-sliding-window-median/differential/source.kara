@@ -1,0 +1,381 @@
+// Differential test for LeetCode #480: Sliding Window Median.
+//
+// Copies of the four arms, on 1,500 random lists of 1 to 30 numbers from
+// -50 to 50 (from -2^31 to 2^31 - 1 for one list in five), with a random
+// window size k from 1 to the length.
+// Properties:
+//   P1  every median is the window's middle element, or the mean of its
+//       two middle ones, found by counting ranks
+//   P2  every number negated negates every median
+//   P3  every number plus d (from -1000 to 1000) adds d to every median
+//   P4  the list reversed reverses the medians
+//   P5  every number doubled doubles every median
+
+// ---- star: sliding_window_median.kara
+
+struct WindowStar {
+    low: PriorityQueue[i64],
+    high: PriorityQueue[i64],
+    gone: Map[i64, i64],
+    low_size: i64,
+    high_size: i64,
+}
+
+impl WindowStar {
+    fn new() -> WindowStar {
+        WindowStar { low: PriorityQueue.max_first(), high: PriorityQueue.new(), gone: Map.new(), low_size: 0, high_size: 0 }
+    }
+
+    // Throw away the numbers on top of both heaps that have already left.
+    fn prune(mut ref self) {
+        loop {
+            let top = match self.low.peek() {
+                Some(x) => x,
+                None => break,
+            };
+            let left = self.gone.get(top) ?? 0;
+            if left == 0 {
+                break;
+            }
+            self.gone[top] = left - 1;
+            let _ = self.low.pop();
+        }
+        loop {
+            let top = match self.high.peek() {
+                Some(x) => x,
+                None => break,
+            };
+            let left = self.gone.get(top) ?? 0;
+            if left == 0 {
+                break;
+            }
+            self.gone[top] = left - 1;
+            let _ = self.high.pop();
+        }
+    }
+
+    // Move one live number across so that low has as many as high, or one more.
+    fn balance(mut ref self) {
+        if self.low_size > self.high_size + 1 {
+            self.high.push(self.low.pop().unwrap());
+            self.low_size -= 1;
+            self.high_size += 1;
+        } else if self.low_size < self.high_size {
+            self.low.push(self.high.pop().unwrap());
+            self.high_size -= 1;
+            self.low_size += 1;
+        }
+        self.prune();
+    }
+
+    fn add(mut ref self, x: i64) {
+        let goes_low = match self.low.peek() {
+            Some(top) => x <= top,
+            None => true,
+        };
+        if goes_low {
+            self.low.push(x);
+            self.low_size += 1;
+        } else {
+            self.high.push(x);
+            self.high_size += 1;
+        }
+        self.balance();
+    }
+
+    fn remove(mut ref self, x: i64) {
+        let in_low = x <= self.low.peek().unwrap();
+        self.gone[x] = (self.gone.get(x) ?? 0) + 1;
+        if in_low {
+            self.low_size -= 1;
+        } else {
+            self.high_size -= 1;
+        }
+        self.prune();
+        self.balance();
+    }
+
+    fn median(self, k: i64) -> f64 {
+        let a = self.low.peek().unwrap();
+        if k % 2 == 1 {
+            a as f64
+        } else {
+            (a + self.high.peek().unwrap()) as f64 / 2.0
+        }
+    }
+}
+
+fn median_sliding_window_star(nums: Vec[i64], k: i64) -> Vec[f64] {
+    let mut window = WindowStar.new();
+    let mut medians: Vec[f64] = Vec.new();
+    for i in 0..nums.len() {
+        window.add(nums[i]);
+        if i >= k {
+            window.remove(nums[i - k]);
+        }
+        if i >= k - 1 {
+            medians.push(window.median(k));
+        }
+    }
+    medians
+}
+
+// ---- sorted: sliding_window_median_sorted.kara
+
+fn lower_bound_sorted(v: Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if v[mid] < x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn median_sliding_window_sorted(nums: Vec[i64], k: i64) -> Vec[f64] {
+    let mut window: Vec[i64] = Vec.new();
+    let mut medians: Vec[f64] = Vec.new();
+    for i in 0..nums.len() {
+        window.insert(lower_bound_sorted(window, nums[i]), nums[i]);
+        if i >= k {
+            let at = window.binary_search(nums[i - k]).unwrap();
+            let _ = window.remove(at);
+        }
+        if i >= k - 1 {
+            if k % 2 == 1 {
+                medians.push(window[k / 2] as f64);
+            } else {
+                medians.push((window[k / 2 - 1] + window[k / 2]) as f64 / 2.0);
+            }
+        }
+    }
+    medians
+}
+
+// ---- halves: sliding_window_median_halves.kara
+
+struct HalfHalves {
+    counts: SortedMap[i64, i64],
+    size: i64,
+}
+
+impl HalfHalves {
+    fn new() -> HalfHalves {
+        HalfHalves { counts: SortedMap.new(), size: 0 }
+    }
+
+    fn add(mut ref self, x: i64) {
+        self.counts[x] = (self.counts.get(x) ?? 0) + 1;
+        self.size += 1;
+    }
+
+    // Takes one `x` out; false if there is none.
+    fn take(mut ref self, x: i64) -> bool {
+        let n = self.counts.get(x) ?? 0;
+        if n == 0 {
+            return false;
+        }
+        if n == 1 {
+            let _ = self.counts.remove(x);
+        } else {
+            self.counts[x] = n - 1;
+        }
+        self.size -= 1;
+        true
+    }
+
+    fn largest(self) -> i64 {
+        match self.counts.floor(i64.MAX) {
+            Some((key, _)) => *key,
+            None => i64.MIN,
+        }
+    }
+
+    fn smallest(self) -> i64 {
+        match self.counts.ceiling(i64.MIN) {
+            Some((key, _)) => *key,
+            None => i64.MAX,
+        }
+    }
+}
+
+fn median_sliding_window_halves(nums: Vec[i64], k: i64) -> Vec[f64] {
+    let mut low = HalfHalves.new();
+    let mut high = HalfHalves.new();
+    let mut medians: Vec[f64] = Vec.new();
+    for i in 0..nums.len() {
+        let x = nums[i];
+        if low.size == 0 or x <= low.largest() {
+            low.add(x);
+        } else {
+            high.add(x);
+        }
+        if i >= k {
+            let out = nums[i - k];
+            if not low.take(out) {
+                let _ = high.take(out);
+            }
+        }
+        // Keep every number in low at most every number in high, and low
+        // as large as high or one larger.
+        while low.size > high.size + 1 {
+            let top = low.largest();
+            let _ = low.take(top);
+            high.add(top);
+        }
+        while low.size < high.size {
+            let bottom = high.smallest();
+            let _ = high.take(bottom);
+            low.add(bottom);
+        }
+        if i >= k - 1 {
+            if k % 2 == 1 {
+                medians.push(low.largest() as f64);
+            } else {
+                medians.push((low.largest() + high.smallest()) as f64 / 2.0);
+            }
+        }
+    }
+    medians
+}
+
+// ---- naive: sliding_window_median_naive.kara
+
+fn median_sliding_window_naive(nums: Vec[i64], k: i64) -> Vec[f64] {
+    let mut medians: Vec[f64] = Vec.new();
+    for start in 0..nums.len() - k + 1 {
+        let mut window = nums[start..start + k].to_vec();
+        window.sort();
+        if k % 2 == 1 {
+            medians.push(window[k / 2] as f64);
+        } else {
+            medians.push((window[k / 2 - 1] + window[k / 2]) as f64 / 2.0);
+        }
+    }
+    medians
+}
+
+// ---- harness
+
+fn answer(arm: i64, nums: Vec[i64], k: i64) -> Vec[f64] {
+    if arm == 0 {
+        median_sliding_window_star(nums, k)
+    } else if arm == 1 {
+        median_sliding_window_sorted(nums, k)
+    } else if arm == 2 {
+        median_sliding_window_halves(nums, k)
+    } else {
+        median_sliding_window_naive(nums, k)
+    }
+}
+
+// The element of rank r (0-based) in nums[start..start + k], by counting:
+// the x with fewer than r + 1 elements below it and at least r + 1 at or
+// below it.
+fn rank(nums: Vec[i64], start: i64, k: i64, r: i64) -> i64 {
+    for i in start..start + k {
+        let mut below = 0;
+        let mut at_or_below = 0;
+        for j in start..start + k {
+            if nums[j] < nums[i] {
+                below += 1;
+            }
+            if nums[j] <= nums[i] {
+                at_or_below += 1;
+            }
+        }
+        if below <= r and r < at_or_below {
+            return nums[i];
+        }
+    }
+    0
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let cases = 1500;
+    let arms = 4;
+    let mut seed: i64 = 4800;
+    let mut checks = 0;
+    let mut fails = vec![0; 6];
+    for c in 0..cases {
+        let wide = c % 5 == 4;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 30 {
+            let r = next_random(mut seed) * 32768 + next_random(mut seed);
+            if wide {
+                nums.push(r * 4 + next_random(mut seed) % 4 - 2147483648);
+            } else {
+                nums.push(r % 101 - 50);
+            }
+        }
+        let n = nums.len();
+        let k = 1 + next_random(mut seed) % n;
+        let shift = next_random(mut seed) % 2001 - 1000;
+        let mut want: Vec[f64] = Vec.new();
+        for start in 0..n - k + 1 {
+            if k % 2 == 1 {
+                want.push(rank(nums, start, k, k / 2) as f64);
+            } else {
+                want.push((rank(nums, start, k, k / 2 - 1) + rank(nums, start, k, k / 2)) as f64 / 2.0);
+            }
+        }
+        let mut negated: Vec[i64] = Vec.new();
+        let mut shifted: Vec[i64] = Vec.new();
+        let mut doubled: Vec[i64] = Vec.new();
+        for x in nums {
+            negated.push(-x);
+            shifted.push(x + shift);
+            doubled.push(2 * x);
+        }
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        for arm in 0..arms {
+            checks += 5;
+            let got = answer(arm, nums, k);
+            let neg = answer(arm, negated, k);
+            let shi = answer(arm, shifted, k);
+            let rev = answer(arm, reversed, k);
+            let dbl = answer(arm, doubled, k);
+            let mut bad = vec![false; 6];
+            if got.len() != want.len() {
+                bad[1] = true;
+            }
+            for i in 0..got.len() {
+                if i >= want.len() or got[i] != want[i] {
+                    bad[1] = true;
+                }
+                if i >= neg.len() or neg[i] != -got[i] {
+                    bad[2] = true;
+                }
+                if i >= shi.len() or shi[i] != got[i] + shift as f64 {
+                    bad[3] = true;
+                }
+                if i >= rev.len() or rev[got.len() - 1 - i] != got[i] {
+                    bad[4] = true;
+                }
+                if i >= dbl.len() or dbl[i] != 2.0 * got[i] {
+                    bad[5] = true;
+                }
+            }
+            for p in 1..6 {
+                if bad[p] {
+                    fails[p] += 1;
+                }
+            }
+        }
+    }
+    let total = fails[1] + fails[2] + fails[3] + fails[4] + fails[5];
+    println(f"{cases} cases, {arms} arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"P1 {fails[1]}, P2 {fails[2]}, P3 {fails[3]}, P4 {fails[4]}, P5 {fails[5]}");
+    }
+}

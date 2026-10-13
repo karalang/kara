@@ -1,0 +1,146 @@
+// Benchmark for #480: the ★ arm (two heaps, deletions put off) on a
+// large workload.
+//
+// LeetCode #480: Sliding Window Median -- two heaps, deletions put off.
+//
+// The smaller half of the window in a largest-first heap, the larger
+// half in a smallest-first one, the low heap holding the extra element
+// when k is odd. A number leaving the window is not dug out of its
+// heap: it is counted in `gone`, and thrown away when it reaches a top.
+// `low_size` and `high_size` count the live elements only.
+// O(n log n).
+
+struct Window {
+    low: PriorityQueue[i64],
+    high: PriorityQueue[i64],
+    gone: Map[i64, i64],
+    low_size: i64,
+    high_size: i64,
+}
+
+impl Window {
+    fn new() -> Window {
+        Window { low: PriorityQueue.max_first(), high: PriorityQueue.new(), gone: Map.new(), low_size: 0, high_size: 0 }
+    }
+
+    // Throw away the numbers on top of both heaps that have already left.
+    fn prune(mut ref self) {
+        loop {
+            let top = match self.low.peek() {
+                Some(x) => x,
+                None => break,
+            };
+            let left = self.gone.get(top) ?? 0;
+            if left == 0 {
+                break;
+            }
+            self.gone[top] = left - 1;
+            let _ = self.low.pop();
+        }
+        loop {
+            let top = match self.high.peek() {
+                Some(x) => x,
+                None => break,
+            };
+            let left = self.gone.get(top) ?? 0;
+            if left == 0 {
+                break;
+            }
+            self.gone[top] = left - 1;
+            let _ = self.high.pop();
+        }
+    }
+
+    // Move one live number across so that low has as many as high, or one more.
+    fn balance(mut ref self) {
+        if self.low_size > self.high_size + 1 {
+            self.high.push(self.low.pop().unwrap());
+            self.low_size -= 1;
+            self.high_size += 1;
+        } else if self.low_size < self.high_size {
+            self.low.push(self.high.pop().unwrap());
+            self.high_size -= 1;
+            self.low_size += 1;
+        }
+        self.prune();
+    }
+
+    fn add(mut ref self, x: i64) {
+        let goes_low = match self.low.peek() {
+            Some(top) => x <= top,
+            None => true,
+        };
+        if goes_low {
+            self.low.push(x);
+            self.low_size += 1;
+        } else {
+            self.high.push(x);
+            self.high_size += 1;
+        }
+        self.balance();
+    }
+
+    fn remove(mut ref self, x: i64) {
+        let in_low = x <= self.low.peek().unwrap();
+        self.gone[x] = (self.gone.get(x) ?? 0) + 1;
+        if in_low {
+            self.low_size -= 1;
+        } else {
+            self.high_size -= 1;
+        }
+        self.prune();
+        self.balance();
+    }
+
+    fn median(self, k: i64) -> f64 {
+        let a = self.low.peek().unwrap();
+        if k % 2 == 1 {
+            a as f64
+        } else {
+            (a + self.high.peek().unwrap()) as f64 / 2.0
+        }
+    }
+}
+
+fn median_sliding_window(nums: Vec[i64], k: i64) -> Vec[f64] {
+    let mut window = Window.new();
+    let mut medians: Vec[f64] = Vec.new();
+    for i in 0..nums.len() {
+        window.add(nums[i]);
+        if i >= k {
+            window.remove(nums[i - k]);
+        }
+        if i >= k - 1 {
+            medians.push(window.median(k));
+        }
+    }
+    medians
+}
+
+// ---- bench ------------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 1,000,000 numbers from -2^31 to 2^31 - 1, built once, then the
+    // medians of every window of 1,000 and of 1,001.
+    let n = 1000000;
+    let mut seed: i64 = 480;
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        let r = next_random(mut seed) * 32768 + next_random(mut seed);
+        nums.push(r * 4 + next_random(mut seed) % 4 - 2147483648);
+    }
+    let mut windows = 0;
+    let mut checksum: i64 = 0;
+    for k in 1000..1002 {
+        for m in median_sliding_window(nums, k) {
+            windows += 1;
+            checksum = (checksum * 31 + (m * 2.0) as i64 % 1000000007 + 1000000007) % 1000000007;
+        }
+    }
+    println(f"{windows} windows: checksum {checksum}");
+}
