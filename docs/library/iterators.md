@@ -107,7 +107,7 @@ trait DoubleEndedIterator: Iterator {
 }
 ```
 
-The iterators over `Vec`, `Array`, `Slice` and `VecDeque`, and integer ranges, implement it, which is what `rev` needs.
+The iterators over `Vec`, `Array`, `Slice` and `VecDeque`, integer ranges, and a `String`'s `chars()` implement it, which is what `rev` needs. (UTF-8 decodes backward as well as forward, so a string's chars cost nothing extra to walk from the end.)
 
 ## Example
 

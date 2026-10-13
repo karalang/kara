@@ -1086,6 +1086,25 @@ impl<'a> Interp<'a> {
                 };
                 Ok(Value::Char(c))
             }
+            // The back step of the same cursor: the char ending at byte `i`.
+            ("String", "char_before_byte") => {
+                let [recv, Value::Int(i)] = args.as_slice() else {
+                    return err(format!("{name} takes a receiver and an index"));
+                };
+                let i = *i;
+                let s = self.str_ref(recv)?;
+                let c = (1..=s.len() as i128)
+                    .contains(&i)
+                    .then(|| s.get(..i as usize).and_then(|t| t.chars().next_back()))
+                    .flatten();
+                let Some(c) = c else {
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::Panic));
+                    }
+                    return Err(Stop::Abort(AbortReason::Panic));
+                };
+                Ok(Value::Char(c))
+            }
             ("Vec", "push") if args.len() == 2 => {
                 let mut args = args.into_iter();
                 let (Some(v), Some(val)) = (args.next(), args.next()) else {
@@ -6087,6 +6106,22 @@ impl<'a> Interp<'a> {
                 };
                 Ok(Value::Char(c))
             }
+            "char_before_byte" => {
+                // The char ending at byte `i`, for `StrChars.next_back`; a
+                // non-boundary or out-of-range byte panics.
+                let i = int(1)?;
+                let c = (1..=s.len() as i128)
+                    .contains(&i)
+                    .then(|| s.get(..i as usize).and_then(|t| t.chars().next_back()))
+                    .flatten();
+                let Some(c) = c else {
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::Panic));
+                    }
+                    return Err(Stop::Abort(AbortReason::Panic));
+                };
+                Ok(Value::Char(c))
+            }
             "index_range" => {
                 // `s[a..b]`: a new String; out of range, inverted or off a
                 // char boundary panics, unlike `substring`.
@@ -9796,6 +9831,7 @@ const STRING_TEXT_METHODS: &[&str] = &[
     "bytes",
     "index_range",
     "char_at_byte",
+    "char_before_byte",
     "lt",
     "sorted",
     "trim_start",

@@ -73,7 +73,7 @@ impl<'a> super::TypeChecker<'a> {
     /// (runtime/stdlib/source/collections.kara): `entry_at(i)` borrows the
     /// `i`th entry of a set or map in iteration order (a map's entry is its
     /// `(key, value)` pair), `char_at_byte(i)` reads the char starting at byte
-    /// `i` of a `String`, and `len_utf8()` is a char's width in bytes. They
+    /// `i` of a `String` (`char_before_byte(i)` the one ending there), and `len_utf8()` is a char's width in bytes. They
     /// are natives of the MIR backends, typed on the library pipeline only.
     pub(super) fn library_cursor_method(
         &mut self,
@@ -91,7 +91,9 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 (name.clone(), 1, Type::Ref(Box::new(entry)))
             }
-            (Type::Str, "char_at_byte") => ("String".to_string(), 1, Type::Char),
+            (Type::Str, "char_at_byte" | "char_before_byte") => {
+                ("String".to_string(), 1, Type::Char)
+            }
             (Type::Char, "len_utf8") => ("char".to_string(), 0, Type::Int(IntSize::I64)),
             _ => return None,
         };

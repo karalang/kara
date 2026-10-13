@@ -532,6 +532,25 @@ pub unsafe extern "C" fn karac_mir_char_at_byte(s: *const u8, n: usize, i: i64) 
     }
 }
 
+/// The char ending at byte `i` of `s` (the one whose last byte is `i - 1`),
+/// or -1 (a panic) when `i` is out of range or not on a char boundary. The
+/// back step of `chars()` (`StrChars.next_back`).
+///
+/// # Safety
+/// `s` is readable for `n` bytes of UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_char_before_byte(s: *const u8, n: usize, i: i64) -> i64 {
+    // SAFETY: the caller's contract.
+    let s = unsafe { text(s, n) };
+    if i <= 0 || i as usize > s.len() {
+        return -1;
+    }
+    match s.get(..i as usize).and_then(|t| t.chars().next_back()) {
+        Some(c) => i64::from(u32::from(c)),
+        None => -1,
+    }
+}
+
 /// `String.from_utf8`: the bytes as a new `String` at `out` and 0, or 1
 /// when the input ends inside a sequence and 2 for an invalid byte, with
 /// nothing written.

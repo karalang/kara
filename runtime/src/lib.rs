@@ -256,6 +256,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_chan_drop_sender,
         mir::karac_mir_chan_drop_receiver,
         mir::karac_mir_char_at_byte,
+        mir::karac_mir_char_before_byte,
         mir::karac_mir_str_from_utf8,
         mir::karac_mir_str_replace,
         mir::karac_mir_str_repeat,

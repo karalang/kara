@@ -41,7 +41,7 @@ let fields: Vec[String] = line.split(",").map(|p| p.to_string()).collect();  // 
 |---|---|---|
 | `len` | `fn len(self) -> i64` | Length in bytes. O(1) |
 | `is_empty` | `fn is_empty(self) -> bool` | `self.len() == 0` |
-| `chars` | `fn chars(self) -> impl Iterator[Item = char]` | Unicode scalar values, decoded from UTF-8. `s.chars().count()` is the number of scalars |
+| `chars` | `fn chars(self) -> impl DoubleEndedIterator[Item = char]` | Unicode scalar values, decoded from UTF-8. `s.chars().count()` is the number of scalars; `s.chars().rev()` walks them back to front |
 | `bytes` | `fn bytes(self) -> Slice[u8]` | The raw UTF-8 bytes. `s.bytes()[i]` is a `u8` and panics if out of bounds. Use it for protocols and binary formats, not text |
 | `char_at` | `fn char_at(self, i: i64) -> Option[char]` | The `i`-th scalar value. O(n); `None` if out of range. For many indexed reads, collect once (`let cs: Vec[char] = s.chars().collect();`) and index the `Vec`, where indexing really is O(1). For a pass over every character, `for c in s.chars()` is O(n) in total |
 | `contains` | `fn contains(self, pat: Str) -> bool` | Substring search |

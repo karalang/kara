@@ -128,6 +128,69 @@ impl<'ctx> Cx<'ctx, '_> {
         self.load_i64(slot)
     }
 
+    /// The char ending at byte `i` of the text `p[..n]` (its last byte is
+    /// `i - 1`), or -1 when there is none: an ASCII byte in line, anything
+    /// else through the runtime. `StrChars.next_back`'s step.
+    fn char_before_byte(
+        &mut self,
+        p: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        i: IntValue<'ctx>,
+    ) -> R<IntValue<'ctx>> {
+        let f = self.cur_fn()?;
+        let slot = self.entry_slot(8, "chb")?;
+        let (look, fast, slow, done) = (
+            self.llcx.append_basic_block(f, "chb.look"),
+            self.llcx.append_basic_block(f, "chb.ascii"),
+            self.llcx.append_basic_block(f, "chb.slow"),
+            self.llcx.append_basic_block(f, "chb.done"),
+        );
+        // `i - 1 < n`, unsigned, so `i <= 0` and `i > n` are both out.
+        let last = self
+            .builder
+            .build_int_sub(i, self.llcx.i64_type().const_int(1, false), "")
+            .map_err(e)?;
+        let inside = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, last, n, "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(inside, look, slow)
+            .map_err(e)?;
+        self.builder.position_at_end(look);
+        let bp = self.elem_ptr(p, last, 1)?;
+        let b = self
+            .builder
+            .build_load(self.llcx.i8_type(), bp, "")
+            .map_err(e)?
+            .into_int_value();
+        let ascii = self
+            .builder
+            .build_int_compare(
+                IntPredicate::ULT,
+                b,
+                self.llcx.i8_type().const_int(0x80, false),
+                "",
+            )
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(ascii, fast, slow)
+            .map_err(e)?;
+        self.builder.position_at_end(fast);
+        let c = self
+            .builder
+            .build_int_z_extend(b, self.llcx.i64_type(), "")
+            .map_err(e)?;
+        self.store(slot, c.into())?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(slow);
+        let c = self.rt_int("char_before_byte", &[p.into(), n.into(), i.into()], 64)?;
+        self.store(slot, c.into())?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        self.load_i64(slot)
+    }
+
     /// The index of the variant named `name` of the enum `ty`.
     pub(super) fn variant_of(&self, ty: Ty, name: &str) -> R<u32> {
         let (adt, _) = self
@@ -317,6 +380,19 @@ impl<'ctx> Cx<'ctx, '_> {
                 let (p, n) = self.str_parts(s)?;
                 let i = self.int_arg(i)?;
                 let c = self.char_at_byte(p, n, i)?;
+                let ok = self.non_negative(c)?;
+                self.abort_unless(ok, "explicit panic")?;
+                let c = self
+                    .builder
+                    .build_int_truncate(c, self.llcx.i32_type(), "")
+                    .map_err(e)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, c.into())?;
+            }
+            ("char_before_byte", [s, i]) => {
+                let (p, n) = self.str_parts(s)?;
+                let i = self.int_arg(i)?;
+                let c = self.char_before_byte(p, n, i)?;
                 let ok = self.non_negative(c)?;
                 self.abort_unless(ok, "explicit panic")?;
                 let c = self

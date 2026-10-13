@@ -222,13 +222,14 @@ impl[K, V] SortedMap[K, V] {
 struct StrChars {
     s: ref String,
     pos: i64,
+    back: i64,
 }
 
 impl Iterator for StrChars {
     type Item = char;
 
     fn next(mut ref self) -> Option[char] {
-        if self.pos >= self.s.len() {
+        if self.pos >= self.back {
             return None;
         }
         let c = self.s.char_at_byte(self.pos);
@@ -237,10 +238,21 @@ impl Iterator for StrChars {
     }
 }
 
+impl DoubleEndedIterator for StrChars {
+    fn next_back(mut ref self) -> Option[char] {
+        if self.back <= self.pos {
+            return None;
+        }
+        let c = self.s.char_before_byte(self.back);
+        self.back = self.back - c.len_utf8();
+        Some(c)
+    }
+}
+
 impl String {
-    /// The chars, front to back.
+    /// The chars, front to back; `rev()` walks them back to front.
     fn chars(ref self) -> StrChars {
-        StrChars { s: self, pos: 0 }
+        StrChars { s: self, pos: 0, back: self.len() }
     }
 }
 

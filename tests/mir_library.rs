@@ -993,3 +993,31 @@ fn main() {
         "3 30 8 80 8 8\n",
     );
 }
+
+#[test]
+fn chars_walk_back_to_front() {
+    // B-2026-10-12-35: `chars()` is double-ended (docs/library/iterators.md),
+    // so `rev()` and `next_back()` decode UTF-8 from the end, and the two
+    // ends meet without crossing.
+    assert_runs(
+        r#"
+fn main() {
+    let s = "héllo→x😀".to_string();
+    let r: String = s.chars().rev().collect();
+    println(f"{r}");
+    for c in s.chars().rev() {
+        print(f"{c}");
+    }
+    println("");
+    let mut it = s.chars();
+    let a = it.next();
+    let b = it.next_back();
+    let rest: String = it.collect();
+    println(f"{a} {b} {rest}");
+    let e = "".to_string();
+    println(f"{e.chars().rev().count()} {"ab".to_string().chars().rev().count()}");
+}
+"#,
+        "😀x→olléh\n😀x→olléh\nSome(h) Some(😀) éllo→x\n0 2\n",
+    );
+}
