@@ -1,0 +1,320 @@
+// Differential test for LeetCode #524: Longest Word in Dictionary
+// through Deleting.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// cases of words from 1 to 3 letters, a third of the words taken from
+// `s`: a short case of up to 10 letters and 10 words for P1, and a
+// longer one of up to 60 letters and 30 words for the rest.
+// Properties:
+//   P1  the answer is the definition's: every subsequence of `s` listed,
+//       and the best word of the dictionary among them
+//   P2  the dictionary back to front gives the same answer
+//   P3  with `s` itself put in the dictionary, `s` is the answer
+//   P4  without every copy of the answer, the answer is no better
+//   P5  `s` and every word back to front give an answer just as long
+
+// ---- star: find_longest_word.kara
+
+fn is_subsequence_star(word: Str, s: Str) -> bool {
+    let w: Vec[char] = word.chars().collect();
+    let mut i = 0;
+    for c in s.chars() {
+        if i < w.len() and w[i] == c {
+            i += 1;
+        }
+    }
+    i == w.len()
+}
+
+fn find_longest_word_star(s: Str, dictionary: Vec[String]) -> String {
+    let mut best = String.new();
+    for word in dictionary.iter() {
+        if word.len() > best.len() or (word.len() == best.len() and word < best) {
+            if is_subsequence_star(word, s) {
+                best = word.clone();
+            }
+        }
+    }
+    best
+}
+
+// ---- sorted: find_longest_word_sorted.kara
+
+fn is_subsequence_sorted(word: Str, s: Str) -> bool {
+    let w = word.bytes();
+    let t = s.bytes();
+    let mut i = 0;
+    let mut j = 0;
+    while i < w.len() and j < t.len() {
+        if w[i] == t[j] {
+            i += 1;
+        }
+        j += 1;
+    }
+    i == w.len()
+}
+
+fn find_longest_word_sorted(s: Str, dictionary: Vec[String]) -> String {
+    let mut words = dictionary.clone();
+    words.sort_by(|a, b| {
+        if a.len() != b.len() {
+            b.len().cmp(a.len())
+        } else {
+            a.cmp(b)
+        }
+    });
+    for word in words.iter() {
+        if is_subsequence_sorted(word, s) {
+            return word.clone();
+        }
+    }
+    String.new()
+}
+
+// ---- table: find_longest_word_table.kara
+
+fn find_longest_word_table(s: Str, dictionary: Vec[String]) -> String {
+    let t = s.bytes();
+    let n = t.len();
+    // next[i * 26 + c]: the first place at or after i holding letter c,
+    // or n when there is none.
+    let mut next: Vec[i64] = vec![n; (n + 1) * 26];
+    for i in (0..n).rev() {
+        for c in 0..26 {
+            next[i * 26 + c] = next[(i + 1) * 26 + c];
+        }
+        next[i * 26 + (t[i] - 97) as i64] = i;
+    }
+    let mut best = String.new();
+    for word in dictionary.iter() {
+        let mut pos = 0;
+        let mut found = true;
+        for b in word.bytes().iter() {
+            let at = next[pos * 26 + (*b - 97) as i64];
+            if at == n {
+                found = false;
+                break;
+            }
+            pos = at + 1;
+        }
+        if found and (word.len() > best.len() or (word.len() == best.len() and word < best)) {
+            best = word.clone();
+        }
+    }
+    best
+}
+
+// ---- waiting: find_longest_word_waiting.kara
+
+fn find_longest_word_waiting(s: Str, dictionary: Vec[String]) -> String {
+    // waiting[c]: (word, letters matched) pairs that need letter c next.
+    let mut waiting: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..26 {
+        waiting.push(Vec.new());
+    }
+    let mut done: Vec[i64] = Vec.new();
+    for i in 0..dictionary.len() {
+        let first = dictionary[i].bytes()[0];
+        waiting[(first - 97) as i64].push((i, 0));
+    }
+    for b in s.bytes().iter() {
+        let moving = mem.replace(mut waiting[(*b - 97) as i64], Vec.new());
+        for (w, matched) in moving.iter() {
+            let word = dictionary[*w].bytes();
+            if *matched + 1 == word.len() {
+                done.push(*w);
+            } else {
+                waiting[(word[*matched + 1] - 97) as i64].push((*w, *matched + 1));
+            }
+        }
+    }
+    let mut best = String.new();
+    for w in done.iter() {
+        let word = ref dictionary[*w];
+        if word.len() > best.len() or (word.len() == best.len() and word < best) {
+            best = word.clone();
+        }
+    }
+    best
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn answer(which: i64, s: Str, dictionary: Vec[String]) -> String {
+    if which == 0 {
+        find_longest_word_star(s, dictionary)
+    } else if which == 1 {
+        find_longest_word_sorted(s, dictionary)
+    } else if which == 2 {
+        find_longest_word_table(s, dictionary)
+    } else {
+        find_longest_word_waiting(s, dictionary)
+    }
+}
+
+// Whether `a` beats `b`: longer, or as long and smaller.
+fn beats(a: Str, b: Str) -> bool {
+    a.len() > b.len() or (a.len() == b.len() and a < b)
+}
+
+// The definition: list every subsequence of `s`, and take the best word
+// of the dictionary among them.
+fn brute(s: Str, dictionary: Vec[String]) -> String {
+    let letters: Vec[char] = s.chars().collect();
+    let mut all: Set[String] = Set.new();
+    for mask in 0..(1 << letters.len()) {
+        let mut word = String.new();
+        for i in 0..letters.len() {
+            if (mask >> i) & 1 == 1 {
+                word.push(letters[i]);
+            }
+        }
+        all.insert(word);
+    }
+    let mut best = String.new();
+    for word in dictionary.iter() {
+        if all.contains(word) and beats(word, best) {
+            best = word.clone();
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut word = String.new();
+    for _ in 0..len {
+        word.push((97 + next_random(seed) % letters) as u8 as char);
+    }
+    word
+}
+
+fn random_subsequence(seed: mut ref i64, s: Str, keep: i64) -> String {
+    let mut word = String.new();
+    for c in s.chars() {
+        if next_random(seed) % keep == 0 {
+            word.push(c);
+        }
+    }
+    if word.len() == 0 {
+        word.push(s.bytes()[0] as char);
+    }
+    word
+}
+
+// `s` of 1 to `most` letters from 1 to 3 letters, and 1 to `words`
+// words of 1 to 6 letters, a third of them taken from `s`.
+fn random_case(seed: mut ref i64, most: i64, words: i64) -> (String, Vec[String]) {
+    let letters = 1 + next_random(seed) % 3;
+    let s = random_word(seed, 1 + next_random(seed) % most, letters);
+    let mut dictionary: Vec[String] = Vec.new();
+    let count = 1 + next_random(seed) % words;
+    for _ in 0..count {
+        if next_random(seed) % 3 == 0 {
+            dictionary.push(random_subsequence(seed, s, 1 + next_random(seed) % 3));
+        } else {
+            dictionary.push(random_word(seed, 1 + next_random(seed) % 6, letters));
+        }
+    }
+    (s, dictionary)
+}
+
+fn reversed(s: Str) -> String {
+    let letters: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    for i in 0..letters.len() {
+        out.push(letters[letters.len() - 1 - i]);
+    }
+    out
+}
+
+fn main() {
+    let names = vec!["star", "sorted", "table", "waiting"];
+    let cases = 1000;
+    let mut seed: i64 = 5240;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for _ in 0..cases {
+        // A short case for P1, `s` of up to 10 letters and up to 10
+        // words; a longer one for the rest, up to 60 letters and 30 words.
+        let (short_s, short_dictionary) = random_case(mut seed, 10, 10);
+        let (s, dictionary) = random_case(mut seed, 60, 30);
+        let mut backwards: Vec[String] = Vec.new();
+        for i in 0..dictionary.len() {
+            backwards.push(dictionary[dictionary.len() - 1 - i].clone());
+        }
+        let mut with_s = dictionary.clone();
+        with_s.insert(next_random(mut seed) % (dictionary.len() + 1), s.clone());
+        let mut mirrored: Vec[String] = Vec.new();
+        for word in dictionary.iter() {
+            mirrored.push(reversed(word));
+        }
+        let want = brute(short_s, short_dictionary);
+        for which in 0..4 {
+            // P1: the answer is the definition's, on the short case.
+            checks += 1;
+            let got = answer(which, short_s, short_dictionary);
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {short_s}, {short_dictionary} gave {got}, want {want}");
+                }
+            }
+            // P2: the dictionary back to front gives the same answer.
+            checks += 1;
+            let got = answer(which, s, dictionary);
+            if answer(which, s, backwards) != got {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {s}, {dictionary} differs back to front");
+                }
+            }
+            // P3: with `s` itself in the dictionary, `s` is the answer.
+            checks += 1;
+            if answer(which, s, with_s) != s {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {s}, {with_s}");
+                }
+            }
+            // P4: without every copy of the answer, the answer is no
+            // better than it was.
+            checks += 1;
+            let mut without: Vec[String] = Vec.new();
+            for word in dictionary.iter() {
+                if word != got {
+                    without.push(word.clone());
+                }
+            }
+            if got.len() > 0 and not beats(got, answer(which, s, without)) {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {s}, {dictionary} without {got}");
+                }
+            }
+            // P5: `s` and every word back to front give an answer just as
+            // long.
+            checks += 1;
+            if answer(which, reversed(s), mirrored).len() != got.len() {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {s}, {dictionary} back to front");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

@@ -1,0 +1,10 @@
+abpcplea, [ale, apple, monkey, plea]: "apple"
+abpcplea, [a, b, c]: "a"
+abc, [d, abcd, ca]: ""
+bab, [ba, ab]: "ab"
+abc, [abc, ab, abc]: "abc"
+aaa, [aaaa, aa]: "aa"
+z, [z]: "z"
+xyzxyz, [zz, yy, xx, zyx]: "xx"
+1000 random cases: 9 with none, checksum 849895590
+1000 words against 1000 letters: 541 letters, starting szzkjmvlga

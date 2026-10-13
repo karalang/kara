@@ -1,0 +1,74 @@
+// LeetCode #525: Contiguous Array -- an array in place of the map.
+//
+// The balance after any prefix lies between -n and n, so the first index
+// of each balance fits in an array of 2n + 1 places, offset by n, with -2
+// marking a balance not seen yet.
+
+fn find_max_length(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut first: Vec[i64] = vec![-2; 2 * n + 1];
+    first[n] = -1;
+    let mut balance = n;
+    let mut best = 0;
+    for i in 0..n {
+        if nums[i] == 1 {
+            balance += 1;
+        } else {
+            balance -= 1;
+        }
+        if first[balance] == -2 {
+            first[balance] = i;
+        } else {
+            best = best.max(i - first[balance]);
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums}: {find_max_length(nums)}");
+}
+
+fn main() {
+    show(vec![0, 1]);
+    show(vec![0, 1, 0]);
+    show(vec![0, 1, 1, 1, 1, 1, 0, 0, 0]);
+    show(vec![0]);
+    show(vec![1, 1]);
+    show(vec![0, 0, 1, 1]);
+    show(vec![1, 0, 1, 0, 1, 0]);
+    show(vec![0, 0, 0, 1]);
+    show(vec![1, 1, 0, 1, 1, 1, 0, 0]);
+    // 3,000 random arrays of 1 to 40 bits, each bit a 1 with chance one
+    // in 1 to 4.
+    let mut seed: i64 = 525;
+    let mut total = 0;
+    let mut checksum = 0;
+    for _ in 0..3000 {
+        let n = 1 + next_random(mut seed) % 40;
+        let q = 1 + next_random(mut seed) % 4;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(if next_random(mut seed) % q == 0 { 1 } else { 0 });
+        }
+        let answer = find_max_length(nums);
+        total += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"3000 random arrays: total {total}, checksum {checksum}");
+    // The largest: 100,000 random bits, and 100,000 bits of 0s then 1s.
+    let mut big: Vec[i64] = Vec.new();
+    let mut halves: Vec[i64] = Vec.new();
+    for i in 0..100000 {
+        big.push(next_random(mut seed) % 2);
+        halves.push(if i < 60000 { 0 } else { 1 });
+    }
+    println(f"100000 random bits: {find_max_length(big)}; 60000 0s then 40000 1s: {find_max_length(halves)}");
+}

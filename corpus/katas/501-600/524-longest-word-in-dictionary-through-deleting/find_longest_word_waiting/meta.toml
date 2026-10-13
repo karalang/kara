@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/524-longest-word-in-dictionary-through-deleting/find_longest_word_waiting.kara"
+dedup_of = []
+expect = "error:E0100"
+exit = 1
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "c8bdf31cd"
+extracted_src = "3a8c75b9"
+model_rev = "1aa23105"
+model_src = "3a8c75b9"

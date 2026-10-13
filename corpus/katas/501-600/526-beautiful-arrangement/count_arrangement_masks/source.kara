@@ -1,0 +1,42 @@
+// LeetCode #526: Beautiful Arrangement -- count over sets of numbers.
+//
+// ways[mask] counts the beautiful ways to fill the first k positions
+// with exactly the numbers in `mask`, k being how many it holds. Each
+// mask adds its count to every mask with one more number that fits
+// position k + 1.
+
+fn count_arrangement(n: i64) -> i64 {
+    let mut ways: Vec[i64] = vec![0; 1 << n];
+    ways[0] = 1;
+    for mask in 0..(1 << n) {
+        if ways[mask] == 0 {
+            continue;
+        }
+        let mut k = 0;
+        for b in 0..n {
+            if (mask >> b) & 1 == 1 {
+                k += 1;
+            }
+        }
+        let pos = k + 1;
+        for x in 1..=n {
+            let bit = 1 << (x - 1);
+            if mask & bit == 0 and (x % pos == 0 or pos % x == 0) {
+                ways[mask | bit] += ways[mask];
+            }
+        }
+    }
+    ways[(1 << n) - 1]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    let mut total = 0;
+    for n in 1..=15 {
+        let count = count_arrangement(n);
+        total += count;
+        println(f"n = {n}: {count}");
+    }
+    println(f"total {total}");
+}

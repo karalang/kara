@@ -1,0 +1,37 @@
+// LeetCode #526: Beautiful Arrangement -- place positions from the front.
+//
+// Fill positions 1, 2, ..., n in turn, trying at each every number not
+// yet used that divides the position or that the position divides. A
+// number that fits nowhere ends the branch at once.
+
+fn place(n: i64, pos: i64, used: mut ref Vec[bool]) -> i64 {
+    if pos > n {
+        return 1;
+    }
+    let mut count = 0;
+    for x in 1..=n {
+        if not used[x] and (x % pos == 0 or pos % x == 0) {
+            used[x] = true;
+            count += place(n, pos + 1, used);
+            used[x] = false;
+        }
+    }
+    count
+}
+
+fn count_arrangement(n: i64) -> i64 {
+    let mut used: Vec[bool] = vec![false; n + 1];
+    place(n, 1, mut used)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    let mut total = 0;
+    for n in 1..=15 {
+        let count = count_arrangement(n);
+        total += count;
+        println(f"n = {n}: {count}");
+    }
+    println(f"total {total}");
+}

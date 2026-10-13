@@ -1,0 +1,229 @@
+// Differential test for LeetCode #525: Contiguous Array.
+//
+// Copies of the four arms, each held to the properties below on 2,000
+// cases of random bits, each a 1 with chance one in 1 to 4: a short
+// array of 1 to 16 bits for P1, and a longer one of 1 to 80 for the
+// rest.
+// Properties:
+//   P1  the answer is the brute force's: every run, its 0s and 1s counted
+//   P2  the array back to front gives the same answer
+//   P3  every bit flipped gives the same answer
+//   P4  the array followed by its flip is balanced as a whole
+//   P5  the answer is even and at most twice the count of the rarer bit
+
+// ---- star: find_max_length.kara
+
+fn find_max_length_star(nums: Vec[i64]) -> i64 {
+    let mut first: Map[i64, i64] = Map.new();
+    first.insert(0, -1);
+    let mut balance = 0;
+    let mut best = 0;
+    for i in 0..nums.len() {
+        balance += if nums[i] == 1 { 1 } else { -1 };
+        match first.get(balance) {
+            Some(j) => {
+                best = best.max(i - *j);
+            }
+            None => {
+                first.insert(balance, i);
+            }
+        }
+    }
+    best
+}
+
+// ---- array: find_max_length_array.kara
+
+fn find_max_length_array(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut first: Vec[i64] = vec![-2; 2 * n + 1];
+    first[n] = -1;
+    let mut balance = n;
+    let mut best = 0;
+    for i in 0..n {
+        if nums[i] == 1 {
+            balance += 1;
+        } else {
+            balance -= 1;
+        }
+        if first[balance] == -2 {
+            first[balance] = i;
+        } else {
+            best = best.max(i - first[balance]);
+        }
+    }
+    best
+}
+
+// ---- sorted: find_max_length_sorted.kara
+
+fn find_max_length_sorted(nums: Vec[i64]) -> i64 {
+    let mut pairs: Vec[(i64, i64)] = vec![(0, 0)];
+    let mut balance = 0;
+    for i in 0..nums.len() {
+        balance += 2 * nums[i] - 1;
+        pairs.push((balance, i + 1));
+    }
+    pairs.sort();
+    let mut best = 0;
+    let mut start = 0;
+    for i in 1..=pairs.len() {
+        if i == pairs.len() or pairs[i].0 != pairs[start].0 {
+            best = best.max(pairs[i - 1].1 - pairs[start].1);
+            start = i;
+        }
+    }
+    best
+}
+
+// ---- last: find_max_length_last.kara
+
+fn find_max_length_last(nums: Vec[i64]) -> i64 {
+    let mut last: Map[i64, i64] = Map.new();
+    let mut balance = 0;
+    last.insert(0, 0);
+    for i in 0..nums.len() {
+        balance += if nums[i] == 1 { 1 } else { -1 };
+        last.insert(balance, i + 1);
+    }
+    let mut best = last[0];
+    balance = 0;
+    for i in 0..nums.len() {
+        balance += if nums[i] == 1 { 1 } else { -1 };
+        best = best.max(last[balance] - (i + 1));
+    }
+    best
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn answer(which: i64, nums: Vec[i64]) -> i64 {
+    if which == 0 {
+        find_max_length_star(nums)
+    } else if which == 1 {
+        find_max_length_array(nums)
+    } else if which == 2 {
+        find_max_length_sorted(nums)
+    } else {
+        find_max_length_last(nums)
+    }
+}
+
+// Every run, its 0s and 1s counted.
+fn brute(nums: Vec[i64]) -> i64 {
+    let mut best = 0;
+    for i in 0..nums.len() {
+        let mut zeros = 0;
+        let mut ones = 0;
+        for j in i..nums.len() {
+            if nums[j] == 0 {
+                zeros += 1;
+            } else {
+                ones += 1;
+            }
+            if zeros == ones and j - i + 1 > best {
+                best = j - i + 1;
+            }
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` bits, each a 1 with chance one in 1 to 4.
+fn random_bits(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let q = 1 + next_random(seed) % 4;
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(if next_random(seed) % q == 0 { 1 } else { 0 });
+    }
+    nums
+}
+
+fn main() {
+    let names = vec!["star", "array", "sorted", "last"];
+    let cases = 2000;
+    let mut seed: i64 = 5250;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for _ in 0..cases {
+        // A short array of 1 to 16 bits for P1; a longer one of 1 to 80
+        // for the rest.
+        let short = random_bits(mut seed, 1 + next_random(mut seed) % 16);
+        let nums = random_bits(mut seed, 1 + next_random(mut seed) % 80);
+        let mut reversed: Vec[i64] = Vec.new();
+        let mut flipped: Vec[i64] = Vec.new();
+        let mut zeros = 0;
+        for i in 0..nums.len() {
+            reversed.push(nums[nums.len() - 1 - i]);
+            flipped.push(1 - nums[i]);
+            if nums[i] == 0 {
+                zeros += 1;
+            }
+        }
+        let mut doubled = nums.clone();
+        for x in flipped.iter() {
+            doubled.push(*x);
+        }
+        let ones = nums.len() - zeros;
+        let want = brute(short);
+        for which in 0..4 {
+            // P1: the answer is the brute force's, on the short array.
+            checks += 1;
+            let got = answer(which, short);
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {short} gave {got}, want {want}");
+                }
+            }
+            // P2: the array back to front gives the same answer.
+            checks += 1;
+            let got = answer(which, nums);
+            if answer(which, reversed) != got {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {nums} differs back to front");
+                }
+            }
+            // P3: every bit flipped gives the same answer.
+            checks += 1;
+            if answer(which, flipped) != got {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {nums} differs flipped");
+                }
+            }
+            // P4: the array followed by its flip is balanced as a whole.
+            checks += 1;
+            if answer(which, doubled) != doubled.len() {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {doubled}");
+                }
+            }
+            // P5: the answer is even and at most twice the rarer bit.
+            checks += 1;
+            if got % 2 != 0 or got > 2 * zeros.min(ones) {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {nums} gave {got}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

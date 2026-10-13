@@ -1,0 +1,52 @@
+// Benchmark for LeetCode #525: Contiguous Array -- the ★ arm (first index
+// of each balance); see ../find_max_length.kara.
+
+fn find_max_length(nums: Vec[i64]) -> i64 {
+    let mut first: Map[i64, i64] = Map.new();
+    first.insert(0, -1);
+    let mut balance = 0;
+    let mut best = 0;
+    for i in 0..nums.len() {
+        balance += if nums[i] == 1 { 1 } else { -1 };
+        match first.get(balance) {
+            Some(j) => {
+                best = best.max(i - *j);
+            }
+            None => {
+                first.insert(balance, i);
+            }
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 20 arrays of 100,000 bits (the problem's longest) made once, each bit
+// a 1 with chance one in 2, 3 or 4 by turns; then every array solved in
+// each of 20 rounds.
+fn main() {
+    let mut seed: i64 = 525;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for a in 0..20 {
+        let q = 2 + a % 3;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..100000 {
+            nums.push(if next_random(mut seed) % q == 0 { 1 } else { 0 });
+        }
+        arrays.push(nums);
+    }
+    let mut total = 0;
+    let mut checksum = 0;
+    for _ in 0..20 {
+        for a in 0..arrays.len() {
+            let answer = find_max_length(arrays[a]);
+            total += answer;
+            checksum = (checksum * 31 + answer) % 1000000007;
+        }
+    }
+    println(f"20 arrays of 100000, 20 rounds: total {total}, checksum {checksum}");
+}

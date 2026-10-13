@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/524-longest-word-in-dictionary-through-deleting/bench/find_longest_word.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "c8bdf31cd"
+extracted_src = "75177208"
+model_rev = "1aa23105"
+model_src = "75177208"

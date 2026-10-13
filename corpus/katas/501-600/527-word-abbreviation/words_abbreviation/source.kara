@@ -1,0 +1,120 @@
+// LeetCode #527: Word Abbreviation -- grow clashing prefixes.
+//
+// Start every word at a one-letter prefix. Walk the words in order; while
+// another word has the same abbreviation as this one, lengthen the
+// prefix of all of them by one letter and abbreviate again.
+
+// The first `k` letters, how many are left out, and the last letter; the
+// word itself when that would not be shorter.
+fn abbreviate(word: Str, k: i64) -> String {
+    let n = word.len();
+    if k >= n - 2 {
+        return word.to_string();
+    }
+    f"{word[0..k]}{n - 1 - k}{word[n - 1..n]}"
+}
+
+fn words_abbreviation(words: Vec[String]) -> Vec[String] {
+    let n = words.len();
+    let mut prefix: Vec[i64] = vec![1; n];
+    let mut abbr: Vec[String] = Vec.new();
+    for word in words.iter() {
+        abbr.push(abbreviate(word, 1));
+    }
+    for i in 0..n {
+        loop {
+            let mut clash: Vec[i64] = Vec.new();
+            for j in i + 1..n {
+                if abbr[j] == abbr[i] {
+                    clash.push(j);
+                }
+            }
+            if clash.is_empty() {
+                break;
+            }
+            clash.push(i);
+            for j in clash.iter() {
+                prefix[*j] += 1;
+                abbr[*j] = abbreviate(words[*j], prefix[*j]);
+            }
+        }
+    }
+    abbr
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut word = String.new();
+    for _ in 0..len {
+        word.push((97 + next_random(seed) % letters) as u8 as char);
+    }
+    word
+}
+
+// `count` distinct words of `shortest` to `longest` letters from the
+// first `letters` letters (fewer when there are not that many).
+fn random_words(seed: mut ref i64, count: i64, shortest: i64, longest: i64, letters: i64) -> Vec[String] {
+    let mut seen: Set[String] = Set.new();
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..count * 4 {
+        if words.len() == count {
+            break;
+        }
+        let word = random_word(seed, shortest + next_random(seed) % (longest - shortest + 1), letters);
+        if not seen.contains(word) {
+            seen.insert(word.clone());
+            words.push(word);
+        }
+    }
+    words
+}
+
+fn show(words: Vec[String]) {
+    println(f"{words}: {words_abbreviation(words)}");
+}
+
+fn main() {
+    show(vec!["like".to_string(), "god".to_string(), "internal".to_string(), "me".to_string(), "internet".to_string(), "interval".to_string(), "intension".to_string(), "face".to_string(), "intrusion".to_string()]);
+    show(vec!["aa".to_string(), "aaa".to_string()]);
+    show(vec!["abcdef".to_string(), "abndef".to_string()]);
+    show(vec!["abcdefghijklm".to_string(), "abcdefghijxlm".to_string(), "axcdefghijklm".to_string()]);
+    show(vec!["wxyz".to_string(), "wyyz".to_string(), "wzyz".to_string()]);
+    // 500 random lists of 2 to 40 distinct words of 2 to 12 letters from
+    // the first 1 to 3 letters.
+    let mut seed: i64 = 527;
+    let mut kept = 0;
+    let mut letters_out = 0;
+    let mut checksum = 0;
+    for _ in 0..500 {
+        let count = 2 + next_random(mut seed) % 39;
+        let letters = 1 + next_random(mut seed) % 3;
+        let words = random_words(mut seed, count, 2, 12, letters);
+        let abbr = words_abbreviation(words);
+        for i in 0..abbr.len() {
+            if abbr[i] == words[i] {
+                kept += 1;
+            }
+            letters_out += abbr[i].len();
+            for b in abbr[i].bytes().iter() {
+                checksum = (checksum * 31 + *b as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"500 random lists: {kept} words kept whole, {letters_out} letters, checksum {checksum}");
+    // The largest: 400 words of 40 to 60 letters from 2 letters.
+    let words = random_words(mut seed, 400, 40, 60, 2);
+    let abbr = words_abbreviation(words);
+    let mut longest = 0;
+    let mut total = 0;
+    for a in abbr.iter() {
+        longest = longest.max(a.len());
+        total += a.len();
+    }
+    println(f"{words.len()} words of 40 to 60 letters: {total} letters, longest {longest}, first {abbr[0]}");
+}

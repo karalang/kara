@@ -1,0 +1,124 @@
+// LeetCode #524: Longest Word in Dictionary through Deleting -- every
+// word at once.
+//
+// Walk `s` once with every word in hand. Each word waits in the bucket
+// of the next letter it needs; when `s` shows that letter, the words in
+// its bucket move on one letter, to their next bucket, or are done.
+
+fn find_longest_word(s: Str, dictionary: Vec[String]) -> String {
+    // waiting[c]: (word, letters matched) pairs that need letter c next.
+    let mut waiting: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..26 {
+        waiting.push(Vec.new());
+    }
+    let mut done: Vec[i64] = Vec.new();
+    for i in 0..dictionary.len() {
+        let first = dictionary[i].bytes()[0];
+        waiting[(first - 97) as i64].push((i, 0));
+    }
+    for b in s.bytes().iter() {
+        let moving = mem.replace(mut waiting[(*b - 97) as i64], Vec.new());
+        for (w, matched) in moving.iter() {
+            let word = dictionary[*w].bytes();
+            if *matched + 1 == word.len() {
+                done.push(*w);
+            } else {
+                waiting[(word[*matched + 1] - 97) as i64].push((*w, *matched + 1));
+            }
+        }
+    }
+    let mut best = String.new();
+    for w in done.iter() {
+        let word = ref dictionary[*w];
+        if word.len() > best.len() or (word.len() == best.len() and word < best) {
+            best = word.clone();
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut word = String.new();
+    for _ in 0..len {
+        word.push((97 + next_random(seed) % letters) as u8 as char);
+    }
+    word
+}
+
+// A random subsequence of `s`: each letter kept with chance one in
+// `keep`, and at least one letter.
+fn random_subsequence(seed: mut ref i64, s: Str, keep: i64) -> String {
+    let mut word = String.new();
+    for c in s.chars() {
+        if next_random(seed) % keep == 0 {
+            word.push(c);
+        }
+    }
+    if word.len() == 0 {
+        word.push(s.bytes()[0] as char);
+    }
+    word
+}
+
+fn show(s: Str, dictionary: Vec[String]) {
+    println(f"{s}, {dictionary}: \"{find_longest_word(s, dictionary)}\"");
+}
+
+fn main() {
+    show("abpcplea", vec!["ale".to_string(), "apple".to_string(), "monkey".to_string(), "plea".to_string()]);
+    show("abpcplea", vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+    show("abc", vec!["d".to_string(), "abcd".to_string(), "ca".to_string()]);
+    show("bab", vec!["ba".to_string(), "ab".to_string()]);
+    show("abc", vec!["abc".to_string(), "ab".to_string(), "abc".to_string()]);
+    show("aaa", vec!["aaaa".to_string(), "aa".to_string()]);
+    show("z", vec!["z".to_string()]);
+    show("xyzxyz", vec!["zz".to_string(), "yy".to_string(), "xx".to_string(), "zyx".to_string()]);
+    // 1,000 random cases: `s` of 1 to 60 letters from 1 to 4 letters, and
+    // 1 to 30 words of 1 to 8 letters, a third of them taken from `s`.
+    let mut seed: i64 = 524;
+    let mut empty = 0;
+    let mut checksum = 0;
+    for _ in 0..1000 {
+        let letters = 1 + next_random(mut seed) % 4;
+        let s = random_word(mut seed, 1 + next_random(mut seed) % 60, letters);
+        let mut dictionary: Vec[String] = Vec.new();
+        let count = 1 + next_random(mut seed) % 30;
+        for _ in 0..count {
+            if next_random(mut seed) % 3 == 0 {
+                dictionary.push(random_subsequence(mut seed, s, 1 + next_random(mut seed) % 8));
+            } else {
+                dictionary.push(random_word(mut seed, 1 + next_random(mut seed) % 8, letters));
+            }
+        }
+        let answer = find_longest_word(s, dictionary);
+        if answer.len() == 0 {
+            empty += 1;
+        }
+        for c in answer.chars() {
+            checksum = (checksum * 31 + c as i64) % 1000000007;
+        }
+        checksum = (checksum * 31 + answer.len()) % 1000000007;
+    }
+    println(f"1000 random cases: {empty} with none, checksum {checksum}");
+    // The largest: `s` of 1,000 letters, and 1,000 words of up to 1,000
+    // letters, half of them taken from `s` with each letter kept with
+    // chance one in 2 to 4.
+    let s = random_word(mut seed, 1000, 26);
+    let mut dictionary: Vec[String] = Vec.new();
+    for i in 0..1000 {
+        if i % 2 == 0 {
+            dictionary.push(random_subsequence(mut seed, s, 2 + next_random(mut seed) % 3));
+        } else {
+            dictionary.push(random_word(mut seed, 1 + next_random(mut seed) % 1000, 26));
+        }
+    }
+    let answer = find_longest_word(s, dictionary);
+    println(f"1000 words against 1000 letters: {answer.len()} letters, starting {answer[0..10]}");
+}

@@ -1,0 +1,37 @@
+// LeetCode #526: Beautiful Arrangement -- place positions from the back.
+//
+// The same search, filling positions n, n - 1, ..., 1. The high
+// positions have the fewest numbers that fit, so a dead branch shows up
+// near the root, where cutting it saves the most.
+
+fn place(pos: i64, used: mut ref Vec[bool]) -> i64 {
+    if pos == 0 {
+        return 1;
+    }
+    let mut count = 0;
+    for x in 1..used.len() {
+        if not used[x] and (x % pos == 0 or pos % x == 0) {
+            used[x] = true;
+            count += place(pos - 1, used);
+            used[x] = false;
+        }
+    }
+    count
+}
+
+fn count_arrangement(n: i64) -> i64 {
+    let mut used: Vec[bool] = vec![false; n + 1];
+    place(n, mut used)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    let mut total = 0;
+    for n in 1..=15 {
+        let count = count_arrangement(n);
+        total += count;
+        println(f"n = {n}: {count}");
+    }
+    println(f"total {total}");
+}

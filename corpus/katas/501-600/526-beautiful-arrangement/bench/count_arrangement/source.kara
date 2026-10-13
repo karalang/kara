@@ -1,0 +1,36 @@
+// Benchmark for LeetCode #526: Beautiful Arrangement -- the ★ arm (place
+// positions from the front); see ../count_arrangement.kara.
+
+fn place(n: i64, pos: i64, used: mut ref Vec[bool]) -> i64 {
+    if pos > n {
+        return 1;
+    }
+    let mut count = 0;
+    for x in 1..=n {
+        if not used[x] and (x % pos == 0 or pos % x == 0) {
+            used[x] = true;
+            count += place(n, pos + 1, used);
+            used[x] = false;
+        }
+    }
+    count
+}
+
+fn count_arrangement(n: i64) -> i64 {
+    let mut used: Vec[bool] = vec![false; n + 1];
+    place(n, 1, mut used)
+}
+
+// Every n the problem allows, 1 to 15, counted in each of 20 rounds.
+fn main() {
+    let mut total = 0;
+    let mut checksum = 0;
+    for round in 0..20 {
+        for n in 1..=15 {
+            let count = count_arrangement(n);
+            total += count;
+            checksum = (checksum * 31 + count + round) % 1000000007;
+        }
+    }
+    println(f"n from 1 to 15, 20 rounds: total {total}, checksum {checksum}");
+}

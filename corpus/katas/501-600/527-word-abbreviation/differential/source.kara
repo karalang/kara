@@ -1,0 +1,408 @@
+// Differential test for LeetCode #527: Word Abbreviation.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// cases of distinct words from the first 1 to 3 letters: a short list of
+// 2 to 8 words of 2 to 8 letters for P1, and a longer one of 2 to 40
+// words of 2 to 12 letters for the rest.
+// Properties:
+//   P1  the abbreviations are the definition's: for each word, the
+//       shortest prefix at which no other word abbreviates the same way
+//   P2  the abbreviations are all different
+//   P3  each abbreviation reads back as its word: the word itself, or a
+//       prefix of it, the count of letters left out and its last letter
+//   P4  the list back to front gives the same abbreviations, back to
+//       front
+//   P5  a word longer than all the others leaves their abbreviations as
+//       they were
+
+// ---- star: words_abbreviation.kara
+
+fn abbreviate_star(word: Str, k: i64) -> String {
+    let n = word.len();
+    if k >= n - 2 {
+        return word.to_string();
+    }
+    f"{word[0..k]}{n - 1 - k}{word[n - 1..n]}"
+}
+
+fn words_abbreviation_star(words: Vec[String]) -> Vec[String] {
+    let n = words.len();
+    let mut prefix: Vec[i64] = vec![1; n];
+    let mut abbr: Vec[String] = Vec.new();
+    for word in words.iter() {
+        abbr.push(abbreviate_star(word, 1));
+    }
+    for i in 0..n {
+        loop {
+            let mut clash: Vec[i64] = Vec.new();
+            for j in i + 1..n {
+                if abbr[j] == abbr[i] {
+                    clash.push(j);
+                }
+            }
+            if clash.is_empty() {
+                break;
+            }
+            clash.push(i);
+            for j in clash.iter() {
+                prefix[*j] += 1;
+                abbr[*j] = abbreviate_star(words[*j], prefix[*j]);
+            }
+        }
+    }
+    abbr
+}
+
+// ---- sorted: words_abbreviation_sorted.kara
+
+fn abbreviate_sorted(word: Str, k: i64) -> String {
+    let n = word.len();
+    if k >= n - 2 {
+        return word.to_string();
+    }
+    f"{word[0..k]}{n - 1 - k}{word[n - 1..n]}"
+}
+
+fn common_prefix_sorted(a: Str, b: Str) -> i64 {
+    let x = a.bytes();
+    let y = b.bytes();
+    let mut i = 0;
+    while i < x.len() and i < y.len() and x[i] == y[i] {
+        i += 1;
+    }
+    i
+}
+
+fn words_abbreviation_sorted(words: Vec[String]) -> Vec[String] {
+    // Each word's index under the key its first abbreviation shares.
+    let mut groups: Map[String, Vec[i64]] = Map.new();
+    for i in 0..words.len() {
+        groups.entry(abbreviate_sorted(words[i], 1)).or_insert_with(Vec.new).push(i);
+    }
+    let mut abbr: Vec[String] = Vec.new();
+    for word in words.iter() {
+        abbr.push(word.clone());
+    }
+    for (_, group) in groups.iter() {
+        let mut order = group.clone();
+        order.sort_by(|a, b| words[a].cmp(words[b]));
+        for p in 0..order.len() {
+            let mut need = 0;
+            if p > 0 {
+                need = need.max(common_prefix_sorted(words[order[p]], words[order[p - 1]]));
+            }
+            if p + 1 < order.len() {
+                need = need.max(common_prefix_sorted(words[order[p]], words[order[p + 1]]));
+            }
+            abbr[order[p]] = abbreviate_sorted(words[order[p]], need + 1);
+        }
+    }
+    abbr
+}
+
+// ---- trie: words_abbreviation_trie.kara
+
+struct Node {
+    next: Vec[i64],
+    count: i64,
+}
+
+fn abbreviate_trie(word: Str, k: i64) -> String {
+    let n = word.len();
+    if k >= n - 2 {
+        return word.to_string();
+    }
+    f"{word[0..k]}{n - 1 - k}{word[n - 1..n]}"
+}
+
+fn words_abbreviation_trie(words: Vec[String]) -> Vec[String] {
+    let mut groups: Map[String, Vec[i64]] = Map.new();
+    for i in 0..words.len() {
+        let key = abbreviate_trie(words[i], 1);
+        if not groups.contains_key(key) {
+            groups.insert(key.clone(), Vec.new());
+        }
+        groups[key].push(i);
+    }
+    let mut abbr: Vec[String] = Vec.new();
+    for word in words.iter() {
+        abbr.push(word.clone());
+    }
+    for (_, group) in groups.iter() {
+        let mut nodes: Vec[Node] = vec![Node { next: vec![-1; 26], count: 0 }];
+        for w in group.iter() {
+            let mut at = 0;
+            for b in words[*w].bytes().iter() {
+                let c = (*b - 97) as i64;
+                if nodes[at].next[c] == -1 {
+                    nodes.push(Node { next: vec![-1; 26], count: 0 });
+                    nodes[at].next[c] = nodes.len() - 1;
+                }
+                at = nodes[at].next[c];
+                nodes[at].count += 1;
+            }
+        }
+        for w in group.iter() {
+            let mut at = 0;
+            let mut k = 0;
+            for b in words[*w].bytes().iter() {
+                at = nodes[at].next[(*b - 97) as i64];
+                k += 1;
+                if nodes[at].count == 1 {
+                    break;
+                }
+            }
+            abbr[*w] = abbreviate_trie(words[*w], k);
+        }
+    }
+    abbr
+}
+
+// ---- pairs: words_abbreviation_pairs.kara
+
+fn abbreviate_pairs(word: Str, k: i64) -> String {
+    let n = word.len();
+    if k >= n - 2 {
+        return word.to_string();
+    }
+    f"{word[0..k]}{n - 1 - k}{word[n - 1..n]}"
+}
+
+fn words_abbreviation_pairs(words: Vec[String]) -> Vec[String] {
+    let mut abbr: Vec[String] = Vec.new();
+    for i in 0..words.len() {
+        let a = words[i].bytes();
+        let mut need = 0;
+        for j in 0..words.len() {
+            let b = words[j].bytes();
+            if j == i or b.len() != a.len() or b[b.len() - 1] != a[a.len() - 1] {
+                continue;
+            }
+            let mut common = 0;
+            while common < a.len() and a[common] == b[common] {
+                common += 1;
+            }
+            need = need.max(common);
+        }
+        abbr.push(abbreviate_pairs(words[i], need + 1));
+    }
+    abbr
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn answer(which: i64, words: Vec[String]) -> Vec[String] {
+    if which == 0 {
+        words_abbreviation_star(words)
+    } else if which == 1 {
+        words_abbreviation_sorted(words)
+    } else if which == 2 {
+        words_abbreviation_trie(words)
+    } else {
+        words_abbreviation_pairs(words)
+    }
+}
+
+// The rule spelled out on its own, letter by letter: the first `k`
+// letters, the count of letters between them and the last, and the last
+// letter, unless that is no shorter than the word.
+fn rule(word: Str, k: i64) -> String {
+    let letters: Vec[char] = word.chars().collect();
+    let mut out = String.new();
+    for i in 0..k.min(letters.len()) {
+        out.push(letters[i]);
+    }
+    out.push_str(f"{letters.len() - 1 - k}");
+    out.push(letters[letters.len() - 1]);
+    if out.len() >= letters.len() {
+        return word.to_string();
+    }
+    out
+}
+
+// The definition, word by word: the shortest prefix at which no other
+// word has the same abbreviation.
+fn definition(words: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..words.len() {
+        let mut k = 1;
+        loop {
+            let mine = rule(words[i], k);
+            let mut clash = false;
+            for j in 0..words.len() {
+                if j != i and rule(words[j], k) == mine {
+                    clash = true;
+                }
+            }
+            if not clash {
+                out.push(mine);
+                break;
+            }
+            k += 1;
+        }
+    }
+    out
+}
+
+// Whether `a` reads as an abbreviation of `word`: the word itself, or a
+// prefix of it, the count of letters left out, and its last letter.
+fn expands(a: Str, word: Str) -> bool {
+    if a == word {
+        return true;
+    }
+    let x = a.bytes();
+    let w = word.bytes();
+    if x.len() >= w.len() or x[x.len() - 1] != w[w.len() - 1] {
+        return false;
+    }
+    let mut k = 0;
+    while k < x.len() and x[k] >= 97 {
+        if x[k] != w[k] {
+            return false;
+        }
+        k += 1;
+    }
+    let mut count = 0;
+    let mut i = k;
+    while i < x.len() - 1 {
+        if x[i] >= 97 {
+            return false;
+        }
+        count = count * 10 + (x[i] - 48) as i64;
+        i += 1;
+    }
+    k >= 1 and i > k and k + count + 1 == w.len()
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut word = String.new();
+    for _ in 0..len {
+        word.push((97 + next_random(seed) % letters) as u8 as char);
+    }
+    word
+}
+
+fn random_words(seed: mut ref i64, count: i64, longest: i64) -> Vec[String] {
+    let letters = 1 + next_random(seed) % 3;
+    let mut seen: Set[String] = Set.new();
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..count * 4 {
+        if words.len() == count {
+            break;
+        }
+        let word = random_word(seed, 2 + next_random(seed) % (longest - 1), letters);
+        if not seen.contains(word) {
+            seen.insert(word.clone());
+            words.push(word);
+        }
+    }
+    words
+}
+
+fn main() {
+    let names = vec!["star", "sorted", "trie", "pairs"];
+    let cases = 1000;
+    let mut seed: i64 = 5270;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for _ in 0..cases {
+        // A short list of 2 to 8 words of up to 8 letters for P1; a longer
+        // one of 2 to 40 words of up to 12 letters for the rest.
+        let short = random_words(mut seed, 2 + next_random(mut seed) % 7, 8);
+        let words = random_words(mut seed, 2 + next_random(mut seed) % 39, 12);
+        let mut reversed: Vec[String] = Vec.new();
+        for i in 0..words.len() {
+            reversed.push(words[words.len() - 1 - i].clone());
+        }
+        // A word longer than any in the list, put in the middle.
+        let mut grown = words.clone();
+        grown.insert(words.len() / 2, random_word(mut seed, 13 + next_random(mut seed) % 5, 3));
+        let want = definition(short);
+        for which in 0..4 {
+            // P1: the abbreviations are the definition's, on the short list.
+            checks += 1;
+            let got = answer(which, short);
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {short} gave {got}, want {want}");
+                }
+            }
+            // P2: the abbreviations are all different.
+            checks += 1;
+            let got = answer(which, words);
+            let mut distinct: Set[String] = Set.new();
+            for a in got.iter() {
+                distinct.insert(a.clone());
+            }
+            if distinct.len() != got.len() {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {words} gave {got}");
+                }
+            }
+            // P3: each abbreviation reads back as its word.
+            checks += 1;
+            let mut reads = got.len() == words.len();
+            for i in 0..got.len().min(words.len()) {
+                if not expands(got[i], words[i]) {
+                    reads = false;
+                }
+            }
+            if not reads {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {words} gave {got}");
+                }
+            }
+            // P4: the list back to front gives the same abbreviations,
+            // back to front.
+            checks += 1;
+            let back = answer(which, reversed);
+            let mut same = back.len() == got.len();
+            for i in 0..back.len().min(got.len()) {
+                if back[i] != got[got.len() - 1 - i] {
+                    same = false;
+                }
+            }
+            if not same {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {words} differs back to front");
+                }
+            }
+            // P5: a word longer than all the others leaves their
+            // abbreviations as they were.
+            checks += 1;
+            let more = answer(which, grown);
+            let mut kept = more.len() == got.len() + 1;
+            for i in 0..got.len() {
+                let at = if i < words.len() / 2 { i } else { i + 1 };
+                if at < more.len() and more[at] != got[i] {
+                    kept = false;
+                }
+            }
+            if not kept {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {words} changed by a longer word");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

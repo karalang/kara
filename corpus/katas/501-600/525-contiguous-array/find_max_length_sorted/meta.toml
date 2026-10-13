@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/525-contiguous-array/find_max_length_sorted.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "c8bdf31cd"
+extracted_src = "1b36a3f4"
+model_rev = "1aa23105"
+model_src = "1b36a3f4"

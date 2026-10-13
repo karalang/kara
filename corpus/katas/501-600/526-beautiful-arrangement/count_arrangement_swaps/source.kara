@@ -1,0 +1,39 @@
+// LeetCode #526: Beautiful Arrangement -- permute by swapping.
+//
+// Build the permutation in place: at depth i, swap each of the numbers
+// still in positions i..n into position i, keep it if it fits there,
+// recurse, and swap it back.
+
+fn permute(perm: mut ref Vec[i64], i: i64) -> i64 {
+    let n = perm.len();
+    if i == n {
+        return 1;
+    }
+    let mut count = 0;
+    for j in i..n {
+        perm.swap(i, j);
+        let pos = i + 1;
+        if perm[i] % pos == 0 or pos % perm[i] == 0 {
+            count += permute(perm, i + 1);
+        }
+        perm.swap(i, j);
+    }
+    count
+}
+
+fn count_arrangement(n: i64) -> i64 {
+    let mut perm: Vec[i64] = (1..=n).collect();
+    permute(mut perm, 0)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    let mut total = 0;
+    for n in 1..=15 {
+        let count = count_arrangement(n);
+        total += count;
+        println(f"n = {n}: {count}");
+    }
+    println(f"total {total}");
+}
