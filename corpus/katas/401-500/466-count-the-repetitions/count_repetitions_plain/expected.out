@@ -1,0 +1,11 @@
+["acb", 4], ["ab", 2] -> 2
+["acb", 1], ["acb", 1] -> 1
+["abc", 3], ["d", 1] -> 0
+["aaa", 3], ["aa", 1] -> 4
+["ab", 1000000], ["ba", 1] -> 999999
+["bacaba", 3], ["abacab", 1] -> 2
+["abcd", 1000000], ["dcba", 7] -> 47619
+["lovelive", 100000], ["lovelive", 100000] -> 1
+["baba", 11], ["baab", 1] -> 7
+["aabaa", 1000000], ["aba", 3] -> 333333
+300 random cases: 52016 repetitions in all, checksum 821001264

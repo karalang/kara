@@ -1,0 +1,367 @@
+// Differential test for LeetCode #465: Optimal Account Balancing.
+//
+// Copies of the four arms, each run on 1,500 random ledgers.
+// Properties:
+//   P1  on up to 4 transactions, the answer is brute force's: the
+//       unsettled people less the most blocks of any partition of them
+//       whose blocks all add up to zero
+//   P2  renaming the people keeps the answer
+//   P3  multiplying every amount keeps it, and so does reversing every
+//       transaction
+//   P4  adding a transaction and its reverse keeps it, and so does
+//       splitting a transaction in two
+//   P5  two ledgers among different people, one in amounts too large
+//       for any of the other's sums to match, take the sum of their
+//       answers
+
+// ---- back: min_transfers.kara
+
+fn fewest_from_back(debts: mut ref Vec[i64], start: i64) -> i64 {
+    let mut first = start;
+    while first < debts.len() and debts[first] == 0 {
+        first += 1;
+    }
+    if first == debts.len() {
+        return 0;
+    }
+    let mut best = -1;
+    for j in first + 1..debts.len() {
+        if debts[j] * debts[first] < 0 {
+            debts[j] += debts[first];
+            let count = 1 + fewest_from_back(debts, first + 1);
+            debts[j] -= debts[first];
+            if best < 0 or count < best {
+                best = count;
+            }
+        }
+    }
+    best
+}
+
+fn transfers_back(transactions: Vec[(i64, i64, i64)]) -> i64 {
+    let mut people = 0;
+    for (from, to, _) in transactions {
+        people = people.max(from + 1).max(to + 1);
+    }
+    let mut balance = vec![0; people];
+    for (from, to, amount) in transactions {
+        balance[from] -= amount;
+        balance[to] += amount;
+    }
+    let mut debts: Vec[i64] = Vec.new();
+    for b in balance {
+        if b != 0 {
+            debts.push(b);
+        }
+    }
+    fewest_from_back(mut debts, 0)
+}
+
+// ---- groups: min_transfers_groups.kara
+
+fn balances_groups(transactions: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut people = 0;
+    for (from, to, _) in transactions {
+        people = people.max(from + 1).max(to + 1);
+    }
+    let mut balance = vec![0; people];
+    for (from, to, amount) in transactions {
+        balance[from] -= amount;
+        balance[to] += amount;
+    }
+    let mut debts: Vec[i64] = Vec.new();
+    for b in balance {
+        if b != 0 {
+            debts.push(b);
+        }
+    }
+    debts
+}
+
+fn transfers_groups(transactions: Vec[(i64, i64, i64)]) -> i64 {
+    let debts = balances_groups(transactions);
+    let k = debts.len();
+    let full = 1 << k;
+    let mut sum = vec![0; full];
+    let mut groups = vec![0; full];
+    for mask in 1..full {
+        for i in 0..k {
+            let bit = 1 << i;
+            if mask & bit != 0 {
+                sum[mask] = sum[mask ^ bit] + debts[i];
+                groups[mask] = groups[mask].max(groups[mask ^ bit]);
+            }
+        }
+        if sum[mask] == 0 {
+            groups[mask] += 1;
+        }
+    }
+    k - groups[full - 1]
+}
+
+// ---- split: min_transfers_split.kara
+
+fn balances_split(transactions: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut people = 0;
+    for (from, to, _) in transactions {
+        people = people.max(from + 1).max(to + 1);
+    }
+    let mut balance = vec![0; people];
+    for (from, to, amount) in transactions {
+        balance[from] -= amount;
+        balance[to] += amount;
+    }
+    let mut debts: Vec[i64] = Vec.new();
+    for b in balance {
+        if b != 0 {
+            debts.push(b);
+        }
+    }
+    debts
+}
+
+fn most_groups_split(left: i64, debts: Vec[i64], memo: mut ref Vec[i64]) -> i64 {
+    if left == 0 {
+        return 0;
+    }
+    if memo[left] >= 0 {
+        return memo[left];
+    }
+    let low = left & -left;
+    let rest = left ^ low;
+    let mut best = 0;
+    // Every subset of the rest, joined with the lowest person.
+    let mut sub = rest;
+    loop {
+        let group = sub | low;
+        let mut total = 0;
+        for i in 0..debts.len() {
+            if group & (1 << i) != 0 {
+                total += debts[i];
+            }
+        }
+        if total == 0 {
+            best = best.max(1 + most_groups_split(left ^ group, debts, memo));
+        }
+        if sub == 0 {
+            break;
+        }
+        sub = (sub - 1) & rest;
+    }
+    memo[left] = best;
+    best
+}
+
+fn transfers_split(transactions: Vec[(i64, i64, i64)]) -> i64 {
+    let debts = balances_split(transactions);
+    let k = debts.len();
+    let mut memo = vec![-1; 1 << k];
+    k - most_groups_split((1 << k) - 1, debts, mut memo)
+}
+
+// ---- bfs: min_transfers_bfs.kara
+
+fn balances_bfs(transactions: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut people = 0;
+    for (from, to, _) in transactions {
+        people = people.max(from + 1).max(to + 1);
+    }
+    let mut balance = vec![0; people];
+    for (from, to, amount) in transactions {
+        balance[from] -= amount;
+        balance[to] += amount;
+    }
+    let mut debts: Vec[i64] = Vec.new();
+    for b in balance {
+        if b != 0 {
+            debts.push(b);
+        }
+    }
+    debts
+}
+
+fn transfers_bfs(transactions: Vec[(i64, i64, i64)]) -> i64 {
+    let mut start = balances_bfs(transactions);
+    start.sort();
+    let mut seen: Set[Vec[i64]] = Set.new();
+    seen.insert(start.clone());
+    let mut level: Vec[Vec[i64]] = vec![start];
+    let mut moves = 0;
+    loop {
+        let mut next: Vec[Vec[i64]] = Vec.new();
+        for debts in level {
+            if debts.is_empty() {
+                return moves;
+            }
+            for j in 1..debts.len() {
+                if debts[j] * debts[0] < 0 {
+                    let mut after: Vec[i64] = Vec.new();
+                    for i in 1..debts.len() {
+                        let b = if i == j { debts[i] + debts[0] } else { debts[i] };
+                        if b != 0 {
+                            after.push(b);
+                        }
+                    }
+                    after.sort();
+                    if not seen.contains(after) {
+                        seen.insert(after.clone());
+                        next.push(after);
+                    }
+                }
+            }
+        }
+        level = next;
+        moves += 1;
+    }
+}
+
+// ---- harness
+
+fn transfers(arm: i64, transactions: Vec[(i64, i64, i64)]) -> i64 {
+    if arm == 0 {
+        transfers_back(transactions)
+    } else if arm == 1 {
+        transfers_groups(transactions)
+    } else if arm == 2 {
+        transfers_split(transactions)
+    } else {
+        transfers_bfs(transactions)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_ledger(n: i64, people: i64, size: i64, seed: mut ref i64) -> Vec[(i64, i64, i64)] {
+    let mut transactions: Vec[(i64, i64, i64)] = Vec.new();
+    for _ in 0..n {
+        let from = next_random(seed) % people;
+        let to = (from + 1 + next_random(seed) % (people - 1)) % people;
+        transactions.push((from, to, 1 + next_random(seed) % size));
+    }
+    transactions
+}
+
+// Every partition of the open balances, each person placed in one of
+// the blocks so far or a new one; the most blocks over the partitions
+// whose blocks all add up to zero.
+fn most_blocks(debts: Vec[i64], i: i64, blocks: mut ref Vec[i64]) -> i64 {
+    if i == debts.len() {
+        for b in blocks {
+            if *b != 0 {
+                return -1;
+            }
+        }
+        return blocks.len();
+    }
+    let mut best = -1;
+    let open = blocks.len();
+    for b in 0..open + 1 {
+        if b == open {
+            blocks.push(debts[i]);
+        } else {
+            blocks[b] += debts[i];
+        }
+        best = best.max(most_blocks(debts, i + 1, blocks));
+        if b == open {
+            blocks.pop();
+        } else {
+            blocks[b] -= debts[i];
+        }
+    }
+    best
+}
+
+fn brute(transactions: Vec[(i64, i64, i64)]) -> i64 {
+    let mut balance = vec![0; 12];
+    for (from, to, amount) in transactions {
+        balance[*from] -= *amount;
+        balance[*to] += *amount;
+    }
+    let mut debts: Vec[i64] = Vec.new();
+    for b in balance {
+        if *b != 0 {
+            debts.push(*b);
+        }
+    }
+    let mut blocks: Vec[i64] = Vec.new();
+    debts.len() - most_blocks(debts, 0, mut blocks)
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4650;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let size = [2, 5, 100][next_random(mut seed) % 3];
+        let small = random_ledger(1 + next_random(mut seed) % 4, 2 + next_random(mut seed) % 7, size, mut seed);
+        let expected = brute(small);
+        let n = 1 + next_random(mut seed) % 5;
+        let people = 2 + next_random(mut seed) % 9;
+        let ledger = random_ledger(n, people, size, mut seed);
+        // A random renaming: shuffle 0 to 11.
+        let mut names: Vec[i64] = Vec.new();
+        for p in 0..12 {
+            names.push(p);
+        }
+        for p in 1..12 {
+            let q = next_random(mut seed) % (p + 1);
+            names.swap(p, q);
+        }
+        let factor = 2 + next_random(mut seed) % 4;
+        let mut renamed: Vec[(i64, i64, i64)] = Vec.new();
+        let mut scaled: Vec[(i64, i64, i64)] = Vec.new();
+        let mut reversed: Vec[(i64, i64, i64)] = Vec.new();
+        for (from, to, amount) in ledger {
+            renamed.push((names[*from], names[*to], *amount));
+            scaled.push((*from, *to, *amount * factor));
+            reversed.push((*to, *from, *amount));
+        }
+        let mut padded = ledger.clone();
+        let a = next_random(mut seed) % 12;
+        let b = (a + 1 + next_random(mut seed) % 11) % 12;
+        let x = 1 + next_random(mut seed) % size;
+        padded.insert(next_random(mut seed) % (n + 1), (a, b, x));
+        padded.insert(next_random(mut seed) % (n + 2), (b, a, x));
+        let mut split = ledger.clone();
+        let at = next_random(mut seed) % n;
+        let (from, to, amount) = split[at];
+        if amount > 1 {
+            let part = 1 + next_random(mut seed) % (amount - 1);
+            split[at] = (from, to, part);
+            split.push((from, to, amount - part));
+        }
+        let left = random_ledger(1 + next_random(mut seed) % 3, 6, size, mut seed);
+        let right = random_ledger(1 + next_random(mut seed) % 3, 6, size, mut seed);
+        let mut both = left.clone();
+        for (from, to, amount) in right {
+            both.push((*from + 6, *to + 6, *amount * 1000));
+        }
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, transfers(arm, small) == expected, mut failures);
+            let answer = transfers(arm, ledger);
+            report(2, arm, case, transfers(arm, renamed) == answer, mut failures);
+            report(3, arm, case, transfers(arm, scaled) == answer and transfers(arm, reversed) == answer, mut failures);
+            report(4, arm, case, transfers(arm, padded) == answer and transfers(arm, split) == answer, mut failures);
+            // Scaling keeps the right ledger's answer (P3).
+            report(5, arm, case, transfers(arm, both) == transfers(arm, left) + transfers(arm, right), mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

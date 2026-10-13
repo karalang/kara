@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/466-count-the-repetitions/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential", "lib:map"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "029e2493f"
+extracted_src = "76943c5c"
+model_rev = "1aa23105"
+model_src = "76943c5c"

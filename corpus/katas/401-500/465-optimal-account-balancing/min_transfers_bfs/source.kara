@@ -1,0 +1,118 @@
+// LeetCode #465: Optimal Account Balancing -- breadth first over
+// balances.
+//
+// A position is the list of balances still open. One move settles the
+// first open balance by passing all of it to someone of the opposite
+// sign, as in the backtracking arm. Search positions breadth first,
+// level by level, skipping any already seen (sorted, so the same
+// balances in another order count once); the first level with nothing
+// open is the answer.
+
+fn balances(transactions: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut people = 0;
+    for (from, to, _) in transactions {
+        people = people.max(from + 1).max(to + 1);
+    }
+    let mut balance = vec![0; people];
+    for (from, to, amount) in transactions {
+        balance[from] -= amount;
+        balance[to] += amount;
+    }
+    let mut debts: Vec[i64] = Vec.new();
+    for b in balance {
+        if b != 0 {
+            debts.push(b);
+        }
+    }
+    debts
+}
+
+fn min_transfers(transactions: Vec[(i64, i64, i64)]) -> i64 {
+    let mut start = balances(transactions);
+    start.sort();
+    let mut seen: Set[Vec[i64]] = Set.new();
+    seen.insert(start.clone());
+    let mut level: Vec[Vec[i64]] = vec![start];
+    let mut moves = 0;
+    loop {
+        let mut next: Vec[Vec[i64]] = Vec.new();
+        for debts in level {
+            if debts.is_empty() {
+                return moves;
+            }
+            for j in 1..debts.len() {
+                if debts[j] * debts[0] < 0 {
+                    let mut after: Vec[i64] = Vec.new();
+                    for i in 1..debts.len() {
+                        let b = if i == j { debts[i] + debts[0] } else { debts[i] };
+                        if b != 0 {
+                            after.push(b);
+                        }
+                    }
+                    after.sort();
+                    if not seen.contains(after) {
+                        seen.insert(after.clone());
+                        next.push(after);
+                    }
+                }
+            }
+        }
+        level = next;
+        moves += 1;
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn listed(transactions: Vec[(i64, i64, i64)]) -> String {
+    let mut out = String.new();
+    for (from, to, amount) in transactions {
+        if not out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(f"{from}->{to}:{amount}");
+    }
+    out
+}
+
+fn show(transactions: Vec[(i64, i64, i64)]) {
+    println(f"{listed(transactions)} -> {min_transfers(transactions)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![(0, 1, 10), (2, 0, 5)]);
+    show(vec![(0, 1, 10), (1, 0, 1), (1, 2, 5), (2, 0, 5)]);
+    show(vec![(0, 1, 5)]);
+    show(vec![(0, 1, 5), (1, 0, 5)]);
+    show(vec![(0, 1, 5), (1, 2, 5), (2, 3, 5)]);
+    show(vec![(0, 1, 3), (2, 3, 3), (4, 5, 3)]);
+    show(vec![(0, 1, 1), (0, 2, 2), (0, 3, 3), (4, 0, 6)]);
+    show(vec![(0, 1, 2), (2, 3, 3), (4, 5, 5), (1, 3, 1), (5, 0, 4)]);
+    show(vec![(0, 1, 100), (2, 3, 1), (4, 5, 1), (6, 7, 1), (8, 9, 1), (10, 11, 1), (11, 0, 100)]);
+    // 300 random ledgers of 1 to 8 transactions among people 0 to 11,
+    // with amounts up to 3, 10 or 100.
+    let count = 300;
+    let mut seed: i64 = 465;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = 1 + next_random(mut seed) % 8;
+        let size = [3, 10, 100][next_random(mut seed) % 3];
+        let mut transactions: Vec[(i64, i64, i64)] = Vec.new();
+        for _ in 0..n {
+            let from = next_random(mut seed) % 12;
+            let to = (from + 1 + next_random(mut seed) % 11) % 12;
+            let amount = 1 + next_random(mut seed) % size;
+            transactions.push((from, to, amount));
+        }
+        let fewest = min_transfers(transactions);
+        total += fewest;
+        checksum = (checksum * 31 + fewest) % 1000000007;
+    }
+    println(f"{count} random ledgers: {total} transfers in all, checksum {checksum}");
+}

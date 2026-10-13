@@ -1,0 +1,122 @@
+// LeetCode #465: Optimal Account Balancing -- split into groups, top
+// down.
+//
+// As in the bottom-up arm, the answer is the number of unsettled people
+// less the most disjoint zero-sum groups. Here the groups are chosen
+// directly: the lowest person left must belong to some zero-sum group,
+// so try every subset of the people left that holds them and adds up to
+// zero, and split the rest the same way. The best count for each set of
+// people left is kept in a Vec indexed by its bitmask.
+
+fn balances(transactions: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut people = 0;
+    for (from, to, _) in transactions {
+        people = people.max(from + 1).max(to + 1);
+    }
+    let mut balance = vec![0; people];
+    for (from, to, amount) in transactions {
+        balance[from] -= amount;
+        balance[to] += amount;
+    }
+    let mut debts: Vec[i64] = Vec.new();
+    for b in balance {
+        if b != 0 {
+            debts.push(b);
+        }
+    }
+    debts
+}
+
+fn most_groups(left: i64, debts: Vec[i64], memo: mut ref Vec[i64]) -> i64 {
+    if left == 0 {
+        return 0;
+    }
+    if memo[left] >= 0 {
+        return memo[left];
+    }
+    let low = left & -left;
+    let rest = left ^ low;
+    let mut best = 0;
+    // Every subset of the rest, joined with the lowest person.
+    let mut sub = rest;
+    loop {
+        let group = sub | low;
+        let mut total = 0;
+        for i in 0..debts.len() {
+            if group & (1 << i) != 0 {
+                total += debts[i];
+            }
+        }
+        if total == 0 {
+            best = best.max(1 + most_groups(left ^ group, debts, memo));
+        }
+        if sub == 0 {
+            break;
+        }
+        sub = (sub - 1) & rest;
+    }
+    memo[left] = best;
+    best
+}
+
+fn min_transfers(transactions: Vec[(i64, i64, i64)]) -> i64 {
+    let debts = balances(transactions);
+    let k = debts.len();
+    let mut memo = vec![-1; 1 << k];
+    k - most_groups((1 << k) - 1, debts, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn listed(transactions: Vec[(i64, i64, i64)]) -> String {
+    let mut out = String.new();
+    for (from, to, amount) in transactions {
+        if not out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(f"{from}->{to}:{amount}");
+    }
+    out
+}
+
+fn show(transactions: Vec[(i64, i64, i64)]) {
+    println(f"{listed(transactions)} -> {min_transfers(transactions)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![(0, 1, 10), (2, 0, 5)]);
+    show(vec![(0, 1, 10), (1, 0, 1), (1, 2, 5), (2, 0, 5)]);
+    show(vec![(0, 1, 5)]);
+    show(vec![(0, 1, 5), (1, 0, 5)]);
+    show(vec![(0, 1, 5), (1, 2, 5), (2, 3, 5)]);
+    show(vec![(0, 1, 3), (2, 3, 3), (4, 5, 3)]);
+    show(vec![(0, 1, 1), (0, 2, 2), (0, 3, 3), (4, 0, 6)]);
+    show(vec![(0, 1, 2), (2, 3, 3), (4, 5, 5), (1, 3, 1), (5, 0, 4)]);
+    show(vec![(0, 1, 100), (2, 3, 1), (4, 5, 1), (6, 7, 1), (8, 9, 1), (10, 11, 1), (11, 0, 100)]);
+    // 300 random ledgers of 1 to 8 transactions among people 0 to 11,
+    // with amounts up to 3, 10 or 100.
+    let count = 300;
+    let mut seed: i64 = 465;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = 1 + next_random(mut seed) % 8;
+        let size = [3, 10, 100][next_random(mut seed) % 3];
+        let mut transactions: Vec[(i64, i64, i64)] = Vec.new();
+        for _ in 0..n {
+            let from = next_random(mut seed) % 12;
+            let to = (from + 1 + next_random(mut seed) % 11) % 12;
+            let amount = 1 + next_random(mut seed) % size;
+            transactions.push((from, to, amount));
+        }
+        let fewest = min_transfers(transactions);
+        total += fewest;
+        checksum = (checksum * 31 + fewest) % 1000000007;
+    }
+    println(f"{count} random ledgers: {total} transfers in all, checksum {checksum}");
+}

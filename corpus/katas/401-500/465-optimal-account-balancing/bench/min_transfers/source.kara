@@ -1,0 +1,70 @@
+// Benchmark for #465: the ★ arm (backtracking over the unsettled
+// balances) on a large workload.
+
+fn fewest_from(debts: mut ref Vec[i64], start: i64) -> i64 {
+    let mut first = start;
+    while first < debts.len() and debts[first] == 0 {
+        first += 1;
+    }
+    if first == debts.len() {
+        return 0;
+    }
+    let mut best = -1;
+    for j in first + 1..debts.len() {
+        if debts[j] * debts[first] < 0 {
+            debts[j] += debts[first];
+            let count = 1 + fewest_from(debts, first + 1);
+            debts[j] -= debts[first];
+            if best < 0 or count < best {
+                best = count;
+            }
+        }
+    }
+    best
+}
+
+fn min_transfers(transactions: Vec[(i64, i64, i64)]) -> i64 {
+    let mut people = 0;
+    for (from, to, _) in transactions {
+        people = people.max(from + 1).max(to + 1);
+    }
+    let mut balance = vec![0; people];
+    for (from, to, amount) in transactions {
+        balance[from] -= amount;
+        balance[to] += amount;
+    }
+    let mut debts: Vec[i64] = Vec.new();
+    for b in balance {
+        if b != 0 {
+            debts.push(b);
+        }
+    }
+    fewest_from(mut debts, 0)
+}
+
+// ---- bench ------------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let ledgers = 20000;
+    let mut seed: i64 = 465;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..ledgers {
+        let mut transactions: Vec[(i64, i64, i64)] = Vec.new();
+        for _ in 0..8 {
+            let from = next_random(mut seed) % 12;
+            let to = (from + 1 + next_random(mut seed) % 11) % 12;
+            let amount = 1 + next_random(mut seed) % 3;
+            transactions.push((from, to, amount));
+        }
+        let fewest = min_transfers(transactions);
+        total += fewest;
+        checksum = (checksum * 31 + fewest) % 1000000007;
+    }
+    println(f"{ledgers} ledgers of 8 transactions: {total} transfers in all, checksum {checksum}");
+}

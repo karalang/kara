@@ -1,0 +1,261 @@
+// Differential test for LeetCode #466: Count The Repetitions.
+//
+// Copies of the four arms, each run on 1,500 random cases.
+// Properties:
+//   P1  on s1 of up to 5 letters and n1 up to 6, the answer is brute
+//       force's: the largest m with s2 written n2 x m times a
+//       subsequence of s1 written n1 times
+//   P2  the answer for n2 is the answer for 1 divided by n2
+//   P3  s2 written r times with n2 gives the answer for s2 with r x n2
+//   P4  s1 written r times with n1 gives the answer for s1 with r x n1
+//   P5  s2 one letter of s1, found c times in it, gives c x n1 / n2
+
+// ---- cycle: count_repetitions.kara
+
+fn repetitions_cycle(s1: String, n1: i64, s2: String, n2: i64) -> i64 {
+    let a: Vec[char] = s1.chars().collect();
+    let b: Vec[char] = s2.chars().collect();
+    let mut index = 0;
+    let mut count = 0;
+    // Where in s2 the match stood after copy k, and the s2 copies by then.
+    let mut seen: Map[i64, (i64, i64)] = Map.new();
+    let mut k = 0;
+    while k < n1 {
+        for c in a {
+            if c == b[index] {
+                index += 1;
+                if index == b.len() {
+                    index = 0;
+                    count += 1;
+                }
+            }
+        }
+        k += 1;
+        if let Some((k0, count0)) = seen.get(index) {
+            let cycle = k - k0;
+            let cycles = (n1 - k) / cycle;
+            count += cycles * (count - count0);
+            k += cycles * cycle;
+            // Fewer than a cycle's worth of copies are left; read them.
+            while k < n1 {
+                for c in a {
+                    if c == b[index] {
+                        index += 1;
+                        if index == b.len() {
+                            index = 0;
+                            count += 1;
+                        }
+                    }
+                }
+                k += 1;
+            }
+            break;
+        }
+        seen.insert(index, (k, count));
+    }
+    count / n2
+}
+
+// ---- table: count_repetitions_table.kara
+
+fn repetitions_table(s1: String, n1: i64, s2: String, n2: i64) -> i64 {
+    let a: Vec[char] = s1.chars().collect();
+    let b: Vec[char] = s2.chars().collect();
+    let mut next: Vec[i64] = Vec.new();
+    let mut gained: Vec[i64] = Vec.new();
+    for start in 0..b.len() {
+        let mut index = start;
+        let mut count = 0;
+        for c in a {
+            if c == b[index] {
+                index += 1;
+                if index == b.len() {
+                    index = 0;
+                    count += 1;
+                }
+            }
+        }
+        next.push(index);
+        gained.push(count);
+    }
+    let mut index = 0;
+    let mut count = 0;
+    for _ in 0..n1 {
+        count += gained[index];
+        index = next[index];
+    }
+    count / n2
+}
+
+// ---- doubling: count_repetitions_doubling.kara
+
+fn repetitions_doubling(s1: String, n1: i64, s2: String, n2: i64) -> i64 {
+    let a: Vec[char] = s1.chars().collect();
+    let b: Vec[char] = s2.chars().collect();
+    let mut next: Vec[i64] = Vec.new();
+    let mut gained: Vec[i64] = Vec.new();
+    for start in 0..b.len() {
+        let mut index = start;
+        let mut count = 0;
+        for c in a {
+            if c == b[index] {
+                index += 1;
+                if index == b.len() {
+                    index = 0;
+                    count += 1;
+                }
+            }
+        }
+        next.push(index);
+        gained.push(count);
+    }
+    // next and gained cover 2^level copies; walk n1's bits upward.
+    let mut index = 0;
+    let mut count = 0;
+    let mut left = n1;
+    while left > 0 {
+        if left % 2 == 1 {
+            count += gained[index];
+            index = next[index];
+        }
+        let mut next2: Vec[i64] = Vec.new();
+        let mut gained2: Vec[i64] = Vec.new();
+        for j in 0..b.len() {
+            next2.push(next[next[j]]);
+            gained2.push(gained[j] + gained[next[j]]);
+        }
+        next = next2;
+        gained = gained2;
+        left /= 2;
+    }
+    count / n2
+}
+
+// ---- plain: count_repetitions_plain.kara
+
+fn repetitions_plain(s1: String, n1: i64, s2: String, n2: i64) -> i64 {
+    let a: Vec[char] = s1.chars().collect();
+    let b: Vec[char] = s2.chars().collect();
+    let mut index = 0;
+    let mut count = 0;
+    for _ in 0..n1 {
+        for c in a {
+            if c == b[index] {
+                index += 1;
+                if index == b.len() {
+                    index = 0;
+                    count += 1;
+                }
+            }
+        }
+    }
+    count / n2
+}
+
+// ---- harness
+
+fn repetitions(arm: i64, s1: String, n1: i64, s2: String, n2: i64) -> i64 {
+    if arm == 0 {
+        repetitions_cycle(s1, n1, s2, n2)
+    } else if arm == 1 {
+        repetitions_table(s1, n1, s2, n2)
+    } else if arm == 2 {
+        repetitions_doubling(s1, n1, s2, n2)
+    } else {
+        repetitions_plain(s1, n1, s2, n2)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(len: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut word = String.new();
+    for _ in 0..len {
+        word.push(char.try_from(97 + next_random(seed) % letters).unwrap());
+    }
+    word
+}
+
+fn written(s: String, times: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..times {
+        out.push_str(s);
+    }
+    out
+}
+
+fn is_subsequence(small: String, big: String) -> bool {
+    let want: Vec[char] = small.chars().collect();
+    let mut i = 0;
+    for c in big.chars() {
+        if i < want.len() and c == want[i] {
+            i += 1;
+        }
+    }
+    i == want.len()
+}
+
+fn brute(s1: String, n1: i64, s2: String, n2: i64) -> i64 {
+    let big = written(s1, n1);
+    let mut m = 0;
+    while is_subsequence(written(s2, n2 * (m + 1)), big) {
+        m += 1;
+    }
+    m
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4660;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let letters = 2 + next_random(mut seed) % 3;
+        let a1 = random_word(1 + next_random(mut seed) % 5, letters, mut seed);
+        let k1 = 1 + next_random(mut seed) % 6;
+        let a2 = random_word(1 + next_random(mut seed) % 4, letters, mut seed);
+        let k2 = 1 + next_random(mut seed) % 3;
+        let expected = brute(a1, k1, a2, k2);
+        let s1 = random_word(1 + next_random(mut seed) % 6, letters, mut seed);
+        let n1 = 1 + next_random(mut seed) % 50;
+        let s2 = random_word(1 + next_random(mut seed) % 4, letters, mut seed);
+        let n2 = 1 + next_random(mut seed) % 4;
+        let r = 2 + next_random(mut seed) % 2;
+        let s2r = written(s2, r);
+        let s1r = written(s1, r);
+        let picked: Vec[char] = s1.chars().collect();
+        let letter = picked[next_random(mut seed) % picked.len()];
+        let mut found = 0;
+        for c in picked {
+            if c == letter {
+                found += 1;
+            }
+        }
+        let single = String.from(letter);
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, repetitions(arm, a1, k1, a2, k2) == expected, mut failures);
+            let answer = repetitions(arm, s1, n1, s2, n2);
+            report(2, arm, case, answer == repetitions(arm, s1, n1, s2, 1) / n2, mut failures);
+            report(3, arm, case, repetitions(arm, s1, n1, s2r, n2) == repetitions(arm, s1, n1, s2, n2 * r), mut failures);
+            report(4, arm, case, repetitions(arm, s1r, n1, s2, n2) == repetitions(arm, s1, n1 * r, s2, n2), mut failures);
+            report(5, arm, case, repetitions(arm, s1, n1, single, n2) == found * n1 / n2, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}
