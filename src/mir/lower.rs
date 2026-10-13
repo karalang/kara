@@ -2396,6 +2396,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         match kind {
             None => self.assign(dest, Rvalue::Use(o)),
+            // A cast into a wider place (`let y: i64 = c as i32`) is the
+            // cast, then the implicit widening `assign` gives a value
+            // (B-2026-10-13-21).
+            Some(k) if self.widening(to, self.place_type(&dest)).is_some() => {
+                let t = self.temp(to);
+                self.assign(t, Rvalue::Cast(k, o, to));
+                self.assign(dest, Rvalue::Use(Operand::Move(Place::local(t))));
+            }
             Some(k) => self.assign(dest, Rvalue::Cast(k, o, to)),
         }
         Ok(())

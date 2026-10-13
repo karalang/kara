@@ -520,3 +520,23 @@ fn mir_vec_extend_takes_any_iterable() {
         }
     }
 }
+
+/// A cast to a narrower type into a wider binding or return slot is the
+/// cast, then the implicit widening (B-2026-10-13-21).
+#[test]
+fn mir_a_cast_into_a_wider_place_widens() {
+    const SRC: &str = "fn code(c: char) -> i64 { c as i32 }\n\
+        fn low(x: i64) -> i64 { x as u8 }\n\
+        fn main() {\n    let x: i64 = 300;\n    let y: i64 = x as u8;\n    \
+        let z: i64 = -x as i32;\n    let w: i64 = 'a' as i32;\n    \
+        let f: f64 = x as f32;\n    \
+        println(f\"{y} {z} {w} {code('b')} {low(259)} {f}\");\n}\n";
+    let want = "44 -300 97 98 3 300.0\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
