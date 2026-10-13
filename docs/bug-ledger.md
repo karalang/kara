@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 602 |
 | double-free | 427 |
 | codegen-gap | 253 |
-| missing-feature | 232 |
+| missing-feature | 233 |
 | other | 171 |
 | perf | 153 |
 | diagnostics | 152 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2856 |
-| interp | 904 |
+| codegen | 2857 |
+| interp | 905 |
 | typecheck | 371 |
 | other | 115 |
 | ownership | 83 |
@@ -595,6 +595,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-6 | 2026-10-13 | typecheck+interp+codegen | low | The remainder of B-2026-10-06-74, two halves: (1) `karac check` refuses `*k` on an item taken from an iterator first bound to a name (`let mut it = w.iter(); let Some(k) = it.next() ...; *k`, for a `Vec[i64]` and a `VecDeque[i64]`) while both MIR backends run it, though `w.iter().next()` unbound now passes; (2) SPEC QUESTION: docs/library/iterators.md gives `find` / `filter` / `position` / `take_while` / `skip_while` / `partition` a bare `Self.Item` predicate, so `(1..n).find(|j| w[*j] ...)` is an error (`j` is an `i64` copy; check refuses it), but runtime/stdlib/source/iter.kara declares them `MutFn(ref Self.Item)`, so both MIR backends accept `*j`; Thread A reads the doc as right and the MIR acceptance as leniency, and the two documents need to agree | — |
 | B-2026-10-13-7 | 2026-10-13 | typecheck+interp+codegen | medium | The MIR backends have no `Iterator.min` / `max` / `min_by` / `max_by` / `min_by_key` / `max_by_key`, all in the library spec (CORRECTION 2026-10-13: the row also said `Vec.min` / `max` is spec'd, citing collections.md:205-206; those lines are `SortedSet`'s, and no `Vec` or `Slice` `min`/`max` is in the spec, so `m.max()` is out of scope here -- found by Thread A): `m.iter().max()`, `(0..4).max()` and `m.iter().map(f).max()` are refused with "no method 'max' on type 'VecIter'" (`Range`, `IterMap`), and `m.max()` reaches the run as "call of unknown function Vec[i64].max"; `karac check` accepts `min` / `max` but types the result by value, so the spec's `*m.iter().max().unwrap()` and `*m.max().unwrap()` are refused ("found 'i64'"), and it has no `min_by` / `max_by_key` either | — |
 | B-2026-10-13-9 | 2026-10-13 | interp+codegen | medium | f64 Display does not follow the v1 spec's rendering on any backend: `println(1.0)` prints `1`, `println([1.0, 2.5])` prints `[1, 2.5]`, `println(1e16)` prints `10000000000000000` and `println(0.00001)` prints `0.00001`, where docs/library/core-types.md § Printing says `1.0`, `[1.0, 2.5]`, `1e+16` and `1e-05` (always a `.` or an exponent; exponent form below 1e-4 and from 1e16, as Python's repr) | — |
+| B-2026-10-13-10 | 2026-10-13 | interp+codegen | medium | On the MIR backends `let s: String = text.chars().collect();` (chars collected into a `String` with no adaptor between) is refused with "collecting chars into this type is not lowered yet", while `karac check` and the legacy interpreter accept it, and the same collect after `.rev()`, `.filter(..)`, `.skip(..)`, `.take(..)` or `.map(..)` runs on both MIR backends | — |
 
 ### Relocated
 
