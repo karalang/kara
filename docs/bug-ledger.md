@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 728 |
 | run-vs-build | 604 |
-| leak | 602 |
+| leak | 603 |
 | double-free | 427 |
 | codegen-gap | 253 |
 | missing-feature | 238 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2864 |
-| interp | 909 |
+| codegen | 2865 |
+| interp | 910 |
 | typecheck | 377 |
 | other | 115 |
 | ownership | 83 |
@@ -599,6 +599,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-20 | 2026-10-13 | codegen+runtime | low | An f-string with one integer hole, `f"{n}"`, costs three allocations, two frees and four thread-local `RefCell` borrows on the v2 compiled backend: 44M `f"{i % 7}"` take 2.7 s on `karac build --mir` against 0.3 s on legacy `karac build` (about 9x), and kata 504's bench runs 3.7 s on `--mir` against 1.6 s on legacy | — |
 | B-2026-10-13-21 | 2026-10-13 | interp+codegen | high | An `as` cast to a narrower integer, widened implicitly into a wider binding or return slot, is never widened by the MIR: `let y: i64 = x as u8;` and `fn f(c: char) -> i64 { c as i32 }` assign the narrow value straight into the `i64` place, so `karac __mir-run` stops at "invalid MIR: assigning u8 to _2 of type i64" and the compiled backend stores 1 or 4 bytes into an 8-byte slot and reads garbage (`let y: i64 = 300 as u8` printed 94505382909996, not 44) | — |
 | B-2026-10-13-22 | 2026-10-13 | typecheck | low | `f64.powi` does not exist, though design.md's own example calls it: `phi.powi(n as i32)` is refused by `karac check` and every backend with "no method 'powi' on type 'f64'"; only `pow(f64)` is implemented, and no library doc lists the float math methods at all | — |
+| B-2026-10-13-23 | 2026-10-13 | interp+codegen | medium | A strong handle stored into a `weak` field is downgraded only when it is a plain local: from a call result (`c.parent = get(a)`, `c.parent = b.parent.expect(...)`, `Node { parent: get(a), .. }`) `karac __mir-run` prints the output and then fails at the drop with "a weak-typed place holds no handle", and `karac __mir-llvm-run` prints it right but leaks the object (ASan: 32 bytes in 1 allocation); from another weak field (`c.parent = b.parent`) `__mir-run` refuses with "invalid MIR ... move out of _7.1, which is inside a shared value" and mir-llvm leaks the same way; `c.parent = Some(a)` fails on both v2 backends at lowering. `karac check` passes all of them, and legacy `karac run --interp` and `karac build` print right | — |
 
 ### Relocated
 
