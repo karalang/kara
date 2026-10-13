@@ -1,0 +1,79 @@
+// LeetCode #486: Predict the Winner -- every game played out.
+//
+// Player 1's final total over nums[i..=j], with nothing remembered: on
+// player 1's move, whichever end leaves player 1 the most; on player 2's,
+// whichever leaves player 1 the least. 2^n games for n numbers, which the
+// problem's n <= 20 allows. Player 1 wins with at least half the whole.
+
+fn first_total(nums: Vec[i64], i: i64, j: i64, first_moves: bool) -> i64 {
+    if i > j {
+        return 0;
+    }
+    let after_left = first_total(nums, i + 1, j, not first_moves);
+    let after_right = first_total(nums, i, j - 1, not first_moves);
+    if first_moves {
+        (nums[i] + after_left).max(nums[j] + after_right)
+    } else {
+        after_left.min(after_right)
+    }
+}
+
+fn predict_the_winner(nums: Vec[i64]) -> bool {
+    let mut total = 0;
+    for k in 0..nums.len() {
+        total += nums[k];
+    }
+    2 * first_total(nums, 0, nums.len() - 1, true) >= total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn list(v: Vec[i64]) -> String {
+    let mut line = String.new();
+    for k in 0..v.len() {
+        if k > 0 {
+            line.push_str(", ");
+        }
+        line.push_str(f"{v[k]}");
+    }
+    line
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"[{list(nums)}] -> {predict_the_winner(nums)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![1, 5, 2]);
+    show(vec![1, 5, 233, 7]);
+    show(vec![7]);
+    show(vec![0]);
+    show(vec![1, 2, 1]);
+    show(vec![2, 4, 55, 6, 8]);
+    show(vec![1, 1, 1, 2, 1]);
+    show(vec![10000000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10000000]);
+    show(vec![3, 9, 1, 2, 9, 7, 8, 4, 6, 5, 2, 8, 1, 7, 3, 6, 4, 9, 2]);
+    // 300 random arrays of 1 to 12 numbers from 0 to 20, or from 0 to
+    // 10^7 in one array in five.
+    let count = 300;
+    let mut seed: i64 = 486;
+    let mut wins = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let top = if c % 5 == 0 { 10000001 } else { 21 };
+        let size = 1 + next_random(mut seed) % 12;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            nums.push(next_random(mut seed) * 32768 % top);
+        }
+        let win = if predict_the_winner(nums) { 1 } else { 0 };
+        wins += win;
+        checksum = (checksum * 31 + win * 7 + nums.len()) % 1000000007;
+    }
+    println(f"{count} random arrays: player 1 wins {wins}, checksum {checksum}");
+}

@@ -1,0 +1,52 @@
+// Benchmark for #486: the ★ arm (one row of leads) on a large workload.
+//
+// LeetCode #486: Predict the Winner -- one row of leads.
+//
+// The lead on nums[i..=j] is the most the player to move can finish
+// ahead by: take nums[i] and the other player then leads on nums[i+1..=j],
+// or take nums[j] and the other leads on nums[i..=j-1]. Filling i from
+// the right needs one row: d[j] holds the lead on nums[i+1..=j] until it
+// is overwritten with the lead on nums[i..=j]. Player 1 wins ties.
+
+fn predict_the_winner(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    let mut d = nums.clone();
+    let mut i = n - 2;
+    while i >= 0 {
+        for j in i + 1..n {
+            d[j] = (nums[i] - d[j]).max(nums[j] - d[j - 1]);
+        }
+        i -= 1;
+    }
+    d[n - 1] >= 0
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 200 arrays of 1,000 or 1,001 numbers from 0 to 10^7, past the
+    // problem's 20 so that one solve is long enough to time, built once,
+    // then each solved once.
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut seed: i64 = 486;
+    for a in 0..200 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..1000 + a % 2 {
+            nums.push(next_random(mut seed) * 32768 % 10000001);
+        }
+        arrays.push(nums);
+    }
+    let mut wins = 0;
+    let mut checksum: i64 = 0;
+    for nums in arrays.iter() {
+        let win = if predict_the_winner(nums) { 1 } else { 0 };
+        wins += win;
+        checksum = (checksum * 31 + win * 7 + nums.len()) % 1000000007;
+    }
+    println(f"200 arrays of 1000 or 1001 numbers: player 1 wins {wins}, checksum {checksum}");
+}

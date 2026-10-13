@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/486-predict-the-winner/bench/predict_the_winner.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "aebbc5cf9"
+extracted_src = "83c29586"
+model_rev = "1aa23105"
+model_src = "83c29586"
