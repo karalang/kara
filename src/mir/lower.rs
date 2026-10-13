@@ -13872,6 +13872,9 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     let dump = std::env::var("KARAC_MIR_DUMP").ok();
     let names: FxHashSet<String> = lowered.program.bodies.keys().cloned().collect();
     let borrowck = std::env::var("KARAC_MIR_BORROWCK").as_deref() != Ok("0");
+    // `KARAC_MIR_RC_PAIRS=0` keeps every retain (`rc_pairs`).
+    let rc_pairs = std::env::var("KARAC_MIR_RC_PAIRS").as_deref() != Ok("0");
+    let coroutines = crate::mir::coroutine::coroutines(lowered.program.bodies.values());
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
@@ -13915,6 +13918,9 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
             .map_err(|e| format!("elaborate {}: {e}", body.instance.name))?;
         // §6.2's run-time borrow flags, on the elaborated body.
         crate::mir::insert_borrow_flags(body, &lowered.tys, &has_receiver);
+        if rc_pairs && !coroutines.contains(&body.instance.name) {
+            crate::mir::rc_pairs::elide_retains(body, &lowered.tys);
+        }
         if dump.as_deref() == Some("elaborated") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
         }

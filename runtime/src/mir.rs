@@ -709,11 +709,25 @@ pub unsafe extern "C" fn karac_mir_str_replacen(
     unsafe { string_of(out, t.as_bytes()) };
 }
 
-/// Runs a program's `main` body on a thread with a 1 GiB stack (reserved,
-/// committed as it is touched) and returns its exit code, so recursion
-/// reaches the depth the interpreter's does.
+/// Runs a program's `main` body on a 1 GiB stack (reserved, committed as
+/// it is touched) and returns its exit code, so recursion reaches the depth
+/// the interpreter's does.
+///
+/// Where it can, it switches the main thread onto that stack rather than
+/// starting a thread: once a process has a second thread, glibc's `malloc`
+/// and `free` lock their arena on every call, which made an allocating
+/// program (a linked-list merge) 1.7x slower than on the process's own
+/// thread. The stack-overflow guard covers the new stack.
 #[no_mangle]
 pub extern "C" fn karac_mir_run_main(body: extern "C" fn() -> i32) -> i32 {
+    #[cfg(all(
+        unix,
+        feature = "net",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    if let Some(code) = big_stack::run(body) {
+        return code;
+    }
     match std::thread::Builder::new()
         .name("main".into())
         .stack_size(1 << 30)
@@ -722,6 +736,75 @@ pub extern "C" fn karac_mir_run_main(body: extern "C" fn() -> i32) -> i32 {
         Ok(h) => h.join().unwrap_or(101),
         // No thread to be had: run it here, on the process's own stack.
         Err(_) => body(),
+    }
+}
+
+#[cfg(all(
+    unix,
+    feature = "net",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod big_stack {
+    const SIZE: usize = 1 << 30;
+    /// The inaccessible low end, which an overflow faults on.
+    const GUARD: usize = 1 << 16;
+
+    /// Runs `body` on a fresh stack; `None` when none could be mapped.
+    pub(super) fn run(body: extern "C" fn() -> i32) -> Option<i32> {
+        // SAFETY: an anonymous private mapping, reserved, not committed.
+        let lo = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                SIZE,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE,
+                -1,
+                0,
+            )
+        };
+        if lo == libc::MAP_FAILED {
+            return None;
+        }
+        // SAFETY: the low pages of the mapping just made.
+        unsafe { libc::mprotect(lo, GUARD, libc::PROT_NONE) };
+        let lo = lo as usize;
+        let top = lo + SIZE;
+        crate::stack_guard::imp::install_for(Some((lo + GUARD, top)));
+        // SAFETY: `top` is the 16-byte-aligned end of a mapping that
+        // nothing else uses; `body` runs on it with the C ABI and returns,
+        // and the callee-saved register holding the old stack pointer
+        // brings it back. The mapping is left in place: the process exits
+        // after `main` returns.
+        let code: i32;
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            std::arch::asm!(
+                "mov r12, rsp",
+                "mov rsp, {top}",
+                "call {f}",
+                "mov rsp, r12",
+                top = in(reg) top,
+                f = in(reg) body,
+                out("r12") _,
+                lateout("eax") code,
+                clobber_abi("C"),
+            );
+        }
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            std::arch::asm!(
+                "mov x20, sp",
+                "mov sp, {top}",
+                "blr {f}",
+                "mov sp, x20",
+                top = in(reg) top,
+                f = in(reg) body,
+                out("x20") _,
+                lateout("w0") code,
+                clobber_abi("C"),
+            );
+        }
+        Some(code)
     }
 }
 

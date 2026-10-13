@@ -40,7 +40,7 @@ pub extern "C" fn karac_runtime_install_stack_guard() {
 }
 
 #[cfg(all(unix, feature = "net"))]
-mod imp {
+pub(crate) mod imp {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     static INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -94,11 +94,17 @@ note: raise the limit with `ulimit -s`, or make the recursion iterative.\n";
     }
 
     pub(super) fn install() {
+        install_for(None);
+    }
+
+    /// Installs the guard for the stack `[lo, hi)`, or the main thread's
+    /// when `None`.
+    pub(crate) fn install_for(bounds: Option<(usize, usize)>) {
         if INSTALLED.swap(true, Ordering::SeqCst) {
             return;
         }
         unsafe {
-            if let Some((lo, hi)) = main_stack_bounds() {
+            if let Some((lo, hi)) = bounds.or_else(|| main_stack_bounds()) {
                 STACK_LO.store(lo, Ordering::Relaxed);
                 STACK_HI.store(hi, Ordering::Relaxed);
             }

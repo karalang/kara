@@ -20,6 +20,7 @@ pub mod movecheck;
 pub mod parse;
 pub mod place_ty;
 pub mod pretty;
+pub mod rc_pairs;
 pub mod syntax;
 pub mod ty;
 pub mod validate;
