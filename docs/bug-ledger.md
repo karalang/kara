@@ -97,11 +97,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 602 |
 | double-free | 427 |
 | codegen-gap | 253 |
-| missing-feature | 229 |
+| missing-feature | 230 |
 | other | 171 |
 | perf | 153 |
 | diagnostics | 152 |
-| false-positive | 148 |
+| false-positive | 149 |
 | crash | 114 |
 | soundness | 99 |
 | use-after-free | 90 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2853 |
 | interp | 901 |
-| typecheck | 367 |
+| typecheck | 369 |
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
@@ -589,12 +589,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-22 | 2026-10-12 | typecheck | low | `karac check` accepts `m.get(k) == Some(n)` on a `Map[u8, i64]`, comparing `Option[ref i64]` with `Option[i64]`, which `karac __mir-run` refuses ("cannot compare 'Option[ref i64]' and 'Option[i64]'") and which check itself refuses for `Vec.get`; the legacy interpreter runs it | — |
 | B-2026-10-12-23 | 2026-10-12 | resolver+typecheck | medium | `karac check` refuses every `#[derive(Serialize, Deserialize)]` program that `karac __mir-run` runs: `DeserializeError` and `Serializer` are undefined types to the resolver, and `Json.serialize` / `Json.deserialize` are 'no associated function' to the typechecker | — |
 | B-2026-10-12-25 | 2026-10-12 | interp | low | `Vec.split_at_mut` passes `karac check` but `__mir-run` has no such function (`call of unknown function Vec[i64].split_at_mut`). CORRECTED: `__mir-llvm-run` has it since 010499d0d5, which landed before this row; the filing measured a binary built before that commit | — |
-| B-2026-10-12-31 | 2026-10-12 | other | medium | `.expect("...")` on the MIR compiled backend still builds a heap String from its literal on every call, success path included: 50,000,000 pops through `.expect("x")` take 1.12-1.19 s against 0.24-0.31 s with `.unwrap()`. CORRECTED 2026-10-13: the stdlib half (`expect` took `msg: own String` where the spec says `msg: Str`) is fixed in c37bfb78dc; the remaining cost is the MIR builder making a String from the literal before borrowing it as a Str (owner Thread B, under the 10-10 static-literal ruling) | — |
-| B-2026-10-12-32 | 2026-10-12 | typecheck | medium | On the MIR backends, `let s: String = cs[1..3].iter().collect();` and `let s: String = cs.into_iter().collect();` (with `cs: Vec[char]`) are refused with "expected 'String', found 'Vec[char]'": `collect` from a slice's iterator or from `into_iter` ignores the `String` target and builds a `Vec`, while `cs.iter().collect()` into the same `String` works | — |
 | B-2026-10-12-33 | 2026-10-12 | typecheck | low | `karac check` refuses `s = cs.iter().collect();` into an existing `String` (also `w.name = ...` and `v.push(cs.iter().collect())` with `v: Vec[String]`), with "expected 'String', found 'Vec[char]'": `collect` takes its target type from a `let` annotation or a return type, but not from an assignment target or an argument, and defaults to `Vec` | — |
-| B-2026-10-12-34 | 2026-10-12 | typecheck | low | On the MIR backends, `v.push(cs.iter().collect())` with `v: Vec[String]` and `cs: Vec[char]` fails to build: "the method call `.collect` with no resolved callee is not lowered yet"; `collect` in argument position gets no target type | — |
 | B-2026-10-13-1 | 2026-10-13 | typecheck | low | `Map.keys()` / `values()` and `SortedMap.keys()` / `values()` return an eager `Vec` on every front end, where docs/library/collections.md gives `fn keys(self) -> impl Iterator[Item = ref K]`: `m.keys().next()` and `m.keys().count()` are refused ("no method 'next' on type 'Vec': iterator adaptors/terminals require an explicit `.iter()`"), and taking the smallest key of a `SortedMap` copies every key | — |
-| B-2026-10-13-3 | 2026-10-13 | interp+codegen | medium | A `Slice[T]`'s `iter()` drives a `for` loop on the MIR backends but no adaptor or terminal: `s.bytes().iter().collect()`, `.count()`, `.position(..)` and `v[0..3].iter().map(..).sum()` fail with "an iterator value is not lowered yet", and a closure that writes the spec's `*b` is refused first ("found 'u8'"), while `karac check` accepts every form and its own diagnostic for `s.bytes().collect()` recommends `s.bytes().iter().collect()` | — |
+| B-2026-10-13-4 | 2026-10-13 | typecheck | medium | On the MIR backends `let s: String = cs.into_iter().collect();` (with `cs: Vec[char]`) is refused with "expected 'String', found 'Vec[char]'": `Vec.into_iter()` has no library iterator, so its `collect()` can only build a `Vec`, while `for x in v.into_iter()` works | — |
+| B-2026-10-13-5 | 2026-10-13 | typecheck | medium | A hand-written conditional impl's bound is not checked where a generic call needs the trait: with `impl[T: Show] Show for Wrap[T]` and no `impl Show for Plain`, `print_it(Wrap { v: Plain { n: 1 } })` (`fn print_it[X: Show](x: ref X)`) passes `karac check` and the MIR type check, and the MIR builder then stops with "the method call `.show` with no resolved callee is not lowered yet" in `Wrap[Plain].show` | — |
 
 ### Relocated
 
@@ -3935,9 +3933,13 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-28 | typecheck | low | A `SortedMap.floor`/`ceiling` entry taken out with `.expect()` or `.unwrap()` loses its `ref`s on the MIR backends: `let (k, v) = m.floor(4).expect("… | b47c3c85e5 |
 | B-2026-10-12-29 | runtime | medium | A hashed `Map` on the MIR compiled backend (`runtime/src/mir_map.rs`) costs about 9x a Rust `HashMap` per lookup: the key is hashed by `karac_hash_wo… | 8acdc0bdb5 |
 | B-2026-10-12-30 | runtime | medium | `Vec.sort` on the MIR compiled backend (`karac_mir_sort`, `runtime/src/mir.rs`) is about 12x slower than legacy codegen's sort: a bottom-up merge sor… | 8acdc0bdb5 |
+| B-2026-10-12-31 | other | medium | `.expect("...")` on the MIR compiled backend still builds a heap String from its literal on every call, success path included: 50,000,000 pops throug… | 55fb1339d3 |
+| B-2026-10-12-32 | typecheck | medium | On the MIR backends, `let s: String = cs[1..3].iter().collect();` and `let s: String = cs.into_iter().collect();` (with `cs: Vec[char]`) are refused… | 0e8113c3ec |
+| B-2026-10-12-34 | typecheck | low | On the MIR backends, `v.push(cs.iter().collect())` with `v: Vec[String]` and `cs: Vec[char]` fails to build: "the method call `.collect` with no reso… | b9967ff0e0 |
 | B-2026-10-12-35 | typecheck | low | `s.chars().rev()` is refused on the MIR backends ("no method 'rev' on type 'StrChars'") while `karac check` and the legacy interpreter accept it; the… | a9bce361cd |
 | B-2026-10-12-36 | codegen | medium | `Vec.push` on the MIR compiled backend is an out-of-line runtime call (`karac_mir_vec_push`, runtime/src/mir.rs) that reserves and then `memcpy`s eac… | d2ffa9b440 |
 | B-2026-10-13-2 | interp | medium | `karac __mir-run` COPIES THE WHOLE TEXT on every `String.len()` and `is_empty()` (and the other 40-odd natives that read a String through `string_at`… | 0349222a33 |
+| B-2026-10-13-3 | interp+codegen | medium | A `Slice[T]`'s `iter()` drives a `for` loop on the MIR backends but no adaptor or terminal: `s.bytes().iter().collect()`, `.count()`, `.position(..)`… | 0e8113c3ec |
 
 </details>
 
