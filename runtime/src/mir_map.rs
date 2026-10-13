@@ -11,8 +11,6 @@
 //! bisection. A handle is a pointer to a [`MirMap`], null while the table
 //! has never held an entry.
 
-use std::collections::HashMap;
-
 use crate::alloc::karac_realloc_or_panic;
 
 pub type HashFn = unsafe extern "C" fn(*const u8) -> u64;
@@ -31,8 +29,12 @@ pub struct MirMap {
     cap: usize,
     /// Each slot's hash, for the hashed kinds.
     hashes: Vec<u64>,
-    /// The slots of each hash.
-    index: HashMap<u64, Vec<usize>>,
+    /// An open-addressing table of the live slots, by hash, for the
+    /// hashed kinds: a power of two long (or empty), at most half full
+    /// counting [`TOMB`]s, probed linearly.
+    index: Vec<usize>,
+    /// The cells of `index` that are not [`EMPTY`].
+    index_used: usize,
     /// Which slots are holes, and how many.
     dead: Vec<bool>,
     holes: usize,
@@ -41,7 +43,95 @@ pub struct MirMap {
     live: Vec<i64>,
 }
 
+/// An `index` cell that never held a slot: a probe stops here.
+const EMPTY: usize = usize::MAX;
+/// An `index` cell whose slot was removed: a probe goes on past it.
+const TOMB: usize = usize::MAX - 1;
+
 impl MirMap {
+    /// Where the probe for `hv` starts in an `index` of `mask + 1` cells.
+    fn home(hv: u64, mask: usize) -> usize {
+        (hv.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 32) as usize & mask
+    }
+
+    /// The live slot whose key has hash `hv` and equals `key`.
+    ///
+    /// # Safety
+    /// `key` is a key of the table's type and `eq` its equality.
+    unsafe fn find_slot(&self, hv: u64, key: *const u8, eq: EqFn) -> Option<usize> {
+        if self.index.is_empty() {
+            return None;
+        }
+        let mask = self.index.len() - 1;
+        let mut i = Self::home(hv, mask);
+        loop {
+            match self.index[i] {
+                EMPTY => return None,
+                TOMB => {}
+                // SAFETY: the caller's contract; `sl < slots`.
+                sl if self.hashes[sl] == hv && unsafe { eq(self.slot_ptr(sl), key) } => {
+                    return Some(sl)
+                }
+                _ => {}
+            }
+            i = (i + 1) & mask;
+        }
+    }
+
+    /// Room in `index` for one more slot.
+    fn index_reserve(&mut self) {
+        if (self.index_used + 1) * 2 > self.index.len() {
+            let want = ((self.len() + 1) * 4).next_power_of_two().max(8);
+            self.reindex(want);
+        }
+    }
+
+    /// Rebuilds `index` with `cells` cells over the live slots.
+    fn reindex(&mut self, cells: usize) {
+        self.index.clear();
+        self.index.resize(cells, EMPTY);
+        self.index_used = 0;
+        for sl in 0..self.hashes.len() {
+            if !self.dead[sl] {
+                self.index_place(self.hashes[sl], sl);
+            }
+        }
+    }
+
+    /// Records slot `sl` (hash `hv`) in `index`, which has room.
+    fn index_place(&mut self, hv: u64, sl: usize) {
+        let mask = self.index.len() - 1;
+        let mut i = Self::home(hv, mask);
+        loop {
+            match self.index[i] {
+                EMPTY => {
+                    self.index[i] = sl;
+                    self.index_used += 1;
+                    return;
+                }
+                TOMB => {
+                    self.index[i] = sl;
+                    return;
+                }
+                _ => i = (i + 1) & mask,
+            }
+        }
+    }
+
+    /// Forgets slot `sl` (hash `hv`) in `index`.
+    fn index_take(&mut self, hv: u64, sl: usize) {
+        let mask = self.index.len() - 1;
+        let mut i = Self::home(hv, mask);
+        while self.index[i] != sl {
+            debug_assert!(
+                self.index[i] != EMPTY,
+                "a live slot is missing from the index"
+            );
+            i = (i + 1) & mask;
+        }
+        self.index[i] = TOMB;
+    }
+
     fn len(&self) -> usize {
         self.slots - self.holes
     }
@@ -136,10 +226,8 @@ impl MirMap {
         self.dead.clear();
         self.dead.resize(w, false);
         self.live.clear();
-        self.index.clear();
-        for (s, h) in self.hashes.iter().enumerate() {
-            self.index.entry(*h).or_default().push(s);
-        }
+        let cells = self.index.len().max(8);
+        self.reindex(cells);
     }
 
     fn grow(&mut self) {
@@ -191,15 +279,11 @@ pub unsafe extern "C" fn karac_mir_map_find(
     };
     // SAFETY: as above.
     let hv = unsafe { hash(key) };
-    if let Some(is) = m.index.get(&hv) {
-        for &sl in is {
-            // SAFETY: as above.
-            if unsafe { eq(m.slot_ptr(sl), key) } {
-                return m.index_of(sl) as i64;
-            }
-        }
+    // SAFETY: as above.
+    match unsafe { m.find_slot(hv, key, eq) } {
+        Some(sl) => m.index_of(sl) as i64,
+        None => -1,
     }
-    -1
 }
 
 /// # Safety
@@ -243,7 +327,8 @@ pub unsafe extern "C" fn karac_mir_map_insert(
                 slots: 0,
                 cap: 0,
                 hashes: Vec::new(),
-                index: HashMap::new(),
+                index: Vec::new(),
+                index_used: 0,
                 dead: Vec::new(),
                 holes: 0,
                 live: Vec::new(),
@@ -252,6 +337,9 @@ pub unsafe extern "C" fn karac_mir_map_insert(
         &mut **hp
     };
     m.grow();
+    if hash.is_some() {
+        m.index_reserve();
+    }
     let es = m.entry_size;
     let at = match cmp {
         // SAFETY: as above.
@@ -275,7 +363,7 @@ pub unsafe extern "C" fn karac_mir_map_insert(
         // SAFETY: as above.
         let hv = unsafe { hash(entry) };
         m.hashes.push(hv);
-        m.index.entry(hv).or_default().push(at);
+        m.index_place(hv, at);
     }
     m.index_of(at) as i64
 }
@@ -406,12 +494,7 @@ pub unsafe extern "C" fn karac_mir_map_remove(h: *mut MirMap, i: i64, out: *mut 
         return;
     }
     let hv = m.hashes[s];
-    if let Some(v) = m.index.get_mut(&hv) {
-        v.retain(|&x| x != s);
-        if v.is_empty() {
-            m.index.remove(&hv);
-        }
-    }
+    m.index_take(hv, s);
     if s + 1 == m.slots && m.holes == 0 {
         m.slots -= 1;
         m.hashes.pop();
@@ -446,6 +529,7 @@ pub unsafe extern "C" fn karac_mir_map_clear(h: *mut MirMap) {
     m.slots = 0;
     m.hashes.clear();
     m.index.clear();
+    m.index_used = 0;
     m.dead.clear();
     m.holes = 0;
     m.live.clear();
@@ -525,6 +609,20 @@ mod tests {
                     karac_mir_map_remove(h, i as i64, (&mut out as *mut i64).cast());
                 }
                 assert_eq!(out, model.remove(i));
+                // A removed key, and one never added, are absent.
+                for gone in [out, next] {
+                    // SAFETY: as above.
+                    let f = unsafe {
+                        karac_mir_map_find(
+                            h,
+                            (&gone as *const i64).cast(),
+                            Some(hash),
+                            Some(eq),
+                            None,
+                        )
+                    };
+                    assert_eq!(f, -1);
+                }
                 // SAFETY: as above.
                 let holes = unsafe { (*h).holes };
                 compacted |= holed && holes == 0;

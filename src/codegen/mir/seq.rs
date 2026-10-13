@@ -9,7 +9,7 @@ use inkwell::IntPredicate;
 
 use super::key::KeyOp;
 use super::{Cx, R};
-use crate::mir::ty::IntrinsicTy;
+use crate::mir::ty::{IntTy, IntrinsicTy};
 use crate::mir::{Operand, Place, Ty, TyKind};
 
 fn e<T: ToString>(x: T) -> String {
@@ -578,6 +578,37 @@ impl<'ctx> Cx<'ctx, '_> {
         self.key_fn(op, el).as_global_value().as_pointer_value()
     }
 
+    /// Sorts the `n` elements of `el` (`size` bytes each) at `buf` in
+    /// their own order: integers, `char`s and `bool`s straight through
+    /// the runtime's slice sort, anything else by [`Self::sort_cmp`].
+    fn sort_own_order(
+        &mut self,
+        buf: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        el: Ty,
+        size: u64,
+    ) -> R<()> {
+        let signed = match self.tys.kind(el) {
+            TyKind::Int(IntTy::I128 | IntTy::U128) => None,
+            TyKind::Int(i) => Some(i.signed()),
+            TyKind::Char | TyKind::Bool => Some(false),
+            _ => None,
+        };
+        match signed {
+            Some(signed) if self.user_cmp_body(el).is_none() && matches!(size, 1 | 2 | 4 | 8) => {
+                let kind = size * 8 + if signed { 256 } else { 0 };
+                self.rt("sort_int", &[buf.into(), n.into(), self.i64(kind).into()])
+            }
+            _ => {
+                let cmp = self.sort_cmp(el);
+                self.rt(
+                    "sort",
+                    &[buf.into(), n.into(), self.i64(size).into(), cmp.into()],
+                )
+            }
+        }
+    }
+
     /// The methods of a view or a `Vec`, or `None` for one not lowered here.
     pub(super) fn seq_native(
         &mut self,
@@ -739,13 +770,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store(d, v)?;
                 self.drop_moved(&args[1..])?;
             }
-            ("sort" | "sort_unstable", []) => {
-                let cmp = self.sort_cmp(el);
-                self.rt(
-                    "sort",
-                    &[p.into(), n.into(), self.i64(size).into(), cmp.into()],
-                )?;
-            }
+            ("sort" | "sort_unstable", []) => self.sort_own_order(p, n, el, size)?,
             (
                 "sort_by"
                 | "sort_unstable_by"
@@ -962,13 +987,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 }
                 let buf = self.load_ptr(d)?;
                 match rest {
-                    [] => {
-                        let cmp = self.sort_cmp(el);
-                        self.rt(
-                            "sort",
-                            &[buf.into(), n.into(), self.i64(size).into(), cmp.into()],
-                        )?;
-                    }
+                    [] => self.sort_own_order(buf, n, el, size)?,
                     [f] => {
                         let (cmp, ctx) = self.sort_by_args(f, method == "sorted_by_key", el)?;
                         self.rt(

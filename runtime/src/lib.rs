@@ -288,6 +288,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_str_join,
         mir::karac_mir_sort,
         mir::karac_mir_sort_ctx,
+        mir::karac_mir_sort_int,
         mir::karac_mir_deque_alloc,
         mir::karac_mir_fs,
         mir_io::karac_mir_file,

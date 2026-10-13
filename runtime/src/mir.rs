@@ -1372,6 +1372,33 @@ pub unsafe extern "C" fn karac_mir_sort(
     unsafe { merge_sort(buf, n, size, &mut |a, b| cmp(a, b)) };
 }
 
+/// Sorts `n` integers at `buf` in their numeric order: `kind` is the
+/// width in bits (8, 16, 32 or 64), plus 256 when signed. Equal integers
+/// cannot be told apart, so this agrees with the stable sort.
+///
+/// # Safety
+/// `buf` holds `n` integers of that width, aligned to it.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_sort_int(buf: *mut u8, n: usize, kind: i64) {
+    if n < 2 {
+        return;
+    }
+    // SAFETY (each arm): the caller's contract.
+    unsafe {
+        match kind {
+            8 => std::slice::from_raw_parts_mut(buf, n).sort_unstable(),
+            16 => std::slice::from_raw_parts_mut(buf as *mut u16, n).sort_unstable(),
+            32 => std::slice::from_raw_parts_mut(buf as *mut u32, n).sort_unstable(),
+            64 => std::slice::from_raw_parts_mut(buf as *mut u64, n).sort_unstable(),
+            264 => std::slice::from_raw_parts_mut(buf as *mut i8, n).sort_unstable(),
+            272 => std::slice::from_raw_parts_mut(buf as *mut i16, n).sort_unstable(),
+            288 => std::slice::from_raw_parts_mut(buf as *mut i32, n).sort_unstable(),
+            320 => std::slice::from_raw_parts_mut(buf as *mut i64, n).sort_unstable(),
+            _ => panic!("karac_mir_sort_int: no integer kind {kind}"),
+        }
+    }
+}
+
 /// [`karac_mir_sort`] with a comparator that also takes `ctx` (a
 /// `sort_by` closure's environment).
 ///
@@ -1400,39 +1427,82 @@ unsafe fn merge_sort(
     if n < 2 || size == 0 {
         return;
     }
-    // SAFETY: every index passed is below `n`.
-    let at = |i: usize| unsafe { buf.add(i * size) };
-    let mut order: Vec<usize> = (0..n).collect();
+    // A fixed element size lets each move be a plain load and store.
+    // SAFETY (each arm): the caller's contract.
+    unsafe {
+        match size {
+            1 => merge_passes::<1>(buf, n, size, cmp),
+            2 => merge_passes::<2>(buf, n, size, cmp),
+            4 => merge_passes::<4>(buf, n, size, cmp),
+            8 => merge_passes::<8>(buf, n, size, cmp),
+            16 => merge_passes::<16>(buf, n, size, cmp),
+            24 => merge_passes::<24>(buf, n, size, cmp),
+            32 => merge_passes::<32>(buf, n, size, cmp),
+            _ => merge_passes::<0>(buf, n, size, cmp),
+        }
+    }
+}
+
+/// The bottom-up merge of [`merge_sort`], between `buf` and one scratch
+/// buffer: widths 1, 2, 4, ..., the right element first only when
+/// strictly less. It makes the same comparisons in the same order as the
+/// interpreter's, so even a comparator that is not an order gives the
+/// same result. `N` is the element size, or 0 for "`size`, copied".
+///
+/// # Safety
+/// As [`merge_sort`].
+unsafe fn merge_passes<const N: usize>(
+    buf: *mut u8,
+    n: usize,
+    size: usize,
+    cmp: &mut dyn FnMut(*const u8, *const u8) -> i32,
+) {
+    let mut scratch = vec![0u8; n * size];
+    let (mut src, mut dst) = (buf, scratch.as_mut_ptr());
+    // SAFETY: every index passed is below `n`, in a buffer of `n`.
+    let at = |b: *mut u8, i: usize| unsafe { b.add(i * size) };
+    let put = |d: *mut u8, s: *const u8| {
+        // SAFETY: both point at whole elements of distinct buffers.
+        unsafe {
+            if N == 0 {
+                std::ptr::copy_nonoverlapping(s, d, size);
+            } else {
+                (d as *mut [u8; N]).write_unaligned((s as *const [u8; N]).read_unaligned());
+            }
+        }
+    };
     let mut width = 1;
     while width < n {
-        let mut out = Vec::with_capacity(n);
+        let mut k = 0;
         for lo in (0..n).step_by(2 * width) {
             let mid = (lo + width).min(n);
             let hi = (lo + 2 * width).min(n);
             let (mut i, mut j) = (lo, mid);
             while i < mid && j < hi {
-                // The right element goes first only when strictly less.
-                if cmp(at(order[j]), at(order[i])) < 0 {
-                    out.push(order[j]);
+                if cmp(at(src, j), at(src, i)) < 0 {
+                    put(at(dst, k), at(src, j));
                     j += 1;
                 } else {
-                    out.push(order[i]);
+                    put(at(dst, k), at(src, i));
                     i += 1;
                 }
+                k += 1;
             }
-            out.extend_from_slice(&order[i..mid]);
-            out.extend_from_slice(&order[j..hi]);
+            // SAFETY: the rest of each run, whole elements in bounds.
+            unsafe {
+                std::ptr::copy_nonoverlapping(at(src, i), at(dst, k), (mid - i) * size);
+                k += mid - i;
+                std::ptr::copy_nonoverlapping(at(src, j), at(dst, k), (hi - j) * size);
+                k += hi - j;
+            }
         }
-        order = out;
+        std::mem::swap(&mut src, &mut dst);
         width *= 2;
     }
-    let mut copy = vec![0u8; n * size];
-    for (k, &i) in order.iter().enumerate() {
-        // SAFETY: `i < n`; `copy` holds `n` elements.
-        unsafe { std::ptr::copy_nonoverlapping(at(i), copy.as_mut_ptr().add(k * size), size) };
+    if src != buf {
+        // SAFETY: the sorted elements are in the scratch buffer.
+        unsafe { std::ptr::copy_nonoverlapping(src, buf, n * size) };
     }
-    // SAFETY: as above.
-    unsafe { std::ptr::copy_nonoverlapping(copy.as_ptr(), buf, n * size) };
 }
 
 /// Ends a `panic_message` format: its text is the next abort's message.
@@ -2311,5 +2381,59 @@ pub unsafe extern "C" fn karac_mir_pool_drop(h: *mut MirPool) {
     unsafe { drop_mir_fn(&p.create) };
     if let Some(c) = &p.check {
         unsafe { drop_mir_fn(c) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_sort;
+
+    /// The merge is stable and sorts, for a fixed element size and for
+    /// one copied by length, against `slice::sort_by_key`.
+    #[test]
+    fn merge_sort_is_stable() {
+        let mut rng = 99u64;
+        for n in [0usize, 1, 2, 3, 7, 16, 100, 1000] {
+            // (key, original position): 16 bytes, and 12 with the key
+            // as an i32 pair padded to an odd size.
+            let mut v16: Vec<(i64, i64)> = (0..n as i64)
+                .map(|i| {
+                    rng ^= rng << 13;
+                    rng ^= rng >> 7;
+                    rng ^= rng << 17;
+                    ((rng % 10) as i64, i)
+                })
+                .collect();
+            let mut want = v16.clone();
+            want.sort_by_key(|e| e.0);
+            let mut key = |a: *const u8, b: *const u8| {
+                // SAFETY: both point at a `(i64, i64)` element.
+                let (x, y) = unsafe {
+                    (
+                        (a as *const i64).read_unaligned(),
+                        (b as *const i64).read_unaligned(),
+                    )
+                };
+                x.cmp(&y) as i32
+            };
+            // SAFETY: `v16` holds `n` elements of 16 bytes.
+            unsafe { merge_sort(v16.as_mut_ptr().cast(), n, 16, &mut key) };
+            assert_eq!(v16, want);
+            let mut v12: Vec<[u8; 12]> = want
+                .iter()
+                .rev()
+                .map(|&(k, i)| {
+                    let mut b = [0u8; 12];
+                    b[..8].copy_from_slice(&k.to_le_bytes());
+                    b[8..].copy_from_slice(&(i as u32).to_le_bytes());
+                    b
+                })
+                .collect();
+            let mut w12 = v12.clone();
+            w12.sort_by_key(|b| i64::from_le_bytes(b[..8].try_into().unwrap()));
+            // SAFETY: `v12` holds `n` elements of 12 bytes.
+            unsafe { merge_sort(v12.as_mut_ptr().cast(), n, 12, &mut key) };
+            assert_eq!(v12, w12);
+        }
     }
 }
