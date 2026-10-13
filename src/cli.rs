@@ -1136,6 +1136,16 @@ impl Pipeline {
         self.parsed = crate::parse(&text);
         crate::mir::lower::mark_library_builtins(&mut self.parsed.program, user_len);
         library_closures_take_their_callers_effects(&mut self.parsed.program, user_len);
+        if std::env::var("KARAC_CHECK_LIBRARY_BODIES").as_deref() != Ok("1") {
+            // The always-appended sources, not the baked modules after them:
+            // a derive or `proto_schema` runs its `comptime` body at check.
+            let end = user_len
+                + crate::prelude::LIBRARY_SOURCES
+                    .iter()
+                    .map(|(_, lib)| 1 + lib.len())
+                    .sum::<usize>();
+            library_bodies_unchecked(&mut self.parsed.program, user_len..end);
+        }
         self.parsed.program.library_start = Some(user_len);
         self.library_fns = library_fn_names(&self.parsed.program, user_len);
         self.source = Some(text);
@@ -2542,6 +2552,41 @@ fn library_closures_take_their_callers_effects(program: &mut crate::ast::Program
                 for it in &mut b.items {
                     if let ImplItem::Method(f) = it {
                         open(f.span.offset, &mut f.params);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Empty the bodies of the library's functions and methods in `range` (the
+/// sources every program gets). A program is checked against their
+/// signatures; the bodies are the library's own concern, checked by its
+/// tests and by the MIR pipeline, and checking them again for every program
+/// cost most of a check's time (about 0.7 s of 0.8 s).
+fn library_bodies_unchecked(program: &mut crate::ast::Program, range: std::ops::Range<usize>) {
+    use crate::ast::{Block, ImplItem, Item, TraitItem};
+    let empty = |b: &mut Block| {
+        b.stmts.clear();
+        b.final_expr = None;
+    };
+    for item in &mut program.items {
+        match item {
+            Item::Function(f) if range.contains(&f.span.offset) => empty(&mut f.body),
+            Item::TraitDef(t) if range.contains(&t.span.offset) => {
+                for it in &mut t.items {
+                    if let TraitItem::Method(m) = it {
+                        if let Some(b) = m.body.as_mut() {
+                            empty(b);
+                        }
+                    }
+                }
+            }
+            Item::ImplBlock(b) if range.contains(&b.span.offset) => {
+                for it in &mut b.items {
+                    if let ImplItem::Method(f) = it {
+                        empty(&mut f.body);
                     }
                 }
             }
