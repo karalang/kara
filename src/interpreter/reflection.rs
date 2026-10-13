@@ -79,6 +79,7 @@ impl Interpreter<'_> {
                 | "key_type"
                 | "value_type"
                 | "attributes"
+                | "generic_params"
         )
     }
 
@@ -189,6 +190,17 @@ impl Interpreter<'_> {
                     .unwrap_or(false);
                 Value::Bool(generic)
             }
+            // The type's own type parameters, by name (`["K", "V"]` for
+            // `struct Pair[K, V]`), for a derive that writes a generic impl.
+            "generic_params" => {
+                let params = tc
+                    .struct_info
+                    .get(type_name)
+                    .map(|s| s.generic_params.clone())
+                    .or_else(|| tc.enum_info.get(type_name).map(|e| e.generic_params.clone()))
+                    .unwrap_or_default();
+                Value::array_of(params.into_iter().map(Value::String).collect())
+            }
             "fields" => Value::array_of(self.reflect_fields(type_name)),
             "variants" => Value::array_of(self.reflect_variants(type_name)),
             "attributes" => Value::array_of(
@@ -202,7 +214,7 @@ impl Interpreter<'_> {
                     "unknown comptime reflection method `{other}` on type `{type_name}`; \
                      this slice supports name / is_struct / is_enum / is_union / \
                      is_generic / fields / variants / derives / element_type / key_type / value_type \
-                     / attributes"
+                     / attributes / generic_params"
                 ),
                 span,
             ),

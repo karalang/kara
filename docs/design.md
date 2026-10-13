@@ -4292,7 +4292,7 @@ enum Status {
 
 #### `Serialize` and `Deserialize`
 
-`Serialize` and `Deserialize` generate format-independent traversal code at compile time. There are no macros and no runtime reflection: the derive walks the fields in declaration order, as the other derives do. The traits, the `Json` format and the derives are ordinary Kāra in `runtime/stdlib/source/serde.kara`, run by the MIR interpreter and by `karac build --mir`; the derive does not yet accept a generic type.
+`Serialize` and `Deserialize` generate format-independent traversal code at compile time. There are no macros and no runtime reflection: the derive walks the fields in declaration order, as the other derives do. The traits, the `Json` format and the derives are ordinary Kāra in `runtime/stdlib/source/serde.kara`, run by the MIR interpreter and by `karac build --mir`. A generic type's derived impl bounds each type parameter by the trait (`impl[T: Serialize] Serialize for Wrap[T]`).
 
 ```kara
 #[derive(Serialize, Deserialize)]

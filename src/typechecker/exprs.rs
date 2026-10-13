@@ -4577,8 +4577,14 @@ impl<'a> super::TypeChecker<'a> {
         };
         // A `#[derive(X)]` that a comptime `derive_x` expands gets its impl
         // only after type checking; until then the derive stands for it.
+        // The generated impl bounds each of a generic type's parameters
+        // by the trait (`impl[T: Serialize] Serialize for Wrap[T]`), so an
+        // argument must satisfy it too; one not yet known is not refused.
         if self.comptime_derives(&ty_name, trait_name) {
-            return true;
+            return ty_args.iter().all(|a| {
+                matches!(a, Type::TypeVar(_) | Type::TypeParam(_) | Type::Error)
+                    || self.type_satisfies_bound(a, trait_name)
+            });
         }
         // An aliased imported trait (`import doer.{Doer as D}` + `T: D`) is
         // canonicalized inside `type_satisfies_trait` — see

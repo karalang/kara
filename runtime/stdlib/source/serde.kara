@@ -1227,6 +1227,31 @@ comptime fn serde_enum_tag(t: ref Type) -> String {
     }
 }
 
+// A generic type's parameters for an impl of `bound` on it: `[A: Serialize, B: Serialize]`,
+// or "" for a type without any.
+comptime fn serde_impl_params(t: ref Type, bound: ref String) -> String {
+    let mut out = "";
+    for p in t.generic_params() {
+        if out != "" {
+            out = out + ", ";
+        }
+        out = out + p + ": " + bound;
+    }
+    if out == "" { "" } else { "[" + out + "]" }
+}
+
+// The type `t` applied to its own parameters: `Pair[A, B]`, or its bare name.
+comptime fn serde_self_type(t: ref Type) -> String {
+    let mut out = "";
+    for p in t.generic_params() {
+        if out != "" {
+            out = out + ", ";
+        }
+        out = out + p;
+    }
+    if out == "" { t.name() } else { t.name() + "[" + out + "]" }
+}
+
 comptime fn serde_untagged(t: ref Type) -> bool {
     serde_flag(serde_args(t.attributes()), "untagged")
 }
@@ -1262,14 +1287,6 @@ comptime fn serde_read_tuple(tys: ref Vec[String], ctor: ref String, what: ref S
 
 comptime fn derive_serialize(comptime T: own Type) -> Vec[Item] {
     let n = T.name();
-    if T.is_generic() {
-        compiler.error(
-            "derive(Serialize): `" + n + "` is generic, which the derive does not support yet; "
-                + "write `impl[...] Serialize for " + n + "[...]` by hand",
-        );
-        let empty: Vec[Item] = Vec.new();
-        return empty;
-    }
     let mut body = "";
     if T.is_enum() {
         let tag = serde_enum_tag(T);
@@ -1343,21 +1360,17 @@ comptime fn derive_serialize(comptime T: own Type) -> Vec[Item] {
         body = serde_write_fields(n, names, attrs, "self.", "", "");
     }
     [ast.item(
-        "impl Serialize for " + n + " { fn serialize[S: Serializer](ref self, s: mut ref S) { "
-            + body + " } }",
+        "impl" + serde_impl_params(T, "Serialize") + " Serialize for " + serde_self_type(T)
+            + " { fn serialize[S: Serializer](ref self, s: mut ref S) { " + body + " } }",
     )]
 }
 
 comptime fn derive_deserialize(comptime T: own Type) -> Vec[Item] {
     let n = T.name();
+    // `Pair[A, B]`, and the parameters a generated function or impl takes.
+    let me = serde_self_type(T);
+    let params = serde_impl_params(T, "Deserialize");
     let mut items: Vec[Item] = Vec.new();
-    if T.is_generic() {
-        compiler.error(
-            "derive(Deserialize): `" + n + "` is generic, which the derive does not support yet; "
-                + "write `impl[...] Deserialize for " + n + "[...]` by hand",
-        );
-        return items;
-    }
     let mut body = "";
     if T.is_enum() and serde_untagged(T) {
         // Each variant in turn, from the same position, until one fits. A
@@ -1377,11 +1390,19 @@ comptime fn derive_deserialize(comptime T: own Type) -> Vec[Item] {
                 } else {
                     serde_read_tuple(v.field_types, ctor, ctor)
                 };
+                // The type's parameters, then the reader's.
+                let fparams = if params == "" {
+                    "[D: Deserializer]"
+                } else {
+                    params.substring(0, params.len() - 1) + ", D: Deserializer]"
+                };
                 items.push(ast.item(
-                    "fn " + f + "[D: Deserializer](d: mut ref D) -> Result[" + n
+                    "fn " + f + fparams + "(d: mut ref D) -> Result[" + me
                         + ", DeserializeError] { Ok(" + read + ") }",
                 ));
-                body = body + "match " + f + "(d) { Ok(serde_r) => return Ok(serde_r), Err(_) => {} } "
+                // Annotated, so a generic type's parameters are known.
+                body = body + "let serde_t: Result[" + me + ", DeserializeError] = " + f + "(d); "
+                    + "match serde_t { Ok(serde_r) => return Ok(serde_r), Err(_) => {} } "
                     + "d.deserialize_reset(serde_m); ";
             }
             k = k + 1;
@@ -1450,8 +1471,9 @@ comptime fn derive_deserialize(comptime T: own Type) -> Vec[Item] {
         body = "Ok(" + serde_read_fields(n, names, tys, attrs, n) + ")";
     }
     items.push(ast.item(
-        "impl Deserialize for " + n + " { fn deserialize[D: Deserializer](d: mut ref D) -> Result["
-            + n + ", DeserializeError] { " + body + " } }",
+        "impl" + params + " Deserialize for " + me
+            + " { fn deserialize[D: Deserializer](d: mut ref D) -> Result[" + me
+            + ", DeserializeError] { " + body + " } }",
     ));
     items
 }

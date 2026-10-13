@@ -361,3 +361,70 @@ fn main() { println(Json.serialize(Bad.A(1))); }
         other => panic!("want a compile error, got {other:?}"),
     }
 }
+
+/// A generic type derives with its parameters bounded by the trait:
+/// `impl[A: Serialize, B: Serialize] Serialize for Pair[A, B]`, for a
+/// struct, an externally tagged enum and an untagged one.
+#[test]
+fn a_generic_type_derives() {
+    let src = r#"
+#[derive(Serialize, Deserialize)]
+struct Pair[A, B] {
+    first: A,
+    second: B,
+    all: Vec[A],
+}
+
+#[derive(Serialize, Deserialize)]
+enum Tree[T] { Leaf, Node(T, Vec[T]), Named { v: T } }
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum Either[L, R] { Left(L), Right(R) }
+
+fn main() {
+    let p = Pair { first: 1, second: "two".to_string(), all: vec![3, 4] };
+    let j = Json.serialize(p);
+    println(j);
+    let back: Result[Pair[i64, String], DeserializeError] = Json.deserialize(j);
+    match back {
+        Ok(b) => println(f"{b.first} {b.second} {b.all.len()}"),
+        Err(e) => println(e.message),
+    }
+    let ts: Vec[Tree[i64]] = vec![Tree.Leaf, Tree.Node(1, vec![2]), Tree.Named { v: 5 }];
+    let jt = Json.serialize(ts);
+    let ts2: Result[Vec[Tree[i64]], DeserializeError] = Json.deserialize(jt);
+    println(f"{jt} {ts2.unwrap().len()}");
+    let es: Vec[Either[i64, String]] = vec![Either.Left(1), Either.Right("r".to_string())];
+    let je = Json.serialize(es);
+    let es2: Result[Vec[Either[i64, String]], DeserializeError] = Json.deserialize(je);
+    println(f"{je} {es2.unwrap().len()}");
+}
+"#;
+    assert_runs(
+        src,
+        "{\"first\":1,\"second\":\"two\",\"all\":[3,4]}\n\
+         1 two 2\n\
+         [\"Leaf\",{\"Node\":[1,[2]]},{\"Named\":{\"v\":5}}] 3\n\
+         [1,\"r\"] 2\n",
+    );
+}
+
+/// A type parameter whose argument is not `Serialize` fails at the use,
+/// as the generated impl's bound, not inside the generated code.
+#[test]
+fn a_generic_derive_needs_its_arguments_serializable() {
+    let src = r#"
+#[derive(Serialize)]
+struct Wrap[T] { v: T }
+struct Plain { n: i64 }
+fn main() {
+    println(Json.serialize(Wrap { v: Plain { n: 1 } }));
+}
+"#;
+    let err = run(src).expect_err("want a refusal");
+    assert!(
+        err.contains("`Wrap[Plain]` does not implement `Serialize`"),
+        "{err}"
+    );
+}

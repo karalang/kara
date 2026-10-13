@@ -1144,6 +1144,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "key_type"
                 | "value_type"
                 | "attributes"
+                | "generic_params"
         )
     }
 
@@ -1251,6 +1252,8 @@ impl<'a> super::TypeChecker<'a> {
             // The type's own `#[...]` attributes, rendered as `Field.attrs`
             // renders a field's (`serde(tag: "type")`).
             "attributes" => vec_of(Type::Str),
+            // The type's own type parameters, by name.
+            "generic_params" => vec_of(Type::Str),
             // `element_type()` peels one generic argument (e.g. `Vec[T]` → `T`)
             // and yields it as a `Type` pseudovalue, so a derive can reflect on
             // a repeated field's element. A non-generic type returns itself.
