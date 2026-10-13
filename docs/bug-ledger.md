@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 253 |
 | missing-feature | 228 |
 | other | 171 |
-| perf | 152 |
+| perf | 153 |
 | diagnostics | 152 |
 | false-positive | 148 |
 | crash | 114 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2852 |
-| interp | 899 |
+| interp | 900 |
 | typecheck | 367 |
 | other | 115 |
 | ownership | 83 |
@@ -596,6 +596,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-34 | 2026-10-12 | typecheck | low | On the MIR backends, `v.push(cs.iter().collect())` with `v: Vec[String]` and `cs: Vec[char]` fails to build: "the method call `.collect` with no resolved callee is not lowered yet"; `collect` in argument position gets no target type | — |
 | B-2026-10-12-35 | 2026-10-12 | typecheck | low | `s.chars().rev()` is refused on the MIR backends ("no method 'rev' on type 'StrChars'") while `karac check` and the legacy interpreter accept it; the library spec makes `chars` a plain `Iterator` and lists only the `Vec`/`Array`/`Slice`/`VecDeque` and range iterators as `DoubleEndedIterator`, so either the spec and `StrChars` gain `next_back` or check should refuse | — |
 | B-2026-10-13-1 | 2026-10-13 | typecheck | low | `Map.keys()` / `values()` and `SortedMap.keys()` / `values()` return an eager `Vec` on every front end, where docs/library/collections.md gives `fn keys(self) -> impl Iterator[Item = ref K]`: `m.keys().next()` and `m.keys().count()` are refused ("no method 'next' on type 'Vec': iterator adaptors/terminals require an explicit `.iter()`"), and taking the smallest key of a `SortedMap` copies every key | — |
+| B-2026-10-13-2 | 2026-10-13 | interp | medium | `karac __mir-run` COPIES THE WHOLE TEXT on every `String.len()` and `is_empty()` (and the other 40-odd natives that read a String through `string_at`), so `while i < s.len()` and every `s.chars()` loop is QUADRATIC: kata 467's bench (10^8 chars) takes 484 s, against 14 s for Python and 6.5 s for `__mir-llvm-run` with its compile | — |
 
 ### Relocated
 
