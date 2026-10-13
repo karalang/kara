@@ -902,3 +902,22 @@ fn main() {
 "#;
     assert_runs(src, "5 10 4 10\n");
 }
+
+/// A string literal passed for a `Str` parameter is a view of static text:
+/// no `String` is built for it (the 10-10 static-literal ruling), while a
+/// `String` passed there is viewed through `as_str`.
+#[test]
+fn a_literal_for_a_str_parameter_allocates_nothing() {
+    let src = r#"
+fn shout(s: Str) -> i64 { s.len() }
+fn main() {
+    let owned = "xy".to_string();
+    println(shout("abc") + shout(owned));
+}
+"#;
+    assert_runs(src, "5\n");
+    let l = karac::mir::lower::build_source(src).expect("MIR");
+    let main = karac::mir::pretty::pretty_body(&l.program.bodies["main"], &l.tys);
+    assert!(main.contains("shout(const \"abc\")"), "{main}");
+    assert!(!main.contains("String.from(const \"abc\")"), "{main}");
+}

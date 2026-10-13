@@ -10103,6 +10103,10 @@ impl<'l, 'a> Bx<'l, 'a> {
         if matches!(self.tys().tcx().kind(pt), HK::StaticStr)
             && matches!(self.strip_ty(at), HK::Str)
         {
+            // A literal is a view of static text, with nothing to allocate.
+            if let ExprKind::StringLit(s) = &a.kind {
+                return Ok(self.static_str(s));
+            }
             let recv = self.recv_ref(a, false)?;
             let v = self.temp(pt);
             self.call_native("String.as_str", vec![recv], Place::local(v));
