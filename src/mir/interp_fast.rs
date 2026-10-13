@@ -249,18 +249,18 @@ fn specialize(op: Op) -> Op {
     }
 }
 
-/// Stores a checked step's result and overflow flag in `slot`, reusing
-/// the pair it held last time round.
+/// Stores a checked step's pair in `slot` when it already holds one: `false`
+/// leaves the store to [`Interp::store_checked`].
 #[inline(always)]
-fn store_checked(slot: &mut Value, v: Value, overflow: bool) {
+fn store_checked_in_place(slot: &mut Value, v: &Value, overflow: bool) -> bool {
     if let Value::Agg(fs) = slot {
         if fs.len() == 2 && matches!(fs[0], Value::Int(_) | Value::Bool(_)) {
-            Value::overwrite(&mut fs[0], v);
+            Value::overwrite(&mut fs[0], v.copy());
             Value::overwrite(&mut fs[1], Value::Bool(overflow));
-            return;
+            return true;
         }
     }
-    *slot = Value::Agg(vec![v, Value::Bool(overflow)]);
+    false
 }
 
 /// A type whose values are plain scalars.
@@ -569,6 +569,20 @@ impl<'a> Interp<'a> {
         &mut self.frames.last_mut().expect("frame").locals
     }
 
+    /// `dst = (v, overflow)`, a checked step's pair, in the pair already
+    /// there or in a reused buffer.
+    #[inline(always)]
+    fn store_checked(&mut self, dst: u32, v: Value, overflow: bool) {
+        if store_checked_in_place(&mut self.locals()[dst as usize], &v, overflow) {
+            return;
+        }
+        let mut pair = self.small_buf();
+        pair.push(v);
+        pair.push(Value::Bool(overflow));
+        let old = std::mem::replace(&mut self.locals()[dst as usize], Value::Agg(pair));
+        self.recycle_value(old);
+    }
+
     /// The scalar at `src`, when it is initialized; reading it changes
     /// nothing (a move is finished by [`Interp::take`]).
     #[inline(always)]
@@ -638,7 +652,7 @@ impl<'a> Interp<'a> {
                 };
                 self.take(a);
                 self.take(b);
-                store_checked(&mut self.locals()[dst as usize], v, overflow);
+                self.store_checked(dst, v, overflow);
                 true
             }
             Op::IntCast { dst, src, int } => {
@@ -682,7 +696,7 @@ impl<'a> Interp<'a> {
                 true
             }
             Op::Tuple { dst, ref parts } => {
-                let mut vals = Vec::with_capacity(parts.len());
+                let mut vals = self.small_buf();
                 for &p in parts.iter() {
                     let Some(v) = self.peek(p) else {
                         return false;
@@ -777,7 +791,7 @@ impl<'a> Interp<'a> {
                 let Some((v, overflow)) = int_op(op, x, y, int) else {
                     return false;
                 };
-                store_checked(&mut locals[dst as usize], v, overflow);
+                self.store_checked(dst, v, overflow);
                 true
             }
             Op::CheckedLC { dst, op, a, b, int } => {
@@ -788,7 +802,7 @@ impl<'a> Interp<'a> {
                 let Some((v, overflow)) = int_op(op, x, b, int) else {
                     return false;
                 };
-                store_checked(&mut locals[dst as usize], v, overflow);
+                self.store_checked(dst, v, overflow);
                 true
             }
             Op::Live(l) => {

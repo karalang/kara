@@ -562,8 +562,10 @@ fn run_with(
         frames: Vec::new(),
         next_frame_id: 0,
         spare_locals: Vec::new(),
+        spare_bufs: Vec::new(),
         callees: Default::default(),
         decoded: Default::default(),
+        droppable: Default::default(),
         heap: Vec::new(),
         free: Vec::new(),
         key_index: Default::default(),
@@ -791,6 +793,10 @@ struct Interp<'a> {
     next_frame_id: u64,
     /// Emptied local vectors of returned frames, reused by the next call.
     spare_locals: Vec<Vec<Value>>,
+    /// Emptied buffers of small aggregates and argument lists, reused for
+    /// the next ones ([`Interp::small_buf`]): a checked step's pair or a
+    /// copied tuple would otherwise allocate on every call.
+    spare_bufs: Vec<Vec<Value>>,
     /// The body each call site's function name finds, keyed by the
     /// address of the name in the program (which outlives the run), so a
     /// call does not search the body map by string.
@@ -798,6 +804,9 @@ struct Interp<'a> {
     /// Each body's decoded scalar steps ([`fast`]), keyed by its address,
     /// made on its first call.
     decoded: rustc_hash::FxHashMap<usize, std::rc::Rc<[fast::Block]>>,
+    /// Each body's locals that can own a value to drop
+    /// ([`Interp::droppable_locals`]), keyed by its address.
+    droppable: rustc_hash::FxHashMap<usize, std::rc::Rc<[usize]>>,
     heap: Vec<Option<HeapObj>>,
     /// Freed slots of `heap`, reused by [`Interp::alloc`].
     free: Vec<u32>,
@@ -945,6 +954,39 @@ impl<'a> Interp<'a> {
     }
 
     /// [`Interp::call`] of the body already found for `name`.
+    /// An empty buffer for a small aggregate or an argument list, reused
+    /// when one was given back.
+    #[inline(always)]
+    fn small_buf(&mut self) -> Vec<Value> {
+        self.spare_bufs
+            .pop()
+            .unwrap_or_else(|| Vec::with_capacity(4))
+    }
+
+    /// Keeps `buf`'s allocation for [`Interp::small_buf`], if it is small.
+    #[inline(always)]
+    fn give_back(&mut self, mut buf: Vec<Value>) {
+        if buf.capacity() != 0 && buf.capacity() <= 8 && self.spare_bufs.len() < 1024 {
+            // Plain parts have no drop glue to run.
+            for v in buf.drain(..) {
+                if v.is_plain() {
+                    std::mem::forget(v);
+                }
+            }
+            self.spare_bufs.push(buf);
+        }
+    }
+
+    /// Drops `v`, keeping the buffer of a small aggregate for reuse.
+    #[inline(always)]
+    fn recycle_value(&mut self, v: Value) {
+        match v {
+            Value::Agg(fs) | Value::Variant(_, fs) => self.give_back(fs),
+            v if v.is_plain() => std::mem::forget(v),
+            v => drop(v),
+        }
+    }
+
     fn call_body(&mut self, name: &str, body: &'a Body, args: Vec<Value>) -> R<Value> {
         if args.len() != body.arg_count {
             return err(format!(
@@ -971,8 +1013,10 @@ impl<'a> Interp<'a> {
         });
         let mut locals = self.spare_locals.pop().unwrap_or_default();
         locals.push(Value::Uninit);
-        locals.extend(args);
-        locals.resize(body.locals.len(), Value::Uninit);
+        let mut args = args;
+        locals.extend(args.drain(..));
+        self.give_back(args);
+        locals.resize_with(body.locals.len(), || Value::Uninit);
         self.next_frame_id += 1;
         let mut held = Vec::new();
         if coroutine::is_drop_frame(name) {
@@ -995,7 +1039,9 @@ impl<'a> Interp<'a> {
         let result = stacker::maybe_grow(256 * 1024, 16 * 1024 * 1024, || self.run_body(body));
         let mut frame = self.frames.pop().expect("frame");
         let mut spare = std::mem::take(&mut frame.locals);
-        spare.clear();
+        for v in spare.drain(..) {
+            self.recycle_value(v);
+        }
         self.spare_locals.push(spare);
         match (&result, frame_at) {
             (Ok(Value::Variant(1, _)), Some(at)) if coroutine::is_resume(name) => {
@@ -6984,9 +7030,10 @@ impl<'a> Interp<'a> {
     /// At `Return`: every local except `_0` must have been dropped or
     /// moved, and `_0` must be initialized.
     fn finish_frame(&mut self, body: &Body) -> R<Value> {
+        let droppable = self.droppable_locals(body);
         let frame = self.frames.last().expect("a frame is running");
-        for (i, v) in frame.locals.iter().enumerate().skip(1) {
-            let ty = body.locals[i].ty;
+        for &i in droppable.iter() {
+            let (v, ty) = (&frame.locals[i], body.locals[i].ty);
             if self.owns_drop(v, ty) {
                 return err(format!(
                     "_{i}: {} still owns a value at return; a drop is missing",
@@ -7000,6 +7047,20 @@ impl<'a> Interp<'a> {
         // The frame is popped next; `_0` moves out of it.
         let frame = self.frames.last_mut().expect("a frame is running");
         Ok(std::mem::replace(&mut frame.locals[0], Value::Uninit))
+    }
+
+    /// The locals of `body` after `_0` whose type can own something to
+    /// drop: the only ones [`Interp::finish_frame`] has to look at.
+    fn droppable_locals(&mut self, body: &Body) -> std::rc::Rc<[usize]> {
+        let key = body as *const Body as usize;
+        if let Some(d) = self.droppable.get(&key) {
+            return d.clone();
+        }
+        let d: std::rc::Rc<[usize]> = (1..body.locals.len())
+            .filter(|&i| self.needs_drop(body.locals[i].ty))
+            .collect();
+        self.droppable.insert(key, d.clone());
+        d
     }
 
     fn place_str(&self, body: &Body, p: &Place) -> String {
@@ -7577,6 +7638,8 @@ impl<'a> Interp<'a> {
         match o {
             Operand::Copy(p) | Operand::Move(p) => {
                 let is_move = matches!(o, Operand::Move(_));
+                // A copied tuple of scalars goes into a reused buffer.
+                let mut buf = self.small_buf();
                 let (v, ty) = if p.projection.is_empty() {
                     // A bare local: read the frame slot directly.
                     let ty = body.local(p.local).ty;
@@ -7586,6 +7649,8 @@ impl<'a> Interp<'a> {
                     }
                     let v = if is_move {
                         std::mem::replace(slot, Value::Uninit)
+                    } else if fill_plain(&mut buf, slot) {
+                        Value::Agg(std::mem::take(&mut buf))
                     } else {
                         slot.copy()
                     };
@@ -7596,6 +7661,8 @@ impl<'a> Interp<'a> {
                     }
                     let v = if is_move {
                         std::mem::replace(slot, Value::Uninit)
+                    } else if fill_plain(&mut buf, slot) {
+                        Value::Agg(std::mem::take(&mut buf))
                     } else {
                         slot.copy()
                     };
@@ -7608,11 +7675,14 @@ impl<'a> Interp<'a> {
                     }
                     let v = if is_move {
                         std::mem::replace(slot, Value::Uninit)
+                    } else if fill_plain(&mut buf, slot) {
+                        Value::Agg(std::mem::take(&mut buf))
                     } else {
                         slot.copy()
                     };
                     (v, ty)
                 };
+                self.give_back(buf);
                 if is_move && self.trace {
                     self.events.push(Event::Move(self.place_str(body, p)));
                 }
@@ -8025,7 +8095,11 @@ impl<'a> Interp<'a> {
                         return self.finish_call(body, destination, target, ret, n);
                     }
                 }
-                let mut vals = Vec::with_capacity(args.len());
+                let mut vals = if native {
+                    Vec::with_capacity(args.len())
+                } else {
+                    self.small_buf()
+                };
                 let mut arg_tys = Vec::with_capacity(if native { args.len() } else { 0 });
                 for a in args {
                     let (v, t) = self.operand(body, a)?;
@@ -9950,6 +10024,24 @@ fn socket_fd(s: &impl std::os::windows::io::AsRawSocket) -> i64 {
 fn socket_fd<T>(_: &T) -> i64 {
     static NEXT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(3);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Copies a tuple of at most eight initialized scalars into the empty
+/// `buf`; `false`, leaving `buf` empty, for any other value.
+#[inline(always)]
+fn fill_plain(buf: &mut Vec<Value>, v: &Value) -> bool {
+    let Value::Agg(fs) = v else {
+        return false;
+    };
+    if fs.len() > 8
+        || !fs
+            .iter()
+            .all(|f| f.is_plain() && !matches!(f, Value::Uninit))
+    {
+        return false;
+    }
+    buf.extend(fs.iter().map(Value::copy));
+    true
 }
 
 /// The interpreter's sockets, by descriptor (`Interp::tcp_method`).
