@@ -1105,7 +1105,7 @@ fn main() {
 "#;
     assert_runs(
         src,
-        "bob cat\nbob cat\napple pear\n1 2 fig apple\n12 1 true\n80 8\n",
+        "bob cat\nbob cat\napple pear\n1 2 fig apple\n12.0 1 true\n80 8\n",
     );
 }
 
