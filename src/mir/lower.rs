@@ -6984,10 +6984,41 @@ impl<'l, 'a> Bx<'l, 'a> {
         body: &'a Block,
         dest: Place,
     ) -> R<()> {
+        // `c.into_iter()` over a library collection loops below, by
+        // position, so a borrowed `c` lends its elements (the library's
+        // `VecIntoIter` is for an iterator value).
+        // (Looked for under an `enumerate()`, which the loop below peels.)
+        let under = match (&iterable.kind, &pattern.kind) {
+            (
+                ExprKind::MethodCall {
+                    object,
+                    method,
+                    args,
+                    ..
+                },
+                PatternKind::Tuple(ps),
+            ) if method == "enumerate" && args.is_empty() && ps.len() == 2 => &**object,
+            _ => iterable,
+        };
+        let into_iter = match &under.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if method == "into_iter" && args.is_empty() => {
+                let t = self.expr_ty(object)?;
+                let (_, t) = self.strip_ty_full(t);
+                matches!(self.tys().tcx().kind(t), HK::Intrinsic { .. })
+            }
+            _ => false,
+        };
         // An `Iterator` implementation in source, the library's adaptors
         // included (`it.skip(2).enumerate()`), loops through its own `next`.
-        if let Some(next) = self.iterator_next(iterable)? {
-            return self.for_iterator(label, pattern, iterable, next, body, dest);
+        if !into_iter {
+            if let Some(next) = self.iterator_next(iterable)? {
+                return self.for_iterator(label, pattern, iterable, next, body, dest);
+            }
         }
         // `for (i, x) in c.iter().enumerate()`: the loop over `c`, with `i`
         // bound to the position.

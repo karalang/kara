@@ -1008,3 +1008,47 @@ fn main() {
 "#;
     assert_runs(src, "1 14 4 3\n");
 }
+
+/// `v.into_iter()` is an iterator value that moves the elements out, so it
+/// collects into any target, runs from either end, and drops what it did
+/// not hand out front to back; a `for` loop over a borrowed `v` still
+/// lends (B-2026-10-13-4).
+#[test]
+fn into_iter_is_a_value_that_moves_the_elements_out() {
+    let src = r#"
+struct D { n: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn weigh(v: Vec[i64]) -> i64 {
+    let mut t = 0;
+    for (i, x) in v.into_iter().enumerate() { t += i * x; }
+    for x in v.into_iter() { t += x; }
+    t
+}
+fn take(ds: own Vec[D]) {
+    let mut it = ds.into_iter();
+    {
+        let a = it.next();
+        let b = it.next_back();
+        println("took two");
+    }
+    println("the rest");
+}
+fn main() {
+    let cs: Vec[char] = "hello".chars().collect();
+    let s: String = cs.into_iter().collect();
+    let v: Vec[i64] = [1, 2, 3].iter().cloned().collect();
+    let w: Vec[i64] = v.into_iter().rev().map(|x| x * 2).collect();
+    println(f"{s} {w[0]} {weigh(w)}");
+    let mut ds: Vec[D] = Vec.new();
+    ds.push(D { n: 1 });
+    ds.push(D { n: 2 });
+    ds.push(D { n: 3 });
+    ds.push(D { n: 4 });
+    take(ds);
+}
+"#;
+    assert_runs(
+        src,
+        "hello 6 20\ntook two\ndrop 4\ndrop 1\nthe rest\ndrop 2\ndrop 3\n",
+    );
+}

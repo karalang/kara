@@ -63,10 +63,55 @@ impl[T] Slice[T] {
     }
 }
 
+/// The elements of a `Vec`, front to back, each moved out. `front` holds
+/// the next ones reversed, so `pop` takes the first; `back` holds the last
+/// ones in order, so `pop` takes the last. Each side refills from the other
+/// when it runs out, so a walk from one end moves each element once.
+struct VecIntoIter[T] {
+    front: Vec[T],
+    back: Vec[T],
+}
+
+impl[T] Iterator for VecIntoIter[T] {
+    type Item = T;
+
+    fn next(mut ref self) -> Option[T] {
+        if self.front.is_empty() {
+            while let Some(x) = self.back.pop() {
+                self.front.push(x);
+            }
+        }
+        self.front.pop()
+    }
+}
+
+impl[T] DoubleEndedIterator for VecIntoIter[T] {
+    fn next_back(mut ref self) -> Option[T] {
+        if self.back.is_empty() {
+            while let Some(x) = self.front.pop() {
+                self.back.push(x);
+            }
+        }
+        self.back.pop()
+    }
+}
+
+impl[T] Drop for VecIntoIter[T] {
+    /// The elements not taken drop front to back, as the vector's would.
+    fn drop(mut ref self) {
+        self.front.reverse();
+    }
+}
+
 impl[T] Vec[T] {
     /// The elements, front to back, each borrowed.
     fn iter(ref self) -> VecIter[T] {
         VecIter { v: self, front: 0, back: self.len() }
+    }
+
+    /// The elements, front to back, each moved out of the vector.
+    fn into_iter(own self) -> VecIntoIter[T] {
+        VecIntoIter { front: Vec.new(), back: self }
     }
 
     fn is_empty(ref self) -> bool {
