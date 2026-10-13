@@ -1084,6 +1084,14 @@ struct Pipeline {
     /// old-behaviour oracle while the v2 middle end is built (the redesign's
     /// M0 default, 2026-10-06).
     strict_core: bool,
+    /// B-2026-10-12-23 — when `Some(n)`, the parsed text is the user's `n`
+    /// bytes followed by the Kāra library (`mir::lower::library_source`), the
+    /// program the MIR pipeline checks; diagnostics past `n` are the
+    /// library's own and are dropped.
+    library_len: Option<usize>,
+    /// The appended library's function names, as the effect checker keys
+    /// them (`f`, `Type.method`, `Trait.method`), kept out of the report.
+    pub(super) library_fns: std::collections::HashSet<String>,
 }
 
 impl Pipeline {
@@ -1108,6 +1116,64 @@ impl Pipeline {
             profile_config: crate::manifest::ProfileConfig::default(),
             lint_overrides: crate::lints::CliLintOverrides::default(),
             strict_core: false,
+            library_len: None,
+            library_fns: std::collections::HashSet::new(),
+        }
+    }
+
+    /// Check the program with the Kāra library appended, as the build does,
+    /// so a library-only feature (`#[derive(Serialize)]`, `Json`) checks as
+    /// it builds (B-2026-10-12-23). Opt-in with `KARAC_CHECK_LIBRARY=1`
+    /// while it is measured.
+    fn with_library(mut self) -> Self {
+        if std::env::var("KARAC_CHECK_LIBRARY").as_deref() != Ok("1") {
+            return self;
+        }
+        let Some(src) = self.source.clone() else {
+            return self;
+        };
+        let (text, user_len) = crate::mir::lower::library_source(&src);
+        self.parsed = crate::parse(&text);
+        crate::mir::lower::mark_library_builtins(&mut self.parsed.program, user_len);
+        library_closures_take_their_callers_effects(&mut self.parsed.program, user_len);
+        self.parsed.program.library_start = Some(user_len);
+        self.library_fns = library_fn_names(&self.parsed.program, user_len);
+        self.source = Some(text);
+        self.library_len = Some(user_len);
+        self
+    }
+
+    /// Drop every diagnostic that lies in the appended library text.
+    fn drop_library_diagnostics(&mut self) {
+        let Some(n) = self.library_len else {
+            return;
+        };
+        let user = |s: &crate::token::Span| s.offset < n;
+        self.parsed.errors.retain(|e| user(&e.span));
+        if let Some(r) = self.resolved.as_mut() {
+            r.errors.retain(|e| user(&e.span));
+        }
+        if let Some(t) = self.typed.as_mut() {
+            t.errors.retain(|e| user(&e.span));
+            t.warnings.retain(|e| user(&e.span));
+        }
+        if let Some(e) = self.effects.as_mut() {
+            e.errors.retain(|e| user(&e.span));
+        }
+        if let Some(o) = self.ownership.as_mut() {
+            o.errors.retain(|e| user(&e.span));
+        }
+        if let Some(v) = self.provider_escape.as_mut() {
+            v.retain(|e| user(&e.escape_span));
+        }
+        if let Some(v) = self.raii_errors.as_mut() {
+            v.retain(|e| user(e.binding_span.as_ref().unwrap_or(&e.yield_span)));
+        }
+        if let Some(v) = self.simd_errors.as_mut() {
+            v.retain(|e| user(&e.span));
+        }
+        if let Some(v) = self.comptime_errors.as_mut() {
+            v.retain(|e| user(&e.span));
         }
     }
 
@@ -1153,8 +1219,16 @@ impl Pipeline {
         // other driver can run a subset of them. See `lib.rs`
         // `prepare_for_resolve` for what each does and what skipping it costs;
         // the test harnesses go through the same call (B-2026-08-11-34).
-        let (target_tombstones, schema_diags) =
-            crate::prepare_for_resolve(&mut self.parsed.program);
+        // Against the library, `collect` is the library's (through
+        // `FromIterator`), so a non-`Vec` target reaches the checker as
+        // written, as it does on the MIR pipeline.
+        let (target_tombstones, schema_diags) = if self.library_len.is_some() {
+            crate::desugar::with_collect_through_from_iterator(|| {
+                crate::prepare_for_resolve(&mut self.parsed.program)
+            })
+        } else {
+            crate::prepare_for_resolve(&mut self.parsed.program)
+        };
         // D5 (core-semantics §4.1): under the strict check a bare parameter
         // is a borrow. The `own` migration reads the bare spelling, so it
         // runs without the rewrite.
@@ -1235,12 +1309,21 @@ impl Pipeline {
         // passes (phase-8-stdlib-floor items 4–5).
         let mut profile_config = self.profile_config.clone();
         profile_config.profile = self.profile;
-        self.typed = Some(crate::typecheck_with_lint_overrides_and_profile(
-            &self.parsed.program,
-            self.resolved.as_ref().unwrap(),
-            self.lint_overrides.clone(),
-            profile_config,
-        ));
+        self.typed = Some(if self.library_len.is_some() {
+            crate::typecheck_with_lint_overrides_profile_and_library(
+                &self.parsed.program,
+                self.resolved.as_ref().unwrap(),
+                self.lint_overrides.clone(),
+                profile_config,
+            )
+        } else {
+            crate::typecheck_with_lint_overrides_and_profile(
+                &self.parsed.program,
+                self.resolved.as_ref().unwrap(),
+                self.lint_overrides.clone(),
+                profile_config,
+            )
+        });
         // B-2026-08-03-9 — `map_value_clone_reinsert`. Emitted into
         // `typed.warnings` rather than through a bespoke lint channel so it
         // rides plumbing that already exists: the JSON collector renders
@@ -1644,15 +1727,22 @@ impl Pipeline {
 
     /// Run all analysis phases (no execution).
     fn run_all_checks(&mut self) {
+        self.drop_library_diagnostics();
         self.resolve();
+        self.drop_library_diagnostics();
         self.typecheck();
+        self.drop_library_diagnostics();
         self.lower();
+        self.drop_library_diagnostics();
         self.effectcheck();
+        self.drop_library_diagnostics();
         self.ownershipcheck();
+        self.drop_library_diagnostics();
         self.concurrencycheck();
         self.provider_escape_check();
         self.raii_check();
         self.simd_check();
+        self.drop_library_diagnostics();
     }
 
     /// Collect all errors across phases. Typecheck errors are included —
@@ -2414,6 +2504,86 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                 err.span.column,
                 err.span.length,
             ));
+        }
+    }
+    out
+}
+
+/// core-semantics.md §12 (D6): a call through a non-escaping function-typed
+/// parameter has the effects of the argument passed, charged to the caller.
+/// The library's closure parameters (`f: own OnceFn() -> T`) carry no effect
+/// clause, which the effect checker reads as a pure slot; under `karac check`
+/// with the library appended they take the argument's effects instead.
+fn library_closures_take_their_callers_effects(program: &mut crate::ast::Program, user_len: usize) {
+    use crate::ast::{EffectSpec, ImplItem, Item, Param, TraitItem, TypeKind};
+    let open = |at: usize, params: &mut [Param]| {
+        if at < user_len {
+            return;
+        }
+        for p in params {
+            if let TypeKind::FnType { effect_spec, .. } = &mut p.ty.kind {
+                if effect_spec.is_none() {
+                    *effect_spec = Some(EffectSpec::Polymorphic);
+                }
+            }
+        }
+    };
+    for item in &mut program.items {
+        match item {
+            Item::Function(f) => open(f.span.offset, &mut f.params),
+            Item::TraitDef(t) => {
+                for it in &mut t.items {
+                    if let TraitItem::Method(m) = it {
+                        open(m.span.offset, &mut m.params);
+                    }
+                }
+            }
+            Item::ImplBlock(b) => {
+                for it in &mut b.items {
+                    if let ImplItem::Method(f) = it {
+                        open(f.span.offset, &mut f.params);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The names of the functions the appended library declares, keyed as the
+/// effect checker keys them.
+fn library_fn_names(
+    program: &crate::ast::Program,
+    user_len: usize,
+) -> std::collections::HashSet<String> {
+    use crate::ast::{ImplItem, Item, TraitItem, TypeKind};
+    let mut out = std::collections::HashSet::new();
+    for item in &program.items {
+        match item {
+            Item::Function(f) if f.span.offset >= user_len => {
+                out.insert(f.name.clone());
+            }
+            Item::ImplBlock(b) if b.span.offset >= user_len => {
+                let TypeKind::Path(path) = &b.target_type.kind else {
+                    continue;
+                };
+                let Some(ty) = path.segments.last() else {
+                    continue;
+                };
+                for it in &b.items {
+                    if let ImplItem::Method(f) = it {
+                        out.insert(format!("{ty}.{}", f.name));
+                    }
+                }
+            }
+            Item::TraitDef(t) if t.span.offset >= user_len => {
+                for it in &t.items {
+                    if let TraitItem::Method(m) = it {
+                        out.insert(format!("{}.{}", t.name, m.name));
+                    }
+                }
+            }
+            _ => {}
         }
     }
     out

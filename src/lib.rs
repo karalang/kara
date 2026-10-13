@@ -399,6 +399,22 @@ pub fn typecheck_with_lint_overrides_and_profile(
     checker.check()
 }
 
+/// [`typecheck_with_lint_overrides_and_profile`] over a program with the Kāra
+/// library appended, typing library calls through its bodies as the MIR
+/// pipeline does (`karac check`, B-2026-10-12-23).
+pub fn typecheck_with_lint_overrides_profile_and_library(
+    program: &Program,
+    resolve_result: &ResolveResult,
+    overrides: crate::lints::CliLintOverrides,
+    profile_config: impl Into<crate::manifest::ProfileConfig>,
+) -> TypeCheckResult {
+    let checker = TypeChecker::new(program, resolve_result)
+        .with_cli_lint_overrides(overrides)
+        .with_profile_config(profile_config)
+        .library_methods_from_source();
+    checker.check()
+}
+
 /// Type-check with the manifest's `[profile]`-table knob carrier and no CLI lint
 /// overrides — the form in-process callers and tests use to exercise the
 /// `panic_on_alloc_failure`-gated rejection passes (items 4–5).

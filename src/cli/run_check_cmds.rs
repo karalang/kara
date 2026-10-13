@@ -2246,7 +2246,8 @@ pub(super) fn cmd_check(
         _ => {
             let mut pipeline = Pipeline::new(filename, &source)
                 .with_lint_overrides(lint_overrides)
-                .strict_core();
+                .strict_core()
+                .with_library();
             pipeline.run_all_checks();
 
             // Slice D: concurrency report fires after `run_all_checks` (which

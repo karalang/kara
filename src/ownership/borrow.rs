@@ -719,13 +719,34 @@ impl<'a> super::OwnershipChecker<'a> {
         if is_relational_method_call(method_call) {
             return false;
         }
-        let Some(key) = self.resolved_method_mode_key(method_call) else {
-            return self.d5.is_some() && d5_library_method_consumes(method_call);
-        };
-        match self.method_self_modes.get(key) {
-            Some(mode) => matches!(mode, SelfParam::Owned),
+        let consumes = match self.resolved_method_mode_key(method_call) {
             None => self.d5.is_some() && d5_library_method_consumes(method_call),
-        }
+            Some(key) => match self.method_self_modes.get(key) {
+                Some(mode) => matches!(mode, SelfParam::Owned),
+                None => self.d5.is_some() && d5_library_method_consumes(method_call),
+            },
+        };
+        // An `own self` receiver whose every part is a `shared` handle or
+        // `Copy` (`w.o.unwrap()` with `o: Option[H]`, `H` shared) is passed
+        // by counting, as `let a = w.o;` is, so it stays usable.
+        consumes && !(super::core_rules() && self.method_receiver_counts(method_call))
+    }
+
+    fn method_receiver_counts(&self, method_call: &Expr) -> bool {
+        let ExprKind::MethodCall { object, .. } = &method_call.kind else {
+            return false;
+        };
+        self.typecheck_result
+            .expr_types
+            .get(&SpanKey::from_span(&object.span))
+            .is_some_and(|t| {
+                crate::use_classifier::type_counts_or_copies(
+                    t,
+                    self.typecheck_result,
+                    &|t| self.is_copy_type(t),
+                    true,
+                )
+            })
     }
 
     /// Slice 2 — the receiver-side `BorrowKind` for a `MethodCall`. Drives

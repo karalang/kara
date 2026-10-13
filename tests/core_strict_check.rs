@@ -3289,3 +3289,79 @@ fn deref_of_a_copy_item_of_iter_next_is_accepted() {
          }\n",
     );
 }
+
+/// `KARAC_CHECK_LIBRARY=1`: check reads the Kāra library the MIR pipeline runs
+/// (B-2026-10-12-23), so it agrees with `__mir-run` on what a library type
+/// offers: `StrChars` is double-ended, and `collect` into an assigned `String`
+/// goes through `FromIterator` rather than the legacy desugar.
+#[test]
+fn library_check_reads_the_kara_library() {
+    let src = "fn main() {\n\
+                   let s = \"héllo\".to_string();\n\
+                   let mut it = s.chars();\n\
+                   match it.next_back() {\n\
+                       Some(c) => println(f\"{c}\"),\n\
+                       None => println(\"none\"),\n\
+                   }\n\
+                   let cs: Vec[char] = s.chars().collect();\n\
+                   let mut t = String.new();\n\
+                   t = cs.iter().collect();\n\
+                   println(t);\n\
+               }\n";
+    let (dir, path) = fixture("library-check", src);
+    let out = karac()
+        .env("KARAC_CHECK_LIBRARY", "1")
+        .arg("check")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "library check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "o\nhéllo\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Library check still reports the user's own errors, and only theirs: the
+/// library's functions stay out of the JSON effect summary.
+#[test]
+fn library_check_keeps_user_errors_and_hides_the_library() {
+    let src = "fn take(s: own String) { println(s); }\n\
+               pub fn shout(s: ref String) { println(s); }\n\
+               fn main() {\n\
+                   let s = \"a\".to_string();\n\
+                   take(s);\n\
+                   take(s);\n\
+               }\n";
+    let (dir, path) = fixture("library-check-errors", src);
+    let out = karac()
+        .env("KARAC_CHECK_LIBRARY", "1")
+        .arg("check")
+        .arg(&path)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "library check must reject: {err}");
+    assert!(err.contains("p.kara:6:"), "the error is the user's: {err}");
+    let json = |lib: bool| {
+        let mut c = karac();
+        if lib {
+            c.env("KARAC_CHECK_LIBRARY", "1");
+        }
+        let out = c
+            .arg("check")
+            .arg("--output=json")
+            .arg(&path)
+            .output()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["public_function_effects"].clone()
+    };
+    let with = json(true);
+    assert!(with.get("shout").is_some(), "{with}");
+    assert_eq!(with, json(false));
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -13732,7 +13732,7 @@ fn defines_a_baked_type(src: &str, baked: &str) -> bool {
 /// The appended library's `#[compiler_builtin]` functions are stdlib items,
 /// which the resolver lets carry the attribute; their bodies are
 /// placeholders, so they stay the interpreter's (`index_functions`).
-fn mark_library_builtins(program: &mut ast::Program, user_len: usize) {
+pub(crate) fn mark_library_builtins(program: &mut ast::Program, user_len: usize) {
     let mark = |f: &mut ast::Function| {
         if f.span.offset >= user_len && f.attributes.iter().any(|a| a.is_bare("compiler_builtin")) {
             f.stdlib_origin = true;

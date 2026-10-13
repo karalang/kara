@@ -107,6 +107,37 @@ impl ClassifierPrelude {
 /// names in scope for it, merging an enclosing `impl` block's parameters with
 /// the method's own. Mirrors `OwnershipChecker::check_function`'s walk so the
 /// two phases answer `is_copy_type` identically. B-2026-09-02-19.
+/// `ty` is a `shared` handle (`top`), or `Copy` (a part, `!top`), or an
+/// `Option` / `Result` / tuple whose parts all are and one is a handle:
+/// a value passed by counting rather than moved.
+pub(crate) fn type_counts_or_copies(
+    ty: &Type,
+    tc: &crate::typechecker::TypeCheckResult,
+    is_copy: &dyn Fn(&Type) -> bool,
+    top: bool,
+) -> bool {
+    let shared = |name: &str| {
+        tc.struct_info.get(name).is_some_and(|i| i.is_shared)
+            || tc.enum_info.get(name).is_some_and(|i| i.is_shared)
+    };
+    let parts = |ps: &[Type]| {
+        !ps.is_empty()
+            && ps
+                .iter()
+                .all(|a| type_counts_or_copies(a, tc, is_copy, false))
+            && ps
+                .iter()
+                .any(|a| type_counts_or_copies(a, tc, is_copy, true))
+    };
+    match ty {
+        Type::Shared(_) | Type::Rc(_) | Type::Arc(_) => true,
+        Type::Named { name, args } if args.is_empty() && shared(name) => true,
+        Type::Named { name, args } if matches!(name.as_str(), "Option" | "Result") => parts(args),
+        Type::Tuple(ps) => parts(ps),
+        other => !top && is_copy(other),
+    }
+}
+
 fn collect_copy_bounded_type_params_by_body(
     program: &Program,
 ) -> FxHashMap<SpanKey, HashSet<String>> {
@@ -908,9 +939,21 @@ impl<'a> UseClassifier<'a> {
                             .insert(SpanKey::from_span(&arg.value.span));
                     }
                 }
-                let receiver_mode = if self.method_consumes_receiver(expr)
-                    || (self.core_builtin_consumes_receiver(object, method)
-                        && self.core_receiver_moves(object))
+                // An `own self` receiver whose every part is a `shared`
+                // handle or `Copy` (`w.o.unwrap()`, `o: Option[H]`) is passed
+                // by counting, as `let a = w.o;` is, and stays usable.
+                let receiver_counts = crate::ownership::core_rules()
+                    && self
+                        .tc
+                        .expr_types
+                        .get(&SpanKey::from_span(&object.span))
+                        .is_some_and(|t| {
+                            type_counts_or_copies(t, self.tc, &|t| self.is_copy_type(t), true)
+                        });
+                let receiver_mode = if !receiver_counts
+                    && (self.method_consumes_receiver(expr)
+                        || (self.core_builtin_consumes_receiver(object, method)
+                            && self.core_receiver_moves(object)))
                 {
                     Mode::Consuming
                 } else {

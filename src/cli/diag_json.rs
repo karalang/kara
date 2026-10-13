@@ -2463,7 +2463,7 @@ pub(super) fn public_function_effects_json(pipeline: &Pipeline) -> String {
         .function_visibility
         .iter()
         .filter_map(|(n, is_pub)| {
-            if *is_pub && n != "main" {
+            if *is_pub && n != "main" && !pipeline.library_fns.contains(n) {
                 Some(n)
             } else {
                 None
@@ -2502,12 +2502,17 @@ pub(super) fn public_function_effects_json(pipeline: &Pipeline) -> String {
 pub(super) fn mutual_recursion_groups_json(pipeline: &Pipeline) -> String {
     match &pipeline.effects {
         Some(effects) => {
-            if effects.mutual_recursion_groups.is_empty() {
-                return "[]".to_string();
-            }
-            let groups: Vec<String> = effects
+            // A cycle inside the appended library is not the program's.
+            let groups: Vec<_> = effects
                 .mutual_recursion_groups
                 .iter()
+                .filter(|g| !g.functions.iter().all(|f| pipeline.library_fns.contains(f)))
+                .collect();
+            if groups.is_empty() {
+                return "[]".to_string();
+            }
+            let groups: Vec<String> = groups
+                .into_iter()
                 .map(|g| {
                     let funcs = json_string_list(&g.functions);
                     let traces: Vec<String> = g

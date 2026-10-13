@@ -1095,6 +1095,10 @@ fn collect_user_impl_types(program: &Program) -> HashSet<String> {
     let mut out = HashSet::new();
     for item in &program.items {
         if let Item::ImplBlock(b) = item {
+            // The appended library's own `impl Vec` is not a user's.
+            if program.library_start.is_some_and(|n| b.span.offset >= n) {
+                continue;
+            }
             if let TypeKind::Path(path) = &b.target_type.kind {
                 if let Some(name) = path.segments.last() {
                     out.insert(name.clone());

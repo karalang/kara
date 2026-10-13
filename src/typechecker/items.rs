@@ -6760,6 +6760,22 @@ impl<'a> super::TypeChecker<'a> {
 
     /// v2 core §5.5: the span of a temporary among the origins (§5.3) of the
     /// view `e` evaluates to, if there is one.
+    /// Is `object` a library iterator (the library's `VecIter`, an adaptor
+    /// over it, ...) whose `method` hands out an item rather than a borrow
+    /// of the iterator? An item of `v.iter()` borrows `v`, not the iterator
+    /// (docs/library/collections.md's iteration table), so
+    /// `let f = v.iter().find(..)` keeps no borrow of the temporary
+    /// iterator. `peek` is the one that lends the iterator itself.
+    fn core_iterator_lends_its_source(&self, object: &Expr, method: &str) -> bool {
+        if !self.library_methods_from_source || matches!(method, "peek" | "peek_mut") {
+            return false;
+        }
+        let Some((Type::Named { name, args }, _)) = self.node_types.get(&object.id) else {
+            return false;
+        };
+        self.env.has_impl("Iterator", name, args)
+    }
+
     fn core_view_temp_origin(&self, e: &Expr) -> Option<Span> {
         // A branch or argument that is not itself a view borrows nothing.
         if self.core_node_is_view(e) == Some(false) {
@@ -6768,7 +6784,7 @@ impl<'a> super::TypeChecker<'a> {
         match &e.kind {
             // §5.4: a `ref self` method's result borrows `self` only, and a
             // by-value generic one (`unwrap`) carries its receiver's origins.
-            ExprKind::MethodCall { object, .. } => {
+            ExprKind::MethodCall { object, method, .. } => {
                 // A map `Entry` is itself a view of its map (its by-value
                 // `or_insert` hands out a reference into the map, not into
                 // the entry), so it carries its own origins on.
@@ -6776,7 +6792,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.node_types.get(&object.id),
                     Some((Type::Named { name, .. }, _)) if name == "Entry"
                 );
-                if entry {
+                if entry || self.core_iterator_lends_its_source(object, method) {
                     return self.core_view_temp_origin(object);
                 }
                 if self.core_expr_is_temp(object) {

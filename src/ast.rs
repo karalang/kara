@@ -799,6 +799,10 @@ pub type DropMethodKeysTable = std::collections::HashMap<String, String>;
 #[derive(Debug, Clone, Default)]
 pub struct Program {
     pub items: Vec<Item>,
+    /// Where the appended Kāra library starts in the source, when the
+    /// program was checked with it (`karac check`, B-2026-10-12-23): items
+    /// at or past this byte offset are the library's, not the user's.
+    pub library_start: Option<usize>,
     /// Joined `//!` doc-comment text at the top of the source file.
     /// Lines from a single run of `//!` are concatenated with `\n`.
     /// `None` when the file has no leading `//!` lines.
