@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/470-implement-rand10-using-rand7/bench/rand10.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "0349222a3+local"
+extracted_src = "2e187eb2"
+model_rev = "1aa23105"
+model_src = "2e187eb2"

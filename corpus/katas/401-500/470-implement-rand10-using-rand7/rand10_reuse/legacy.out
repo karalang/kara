@@ -1,0 +1,9 @@
+every script of up to 2 draws: all ten values equally likely: true
+every script of up to 3 draws: all ten values equally likely: true
+every script of up to 4 draws: all ten values equally likely: true
+every script of up to 5 draws: all ten values equally likely: true
+every script of up to 6 draws: all ten values equally likely: true
+every value returned is from 1 to 10: true
+1000000 draws, all from 1 to 10: true
+each value within 4 standard deviations of 100000: true
+each of the 100 pairs of consecutive draws within 4 standard deviations of 5000: true

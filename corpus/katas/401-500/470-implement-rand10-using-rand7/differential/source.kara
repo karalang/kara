@@ -1,0 +1,264 @@
+// Differential test for LeetCode #470: Implement Rand10() Using Rand7().
+//
+// Copies of the four arms. The arms draw differently, so they are not
+// compared with each other; each is held to what a rand10 must do.
+// Properties:
+//   P1  over every script of draws up to 6 long, the scripts of exactly
+//       L draws that the arm finishes on give each value equally often,
+//       for each L from 1 to 6
+//   P2  on 1,500 random scripts, the draws the arm read decide its value:
+//       the same draws followed by others give the same value and read
+//       as many
+//   P3  every value on those scripts is from 1 to 10
+//   P4  in 10 seeded runs of 30,000 draws, each value comes up within
+//       5 standard deviations of 3,000 times
+//   P5  in the same runs, each pair of consecutive draws comes up within
+//       5 standard deviations of 150 times
+
+// ---- reject: rand10.kara
+
+fn rand10_reject(rng: mut ref Rand7) -> i64 {
+    loop {
+        let v = (rng.rand7() - 1) * 7 + rng.rand7();
+        if v <= 40 {
+            return 1 + (v - 1) % 10;
+        }
+    }
+}
+
+// ---- reuse: rand10_reuse.kara
+
+fn rand10_reuse(rng: mut ref Rand7) -> i64 {
+    loop {
+        let a = (rng.rand7() - 1) * 7 + rng.rand7();
+        if a <= 40 {
+            return 1 + (a - 1) % 10;
+        }
+        let b = (a - 41) * 7 + rng.rand7();
+        if b <= 60 {
+            return 1 + (b - 1) % 10;
+        }
+        let c = (b - 61) * 7 + rng.rand7();
+        if c <= 20 {
+            return 1 + (c - 1) % 10;
+        }
+    }
+}
+
+// ---- bits: rand10_bits.kara
+
+fn fair_bit_bits(rng: mut ref Rand7) -> i64 {
+    loop {
+        let d = rng.rand7();
+        if d <= 6 {
+            return d % 2;
+        }
+    }
+}
+
+fn rand10_bits(rng: mut ref Rand7) -> i64 {
+    loop {
+        let mut v = 0;
+        for _ in 0..4 {
+            v = v * 2 + fair_bit_bits(rng);
+        }
+        if v < 10 {
+            return v + 1;
+        }
+    }
+}
+
+// ---- halves: rand10_halves.kara
+
+fn rand2_halves(rng: mut ref Rand7) -> i64 {
+    loop {
+        let d = rng.rand7();
+        if d <= 6 {
+            return d % 2;
+        }
+    }
+}
+
+fn rand5_halves(rng: mut ref Rand7) -> i64 {
+    loop {
+        let d = rng.rand7();
+        if d <= 5 {
+            return d;
+        }
+    }
+}
+
+fn rand10_halves(rng: mut ref Rand7) -> i64 {
+    let half = rand2_halves(rng);
+    half * 5 + rand5_halves(rng)
+}
+
+// ---- harness
+
+// rand7 either draws from a seeded generator or replays a script of
+// draws; a call past the end of the script marks it and returns 2.
+struct Rand7 {
+    seed: i64,
+    script: Vec[i64],
+    scripted: bool,
+    pos: i64,
+    overrun: bool,
+}
+
+impl Rand7 {
+    fn seeded(seed: i64) -> Rand7 {
+        Rand7 { seed: seed, script: Vec.new(), scripted: false, pos: 0, overrun: false }
+    }
+
+    fn replay(script: own Vec[i64]) -> Rand7 {
+        Rand7 { seed: 0, script: script, scripted: true, pos: 0, overrun: false }
+    }
+
+    fn rand7(mut ref self) -> i64 {
+        if self.scripted {
+            if self.pos < self.script.len() {
+                let d = self.script[self.pos];
+                self.pos += 1;
+                return d;
+            }
+            self.overrun = true;
+            return 2;
+        }
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        1 + (self.seed / 65536) % 7
+    }
+}
+
+fn rand10(arm: i64, rng: mut ref Rand7) -> i64 {
+    if arm == 0 {
+        rand10_reject(rng)
+    } else if arm == 1 {
+        rand10_reuse(rng)
+    } else if arm == 2 {
+        rand10_bits(rng)
+    } else {
+        rand10_halves(rng)
+    }
+}
+
+// Every script of up to `depth` draws, tallied by the length of the
+// script the arm finishes on and the value it returns.
+fn explore(arm: i64, script: mut ref Vec[i64], depth: i64, tally: mut ref Vec[Vec[i64]]) {
+    let mut rng = Rand7.replay(script.clone());
+    let value = rand10(arm, mut rng);
+    if not rng.overrun {
+        let v = if value >= 1 and value <= 10 { value } else { 0 };
+        tally[script.len()][v] += 1;
+        return;
+    }
+    if script.len() == depth {
+        return;
+    }
+    for d in 1..8 {
+        script.push(d);
+        explore(arm, script, depth, tally);
+        script.pop();
+    }
+}
+
+// |count - expected| < 5 standard deviations, in integers. With 4,000
+// counts checked in all, 4 would let a fair arm fail about one run in
+// five.
+fn within(count: i64, expected: i64, variance: i64) -> bool {
+    let off = (count - expected).abs();
+    off * off < 25 * variance
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for arm in 0..4 {
+        // P1: the scripts of exactly L draws that finish give each value
+        // equally often, for L from 1 to 6.
+        let mut tally: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..7 {
+            tally.push(vec![0; 11]);
+        }
+        let mut script: Vec[i64] = Vec.new();
+        explore(arm, mut script, 6, mut tally);
+        for length in 1..7 {
+            let mut equal = tally[length][0] == 0;
+            for v in 2..11 {
+                equal = equal and tally[length][v] == tally[length][1];
+            }
+            checks += 1;
+            report(1, arm, length, equal, mut failures);
+        }
+        // P2 and P3 on 1,500 random scripts of 200 draws.
+        let mut seed: i64 = 4700 + arm;
+        for case in 0..1500 {
+            let mut draws: Vec[i64] = Vec.new();
+            for _ in 0..200 {
+                draws.push(1 + next_random(mut seed) % 7);
+            }
+            let mut rng = Rand7.replay(draws.clone());
+            let value = rand10(arm, mut rng);
+            let used = rng.pos;
+            // P2: the draws it read decide the value, whatever follows.
+            let mut other: Vec[i64] = Vec.new();
+            for i in 0..200 {
+                other.push(if i < used { draws[i] } else { 1 + next_random(mut seed) % 7 });
+            }
+            let mut again = Rand7.replay(other);
+            let same = rand10(arm, mut again) == value and again.pos == used;
+            checks += 2;
+            report(2, arm, case, same and not rng.overrun, mut failures);
+            // P3: the value is from 1 to 10.
+            report(3, arm, case, value >= 1 and value <= 10, mut failures);
+        }
+        // P4 and P5 on 10 seeded runs of 30,000 draws: each value about
+        // 3,000 times (variance 2,700), and each of the 100 pairs of
+        // consecutive draws, cut into 15,000 pairs, about 150 times
+        // (variance 148.5, rounded down to 148).
+        for run in 0..10 {
+            let mut rng = Rand7.seeded(47000 + 10 * arm + run);
+            let mut counts = vec![0; 11];
+            let mut pairs = vec![0; 100];
+            let mut last = 1;
+            for i in 0..30000 {
+                let value = rand10(arm, mut rng);
+                let v = if value >= 1 and value <= 10 { value } else { 0 };
+                counts[v] += 1;
+                if i % 2 == 1 and v > 0 and last > 0 {
+                    pairs[(last - 1) * 10 + v - 1] += 1;
+                }
+                last = v;
+            }
+            let mut even = counts[0] == 0;
+            for v in 1..11 {
+                even = even and within(counts[v], 3000, 2700);
+            }
+            let mut independent = true;
+            for p in pairs {
+                independent = independent and within(p, 150, 148);
+            }
+            checks += 2;
+            report(4, arm, run, even, mut failures);
+            report(5, arm, run, independent, mut failures);
+        }
+    }
+    println(f"4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

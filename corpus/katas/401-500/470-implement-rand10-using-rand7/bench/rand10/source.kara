@@ -1,0 +1,37 @@
+// Benchmark for #470: the ★ arm (rejection sampling) on a large
+// workload, over a seeded rand7.
+
+struct Rand7 {
+    seed: i64,
+}
+
+impl Rand7 {
+    fn rand7(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        1 + (self.seed / 65536) % 7
+    }
+}
+
+fn rand10(rng: mut ref Rand7) -> i64 {
+    loop {
+        let v = (rng.rand7() - 1) * 7 + rng.rand7();
+        if v <= 40 {
+            return 1 + (v - 1) % 10;
+        }
+    }
+}
+
+// ---- bench ------------------------------------------------------------------
+
+fn main() {
+    let n = 20000000;
+    let mut rng = Rand7 { seed: 470 };
+    let mut counts = vec![0; 11];
+    let mut checksum: i64 = 0;
+    for _ in 0..n {
+        let value = rand10(mut rng);
+        counts[value] += 1;
+        checksum = (checksum * 11 + value) % 1000000007;
+    }
+    println(f"{n} draws: {counts[1]} ones, {counts[10]} tens, checksum {checksum}");
+}

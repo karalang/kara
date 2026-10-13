@@ -1,0 +1,139 @@
+// LeetCode #470: Implement Rand10() Using Rand7() -- rejection sampling.
+//
+// Two calls of rand7 give one of 49 equally likely numbers. Keep the
+// first 40, which split evenly into ten groups of four, and draw again
+// on the other 9. Each round succeeds with probability 40/49, so it takes
+// 2 x 49/40 = 2.45 calls of rand7 on average.
+
+fn rand10(rng: mut ref Rand7) -> i64 {
+    loop {
+        let v = (rng.rand7() - 1) * 7 + rng.rand7();
+        if v <= 40 {
+            return 1 + (v - 1) % 10;
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// rand7 either draws from a seeded generator or replays a script of
+// draws; a call past the end of the script marks it and returns 2, which
+// lets every arm finish.
+struct Rand7 {
+    seed: i64,
+    script: Vec[i64],
+    scripted: bool,
+    pos: i64,
+    overrun: bool,
+}
+
+impl Rand7 {
+    fn seeded(seed: i64) -> Rand7 {
+        Rand7 { seed: seed, script: Vec.new(), scripted: false, pos: 0, overrun: false }
+    }
+
+    fn replay(script: own Vec[i64]) -> Rand7 {
+        Rand7 { seed: 0, script: script, scripted: true, pos: 0, overrun: false }
+    }
+
+    fn rand7(mut ref self) -> i64 {
+        if self.scripted {
+            if self.pos < self.script.len() {
+                let d = self.script[self.pos];
+                self.pos += 1;
+                return d;
+            }
+            self.overrun = true;
+            return 2;
+        }
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        1 + (self.seed / 65536) % 7
+    }
+}
+
+// Every script of up to `depth` draws that rand10 finishes on: each adds
+// 7 ^ (depth - its length), its share of all 7 ^ depth scripts, to the
+// mass of the value it returns. Returns false if a value fell outside 1
+// to 10.
+fn explore(script: mut ref Vec[i64], depth: i64, masses: mut ref Vec[i64]) -> bool {
+    let mut rng = Rand7.replay(script.clone());
+    let value = rand10(mut rng);
+    if not rng.overrun {
+        if value < 1 or value > 10 {
+            return false;
+        }
+        let mut weight = 1;
+        for _ in script.len()..depth {
+            weight *= 7;
+        }
+        masses[value] += weight;
+        return true;
+    }
+    if script.len() == depth {
+        return true;
+    }
+    for d in 1..8 {
+        script.push(d);
+        let ok = explore(script, depth, masses);
+        script.pop();
+        if not ok {
+            return false;
+        }
+    }
+    true
+}
+
+fn within(count: i64, expected: i64, variance: i64) -> bool {
+    // |count - expected| < 4 standard deviations, in integers.
+    let off = (count - expected).abs();
+    off * off < 16 * variance
+}
+
+fn main() {
+    let mut in_range = true;
+    for depth in 2..7 {
+        let mut masses = vec![0; 11];
+        let mut script: Vec[i64] = Vec.new();
+        let finished = explore(mut script, depth, mut masses);
+        in_range = in_range and finished;
+        let mut equal = true;
+        for v in 2..11 {
+            equal = equal and masses[v] == masses[1];
+        }
+        println(f"every script of up to {depth} draws: all ten values equally likely: {equal}");
+    }
+    println(f"every value returned is from 1 to 10: {in_range}");
+    // 1,000,000 draws from a seeded rand7: each value about 100,000 times
+    // (variance n p (1 - p) = 90,000), and, cutting the draws into
+    // 500,000 pairs, each of the 100 possible pairs about 5,000 times
+    // (variance 4,950).
+    let n = 1000000;
+    let mut rng = Rand7.seeded(470);
+    let mut counts = vec![0; 11];
+    let mut pairs = vec![0; 100];
+    let mut last = 0;
+    let mut ok = true;
+    for i in 0..n {
+        let value = rand10(mut rng);
+        if value < 1 or value > 10 {
+            ok = false;
+        } else {
+            counts[value] += 1;
+            if i % 2 == 1 {
+                pairs[(last - 1) * 10 + value - 1] += 1;
+            }
+            last = value;
+        }
+    }
+    let mut even = true;
+    for v in 1..11 {
+        even = even and within(counts[v], n / 10, 90000);
+    }
+    let mut independent = true;
+    for p in pairs {
+        independent = independent and within(p, n / 200, 4950);
+    }
+    println(f"{n} draws, all from 1 to 10: {ok}");
+    println(f"each value within 4 standard deviations of {n / 10}: {even}");
+    println(f"each of the 100 pairs of consecutive draws within 4 standard deviations of {n / 200}: {independent}");
+}
