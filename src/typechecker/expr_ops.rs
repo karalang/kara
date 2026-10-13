@@ -3352,8 +3352,18 @@ impl<'a> super::TypeChecker<'a> {
         if !self.cli_lint_overrides.strict_core {
             // The MIR pipeline binds a `Copy` part of a borrowed tuple by
             // value and reads `*w` of it as the binding (B-2026-10-12-9).
-            return self.library_methods_from_source
-                && matches!(&operand.kind, ExprKind::Identifier(n) if self.local_scope.is_view(n));
+            // A part of such a binding (`*entry.0`) reads the same way
+            // (B-2026-10-12-28).
+            if !self.library_methods_from_source {
+                return false;
+            }
+            let mut root = operand;
+            while let ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } =
+                &root.kind
+            {
+                root = object;
+            }
+            return matches!(&root.kind, ExprKind::Identifier(n) if self.local_scope.is_view(n));
         }
         match &operand.kind {
             ExprKind::Identifier(n) => self.local_scope.is_view(n),

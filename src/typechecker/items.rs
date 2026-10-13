@@ -5746,6 +5746,23 @@ impl<'a> super::TypeChecker<'a> {
         matches!(ty, Type::Named { name, .. } if name == "SortedMap")
     }
 
+    /// `m.floor(k).expect(..)` / `.unwrap()` on the MIR pipeline: the
+    /// unwrapped payload of a [`Self::lib_clone_view_scrutinee`] call
+    /// (B-2026-10-12-28).
+    fn lib_unwrapped_clone_view(&self, value: &Expr) -> bool {
+        if !self.library_methods_from_source || self.cli_lint_overrides.strict_core {
+            return false;
+        }
+        match &value.kind {
+            ExprKind::MethodCall { object, method, .. }
+                if matches!(method.as_str(), "unwrap" | "expect") =>
+            {
+                self.lib_clone_view_scrutinee(object)
+            }
+            _ => false,
+        }
+    }
+
     /// `c.iter().next()` on a core collection (B-2026-10-06-74): the item is
     /// a `ref T` (docs/library/collections.md's iteration table), so a `Copy`
     /// part a pattern binds out of it is a view that `*k` reads, as the same
@@ -7696,6 +7713,21 @@ impl<'a> super::TypeChecker<'a> {
                 if borrowed_destructure {
                     for name in pattern.binding_names() {
                         self.local_scope.mark_view(&name);
+                    }
+                }
+                // B-2026-10-12-28: on the MIR pipeline a `SortedMap.floor` /
+                // `ceiling` entry taken out with `.expect()` / `.unwrap()` is
+                // the same clone view its `Some((k, v))` pattern binds, so
+                // `*k` (and `*entry.0`) reads a `Copy` part of it.
+                if self.lib_unwrapped_clone_view(value) {
+                    for name in pattern.binding_names() {
+                        let copy = self
+                            .local_scope
+                            .lookup(&name)
+                            .is_some_and(|t| self.is_copy_type_during_check(t));
+                        if copy {
+                            self.local_scope.mark_view(&name);
+                        }
                     }
                 }
                 if ref_copy {

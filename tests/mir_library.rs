@@ -970,3 +970,26 @@ fn main() {
         Err(e) => assert!(e.contains("gone 7"), "expect on None must panic with its message: {e}"),
     }
 }
+
+#[test]
+fn a_floor_entry_taken_out_with_expect_reads_through_deref() {
+    // B-2026-10-12-28: `floor` / `ceiling` hand out `Option[(ref K, ref V)]`
+    // (docs/library/collections.md), so after `.expect()` / `.unwrap()` the
+    // items read with `*`, as the `Some((k, v))` pattern forms already do.
+    assert_runs(
+        r#"
+fn main() {
+    let mut m: SortedMap[i64, i64] = SortedMap.new();
+    m.insert(3, 30);
+    m.insert(8, 80);
+    let (k, v) = m.floor(4).expect("an entry");
+    let entry = m.ceiling(4).expect("an entry");
+    let w = m.floor(9).unwrap();
+    let (top, _) = m.floor(i64.MAX).expect("a top");
+    let top = *top;
+    println(f"{*k} {*v} {*entry.0} {*entry.1} {*w.0} {top}");
+}
+"#,
+        "3 30 8 80 8 8\n",
+    );
+}
