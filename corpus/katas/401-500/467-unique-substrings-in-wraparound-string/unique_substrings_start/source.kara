@@ -1,0 +1,96 @@
+// LeetCode #467: Unique Substrings in Wraparound String -- longest run
+// starting at each letter.
+//
+// The mirror image of the ★ arm: a run is just as well fixed by its
+// first letter and its length. Read s from the right, tracking the run
+// that starts at each position, and keep the longest run starting on
+// each letter; the answer is the sum of the 26 lengths. O(n).
+
+fn find_substring_in_wrapround_string(s: String) -> i64 {
+    let letters: Vec[char] = s.chars().collect();
+    let mut longest = vec![0; 26];
+    let mut run = 0;
+    let mut i = letters.len() - 1;
+    while i >= 0 {
+        let code = letters[i] as i64 - 97;
+        if i + 1 < letters.len() and letters[i + 1] as i64 - 97 == (code + 1) % 26 {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        longest[code] = longest[code].max(run);
+        i -= 1;
+    }
+    let mut total = 0;
+    for length in longest {
+        total += length;
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(s: String) {
+    let count = find_substring_in_wrapround_string(s);
+    if s.len() <= 40 {
+        println(f"\"{s}\" -> {count}");
+    } else {
+        println(f"{s.len()} letters from \"{s.slice(0, 10)}\" -> {count}");
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(i: i64) -> char {
+    char.try_from(97 + i % 26).unwrap()
+}
+
+fn main() {
+    show("a");
+    show("cac");
+    show("zab");
+    show("abcdefghijklmnopqrstuvwxyz");
+    show("zyx");
+    show("abcabc");
+    show("xyzabcxyz");
+    show("aaaaaaaaaa");
+    let mut long = String.new();
+    for i in 0..100 {
+        long.push(letter(25 + i));
+    }
+    show(long);
+    let mut broken = String.new();
+    for i in 0..1000 {
+        broken.push(letter(i + i / 30));
+    }
+    show(broken);
+    // 300 random strings of 1 to 200 letters: each letter follows the
+    // last in the alphabet with probability 1/2, 3/4 or 15/16, and is
+    // random otherwise.
+    let count = 300;
+    let mut seed: i64 = 467;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = 1 + next_random(mut seed) % 200;
+        let breaks = [2, 4, 16][next_random(mut seed) % 3];
+        let mut s = String.new();
+        let mut last = next_random(mut seed) % 26;
+        s.push(letter(last));
+        for _ in 1..n {
+            if next_random(mut seed) % breaks == 0 {
+                last = next_random(mut seed) % 26;
+            } else {
+                last = (last + 1) % 26;
+            }
+            s.push(letter(last));
+        }
+        let found = find_substring_in_wrapround_string(s);
+        total += found;
+        checksum = (checksum * 31 + found) % 1000000007;
+    }
+    println(f"{count} random strings: {total} substrings in all, checksum {checksum}");
+}

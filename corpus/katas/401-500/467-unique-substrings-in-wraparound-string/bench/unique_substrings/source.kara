@@ -1,0 +1,67 @@
+// Benchmark for #467: the ★ arm (longest run ending at each letter) on
+// a large workload.
+
+fn find_substring_in_wrapround_string(s: String) -> i64 {
+    let mut longest = vec![0; 26];
+    let mut run = 0;
+    let mut previous = -1;
+    for c in s.chars() {
+        let code = c as i64 - 97;
+        if previous >= 0 and code == (previous + 1) % 26 {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        longest[code] = longest[code].max(run);
+        previous = code;
+    }
+    let mut total = 0;
+    for length in longest {
+        total += length;
+    }
+    total
+}
+
+// ---- bench ------------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(i: i64) -> char {
+    char.try_from(97 + i % 26).unwrap()
+}
+
+fn main() {
+    let count = 10;
+    let n = 100000;
+    let rounds = 100;
+    let mut seed: i64 = 467;
+    let mut strings: Vec[String] = Vec.new();
+    for _ in 0..count {
+        let mut s = String.new();
+        let mut last = next_random(mut seed) % 26;
+        s.push(letter(last));
+        for _ in 1..n {
+            if next_random(mut seed) % 16 == 0 {
+                last = next_random(mut seed) % 26;
+            } else {
+                last = (last + 1) % 26;
+            }
+            s.push(letter(last));
+        }
+        strings.push(s);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        for k in 0..count {
+            strings[k].push(letter(next_random(mut seed) % 26));
+            let found = find_substring_in_wrapround_string(strings[k]);
+            total += found;
+            checksum = (checksum * 31 + found) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds on {count} strings: {total} substrings in all, checksum {checksum}");
+}

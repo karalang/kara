@@ -1,0 +1,244 @@
+// Differential test for LeetCode #467: Unique Substrings in
+// Wraparound String.
+//
+// Copies of the four arms, each run on 1,500 random cases.
+// Properties:
+//   P1  on up to 12 letters, the answer is brute force's: every
+//       substring of s, kept when each letter follows the last, counted
+//       once
+//   P2  shifting every letter along the alphabet keeps the answer
+//   P3  reversing s and mirroring every letter (a <-> z, b <-> y, ...)
+//       keeps it
+//   P4  a single run of L >= 26 letters gives 26 L - 325
+//   P5  writing every letter twice gives the number of different
+//       letters plus the number of different neighbouring pairs that
+//       are a run of two
+
+// ---- end: unique_substrings.kara
+
+fn substrings_end(s: String) -> i64 {
+    let mut longest = vec![0; 26];
+    let mut run = 0;
+    let mut previous = -1;
+    for c in s.chars() {
+        let code = c as i64 - 97;
+        if previous >= 0 and code == (previous + 1) % 26 {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        longest[code] = longest[code].max(run);
+        previous = code;
+    }
+    let mut total = 0;
+    for length in longest {
+        total += length;
+    }
+    total
+}
+
+// ---- start: unique_substrings_start.kara
+
+fn substrings_start(s: String) -> i64 {
+    let letters: Vec[char] = s.chars().collect();
+    let mut longest = vec![0; 26];
+    let mut run = 0;
+    let mut i = letters.len() - 1;
+    while i >= 0 {
+        let code = letters[i] as i64 - 97;
+        if i + 1 < letters.len() and letters[i + 1] as i64 - 97 == (code + 1) % 26 {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        longest[code] = longest[code].max(run);
+        i -= 1;
+    }
+    let mut total = 0;
+    for length in longest {
+        total += length;
+    }
+    total
+}
+
+// ---- runs: unique_substrings_runs.kara
+
+fn substrings_runs(s: String) -> i64 {
+    let letters: Vec[char] = s.chars().collect();
+    let mut longest = vec![0; 26];
+    let mut start = 0;
+    while start < letters.len() {
+        let mut end = start + 1;
+        while end < letters.len() and letters[end] as i64 - 97 == (letters[end - 1] as i64 - 97 + 1) % 26 {
+            end += 1;
+        }
+        let first = letters[start] as i64 - 97;
+        let length = end - start;
+        for i in 0..length.min(26) {
+            let code = (first + i) % 26;
+            longest[code] = longest[code].max(length - i);
+        }
+        start = end;
+    }
+    let mut total = 0;
+    for length in longest {
+        total += length;
+    }
+    total
+}
+
+// ---- set: unique_substrings_set.kara
+
+fn substrings_set(s: String) -> i64 {
+    let letters: Vec[char] = s.chars().collect();
+    let mut found: Set[String] = Set.new();
+    for i in 0..letters.len() {
+        let mut piece = String.new();
+        let mut j = i;
+        while j < letters.len() {
+            if j > i and letters[j] as i64 - 97 != (letters[j - 1] as i64 - 97 + 1) % 26 {
+                break;
+            }
+            piece.push(letters[j]);
+            found.insert(piece.clone());
+            j += 1;
+        }
+    }
+    found.len()
+}
+
+// ---- harness
+
+fn substrings(arm: i64, s: String) -> i64 {
+    if arm == 0 {
+        substrings_end(s)
+    } else if arm == 1 {
+        substrings_start(s)
+    } else if arm == 2 {
+        substrings_runs(s)
+    } else {
+        substrings_set(s)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(i: i64) -> char {
+    char.try_from(97 + i % 26).unwrap()
+}
+
+fn code(c: char) -> i64 {
+    c as i64 - 97
+}
+
+// 1 to max_len letters; each follows the last with probability 1 - 1/breaks.
+fn random_string(max_len: i64, seed: mut ref i64) -> String {
+    let n = 1 + next_random(seed) % max_len;
+    let breaks = [2, 4, 16][next_random(seed) % 3];
+    let mut s = String.new();
+    let mut last = next_random(seed) % 26;
+    s.push(letter(last));
+    for _ in 1..n {
+        if next_random(seed) % breaks == 0 {
+            last = next_random(seed) % 26;
+        } else {
+            last = (last + 1) % 26;
+        }
+        s.push(letter(last));
+    }
+    s
+}
+
+fn brute(s: String) -> i64 {
+    let letters: Vec[char] = s.chars().collect();
+    let mut found: Set[String] = Set.new();
+    for i in 0..letters.len() {
+        for j in i + 1..letters.len() + 1 {
+            let mut ok = true;
+            for k in i + 1..j {
+                if code(letters[k]) != (code(letters[k - 1]) + 1) % 26 {
+                    ok = false;
+                }
+            }
+            if ok {
+                found.insert(s.slice(i, j).to_string());
+            }
+        }
+    }
+    found.len()
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4670;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let small = random_string(12, mut seed);
+        let expected = brute(small);
+        let s = random_string(80, mut seed);
+        let shift = 1 + next_random(mut seed) % 25;
+        let mut shifted = String.new();
+        let mut doubled = String.new();
+        let mut letters_seen = vec![false; 26];
+        let mut pairs_seen = vec![false; 26];
+        let mut previous = -1;
+        for c in s.chars() {
+            shifted.push(letter(code(c) + shift));
+            doubled.push(c);
+            doubled.push(c);
+            letters_seen[code(c)] = true;
+            if previous >= 0 and code(c) == (previous + 1) % 26 {
+                pairs_seen[previous] = true;
+            }
+            previous = code(c);
+        }
+        let mut mirrored = String.new();
+        let backward: Vec[char] = s.chars().collect();
+        let mut i = backward.len() - 1;
+        while i >= 0 {
+            mirrored.push(letter(25 - code(backward[i])));
+            i -= 1;
+        }
+        let mut distinct = 0;
+        for k in 0..26 {
+            if letters_seen[k] {
+                distinct += 1;
+            }
+            if pairs_seen[k] {
+                distinct += 1;
+            }
+        }
+        let run_len = 26 + next_random(mut seed) % 55;
+        let first = next_random(mut seed) % 26;
+        let mut run = String.new();
+        for k in 0..run_len {
+            run.push(letter(first + k));
+        }
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, substrings(arm, small) == expected, mut failures);
+            let answer = substrings(arm, s);
+            report(2, arm, case, substrings(arm, shifted) == answer, mut failures);
+            report(3, arm, case, substrings(arm, mirrored) == answer, mut failures);
+            report(4, arm, case, substrings(arm, run) == 26 * run_len - 325, mut failures);
+            report(5, arm, case, substrings(arm, doubled) == distinct, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

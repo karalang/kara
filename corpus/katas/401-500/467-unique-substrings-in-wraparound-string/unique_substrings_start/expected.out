@@ -1,0 +1,11 @@
+"a" -> 1
+"cac" -> 2
+"zab" -> 6
+"abcdefghijklmnopqrstuvwxyz" -> 351
+"zyx" -> 3
+"abcabc" -> 6
+"xyzabcxyz" -> 21
+"aaaaaaaaaa" -> 1
+100 letters from "zabcdefghi" -> 2275
+1000 letters from "abcdefghij" -> 780
+300 random strings: 90075 substrings in all, checksum 622128066
