@@ -1,0 +1,189 @@
+// Differential test for LeetCode #495: Teemo Attacking.
+//
+// Copies of the four arms, on 1,500 random series a and b of 1 to 25
+// attacks, with gaps of 0 to 2, 0 to 9 or 0 to 40 in turn, a duration
+// of 0 to 12 and a shift of 0 to 999. Properties:
+//   P1  the total is the seconds covered, marked one by one
+//   P2  every attack shifted by the same amount gives the same total
+//   P3  the total is at least one duration and at most one per attack
+//   P4  an attack repeated at the same moment adds nothing
+//   P5  b placed after a's poison wears off adds b's own total
+
+// ---- star: teemo_attacking.kara
+
+fn find_poisoned_duration_star(time_series: Vec[i64], duration: i64) -> i64 {
+    let mut total = 0;
+    for i in 0..time_series.len() {
+        if i + 1 < time_series.len() {
+            total += (time_series[i + 1] - time_series[i]).min(duration);
+        } else {
+            total += duration;
+        }
+    }
+    total
+}
+
+// ---- merge: teemo_attacking_merge.kara
+
+fn find_poisoned_duration_merge(time_series: Vec[i64], duration: i64) -> i64 {
+    let mut total = 0;
+    let mut start = -1;
+    let mut end = -1;
+    for t in time_series {
+        if t > end {
+            total += end - start;
+            start = t;
+        }
+        end = t + duration;
+    }
+    total + end - start
+}
+
+// ---- fold: teemo_attacking_fold.kara
+
+fn find_poisoned_duration_fold(time_series: Vec[i64], duration: i64) -> i64 {
+    let (total, _) = time_series.iter().fold((0, 0), |(total, until), t| {
+        let start = (*t).max(until);
+        (total + *t + duration - start, *t + duration)
+    });
+    total
+}
+
+// ---- zip: teemo_attacking_zip.kara
+
+fn find_poisoned_duration_zip(time_series: Vec[i64], duration: i64) -> i64 {
+    let gaps: i64 = time_series.iter().zip(time_series.iter().skip(1)).map(|(a, b)| (b - a).min(duration)).sum();
+    gaps + duration
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, time_series: Vec[i64], duration: i64) -> i64 {
+    match which {
+        0 => find_poisoned_duration_star(time_series, duration),
+        1 => find_poisoned_duration_merge(time_series, duration),
+        2 => find_poisoned_duration_fold(time_series, duration),
+        _ => find_poisoned_duration_zip(time_series, duration),
+    }
+}
+
+// Every second some attack's poison covers, marked one by one.
+fn reference(time_series: Vec[i64], duration: i64) -> i64 {
+    let mut poisoned: Set[i64] = Set.new();
+    for t in time_series {
+        for s in t..t + duration {
+            poisoned.insert(s);
+        }
+    }
+    poisoned.len()
+}
+
+fn random_series(seed: mut ref i64, size: i64, gap: i64) -> Vec[i64] {
+    let mut series: Vec[i64] = Vec.new();
+    let mut t = next_random(seed) % 5;
+    for _ in 0..size {
+        series.push(t);
+        t += next_random(seed) % (gap + 1);
+    }
+    series
+}
+
+fn main() {
+    let names = vec!["star", "merge", "fold", "zip"];
+    let cases = 1500;
+    let mut seed: i64 = 4950;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // a of 1 to 25 attacks and b of 1 to 25, with gaps of 0 to 2, 0
+        // to 9 or 0 to 40 in turn, a duration of 0 to 12 and a shift.
+        let gap = if c % 3 == 0 { 2 } else if c % 3 == 1 { 9 } else { 40 };
+        let size = 1 + next_random(mut seed) % 25;
+        let a = random_series(mut seed, size, gap);
+        let size = 1 + next_random(mut seed) % 25;
+        let b = random_series(mut seed, size, gap);
+        let duration = next_random(mut seed) % 13;
+        let shift = next_random(mut seed) % 1000;
+        let mut shifted: Vec[i64] = Vec.new();
+        for t in a {
+            shifted.push(t + shift);
+        }
+        let at = next_random(mut seed) % a.len();
+        let mut doubled: Vec[i64] = Vec.new();
+        for k in 0..a.len() {
+            doubled.push(a[k]);
+            if k == at {
+                doubled.push(a[k]);
+            }
+        }
+        // b placed after a's poison has worn off.
+        let mut joined = a.clone();
+        let start = a[a.len() - 1] + duration + next_random(mut seed) % 3;
+        for t in b {
+            joined.push(t + start);
+        }
+        let want = reference(a, duration);
+        for which in 0..4 {
+            let got = arm(which, a, duration);
+            // P1: the seconds covered, marked one by one.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {a} for {duration} gave {got}, want {want}");
+                }
+            }
+            // P2: every attack moved by the same shift gives the same.
+            checks += 1;
+            let other = arm(which, shifted, duration);
+            if other != got {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {shifted} for {duration} gave {other}, want {got}");
+                }
+            }
+            // P3: at least one full duration, at most one per attack.
+            checks += 1;
+            if got < duration or got > a.len() * duration {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {a} for {duration} gave {got}");
+                }
+            }
+            // P4: an attack repeated at the same moment adds nothing.
+            checks += 1;
+            let other = arm(which, doubled, duration);
+            if other != got {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {doubled} for {duration} gave {other}, want {got}");
+                }
+            }
+            // P5: b after a's poison wears off adds b's own total.
+            checks += 1;
+            let both = arm(which, joined, duration);
+            let expected = got + arm(which, b, duration);
+            if both != expected {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {joined} for {duration} gave {both}, want {expected}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

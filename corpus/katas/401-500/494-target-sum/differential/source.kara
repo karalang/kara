@@ -1,0 +1,218 @@
+// Differential test for LeetCode #494: Target Sum.
+//
+// Copies of the four arms, on 1,500 random arrays of 1 to 11 numbers
+// from 0 to 3, 0 to 10 or 0 to 50 in turn, a target within three of
+// the reachable range, and one more number x. Properties:
+//   P1  the count is every choice of signs, enumerated as bitmasks
+//   P2  the target negated has as many ways
+//   P3  the numbers reversed have as many ways
+//   P4  a 0 appended doubles the ways
+//   P5  x appended gives the ways to target - x plus those to
+//       target + x without it
+
+// ---- star: target_sum.kara
+
+fn find_target_sum_ways_star(nums: Vec[i64], target: i64) -> i64 {
+    let mut total = 0;
+    for x in nums {
+        total += x;
+    }
+    if target > total or target < -total {
+        return 0;
+    }
+    let width = 2 * total + 1;
+    let mut ways: Vec[i64] = vec![0; width];
+    ways[total] = 1;
+    for x in nums {
+        let mut next: Vec[i64] = vec![0; width];
+        for s in 0..width {
+            if ways[s] > 0 {
+                next[s + x] += ways[s];
+                next[s - x] += ways[s];
+            }
+        }
+        ways = next;
+    }
+    ways[target + total]
+}
+
+// ---- signs: target_sum_signs.kara
+
+fn count_signs_signs(nums: Vec[i64], i: i64, sum: i64, target: i64) -> i64 {
+    if i == nums.len() {
+        return if sum == target { 1 } else { 0 };
+    }
+    count_signs_signs(nums, i + 1, sum + nums[i], target) + count_signs_signs(nums, i + 1, sum - nums[i], target)
+}
+
+fn find_target_sum_ways_signs(nums: Vec[i64], target: i64) -> i64 {
+    count_signs_signs(nums, 0, 0, target)
+}
+
+// ---- subset: target_sum_subset.kara
+
+fn find_target_sum_ways_subset(nums: Vec[i64], target: i64) -> i64 {
+    let mut total = 0;
+    for x in nums {
+        total += x;
+    }
+    if target > total or target < -total or (total + target) % 2 != 0 {
+        return 0;
+    }
+    let goal = (total + target) / 2;
+    let mut ways: Vec[i64] = vec![0; goal + 1];
+    ways[0] = 1;
+    for x in nums {
+        let mut s = goal;
+        while s >= x {
+            ways[s] += ways[s - x];
+            s -= 1;
+        }
+    }
+    ways[goal]
+}
+
+// ---- memo: target_sum_memo.kara
+
+fn count_memo_memo(nums: Vec[i64], i: i64, sum: i64, target: i64, memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if i == nums.len() {
+        return if sum == target { 1 } else { 0 };
+    }
+    if let Some(known) = memo.get((i, sum)) {
+        return known;
+    }
+    let ways = count_memo_memo(nums, i + 1, sum + nums[i], target, memo) + count_memo_memo(nums, i + 1, sum - nums[i], target, memo);
+    memo.insert((i, sum), ways);
+    ways
+}
+
+fn find_target_sum_ways_memo(nums: Vec[i64], target: i64) -> i64 {
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    count_memo_memo(nums, 0, 0, target, mut memo)
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, nums: Vec[i64], target: i64) -> i64 {
+    match which {
+        0 => find_target_sum_ways_star(nums, target),
+        1 => find_target_sum_ways_signs(nums, target),
+        2 => find_target_sum_ways_subset(nums, target),
+        _ => find_target_sum_ways_memo(nums, target),
+    }
+}
+
+// Every choice of signs as the bits of a number from 0 to 2^n - 1, a set
+// bit meaning minus.
+fn reference(nums: Vec[i64], target: i64) -> i64 {
+    let n = nums.len();
+    let mut count = 0;
+    for mask in 0..(1 << n) {
+        let mut sum = 0;
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                sum -= nums[i];
+            } else {
+                sum += nums[i];
+            }
+        }
+        if sum == target {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn main() {
+    let names = vec!["star", "signs", "subset", "memo"];
+    let cases = 1500;
+    let mut seed: i64 = 4940;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // 1 to 11 numbers from 0 to 3, 0 to 10 or 0 to 50 in turn, a
+        // target within three of the reachable range, and one more x.
+        let top = if c % 3 == 0 { 3 } else if c % 3 == 1 { 10 } else { 50 };
+        let size = 1 + next_random(mut seed) % 11;
+        let mut nums: Vec[i64] = Vec.new();
+        let mut total = 0;
+        for _ in 0..size {
+            let x = next_random(mut seed) % (top + 1);
+            nums.push(x);
+            total += x;
+        }
+        let target = next_random(mut seed) % (2 * total + 7) - total - 3;
+        let x = next_random(mut seed) % (top + 1);
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        let mut with_zero = nums.clone();
+        with_zero.push(0);
+        let mut with_x = nums.clone();
+        with_x.push(x);
+        let want = reference(nums, target);
+        for which in 0..4 {
+            let got = arm(which, nums, target);
+            // P1: every choice of signs, counted.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {nums} to {target} gave {got}, want {want}");
+                }
+            }
+            // P2: the target negated has as many ways (flip every sign).
+            checks += 1;
+            let other = arm(which, nums, -target);
+            if other != got {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {nums} to {-target} gave {other}, want {got}");
+                }
+            }
+            // P3: the numbers reversed have as many ways.
+            checks += 1;
+            let other = arm(which, reversed, target);
+            if other != got {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {reversed} to {target} gave {other}, want {got}");
+                }
+            }
+            // P4: a 0 appended doubles the ways (+0 and -0).
+            checks += 1;
+            let other = arm(which, with_zero, target);
+            if other != 2 * got {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {with_zero} to {target} gave {other}, want {2 * got}");
+                }
+            }
+            // P5: x appended gives the ways to target - x plus those to
+            // target + x without it.
+            checks += 1;
+            let other = arm(which, with_x, target);
+            let expected = arm(which, nums, target - x) + arm(which, nums, target + x);
+            if other != expected {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {with_x} to {target} gave {other}, want {expected}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

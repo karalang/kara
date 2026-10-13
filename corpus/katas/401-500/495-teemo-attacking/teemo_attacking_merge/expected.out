@@ -1,0 +1,9 @@
+example 1: [1, 4] for 2 -> 4
+example 2: [1, 2] for 2 -> 3
+one attack: [5] for 3 -> 3
+zero duration: [1, 2, 3] for 0 -> 0
+back to back: [0, 1, 2, 3] for 1 -> 4
+exactly touching: [0, 5, 10] for 5 -> 15
+at time zero: [0, 0] for 10 -> 10
+large: [0, 10000000] for 10000000 -> 20000000
+300 random series: 14573 poisoned in all, checksum 433575186

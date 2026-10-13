@@ -1,0 +1,54 @@
+// LeetCode #495: Teemo Attacking -- counting only what is new.
+//
+// Keep the moment the poison wears off. Each attack adds the poisoned
+// time it brings past that moment, then moves the moment on.
+
+fn find_poisoned_duration(time_series: Vec[i64], duration: i64) -> i64 {
+    let (total, _) = time_series.iter().fold((0, 0), |(total, until), t| {
+        let start = (*t).max(until);
+        (total + *t + duration - start, *t + duration)
+    });
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(name: String, time_series: Vec[i64], duration: i64) {
+    println(f"{name}: {time_series} for {duration} -> {find_poisoned_duration(time_series, duration)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("example 1", vec![1, 4], 2);
+    show("example 2", vec![1, 2], 2);
+    show("one attack", vec![5], 3);
+    show("zero duration", vec![1, 2, 3], 0);
+    show("back to back", vec![0, 1, 2, 3], 1);
+    show("exactly touching", vec![0, 5, 10], 5);
+    show("at time zero", vec![0, 0], 10);
+    show("large", vec![0, 10000000], 10000000);
+    // 300 random series of 1 to 30 attacks with gaps of 0 to 9, each
+    // with a duration of 0 to 9.
+    let count = 300;
+    let mut seed: i64 = 495;
+    let mut sum = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let size = 1 + next_random(mut seed) % 30;
+        let mut series: Vec[i64] = Vec.new();
+        let mut t = next_random(mut seed) % 5;
+        for _ in 0..size {
+            series.push(t);
+            t += next_random(mut seed) % 10;
+        }
+        let duration = next_random(mut seed) % 10;
+        let poisoned = find_poisoned_duration(series, duration);
+        sum += poisoned;
+        checksum = (checksum * 31 + poisoned) % 1000000007;
+    }
+    println(f"{count} random series: {sum} poisoned in all, checksum {checksum}");
+}

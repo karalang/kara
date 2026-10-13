@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/494-target-sum/target_sum_memo.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:map"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "f6acb3b73"
+extracted_src = "717df2d4"
+model_rev = "1aa23105"
+model_src = "717df2d4"

@@ -1,0 +1,58 @@
+// Benchmark for #494: the ★ arm (counting ways by running sum); see
+// ../target_sum.kara.
+
+fn find_target_sum_ways(nums: Vec[i64], target: i64) -> i64 {
+    let mut total = 0;
+    for x in nums {
+        total += x;
+    }
+    if target > total or target < -total {
+        return 0;
+    }
+    let width = 2 * total + 1;
+    let mut ways: Vec[i64] = vec![0; width];
+    ways[total] = 1;
+    for x in nums {
+        let mut next: Vec[i64] = vec![0; width];
+        for s in 0..width {
+            if ways[s] > 0 {
+                next[s + x] += ways[s];
+                next[s - x] += ways[s];
+            }
+        }
+        ways = next;
+    }
+    ways[target + total]
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 40,000 arrays of 20 numbers from 0 to 50 (the problem's most numbers
+    // and at most its largest sum), each with a target from -100 to 100,
+    // built once, then each solved once.
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut targets: Vec[i64] = Vec.new();
+    let mut seed: i64 = 494;
+    for _ in 0..40000 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..20 {
+            nums.push(next_random(mut seed) % 51);
+        }
+        arrays.push(nums);
+        targets.push(next_random(mut seed) % 201 - 100);
+    }
+    let mut reachable = 0;
+    let mut checksum: i64 = 0;
+    for k in 0..arrays.len() {
+        let ways = find_target_sum_ways(arrays[k], targets[k]);
+        if ways > 0 {
+            reachable += 1;
+        }
+        checksum = (checksum * 31 + ways) % 1000000007;
+    }
+    println(f"40000 arrays of 20: {reachable} reachable, checksum {checksum}");
+}

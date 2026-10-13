@@ -1,0 +1,8 @@
+example 1: [1, 1, 1, 1, 1] to 3 -> 5
+example 2: [1] to 1 -> 1
+zeros: [0, 0, 0, 1] to 1 -> 8
+out of reach: [2, 3] to 6 -> 0
+wrong parity: [2, 4] to 1 -> 0
+a negative target: [1, 2, 3, 4] to -2 -> 2
+all minus: [5, 5, 5] to -15 -> 1
+300 random arrays: 116 reachable, 5252 ways, checksum 483636255
