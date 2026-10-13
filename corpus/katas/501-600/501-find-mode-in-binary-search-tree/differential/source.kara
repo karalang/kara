@@ -1,0 +1,353 @@
+// Differential test for LeetCode #501: Find Mode in Binary Search Tree.
+//
+// Copies of the four arms, on 1,500 random search trees of 1 to 30
+// values from 1 to 4 values, 20, or the whole range -100,000 to
+// 100,000 in turn, an equal value going left or right by a coin flip.
+// Every arm gets the same trees. Properties:
+//   P1  the modes are the reference's, which counts each distinct value
+//       in a list and keeps the largest counts, sorted
+//   P2  the modes rise and are values of the tree
+//   P3  one more copy of the smallest mode makes it the only mode
+//   P4  the tree is as it was: the same values in the same shape
+//   P5  the same values inserted in the reverse order, another shape,
+//       have the same modes
+
+// ---- star: find_mode.kara
+
+struct WalkStar {
+    prev: i64,
+    run: i64,
+    best: i64,
+    modes: Vec[i64],
+}
+
+fn visit_star(node: Option[TreeNode], walk: mut ref WalkStar) {
+    let Some(n) = node else {
+        return;
+    };
+    visit_star(n.left, walk);
+    if walk.run > 0 and n.val == walk.prev {
+        walk.run += 1;
+    } else {
+        walk.prev = n.val;
+        walk.run = 1;
+    }
+    if walk.run > walk.best {
+        walk.best = walk.run;
+        walk.modes.clear();
+        walk.modes.push(n.val);
+    } else if walk.run == walk.best {
+        walk.modes.push(n.val);
+    }
+    visit_star(n.right, walk);
+}
+
+fn find_mode_star(root: Option[TreeNode]) -> Vec[i64] {
+    let mut walk = WalkStar { prev: 0, run: 0, best: 0, modes: Vec.new() };
+    visit_star(root, mut walk);
+    walk.modes
+}
+
+// ---- map: find_mode_map.kara
+
+fn count_map(node: Option[TreeNode], counts: mut ref Map[i64, i64]) {
+    let Some(n) = node else {
+        return;
+    };
+    *counts.entry(n.val).or_insert(0) += 1;
+    count_map(n.left, counts);
+    count_map(n.right, counts);
+}
+
+fn find_mode_map(root: Option[TreeNode]) -> Vec[i64] {
+    let mut counts: Map[i64, i64] = Map.new();
+    count_map(root, mut counts);
+    let best = *counts.values().max().unwrap();
+    let mut modes: Vec[i64] = counts.iter().filter(|(_, c)| *c == best).map(|(v, _)| *v).collect();
+    modes.sort();
+    modes
+}
+
+// ---- stack: find_mode_stack.kara
+
+fn find_mode_stack(root: Option[TreeNode]) -> Vec[i64] {
+    let mut stack: Vec[TreeNode] = Vec.new();
+    let mut node = root;
+    let mut prev = 0;
+    let mut run = 0;
+    let mut best = 0;
+    let mut modes: Vec[i64] = Vec.new();
+    loop {
+        while let Some(n) = node {
+            stack.push(n);
+            node = n.left;
+        }
+        let Some(n) = stack.pop() else {
+            break;
+        };
+        if run > 0 and n.val == prev {
+            run += 1;
+        } else {
+            prev = n.val;
+            run = 1;
+        }
+        if run > best {
+            best = run;
+            modes.clear();
+            modes.push(n.val);
+        } else if run == best {
+            modes.push(n.val);
+        }
+        node = n.right;
+    }
+    modes
+}
+
+// ---- morris: find_mode_morris.kara
+
+fn find_mode_morris(root: Option[TreeNode]) -> Vec[i64] {
+    let mut cur = root;
+    let mut prev = 0;
+    let mut run = 0;
+    let mut best = 0;
+    let mut modes: Vec[i64] = Vec.new();
+    while let Some(n) = cur {
+        if let Some(l) = n.left {
+            let mut pred = l;
+            loop {
+                match pred.right {
+                    Some(r) => {
+                        if r.ref_eq(n) {
+                            break;
+                        }
+                        pred = r;
+                    }
+                    None => {
+                        break;
+                    }
+                }
+            }
+            if pred.right.is_none() {
+                pred.right = Some(n);
+                cur = n.left;
+                continue;
+            }
+            pred.right = None;
+        }
+        if run > 0 and n.val == prev {
+            run += 1;
+        } else {
+            prev = n.val;
+            run = 1;
+        }
+        if run > best {
+            best = run;
+            modes.clear();
+            modes.push(n.val);
+        } else if run == best {
+            modes.push(n.val);
+        }
+        cur = n.right;
+    }
+    modes
+}
+// ---- differential harness -------------------------------------------------
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A search tree of the values, inserted in the order given: a smaller
+// value goes left, a larger one right, and an equal one either way by a
+// coin flip from seed.
+fn build(values: Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
+    if values.is_empty() {
+        return None;
+    }
+    let root = TreeNode { val: values[0], left: None, right: None };
+    for i in 1..values.len() {
+        let v = values[i];
+        let mut node = root;
+        loop {
+            if v < node.val or (v == node.val and next_random(seed) % 2 == 0) {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+fn arm(which: i64, root: Option[TreeNode]) -> Vec[i64] {
+    match which {
+        0 => find_mode_star(root),
+        1 => find_mode_map(root),
+        2 => find_mode_stack(root),
+        _ => find_mode_morris(root),
+    }
+}
+
+// The tree in preorder, a missing child written as -1,000,000: the same
+// list means the same values in the same shape.
+fn shape(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    match node {
+        None => out.push(-1000000),
+        Some(n) => {
+            out.push(n.val);
+            shape(n.left, out);
+            shape(n.right, out);
+        }
+    }
+}
+
+// The reference: count each distinct value in a list of the values seen
+// so far, then keep those with the largest count, sorted.
+fn reference(values: Vec[i64]) -> Vec[i64] {
+    let mut seen: Vec[i64] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for k in 0..values.len() {
+        let mut found = false;
+        for i in 0..seen.len() {
+            if seen[i] == values[k] {
+                counts[i] += 1;
+                found = true;
+            }
+        }
+        if not found {
+            seen.push(values[k]);
+            counts.push(1);
+        }
+    }
+    let mut best = 0;
+    for i in 0..counts.len() {
+        if counts[i] > best {
+            best = counts[i];
+        }
+    }
+    let mut modes: Vec[i64] = Vec.new();
+    for i in 0..seen.len() {
+        if counts[i] == best {
+            modes.push(seen[i]);
+        }
+    }
+    modes.sort();
+    modes
+}
+
+fn main() {
+    let names = vec!["star", "map", "stack", "morris"];
+    let cases = 1500;
+    let mut seed: i64 = 5010;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // 1 to 30 values from 1 to 4 values, 20, or the whole range
+        // -100,000 to 100,000, in turn.
+        let range = if c % 3 == 0 { 1 + next_random(mut seed) % 4 } else if c % 3 == 1 { 20 } else { 200001 };
+        let size = 1 + next_random(mut seed) % 30;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            let v = next_random(mut seed) * 7 % range;
+            values.push(if range == 200001 { v - 100000 } else { v });
+        }
+        let want = reference(values);
+        // The values with one more copy of the smallest mode, and the
+        // values in the reverse order, which builds another shape.
+        let mut extra = values.clone();
+        extra.push(want[0]);
+        let mut reversed: Vec[i64] = Vec.new();
+        for k in 0..size {
+            reversed.push(values[size - 1 - k]);
+        }
+        // Every arm gets the same three trees: their coin flips start
+        // from the same seed.
+        let tree_seed = next_random(mut seed);
+        for which in 0..4 {
+            let mut s = tree_seed;
+            let root = build(values, mut s);
+            let mut before: Vec[i64] = Vec.new();
+            shape(root, mut before);
+            let got = arm(which, root);
+            // P1: the modes are the reference's.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {values} gave {got}, want {want}");
+                }
+            }
+            // P2: the modes rise and are values of the tree.
+            checks += 1;
+            let mut ok = got.len() > 0;
+            for i in 0..got.len() {
+                if (i > 0 and got[i - 1] >= got[i]) or not values.contains(got[i]) {
+                    ok = false;
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {values} gave {got}");
+                }
+            }
+            // P3: one more copy of a mode makes it the only one.
+            checks += 1;
+            let more = arm(which, build(extra, mut s));
+            if more != vec![want[0]] {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {extra} gave {more}, want [{want[0]}]");
+                }
+            }
+            // P4: the tree is as it was.
+            checks += 1;
+            let mut after: Vec[i64] = Vec.new();
+            shape(root, mut after);
+            if after != before {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {values} left {after}, was {before}");
+                }
+            }
+            // P5: the same values in another shape have the same modes.
+            checks += 1;
+            let other = arm(which, build(reversed, mut s));
+            if other != got {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {reversed} gave {other}, in order {got}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

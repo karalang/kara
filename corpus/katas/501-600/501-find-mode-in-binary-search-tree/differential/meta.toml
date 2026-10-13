@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/501-find-mode-in-binary-search-tree/differential.kara"
+dedup_of = []
+expect = "error:E0209"
+exit = 1
+tags = ["closure", "differential", "shared", "lib:map"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "f7213ae5d"
+extracted_src = "933abcb8"
+model_rev = "1aa23105"
+model_src = "933abcb8"

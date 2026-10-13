@@ -1,0 +1,310 @@
+// Differential test for LeetCode #500: Keyboard Row.
+//
+// Copies of the four arms, on 1,500 random cases of two lists of 1 to
+// 10 words of 1 to 8 letters: each word from one row (2 in 3) or the
+// whole alphabet, a letter upper case with odds 1 in 4, and now and
+// then one more letter from anywhere. Properties:
+//   P1  the words are the reference's, which compares every letter of
+//       each word with every letter of each row
+//   P2  the words kept are words given, in their order
+//   P3  swapping the case of every letter keeps the same words
+//   P4  reversing every word keeps the same words, reversed
+//   P5  the two lists together keep what each keeps alone
+
+// ---- star: keyboard_row.kara
+
+fn find_words_star(words: Vec[String]) -> Vec[String] {
+    let rows = vec!["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+    let mut row_of = vec![0; 26];
+    for r in 0..3 {
+        for ch in rows[r].chars() {
+            row_of[ch as i64 - 'a' as i64] = r;
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for word in words {
+        let mut first = -1;
+        let mut one_row = true;
+        for ch in word.to_lowercase().chars() {
+            let r = row_of[ch as i64 - 'a' as i64];
+            if first < 0 {
+                first = r;
+            } else if r != first {
+                one_row = false;
+                break;
+            }
+        }
+        if one_row {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+// ---- sets: keyboard_row_sets.kara
+
+fn find_words_sets(words: Vec[String]) -> Vec[String] {
+    let mut rows: Vec[Set[char]] = Vec.new();
+    for letters in vec!["qwertyuiop", "asdfghjkl", "zxcvbnm"] {
+        let mut set: Set[char] = Set.new();
+        for ch in letters.chars() {
+            set.insert(ch);
+        }
+        rows.push(set);
+    }
+    let mut out: Vec[String] = Vec.new();
+    for word in words {
+        let lower = word.to_lowercase();
+        for row in rows {
+            let mut inside = true;
+            for ch in lower.chars() {
+                if not row.contains(ch) {
+                    inside = false;
+                }
+            }
+            if inside {
+                out.push(word.clone());
+                break;
+            }
+        }
+    }
+    out
+}
+
+// ---- masks: keyboard_row_masks.kara
+
+fn mask_masks(letters: String) -> i64 {
+    let mut m = 0;
+    for ch in letters.to_lowercase().chars() {
+        m = m | (1 << (ch as i64 - 'a' as i64));
+    }
+    m
+}
+
+fn find_words_masks(words: Vec[String]) -> Vec[String] {
+    let rows = vec![mask_masks("qwertyuiop"), mask_masks("asdfghjkl"), mask_masks("zxcvbnm")];
+    let mut out: Vec[String] = Vec.new();
+    for word in words {
+        let m = mask_masks(word);
+        if rows.iter().any(|row| m & ~row == 0) {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+// ---- filter: keyboard_row_filter.kara
+
+fn find_words_filter(words: Vec[String]) -> Vec[String] {
+    let rows = vec!["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+    words
+        .iter()
+        .filter(|word| rows.iter().any(|row| word.to_lowercase().chars().all(|ch| row.chars().any(|r| r == ch))))
+        .map(|word| word.clone())
+        .collect()
+}
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, words: Vec[String]) -> Vec[String] {
+    match which {
+        0 => find_words_star(words),
+        1 => find_words_sets(words),
+        2 => find_words_masks(words),
+        _ => find_words_filter(words),
+    }
+}
+
+// Whether every letter of the word, lowercased, is one of the row's.
+fn on_row(word: String, row: String) -> bool {
+    for ch in word.to_lowercase().chars() {
+        let mut found = false;
+        for r in row.chars() {
+            if r == ch {
+                found = true;
+            }
+        }
+        if not found {
+            return false;
+        }
+    }
+    true
+}
+
+// Each word in turn, kept when it is on one of the three rows.
+fn reference(words: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for word in words {
+        if on_row(word, "qwertyuiop") or on_row(word, "asdfghjkl") or on_row(word, "zxcvbnm") {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
+fn random_words(seed: mut ref i64, most: i64) -> Vec[String] {
+    let rows = vec!["qwertyuiop", "asdfghjkl", "zxcvbnm", "abcdefghijklmnopqrstuvwxyz"];
+    let size = 1 + next_random(seed) % most;
+    let mut words: Vec[String] = Vec.new();
+    for _ in 0..size {
+        let pool = if next_random(seed) % 3 == 0 { 3 } else { next_random(seed) % 3 };
+        let chars: Vec[char] = rows[pool].chars().collect();
+        let length = 1 + next_random(seed) % 8;
+        let mut word = String.new();
+        for _ in 0..length {
+            let ch = chars[next_random(seed) % chars.len()];
+            if next_random(seed) % 4 == 0 {
+                word.push(ch.to_ascii_uppercase());
+            } else {
+                word.push(ch);
+            }
+        }
+        // Now and then one letter from anywhere at a random place.
+        if next_random(seed) % 4 == 0 {
+            let at = next_random(seed) % (word.len() + 1);
+            let extra = rows[3].char_at(next_random(seed) % 26).unwrap();
+            let mut changed = String.new();
+            let mut k = 0;
+            for ch in word.chars() {
+                if k == at {
+                    changed.push(extra);
+                }
+                changed.push(ch);
+                k += 1;
+            }
+            if at == word.len() {
+                changed.push(extra);
+            }
+            word = changed;
+        }
+        words.push(word);
+    }
+    words
+}
+
+// Whether `part` is `whole` with some items left out, in order.
+fn in_order(part: Vec[String], whole: Vec[String]) -> bool {
+    let mut k = 0;
+    for w in whole {
+        if k < part.len() and part[k] == w {
+            k += 1;
+        }
+    }
+    k == part.len()
+}
+
+fn main() {
+    let names = vec!["star", "sets", "masks", "filter"];
+    let cases = 1500;
+    let mut seed: i64 = 5000;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for _ in 0..cases {
+        // Two lists of 1 to 10 words of 1 to 8 letters, each word from
+        // one row (2 in 3) or the whole alphabet, a letter upper case
+        // with odds 1 in 4, and now and then one more letter from
+        // anywhere.
+        let words = random_words(mut seed, 10);
+        let more = random_words(mut seed, 10);
+        let mut swapped: Vec[String] = Vec.new();
+        let mut reversed: Vec[String] = Vec.new();
+        for w in words {
+            let mut s = String.new();
+            for ch in w.chars() {
+                if ch.is_ascii_uppercase() {
+                    s.push(ch.to_ascii_lowercase());
+                } else {
+                    s.push(ch.to_ascii_uppercase());
+                }
+            }
+            swapped.push(s);
+            let back: String = w.chars().rev().collect();
+            reversed.push(back);
+        }
+        let mut both = words.clone();
+        for w in more {
+            both.push(w.clone());
+        }
+        let want = reference(words);
+        for which in 0..4 {
+            let got = arm(which, words);
+            // P1: the reference's words.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {words} gave {got}, want {want}");
+                }
+            }
+            // P2: the words kept are words given, in their order.
+            checks += 1;
+            if not in_order(got, words) {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {words} gave {got}");
+                }
+            }
+            // P3: swapping the case of every letter keeps the same
+            // words, swapped.
+            checks += 1;
+            let other = arm(which, swapped);
+            let mut ok = other.len() == got.len();
+            if ok {
+                for i in 0..got.len() {
+                    if other[i].to_lowercase() != got[i].to_lowercase() {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {swapped} gave {other}, unswapped {got}");
+                }
+            }
+            // P4: every word reversed keeps the same words, reversed.
+            checks += 1;
+            let other = arm(which, reversed);
+            let mut ok = other.len() == got.len();
+            if ok {
+                for i in 0..got.len() {
+                    let back: String = other[i].chars().rev().collect();
+                    if back != got[i] {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {reversed} gave {other}, forwards {got}");
+                }
+            }
+            // P5: two lists together keep what each keeps alone.
+            checks += 1;
+            let mut expected = got.clone();
+            expected.extend(arm(which, more));
+            let together = arm(which, both);
+            if together != expected {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {both} gave {together}, want {expected}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

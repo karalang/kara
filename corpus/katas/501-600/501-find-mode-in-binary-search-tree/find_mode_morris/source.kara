@@ -1,0 +1,145 @@
+// LeetCode #501: Find Mode in Binary Search Tree -- Morris traversal,
+// the follow-up's O(1) extra space.
+//
+// In-order with no stack: before going left from a node, find its
+// in-order predecessor (the rightmost node of its left subtree) and
+// point that node's right link back to it. Meeting that thread again
+// means the left side is done: clear it, count the node and go right.
+// Values repeat, so the thread is told from a real link by identity
+// (`ref_eq`), not by value. The ★ arm's running count, and the tree is
+// as it was when the walk ends. O(n) time, O(1) extra space besides the
+// modes.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn find_mode(root: Option[TreeNode]) -> Vec[i64] {
+    let mut cur = root;
+    let mut prev = 0;
+    let mut run = 0;
+    let mut best = 0;
+    let mut modes: Vec[i64] = Vec.new();
+    while let Some(n) = cur {
+        if let Some(l) = n.left {
+            let mut pred = l;
+            loop {
+                match pred.right {
+                    Some(r) => {
+                        if r.ref_eq(n) {
+                            break;
+                        }
+                        pred = r;
+                    }
+                    None => {
+                        break;
+                    }
+                }
+            }
+            if pred.right.is_none() {
+                pred.right = Some(n);
+                cur = n.left;
+                continue;
+            }
+            pred.right = None;
+        }
+        if run > 0 and n.val == prev {
+            run += 1;
+        } else {
+            prev = n.val;
+            run = 1;
+        }
+        if run > best {
+            best = run;
+            modes.clear();
+            modes.push(n.val);
+        } else if run == best {
+            modes.push(n.val);
+        }
+        cur = n.right;
+    }
+    modes
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A search tree of the values, inserted in the order given: a smaller
+// value goes left, a larger one right, and an equal one either way by a
+// coin flip from seed, which keeps every value on the left of a node at
+// most the node's and every value on its right at least.
+fn build(values: Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
+    if values.is_empty() {
+        return None;
+    }
+    let root = TreeNode { val: values[0], left: None, right: None };
+    for i in 1..values.len() {
+        let v = values[i];
+        let mut node = root;
+        loop {
+            if v < node.val or (v == node.val and next_random(seed) % 2 == 0) {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+fn show(name: Str, values: Vec[i64], seed: mut ref i64) {
+    let root = build(values, seed);
+    println(f"{name}: {values} -> {find_mode(root)}");
+}
+
+fn main() {
+    let mut seed: i64 = 501;
+    show("example 1", vec![1, 2, 2], mut seed);
+    show("example 2", vec![0], mut seed);
+    show("all equal", vec![5, 5, 5, 5, 5], mut seed);
+    show("all different", vec![4, 2, 6, 1, 3, 5, 7], mut seed);
+    show("two modes", vec![3, 1, 3, 7, 1, 5], mut seed);
+    show("the extremes", vec![-100000, 100000, -100000, 0, 100000], mut seed);
+    show("mode at the end", vec![1, 2, 3, 4, 4], mut seed);
+    show("mode at the start", vec![9, 1, 5, 1, 8], mut seed);
+    // 300 random trees of 1 to 40 values from 1 to 5 values, 50, or the
+    // whole range -100,000 to 100,000, in turn.
+    let count = 300;
+    let mut total = 0;
+    let mut modes = 0;
+    let mut checksum: i64 = 0;
+    for t in 0..count {
+        let range = if t % 3 == 0 { 1 + next_random(mut seed) % 5 } else if t % 3 == 1 { 50 } else { 200001 };
+        let size = 1 + next_random(mut seed) % 40;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            let v = next_random(mut seed) * 7 % range;
+            values.push(if range == 200001 { v - 100000 } else { v });
+        }
+        total += size;
+        let root = build(values, mut seed);
+        for m in find_mode(root) {
+            modes += 1;
+            checksum = (checksum * 31 + m + 100000) % 1000000007;
+        }
+    }
+    println(f"{count} random trees: {total} values, {modes} modes, checksum {checksum}");
+}

@@ -1,0 +1,72 @@
+// LeetCode #500: Keyboard Row -- searching the row strings.
+//
+// Keep the words for which some row holds every one of the word's
+// letters, looked up in the row's own text: one `filter`, with `any`
+// over the rows, `all` over the word's letters and `any` again over the
+// row's.
+
+fn find_words(words: Vec[String]) -> Vec[String] {
+    let rows = vec!["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+    words
+        .iter()
+        .filter(|word| rows.iter().any(|row| word.to_lowercase().chars().all(|ch| row.chars().any(|r| r == ch))))
+        .map(|word| word.clone())
+        .collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(name: String, words: Vec[String]) {
+    println(f"{name}: {words} -> {find_words(words)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("example 1", vec!["Hello", "Alaska", "Dad", "Peace"]);
+    show("example 2", vec!["omk"]);
+    show("example 3", vec!["adsdf", "sfd"]);
+    show("one letter each", vec!["a", "Q", "z", "M"]);
+    show("whole rows", vec!["QWERTYUIOP", "asdfghjkl", "ZxCvBnM", "qaz"]);
+    show("mixed case", vec!["TyPeWrItEr", "Typewriters", "FLASK", "flasks"]);
+    show("keyboard row", vec!["abc", "Keyboard", "Row"]);
+    // 300 random lists of 1 to 20 words of 1 to 12 letters, each word
+    // drawn from one row (2 in 3) or from the whole alphabet, upper
+    // case with odds 1 in 4 per letter.
+    let rows = vec!["qwertyuiop", "asdfghjkl", "zxcvbnm", "abcdefghijklmnopqrstuvwxyz"];
+    let count = 300;
+    let mut seed: i64 = 500;
+    let mut kept = 0;
+    let mut letters = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let size = 1 + next_random(mut seed) % 20;
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..size {
+            let pool = if next_random(mut seed) % 3 == 0 { 3 } else { next_random(mut seed) % 3 };
+            let chars: Vec[char] = rows[pool].chars().collect();
+            let length = 1 + next_random(mut seed) % 12;
+            let mut word = String.new();
+            for _ in 0..length {
+                let ch = chars[next_random(mut seed) % chars.len()];
+                if next_random(mut seed) % 4 == 0 {
+                    word.push(ch.to_ascii_uppercase());
+                } else {
+                    word.push(ch);
+                }
+            }
+            words.push(word);
+        }
+        for word in find_words(words) {
+            kept += 1;
+            letters += word.len();
+            for ch in word.chars() {
+                checksum = (checksum * 31 + ch as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"{count} random lists: {kept} words kept, {letters} letters, checksum {checksum}");
+}

@@ -1,0 +1,9 @@
+example 1: [1, 2, 2] -> [2]
+example 2: [0] -> [0]
+all equal: [5, 5, 5, 5, 5] -> [5]
+all different: [4, 2, 6, 1, 3, 5, 7] -> [1, 2, 3, 4, 5, 6, 7]
+two modes: [3, 1, 3, 7, 1, 5] -> [1, 3]
+the extremes: [-100000, 100000, -100000, 0, 100000] -> [-100000, 100000]
+mode at the end: [1, 2, 3, 4, 4] -> [4]
+mode at the start: [9, 1, 5, 1, 8] -> [1]
+300 random trees: 6027 values, 2598 modes, checksum 737568936

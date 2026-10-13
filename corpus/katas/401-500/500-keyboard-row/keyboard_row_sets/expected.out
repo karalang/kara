@@ -1,0 +1,8 @@
+example 1: [Hello, Alaska, Dad, Peace] -> [Alaska, Dad]
+example 2: [omk] -> []
+example 3: [adsdf, sfd] -> [adsdf, sfd]
+one letter each: [a, Q, z, M] -> [a, Q, z, M]
+whole rows: [QWERTYUIOP, asdfghjkl, ZxCvBnM, qaz] -> [QWERTYUIOP, asdfghjkl, ZxCvBnM]
+mixed case: [TyPeWrItEr, Typewriters, FLASK, flasks] -> [TyPeWrItEr, FLASK, flasks]
+keyboard row: [abc, Keyboard, Row] -> [Row]
+300 random lists: 2191 words kept, 13771 letters, checksum 960407643
