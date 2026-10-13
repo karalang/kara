@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 171 |
 | perf | 153 |
 | diagnostics | 152 |
-| false-positive | 150 |
+| false-positive | 151 |
 | crash | 114 |
 | soundness | 99 |
 | use-after-free | 90 |
@@ -116,8 +116,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
+| parser | 60 |
 | autopar | 59 |
-| parser | 59 |
 | runtime | 58 |
 | resolver | 34 |
 | effect | 30 |
@@ -594,6 +594,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-5 | 2026-10-13 | typecheck | medium | A hand-written conditional impl's bound is not checked where a generic call needs the trait: with `impl[T: Show] Show for Wrap[T]` and no `impl Show for Plain`, `print_it(Wrap { v: Plain { n: 1 } })` (`fn print_it[X: Show](x: ref X)`) passes `karac check` and the MIR type check, and the MIR builder then stops with "the method call `.show` with no resolved callee is not lowered yet" in `Wrap[Plain].show` | — |
 | B-2026-10-13-6 | 2026-10-13 | typecheck+interp+codegen | low | The remainder of B-2026-10-06-74, two halves: (1) `karac check` refuses `*k` on an item taken from an iterator first bound to a name (`let mut it = w.iter(); let Some(k) = it.next() ...; *k`, for a `Vec[i64]` and a `VecDeque[i64]`) while both MIR backends run it, though `w.iter().next()` unbound now passes; (2) SPEC QUESTION: docs/library/iterators.md gives `find` / `filter` / `position` / `take_while` / `skip_while` / `partition` a bare `Self.Item` predicate, so `(1..n).find(|j| w[*j] ...)` is an error (`j` is an `i64` copy; check refuses it), but runtime/stdlib/source/iter.kara declares them `MutFn(ref Self.Item)`, so both MIR backends accept `*j`; Thread A reads the doc as right and the MIR acceptance as leniency, and the two documents need to agree | — |
 | B-2026-10-13-7 | 2026-10-13 | typecheck+interp+codegen | medium | The MIR backends have no `Iterator.min` / `max` / `min_by` / `max_by` / `min_by_key` / `max_by_key` and no `Vec.min` / `max`, all in the library spec: `m.iter().max()`, `(0..4).max()` and `m.iter().map(f).max()` are refused with "no method 'max' on type 'VecIter'" (`Range`, `IterMap`), and `m.max()` reaches the run as "call of unknown function Vec[i64].max"; `karac check` accepts `min` / `max` but types the result by value, so the spec's `*m.iter().max().unwrap()` and `*m.max().unwrap()` are refused ("found 'i64'"), and it has no `min_by` / `max_by_key` either | — |
+| B-2026-10-13-8 | 2026-10-13 | parser | medium | A primitive's associated constant right before a block is misparsed as a module-qualified struct literal's path: `if need == i64.MAX { .. }`, `if need < i64.MAX { .. }`, `while need < i64.MAX { .. }`, `match need == i64.MAX { .. }` and `for i in 0..i64.MAX { .. }` are all refused with "no associated function 'MAX' on type 'i64'" by `karac check`, the legacy interpreter and both MIR backends, while `let b = need == i64.MAX;` and `if (need == i64.MAX) { .. }` work | — |
 
 ### Relocated
 
