@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 253 |
 | missing-feature | 241 |
 | other | 172 |
-| perf | 156 |
+| perf | 157 |
 | diagnostics | 154 |
 | false-positive | 153 |
 | crash | 114 |
@@ -110,14 +110,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2866 |
+| codegen | 2867 |
 | interp | 912 |
 | typecheck | 380 |
 | other | 115 |
 | ownership | 84 |
 | cli | 75 |
+| runtime | 61 |
 | parser | 61 |
-| runtime | 60 |
 | autopar | 59 |
 | resolver | 35 |
 | effect | 30 |
@@ -597,6 +597,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-27 | 2026-10-13 | typecheck | medium | No standard type has a usable `Default`: `String.default()`, `i64.default()`, `Vec.default()` and `Map.default()` are all "no associated function 'default'", `#[derive(Default)]` on a struct with a `Vec` field is refused (E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT), and `take(place)` accepts a `String` or `i64` place but refuses a `Vec` one as not `Default` | — |
 | B-2026-10-13-28 | 2026-10-13 | typecheck | low | `karac check` loses the `ref` of a `Map.get` result once it is stored in a tuple local: `let t = (m.get("a"), 5); match t { (Some(i), k) => *i + k, _ => 0 }` is refused ("unary '*' requires 'ref T' ... found 'i64'"), while the same match on the tuple literal passes since B-2026-10-12-16 and `__mir-run` runs both | — |
 | B-2026-10-13-29 | 2026-10-13 | ownership | high | The MIR borrow checker does not see a `Str` view of a `String` as a borrow: `let v = owned.as_str(); owned.push_str(..); println(v)` runs on `__mir-run` and reads freed memory under `__mir-llvm-run`, while the same program with `owned.chars()` (a `ref String`) is refused with E0516 | — |
+| B-2026-10-13-30 | 2026-10-13 | codegen+runtime | medium | `String.push(c)` on the MIR compiled backend is an out-of-line runtime call per char (`karac_mir_string_push_char` -> `karac_mir_string_push_str` -> `karac_mir_vec_reserve`), so building strings a char at a time runs 3.6x slower than Rust: 2,000,000 keys of 200 chars take 2.78 s under `karac build --mir` against 0.77 s for `rustc -O -C overflow-checks=on` | — |
 
 ### Relocated
 
