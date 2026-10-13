@@ -1021,3 +1021,27 @@ fn main() {
         "😀x→olléh\n😀x→olléh\nSome(h) Some(😀) éllo→x\n0 2\n",
     );
 }
+
+/// `Vec.split_at` / `split_at_mut` are the slice methods on the Vec's own
+/// elements: a write through the second view reaches the Vec
+/// (B-2026-10-12-25).
+#[test]
+fn vec_split_at_mut_views_the_vec() {
+    assert_runs(
+        r#"
+fn flip(v: mut ref Vec[i64]) {
+    let (_, right) = v.split_at_mut(1);
+    right.reverse();
+}
+
+fn main() {
+    let mut v = vec![1, 2, 3, 4];
+    flip(mut v);
+    println(f"{v[0]} {v[1]} {v[2]} {v[3]}");
+    let (a, b) = v.split_at(3);
+    println(f"{a.len()} {a[2]} {b.len()} {b[0]}");
+}
+"#,
+        "1 4 3 2\n3 3 1 2\n",
+    );
+}

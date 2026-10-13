@@ -1707,7 +1707,9 @@ impl<'a> Interp<'a> {
                 Ok(Value::Unit)
             }
             (_, "as_slice_mut") => self.view_method(name, "as_mut_slice", args, ret),
-            ("Vec", "get_unchecked") => self.view_method(name, method, args, ret),
+            ("Vec", "get_unchecked" | "split_at" | "split_at_mut") => {
+                self.view_method(name, method, args, ret)
+            }
             (_, "as_slice" | "as_mut_slice" | "slice" | "slice_mut")
             | ("Slice", _)
             | ("Array", _)
