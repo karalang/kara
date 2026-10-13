@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 253 |
 | missing-feature | 235 |
 | other | 171 |
-| perf | 153 |
+| perf | 154 |
 | diagnostics | 153 |
 | false-positive | 152 |
 | crash | 114 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2859 |
+| codegen | 2860 |
 | interp | 907 |
 | typecheck | 373 |
 | other | 115 |
@@ -595,6 +595,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-11 | 2026-10-13 | typecheck | low | `PriorityQueue.peek` is typed `Option[T]` by value instead of the spec's `Option[ref T]`, so the spec's own `*pq.peek().unwrap()` and `Some(x) => *x` are refused by `karac check` and both MIR backends ("unary '*' requires 'ref T' ... found 'i64'"), and `let s = pq.peek().unwrap()` on a `PriorityQueue[String]` is accepted as an owned `String` | — |
 | B-2026-10-13-12 | 2026-10-13 | typecheck | low | `char.is_ascii_lowercase()`, `is_ascii_uppercase()` and `is_ascii_alphanumeric()` are refused by `karac check`, the legacy interpreter and both MIR backends ("no method 'is_ascii_lowercase' on type 'char'"), though `is_ascii_digit`, `is_ascii_alphabetic`, `is_lowercase` and `to_ascii_uppercase` are accepted and the MIR codegen's native table already lists all three; the `char` method surface is not in docs/library at all | — |
 | B-2026-10-13-14 | 2026-10-13 | interp+codegen | medium | The MIR builder refuses `for x in c.into_iter()` over a `Set`, `VecDeque`, `Map` or `SortedMap` whose elements are not `Copy` -- `for s in found.into_iter()` with `found: Set[Vec[i64]]` stops at "a `for` loop over a collection is not lowered yet" on both v2 backends, though `karac check` accepts it and the diagnostic for a bare `for` recommends exactly that spelling | — |
+| B-2026-10-13-15 | 2026-10-13 | codegen | low | `karac build --mir` runs kata 495's bench 3.6x slower than C, Rust and legacy `karac build` (0.36-0.44 s against 0.07-0.12 s): the x86 code for the hot loop takes a data-dependent BRANCH for `(a - b).min(duration)` where rustc emits a cmov, and mispredicts it about 28 million times | — |
 
 ### Relocated
 
