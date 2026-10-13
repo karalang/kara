@@ -1,0 +1,11 @@
+example 1: [4,1,6,0,2,5,7,null,null,null,3,null,null,null,8] -> [30,36,21,36,35,26,15,null,null,null,33,null,null,null,8]
+example 2: [0,null,1] -> [1,null,1]
+one node: [5] -> [5]
+no nodes: [] -> []
+negative values: [-3,-5,-1,null,-4,-2] -> [-6,-15,-1,null,-10,-3]
+both ends of the range: [0,-10000,10000,null,-1,1] -> [10001,0,10000,null,10000,10001]
+falling chain: [5,4,null,3,null,2,null,1] -> [5,9,null,12,null,14,null,15]
+rising chain: [1,null,2,null,3,null,4,null,5] -> [15,null,14,null,12,null,9,null,5]
+300 random trees: 11673 values, checksum 626867878
+10000 values in a random order: root 9363744, checksum 868774364
+a chain of 10000: top 50005000, bottom 10000, checksum 225491775

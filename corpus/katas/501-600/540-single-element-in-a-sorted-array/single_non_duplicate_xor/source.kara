@@ -1,0 +1,80 @@
+// LeetCode #540: Single Element in a Sorted Array -- every element
+// XORed.
+//
+// Each pair cancels under XOR, so the XOR of all the elements is the
+// single one. It ignores the order, so it takes O(n) time where the
+// problem asks for O(log n); it is here as the simplest correct answer.
+
+fn single_non_duplicate(nums: Vec[i64]) -> i64 {
+    nums.iter().fold(0, |acc, x| acc ^ x)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(name: Str, nums: Vec[i64]) {
+    println(f"{name}: {nums} -> {single_non_duplicate(nums)}");
+}
+
+// `pairs` + 1 distinct values from 0 to `top`, rising, every one written
+// twice except the one at place `single`.
+fn array(pairs: i64, single: i64, top: i64, seed: mut ref i64) -> Vec[i64] {
+    // Rising distinct values: the places left set in a random choice of
+    // pairs + 1 out of top + 1.
+    let mut values: Vec[i64] = Vec.new();
+    let mut need = pairs + 1;
+    let mut left = top + 1;
+    let mut v = 0;
+    while need > 0 {
+        if (next_random(seed) * 32768 + next_random(seed)) % left < need {
+            values.push(v);
+            need -= 1;
+        }
+        left -= 1;
+        v += 1;
+    }
+    let mut nums: Vec[i64] = Vec.new();
+    for i in 0..values.len() {
+        nums.push(values[i]);
+        if i != single {
+            nums.push(values[i]);
+        }
+    }
+    nums
+}
+
+fn main() {
+    let mut seed: i64 = 540;
+    show("example 1", vec![1, 1, 2, 3, 3, 4, 4, 8, 8]);
+    show("example 2", vec![3, 3, 7, 7, 10, 11, 11]);
+    show("one element", vec![5]);
+    show("single first", vec![0, 1, 1, 2, 2]);
+    show("single last", vec![0, 0, 1, 1, 100000]);
+    show("single in the middle", vec![2, 2, 4, 6, 6]);
+    show("both ends of the range", vec![0, 0, 100000]);
+    // 300 random arrays of 0 to 30 pairs and a single element, values
+    // from 0 to 99, the single at a random place.
+    let count = 300;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let pairs = next_random(mut seed) % 31;
+        let single = next_random(mut seed) % (pairs + 1);
+        let nums = array(pairs, single, 99, mut seed);
+        total += nums.len();
+        let answer = single_non_duplicate(nums);
+        checksum = (checksum * 31 + answer + 1) % 1000000007;
+    }
+    println(f"{count} random arrays: {total} elements, checksum {checksum}");
+    // The largest: 99,999 elements (the most an odd length can be under
+    // 10^5), 49,999 pairs and the single one at the start, a quarter of
+    // the way, the middle and the end, values from 0 to 100,000.
+    for single in [0, 12500, 25000, 49999] {
+        let nums = array(49999, single, 100000, mut seed);
+        println(f"{nums.len()} elements, single at place {single}: {single_non_duplicate(nums)}");
+    }
+}

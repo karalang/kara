@@ -1,0 +1,201 @@
+// Differential test for LeetCode #539: Minimum Time Difference.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random lists, in turn: 2 to 50 times from the whole day; 2 to 50 from
+// a window of 30 minutes starting in the last hour of the day, which
+// crosses midnight about half the time; and 2 to 5 from the whole day.
+// Properties:
+//   P1  the answer is the definition's: over every pair, the shorter
+//       way round the clock
+//   P2  the list backwards gives the same answer
+//   P3  every time moved on by the same number of minutes, round the
+//       clock, gives the same answer
+//   P4  the list with one of its times again gives 0
+//   P5  the answer is from 0 to 720, and at most a day shared out among
+//       the times
+
+// ---- star: find_min_difference.kara
+
+fn minutes_star(t: Str) -> i64 {
+    i64.parse(t[0..2]).unwrap() * 60 + i64.parse(t[3..5]).unwrap()
+}
+
+fn find_min_difference_star(time_points: Vec[String]) -> i64 {
+    let mut mins: Vec[i64] = time_points.iter().map(|t| minutes_star(t)).collect();
+    mins.sort();
+    let mut best = mins[0] + 1440 - mins[mins.len() - 1];
+    for i in 1..mins.len() {
+        best = best.min(mins[i] - mins[i - 1]);
+    }
+    best
+}
+
+// ---- buckets: find_min_difference_buckets.kara
+
+fn find_min_difference_buckets(time_points: Vec[String]) -> i64 {
+    if time_points.len() > 1440 {
+        return 0;
+    }
+    let mut seen = vec![false; 1440];
+    for t in time_points.iter() {
+        let b = t.bytes();
+        let hours = (b[0] - b'0') as i64 * 10 + (b[1] - b'0') as i64;
+        let m = hours * 60 + (b[3] - b'0') as i64 * 10 + (b[4] - b'0') as i64;
+        if seen[m] {
+            return 0;
+        }
+        seen[m] = true;
+    }
+    let mut first = -1;
+    let mut prev = -1;
+    let mut best = 1440;
+    for m in 0..1440 {
+        if seen[m] {
+            if prev < 0 {
+                first = m;
+            } else {
+                best = best.min(m - prev);
+            }
+            prev = m;
+        }
+    }
+    best.min(first + 1440 - prev)
+}
+
+// ---- strings: find_min_difference_strings.kara
+
+fn minutes_strings(t: Str) -> i64 {
+    i64.parse(t[0..2]).unwrap() * 60 + i64.parse(t[3..5]).unwrap()
+}
+
+fn find_min_difference_strings(time_points: Vec[String]) -> i64 {
+    let mut sorted: Vec[Str] = time_points.iter().map(|t| t.as_str()).collect();
+    sorted.sort();
+    let n = sorted.len();
+    let mut best = minutes_strings(sorted[0]) + 1440 - minutes_strings(sorted[n - 1]);
+    for i in 1..n {
+        best = best.min(minutes_strings(sorted[i]) - minutes_strings(sorted[i - 1]));
+    }
+    best
+}
+
+// ---- ordered: find_min_difference_ordered.kara
+
+fn find_min_difference_ordered(time_points: Vec[String]) -> i64 {
+    let mut set: SortedSet[i64] = SortedSet.new();
+    for t in time_points.iter() {
+        let colon = t.find(":").unwrap();
+        let minute = i64.parse(t[0..colon]).unwrap() * 60 + i64.parse(t[colon + 1..t.len()]).unwrap();
+        if not set.insert(minute) {
+            return 0;
+        }
+    }
+    let first = *set.min().unwrap();
+    let mut prev = first;
+    let mut best = 1440;
+    for m in set.iter().skip(1) {
+        best = best.min(*m - prev);
+        prev = *m;
+    }
+    best.min(first + 1440 - prev)
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn clock(minute: i64) -> String {
+    f"{minute / 60:02}:{minute % 60:02}"
+}
+
+fn answer(which: i64, times: Vec[String]) -> i64 {
+    if which == 0 {
+        find_min_difference_star(times)
+    } else if which == 1 {
+        find_min_difference_buckets(times)
+    } else if which == 2 {
+        find_min_difference_strings(times)
+    } else {
+        find_min_difference_ordered(times)
+    }
+}
+
+// The definition: over every pair, the shorter way round the clock.
+fn definition(mins: Vec[i64]) -> i64 {
+    let mut best = i64.MAX;
+    for i in 0..mins.len() {
+        for j in i + 1..mins.len() {
+            let d = (mins[i] - mins[j]).abs();
+            best = best.min(d.min(1440 - d));
+        }
+    }
+    best
+}
+
+fn written(mins: Vec[i64]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for m in mins.iter() {
+        out.push(clock(*m));
+    }
+    out
+}
+
+fn main() {
+    let names = vec!["star", "buckets", "strings", "ordered"];
+    let count = 1000;
+    let mut seed: i64 = 5390;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // In turn: 2 to 50 times from the whole day; 2 to 50 from a
+        // window of 30 minutes that starts in the last hour of the day,
+        // so that about half of the windows cross midnight; and 2 to 5
+        // from the whole day.
+        let size = if t % 3 == 2 { 2 + next_random(mut seed) % 4 } else { 2 + next_random(mut seed) % 49 };
+        let start = 1380 + next_random(mut seed) % 60;
+        let mut mins: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            let m = if t % 3 == 1 { (start + next_random(mut seed) % 30) % 1440 } else { next_random(mut seed) % 1440 };
+            mins.push(m);
+        }
+        let want = definition(mins.clone());
+        let times = written(mins.clone());
+        let mut backwards = times.clone();
+        backwards.reverse();
+        let shift = next_random(mut seed) % 1440;
+        let mut moved: Vec[i64] = Vec.new();
+        for m in mins.iter() {
+            moved.push((*m + shift) % 1440);
+        }
+        let shifted = written(moved);
+        let mut repeated = times.clone();
+        repeated.push(times[next_random(mut seed) % size].clone());
+        for which in 0..4 {
+            let got = answer(which, times.clone());
+            let ok = vec![
+                got == want,
+                answer(which, backwards.clone()) == got,
+                answer(which, shifted.clone()) == got,
+                answer(which, repeated.clone()) == 0,
+                got >= 0 and got <= 720 and got * size <= 1440,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: {times} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

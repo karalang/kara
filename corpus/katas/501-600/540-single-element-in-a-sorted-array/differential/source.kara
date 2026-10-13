@@ -1,0 +1,193 @@
+// Differential test for LeetCode #540: Single Element in a Sorted Array.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random arrays of 0 to 40 pairs and one single element at a random
+// place, the values rising by 1 to 3 at a time, or every other time by
+// 1 to 2,000.
+// Properties:
+//   P1  the answer is the definition's: the value written once
+//   P2  every value moved up by the same amount moves the answer by it
+//   P3  the array mirrored (each value v as 200,000 - v, in reverse)
+//       gives 200,000 less the answer
+//   P4  one more pair below the smallest value and one above the
+//       largest leave the answer as it was
+//   P5  the answer is in the array, first written at an even place
+
+// ---- star: single_non_duplicate.kara
+
+fn single_non_duplicate_star(nums: Vec[i64]) -> i64 {
+    let mut low = 0;
+    let mut high = nums.len() - 1;
+    while low < high {
+        let mut mid = (low + high) / 2;
+        if mid % 2 == 1 {
+            mid -= 1;
+        }
+        if nums[mid] == nums[mid + 1] {
+            low = mid + 2;
+        } else {
+            high = mid;
+        }
+    }
+    nums[low]
+}
+
+// ---- partner: single_non_duplicate_partner.kara
+
+fn single_non_duplicate_partner(nums: Vec[i64]) -> i64 {
+    let mut low = 0;
+    let mut high = nums.len() - 1;
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if nums[mid] == nums[mid ^ 1] {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    nums[low]
+}
+
+// ---- xor: single_non_duplicate_xor.kara
+
+fn single_non_duplicate_xor(nums: Vec[i64]) -> i64 {
+    nums.iter().fold(0, |acc, x| acc ^ x)
+}
+
+// ---- halves: single_non_duplicate_halves.kara
+
+fn single_non_duplicate_halves(nums: Vec[i64]) -> i64 {
+    let mut low = 0;
+    let mut high = nums.len() - 1;
+    while low < high {
+        let mid = (low + high) / 2;
+        if nums[mid] == nums[mid - 1] {
+            if (mid - 1 - low) % 2 == 1 {
+                high = mid - 2;
+            } else {
+                low = mid + 1;
+            }
+        } else if nums[mid] == nums[mid + 1] {
+            if (mid - low) % 2 == 1 {
+                high = mid - 1;
+            } else {
+                low = mid + 2;
+            }
+        } else {
+            return nums[mid];
+        }
+    }
+    nums[low]
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, nums: Vec[i64]) -> i64 {
+    if which == 0 {
+        single_non_duplicate_star(nums)
+    } else if which == 1 {
+        single_non_duplicate_partner(nums)
+    } else if which == 2 {
+        single_non_duplicate_xor(nums)
+    } else {
+        single_non_duplicate_halves(nums)
+    }
+}
+
+// The definition: the value written once.
+fn definition(nums: Vec[i64]) -> i64 {
+    for x in nums.iter() {
+        let mut times = 0;
+        for y in nums.iter() {
+            if y == x {
+                times += 1;
+            }
+        }
+        if times == 1 {
+            return *x;
+        }
+    }
+    -1
+}
+
+fn main() {
+    let names = vec!["star", "partner", "xor", "halves"];
+    let count = 1000;
+    let mut seed: i64 = 5400;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 0 to 40 pairs and the single element at a random place, the
+        // values rising by 1 to 3 at a time, or every other time by 1 to
+        // 2,000.
+        let pairs = next_random(mut seed) % 41;
+        let single = next_random(mut seed) % (pairs + 1);
+        let gap = if t % 2 == 0 { 3 } else { 2000 };
+        let mut values: Vec[i64] = Vec.new();
+        let mut v = 0;
+        for _ in 0..pairs + 1 {
+            v += 1 + next_random(mut seed) % gap;
+            values.push(v);
+        }
+        let mut nums: Vec[i64] = Vec.new();
+        for i in 0..values.len() {
+            nums.push(values[i]);
+            if i != single {
+                nums.push(values[i]);
+            }
+        }
+        let want = definition(nums.clone());
+        let shift = next_random(mut seed) % 1000;
+        let mut shifted: Vec[i64] = Vec.new();
+        for x in nums.iter() {
+            shifted.push(*x + shift);
+        }
+        let mut mirrored: Vec[i64] = Vec.new();
+        for i in (0..nums.len()).rev() {
+            mirrored.push(200000 - nums[i]);
+        }
+        // One more pair below the smallest value, and one above the
+        // largest.
+        let mut wider: Vec[i64] = vec![0, 0];
+        for x in nums.iter() {
+            wider.push(*x);
+        }
+        wider.push(300000);
+        wider.push(300000);
+        for which in 0..4 {
+            let got = answer(which, nums.clone());
+            let mut first = -1;
+            for i in 0..nums.len() {
+                if first < 0 and nums[i] == got {
+                    first = i;
+                }
+            }
+            let ok = vec![
+                got == want,
+                answer(which, shifted.clone()) == got + shift,
+                answer(which, mirrored.clone()) == 200000 - got,
+                answer(which, wider.clone()) == got,
+                first >= 0 and first % 2 == 0,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: {nums} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

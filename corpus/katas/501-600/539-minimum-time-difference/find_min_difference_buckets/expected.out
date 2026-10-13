@@ -1,0 +1,11 @@
+example 1: [23:59, 00:00] -> 1
+example 2: [00:00, 23:59, 00:00] -> 0
+half a day: [12:00, 00:00] -> 720
+the same time twice: [07:30, 07:30] -> 0
+closest across midnight: [23:50, 00:05, 12:00] -> 15
+closest inside the day: [01:00, 02:00, 01:59, 23:00] -> 1
+hours apart: [03:00, 09:00, 15:00, 21:00] -> 360
+300 random lists: 9522 times, 177 with a repeat, checksum 591207524
+every third minute: 480 times -> 3
+every minute: 1440 times -> 1
+20000 random times: 20000 times -> 0

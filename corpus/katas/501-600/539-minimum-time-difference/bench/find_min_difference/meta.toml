@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/539-minimum-time-difference/bench/find_min_difference.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["closure", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "714034d39"
+extracted_src = "2ec4ae83"
+model_rev = "1aa23105"
+model_src = "2ec4ae83"

@@ -1,0 +1,99 @@
+// LeetCode #539: Minimum Time Difference -- the times sorted as
+// written.
+//
+// "HH:MM" with its leading zeros sorts as text in the same order as in
+// time, so the times are sorted as they are and only neighbours (and
+// the last with the first, across midnight) are turned into minutes.
+// O(n log n) time.
+
+fn minutes(t: Str) -> i64 {
+    i64.parse(t[0..2]).unwrap() * 60 + i64.parse(t[3..5]).unwrap()
+}
+
+fn find_min_difference(time_points: Vec[String]) -> i64 {
+    let mut sorted: Vec[Str] = time_points.iter().map(|t| t.as_str()).collect();
+    sorted.sort();
+    let n = sorted.len();
+    let mut best = minutes(sorted[0]) + 1440 - minutes(sorted[n - 1]);
+    for i in 1..n {
+        best = best.min(minutes(sorted[i]) - minutes(sorted[i - 1]));
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn clock(minute: i64) -> String {
+    f"{minute / 60:02}:{minute % 60:02}"
+}
+
+fn show(name: Str, times: Vec[String]) {
+    let answer = find_min_difference(times);
+    if times.len() <= 8 {
+        println(f"{name}: {times} -> {answer}");
+    } else {
+        println(f"{name}: {times.len()} times -> {answer}");
+    }
+}
+
+// Every `step`th minute of the day, in a random order.
+fn spread(name: Str, step: i64, seed: mut ref i64) {
+    let mut times: Vec[String] = Vec.new();
+    let mut minute = 0;
+    while minute < 1440 {
+        times.push(clock(minute));
+        minute += step;
+    }
+    for i in (1..times.len()).rev() {
+        let j = (next_random(seed) * 32768 + next_random(seed)) % (i + 1);
+        times.swap(i, j);
+    }
+    show(name, times);
+}
+
+fn main() {
+    let mut seed: i64 = 539;
+    show("example 1", vec!["23:59".to_string(), "00:00".to_string()]);
+    show("example 2", vec!["00:00".to_string(), "23:59".to_string(), "00:00".to_string()]);
+    show("half a day", vec!["12:00".to_string(), "00:00".to_string()]);
+    show("the same time twice", vec!["07:30".to_string(), "07:30".to_string()]);
+    show("closest across midnight", vec!["23:50".to_string(), "00:05".to_string(), "12:00".to_string()]);
+    show("closest inside the day", vec!["01:00".to_string(), "02:00".to_string(), "01:59".to_string(), "23:00".to_string()]);
+    show("hours apart", vec!["03:00".to_string(), "09:00".to_string(), "15:00".to_string(), "21:00".to_string()]);
+    // 300 random lists of 2 to 60 times, from the whole day, or from
+    // the first two hours, where repeats are common.
+    let count = 300;
+    let mut total = 0;
+    let mut zeros = 0;
+    let mut checksum: i64 = 0;
+    for t in 0..count {
+        let size = 2 + next_random(mut seed) % 59;
+        let span = if t % 2 == 0 { 1440 } else { 120 };
+        let mut times: Vec[String] = Vec.new();
+        for _ in 0..size {
+            times.push(clock(next_random(mut seed) % span));
+        }
+        total += size;
+        let answer = find_min_difference(times);
+        if answer == 0 {
+            zeros += 1;
+        }
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"{count} random lists: {total} times, {zeros} with a repeat, checksum {checksum}");
+    // The largest cases: every third minute of the day, every minute,
+    // and 20,000 random times (the problem's most), each in a random
+    // order.
+    spread("every third minute", 3, mut seed);
+    spread("every minute", 1, mut seed);
+    let mut times: Vec[String] = Vec.new();
+    for _ in 0..20000 {
+        times.push(clock(next_random(mut seed) % 1440));
+    }
+    show("20000 random times", times);
+}

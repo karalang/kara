@@ -1,0 +1,12 @@
+example 1: [1, 1, 2, 3, 3, 4, 4, 8, 8] -> 2
+example 2: [3, 3, 7, 7, 10, 11, 11] -> 10
+one element: [5] -> 5
+single first: [0, 1, 1, 2, 2] -> 0
+single last: [0, 0, 1, 1, 100000] -> 100000
+single in the middle: [2, 2, 4, 6, 6] -> 4
+both ends of the range: [0, 0, 100000] -> 100000
+300 random arrays: 9264 elements, checksum 201133811
+99999 elements, single at place 0: 1
+99999 elements, single at place 12500: 24937
+99999 elements, single at place 25000: 49786
+99999 elements, single at place 49999: 100000

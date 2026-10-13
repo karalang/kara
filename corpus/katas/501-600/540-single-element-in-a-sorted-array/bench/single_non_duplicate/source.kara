@@ -1,0 +1,67 @@
+// Benchmark for #540: Single Element in a Sorted Array -- the ★ arm
+// (binary search over the pairs).
+//
+// Before the single element every pair starts at an even index; from it
+// on, every pair starts at an odd one. So the search looks only at even
+// indices: if nums[mid] equals the next element, the pair is whole and
+// the single element is further right, else it is at mid or to its
+// left. O(log n) time and O(1) space.
+
+fn single_non_duplicate(nums: Vec[i64]) -> i64 {
+    let mut low = 0;
+    let mut high = nums.len() - 1;
+    while low < high {
+        let mut mid = (low + high) / 2;
+        if mid % 2 == 1 {
+            mid -= 1;
+        }
+        if nums[mid] == nums[mid + 1] {
+            low = mid + 2;
+        } else {
+            high = mid;
+        }
+    }
+    nums[low]
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100 arrays of 0 to 49,999 pairs and the single element at a
+    // random place, values rising by 1 or 2, built once. Then the answer
+    // for each array is found 200,000 times.
+    let arrays = 100;
+    let mut seed: i64 = 540;
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    let mut elements = 0;
+    for _ in 0..arrays {
+        let pairs = (next_random(mut seed) * 32768 + next_random(mut seed)) % 50000;
+        let single = (next_random(mut seed) * 32768 + next_random(mut seed)) % (pairs + 1);
+        let mut nums: Vec[i64] = Vec.new();
+        let mut v = 0;
+        for i in 0..pairs + 1 {
+            v += 1 + next_random(mut seed) % 2;
+            nums.push(v);
+            if i != single {
+                nums.push(v);
+            }
+        }
+        elements += nums.len();
+        all.push(nums);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..200000 {
+        for t in 0..arrays {
+            let answer = single_non_duplicate(all[t]);
+            total += answer;
+            checksum = (checksum * 31 + answer) % 1000000007;
+        }
+    }
+    println(f"{arrays} arrays, {elements} elements, 200000 times each: total {total}, checksum {checksum}");
+}

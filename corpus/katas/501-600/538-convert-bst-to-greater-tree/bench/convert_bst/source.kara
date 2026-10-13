@@ -1,0 +1,115 @@
+// Benchmark for #538: Convert BST to Greater Tree -- the ★ arm (reverse
+// in order, recursively).
+//
+// Walked right subtree first, then the node, then the left subtree, a
+// search tree gives up its values from the largest down. A running total
+// of the values met so far is then, at each node, the sum of every value
+// at least its own, which is the node's new value. O(n) time, O(h) stack.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn visit(node: Option[TreeNode], total: mut ref i64) {
+    if let Some(n) = node {
+        visit(n.right, total);
+        *total += n.val;
+        n.val = *total;
+        visit(n.left, total);
+    }
+}
+
+fn convert_bst(root: Option[TreeNode]) -> Option[TreeNode] {
+    let mut total = 0;
+    visit(root, mut total);
+    root
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A search tree of distinct values, inserted in the order given; every
+// node is also listed in `nodes`, in the same order.
+fn build(values: Vec[i64], nodes: mut ref Vec[TreeNode]) -> Option[TreeNode] {
+    let root = leaf(values[0]);
+    nodes.push(root);
+    for i in 1..values.len() {
+        let v = values[i];
+        let mut node = root;
+        loop {
+            if v < node.val {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        let fresh = leaf(v);
+                        node.left = Some(fresh);
+                        nodes.push(fresh);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        let fresh = leaf(v);
+                        node.right = Some(fresh);
+                        nodes.push(fresh);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+fn main() {
+    // 100 random search trees of 10,000 distinct values (the problem's
+    // most) from -10,000 to 10,000, built once. Then 50 times over, each
+    // tree has its values put back and is converted.
+    let trees = 100;
+    let mut seed: i64 = 538;
+    let mut pool: Vec[i64] = Vec.new();
+    for v in -10000..10001 {
+        pool.push(v);
+    }
+    let mut roots: Vec[Option[TreeNode]] = Vec.new();
+    let mut lists: Vec[Vec[TreeNode]] = Vec.new();
+    let mut originals: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..trees {
+        for i in 0..10000 {
+            let j = i + (next_random(mut seed) * 32768 + next_random(mut seed)) % (20001 - i);
+            pool.swap(i, j);
+        }
+        let values = pool[0..10000].to_vec();
+        let mut nodes: Vec[TreeNode] = Vec.new();
+        roots.push(build(values, mut nodes));
+        lists.push(nodes);
+        originals.push(values);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..50 {
+        for t in 0..trees {
+            let nodes = ref lists[t];
+            let values = ref originals[t];
+            for i in 0..nodes.len() {
+                nodes[i].val = values[i];
+            }
+            let top = convert_bst(roots[t]).unwrap().val;
+            total += top;
+            checksum = (checksum * 31 + top + 1000000000) % 1000000007;
+        }
+    }
+    println(f"{trees} trees of 10000 values, 50 times each: total {total}, checksum {checksum}");
+}
