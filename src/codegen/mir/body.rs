@@ -808,6 +808,74 @@ impl<'ctx> Cx<'ctx, '_> {
             let o = b.build_extract_value(r, 1, "").map_err(e)?.into_int_value();
             Ok((v, o))
         };
+        // `x ± c` for a constant `c` overflows exactly when `x` is past a
+        // bound: a compare and a `nsw`/`nuw` operation, which LLVM's loop
+        // and range analyses see through where they do not see through
+        // the overflow intrinsics (a bit-count loop becomes `popcnt`).
+        let (cx, cy) = (x.is_const(), y.is_const());
+        if matches!(op, BinOp::Add | BinOp::Sub) && bits <= 64 && (cy || (cx && op == BinOp::Add)) {
+            let (v, c) = if cy { (x, y) } else { (y, x) };
+            let width = |n: i128| -> i128 {
+                if signed {
+                    n
+                } else {
+                    n & ((1i128 << bits) - 1)
+                }
+            };
+            let c = if signed {
+                c.get_sign_extended_constant().map(i128::from)
+            } else {
+                c.get_zero_extended_constant().map(i128::from)
+            };
+            if let Some(c) = c.map(width) {
+                let (min, max) = if signed {
+                    (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+                } else {
+                    (0, (1i128 << bits) - 1)
+                };
+                // The overflow test as `v pred bound`, or none when `c` is 0.
+                let test = match (op, c.signum()) {
+                    (_, 0) => None,
+                    (BinOp::Add, 1) | (BinOp::Sub, -1) => {
+                        let bound = if op == BinOp::Add { max - c } else { max + c };
+                        Some((
+                            if signed {
+                                IntPredicate::SGT
+                            } else {
+                                IntPredicate::UGT
+                            },
+                            bound,
+                        ))
+                    }
+                    _ => {
+                        let bound = if op == BinOp::Add { min - c } else { min + c };
+                        Some((
+                            if signed {
+                                IntPredicate::SLT
+                            } else {
+                                IntPredicate::ULT
+                            },
+                            bound,
+                        ))
+                    }
+                };
+                let o = match test {
+                    None => self.llcx.bool_type().const_zero(),
+                    Some((pred, bound)) => {
+                        let bound = it.const_int(bound as u64, signed);
+                        b.build_int_compare(pred, v, bound, "").map_err(e)?
+                    }
+                };
+                let r = match (op, signed) {
+                    (BinOp::Add, true) => b.build_int_nsw_add(x, y, ""),
+                    (BinOp::Add, false) => b.build_int_nuw_add(x, y, ""),
+                    (_, true) => b.build_int_nsw_sub(x, y, ""),
+                    (_, false) => b.build_int_nuw_sub(x, y, ""),
+                }
+                .map_err(e)?;
+                return Ok((r, o));
+            }
+        }
         let s = if signed { "s" } else { "u" };
         match op {
             BinOp::Add => intrinsic(&format!("llvm.{s}add.with.overflow")),

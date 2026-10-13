@@ -14115,6 +14115,8 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     let borrowck = std::env::var("KARAC_MIR_BORROWCK").as_deref() != Ok("0");
     // `KARAC_MIR_RC_PAIRS=0` keeps every retain (`rc_pairs`).
     let rc_pairs = std::env::var("KARAC_MIR_RC_PAIRS").as_deref() != Ok("0");
+    // `KARAC_MIR_COUNTERS=0` keeps every counter's overflow check (`counters`).
+    let counters = std::env::var("KARAC_MIR_COUNTERS").as_deref() != Ok("0");
     let coroutines = crate::mir::coroutine::coroutines(lowered.program.bodies.values());
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
@@ -14161,6 +14163,9 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
         crate::mir::insert_borrow_flags(body, &lowered.tys, &has_receiver);
         if rc_pairs && !coroutines.contains(&body.instance.name) {
             crate::mir::rc_pairs::elide_retains(body, &lowered.tys);
+        }
+        if counters {
+            crate::mir::counters::elide_counter_checks(body, &lowered.tys);
         }
         if dump.as_deref() == Some("elaborated") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
