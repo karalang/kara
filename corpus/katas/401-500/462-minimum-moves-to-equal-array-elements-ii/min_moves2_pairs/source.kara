@@ -1,0 +1,64 @@
+// LeetCode #462: Minimum Moves to Equal Array Elements II -- pair ends.
+//
+// After sorting, the smallest and largest numbers must meet somewhere
+// between them, which costs at least their difference, and any target
+// between them costs exactly that much for the pair. The same holds for
+// the second smallest and second largest, and so on inward, and the
+// median lies between every pair. So add up the pairs' differences.
+// O(n log n).
+
+fn min_moves2(nums: own Vec[i64]) -> i64 {
+    let mut sorted = nums;
+    sorted.sort();
+    let mut lo = 0;
+    let mut hi = sorted.len() - 1;
+    let mut moves = 0;
+    while lo < hi {
+        moves += sorted[hi] - sorted[lo];
+        lo += 1;
+        hi -= 1;
+    }
+    moves
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(nums: Vec[i64]) {
+    let moves = min_moves2(nums.clone());
+    println(f"{nums} -> {moves}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![1, 2, 3]);
+    show(vec![1, 10, 2, 9]);
+    show(vec![7]);
+    show(vec![4, -4]);
+    show(vec![5, 5, 5, 5]);
+    show(vec![-1000000000, 1000000000, 0]);
+    show(vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5]);
+    show(vec![1, 1, 1, 1000000000]);
+    // 300 random arrays of 1 to 200 numbers, from -s to s for s of 5,
+    // 1,000 or 10^9.
+    let count = 300;
+    let mut seed: i64 = 462;
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = 1 + next_random(mut seed) % 200;
+        let spread = [5, 1000, 1000000000][next_random(mut seed) % 3];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let r = ((next_random(mut seed) * 32768 + next_random(mut seed)) * 32768 + next_random(mut seed)) % (2 * spread + 1);
+            nums.push(r - spread);
+        }
+        let moves = min_moves2(nums);
+        total += moves;
+        checksum = (checksum * 31 + moves % 1000003) % 1000000007;
+    }
+    println(f"{count} random arrays: {total} moves in all, checksum {checksum}");
+}

@@ -1,0 +1,205 @@
+// Differential test for LeetCode #462: Minimum Moves to Equal Array
+// Elements II.
+//
+// Copies of the four arms, each run on 1,500 random cases.
+// Properties:
+//   P1  on 1 to 7 numbers within 0 to 6, the answer is brute force's:
+//       the cheapest of every whole target from the least to the most
+//   P2  reversing and rotating the array keeps the answer
+//   P3  adding a constant keeps it, and scaling by k multiplies it by k
+//   P4  a number below all and one above all add their difference
+//   P5  an array of zeros and ones costs the fewer of the two
+
+// ---- median: min_moves2.kara
+
+fn moves_median(nums: own Vec[i64]) -> i64 {
+    let mut sorted = nums;
+    sorted.sort();
+    let median = sorted[sorted.len() / 2];
+    let mut moves = 0;
+    for x in sorted {
+        moves += (x - median).abs();
+    }
+    moves
+}
+
+// ---- pairs: min_moves2_pairs.kara
+
+fn moves_pairs(nums: own Vec[i64]) -> i64 {
+    let mut sorted = nums;
+    sorted.sort();
+    let mut lo = 0;
+    let mut hi = sorted.len() - 1;
+    let mut moves = 0;
+    while lo < hi {
+        moves += sorted[hi] - sorted[lo];
+        lo += 1;
+        hi -= 1;
+    }
+    moves
+}
+
+// ---- select: min_moves2_select.kara
+
+fn select_kth(nums: own Vec[i64], k: i64) -> i64 {
+    let mut part = nums;
+    let mut k = k;
+    loop {
+        let pivot = part[part.len() / 2];
+        let mut smaller: Vec[i64] = Vec.new();
+        let mut equal = 0;
+        let mut larger: Vec[i64] = Vec.new();
+        for x in part {
+            if x < pivot {
+                smaller.push(x);
+            } else if x > pivot {
+                larger.push(x);
+            } else {
+                equal += 1;
+            }
+        }
+        if k < smaller.len() {
+            part = smaller;
+        } else if k < smaller.len() + equal {
+            return pivot;
+        } else {
+            k -= smaller.len() + equal;
+            part = larger;
+        }
+    }
+}
+
+fn moves_select(nums: own Vec[i64]) -> i64 {
+    let median = select_kth(nums.clone(), nums.len() / 2);
+    let mut moves = 0;
+    for x in nums {
+        moves += (x - median).abs();
+    }
+    moves
+}
+
+// ---- every: min_moves2_every.kara
+
+fn moves_every(nums: own Vec[i64]) -> i64 {
+    let mut best = -1;
+    for t in nums {
+        let mut cost = 0;
+        for x in nums {
+            cost += (x - t).abs();
+        }
+        if best < 0 or cost < best {
+            best = cost;
+        }
+    }
+    best
+}
+
+// ---- harness
+
+fn moves(arm: i64, nums: Vec[i64]) -> i64 {
+    if arm == 0 {
+        moves_median(nums.clone())
+    } else if arm == 1 {
+        moves_pairs(nums.clone())
+    } else if arm == 2 {
+        moves_select(nums.clone())
+    } else {
+        moves_every(nums.clone())
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn brute(nums: Vec[i64]) -> i64 {
+    let mut lo = nums[0];
+    let mut hi = nums[0];
+    for x in nums {
+        lo = lo.min(*x);
+        hi = hi.max(*x);
+    }
+    let mut best = -1;
+    for t in lo..hi + 1 {
+        let mut cost = 0;
+        for x in nums {
+            cost += (*x - t).abs();
+        }
+        if best < 0 or cost < best {
+            best = cost;
+        }
+    }
+    best
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4620;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let mut small: Vec[i64] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 7 {
+            small.push(next_random(mut seed) % 7);
+        }
+        let expected = brute(small);
+        // 1 to 60 numbers within -s to s, s from 1 to 10^6.
+        let n = 1 + next_random(mut seed) % 60;
+        let spread = [1, 10, 1000, 1000000][next_random(mut seed) % 4];
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push((next_random(mut seed) * 32768 + next_random(mut seed)) % (2 * spread + 1) - spread);
+        }
+        let by = next_random(mut seed) % n;
+        let mut turned: Vec[i64] = Vec.new();
+        for i in 0..n {
+            turned.push(nums[n - 1 - (i + by) % n]);
+        }
+        let shift = next_random(mut seed) % 2001 - 1000;
+        let k = 1 + next_random(mut seed) % 5;
+        let mut shifted: Vec[i64] = Vec.new();
+        let mut scaled: Vec[i64] = Vec.new();
+        let mut lo = nums[0];
+        let mut hi = nums[0];
+        for x in nums {
+            shifted.push(*x + shift);
+            scaled.push(*x * k);
+            lo = lo.min(*x);
+            hi = hi.max(*x);
+        }
+        let gap = next_random(mut seed) % 100;
+        let mut widened = nums.clone();
+        widened.insert(next_random(mut seed) % (n + 1), lo - 1 - gap);
+        widened.insert(next_random(mut seed) % (n + 2), hi + 1 + gap);
+        let mut bits: Vec[i64] = Vec.new();
+        let mut ones = 0;
+        for _ in 0..n {
+            let b = next_random(mut seed) % 2;
+            ones += b;
+            bits.push(b);
+        }
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, moves(arm, small) == expected, mut failures);
+            let answer = moves(arm, nums);
+            report(2, arm, case, moves(arm, turned) == answer, mut failures);
+            report(3, arm, case, moves(arm, shifted) == answer and moves(arm, scaled) == k * answer, mut failures);
+            report(4, arm, case, moves(arm, widened) == answer + (hi + 1 + gap) - (lo - 1 - gap), mut failures);
+            report(5, arm, case, moves(arm, bits) == ones.min(n - ones), mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}
