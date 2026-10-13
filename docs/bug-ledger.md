@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 154 |
 | false-positive | 153 |
 | crash | 114 |
-| soundness | 99 |
+| soundness | 100 |
 | use-after-free | 90 |
 
 ### By surface
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 912 |
 | typecheck | 380 |
 | other | 115 |
-| ownership | 83 |
+| ownership | 84 |
 | cli | 75 |
 | parser | 61 |
 | runtime | 60 |
@@ -594,9 +594,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-20 | 2026-10-13 | codegen+runtime | low | An f-string with one integer hole, `f"{n}"`, costs three allocations, two frees and four thread-local `RefCell` borrows on the v2 compiled backend: 44M `f"{i % 7}"` take 2.7 s on `karac build --mir` against 0.3 s on legacy `karac build` (about 9x), and kata 504's bench runs 3.7 s on `--mir` against 1.6 s on legacy | — |
 | B-2026-10-13-24 | 2026-10-13 | typecheck+interp | low | `Vec.append` and `Vec.extend_from_slice` are accepted by `karac check` and run on both v2 backends, but docs/library/collections.md says "There is no `append`" and has no `extend_from_slice` row: either the spec or the implementation is wrong | — |
 | B-2026-10-13-25 | 2026-10-13 | resolver | low | `mem.swap(a, b)`, `mem.replace(d, v)` and `mem.take(d)`, the spelling core-semantics.md §3.7 and design.md give for the move-out fixes, do not resolve ("undefined name 'mem'"); only the bare prelude `swap` / `replace` / `take` work, and `import std.mem` is an unknown module | — |
-| B-2026-10-13-26 | 2026-10-13 | interp+codegen | medium | `chars()` on a `Str` is not an iterator value on the MIR pipeline: `.enumerate()`, `.filter()`, `.rev()`, `.all()`, `.next()` and the rest are refused at build ("an iterator value is not lowered yet" / "`enumerate` over chars is not lowered yet") and `.map(..).collect()` into a `String` mistypes as `Vec[char]`, though `karac check` accepts them and the same calls on a `String` run | — |
 | B-2026-10-13-27 | 2026-10-13 | typecheck | medium | No standard type has a usable `Default`: `String.default()`, `i64.default()`, `Vec.default()` and `Map.default()` are all "no associated function 'default'", `#[derive(Default)]` on a struct with a `Vec` field is refused (E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT), and `take(place)` accepts a `String` or `i64` place but refuses a `Vec` one as not `Default` | — |
 | B-2026-10-13-28 | 2026-10-13 | typecheck | low | `karac check` loses the `ref` of a `Map.get` result once it is stored in a tuple local: `let t = (m.get("a"), 5); match t { (Some(i), k) => *i + k, _ => 0 }` is refused ("unary '*' requires 'ref T' ... found 'i64'"), while the same match on the tuple literal passes since B-2026-10-12-16 and `__mir-run` runs both | — |
+| B-2026-10-13-29 | 2026-10-13 | ownership | high | The MIR borrow checker does not see a `Str` view of a `String` as a borrow: `let v = owned.as_str(); owned.push_str(..); println(v)` runs on `__mir-run` and reads freed memory under `__mir-llvm-run`, while the same program with `owned.chars()` (a `ref String`) is refused with E0516 | — |
 
 ### Relocated
 
@@ -3963,6 +3963,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-21 | interp+codegen | high | An `as` cast to a narrower integer, widened implicitly into a wider binding or return slot, is never widened by the MIR: `let y: i64 = x as u8;` and… | 64dbf3323c |
 | B-2026-10-13-22 | typecheck | low | `f64.powi` does not exist, though design.md's own example calls it: `phi.powi(n as i32)` is refused by `karac check` and every backend with "no metho… | 95778e966b |
 | B-2026-10-13-23 | interp+codegen | medium | A strong handle stored into a `weak` field is downgraded only when it is a plain local: from a call result (`c.parent = get(a)`, `c.parent = b.parent… | 2cc5465a11 |
+| B-2026-10-13-26 | interp+codegen | medium | `chars()` on a `Str` is not an iterator value on the MIR pipeline: `.enumerate()`, `.filter()`, `.rev()`, `.all()`, `.next()` and the rest are refuse… | 2ef9b2ad96 |
 
 </details>
 
