@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/474-ones-and-zeroes/bench/ones_and_zeroes.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "7a51dd269"
+extracted_src = "4fe8767f"
+model_rev = "1aa23105"
+model_src = "4fe8767f"

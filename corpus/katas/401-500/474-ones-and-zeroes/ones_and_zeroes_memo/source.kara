@@ -1,0 +1,112 @@
+// LeetCode #474: Ones and Zeroes -- take it or leave it, remembered.
+//
+// From string k on, with z zeros and o ones left, the best is the
+// better of leaving string k and taking it (when it fits). The answer
+// depends only on (k, z, o), so each is worked out once and kept in a
+// map keyed by the triple. O(strings x m x n) states.
+
+struct Counts {
+    zeros: Vec[i64],
+    ones: Vec[i64],
+}
+
+fn most_from(counts: Counts, k: i64, z: i64, o: i64, memo: mut ref Map[(i64, i64, i64), i64]) -> i64 {
+    if k == counts.zeros.len() {
+        return 0;
+    }
+    if let Some(known) = memo.get((k, z, o)) {
+        return known;
+    }
+    let mut best = most_from(counts, k + 1, z, o, memo);
+    if counts.zeros[k] <= z and counts.ones[k] <= o {
+        let take = 1 + most_from(counts, k + 1, z - counts.zeros[k], o - counts.ones[k], memo);
+        if take > best {
+            best = take;
+        }
+    }
+    memo.insert((k, z, o), best);
+    best
+}
+
+fn find_max_form(strs: Vec[String], m: i64, n: i64) -> i64 {
+    let mut counts = Counts { zeros: Vec.new(), ones: Vec.new() };
+    for s in strs {
+        let mut zeros = 0;
+        let mut ones = 0;
+        for b in s.bytes() {
+            if b == 48 {
+                zeros += 1;
+            } else {
+                ones += 1;
+            }
+        }
+        counts.zeros.push(zeros);
+        counts.ones.push(ones);
+    }
+    let mut memo: Map[(i64, i64, i64), i64] = Map.new();
+    most_from(counts, 0, m, n, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(strs: Vec[String], m: i64, n: i64) {
+    let mut line = String.new();
+    for s in strs {
+        if not line.is_empty() {
+            line.push_str(", ");
+        }
+        line.push_str(s.as_str());
+    }
+    println(f"[{line}], m = {m}, n = {n} -> {find_max_form(strs, m, n)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 1 to 20 strings of 1 to 8 binary digits, each leaning to zeros, to
+// ones, or neither; m and n from 0 to 12.
+fn random_strs(seed: mut ref i64) -> Vec[String] {
+    let count = 1 + next_random(seed) % 20;
+    let mut strs: Vec[String] = Vec.new();
+    for _ in 0..count {
+        let size = 1 + next_random(seed) % 8;
+        let lean = next_random(seed) % 3;
+        let mut s = String.new();
+        for _ in 0..size {
+            let r = next_random(seed) % 4;
+            let zero = if lean == 0 { r != 0 } else if lean == 1 { r == 0 } else { r < 2 };
+            s.push(if zero { '0' } else { '1' });
+        }
+        strs.push(s);
+    }
+    strs
+}
+
+fn main() {
+    show(vec!["10", "0001", "111001", "1", "0"], 5, 3);
+    show(vec!["10", "0", "1"], 1, 1);
+    show(vec!["10", "0", "1"], 0, 0);
+    show(vec!["0", "0", "0", "1"], 2, 0);
+    show(vec!["111", "1000", "1000", "1000"], 9, 3);
+    show(vec!["00", "000"], 1, 10);
+    show(vec!["01", "10", "01", "10", "0011"], 4, 4);
+    show(vec!["1"], 0, 1);
+    // 300 random cases.
+    let count = 300;
+    let mut seed: i64 = 474;
+    let mut strings = 0;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let strs = random_strs(mut seed);
+        let m = next_random(mut seed) % 13;
+        let n = next_random(mut seed) % 13;
+        let got = find_max_form(strs, m, n);
+        strings += strs.len();
+        total += got;
+        checksum = (checksum * 31 + got + 1) % 1000000007;
+    }
+    println(f"{count} random cases, {strings} strings: {total} chosen, checksum {checksum}");
+}

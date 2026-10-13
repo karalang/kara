@@ -1,0 +1,97 @@
+// LeetCode #474: Ones and Zeroes -- equal strings counted together.
+//
+// Only a string's numbers of zeros and ones matter, and many strings
+// share them. Count the strings per (zeros, ones) pair, then treat each
+// pair as one item that can be taken up to its count times: for each
+// budget, from the top down, try taking 0, 1, ... copies while they
+// fit. Fewer items when the strings repeat, the same answer.
+// O(pairs x m x n x copies).
+
+fn find_max_form(strs: Vec[String], m: i64, n: i64) -> i64 {
+    let mut groups: Map[(i64, i64), i64] = Map.new();
+    for s in strs {
+        let zeros = s.chars().filter(|c| c == '0').count();
+        let pair = (zeros, s.len() - zeros);
+        groups.insert(pair, groups.get(pair).unwrap_or(0) + 1);
+    }
+    let mut best = vec![vec![0; n + 1]; m + 1];
+    for ((zeros, ones), copies) in groups {
+        for i in (0..m + 1).rev() {
+            for j in (0..n + 1).rev() {
+                let mut t = 1;
+                while t <= copies and t * zeros <= i and t * ones <= j {
+                    let take = best[i - t * zeros][j - t * ones] + t;
+                    if take > best[i][j] {
+                        best[i][j] = take;
+                    }
+                    t += 1;
+                }
+            }
+        }
+    }
+    best[m][n]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(strs: Vec[String], m: i64, n: i64) {
+    let mut line = String.new();
+    for s in strs {
+        if not line.is_empty() {
+            line.push_str(", ");
+        }
+        line.push_str(s.as_str());
+    }
+    println(f"[{line}], m = {m}, n = {n} -> {find_max_form(strs, m, n)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 1 to 20 strings of 1 to 8 binary digits, each leaning to zeros, to
+// ones, or neither; m and n from 0 to 12.
+fn random_strs(seed: mut ref i64) -> Vec[String] {
+    let count = 1 + next_random(seed) % 20;
+    let mut strs: Vec[String] = Vec.new();
+    for _ in 0..count {
+        let size = 1 + next_random(seed) % 8;
+        let lean = next_random(seed) % 3;
+        let mut s = String.new();
+        for _ in 0..size {
+            let r = next_random(seed) % 4;
+            let zero = if lean == 0 { r != 0 } else if lean == 1 { r == 0 } else { r < 2 };
+            s.push(if zero { '0' } else { '1' });
+        }
+        strs.push(s);
+    }
+    strs
+}
+
+fn main() {
+    show(vec!["10", "0001", "111001", "1", "0"], 5, 3);
+    show(vec!["10", "0", "1"], 1, 1);
+    show(vec!["10", "0", "1"], 0, 0);
+    show(vec!["0", "0", "0", "1"], 2, 0);
+    show(vec!["111", "1000", "1000", "1000"], 9, 3);
+    show(vec!["00", "000"], 1, 10);
+    show(vec!["01", "10", "01", "10", "0011"], 4, 4);
+    show(vec!["1"], 0, 1);
+    // 300 random cases.
+    let count = 300;
+    let mut seed: i64 = 474;
+    let mut strings = 0;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let strs = random_strs(mut seed);
+        let m = next_random(mut seed) % 13;
+        let n = next_random(mut seed) % 13;
+        let got = find_max_form(strs, m, n);
+        strings += strs.len();
+        total += got;
+        checksum = (checksum * 31 + got + 1) % 1000000007;
+    }
+    println(f"{count} random cases, {strings} strings: {total} chosen, checksum {checksum}");
+}

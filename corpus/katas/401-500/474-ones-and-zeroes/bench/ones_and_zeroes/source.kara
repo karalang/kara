@@ -1,0 +1,76 @@
+// Benchmark for #474: the ★ arm (0/1 knapsack with two budgets, one
+// table) on a large workload.
+//
+// LeetCode #474: Ones and Zeroes -- 0/1 knapsack with two budgets, one
+// table.
+//
+// Each string costs its zeros from one budget and its ones from the
+// other, and is worth 1. `best[i][j]` is the most strings that fit in
+// i zeros and j ones among those seen so far; a new string can be added
+// to the best set for the budget it leaves behind. Going through the
+// budgets from the top down reads only values from before this string,
+// so each string is taken at most once. O(strings x m x n).
+
+fn count_zeros(s: String) -> i64 {
+    let mut zeros = 0;
+    for c in s.chars() {
+        if c == '0' {
+            zeros += 1;
+        }
+    }
+    zeros
+}
+
+fn find_max_form(strs: Vec[String], m: i64, n: i64) -> i64 {
+    let mut best = vec![vec![0; n + 1]; m + 1];
+    for s in strs {
+        let zeros = count_zeros(s);
+        let ones = s.len() - zeros;
+        for i in (zeros..m + 1).rev() {
+            for j in (ones..n + 1).rev() {
+                let take = best[i - zeros][j - ones] + 1;
+                if take > best[i][j] {
+                    best[i][j] = take;
+                }
+            }
+        }
+    }
+    best[m][n]
+}
+
+// ---- bench ------------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 600 strings (the problem's most) of 1 to 100 binary digits, each
+    // leaning to zeros, to ones, or neither, built once; then 20
+    // rounds, each with m and n from 50 to 100.
+    let mut seed: i64 = 474;
+    let mut strs: Vec[String] = Vec.new();
+    for _ in 0..600 {
+        let size = 1 + next_random(mut seed) % 100;
+        let lean = next_random(mut seed) % 3;
+        let mut s = String.new();
+        for _ in 0..size {
+            let r = next_random(mut seed) % 4;
+            let zero = if lean == 0 { r != 0 } else if lean == 1 { r == 0 } else { r < 2 };
+            s.push(if zero { '0' } else { '1' });
+        }
+        strs.push(s);
+    }
+    let rounds = 300;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        let m = 50 + next_random(mut seed) % 51;
+        let n = 50 + next_random(mut seed) % 51;
+        let got = find_max_form(strs, m, n);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"{rounds} rounds on 600 strings: {total} chosen, checksum {checksum}");
+}

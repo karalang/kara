@@ -1,0 +1,266 @@
+// Differential test for LeetCode #474: Ones and Zeroes.
+//
+// Copies of the four arms, on 1,500 random cases: 1 to 10 strings of 1
+// to 6 binary digits (each string leaning to zeros, to ones, or
+// neither), m and n from 0 to 8.
+// Properties:
+//   P1  the arm's answer is the most strings of any subset that fits,
+//       every subset tried
+//   P2  the same strings in another order give the same answer
+//   P3  one more zero (or one more one) in the budget raises the answer
+//       by 0 or 1
+//   P4  one more string raises the answer by 0 or 1
+//   P5  every digit flipped, with m and n swapped, gives the same answer
+
+// ---- star: ones_and_zeroes.kara
+
+fn count_zeros_star(s: String) -> i64 {
+    let mut zeros = 0;
+    for c in s.chars() {
+        if c == '0' {
+            zeros += 1;
+        }
+    }
+    zeros
+}
+
+fn find_max_form_star(strs: Vec[String], m: i64, n: i64) -> i64 {
+    let mut best = vec![vec![0; n + 1]; m + 1];
+    for s in strs {
+        let zeros = count_zeros_star(s);
+        let ones = s.len() - zeros;
+        for i in (zeros..m + 1).rev() {
+            for j in (ones..n + 1).rev() {
+                let take = best[i - zeros][j - ones] + 1;
+                if take > best[i][j] {
+                    best[i][j] = take;
+                }
+            }
+        }
+    }
+    best[m][n]
+}
+
+// ---- table: ones_and_zeroes_table.kara
+
+fn find_max_form_table(strs: Vec[String], m: i64, n: i64) -> i64 {
+    let count = strs.len();
+    let mut most = vec![vec![vec![0; n + 1]; m + 1]; count + 1];
+    for k in 1..count + 1 {
+        let s = ref strs[k - 1];
+        let zeros = s.chars().filter(|c| c == '0').count();
+        let ones = s.len() - zeros;
+        for i in 0..m + 1 {
+            for j in 0..n + 1 {
+                let mut value = most[k - 1][i][j];
+                if zeros <= i and ones <= j {
+                    value = value.max(most[k - 1][i - zeros][j - ones] + 1);
+                }
+                most[k][i][j] = value;
+            }
+        }
+    }
+    most[count][m][n]
+}
+
+// ---- memo: ones_and_zeroes_memo.kara
+
+struct Counts_memo {
+    zeros: Vec[i64],
+    ones: Vec[i64],
+}
+
+fn most_from_memo(counts: Counts_memo, k: i64, z: i64, o: i64, memo: mut ref Map[(i64, i64, i64), i64]) -> i64 {
+    if k == counts.zeros.len() {
+        return 0;
+    }
+    if let Some(known) = memo.get((k, z, o)) {
+        return known;
+    }
+    let mut best = most_from_memo(counts, k + 1, z, o, memo);
+    if counts.zeros[k] <= z and counts.ones[k] <= o {
+        let take = 1 + most_from_memo(counts, k + 1, z - counts.zeros[k], o - counts.ones[k], memo);
+        if take > best {
+            best = take;
+        }
+    }
+    memo.insert((k, z, o), best);
+    best
+}
+
+fn find_max_form_memo(strs: Vec[String], m: i64, n: i64) -> i64 {
+    let mut counts = Counts_memo { zeros: Vec.new(), ones: Vec.new() };
+    for s in strs {
+        let mut zeros = 0;
+        let mut ones = 0;
+        for b in s.bytes() {
+            if b == 48 {
+                zeros += 1;
+            } else {
+                ones += 1;
+            }
+        }
+        counts.zeros.push(zeros);
+        counts.ones.push(ones);
+    }
+    let mut memo: Map[(i64, i64, i64), i64] = Map.new();
+    most_from_memo(counts, 0, m, n, mut memo)
+}
+
+// ---- groups: ones_and_zeroes_groups.kara
+
+fn find_max_form_groups(strs: Vec[String], m: i64, n: i64) -> i64 {
+    let mut groups: Map[(i64, i64), i64] = Map.new();
+    for s in strs {
+        let zeros = s.chars().filter(|c| c == '0').count();
+        let pair = (zeros, s.len() - zeros);
+        groups.insert(pair, groups.get(pair).unwrap_or(0) + 1);
+    }
+    let mut best = vec![vec![0; n + 1]; m + 1];
+    for ((zeros, ones), copies) in groups {
+        for i in (0..m + 1).rev() {
+            for j in (0..n + 1).rev() {
+                let mut t = 1;
+                while t <= copies and t * zeros <= i and t * ones <= j {
+                    let take = best[i - t * zeros][j - t * ones] + t;
+                    if take > best[i][j] {
+                        best[i][j] = take;
+                    }
+                    t += 1;
+                }
+            }
+        }
+    }
+    best[m][n]
+}
+
+// ---- harness
+
+fn answer(arm: i64, strs: Vec[String], m: i64, n: i64) -> i64 {
+    if arm == 0 {
+        find_max_form_star(strs, m, n)
+    } else if arm == 1 {
+        find_max_form_table(strs, m, n)
+    } else if arm == 2 {
+        find_max_form_memo(strs, m, n)
+    } else {
+        find_max_form_groups(strs, m, n)
+    }
+}
+
+// The most strings of any subset with at most m zeros and n ones:
+// every one of the 2^k subsets.
+fn brute(strs: Vec[String], m: i64, n: i64) -> i64 {
+    let k = strs.len();
+    let mut zeros: Vec[i64] = Vec.new();
+    for s in strs {
+        let mut z = 0;
+        for c in s.chars() {
+            if c == '0' {
+                z += 1;
+            }
+        }
+        zeros.push(z);
+    }
+    let mut most = 0;
+    for mask in 0..(1 << k) {
+        let mut z = 0;
+        let mut o = 0;
+        let mut size = 0;
+        for i in 0..k {
+            if (mask >> i) % 2 == 1 {
+                z += zeros[i];
+                o += strs[i].len() - zeros[i];
+                size += 1;
+            }
+        }
+        if z <= m and o <= n and size > most {
+            most = size;
+        }
+    }
+    most
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_string(seed: mut ref i64) -> String {
+    let size = 1 + next_random(seed) % 6;
+    let lean = next_random(seed) % 3;
+    let mut s = String.new();
+    for _ in 0..size {
+        let r = next_random(seed) % 4;
+        let zero = if lean == 0 { r != 0 } else if lean == 1 { r == 0 } else { r < 2 };
+        s.push(if zero { '0' } else { '1' });
+    }
+    s
+}
+
+fn flipped(strs: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for s in strs {
+        let mut t = String.new();
+        for c in s.chars() {
+            t.push(if c == '0' { '1' } else { '0' });
+        }
+        out.push(t);
+    }
+    out
+}
+
+fn main() {
+    let cases = 1500;
+    let arms = 4;
+    let mut seed: i64 = 4740;
+    let mut checks = 0;
+    let mut fails = vec![0; 6];
+    for _ in 0..cases {
+        // 1 to 10 strings of 1 to 6 digits; m and n from 0 to 8.
+        let count = 1 + next_random(mut seed) % 10;
+        let mut strs: Vec[String] = Vec.new();
+        for _ in 0..count {
+            strs.push(random_string(mut seed));
+        }
+        let m = next_random(mut seed) % 9;
+        let n = next_random(mut seed) % 9;
+        let truth = brute(strs, m, n);
+        let mut shuffled = strs.clone();
+        for i in (1..shuffled.len()).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            shuffled.swap(i, j);
+        }
+        let more_zeros = next_random(mut seed) % 2 == 0;
+        let (m2, n2) = if more_zeros { (m + 1, n) } else { (m, n + 1) };
+        let mut added = strs.clone();
+        added.push(random_string(mut seed));
+        let flip = flipped(strs);
+        for arm in 0..arms {
+            let got = answer(arm, strs, m, n);
+            checks += 5;
+            if got != truth {
+                fails[1] += 1;
+            }
+            if answer(arm, shuffled, m, n) != got {
+                fails[2] += 1;
+            }
+            let bigger = answer(arm, strs, m2, n2);
+            if bigger < got or bigger > got + 1 {
+                fails[3] += 1;
+            }
+            let more = answer(arm, added, m, n);
+            if more < got or more > got + 1 {
+                fails[4] += 1;
+            }
+            if answer(arm, flip, n, m) != got {
+                fails[5] += 1;
+            }
+        }
+    }
+    let total = fails[1] + fails[2] + fails[3] + fails[4] + fails[5];
+    println(f"{cases} cases, {arms} arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"P1 {fails[1]}, P2 {fails[2]}, P3 {fails[3]}, P4 {fails[4]}, P5 {fails[5]}");
+    }
+}
