@@ -1,0 +1,95 @@
+// Benchmark for #473: the ★ arm (backtracking, longest stick first) on
+// a large workload.
+//
+// LeetCode #473: Matchsticks to Square -- backtracking, longest stick
+// first.
+//
+// Every stick is used once and the four sides are equal, so each side
+// is a quarter of the total. Place the sticks from longest to shortest,
+// trying each side that still has room; a long stick has few places to
+// go, so the dead ends show up early. A side as long as one tried
+// before it would give the same search, so it is skipped. Worst case
+// O(4^n), far less in practice.
+
+fn place(sticks: Vec[i64], i: i64, sides: mut ref Vec[i64], side: i64) -> bool {
+    if i == sticks.len() {
+        return true;
+    }
+    for s in 0..4 {
+        if sides[s] + sticks[i] > side {
+            continue;
+        }
+        let mut repeat = false;
+        for t in 0..s {
+            if sides[t] == sides[s] {
+                repeat = true;
+                break;
+            }
+        }
+        if repeat {
+            continue;
+        }
+        sides[s] += sticks[i];
+        if place(sticks, i + 1, sides, side) {
+            return true;
+        }
+        sides[s] -= sticks[i];
+    }
+    false
+}
+
+fn makesquare(matchsticks: Vec[i64]) -> bool {
+    if matchsticks.len() < 4 {
+        return false;
+    }
+    let mut total = 0;
+    for m in matchsticks {
+        total += m;
+    }
+    if total % 4 != 0 {
+        return false;
+    }
+    let side = total / 4;
+    let mut sticks = matchsticks.clone();
+    sticks.sort();
+    sticks.reverse();
+    if sticks[0] > side {
+        return false;
+    }
+    let mut sides = vec![0; 4];
+    place(sticks, 0, mut sides, side)
+}
+
+// ---- bench ------------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 2,000 sets of 15 sticks (the problem's most), each from 50 to 99
+    // long, the last made longer by up to 4 so the total is a multiple
+    // of 4. Sticks this close in length leave many near fits to rule
+    // out, and few of the sets are squares.
+    let cases = 2000;
+    let mut seed: i64 = 473;
+    let mut squares = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..cases {
+        let mut sticks: Vec[i64] = Vec.new();
+        let mut total = 0;
+        for _ in 0..15 {
+            let v = 50 + next_random(mut seed) % 50;
+            sticks.push(v);
+            total += v;
+        }
+        sticks[14] += (4 - total % 4) % 4;
+        let ok = makesquare(sticks);
+        if ok {
+            squares += 1;
+        }
+        checksum = (checksum * 3 + (if ok { 1 } else { 2 })) % 1000000007;
+    }
+    println(f"{cases} sets of 15 sticks: {squares} squares, checksum {checksum}");
+}

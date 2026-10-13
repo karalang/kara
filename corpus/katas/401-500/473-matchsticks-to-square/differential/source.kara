@@ -1,0 +1,363 @@
+// Differential test for LeetCode #473: Matchsticks to Square.
+//
+// Copies of the four arms, on 1,500 random cases of 1 to 8 sticks: a
+// square cut into pieces, the same with one unit moved from one stick
+// to another, or random lengths from 1 to 6.
+// Properties:
+//   P1  the arm says a square exactly when some way of giving the
+//       sticks to four sides makes them equal (every way tried)
+//   P2  the same sticks in another order give the same answer
+//   P3  every stick 2 to 5 times as long gives the same answer
+//   P4  a square stays one with four more sticks of one length; a
+//       non-square stays one with two of its sticks glued together
+//   P5  a square cut into 10 to 12 sticks is found
+
+// ---- star: matchsticks.kara
+
+fn place_star(sticks: Vec[i64], i: i64, sides: mut ref Vec[i64], side: i64) -> bool {
+    if i == sticks.len() {
+        return true;
+    }
+    for s in 0..4 {
+        if sides[s] + sticks[i] > side {
+            continue;
+        }
+        let mut repeat = false;
+        for t in 0..s {
+            if sides[t] == sides[s] {
+                repeat = true;
+                break;
+            }
+        }
+        if repeat {
+            continue;
+        }
+        sides[s] += sticks[i];
+        if place_star(sticks, i + 1, sides, side) {
+            return true;
+        }
+        sides[s] -= sticks[i];
+    }
+    false
+}
+
+fn makesquare_star(matchsticks: Vec[i64]) -> bool {
+    if matchsticks.len() < 4 {
+        return false;
+    }
+    let mut total = 0;
+    for m in matchsticks {
+        total += m;
+    }
+    if total % 4 != 0 {
+        return false;
+    }
+    let side = total / 4;
+    let mut sticks = matchsticks.clone();
+    sticks.sort();
+    sticks.reverse();
+    if sticks[0] > side {
+        return false;
+    }
+    let mut sides = vec![0; 4];
+    place_star(sticks, 0, mut sides, side)
+}
+
+// ---- table: matchsticks_table.kara
+
+fn makesquare_table(matchsticks: Vec[i64]) -> bool {
+    let n = matchsticks.len();
+    if n < 4 {
+        return false;
+    }
+    let mut total = 0;
+    for m in matchsticks {
+        total += m;
+    }
+    if total % 4 != 0 {
+        return false;
+    }
+    let side = total / 4;
+    let full = (1 << n) - 1;
+    let mut fill = vec![-1; full + 1];
+    fill[0] = 0;
+    for mask in 0..full {
+        if fill[mask] < 0 {
+            continue;
+        }
+        for i in 0..n {
+            if (mask & (1 << i)) != 0 {
+                continue;
+            }
+            let next = fill[mask] + matchsticks[i];
+            if next <= side {
+                fill[mask | (1 << i)] = next % side;
+            }
+        }
+    }
+    fill[full] == 0
+}
+
+// ---- sides: matchsticks_sides.kara
+
+fn search_sides(sticks: Vec[i64], used: i64, filled: i64, side: i64, dead: mut ref Set[i64]) -> bool {
+    let n = sticks.len();
+    if used == (1 << n) - 1 {
+        return true;
+    }
+    if dead.contains(used) {
+        return false;
+    }
+    for i in 0..n {
+        if (used & (1 << i)) != 0 {
+            continue;
+        }
+        if filled + sticks[i] <= side {
+            let next = (filled + sticks[i]) % side;
+            if search_sides(sticks, used | (1 << i), next, side, dead) {
+                return true;
+            }
+        }
+        if filled == 0 {
+            // The lowest unused stick starts the side, or nothing does.
+            break;
+        }
+    }
+    dead.insert(used);
+    false
+}
+
+fn makesquare_sides(matchsticks: Vec[i64]) -> bool {
+    if matchsticks.len() < 4 {
+        return false;
+    }
+    let mut total = 0;
+    for m in matchsticks {
+        total += m;
+    }
+    if total % 4 != 0 {
+        return false;
+    }
+    let mut dead: Set[i64] = Set.new();
+    search_sides(matchsticks, 0, 0, total / 4, mut dead)
+}
+
+// ---- subsets: matchsticks_subsets.kara
+
+fn choose_subsets(sides: Vec[i64], used: i64, chosen: i64) -> bool {
+    if chosen == 3 {
+        return true;
+    }
+    let mut low = 1;
+    while (used & low) != 0 {
+        low = low * 2;
+    }
+    for s in sides {
+        if (s & used) == 0 and (s & low) != 0 {
+            if choose_subsets(sides, used | s, chosen + 1) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn makesquare_subsets(matchsticks: Vec[i64]) -> bool {
+    let n = matchsticks.len();
+    if n < 4 {
+        return false;
+    }
+    let mut total = 0;
+    for m in matchsticks {
+        total += m;
+    }
+    if total % 4 != 0 {
+        return false;
+    }
+    let side = total / 4;
+    let mut sum = vec![0; 1 << n];
+    let mut sides: Vec[i64] = Vec.new();
+    for mask in 1..(1 << n) {
+        let rest = mask & (mask - 1);
+        let mut i = 0;
+        while (1 << i) != mask - rest {
+            i += 1;
+        }
+        sum[mask] = sum[rest] + matchsticks[i];
+        if sum[mask] == side {
+            sides.push(mask);
+        }
+    }
+    choose_subsets(sides, 0, 0)
+}
+
+// ---- harness
+
+fn answer(arm: i64, sticks: Vec[i64]) -> bool {
+    if arm == 0 {
+        makesquare_star(sticks)
+    } else if arm == 1 {
+        makesquare_table(sticks)
+    } else if arm == 2 {
+        makesquare_sides(sticks)
+    } else {
+        makesquare_subsets(sticks)
+    }
+}
+
+// True when some way of giving each stick to one of four sides makes
+// the four sides equal: every assignment, with the first stick on the
+// first side (the sides are interchangeable).
+fn brute(sticks: Vec[i64]) -> bool {
+    let n = sticks.len();
+    if n < 4 {
+        return false;
+    }
+    let mut ways = 1;
+    for _ in 1..n {
+        ways *= 4;
+    }
+    for code in 0..ways {
+        let mut sums = vec![0; 4];
+        sums[0] = sticks[0];
+        let mut rest = code;
+        for i in 1..n {
+            sums[rest % 4] += sticks[i];
+            rest = rest / 4;
+        }
+        if sums[0] == sums[1] and sums[1] == sums[2] and sums[2] == sums[3] {
+            return true;
+        }
+    }
+    false
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` sticks laid out as a square, shuffled; as in the arms' harness.
+fn square_sticks(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut count = vec![1; 4];
+    for _ in 4..n {
+        count[next_random(seed) % 4] += 1;
+    }
+    let mut most = 0;
+    for c in count {
+        if c > most {
+            most = c;
+        }
+    }
+    let side = most + next_random(seed) % 8;
+    let mut sticks: Vec[i64] = Vec.new();
+    for s in 0..4 {
+        let c = count[s];
+        let mut cut = vec![false; side];
+        let mut made = 1;
+        while made < c {
+            let p = 1 + next_random(seed) % (side - 1);
+            if not cut[p] {
+                cut[p] = true;
+                made += 1;
+            }
+        }
+        let mut last = 0;
+        for p in 1..side {
+            if cut[p] {
+                sticks.push(p - last);
+                last = p;
+            }
+        }
+        sticks.push(side - last);
+    }
+    shuffle(seed, mut sticks);
+    sticks
+}
+
+fn shuffle(seed: mut ref i64, sticks: mut ref Vec[i64]) {
+    for i in (1..sticks.len()).rev() {
+        let j = next_random(seed) % (i + 1);
+        sticks.swap(i, j);
+    }
+}
+
+// 1 to 8 sticks: a square, a square with one unit moved between two
+// sticks, or random lengths from 1 to 6.
+fn random_case(seed: mut ref i64) -> Vec[i64] {
+    let n = 1 + next_random(seed) % 8;
+    let kind = next_random(seed) % 3;
+    if kind == 2 or n < 4 {
+        let mut sticks: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            sticks.push(1 + next_random(seed) % 6);
+        }
+        return sticks;
+    }
+    let mut sticks = square_sticks(seed, n);
+    if kind == 1 {
+        let from = next_random(seed) % n;
+        let to = next_random(seed) % n;
+        if sticks[from] > 1 and from != to {
+            sticks[from] -= 1;
+            sticks[to] += 1;
+        }
+    }
+    sticks
+}
+
+fn main() {
+    let cases = 1500;
+    let arms = 4;
+    let mut seed: i64 = 4730;
+    let mut checks = 0;
+    let mut fails = vec![0; 6];
+    for _ in 0..cases {
+        let sticks = random_case(mut seed);
+        let truth = brute(sticks);
+        let mut shuffled = sticks.clone();
+        shuffle(mut seed, mut shuffled);
+        let k = 2 + next_random(mut seed) % 4;
+        let mut scaled: Vec[i64] = Vec.new();
+        for s in sticks {
+            scaled.push(s * k);
+        }
+        // P4: a square with four more equal sticks, or a non-square with
+        // its first two sticks glued into one.
+        let mut changed = sticks.clone();
+        if truth {
+            let v = 1 + next_random(mut seed) % 6;
+            for _ in 0..4 {
+                changed.push(v);
+            }
+        } else if changed.len() >= 2 {
+            let first = changed.remove(0);
+            changed[0] += first;
+        }
+        let big = square_sticks(mut seed, 10 + next_random(mut seed) % 3);
+        for arm in 0..arms {
+            let got = answer(arm, sticks);
+            checks += 5;
+            if got != truth {
+                fails[1] += 1;
+            }
+            if answer(arm, shuffled) != got {
+                fails[2] += 1;
+            }
+            if answer(arm, scaled) != got {
+                fails[3] += 1;
+            }
+            if answer(arm, changed) != truth {
+                fails[4] += 1;
+            }
+            if not answer(arm, big) {
+                fails[5] += 1;
+            }
+        }
+    }
+    let total = fails[1] + fails[2] + fails[3] + fails[4] + fails[5];
+    println(f"{cases} cases, {arms} arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"P1 {fails[1]}, P2 {fails[2]}, P3 {fails[3]}, P4 {fails[4]}, P5 {fails[5]}");
+    }
+}

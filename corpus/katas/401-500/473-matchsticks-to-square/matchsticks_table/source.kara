@@ -1,0 +1,163 @@
+// LeetCode #473: Matchsticks to Square -- a table over the sets of
+// sticks used.
+//
+// Lay the sticks down one at a time, filling one side before starting
+// the next. For a set of sticks, all that matters is how far along the
+// side being filled is, which is the set's total modulo the side
+// length; the only question is whether some order gets there without a
+// stick running past the end of its side. `fill[mask]` holds that
+// partial length, or -1 if no order works, and grows from the empty
+// set one stick at a time. All of them fit exactly when the full set
+// ends at 0. O(2^n x n).
+
+fn makesquare(matchsticks: Vec[i64]) -> bool {
+    let n = matchsticks.len();
+    if n < 4 {
+        return false;
+    }
+    let mut total = 0;
+    for m in matchsticks {
+        total += m;
+    }
+    if total % 4 != 0 {
+        return false;
+    }
+    let side = total / 4;
+    let full = (1 << n) - 1;
+    let mut fill = vec![-1; full + 1];
+    fill[0] = 0;
+    for mask in 0..full {
+        if fill[mask] < 0 {
+            continue;
+        }
+        for i in 0..n {
+            if (mask & (1 << i)) != 0 {
+                continue;
+            }
+            let next = fill[mask] + matchsticks[i];
+            if next <= side {
+                fill[mask | (1 << i)] = next % side;
+            }
+        }
+    }
+    fill[full] == 0
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(matchsticks: Vec[i64]) {
+    let mut line = String.new();
+    for m in matchsticks {
+        if not line.is_empty() {
+            line.push_str(", ");
+        }
+        line.push_str(f"{m}");
+    }
+    println(f"[{line}] -> {makesquare(matchsticks)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `n` sticks laid out as a square: the first four start one side each,
+// the rest go to random sides, and each side's length is cut into as
+// many pieces as it has sticks. The sticks come back shuffled.
+fn square_sticks(seed: mut ref i64, n: i64) -> Vec[i64] {
+    let mut count = vec![1; 4];
+    for _ in 4..n {
+        count[next_random(seed) % 4] += 1;
+    }
+    let mut most = 0;
+    for c in count {
+        if c > most {
+            most = c;
+        }
+    }
+    let side = most + next_random(seed) % 8;
+    let mut sticks: Vec[i64] = Vec.new();
+    for s in 0..4 {
+        // c - 1 distinct cut points in 1..side, as the gaps between them.
+        let c = count[s];
+        let mut cut = vec![false; side];
+        let mut made = 1;
+        while made < c {
+            let p = 1 + next_random(seed) % (side - 1);
+            if not cut[p] {
+                cut[p] = true;
+                made += 1;
+            }
+        }
+        let mut last = 0;
+        for p in 1..side {
+            if cut[p] {
+                sticks.push(p - last);
+                last = p;
+            }
+        }
+        sticks.push(side - last);
+    }
+    for i in (1..sticks.len()).rev() {
+        let j = next_random(seed) % (i + 1);
+        sticks.swap(i, j);
+    }
+    sticks
+}
+
+// One of three kinds: a square, a square with one unit moved from one
+// stick to another (often no longer a square), or random lengths.
+fn random_case(seed: mut ref i64) -> Vec[i64] {
+    let n = 1 + next_random(seed) % 12;
+    let kind = next_random(seed) % 3;
+    if kind == 2 or n < 4 {
+        let mut sticks: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            sticks.push(1 + next_random(seed) % 8);
+        }
+        return sticks;
+    }
+    let mut sticks = square_sticks(seed, n);
+    if kind == 1 {
+        let from = next_random(seed) % n;
+        let to = next_random(seed) % n;
+        if sticks[from] > 1 and from != to {
+            sticks[from] -= 1;
+            sticks[to] += 1;
+        }
+    }
+    sticks
+}
+
+fn main() {
+    show(vec![1, 1, 2, 2, 2]);
+    show(vec![3, 3, 3, 3, 4]);
+    show(vec![1, 1, 1, 1]);
+    show(vec![1, 2, 3]);
+    show(vec![5, 5, 5, 5, 4, 4, 4, 4, 3, 3, 3, 3]);
+    show(vec![10, 6, 5, 5, 5, 3, 3, 3, 2, 2, 2, 2]);
+    show(vec![100000000, 100000000, 100000000, 100000000]);
+    show(vec![6, 6, 6, 6, 4, 2, 2]);
+    show(vec![2, 2, 2, 2, 2, 6]);
+    show(vec![5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4]);
+    show(vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2]);
+    show(vec![4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 8]);
+    show(vec![12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12]);
+    show(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 5, 4, 3, 2, 1]);
+    // 400 random cases of 1 to 12 sticks.
+    let count = 400;
+    let mut seed: i64 = 473;
+    let mut sticks_total = 0;
+    let mut squares = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let sticks = random_case(mut seed);
+        let ok = makesquare(sticks);
+        sticks_total += sticks.len();
+        if ok {
+            squares += 1;
+        }
+        checksum = (checksum * 3 + (if ok { 1 } else { 2 })) % 1000000007;
+    }
+    println(f"{count} random cases, {sticks_total} sticks: {squares} squares, checksum {checksum}");
+}

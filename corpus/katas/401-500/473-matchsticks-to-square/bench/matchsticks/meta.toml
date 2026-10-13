@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/473-matchsticks-to-square/bench/matchsticks.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "accad84b9"
+extracted_src = "fbdb0296"
+model_rev = "1aa23105"
+model_src = "fbdb0296"
