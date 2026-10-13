@@ -1,0 +1,55 @@
+// LeetCode #479: Largest Palindrome Product -- two factors from a sum.
+//
+// Write the factors as 10^n - x and 10^n - y, and let a = x + y. Their
+// product is (10^n - a) x 10^n + x y, so when x y has at most n digits
+// the left half of the palindrome is 10^n - a and the right half is x y.
+// For a = 1, 2, ..., take that left half, its mirror lo as the right
+// half, and ask whether x + y = a and x y = lo have whole solutions:
+// whether a^2 - 4 lo is a perfect square. The first a that works gives
+// the largest palindrome. O(10^n) at worst.
+
+fn isqrt(v: i64) -> i64 {
+    let mut r = (v as f64).sqrt() as i64;
+    while r * r > v {
+        r -= 1;
+    }
+    while (r + 1) * (r + 1) <= v {
+        r += 1;
+    }
+    r
+}
+
+fn largest_palindrome(n: i64) -> i64 {
+    if n == 1 {
+        return 9;
+    }
+    let mut base = 1;
+    for _ in 0..n {
+        base *= 10;
+    }
+    for a in 1..base {
+        let hi = base - a;
+        let mut lo = 0;
+        let mut rest = hi;
+        while rest > 0 {
+            lo = lo * 10 + rest % 10;
+            rest /= 10;
+        }
+        let disc = a * a - 4 * lo;
+        if disc >= 0 {
+            let r = isqrt(disc);
+            if r * r == disc {
+                return (hi % 1337 * (base % 1337) + lo) % 1337;
+            }
+        }
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    for n in 1..9 {
+        println(f"n = {n} -> {largest_palindrome(n)}");
+    }
+}

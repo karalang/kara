@@ -1,0 +1,47 @@
+// LeetCode #479: Largest Palindrome Product -- one factor is a multiple
+// of 11.
+//
+// A palindrome with an even number of digits is a multiple of 11 (its
+// alternating digit sum is 0), and 11 is prime, so one of the two
+// factors is a multiple of 11. Walk the 2n-digit palindromes from the
+// top as the ★ arm does, but try only factors that are multiples of 11,
+// from the largest n-digit one down, while the cofactor stays n-digit.
+
+fn largest_palindrome(n: i64) -> i64 {
+    if n == 1 {
+        return 9;
+    }
+    let mut upper = 1;
+    for _ in 0..n {
+        upper *= 10;
+    }
+    let lower = upper / 10;
+    upper -= 1;
+    let top = upper - upper % 11;
+    let mut half = upper;
+    while half >= lower {
+        let mut palindrome = half;
+        let mut rest = half;
+        while rest > 0 {
+            palindrome = palindrome * 10 + rest % 10;
+            rest /= 10;
+        }
+        let mut factor = top;
+        while factor >= lower and palindrome / factor <= upper {
+            if palindrome % factor == 0 and palindrome / factor >= lower {
+                return palindrome % 1337;
+            }
+            factor -= 11;
+        }
+        half -= 1;
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    for n in 1..9 {
+        println(f"n = {n} -> {largest_palindrome(n)}");
+    }
+}

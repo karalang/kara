@@ -1,0 +1,42 @@
+// LeetCode #479: Largest Palindrome Product -- the palindrome as text,
+// the factor from below.
+//
+// Spell each left half out, append it reversed, and read the number
+// back. Any factorization will do, so search the factor upward instead:
+// from the smallest that leaves an n-digit cofactor, palindrome / upper
+// rounded up, to the square root, where the factor passes the cofactor.
+
+fn largest_palindrome(n: i64) -> i64 {
+    if n == 1 {
+        return 9;
+    }
+    let mut upper = 1;
+    for _ in 0..n {
+        upper *= 10;
+    }
+    let lower = upper / 10;
+    upper -= 1;
+    let mut half = upper;
+    while half >= lower {
+        let left = f"{half}";
+        let right: String = left.chars().rev().collect();
+        let palindrome = i64.from_str_radix(f"{left}{right}", 10).unwrap();
+        let mut factor = (palindrome + upper - 1) / upper;
+        while factor * factor <= palindrome {
+            if palindrome % factor == 0 {
+                return palindrome % 1337;
+            }
+            factor += 1;
+        }
+        half -= 1;
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    for n in 1..9 {
+        println(f"n = {n} -> {largest_palindrome(n)}");
+    }
+}

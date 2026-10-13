@@ -1,0 +1,59 @@
+// Benchmark for #479: the ★ arm (palindromes from the top) on every
+// n the problem allows, ten times over.
+//
+// LeetCode #479: Largest Palindrome Product -- palindromes from the top.
+//
+// A product of two n-digit numbers has 2n digits at most, and the
+// largest has 2n (99 x 91 = 9009 already). So walk the 2n-digit
+// palindromes from the largest down, each made from its left half, and
+// for each look for a factor from the largest n-digit number down while
+// the factor's square still reaches the palindrome; the cofactor is
+// then at most the factor, and an n-digit one when it is large enough.
+// For n = 1 the answer is 9, a one-digit palindrome.
+
+fn largest_palindrome(n: i64) -> i64 {
+    if n == 1 {
+        return 9;
+    }
+    let mut upper = 1;
+    for _ in 0..n {
+        upper *= 10;
+    }
+    let lower = upper / 10;
+    upper -= 1;
+    let mut half = upper;
+    while half >= lower {
+        // The palindrome whose left half is `half`.
+        let mut palindrome = half;
+        let mut rest = half;
+        while rest > 0 {
+            palindrome = palindrome * 10 + rest % 10;
+            rest /= 10;
+        }
+        let mut factor = upper;
+        while factor * factor >= palindrome {
+            if palindrome % factor == 0 and palindrome / factor >= lower {
+                return palindrome % 1337;
+            }
+            factor -= 1;
+        }
+        half -= 1;
+    }
+    -1
+}
+
+// ---- bench ------------------------------------------------------------------
+
+fn main() {
+    let rounds = 10;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        for n in 1..9 {
+            let got = largest_palindrome(n);
+            total += got;
+            checksum = (checksum * 31 + got) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of n = 1 to 8: answers add up to {total}, checksum {checksum}");
+}

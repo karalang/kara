@@ -1,0 +1,221 @@
+// Differential test for LeetCode #479: Largest Palindrome Product.
+//
+// Copies of the four arms, on every input the problem allows: n = 1 to 8.
+// Properties:
+//   P1  the answer is the largest palindrome over every pair of n-digit
+//       numbers, by brute force, modulo 1337 (n = 1 to 6; from n = 7 the
+//       brute force passes the MIR interpreter's step limit)
+//   P2  the answer is LeetCode's, for every n
+
+// ---- star: largest_palindrome_product.kara
+
+fn largest_palindrome_star(n: i64) -> i64 {
+    if n == 1 {
+        return 9;
+    }
+    let mut upper = 1;
+    for _ in 0..n {
+        upper *= 10;
+    }
+    let lower = upper / 10;
+    upper -= 1;
+    let mut half = upper;
+    while half >= lower {
+        // The palindrome whose left half is `half`.
+        let mut palindrome = half;
+        let mut rest = half;
+        while rest > 0 {
+            palindrome = palindrome * 10 + rest % 10;
+            rest /= 10;
+        }
+        let mut factor = upper;
+        while factor * factor >= palindrome {
+            if palindrome % factor == 0 and palindrome / factor >= lower {
+                return palindrome % 1337;
+            }
+            factor -= 1;
+        }
+        half -= 1;
+    }
+    -1
+}
+
+// ---- sqrt: largest_palindrome_product_sqrt.kara
+
+fn isqrt_sqrt(v: i64) -> i64 {
+    let mut r = (v as f64).sqrt() as i64;
+    while r * r > v {
+        r -= 1;
+    }
+    while (r + 1) * (r + 1) <= v {
+        r += 1;
+    }
+    r
+}
+
+fn largest_palindrome_sqrt(n: i64) -> i64 {
+    if n == 1 {
+        return 9;
+    }
+    let mut base = 1;
+    for _ in 0..n {
+        base *= 10;
+    }
+    for a in 1..base {
+        let hi = base - a;
+        let mut lo = 0;
+        let mut rest = hi;
+        while rest > 0 {
+            lo = lo * 10 + rest % 10;
+            rest /= 10;
+        }
+        let disc = a * a - 4 * lo;
+        if disc >= 0 {
+            let r = isqrt_sqrt(disc);
+            if r * r == disc {
+                return (hi % 1337 * (base % 1337) + lo) % 1337;
+            }
+        }
+    }
+    -1
+}
+
+// ---- eleven: largest_palindrome_product_eleven.kara
+
+fn largest_palindrome_eleven(n: i64) -> i64 {
+    if n == 1 {
+        return 9;
+    }
+    let mut upper = 1;
+    for _ in 0..n {
+        upper *= 10;
+    }
+    let lower = upper / 10;
+    upper -= 1;
+    let top = upper - upper % 11;
+    let mut half = upper;
+    while half >= lower {
+        let mut palindrome = half;
+        let mut rest = half;
+        while rest > 0 {
+            palindrome = palindrome * 10 + rest % 10;
+            rest /= 10;
+        }
+        let mut factor = top;
+        while factor >= lower and palindrome / factor <= upper {
+            if palindrome % factor == 0 and palindrome / factor >= lower {
+                return palindrome % 1337;
+            }
+            factor -= 11;
+        }
+        half -= 1;
+    }
+    -1
+}
+
+// ---- text: largest_palindrome_product_text.kara
+
+fn largest_palindrome_text(n: i64) -> i64 {
+    if n == 1 {
+        return 9;
+    }
+    let mut upper = 1;
+    for _ in 0..n {
+        upper *= 10;
+    }
+    let lower = upper / 10;
+    upper -= 1;
+    let mut half = upper;
+    while half >= lower {
+        let left = f"{half}";
+        let right: String = left.chars().rev().collect();
+        let palindrome = i64.from_str_radix(f"{left}{right}", 10).unwrap();
+        let mut factor = (palindrome + upper - 1) / upper;
+        while factor * factor <= palindrome {
+            if palindrome % factor == 0 {
+                return palindrome % 1337;
+            }
+            factor += 1;
+        }
+        half -= 1;
+    }
+    -1
+}
+
+// ---- harness
+
+fn answer(arm: i64, n: i64) -> i64 {
+    if arm == 0 {
+        largest_palindrome_star(n)
+    } else if arm == 1 {
+        largest_palindrome_sqrt(n)
+    } else if arm == 2 {
+        largest_palindrome_eleven(n)
+    } else {
+        largest_palindrome_text(n)
+    }
+}
+
+fn is_palindrome(v: i64) -> bool {
+    let mut reversed = 0;
+    let mut rest = v;
+    while rest > 0 {
+        reversed = reversed * 10 + rest % 10;
+        rest /= 10;
+    }
+    reversed == v
+}
+
+// The largest palindrome i x j over every pair of n-digit numbers, by
+// brute force: i from the top, j from i down, until i x j can no longer
+// beat the best found.
+fn brute(n: i64) -> i64 {
+    let mut upper = 1;
+    for _ in 0..n {
+        upper *= 10;
+    }
+    let lower = upper / 10;
+    upper -= 1;
+    let mut best = 0;
+    let mut i = upper;
+    while i >= lower and i * upper > best {
+        let mut j = i;
+        while j >= lower and i * j > best {
+            if is_palindrome(i * j) {
+                best = i * j;
+            }
+            j -= 1;
+        }
+        i -= 1;
+    }
+    best
+}
+
+fn main() {
+    let arms = 4;
+    // LeetCode's answers for n = 1 to 8.
+    let known = vec![9, 987, 123, 597, 677, 1218, 877, 475];
+    let mut checks = 0;
+    let mut fails = vec![0; 3];
+    for n in 1..9 {
+        let want = if n <= 6 { brute(n) % 1337 } else { -1 };
+        for arm in 0..arms {
+            let got = answer(arm, n);
+            if n <= 6 {
+                checks += 1;
+                if got != want {
+                    fails[1] += 1;
+                }
+            }
+            checks += 1;
+            if got != known[n - 1] {
+                fails[2] += 1;
+            }
+        }
+    }
+    let total = fails[1] + fails[2];
+    println(f"n = 1 to 8, {arms} arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"P1 {fails[1]}, P2 {fails[2]}");
+    }
+}
