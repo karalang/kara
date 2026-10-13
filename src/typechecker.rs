@@ -2271,6 +2271,15 @@ pub(super) struct ClosureReturnFrame {
     pub(super) question_option: bool,
 }
 
+/// One element of a tuple-literal scrutinee, for
+/// [`TypeChecker::scrutinee_tuple_parts_borrowed`]: whether it is a place the
+/// function does not own, or a tuple literal of its own.
+#[derive(Clone, Debug)]
+pub(crate) enum ScrutineePart {
+    Leaf(bool),
+    Tuple(Vec<ScrutineePart>),
+}
+
 pub struct TypeChecker<'a> {
     pub(super) program: &'a Program,
     pub(super) resolve_result: &'a ResolveResult,
@@ -2333,6 +2342,12 @@ pub struct TypeChecker<'a> {
     /// nothing. Set and restored beside
     /// [`Self::current_scrutinee_borrow_projection`].
     pub(super) current_scrutinee_core_borrowed: bool,
+    /// The scrutinee is a tuple literal (`match (m.get(a), m.get(b))`):
+    /// whether each of its elements is a place the function does not own,
+    /// so the matching sub-pattern binds `ref`s as it would against that
+    /// element alone (B-2026-10-12-16). Read by the top-level tuple pattern
+    /// only, and cleared once the scrutinee's pattern is checked.
+    pub(super) scrutinee_tuple_parts_borrowed: Option<Vec<ScrutineePart>>,
     /// The scrutinee is `self` in a library `mut ref self` method, so its
     /// bindings are `mut ref` parts of the receiver (`Option.get_or_insert`).
     pub(super) current_scrutinee_mut_self: bool,
@@ -3153,6 +3168,7 @@ impl<'a> TypeChecker<'a> {
             current_arm_body_block: None,
             current_scrutinee_borrow_projection: false,
             current_scrutinee_core_borrowed: false,
+            scrutinee_tuple_parts_borrowed: None,
             current_scrutinee_mut_self: false,
             current_scrutinee_clone_view: false,
             core_no_move_out: Vec::new(),

@@ -1588,8 +1588,23 @@ impl<'a> super::TypeChecker<'a> {
             }
             PatternKind::Tuple(patterns) => {
                 if let Type::Tuple(types) = expected {
-                    for (pat, ty) in patterns.iter().zip(types.iter()) {
+                    // The scrutinee's own tuple literal, at the top level only:
+                    // a nested tuple pattern sees `None`.
+                    let parts = self.scrutinee_tuple_parts_borrowed.take();
+                    let outer_borrowed = self.current_scrutinee_core_borrowed;
+                    for (i, (pat, ty)) in patterns.iter().zip(types.iter()).enumerate() {
+                        match parts.as_ref().and_then(|p| p.get(i)) {
+                            Some(super::ScrutineePart::Leaf(b)) => {
+                                self.current_scrutinee_core_borrowed = outer_borrowed || *b;
+                            }
+                            Some(super::ScrutineePart::Tuple(sub)) => {
+                                self.scrutinee_tuple_parts_borrowed = Some(sub.clone());
+                            }
+                            None => {}
+                        }
                         self.check_pattern_against(pat, ty, mode);
+                        self.current_scrutinee_core_borrowed = outer_borrowed;
+                        self.scrutinee_tuple_parts_borrowed = None;
                         // B-2026-09-17-24 — a tuple LEAF typed by a bare
                         // generic parameter (`a` in `Some((a, b))` over
                         // `Option[(T, i64)]`) records the parameter itself, so
@@ -1611,6 +1626,7 @@ impl<'a> super::TypeChecker<'a> {
                                 .insert(SpanKey::from_span(&pat.span), Self::type_to_type_expr(ty));
                         }
                     }
+                    self.scrutinee_tuple_parts_borrowed = parts;
                 }
             }
             PatternKind::RangePattern {
@@ -1758,7 +1774,18 @@ impl<'a> super::TypeChecker<'a> {
         scrutinee: &Expr,
     ) {
         let prev = std::mem::take(&mut self.core_pattern_moves);
+        // A tuple literal scrutinee lends each element it borrows on its own:
+        // `(Some(i), Some(j))` over `(m.get(a), m.get(b))` binds `ref`s,
+        // as `Some(i)` over `m.get(a)` does (B-2026-10-12-16).
+        let prev_parts = self.scrutinee_tuple_parts_borrowed.take();
+        if self.cli_lint_overrides.strict_core {
+            if let ExprKind::Tuple(elems) = &scrutinee.kind {
+                let parts = self.scrutinee_parts(elems);
+                self.scrutinee_tuple_parts_borrowed = Some(parts);
+            }
+        }
         self.check_pattern_against(pattern, ty, mode);
+        self.scrutinee_tuple_parts_borrowed = prev_parts;
         // §4.6: a binding into a `for` element that `.into_iter()` would make
         // owned is fixed by the same `.into_iter()`.
         if self.cli_lint_overrides.strict_core {
@@ -1782,6 +1809,18 @@ impl<'a> super::TypeChecker<'a> {
                 .or_default()
                 .extend(moves);
         }
+    }
+
+    /// Each element of a tuple-literal scrutinee: borrowed or not, or a
+    /// nested tuple literal (B-2026-10-12-16).
+    fn scrutinee_parts(&self, elems: &[Expr]) -> Vec<super::ScrutineePart> {
+        elems
+            .iter()
+            .map(|e| match &e.kind {
+                ExprKind::Tuple(inner) => super::ScrutineePart::Tuple(self.scrutinee_parts(inner)),
+                _ => super::ScrutineePart::Leaf(self.scrutinee_core_borrowed(e)),
+            })
+            .collect()
     }
 
     fn core_enters_shared(&self, type_name: &str, mode: ScrutineeMode) -> bool {

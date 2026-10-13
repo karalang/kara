@@ -3384,3 +3384,46 @@ fn extending_from_lent_items_takes_cloned() {
         1,
     );
 }
+
+// B-2026-10-12-16 — a tuple-literal scrutinee lends each element it borrows
+// on its own, so `(Some(i), Some(j))` over `(m.get(a), m.get(b))` binds `ref`s
+// exactly as `Some(i)` over `m.get(a)` does: `*i` reads through them, nested
+// tuples and or-patterns included.
+#[test]
+fn tuple_scrutinee_keeps_each_element_borrow() {
+    accepted(
+        "tuple-scrutinee-ref",
+        r#"fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(String.from("a"), 1);
+    m.insert(String.from("b"), 2);
+    match (m.get("a"), m.get("b")) {
+        (Some(i), Some(j)) => println(f"{*i + *j}"),
+        _ => println("none"),
+    }
+    match (m.get("a"), m.get("q")) {
+        (Some(i), None) | (None, Some(i)) => println(f"{*i}"),
+        _ => println("both or none"),
+    }
+    match ((m.get("a"), 1), 2) {
+        ((Some(i), k), l) => println(f"{*i + k + l}"),
+        _ => println("none"),
+    }
+}
+"#,
+    );
+    rejected_then_fixed(
+        "tuple-scrutinee-move",
+        r#"fn take(s: own String) -> i64 { s.len() }
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    m.insert(String.from("a"), String.from("xy"));
+    match (m.get("a"), 1) {
+        (Some(a), _) => println(f"{take(a)}"),
+        _ => println("none"),
+    }
+}
+"#,
+        "cannot move 'a': it borrows its value",
+    );
+}

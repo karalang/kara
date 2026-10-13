@@ -710,3 +710,35 @@ fn main() {
         }
     }
 }
+
+// B-2026-10-12-16 — matching through a tuple of `Map.get` results binds the
+// `ref`s each `get` lends, on both backends.
+#[test]
+fn mir_tuple_scrutinee_of_map_gets() {
+    const SRC: &str = r#"fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(String.from("a"), 1);
+    m.insert(String.from("b"), 2);
+    match (m.get("a"), m.get("b")) {
+        (Some(i), Some(j)) => println(f"{*i + *j}"),
+        _ => println("none"),
+    }
+    match (m.get("a"), m.get("q")) {
+        (Some(i), None) | (None, Some(i)) => println(f"{*i}"),
+        _ => println("both or none"),
+    }
+    match ((m.get("b"), 1), 2) {
+        ((Some(i), k), l) => println(f"{*i + k + l}"),
+        _ => println("none"),
+    }
+}
+"#;
+    let want = "3\n1\n5\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
