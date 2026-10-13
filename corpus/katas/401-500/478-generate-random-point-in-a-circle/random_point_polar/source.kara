@@ -1,0 +1,143 @@
+// LeetCode #478: Generate Random Point in a Circle -- the inverse of the
+// radius's distribution.
+//
+// A uniform point's distance from the centre is not uniform: the ring at
+// distance d is longer the larger d is, so the chance of being within d
+// of the centre is (d / R)^2. Drawing u uniformly and taking R x sqrt(u)
+// inverts that; the angle is uniform on its own. One draw for each.
+
+const PI: f64 = 3.141592653589793;
+
+// A seeded generator: 30 random bits as a float in [0, 1).
+struct Uniform {
+    seed: i64,
+}
+
+impl Uniform {
+    fn new(seed: i64) -> Uniform {
+        Uniform { seed: seed }
+    }
+
+    fn step(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.seed / 65536
+    }
+
+    fn next(mut ref self) -> f64 {
+        let high = self.step();
+        let low = self.step();
+        (high * 32768 + low) as f64 / 1073741824.0
+    }
+}
+
+struct Solution {
+    radius: f64,
+    x_center: f64,
+    y_center: f64,
+    rng: Uniform,
+}
+
+impl Solution {
+    fn new(radius: f64, x_center: f64, y_center: f64, seed: i64) -> Solution {
+        Solution { radius: radius, x_center: x_center, y_center: y_center, rng: Uniform.new(seed) }
+    }
+
+    fn rand_point(mut ref self) -> (f64, f64) {
+        let distance = self.radius * self.rng.next().sqrt();
+        let angle = 2.0 * PI * self.rng.next();
+        (self.x_center + distance * angle.cos(), self.y_center + distance * angle.sin())
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// Whether every count is within `sds` standard deviations of an even
+// share of `n` draws.
+fn even(counts: Vec[i64], n: i64, sds: f64) -> bool {
+    let p = 1.0 / counts.len() as f64;
+    let expect = n as f64 * p;
+    let sd = (n as f64 * p * (1.0 - p)).sqrt();
+    for count in counts {
+        if (count as f64 - expect).abs() > sds * sd {
+            return false;
+        }
+    }
+    true
+}
+
+// One of four quadrants, then one of their halves: eight equal sectors.
+fn sector(u: f64, v: f64) -> i64 {
+    let quadrant = if u >= 0.0 {
+        if v >= 0.0 { 0 } else { 3 }
+    } else {
+        if v >= 0.0 { 1 } else { 2 }
+    };
+    let half = if v.abs() < u.abs() { 0 } else { 1 };
+    quadrant * 2 + half
+}
+
+// One of ten rings of equal area in the unit disk.
+fn ring(u: f64, v: f64) -> i64 {
+    (((u * u + v * v) * 10.0) as i64).min(9)
+}
+
+fn check(radius: f64, x_center: f64, y_center: f64, seed: i64) {
+    let n = 100000;
+    let mut solution = Solution.new(radius, x_center, y_center, seed);
+    let tolerance = 1e-9 * radius + 1e-15 * (x_center.abs() + y_center.abs());
+    let mut inside = true;
+    let mut quadrants = vec![0; 4];
+    let mut sectors = vec![0; 8];
+    let mut rings = vec![0; 10];
+    let mut grid = vec![0; 80];
+    let mut sum_u = 0.0;
+    let mut sum_v = 0.0;
+    for _ in 0..n {
+        let (x, y) = solution.rand_point();
+        let dx = x - x_center;
+        let dy = y - y_center;
+        if (dx * dx + dy * dy).sqrt() > radius + tolerance {
+            inside = false;
+        }
+        let u = dx / radius;
+        let v = dy / radius;
+        let s = sector(u, v);
+        let r = ring(u, v);
+        quadrants[s / 2] += 1;
+        sectors[s] += 1;
+        rings[r] += 1;
+        grid[r * 8 + s] += 1;
+        sum_u += u;
+        sum_v += v;
+    }
+    // Each coordinate of a uniform point in the unit disk has variance 1/4.
+    let limit = 4.0 * (0.25 / n as f64).sqrt();
+    let centred = (sum_u / n as f64).abs() <= limit and (sum_v / n as f64).abs() <= limit;
+    println(f"radius {radius} at ({x_center}, {y_center}): {n} points, inside {inside}, quadrants {even(quadrants, n, 4.0)}, sectors {even(sectors, n, 4.0)}, rings {even(rings, n, 4.0)}, grid {even(grid, n, 5.0)}, centred {centred}");
+}
+
+fn main() {
+    check(1.0, 0.0, 0.0, 478);
+    check(10.0, 5.0, -7.5, 4781);
+    check(0.01, -73839.0, 9500000.0, 4782);
+    check(100000000.0, 10000000.0, -10000000.0, 4783);
+    check(0.5, 0.25, 0.25, 4784);
+    // The same seed draws the same points; another seed, other points.
+    let mut a = Solution.new(2.0, 1.0, 1.0, 7);
+    let mut b = Solution.new(2.0, 1.0, 1.0, 7);
+    let mut c = Solution.new(2.0, 1.0, 1.0, 8);
+    let mut same = true;
+    let mut differs = false;
+    for _ in 0..1000 {
+        let p = a.rand_point();
+        let q = b.rand_point();
+        let r = c.rand_point();
+        if p.0 != q.0 or p.1 != q.1 {
+            same = false;
+        }
+        if p.0 != r.0 or p.1 != r.1 {
+            differs = true;
+        }
+    }
+    println(f"1000 points from one seed twice: same {same}; from another seed: different {differs}");
+}

@@ -1,0 +1,323 @@
+// Differential test for LeetCode #478: Generate Random Point in a Circle.
+//
+// Copies of the four arms. They draw differently, so the same seed gives
+// each of them different points, and each is held to the properties
+// below on its own: 1,500 random circles (radius from 0.000001 to 10^8,
+// centre within 10^7 of the origin), 10 points each, and ten seeded
+// runs of 20,000 points in the unit disk.
+// Properties:
+//   P1  every point is in the circle
+//   P2  the same seed with the centre moved by (dx, dy) gives the same
+//       points moved by (dx, dy)
+//   P3  the same seed with the radius k times as large, centred on the
+//       origin, gives the points k times as far out
+//   P4  ten rings of equal area each get their share of the points,
+//       within 5 standard deviations
+//   P5  so do 16 cells: eight sectors, each cut where half its area is
+
+// ---- star: random_point.kara
+
+struct UniformStar {
+    seed: i64,
+}
+
+impl UniformStar {
+    fn new(seed: i64) -> UniformStar {
+        UniformStar { seed: seed }
+    }
+
+    fn step(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.seed / 65536
+    }
+
+    fn next(mut ref self) -> f64 {
+        let high = self.step();
+        let low = self.step();
+        (high * 32768 + low) as f64 / 1073741824.0
+    }
+}
+
+struct SolutionStar {
+    radius: f64,
+    x_center: f64,
+    y_center: f64,
+    rng: UniformStar,
+}
+
+impl SolutionStar {
+    fn new(radius: f64, x_center: f64, y_center: f64, seed: i64) -> SolutionStar {
+        SolutionStar { radius: radius, x_center: x_center, y_center: y_center, rng: UniformStar.new(seed) }
+    }
+
+    fn rand_point(mut ref self) -> (f64, f64) {
+        loop {
+            let x = 2.0 * self.rng.next() - 1.0;
+            let y = 2.0 * self.rng.next() - 1.0;
+            if x * x + y * y <= 1.0 {
+                return (self.x_center + self.radius * x, self.y_center + self.radius * y);
+            }
+        }
+    }
+}
+
+// ---- polar: random_point_polar.kara
+
+struct UniformPolar {
+    seed: i64,
+}
+
+impl UniformPolar {
+    fn new(seed: i64) -> UniformPolar {
+        UniformPolar { seed: seed }
+    }
+
+    fn step(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.seed / 65536
+    }
+
+    fn next(mut ref self) -> f64 {
+        let high = self.step();
+        let low = self.step();
+        (high * 32768 + low) as f64 / 1073741824.0
+    }
+}
+
+struct SolutionPolar {
+    radius: f64,
+    x_center: f64,
+    y_center: f64,
+    rng: UniformPolar,
+}
+
+impl SolutionPolar {
+    fn new(radius: f64, x_center: f64, y_center: f64, seed: i64) -> SolutionPolar {
+        SolutionPolar { radius: radius, x_center: x_center, y_center: y_center, rng: UniformPolar.new(seed) }
+    }
+
+    fn rand_point(mut ref self) -> (f64, f64) {
+        let distance = self.radius * self.rng.next().sqrt();
+        let angle = 2.0 * PI * self.rng.next();
+        (self.x_center + distance * angle.cos(), self.y_center + distance * angle.sin())
+    }
+}
+
+// ---- larger: random_point_larger.kara
+
+struct UniformLarger {
+    seed: i64,
+}
+
+impl UniformLarger {
+    fn new(seed: i64) -> UniformLarger {
+        UniformLarger { seed: seed }
+    }
+
+    fn step(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.seed / 65536
+    }
+
+    fn next(mut ref self) -> f64 {
+        let high = self.step();
+        let low = self.step();
+        (high * 32768 + low) as f64 / 1073741824.0
+    }
+}
+
+struct SolutionLarger {
+    radius: f64,
+    x_center: f64,
+    y_center: f64,
+    rng: UniformLarger,
+}
+
+impl SolutionLarger {
+    fn new(radius: f64, x_center: f64, y_center: f64, seed: i64) -> SolutionLarger {
+        SolutionLarger { radius: radius, x_center: x_center, y_center: y_center, rng: UniformLarger.new(seed) }
+    }
+
+    fn rand_point(mut ref self) -> (f64, f64) {
+        let first = self.rng.next();
+        let second = self.rng.next();
+        let distance = self.radius * first.max(second);
+        let angle = 2.0 * PI * self.rng.next();
+        (self.x_center + distance * angle.cos(), self.y_center + distance * angle.sin())
+    }
+}
+
+// ---- folded: random_point_folded.kara
+
+struct UniformFolded {
+    seed: i64,
+}
+
+impl UniformFolded {
+    fn new(seed: i64) -> UniformFolded {
+        UniformFolded { seed: seed }
+    }
+
+    fn step(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.seed / 65536
+    }
+
+    fn next(mut ref self) -> f64 {
+        let high = self.step();
+        let low = self.step();
+        (high * 32768 + low) as f64 / 1073741824.0
+    }
+}
+
+struct SolutionFolded {
+    radius: f64,
+    x_center: f64,
+    y_center: f64,
+    rng: UniformFolded,
+}
+
+impl SolutionFolded {
+    fn new(radius: f64, x_center: f64, y_center: f64, seed: i64) -> SolutionFolded {
+        SolutionFolded { radius: radius, x_center: x_center, y_center: y_center, rng: UniformFolded.new(seed) }
+    }
+
+    fn rand_point(mut ref self) -> (f64, f64) {
+        let mut sum = self.rng.next() + self.rng.next();
+        if sum > 1.0 {
+            sum = 2.0 - sum;
+        }
+        let angle = 2.0 * PI * self.rng.next();
+        (self.x_center + self.radius * sum * angle.cos(), self.y_center + self.radius * sum * angle.sin())
+    }
+}
+
+// ---- harness
+
+const PI: f64 = 3.141592653589793;
+
+// `n` points from arm `arm` for one circle and seed.
+fn points(arm: i64, radius: f64, x_center: f64, y_center: f64, seed: i64, n: i64) -> Vec[(f64, f64)] {
+    let mut out: Vec[(f64, f64)] = Vec.new();
+    if arm == 0 {
+        let mut s = SolutionStar.new(radius, x_center, y_center, seed);
+        for _ in 0..n {
+            out.push(s.rand_point());
+        }
+    } else if arm == 1 {
+        let mut s = SolutionPolar.new(radius, x_center, y_center, seed);
+        for _ in 0..n {
+            out.push(s.rand_point());
+        }
+    } else if arm == 2 {
+        let mut s = SolutionLarger.new(radius, x_center, y_center, seed);
+        for _ in 0..n {
+            out.push(s.rand_point());
+        }
+    } else {
+        let mut s = SolutionFolded.new(radius, x_center, y_center, seed);
+        for _ in 0..n {
+            out.push(s.rand_point());
+        }
+    }
+    out
+}
+
+fn even(counts: Vec[i64], n: i64, sds: f64) -> i64 {
+    let p = 1.0 / counts.len() as f64;
+    let expect = n as f64 * p;
+    let sd = (n as f64 * p * (1.0 - p)).sqrt();
+    let mut bad = 0;
+    for count in counts {
+        if (count as f64 - expect).abs() > sds * sd {
+            bad += 1;
+        }
+    }
+    bad
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let cases = 1500;
+    let arms = 4;
+    let scales = vec![0.001, 0.1, 1.0, 100.0, 100000.0, 100000000.0];
+    let mut seed: i64 = 4780;
+    let mut checks = 0;
+    let mut fails = vec![0; 6];
+    for _ in 0..cases {
+        let radius = scales[next_random(mut seed) % 6] * (1 + next_random(mut seed) % 1000) as f64 / 1000.0;
+        let x_center = ((next_random(mut seed) * 32768 + next_random(mut seed)) % 20000001 - 10000000) as f64 / (1 + next_random(mut seed) % 4) as f64;
+        let y_center = ((next_random(mut seed) * 32768 + next_random(mut seed)) % 20000001 - 10000000) as f64 / (1 + next_random(mut seed) % 4) as f64;
+        let dx = (next_random(mut seed) % 2001 - 1000) as f64 / 8.0;
+        let dy = (next_random(mut seed) % 2001 - 1000) as f64 / 8.0;
+        let k = (2 + next_random(mut seed) % 8) as f64;
+        let run = next_random(mut seed);
+        let size = x_center.abs() + y_center.abs() + dx.abs() + dy.abs();
+        for arm in 0..arms {
+            checks += 3;
+            let here = points(arm, radius, x_center, y_center, run, 10);
+            let moved = points(arm, radius, x_center + dx, y_center + dy, run, 10);
+            let origin = points(arm, radius, 0.0, 0.0, run, 10);
+            let scaled = points(arm, k * radius, 0.0, 0.0, run, 10);
+            let tolerance = 1e-9 * radius + 1e-15 * size;
+            let mut outside = false;
+            let mut shifted = false;
+            let mut stretched = false;
+            for i in 0..10 {
+                let (x, y) = here[i];
+                let u = x - x_center;
+                let v = y - y_center;
+                if (u * u + v * v).sqrt() > radius + tolerance {
+                    outside = true;
+                }
+                let (mx, my) = moved[i];
+                if (mx - x - dx).abs() > tolerance or (my - y - dy).abs() > tolerance {
+                    shifted = true;
+                }
+                let (ox, oy) = origin[i];
+                let (sx, sy) = scaled[i];
+                if (sx - k * ox).abs() > 1e-12 * k * radius or (sy - k * oy).abs() > 1e-12 * k * radius {
+                    stretched = true;
+                }
+            }
+            if outside {
+                fails[1] += 1;
+            }
+            if shifted {
+                fails[2] += 1;
+            }
+            if stretched {
+                fails[3] += 1;
+            }
+        }
+    }
+    // Ten seeded runs of 20,000 points in the unit disk.
+    let n = 20000;
+    for arm in 0..arms {
+        for r in 0..10 {
+            let drawn = points(arm, 1.0, 0.0, 0.0, 47800 + r, n);
+            let mut rings = vec![0; 10];
+            let mut cells = vec![0; 16];
+            for (u, v) in drawn {
+                let d = u * u + v * v;
+                rings[((d * 10.0) as i64).min(9)] += 1;
+                let angle = v.atan2(u) + PI;
+                let s = ((angle / (2.0 * PI) * 8.0) as i64).min(7);
+                let outer = if d < 0.5 { 0 } else { 1 };
+                cells[s * 2 + outer] += 1;
+            }
+            checks += 26;
+            fails[4] += even(rings, n, 5.0);
+            fails[5] += even(cells, n, 5.0);
+        }
+    }
+    let total = fails[1] + fails[2] + fails[3] + fails[4] + fails[5];
+    println(f"{cases} circles and 10 runs, {arms} arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"P1 {fails[1]}, P2 {fails[2]}, P3 {fails[3]}, P4 {fails[4]}, P5 {fails[5]}");
+    }
+}
