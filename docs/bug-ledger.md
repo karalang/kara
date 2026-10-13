@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 172 |
 | perf | 158 |
 | diagnostics | 155 |
-| false-positive | 153 |
+| false-positive | 154 |
 | crash | 114 |
 | soundness | 100 |
 | use-after-free | 90 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 912 |
 | typecheck | 381 |
 | other | 115 |
-| ownership | 84 |
+| ownership | 85 |
 | cli | 75 |
 | runtime | 62 |
 | parser | 61 |
@@ -599,6 +599,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-30 | 2026-10-13 | codegen+runtime | medium | `String.push(c)` on the MIR compiled backend is an out-of-line runtime call per char (`karac_mir_string_push_char` -> `karac_mir_string_push_str` -> `karac_mir_vec_reserve`), so building strings a char at a time runs 3.6x slower than Rust: 2,000,000 keys of 200 chars take 2.78 s under `karac build --mir` against 0.77 s for `rustc -O -C overflow-checks=on` | — |
 | B-2026-10-13-31 | 2026-10-13 | codegen+runtime | medium | Walking a `Str`'s `chars()` on the MIR compiled backend costs about 3.6 ns a char against 1.0 for its `bytes()` and 0.9 for Rust's `chars()`, and a char predicate such as `is_ascii_uppercase` is a runtime call that finds the method by comparing names: kata 520's bench (`word.chars().filter(|c| c.is_ascii_uppercase()).count()`) runs 2.0 to 2.2 s under `karac build --mir` against 0.20 to 0.25 s for `rustc -O` | — |
 | B-2026-10-13-32 | 2026-10-13 | typecheck | low | The MIR front end accepts `*c` on a `filter` closure's `char` parameter over `chars()`, which `karac check` refuses ("unary '*' requires 'ref T' ... found 'char'") as docs/library/iterators.md's `fn filter[F: MutFn(Self.Item) -> bool]` says it should: `w.chars().filter(|c| *c == 'Q').count()` prints 2 under `karac __mir-run` and builds under `karac build --mir` | — |
+| B-2026-10-13-33 | 2026-10-13 | ownership | medium | The MIR borrow checker refuses a write to a `mut` field of a shared value reached by indexing a borrowed `Vec` (`nodes[i].val = v` with `nodes` a `ref Vec[Node]` or a bare `Vec[Node]` parameter: "mutable borrow of (*_1) through a shared reference [E0517]") under `__mir-run`, `__mir-llvm-run` and `build --mir`, where `karac check` passes it and core-semantics §5.9 makes such a field writable through any handle | — |
 
 ### Relocated
 
