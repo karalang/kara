@@ -1,0 +1,272 @@
+// Differential test for LeetCode #493: Reverse Pairs.
+//
+// Copies of the four arms, on 1,500 random arrays a of 1 to 30 numbers
+// and b of 0 to 30, from -3 to 3, -100 to 100 or across the whole
+// 32-bit range in turn, and one more number x. Properties:
+//   P1  the count is every later number checked against every earlier
+//   P2  a with x appended adds the numbers of a above twice x
+//   P3  every number doubled gives the same count
+//   P4  a then b gives the count of a, of b, and of the pairs across
+
+// ---- star: reverse_pairs.kara
+
+fn sort_count_star(nums: mut ref Vec[i64], low: i64, high: i64) -> i64 {
+    if high - low <= 1 {
+        return 0;
+    }
+    let mid = (low + high) / 2;
+    let mut count = sort_count_star(nums, low, mid) + sort_count_star(nums, mid, high);
+    let mut j = mid;
+    for i in low..mid {
+        while j < high and nums[i] > 2 * nums[j] {
+            j += 1;
+        }
+        count += j - mid;
+    }
+    let mut merged: Vec[i64] = Vec.new();
+    let mut a = low;
+    let mut b = mid;
+    while a < mid or b < high {
+        if b == high or (a < mid and nums[a] <= nums[b]) {
+            merged.push(nums[a]);
+            a += 1;
+        } else {
+            merged.push(nums[b]);
+            b += 1;
+        }
+    }
+    for k in 0..merged.len() {
+        nums[low + k] = merged[k];
+    }
+    count
+}
+
+fn reverse_pairs_star(nums: Vec[i64]) -> i64 {
+    let mut work = nums.clone();
+    let n = work.len();
+    sort_count_star(mut work, 0, n)
+}
+
+// ---- brute: reverse_pairs_brute.kara
+
+fn reverse_pairs_brute(nums: Vec[i64]) -> i64 {
+    let mut count = 0;
+    for i in 0..nums.len() {
+        for j in i + 1..nums.len() {
+            if nums[i] > 2 * nums[j] {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// ---- fenwick: reverse_pairs_fenwick.kara
+
+fn reverse_pairs_fenwick(nums: Vec[i64]) -> i64 {
+    let mut values = nums.clone();
+    values.sort();
+    values.dedup();
+    let size = values.len();
+    let mut tree: Vec[i64] = vec![0; size + 1];
+    let mut count = 0;
+    let mut seen = 0;
+    for x in nums {
+        // How many values are at most 2 * x: the first index above it.
+        let limit = 2 * x;
+        let mut low = 0;
+        let mut high = size;
+        while low < high {
+            let mid = (low + high) / 2;
+            if values[mid] <= limit {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        let mut at_most = 0;
+        let mut i = low;
+        while i > 0 {
+            at_most += tree[i];
+            i -= i & -i;
+        }
+        count += seen - at_most;
+        // Record x at its own rank.
+        let mut low = 0;
+        let mut high = size - 1;
+        while low < high {
+            let mid = (low + high) / 2;
+            if values[mid] < x {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        let mut i = low + 1;
+        while i <= size {
+            tree[i] += 1;
+            i += i & -i;
+        }
+        seen += 1;
+    }
+    count
+}
+
+// ---- insert: reverse_pairs_insert.kara
+
+fn first_above_insert(sorted: Vec[i64], limit: i64) -> i64 {
+    let mut low = 0;
+    let mut high = sorted.len();
+    while low < high {
+        let mid = (low + high) / 2;
+        if sorted[mid] <= limit {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    low
+}
+
+fn reverse_pairs_insert(nums: Vec[i64]) -> i64 {
+    let mut sorted: Vec[i64] = Vec.new();
+    let mut count = 0;
+    for x in nums {
+        count += sorted.len() - first_above_insert(sorted, 2 * x);
+        let at = first_above_insert(sorted, x);
+        sorted.insert(at, x);
+    }
+    count
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, nums: Vec[i64]) -> i64 {
+    match which {
+        0 => reverse_pairs_star(nums),
+        1 => reverse_pairs_brute(nums),
+        2 => reverse_pairs_fenwick(nums),
+        _ => reverse_pairs_insert(nums),
+    }
+}
+
+// For each later number, how many earlier ones are more than twice it.
+fn reference(nums: Vec[i64]) -> i64 {
+    let mut count = 0;
+    for j in 0..nums.len() {
+        for i in 0..j {
+            if nums[i] - 2 * nums[j] > 0 {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn random_number(seed: mut ref i64, spread: i64) -> i64 {
+    if spread == 0 {
+        next_random(seed) * 131072 + next_random(seed) * 4 - 2147483648
+    } else {
+        next_random(seed) % (2 * spread + 1) - spread
+    }
+}
+
+fn main() {
+    let names = vec!["star", "brute", "fenwick", "insert"];
+    let cases = 1500;
+    let mut seed: i64 = 4930;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0];
+    for c in 0..cases {
+        // a of 1 to 30 numbers and b of 0 to 30, from -3 to 3, -100 to
+        // 100 or across the whole 32-bit range in turn, and one more x.
+        let spread = if c % 3 == 0 { 3 } else if c % 3 == 1 { 100 } else { 0 };
+        let mut a: Vec[i64] = Vec.new();
+        let size = 1 + next_random(mut seed) % 30;
+        for _ in 0..size {
+            a.push(random_number(mut seed, spread));
+        }
+        let mut b: Vec[i64] = Vec.new();
+        let size = next_random(mut seed) % 31;
+        for _ in 0..size {
+            b.push(random_number(mut seed, spread));
+        }
+        let x = random_number(mut seed, spread);
+        let mut appended = a.clone();
+        appended.push(x);
+        let mut above = 0;
+        for y in a.iter() {
+            if *y > 2 * x {
+                above += 1;
+            }
+        }
+        let mut doubled: Vec[i64] = Vec.new();
+        for y in a.iter() {
+            doubled.push(2 * *y);
+        }
+        let mut joined = a.clone();
+        let mut across = 0;
+        for z in b.iter() {
+            joined.push(*z);
+            for y in a.iter() {
+                if *y > 2 * *z {
+                    across += 1;
+                }
+            }
+        }
+        let want = reference(a);
+        for which in 0..4 {
+            let got = arm(which, a);
+            // P1: every later number against every earlier one.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {a} gave {got}, want {want}");
+                }
+            }
+            // P2: one more number adds the earlier ones above twice it.
+            checks += 1;
+            let more = arm(which, appended);
+            if more != got + above {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {appended} gave {more}, want {got + above}");
+                }
+            }
+            // P3: every number doubled keeps the same pairs.
+            checks += 1;
+            let other = arm(which, doubled);
+            if other != got {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {doubled} gave {other}, want {got}");
+                }
+            }
+            // P4: a then b gives the pairs in each and those across.
+            checks += 1;
+            let both = arm(which, joined);
+            let expected = got + arm(which, b) + across;
+            if both != expected {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {joined} gave {both}, want {expected}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}");
+    }
+}

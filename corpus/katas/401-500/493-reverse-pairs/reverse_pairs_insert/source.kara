@@ -1,0 +1,74 @@
+// LeetCode #493: Reverse Pairs -- a sorted list of the numbers seen.
+//
+// Keep the numbers seen so far in a sorted `Vec`. For each new number,
+// binary search for the first one greater than twice it: everything from
+// there on makes a pair with it. Then insert it in its sorted place.
+
+fn first_above(sorted: Vec[i64], limit: i64) -> i64 {
+    let mut low = 0;
+    let mut high = sorted.len();
+    while low < high {
+        let mid = (low + high) / 2;
+        if sorted[mid] <= limit {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    low
+}
+
+fn reverse_pairs(nums: Vec[i64]) -> i64 {
+    let mut sorted: Vec[i64] = Vec.new();
+    let mut count = 0;
+    for x in nums {
+        count += sorted.len() - first_above(sorted, 2 * x);
+        let at = first_above(sorted, x);
+        sorted.insert(at, x);
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(name: String, nums: Vec[i64]) {
+    println(f"{name}: {nums} -> {reverse_pairs(nums)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("example 1", vec![1, 3, 2, 3, 1]);
+    show("example 2", vec![2, 4, 3, 5, 1]);
+    show("one number", vec![7]);
+    show("rising", vec![1, 2, 3, 4, 5]);
+    show("falling", vec![16, 8, 4, 2, 1]);
+    show("exactly twice", vec![4, 2, 2, 1]);
+    show("negatives", vec![-5, -5, -3, -1, 0]);
+    show("the extremes", vec![2147483647, 2147483647, -2147483648, -2147483648]);
+    // 300 random arrays of 1 to 40 numbers, from -50 to 50 or across the
+    // whole 32-bit range in turn.
+    let count = 300;
+    let mut seed: i64 = 493;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let size = 1 + next_random(mut seed) % 40;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            let x = if c % 2 == 0 {
+                next_random(mut seed) % 101 - 50
+            } else {
+                next_random(mut seed) * 131072 + next_random(mut seed) * 4 - 2147483648
+            };
+            nums.push(x);
+        }
+        let pairs = reverse_pairs(nums);
+        total += pairs;
+        checksum = (checksum * 31 + pairs) % 1000000007;
+    }
+    println(f"{count} random arrays: {total} reverse pairs, checksum {checksum}");
+}

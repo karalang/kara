@@ -1,0 +1,64 @@
+// Benchmark for #493: the ★ arm (merge sort); see ../reverse_pairs.kara.
+
+fn sort_count(nums: mut ref Vec[i64], low: i64, high: i64) -> i64 {
+    if high - low <= 1 {
+        return 0;
+    }
+    let mid = (low + high) / 2;
+    let mut count = sort_count(nums, low, mid) + sort_count(nums, mid, high);
+    let mut j = mid;
+    for i in low..mid {
+        while j < high and nums[i] > 2 * nums[j] {
+            j += 1;
+        }
+        count += j - mid;
+    }
+    let mut merged: Vec[i64] = Vec.new();
+    let mut a = low;
+    let mut b = mid;
+    while a < mid or b < high {
+        if b == high or (a < mid and nums[a] <= nums[b]) {
+            merged.push(nums[a]);
+            a += 1;
+        } else {
+            merged.push(nums[b]);
+            b += 1;
+        }
+    }
+    for k in 0..merged.len() {
+        nums[low + k] = merged[k];
+    }
+    count
+}
+
+fn reverse_pairs(nums: Vec[i64]) -> i64 {
+    let mut work = nums.clone();
+    let n = work.len();
+    sort_count(mut work, 0, n)
+}
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 60 arrays of 50,000 numbers across the whole 32-bit range, built
+    // once, then each counted once.
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut seed: i64 = 493;
+    for _ in 0..60 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..50000 {
+            nums.push(next_random(mut seed) * 131072 + next_random(mut seed) * 4 - 2147483648);
+        }
+        arrays.push(nums);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for nums in arrays {
+        let pairs = reverse_pairs(nums);
+        total += pairs;
+        checksum = (checksum * 31 + pairs) % 1000000007;
+    }
+    println(f"60 arrays of 50000: {total} reverse pairs, checksum {checksum}");
+}

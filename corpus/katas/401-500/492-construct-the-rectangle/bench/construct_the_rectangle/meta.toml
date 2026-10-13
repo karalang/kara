@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/492-construct-the-rectangle/bench/construct_the_rectangle.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "da6797288"
+extracted_src = "30fdc4cc"
+model_rev = "1aa23105"
+model_src = "30fdc4cc"

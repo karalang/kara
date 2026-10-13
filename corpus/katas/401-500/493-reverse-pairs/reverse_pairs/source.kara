@@ -1,0 +1,87 @@
+// LeetCode #493: Reverse Pairs -- merge sort.
+//
+// Sort the array by halves. Before merging two sorted halves, count the
+// pairs across them: for each number on the left, the numbers on the
+// right less than half of it form a prefix of the right half, and that
+// prefix only grows as the left number grows, so one pointer walks it.
+
+fn sort_count(nums: mut ref Vec[i64], low: i64, high: i64) -> i64 {
+    if high - low <= 1 {
+        return 0;
+    }
+    let mid = (low + high) / 2;
+    let mut count = sort_count(nums, low, mid) + sort_count(nums, mid, high);
+    let mut j = mid;
+    for i in low..mid {
+        while j < high and nums[i] > 2 * nums[j] {
+            j += 1;
+        }
+        count += j - mid;
+    }
+    let mut merged: Vec[i64] = Vec.new();
+    let mut a = low;
+    let mut b = mid;
+    while a < mid or b < high {
+        if b == high or (a < mid and nums[a] <= nums[b]) {
+            merged.push(nums[a]);
+            a += 1;
+        } else {
+            merged.push(nums[b]);
+            b += 1;
+        }
+    }
+    for k in 0..merged.len() {
+        nums[low + k] = merged[k];
+    }
+    count
+}
+
+fn reverse_pairs(nums: Vec[i64]) -> i64 {
+    let mut work = nums.clone();
+    let n = work.len();
+    sort_count(mut work, 0, n)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(name: String, nums: Vec[i64]) {
+    println(f"{name}: {nums} -> {reverse_pairs(nums)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("example 1", vec![1, 3, 2, 3, 1]);
+    show("example 2", vec![2, 4, 3, 5, 1]);
+    show("one number", vec![7]);
+    show("rising", vec![1, 2, 3, 4, 5]);
+    show("falling", vec![16, 8, 4, 2, 1]);
+    show("exactly twice", vec![4, 2, 2, 1]);
+    show("negatives", vec![-5, -5, -3, -1, 0]);
+    show("the extremes", vec![2147483647, 2147483647, -2147483648, -2147483648]);
+    // 300 random arrays of 1 to 40 numbers, from -50 to 50 or across the
+    // whole 32-bit range in turn.
+    let count = 300;
+    let mut seed: i64 = 493;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let size = 1 + next_random(mut seed) % 40;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            let x = if c % 2 == 0 {
+                next_random(mut seed) % 101 - 50
+            } else {
+                next_random(mut seed) * 131072 + next_random(mut seed) * 4 - 2147483648
+            };
+            nums.push(x);
+        }
+        let pairs = reverse_pairs(nums);
+        total += pairs;
+        checksum = (checksum * 31 + pairs) % 1000000007;
+    }
+    println(f"{count} random arrays: {total} reverse pairs, checksum {checksum}");
+}

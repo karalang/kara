@@ -1,0 +1,100 @@
+// LeetCode #493: Reverse Pairs -- a Fenwick tree over ranks.
+//
+// Walk the array left to right, keeping counts of the numbers seen so
+// far in a Fenwick tree indexed by rank among the sorted values. For
+// each number, the pairs it ends are the numbers seen that are greater
+// than twice it: all of them less those at a rank no higher than the
+// last value at most twice it, found by binary search.
+
+fn reverse_pairs(nums: Vec[i64]) -> i64 {
+    let mut values = nums.clone();
+    values.sort();
+    values.dedup();
+    let size = values.len();
+    let mut tree: Vec[i64] = vec![0; size + 1];
+    let mut count = 0;
+    let mut seen = 0;
+    for x in nums {
+        // How many values are at most 2 * x: the first index above it.
+        let limit = 2 * x;
+        let mut low = 0;
+        let mut high = size;
+        while low < high {
+            let mid = (low + high) / 2;
+            if values[mid] <= limit {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        let mut at_most = 0;
+        let mut i = low;
+        while i > 0 {
+            at_most += tree[i];
+            i -= i & -i;
+        }
+        count += seen - at_most;
+        // Record x at its own rank.
+        let mut low = 0;
+        let mut high = size - 1;
+        while low < high {
+            let mid = (low + high) / 2;
+            if values[mid] < x {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        let mut i = low + 1;
+        while i <= size {
+            tree[i] += 1;
+            i += i & -i;
+        }
+        seen += 1;
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(name: String, nums: Vec[i64]) {
+    println(f"{name}: {nums} -> {reverse_pairs(nums)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("example 1", vec![1, 3, 2, 3, 1]);
+    show("example 2", vec![2, 4, 3, 5, 1]);
+    show("one number", vec![7]);
+    show("rising", vec![1, 2, 3, 4, 5]);
+    show("falling", vec![16, 8, 4, 2, 1]);
+    show("exactly twice", vec![4, 2, 2, 1]);
+    show("negatives", vec![-5, -5, -3, -1, 0]);
+    show("the extremes", vec![2147483647, 2147483647, -2147483648, -2147483648]);
+    // 300 random arrays of 1 to 40 numbers, from -50 to 50 or across the
+    // whole 32-bit range in turn.
+    let count = 300;
+    let mut seed: i64 = 493;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let size = 1 + next_random(mut seed) % 40;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            let x = if c % 2 == 0 {
+                next_random(mut seed) % 101 - 50
+            } else {
+                next_random(mut seed) * 131072 + next_random(mut seed) * 4 - 2147483648
+            };
+            nums.push(x);
+        }
+        let pairs = reverse_pairs(nums);
+        total += pairs;
+        checksum = (checksum * 31 + pairs) % 1000000007;
+    }
+    println(f"{count} random arrays: {total} reverse pairs, checksum {checksum}");
+}

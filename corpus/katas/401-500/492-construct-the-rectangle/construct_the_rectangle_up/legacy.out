@@ -1,0 +1,9 @@
+example 1: 4 -> [2, 2]
+example 2: 37 -> [37, 1]
+example 3: 122122 -> [427, 286]
+one: 1 -> [1, 1]
+a prime square: 49 -> [7, 7]
+twice a prime: 26 -> [13, 2]
+ten million: 10000000 -> [3200, 3125]
+the largest prime below ten million: 9999991 -> [9999991, 1]
+300 random areas: 0 squares, 19 of width 1, checksum 933012675

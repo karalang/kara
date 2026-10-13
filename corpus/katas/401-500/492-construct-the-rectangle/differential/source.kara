@@ -1,0 +1,195 @@
+// Differential test for LeetCode #492: Construct the Rectangle.
+//
+// Copies of the four arms, on 1,500 random areas up to 100, ten
+// thousand or a million in turn, each with a factor k of 2 to 5.
+// Properties:
+//   P1  the sides are the divisor pair with the smallest difference
+//   P2  two sides, length no shorter than width, width at least 1,
+//       whose product is the area
+//   P3  the area times k squared gives a difference no larger than k
+//       times this one
+//   P4  the width squared gives a square
+
+// ---- star: construct_the_rectangle.kara
+
+fn construct_rectangle_star(area: i64) -> Vec[i64] {
+    let mut width = (area as f64).sqrt() as i64;
+    while width * width > area {
+        width -= 1;
+    }
+    while (width + 1) * (width + 1) <= area {
+        width += 1;
+    }
+    while area % width != 0 {
+        width -= 1;
+    }
+    vec![area / width, width]
+}
+
+// ---- up: construct_the_rectangle_up.kara
+
+fn construct_rectangle_up(area: i64) -> Vec[i64] {
+    let mut best = 1;
+    let mut width = 1;
+    while width * width <= area {
+        if area % width == 0 {
+            best = width;
+        }
+        width += 1;
+    }
+    vec![area / best, best]
+}
+
+// ---- divisors: construct_the_rectangle_divisors.kara
+
+fn construct_rectangle_divisors(area: i64) -> Vec[i64] {
+    let mut primes: Vec[(i64, i64)] = Vec.new();
+    let mut rest = area;
+    let mut p = 2;
+    while p * p <= rest {
+        let mut times = 0;
+        while rest % p == 0 {
+            rest /= p;
+            times += 1;
+        }
+        if times > 0 {
+            primes.push((p, times));
+        }
+        p += 1;
+    }
+    if rest > 1 {
+        primes.push((rest, 1));
+    }
+    let mut divisors: Vec[i64] = vec![1];
+    for (prime, times) in primes {
+        let count = divisors.len();
+        let mut power = 1;
+        for _ in 0..times {
+            power *= prime;
+            for k in 0..count {
+                divisors.push(divisors[k] * power);
+            }
+        }
+    }
+    let mut best = 1;
+    for d in divisors {
+        if d * d <= area and d > best {
+            best = d;
+        }
+    }
+    vec![area / best, best]
+}
+
+// ---- bisect: construct_the_rectangle_bisect.kara
+
+fn construct_rectangle_bisect(area: i64) -> Vec[i64] {
+    let mut low = 1;
+    let mut high = area;
+    while low < high {
+        let mid = low + (high - low + 1) / 2;
+        if mid <= area / mid {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    let mut width = low;
+    while area % width != 0 {
+        width -= 1;
+    }
+    vec![area / width, width]
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, area: i64) -> Vec[i64] {
+    match which {
+        0 => construct_rectangle_star(area),
+        1 => construct_rectangle_up(area),
+        2 => construct_rectangle_divisors(area),
+        _ => construct_rectangle_bisect(area),
+    }
+}
+
+// The pair of sides, length first, with the smallest difference, over
+// every divisor pair of the area.
+fn reference(area: i64) -> Vec[i64] {
+    let mut best = vec![area, 1];
+    let mut d = 1;
+    while d * d <= area {
+        if area % d == 0 and area / d - d < best[0] - best[1] {
+            best = vec![area / d, d];
+        }
+        d += 1;
+    }
+    best
+}
+
+fn main() {
+    let names = vec!["star", "up", "divisors", "bisect"];
+    let cases = 1500;
+    let mut seed: i64 = 4920;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0];
+    for c in 0..cases {
+        // an area up to 100, ten thousand or a million in turn, and a
+        // factor of 2 to 5.
+        let top = if c % 3 == 0 { 100 } else if c % 3 == 1 { 10000 } else { 1000000 };
+        let area = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % top;
+        let k = 2 + next_random(mut seed) % 4;
+        let want = reference(area);
+        for which in 0..4 {
+            let got = arm(which, area);
+            // P1: the divisor pair with the smallest difference.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {area} gave {got}, want {want}");
+                }
+            }
+            // P2: two sides, the length no shorter than the width, the
+            // width at least 1, that multiply to the area.
+            checks += 1;
+            if got.len() != 2 or got[1] < 1 or got[0] < got[1] or got[0] * got[1] != area {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {area} gave {got}");
+                }
+            }
+            // P3: the area times k squared is no further from square than
+            // k times the sides, which make it too.
+            checks += 1;
+            let bigger = arm(which, area * k * k);
+            if bigger.len() != 2 or bigger[0] - bigger[1] > k * (got[0] - got[1]) {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {area * k * k} gave {bigger}, from {got} times {k}");
+                }
+            }
+            // P4: the square of the width is a square.
+            checks += 1;
+            let square = arm(which, got[1] * got[1]);
+            if square != vec![got[1], got[1]] {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {got[1] * got[1]} gave {square}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}");
+    }
+}

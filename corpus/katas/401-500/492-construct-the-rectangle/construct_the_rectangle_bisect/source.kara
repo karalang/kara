@@ -1,0 +1,63 @@
+// LeetCode #492: Construct the Rectangle -- an integer square root.
+//
+// The same walk down as the star arm, but the starting width is found
+// without floating point: a binary search for the largest number whose
+// square is no larger than the area.
+
+fn construct_rectangle(area: i64) -> Vec[i64] {
+    let mut low = 1;
+    let mut high = area;
+    while low < high {
+        let mid = low + (high - low + 1) / 2;
+        if mid <= area / mid {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    let mut width = low;
+    while area % width != 0 {
+        width -= 1;
+    }
+    vec![area / width, width]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(name: String, area: i64) {
+    println(f"{name}: {area} -> {construct_rectangle(area)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("example 1", 4);
+    show("example 2", 37);
+    show("example 3", 122122);
+    show("one", 1);
+    show("a prime square", 49);
+    show("twice a prime", 26);
+    show("ten million", 10000000);
+    show("the largest prime below ten million", 9999991);
+    // 300 random areas from 1 to ten million.
+    let count = 300;
+    let mut seed: i64 = 492;
+    let mut squares = 0;
+    let mut thin = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let area = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 10000000;
+        let sides = construct_rectangle(area);
+        if sides[0] == sides[1] {
+            squares += 1;
+        }
+        if sides[1] == 1 {
+            thin += 1;
+        }
+        checksum = (checksum * 31 + sides[0] - sides[1]) % 1000000007;
+    }
+    println(f"{count} random areas: {squares} squares, {thin} of width 1, checksum {checksum}");
+}
