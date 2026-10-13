@@ -1,0 +1,77 @@
+// LeetCode #458: Poor Pigs -- count the outcomes pig by pig.
+//
+// Of p pigs, some k die, each in one of T rounds, where T =
+// minutes_to_test / minutes_to_die. Choosing which k die and when gives
+// C(p, k) * T^k outcomes, so p pigs tell apart the sum of those over k
+// from 0 to p. Try p = 0, 1, 2, ... until the sum covers the buckets.
+// O(log^2 buckets).
+
+fn outcomes(pigs: i64, rounds: i64) -> i64 {
+    let mut total = 0;
+    let mut choose = 1;
+    let mut power = 1;
+    for k in 0..pigs + 1 {
+        total += choose * power;
+        // C(pigs, k + 1) from C(pigs, k).
+        choose = choose * (pigs - k) / (k + 1);
+        power *= rounds;
+    }
+    total
+}
+
+fn poor_pigs(buckets: i64, minutes_to_die: i64, minutes_to_test: i64) -> i64 {
+    let rounds = minutes_to_test / minutes_to_die;
+    let mut pigs = 0;
+    while outcomes(pigs, rounds) < buckets {
+        pigs += 1;
+    }
+    pigs
+}
+
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(buckets: i64, minutes_to_die: i64, minutes_to_test: i64) {
+    let pigs = poor_pigs(buckets, minutes_to_die, minutes_to_test);
+    println(f"buckets {buckets}, minutes_to_die {minutes_to_die}, minutes_to_test {minutes_to_test} -> {pigs}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(4, 15, 15);
+    show(4, 15, 30);
+    show(1000, 15, 60);
+    show(1, 1, 1);
+    show(2, 1, 1);
+    show(1000, 1, 1);
+    show(1000, 1, 9);
+    show(1001, 1, 9);
+    show(1000, 100, 100);
+    show(1000, 1, 100);
+    show(1000000000000, 7, 20);
+    // 300 random cases: 1 to 10^12 buckets, spread over every number of
+    // digits, and 1 <= minutes_to_die <= minutes_to_test <= 100.
+    let count = 300;
+    let mut seed: i64 = 458;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let digits = next_random(mut seed) % 13;
+        let mut top = 1;
+        for _ in 0..digits {
+            top *= 10;
+        }
+        let r = (next_random(mut seed) * 65536 + next_random(mut seed)) * 65536 + next_random(mut seed);
+        let buckets = 1 + r % top;
+        let die = 1 + next_random(mut seed) % 100;
+        let test = die + next_random(mut seed) % (101 - die);
+        let pigs = poor_pigs(buckets, die, test);
+        total += pigs;
+        checksum = (checksum * 31 + pigs * 1000003 + buckets % 1000) % 1000000007;
+    }
+    println(f"{count} random cases: {total} pigs, checksum {checksum}");
+}

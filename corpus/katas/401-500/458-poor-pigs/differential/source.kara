@@ -1,0 +1,189 @@
+// Differential test for LeetCode #458: Poor Pigs.
+//
+// Copies of the four arms, each run on 1,500 random cases.
+// Properties:
+//   P1  on 1 to 200 buckets and 1 to 4 rounds, the answer is brute
+//       force's: count the pigs' outcome tuples one by one
+//   P2  on 1 to 10^12 buckets, one bucket more needs the same number
+//       of pigs or one more
+//   P3  scaling minutes_to_die and minutes_to_test by 1 to 5 keeps it
+//   P4  time for one round more never needs more pigs
+//   P5  (T + 1)^p buckets need p pigs, and one bucket more needs p + 1
+
+// ---- power: poor_pigs.kara
+
+fn poor_pigs_power(buckets: i64, minutes_to_die: i64, minutes_to_test: i64) -> i64 {
+    let states = minutes_to_test / minutes_to_die + 1;
+    let mut pigs = 0;
+    let mut covered = 1;
+    while covered < buckets {
+        covered *= states;
+        pigs += 1;
+    }
+    pigs
+}
+
+// ---- digits: poor_pigs_digits.kara
+
+fn poor_pigs_digits(buckets: i64, minutes_to_die: i64, minutes_to_test: i64) -> i64 {
+    let base = minutes_to_test / minutes_to_die + 1;
+    let mut rest = buckets - 1;
+    let mut pigs = 0;
+    while rest > 0 {
+        rest /= base;
+        pigs += 1;
+    }
+    pigs
+}
+
+// ---- outcomes: poor_pigs_outcomes.kara
+
+fn outcomes_count(pigs: i64, rounds: i64) -> i64 {
+    let mut total = 0;
+    let mut choose = 1;
+    let mut power = 1;
+    for k in 0..pigs + 1 {
+        total += choose * power;
+        // C(pigs, k + 1) from C(pigs, k).
+        choose = choose * (pigs - k) / (k + 1);
+        power *= rounds;
+    }
+    total
+}
+
+fn poor_pigs_outcomes(buckets: i64, minutes_to_die: i64, minutes_to_test: i64) -> i64 {
+    let rounds = minutes_to_test / minutes_to_die;
+    let mut pigs = 0;
+    while outcomes_count(pigs, rounds) < buckets {
+        pigs += 1;
+    }
+    pigs
+}
+
+// ---- logs: poor_pigs_logs.kara
+
+fn int_power(base: i64, exponent: i64) -> i64 {
+    let mut result = 1;
+    for _ in 0..exponent {
+        result *= base;
+    }
+    result
+}
+
+fn poor_pigs_logs(buckets: i64, minutes_to_die: i64, minutes_to_test: i64) -> i64 {
+    let base = minutes_to_test / minutes_to_die + 1;
+    let mut pigs = ((buckets as f64).ln() / (base as f64).ln()).ceil() as i64;
+    while int_power(base, pigs) < buckets {
+        pigs += 1;
+    }
+    while pigs > 0 and int_power(base, pigs - 1) >= buckets {
+        pigs -= 1;
+    }
+    pigs
+}
+
+// ---- harness
+
+fn pigs(arm: i64, buckets: i64, minutes_to_die: i64, minutes_to_test: i64) -> i64 {
+    if arm == 0 {
+        poor_pigs_power(buckets, minutes_to_die, minutes_to_test)
+    } else if arm == 1 {
+        poor_pigs_digits(buckets, minutes_to_die, minutes_to_test)
+    } else if arm == 2 {
+        poor_pigs_outcomes(buckets, minutes_to_die, minutes_to_test)
+    } else {
+        poor_pigs_logs(buckets, minutes_to_die, minutes_to_test)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Each pig ends in one of rounds + 1 states. For p = 0, 1, 2, ...,
+// step an odometer over every tuple of p states, counting them, until
+// the count reaches the buckets.
+fn brute(buckets: i64, rounds: i64) -> i64 {
+    let mut p = 0;
+    loop {
+        let mut digits: Vec[i64] = vec![0; p];
+        let mut count = 1;
+        while count < buckets {
+            let mut i = 0;
+            while i < p and digits[i] == rounds {
+                digits[i] = 0;
+                i += 1;
+            }
+            if i == p {
+                break;
+            }
+            digits[i] += 1;
+            count += 1;
+        }
+        if count >= buckets {
+            return p;
+        }
+        p += 1;
+    }
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4580;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // Small: 1 to 200 buckets, 1 to 4 rounds of minutes_to_die.
+        let small = 1 + next_random(mut seed) % 200;
+        let small_die = 1 + next_random(mut seed) % 15;
+        let small_rounds = 1 + next_random(mut seed) % 4;
+        let small_test = small_die * small_rounds + next_random(mut seed) % small_die;
+        let expected = brute(small, small_rounds);
+        // Large: 1 to 10^12 buckets over every number of digits, and
+        // 1 <= minutes_to_die <= minutes_to_test <= 100.
+        let digits = next_random(mut seed) % 13;
+        let mut top = 1;
+        for _ in 0..digits {
+            top *= 10;
+        }
+        let r = (next_random(mut seed) * 65536 + next_random(mut seed)) * 65536 + next_random(mut seed);
+        let buckets = 1 + r % top;
+        let die = 1 + next_random(mut seed) % 100;
+        let test = die + next_random(mut seed) % (101 - die);
+        let scale = 1 + next_random(mut seed) % 5;
+        // An exact power of the number of states, at most 10^12.
+        let states = test / die + 1;
+        let mut exact = 1;
+        let mut exponent = 0;
+        let want = next_random(mut seed) % 41;
+        while exponent < want and exact <= 1000000000000 / states {
+            exact *= states;
+            exponent += 1;
+        }
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, pigs(arm, small, small_die, small_test) == expected, mut failures);
+            let answer = pigs(arm, buckets, die, test);
+            let more = pigs(arm, buckets + 1, die, test) - answer;
+            report(2, arm, case, more == 0 or more == 1, mut failures);
+            report(3, arm, case, pigs(arm, buckets, die * scale, test * scale) == answer, mut failures);
+            report(4, arm, case, pigs(arm, buckets, die, test + die) <= answer, mut failures);
+            let exact_ok = pigs(arm, exact, die, test) == exponent and pigs(arm, exact + 1, die, test) == exponent + 1;
+            report(5, arm, case, exact_ok, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

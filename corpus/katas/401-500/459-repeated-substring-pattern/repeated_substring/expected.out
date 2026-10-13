@@ -1,0 +1,11 @@
+"abab" -> true
+"aba" -> false
+"abcabcabcabc" -> true
+"a" -> false
+"aa" -> true
+"ab" -> false
+"aabaaba" -> false
+"abaababaab" -> true
+"abcabcabd" -> false
+"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzy" -> false
+300 random strings: 132 repeat a substring, checksum 383047542

@@ -1,0 +1,72 @@
+// LeetCode #459: Repeated Substring Pattern -- try every proper divisor.
+//
+// A string of length n is k copies of a unit of length d exactly when d
+// divides n and every character equals the one d places before it. Try
+// each proper divisor d of n. O(n * number of divisors).
+
+fn repeated_substring_pattern(s: String) -> bool {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    for d in 1..n / 2 + 1 {
+        if n % d != 0 {
+            continue;
+        }
+        let mut repeats = true;
+        for i in d..n {
+            if cs[i] != cs[i - d] {
+                repeats = false;
+                break;
+            }
+        }
+        if repeats {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- bench ------------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let strings = 10;
+    let n = 100000;
+    let rounds = 40;
+    let units = [1, 5, 32, 100, 625, 1000, 3125, 5000, 20000, 50000];
+    let mut seed: i64 = 459;
+    let mut all: Vec[String] = Vec.new();
+    for a in 0..strings {
+        let mut unit = String.new();
+        for _ in 0..units[a] {
+            unit.push(char.try_from(97 + (next_random(mut seed) % 26) as u32).unwrap());
+        }
+        all.push(unit.repeat(n / units[a]));
+    }
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        for a in 0..strings {
+            // Half the time, change one letter in the second half.
+            let k = n / 2 + (next_random(mut seed) * 65536 + next_random(mut seed)) % (n / 2);
+            let punch = next_random(mut seed) % 2 == 0;
+            let original = all[a].clone();
+            if punch {
+                let mut cs: Vec[char] = all[a].chars().collect();
+                let c = cs[k] as u32;
+                cs[k] = char.try_from(97 + (c - 97 + 1) % 26).unwrap();
+                all[a] = cs.iter().collect();
+            }
+            let has = repeated_substring_pattern(all[a]);
+            all[a] = original;
+            if has {
+                found += 1;
+            }
+            checksum = (checksum * 31 + (if has { units[a] } else { k })) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds on {strings} strings of {n}: {found} repeat a substring, checksum {checksum}");
+}

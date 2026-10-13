@@ -1,0 +1,164 @@
+// Differential test for LeetCode #459: Repeated Substring Pattern.
+//
+// Copies of the four arms, each run on 1,500 random cases.
+// Properties:
+//   P1  on 1 to 8 letters over 1 or 2 letters, the answer is brute
+//       force's: build each candidate unit's copies and compare
+//   P2  a string of 1 to 30 letters written 2 to 5 times is true
+//   P3  rotating a string keeps the answer
+//   P4  reversing a string keeps the answer
+//   P5  a string ending in a letter found nowhere else in it is false
+
+// ---- divisors: repeated_substring.kara
+
+fn repeated_divisors(s: String) -> bool {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    for d in 1..n / 2 + 1 {
+        if n % d != 0 {
+            continue;
+        }
+        let mut repeats = true;
+        for i in d..n {
+            if cs[i] != cs[i - d] {
+                repeats = false;
+                break;
+            }
+        }
+        if repeats {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- doubled: repeated_substring_doubled.kara
+
+fn repeated_doubled(s: String) -> bool {
+    let n = s.len();
+    let doubled = f"{s}{s}";
+    doubled[1..2 * n - 1].contains(s.as_str())
+}
+
+// ---- prefix: repeated_substring_prefix.kara
+
+fn repeated_prefix(s: String) -> bool {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut border: Vec[i64] = vec![0; n];
+    for i in 1..n {
+        let mut k = border[i - 1];
+        while k > 0 and cs[i] != cs[k] {
+            k = border[k - 1];
+        }
+        if cs[i] == cs[k] {
+            k += 1;
+        }
+        border[i] = k;
+    }
+    let p = border[n - 1];
+    p > 0 and n % (n - p) == 0
+}
+
+// ---- rotate: repeated_substring_rotate.kara
+
+fn repeated_rotate(s: String) -> bool {
+    let n = s.len();
+    for d in 1..n / 2 + 1 {
+        if n % d == 0 and s[d..] == s[..n - d] {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- harness
+
+fn answer(arm: i64, s: String) -> bool {
+    if arm == 0 {
+        repeated_divisors(s)
+    } else if arm == 1 {
+        repeated_doubled(s)
+    } else if arm == 2 {
+        repeated_prefix(s)
+    } else {
+        repeated_rotate(s)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_string(n: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(char.try_from(97 + (next_random(seed) % letters) as u32).unwrap());
+    }
+    s
+}
+
+// For every unit length d that divides n with d < n, write the first d
+// letters n / d times and compare with s.
+fn brute(s: String) -> bool {
+    let n = s.len();
+    for d in 1..n {
+        if n % d == 0 and s[..d].repeat(n / d) == s {
+            return true;
+        }
+    }
+    false
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4590;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let small = random_string(1 + next_random(mut seed) % 8, 1 + next_random(mut seed) % 2, mut seed);
+        let expected = brute(small);
+        // A unit of 1 to 30 letters over 1, 2, 3 or 25 letters, written
+        // 2 to 5 times; and, half the time, a random string instead.
+        let letters = [1, 2, 3, 25][next_random(mut seed) % 4];
+        let unit = random_string(1 + next_random(mut seed) % 30, letters, mut seed);
+        let copies = 2 + next_random(mut seed) % 4;
+        let repeated = unit.repeat(copies);
+        let s = if next_random(mut seed) % 2 == 0 {
+            unit.repeat(1 + next_random(mut seed) % 5)
+        } else {
+            random_string(1 + next_random(mut seed) % 60, letters, mut seed)
+        };
+        let n = s.len();
+        let by = next_random(mut seed) % n;
+        let rotated = f"{s[by..]}{s[..by]}";
+        let mut cs: Vec[char] = s.chars().collect();
+        cs.reverse();
+        let reversed: String = cs.iter().collect();
+        // Letters from a to y, then a z.
+        let ended = f"{random_string(next_random(mut seed) % 40, letters, mut seed)}z";
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, answer(arm, small) == expected, mut failures);
+            report(2, arm, case, answer(arm, repeated), mut failures);
+            let base = answer(arm, s);
+            report(3, arm, case, answer(arm, rotated) == base, mut failures);
+            report(4, arm, case, answer(arm, reversed) == base, mut failures);
+            report(5, arm, case, not answer(arm, ended), mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

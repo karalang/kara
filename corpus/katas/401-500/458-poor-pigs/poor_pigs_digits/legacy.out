@@ -1,0 +1,12 @@
+buckets 4, minutes_to_die 15, minutes_to_test 15 -> 2
+buckets 4, minutes_to_die 15, minutes_to_test 30 -> 2
+buckets 1000, minutes_to_die 15, minutes_to_test 60 -> 5
+buckets 1, minutes_to_die 1, minutes_to_test 1 -> 0
+buckets 2, minutes_to_die 1, minutes_to_test 1 -> 1
+buckets 1000, minutes_to_die 1, minutes_to_test 1 -> 10
+buckets 1000, minutes_to_die 1, minutes_to_test 9 -> 3
+buckets 1001, minutes_to_die 1, minutes_to_test 9 -> 4
+buckets 1000, minutes_to_die 100, minutes_to_test 100 -> 10
+buckets 1000, minutes_to_die 1, minutes_to_test 100 -> 2
+buckets 1000000000000, minutes_to_die 7, minutes_to_test 20 -> 26
+300 random cases: 5012 pigs, checksum 83929412
