@@ -1,0 +1,321 @@
+// Differential test for LeetCode #515: Find Largest Value in Each
+// Tree Row.
+//
+// Copies of the four arms, on 1,500 random trees of 0 to 40 nodes, the
+// values from -2 to 2, from -1,000 to 1,000, or from the whole range
+// -2^31 to 2^31 - 1 in turn. Properties:
+//   P1  the entries are the reference's: every value gathered into its
+//       row's list, each list's largest found by a plain loop
+//   P2  there is one entry for each row of the tree
+//   P3  the mirror image gives the same entries
+//   P4  k added to every value, k from -1,000 to 1,000, adds k to every
+//       entry
+//   P5  a new root over a copy of the tree and its mirror image puts
+//       its own value in front of the same entries
+
+// ---- star: largest_values.kara
+
+fn largest_values_star(root: Option[TreeNode]) -> Vec[i64] {
+    let mut largest: Vec[i64] = Vec.new();
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    if let Some(r) = root {
+        queue.push_back(r);
+    }
+    while not queue.is_empty() {
+        let mut best = i64.MIN;
+        for _ in 0..queue.len() {
+            let node = queue.pop_front().unwrap();
+            best = best.max(node.val);
+            if let Some(l) = node.left {
+                queue.push_back(l);
+            }
+            if let Some(r) = node.right {
+                queue.push_back(r);
+            }
+        }
+        largest.push(best);
+    }
+    largest
+}
+
+// ---- depth: largest_values_depth.kara
+
+fn visit_depth(node: Option[TreeNode], depth: i64, largest: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        if depth == largest.len() {
+            largest.push(n.val);
+        } else if n.val > largest[depth] {
+            largest[depth] = n.val;
+        }
+        visit_depth(n.left, depth + 1, largest);
+        visit_depth(n.right, depth + 1, largest);
+    }
+}
+
+fn largest_values_depth(root: Option[TreeNode]) -> Vec[i64] {
+    let mut largest: Vec[i64] = Vec.new();
+    visit_depth(root, 0, mut largest);
+    largest
+}
+
+// ---- stack: largest_values_stack.kara
+
+fn largest_values_stack(root: Option[TreeNode]) -> Vec[i64] {
+    let mut largest: Vec[i64] = Vec.new();
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, 0));
+    }
+    while let Some((node, depth)) = stack.pop() {
+        if depth == largest.len() {
+            largest.push(node.val);
+        } else {
+            largest[depth] = largest[depth].max(node.val);
+        }
+        if let Some(r) = node.right {
+            stack.push((r, depth + 1));
+        }
+        if let Some(l) = node.left {
+            stack.push((l, depth + 1));
+        }
+    }
+    largest
+}
+
+// ---- rows: largest_values_rows.kara
+
+fn largest_values_rows(root: Option[TreeNode]) -> Vec[i64] {
+    let mut largest: Vec[i64] = Vec.new();
+    let mut row: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        row.push(r);
+    }
+    while not row.is_empty() {
+        largest.push(row.iter().map(|n| n.val).max().unwrap());
+        let mut next: Vec[TreeNode] = Vec.new();
+        for node in row.iter() {
+            if let Some(l) = node.left {
+                next.push(l);
+            }
+            if let Some(r) = node.right {
+                next.push(r);
+            }
+        }
+        row = next;
+    }
+    largest
+}
+// ---- differential harness -------------------------------------------------
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A value from -half to half, or from the whole range -2^31 to 2^31 - 1
+// when half is 0.
+fn draw(half: i64, seed: mut ref i64) -> i64 {
+    if half == 0 {
+        next_random(seed) * 65536 + next_random(seed) * 2 + next_random(seed) % 2 - 2147483648
+    } else {
+        next_random(seed) % (2 * half + 1) - half
+    }
+}
+
+fn grow(size: i64, half: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if size == 0 {
+        return None;
+    }
+    let root = TreeNode { val: draw(half, seed), left: None, right: None };
+    for _ in 1..size {
+        let leaf = TreeNode { val: draw(half, seed), left: None, right: None };
+        let mut node = root;
+        loop {
+            if next_random(seed) % 2 == 0 {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(leaf);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(leaf);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+// A new tree of the same shape, every value plus k, and the children
+// swapped when flip is set.
+fn copy(node: Option[TreeNode], k: i64, flip: bool) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => {
+            let left = copy(n.left, k, flip);
+            let right = copy(n.right, k, flip);
+            if flip {
+                Some(TreeNode { val: n.val + k, left: right, right: left })
+            } else {
+                Some(TreeNode { val: n.val + k, left: left, right: right })
+            }
+        }
+    }
+}
+
+fn arm(which: i64, root: Option[TreeNode]) -> Vec[i64] {
+    match which {
+        0 => largest_values_star(root),
+        1 => largest_values_depth(root),
+        2 => largest_values_stack(root),
+        _ => largest_values_rows(root),
+    }
+}
+
+// The reference: every value gathered into its row's list, then each
+// list's largest found by a plain loop.
+fn gather(node: Option[TreeNode], depth: i64, rows: mut ref Vec[Vec[i64]]) {
+    if let Some(n) = node {
+        if depth == rows.len() {
+            rows.push(Vec.new());
+        }
+        rows[depth].push(n.val);
+        gather(n.left, depth + 1, rows);
+        gather(n.right, depth + 1, rows);
+    }
+}
+
+fn reference(root: Option[TreeNode]) -> Vec[i64] {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    gather(root, 0, mut rows);
+    let mut out: Vec[i64] = Vec.new();
+    for row in rows.iter() {
+        let mut best = row[0];
+        for v in row.iter() {
+            if *v > best {
+                best = *v;
+            }
+        }
+        out.push(best);
+    }
+    out
+}
+
+fn height(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => 1 + height(n.left).max(height(n.right)),
+    }
+}
+
+fn same(a: Vec[i64], b: Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn main() {
+    let names = vec!["star", "depth", "stack", "rows"];
+    let cases = 1500;
+    let mut seed: i64 = 5150;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        let half = if c % 3 == 0 { 2 } else if c % 3 == 1 { 1000 } else { 0 };
+        let size = next_random(mut seed) % 41;
+        let root = grow(size, half, mut seed);
+        let want = reference(root);
+        let levels = height(root);
+        let k = next_random(mut seed) % 2001 - 1000;
+        let top = draw(half, mut seed);
+        let flipped = copy(root, 0, true);
+        let shifted = copy(root, k, false);
+        let grafted = Some(TreeNode { val: top, left: copy(root, 0, false), right: copy(root, 0, true) });
+        for which in 0..4 {
+            let got = arm(which, root);
+            // P1: the rows' largest are the reference's.
+            checks += 1;
+            if not same(got.clone(), want.clone()) {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: case {c} of {size} nodes is wrong");
+                }
+            }
+            // P2: one entry for each row of the tree.
+            checks += 1;
+            if got.len() != levels {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {got.len()} entries for {levels} rows");
+                }
+            }
+            // P3: the mirror image has the same rows.
+            checks += 1;
+            if not same(arm(which, flipped), got.clone()) {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: the mirror image of case {c} differs");
+                }
+            }
+            // P4: k added to every value adds k to every entry.
+            checks += 1;
+            let moved = arm(which, shifted);
+            let mut fits = moved.len() == got.len();
+            if fits {
+                for i in 0..got.len() {
+                    if moved[i] != got[i] + k {
+                        fits = false;
+                    }
+                }
+            }
+            if not fits {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: case {c} plus {k} is not shifted by {k}");
+                }
+            }
+            // P5: a new root over the tree and its mirror image puts its
+            // own value in front and leaves every row below as it was.
+            checks += 1;
+            let mut expect: Vec[i64] = vec![top];
+            for v in got.iter() {
+                expect.push(*v);
+            }
+            if not same(arm(which, grafted), expect) {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: a root of {top} over case {c} is wrong");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

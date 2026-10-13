@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/516-longest-palindromic-subsequence/differential.kara"
+dedup_of = []
+expect = "error:E0100"
+exit = 1
+tags = ["differential"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "0736eef76"
+extracted_src = "e37564ad"
+model_rev = "1aa23105"
+model_src = "e37564ad"

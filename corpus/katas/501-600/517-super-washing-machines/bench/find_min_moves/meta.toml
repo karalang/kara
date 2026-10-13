@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/517-super-washing-machines/bench/find_min_moves.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "0736eef76"
+extracted_src = "1adc59a3"
+model_rev = "1aa23105"
+model_src = "1adc59a3"

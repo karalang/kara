@@ -1,0 +1,8 @@
+example 1: [1, 3, 9]
+example 2: [1, 3]
+the empty tree: []
+one node: [-7]
+all negative: [-1, -3, -4]
+a zigzag: [1, 2, 3, 4, 5]
+the extremes: [-2147483648, 2147483647, -2147483648]
+300 random trees: 1859 rows, checksum 734068233

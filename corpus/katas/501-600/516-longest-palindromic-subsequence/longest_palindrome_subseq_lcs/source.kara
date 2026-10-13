@@ -1,0 +1,64 @@
+// LeetCode #516: Longest Palindromic Subsequence -- the longest common
+// subsequence with the reverse.
+//
+// A palindromic subsequence of s reads the same in s reversed, so it is
+// a common subsequence of the two; and the longest common subsequence
+// of a string and its reverse is always as long as the longest
+// palindromic one. The classic LCS table over prefixes. O(n^2).
+
+fn longest_palindrome_subseq(s: Str) -> i64 {
+    let a: Vec[u8] = s.bytes().to_vec();
+    let mut r = a.clone();
+    r.reverse();
+    let n = a.len();
+    let mut common: Vec[Vec[i64]] = vec![vec![0; n + 1]; n + 1];
+    for i in 1..=n {
+        for j in 1..=n {
+            common[i][j] = if a[i - 1] == r[j - 1] {
+                common[i - 1][j - 1] + 1
+            } else {
+                common[i - 1][j].max(common[i][j - 1])
+            };
+        }
+    }
+    common[n][n]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str) {
+    println(f"\"{s}\": {longest_palindrome_subseq(s)}");
+}
+
+fn main() {
+    show("bbbab");
+    show("cbbd");
+    show("a");
+    show("abcde");
+    show("racecar");
+    show("character");
+    show("abacabadabacabaeabacabadabacaba");
+    // 300 random strings of 1 to 80 letters from the first 2, 5 or 26
+    // in turn.
+    let mut seed: i64 = 516;
+    let count = 300;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for t in 0..count {
+        let letters = if t % 3 == 0 { 2 } else if t % 3 == 1 { 5 } else { 26 };
+        let n = 1 + next_random(mut seed) % 80;
+        let mut s = String.new();
+        for _ in 0..n {
+            s.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+        }
+        let v = longest_palindrome_subseq(s);
+        total += v;
+        checksum = (checksum * 31 + v) % 1000000007;
+    }
+    println(f"{count} random strings: {total} in all, checksum {checksum}");
+}

@@ -1,0 +1,306 @@
+// Differential test for LeetCode #517: Super Washing Machines.
+//
+// Copies of the four arms, on 1,500 cases, each a small row of 1 to 4
+// machines (0 to 3 dresses each, or every other case 0 or 1 each with up
+// to 8 more piled on one) and a larger row of 1 to 30 holding 0 to
+// 1,000, evened out in total every other case. Properties:
+//   P1  the small row's answer is the reference's, a breadth-first
+//       search over every row of dresses the moves can reach
+//   P2  the larger row read from the other end has the same answer
+//   P3  the same number more in every machine changes nothing
+//   P4  twice the dresses in every machine takes twice the moves
+//   P5  the row written out twice end to end has the same answer
+
+// ---- star: find_min_moves.kara
+
+fn find_min_moves_star(machines: Vec[i64]) -> i64 {
+    let n = machines.len();
+    let mut total = 0;
+    for m in machines.iter() {
+        total += *m;
+    }
+    if total % n != 0 {
+        return -1;
+    }
+    let average = total / n;
+    let mut moves = 0;
+    let mut surplus = 0;
+    for m in machines.iter() {
+        let extra = *m - average;
+        surplus += extra;
+        moves = moves.max(surplus.abs()).max(extra);
+    }
+    moves
+}
+
+// ---- sides: find_min_moves_sides.kara
+
+fn find_min_moves_sides(machines: Vec[i64]) -> i64 {
+    let n = machines.len();
+    let total: i64 = machines.iter().sum();
+    if total % n != 0 {
+        return -1;
+    }
+    let average = total / n;
+    let mut before = 0;
+    let mut moves = 0;
+    for i in 0..n {
+        let left = i * average - before;
+        let right = (n - 1 - i) * average - (total - before - machines[i]);
+        let need = if left > 0 and right > 0 {
+            left + right
+        } else {
+            left.abs().max(right.abs())
+        };
+        moves = moves.max(need);
+        before += machines[i];
+    }
+    moves
+}
+
+// ---- search: find_min_moves_search.kara
+
+fn fits_search(machines: Vec[i64], average: i64, k: i64) -> bool {
+    let mut surplus = 0;
+    for m in machines.iter() {
+        surplus += *m - average;
+        if surplus.abs() > k or *m - average > k {
+            return false;
+        }
+    }
+    true
+}
+
+fn find_min_moves_search(machines: Vec[i64]) -> i64 {
+    let n = machines.len();
+    let mut total = 0;
+    for m in machines.iter() {
+        total += *m;
+    }
+    if total % n != 0 {
+        return -1;
+    }
+    let average = total / n;
+    let mut low = 0;
+    let mut high = total;
+    while low < high {
+        let mid = (low + high) / 2;
+        if fits_search(machines, average, mid) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    low
+}
+
+// ---- fold: find_min_moves_fold.kara
+
+fn find_min_moves_fold(machines: Vec[i64]) -> i64 {
+    let n = machines.len();
+    let total: i64 = machines.iter().sum();
+    if total % n != 0 {
+        return -1;
+    }
+    let average = total / n;
+    let (_, moves) = machines.iter().fold((0, 0), |(surplus, most), m| {
+        let extra = *m - average;
+        (surplus + extra, most.max((surplus + extra).abs()).max(extra))
+    });
+    moves
+}
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, machines: Vec[i64]) -> i64 {
+    match which {
+        0 => find_min_moves_star(machines),
+        1 => find_min_moves_sides(machines),
+        2 => find_min_moves_search(machines),
+        _ => find_min_moves_fold(machines),
+    }
+}
+
+// A row of machines as one number, base `base`.
+fn encode(row: Vec[i64], base: i64) -> i64 {
+    let mut key = 0;
+    for m in row.iter() {
+        key = key * base + *m;
+    }
+    key
+}
+
+// The reference: breadth-first search over every row of dresses. One
+// move picks, for each machine holding a dress, to pass one left, pass
+// one right or do nothing, all at once; the answer is the fewest moves
+// to a row where every machine holds the same. -1 when none is reached.
+fn reference(start: Vec[i64]) -> i64 {
+    let n = start.len();
+    let mut total = 0;
+    for m in start.iter() {
+        total += *m;
+    }
+    let base = total + 1;
+    let mut seen: Set[i64] = Set.new();
+    let mut queue: VecDeque[(Vec[i64], i64)] = VecDeque.new();
+    seen.insert(encode(start, base));
+    queue.push_back((start.clone(), 0));
+    while let Some((row, steps)) = queue.pop_front() {
+        let mut even = true;
+        for i in 1..n {
+            if row[i] != row[0] {
+                even = false;
+            }
+        }
+        if even {
+            return steps;
+        }
+        // Each machine's choice is a digit 0 (stay), 1 (left) or 2
+        // (right) of a number below 3^n.
+        let mut choices = 1;
+        for _ in 0..n {
+            choices *= 3;
+        }
+        for code in 1..choices {
+            let mut next = row.clone();
+            let mut c = code;
+            let mut ok = true;
+            for i in 0..n {
+                let d = c % 3;
+                c /= 3;
+                if d == 0 {
+                    continue;
+                }
+                let to = if d == 1 { i - 1 } else { i + 1 };
+                if row[i] == 0 or to < 0 or to >= n {
+                    ok = false;
+                } else {
+                    next[i] -= 1;
+                    next[to] += 1;
+                }
+            }
+            if ok {
+                let key = encode(next, base);
+                if not seen.contains(key) {
+                    seen.insert(key);
+                    queue.push_back((next, steps + 1));
+                }
+            }
+        }
+    }
+    -1
+}
+
+fn main() {
+    let names = vec!["star", "sides", "search", "fold"];
+    let cases = 1500;
+    let mut seed: i64 = 5170;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // A small row for the search: 1 to 4 machines of 0 to 3 dresses,
+        // or every other case 0 or 1 in each and up to 8 more piled on
+        // one of them.
+        let n = 1 + next_random(mut seed) % 4;
+        let mut small: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            small.push(next_random(mut seed) % (if c % 2 == 0 { 4 } else { 2 }));
+        }
+        if c % 2 == 1 {
+            let pile = next_random(mut seed) % n;
+            small[pile] += next_random(mut seed) % 9;
+        }
+        let want = reference(small);
+        // A larger row: 1 to 30 machines of 0 to 1,000, evened out in
+        // total every other case.
+        let big_n = 1 + next_random(mut seed) % 30;
+        let mut row: Vec[i64] = Vec.new();
+        let mut total = 0;
+        for _ in 0..big_n {
+            let m = next_random(mut seed) % 1001;
+            row.push(m);
+            total += m;
+        }
+        if c % 2 == 0 {
+            row[big_n - 1] += (big_n - total % big_n) % big_n;
+        }
+        let sum: i64 = row.iter().sum();
+        let add = next_random(mut seed) % 50;
+        let mut back = row.clone();
+        back.reverse();
+        let mut raised: Vec[i64] = Vec.new();
+        let mut doubled: Vec[i64] = Vec.new();
+        let mut twice = row.clone();
+        for m in row.iter() {
+            raised.push(*m + add);
+            doubled.push(2 * *m);
+            twice.push(*m);
+        }
+        for which in 0..4 {
+            // P1: the small row's answer is the search's.
+            checks += 1;
+            let got_small = arm(which, small);
+            if got_small != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: case {c} gave {got_small}, want {want}");
+                }
+            }
+            let got = arm(which, row);
+            // P2: the row read from the other end has the same answer.
+            checks += 1;
+            let other = arm(which, back);
+            if other != got {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: case {c} backwards gave {other}, forwards {got}");
+                }
+            }
+            // P3: the same number more in every machine changes nothing.
+            checks += 1;
+            let more = arm(which, raised);
+            if more != got {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: case {c} plus {add} gave {more}, want {got}");
+                }
+            }
+            // P4: twice the dresses in every machine takes twice the
+            // moves; a row that cannot be evened out stays so, unless
+            // twice its dresses share out evenly.
+            checks += 1;
+            let double = arm(which, doubled);
+            let expect = if got >= 0 { 2 * got } else if 2 * sum % big_n == 0 { double } else { -1 };
+            if double != expect {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: case {c} doubled gave {double}, want {expect}");
+                }
+            }
+            // P5: the row written out twice end to end has the same
+            // answer.
+            checks += 1;
+            let again = arm(which, twice);
+            if again != got {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: case {c} written twice gave {again}, want {got}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}
