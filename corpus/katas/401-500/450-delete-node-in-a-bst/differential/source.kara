@@ -146,10 +146,7 @@ fn delete_node_relink(root: Option[TreeNode], key: i64) -> Option[TreeNode] {
     let Some(right) = node.right else {
         return node.left;
     };
-    // `let (successor, rest)` once B-2026-10-12-27 is fixed: check
-    // refuses writing a shared value's `mut` field through a name bound
-    // by a `let` tuple pattern.
-    let mut (successor, rest) = take_smallest_relink(right);
+    let (successor, rest) = take_smallest_relink(right);
     successor.left = node.left;
     successor.right = rest;
     Some(successor)

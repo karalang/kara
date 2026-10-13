@@ -72,10 +72,7 @@ fn main() {
     let mut checksum: i64 = 0;
     for round in 0..rounds {
         for i in 0..count {
-            // kara B-2026-10-12-26: an element of a Vec[Option[ListNode]]
-            // passed to a bare parameter is refused as a move; revert to
-            // add_two_numbers(numbers[i], numbers[(i + 1) % count]).
-            let mut node = add_two_numbers(numbers[i].clone(), numbers[(i + 1) % count].clone());
+            let mut node = add_two_numbers(numbers[i], numbers[(i + 1) % count]);
             while let Some(n) = node {
                 digits += 1;
                 checksum = (checksum * 31 + n.val + round) % 1000000007;

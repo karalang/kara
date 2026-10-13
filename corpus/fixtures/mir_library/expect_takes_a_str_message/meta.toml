@@ -1,0 +1,17 @@
+source = "tests/mir_library.rs::expect_takes_a_str_message"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"
+bucket = "a"
+classified_with = "029e2493f+local"
+extracted_src = "b082fed8"
+model_exit = 0
+model_rev = "1aa23105"
+model_src = "b082fed8"
+model_verdict = "SAME"

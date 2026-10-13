@@ -1,0 +1,20 @@
+
+shared struct Node {
+    val: i64,
+}
+
+fn total(n: Option[Node]) -> i64 {
+    if let Some(x) = n { x.val } else { 0 }
+}
+
+fn pair_total(p: (Node, i64)) -> i64 {
+    p.0.val + p.1
+}
+
+fn main() {
+    let options: Vec[Option[Node]] = vec![Some(Node { val: 2 }), None];
+    let pairs: Vec[(Node, i64)] = vec![(Node { val: 3 }, 4)];
+    let o = options[0];
+    println(f"{total(o)} {total(options[1])} {total(options[0])}");
+    println(f"{pair_total(pairs[0])} {pairs[0].0.val}");
+}

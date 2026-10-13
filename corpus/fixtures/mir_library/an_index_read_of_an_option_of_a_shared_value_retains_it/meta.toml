@@ -1,0 +1,17 @@
+source = "tests/mir_library.rs::an_index_read_of_an_option_of_a_shared_value_retains_it"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "a"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"
+bucket = "a"
+classified_with = "029e2493f+local"
+extracted_src = "a6b8faa6"
+model_exit = 0
+model_rev = "1aa23105"
+model_src = "a6b8faa6"
+model_verdict = "SAME"

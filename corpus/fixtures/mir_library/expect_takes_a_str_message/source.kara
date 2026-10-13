@@ -1,0 +1,8 @@
+
+fn main() {
+    let a: Option[i64] = Some(3);
+    let b: Result[i64, String] = Ok(4);
+    let b2: Result[i64, String] = Ok(5);
+    let name = "ctx".to_string();
+    println(f"{a.expect("x")} {b.expect("y")} {a.expect(f"msg {name}")} {b2.expect(name)}");
+}
