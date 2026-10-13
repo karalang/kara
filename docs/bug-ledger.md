@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 602 |
 | double-free | 427 |
 | codegen-gap | 253 |
-| missing-feature | 235 |
+| missing-feature | 236 |
 | other | 171 |
 | perf | 154 |
 | diagnostics | 154 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2860 |
-| interp | 907 |
-| typecheck | 374 |
+| codegen | 2861 |
+| interp | 908 |
+| typecheck | 375 |
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
@@ -596,6 +596,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-14 | 2026-10-13 | interp+codegen | medium | The MIR builder refuses `for x in c.into_iter()` over a `Set`, `VecDeque`, `Map` or `SortedMap` whose elements are not `Copy` -- `for s in found.into_iter()` with `found: Set[Vec[i64]]` stops at "a `for` loop over a collection is not lowered yet" on both v2 backends, though `karac check` accepts it and the diagnostic for a bare `for` recommends exactly that spelling | — |
 | B-2026-10-13-15 | 2026-10-13 | codegen | low | `karac build --mir` runs kata 495's bench 3.6x slower than C, Rust and legacy `karac build` (0.36-0.44 s against 0.07-0.12 s): the x86 code for the hot loop takes a data-dependent BRANCH for `(a - b).min(duration)` where rustc emits a cmov, and mispredicts it about 28 million times | — |
 | B-2026-10-13-16 | 2026-10-13 | parser+typecheck | low | `karac fix` rewrites `!x` to `not x` whatever the operand's type, so on an INTEGER operand (Rust's bitwise complement, `m & !row == 0`) the first pass writes `not row`, a new error ("unary 'not' requires 'bool', found 'i64'; the bitwise complement of an integer is `~`"), and only a SECOND `karac fix` reaches the right `~ row` | — |
+| B-2026-10-13-17 | 2026-10-13 | typecheck+interp+codegen | medium | `ref_eq` has no v2 form: the spec's method `a.ref_eq(b)` on a `shared` handle (design.md § Equality, "a method the compiler provides on every `shared`, `sync` and `frozen` handle type") is refused by `karac check` and both MIR backends ("no method 'ref_eq' on type 'N'"), and the legacy free function `ref_eq(a, b)` that `karac check` still accepts is unknown to `karac __mir-run` ("call of unknown function ref_eq") and not lowered by `__mir-llvm-run` ("native `ref_eq` is not lowered yet"), so no program that compares `shared` handles by identity runs on v2 | — |
 
 ### Relocated
 
