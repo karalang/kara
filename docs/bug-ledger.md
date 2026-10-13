@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 602 |
 | double-free | 427 |
 | codegen-gap | 253 |
-| missing-feature | 227 |
+| missing-feature | 228 |
 | other | 171 |
 | perf | 152 |
 | diagnostics | 152 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2852 |
 | interp | 899 |
-| typecheck | 366 |
+| typecheck | 367 |
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-12). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-13). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -600,6 +600,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-34 | 2026-10-12 | typecheck | low | On the MIR backends, `v.push(cs.iter().collect())` with `v: Vec[String]` and `cs: Vec[char]` fails to build: "the method call `.collect` with no resolved callee is not lowered yet"; `collect` in argument position gets no target type | — |
 | B-2026-10-12-35 | 2026-10-12 | typecheck | low | `s.chars().rev()` is refused on the MIR backends ("no method 'rev' on type 'StrChars'") while `karac check` and the legacy interpreter accept it; the library spec makes `chars` a plain `Iterator` and lists only the `Vec`/`Array`/`Slice`/`VecDeque` and range iterators as `DoubleEndedIterator`, so either the spec and `StrChars` gain `next_back` or check should refuse | — |
 | B-2026-10-12-36 | 2026-10-12 | codegen | medium | `Vec.push` on the MIR compiled backend is an out-of-line runtime call (`karac_mir_vec_push`, runtime/src/mir.rs) that reserves and then `memcpy`s each element by its runtime size: a loop pushing 1,000,000 `i64` 40 times takes 0.19 s against 0.04 s for Rust and 0.01 s for legacy `karac build`; `s.chars().collect()` into a `Vec[char]` pays it per char, plus an out-of-line `karac_mir_char_at_byte` | — |
+| B-2026-10-13-1 | 2026-10-13 | typecheck | low | `Map.keys()` / `values()` and `SortedMap.keys()` / `values()` return an eager `Vec` on every front end, where docs/library/collections.md gives `fn keys(self) -> impl Iterator[Item = ref K]`: `m.keys().next()` and `m.keys().count()` are refused ("no method 'next' on type 'Vec': iterator adaptors/terminals require an explicit `.iter()`"), and taking the smallest key of a `SortedMap` copies every key | — |
 
 ### Relocated
 
