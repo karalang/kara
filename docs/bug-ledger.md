@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 602 |
 | double-free | 427 |
 | codegen-gap | 253 |
-| missing-feature | 234 |
+| missing-feature | 235 |
 | other | 171 |
 | perf | 153 |
 | diagnostics | 153 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2858 |
-| interp | 906 |
+| codegen | 2859 |
+| interp | 907 |
 | typecheck | 373 |
 | other | 115 |
 | ownership | 83 |
@@ -595,6 +595,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-7 | 2026-10-13 | typecheck+interp+codegen | medium | The MIR backends have no `Iterator.min` / `max` / `min_by` / `max_by` / `min_by_key` / `max_by_key`, all in the library spec (CORRECTION 2026-10-13: the row also said `Vec.min` / `max` is spec'd, citing collections.md:205-206; those lines are `SortedSet`'s, and no `Vec` or `Slice` `min`/`max` is in the spec, so `m.max()` is out of scope here -- found by Thread A): `m.iter().max()`, `(0..4).max()` and `m.iter().map(f).max()` are refused with "no method 'max' on type 'VecIter'" (`Range`, `IterMap`), and `m.max()` reaches the run as "call of unknown function Vec[i64].max"; `karac check` accepts `min` / `max` but types the result by value, so the spec's `*m.iter().max().unwrap()` and `*m.max().unwrap()` are refused ("found 'i64'"), and it has no `min_by` / `max_by_key` either | — |
 | B-2026-10-13-11 | 2026-10-13 | typecheck | low | `PriorityQueue.peek` is typed `Option[T]` by value instead of the spec's `Option[ref T]`, so the spec's own `*pq.peek().unwrap()` and `Some(x) => *x` are refused by `karac check` and both MIR backends ("unary '*' requires 'ref T' ... found 'i64'"), and `let s = pq.peek().unwrap()` on a `PriorityQueue[String]` is accepted as an owned `String` | — |
 | B-2026-10-13-12 | 2026-10-13 | typecheck | low | `char.is_ascii_lowercase()`, `is_ascii_uppercase()` and `is_ascii_alphanumeric()` are refused by `karac check`, the legacy interpreter and both MIR backends ("no method 'is_ascii_lowercase' on type 'char'"), though `is_ascii_digit`, `is_ascii_alphabetic`, `is_lowercase` and `to_ascii_uppercase` are accepted and the MIR codegen's native table already lists all three; the `char` method surface is not in docs/library at all | — |
+| B-2026-10-13-14 | 2026-10-13 | interp+codegen | medium | The MIR builder refuses `for x in c.into_iter()` over a `Set`, `VecDeque`, `Map` or `SortedMap` whose elements are not `Copy` -- `for s in found.into_iter()` with `found: Set[Vec[i64]]` stops at "a `for` loop over a collection is not lowered yet" on both v2 backends, though `karac check` accepts it and the diagnostic for a bare `for` recommends exactly that spelling | — |
 
 ### Relocated
 
