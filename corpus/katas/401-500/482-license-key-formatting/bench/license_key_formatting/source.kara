@@ -1,0 +1,61 @@
+// Benchmark for #482: the ★ arm (back to front) on a large workload.
+//
+// LeetCode #482: License Key Formatting -- back to front.
+//
+// Every group is k long except the first, so the groups are fixed from
+// the end. Walk the characters back to front, skip the dashes, put a
+// dash in before every k-th character kept after the first, and reverse
+// at the end.
+
+fn license_key_formatting(s: String, k: i64) -> String {
+    let mut backwards: Vec[char] = Vec.new();
+    let mut in_group = 0;
+    for c in s.chars().rev() {
+        if c == '-' {
+            continue;
+        }
+        if in_group == k {
+            backwards.push('-');
+            in_group = 0;
+        }
+        backwards.push(c.to_ascii_uppercase());
+        in_group += 1;
+    }
+    backwards.reverse();
+    let mut key = String.new();
+    for c in backwards {
+        key.push(c);
+    }
+    key
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // One string of 100,000 characters (a dash one time in four), built
+    // once, then formatted for every k from 1 to 500.
+    let alphabet: Vec[char] = "abcxyzABCXYZ0189".chars().collect();
+    let mut seed: i64 = 482;
+    let mut s = String.new();
+    for _ in 0..100000 {
+        if next_random(mut seed) % 4 == 0 {
+            s.push('-');
+        } else {
+            s.push(alphabet[next_random(mut seed) % alphabet.len()]);
+        }
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for k in 1..501 {
+        let key = license_key_formatting(s, k);
+        let bytes = key.bytes();
+        total += key.len();
+        checksum = (checksum * 31 + key.len() * 7 + bytes[key.len() / 2] as i64 + bytes[k] as i64) % 1000000007;
+    }
+    println(f"k = 1 to 500 on 100000 characters: keys add up to {total} characters, checksum {checksum}");
+}

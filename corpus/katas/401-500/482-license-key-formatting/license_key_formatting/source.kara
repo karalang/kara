@@ -1,0 +1,81 @@
+// LeetCode #482: License Key Formatting -- back to front.
+//
+// Every group is k long except the first, so the groups are fixed from
+// the end. Walk the characters back to front, skip the dashes, put a
+// dash in before every k-th character kept after the first, and reverse
+// at the end.
+
+fn license_key_formatting(s: String, k: i64) -> String {
+    let mut backwards: Vec[char] = Vec.new();
+    let mut in_group = 0;
+    for c in s.chars().rev() {
+        if c == '-' {
+            continue;
+        }
+        if in_group == k {
+            backwards.push('-');
+            in_group = 0;
+        }
+        backwards.push(c.to_ascii_uppercase());
+        in_group += 1;
+    }
+    backwards.reverse();
+    let mut key = String.new();
+    for c in backwards {
+        key.push(c);
+    }
+    key
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(s: String, k: i64) {
+    println(f"'{s}', k = {k} -> '{license_key_formatting(s, k)}'");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(String.from("5F3Z-2e-9-w"), 4);
+    show(String.from("2-5g-3-J"), 2);
+    show(String.from("---"), 3);
+    show(String.from("a"), 1);
+    show(String.from("abcdef"), 10);
+    show(String.from("a-b-c-d"), 1);
+    show(String.from("--a--bc--"), 2);
+    show(String.from("r5z-9kx-m"), 3);
+    show(String.from("AA-aa-AA"), 2);
+    // 300 random cases: 1 to 40 characters, a dash one time in four and
+    // otherwise a letter of either case or a digit, with k from 1 to 8.
+    let alphabet: Vec[char] = "abcxyzABCXYZ0189".chars().collect();
+    let count = 300;
+    let mut seed: i64 = 482;
+    let mut length = 0;
+    let mut dashes = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let mut s = String.new();
+        let size = 1 + next_random(mut seed) % 40;
+        for _ in 0..size {
+            if next_random(mut seed) % 4 == 0 {
+                s.push('-');
+            } else {
+                s.push(alphabet[next_random(mut seed) % alphabet.len()]);
+            }
+        }
+        let k = 1 + next_random(mut seed) % 8;
+        let key = license_key_formatting(s, k);
+        for c in key.chars() {
+            length += 1;
+            if c == '-' {
+                dashes += 1;
+            }
+            checksum = (checksum * 31 + c as i64) % 1000000007;
+        }
+        checksum = (checksum * 31 + 7) % 1000000007;
+    }
+    println(f"{count} random cases: {length} characters, {dashes} dashes, checksum {checksum}");
+}

@@ -1,0 +1,254 @@
+// Differential test for LeetCode #482: License Key Formatting.
+//
+// Copies of the four arms, on 1,500 random strings of 0 to 30 characters
+// (a dash one time in three, otherwise a letter of either case or a
+// digit) with k from 1 to 7. Properties:
+//   P1  the key passes the definition: without its dashes it is the
+//       string's characters without dashes, uppercased, and its groups
+//       are k long except the first, which holds 1 to k
+//   P2  one more dash in the string, anywhere, gives the same key
+//   P3  the string with its letters' case swapped gives the same key
+//   P4  k more characters at the end give them, uppercased, as one more
+//       group at the end of the key
+
+// ---- star: license_key_formatting.kara
+
+fn license_key_formatting_star(s: String, k: i64) -> String {
+    let mut backwards: Vec[char] = Vec.new();
+    let mut in_group = 0;
+    for c in s.chars().rev() {
+        if c == '-' {
+            continue;
+        }
+        if in_group == k {
+            backwards.push('-');
+            in_group = 0;
+        }
+        backwards.push(c.to_ascii_uppercase());
+        in_group += 1;
+    }
+    backwards.reverse();
+    let mut key = String.new();
+    for c in backwards {
+        key.push(c);
+    }
+    key
+}
+
+// ---- front: license_key_formatting_front.kara
+
+fn license_key_formatting_front(s: String, k: i64) -> String {
+    let mut total = 0;
+    for c in s.chars() {
+        if c != '-' {
+            total += 1;
+        }
+    }
+    let mut room = total % k;
+    if room == 0 {
+        room = k;
+    }
+    let mut key = String.new();
+    for c in s.chars() {
+        if c == '-' {
+            continue;
+        }
+        if room == 0 {
+            key.push('-');
+            room = k;
+        }
+        key.push(c.to_ascii_uppercase());
+        room -= 1;
+    }
+    key
+}
+
+// ---- pieces: license_key_formatting_pieces.kara
+
+fn license_key_formatting_pieces(s: String, k: i64) -> String {
+    let clean = s.replace("-", "").to_uppercase();
+    let mut pieces: Vec[String] = Vec.new();
+    let mut start = 0;
+    let mut end = clean.len() % k;
+    if end == 0 {
+        end = k;
+    }
+    while start < clean.len() {
+        pieces.push(clean[start..end].to_string());
+        start = end;
+        end += k;
+    }
+    pieces.join("-")
+}
+
+// ---- collect: license_key_formatting_collect.kara
+
+fn license_key_formatting_collect(s: String, k: i64) -> String {
+    let kept: Vec[char] = s.chars().filter(|c| c != '-').map(|c| c.to_ascii_uppercase()).collect();
+    let n = kept.len();
+    let mut key = String.new();
+    for i in 0..n {
+        if i > 0 and (n - i) % k == 0 {
+            key.push('-');
+        }
+        key.push(kept[i]);
+    }
+    key
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, s: String, k: i64) -> String {
+    match which {
+        0 => license_key_formatting_star(s, k),
+        1 => license_key_formatting_front(s, k),
+        2 => license_key_formatting_pieces(s, k),
+        _ => license_key_formatting_collect(s, k),
+    }
+}
+
+// Whether `key` is the formatting of `s`: its characters without the
+// dashes are `s`'s without the dashes, uppercased, and between its
+// dashes are groups of k, except the first, which holds 1 to k. Only one
+// string passes.
+fn is_formatting(key: String, s: String, k: i64) -> bool {
+    let mut want = String.new();
+    for c in s.chars() {
+        if c != '-' {
+            want.push(c.to_ascii_uppercase());
+        }
+    }
+    let mut got = String.new();
+    let mut groups: Vec[i64] = vec![0];
+    for c in key.chars() {
+        if c == '-' {
+            groups.push(0);
+        } else {
+            got.push(c);
+            let last = groups.len() - 1;
+            groups[last] += 1;
+        }
+    }
+    if got != want {
+        return false;
+    }
+    if want.is_empty() {
+        return key.is_empty();
+    }
+    if groups[0] < 1 or groups[0] > k {
+        return false;
+    }
+    for i in 1..groups.len() {
+        if groups[i] != k {
+            return false;
+        }
+    }
+    true
+}
+
+fn main() {
+    let names = vec!["star", "front", "pieces", "collect"];
+    let alphabet: Vec[char] = "abcxyzABCXYZ0189".chars().collect();
+    let cases = 1500;
+    let mut seed: i64 = 4820;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0];
+    for _ in 0..cases {
+        // 0 to 30 characters, a dash one time in three, and k from 1 to 7.
+        let mut s = String.new();
+        let size = next_random(mut seed) % 31;
+        for _ in 0..size {
+            if next_random(mut seed) % 3 == 0 {
+                s.push('-');
+            } else {
+                s.push(alphabet[next_random(mut seed) % alphabet.len()]);
+            }
+        }
+        let k = 1 + next_random(mut seed) % 7;
+        // The same string with a dash added at a random place, with its
+        // letters' case swapped, and with k characters after it.
+        let mut dashed = String.new();
+        let mut swapped = String.new();
+        let mut back = String.new();
+        let at = next_random(mut seed) % (size + 1);
+        let mut i = 0;
+        for c in s.chars() {
+            if i == at {
+                dashed.push('-');
+            }
+            dashed.push(c);
+            if c.is_lowercase() {
+                swapped.push(c.to_ascii_uppercase());
+            } else {
+                swapped.push(c.to_ascii_lowercase());
+            }
+            i += 1;
+        }
+        if at == size {
+            dashed.push('-');
+        }
+        for j in 0..k {
+            back.push(alphabet[(j * 5 + k) % alphabet.len()]);
+        }
+        let added = back.to_uppercase();
+        let mut longer = s.clone();
+        longer.push_str(back.as_str());
+        for which in 0..4 {
+            let key = arm(which, s, k);
+            // P1: the key passes the definition.
+            checks += 1;
+            if not is_formatting(key, s, k) {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: '{s}', k = {k} gave '{key}'");
+                }
+            }
+            // P2: one more dash changes nothing.
+            checks += 1;
+            let other = arm(which, dashed, k);
+            if other != key {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: '{dashed}', k = {k} gave '{other}', not '{key}'");
+                }
+            }
+            // P3: swapping the letters' case changes nothing.
+            checks += 1;
+            let other = arm(which, swapped, k);
+            if other != key {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: '{swapped}', k = {k} gave '{other}', not '{key}'");
+                }
+            }
+            // P4: k characters at the end make one more group, at the end.
+            checks += 1;
+            let mut want = key.clone();
+            if not key.is_empty() {
+                want.push('-');
+            }
+            want.push_str(added.as_str());
+            let other = arm(which, longer, k);
+            if other != want {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: '{longer}', k = {k} gave '{other}', want '{want}'");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}");
+    }
+}

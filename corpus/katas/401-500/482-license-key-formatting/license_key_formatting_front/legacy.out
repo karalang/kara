@@ -1,0 +1,10 @@
+'5F3Z-2e-9-w', k = 4 -> '5F3Z-2E9W'
+'2-5g-3-J', k = 2 -> '2-5G-3J'
+'---', k = 3 -> ''
+'a', k = 1 -> 'A'
+'abcdef', k = 10 -> 'ABCDEF'
+'a-b-c-d', k = 1 -> 'A-B-C-D'
+'--a--bc--', k = 2 -> 'A-BC'
+'r5z-9kx-m', k = 3 -> 'R-5Z9-KXM'
+'AA-aa-AA', k = 2 -> 'AA-AA-AA'
+300 random cases: 6362 characters, 1586 dashes, checksum 776400600
