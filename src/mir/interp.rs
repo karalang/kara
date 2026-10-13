@@ -1858,6 +1858,9 @@ impl<'a> Interp<'a> {
                 "is_ascii_digit"
                 | "is_ascii_alphabetic"
                 | "is_ascii_alphanumeric"
+                | "is_ascii_uppercase"
+                | "is_ascii_lowercase"
+                | "is_ascii_punctuation"
                 | "is_ascii_whitespace"
                 | "is_ascii_hexdigit",
             ) if int_width(t).is_some() => {

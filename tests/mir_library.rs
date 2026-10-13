@@ -1045,3 +1045,43 @@ fn main() {
         "1 4 3 2\n3 3 1 2\n",
     );
 }
+
+/// Every ASCII class predicate takes a `char` and an integer byte alike,
+/// `is_ascii_lowercase`, `is_ascii_uppercase`, `is_ascii_alphanumeric`,
+/// `is_ascii_punctuation` and `is_ascii_whitespace` as much as
+/// `is_ascii_digit` (B-2026-10-13-12). A byte outside 0..=255 is in no class.
+#[test]
+fn ascii_class_predicates_take_a_char_or_a_byte() {
+    let src = r#"
+fn classes(c: char) -> String {
+    let mut s = String.new();
+    if c.is_ascii_lowercase() { s.push('l'); }
+    if c.is_ascii_uppercase() { s.push('u'); }
+    if c.is_ascii_alphanumeric() { s.push('a'); }
+    if c.is_ascii_punctuation() { s.push('p'); }
+    if c.is_ascii_whitespace() { s.push('w'); }
+    s
+}
+fn byte_classes(b: u8) -> String {
+    let mut s = String.new();
+    if b.is_ascii_lowercase() { s.push('l'); }
+    if b.is_ascii_uppercase() { s.push('u'); }
+    if b.is_ascii_alphanumeric() { s.push('a'); }
+    if b.is_ascii_punctuation() { s.push('p'); }
+    if b.is_ascii_whitespace() { s.push('w'); }
+    s
+}
+fn main() {
+    for c in "aZ7!  é".chars() {
+        print(f"[{classes(c)}]");
+    }
+    println("");
+    for b in "aZ7! ".bytes() {
+        print(f"[{byte_classes(b)}]");
+    }
+    let big: i64 = 353;
+    println(f" {big.is_ascii_lowercase()}");
+}
+"#;
+    assert_runs(src, "[la][ua][a][p][w][w][]\n[la][ua][a][p][w] false\n");
+}
