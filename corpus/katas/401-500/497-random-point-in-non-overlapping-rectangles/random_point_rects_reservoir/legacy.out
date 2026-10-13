@@ -1,0 +1,8 @@
+example: 31 points, 31000 picks, all covered true, each point its share true
+one point: 1 points, 100 picks, all covered true, each point its share true
+a column: 9 points, 9000 picks, all covered true, each point its share true
+a row and a column: 20 points, 20000 picks, all covered true, each point its share true
+squares 1 to 16: 30 points, 30000 picks, all covered true, each point its share true
+far corners: 13 points, 13000 picks, all covered true, each point its share true
+largest: 400400100 points, 40000 picks, all covered true, each rectangle its share true, columns even true, rows even true
+one seed twice the same true, another seed other picks true

@@ -1,0 +1,430 @@
+// Differential test for LeetCode #497: Random Point in Non-overlapping
+// Rectangles.
+//
+// Copies of the four arms. The arms draw differently, so each is held
+// to the properties on its own: 1,500 random sets of 1 to 8 rectangles
+// of up to 3, 40 or 2,001 on a side in turn, anywhere in range, with 20
+// picks each for P1 and P2, and ten seeded runs of 8,000 picks for P3
+// to P5. Properties:
+//   P1  every pick is a point some rectangle covers
+//   P2  the rectangles moved by (dx, dy) give the same picks moved
+//   P3  every point of 1 to 4 rectangles of up to 4 by 4 gets its share,
+//       within 5 standard deviations
+//   P4  so does every rectangle, by its count of points
+//   P5  in one rectangle of 2 to 12 by 2 to 12, so does every column
+//       and every row
+
+// ---- the shared generator
+
+struct Draw {
+    seed: i64,
+}
+
+impl Draw {
+    fn new(seed: i64) -> Draw {
+        Draw { seed: seed }
+    }
+
+    fn step(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.seed / 65536
+    }
+
+    // Uniform in [0, n) for n up to 2^30: 30 random bits, drawn again
+    // when they land in the last, incomplete run of n.
+    fn below(mut ref self, n: i64) -> i64 {
+        let limit = 1073741824 / n * n;
+        loop {
+            let high = self.step();
+            let low = self.step();
+            let r = high * 32768 + low;
+            if r < limit {
+                return r % n;
+            }
+        }
+    }
+}
+
+// ---- star: random_point_rects.kara
+
+struct SolutionStar {
+    rects: Vec[Vec[i64]],
+    ends: Vec[i64],
+    draw: Draw,
+}
+
+impl SolutionStar {
+    fn new(rects: own Vec[Vec[i64]], seed: i64) -> SolutionStar {
+        let mut ends: Vec[i64] = Vec.new();
+        let mut total = 0;
+        for r in rects {
+            total += (r[2] - r[0] + 1) * (r[3] - r[1] + 1);
+            ends.push(total);
+        }
+        SolutionStar { rects: rects, ends: ends, draw: Draw.new(seed) }
+    }
+
+    fn pick(mut ref self) -> Vec[i64] {
+        let k = self.draw.below(self.ends[self.ends.len() - 1]);
+        // The first rectangle whose running count passes k.
+        let mut low = 0;
+        let mut high = self.ends.len() - 1;
+        while low < high {
+            let mid = (low + high) / 2;
+            if self.ends[mid] > k {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+        let r = ref self.rects[low];
+        let before = if low == 0 { 0 } else { self.ends[low - 1] };
+        let at = k - before;
+        let width = r[2] - r[0] + 1;
+        vec![r[0] + at % width, r[1] + at / width]
+    }
+}
+
+// ---- walk: random_point_rects_walk.kara
+
+struct SolutionWalk {
+    rects: Vec[Vec[i64]],
+    counts: Vec[i64],
+    total: i64,
+    draw: Draw,
+}
+
+impl SolutionWalk {
+    fn new(rects: own Vec[Vec[i64]], seed: i64) -> SolutionWalk {
+        let mut counts: Vec[i64] = Vec.new();
+        let mut total = 0;
+        for r in rects {
+            let count = (r[2] - r[0] + 1) * (r[3] - r[1] + 1);
+            counts.push(count);
+            total += count;
+        }
+        SolutionWalk { rects: rects, counts: counts, total: total, draw: Draw.new(seed) }
+    }
+
+    fn pick(mut ref self) -> Vec[i64] {
+        let mut k = self.draw.below(self.total);
+        let mut i = 0;
+        while k >= self.counts[i] {
+            k -= self.counts[i];
+            i += 1;
+        }
+        let r = ref self.rects[i];
+        let width = r[2] - r[0] + 1;
+        vec![r[0] + k % width, r[1] + k / width]
+    }
+}
+
+// ---- reservoir: random_point_rects_reservoir.kara
+
+struct SolutionReservoir {
+    rects: Vec[Vec[i64]],
+    draw: Draw,
+}
+
+impl SolutionReservoir {
+    fn new(rects: own Vec[Vec[i64]], seed: i64) -> SolutionReservoir {
+        SolutionReservoir { rects: rects, draw: Draw.new(seed) }
+    }
+
+    fn pick(mut ref self) -> Vec[i64] {
+        let mut seen = 0;
+        let mut kept = 0;
+        for i in 0..self.rects.len() {
+            let r = ref self.rects[i];
+            let count = (r[2] - r[0] + 1) * (r[3] - r[1] + 1);
+            seen += count;
+            if self.draw.below(seen) < count {
+                kept = i;
+            }
+        }
+        let r = ref self.rects[kept];
+        let x = r[0] + self.draw.below(r[2] - r[0] + 1);
+        let y = r[1] + self.draw.below(r[3] - r[1] + 1);
+        vec![x, y]
+    }
+}
+
+// ---- alias: random_point_rects_alias.kara
+
+struct SolutionAlias {
+    rects: Vec[Vec[i64]],
+    counts: Vec[i64],
+    total: i64,
+    keep: Vec[i64],
+    alias: Vec[i64],
+    draw: Draw,
+}
+
+impl SolutionAlias {
+    fn new(rects: own Vec[Vec[i64]], seed: i64) -> SolutionAlias {
+        let n = rects.len();
+        let mut counts: Vec[i64] = Vec.new();
+        let mut total = 0;
+        for r in rects {
+            let count = (r[2] - r[0] + 1) * (r[3] - r[1] + 1);
+            counts.push(count);
+            total += count;
+        }
+        // Each rectangle's share in units of total / n, so a full column
+        // is `total` units.
+        let mut share: Vec[i64] = Vec.new();
+        for c in counts {
+            share.push(c * n);
+        }
+        let mut keep = vec![total; n];
+        let mut alias: Vec[i64] = Vec.new();
+        for i in 0..n {
+            alias.push(i);
+        }
+        let mut small: Vec[i64] = Vec.new();
+        let mut large: Vec[i64] = Vec.new();
+        for i in 0..n {
+            if share[i] < total {
+                small.push(i);
+            } else {
+                large.push(i);
+            }
+        }
+        while small.len() > 0 and large.len() > 0 {
+            let s = small.pop().unwrap();
+            let l = large.pop().unwrap();
+            keep[s] = share[s];
+            alias[s] = l;
+            share[l] -= total - share[s];
+            if share[l] < total {
+                small.push(l);
+            } else {
+                large.push(l);
+            }
+        }
+        SolutionAlias { rects: rects, counts: counts, total: total, keep: keep, alias: alias, draw: Draw.new(seed) }
+    }
+
+    fn pick(mut ref self) -> Vec[i64] {
+        let column = self.draw.below(self.rects.len());
+        let unit = self.draw.below(self.total);
+        let i = if unit < self.keep[column] { column } else { self.alias[column] };
+        let r = ref self.rects[i];
+        let at = self.draw.below(self.counts[i]);
+        let width = r[2] - r[0] + 1;
+        vec![r[0] + at % width, r[1] + at / width]
+    }
+}
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// An arm's first `n` picks for the rectangles from `seed`.
+fn picks(which: i64, rects: Vec[Vec[i64]], seed: i64, n: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if which == 0 {
+        let mut s = SolutionStar.new(rects.clone(), seed);
+        for _ in 0..n {
+            out.push(s.pick());
+        }
+    } else if which == 1 {
+        let mut s = SolutionWalk.new(rects.clone(), seed);
+        for _ in 0..n {
+            out.push(s.pick());
+        }
+    } else if which == 2 {
+        let mut s = SolutionReservoir.new(rects.clone(), seed);
+        for _ in 0..n {
+            out.push(s.pick());
+        }
+    } else {
+        let mut s = SolutionAlias.new(rects.clone(), seed);
+        for _ in 0..n {
+            out.push(s.pick());
+        }
+    }
+    out
+}
+
+// The point's number, rectangle by rectangle and row by row, or -1.
+fn number_of(rects: Vec[Vec[i64]], p: Vec[i64]) -> i64 {
+    let mut before = 0;
+    for r in rects {
+        if p[0] >= r[0] and p[0] <= r[2] and p[1] >= r[1] and p[1] <= r[3] {
+            return before + (p[1] - r[1]) * (r[2] - r[0] + 1) + p[0] - r[0];
+        }
+        before += (r[2] - r[0] + 1) * (r[3] - r[1] + 1);
+    }
+    -1
+}
+
+// Whether every count is within 5 standard deviations of its share,
+// `weights[i]` of every `total`, of `n` draws.
+fn fair(counts: Vec[i64], weights: Vec[i64], total: i64, n: i64) -> bool {
+    for i in 0..counts.len() {
+        let p = weights[i] as f64 / total as f64;
+        let sd = (n as f64 * p * (1.0 - p)).sqrt();
+        if (counts[i] as f64 - n as f64 * p).abs() > 5.0 * sd + 0.000001 {
+            return false;
+        }
+    }
+    true
+}
+
+// 1 to `most` rectangles side by side from `x0`, each up to `side` wide
+// and tall, at heights within 10 of `y0`.
+fn random_rects(seed: mut ref i64, most: i64, side: i64, x0: i64, y0: i64) -> Vec[Vec[i64]] {
+    let count = 1 + next_random(seed) % most;
+    let mut rects: Vec[Vec[i64]] = Vec.new();
+    for i in 0..count {
+        let x = x0 + i * (side + 5) + next_random(seed) % 3;
+        let y = y0 + next_random(seed) % 21 - 10;
+        let w = 1 + next_random(seed) % side;
+        let h = 1 + next_random(seed) % side;
+        rects.push(vec![x, y, x + w - 1, y + h - 1]);
+    }
+    rects
+}
+
+fn main() {
+    let names = vec!["star", "walk", "reservoir", "alias"];
+    let cases = 1500;
+    let runs = 10;
+    let mut seed: i64 = 4970;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // 1 to 8 rectangles of up to 2,001 by 2,001, anywhere in range,
+        // 20 picks; and the same moved by up to 1,000 each way.
+        let x0 = next_random(mut seed) % 1000000 * 1000 - 1000000000;
+        let y0 = next_random(mut seed) % 1000000 * 1000 - 999990000;
+        let side = if c % 3 == 0 { 3 } else if c % 3 == 1 { 40 } else { 2001 };
+        let rects = random_rects(mut seed, 8, side, x0, y0);
+        let dx = next_random(mut seed) % 2001 - 1000;
+        let dy = next_random(mut seed) % 2001 - 1000;
+        let mut moved: Vec[Vec[i64]] = Vec.new();
+        for r in rects {
+            moved.push(vec![r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy]);
+        }
+        let s = next_random(mut seed);
+        for which in 0..4 {
+            let got = picks(which, rects, s, 20);
+            // P1: every pick is a point some rectangle covers.
+            checks += 1;
+            let mut ok = got.len() == 20;
+            for p in got {
+                if p.len() != 2 or number_of(rects, p) < 0 {
+                    ok = false;
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {rects} from {s} gave {got}");
+                }
+            }
+            // P2: the rectangles moved move the picks with them.
+            checks += 1;
+            let other = picks(which, moved, s, 20);
+            let mut ok = other.len() == got.len();
+            if ok {
+                for i in 0..got.len() {
+                    if other[i] != vec![got[i][0] + dx, got[i][1] + dy] {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {moved} from {s} gave {other}, unmoved {got}");
+                }
+            }
+        }
+    }
+    for run in 0..runs {
+        // 1 to 4 rectangles of up to 4 by 4, and one of 2 to 12 by 2
+        // to 12; 8,000 picks of each.
+        let rects = random_rects(mut seed, 4, 4, run * 100, 0);
+        let mut total = 0;
+        let mut sizes: Vec[i64] = Vec.new();
+        for r in rects {
+            let size = (r[2] - r[0] + 1) * (r[3] - r[1] + 1);
+            sizes.push(size);
+            total += size;
+        }
+        let w = 2 + next_random(mut seed) % 11;
+        let h = 2 + next_random(mut seed) % 11;
+        let one = vec![vec![-5, 7, w - 6, h + 6]];
+        let s = next_random(mut seed);
+        let n = 8000;
+        for which in 0..4 {
+            let got = picks(which, rects, s, n);
+            let mut by_point = vec![0; total];
+            let mut by_rect = vec![0; rects.len()];
+            for p in got {
+                let k = number_of(rects, p);
+                if k >= 0 {
+                    by_point[k] += 1;
+                    let mut i = 0;
+                    let mut before = sizes[0];
+                    while k >= before {
+                        i += 1;
+                        before += sizes[i];
+                    }
+                    by_rect[i] += 1;
+                }
+            }
+            // P3: every point gets its share.
+            checks += 1;
+            if not fair(by_point, vec![1; total], total, n) {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {rects} from {s}: {by_point}");
+                }
+            }
+            // P4: every rectangle gets its share.
+            checks += 1;
+            if not fair(by_rect, sizes, total, n) {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {rects} from {s}: {by_rect}");
+                }
+            }
+            // P5: in one rectangle, every column and every row gets its
+            // share.
+            checks += 1;
+            let got = picks(which, one, s, n);
+            let mut by_column = vec![0; w];
+            let mut by_row = vec![0; h];
+            let mut ok = true;
+            for p in got {
+                if number_of(one, p) < 0 {
+                    ok = false;
+                } else {
+                    by_column[p[0] + 5] += 1;
+                    by_row[p[1] - 7] += 1;
+                }
+            }
+            if not ok or not fair(by_column, vec![1; w], w, n) or not fair(by_row, vec![1; h], h, n) {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {one} from {s}: columns {by_column}, rows {by_row}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases and {runs} runs, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

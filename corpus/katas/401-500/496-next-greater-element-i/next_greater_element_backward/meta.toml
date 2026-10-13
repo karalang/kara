@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/496-next-greater-element-i/next_greater_element_backward.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "lib:map"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "40c0c7a8d"
+extracted_src = "319d07b3"
+model_rev = "1aa23105"
+model_src = "319d07b3"

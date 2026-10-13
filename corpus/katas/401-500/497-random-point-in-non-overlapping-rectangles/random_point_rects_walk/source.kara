@@ -1,0 +1,189 @@
+// LeetCode #497: Random Point in Non-overlapping Rectangles -- a walk.
+//
+// Draw one number below the total count of points, then walk the
+// rectangles taking each one's count off it until it falls inside one;
+// what is left is the point's place in that rectangle, row by row.
+
+// A seeded generator: 15 random bits a step, and a uniform draw below n
+// built from two steps.
+struct Draw {
+    seed: i64,
+}
+
+impl Draw {
+    fn new(seed: i64) -> Draw {
+        Draw { seed: seed }
+    }
+
+    fn step(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.seed / 65536
+    }
+
+    // Uniform in [0, n) for n up to 2^30: 30 random bits, drawn again
+    // when they land in the last, incomplete run of n.
+    fn below(mut ref self, n: i64) -> i64 {
+        let limit = 1073741824 / n * n;
+        loop {
+            let high = self.step();
+            let low = self.step();
+            let r = high * 32768 + low;
+            if r < limit {
+                return r % n;
+            }
+        }
+    }
+}
+
+struct Solution {
+    rects: Vec[Vec[i64]],
+    counts: Vec[i64],
+    total: i64,
+    draw: Draw,
+}
+
+impl Solution {
+    fn new(rects: own Vec[Vec[i64]], seed: i64) -> Solution {
+        let mut counts: Vec[i64] = Vec.new();
+        let mut total = 0;
+        for r in rects {
+            let count = (r[2] - r[0] + 1) * (r[3] - r[1] + 1);
+            counts.push(count);
+            total += count;
+        }
+        Solution { rects: rects, counts: counts, total: total, draw: Draw.new(seed) }
+    }
+
+    fn pick(mut ref self) -> Vec[i64] {
+        let mut k = self.draw.below(self.total);
+        let mut i = 0;
+        while k >= self.counts[i] {
+            k -= self.counts[i];
+            i += 1;
+        }
+        let r = ref self.rects[i];
+        let width = r[2] - r[0] + 1;
+        vec![r[0] + k % width, r[1] + k / width]
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// The point's number when every point is numbered rectangle by
+// rectangle and row by row, or -1 when no rectangle covers it.
+fn number_of(rects: Vec[Vec[i64]], p: Vec[i64]) -> i64 {
+    let mut before = 0;
+    for r in rects {
+        if p[0] >= r[0] and p[0] <= r[2] and p[1] >= r[1] and p[1] <= r[3] {
+            return before + (p[1] - r[1]) * (r[2] - r[0] + 1) + p[0] - r[0];
+        }
+        before += (r[2] - r[0] + 1) * (r[3] - r[1] + 1);
+    }
+    -1
+}
+
+// Whether every count is within `sds` standard deviations of its share,
+// `weights[i]` of every `total`, of `n` draws.
+fn fair(counts: Vec[i64], weights: Vec[i64], total: i64, n: i64, sds: f64) -> bool {
+    for i in 0..counts.len() {
+        let p = weights[i] as f64 / total as f64;
+        let expect = n as f64 * p;
+        let sd = (n as f64 * p * (1.0 - p)).sqrt();
+        if (counts[i] as f64 - expect).abs() > sds * sd + 0.000001 {
+            return false;
+        }
+    }
+    true
+}
+
+// Picks `n` points from a fresh solution and reports whether all are
+// covered and whether every point got its share.
+fn check(name: String, rects: Vec[Vec[i64]], n: i64, seed: i64) {
+    let mut total = 0;
+    for r in rects {
+        total += (r[2] - r[0] + 1) * (r[3] - r[1] + 1);
+    }
+    let mut solution = Solution.new(rects.clone(), seed);
+    let mut counts = vec![0; total];
+    let mut inside = true;
+    for _ in 0..n {
+        let p = solution.pick();
+        let k = number_of(rects, p);
+        if p.len() != 2 or k < 0 {
+            inside = false;
+        } else {
+            counts[k] += 1;
+        }
+    }
+    let ones = vec![1; total];
+    let even = inside and fair(counts, ones, total, n, 5.0);
+    println(f"{name}: {total} points, {n} picks, all covered {inside}, each point its share {even}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    check("example", vec![vec![-2, -2, 1, 1], vec![2, 2, 4, 6]], 31000, 1);
+    check("one point", vec![vec![7, -3, 7, -3]], 100, 2);
+    check("a column", vec![vec![5, 1, 5, 9]], 9000, 3);
+    check("a row and a column", vec![vec![0, 0, 9, 0], vec![20, 0, 20, 9]], 20000, 4);
+    check("squares 1 to 16", vec![vec![0, 0, 0, 0], vec![10, 0, 11, 1], vec![20, 0, 22, 2], vec![30, 0, 33, 3]], 30000, 5);
+    check("far corners", vec![vec![-1000000000, -1000000000, -999999999, -999999999], vec![999999998, 999999998, 1000000000, 1000000000]], 13000, 6);
+    // The problem's largest: 100 rectangles of 2,001 by 2,001 spread
+    // across the whole range, 40,000 picks. Each rectangle should get
+    // its share, and the picks should spread evenly over 20 bands of
+    // columns and 20 bands of rows within the rectangles.
+    let mut rects: Vec[Vec[i64]] = Vec.new();
+    for i in 0..100 {
+        let x = -1000000000 + i * 19000000;
+        let y = 999997999 - i * 17000000;
+        rects.push(vec![x, y, x + 2000, y + 2000]);
+    }
+    let mut solution = Solution.new(rects.clone(), 7);
+    let n = 40000;
+    let mut by_rect = vec![0; 100];
+    let mut by_column = vec![0; 20];
+    let mut by_row = vec![0; 20];
+    let mut inside = true;
+    for _ in 0..n {
+        let p = solution.pick();
+        let k = number_of(rects, p);
+        if p.len() != 2 or k < 0 {
+            inside = false;
+        } else {
+            let r = k / 4004001;
+            by_rect[r] += 1;
+            // Bands of 100 columns or rows; the last also has the 2,001st.
+            by_column[((p[0] - rects[r][0]) / 100).min(19)] += 1;
+            by_row[((p[1] - rects[r][1]) / 100).min(19)] += 1;
+        }
+    }
+    let band = vec![100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 101];
+    println(f"largest: 400400100 points, {n} picks, all covered {inside}, each rectangle its share {fair(by_rect, vec![1; 100], 100, n, 5.0)}, columns even {fair(by_column, band, 2001, n, 5.0)}, rows even {fair(by_row, band, 2001, n, 5.0)}");
+    // One seed twice gives the same 1,000 picks; another seed others.
+    let mut seed: i64 = 497;
+    let mut some: Vec[Vec[i64]] = Vec.new();
+    for i in 0..10 {
+        let x = i * 100 + next_random(mut seed) % 50;
+        let y = next_random(mut seed) % 1000 - 500;
+        some.push(vec![x, y, x + next_random(mut seed) % 40, y + next_random(mut seed) % 40]);
+    }
+    let mut a = Solution.new(some.clone(), 11);
+    let mut b = Solution.new(some.clone(), 11);
+    let mut c = Solution.new(some.clone(), 12);
+    let mut same = true;
+    let mut differ = false;
+    for _ in 0..1000 {
+        let pa = a.pick();
+        if b.pick() != pa {
+            same = false;
+        }
+        if c.pick() != pa {
+            differ = true;
+        }
+    }
+    println(f"one seed twice the same {same}, another seed other picks {differ}");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/496-next-greater-element-i/bench/next_greater_element.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:map", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "40c0c7a8d"
+extracted_src = "61da9b12"
+model_rev = "1aa23105"
+model_src = "61da9b12"

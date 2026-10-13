@@ -1,0 +1,271 @@
+// Differential test for LeetCode #496: Next Greater Element I.
+//
+// Copies of the four arms, on 1,500 random cases: nums2 of 1 to 25
+// distinct numbers below 30, 100 or 200 in turn, and nums1 of 1 to all
+// of them in a random order. Properties:
+//   P1  each answer fits the definition: -1 when nothing after the
+//       number is greater, else the first greater number after it
+//   P2  each answer is the one it gets when all of nums2 is asked
+//   P3  a number above all of them on the end of nums2 answers every
+//       -1 and changes nothing else
+//   P4  a number above all of them in front of nums2 changes nothing
+//   P5  every number moved up by the same amount moves every answer
+//       but -1 up by it
+
+// ---- star: next_greater_element.kara
+
+fn next_greater_element_star(nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    let mut next: Map[i64, i64] = Map.new();
+    let mut waiting: Vec[i64] = Vec.new();
+    for x in nums2 {
+        while let Some(top) = waiting.last() {
+            if *top >= x {
+                break;
+            }
+            next.insert(*top, x);
+            waiting.pop();
+        }
+        waiting.push(x);
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for x in nums1 {
+        match next.get(x) {
+            Some(g) => out.push(*g),
+            None => out.push(-1),
+        }
+    }
+    out
+}
+
+// ---- brute: next_greater_element_brute.kara
+
+fn next_greater_element_brute(nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in nums1 {
+        let mut j = 0;
+        while nums2[j] != x {
+            j += 1;
+        }
+        let mut answer = -1;
+        for k in j + 1..nums2.len() {
+            if nums2[k] > x {
+                answer = nums2[k];
+                break;
+            }
+        }
+        out.push(answer);
+    }
+    out
+}
+
+// ---- backward: next_greater_element_backward.kara
+
+fn next_greater_element_backward(nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    let mut next: Map[i64, i64] = Map.new();
+    let mut candidates: Vec[i64] = Vec.new();
+    for i in (0..nums2.len()).rev() {
+        let x = nums2[i];
+        while candidates.len() > 0 and candidates[candidates.len() - 1] <= x {
+            candidates.pop();
+        }
+        let answer = if candidates.is_empty() { -1 } else { candidates[candidates.len() - 1] };
+        next.insert(x, answer);
+        candidates.push(x);
+    }
+    nums1.iter().map(|x| next[x]).collect()
+}
+
+// ---- table: next_greater_element_table.kara
+
+fn next_greater_element_table(nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    let mut next = vec![-1; 10001];
+    let mut waiting: Vec[i64] = Vec.new();
+    for i in 0..nums2.len() {
+        while waiting.len() > 0 and nums2[waiting[waiting.len() - 1]] < nums2[i] {
+            let j = waiting.pop().unwrap();
+            next[nums2[j]] = nums2[i];
+        }
+        waiting.push(i);
+    }
+    let mut out = vec![0; nums1.len()];
+    for i in 0..nums1.len() {
+        out[i] = next[nums1[i]];
+    }
+    out
+}
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, nums1: Vec[i64], nums2: Vec[i64]) -> Vec[i64] {
+    match which {
+        0 => next_greater_element_star(nums1, nums2),
+        1 => next_greater_element_brute(nums1, nums2),
+        2 => next_greater_element_backward(nums1, nums2),
+        _ => next_greater_element_table(nums1, nums2),
+    }
+}
+
+// Whether `answer` fits the definition for `x`: -1 when nothing after x
+// is greater, else a greater number after x with nothing greater than x
+// between them.
+fn fits(nums2: Vec[i64], x: i64, answer: i64) -> bool {
+    let mut j = 0;
+    while nums2[j] != x {
+        j += 1;
+    }
+    for k in j + 1..nums2.len() {
+        if nums2[k] > x {
+            return nums2[k] == answer;
+        }
+    }
+    answer == -1
+}
+
+fn main() {
+    let names = vec!["star", "brute", "backward", "table"];
+    let cases = 1500;
+    let mut seed: i64 = 4960;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // nums2 of 1 to 25 distinct numbers below 30, 100 or 200 in
+        // turn, and nums1 of 1 to all of them in a random order.
+        let range = if c % 3 == 0 { 30 } else if c % 3 == 1 { 100 } else { 200 };
+        let size = 1 + next_random(mut seed) % 25;
+        let mut used = vec![false; range];
+        let mut nums2: Vec[i64] = Vec.new();
+        while nums2.len() < size {
+            let x = next_random(mut seed) % range;
+            if not used[x] {
+                used[x] = true;
+                nums2.push(x);
+            }
+        }
+        let wanted = 1 + next_random(mut seed) % size;
+        let mut taken = vec![false; size];
+        let mut nums1: Vec[i64] = Vec.new();
+        while nums1.len() < wanted {
+            let j = next_random(mut seed) % size;
+            if not taken[j] {
+                taken[j] = true;
+                nums1.push(nums2[j]);
+            }
+        }
+        // nums2 with a number above all of them on the end, with one
+        // below the range in front, and with every number moved up.
+        let mut topped = nums2.clone();
+        topped.push(9999);
+        let mut fronted: Vec[i64] = vec![range + next_random(mut seed) % 100];
+        for x in nums2 {
+            fronted.push(x);
+        }
+        let shift = next_random(mut seed) % 500;
+        let mut shifted1: Vec[i64] = Vec.new();
+        for x in nums1 {
+            shifted1.push(x + shift);
+        }
+        let mut shifted2: Vec[i64] = Vec.new();
+        for x in nums2 {
+            shifted2.push(x + shift);
+        }
+        for which in 0..4 {
+            let got = arm(which, nums1, nums2);
+            // P1: each answer fits the definition.
+            checks += 1;
+            let mut ok = got.len() == nums1.len();
+            if ok {
+                for i in 0..nums1.len() {
+                    if not fits(nums2, nums1[i], got[i]) {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {nums1} in {nums2} gave {got}");
+                }
+            }
+            // P2: each answer is the one it gets when all are asked.
+            checks += 1;
+            let all = arm(which, nums2, nums2);
+            let mut ok = got.len() == nums1.len();
+            if ok {
+                for i in 0..nums1.len() {
+                    let mut j = 0;
+                    while nums2[j] != nums1[i] {
+                        j += 1;
+                    }
+                    if got[i] != all[j] {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {nums1} in {nums2} gave {got}, all asked {all}");
+                }
+            }
+            // P3: a number above all on the end answers every -1.
+            checks += 1;
+            let other = arm(which, nums1, topped);
+            let mut ok = other.len() == got.len();
+            if ok {
+                for i in 0..got.len() {
+                    let want = if got[i] == -1 { 9999 } else { got[i] };
+                    if other[i] != want {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {nums1} in {topped} gave {other}, alone {got}");
+                }
+            }
+            // P4: a number in front changes nothing asked after it.
+            checks += 1;
+            let other = arm(which, nums1, fronted);
+            if other != got {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {nums1} in {fronted} gave {other}, want {got}");
+                }
+            }
+            // P5: every number moved up moves every answer up.
+            checks += 1;
+            let other = arm(which, shifted1, shifted2);
+            let mut ok = other.len() == got.len();
+            if ok {
+                for i in 0..got.len() {
+                    let want = if got[i] == -1 { -1 } else { got[i] + shift };
+                    if other[i] != want {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {shifted1} in {shifted2} gave {other}, unshifted {got}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}
