@@ -1,0 +1,58 @@
+// LeetCode #461: Hamming Distance -- compare the bits one by one.
+//
+// The plain reference: for each of the 31 bit positions, take the bit
+// of x and the bit of y and count the positions where they differ.
+// O(31).
+
+fn hamming_distance(x: i64, y: i64) -> i64 {
+    let mut count = 0;
+    for i in 0..31 {
+        if (x >> i) & 1 != (y >> i) & 1 {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(x: i64, y: i64) {
+    let d = hamming_distance(x, y);
+    println(f"hamming_distance({x}, {y}) = {d}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(1, 4);
+    show(3, 1);
+    show(0, 0);
+    show(0, 2147483647);
+    show(2147483647, 2147483647);
+    show(5, 10);
+    show(1073741824, 0);
+    show(1431655765, 715827882);
+    show(123456789, 987654321);
+    // 300 random pairs of 31-bit numbers, a third of them with few bits
+    // set and a third with y a near copy of x.
+    let count = 300;
+    let mut seed: i64 = 461;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for i in 0..count {
+        let x = ((next_random(mut seed) * 32768 + next_random(mut seed)) * 2 + next_random(mut seed) % 2) % 2147483648;
+        let mut y = ((next_random(mut seed) * 32768 + next_random(mut seed)) * 2 + next_random(mut seed) % 2) % 2147483648;
+        if i % 3 == 1 {
+            y = y & ((next_random(mut seed) * 32768 + next_random(mut seed)) * 2) & (next_random(mut seed) * 65536);
+        } else if i % 3 == 2 {
+            y = x ^ (1 << (next_random(mut seed) % 31)) ^ (1 << (next_random(mut seed) % 31));
+        }
+        let d = hamming_distance(x, y);
+        total += d;
+        checksum = (checksum * 31 + d * 7 + x % 1000) % 1000000007;
+    }
+    println(f"{count} random pairs: total distance {total}, checksum {checksum}");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/461-hamming-distance/bench/hamming_distance.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "014e9dcb3"
+extracted_src = "483dac22"
+model_rev = "1aa23105"
+model_src = "483dac22"

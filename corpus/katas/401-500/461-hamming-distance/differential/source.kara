@@ -1,0 +1,135 @@
+// Differential test for LeetCode #461: Hamming Distance.
+//
+// Copies of the four arms, each run on 1,500 random cases.
+// Properties:
+//   P1  on x, y below 256, the distance is brute force's, which compares
+//       the last binary digits by % 2 and halves both numbers
+//   P2  the distance is symmetric
+//   P3  flipping the same bits of x and y keeps the distance
+//   P4  the distance obeys the triangle inequality
+//   P5  flipping k distinct bits of x gives distance k from x
+
+// ---- clear: hamming_distance.kara
+
+fn hamming_clear(x: i64, y: i64) -> i64 {
+    let mut z = x ^ y;
+    let mut count = 0;
+    while z != 0 {
+        z &= z - 1;
+        count += 1;
+    }
+    count
+}
+
+// ---- ones: hamming_distance_ones.kara
+
+fn hamming_ones(x: i64, y: i64) -> i64 {
+    (x ^ y).count_ones() as i64
+}
+
+// ---- table: hamming_distance_table.kara
+
+fn hamming_table(x: i64, y: i64) -> i64 {
+    let mut ones: Vec[i64] = vec![0; 256];
+    for b in 1..256 {
+        ones[b] = ones[b >> 1] + (b & 1);
+    }
+    let z = x ^ y;
+    ones[z & 255] + ones[(z >> 8) & 255] + ones[(z >> 16) & 255] + ones[(z >> 24) & 255]
+}
+
+// ---- compare: hamming_distance_compare.kara
+
+fn hamming_compare(x: i64, y: i64) -> i64 {
+    let mut count = 0;
+    for i in 0..31 {
+        if (x >> i) & 1 != (y >> i) & 1 {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- harness
+
+fn distance(arm: i64, x: i64, y: i64) -> i64 {
+    if arm == 0 {
+        hamming_clear(x, y)
+    } else if arm == 1 {
+        hamming_ones(x, y)
+    } else if arm == 2 {
+        hamming_table(x, y)
+    } else {
+        hamming_compare(x, y)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random31(seed: mut ref i64) -> i64 {
+    ((next_random(seed) * 32768 + next_random(seed)) * 2 + next_random(seed) % 2) % 2147483648
+}
+
+fn brute(x: i64, y: i64) -> i64 {
+    let mut (a, b) = (x, y);
+    let mut count = 0;
+    while a > 0 or b > 0 {
+        if a % 2 != b % 2 {
+            count += 1;
+        }
+        a /= 2;
+        b /= 2;
+    }
+    count
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4610;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let (a, b) = (next_random(mut seed) % 256, next_random(mut seed) % 256);
+        let expected = brute(a, b);
+        let x = random31(mut seed);
+        let y = random31(mut seed);
+        let z = random31(mut seed);
+        let m = random31(mut seed);
+        // k distinct bits of x flipped, k from 0 to 31.
+        let k = next_random(mut seed) % 32;
+        let mut flipped = x;
+        let mut chosen = 0;
+        while chosen < k {
+            let bit = 1 << (next_random(mut seed) % 31);
+            if (flipped ^ x) & bit == 0 {
+                flipped ^= bit;
+                chosen += 1;
+            }
+        }
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, distance(arm, a, b) == expected, mut failures);
+            let d = distance(arm, x, y);
+            report(2, arm, case, distance(arm, y, x) == d, mut failures);
+            report(3, arm, case, distance(arm, x ^ m, y ^ m) == d, mut failures);
+            report(4, arm, case, distance(arm, x, z) <= d + distance(arm, y, z), mut failures);
+            report(5, arm, case, distance(arm, x, flipped) == k, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}
