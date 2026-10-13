@@ -1,0 +1,79 @@
+// LeetCode #514: Freedom Trail -- only the nearest letter each way.
+//
+// From position p, going past the nearest key[i] clockwise to a farther
+// one clockwise is never better than stopping there first, and the
+// same anticlockwise; so only two moves need trying at each step. The
+// fewest steps from each (i, p) are kept in a Map keyed by the tuple.
+// O(m n) states, O(n) to find the two nearest.
+
+fn rest(r: Slice[u8], k: Slice[u8], i: i64, p: i64, memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if i == k.len() {
+        return 0;
+    }
+    if let Some(v) = memo.get((i, p)) {
+        return *v;
+    }
+    let n = r.len();
+    let mut right = 0;
+    while r[(p + right) % n] != k[i] {
+        right += 1;
+    }
+    let mut left = 0;
+    while r[(p - left + n) % n] != k[i] {
+        left += 1;
+    }
+    let best = (right + rest(r, k, i + 1, (p + right) % n, memo)).min(left + rest(r, k, i + 1, (p - left + n) % n, memo));
+    memo.insert((i, p), best);
+    best
+}
+
+fn find_rotate_steps(ring: Str, key: Str) -> i64 {
+    let r = ring.bytes();
+    let k = key.bytes();
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    rest(r, k, 0, 0, mut memo) + k.len()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(ring: Str, key: Str) {
+    println(f"\"{ring}\", \"{key}\": {find_rotate_steps(ring, key)}");
+}
+
+fn main() {
+    show("godding", "gd");
+    show("godding", "godding");
+    show("a", "a");
+    show("ab", "bbbb");
+    show("abcde", "eae");
+    show("caotmcaataijjxi", "oatjiioicitatajtijciocjcaaxaaatmctxamacaamjjx");
+    // 300 random rings of 1 to 60 letters from the first 2, 5 or 26 in
+    // turn, and keys of 1 to 60 letters drawn from the ring.
+    let mut seed: i64 = 514;
+    let count = 300;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for t in 0..count {
+        let letters = if t % 3 == 0 { 2 } else if t % 3 == 1 { 5 } else { 26 };
+        let n = 1 + next_random(mut seed) % 60;
+        let m = 1 + next_random(mut seed) % 60;
+        let mut ring = String.new();
+        for _ in 0..n {
+            ring.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+        }
+        let rb = ring.bytes();
+        let mut key = String.new();
+        for _ in 0..m {
+            key.push(rb[next_random(mut seed) % n] as char);
+        }
+        let steps = find_rotate_steps(ring, key);
+        total += steps;
+        checksum = (checksum * 31 + steps) % 1000000007;
+    }
+    println(f"{count} random rings: {total} steps in all, checksum {checksum}");
+}

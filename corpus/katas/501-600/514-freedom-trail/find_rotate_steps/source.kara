@@ -1,0 +1,82 @@
+// LeetCode #514: Freedom Trail -- dynamic programming over the
+// positions of each letter.
+//
+// After spelling key[..i], the ring can only rest at a position holding
+// key[i - 1]. For each such position keep the fewest rotations that
+// leave it at 12:00; the next letter's positions each take the best of
+// those plus the shorter way round, min(d, n - d). One press per letter
+// on top. O(m n^2) at worst, n the ring and m the key.
+
+fn find_rotate_steps(ring: Str, key: Str) -> i64 {
+    let r = ring.bytes();
+    let n = r.len();
+    let mut at: Vec[Vec[i64]] = vec![Vec.new(); 26];
+    for j in 0..n {
+        at[(r[j] - b'a') as i64].push(j);
+    }
+    let mut prev_pos: Vec[i64] = vec![0];
+    let mut prev_cost: Vec[i64] = vec![0];
+    for c in key.bytes() {
+        let pos = at[(c - b'a') as i64].clone();
+        let mut cost: Vec[i64] = Vec.new();
+        for q in pos.iter() {
+            let mut best = i64.MAX;
+            for i in 0..prev_pos.len() {
+                let d = (prev_pos[i] - *q).abs();
+                best = best.min(prev_cost[i] + d.min(n - d));
+            }
+            cost.push(best);
+        }
+        prev_pos = pos;
+        prev_cost = cost;
+    }
+    let mut fewest = i64.MAX;
+    for c in prev_cost.iter() {
+        fewest = fewest.min(*c);
+    }
+    fewest + key.len()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(ring: Str, key: Str) {
+    println(f"\"{ring}\", \"{key}\": {find_rotate_steps(ring, key)}");
+}
+
+fn main() {
+    show("godding", "gd");
+    show("godding", "godding");
+    show("a", "a");
+    show("ab", "bbbb");
+    show("abcde", "eae");
+    show("caotmcaataijjxi", "oatjiioicitatajtijciocjcaaxaaatmctxamacaamjjx");
+    // 300 random rings of 1 to 60 letters from the first 2, 5 or 26 in
+    // turn, and keys of 1 to 60 letters drawn from the ring.
+    let mut seed: i64 = 514;
+    let count = 300;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for t in 0..count {
+        let letters = if t % 3 == 0 { 2 } else if t % 3 == 1 { 5 } else { 26 };
+        let n = 1 + next_random(mut seed) % 60;
+        let m = 1 + next_random(mut seed) % 60;
+        let mut ring = String.new();
+        for _ in 0..n {
+            ring.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+        }
+        let rb = ring.bytes();
+        let mut key = String.new();
+        for _ in 0..m {
+            key.push(rb[next_random(mut seed) % n] as char);
+        }
+        let steps = find_rotate_steps(ring, key);
+        total += steps;
+        checksum = (checksum * 31 + steps) % 1000000007;
+    }
+    println(f"{count} random rings: {total} steps in all, checksum {checksum}");
+}

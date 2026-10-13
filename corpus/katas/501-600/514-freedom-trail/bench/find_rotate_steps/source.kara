@@ -1,0 +1,63 @@
+// Benchmark for LeetCode #514: Freedom Trail -- the ★ arm (a cost per
+// position of the current letter); see ../find_rotate_steps.kara.
+
+fn find_rotate_steps(ring: Str, key: Str) -> i64 {
+    let r = ring.bytes();
+    let n = r.len();
+    let mut at: Vec[Vec[i64]] = vec![Vec.new(); 26];
+    for j in 0..n {
+        at[(r[j] - b'a') as i64].push(j);
+    }
+    let mut prev_pos: Vec[i64] = vec![0];
+    let mut prev_cost: Vec[i64] = vec![0];
+    for c in key.bytes() {
+        let pos = at[(c - b'a') as i64].clone();
+        let mut cost: Vec[i64] = Vec.new();
+        for q in pos.iter() {
+            let mut best = i64.MAX;
+            for i in 0..prev_pos.len() {
+                let d = (prev_pos[i] - *q).abs();
+                best = best.min(prev_cost[i] + d.min(n - d));
+            }
+            cost.push(best);
+        }
+        prev_pos = pos;
+        prev_cost = cost;
+    }
+    let mut fewest = i64.MAX;
+    for c in prev_cost.iter() {
+        fewest = fewest.min(*c);
+    }
+    fewest + key.len()
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 400 random rings of 300 letters from all 26, each with a key of
+    // 2,000 letters drawn from the ring, solved once each.
+    let mut seed: i64 = 514;
+    let rings = 400;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rings {
+        let mut ring = String.new();
+        for _ in 0..300 {
+            ring.push((b'a' + (next_random(mut seed) % 26) as u8) as char);
+        }
+        let rb = ring.bytes();
+        let mut key = String.new();
+        for _ in 0..2000 {
+            key.push(rb[next_random(mut seed) % 300] as char);
+        }
+        let steps = find_rotate_steps(ring, key);
+        total += steps;
+        checksum = (checksum * 31 + steps) % 1000000007;
+    }
+    println(f"{rings} rings of 300 letters, keys of 2000: {total} steps in all, checksum {checksum}");
+}

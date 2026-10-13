@@ -1,0 +1,8 @@
+example 1: 1
+example 2: 7
+one node: -7
+only a right child: 2
+the bottom row on the right: 4
+a zigzag: 5
+the extremes: -2147483648
+300 random trees: 9082 nodes, checksum 491031492

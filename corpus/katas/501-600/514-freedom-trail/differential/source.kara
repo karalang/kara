@@ -1,0 +1,304 @@
+// Differential test for LeetCode #514: Freedom Trail.
+//
+// Copies of the four arms, on 1,000 random rings of 1 to 24 letters
+// from the first 2, 5 or 26 in turn, with keys of 1 to 12 letters
+// drawn from the ring. Properties:
+//   P1  the answer is the reference's: distances found by walking the
+//       ring a step at a time, then a table over every position filled
+//       from the end of the key back
+//   P2  the ring read the other way round, from the same 12:00 letter,
+//       needs as many steps
+//   P3  renaming the letters (a <-> z, b <-> y, ...) changes nothing
+//   P4  one more key letter costs at least 1 and at most 1 + n / 2
+//   P5  pressing the last letter again costs exactly 1
+
+// ---- star: find_rotate_steps.kara
+
+fn find_rotate_steps_star(ring: Str, key: Str) -> i64 {
+    let r = ring.bytes();
+    let n = r.len();
+    let mut at: Vec[Vec[i64]] = vec![Vec.new(); 26];
+    for j in 0..n {
+        at[(r[j] - b'a') as i64].push(j);
+    }
+    let mut prev_pos: Vec[i64] = vec![0];
+    let mut prev_cost: Vec[i64] = vec![0];
+    for c in key.bytes() {
+        let pos = at[(c - b'a') as i64].clone();
+        let mut cost: Vec[i64] = Vec.new();
+        for q in pos.iter() {
+            let mut best = i64.MAX;
+            for i in 0..prev_pos.len() {
+                let d = (prev_pos[i] - *q).abs();
+                best = best.min(prev_cost[i] + d.min(n - d));
+            }
+            cost.push(best);
+        }
+        prev_pos = pos;
+        prev_cost = cost;
+    }
+    let mut fewest = i64.MAX;
+    for c in prev_cost.iter() {
+        fewest = fewest.min(*c);
+    }
+    fewest + key.len()
+}
+
+// ---- memo: find_rotate_steps_memo.kara
+
+fn steps_memo(r: Slice[u8], k: Slice[u8], i: i64, p: i64, memo: mut ref Vec[Vec[i64]]) -> i64 {
+    if i == k.len() {
+        return 0;
+    }
+    if memo[i][p] >= 0 {
+        return memo[i][p];
+    }
+    let n = r.len();
+    let mut best = i64.MAX;
+    for q in 0..n {
+        if r[q] == k[i] {
+            let d = (p - q).abs();
+            best = best.min(d.min(n - d) + steps_memo(r, k, i + 1, q, memo));
+        }
+    }
+    memo[i][p] = best;
+    best
+}
+
+fn find_rotate_steps_memo(ring: Str, key: Str) -> i64 {
+    let r = ring.bytes();
+    let k = key.bytes();
+    let mut memo: Vec[Vec[i64]] = vec![vec![-1; r.len()]; k.len()];
+    steps_memo(r, k, 0, 0, mut memo) + k.len()
+}
+
+// ---- dijkstra: find_rotate_steps_dijkstra.kara
+
+fn find_rotate_steps_dijkstra(ring: Str, key: Str) -> i64 {
+    let r = ring.bytes();
+    let k = key.bytes();
+    let n = r.len();
+    let m = k.len();
+    let mut done: Vec[Vec[bool]] = vec![vec![false; n]; m + 1];
+    let mut queue: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    queue.push((0, 0, 0));
+    while let Some((cost, i, p)) = queue.pop() {
+        if i == m {
+            return cost;
+        }
+        if done[i][p] {
+            continue;
+        }
+        done[i][p] = true;
+        for q in 0..n {
+            if r[q] == k[i] and not done[i + 1][q] {
+                let d = (p - q).abs();
+                queue.push((cost + d.min(n - d) + 1, i + 1, q));
+            }
+        }
+    }
+    -1
+}
+
+// ---- nearest: find_rotate_steps_nearest.kara
+
+fn rest_nearest(r: Slice[u8], k: Slice[u8], i: i64, p: i64, memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if i == k.len() {
+        return 0;
+    }
+    if let Some(v) = memo.get((i, p)) {
+        return *v;
+    }
+    let n = r.len();
+    let mut right = 0;
+    while r[(p + right) % n] != k[i] {
+        right += 1;
+    }
+    let mut left = 0;
+    while r[(p - left + n) % n] != k[i] {
+        left += 1;
+    }
+    let best = (right + rest_nearest(r, k, i + 1, (p + right) % n, memo)).min(left + rest_nearest(r, k, i + 1, (p - left + n) % n, memo));
+    memo.insert((i, p), best);
+    best
+}
+
+fn find_rotate_steps_nearest(ring: Str, key: Str) -> i64 {
+    let r = ring.bytes();
+    let k = key.bytes();
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    rest_nearest(r, k, 0, 0, mut memo) + k.len()
+}
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, ring: Str, key: Str) -> i64 {
+    match which {
+        0 => find_rotate_steps_star(ring, key),
+        1 => find_rotate_steps_memo(ring, key),
+        2 => find_rotate_steps_dijkstra(ring, key),
+        _ => find_rotate_steps_nearest(ring, key),
+    }
+}
+
+// The reference: the distance between every two positions found by
+// walking round the ring one step at a time, then a table filled from
+// the end of the key back, over every position, not only the ones
+// holding the letter.
+fn reference(ring: Str, key: Str) -> i64 {
+    let r = ring.bytes();
+    let k = key.bytes();
+    let n = r.len();
+    let m = k.len();
+    let mut dist: Vec[Vec[i64]] = vec![vec![0; n]; n];
+    for p in 0..n {
+        let mut at = p;
+        let mut walked = 0;
+        while walked < n {
+            if walked < n - walked {
+                dist[p][at] = walked;
+            } else {
+                dist[p][at] = n - walked;
+            }
+            at = (at + 1) % n;
+            walked += 1;
+        }
+    }
+    let mut after: Vec[i64] = vec![0; n];
+    let mut i = m;
+    while i > 0 {
+        i -= 1;
+        let mut here: Vec[i64] = vec![0; n];
+        for p in 0..n {
+            let mut best = -1;
+            for q in 0..n {
+                if r[q] == k[i] {
+                    let s = dist[p][q] + 1 + after[q];
+                    if best < 0 or s < best {
+                        best = s;
+                    }
+                }
+            }
+            here[p] = best;
+        }
+        after = here;
+    }
+    after[0]
+}
+
+// The same ring read anticlockwise, still starting from position 0.
+fn mirrored(ring: Str) -> String {
+    let r = ring.bytes();
+    let n = r.len();
+    let mut out = String.new();
+    out.push(r[0] as char);
+    let mut j = n - 1;
+    while j >= 1 {
+        out.push(r[j] as char);
+        j -= 1;
+    }
+    out
+}
+
+// Every letter swapped for its partner from the other end of the
+// alphabet.
+fn relabelled(s: Str) -> String {
+    let mut out = String.new();
+    for b in s.bytes() {
+        out.push((b'z' - (*b - b'a')) as char);
+    }
+    out
+}
+
+fn main() {
+    let names = vec!["star", "memo", "dijkstra", "nearest"];
+    let cases = 1000;
+    let mut seed: i64 = 5140;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        let letters = if c % 3 == 0 { 2 } else if c % 3 == 1 { 5 } else { 26 };
+        let n = 1 + next_random(mut seed) % 24;
+        let m = 1 + next_random(mut seed) % 12;
+        let mut ring = String.new();
+        for _ in 0..n {
+            ring.push((b'a' + (next_random(mut seed) % letters) as u8) as char);
+        }
+        let rb = ring.bytes();
+        let mut key = String.new();
+        for _ in 0..m {
+            key.push(rb[next_random(mut seed) % n] as char);
+        }
+        let extra = rb[next_random(mut seed) % n] as char;
+        let want = reference(ring, key);
+        let mirror = mirrored(ring);
+        let ring2 = relabelled(ring);
+        let key2 = relabelled(key);
+        let mut longer = key.clone();
+        longer.push(extra);
+        let mut doubled = key.clone();
+        doubled.push(key.bytes()[m - 1] as char);
+        for which in 0..4 {
+            let got = arm(which, ring, key);
+            // P1: the answer is the reference's.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: \"{ring}\", \"{key}\" gave {got}, want {want}");
+                }
+            }
+            // P2: the ring read the other way round needs as many steps.
+            checks += 1;
+            let other = arm(which, mirror, key);
+            if other != got {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: \"{mirror}\", \"{key}\" gave {other}, \"{ring}\" gave {got}");
+                }
+            }
+            // P3: renaming the letters changes nothing.
+            checks += 1;
+            let renamed = arm(which, ring2, key2);
+            if renamed != got {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: \"{ring2}\", \"{key2}\" gave {renamed}, want {got}");
+                }
+            }
+            // P4: one more letter costs its press and at most half the
+            // ring of turning.
+            checks += 1;
+            let more = arm(which, ring, longer);
+            if more < got + 1 or more > got + 1 + n / 2 {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: \"{longer}\" gave {more}, \"{key}\" gave {got}");
+                }
+            }
+            // P5: pressing the last letter again costs exactly one.
+            checks += 1;
+            let twice = arm(which, ring, doubled);
+            if twice != got + 1 {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: \"{doubled}\" gave {twice}, want {got + 1}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

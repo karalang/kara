@@ -1,0 +1,130 @@
+// LeetCode #513: Find Bottom Left Tree Value -- breadth-first from the
+// right.
+//
+// One queue, no levels: push the right child before the left, so each
+// level is visited right to left and the deepest level last. The very
+// last node out of the queue is then the bottom row's leftmost. O(n).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn find_bottom_left_value(root: TreeNode) -> i64 {
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut last = root.val;
+    while let Some(node) = queue.pop_front() {
+        last = node.val;
+        if let Some(r) = node.right {
+            queue.push_back(r);
+        }
+        if let Some(l) = node.left {
+            queue.push_back(l);
+        }
+    }
+    last
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order: the values row by row, None for a
+// missing child, and nothing listed under a missing node.
+fn from_level_order(items: Vec[Option[i64]]) -> TreeNode {
+    let root = TreeNode { val: items[0].expect("the tree has a root"), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < items.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = items[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < items.len() {
+            if let Some(v) = items[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    root
+}
+
+// A value from -half to half, or from the whole range -2^31 to 2^31 - 1
+// when half is 0.
+fn draw(half: i64, seed: mut ref i64) -> i64 {
+    if half == 0 {
+        next_random(seed) * 65536 + next_random(seed) * 2 + next_random(seed) % 2 - 2147483648
+    } else {
+        next_random(seed) % (2 * half + 1) - half
+    }
+}
+
+// A random tree of size nodes: each new node walks down from the root,
+// left or right by a coin flip, to the first empty place.
+fn grow(size: i64, half: i64, seed: mut ref i64) -> TreeNode {
+    let root = TreeNode { val: draw(half, seed), left: None, right: None };
+    for _ in 1..size {
+        let leaf = TreeNode { val: draw(half, seed), left: None, right: None };
+        let mut node = root;
+        loop {
+            if next_random(seed) % 2 == 0 {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(leaf);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(leaf);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+fn show(name: Str, items: Vec[Option[i64]]) {
+    println(f"{name}: {find_bottom_left_value(from_level_order(items))}");
+}
+
+fn main() {
+    show("example 1", vec![Some(2), Some(1), Some(3)]);
+    show("example 2", vec![Some(1), Some(2), Some(3), Some(4), None, Some(5), Some(6), None, None, Some(7)]);
+    show("one node", vec![Some(-7)]);
+    show("only a right child", vec![Some(1), None, Some(2)]);
+    show("the bottom row on the right", vec![Some(1), Some(2), Some(3), None, None, Some(4), Some(5)]);
+    show("a zigzag", vec![Some(1), Some(2), None, None, Some(3), Some(4), None, None, Some(5)]);
+    show("the extremes", vec![Some(2147483647), Some(-2147483648), Some(2147483647), None, Some(-2147483648)]);
+    // 300 random trees of 1 to 60 nodes, the values from -2 to 2, from
+    // -1,000 to 1,000, or from the whole range in turn.
+    let mut seed: i64 = 513;
+    let count = 300;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for t in 0..count {
+        let half = if t % 3 == 0 { 2 } else if t % 3 == 1 { 1000 } else { 0 };
+        let size = 1 + next_random(mut seed) % 60;
+        total += size;
+        let v = find_bottom_left_value(grow(size, half, mut seed));
+        checksum = (checksum * 31 + v + 2147483648) % 1000000007;
+    }
+    println(f"{count} random trees: {total} nodes, checksum {checksum}");
+}

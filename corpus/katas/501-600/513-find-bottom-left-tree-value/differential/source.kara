@@ -1,0 +1,279 @@
+// Differential test for LeetCode #513: Find Bottom Left Tree Value.
+//
+// Copies of the four arms, on 1,500 random trees of 1 to 30 nodes, the
+// values from -2 to 2, from -50 to 50, or from -10^6 to 10^6 in turn.
+// Properties:
+//   P1  the value is the reference's, the first in preorder of the
+//       values at the greatest depth
+//   P2  the mirror image gives the bottom row's rightmost value
+//   P3  every value plus 7 gives the value plus 7
+//   P4  the tree as the right child of a new root beside a leaf keeps
+//       its value, or gives the leaf's when the tree is one node
+//   P5  two copies side by side under a new root give the same value
+
+// ---- star: find_bottom_left_value.kara
+
+fn find_bottom_left_value_star(root: TreeNode) -> i64 {
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut leftmost = root.val;
+    while not queue.is_empty() {
+        leftmost = queue.front().unwrap().val;
+        for _ in 0..queue.len() {
+            let node = queue.pop_front().unwrap();
+            if let Some(l) = node.left {
+                queue.push_back(l);
+            }
+            if let Some(r) = node.right {
+                queue.push_back(r);
+            }
+        }
+    }
+    leftmost
+}
+
+// ---- reversed: find_bottom_left_value_reversed.kara
+
+fn find_bottom_left_value_reversed(root: TreeNode) -> i64 {
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut last = root.val;
+    while let Some(node) = queue.pop_front() {
+        last = node.val;
+        if let Some(r) = node.right {
+            queue.push_back(r);
+        }
+        if let Some(l) = node.left {
+            queue.push_back(l);
+        }
+    }
+    last
+}
+
+// ---- depth: find_bottom_left_value_depth.kara
+
+struct DeepestDepth {
+    depth: i64,
+    val: i64,
+}
+
+fn visit_depth(node: Option[TreeNode], depth: i64, best: mut ref DeepestDepth) {
+    let Some(n) = node else {
+        return;
+    };
+    if depth > best.depth {
+        best.depth = depth;
+        best.val = n.val;
+    }
+    visit_depth(n.left, depth + 1, best);
+    visit_depth(n.right, depth + 1, best);
+}
+
+fn find_bottom_left_value_depth(root: TreeNode) -> i64 {
+    let mut best = DeepestDepth { depth: -1, val: 0 };
+    visit_depth(Some(root), 0, mut best);
+    best.val
+}
+
+// ---- stack: find_bottom_left_value_stack.kara
+
+fn find_bottom_left_value_stack(root: TreeNode) -> i64 {
+    let mut stack: Vec[(TreeNode, i64)] = vec![(root, 0)];
+    let mut best = (-1, 0);
+    while let Some((node, depth)) = stack.pop() {
+        if depth > best.0 {
+            best = (depth, node.val);
+        }
+        if let Some(r) = node.right {
+            stack.push((r, depth + 1));
+        }
+        if let Some(l) = node.left {
+            stack.push((l, depth + 1));
+        }
+    }
+    best.1
+}
+// ---- differential harness -------------------------------------------------
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn grow(size: i64, half: i64, seed: mut ref i64) -> TreeNode {
+    let root = TreeNode { val: next_random(seed) % (2 * half + 1) - half, left: None, right: None };
+    for _ in 1..size {
+        let leaf = TreeNode { val: next_random(seed) % (2 * half + 1) - half, left: None, right: None };
+        let mut node = root;
+        loop {
+            if next_random(seed) % 2 == 0 {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(leaf);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(leaf);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// A new tree of the same shape, every value plus k, and the children
+// swapped when flip is set.
+fn copy(node: Option[TreeNode], k: i64, flip: bool) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => {
+            let left = copy(n.left, k, flip);
+            let right = copy(n.right, k, flip);
+            if flip {
+                Some(TreeNode { val: n.val + k, left: right, right: left })
+            } else {
+                Some(TreeNode { val: n.val + k, left: left, right: right })
+            }
+        }
+    }
+}
+
+fn arm(which: i64, root: TreeNode) -> i64 {
+    match which {
+        0 => find_bottom_left_value_star(root),
+        1 => find_bottom_left_value_reversed(root),
+        2 => find_bottom_left_value_depth(root),
+        _ => find_bottom_left_value_stack(root),
+    }
+}
+
+// Every value with its depth, in preorder (left before right).
+fn levels(node: Option[TreeNode], depth: i64, out: mut ref Vec[(i64, i64)]) {
+    if let Some(n) = node {
+        out.push((depth, n.val));
+        levels(n.left, depth + 1, out);
+        levels(n.right, depth + 1, out);
+    }
+}
+
+// The reference: the deepest depth, then the first value at it in
+// preorder (the leftmost) and the last (the rightmost).
+fn reference(root: TreeNode) -> (i64, i64, i64) {
+    let mut all: Vec[(i64, i64)] = Vec.new();
+    levels(Some(root), 0, mut all);
+    let mut deepest = 0;
+    for (d, _) in all.iter() {
+        if *d > deepest {
+            deepest = *d;
+        }
+    }
+    let mut first = 0;
+    let mut last = 0;
+    let mut seen = false;
+    for (d, v) in all.iter() {
+        if *d == deepest {
+            if not seen {
+                first = *v;
+                seen = true;
+            }
+            last = *v;
+        }
+    }
+    (deepest, first, last)
+}
+
+fn main() {
+    let names = vec!["star", "reversed", "depth", "stack"];
+    let cases = 1500;
+    let mut seed: i64 = 5130;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // 1 to 30 nodes, the values from -2 to 2, from -50 to 50, or from
+        // -10^6 to 10^6, in turn.
+        let half = if c % 3 == 0 { 2 } else if c % 3 == 1 { 50 } else { 1000000 };
+        let size = 1 + next_random(mut seed) % 30;
+        let root = grow(size, half, mut seed);
+        let (deepest, first, last) = reference(root);
+        let mirrored = copy(Some(root), 0, true).expect("a copy of a tree");
+        let shifted = copy(Some(root), 7, false).expect("a copy of a tree");
+        // The tree as the right child of a new root whose left child is a
+        // leaf: one row lower, unless the tree is a single node, when the
+        // leaf starts the bottom row.
+        let lower = TreeNode { val: 0, left: Some(TreeNode { val: 1000000000, left: None, right: None }), right: Some(root) };
+        let lower_want = if deepest > 0 { first } else { 1000000000 };
+        // Two copies of the tree side by side under a new root.
+        let twice = TreeNode { val: 0, left: copy(Some(root), 0, false), right: copy(Some(root), 0, false) };
+        for which in 0..4 {
+            let got = arm(which, root);
+            // P1: the value is the reference's.
+            checks += 1;
+            if got != first {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: case {c} gave {got}, want {first}");
+                }
+            }
+            // P2: the mirror image gives the bottom row's rightmost.
+            checks += 1;
+            let m = arm(which, mirrored);
+            if m != last {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: case {c} mirrored gave {m}, want {last}");
+                }
+            }
+            // P3: every value plus 7 gives the value plus 7.
+            checks += 1;
+            let s = arm(which, shifted);
+            if s != first + 7 {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: case {c} shifted gave {s}, want {first + 7}");
+                }
+            }
+            // P4: under a new root beside a leaf, the bottom row keeps its
+            // leftmost, or the leaf joins it.
+            checks += 1;
+            let l = arm(which, lower);
+            if l != lower_want {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: case {c} lowered gave {l}, want {lower_want}");
+                }
+            }
+            // P5: two copies side by side give the left copy's value.
+            checks += 1;
+            let t = arm(which, twice);
+            if t != first {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: case {c} doubled gave {t}, want {first}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}
