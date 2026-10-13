@@ -170,12 +170,17 @@ pub fn check_borrows(
                     if !o[0][li] {
                         continue;
                     }
+                    // A slice is a view: a borrow of one borrows what it
+                    // views, as a borrow through a reference does.
+                    let view_of = place_ty(body, tys, &loan.place)
+                        .is_ok_and(|pt| matches!(tys.kind(pt.ty), TyKind::Slice { .. }));
                     let derefs = loan
                         .place
                         .projection
                         .iter()
                         .filter(|p| **p == ProjElem::Deref)
-                        .count();
+                        .count()
+                        + usize::from(view_of);
                     let owned = if derefs == 0 {
                         "this function owns"
                     } else if view && derefs == 1 && loan.place.local.index() == 1 {

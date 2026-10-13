@@ -334,6 +334,9 @@ struct FnItem<'a> {
     /// The primitive an impl is for (`impl Step for i64`), which has no
     /// definition to be `impl_target`.
     impl_prim: Option<Ty>,
+    /// The library's `impl[T] Slice[T]`: its one parameter is the element,
+    /// and `self` is the slice of it.
+    impl_slice: bool,
     /// The impl's generic parameters, which come before the method's.
     impl_generics: Option<&'a ast::GenericParams>,
     /// Where each impl parameter sits among the target's arguments, when
@@ -362,6 +365,26 @@ impl FnItem<'_> {
             None => targs.get(..self.impl_params).map(<[Ty]>::to_vec),
         }
     }
+}
+
+/// Whether `b` is `impl[T] Slice[T]`, the library's slice methods.
+fn is_slice_impl(b: &ast::ImplBlock) -> bool {
+    let Some(g) = &b.generic_params else {
+        return false;
+    };
+    let ast::TypeKind::Path(p) = &b.target_type.kind else {
+        return false;
+    };
+    let one = |a: &ast::GenericArg| match a {
+        ast::GenericArg::Type(t) => matches!(&t.kind, ast::TypeKind::Path(q)
+            if q.generic_args.is_none() && q.segments == [g.params[0].name.clone()]),
+        _ => false,
+    };
+    g.params.len() == 1
+        && p.segments.last().is_some_and(|n| n == "Slice")
+        && p.generic_args
+            .as_deref()
+            .is_some_and(|a| a.len() == 1 && one(&a[0]))
 }
 
 /// Where each of `b`'s generic parameters is written among its target's
@@ -585,6 +608,7 @@ impl<'a> Lcx<'a> {
                                 impl_target: None,
                                 impl_params: 0,
                                 impl_prim: None,
+                                impl_slice: false,
                                 impl_generics: None,
                                 impl_arg_pos: None,
                                 impl_span: None,
@@ -637,7 +661,8 @@ impl<'a> Lcx<'a> {
                             self.mir_ty(hir, &[]).ok()
                         })
                     });
-                    if target.is_none() && prim.is_none() {
+                    let slice = target.is_none() && prim.is_none() && is_slice_impl(b);
+                    if target.is_none() && prim.is_none() && !slice {
                         continue;
                     }
                     let impl_dispatch = dispatch_names
@@ -674,6 +699,7 @@ impl<'a> Lcx<'a> {
                                     impl_target: target,
                                     impl_params,
                                     impl_prim: prim,
+                                    impl_slice: slice,
                                     impl_generics: b.generic_params.as_ref(),
                                     impl_arg_pos: impl_arg_pos.clone(),
                                     impl_span: Some(SpanKey::from_span(&b.span)),
@@ -843,6 +869,16 @@ impl<'a> Lcx<'a> {
                     s = format!("{s}[{}]", show(own));
                 }
                 s
+            }
+            Some(FnItem {
+                impl_slice: true, ..
+            }) if !args.is_empty() => {
+                let s = format!("Slice[{}].{name}", show(&args[..1]));
+                if args.len() == 1 {
+                    s
+                } else {
+                    format!("{s}[{}]", show(&args[1..]))
+                }
             }
             Some(FnItem {
                 impl_prim: Some(t), ..
@@ -2705,6 +2741,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .flatten();
             let t = match seen {
                 Some(t) => t,
+                None if self.lcx.fns[&self.b.instance().def].impl_slice => {
+                    let elem = self.args[0];
+                    self.tys().tcx().intern(HK::Slice {
+                        elem,
+                        mutable: false,
+                    })
+                }
                 None => {
                     let Some((target, n)) = impl_target else {
                         return self.unsupported(f.span, "a `self` parameter outside an impl");
@@ -11334,6 +11377,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // (`impl Reads for Array[i64, 3]`) is recorded as a builtin.
                 let rt = self.expr_ty(object)?;
                 let (_, base) = self.strip_ty_full(rt);
+                if let HK::Slice { elem, .. } = self.tys().tcx().kind(base) {
+                    let lib = self.lcx.fns.iter().find(|(_, i)| {
+                        i.impl_slice
+                            && i.f.name == method
+                            && i.f
+                                .generic_params
+                                .as_ref()
+                                .is_none_or(|g| g.params.is_empty())
+                    });
+                    if let Some((&d, _)) = lib {
+                        return self.user_method_call(e, object, d, vec![elem], args, dest);
+                    }
+                }
                 let user = self
                     .lcx
                     .fns

@@ -26,6 +26,33 @@ impl[T] Iterator for VecIter[T] {
     }
 }
 
+/// The elements of a slice, front to back, each borrowed.
+struct SliceIter[T] {
+    s: Slice[T],
+    front: i64,
+    back: i64,
+}
+
+impl[T] Iterator for SliceIter[T] {
+    type Item = ref T;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        self.s.get(i)
+    }
+}
+
+impl[T] Slice[T] {
+    /// The elements, front to back, each borrowed.
+    fn iter(self) -> SliceIter[T] {
+        SliceIter { s: self, front: 0, back: self.len() }
+    }
+}
+
 impl[T] Vec[T] {
     /// The elements, front to back, each borrowed.
     fn iter(ref self) -> VecIter[T] {

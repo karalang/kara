@@ -774,6 +774,7 @@ pub const LIBRARY_SOURCE_TYPES: &[&str] = &[
     "Map",
     "SortedMap",
     "String",
+    "Slice",
 ];
 
 /// Library methods written in Kāra (redesign A2), from

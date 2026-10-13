@@ -53,6 +53,7 @@ impl<'a> super::TypeChecker<'a> {
         let name = match receiver {
             Type::Named { name, .. } => name.as_str(),
             Type::Str => "String",
+            Type::Slice { .. } => "Slice",
             _ => return None,
         };
         if !crate::prelude::LIBRARY_SOURCE_TYPES.contains(&name) {

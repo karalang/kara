@@ -938,3 +938,29 @@ fn main() {
 "#;
     assert_runs(src, "hey 3\n");
 }
+
+/// A slice iterates through the library's `SliceIter`, so its `collect()`
+/// fills the annotated collection, a `String` of chars included
+/// (B-2026-10-12-32).
+#[test]
+fn a_slice_iterator_collects_into_the_annotated_type() {
+    let src = r#"
+fn total(s: Slice[i64]) -> i64 {
+    let mut n = 0;
+    for x in s.iter() {
+        n += x;
+    }
+    n
+}
+
+fn main() {
+    let cs: Vec[char] = "hello".chars().collect();
+    let b: String = cs[1..3].iter().collect();
+    let c: Vec[char] = cs[2..].iter().cloned().collect();
+    let v: Vec[i64] = [4, 5, 6, 7].iter().cloned().collect();
+    let firsts: Vec[i64] = v[1..3].iter().map(|x| x * 10).collect();
+    println(f"{b} {c.len()} {total(v[..2])} {firsts[1]} {v[1..].iter().count()}");
+}
+"#;
+    assert_runs(src, "el 3 9 60 3\n");
+}

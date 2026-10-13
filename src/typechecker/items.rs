@@ -3697,6 +3697,9 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     lowered.clone()
                 }
+                // The library's `impl[T] Slice[T]`, on the MIR pipeline only
+                // (`env_add_impl` registers it there alone).
+                Type::Slice { .. } if self.library_methods_from_source => lowered.clone(),
                 // B-2026-08-07-8 — a `shared`/`par` target keeps its
                 // `Type::Shared`. `lower_type_expr` already produced it (the
                 // bare struct name of a `shared struct S` lowers to

@@ -2497,6 +2497,7 @@ impl<'a> super::TypeChecker<'a> {
         // though `target_args` below collapses to empty for a generic impl.
         let target_generic_args: Vec<Type> = match &lowered_target {
             Type::Named { args, .. } => args.clone(),
+            Type::Slice { element, .. } => vec![(**element).clone()],
             _ => Vec::new(),
         };
         let (type_name, target_args) = match &lowered_target {
@@ -2607,10 +2608,17 @@ impl<'a> super::TypeChecker<'a> {
                 let Some(name) = method_callee_type_name(&lowered_target) else {
                     return;
                 };
+                // The MIR backends instantiate a generic impl per use, so
+                // the library's `impl[T] Slice[T]` (its `iter`) registers
+                // there as a generic-on-name impl does.
                 if !type_is_fully_concrete(element) {
-                    return;
+                    if !self.library_methods_from_source {
+                        return;
+                    }
+                    (name, Vec::new())
+                } else {
+                    (name, vec![(**element).clone()])
                 }
-                (name, vec![(**element).clone()])
             }
             // B-2026-08-18-13 — `Array[T, N]`, on the same terms as `Slice`
             // above and with one extra caveat of its own.
