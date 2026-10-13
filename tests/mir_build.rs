@@ -742,3 +742,44 @@ fn mir_tuple_scrutinee_of_map_gets() {
         }
     }
 }
+
+/// A strong handle or an `Option` of one stored into a `weak` field from a
+/// call, `Some(a)`, another weak field or a struct literal is downgraded:
+/// the object goes when its last strong handle does (B-2026-10-13-23).
+const WEAK_STORES: &str = r#"
+shared struct Node { val: i64, mut parent: weak Node }
+fn get(n: Node) -> Node { n }
+fn find(n: Node) -> Option[Node] { Some(n) }
+fn main() {
+    let c = Node { val: 3, parent: None };
+    let b = Node { val: 2, parent: None };
+    {
+        let a = Node { val: 1, parent: None };
+        b.parent = a;
+        c.parent = get(a);
+        println(f"{c.parent.expect("set").val}");
+        c.parent = b.parent.expect("b");
+        c.parent = b.parent;
+        c.parent = Some(a);
+        c.parent = find(a);
+        let d = Node { val: 4, parent: get(a) };
+        println(f"{d.parent.expect("d").val} {c.parent.is_some()}");
+    }
+    println(f"{c.parent.is_none()} {b.parent.is_none()}");
+}
+"#;
+
+#[test]
+fn mir_weak_stores_downgrade_every_value() {
+    let want = "1
+1 true
+true true
+";
+    let interp = karac::mir::lower::run_source(WEAK_STORES).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(WEAK_STORES, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

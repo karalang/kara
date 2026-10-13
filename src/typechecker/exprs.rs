@@ -621,6 +621,8 @@ impl<'a> super::TypeChecker<'a> {
             return ty;
         }
         let mut ty = self.check_expr_inner(expr, expected);
+        // A value stored into a `weak` slot keeps its own type in typed HIR.
+        let weak_store = self.weak_store_actual.take();
         // A result whose type only the context decides (`collect`'s `C`)
         // takes the context's type, so the call's type argument is solved.
         if self.library_methods_from_source {
@@ -672,7 +674,7 @@ impl<'a> super::TypeChecker<'a> {
         {
             self.record_node_type(expr.id, expected);
         } else {
-            self.record_node_type(expr.id, &ty);
+            self.record_node_type(expr.id, weak_store.as_ref().unwrap_or(&ty));
         }
         self.link_part_node_types(expr);
         self.deny_for_element_drop_copy_in_literal(expr);
@@ -1208,6 +1210,18 @@ impl<'a> super::TypeChecker<'a> {
                 );
                 self.record_expr_type(&expr.span, &Type::Error);
                 return Type::Error;
+            }
+            // On the MIR pipeline the value keeps its own type (a call's
+            // strong handle, `Some(x)`'s `Option`), which the builder
+            // downgrades into the slot (B-2026-10-13-23); an unbound `None`
+            // takes the slot's.
+            let unbound = matches!(
+                referent,
+                Type::TypeVar(_) | Type::TypeParam(_) | Type::Error
+            ) || matches!(actual, Type::Error | Type::Never);
+            if self.library_methods_from_source && !unbound {
+                self.weak_store_actual = Some(actual);
+                return expected.clone();
             }
             self.record_expr_type(&expr.span, expected);
             return expected.clone();

@@ -4148,10 +4148,22 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// reading it is a new weak handle to the same object (§6.5), a
     /// downgrade through a borrow of it, in a new temporary.
     fn weak_read(&mut self, p: &Place, t: Ty) -> Option<Local> {
+        // A field of a `shared` value cannot move out either
+        // (`c.parent = b.parent`, B-2026-10-13-23).
         let behind = p
             .projection
             .iter()
-            .any(|e| matches!(e, ProjElem::Deref | ProjElem::Index(_)));
+            .any(|e| matches!(e, ProjElem::Deref | ProjElem::Index(_)))
+            || (0..p.projection.len()).any(|i| {
+                let prefix = Place {
+                    local: p.local,
+                    projection: p.projection[..i].to_vec(),
+                };
+                matches!(
+                    self.tys().tcx().kind(self.place_type(&prefix)),
+                    HK::Shared { .. }
+                )
+            });
         if !behind || !matches!(self.tys().tcx().kind(t), HK::Weak(_)) {
             return None;
         }
@@ -4424,6 +4436,28 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.call_native("process.exit", vec![op], Place::local(u));
             self.diverge(TerminatorKind::Unreachable);
             return Ok(());
+        }
+        // A strong handle or an `Option` of one, made by a call, a
+        // constructor or a branch, stored into a `weak` slot: made in a
+        // temporary of its own type, then downgraded by `assign` as a
+        // local's handle is (B-2026-10-13-23).
+        if let HK::Weak(_) = self.tys().tcx().kind(self.place_type(&dest)) {
+            if matches!(
+                e.kind,
+                ExprKind::Call { .. }
+                    | ExprKind::MethodCall { .. }
+                    | ExprKind::If { .. }
+                    | ExprKind::Match { .. }
+                    | ExprKind::Block(..)
+            ) {
+                let et = self.expr_ty(e)?;
+                if !matches!(self.tys().tcx().kind(et), HK::Weak(_)) {
+                    let t = self.temp(et);
+                    self.expr_into(e, Place::local(t))?;
+                    self.assign(dest, Rvalue::Use(Operand::Move(Place::local(t))));
+                    return Ok(());
+                }
+            }
         }
         if let Some(op) = self.literal_ref(e, None)? {
             self.assign(dest, Rvalue::Use(op));
