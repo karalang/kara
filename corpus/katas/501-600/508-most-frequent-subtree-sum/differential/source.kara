@@ -1,0 +1,357 @@
+// Differential test for LeetCode #508: Most Frequent Subtree Sum.
+//
+// Copies of the four arms, on 1,500 random trees of 1 to 30 nodes, the
+// values from -2 to 2, from -50 to 50, or from -100,000 to 100,000 in
+// turn. Properties:
+//   P1  the sums are the reference's, which walks the subtree of every
+//       node on its own and counts each sum by scanning the list
+//   P2  the mirror image has the same sums
+//   P3  every value negated negates the sums
+//   P4  every value times 3 triples the sums
+//   P5  two copies of the tree under a new root of 10^9 keep the sums
+
+// ---- star: find_frequent_tree_sum.kara
+
+fn subtree_sum_star(node: Option[TreeNode], counts: mut ref Map[i64, i64]) -> i64 {
+    let Some(n) = node else {
+        return 0;
+    };
+    let sum = n.val + subtree_sum_star(n.left, counts) + subtree_sum_star(n.right, counts);
+    *counts.entry(sum).or_insert(0) += 1;
+    sum
+}
+
+fn find_frequent_tree_sum_star(root: Option[TreeNode]) -> Vec[i64] {
+    let mut counts: Map[i64, i64] = Map.new();
+    subtree_sum_star(root, mut counts);
+    let mut best = 0;
+    for (_, c) in counts.iter() {
+        if *c > best {
+            best = *c;
+        }
+    }
+    let mut sums: Vec[i64] = Vec.new();
+    for (s, c) in counts.iter() {
+        if *c == best {
+            sums.push(*s);
+        }
+    }
+    sums
+}
+
+// ---- sorted: find_frequent_tree_sum_sorted.kara
+
+fn collect_sorted(node: Option[TreeNode], sums: mut ref Vec[i64]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let sum = n.val + collect_sorted(n.left, sums) + collect_sorted(n.right, sums);
+            sums.push(sum);
+            sum
+        }
+    }
+}
+
+fn find_frequent_tree_sum_sorted(root: Option[TreeNode]) -> Vec[i64] {
+    let mut sums: Vec[i64] = Vec.new();
+    collect_sorted(root, mut sums);
+    sums.sort();
+    let mut modes: Vec[i64] = Vec.new();
+    let mut best = 0;
+    let mut start = 0;
+    while start < sums.len() {
+        let mut end = start + 1;
+        while end < sums.len() and sums[end] == sums[start] {
+            end += 1;
+        }
+        if end - start > best {
+            best = end - start;
+            modes.clear();
+        }
+        if end - start == best {
+            modes.push(sums[start]);
+        }
+        start = end;
+    }
+    modes
+}
+
+// ---- levels: find_frequent_tree_sum_levels.kara
+
+fn find_frequent_tree_sum_levels(root: Option[TreeNode]) -> Vec[i64] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    let mut parent: Vec[i64] = Vec.new();
+    if let Some(r) = root {
+        nodes.push(r);
+        parent.push(-1);
+    }
+    let mut head = 0;
+    while head < nodes.len() {
+        let n = nodes[head];
+        if let Some(l) = n.left {
+            nodes.push(l);
+            parent.push(head);
+        }
+        if let Some(r) = n.right {
+            nodes.push(r);
+            parent.push(head);
+        }
+        head += 1;
+    }
+    let mut sums: Vec[i64] = nodes.iter().map(|n| n.val).collect();
+    let mut counts: SortedMap[i64, i64] = SortedMap.new();
+    let mut i = nodes.len() - 1;
+    while i >= 0 {
+        if parent[i] >= 0 {
+            sums[parent[i]] += sums[i];
+        }
+        *counts.entry(sums[i]).or_insert(0) += 1;
+        i -= 1;
+    }
+    let best = counts.iter().map(|(_, c)| *c).max().unwrap_or(0);
+    counts.iter().filter(|(_, c)| *c == best).map(|(s, _)| *s).collect()
+}
+
+// ---- stack: find_frequent_tree_sum_stack.kara
+
+fn find_frequent_tree_sum_stack(root: Option[TreeNode]) -> Vec[i64] {
+    let mut stack: Vec[(Option[TreeNode], bool)] = vec![(root, false)];
+    let mut done: Vec[i64] = Vec.new();
+    let mut counts: Map[i64, i64] = Map.new();
+    let mut best = 0;
+    let mut modes: Vec[i64] = Vec.new();
+    while let Some((node, expanded)) = stack.pop() {
+        let Some(n) = node else {
+            done.push(0);
+            continue;
+        };
+        if not expanded {
+            stack.push((Some(n), true));
+            stack.push((n.right, false));
+            stack.push((n.left, false));
+            continue;
+        }
+        let right = done.pop().unwrap();
+        let left = done.pop().unwrap();
+        let sum = n.val + left + right;
+        done.push(sum);
+        let count = match counts.get(sum) {
+            Some(c) => *c + 1,
+            None => 1,
+        };
+        counts.insert(sum, count);
+        if count > best {
+            best = count;
+            modes.clear();
+        }
+        if count == best {
+            modes.push(sum);
+        }
+    }
+    modes
+}
+// ---- differential harness -------------------------------------------------
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random tree of size nodes with values from -half to half, each new
+// node hung at the first empty place of a random walk down from the root.
+fn grow(size: i64, half: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let root = TreeNode { val: next_random(seed) % (2 * half + 1) - half, left: None, right: None };
+    for _ in 1..size {
+        let leaf = TreeNode { val: next_random(seed) % (2 * half + 1) - half, left: None, right: None };
+        let mut node = root;
+        loop {
+            if next_random(seed) % 2 == 0 {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(leaf);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(leaf);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+// A new tree of the same shape, every value times k, and the left and
+// right children swapped when flip is set.
+fn copy(node: Option[TreeNode], k: i64, flip: bool) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => {
+            let left = copy(n.left, k, flip);
+            let right = copy(n.right, k, flip);
+            if flip {
+                Some(TreeNode { val: n.val * k, left: right, right: left })
+            } else {
+                Some(TreeNode { val: n.val * k, left: left, right: right })
+            }
+        }
+    }
+}
+
+fn arm(which: i64, root: Option[TreeNode]) -> Vec[i64] {
+    let mut got = match which {
+        0 => find_frequent_tree_sum_star(root),
+        1 => find_frequent_tree_sum_sorted(root),
+        2 => find_frequent_tree_sum_levels(root),
+        _ => find_frequent_tree_sum_stack(root),
+    };
+    got.sort();
+    got
+}
+
+fn nodes_of(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
+    if let Some(n) = node {
+        out.push(n);
+        nodes_of(n.left, out);
+        nodes_of(n.right, out);
+    }
+}
+
+fn total(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => n.val + total(n.left) + total(n.right),
+    }
+}
+
+// The reference: the sum under every node by its own walk, each sum's
+// count by a scan of the list, and the sums with the largest count,
+// sorted.
+fn reference(root: Option[TreeNode]) -> Vec[i64] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    nodes_of(root, mut nodes);
+    let mut sums: Vec[i64] = Vec.new();
+    for n in nodes {
+        sums.push(total(Some(n)));
+    }
+    let mut best = 0;
+    for a in 0..sums.len() {
+        let mut count = 0;
+        for b in 0..sums.len() {
+            if sums[b] == sums[a] {
+                count += 1;
+            }
+        }
+        if count > best {
+            best = count;
+        }
+    }
+    let mut modes: Vec[i64] = Vec.new();
+    for a in 0..sums.len() {
+        let mut count = 0;
+        for b in 0..sums.len() {
+            if sums[b] == sums[a] {
+                count += 1;
+            }
+        }
+        if count == best and not modes.contains(sums[a]) {
+            modes.push(sums[a]);
+        }
+    }
+    modes.sort();
+    modes
+}
+
+fn main() {
+    let names = vec!["star", "sorted", "levels", "stack"];
+    let cases = 1500;
+    let mut seed: i64 = 5080;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // 1 to 30 nodes, the values from -2 to 2, from -50 to 50, or from
+        // the whole range -100,000 to 100,000, in turn.
+        let half = if c % 3 == 0 { 2 } else if c % 3 == 1 { 50 } else { 100000 };
+        let size = 1 + next_random(mut seed) % 30;
+        let root = grow(size, half, mut seed);
+        let want = reference(root);
+        let mirrored = copy(root, 1, true);
+        let negated = copy(root, -1, false);
+        let tripled = copy(root, 3, false);
+        // Two copies of the tree under a root of 10^9: every sum turns up
+        // twice as often, and the new root's sum is far from all of them.
+        let twice = Some(TreeNode { val: 1000000000, left: copy(root, 1, false), right: copy(root, 1, false) });
+        let mut negated_want: Vec[i64] = want.iter().map(|s| -*s).collect();
+        negated_want.sort();
+        let tripled_want: Vec[i64] = want.iter().map(|s| 3 * *s).collect();
+        for which in 0..4 {
+            let got = arm(which, root);
+            // P1: the sums are the reference's.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: case {c} gave {got}, want {want}");
+                }
+            }
+            // P2: the mirror image has the same sums.
+            checks += 1;
+            let m = arm(which, mirrored);
+            if m != want {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: case {c} mirrored gave {m}, want {want}");
+                }
+            }
+            // P3: every value negated negates the sums.
+            checks += 1;
+            let n = arm(which, negated);
+            if n != negated_want {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: case {c} negated gave {n}, want {negated_want}");
+                }
+            }
+            // P4: every value times 3 triples the sums.
+            checks += 1;
+            let t = arm(which, tripled);
+            if t != tripled_want {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: case {c} tripled gave {t}, want {tripled_want}");
+                }
+            }
+            // P5: two copies under a new root keep the sums.
+            checks += 1;
+            let d = arm(which, twice);
+            if d != want {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: case {c} doubled gave {d}, want {want}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

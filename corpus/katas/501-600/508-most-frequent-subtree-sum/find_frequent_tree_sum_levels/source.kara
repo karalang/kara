@@ -1,0 +1,153 @@
+// LeetCode #508: Most Frequent Subtree Sum -- level order, each sum
+// handed up by index.
+//
+// No recursion. List the nodes breadth first, each with the index of
+// its parent. A child comes after its parent in that list, so a walk
+// from the back meets every node after all of its descendants: its sum
+// is finished, and is added into its parent's. The sums are counted in a
+// SortedMap, and two iterator chains take the largest count and the sums
+// that have it. O(n log n).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn find_frequent_tree_sum(root: Option[TreeNode]) -> Vec[i64] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    let mut parent: Vec[i64] = Vec.new();
+    if let Some(r) = root {
+        nodes.push(r);
+        parent.push(-1);
+    }
+    let mut head = 0;
+    while head < nodes.len() {
+        let n = nodes[head];
+        if let Some(l) = n.left {
+            nodes.push(l);
+            parent.push(head);
+        }
+        if let Some(r) = n.right {
+            nodes.push(r);
+            parent.push(head);
+        }
+        head += 1;
+    }
+    let mut sums: Vec[i64] = nodes.iter().map(|n| n.val).collect();
+    let mut counts: SortedMap[i64, i64] = SortedMap.new();
+    let mut i = nodes.len() - 1;
+    while i >= 0 {
+        if parent[i] >= 0 {
+            sums[parent[i]] += sums[i];
+        }
+        *counts.entry(sums[i]).or_insert(0) += 1;
+        i -= 1;
+    }
+    let best = counts.iter().map(|(_, c)| *c).max().unwrap_or(0);
+    counts.iter().filter(|(_, c)| *c == best).map(|(s, _)| *s).collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order: the values row by row, None for a
+// missing child, and nothing listed under a missing node.
+fn from_level_order(items: Vec[Option[i64]]) -> Option[TreeNode] {
+    let Some(first) = items[0] else {
+        return None;
+    };
+    let root = TreeNode { val: first, left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < items.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = items[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < items.len() {
+            if let Some(v) = items[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A random tree of size nodes with values from -half to half: each new
+// node walks down from the root, left or right by a coin flip, to the
+// first empty place.
+fn grow(size: i64, half: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let root = TreeNode { val: next_random(seed) % (2 * half + 1) - half, left: None, right: None };
+    for _ in 1..size {
+        let leaf = TreeNode { val: next_random(seed) % (2 * half + 1) - half, left: None, right: None };
+        let mut node = root;
+        loop {
+            if next_random(seed) % 2 == 0 {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(leaf);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(leaf);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+fn show(name: Str, items: Vec[Option[i64]]) {
+    let mut sums = find_frequent_tree_sum(from_level_order(items));
+    sums.sort();
+    println(f"{name}: {sums}");
+}
+
+fn main() {
+    show("example 1", vec![Some(5), Some(2), Some(-3)]);
+    show("example 2", vec![Some(5), Some(2), Some(-5)]);
+    show("one node", vec![Some(7)]);
+    show("every sum once", vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7)]);
+    show("all zero", vec![Some(0), Some(0), Some(0), Some(0)]);
+    show("a chain", vec![Some(1), None, Some(-1), None, Some(1), None, Some(-1)]);
+    show("the extremes", vec![Some(-100000), Some(100000), Some(-100000), Some(100000), None, None, Some(-100000)]);
+    show("sums that cancel", vec![Some(3), Some(-3), Some(-3), Some(3), Some(3), None, Some(3)]);
+    // 300 random trees of 1 to 40 nodes, the values from -2 to 2, from
+    // -50 to 50, or from the whole range -100,000 to 100,000, in turn.
+    let mut seed: i64 = 508;
+    let count = 300;
+    let mut total = 0;
+    let mut modes = 0;
+    let mut checksum: i64 = 0;
+    for t in 0..count {
+        let half = if t % 3 == 0 { 2 } else if t % 3 == 1 { 50 } else { 100000 };
+        let size = 1 + next_random(mut seed) % 40;
+        total += size;
+        let mut sums = find_frequent_tree_sum(grow(size, half, mut seed));
+        sums.sort();
+        for s in sums {
+            modes += 1;
+            checksum = (checksum * 31 + s + 10000000) % 1000000007;
+        }
+    }
+    println(f"{count} random trees: {total} nodes, {modes} most frequent sums, checksum {checksum}");
+}

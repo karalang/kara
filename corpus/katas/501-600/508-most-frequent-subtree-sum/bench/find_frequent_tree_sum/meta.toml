@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/508-most-frequent-subtree-sum/bench/find_frequent_tree_sum.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["shared", "lib:map", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "94b0bb60c"
+extracted_src = "c03e5027"
+model_rev = "1aa23105"
+model_src = "c03e5027"

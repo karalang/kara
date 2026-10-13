@@ -1,0 +1,61 @@
+// LeetCode #507: Perfect Number -- an iterator over the divisors.
+//
+// The ★ arm's walk as one chain: the d from 1 to the square root that
+// divide num, each mapped to d plus its partner num / d (1 and a square
+// root counted alone), and summed. O(sqrt n) time.
+
+fn check_perfect_number(num: i64) -> bool {
+    let mut root = 1;
+    while (root + 1) * (root + 1) <= num {
+        root += 1;
+    }
+    let sum: i64 = (1..=root)
+        .filter(|d| num % d == 0)
+        .map(|d| if d == 1 or d * d == num { d } else { d + num / d })
+        .sum();
+    num > 1 and sum == num
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    for num in [28, 7, 1, 2, 6, 12, 496, 8128, 33550336, 33550337, 100000000] {
+        println(f"{num} -> {check_perfect_number(num)}");
+    }
+    // Every number from 1 to 10,000.
+    let mut found: Vec[i64] = Vec.new();
+    for num in 1..=10000 {
+        if check_perfect_number(num) {
+            found.push(num);
+        }
+    }
+    println(f"perfect from 1 to 10000: {found}");
+    // 300 numbers: in turn a random one from 1 to 10^8, one of the five
+    // perfect numbers in range, one of those plus or minus 1, and twice
+    // one of those.
+    let known = [6, 28, 496, 8128, 33550336];
+    let count = 300;
+    let mut seed: i64 = 507;
+    let mut perfect = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let pick = known[next_random(mut seed) % 5];
+        let num = match c % 4 {
+            0 => 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000000,
+            1 => pick,
+            2 => if next_random(mut seed) % 2 == 0 { pick - 1 } else { pick + 1 },
+            _ => 2 * pick,
+        };
+        let answer = check_perfect_number(num);
+        if answer {
+            perfect += 1;
+        }
+        checksum = (checksum * 31 + num % 1000 * 2 + answer as i64) % 1000000007;
+    }
+    println(f"{count} numbers: {perfect} perfect, checksum {checksum}");
+}

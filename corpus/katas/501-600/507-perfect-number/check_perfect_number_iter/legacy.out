@@ -1,0 +1,13 @@
+28 -> true
+7 -> false
+1 -> false
+2 -> false
+6 -> true
+12 -> false
+496 -> true
+8128 -> true
+33550336 -> true
+33550337 -> false
+100000000 -> false
+perfect from 1 to 10000: [6, 28, 496, 8128]
+300 numbers: 75 perfect, checksum 37622770

@@ -1,0 +1,74 @@
+// LeetCode #507: Perfect Number -- the divisor sum from the prime
+// factors.
+//
+// sigma(n), the sum of all of n's divisors, n included, is the product
+// over its prime powers p^k of 1 + p + ... + p^k. Factor by trial
+// division, build that product, and n is perfect when sigma(n) is 2n.
+// O(sqrt n) time.
+
+fn check_perfect_number(num: i64) -> bool {
+    // sigma(n), the sum of all divisors, is the product over the prime
+    // powers p^k in n of 1 + p + ... + p^k.
+    let mut rest = num;
+    let mut sigma = 1;
+    let mut p = 2;
+    while p * p <= rest {
+        let mut term = 1;
+        let mut power = 1;
+        while rest % p == 0 {
+            rest /= p;
+            power *= p;
+            term += power;
+        }
+        sigma *= term;
+        p += 1;
+    }
+    if rest > 1 {
+        sigma *= 1 + rest;
+    }
+    sigma == 2 * num
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    for num in [28, 7, 1, 2, 6, 12, 496, 8128, 33550336, 33550337, 100000000] {
+        println(f"{num} -> {check_perfect_number(num)}");
+    }
+    // Every number from 1 to 10,000.
+    let mut found: Vec[i64] = Vec.new();
+    for num in 1..=10000 {
+        if check_perfect_number(num) {
+            found.push(num);
+        }
+    }
+    println(f"perfect from 1 to 10000: {found}");
+    // 300 numbers: in turn a random one from 1 to 10^8, one of the five
+    // perfect numbers in range, one of those plus or minus 1, and twice
+    // one of those.
+    let known = [6, 28, 496, 8128, 33550336];
+    let count = 300;
+    let mut seed: i64 = 507;
+    let mut perfect = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let pick = known[next_random(mut seed) % 5];
+        let num = match c % 4 {
+            0 => 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000000,
+            1 => pick,
+            2 => if next_random(mut seed) % 2 == 0 { pick - 1 } else { pick + 1 },
+            _ => 2 * pick,
+        };
+        let answer = check_perfect_number(num);
+        if answer {
+            perfect += 1;
+        }
+        checksum = (checksum * 31 + num % 1000 * 2 + answer as i64) % 1000000007;
+    }
+    println(f"{count} numbers: {perfect} perfect, checksum {checksum}");
+}

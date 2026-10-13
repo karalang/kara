@@ -1,0 +1,52 @@
+// Benchmark for #507: the ★ arm (divisors in pairs up to the square
+// root); see ../check_perfect_number.kara.
+
+fn check_perfect_number(num: i64) -> bool {
+    if num == 1 {
+        return false;
+    }
+    let mut sum = 1;
+    let mut i = 2;
+    while i * i <= num {
+        if num % i == 0 {
+            sum += i;
+            if i * i != num {
+                sum += num / i;
+            }
+        }
+        i += 1;
+    }
+    sum == num
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100,000 numbers from 1 to 10^8 (the problem's most), one in ten of
+    // them one of the five perfect numbers in range, built once. Then
+    // each is checked once.
+    let count = 100000;
+    let known = [6, 28, 496, 8128, 33550336];
+    let mut seed: i64 = 507;
+    let mut nums: Vec[i64] = Vec.new();
+    for c in 0..count {
+        if c % 10 == 0 {
+            nums.push(known[next_random(mut seed) % 5]);
+        } else {
+            nums.push(1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000000);
+        }
+    }
+    let mut perfect = 0;
+    let mut checksum: i64 = 0;
+    for num in nums {
+        let answer = check_perfect_number(num);
+        if answer {
+            perfect += 1;
+        }
+        checksum = (checksum * 31 + num % 1000 * 2 + answer as i64) % 1000000007;
+    }
+    println(f"{count} numbers: {perfect} perfect, checksum {checksum}");
+}

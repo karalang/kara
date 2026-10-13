@@ -1,0 +1,9 @@
+example 1: [-3, 2, 4]
+example 2: [2]
+one node: [7]
+every sum once: [4, 5, 6, 7, 11, 16, 28]
+all zero: [0]
+a chain: [-1, 0]
+the extremes: [-100000]
+sums that cancel: [3]
+300 random trees: 6068 nodes, 2722 most frequent sums, checksum 399288846

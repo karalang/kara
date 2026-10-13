@@ -1,0 +1,243 @@
+// Differential test for LeetCode #507: Perfect Number.
+//
+// Copies of the four arms, on 1,500 numbers: in turn a random one from 1
+// to 20,000, one from 1 to 10^8, a perfect number, one within 5 of a
+// perfect number (1 among them), and twice a perfect number.
+// Properties:
+//   P1  the answer is the reference's, which adds up every proper
+//       divisor (up to 20,000) or looks the number up in the five
+//       perfect numbers below 10^8
+//   P2  a perfect number is even
+//   P3  a number and the next are never both perfect
+//   P4  a perfect number is 2^k (2^(k+1) - 1)
+//   P5  the smallest prime not below the number is not perfect
+
+// ---- star: check_perfect_number.kara
+
+fn check_perfect_number_star(num: i64) -> bool {
+    if num == 1 {
+        return false;
+    }
+    let mut sum = 1;
+    let mut i = 2;
+    while i * i <= num {
+        if num % i == 0 {
+            sum += i;
+            if i * i != num {
+                sum += num / i;
+            }
+        }
+        i += 1;
+    }
+    sum == num
+}
+
+// ---- sigma: check_perfect_number_sigma.kara
+
+fn check_perfect_number_sigma(num: i64) -> bool {
+    // sigma(n), the sum of all divisors, is the product over the prime
+    // powers p^k in n of 1 + p + ... + p^k.
+    let mut rest = num;
+    let mut sigma = 1;
+    let mut p = 2;
+    while p * p <= rest {
+        let mut term = 1;
+        let mut power = 1;
+        while rest % p == 0 {
+            rest /= p;
+            power *= p;
+            term += power;
+        }
+        sigma *= term;
+        p += 1;
+    }
+    if rest > 1 {
+        sigma *= 1 + rest;
+    }
+    sigma == 2 * num
+}
+
+// ---- euclid: check_perfect_number_euclid.kara
+
+fn is_prime_euclid(n: i64) -> bool {
+    if n < 2 {
+        return false;
+    }
+    let mut d = 2;
+    while d * d <= n {
+        if n % d == 0 {
+            return false;
+        }
+        d += 1;
+    }
+    true
+}
+
+fn check_perfect_number_euclid(num: i64) -> bool {
+    // Euclid-Euler: the even perfect numbers are 2^(p-1) * (2^p - 1)
+    // with 2^p - 1 prime, and there is no odd one below 10^1500.
+    let mut p = 2;
+    loop {
+        let mersenne = (1 << p) - 1;
+        let candidate = (1 << (p - 1)) * mersenne;
+        if candidate > num {
+            return false;
+        }
+        if candidate == num {
+            return is_prime_euclid(mersenne);
+        }
+        p += 1;
+    }
+}
+
+// ---- iter: check_perfect_number_iter.kara
+
+fn check_perfect_number_iter(num: i64) -> bool {
+    let mut root = 1;
+    while (root + 1) * (root + 1) <= num {
+        root += 1;
+    }
+    let sum: i64 = (1..=root)
+        .filter(|d| num % d == 0)
+        .map(|d| if d == 1 or d * d == num { d } else { d + num / d })
+        .sum();
+    num > 1 and sum == num
+}
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, num: i64) -> bool {
+    match which {
+        0 => check_perfect_number_star(num),
+        1 => check_perfect_number_sigma(num),
+        2 => check_perfect_number_euclid(num),
+        _ => check_perfect_number_iter(num),
+    }
+}
+
+// The reference: every proper divisor added up, for a number up to
+// 20,000; above that, membership in the five perfect numbers up to 10^8.
+fn reference(num: i64) -> bool {
+    if num > 20000 {
+        return num == 33550336;
+    }
+    let mut sum = 0;
+    for d in 1..num {
+        if num % d == 0 {
+            sum += d;
+        }
+    }
+    num > 1 and sum == num
+}
+
+fn smallest_prime_from(n: i64) -> i64 {
+    let mut p = if n < 2 { 2 } else { n };
+    loop {
+        let mut d = 2;
+        let mut prime = true;
+        while d * d <= p {
+            if p % d == 0 {
+                prime = false;
+                break;
+            }
+            d += 1;
+        }
+        if prime {
+            return p;
+        }
+        p += 1;
+    }
+}
+
+// Whether n is 2^k * (2^(k+1) - 1) for some k >= 1.
+fn euclid_form(n: i64) -> bool {
+    let mut k = 1;
+    while (1 << k) * ((1 << (k + 1)) - 1) <= n {
+        if (1 << k) * ((1 << (k + 1)) - 1) == n {
+            return true;
+        }
+        k += 1;
+    }
+    false
+}
+
+fn main() {
+    let names = ["star", "sigma", "euclid", "iter"];
+    let known = [6, 28, 496, 8128, 33550336];
+    let cases = 1500;
+    let mut seed: i64 = 5070;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property = [0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // In turn: a random number from 1 to 20,000, one from 1 to 10^8,
+        // a perfect number, one within 5 of a perfect number (1 among
+        // them), and twice a perfect number.
+        let pick = known[next_random(mut seed) % 5];
+        let num = match c % 5 {
+            0 => 1 + next_random(mut seed) % 20000,
+            1 => 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000000,
+            2 => pick,
+            3 => pick - 5 + next_random(mut seed) % 11,
+            _ => 2 * pick,
+        };
+        let want = reference(num);
+        let prime = smallest_prime_from(num);
+        for which in 0..4 {
+            let got = arm(which, num);
+            // P1: the reference's answer.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {num} gave {got}, want {want}");
+                }
+            }
+            // P2: a perfect number is even.
+            checks += 1;
+            if got and num % 2 != 0 {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {num} is odd and gave true");
+                }
+            }
+            // P3: a number and the next are never both perfect.
+            checks += 1;
+            if got and arm(which, num + 1) {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {num} and {num + 1} both gave true");
+                }
+            }
+            // P4: a perfect number is 2^k (2^(k+1) - 1).
+            checks += 1;
+            if got and not euclid_form(num) {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {num} gave true and is not of Euclid's form");
+                }
+            }
+            // P5: a prime is never perfect.
+            checks += 1;
+            if arm(which, prime) {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: the prime {prime} gave true");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}
