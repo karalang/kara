@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 602 |
 | double-free | 427 |
 | codegen-gap | 253 |
-| missing-feature | 228 |
+| missing-feature | 229 |
 | other | 171 |
 | perf | 153 |
 | diagnostics | 152 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2852 |
-| interp | 900 |
+| codegen | 2853 |
+| interp | 901 |
 | typecheck | 367 |
 | other | 115 |
 | ownership | 83 |
@@ -594,6 +594,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-33 | 2026-10-12 | typecheck | low | `karac check` refuses `s = cs.iter().collect();` into an existing `String` (also `w.name = ...` and `v.push(cs.iter().collect())` with `v: Vec[String]`), with "expected 'String', found 'Vec[char]'": `collect` takes its target type from a `let` annotation or a return type, but not from an assignment target or an argument, and defaults to `Vec` | — |
 | B-2026-10-12-34 | 2026-10-12 | typecheck | low | On the MIR backends, `v.push(cs.iter().collect())` with `v: Vec[String]` and `cs: Vec[char]` fails to build: "the method call `.collect` with no resolved callee is not lowered yet"; `collect` in argument position gets no target type | — |
 | B-2026-10-13-1 | 2026-10-13 | typecheck | low | `Map.keys()` / `values()` and `SortedMap.keys()` / `values()` return an eager `Vec` on every front end, where docs/library/collections.md gives `fn keys(self) -> impl Iterator[Item = ref K]`: `m.keys().next()` and `m.keys().count()` are refused ("no method 'next' on type 'Vec': iterator adaptors/terminals require an explicit `.iter()`"), and taking the smallest key of a `SortedMap` copies every key | — |
+| B-2026-10-13-3 | 2026-10-13 | interp+codegen | medium | A `Slice[T]`'s `iter()` drives a `for` loop on the MIR backends but no adaptor or terminal: `s.bytes().iter().collect()`, `.count()`, `.position(..)` and `v[0..3].iter().map(..).sum()` fail with "an iterator value is not lowered yet", and a closure that writes the spec's `*b` is refused first ("found 'u8'"), while `karac check` accepts every form and its own diagnostic for `s.bytes().collect()` recommends `s.bytes().iter().collect()` | — |
 
 ### Relocated
 
