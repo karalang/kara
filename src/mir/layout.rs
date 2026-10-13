@@ -3,8 +3,8 @@
 //!
 //! This is the one place the MIR backends get a type's layout from, so the
 //! MIR interpreter and the LLVM backend (M2) report the same numbers. The
-//! rules are the natural C layout, with no field reordering and no niche
-//! optimization:
+//! rules are the natural C layout, with no field reordering and one niche
+//! (an `Option` of a non-null pointer):
 //!
 //! - Scalars are their own width (`char` is 4 bytes, `bool` 1, `i128` 16).
 //! - A tuple, struct or closure places each part at the next multiple of
@@ -13,6 +13,9 @@
 //!   variants) followed by the largest variant laid out as a struct.
 //! - A field whose type holds its own ADT again by value is boxed: a
 //!   pointer to a malloc'd value ([`boxed_field`]).
+//! - An `Option` of a thin pointer that is never null (a `shared` handle,
+//!   or a reference to a sized, non-empty type) is that pointer alone, with
+//!   null for `None` ([`null_niche`]).
 //! - A `shared` handle points at a box: two `u64` counts (strong, then
 //!   weak) and then the type's body, laid out as the plain struct or enum.
 //! - `String` and `Vec` are `{ptr, len, cap}`; `VecDeque` is a ring,
@@ -148,6 +151,9 @@ pub fn library_cell(tys: &TyInterner, t: Ty) -> Option<Cell> {
 /// or a `shared` one (whose handle points at a box holding this body).
 fn adt_body(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
     let of = |t: Ty| layout_at(tys, t, depth + 1);
+    if null_niche(tys, t).is_some() {
+        return Some(WORD);
+    }
     let (adt, _) = tys.tcx().adt_of(t)?;
     let variant = |v: usize| -> Option<Vec<Layout>> {
         let fields = adt.variants[v].fields.len() as u32;
@@ -218,6 +224,9 @@ pub fn shared_body_offset(tys: &TyInterner, t: Ty) -> Option<u64> {
 /// enum field. For a `shared` type it is the offset within the box's body
 /// (add [`shared_body_offset`] for the offset within the box).
 pub fn field_offset(tys: &TyInterner, t: Ty, variant: Option<u32>, f: u32) -> Option<u64> {
+    if let Some((_, some)) = null_niche(tys, t) {
+        return (variant == Some(some) && f == 0).then_some(0);
+    }
     let (start, count) = match tys.kind(t) {
         TyKind::Tuple(ts) | TyKind::Closure(_, ts) if variant.is_none() => (ZST, ts.len()),
         TyKind::Adt(_) | TyKind::Shared(_) => {
@@ -248,6 +257,76 @@ pub fn field_offset(tys: &TyInterner, t: Ty, variant: Option<u32>, f: u32) -> Op
         }
     }
     Some(at)
+}
+
+/// For an `Option` stored as a bare pointer, the variant indices of its
+/// `None` and `Some`: the payload is a `shared` handle or a reference to a
+/// sized type that is not empty, so it is never null, and a null pointer
+/// is `None`. The logical tag is still [`enum_tag`]'s byte; readers and
+/// writers of the tag compare and store the pointer instead.
+pub fn null_niche(tys: &TyInterner, t: Ty) -> Option<(u32, u32)> {
+    let TyKind::Adt(a) = tys.kind(t) else {
+        return None;
+    };
+    let adt = tys.adt(a);
+    if adt.name != "Option" || adt.variants.len() != 2 {
+        return None;
+    }
+    let some = adt.variants.iter().position(|v| v.name == "Some")? as u32;
+    let none = 1 - some;
+    if adt.variants[some as usize].fields.len() != 1
+        || !adt.variants[none as usize].fields.is_empty()
+    {
+        return None;
+    }
+    let payload = tys.field_ty(t, Some(some), 0)?;
+    let ok = match tys.kind(payload) {
+        TyKind::Shared(_) => true,
+        TyKind::Ref(p) | TyKind::MutRef(p) => {
+            !matches!(tys.kind(p), TyKind::Str | TyKind::Slice(_))
+                && !may_be_empty(tys, p, &mut Vec::new())
+        }
+        _ => false,
+    };
+    ok.then_some((none, some))
+}
+
+/// Whether `t` may have size 0 (a reference to it then need not point at
+/// anything, and may be null). Answered from the type's shape rather than
+/// its layout, which asks [`null_niche`] in turn; a type met again on the
+/// way counts as possibly empty.
+fn may_be_empty(tys: &TyInterner, t: Ty, seen: &mut Vec<Ty>) -> bool {
+    if seen.contains(&t) {
+        return true;
+    }
+    seen.push(t);
+    match tys.kind(t) {
+        TyKind::Unit | TyKind::Never | TyKind::FnDef(_) | TyKind::Other => true,
+        TyKind::Tuple(ts) | TyKind::Closure(_, ts) => {
+            ts.into_iter().all(|t| may_be_empty(tys, t, seen))
+        }
+        TyKind::Array(el, n) => n == 0 || may_be_empty(tys, el, seen),
+        TyKind::Adt(_) => match library_cell(tys, t) {
+            Some(Cell::Handle) => false,
+            Some(Cell::Inline(h)) => may_be_empty(tys, h, seen),
+            None => {
+                let Some((adt, _)) = tys.tcx().adt_of(t) else {
+                    return true;
+                };
+                if adt.is_enum {
+                    // Any variant gives the enum a tag byte.
+                    return adt.variants.is_empty();
+                }
+                (0..adt.variants[0].fields.len() as u32).all(|f| {
+                    !boxed_field(tys, t, None, f)
+                        && tys
+                            .field_ty(t, None, f)
+                            .is_none_or(|ft| may_be_empty(tys, ft, seen))
+                })
+            }
+        },
+        _ => false,
+    }
 }
 
 /// Whether field `f` of the plain ADT `t` (seen as `variant` for an enum)

@@ -669,6 +669,25 @@ impl<'ctx> Cx<'ctx, '_> {
         let Some(tag) = crate::mir::layout::enum_tag(self.tys, ty) else {
             return Ok(());
         };
+        if let Some((none, _)) = crate::mir::layout::null_niche(self.tys, ty) {
+            // Null for `None`; the payload already written stays for `Some`.
+            let is_none = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    k,
+                    k.get_type().const_int(u64::from(none), false),
+                    "",
+                )
+                .map_err(e)?;
+            let cur = self.load_ptr(p)?;
+            let null = self.ptr_ty().const_null();
+            let v = self
+                .builder
+                .build_select(is_none, null, cur, "")
+                .map_err(e)?;
+            return self.store(p, v);
+        }
         let tt = self.int_ty(tag.size as u32 * 8);
         let k = self
             .builder

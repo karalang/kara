@@ -463,14 +463,9 @@ impl<'ctx> Cx<'ctx, '_> {
             TyKind::Tuple(_) => self.hash_parts(p, ty, None, self.i64(0)),
             TyKind::Adt(_) => match layout::enum_tag(self.tys, ty) {
                 None => self.hash_parts(p, ty, None, self.i64(0)),
-                Some(tag) => {
+                Some(_) => {
                     let acc = self.entry_slot(8, "hash")?;
-                    let tag_ty = self.int_ty(tag.size as u32 * 8);
-                    let t = self
-                        .builder
-                        .build_load(tag_ty, p, "tag")
-                        .map_err(e)?
-                        .into_int_value();
+                    let t = self.tag_at(p, ty)?;
                     let t64 = self
                         .builder
                         .build_int_z_extend_or_bit_cast(t, self.llcx.i64_type(), "")
@@ -640,18 +635,9 @@ impl<'ctx> Cx<'ctx, '_> {
                     let parts = self.parts_of(ty, None)?;
                     self.cmp_parts(op, a, b, parts)
                 }
-                Some(tag) => {
-                    let tag_ty = self.int_ty(tag.size as u32 * 8);
-                    let ta = self
-                        .builder
-                        .build_load(tag_ty, a, "")
-                        .map_err(e)?
-                        .into_int_value();
-                    let tb = self
-                        .builder
-                        .build_load(tag_ty, b, "")
-                        .map_err(e)?
-                        .into_int_value();
+                Some(_) => {
+                    let ta = self.tag_at(a, ty)?;
+                    let tb = self.tag_at(b, ty)?;
                     let res = self.entry_slot(4, "ord")?;
                     let o = self.ord_ints(ta, tb, false)?;
                     self.store(res, o.into())?;

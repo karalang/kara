@@ -242,11 +242,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 cases.push((tag_ty.const_int(v as u64, false), bb, v, var.fields.len()));
             }
         }
-        let tag_v = self
-            .builder
-            .build_load(tag_ty, src, "tag")
-            .map_err(e)?
-            .into_int_value();
+        let tag_v = self.tag_at(src, ty)?;
         let arms: Vec<_> = cases.iter().map(|(k, bb, _, _)| (*k, *bb)).collect();
         self.builder.build_switch(tag_v, done, &arms).map_err(e)?;
         for (_, bb, v, n) in cases {

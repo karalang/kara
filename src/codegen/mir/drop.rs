@@ -96,8 +96,12 @@ const ONCE_FREE: &str = "karac_runtime_once_free";
 #[derive(Default)]
 pub(super) struct Glue<'ctx> {
     fns: HashMap<Ty, FunctionValue<'ctx>>,
-    /// Requested but not built yet.
-    todo: Vec<(Ty, FunctionValue<'ctx>)>,
+    /// The release of a `shared` type's box once its strong count is 0
+    /// (`void @"last.shared T"(ptr box)`), kept out of the glue so the
+    /// glue itself is a small count decrement that inlines.
+    last: HashMap<Ty, FunctionValue<'ctx>>,
+    /// Requested but not built yet (`true`: a `last` function).
+    todo: Vec<(Ty, FunctionValue<'ctx>, bool)>,
 }
 
 fn err<T>(e: impl ToString) -> R<T> {
@@ -138,7 +142,26 @@ impl<'ctx> Cx<'ctx, '_> {
             .module
             .add_function(&name, fn_ty, Some(Linkage::Internal));
         self.glue.fns.insert(ty, f);
-        self.glue.todo.push((ty, f));
+        self.glue.todo.push((ty, f, false));
+        f
+    }
+
+    /// The release of the box of the `shared` type `ty` at strong count 0,
+    /// declared now and built by [`Cx::finish_glue`].
+    fn last_fn(&mut self, ty: Ty) -> FunctionValue<'ctx> {
+        if let Some(&f) = self.glue.last.get(&ty) {
+            return f;
+        }
+        let fn_ty = self
+            .llcx
+            .void_type()
+            .fn_type(&[self.ptr_ty().into()], false);
+        let name = format!("last.{}", self.tys.display(ty));
+        let f = self
+            .module
+            .add_function(&name, fn_ty, Some(Linkage::Internal));
+        self.glue.last.insert(ty, f);
+        self.glue.todo.push((ty, f, true));
         f
     }
 
@@ -149,14 +172,17 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// Builds every glue function requested so far, and those they request.
     pub fn finish_glue(&mut self) -> R<()> {
-        while let Some((ty, f)) = self.glue.todo.pop() {
+        while let Some((ty, f, last)) = self.glue.todo.pop() {
             let entry = self.llcx.append_basic_block(f, "entry");
             self.builder.position_at_end(entry);
             let p = f
                 .get_first_param()
                 .ok_or("glue has no parameter")?
                 .into_pointer_value();
-            self.drop_value(p, ty)?;
+            match (last, self.tys.kind(ty)) {
+                (true, TyKind::Shared(a)) => self.release_last(p, ty, a)?,
+                _ => self.drop_value(p, ty)?,
+            }
             self.builder.build_return(None).map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -543,11 +569,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 cases.push((tag_ty.const_int(v as u64, false), bb, v, var.fields.len()));
             }
         }
-        let tag_v = self
-            .builder
-            .build_load(tag_ty, p, "tag")
-            .map_err(|e| e.to_string())?
-            .into_int_value();
+        let tag_v = self.tag_at(p, ty)?;
         let arms: Vec<_> = cases.iter().map(|(k, bb, _, _)| (*k, *bb)).collect();
         self.builder
             .build_switch(tag_v, done, &arms)
@@ -594,8 +616,9 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(())
     }
 
-    /// Releases the `shared` handle at `p`.
-    fn release(&mut self, p: PointerValue<'ctx>, ty: Ty, a: AdtId) -> R<()> {
+    /// Releases the `shared` handle at `p`: the box's own release
+    /// ([`Cx::release_last`]) runs when this was the last strong handle.
+    fn release(&mut self, p: PointerValue<'ctx>, ty: Ty, _a: AdtId) -> R<()> {
         let b = self.load_ptr(p)?;
         let strong = self.load_i64(b)?;
         let left = self
@@ -606,39 +629,138 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_store(b, left)
             .map_err(|e| e.to_string())?;
         let last = self.is_zero(left)?;
+        let f = self.last_fn(ty);
         self.if_then(last, |cx| {
-            // Hold a weak count across the drop: the body may hold the last
-            // weak handle to its own box, whose release must not free it.
-            let wp = cx.offset(b, 8)?;
-            let w = cx.load_i64(wp)?;
-            let held = cx
-                .builder
-                .build_int_add(w, cx.i64(1), "")
-                .map_err(|e| e.to_string())?;
             cx.builder
-                .build_store(wp, held)
+                .build_call(f, &[b.into()], "")
                 .map_err(|e| e.to_string())?;
-            if cx.adt_has_drop_body(a)? {
-                // The body takes a reference to a handle, as every read
-                // through one does: the handle at `p`.
-                let slot = cx.entry_slot(8, "self")?;
-                cx.builder.build_store(slot, p).map_err(|e| e.to_string())?;
-                cx.call_drop_body(a, ty, slot)?;
-            }
-            let off = layout::shared_body_offset(cx.tys, ty)
-                .ok_or_else(|| format!("`{}` has no layout", cx.tys.display(ty)))?;
-            cx.drop_fields(cx.offset(b, off)?, ty)?;
-            let weak = cx.load_i64(wp)?;
-            let weak = cx
-                .builder
-                .build_int_sub(weak, cx.i64(1), "")
-                .map_err(|e| e.to_string())?;
-            cx.builder
-                .build_store(wp, weak)
-                .map_err(|e| e.to_string())?;
-            let no_weak = cx.is_zero(weak)?;
-            cx.if_then(no_weak, |cx| cx.free(b))
+            Ok(())
         })
+    }
+
+    /// The body of `last.shared T`: drops the body of the box `b`, whose
+    /// strong count is 0, and frees the box when no weak handle keeps it.
+    /// When the body's only field that needs dropping is another handle
+    /// of the same type (`next: Option[Node]`), that handle is released
+    /// last, after the box is freed, and its box in turn by the same loop,
+    /// so a long chain is not dropped by one call per node.
+    fn release_last(&mut self, b0: PointerValue<'ctx>, ty: Ty, a: AdtId) -> R<()> {
+        let chain = self.chain_field(ty)?;
+        let cur = self.entry_slot(8, "box")?;
+        self.store(cur, b0.into())?;
+        let f = self.cur_fn()?;
+        let top = self.llcx.append_basic_block(f, "release");
+        self.builder
+            .build_unconditional_branch(top)
+            .map_err(|e| e.to_string())?;
+        self.builder.position_at_end(top);
+        let b = self.load_ptr(cur)?;
+        // Hold a weak count across the drop: the body may hold the last
+        // weak handle to its own box, whose release must not free it.
+        let wp = self.offset(b, 8)?;
+        let w = self.load_i64(wp)?;
+        let held = self
+            .builder
+            .build_int_add(w, self.i64(1), "")
+            .map_err(|e| e.to_string())?;
+        self.builder
+            .build_store(wp, held)
+            .map_err(|e| e.to_string())?;
+        if self.adt_has_drop_body(a)? {
+            // The body takes a reference to a handle, as every read
+            // through one does: a handle on `b`.
+            let h = self.entry_slot(8, "handle")?;
+            self.store(h, b.into())?;
+            let slot = self.entry_slot(8, "self")?;
+            self.store(slot, h.into())?;
+            self.call_drop_body(a, ty, slot)?;
+        }
+        let off = layout::shared_body_offset(self.tys, ty)
+            .ok_or_else(|| format!("`{}` has no layout", self.tys.display(ty)))?;
+        let body = self.offset(b, off)?;
+        let next = match chain {
+            // Every other field is plain data: only the handle is taken.
+            Some(foff) => Some(self.load_ptr(self.offset(body, foff)?)?),
+            None => {
+                self.drop_fields(body, ty)?;
+                None
+            }
+        };
+        let weak = self.load_i64(wp)?;
+        let weak = self
+            .builder
+            .build_int_sub(weak, self.i64(1), "")
+            .map_err(|e| e.to_string())?;
+        self.builder
+            .build_store(wp, weak)
+            .map_err(|e| e.to_string())?;
+        let no_weak = self.is_zero(weak)?;
+        self.if_then(no_weak, |cx| cx.free(b))?;
+        if let Some(next) = next {
+            let null = self
+                .builder
+                .build_is_null(next, "")
+                .map_err(|e| e.to_string())?;
+            let some = self
+                .builder
+                .build_not(null, "")
+                .map_err(|e| e.to_string())?;
+            let more = self.llcx.append_basic_block(f, "next");
+            let done = self.llcx.append_basic_block(f, "released");
+            self.builder
+                .build_conditional_branch(some, more, done)
+                .map_err(|e| e.to_string())?;
+            self.builder.position_at_end(more);
+            let strong = self.load_i64(next)?;
+            let left = self
+                .builder
+                .build_int_sub(strong, self.i64(1), "strong")
+                .map_err(|e| e.to_string())?;
+            self.builder
+                .build_store(next, left)
+                .map_err(|e| e.to_string())?;
+            self.store(cur, next.into())?;
+            let last = self.is_zero(left)?;
+            self.builder
+                .build_conditional_branch(last, top, done)
+                .map_err(|e| e.to_string())?;
+            self.builder.position_at_end(done);
+        }
+        Ok(())
+    }
+
+    /// For the `shared` struct `ty` whose only field needing a drop is a
+    /// handle of `ty` itself (as `ty` or as an `Option[ty]` held as a bare
+    /// pointer), that field's offset in the body.
+    fn chain_field(&self, ty: Ty) -> R<Option<u64>> {
+        let Some((adt, _)) = self.tys.tcx().adt_of(ty) else {
+            return Ok(None);
+        };
+        if adt.is_enum {
+            return Ok(None);
+        }
+        let mut found = None;
+        for f in 0..adt.variants[0].fields.len() as u32 {
+            let Some(ft) = self.tys.field_ty(ty, None, f) else {
+                return Ok(None);
+            };
+            if !self.tys.needs_drop(ft) {
+                continue;
+            }
+            let own = ft == ty
+                || (layout::null_niche(self.tys, ft).is_some()
+                    && self
+                        .tys
+                        .tcx()
+                        .adt_of(ft)
+                        .and_then(|(_, a)| a.first().copied())
+                        == Some(ty));
+            if !own || found.is_some() {
+                return Ok(None);
+            }
+            found = Some(self.field_offset(ty, None, f)?);
+        }
+        Ok(found)
     }
 
     /// Drops the `weak` handle at `p`.
@@ -1198,14 +1320,15 @@ fn cells(o: own OnceLock[R], f: own Option[File], x: own Atomic[i64], q: own Vec
         let body = layout::shared_body_offset(&l.tys, node).unwrap();
         let size = layout::body_layout(&l.tys, node).unwrap().size;
         let next_ty = l.tys.field_ty(node, None, 1).unwrap();
-        let none = variant(&l, next_ty, "None");
+        // `Option[Node]` is a bare pointer: `None` is null.
+        assert!(layout::null_niche(&l.tys, next_ty).is_some());
 
         let new_box = |strong: u64, weak: u64| {
             let b = alloc((body + size) as usize);
             put(b, 0, strong);
             put(b, 8, weak);
             let name = string_at(unsafe { b.add((body + off(&l, node, None, 0)) as usize) });
-            put_u8(b, body + off(&l, node, None, 1), none as u8);
+            put(b, body + off(&l, node, None, 1), 0);
             (b, name)
         };
         let handle = alloc(8);

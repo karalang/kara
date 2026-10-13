@@ -1205,11 +1205,33 @@ impl<'ctx> Cx<'ctx, '_> {
     /// `shared` one), as an integer of its own width.
     pub(super) fn load_tag(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<IntValue<'ctx>> {
         let (p, ty) = self.through_shared(p, ty)?;
+        self.tag_at(p, ty)
+    }
+
+    /// The tag of the enum body of type `ty` at `p` (no `shared` handle to
+    /// go through), as an integer of [`layout::enum_tag`]'s width. An
+    /// `Option` held as a bare pointer ([`layout::null_niche`]) is `None`
+    /// when the pointer is null.
+    pub(super) fn tag_at(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<IntValue<'ctx>> {
         let Some(tag) = layout::enum_tag(self.tys, ty) else {
             // A struct (or an enum with no variants) has discriminant 0.
             return Ok(self.llcx.i8_type().const_zero());
         };
         let it = self.int_ty(tag.size as u32 * 8);
+        if let Some((none, some)) = layout::null_niche(self.tys, ty) {
+            let q = self.load_ptr(p)?;
+            let null = self.builder.build_is_null(q, "").map_err(e)?;
+            let v = self
+                .builder
+                .build_select(
+                    null,
+                    it.const_int(u64::from(none), false),
+                    it.const_int(u64::from(some), false),
+                    "tag",
+                )
+                .map_err(e)?;
+            return Ok(v.into_int_value());
+        }
         let v = self.builder.build_load(it, p, "tag").map_err(e)?;
         Ok(v.into_int_value())
     }
@@ -1219,6 +1241,14 @@ impl<'ctx> Cx<'ctx, '_> {
         let Some(tag) = layout::enum_tag(self.tys, ty) else {
             return Ok(());
         };
+        if let Some((none, _)) = layout::null_niche(self.tys, ty) {
+            // `Some` is its payload, written on its own; `None` is null.
+            if v == none {
+                let null = self.ptr_ty().const_null();
+                self.store(p, null.into())?;
+            }
+            return Ok(());
+        }
         let it = self.int_ty(tag.size as u32 * 8);
         self.store(p, it.const_int(u64::from(v), false).into())
     }
