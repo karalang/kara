@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 235 |
 | other | 171 |
 | perf | 154 |
-| diagnostics | 153 |
+| diagnostics | 154 |
 | false-positive | 152 |
 | crash | 114 |
 | soundness | 99 |
@@ -112,11 +112,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2860 |
 | interp | 907 |
-| typecheck | 373 |
+| typecheck | 374 |
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
-| parser | 60 |
+| parser | 61 |
 | autopar | 59 |
 | runtime | 58 |
 | resolver | 34 |
@@ -595,6 +595,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-12 | 2026-10-13 | typecheck | low | `char.is_ascii_lowercase()`, `is_ascii_uppercase()` and `is_ascii_alphanumeric()` are refused by `karac check`, the legacy interpreter and both MIR backends ("no method 'is_ascii_lowercase' on type 'char'"), though `is_ascii_digit`, `is_ascii_alphabetic`, `is_lowercase` and `to_ascii_uppercase` are accepted and the MIR codegen's native table already lists all three; the `char` method surface is not in docs/library at all | — |
 | B-2026-10-13-14 | 2026-10-13 | interp+codegen | medium | The MIR builder refuses `for x in c.into_iter()` over a `Set`, `VecDeque`, `Map` or `SortedMap` whose elements are not `Copy` -- `for s in found.into_iter()` with `found: Set[Vec[i64]]` stops at "a `for` loop over a collection is not lowered yet" on both v2 backends, though `karac check` accepts it and the diagnostic for a bare `for` recommends exactly that spelling | — |
 | B-2026-10-13-15 | 2026-10-13 | codegen | low | `karac build --mir` runs kata 495's bench 3.6x slower than C, Rust and legacy `karac build` (0.36-0.44 s against 0.07-0.12 s): the x86 code for the hot loop takes a data-dependent BRANCH for `(a - b).min(duration)` where rustc emits a cmov, and mispredicts it about 28 million times | — |
+| B-2026-10-13-16 | 2026-10-13 | parser+typecheck | low | `karac fix` rewrites `!x` to `not x` whatever the operand's type, so on an INTEGER operand (Rust's bitwise complement, `m & !row == 0`) the first pass writes `not row`, a new error ("unary 'not' requires 'bool', found 'i64'; the bitwise complement of an integer is `~`"), and only a SECOND `karac fix` reaches the right `~ row` | — |
 
 ### Relocated
 
