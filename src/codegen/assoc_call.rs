@@ -3620,6 +3620,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Ok(v);
             }
         }
+        // A standard collection's or `Option`'s `default()` (B-2026-10-13-27,
+        // reached through `take[T: Default]`) has no lowering here, and the
+        // i64-zero fallthrough below would leave the old value in place: a
+        // refusal, not a miscompile. The MIR pipeline lowers it.
+        if method == "default"
+            && args.is_empty()
+            && matches!(
+                type_name,
+                "Vec" | "VecDeque" | "Set" | "SortedSet" | "Map" | "SortedMap" | "Option"
+            )
+        {
+            return Err(format!(
+                "`{type_name}.default()` (as `take` uses it) is not lowered by this backend; \
+                 write `replace(place, {type_name}.new())`, or build with `karac build --mir`"
+            ));
+        }
 
         // `Vec.with_capacity(n: i64) -> Vec[T]` — empty Vec (len=0)
         // with pre-allocated capacity n, so subsequent push calls don't
