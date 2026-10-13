@@ -1,0 +1,15 @@
+"aaa" -> length 3, decodes back: true, unchanged: true
+"aaaaa" -> length 4, decodes back: true, unchanged: false
+"aaaaaaaaaa" -> length 5, decodes back: true, unchanged: false
+"aabcaabcd" -> length 8, decodes back: true, unchanged: false
+"abbbabbbcabbbabbbc" -> length 11, decodes back: true, unchanged: false
+"a" -> length 1, decodes back: true, unchanged: true
+"aaaa" -> length 4, decodes back: true, unchanged: true
+"ababab" -> length 5, decodes back: true, unchanged: false
+"abcdef" -> length 6, decodes back: true, unchanged: true
+"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab" -> length 6, decodes back: true, unchanged: false
+150 a's -> length 6, decodes back: true, unchanged: false
+50 abc's -> length 7, decodes back: true, unchanged: false
+abcdefghijklmnopqrstuvwxy written 6 times -> length 28, decodes back: true, unchanged: false
+ab, 74 times, then a -> length 7, decodes back: true, unchanged: false
+300 random strings: 1912 letters encoded, 95 unchanged, all decode back: true, checksum 699759705

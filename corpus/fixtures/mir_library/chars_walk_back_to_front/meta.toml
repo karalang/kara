@@ -1,0 +1,15 @@
+source = "tests/mir_library.rs::chars_walk_back_to_front"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0"
+bucket = "check-refuses:E0200"
+classified_with = "b09d1b2cb"
+extracted_src = "34bb172b"
+model_rev = "1aa23105"
+model_src = "34bb172b"

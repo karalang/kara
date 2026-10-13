@@ -1,0 +1,17 @@
+
+fn main() {
+    let s = "héllo→x😀".to_string();
+    let r: String = s.chars().rev().collect();
+    println(f"{r}");
+    for c in s.chars().rev() {
+        print(f"{c}");
+    }
+    println("");
+    let mut it = s.chars();
+    let a = it.next();
+    let b = it.next_back();
+    let rest: String = it.collect();
+    println(f"{a} {b} {rest}");
+    let e = "".to_string();
+    println(f"{e.chars().rev().count()} {"ab".to_string().chars().rev().count()}");
+}

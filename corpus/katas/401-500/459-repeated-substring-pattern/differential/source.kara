@@ -142,9 +142,7 @@ fn main() {
         let n = s.len();
         let by = next_random(mut seed) % n;
         let rotated = f"{s[by..]}{s[..by]}";
-        let mut cs: Vec[char] = s.chars().collect();
-        cs.reverse();
-        let reversed: String = cs.iter().collect();
+        let reversed: String = s.chars().rev().collect();
         // Letters from a to y, then a z.
         let ended = f"{random_string(next_random(mut seed) % 40, letters, mut seed)}z";
         for arm in 0..4 {

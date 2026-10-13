@@ -1,0 +1,380 @@
+// Differential test for LeetCode #471: Encode String with Shortest Length.
+//
+// Copies of the four arms, on 1,500 random strings over 1 to 3 letters:
+// a third up to 10 letters long, a third up to 8, and a third two to
+// four copies of a unit of up to 3 letters ending in a, then a run of
+// 8 to 12 a's and up to 4 more letters. The arms may pick
+// different encodings of the same length, so each is held to
+// properties of its own answer. Properties:
+//   P1  the encoding decodes back to the string, and is the string
+//       itself unless it is shorter
+//   P2  its length is the reference's: the grammar's recurrence,
+//       remembered by the string itself, with units checked by `repeat`
+//   P3  up to 4 letters of the string written k times (2 to 4) encode
+//       no longer than k[e] for the encoding e of those letters
+//   P4  the string encodes no longer than its two parts on either side
+//       of a cut, each encoded
+//   P5  renaming the letters by a turn of the alphabet (even cases) or
+//       reversing the string (odd cases) keeps the length
+
+// ---- dp: encode_string.kara
+
+fn encode_dp(s: String) -> String {
+    let n = s.len();
+    let mut best: Vec[Vec[String]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[String] = Vec.new();
+        for _ in 0..n {
+            row.push(String.new());
+        }
+        best.push(row);
+    }
+    for len in 1..n + 1 {
+        for i in 0..n - len + 1 {
+            let j = i + len - 1;
+            let t = s[i..j + 1].to_string();
+            let doubled = f"{t}{t}";
+            let unit = 1 + doubled[1..].find(t.as_str()).unwrap();
+            let mut shortest = t;
+            if unit < len {
+                let packed = f"{len / unit}[{best[i][i + unit - 1]}]";
+                if packed.len() < shortest.len() {
+                    shortest = packed;
+                }
+            }
+            for k in i..j {
+                if best[i][k].len() + best[k + 1][j].len() < shortest.len() {
+                    shortest = f"{best[i][k]}{best[k + 1][j]}";
+                }
+            }
+            best[i][j] = shortest;
+        }
+    }
+    best[0][n - 1].clone()
+}
+
+// ---- memo: encode_string_memo.kara
+
+fn solve_memo(s: String, i: i64, j: i64, memo: mut ref Map[(i64, i64), String]) -> String {
+    if let Some(known) = memo.get((i, j)) {
+        return known.clone();
+    }
+    let len = j - i;
+    let mut shortest = s[i..j].to_string();
+    for d in 1..len {
+        if len % d == 0 and s[i + d..j] == s[i..j - d] {
+            let packed = f"{len / d}[{solve_memo(s, i, i + d, memo)}]";
+            if packed.len() < shortest.len() {
+                shortest = packed;
+            }
+        }
+    }
+    for k in i + 1..j {
+        let left = solve_memo(s, i, k, memo);
+        let right = solve_memo(s, k, j, memo);
+        if left.len() + right.len() < shortest.len() {
+            shortest = f"{left}{right}";
+        }
+    }
+    memo.insert((i, j), shortest.clone());
+    shortest
+}
+
+fn encode_memo(s: String) -> String {
+    let mut memo: Map[(i64, i64), String] = Map.new();
+    solve_memo(s, 0, s.len(), mut memo)
+}
+
+// ---- lengths: encode_string_lengths.kara
+
+fn digits_lengths(k: i64) -> i64 {
+    let mut count = 1;
+    let mut rest = k / 10;
+    while rest > 0 {
+        count += 1;
+        rest /= 10;
+    }
+    count
+}
+
+fn build_lengths(cs: Vec[char], how: Vec[Vec[i64]], i: i64, j: i64, out: mut ref String) {
+    let h = how[i][j];
+    if h == 0 {
+        for x in i..j + 1 {
+            out.push(cs[x]);
+        }
+    } else if h > 0 {
+        build_lengths(cs, how, i, h - 1, out);
+        build_lengths(cs, how, h, j, out);
+    } else {
+        let p = -h;
+        out.push_str(f"{(j - i + 1) / p}[");
+        build_lengths(cs, how, i, i + p - 1, out);
+        out.push(']');
+    }
+}
+
+fn encode_lengths(s: String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut cost = vec![vec![0; n]; n];
+    let mut how = vec![vec![0; n]; n];
+    for i in (0..n).rev() {
+        for j in i..n {
+            let len = j - i + 1;
+            cost[i][j] = len;
+            for p in 1..len {
+                if len % p != 0 {
+                    continue;
+                }
+                let mut repeats = true;
+                for x in i + p..j + 1 {
+                    if cs[x] != cs[x - p] {
+                        repeats = false;
+                        break;
+                    }
+                }
+                if repeats and digits_lengths(len / p) + 2 + cost[i][i + p - 1] < cost[i][j] {
+                    cost[i][j] = digits_lengths(len / p) + 2 + cost[i][i + p - 1];
+                    how[i][j] = -p;
+                }
+            }
+            for k in i..j {
+                if cost[i][k] + cost[k + 1][j] < cost[i][j] {
+                    cost[i][j] = cost[i][k] + cost[k + 1][j];
+                    how[i][j] = k + 1;
+                }
+            }
+        }
+    }
+    let mut out = String.new();
+    build_lengths(cs, how, 0, n - 1, mut out);
+    out
+}
+
+// ---- kmp: encode_string_kmp.kara
+
+fn encode_kmp(s: String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut unit = vec![0; n * n];
+    for i in 0..n {
+        let m = n - i;
+        let mut border = vec![0; m];
+        unit[i * n + i] = 1;
+        for q in 1..m {
+            let mut k = border[q - 1];
+            while k > 0 and cs[i + q] != cs[i + k] {
+                k = border[k - 1];
+            }
+            if cs[i + q] == cs[i + k] {
+                k += 1;
+            }
+            border[q] = k;
+            let len = q + 1;
+            let period = len - k;
+            unit[i * n + i + q] = if len % period == 0 { period } else { len };
+        }
+    }
+    let mut best: Vec[String] = Vec.new();
+    for _ in 0..n * n {
+        best.push(String.new());
+    }
+    for i in (0..n).rev() {
+        for j in i..n {
+            let len = j - i + 1;
+            let mut shortest = String.new();
+            for x in i..j + 1 {
+                shortest.push(cs[x]);
+            }
+            let p = unit[i * n + j];
+            if p < len {
+                let packed = f"{len / p}[{best[i * n + i + p - 1]}]";
+                if packed.len() < shortest.len() {
+                    shortest = packed;
+                }
+            }
+            for k in i..j {
+                if best[i * n + k].len() + best[(k + 1) * n + j].len() < shortest.len() {
+                    shortest = f"{best[i * n + k]}{best[(k + 1) * n + j]}";
+                }
+            }
+            best[i * n + j] = shortest;
+        }
+    }
+    best[n - 1].clone()
+}
+
+// ---- harness
+
+fn encoded(arm: i64, s: String) -> String {
+    if arm == 0 {
+        encode_dp(s)
+    } else if arm == 1 {
+        encode_memo(s)
+    } else if arm == 2 {
+        encode_lengths(s)
+    } else {
+        encode_kmp(s)
+    }
+}
+
+fn expand(cs: Vec[char], pos: mut ref i64) -> Option[String] {
+    let mut out = String.new();
+    while *pos < cs.len() and cs[*pos] != ']' {
+        let c = cs[*pos];
+        if c.is_ascii_digit() {
+            let mut k = 0;
+            while *pos < cs.len() and cs[*pos].is_ascii_digit() {
+                k = k * 10 + (cs[*pos] as u32) as i64 - 48;
+                *pos += 1;
+            }
+            if k < 1 or *pos >= cs.len() or cs[*pos] != '[' {
+                return None;
+            }
+            *pos += 1;
+            let inner = expand(cs, pos)?;
+            if *pos >= cs.len() {
+                return None;
+            }
+            *pos += 1;
+            for _ in 0..k {
+                out.push_str(inner.as_str());
+            }
+        } else if c == '[' {
+            return None;
+        } else {
+            out.push(c);
+            *pos += 1;
+        }
+    }
+    Some(out)
+}
+
+fn decode(e: String) -> Option[String] {
+    let cs: Vec[char] = e.chars().collect();
+    let mut pos = 0;
+    let out = expand(cs, mut pos)?;
+    if pos != cs.len() {
+        return None;
+    }
+    Some(out)
+}
+
+// The length of a shortest encoding, straight from the grammar: an
+// encoding is the letters themselves, two encodings side by side, or
+// k[e] for a string that is k copies of a unit (checked with `repeat`).
+// Remembered by the string itself.
+fn reference(t: String, memo: mut ref Map[String, i64]) -> i64 {
+    if let Some(known) = memo.get(t.clone()) {
+        return *known;
+    }
+    let n = t.len();
+    let mut best = n;
+    for d in 1..n {
+        if n % d == 0 and t[..d].repeat(n / d) == t {
+            let packed = (n / d).to_string().len() + 2 + reference(t[..d].to_string(), memo);
+            if packed < best {
+                best = packed;
+            }
+        }
+    }
+    for k in 1..n {
+        let parts = reference(t[..k].to_string(), memo) + reference(t[k..].to_string(), memo);
+        if parts < best {
+            best = parts;
+        }
+    }
+    memo.insert(t.clone(), best);
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_string(seed: mut ref i64, letters: i64, depth: i64) -> String {
+    let mut s = String.new();
+    let pieces = 1 + next_random(seed) % 4;
+    for _ in 0..pieces {
+        if depth > 0 and next_random(seed) % 2 == 0 {
+            let unit = random_string(seed, letters, depth - 1);
+            let copies = 2 + next_random(seed) % 11;
+            for _ in 0..copies {
+                s.push_str(unit.as_str());
+            }
+        } else {
+            s.push(char.try_from(97 + (next_random(seed) % letters) as u32).unwrap());
+        }
+    }
+    s
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4710;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    let mut memo: Map[String, i64] = Map.new();
+    for case in 0..1500 {
+        let letters = 1 + next_random(mut seed) % 3;
+        let full = random_string(mut seed, letters, 2);
+        let limit = if case % 3 == 0 { 10 } else { 8 };
+        let cut = 1 + next_random(mut seed) % limit;
+        let mut s = if full.len() > cut { full[..cut].to_string() } else { full };
+        if case % 3 == 2 {
+            // Two to four copies of a unit of up to 2 letters and an a,
+            // a run of 8 to 12 a's, where a count goes from one digit to
+            // two and the unit's last a can go to either side, then up to
+            // 4 more letters.
+            let start = random_string(mut seed, letters, 0);
+            let mut unit = if start.len() > 2 { start[..2].to_string() } else { start };
+            unit.push('a');
+            s = unit.repeat(2 + next_random(mut seed) % 3);
+            s.push_str("a".repeat(8 + next_random(mut seed) % 5).as_str());
+            let more = random_string(mut seed, letters, 1);
+            s.push_str(if more.len() > 4 { more[..4].to_string() } else { more }.as_str());
+        }
+        let n = s.len();
+        let shortest = reference(s.clone(), mut memo);
+        // P3: up to 4 letters of it, written 2 to 4 times.
+        let unit = s[..if n < 4 { n } else { 4 }].to_string();
+        let copies = 2 + next_random(mut seed) % 3;
+        let repeated = unit.repeat(copies);
+        // P4: a cut into two nonempty parts (none for one letter).
+        let at = if n > 1 { 1 + next_random(mut seed) % (n - 1) } else { 0 };
+        // P5: the letters renamed by a turn of the alphabet, or reversed.
+        let turn = 1 + next_random(mut seed) % 25;
+        let mut renamed = String.new();
+        for c in s.chars() {
+            renamed.push(char.try_from((97 + ((c as u32) as i64 - 97 + turn) % 26) as u32).unwrap());
+        }
+        let reversed: String = s.chars().rev().collect();
+        let changed = if case % 2 == 0 { renamed } else { reversed };
+        for arm in 0..4 {
+            checks += 5;
+            let e = encoded(arm, s.clone());
+            report(1, arm, case, decode(e.clone()) == Some(s.clone()) and (e.len() < n or e == s), mut failures);
+            report(2, arm, case, e.len() == shortest, mut failures);
+            let bound = copies.to_string().len() + 2 + encoded(arm, unit.clone()).len();
+            report(3, arm, case, encoded(arm, repeated.clone()).len() <= bound, mut failures);
+            let split_ok = at == 0 or e.len() <= encoded(arm, s[..at].to_string()).len() + encoded(arm, s[at..].to_string()).len();
+            report(4, arm, case, split_ok, mut failures);
+            report(5, arm, case, encoded(arm, changed.clone()).len() == e.len(), mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

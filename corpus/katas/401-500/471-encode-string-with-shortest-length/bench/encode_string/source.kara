@@ -1,0 +1,99 @@
+// Benchmark for #471: the ★ arm (interval DP over the encodings) on a
+// large workload.
+//
+// LeetCode #471: Encode String with Shortest Length -- interval DP over
+// the encodings themselves.
+//
+// best[i][j] is a shortest encoding of s[i..=j]. A shortest encoding of a
+// string t is t itself, a shortest encoding of each side of some cut put
+// side by side, or k[e] where t is k copies of a unit and e is a shortest
+// encoding of the unit. The shortest unit is enough, since every unit is
+// itself copies of it, and the first place after 0 where t appears in
+// t + t is its length (or the length of t, when t has no shorter unit).
+// A choice replaces the one before only when strictly shorter, so a
+// piece that encoding cannot shorten stays as it is. O(n^3).
+
+fn encode(s: String) -> String {
+    let n = s.len();
+    let mut best: Vec[Vec[String]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[String] = Vec.new();
+        for _ in 0..n {
+            row.push(String.new());
+        }
+        best.push(row);
+    }
+    for len in 1..n + 1 {
+        for i in 0..n - len + 1 {
+            let j = i + len - 1;
+            let t = s[i..j + 1].to_string();
+            let doubled = f"{t}{t}";
+            let unit = 1 + doubled[1..].find(t.as_str()).unwrap();
+            let mut shortest = t;
+            if unit < len {
+                let packed = f"{len / unit}[{best[i][i + unit - 1]}]";
+                if packed.len() < shortest.len() {
+                    shortest = packed;
+                }
+            }
+            for k in i..j {
+                if best[i][k].len() + best[k + 1][j].len() < shortest.len() {
+                    shortest = f"{best[i][k]}{best[k + 1][j]}";
+                }
+            }
+            best[i][j] = shortest;
+        }
+    }
+    best[0][n - 1].clone()
+}
+
+// ---- bench ------------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// One to four pieces, each a letter or, while depth lasts, 2 to 12
+// copies of a smaller such string.
+fn random_string(seed: mut ref i64, letters: i64, depth: i64) -> String {
+    let mut s = String.new();
+    let pieces = 1 + next_random(seed) % 4;
+    for _ in 0..pieces {
+        if depth > 0 and next_random(seed) % 2 == 0 {
+            let unit = random_string(seed, letters, depth - 1);
+            let copies = 2 + next_random(seed) % 11;
+            for _ in 0..copies {
+                s.push_str(unit.as_str());
+            }
+        } else {
+            s.push(char.try_from(97 + (next_random(seed) % letters) as u32).unwrap());
+        }
+    }
+    s
+}
+
+fn main() {
+    // 400 strings of 150 letters (the problem's largest), over 2 or 3
+    // letters, each random pieces put together and cut to length.
+    let count = 400;
+    let size = 150;
+    let mut seed: i64 = 471;
+    let mut strings: Vec[String] = Vec.new();
+    for _ in 0..count {
+        let letters = 2 + next_random(mut seed) % 2;
+        let mut s = String.new();
+        while s.len() < size {
+            s.push_str(random_string(mut seed, letters, 2).as_str());
+        }
+        strings.push(s[..size].to_string());
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for i in 0..count {
+        let e = encode(strings[i]);
+        total += e.len();
+        checksum = (checksum * 31 + e.len()) % 1000000007;
+    }
+    println(f"{count} strings of {size} letters: {total} letters encoded, checksum {checksum}");
+}

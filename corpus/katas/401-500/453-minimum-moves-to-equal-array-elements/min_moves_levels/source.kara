@@ -13,16 +13,9 @@ fn min_moves(nums: Vec[i64]) -> i64 {
     }
     let mut moves = 0;
     while levels.len() > 1 {
-        // let-else, not `.expect(...)` then `*top`: on the MIR backends
-        // the entry taken out through `expect` loses its refs
-        // (B-2026-10-12-28). Revert to the `expect` form once it is fixed.
-        let Some((top, _)) = levels.floor(i64.MAX) else {
-            panic("no top level");
-        };
+        let (top, _) = levels.floor(i64.MAX).expect("a top level");
         let top = *top;
-        let Some((below, _)) = levels.floor(top - 1) else {
-            panic("no level below");
-        };
+        let (below, _) = levels.floor(top - 1).expect("a level below");
         let below = *below;
         let count = levels.remove(top).expect("the top level");
         moves += (top - below) * count;

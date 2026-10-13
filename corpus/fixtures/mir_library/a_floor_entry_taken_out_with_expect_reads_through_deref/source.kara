@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut m: SortedMap[i64, i64] = SortedMap.new();
+    m.insert(3, 30);
+    m.insert(8, 80);
+    let (k, v) = m.floor(4).expect("an entry");
+    let entry = m.ceiling(4).expect("an entry");
+    let w = m.floor(9).unwrap();
+    let (top, _) = m.floor(i64.MAX).expect("a top");
+    let top = *top;
+    println(f"{*k} {*v} {*entry.0} {*entry.1} {*w.0} {top}");
+}

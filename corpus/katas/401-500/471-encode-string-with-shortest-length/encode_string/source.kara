@@ -1,0 +1,153 @@
+// LeetCode #471: Encode String with Shortest Length -- interval DP over
+// the encodings themselves.
+//
+// best[i][j] is a shortest encoding of s[i..=j]. A shortest encoding of a
+// string t is t itself, a shortest encoding of each side of some cut put
+// side by side, or k[e] where t is k copies of a unit and e is a shortest
+// encoding of the unit. The shortest unit is enough, since every unit is
+// itself copies of it, and the first place after 0 where t appears in
+// t + t is its length (or the length of t, when t has no shorter unit).
+// A choice replaces the one before only when strictly shorter, so a
+// piece that encoding cannot shorten stays as it is. O(n^3).
+
+fn encode(s: String) -> String {
+    let n = s.len();
+    let mut best: Vec[Vec[String]] = Vec.new();
+    for _ in 0..n {
+        let mut row: Vec[String] = Vec.new();
+        for _ in 0..n {
+            row.push(String.new());
+        }
+        best.push(row);
+    }
+    for len in 1..n + 1 {
+        for i in 0..n - len + 1 {
+            let j = i + len - 1;
+            let t = s[i..j + 1].to_string();
+            let doubled = f"{t}{t}";
+            let unit = 1 + doubled[1..].find(t.as_str()).unwrap();
+            let mut shortest = t;
+            if unit < len {
+                let packed = f"{len / unit}[{best[i][i + unit - 1]}]";
+                if packed.len() < shortest.len() {
+                    shortest = packed;
+                }
+            }
+            for k in i..j {
+                if best[i][k].len() + best[k + 1][j].len() < shortest.len() {
+                    shortest = f"{best[i][k]}{best[k + 1][j]}";
+                }
+            }
+            best[i][j] = shortest;
+        }
+    }
+    best[0][n - 1].clone()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// Expands an encoding from `pos` up to an unmatched `]` or the end: a run
+// of digits must be followed by a bracketed encoding, written that many
+// times, and anything else is a letter. None when it is not well formed.
+fn expand(cs: Vec[char], pos: mut ref i64) -> Option[String] {
+    let mut out = String.new();
+    while *pos < cs.len() and cs[*pos] != ']' {
+        let c = cs[*pos];
+        if c.is_ascii_digit() {
+            let mut k = 0;
+            while *pos < cs.len() and cs[*pos].is_ascii_digit() {
+                k = k * 10 + (cs[*pos] as u32) as i64 - 48;
+                *pos += 1;
+            }
+            if k < 1 or *pos >= cs.len() or cs[*pos] != '[' {
+                return None;
+            }
+            *pos += 1;
+            let inner = expand(cs, pos)?;
+            if *pos >= cs.len() {
+                return None;
+            }
+            *pos += 1;
+            for _ in 0..k {
+                out.push_str(inner.as_str());
+            }
+        } else if c == '[' {
+            return None;
+        } else {
+            out.push(c);
+            *pos += 1;
+        }
+    }
+    Some(out)
+}
+
+fn decode(e: String) -> Option[String] {
+    let cs: Vec[char] = e.chars().collect();
+    let mut pos = 0;
+    let out = expand(cs, mut pos)?;
+    if pos != cs.len() {
+        return None;
+    }
+    Some(out)
+}
+
+fn show(label: String, s: String) {
+    let e = encode(s);
+    let back = decode(e.clone()) == Some(s.clone());
+    println(f"{label} -> length {e.len()}, decodes back: {back}, unchanged: {e == s}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// One to four pieces, each a letter or, while depth lasts, 2 to 12
+// copies of a smaller such string.
+fn random_string(seed: mut ref i64, letters: i64, depth: i64) -> String {
+    let mut s = String.new();
+    let pieces = 1 + next_random(seed) % 4;
+    for _ in 0..pieces {
+        if depth > 0 and next_random(seed) % 2 == 0 {
+            let unit = random_string(seed, letters, depth - 1);
+            let copies = 2 + next_random(seed) % 11;
+            for _ in 0..copies {
+                s.push_str(unit.as_str());
+            }
+        } else {
+            s.push(char.try_from(97 + (next_random(seed) % letters) as u32).unwrap());
+        }
+    }
+    s
+}
+
+fn main() {
+    for s in ["aaa", "aaaaa", "aaaaaaaaaa", "aabcaabcd", "abbbabbbcabbbabbbc", "a", "aaaa", "ababab", "abcdef", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"] {
+        show(f"\"{s}\"", s.to_string());
+    }
+    show("150 a's".to_string(), "a".repeat(150));
+    show("50 abc's".to_string(), "abc".repeat(50));
+    show("abcdefghijklmnopqrstuvwxy written 6 times".to_string(), "abcdefghijklmnopqrstuvwxy".repeat(6));
+    show("ab, 74 times, then a".to_string(), f"{"ab".repeat(74)}a");
+    // 300 random strings over 1, 2 or 3 letters, cut to 1 to 60 letters.
+    let count = 300;
+    let mut seed: i64 = 471;
+    let mut total = 0;
+    let mut unchanged = 0;
+    let mut all_back = true;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let letters = 1 + next_random(mut seed) % 3;
+        let full = random_string(mut seed, letters, 2);
+        let cut = 1 + next_random(mut seed) % 60;
+        let s = if full.len() > cut { full[..cut].to_string() } else { full };
+        let e = encode(s);
+        total += e.len();
+        if e == s {
+            unchanged += 1;
+        }
+        all_back = all_back and decode(e.clone()) == Some(s.clone());
+        checksum = (checksum * 31 + e.len()) % 1000000007;
+    }
+    println(f"{count} random strings: {total} letters encoded, {unchanged} unchanged, all decode back: {all_back}, checksum {checksum}");
+}

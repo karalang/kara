@@ -1,0 +1,15 @@
+source = "tests/mir_library.rs::a_floor_entry_taken_out_with_expect_reads_through_deref"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["lib:sortedmap"]
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0 e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "b09d1b2cb"
+extracted_src = "e2f27f14"
+model_rev = "1aa23105"
+model_src = "e2f27f14"
