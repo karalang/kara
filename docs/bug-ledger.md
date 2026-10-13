@@ -595,7 +595,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-33 | 2026-10-12 | typecheck | low | `karac check` refuses `s = cs.iter().collect();` into an existing `String` (also `w.name = ...` and `v.push(cs.iter().collect())` with `v: Vec[String]`), with "expected 'String', found 'Vec[char]'": `collect` takes its target type from a `let` annotation or a return type, but not from an assignment target or an argument, and defaults to `Vec` | — |
 | B-2026-10-12-34 | 2026-10-12 | typecheck | low | On the MIR backends, `v.push(cs.iter().collect())` with `v: Vec[String]` and `cs: Vec[char]` fails to build: "the method call `.collect` with no resolved callee is not lowered yet"; `collect` in argument position gets no target type | — |
 | B-2026-10-12-35 | 2026-10-12 | typecheck | low | `s.chars().rev()` is refused on the MIR backends ("no method 'rev' on type 'StrChars'") while `karac check` and the legacy interpreter accept it; the library spec makes `chars` a plain `Iterator` and lists only the `Vec`/`Array`/`Slice`/`VecDeque` and range iterators as `DoubleEndedIterator`, so either the spec and `StrChars` gain `next_back` or check should refuse | — |
-| B-2026-10-12-36 | 2026-10-12 | codegen | medium | `Vec.push` on the MIR compiled backend is an out-of-line runtime call (`karac_mir_vec_push`, runtime/src/mir.rs) that reserves and then `memcpy`s each element by its runtime size: a loop pushing 1,000,000 `i64` 40 times takes 0.19 s against 0.04 s for Rust and 0.01 s for legacy `karac build`; `s.chars().collect()` into a `Vec[char]` pays it per char, plus an out-of-line `karac_mir_char_at_byte` | — |
 | B-2026-10-13-1 | 2026-10-13 | typecheck | low | `Map.keys()` / `values()` and `SortedMap.keys()` / `values()` return an eager `Vec` on every front end, where docs/library/collections.md gives `fn keys(self) -> impl Iterator[Item = ref K]`: `m.keys().next()` and `m.keys().count()` are refused ("no method 'next' on type 'Vec': iterator adaptors/terminals require an explicit `.iter()`"), and taking the smallest key of a `SortedMap` copies every key | — |
 
 ### Relocated
@@ -3936,6 +3935,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-27 | ownership | low | `karac check` refuses a write to a `mut` field of a shared value bound by a `let` tuple pattern (`let (s, k) = f(); s.left = x;`, "cannot assign thro… | c07dbf5094 |
 | B-2026-10-12-29 | runtime | medium | A hashed `Map` on the MIR compiled backend (`runtime/src/mir_map.rs`) costs about 9x a Rust `HashMap` per lookup: the key is hashed by `karac_hash_wo… | 8acdc0bdb5 |
 | B-2026-10-12-30 | runtime | medium | `Vec.sort` on the MIR compiled backend (`karac_mir_sort`, `runtime/src/mir.rs`) is about 12x slower than legacy codegen's sort: a bottom-up merge sor… | 8acdc0bdb5 |
+| B-2026-10-12-36 | codegen | medium | `Vec.push` on the MIR compiled backend is an out-of-line runtime call (`karac_mir_vec_push`, runtime/src/mir.rs) that reserves and then `memcpy`s eac… | d2ffa9b440 |
 
 </details>
 
