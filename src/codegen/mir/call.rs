@@ -303,10 +303,39 @@ impl<'ctx> Cx<'ctx, '_> {
         self.load_ptr(p)
     }
 
+    /// The `shared` handle an operand holds, or holds a reference to.
+    fn handle_arg(&mut self, a: &Operand) -> R<PointerValue<'ctx>> {
+        let mut t = self.operand_type(a)?;
+        let p = self.operand_ptr(a)?;
+        let mut v = self.load_ptr(p)?;
+        while let TyKind::Ref(i) | TyKind::MutRef(i) = self.tys.kind(t) {
+            v = self.load_ptr(v)?;
+            t = i;
+        }
+        Ok(v)
+    }
+
     fn native(&mut self, name: &str, args: &[Operand], dest: &Place) -> R<()> {
         let (ty_name, method) = split_method(name);
         let base = ty_name.split('[').next().unwrap_or(ty_name);
         let dty = self.place_type(dest)?;
+        // `a.ref_eq(b)` on a `shared` type, or the free `ref_eq(a, b)`: the
+        // two handles are one pointer (B-2026-10-13-17).
+        if (method == "ref_eq" && ty_name.starts_with("shared ")) || name == "ref_eq" {
+            let [a, b] = args else {
+                return Err(format!("MIR to LLVM: `{name}` takes two handles"));
+            };
+            let i64t = self.llcx.i64_type();
+            let (a, b) = (self.handle_arg(a)?, self.handle_arg(b)?);
+            let bld = &self.builder;
+            let a = bld.build_ptr_to_int(a, i64t, "").map_err(e)?;
+            let b = bld.build_ptr_to_int(b, i64t, "").map_err(e)?;
+            let same = bld
+                .build_int_compare(IntPredicate::EQ, a, b, "")
+                .map_err(e)?;
+            self.store_bool(dest, same)?;
+            return self.drop_moved(args);
+        }
         if matches!(base, "Map" | "Set" | "SortedMap" | "SortedSet")
             && self.table_native(method, args, dest)?.is_some()
         {

@@ -1924,6 +1924,22 @@ impl<'a> super::TypeChecker<'a> {
             _ => obj_ty.clone(),
         };
 
+        // `a.ref_eq(b)`: identity of two handles of one `shared` type, a
+        // method the compiler provides on every such type (design.md
+        // § Equality, B-2026-10-13-17). A program's own `ref_eq` wins.
+        if method == "ref_eq" {
+            if let Type::Shared(name) = &obj_ty_for_named {
+                if self
+                    .env
+                    .find_methods_with_args(name, &[], method)
+                    .is_empty()
+                {
+                    let name = name.clone();
+                    return self.infer_ref_eq_method(&name, args, span);
+                }
+            }
+        }
+
         // String method dispatch keeps the un-derefed `obj_ty` check
         // intentionally: `ref String` / `mut ref String` are intended
         // to flow through the impl-block-method path (which calls

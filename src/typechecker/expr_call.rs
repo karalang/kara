@@ -281,6 +281,54 @@ impl<'a> super::TypeChecker<'a> {
         Type::Bool
     }
 
+    /// Type `a.ref_eq(b) -> bool` on a handle of the `shared` type `name`:
+    /// `b` must be a handle of the same type, or a reference to one.
+    pub(super) fn infer_ref_eq_method(
+        &mut self,
+        name: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let [arg] = args else {
+            self.type_error(
+                format!("`ref_eq` takes one argument, got {}", args.len()),
+                *span,
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for a in args {
+                self.infer_expr(&a.value);
+            }
+            return Type::Bool;
+        };
+        let t = self.infer_expr(&arg.value);
+        let t = match t {
+            Type::Ref(inner) | Type::MutRef(inner) => *inner,
+            t => t,
+        };
+        match &t {
+            Type::Shared(other) if other == name => {}
+            Type::Error => {}
+            Type::Shared(other) => self.type_error(
+                format!(
+                    "`ref_eq` compares two handles of the SAME `shared` type; \
+                     got `shared {name}` and `shared {other}`"
+                ),
+                arg.value.span,
+                TypeErrorKind::TypeMismatch,
+            ),
+            other => self.type_error(
+                format!(
+                    "`ref_eq` compares a `shared {name}` handle with another; `{}` is not \
+                     one — use `==` for structural equality",
+                    type_display(other)
+                ),
+                arg.value.span,
+                TypeErrorKind::TypeMismatch,
+            ),
+        }
+        Type::Bool
+    }
+
     pub(super) fn infer_layout_query_intrinsic(
         &mut self,
         name: &str,

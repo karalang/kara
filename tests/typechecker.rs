@@ -53082,3 +53082,32 @@ fn primitive_constant_before_a_block_is_not_a_struct_literal_path() {
         ));
     }
 }
+
+/// B-2026-10-13-17: `a.ref_eq(b)` is a method on every `shared` type, taking
+/// a handle of the same type (or a reference to one); another `shared` type
+/// or a plain value is refused, and a program's own `ref_eq` method wins.
+#[test]
+fn ref_eq_is_a_method_on_shared_handles() {
+    typecheck_ok(
+        "shared struct N { val: i64 }\n\
+         fn same(x: ref N, y: N) -> bool { x.ref_eq(y) }\n\
+         fn main() {\n    let a = N { val: 1 };\n    let b = a;\n    \
+         let t: bool = a.ref_eq(b);\n    println(f\"{t} {same(a, b)}\");\n}\n",
+    );
+    for (arg, want) in [("m", "SAME `shared` type"), ("1", "not one")] {
+        let errs = typecheck_errors(&format!(
+            "shared struct N {{ val: i64 }}\nshared struct M {{ val: i64 }}\n\
+             fn main() {{\n    let a = N {{ val: 1 }};\n    let m = M {{ val: 1 }};\n    \
+             println(f\"{{a.ref_eq({arg})}}\");\n}}\n"
+        ));
+        assert!(
+            errs.iter().any(|e| e.message.contains(want)),
+            "`a.ref_eq({arg})`: {errs:?}"
+        );
+    }
+    typecheck_ok(
+        "shared struct N { val: i64 }\n\
+         impl N { fn ref_eq(self, n: i64) -> bool { self.val == n } }\n\
+         fn main() {\n    let a = N { val: 1 };\n    println(f\"{a.ref_eq(1)}\");\n}\n",
+    );
+}

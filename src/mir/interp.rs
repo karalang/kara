@@ -1074,6 +1074,15 @@ impl<'a> Interp<'a> {
         if base == "str" {
             return self.native(&format!("String.{method}"), args, arg_tys, ret);
         }
+        // `a.ref_eq(b)` on a `shared` type, or the free `ref_eq(a, b)`: the
+        // two handles name one value (B-2026-10-13-17).
+        if (method == "ref_eq" && ty_name.starts_with("shared ")) || name == "ref_eq" {
+            let [a, b] = args.as_slice() else {
+                return err(format!("{name} takes two handles"));
+            };
+            let (a, b) = (self.handle_behind(a)?, self.handle_behind(b)?);
+            return Ok(Value::Bool(a.is_some() && a == b));
+        }
         // A table's lookups and updates, the commonest natives after a
         // `Vec`'s, go straight to it: no arm before the table's own takes
         // these methods.

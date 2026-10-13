@@ -428,3 +428,24 @@ fn mir_string_slice_panics_name_the_cut() {
         assert_eq!(first(&run.stderr), want, "compiled");
     }
 }
+
+/// `a.ref_eq(b)` on a `shared` type, and the free `ref_eq(a, b)`, compare
+/// the handles, not the values, on the interpreter and compiled alike
+/// (B-2026-10-13-17).
+#[test]
+fn mir_ref_eq_compares_shared_handles() {
+    const SRC: &str = "shared struct N { val: i64 }\n\
+        fn same(x: N, y: N) -> bool { x.ref_eq(y) }\n\
+        fn main() {\n    let a = N { val: 1 };\n    let b = a;\n    \
+        let c = N { val: 1 };\n    \
+        println(f\"{a.ref_eq(b)} {a.ref_eq(c)} {same(a, c)} {same(c, c)}\");\n    \
+        println(f\"{ref_eq(a, b)} {ref_eq(a, c)}\");\n}\n";
+    let want = "true false false true\ntrue false\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
