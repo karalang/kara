@@ -16,8 +16,8 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | bucket | programs |
 |---|---|
 | a | 4981 |
-| e-spec | 1241 |
-| a:refused | 286 |
+| e-spec | 1242 |
+| a:refused | 285 |
 | b->a | 266 |
 | mir-gap | 140 |
 | b->e-spec | 59 |
@@ -78,7 +78,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 | post-m1:process | 24 |
 | post-m1:refinement | 24 |
 
-## Auto-resolved e-spec (1306): MIR matches the spec's model or pin, legacy does not
+## Auto-resolved e-spec (1307): MIR matches the spec's model or pin, legacy does not
 
 - `core/drop_aggregates`
 - `core/drop_assign`
@@ -851,6 +851,7 @@ gate rules of 2026-10-08. Each entry is one deduplicated program, run on a relea
 - `fixtures/codegen/vecs/test_e2e_remove_releases_a_shared_key_through_the_refcount`
 - `fixtures/codegen/vecs/test_e2e_remove_releases_a_shared_key_through_the_refcount_2`
 - `fixtures/codegen/vecs/test_e2e_remove_runs_the_key_drop_body`
+- `fixtures/concurrency/test_reduction_declined_for_shared_capture_body`
 - `fixtures/interpreter/closures/test_pool_create_fn_can_be_a_closure_with_captures`
 - `fixtures/interpreter/drop_order/interp_array_param_handed_back_by_the_callee_is_freed_once`
 - `fixtures/interpreter/drop_order/interp_array_param_handed_back_on_some_exits_is_dropped_once`
