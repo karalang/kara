@@ -449,3 +449,40 @@ fn mir_ref_eq_compares_shared_handles() {
         }
     }
 }
+
+/// A program's own items named as the library's are (B-2026-10-12-21): a
+/// `struct Peekable`, a variant `IterMap`, a function `serde_next`. The
+/// library's keep working beside them, `peekable()` among them.
+const LIBRARY_NAMES_PROGRAM: &str = r#"
+struct Peekable { n: i64 }
+enum Token { Letter(u8), IterMap(i64) }
+fn serde_next(n: i64) -> i64 { n + 1 }
+fn main() {
+    let s = Peekable { n: 4 };
+    let t = Token.IterMap(serde_next(2));
+    match t {
+        Token.IterMap(n) => println(f"map {n}"),
+        Token.Letter(c) => println(f"letter {c}"),
+    }
+    let v = vec![1, 2, 3];
+    let mut it = v.iter().peekable();
+    match it.peek() {
+        Some(x) => println(f"{x} {s.n}"),
+        None => println("none"),
+    }
+    let d: Vec[i64] = v.iter().map(|x| x * s.n).collect();
+    println(f"{d}");
+}
+"#;
+
+#[test]
+fn mir_program_items_may_take_library_names() {
+    let want = "map 3\n1 4\n[4, 8, 12]\n";
+    let interp = karac::mir::lower::run_source(LIBRARY_NAMES_PROGRAM).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(LIBRARY_NAMES_PROGRAM, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

@@ -13764,7 +13764,6 @@ pub(crate) fn mark_library_builtins(program: &mut ast::Program, user_len: usize)
 /// check` checks this text, as the build does, so a program using a
 /// library-only feature (`#[derive(Serialize)]`) checks as it builds.
 pub fn library_source(src: &str) -> (String, usize) {
-    let mut src = src.to_string();
     let user_len = src.len();
     // Baked modules whose bodies are Kāra, for a program that names them
     // (`#[derive(Message)]`'s `encode` / `decode` call `std.protobuf`), as
@@ -13772,25 +13771,152 @@ pub fn library_source(src: &str) -> (String, usize) {
     let baked: Vec<&str> = BAKED_SOURCES
         .iter()
         .filter(|(text, words)| {
-            words.iter().any(|w| src.contains(w)) && !defines_a_baked_type(&src, text)
+            words.iter().any(|w| src.contains(w)) && !defines_a_baked_type(src, text)
         })
         .map(|(text, _)| *text)
         .collect();
-    for (_, lib) in crate::prelude::LIBRARY_SOURCES {
-        src.push('\n');
-        src.push_str(lib);
+    let mut lib = String::new();
+    for (_, text) in crate::prelude::LIBRARY_SOURCES {
+        lib.push('\n');
+        lib.push_str(text);
     }
     for text in baked {
         // A `//!` header is a module doc comment, legal only at the top, and
         // the baked spelling `Unit` is `()` outside the stdlib.
         for line in text.lines() {
-            src.push('\n');
+            lib.push('\n');
             if !line.starts_with("//!") {
-                src.push_str(&line.replace("[Unit,", "[(),"));
+                lib.push_str(&line.replace("[Unit,", "[(),"));
             }
         }
     }
-    (src, user_len)
+    let lib = rename_clashing_library_items(src, lib);
+    (format!("{src}{lib}"), user_len)
+}
+
+/// Library items the compiler names (`Iterator`, `Ordering`, the serde
+/// traits, the builtins lowering calls by name): they keep their names, so
+/// a program's own item of one of these names still clashes.
+const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
+    "Iterator",
+    "DoubleEndedIterator",
+    "FromIterator",
+    "Ordering",
+    "Range",
+    "RangeInclusive",
+    "Serialize",
+    "Deserialize",
+    "Serializer",
+    "Deserializer",
+    "DeserializeError",
+    "iter_read_value",
+    "iter_clone_value",
+];
+
+/// The names the library text `lib` declares at its top level.
+fn library_top_level_names(lib: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in lib.lines() {
+        if line.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let line = line
+            .trim_start_matches("pub ")
+            .trim_start_matches("shared ");
+        for kw in ["struct ", "enum ", "trait ", "type ", "fn "] {
+            if let Some(rest) = line.strip_prefix(kw) {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty() {
+                    names.push(name);
+                }
+            }
+        }
+    }
+    names
+}
+
+/// The names the program `src` declares at its top level, its enums'
+/// variants among them (the resolver defines a variant there too).
+fn program_top_level_names(src: &str) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
+    for item in crate::parse(src).program.items {
+        let name = match item {
+            Item::Function(f) => f.name,
+            Item::StructDef(s) => s.name,
+            Item::UnionDef(u) => u.name,
+            Item::EnumDef(e) => {
+                names.extend(e.variants.into_iter().map(|v| v.name));
+                e.name
+            }
+            Item::TraitDef(t) => t.name,
+            Item::TraitAlias(t) => t.name,
+            Item::MarkerTrait(t) => t.name,
+            Item::TypeAlias(t) => t.name,
+            Item::ConstDecl(c) => c.name,
+            _ => continue,
+        };
+        names.insert(name);
+    }
+    names
+}
+
+/// The library text `lib` with each of its top-level items that the
+/// program `src` declares an item of the same name renamed out of the way
+/// (`Peekable` to `Peekable__lib`), as the library is resolved in the
+/// program's scope: the program's `struct Peekable` or variant `Peekable`
+/// means its own, and the library's keeps working under the new name
+/// (B-2026-10-12-21). Most programs clash with nothing and parse no extra.
+fn rename_clashing_library_items(src: &str, lib: String) -> String {
+    let declared = library_top_level_names(&lib);
+    // Only a word the program has at all can be a name it declares.
+    let candidates: Vec<&String> = declared
+        .iter()
+        .filter(|n| !LIBRARY_NAMES_THE_COMPILER_USES.contains(&n.as_str()))
+        .filter(|n| {
+            src.match_indices(n.as_str()).any(|(i, _)| {
+                let word = |c: char| c.is_alphanumeric() || c == '_';
+                !src[..i].ends_with(word) && !src[i + n.len()..].starts_with(word)
+            })
+        })
+        .collect();
+    if candidates.is_empty() {
+        return lib;
+    }
+    let program = program_top_level_names(src);
+    let mut renames: FxHashMap<&str, String> = FxHashMap::default();
+    for name in candidates {
+        if program.contains(name) {
+            // A suffix, as a capital first letter is what makes
+            // `Peekable { .. }` a struct literal.
+            let mut new = format!("{name}__lib");
+            while program.contains(&new) {
+                new.push('_');
+            }
+            renames.insert(name.as_str(), new);
+        }
+    }
+    if renames.is_empty() {
+        return lib;
+    }
+    let mut out = String::with_capacity(lib.len() + 16 * renames.len());
+    let mut at = 0;
+    for tok in crate::tokenize(&lib) {
+        let crate::token::Token::Identifier { name, .. } = &tok.token else {
+            continue;
+        };
+        let Some(new) = renames.get(name.as_str()) else {
+            continue;
+        };
+        let start = tok.span.offset;
+        out.push_str(&lib[at..start]);
+        out.push_str(new);
+        at = start + tok.span.length;
+    }
+    out.push_str(&lib[at..]);
+    out
 }
 
 /// Check one source file, build its MIR and elaborate drops; or the first
