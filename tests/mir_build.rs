@@ -540,3 +540,51 @@ fn mir_a_cast_into_a_wider_place_widens() {
         }
     }
 }
+
+/// B-2026-10-13-22: `x.powi(n)` raises a float to an `i32` power by repeated
+/// squaring, with the same multiplications on both backends, so the bits
+/// agree (design.md's `(x2 - x1).powi(2)`, kata 509's Binet arm).
+#[test]
+fn mir_float_powi_agrees_on_both_backends() {
+    const SRC: &str = "fn main() {\n    let x: f64 = 1.5;\n    \
+        println(f\"{x.powi(2)} {x.powi(0)} {x.powi(-3)} {2.0.powi(10)}\");\n    \
+        let phi: f64 = (1.0 + 5.0.sqrt()) / 2.0;\n    let root5: f64 = 5.0.sqrt();\n    \
+        let n: i64 = 19;\n    println(f\"{(phi.powi(n as i32) / root5).round() as i64}\");\n    \
+        let y: f64 = 1.1;\n    println(f\"{y.powi(10).to_bits()} {y.powi(-7).to_bits()}\");\n    \
+        let z: f32 = 1.1;\n    println(f\"{z.powi(10).to_bits32()} {z.powi(-2).to_bits32()}\");\n    \
+        let big: f64 = 0.999999;\n    println(f\"{big.powi(2147483647)} {2.0.powi(-2147483648)}\");\n    \
+        let (x1, y1, x2, y2) = (1.0, 2.0, 4.0, 6.0);\n    \
+        println(f\"{((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt()}\");\n}\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    let want = interp.output.clone();
+    let lines: Vec<&str> = want.lines().collect();
+    assert_eq!(lines[0], "2.25 1.0 0.2962962962962963 1024.0");
+    assert_eq!(lines[1], "4181");
+    // Repeated squaring, in this order, as plain Rust computes it.
+    let sq = |x: f64, n: i32| -> f64 {
+        let (mut r, mut b, mut e) = (1.0, x, n.unsigned_abs());
+        while e != 0 {
+            if e & 1 == 1 {
+                r *= b;
+            }
+            b *= b;
+            e >>= 1;
+        }
+        if n < 0 {
+            1.0 / r
+        } else {
+            r
+        }
+    };
+    assert_eq!(
+        lines[2],
+        format!("{} {}", sq(1.1, 10).to_bits(), sq(1.1, -7).to_bits())
+    );
+    assert_eq!(lines[4], "0.0 0.0");
+    assert_eq!(lines[5], "5.0");
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

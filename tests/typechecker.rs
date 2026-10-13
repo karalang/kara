@@ -53133,3 +53133,28 @@ fn vec_extend_takes_any_owned_iterable() {
         "not iterable: {errs:?}"
     );
 }
+
+/// B-2026-10-13-22: `powi` takes an `i32` exponent; an unsuffixed literal,
+/// negated or not, is one when it fits.
+#[test]
+fn float_powi_takes_an_i32_exponent() {
+    typecheck_ok(
+        "fn main() {\n    let x: f64 = 1.5;\n    let n: i64 = 3;\n    \
+         let a: f64 = x.powi(2) + x.powi(-2) + x.powi(n as i32);\n    \
+         let y: f32 = 2.0;\n    let b: f32 = y.powi(3);\n    println(f\"{a} {b}\");\n}\n",
+    );
+    for (arg, want) in [
+        ("n", "powi expects an exponent of type `i32`, got `i64`"),
+        ("2.0", "powi expects an exponent of type `i32`"),
+        ("3000000000", "does not fit an `i32`"),
+    ] {
+        let errs = typecheck_errors(&format!(
+            "fn main() {{\n    let x: f64 = 1.5;\n    let n: i64 = 3;\n    \
+             println(f\"{{x.powi({arg})}}\");\n}}\n"
+        ));
+        assert!(
+            errs.iter().any(|e| e.message.contains(want)),
+            "`x.powi({arg})`: {errs:?}"
+        );
+    }
+}

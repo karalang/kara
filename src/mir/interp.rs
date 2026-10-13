@@ -653,6 +653,27 @@ fn run_with(
 
 /// The unary float function `method` of `x`, at `f64` when `wide`, else
 /// at `f32`; `None` for a name that is not one.
+/// `x.powi(n)`: `x` to the power `n` by repeated squaring, the reciprocal
+/// for a negative `n` (B-2026-10-13-22).
+fn powi_by_squaring<F>(x: F, n: i32) -> F
+where
+    F: Copy + std::ops::Mul<Output = F> + std::ops::Div<Output = F> + From<i8>,
+{
+    let (mut r, mut b, mut e) = (F::from(1), x, n.unsigned_abs());
+    while e != 0 {
+        if e & 1 == 1 {
+            r = r * b;
+        }
+        b = b * b;
+        e >>= 1;
+    }
+    if n < 0 {
+        F::from(1) / r
+    } else {
+        r
+    }
+}
+
 fn float_unary(method: &str, x: f64, wide: bool) -> Option<f64> {
     use crate::float_math as fm;
     macro_rules! at {
@@ -2062,7 +2083,7 @@ impl<'a> Interp<'a> {
             (_, m)
                 if matches!(args.first(), Some(Value::Float(_)))
                     && (float_unary(m, 0.0, true).is_some()
-                        || matches!(m, "atan2" | "hypot" | "copysign")) =>
+                        || matches!(m, "atan2" | "hypot" | "copysign" | "powi")) =>
             {
                 self.scalar_method(name, method, &args, ret)
             }
@@ -6387,6 +6408,18 @@ impl<'a> Interp<'a> {
                 // an `f32` (or narrower) goes through the `f32` function.
                 let narrow = !matches!(self.tys.kind(ret), TyKind::Float(super::ty::FloatTy::F64));
                 Ok(Value::Float(float_unary(method, *a, !narrow).unwrap()))
+            }
+            ("powi", [Value::Float(a), Value::Int(n)]) => {
+                // Repeated squaring at the receiver's width, the same
+                // multiplications in the same order as the compiled loop
+                // (`src/codegen/mir/num.rs`), so the two agree to the bit.
+                let wide = matches!(self.tys.kind(ret), TyKind::Float(super::ty::FloatTy::F64));
+                let n = *n as i32;
+                Ok(Value::Float(if wide {
+                    powi_by_squaring(*a, n)
+                } else {
+                    f64::from(powi_by_squaring(*a as f32, n))
+                }))
             }
             (_, [Value::Float(a), Value::Float(b)])
                 if matches!(method, "pow" | "atan2" | "hypot" | "copysign") =>

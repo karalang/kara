@@ -101,6 +101,60 @@ impl<'a> super::TypeChecker<'a> {
         // `NoMethodFound`. Backends: interpreter `method_call.rs` (Rust
         // `f64::*`), codegen `method_call.rs` (LLVM intrinsics; `atan2` via a
         // direct libm call). Driven by the Plume flow-field dogfood.
+        // `x.powi(n)`: a float to an `i32` power, by repeated squaring at the
+        // receiver's width (design.md's `(x2 - x1).powi(2)`; B-2026-10-13-22).
+        if method == "powi" && matches!(receiver_for_lookup, Type::Float(_)) {
+            if args.len() != 1 {
+                self.type_error(
+                    format!("powi expects 1 argument, got {}", args.len()),
+                    *span,
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                return Some(Type::Error);
+            }
+            let i32_ty = Type::Int(IntSize::I32);
+            let arg = &args[0].value;
+            let arg_ty = self.infer_expr(arg);
+            // An unsuffixed literal, negated or not (`-3` is `Neg` over `3`),
+            // is an `i32` when it fits one.
+            let literal = match &arg.kind {
+                ExprKind::Integer(n, None) => Some((*n, None)),
+                ExprKind::Unary {
+                    op: UnaryOp::Neg,
+                    operand,
+                } => match &operand.kind {
+                    ExprKind::Integer(n, None) => Some((-*n, Some(operand.span))),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some((n, inner)) = literal {
+                if i32::try_from(n).is_err() {
+                    self.type_error(
+                        format!("powi's exponent {n} does not fit an `i32`"),
+                        arg.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Some(Type::Error);
+                }
+                if let Some(inner) = inner {
+                    self.record_expr_type(&inner, &i32_ty);
+                }
+                self.record_expr_type(&arg.span, &i32_ty);
+            } else if arg_ty != Type::Error && arg_ty != i32_ty {
+                self.type_error(
+                    format!(
+                        "powi expects an exponent of type `i32`, got `{}` (cast with `as i32`, \
+                         or use `pow` for a float exponent)",
+                        type_display(&arg_ty)
+                    ),
+                    arg.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Some(Type::Error);
+            }
+            return Some(receiver_for_lookup.clone());
+        }
         if matches!(receiver_for_lookup, Type::Float(_)) {
             if let Some(kind) = crate::float_math::classify(method) {
                 match kind {

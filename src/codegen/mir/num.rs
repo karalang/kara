@@ -1137,6 +1137,15 @@ impl<'ctx> Cx<'ctx, '_> {
                 };
                 self.libm(name, x, None)?
             }
+            ("powi", [y]) => {
+                let yt = self.operand_type(y)?;
+                if !matches!(self.tys.kind(yt), TyKind::Int(_)) {
+                    return Ok(None);
+                }
+                let n = self.operand_scalar(y)?.into_int_value();
+                let x = self.at_dest_width(x, dest)?;
+                self.powi_by_squaring(x, n)?
+            }
             ("pow" | "atan2" | "hypot" | "copysign", [y]) => {
                 let yt = self.operand_type(y)?;
                 if !matches!(self.tys.kind(yt), TyKind::Float(_)) {
@@ -1264,6 +1273,71 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// `x` converted to the width of `dest`'s float type.
+    /// `x.powi(n)` by repeated squaring, the reciprocal for a negative `n`:
+    /// the multiplications the interpreter's `powi_by_squaring` does, in its
+    /// order, so the two backends agree to the bit (B-2026-10-13-22).
+    fn powi_by_squaring(&mut self, x: FloatValue<'ctx>, n: IntValue<'ctx>) -> R<FloatValue<'ctx>> {
+        let ft = x.get_type();
+        let it = n.get_type();
+        let one = ft.const_float(1.0);
+        let zero = it.const_zero();
+        let f = self.cur_fn()?;
+        let b = &self.builder;
+        let neg = b
+            .build_int_compare(IntPredicate::SLT, n, zero, "")
+            .map_err(e)?;
+        let flipped = b.build_int_sub(zero, n, "").map_err(e)?;
+        let mag = b
+            .build_select(neg, flipped, n, "")
+            .map_err(e)?
+            .into_int_value();
+        let pre = b.get_insert_block().ok_or("no insert block")?;
+        let head = self.llcx.append_basic_block(f, "powi");
+        let step = self.llcx.append_basic_block(f, "powi.step");
+        let done = self.llcx.append_basic_block(f, "powi.done");
+        let b = &self.builder;
+        b.build_unconditional_branch(head).map_err(e)?;
+        b.position_at_end(head);
+        let r = b.build_phi(ft, "r").map_err(e)?;
+        let base = b.build_phi(ft, "b").map_err(e)?;
+        let left = b.build_phi(it, "e").map_err(e)?;
+        r.add_incoming(&[(&one, pre)]);
+        base.add_incoming(&[(&x, pre)]);
+        left.add_incoming(&[(&mag, pre)]);
+        let (rv, bv, ev) = (
+            r.as_basic_value().into_float_value(),
+            base.as_basic_value().into_float_value(),
+            left.as_basic_value().into_int_value(),
+        );
+        let more = b
+            .build_int_compare(IntPredicate::NE, ev, zero, "")
+            .map_err(e)?;
+        b.build_conditional_branch(more, step, done).map_err(e)?;
+        b.position_at_end(step);
+        let low = b.build_and(ev, it.const_int(1, false), "").map_err(e)?;
+        let odd = b
+            .build_int_compare(IntPredicate::NE, low, zero, "")
+            .map_err(e)?;
+        let times = b.build_float_mul(rv, bv, "").map_err(e)?;
+        let r2 = b
+            .build_select(odd, times, rv, "")
+            .map_err(e)?
+            .into_float_value();
+        let b2 = b.build_float_mul(bv, bv, "").map_err(e)?;
+        let e2 = b
+            .build_right_shift(ev, it.const_int(1, false), false, "")
+            .map_err(e)?;
+        r.add_incoming(&[(&r2, step)]);
+        base.add_incoming(&[(&b2, step)]);
+        left.add_incoming(&[(&e2, step)]);
+        b.build_unconditional_branch(head).map_err(e)?;
+        b.position_at_end(done);
+        let inv = b.build_float_div(one, rv, "").map_err(e)?;
+        Ok(b.build_select(neg, inv, rv, "")
+            .map_err(e)?
+            .into_float_value())
+    }
+
     fn at_dest_width(&mut self, x: FloatValue<'ctx>, dest: &Place) -> R<FloatValue<'ctx>> {
         let dty = self.place_type(dest)?;
         let narrow = !matches!(self.tys.kind(dty), TyKind::Float(FloatTy::F64));
