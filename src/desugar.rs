@@ -1523,6 +1523,8 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
 ///   * parallel / destructuring assignment (`a, b = b, a`), and
 ///   * `collect()` into a non-`Vec` `FromIterator` target (B-2026-08-17-36).
 fn desugar_stmt_rewrites_in_program(program: &mut Program) {
+    let mem = mem_fns_in_reach(program);
+    let mem = &mem;
     let sigs = collect_arg_sigs(program);
     let payloads = unwrap_payload_types(program);
     // A trait method's body is left alone (no payload types): its parameters
@@ -1541,7 +1543,7 @@ fn desugar_stmt_rewrites_in_program(program: &mut Program) {
                     payloads: &payloads,
                     generics: generic_param_names(&[f.generic_params.as_ref()]),
                 };
-                walk_fn_body(&mut f.body, ret.as_ref(), &params, &sigs, &uw);
+                walk_fn_body(&mut f.body, ret.as_ref(), &params, &sigs, &uw, mem);
                 f.params = params;
             }
             Item::ImplBlock(imp) => {
@@ -1557,7 +1559,7 @@ fn desugar_stmt_rewrites_in_program(program: &mut Program) {
                                 m.generic_params.as_ref(),
                             ]),
                         };
-                        walk_fn_body(&mut m.body, ret.as_ref(), &params, &sigs, &uw);
+                        walk_fn_body(&mut m.body, ret.as_ref(), &params, &sigs, &uw, mem);
                         m.params = params;
                     }
                 }
@@ -1568,13 +1570,13 @@ fn desugar_stmt_rewrites_in_program(program: &mut Program) {
                         let ret = m.return_type.clone();
                         let params = std::mem::take(&mut m.params);
                         if let Some(body) = &mut m.body {
-                            walk_fn_body(body, ret.as_ref(), &params, &sigs, &none);
+                            walk_fn_body(body, ret.as_ref(), &params, &sigs, &none, mem);
                         }
                         m.params = params;
                     }
                 }
             }
-            Item::TestCase(tc) => walk_fn_body(&mut tc.body, None, &[], &sigs, &none),
+            Item::TestCase(tc) => walk_fn_body(&mut tc.body, None, &[], &sigs, &none, mem),
             Item::ConstDecl(c) => {
                 // Not a function body: no parameters, and no local bindings to
                 // stand down for. A fresh context with no collected names is
@@ -1690,6 +1692,10 @@ struct WalkCx<'a> {
     /// blocks enclosing the current position. A parameter named here is not
     /// the parameter any more, so its `unwrap` is left alone.
     shadowed: std::collections::HashSet<String>,
+    /// Did pass 1 see a `mem.<f>(..)` call? Pass 4 is skipped otherwise.
+    saw_mem: bool,
+    /// `Some` on pass 4 only: the `mem` functions it rewrites.
+    mem: Option<&'a MemFns>,
 }
 
 impl WalkCx<'_> {
@@ -1705,6 +1711,8 @@ impl WalkCx<'_> {
             bind_counts: std::collections::HashMap::new(),
             shadow_unwrap_lets: std::collections::HashMap::new(),
             shadowed: std::collections::HashSet::new(),
+            saw_mem: false,
+            mem: None,
         }
     }
 
@@ -1841,6 +1849,7 @@ fn walk_fn_body(
     params: &[Param],
     sigs: &ArgSigs,
     uw_types: &UnwrapPayloadTypes<'_>,
+    mem: &MemFns,
 ) {
     let mut cx = WalkCx::collecting();
     walk_block(block, ret, &mut cx);
@@ -1872,6 +1881,14 @@ fn walk_fn_body(
     }
     for p in params {
         cx.bind_pattern(&p.pattern);
+    }
+
+    // Pass 4 — `mem.swap(a, b)` and its siblings, unless the body binds a
+    // `mem` of its own (B-2026-10-13-25).
+    if cx.saw_mem && !cx.bound.contains("mem") && !mem.is_empty() {
+        let mut cx4 = WalkCx::collecting();
+        cx4.mem = Some(mem);
+        walk_block(block, ret, &mut cx4);
     }
 
     // Pass 2 — argument position (B-2026-08-18-27). Skipped entirely when no
@@ -2115,6 +2132,11 @@ fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
             if method == "collect" {
                 cx.saw_collect = true;
             }
+            if matches!(&object.kind, ExprKind::Identifier(m) if m == "mem")
+                && MEM_FNS.contains(&method.as_str())
+            {
+                cx.saw_mem = true;
+            }
             if matches!(
                 method.as_str(),
                 "unwrap" | "expect" | "unwrap_err" | "expect_err"
@@ -2276,6 +2298,88 @@ fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
             walk_block(body, ret, cx);
         }
     }
+    if let Some(mem) = cx.mem {
+        rewrite_mem_call(expr, mem);
+    }
+}
+
+/// The `std.mem` functions a program may call as `mem.<f>(..)`
+/// (core-semantics.md §3.7: `mem.take(place)`, `mem.replace(place, value)`,
+/// `mem.swap(a, b)`). They are prelude functions, so the qualified call is
+/// the bare one (B-2026-10-13-25).
+const MEM_FNS: &[&str] = &["swap", "replace", "take"];
+
+type MemFns = std::collections::HashSet<&'static str>;
+
+/// The [`MEM_FNS`] a `mem.<f>(..)` call can name in this program: none when
+/// it declares or imports a `mem` of its own, and not one it declares or
+/// imports under the same name, which its bare call would reach instead.
+fn mem_fns_in_reach(program: &Program) -> MemFns {
+    let mut names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for item in &program.items {
+        match item {
+            Item::Function(f) => {
+                names.insert(&f.name);
+            }
+            Item::StructDef(d) => {
+                names.insert(&d.name);
+            }
+            Item::EnumDef(d) => {
+                names.insert(&d.name);
+            }
+            Item::ConstDecl(c) => {
+                names.insert(&c.name);
+            }
+            Item::ModuleBinding(b) => {
+                names.insert(&b.name);
+            }
+            Item::Import(imp) => {
+                if let Some(last) = imp.path.last() {
+                    names.insert(last);
+                }
+                for it in &imp.items {
+                    names.insert(it.alias.as_deref().unwrap_or(&it.name));
+                }
+            }
+            _ => {}
+        }
+    }
+    if names.contains("mem") {
+        return MemFns::new();
+    }
+    MEM_FNS
+        .iter()
+        .copied()
+        .filter(|f| !names.contains(f))
+        .collect()
+}
+
+/// `mem.swap(a, b)` → `swap(a, b)`, for a function in `mem`.
+fn rewrite_mem_call(expr: &mut Expr, mem: &MemFns) {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+        ..
+    } = &mut expr.kind
+    else {
+        return;
+    };
+    if !matches!(&object.kind, ExprKind::Identifier(m) if m == "mem")
+        || !mem.contains(method.as_str())
+    {
+        return;
+    }
+    let callee = Expr {
+        id: object.id,
+        kind: ExprKind::Identifier(method.clone()),
+        span: object.span,
+    };
+    let args = std::mem::take(args);
+    expr.kind = ExprKind::Call {
+        callee: Box::new(callee),
+        args,
+    };
 }
 
 /// B-2026-09-29-12 — pass 3's rewrite, at one of the WHOLE-VALUE positions it

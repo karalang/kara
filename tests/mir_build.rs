@@ -858,3 +858,34 @@ fn main() {
         }
     }
 }
+
+// B-2026-10-13-25 — `mem.swap` / `mem.replace` / `mem.take` on both
+// backends, on locals and on places, and a local `mem` with its own `take`.
+#[test]
+fn mir_mem_module_functions() {
+    const SRC: &str = r#"struct Node { kids: Vec[i64], name: String }
+struct Mem { n: i64 }
+impl Mem { fn take(mut ref self, k: i64) -> i64 { self.n -= k; self.n } }
+fn other() -> i64 { let mut mem = Mem { n: 10 }; mem.take(3) }
+fn main() {
+    let mut a: Vec[i64] = vec![1];
+    let mut b: Vec[i64] = vec![2, 3];
+    mem.swap(mut a, mut b);
+    let old = mem.replace(mut a, vec![9]);
+    let gone = mem.take(mut b);
+    println(f"{a.len()} {b.len()} {old.len()} {gone.len()}");
+    let mut nodes: Vec[Node] = vec![Node { kids: vec![1, 2], name: String.from("x") }];
+    let k = mem.take(mut nodes[0].kids);
+    let n = mem.replace(mut nodes[0].name, String.from("y"));
+    println(f"{k.len()} {n} {nodes[0].kids.len()} {nodes[0].name} {other()}");
+}
+"#;
+    let want = "1 0 2 1\n2 x 0 y 7\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

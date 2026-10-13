@@ -53221,3 +53221,30 @@ fn standard_types_are_default() {
 "#,
     );
 }
+
+// B-2026-10-13-25 — `mem.swap(a, b)`, `mem.replace(d, v)` and `mem.take(d)`,
+// the spelling core-semantics.md §3.7 gives, are the prelude functions; a
+// body that binds its own `mem` keeps it.
+#[test]
+fn mem_module_functions_resolve() {
+    typecheck_desugared_ok(
+        r#"fn main() {
+    let mut a: Vec[i64] = vec![1];
+    let mut b: Vec[i64] = vec![2, 3];
+    mem.swap(mut a, mut b);
+    let old = mem.replace(mut a, vec![9]);
+    let gone = mem.take(mut b);
+    println(f"{a.len()} {b.len()} {old.len()} {gone.len()}");
+}
+"#,
+    );
+    typecheck_desugared_ok(
+        r#"struct Mem { n: i64 }
+impl Mem { fn take(mut ref self, k: i64) -> i64 { self.n -= k; self.n } }
+fn main() {
+    let mut mem = Mem { n: 10 };
+    println(f"{mem.take(3)}");
+}
+"#,
+    );
+}
