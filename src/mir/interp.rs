@@ -1014,7 +1014,7 @@ impl<'a> Interp<'a> {
         let mut locals = self.spare_locals.pop().unwrap_or_default();
         locals.push(Value::Uninit);
         let mut args = args;
-        locals.extend(args.drain(..));
+        locals.append(&mut args);
         self.give_back(args);
         locals.resize_with(body.locals.len(), || Value::Uninit);
         self.next_frame_id += 1;
