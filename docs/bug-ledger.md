@@ -99,8 +99,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 253 |
 | missing-feature | 241 |
 | other | 172 |
-| perf | 157 |
-| diagnostics | 154 |
+| perf | 158 |
+| diagnostics | 155 |
 | false-positive | 153 |
 | crash | 114 |
 | soundness | 100 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2867 |
+| codegen | 2868 |
 | interp | 912 |
-| typecheck | 380 |
+| typecheck | 381 |
 | other | 115 |
 | ownership | 84 |
 | cli | 75 |
-| runtime | 61 |
+| runtime | 62 |
 | parser | 61 |
 | autopar | 59 |
 | resolver | 35 |
@@ -597,6 +597,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-28 | 2026-10-13 | typecheck | low | `karac check` loses the `ref` of a `Map.get` result once it is stored in a tuple local: `let t = (m.get("a"), 5); match t { (Some(i), k) => *i + k, _ => 0 }` is refused ("unary '*' requires 'ref T' ... found 'i64'"), while the same match on the tuple literal passes since B-2026-10-12-16 and `__mir-run` runs both | — |
 | B-2026-10-13-29 | 2026-10-13 | ownership | high | The MIR borrow checker does not see a `Str` view of a `String` as a borrow: `let v = owned.as_str(); owned.push_str(..); println(v)` runs on `__mir-run` and reads freed memory under `__mir-llvm-run`, while the same program with `owned.chars()` (a `ref String`) is refused with E0516 | — |
 | B-2026-10-13-30 | 2026-10-13 | codegen+runtime | medium | `String.push(c)` on the MIR compiled backend is an out-of-line runtime call per char (`karac_mir_string_push_char` -> `karac_mir_string_push_str` -> `karac_mir_vec_reserve`), so building strings a char at a time runs 3.6x slower than Rust: 2,000,000 keys of 200 chars take 2.78 s under `karac build --mir` against 0.77 s for `rustc -O -C overflow-checks=on` | — |
+| B-2026-10-13-31 | 2026-10-13 | codegen+runtime | medium | Walking a `Str`'s `chars()` on the MIR compiled backend costs about 3.6 ns a char against 1.0 for its `bytes()` and 0.9 for Rust's `chars()`, and a char predicate such as `is_ascii_uppercase` is a runtime call that finds the method by comparing names: kata 520's bench (`word.chars().filter(|c| c.is_ascii_uppercase()).count()`) runs 2.0 to 2.2 s under `karac build --mir` against 0.20 to 0.25 s for `rustc -O` | — |
+| B-2026-10-13-32 | 2026-10-13 | typecheck | low | The MIR front end accepts `*c` on a `filter` closure's `char` parameter over `chars()`, which `karac check` refuses ("unary '*' requires 'ref T' ... found 'char'") as docs/library/iterators.md's `fn filter[F: MutFn(Self.Item) -> bool]` says it should: `w.chars().filter(|c| *c == 'Q').count()` prints 2 under `karac __mir-run` and builds under `karac build --mir` | — |
 
 ### Relocated
 
