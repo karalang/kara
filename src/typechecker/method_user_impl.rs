@@ -110,6 +110,12 @@ impl<'a> super::TypeChecker<'a> {
             (Type::Str, "char_at_byte" | "char_before_byte") => {
                 ("String".to_string(), 1, Type::Char)
             }
+            // A `Str` reads through the same natives (B-2026-10-13-26).
+            (Type::Named { name, args: targs }, "char_at_byte" | "char_before_byte")
+                if name == "StringSlice" && targs.is_empty() =>
+            {
+                ("String".to_string(), 1, Type::Char)
+            }
             (Type::Char, "len_utf8") => ("char".to_string(), 0, Type::Int(IntSize::I64)),
             _ => return None,
         };

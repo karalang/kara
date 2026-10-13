@@ -783,3 +783,40 @@ true true
         }
     }
 }
+
+// B-2026-10-13-26 — `chars()` on a `Str` is an iterator value on both
+// backends, as it is on a `String`: adaptors, `rev`, `next`, a collect into a
+// `String`, multi-byte chars, and the plain `for` and `Vec[char]` forms.
+#[test]
+fn mir_str_chars_is_an_iterator() {
+    const SRC: &str = r#"fn e(w: Str) { for (i, c) in w.chars().enumerate() { print(f"{i}{c} "); } println(""); }
+fn fc(w: Str) -> i64 { w.chars().filter(|c| c.is_ascii_uppercase()).count() }
+fn r(w: Str) { for c in w.chars().rev() { print(f"{c} "); } println(""); }
+fn a(w: Str) -> bool { w.chars().all(|c| c.is_ascii_uppercase()) }
+fn n(w: Str) -> Option[char] { let mut it = w.chars(); it.next() }
+fn m(w: Str) -> String { let s: String = w.chars().map(|c| c.to_ascii_lowercase()).collect(); s }
+fn plain(w: Str) -> i64 { let mut k = 0; for c in w.chars() { if c == 'é' { k += 10; } k += 1; } k }
+fn v(w: Str) -> Vec[char] { w.chars().collect() }
+fn main() {
+    e("Ab");
+    println(f"{fc("Ab")} {a("Ab")} {n("Ab")} {n("")}");
+    r("Ab");
+    println(m("Ab"));
+    let owned = String.from("xé€y");
+    e(owned.as_str());
+    r(owned.as_str());
+    println(f"{plain(owned.as_str())} {v("hé")}");
+    let s: Str = "QRS";
+    let back: String = s.chars().rev().collect();
+    println(back);
+}
+"#;
+    let want = "0A 1b \n1 false Some(A) None\nb A \nab\n0x 1é 2€ 3y \ny € é x \n14 [h, é]\nSRQ\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

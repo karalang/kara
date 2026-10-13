@@ -368,6 +368,45 @@ impl String {
     }
 }
 
+/// The chars of a `Str`, front to back: [`StrChars`] over a view rather
+/// than a borrowed `String` (B-2026-10-13-26).
+struct StrViewChars {
+    s: Str,
+    pos: i64,
+    back: i64,
+}
+
+impl Iterator for StrViewChars {
+    type Item = char;
+
+    fn next(mut ref self) -> Option[char] {
+        if self.pos >= self.back {
+            return None;
+        }
+        let c = self.s.char_at_byte(self.pos);
+        self.pos = self.pos + c.len_utf8();
+        Some(c)
+    }
+}
+
+impl DoubleEndedIterator for StrViewChars {
+    fn next_back(mut ref self) -> Option[char] {
+        if self.back <= self.pos {
+            return None;
+        }
+        let c = self.s.char_before_byte(self.back);
+        self.back = self.back - c.len_utf8();
+        Some(c)
+    }
+}
+
+impl StringSlice {
+    /// The chars, front to back; `rev()` walks them back to front.
+    fn chars(self) -> StrViewChars {
+        StrViewChars { s: self, pos: 0, back: self.len() }
+    }
+}
+
 impl[T] FromIterator[T] for Vec[T] {
     fn from_iter[I: Iterator[Item = T]](iter: own I) -> Vec[T] {
         let mut it = iter;

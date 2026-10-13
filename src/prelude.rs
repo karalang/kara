@@ -774,6 +774,7 @@ pub const LIBRARY_SOURCE_TYPES: &[&str] = &[
     "Map",
     "SortedMap",
     "String",
+    "StringSlice",
     "Slice",
     "VecDeque",
 ];
