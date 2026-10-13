@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | codegen-gap | 253 |
 | missing-feature | 238 |
-| other | 171 |
+| other | 172 |
 | perf | 156 |
 | diagnostics | 154 |
 | false-positive | 152 |
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2865 |
-| interp | 910 |
-| typecheck | 377 |
+| interp | 911 |
+| typecheck | 378 |
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
@@ -595,11 +595,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-14 | 2026-10-13 | interp+codegen | medium | The MIR builder refuses `for x in c.into_iter()` over a `Set`, `VecDeque`, `Map` or `SortedMap` whose elements are not `Copy` -- `for s in found.into_iter()` with `found: Set[Vec[i64]]` stops at "a `for` loop over a collection is not lowered yet" on both v2 backends, though `karac check` accepts it and the diagnostic for a bare `for` recommends exactly that spelling | — |
 | B-2026-10-13-15 | 2026-10-13 | codegen | low | `karac build --mir` runs kata 495's bench 3.6x slower than C, Rust and legacy `karac build` (0.36-0.44 s against 0.07-0.12 s): the x86 code for the hot loop takes a data-dependent BRANCH for `(a - b).min(duration)` where rustc emits a cmov, and mispredicts it about 28 million times | — |
 | B-2026-10-13-18 | 2026-10-13 | codegen+runtime | medium | `Vec.sort_by_key` and `sort_by` on the MIR compiled backend run about 3.5-4x slower than Rust's `sort_by_key`: `karac_mir_sort_ctx` (runtime/src/mir.rs) is a bottom-up merge sort that calls the comparison through a function pointer for every comparison, and the emitted comparison calls the key closure, not inlined, for each side. Sorting 1M indices by an i64 key 10 times takes 2.74-2.78 s on `karac build --mir` and 0.65-0.77 s on `rustc -O`; in kata 502's bench the sort is 63% of all instructions | — |
-| B-2026-10-13-19 | 2026-10-13 | typecheck | medium | `Vec.extend` accepts only a `Vec`, `Slice` or `Array`, where the spec gives `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)`: `d.extend(v.iter().cloned())`, `d.extend(v.iter().map(f))`, `d.extend(0..3)`, `d.extend(v.into_iter())` and `d.extend(a_set)` are all refused by `karac check`, `karac run --interp` and both MIR backends with a misleading "no method 'extend' on type 'Vec'" | — |
 | B-2026-10-13-20 | 2026-10-13 | codegen+runtime | low | An f-string with one integer hole, `f"{n}"`, costs three allocations, two frees and four thread-local `RefCell` borrows on the v2 compiled backend: 44M `f"{i % 7}"` take 2.7 s on `karac build --mir` against 0.3 s on legacy `karac build` (about 9x), and kata 504's bench runs 3.7 s on `--mir` against 1.6 s on legacy | — |
 | B-2026-10-13-21 | 2026-10-13 | interp+codegen | high | An `as` cast to a narrower integer, widened implicitly into a wider binding or return slot, is never widened by the MIR: `let y: i64 = x as u8;` and `fn f(c: char) -> i64 { c as i32 }` assign the narrow value straight into the `i64` place, so `karac __mir-run` stops at "invalid MIR: assigning u8 to _2 of type i64" and the compiled backend stores 1 or 4 bytes into an 8-byte slot and reads garbage (`let y: i64 = 300 as u8` printed 94505382909996, not 44) | — |
 | B-2026-10-13-22 | 2026-10-13 | typecheck | low | `f64.powi` does not exist, though design.md's own example calls it: `phi.powi(n as i32)` is refused by `karac check` and every backend with "no method 'powi' on type 'f64'"; only `pow(f64)` is implemented, and no library doc lists the float math methods at all | — |
 | B-2026-10-13-23 | 2026-10-13 | interp+codegen | medium | A strong handle stored into a `weak` field is downgraded only when it is a plain local: from a call result (`c.parent = get(a)`, `c.parent = b.parent.expect(...)`, `Node { parent: get(a), .. }`) `karac __mir-run` prints the output and then fails at the drop with "a weak-typed place holds no handle", and `karac __mir-llvm-run` prints it right but leaks the object (ASan: 32 bytes in 1 allocation); from another weak field (`c.parent = b.parent`) `__mir-run` refuses with "invalid MIR ... move out of _7.1, which is inside a shared value" and mir-llvm leaks the same way; `c.parent = Some(a)` fails on both v2 backends at lowering. `karac check` passes all of them, and legacy `karac run --interp` and `karac build` print right | — |
+| B-2026-10-13-24 | 2026-10-13 | typecheck+interp | low | `Vec.append` and `Vec.extend_from_slice` are accepted by `karac check` and run on both v2 backends, but docs/library/collections.md says "There is no `append`" and has no `extend_from_slice` row: either the spec or the implementation is wrong | — |
 
 ### Relocated
 
@@ -3958,6 +3958,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-13 | interp+codegen | low | On both MIR backends a string slice `s[a..b]` that runs past the end, or cuts a code point, stops with `runtime error: explicit panic`, the report a… | 552971e048 |
 | B-2026-10-13-16 | parser+typecheck | low | `karac fix` rewrites `!x` to `not x` whatever the operand's type, so on an INTEGER operand (Rust's bitwise complement, `m & !row == 0`) the first pas… | 56a1b16034 |
 | B-2026-10-13-17 | typecheck+interp+codegen | medium | `ref_eq` has no v2 form: the spec's method `a.ref_eq(b)` on a `shared` handle (design.md § Equality, "a method the compiler provides on every `shared… | 32540012cd |
+| B-2026-10-13-19 | typecheck | medium | `Vec.extend` accepts only a `Vec`, `Slice` or `Array`, where the spec gives `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)`: `d.ex… | 36fc6a0f92 |
 
 </details>
 
