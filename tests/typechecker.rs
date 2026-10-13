@@ -53111,3 +53111,25 @@ fn ref_eq_is_a_method_on_shared_handles() {
          fn main() {\n    let a = N { val: 1 };\n    println(f\"{a.ref_eq(1)}\");\n}\n",
     );
 }
+
+/// B-2026-10-13-19: `Vec.extend` takes any owned iterable, and names the
+/// argument when it is not iterable at all (lent items:
+/// `tests/core_strict_check.rs`).
+#[test]
+fn vec_extend_takes_any_owned_iterable() {
+    typecheck_ok(
+        "fn main() {\n    let v: Vec[i64] = vec![1, 2];\n    let mut d = v.clone();\n    \
+         d.extend(v.iter().cloned());\n    d.extend(v.clone().into_iter().map(|x| x * 10));\n    \
+         d.extend(0..3);\n    let s: Set[i64] = Set.new();\n    d.extend(s);\n    \
+         d.extend(v.into_iter());\n    println(f\"{d}\");\n}\n",
+    );
+    let errs = typecheck_errors(
+        "fn main() {\n    let mut d: Vec[i64] = Vec.new();\n    d.extend(5);\n}\n",
+    );
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("`extend` takes an owned iterable of `i64`")),
+        "not iterable: {errs:?}"
+    );
+}

@@ -13053,6 +13053,79 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// A library method the interpreter implements natively.
+    /// `v.extend(items)` from a source that is not a `Vec`, slice or array
+    /// (B-2026-10-13-19): a call of the library's `vec_extend_*` for that
+    /// source, which moves each item onto the end. False when the native
+    /// `extend` takes the source.
+    fn extend_from_iterable(
+        &mut self,
+        e: &'a Expr,
+        object: &'a Expr,
+        recv: Ty,
+        src: &'a CallArg,
+        dest: Place,
+    ) -> R<bool> {
+        let st = self.expr_ty(&src.value)?;
+        let tcx = self.tys().tcx();
+        let HK::Intrinsic {
+            kind: IntrinsicKind::Vec,
+            args: vargs,
+        } = tcx.kind(recv)
+        else {
+            return Ok(false);
+        };
+        let elem = tcx.list(vargs)[0];
+        let (helper, inst_args) = match tcx.kind(st) {
+            HK::Ref(_) | HK::MutRef(_) | HK::Slice { .. } | HK::Array { .. } => return Ok(false),
+            HK::Intrinsic { kind, args } => {
+                let sargs = tcx.list(args);
+                let helper = match kind {
+                    IntrinsicKind::Vec => return Ok(false),
+                    IntrinsicKind::Set => "vec_extend_set",
+                    IntrinsicKind::SortedSet => "vec_extend_sorted_set",
+                    IntrinsicKind::VecDeque => "vec_extend_deque",
+                    IntrinsicKind::Map => "vec_extend_map",
+                    IntrinsicKind::SortedMap => "vec_extend_sorted_map",
+                };
+                // The helpers move out of the collection with a `for` loop,
+                // which is lowered for `Copy` elements only so far
+                // (B-2026-10-13-14).
+                if !sargs.iter().all(|&t| self.is_copy(t)) {
+                    return self.unsupported(
+                        e.span,
+                        "`extend` from a collection of non-`Copy` elements (B-2026-10-13-14)",
+                    );
+                }
+                (helper, sargs.to_vec())
+            }
+            _ => ("vec_extend_iter", vec![elem, st]),
+        };
+        let Some(d) = self.lcx.defs.lookup(0, helper) else {
+            return Ok(false);
+        };
+        let f = self.lcx.fns[&d].f;
+        let recv = self.recv_place(object, true)?;
+        let pt = self.callee_param_ty(&f.params[1], &inst_args)?;
+        let pending = self.arg_pending(&src.value, pt)?;
+        let mut rest = self.finish_args(vec![pending])?;
+        let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
+        ops.extend(rest);
+        let name = self.lcx.instance(d, inst_args.clone());
+        let func = self.fn_operand(&name, d, inst_args);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: ops,
+                destination: dest,
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        Ok(true)
+    }
+
     fn builtin_method(
         &mut self,
         e: &'a Expr,
@@ -13067,6 +13140,11 @@ impl<'l, 'a> Bx<'l, 'a> {
             HK::Ref(t) | HK::MutRef(t) => t,
             _ => ot,
         };
+        if let ("extend", [src]) = (method, args) {
+            if self.extend_from_iterable(e, object, base, src, dest.clone())? {
+                return Ok(());
+            }
+        }
         if let ("discriminant", []) = (method, args) {
             let p = self.expr_place(object, false)?;
             let (p, t) = self.strip_refs(p);
@@ -13811,6 +13889,12 @@ const LIBRARY_NAMES_THE_COMPILER_USES: &[&str] = &[
     "DeserializeError",
     "iter_read_value",
     "iter_clone_value",
+    "vec_extend_iter",
+    "vec_extend_set",
+    "vec_extend_sorted_set",
+    "vec_extend_deque",
+    "vec_extend_map",
+    "vec_extend_sorted_map",
 ];
 
 /// The names the library text `lib` declares at its top level.

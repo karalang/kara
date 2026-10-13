@@ -4364,8 +4364,9 @@ impl<'a> super::TypeChecker<'a> {
     /// v2 core §5.10: `collect` builds owned values, so a chain whose items
     /// are lent by the collection it walks (`v.iter().chain(w.iter())`)
     /// would move each one out of it. `.cloned()` before `collect` clones
-    /// them instead.
-    fn check_core_collect_lent(&mut self, object: &Expr) {
+    /// them instead. `consumer` names the call that takes the items:
+    /// `collect`, or `extend` for `v.extend(w.iter())` (B-2026-10-13-19).
+    pub(super) fn check_core_collect_lent(&mut self, object: &Expr, consumer: &str) {
         let lent = Self::core_lent_items(object);
         let Some(Type::Named { name, args }) = self
             .expr_types
@@ -4398,15 +4399,19 @@ impl<'a> super::TypeChecker<'a> {
             format!("`{shown}` with parts lent by the collection they walk")
         };
         let place = if whole {
-            "before `collect`"
+            if consumer == "collect" {
+                "before `collect`".to_string()
+            } else {
+                format!("on the iterator `{consumer}` takes")
+            }
         } else {
-            "after the `.iter()` that lends them"
+            "after the `.iter()` that lends them".to_string()
         };
         let (message, fix) = if self.type_supports_clone(&part) {
             (
                 format!(
                     "cannot move a non-`Copy` value out of a borrowed place: the items are \
-                     {items}, and `collect` would move each one out of it (core semantics \
+                     {items}, and `{consumer}` would move each one out of it (core semantics \
                      §5.10). Write `.cloned()` {place}"
                 ),
                 Some(FixIt {
@@ -4419,7 +4424,7 @@ impl<'a> super::TypeChecker<'a> {
             (
                 format!(
                     "cannot move a non-`Copy` value out of a borrowed place: the items are \
-                     {items}, and `collect` would move each one out of it (core semantics \
+                     {items}, and `{consumer}` would move each one out of it (core semantics \
                      §5.10). '{part_shown}' has no `.clone()` yet: derive `Clone` on it and \
                      write `.cloned()` {place}"
                 ),
@@ -6166,7 +6171,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 let t = self.infer_method_call(object, method, args, &expr.span, args_close_span);
                 if self.cli_lint_overrides.strict_core && method == "collect" && args.is_empty() {
-                    self.check_core_collect_lent(object);
+                    self.check_core_collect_lent(object, "collect");
                 }
                 if self.cli_lint_overrides.strict_core && self.core_receiver_is_borrowed(object) {
                     self.core_borrowed_receivers

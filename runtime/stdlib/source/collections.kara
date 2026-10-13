@@ -412,6 +412,50 @@ impl[T] FromIterator[T] for Set[T] {
     }
 }
 
+// `v.extend(items)` from a source that is not a `Vec`, slice or array: the
+// MIR builder calls one of these (docs/library/collections.md, `extend`
+// takes any `IntoIterator[Item = T]`). Each item moves onto the end in order.
+
+// An iterator's `ref` items to a `Copy` element are copied out
+// (`d.extend(v.iter())`), as `ItemValues` reads them; other items move.
+fn vec_extend_iter[T, I: Iterator](v: mut ref Vec[T], items: own I) {
+    let mut it = items;
+    while let Some(x) = it.next() {
+        let y: T = iter_read_value(x);
+        v.push(y);
+    }
+}
+
+fn vec_extend_set[T](v: mut ref Vec[T], items: own Set[T]) {
+    for x in items.into_iter() {
+        v.push(x);
+    }
+}
+
+fn vec_extend_sorted_set[T](v: mut ref Vec[T], items: own SortedSet[T]) {
+    for x in items.into_iter() {
+        v.push(x);
+    }
+}
+
+fn vec_extend_deque[T](v: mut ref Vec[T], items: own VecDeque[T]) {
+    for x in items.into_iter() {
+        v.push(x);
+    }
+}
+
+fn vec_extend_map[K, V](v: mut ref Vec[(K, V)], items: own Map[K, V]) {
+    for (k, x) in items.into_iter() {
+        v.push((k, x));
+    }
+}
+
+fn vec_extend_sorted_map[K, V](v: mut ref Vec[(K, V)], items: own SortedMap[K, V]) {
+    for (k, x) in items.into_iter() {
+        v.push((k, x));
+    }
+}
+
 // The collections' `default()`, empty: what `T: Default` calls (`Default`
 // is a builtin, satisfied by a type's `default` associated function), and
 // what a `#[serde(skip)]` collection field reads back as.

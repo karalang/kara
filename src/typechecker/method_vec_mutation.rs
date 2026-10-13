@@ -355,9 +355,24 @@ impl<'a> super::TypeChecker<'a> {
                     // typed as `Type::Error` instead of `()`.
                     Type::Slice { element, .. } => Some((**element).clone()),
                     Type::Array { element, .. } => Some((**element).clone()),
+                    // `extend` takes any owned iterable (docs/library/
+                    // collections.md: `fn extend[I: IntoIterator[Item = T]]`):
+                    // an iterator chain, a range, or another collection,
+                    // whose items are the elements (B-2026-10-13-19).
+                    // `extend_from_slice` stays slice-shaped.
+                    _ if method == "extend"
+                        && !matches!(arg_ty, Type::Ref(_) | Type::MutRef(_)) =>
+                    {
+                        self.extend_item_type(&arg_inner)
+                    }
                     _ => None,
                 };
                 if let Some(src) = src_elem {
+                    if method == "extend" {
+                        // Items a `.iter()` lends would move out of their
+                        // collection, as for `collect`.
+                        self.check_core_collect_lent(&args[0].value, "extend");
+                    }
                     unify_types(
                         &elem,
                         &src,
@@ -367,6 +382,21 @@ impl<'a> super::TypeChecker<'a> {
                     let resolved_elem = resolve_type_var_top(&elem, &self.env.substitutions);
                     let resolved_src = resolve_type_var_top(&src, &self.env.substitutions);
                     self.check_assignable(&resolved_elem, &resolved_src, args[0].value.span);
+                    return Some(Type::Unit);
+                }
+                if method == "extend" && !matches!(arg_inner, Type::Error) {
+                    // Name the argument, not the method: `extend` exists, and
+                    // what it refuses is this source.
+                    self.type_error(
+                        format!(
+                            "`extend` takes an owned iterable of `{}` (a `Vec`, an iterator, \
+                             a range or another collection); `{}` is not one",
+                            type_display(&resolve_type_var_top(&elem, &self.env.substitutions)),
+                            type_display(&arg_ty)
+                        ),
+                        args[0].value.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
                     return Some(Type::Unit);
                 }
             }
@@ -546,5 +576,34 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         None
+    }
+
+    /// The item type of an owned `extend` source that is not slice-shaped:
+    /// an iterator chain (`v.iter().cloned()`), a range, a library
+    /// collection (`Set`, `VecDeque`, a map's `(K, V)` entries), or a type
+    /// with its own `Iterator` impl. `None` when the source is none of those.
+    fn extend_item_type(&mut self, src: &Type) -> Option<Type> {
+        match src {
+            Type::Named { name, args } if name == "Iterator" && args.len() == 1 => {
+                Some(args[0].clone())
+            }
+            Type::Named { .. } => {
+                if let Some(t) = super::types::iterator_item_type_for(src) {
+                    return Some(t);
+                }
+                let Type::Named { name, .. } = src else {
+                    return None;
+                };
+                if !self
+                    .env
+                    .impl_assoc_types
+                    .contains_key(&(name.clone(), "Item".to_string()))
+                {
+                    return None;
+                }
+                Some(self.element_type_of(src))
+            }
+            _ => None,
+        }
     }
 }

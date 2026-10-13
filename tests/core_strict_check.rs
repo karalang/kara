@@ -3365,3 +3365,22 @@ fn library_check_keeps_user_errors_and_hides_the_library() {
     assert_eq!(with, json(false));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-10-13-19: `extend` takes owned items, so extending from a chain
+/// over `.iter()` moves each lent item out of its collection, as `collect`
+/// does; `.cloned()` on the iterator clones them.
+#[test]
+fn extending_from_lent_items_takes_cloned() {
+    rejected_then_fixed_in(
+        "extend-lent",
+        "fn main() {\n\
+             let a: Vec[String] = vec![\"x\"];\n\
+             let mut d: Vec[String] = Vec.new();\n\
+             d.extend(a.iter());\n\
+             println(d.len() + a.len());\n\
+         }\n",
+        "`extend` would move each one out of it",
+        "d.extend(a.iter().cloned())",
+        1,
+    );
+}

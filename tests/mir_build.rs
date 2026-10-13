@@ -486,3 +486,37 @@ fn mir_program_items_may_take_library_names() {
         }
     }
 }
+
+/// B-2026-10-13-19: `Vec.extend` takes any owned iterable, as the spec's
+/// `fn extend[I: IntoIterator[Item = T]]` does: an iterator chain, a range,
+/// a type's own `Iterator`, another collection, and lent `Copy` items.
+#[test]
+fn mir_vec_extend_takes_any_iterable() {
+    const SRC: &str = "struct Count { n: i64 }\n\
+        impl Iterator for Count {\n    type Item = i64;\n    \
+        fn next(mut ref self) -> Option[i64] {\n        \
+        if self.n == 0 { return None; }\n        self.n = self.n - 1;\n        Some(self.n)\n    }\n}\n\
+        struct D { id: i64 }\n\
+        impl Drop for D { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n\
+        fn main() {\n    let v: Vec[i64] = vec![1, 2];\n    let mut d = v.clone();\n    \
+        d.extend(v.iter().cloned());\n    d.extend(v.iter().map(|x| *x * 10));\n    \
+        d.extend(v.iter());\n    d.extend(0..2);\n    d.extend(Count { n: 2 });\n    \
+        let mut q: VecDeque[i64] = VecDeque.new();\n    q.push_back(9);\n    q.push_front(8);\n    \
+        d.extend(q);\n    let mut s: SortedSet[i64] = SortedSet.new();\n    s.insert(5);\n    s.insert(4);\n    \
+        d.extend(s);\n    d.extend(v.into_iter());\n    println(f\"{d}\");\n    \
+        let mut m: SortedMap[i64, bool] = SortedMap.new();\n    m.insert(2, true);\n    m.insert(1, false);\n    \
+        let mut e: Vec[(i64, bool)] = Vec.new();\n    e.extend(m);\n    println(f\"{e}\");\n    \
+        let mut names: Vec[String] = vec![\"a\".to_string()];\n    \
+        names.extend((0..2).map(|i| f\"n{i}\"));\n    println(f\"{names}\");\n    \
+        let src: Vec[D] = vec![D { id: 1 }, D { id: 2 }];\n    let mut out: Vec[D] = Vec.new();\n    \
+        out.extend(src.into_iter().filter(|x| x.id > 1));\n    println(f\"len {out.len()}\");\n}\n";
+    let want = "[1, 2, 1, 2, 10, 20, 1, 2, 0, 1, 1, 0, 8, 9, 4, 5, 1, 2]\n\
+        [(1, false), (2, true)]\n[a, n0, n1]\ndrop 1\nlen 1\ndrop 2\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
