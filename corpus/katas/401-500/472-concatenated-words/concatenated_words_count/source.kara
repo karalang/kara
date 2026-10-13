@@ -1,0 +1,124 @@
+// LeetCode #472: Concatenated Words -- the most pieces each prefix can
+// be cut into.
+//
+// With every word in one set (the word itself included), most[i] is the
+// largest number of set words that s[..i] can be cut into, or -1 when
+// it cannot be cut at all. The word itself is always one piece, so
+// most[n] is at least 1; the word is concatenated exactly when it can
+// be cut into two or more. O(total length x longest word).
+
+fn most_pieces(word: String, all: Set[String]) -> i64 {
+    let n = word.len();
+    let mut most = vec![-1; n + 1];
+    most[0] = 0;
+    for end in 1..n + 1 {
+        for start in 0..end {
+            if most[start] >= 0 and most[start] + 1 > most[end] and all.contains(word[start..end]) {
+                most[end] = most[start] + 1;
+            }
+        }
+    }
+    most[n]
+}
+
+fn find_all_concatenated_words_in_a_dict(words: Vec[String]) -> Vec[String] {
+    let mut all: Set[String] = Set.new();
+    for word in words {
+        all.insert(word.clone());
+    }
+    let mut found: Vec[String] = Vec.new();
+    for word in words {
+        if most_pieces(word, all) >= 2 {
+            found.push(word.clone());
+        }
+    }
+    found
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(words: Vec[String]) {
+    let mut got = find_all_concatenated_words_in_a_dict(words);
+    got.sort();
+    let mut line = String.new();
+    for w in got {
+        line.push(' ');
+        line.push_str(w.as_str());
+    }
+    println(f"{words.len()} words -> {got.len()}:{line}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `base` random words of 1 to 4 letters, then `joined` tries at two to
+// four of the words so far put together, a quarter of them with one
+// more letter on the end; a word already in the list, or longer than
+// the problem's 30 letters, is skipped.
+fn random_words(seed: mut ref i64, letters: i64, base: i64, joined: i64) -> Vec[String] {
+    let mut seen: Set[String] = Set.new();
+    let mut words: Vec[String] = Vec.new();
+    let mut tries = 0;
+    while words.len() < base and tries < 100 {
+        tries += 1;
+        let mut w = String.new();
+        let size = 1 + next_random(seed) % 4;
+        for _ in 0..size {
+            w.push(char.try_from(97 + (next_random(seed) % letters) as u32).unwrap());
+        }
+        if not seen.contains(w) {
+            seen.insert(w.clone());
+            words.push(w);
+        }
+    }
+    for _ in 0..joined {
+        let parts = 2 + next_random(seed) % 3;
+        let mut w = String.new();
+        for _ in 0..parts {
+            w.push_str(words[next_random(seed) % words.len()].as_str());
+        }
+        if next_random(seed) % 4 == 0 {
+            w.push(char.try_from(97 + (next_random(seed) % letters) as u32).unwrap());
+        }
+        if w.len() <= 30 and not seen.contains(w) {
+            seen.insert(w.clone());
+            words.push(w);
+        }
+    }
+    words
+}
+
+fn main() {
+    show(vec!["cat", "cats", "catsdogcats", "dog", "dogcatsdog", "hippopotamuses", "rat", "ratcatdogcat"]);
+    show(vec!["cat", "dog", "catdog"]);
+    show(vec!["a", "aa", "aaa", "aaaa"]);
+    show(vec!["ab", "a", "b", "ba", "aba", "abab", "c"]);
+    show(vec!["cat"]);
+    show(vec!["xyz", "xy", "z", "yz", "x"]);
+    show(vec!["abc", "ab", "cd", "abcd", "bcd", "a"]);
+    // 300 random lists over 1, 2 or 3 letters.
+    let count = 300;
+    let mut seed: i64 = 472;
+    let mut total_words = 0;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let letters = 1 + next_random(mut seed) % 3;
+        let base = 2 + next_random(mut seed) % 11;
+        let joined = next_random(mut seed) % 31;
+        let words = random_words(mut seed, letters, base, joined);
+        let mut got = find_all_concatenated_words_in_a_dict(words);
+        got.sort();
+        total_words += words.len();
+        total += got.len();
+        for w in got {
+            for b in w.bytes() {
+                checksum = (checksum * 31 + (b as i64)) % 1000000007;
+            }
+            checksum = (checksum * 31 + 1) % 1000000007;
+        }
+    }
+    println(f"{count} random lists, {total_words} words: {total} concatenated, checksum {checksum}");
+}

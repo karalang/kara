@@ -1,0 +1,7 @@
+
+#[derive(Serialize)]
+struct Wrap[T] { v: T }
+struct Plain { n: i64 }
+fn main() {
+    println(Json.serialize(Wrap { v: Plain { n: 1 } }));
+}

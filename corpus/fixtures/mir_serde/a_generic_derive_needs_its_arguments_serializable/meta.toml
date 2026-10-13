@@ -1,0 +1,17 @@
+source = "tests/mir_serde.rs::a_generic_derive_needs_its_arguments_serializable"
+dedup_of = []
+expect = "error:E0236"
+exit = 1
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "7874b6085"
+extracted_src = "aa6e5a0a"
+model_rev = "1aa23105"
+model_src = "aa6e5a0a"

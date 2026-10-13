@@ -1,0 +1,15 @@
+source = "tests/mir_iterators.rs::a_slice_iterator_collects_into_the_annotated_type"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure"]
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0 e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "7874b6085"
+extracted_src = "686d2c04"
+model_rev = "1aa23105"
+model_src = "686d2c04"

@@ -1,0 +1,6 @@
+
+fn shout(s: Str) -> i64 { s.len() }
+fn main() {
+    let owned = "xy".to_string();
+    println(shout("abc") + shout(owned));
+}

@@ -1,0 +1,17 @@
+source = "tests/mir_iterators.rs::a_literal_for_a_str_parameter_allocates_nothing"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "e"
+expected_from = "pin"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+note = "a v2 pin: the test's assert_runs literal, the MIR pipeline's stdout at exit 0 e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "7874b6085"
+extracted_src = "088c040a"
+model_exit = 0
+model_rev = "1aa23105"
+model_src = "088c040a"
+model_verdict = "DIFF"

@@ -1,0 +1,380 @@
+// Differential test for LeetCode #472: Concatenated Words.
+//
+// Copies of the four arms, on 1,500 random lists over 1 to 3 letters:
+// 2 to 8 short words, then up to 15 tries at two to four of the words so
+// far put together (a quarter with one more letter), each kept when it
+// is new and at most 30 letters. Each arm's answer is sorted.
+// Properties:
+//   P1  among the words of up to 8 letters, the arm finds exactly those
+//       that some set of cuts splits into list words (every set tried)
+//   P2  the same words in another order give the same answer
+//   P3  two of the words put together, added as a new word, add exactly
+//       that word to the answer
+//   P4  every word reversed reverses the answer
+//   P5  one concatenated word taken out of the list takes exactly that
+//       word out of the answer
+
+// ---- shortest: concatenated_words.kara
+
+fn breaks_shortest(word: String, known: Set[String]) -> bool {
+    let n = word.len();
+    let mut reach = vec![false; n + 1];
+    reach[0] = true;
+    for end in 1..n + 1 {
+        for start in 0..end {
+            if reach[start] and known.contains(word[start..end]) {
+                reach[end] = true;
+                break;
+            }
+        }
+    }
+    reach[n]
+}
+
+fn find_all_concatenated_words_in_a_dict_shortest(words: Vec[String]) -> Vec[String] {
+    let mut order = words.clone();
+    order.sort_by_key(|w| w.len());
+    let mut known: Set[String] = Set.new();
+    let mut found: Vec[String] = Vec.new();
+    for word in order {
+        if not known.is_empty() and breaks_shortest(word, known) {
+            found.push(word.clone());
+        }
+        known.insert(word.clone());
+    }
+    found
+}
+
+// ---- trie: concatenated_words_trie.kara
+
+struct Trie_trie {
+    next: Vec[i64],
+    ends: Vec[bool],
+}
+
+impl Trie_trie {
+    fn new() -> Trie_trie {
+        Trie_trie { next: vec![-1; 26], ends: vec![false] }
+    }
+
+    fn insert(mut ref self, word: String) {
+        let mut node = 0;
+        for b in word.bytes() {
+            let at = node * 26 + (b as i64) - 97;
+            if self.next[at] < 0 {
+                self.next[at] = self.ends.len();
+                self.ends.push(false);
+                for _ in 0..26 {
+                    self.next.push(-1);
+                }
+            }
+            node = self.next[at];
+        }
+        self.ends[node] = true;
+    }
+}
+
+fn finish_trie(trie: Trie_trie, word: Vec[u8], start: i64, dead: mut ref Vec[bool]) -> bool {
+    if dead[start] {
+        return false;
+    }
+    let n = word.len();
+    let mut node = 0;
+    let mut at = start;
+    while at < n {
+        node = trie.next[node * 26 + (word[at] as i64) - 97];
+        if node < 0 {
+            break;
+        }
+        at += 1;
+        if trie.ends[node] {
+            if at == n {
+                if start > 0 {
+                    return true;
+                }
+            } else if finish_trie(trie, word, at, dead) {
+                return true;
+            }
+        }
+    }
+    dead[start] = true;
+    false
+}
+
+fn find_all_concatenated_words_in_a_dict_trie(words: Vec[String]) -> Vec[String] {
+    let mut trie = Trie_trie.new();
+    for word in words {
+        trie.insert(word);
+    }
+    let mut found: Vec[String] = Vec.new();
+    for word in words {
+        let letters: Vec[u8] = word.bytes().to_vec();
+        let mut dead = vec![false; letters.len() + 1];
+        if finish_trie(trie, letters, 0, mut dead) {
+            found.push(word.clone());
+        }
+    }
+    found
+}
+
+// ---- count: concatenated_words_count.kara
+
+fn most_pieces_count(word: String, all: Set[String]) -> i64 {
+    let n = word.len();
+    let mut most = vec![-1; n + 1];
+    most[0] = 0;
+    for end in 1..n + 1 {
+        for start in 0..end {
+            if most[start] >= 0 and most[start] + 1 > most[end] and all.contains(word[start..end]) {
+                most[end] = most[start] + 1;
+            }
+        }
+    }
+    most[n]
+}
+
+fn find_all_concatenated_words_in_a_dict_count(words: Vec[String]) -> Vec[String] {
+    let mut all: Set[String] = Set.new();
+    for word in words {
+        all.insert(word.clone());
+    }
+    let mut found: Vec[String] = Vec.new();
+    for word in words {
+        if most_pieces_count(word, all) >= 2 {
+            found.push(word.clone());
+        }
+    }
+    found
+}
+
+// ---- suffix: concatenated_words_suffix.kara
+
+fn made_of_words_suffix(rest: String, all: Set[String], memo: mut ref Map[String, bool]) -> bool {
+    if let Some(known) = memo.get(rest) {
+        return *known;
+    }
+    let n = rest.len();
+    let mut answer = all.contains(rest);
+    let mut cut = 1;
+    while not answer and cut < n {
+        if all.contains(rest[..cut]) and made_of_words_suffix(rest[cut..].to_string(), all, memo) {
+            answer = true;
+        }
+        cut += 1;
+    }
+    memo.insert(rest.clone(), answer);
+    answer
+}
+
+fn find_all_concatenated_words_in_a_dict_suffix(words: Vec[String]) -> Vec[String] {
+    let mut all: Set[String] = Set.new();
+    for word in words {
+        all.insert(word.clone());
+    }
+    let mut memo: Map[String, bool] = Map.new();
+    let mut found: Vec[String] = Vec.new();
+    for word in words {
+        let n = word.len();
+        for cut in 1..n {
+            if all.contains(word[..cut]) and made_of_words_suffix(word[cut..].to_string(), all, mut memo) {
+                found.push(word.clone());
+                break;
+            }
+        }
+    }
+    found
+}
+
+// ---- harness
+
+fn answer(arm: i64, words: Vec[String]) -> Vec[String] {
+    let mut got = if arm == 0 {
+        find_all_concatenated_words_in_a_dict_shortest(words)
+    } else if arm == 1 {
+        find_all_concatenated_words_in_a_dict_trie(words)
+    } else if arm == 2 {
+        find_all_concatenated_words_in_a_dict_count(words)
+    } else {
+        find_all_concatenated_words_in_a_dict_suffix(words)
+    };
+    got.sort();
+    got
+}
+
+// True when some set of cuts (at least one) splits the word into
+// pieces that are all in the list: every one of the 2^(n-1) - 1 sets.
+fn brute(word: String, all: Set[String]) -> bool {
+    let n = word.len();
+    for mask in 1..(1 << (n - 1)) {
+        let mut start = 0;
+        let mut ok = true;
+        for at in 1..n + 1 {
+            if at == n or (mask >> (at - 1)) % 2 == 1 {
+                if not all.contains(word[start..at]) {
+                    ok = false;
+                    break;
+                }
+                start = at;
+            }
+        }
+        if ok {
+            return true;
+        }
+    }
+    false
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_words(seed: mut ref i64, letters: i64, base: i64, joined: i64) -> Vec[String] {
+    let mut seen: Set[String] = Set.new();
+    let mut words: Vec[String] = Vec.new();
+    let mut tries = 0;
+    while words.len() < base and tries < 100 {
+        tries += 1;
+        let mut w = String.new();
+        let size = 1 + next_random(seed) % 4;
+        for _ in 0..size {
+            w.push(char.try_from(97 + (next_random(seed) % letters) as u32).unwrap());
+        }
+        if not seen.contains(w) {
+            seen.insert(w.clone());
+            words.push(w);
+        }
+    }
+    for _ in 0..joined {
+        let parts = 2 + next_random(seed) % 3;
+        let mut w = String.new();
+        for _ in 0..parts {
+            w.push_str(words[next_random(seed) % words.len()].as_str());
+        }
+        if next_random(seed) % 4 == 0 {
+            w.push(char.try_from(97 + (next_random(seed) % letters) as u32).unwrap());
+        }
+        if w.len() <= 30 and not seen.contains(w) {
+            seen.insert(w.clone());
+            words.push(w);
+        }
+    }
+    words
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4720;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let letters = 1 + next_random(mut seed) % 3;
+        let base = 2 + next_random(mut seed) % 7;
+        let joined = next_random(mut seed) % 16;
+        let words = random_words(mut seed, letters, base, joined);
+        let mut all: Set[String] = Set.new();
+        for w in words {
+            all.insert(w.clone());
+        }
+        // P1: the words of up to 8 letters, against every set of cuts.
+        let mut short_in: Set[String] = Set.new();
+        let mut short_out: Set[String] = Set.new();
+        for w in words {
+            if w.len() <= 8 {
+                if brute(w, all) {
+                    short_in.insert(w.clone());
+                } else {
+                    short_out.insert(w.clone());
+                }
+            }
+        }
+        // P2: the same words in another order.
+        let mut shuffled = words.clone();
+        for i in (1..shuffled.len()).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            shuffled.swap(i, j);
+        }
+        // P3: two of the words put together, when that is a new word of
+        // up to 30 letters.
+        let pair = f"{words[next_random(mut seed) % words.len()]}{words[next_random(mut seed) % words.len()]}";
+        let pair_new = pair.len() <= 30 and not all.contains(pair);
+        let mut with_pair = words.clone();
+        if pair_new {
+            with_pair.push(pair.clone());
+        }
+        // P4: every word reversed.
+        // Each reversed word is bound with its type before the push:
+        // `reversed.push(w.chars().rev().collect())` is refused by
+        // check (B-2026-10-12-33).
+        let mut reversed: Vec[String] = Vec.new();
+        for w in words {
+            let r: String = w.chars().rev().collect();
+            reversed.push(r);
+        }
+        let pick = next_random(mut seed);
+        for arm in 0..4 {
+            checks += 5;
+            let got = answer(arm, words);
+            let mut p1 = true;
+            for w in got {
+                if short_out.contains(w) {
+                    p1 = false;
+                }
+            }
+            let mut short_found = 0;
+            for w in got {
+                if short_in.contains(w) {
+                    short_found += 1;
+                }
+            }
+            report(1, arm, case, p1 and short_found == short_in.len(), mut failures);
+            report(2, arm, case, answer(arm, shuffled) == got, mut failures);
+            let mut expected = got.clone();
+            if pair_new {
+                expected.push(pair.clone());
+                expected.sort();
+            }
+            report(3, arm, case, answer(arm, with_pair) == expected, mut failures);
+            let mut back: Vec[String] = Vec.new();
+            for w in got {
+                let r: String = w.chars().rev().collect();
+                back.push(r);
+            }
+            back.sort();
+            report(4, arm, case, answer(arm, reversed) == back, mut failures);
+            // P5: one concatenated word taken out; the rest keep their
+            // answers.
+            if got.is_empty() {
+                report(5, arm, case, true, mut failures);
+            } else {
+                let gone = got[pick % got.len()].clone();
+                let mut fewer: Vec[String] = Vec.new();
+                for w in words {
+                    if w != gone {
+                        fewer.push(w.clone());
+                    }
+                }
+                let mut rest: Vec[String] = Vec.new();
+                for w in got {
+                    if w != gone {
+                        rest.push(w.clone());
+                    }
+                }
+                report(5, arm, case, answer(arm, fewer) == rest, mut failures);
+            }
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

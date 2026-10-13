@@ -1,0 +1,33 @@
+
+#[derive(Serialize, Deserialize)]
+struct Pair[A, B] {
+    first: A,
+    second: B,
+    all: Vec[A],
+}
+
+#[derive(Serialize, Deserialize)]
+enum Tree[T] { Leaf, Node(T, Vec[T]), Named { v: T } }
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum Either[L, R] { Left(L), Right(R) }
+
+fn main() {
+    let p = Pair { first: 1, second: "two".to_string(), all: vec![3, 4] };
+    let j = Json.serialize(p);
+    println(j);
+    let back: Result[Pair[i64, String], DeserializeError] = Json.deserialize(j);
+    match back {
+        Ok(b) => println(f"{b.first} {b.second} {b.all.len()}"),
+        Err(e) => println(e.message),
+    }
+    let ts: Vec[Tree[i64]] = vec![Tree.Leaf, Tree.Node(1, vec![2]), Tree.Named { v: 5 }];
+    let jt = Json.serialize(ts);
+    let ts2: Result[Vec[Tree[i64]], DeserializeError] = Json.deserialize(jt);
+    println(f"{jt} {ts2.unwrap().len()}");
+    let es: Vec[Either[i64, String]] = vec![Either.Left(1), Either.Right("r".to_string())];
+    let je = Json.serialize(es);
+    let es2: Result[Vec[Either[i64, String]], DeserializeError] = Json.deserialize(je);
+    println(f"{je} {es2.unwrap().len()}");
+}

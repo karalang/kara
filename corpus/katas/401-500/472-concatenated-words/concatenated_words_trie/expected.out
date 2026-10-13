@@ -1,0 +1,8 @@
+8 words -> 3: catsdogcats dogcatsdog ratcatdogcat
+3 words -> 1: catdog
+4 words -> 3: aa aaa aaaa
+7 words -> 4: ab aba abab ba
+1 words -> 0:
+5 words -> 1: xyz
+6 words -> 1: abcd
+300 random lists, 4675 words: 3655 concatenated, checksum 584251900

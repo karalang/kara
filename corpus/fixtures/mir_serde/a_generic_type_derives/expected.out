@@ -1,0 +1,4 @@
+{"first":1,"second":"two","all":[3,4]}
+1 two 2
+["Leaf",{"Node":[1,[2]]},{"Named":{"v":5}}] 3
+[1,"r"] 2

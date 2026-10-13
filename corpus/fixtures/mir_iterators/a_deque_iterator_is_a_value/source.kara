@@ -1,0 +1,11 @@
+
+fn main() {
+    let mut d: VecDeque[i64] = VecDeque.new();
+    d.push_back(9);
+    d.push_front(1);
+    d.push_back(4);
+    let Some(q) = d.iter().next() else { return; };
+    let t: i64 = d.iter().sum();
+    let r: Vec[i64] = d.iter().rev().cloned().collect();
+    println(f"{q} {t} {r[0]} {r.len()}");
+}
