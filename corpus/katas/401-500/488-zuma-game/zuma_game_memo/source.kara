@@ -1,0 +1,162 @@
+// LeetCode #488: Zuma Game -- depth first, every state remembered.
+//
+// fewest(board, hand) is the fewest balls that clear the board, or a
+// sentinel larger than any hand when none do; each state is worked out
+// once and kept in a Map. The useful insertions are the ★ arm's. Only
+// the run around the new ball can reach three, so removal starts there
+// and widens: when a run goes, the balls either side meet, and go too
+// if they make three together.
+
+fn collapse(b: Vec[char], at: i64) -> Vec[char] {
+    let mut left = at;
+    let mut right = at;
+    let colour = b[at];
+    while left > 0 and b[left - 1] == colour {
+        left -= 1;
+    }
+    while right + 1 < b.len() and b[right + 1] == colour {
+        right += 1;
+    }
+    if right - left + 1 < 3 {
+        return b.clone();
+    }
+    // b[left..=right] goes; see whether the balls either side follow.
+    loop {
+        if left == 0 or right + 1 == b.len() or b[left - 1] != b[right + 1] {
+            break;
+        }
+        let colour = b[left - 1];
+        let mut l = left - 1;
+        let mut r = right + 1;
+        while l > 0 and b[l - 1] == colour {
+            l -= 1;
+        }
+        while r + 1 < b.len() and b[r + 1] == colour {
+            r += 1;
+        }
+        if (left - l) + (r - right) < 3 {
+            break;
+        }
+        left = l;
+        right = r;
+    }
+    let mut out: Vec[char] = Vec.new();
+    for k in 0..left {
+        out.push(b[k]);
+    }
+    for k in right + 1..b.len() {
+        out.push(b[k]);
+    }
+    out
+}
+
+fn fewest(board: Vec[char], hand: Vec[char], memo: mut ref Map[String, i64]) -> i64 {
+    let never = 100;
+    if board.len() == 0 {
+        return 0;
+    }
+    let mut state = String.new();
+    for k in 0..board.len() {
+        state.push(board[k]);
+    }
+    state.push('|');
+    for k in 0..hand.len() {
+        state.push(hand[k]);
+    }
+    if let Some(known) = memo.get(state) {
+        return known;
+    }
+    let mut best = never;
+    for t in 0..hand.len() {
+        let c = hand[t];
+        if t > 0 and hand[t - 1] == c {
+            continue;
+        }
+        let mut rest = hand.clone();
+        rest.remove(t);
+        for i in 0..board.len() + 1 {
+            let starts_run = i < board.len() and board[i] == c and (i == 0 or board[i - 1] != c);
+            let splits_pair = i > 0 and i < board.len() and board[i - 1] == board[i] and board[i] != c;
+            if not starts_run and not splits_pair {
+                continue;
+            }
+            let mut inserted = board.clone();
+            inserted.insert(i, c);
+            let after = collapse(inserted, i);
+            let more = fewest(after, rest, memo);
+            if more + 1 < best {
+                best = more + 1;
+            }
+        }
+    }
+    memo.insert(state, best);
+    best
+}
+
+fn find_min_step(board: String, hand: String) -> i64 {
+    let mut balls: Vec[char] = hand.chars().collect();
+    balls.sort();
+    let mut memo: Map[String, i64] = Map.new();
+    let steps = fewest(board.chars().collect(), balls, mut memo);
+    if steps >= 100 { -1 } else { steps }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(board: String, hand: String) {
+    println(f"{board} with {hand} -> {find_min_step(board, hand)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("WRRBBW", "RB");
+    show("WWRRBBWW", "WRBRW");
+    show("G", "GGGGG");
+    show("RRWWRRBBRR", "WB");
+    show("RBYYBBRRB", "YRBGB");
+    show("RRYGGYYRRYGGYYRR", "GGBBB");
+    show("RRYRRYYRRYYRRYRR", "YYRYY");
+    show("WWBBWBBWW", "BB");
+    show("R", "Y");
+    // 300 random cases: a board of 1 to 10 balls with no three alike in a
+    // row, from the first 2 to 5 colours, and a hand of 1 to 5 balls.
+    let colours: Vec[char] = vec!['R', 'Y', 'B', 'G', 'W'];
+    let count = 300;
+    let mut seed: i64 = 488;
+    let mut total = 0;
+    let mut cleared = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let palette = 2 + c % 4;
+        let length = 1 + next_random(mut seed) % 10;
+        let mut balls: Vec[char] = Vec.new();
+        while balls.len() < length {
+            let ball = colours[next_random(mut seed) % palette];
+            let n = balls.len();
+            if n >= 2 and balls[n - 1] == ball and balls[n - 2] == ball {
+                continue;
+            }
+            balls.push(ball);
+        }
+        let mut board = String.new();
+        for k in 0..balls.len() {
+            board.push(balls[k]);
+        }
+        let mut hand = String.new();
+        let size = 1 + next_random(mut seed) % 5;
+        for _ in 0..size {
+            hand.push(colours[next_random(mut seed) % palette]);
+        }
+        let steps = find_min_step(board, hand);
+        if steps >= 0 {
+            cleared += 1;
+            total += steps;
+        }
+        checksum = (checksum * 31 + steps + 2 + length) % 1000000007;
+    }
+    println(f"{count} random cases: {cleared} cleared with {total} balls, checksum {checksum}");
+}

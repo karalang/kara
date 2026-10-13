@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/489-robot-room-cleaner/bench/robot_room_cleaner.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:set", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "700403ce4"
+extracted_src = "bfbbb4e0"
+model_rev = "1aa23105"
+model_src = "bfbbb4e0"

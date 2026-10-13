@@ -1,0 +1,7 @@
+LeetCode: 30 cells cleaned, all and only the reachable ones once each: true
+one cell: 1 cells cleaned, all and only the reachable ones once each: true
+a corridor: 7 cells cleaned, all and only the reachable ones once each: true
+a closed-off corner: 4 cells cleaned, all and only the reachable ones once each: true
+a spiral: 17 cells cleaned, all and only the reachable ones once each: true
+an open room: 12 cells cleaned, all and only the reachable ones once each: true
+300 random rooms: 2871 cells cleaned, 300 rooms cleaned right, checksum 282274023

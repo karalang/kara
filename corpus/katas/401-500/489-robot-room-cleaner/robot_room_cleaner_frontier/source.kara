@@ -1,0 +1,294 @@
+// LeetCode #489: Robot Room Cleaner -- frontier exploration.
+//
+// The robot keeps a map of the cells it knows to be open and those it
+// knows to be walls. It walks (over known open cells, by breadth-first
+// search) to the nearest open cell with a neighbour it does not know,
+// probes each such neighbour (face it, try to step: a new open cell is
+// cleaned and stepped back out of, a refusal is a wall), and repeats
+// until no open cell has an unknown neighbour.
+
+fn step_row(facing: i64) -> i64 {
+    match facing {
+        0 => -1,
+        2 => 1,
+        _ => 0,
+    }
+}
+
+fn step_col(facing: i64) -> i64 {
+    match facing {
+        1 => 1,
+        3 => -1,
+        _ => 0,
+    }
+}
+
+fn turn_to(robot: mut ref Robot, facing: mut ref i64, want: i64) {
+    if (*facing + 1) % 4 == want {
+        robot.turn_right();
+    } else if (*facing + 3) % 4 == want {
+        robot.turn_left();
+    } else if *facing != want {
+        robot.turn_right();
+        robot.turn_right();
+    }
+    *facing = want;
+}
+
+// The directions to walk from `from` to the nearest open cell with an
+// unknown neighbour, or None when there is none.
+fn route(from: (i64, i64), open: Set[(i64, i64)], wall: Set[(i64, i64)]) -> Option[Vec[i64]] {
+    let mut came: Map[(i64, i64), i64] = Map.new();
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    came.insert(from, -1);
+    queue.push_back(from);
+    while let Some(cell) = queue.pop_front() {
+        let mut unknown = false;
+        for d in 0..4 {
+            let next = (cell.0 + step_row(d), cell.1 + step_col(d));
+            if not open.contains(next) and not wall.contains(next) {
+                unknown = true;
+            }
+        }
+        if unknown {
+            let mut dirs: Vec[i64] = Vec.new();
+            let mut at = cell;
+            while at != from {
+                let d = came.get(at) ?? 0;
+                dirs.push(d);
+                at = (at.0 - step_row(d), at.1 - step_col(d));
+            }
+            dirs.reverse();
+            return Some(dirs);
+        }
+        for d in 0..4 {
+            let next = (cell.0 + step_row(d), cell.1 + step_col(d));
+            if open.contains(next) and not came.contains_key(next) {
+                came.insert(next, d);
+                queue.push_back(next);
+            }
+        }
+    }
+    None
+}
+
+fn clean_room(robot: mut ref Robot) {
+    let mut open: Set[(i64, i64)] = Set.new();
+    let mut wall: Set[(i64, i64)] = Set.new();
+    let mut at = (0, 0);
+    let mut facing = 0;
+    open.insert(at);
+    robot.clean();
+    while let Some(dirs) = route(at, open, wall) {
+        for d in dirs {
+            turn_to(robot, mut facing, d);
+            robot.forward();
+            at = (at.0 + step_row(d), at.1 + step_col(d));
+        }
+        for d in 0..4 {
+            let next = (at.0 + step_row(d), at.1 + step_col(d));
+            if open.contains(next) or wall.contains(next) {
+                continue;
+            }
+            turn_to(robot, mut facing, d);
+            if robot.forward() {
+                open.insert(next);
+                robot.clean();
+                turn_to(robot, mut facing, (d + 2) % 4);
+                robot.forward();
+            } else {
+                wall.insert(next);
+            }
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// The room as LeetCode hides it: 1 open, 0 a wall; the robot knows only
+// these four calls. A robot that has made more calls than `budget` (far
+// more than any of the arms needs) stops moving, so a search that has
+// lost its way ends instead of running for ever.
+struct Robot {
+    room: Vec[Vec[i64]],
+    row: i64,
+    col: i64,
+    facing: i64,
+    cleaned: Vec[Vec[i64]],
+    calls: i64,
+    budget: i64,
+}
+
+impl Robot {
+    fn forward(mut ref self) -> bool {
+        self.calls += 1;
+        if self.calls > self.budget {
+            return false;
+        }
+        let (dr, dc) = match self.facing {
+            0 => (-1, 0),
+            1 => (0, 1),
+            2 => (1, 0),
+            _ => (0, -1),
+        };
+        let r = self.row + dr;
+        let c = self.col + dc;
+        if r < 0 or r >= self.room.len() or c < 0 or c >= self.room[0].len() or self.room[r][c] == 0 {
+            return false;
+        }
+        self.row = r;
+        self.col = c;
+        true
+    }
+
+    fn turn_left(mut ref self) {
+        self.calls += 1;
+        if self.calls <= self.budget {
+            self.facing = (self.facing + 3) % 4;
+        }
+    }
+
+    fn turn_right(mut ref self) {
+        self.calls += 1;
+        if self.calls <= self.budget {
+            self.facing = (self.facing + 1) % 4;
+        }
+    }
+
+    fn clean(mut ref self) {
+        self.calls += 1;
+        if self.calls <= self.budget {
+            self.cleaned[self.row][self.col] += 1;
+        }
+    }
+}
+
+fn make_robot(room: Vec[Vec[i64]], row: i64, col: i64, facing: i64) -> Robot {
+    let mut cleaned: Vec[Vec[i64]] = Vec.new();
+    for r in 0..room.len() {
+        let mut line: Vec[i64] = Vec.new();
+        for _ in 0..room[r].len() {
+            line.push(0);
+        }
+        cleaned.push(line);
+    }
+    let cells = room.len() * room[0].len();
+    Robot { room: room.clone(), row: row, col: col, facing: facing, cleaned: cleaned, calls: 0, budget: 16 * cells * cells + 1000 }
+}
+
+// The open cells the start can reach, by a flood fill the robot never
+// sees: 1 reachable, 0 not.
+fn reachable(room: Vec[Vec[i64]], row: i64, col: i64) -> Vec[Vec[i64]] {
+    let mut seen: Vec[Vec[i64]] = Vec.new();
+    for r in 0..room.len() {
+        let mut line: Vec[i64] = Vec.new();
+        for _ in 0..room[r].len() {
+            line.push(0);
+        }
+        seen.push(line);
+    }
+    let mut stack: Vec[(i64, i64)] = vec![(row, col)];
+    seen[row][col] = 1;
+    while stack.len() > 0 {
+        let (r, c) = stack.pop().unwrap();
+        for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < room.len() and nc >= 0 and nc < room[0].len() and room[nr][nc] == 1 and seen[nr][nc] == 0 {
+                seen[nr][nc] = 1;
+                stack.push((nr, nc));
+            }
+        }
+    }
+    seen
+}
+
+// Cleans the room and returns (cells cleaned, true when every reachable
+// cell was cleaned exactly once and nothing else was).
+fn run(room: Vec[Vec[i64]], row: i64, col: i64) -> (i64, bool) {
+    let mut robot = make_robot(room, row, col, 0);
+    clean_room(mut robot);
+    let want = reachable(room, row, col);
+    let mut count = 0;
+    let mut right = true;
+    for r in 0..room.len() {
+        for c in 0..room[r].len() {
+            if robot.cleaned[r][c] > 0 {
+                count += 1;
+            }
+            if robot.cleaned[r][c] != want[r][c] {
+                right = false;
+            }
+        }
+    }
+    (count, right)
+}
+
+fn show(name: String, room: Vec[Vec[i64]], row: i64, col: i64) {
+    let (count, right) = run(room, row, col);
+    println(f"{name}: {count} cells cleaned, all and only the reachable ones once each: {right}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("LeetCode", vec![
+        vec![1, 1, 1, 1, 1, 0, 1, 1],
+        vec![1, 1, 1, 1, 1, 0, 1, 1],
+        vec![1, 0, 1, 1, 1, 1, 1, 1],
+        vec![0, 0, 0, 1, 0, 0, 0, 0],
+        vec![1, 1, 1, 1, 1, 1, 1, 1],
+    ], 1, 3);
+    show("one cell", vec![vec![1]], 0, 0);
+    show("a corridor", vec![vec![1, 1, 1, 1, 1, 1, 1]], 0, 3);
+    show("a closed-off corner", vec![
+        vec![1, 1, 0, 1],
+        vec![1, 1, 0, 1],
+        vec![0, 0, 1, 1],
+    ], 0, 0);
+    show("a spiral", vec![
+        vec![1, 1, 1, 1, 1],
+        vec![0, 0, 0, 0, 1],
+        vec![1, 1, 1, 0, 1],
+        vec![1, 0, 0, 0, 1],
+        vec![1, 1, 1, 1, 1],
+    ], 2, 2);
+    show("an open room", vec![
+        vec![1, 1, 1, 1],
+        vec![1, 1, 1, 1],
+        vec![1, 1, 1, 1],
+    ], 2, 0);
+    // 300 random rooms of 1 to 8 by 1 to 8 cells, a wall in each cell with
+    // odds of 1 in 5, 1 in 3 or 1 in 2 in turn, the start on an open cell.
+    let count = 300;
+    let mut seed: i64 = 489;
+    let mut total = 0;
+    let mut right_rooms = 0;
+    let mut checksum: i64 = 0;
+    for k in 0..count {
+        let odds = if k % 3 == 0 { 20 } else if k % 3 == 1 { 33 } else { 50 };
+        let rows = 1 + next_random(mut seed) % 8;
+        let cols = 1 + next_random(mut seed) % 8;
+        let mut room: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut line: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                line.push(if next_random(mut seed) % 100 < odds { 0 } else { 1 });
+            }
+            room.push(line);
+        }
+        let row = next_random(mut seed) % rows;
+        let col = next_random(mut seed) % cols;
+        room[row][col] = 1;
+        let (cleaned, right) = run(room, row, col);
+        total += cleaned;
+        if right {
+            right_rooms += 1;
+        }
+        checksum = (checksum * 31 + cleaned * 7 + rows * cols) % 1000000007;
+    }
+    println(f"{count} random rooms: {total} cells cleaned, {right_rooms} rooms cleaned right, checksum {checksum}");
+}

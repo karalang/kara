@@ -1,0 +1,155 @@
+// Benchmark for #488: the ★ arm (breadth first) on a large workload.
+//
+// LeetCode #488: Zuma Game -- breadth first over boards and hands.
+//
+// A state is the board and the balls left in hand, kept sorted so equal
+// hands meet. Each level of the search inserts one ball, so the first
+// empty board found is reached with the fewest. Only two kinds of
+// insertion can help: a ball at the start of a run of its own colour, or
+// a ball splitting two equal neighbours of another colour (which can
+// set up a chain). After each insertion every run of three or more is
+// removed, again and again until none is left.
+
+fn shrink(board: Vec[char]) -> Vec[char] {
+    let mut b = board.clone();
+    loop {
+        let mut kept: Vec[char] = Vec.new();
+        let mut removed = false;
+        let mut i = 0;
+        while i < b.len() {
+            let mut j = i;
+            while j < b.len() and b[j] == b[i] {
+                j += 1;
+            }
+            if j - i >= 3 {
+                removed = true;
+            } else {
+                for k in i..j {
+                    kept.push(b[k]);
+                }
+            }
+            i = j;
+        }
+        b = kept;
+        if not removed {
+            return b;
+        }
+    }
+}
+
+fn key(board: Vec[char], hand: Vec[char]) -> String {
+    let mut s = String.new();
+    for k in 0..board.len() {
+        s.push(board[k]);
+    }
+    s.push('|');
+    for k in 0..hand.len() {
+        s.push(hand[k]);
+    }
+    s
+}
+
+fn find_min_step(board: String, hand: String) -> i64 {
+    let mut first: Vec[char] = hand.chars().collect();
+    first.sort();
+    let mut boards: Vec[Vec[char]] = vec![board.chars().collect()];
+    let mut hands: Vec[Vec[char]] = vec![first];
+    let mut seen: Set[String] = Set.new();
+    let mut steps = 0;
+    while boards.len() > 0 {
+        steps += 1;
+        let mut next_boards: Vec[Vec[char]] = Vec.new();
+        let mut next_hands: Vec[Vec[char]] = Vec.new();
+        for s in 0..boards.len() {
+            let b = boards[s].clone();
+            let h = hands[s].clone();
+            for t in 0..h.len() {
+                let c = h[t];
+                if t > 0 and h[t - 1] == c {
+                    continue;
+                }
+                for i in 0..b.len() + 1 {
+                    let starts_run = i < b.len() and b[i] == c and (i == 0 or b[i - 1] != c);
+                    let splits_pair = i > 0 and i < b.len() and b[i - 1] == b[i] and b[i] != c;
+                    if not starts_run and not splits_pair {
+                        continue;
+                    }
+                    let mut inserted: Vec[char] = Vec.new();
+                    for k in 0..i {
+                        inserted.push(b[k]);
+                    }
+                    inserted.push(c);
+                    for k in i..b.len() {
+                        inserted.push(b[k]);
+                    }
+                    let after = shrink(inserted);
+                    if after.len() == 0 {
+                        return steps;
+                    }
+                    let mut rest = h.clone();
+                    rest.remove(t);
+                    let state = key(after, rest);
+                    if not seen.contains(state) {
+                        seen.insert(state);
+                        next_boards.push(after);
+                        next_hands.push(rest);
+                    }
+                }
+            }
+        }
+        boards = next_boards;
+        hands = next_hands;
+    }
+    -1
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 60 cases at the problem's limits: a board of 16 balls with no three
+    // alike in a row and a hand of 5, from the first 2 to 4 colours, built
+    // once, then each solved once.
+    let colours: Vec[char] = vec!['R', 'Y', 'B', 'G', 'W'];
+    let mut boards: Vec[String] = Vec.new();
+    let mut hands: Vec[String] = Vec.new();
+    let mut seed: i64 = 488;
+    for c in 0..60 {
+        let palette = 2 + c % 3;
+        let mut balls: Vec[char] = Vec.new();
+        while balls.len() < 16 {
+            let ball = colours[next_random(mut seed) % palette];
+            let n = balls.len();
+            if n >= 2 and balls[n - 1] == ball and balls[n - 2] == ball {
+                continue;
+            }
+            balls.push(ball);
+        }
+        let mut board = String.new();
+        for k in 0..balls.len() {
+            board.push(balls[k]);
+        }
+        let mut hand = String.new();
+        for _ in 0..5 {
+            hand.push(colours[next_random(mut seed) % palette]);
+        }
+        boards.push(board);
+        hands.push(hand);
+    }
+    let mut cleared = 0;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for k in 0..boards.len() {
+        let steps = find_min_step(boards[k], hands[k]);
+        if steps >= 0 {
+            cleared += 1;
+            total += steps;
+        }
+        checksum = (checksum * 31 + steps + 2) % 1000000007;
+    }
+    println(f"60 cases of 16 balls and a hand of 5: {cleared} cleared with {total} balls, checksum {checksum}");
+}

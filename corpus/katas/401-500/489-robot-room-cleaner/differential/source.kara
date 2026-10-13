@@ -1,0 +1,547 @@
+// Differential test for LeetCode #489: Robot Room Cleaner.
+//
+// Copies of the four arms, on 1,500 random rooms of 1 to 7 by 1 to 7
+// cells (a wall in each cell with odds of 1 in 5, 1 in 3 or 1 in 2 in
+// turn), the start on an open cell. Properties:
+//   P1  every cell reachable from the start is cleaned exactly once, and
+//       no other cell
+//   P2  starting facing another way cleans the same cells
+//   P3  the room turned a quarter cleans as many cells
+//   P4  the room mirrored cleans as many cells
+//   P5  a wall next to the reachable cells opened never means fewer
+//       cells cleaned
+
+// ---- star: robot_room_cleaner.kara
+
+fn step_row_star(facing: i64) -> i64 {
+    match facing {
+        0 => -1,
+        2 => 1,
+        _ => 0,
+    }
+}
+
+fn step_col_star(facing: i64) -> i64 {
+    match facing {
+        1 => 1,
+        3 => -1,
+        _ => 0,
+    }
+}
+
+fn explore_star(robot: mut ref Robot, row: i64, col: i64, facing: i64, visited: mut ref Set[(i64, i64)]) {
+    visited.insert((row, col));
+    robot.clean();
+    let mut d = facing;
+    for _ in 0..4 {
+        let next = (row + step_row_star(d), col + step_col_star(d));
+        if not visited.contains(next) and robot.forward() {
+            explore_star(robot, next.0, next.1, d, visited);
+            robot.turn_right();
+            robot.turn_right();
+            robot.forward();
+            robot.turn_right();
+            robot.turn_right();
+        }
+        robot.turn_right();
+        d = (d + 1) % 4;
+    }
+}
+
+fn clean_room_star(robot: mut ref Robot) {
+    let mut visited: Set[(i64, i64)] = Set.new();
+    explore_star(robot, 0, 0, 0, mut visited);
+}
+
+// ---- stack: robot_room_cleaner_stack.kara
+
+fn step_row_stack(facing: i64) -> i64 {
+    match facing {
+        0 => -1,
+        2 => 1,
+        _ => 0,
+    }
+}
+
+fn step_col_stack(facing: i64) -> i64 {
+    match facing {
+        1 => 1,
+        3 => -1,
+        _ => 0,
+    }
+}
+
+fn clean_room_stack(robot: mut ref Robot) {
+    let mut visited: Set[(i64, i64)] = Set.new();
+    let mut cells: Vec[(i64, i64)] = vec![(0, 0)];
+    let mut looked: Vec[i64] = vec![0];
+    let mut facing = 0;
+    visited.insert((0, 0));
+    robot.clean();
+    while cells.len() > 0 {
+        let top = cells.len() - 1;
+        if looked[top] == 4 {
+            cells.pop();
+            looked.pop();
+            if cells.len() > 0 {
+                robot.turn_right();
+                robot.turn_right();
+                robot.forward();
+                robot.turn_right();
+                robot.turn_right();
+            }
+            continue;
+        }
+        let here = cells[top];
+        let next = (here.0 + step_row_stack(facing), here.1 + step_col_stack(facing));
+        if not visited.contains(next) and robot.forward() {
+            visited.insert(next);
+            robot.clean();
+            cells.push(next);
+            looked.push(0);
+            continue;
+        }
+        robot.turn_right();
+        facing = (facing + 1) % 4;
+        looked[top] += 1;
+    }
+}
+
+// ---- frontier: robot_room_cleaner_frontier.kara
+
+fn step_row_frontier(facing: i64) -> i64 {
+    match facing {
+        0 => -1,
+        2 => 1,
+        _ => 0,
+    }
+}
+
+fn step_col_frontier(facing: i64) -> i64 {
+    match facing {
+        1 => 1,
+        3 => -1,
+        _ => 0,
+    }
+}
+
+fn turn_to_frontier(robot: mut ref Robot, facing: mut ref i64, want: i64) {
+    if (*facing + 1) % 4 == want {
+        robot.turn_right();
+    } else if (*facing + 3) % 4 == want {
+        robot.turn_left();
+    } else if *facing != want {
+        robot.turn_right();
+        robot.turn_right();
+    }
+    *facing = want;
+}
+
+fn route_frontier(from: (i64, i64), open: Set[(i64, i64)], wall: Set[(i64, i64)]) -> Option[Vec[i64]] {
+    let mut came: Map[(i64, i64), i64] = Map.new();
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    came.insert(from, -1);
+    queue.push_back(from);
+    while let Some(cell) = queue.pop_front() {
+        let mut unknown = false;
+        for d in 0..4 {
+            let next = (cell.0 + step_row_frontier(d), cell.1 + step_col_frontier(d));
+            if not open.contains(next) and not wall.contains(next) {
+                unknown = true;
+            }
+        }
+        if unknown {
+            let mut dirs: Vec[i64] = Vec.new();
+            let mut at = cell;
+            while at != from {
+                let d = came.get(at) ?? 0;
+                dirs.push(d);
+                at = (at.0 - step_row_frontier(d), at.1 - step_col_frontier(d));
+            }
+            dirs.reverse();
+            return Some(dirs);
+        }
+        for d in 0..4 {
+            let next = (cell.0 + step_row_frontier(d), cell.1 + step_col_frontier(d));
+            if open.contains(next) and not came.contains_key(next) {
+                came.insert(next, d);
+                queue.push_back(next);
+            }
+        }
+    }
+    None
+}
+
+fn clean_room_frontier(robot: mut ref Robot) {
+    let mut open: Set[(i64, i64)] = Set.new();
+    let mut wall: Set[(i64, i64)] = Set.new();
+    let mut at = (0, 0);
+    let mut facing = 0;
+    open.insert(at);
+    robot.clean();
+    while let Some(dirs) = route_frontier(at, open, wall) {
+        for d in dirs {
+            turn_to_frontier(robot, mut facing, d);
+            robot.forward();
+            at = (at.0 + step_row_frontier(d), at.1 + step_col_frontier(d));
+        }
+        for d in 0..4 {
+            let next = (at.0 + step_row_frontier(d), at.1 + step_col_frontier(d));
+            if open.contains(next) or wall.contains(next) {
+                continue;
+            }
+            turn_to_frontier(robot, mut facing, d);
+            if robot.forward() {
+                open.insert(next);
+                robot.clean();
+                turn_to_frontier(robot, mut facing, (d + 2) % 4);
+                robot.forward();
+            } else {
+                wall.insert(next);
+            }
+        }
+    }
+}
+
+// ---- survey: robot_room_cleaner_survey.kara
+
+fn step_row_survey(facing: i64) -> i64 {
+    match facing {
+        0 => -1,
+        2 => 1,
+        _ => 0,
+    }
+}
+
+fn step_col_survey(facing: i64) -> i64 {
+    match facing {
+        1 => 1,
+        3 => -1,
+        _ => 0,
+    }
+}
+
+fn survey_survey(robot: mut ref Robot, row: i64, col: i64, facing: i64, open: mut ref Set[(i64, i64)]) {
+    open.insert((row, col));
+    let mut d = facing;
+    for _ in 0..4 {
+        let next = (row + step_row_survey(d), col + step_col_survey(d));
+        if not open.contains(next) and robot.forward() {
+            survey_survey(robot, next.0, next.1, d, open);
+            robot.turn_left();
+            robot.turn_left();
+            robot.forward();
+            robot.turn_left();
+            robot.turn_left();
+        }
+        robot.turn_left();
+        d = (d + 3) % 4;
+    }
+}
+
+fn path_survey(from: (i64, i64), to: (i64, i64), open: Set[(i64, i64)]) -> Vec[i64] {
+    let mut came: Map[(i64, i64), i64] = Map.new();
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    came.insert(from, -1);
+    queue.push_back(from);
+    while let Some(cell) = queue.pop_front() {
+        if cell == to {
+            break;
+        }
+        for d in 0..4 {
+            let next = (cell.0 + step_row_survey(d), cell.1 + step_col_survey(d));
+            if open.contains(next) and not came.contains_key(next) {
+                came.insert(next, d);
+                queue.push_back(next);
+            }
+        }
+    }
+    let mut dirs: Vec[i64] = Vec.new();
+    let mut at = to;
+    while at != from {
+        let d = came.get(at) ?? 0;
+        dirs.push(d);
+        at = (at.0 - step_row_survey(d), at.1 - step_col_survey(d));
+    }
+    dirs.reverse();
+    dirs
+}
+
+fn clean_room_survey(robot: mut ref Robot) {
+    let mut open: Set[(i64, i64)] = Set.new();
+    survey_survey(robot, 0, 0, 0, mut open);
+    let mut cells: Vec[(i64, i64)] = Vec.new();
+    for cell in open.iter() {
+        cells.push(*cell);
+    }
+    cells.sort();
+    let mut at = (0, 0);
+    let mut facing = 0;
+    for target in cells {
+        for d in path_survey(at, target, open) {
+            let turns = (d - facing + 4) % 4;
+            for _ in 0..turns {
+                robot.turn_right();
+            }
+            facing = d;
+            robot.forward();
+        }
+        at = target;
+        robot.clean();
+    }
+}
+
+// ---- differential harness ---------------------------------------------------
+
+// The room as LeetCode hides it: 1 open, 0 a wall; the robot knows only
+// these four calls. A robot that has made more calls than `budget` (far
+// more than any of the arms needs) stops moving, so a search that has
+// lost its way ends instead of running for ever.
+struct Robot {
+    room: Vec[Vec[i64]],
+    row: i64,
+    col: i64,
+    facing: i64,
+    cleaned: Vec[Vec[i64]],
+    calls: i64,
+    budget: i64,
+}
+
+impl Robot {
+    fn forward(mut ref self) -> bool {
+        self.calls += 1;
+        if self.calls > self.budget {
+            return false;
+        }
+        let (dr, dc) = match self.facing {
+            0 => (-1, 0),
+            1 => (0, 1),
+            2 => (1, 0),
+            _ => (0, -1),
+        };
+        let r = self.row + dr;
+        let c = self.col + dc;
+        if r < 0 or r >= self.room.len() or c < 0 or c >= self.room[0].len() or self.room[r][c] == 0 {
+            return false;
+        }
+        self.row = r;
+        self.col = c;
+        true
+    }
+
+    fn turn_left(mut ref self) {
+        self.calls += 1;
+        if self.calls <= self.budget {
+            self.facing = (self.facing + 3) % 4;
+        }
+    }
+
+    fn turn_right(mut ref self) {
+        self.calls += 1;
+        if self.calls <= self.budget {
+            self.facing = (self.facing + 1) % 4;
+        }
+    }
+
+    fn clean(mut ref self) {
+        self.calls += 1;
+        if self.calls <= self.budget {
+            self.cleaned[self.row][self.col] += 1;
+        }
+    }
+}
+
+fn make_robot(room: Vec[Vec[i64]], row: i64, col: i64, facing: i64) -> Robot {
+    let mut cleaned: Vec[Vec[i64]] = Vec.new();
+    for r in 0..room.len() {
+        let mut line: Vec[i64] = Vec.new();
+        for _ in 0..room[r].len() {
+            line.push(0);
+        }
+        cleaned.push(line);
+    }
+    let cells = room.len() * room[0].len();
+    Robot { room: room.clone(), row: row, col: col, facing: facing, cleaned: cleaned, calls: 0, budget: 16 * cells * cells + 1000 }
+}
+
+// The open cells the start can reach, by a flood fill the robot never
+// sees: 1 reachable, 0 not.
+fn reachable(room: Vec[Vec[i64]], row: i64, col: i64) -> Vec[Vec[i64]] {
+    let mut seen: Vec[Vec[i64]] = Vec.new();
+    for r in 0..room.len() {
+        let mut line: Vec[i64] = Vec.new();
+        for _ in 0..room[r].len() {
+            line.push(0);
+        }
+        seen.push(line);
+    }
+    let mut stack: Vec[(i64, i64)] = vec![(row, col)];
+    seen[row][col] = 1;
+    while stack.len() > 0 {
+        let (r, c) = stack.pop().unwrap();
+        for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let nr = r + dr;
+            let nc = c + dc;
+            if nr >= 0 and nr < room.len() and nc >= 0 and nc < room[0].len() and room[nr][nc] == 1 and seen[nr][nc] == 0 {
+                seen[nr][nc] = 1;
+                stack.push((nr, nc));
+            }
+        }
+    }
+    seen
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn clean_with(which: i64, robot: mut ref Robot) {
+    match which {
+        0 => clean_room_star(robot),
+        1 => clean_room_stack(robot),
+        2 => clean_room_frontier(robot),
+        _ => clean_room_survey(robot),
+    }
+}
+
+// The cleaning counts left in the room after arm `which` runs from (row,
+// col), first facing `facing`.
+fn cleaned_by(which: i64, room: Vec[Vec[i64]], row: i64, col: i64, facing: i64) -> Vec[Vec[i64]] {
+    let mut robot = make_robot(room, row, col, facing);
+    clean_with(which, mut robot);
+    robot.cleaned.clone()
+}
+
+fn total(grid: Vec[Vec[i64]]) -> i64 {
+    let mut sum = 0;
+    for r in 0..grid.len() {
+        for c in 0..grid[r].len() {
+            sum += grid[r][c];
+        }
+    }
+    sum
+}
+
+fn main() {
+    let names = vec!["star", "stack", "frontier", "survey"];
+    let cases = 1500;
+    let mut seed: i64 = 4890;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for k in 0..cases {
+        // a room of 1 to 7 by 1 to 7 cells, a wall in each cell with odds
+        // of 1 in 5, 1 in 3 or 1 in 2 in turn, the start on an open cell.
+        let odds = if k % 3 == 0 { 20 } else if k % 3 == 1 { 33 } else { 50 };
+        let rows = 1 + next_random(mut seed) % 7;
+        let cols = 1 + next_random(mut seed) % 7;
+        let mut room: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut line: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                line.push(if next_random(mut seed) % 100 < odds { 0 } else { 1 });
+            }
+            room.push(line);
+        }
+        let row = next_random(mut seed) % rows;
+        let col = next_random(mut seed) % cols;
+        room[row][col] = 1;
+        let facing = 1 + next_random(mut seed) % 3;
+        let want = reachable(room, row, col);
+        // the room turned a quarter clockwise: (r, c) goes to (c, rows - 1 - r)
+        let mut turned: Vec[Vec[i64]] = Vec.new();
+        for c in 0..cols {
+            let mut line: Vec[i64] = Vec.new();
+            for r in 0..rows {
+                line.push(room[rows - 1 - r][c]);
+            }
+            turned.push(line);
+        }
+        // the room mirrored left to right
+        let mut mirrored: Vec[Vec[i64]] = Vec.new();
+        for r in 0..rows {
+            let mut line = room[r].clone();
+            line.reverse();
+            mirrored.push(line);
+        }
+        // one wall next to the reachable cells opened, when there is one
+        let mut opened = room.clone();
+        let mut walls: Vec[(i64, i64)] = Vec.new();
+        for r in 0..rows {
+            for c in 0..cols {
+                if room[r][c] == 0 {
+                    let mut next_to = false;
+                    for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                        let nr = r + dr;
+                        let nc = c + dc;
+                        if nr >= 0 and nr < rows and nc >= 0 and nc < cols and want[nr][nc] == 1 {
+                            next_to = true;
+                        }
+                    }
+                    if next_to {
+                        walls.push((r, c));
+                    }
+                }
+            }
+        }
+        if walls.len() > 0 {
+            let (r, c) = walls[next_random(mut seed) % walls.len()];
+            opened[r][c] = 1;
+        }
+        for which in 0..4 {
+            let got = cleaned_by(which, room, row, col, 0);
+            let count = total(got);
+            // P1: every reachable cell cleaned once, nothing else.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: room {room} from ({row}, {col}) cleaned {got}");
+                }
+            }
+            // P2: starting facing another way cleans the same cells.
+            checks += 1;
+            if cleaned_by(which, room, row, col, facing) != got {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: room {room} from ({row}, {col}) facing {facing}");
+                }
+            }
+            // P3: the room turned a quarter cleans as many cells.
+            checks += 1;
+            if total(cleaned_by(which, turned, col, rows - 1 - row, 0)) != count {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: room {room} from ({row}, {col}) turned");
+                }
+            }
+            // P4: the room mirrored cleans as many cells.
+            checks += 1;
+            if total(cleaned_by(which, mirrored, row, cols - 1 - col, 0)) != count {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: room {room} from ({row}, {col}) mirrored");
+                }
+            }
+            // P5: a wall next to the reachable cells opened never means
+            // fewer cells cleaned.
+            checks += 1;
+            if total(cleaned_by(which, opened, row, col, 0)) < count {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: room {opened} from ({row}, {col})");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

@@ -1,0 +1,10 @@
+WRRBBW with RB -> -1
+WWRRBBWW with WRBRW -> 2
+G with GGGGG -> 2
+RRWWRRBBRR with WB -> 2
+RBYYBBRRB with YRBGB -> 3
+RRYGGYYRRYGGYYRR with GGBBB -> 5
+RRYRRYYRRYYRRYRR with YYRYY -> 2
+WWBBWBBWW with BB -> -1
+R with Y -> -1
+300 random cases: 50 cleared with 116 balls, checksum 343344379

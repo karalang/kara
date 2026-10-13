@@ -1,0 +1,597 @@
+// Differential test for LeetCode #488: Zuma Game.
+//
+// Copies of the four arms, on 1,000 random cases: a board of 1 to 7
+// balls with no three alike in a row and a hand of 1 to 3, from the first
+// 2 to 5 colours; one case in ten is 10 balls in runs of one or two and
+// a hand of 3, from 2 colours. Properties:
+//   P1  the answer is the fewest balls, every ball tried at every
+//       position with no pruning
+//   P2  the board reversed gives the same answer
+//   P3  the colours renamed give the same answer
+//   P4  one more ball in hand never makes the answer worse
+//   P5  the hand in another order gives the same answer, and it is -1 or
+//       from 1 to the hand's size
+
+// ---- star: zuma_game.kara
+
+fn shrink_star(board: Vec[char]) -> Vec[char] {
+    let mut b = board.clone();
+    loop {
+        let mut kept: Vec[char] = Vec.new();
+        let mut removed = false;
+        let mut i = 0;
+        while i < b.len() {
+            let mut j = i;
+            while j < b.len() and b[j] == b[i] {
+                j += 1;
+            }
+            if j - i >= 3 {
+                removed = true;
+            } else {
+                for k in i..j {
+                    kept.push(b[k]);
+                }
+            }
+            i = j;
+        }
+        b = kept;
+        if not removed {
+            return b;
+        }
+    }
+}
+
+fn key_star(board: Vec[char], hand: Vec[char]) -> String {
+    let mut s = String.new();
+    for k in 0..board.len() {
+        s.push(board[k]);
+    }
+    s.push('|');
+    for k in 0..hand.len() {
+        s.push(hand[k]);
+    }
+    s
+}
+
+fn find_min_step_star(board: String, hand: String) -> i64 {
+    let mut first: Vec[char] = hand.chars().collect();
+    first.sort();
+    let mut boards: Vec[Vec[char]] = vec![board.chars().collect()];
+    let mut hands: Vec[Vec[char]] = vec![first];
+    let mut seen: Set[String] = Set.new();
+    let mut steps = 0;
+    while boards.len() > 0 {
+        steps += 1;
+        let mut next_boards: Vec[Vec[char]] = Vec.new();
+        let mut next_hands: Vec[Vec[char]] = Vec.new();
+        for s in 0..boards.len() {
+            let b = boards[s].clone();
+            let h = hands[s].clone();
+            for t in 0..h.len() {
+                let c = h[t];
+                if t > 0 and h[t - 1] == c {
+                    continue;
+                }
+                for i in 0..b.len() + 1 {
+                    let starts_run = i < b.len() and b[i] == c and (i == 0 or b[i - 1] != c);
+                    let splits_pair = i > 0 and i < b.len() and b[i - 1] == b[i] and b[i] != c;
+                    if not starts_run and not splits_pair {
+                        continue;
+                    }
+                    let mut inserted: Vec[char] = Vec.new();
+                    for k in 0..i {
+                        inserted.push(b[k]);
+                    }
+                    inserted.push(c);
+                    for k in i..b.len() {
+                        inserted.push(b[k]);
+                    }
+                    let after = shrink_star(inserted);
+                    if after.len() == 0 {
+                        return steps;
+                    }
+                    let mut rest = h.clone();
+                    rest.remove(t);
+                    let state = key_star(after, rest);
+                    if not seen.contains(state) {
+                        seen.insert(state);
+                        next_boards.push(after);
+                        next_hands.push(rest);
+                    }
+                }
+            }
+        }
+        boards = next_boards;
+        hands = next_hands;
+    }
+    -1
+}
+
+// ---- memo: zuma_game_memo.kara
+
+fn collapse_memo(b: Vec[char], at: i64) -> Vec[char] {
+    let mut left = at;
+    let mut right = at;
+    let colour = b[at];
+    while left > 0 and b[left - 1] == colour {
+        left -= 1;
+    }
+    while right + 1 < b.len() and b[right + 1] == colour {
+        right += 1;
+    }
+    if right - left + 1 < 3 {
+        return b.clone();
+    }
+    // b[left..=right] goes; see whether the balls either side follow.
+    loop {
+        if left == 0 or right + 1 == b.len() or b[left - 1] != b[right + 1] {
+            break;
+        }
+        let colour = b[left - 1];
+        let mut l = left - 1;
+        let mut r = right + 1;
+        while l > 0 and b[l - 1] == colour {
+            l -= 1;
+        }
+        while r + 1 < b.len() and b[r + 1] == colour {
+            r += 1;
+        }
+        if (left - l) + (r - right) < 3 {
+            break;
+        }
+        left = l;
+        right = r;
+    }
+    let mut out: Vec[char] = Vec.new();
+    for k in 0..left {
+        out.push(b[k]);
+    }
+    for k in right + 1..b.len() {
+        out.push(b[k]);
+    }
+    out
+}
+
+fn fewest_memo(board: Vec[char], hand: Vec[char], memo: mut ref Map[String, i64]) -> i64 {
+    let never = 100;
+    if board.len() == 0 {
+        return 0;
+    }
+    let mut state = String.new();
+    for k in 0..board.len() {
+        state.push(board[k]);
+    }
+    state.push('|');
+    for k in 0..hand.len() {
+        state.push(hand[k]);
+    }
+    if let Some(known) = memo.get(state) {
+        return known;
+    }
+    let mut best = never;
+    for t in 0..hand.len() {
+        let c = hand[t];
+        if t > 0 and hand[t - 1] == c {
+            continue;
+        }
+        let mut rest = hand.clone();
+        rest.remove(t);
+        for i in 0..board.len() + 1 {
+            let starts_run = i < board.len() and board[i] == c and (i == 0 or board[i - 1] != c);
+            let splits_pair = i > 0 and i < board.len() and board[i - 1] == board[i] and board[i] != c;
+            if not starts_run and not splits_pair {
+                continue;
+            }
+            let mut inserted = board.clone();
+            inserted.insert(i, c);
+            let after = collapse_memo(inserted, i);
+            let more = fewest_memo(after, rest, memo);
+            if more + 1 < best {
+                best = more + 1;
+            }
+        }
+    }
+    memo.insert(state, best);
+    best
+}
+
+fn find_min_step_memo(board: String, hand: String) -> i64 {
+    let mut balls: Vec[char] = hand.chars().collect();
+    balls.sort();
+    let mut memo: Map[String, i64] = Map.new();
+    let steps = fewest_memo(board.chars().collect(), balls, mut memo);
+    if steps >= 100 { -1 } else { steps }
+}
+
+// ---- deepening: zuma_game_deepening.kara
+
+fn shrink_deepening(b: Vec[char]) -> Vec[char] {
+    let mut colours: Vec[char] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for k in 0..b.len() {
+        let c = b[k];
+        let mut top = colours.len() - 1;
+        if top >= 0 and colours[top] != c and counts[top] >= 3 {
+            colours.pop();
+            counts.pop();
+            top -= 1;
+        }
+        if top >= 0 and colours[top] == c {
+            counts[top] += 1;
+        } else {
+            colours.push(c);
+            counts.push(1);
+        }
+    }
+    let top = colours.len() - 1;
+    if top >= 0 and counts[top] >= 3 {
+        colours.pop();
+        counts.pop();
+    }
+    let mut out: Vec[char] = Vec.new();
+    for k in 0..colours.len() {
+        for _ in 0..counts[k] {
+            out.push(colours[k]);
+        }
+    }
+    out
+}
+
+fn clears_deepening(board: Vec[char], hand: Vec[char], budget: i64) -> bool {
+    if board.len() == 0 {
+        return true;
+    }
+    if budget == 0 {
+        return false;
+    }
+    for t in 0..hand.len() {
+        let c = hand[t];
+        if t > 0 and hand[t - 1] == c {
+            continue;
+        }
+        let mut rest = hand.clone();
+        rest.remove(t);
+        for i in 0..board.len() + 1 {
+            let starts_run = i < board.len() and board[i] == c and (i == 0 or board[i - 1] != c);
+            let splits_pair = i > 0 and i < board.len() and board[i - 1] == board[i] and board[i] != c;
+            if not starts_run and not splits_pair {
+                continue;
+            }
+            let mut inserted = board.clone();
+            inserted.insert(i, c);
+            if clears_deepening(shrink_deepening(inserted), rest, budget - 1) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn find_min_step_deepening(board: String, hand: String) -> i64 {
+    let start: Vec[char] = board.chars().collect();
+    let mut balls: Vec[char] = hand.chars().collect();
+    balls.sort();
+    for budget in 1..balls.len() + 1 {
+        if clears_deepening(start, balls, budget) {
+            return budget;
+        }
+    }
+    -1
+}
+
+// ---- counts: zuma_game_counts.kara
+
+fn colour_index_counts(c: char) -> i64 {
+    match c {
+        'R' => 0,
+        'Y' => 1,
+        'B' => 2,
+        'G' => 3,
+        _ => 4,
+    }
+}
+
+fn shrink_counts(board: Vec[char]) -> Vec[char] {
+    let mut b = board.clone();
+    loop {
+        let mut kept: Vec[char] = Vec.new();
+        let mut removed = false;
+        let mut i = 0;
+        while i < b.len() {
+            let mut j = i;
+            while j < b.len() and b[j] == b[i] {
+                j += 1;
+            }
+            if j - i >= 3 {
+                removed = true;
+            } else {
+                for k in i..j {
+                    kept.push(b[k]);
+                }
+            }
+            i = j;
+        }
+        b = kept;
+        if not removed {
+            return b;
+        }
+    }
+}
+
+fn search_counts(board: Vec[char], counts: mut ref Vec[i64], memo: mut ref Map[String, i64]) -> i64 {
+    let never = 100;
+    if board.len() == 0 {
+        return 0;
+    }
+    let mut state = String.new();
+    for k in 0..board.len() {
+        state.push(board[k]);
+    }
+    for k in 0..5 {
+        state.push_str(f",{counts[k]}");
+    }
+    if let Some(known) = memo.get(state) {
+        return known;
+    }
+    let colours: Vec[char] = vec!['R', 'Y', 'B', 'G', 'W'];
+    let mut best = never;
+    for ci in 0..5 {
+        if counts[ci] == 0 {
+            continue;
+        }
+        let c = colours[ci];
+        for i in 0..board.len() + 1 {
+            let starts_run = i < board.len() and board[i] == c and (i == 0 or board[i - 1] != c);
+            let splits_pair = i > 0 and i < board.len() and board[i - 1] == board[i] and board[i] != c;
+            if not starts_run and not splits_pair {
+                continue;
+            }
+            let mut inserted = board.clone();
+            inserted.insert(i, c);
+            counts[ci] -= 1;
+            let more = search_counts(shrink_counts(inserted), counts, memo);
+            counts[ci] += 1;
+            if more + 1 < best {
+                best = more + 1;
+            }
+        }
+    }
+    memo.insert(state, best);
+    best
+}
+
+fn find_min_step_counts(board: String, hand: String) -> i64 {
+    let mut counts: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in hand.chars() {
+        counts[colour_index_counts(c)] += 1;
+    }
+    let mut memo: Map[String, i64] = Map.new();
+    let steps = search_counts(board.chars().collect(), mut counts, mut memo);
+    if steps >= 100 { -1 } else { steps }
+}
+
+// ---- differential harness ---------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, board: String, hand: String) -> i64 {
+    match which {
+        0 => find_min_step_star(board, hand),
+        1 => find_min_step_memo(board, hand),
+        2 => find_min_step_deepening(board, hand),
+        _ => find_min_step_counts(board, hand),
+    }
+}
+
+// Removes the first run of three or more, then looks again.
+fn vanish(b: Vec[char]) -> Vec[char] {
+    let mut i = 0;
+    while i < b.len() {
+        let mut j = i;
+        while j < b.len() and b[j] == b[i] {
+            j += 1;
+        }
+        if j - i >= 3 {
+            let mut out: Vec[char] = Vec.new();
+            for k in 0..i {
+                out.push(b[k]);
+            }
+            for k in j..b.len() {
+                out.push(b[k]);
+            }
+            return vanish(out);
+        }
+        i = j;
+    }
+    b.clone()
+}
+
+// The fewest balls with every ball tried at every position, no pruning,
+// states remembered; 100 when the board cannot be cleared.
+fn brute(board: String, hand: String, memo: mut ref Map[String, i64]) -> i64 {
+    if board.len() == 0 {
+        return 0;
+    }
+    let state = f"{board}|{hand}";
+    if let Some(known) = memo.get(state) {
+        return known;
+    }
+    let b: Vec[char] = board.chars().collect();
+    let h: Vec[char] = hand.chars().collect();
+    let mut best = 100;
+    for t in 0..h.len() {
+        let mut rest = String.new();
+        for k in 0..h.len() {
+            if k != t {
+                rest.push(h[k]);
+            }
+        }
+        for i in 0..b.len() + 1 {
+            let mut inserted: Vec[char] = Vec.new();
+            for k in 0..i {
+                inserted.push(b[k]);
+            }
+            inserted.push(h[t]);
+            for k in i..b.len() {
+                inserted.push(b[k]);
+            }
+            let after = vanish(inserted);
+            let mut next = String.new();
+            for k in 0..after.len() {
+                next.push(after[k]);
+            }
+            let more = brute(next, rest, memo);
+            if more + 1 < best {
+                best = more + 1;
+            }
+        }
+    }
+    memo.insert(state, best);
+    best
+}
+
+fn text(balls: Vec[char]) -> String {
+    let mut s = String.new();
+    for k in 0..balls.len() {
+        s.push(balls[k]);
+    }
+    s
+}
+
+fn renamed(s: String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(match c {
+            'R' => 'Y',
+            'Y' => 'B',
+            'B' => 'G',
+            'G' => 'W',
+            _ => 'R',
+        });
+    }
+    out
+}
+
+fn main() {
+    let names = vec!["star", "memo", "deepening", "counts"];
+    let colours: Vec[char] = vec!['R', 'Y', 'B', 'G', 'W'];
+    let cases = 1000;
+    let mut seed: i64 = 4880;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // a board of 1 to 7 balls, no three alike in a row, and a hand of
+        // 1 to 3, from the first 2 to 5 colours; one case in ten is 10
+        // balls in runs of one or two and a hand of 3, from 2 colours,
+        // where splitting a pair can pay.
+        let pairs = c % 10 == 9;
+        let palette = if pairs { 2 } else { 2 + c % 4 };
+        let mut balls: Vec[char] = Vec.new();
+        if pairs {
+            let length = 10;
+            while balls.len() < length {
+                let ball = colours[next_random(mut seed) % palette];
+                let n = balls.len();
+                if n >= 1 and balls[n - 1] == ball {
+                    continue;
+                }
+                balls.push(ball);
+                if balls.len() < length and next_random(mut seed) % 3 > 0 {
+                    balls.push(ball);
+                }
+            }
+        } else {
+            let length = 1 + next_random(mut seed) % 7;
+            while balls.len() < length {
+                let ball = colours[next_random(mut seed) % palette];
+                let n = balls.len();
+                if n >= 2 and balls[n - 1] == ball and balls[n - 2] == ball {
+                    continue;
+                }
+                balls.push(ball);
+            }
+        }
+        let mut hand_balls: Vec[char] = Vec.new();
+        let size = if pairs { 3 } else { 1 + next_random(mut seed) % 3 };
+        for _ in 0..size {
+            hand_balls.push(colours[next_random(mut seed) % palette]);
+        }
+        let board = text(balls);
+        let hand = text(hand_balls);
+        let mut back = balls.clone();
+        back.reverse();
+        let reversed = text(back);
+        let mut hand_back = hand_balls.clone();
+        hand_back.reverse();
+        let hand_reversed = text(hand_back);
+        let mut more_balls = hand_balls.clone();
+        more_balls.push(colours[next_random(mut seed) % palette]);
+        let more_hand = text(more_balls);
+        let mut memo: Map[String, i64] = Map.new();
+        let mut sorted_hand = hand_balls.clone();
+        sorted_hand.sort();
+        let fewest = brute(board, text(sorted_hand), mut memo);
+        let want = if fewest >= 100 { -1 } else { fewest };
+        for which in 0..4 {
+            let got = arm(which, board, hand);
+            // P1: the fewest balls, every insertion tried.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {board} with {hand} gave {got}, want {want}");
+                }
+            }
+            // P2: the board reversed gives the same answer.
+            checks += 1;
+            let other = arm(which, reversed, hand);
+            if other != got {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {reversed} with {hand} gave {other}, not {got}");
+                }
+            }
+            // P3: the colours renamed give the same answer.
+            checks += 1;
+            let other = arm(which, renamed(board), renamed(hand));
+            if other != got {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {board} with {hand} renamed gave {other}, not {got}");
+                }
+            }
+            // P4: one more ball in hand never makes the answer worse.
+            checks += 1;
+            let other = arm(which, board, more_hand);
+            if got >= 0 and (other < 0 or other > got) {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {board} with {more_hand} gave {other}, from {got}");
+                }
+            }
+            // P5: the hand in another order gives the same answer, and it
+            // is -1 or from 1 to the hand's size.
+            checks += 1;
+            let other = arm(which, board, hand_reversed);
+            if other != got or got == 0 or got < -1 or got > size {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {board} with {hand_reversed} gave {other}, not {got}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}
