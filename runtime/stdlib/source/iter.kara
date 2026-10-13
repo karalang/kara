@@ -210,6 +210,133 @@ trait Iterator {
         acc
     }
 
+    /// The items multiplied together; 1 if there are none. A `ref` to a
+    /// `Copy` item is read as the item (`V`).
+    fn product[V: MulIdentity + Mul[Output = V]](own self) -> V {
+        let mut it = self;
+        let mut acc: V = V.mul_identity();
+        while let Some(x) = it.next() {
+            let v: V = iter_read_value(x);
+            acc = acc * v;
+        }
+        acc
+    }
+
+    /// The smallest item, the first of several equal ones; `None` if there
+    /// are none.
+    fn min(own self) -> Option[Self.Item] {
+        let mut it = self;
+        let mut best: Option[Self.Item] = None;
+        while let Some(x) = it.next() {
+            best = match best {
+                None => Some(x),
+                Some(b) => if x < b { Some(x) } else { Some(b) },
+            };
+        }
+        best
+    }
+
+    /// The largest item, the last of several equal ones; `None` if there are
+    /// none.
+    fn max(own self) -> Option[Self.Item] {
+        let mut it = self;
+        let mut best: Option[Self.Item] = None;
+        while let Some(x) = it.next() {
+            best = match best {
+                None => Some(x),
+                Some(b) => if x >= b { Some(x) } else { Some(b) },
+            };
+        }
+        best
+    }
+
+    /// The smallest item by `cmp`, the first of several equal ones.
+    fn min_by(own self, cmp: own MutFn(ref Self.Item, ref Self.Item) -> Ordering) -> Option[Self.Item] {
+        let mut it = self;
+        let mut best: Option[Self.Item] = None;
+        while let Some(x) = it.next() {
+            best = match best {
+                None => Some(x),
+                Some(b) => if cmp(x, b).is_lt() { Some(x) } else { Some(b) },
+            };
+        }
+        best
+    }
+
+    /// The largest item by `cmp`, the last of several equal ones.
+    fn max_by(own self, cmp: own MutFn(ref Self.Item, ref Self.Item) -> Ordering) -> Option[Self.Item] {
+        let mut it = self;
+        let mut best: Option[Self.Item] = None;
+        while let Some(x) = it.next() {
+            best = match best {
+                None => Some(x),
+                Some(b) => if cmp(x, b).is_ge() { Some(x) } else { Some(b) },
+            };
+        }
+        best
+    }
+
+    /// The item whose `key` is smallest, the first of several equal ones.
+    fn min_by_key[K: Ord](own self, key: own MutFn(ref Self.Item) -> K) -> Option[Self.Item] {
+        let mut it = self;
+        let mut best: Option[(K, Self.Item)] = None;
+        while let Some(x) = it.next() {
+            let k = key(x);
+            best = match best {
+                None => Some((k, x)),
+                Some((bk, b)) => if k < bk { Some((k, x)) } else { Some((bk, b)) },
+            };
+        }
+        match best {
+            Some((_, b)) => Some(b),
+            None => None,
+        }
+    }
+
+    /// The item whose `key` is largest, the last of several equal ones.
+    fn max_by_key[K: Ord](own self, key: own MutFn(ref Self.Item) -> K) -> Option[Self.Item] {
+        let mut it = self;
+        let mut best: Option[(K, Self.Item)] = None;
+        while let Some(x) = it.next() {
+            let k = key(x);
+            best = match best {
+                None => Some((k, x)),
+                Some((bk, b)) => if k >= bk { Some((k, x)) } else { Some((bk, b)) },
+            };
+        }
+        match best {
+            Some((_, b)) => Some(b),
+            None => None,
+        }
+    }
+
+    /// The first `Some` that `f` returns.
+    fn find_map[U](own self, f: own MutFn(own Self.Item) -> Option[U]) -> Option[U] {
+        let mut it = self;
+        while let Some(x) = it.next() {
+            match f(x) {
+                Some(u) => return Some(u),
+                None => {}
+            }
+        }
+        None
+    }
+
+    /// The items `pred` holds for, then the items it does not.
+    fn partition(own self, pred: own MutFn(ref Self.Item) -> bool) -> (Vec[Self.Item], Vec[Self.Item]) {
+        let mut it = self;
+        let mut yes: Vec[Self.Item] = Vec.new();
+        let mut no: Vec[Self.Item] = Vec.new();
+        while let Some(x) = it.next() {
+            if pred(x) {
+                yes.push(x);
+            } else {
+                no.push(x);
+            }
+        }
+        (yes, no)
+    }
+
     /// The items combined front to back by `f`; `None` if there are none.
     fn reduce[V](own self, f: own MutFn(own V, own V) -> V) -> Option[V] {
         let mut it = self;
@@ -691,5 +818,94 @@ impl[I: DoubleEndedIterator] Iterator for IterRev[I] {
 impl[I: DoubleEndedIterator] DoubleEndedIterator for IterRev[I] {
     fn next_back(mut ref self) -> Option[I.Item] {
         self.it.next()
+    }
+}
+
+/// A number's multiplicative identity, which `product` starts from.
+trait MulIdentity {
+    fn mul_identity() -> Self;
+}
+
+impl MulIdentity for i8 {
+    fn mul_identity() -> i8 {
+        1
+    }
+}
+
+impl MulIdentity for i16 {
+    fn mul_identity() -> i16 {
+        1
+    }
+}
+
+impl MulIdentity for i32 {
+    fn mul_identity() -> i32 {
+        1
+    }
+}
+
+impl MulIdentity for i64 {
+    fn mul_identity() -> i64 {
+        1
+    }
+}
+
+impl MulIdentity for i128 {
+    fn mul_identity() -> i128 {
+        1
+    }
+}
+
+impl MulIdentity for isize {
+    fn mul_identity() -> isize {
+        1
+    }
+}
+
+impl MulIdentity for u8 {
+    fn mul_identity() -> u8 {
+        1
+    }
+}
+
+impl MulIdentity for u16 {
+    fn mul_identity() -> u16 {
+        1
+    }
+}
+
+impl MulIdentity for u32 {
+    fn mul_identity() -> u32 {
+        1
+    }
+}
+
+impl MulIdentity for u64 {
+    fn mul_identity() -> u64 {
+        1
+    }
+}
+
+impl MulIdentity for u128 {
+    fn mul_identity() -> u128 {
+        1
+    }
+}
+
+impl MulIdentity for usize {
+    fn mul_identity() -> usize {
+        1
+    }
+}
+
+impl MulIdentity for f32 {
+    fn mul_identity() -> f32 {
+        1.0
+    }
+}
+
+impl MulIdentity for f64 {
+    fn mul_identity() -> f64 {
+        1.0
     }
 }

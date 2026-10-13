@@ -1052,3 +1052,75 @@ fn main() {
         "hello 6 20\ntook two\ndrop 4\ndrop 1\nthe rest\ndrop 2\ndrop 3\n",
     );
 }
+
+/// The spec's terminal methods are provided methods of `Iterator`
+/// (docs/library/iterators.md; B-2026-10-13-7): `min` / `min_by` /
+/// `min_by_key` keep the first of several equal items and the `max`es the
+/// last, `product` of nothing is 1, `find_map` stops at its first `Some`, and
+/// `partition` keeps the items' order on both sides.
+#[test]
+fn the_terminal_methods_min_max_product_find_map_partition() {
+    let src = r#"
+struct P { name: String, age: i64 }
+
+fn main() {
+    let ps: Vec[P] = vec![
+        P { name: "ann".to_string(), age: 30 },
+        P { name: "bob".to_string(), age: 25 },
+        P { name: "cat".to_string(), age: 30 },
+        P { name: "dan".to_string(), age: 25 },
+    ];
+    let young = ps.iter().min_by_key(|p| p.age);
+    let old = ps.iter().max_by_key(|p| p.age);
+    match (young, old) {
+        (Some(y), Some(o)) => println(f"{y.name} {o.name}"),
+        _ => println("none"),
+    }
+    let by = ps.iter().max_by(|a, b| a.age.cmp(b.age));
+    let lo = ps.iter().min_by(|a, b| a.age.cmp(b.age));
+    match (lo, by) {
+        (Some(l), Some(b)) => println(f"{l.name} {b.name}"),
+        _ => println("none"),
+    }
+    let words: Vec[String] = vec!["pear".to_string(), "apple".to_string(), "fig".to_string()];
+    match (words.iter().min(), words.iter().max()) {
+        (Some(a), Some(b)) => println(f"{a} {b}"),
+        _ => println("none"),
+    }
+    let (short, long): (Vec[String], Vec[String]) = words.iter().cloned().partition(|w| w.len() < 4);
+    println(f"{short.len()} {long.len()} {short[0]} {long[1]}");
+    let fs: Vec[f64] = vec![1.5, 2.0, 4.0];
+    let p: f64 = fs.iter().product();
+    let empty: Vec[i64] = Vec.new();
+    let e: i64 = empty.iter().product();
+    let m = empty.iter().max();
+    println(f"{p} {e} {m.is_none()}");
+    let mut seen = 0;
+    let hit = (1..100).find_map(|i| {
+        seen += 1;
+        if i * i > 50 { Some(i * 10) } else { None }
+    });
+    println(f"{hit ?? 0} {seen}");
+}
+"#;
+    assert_runs(
+        src,
+        "bob cat\nbob cat\napple pear\n1 2 fig apple\n12 1 true\n80 8\n",
+    );
+}
+
+/// `max` over `ref` items is a view of the largest (`*` reads it), and a
+/// range has the terminals too.
+#[test]
+fn max_of_a_vec_iterator_is_a_view_and_a_range_has_min() {
+    let src = r#"
+fn main() {
+    let m = vec![3, 1, 2, 2];
+    let top = *m.iter().max().unwrap();
+    let low: i64 = (0..4).min() ?? -1;
+    let wide = m.iter().map(|x| *x * 10).max() ?? 0;
+    println(f"{top} {low} {wide}");
+}
+"#;
+    assert_runs(src, "3 0 30\n");
+}

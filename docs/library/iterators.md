@@ -59,12 +59,12 @@ let rest: Vec[Str] = words.collect();   // the words after "--"
 | `count` | `fn count(own self) -> i64` | Number of items |
 | `sum` | `fn sum(own self) -> V` | Numeric items; 0 if empty. Overflow follows the item type's arithmetic |
 | `product` | `fn product(own self) -> V` | Numeric items; 1 if empty |
-| `min` | `fn min(own self) -> Option[Self.Item] where Self.Item: Ord` | `None` if empty |
-| `max` | `fn max(own self) -> Option[Self.Item] where Self.Item: Ord` | `None` if empty |
-| `min_by` | `fn min_by(own self, cmp: own MutFn(Self.Item, Self.Item) -> Ordering) -> Option[Self.Item]` | |
-| `max_by` | `fn max_by(own self, cmp: own MutFn(Self.Item, Self.Item) -> Ordering) -> Option[Self.Item]` | |
-| `min_by_key` | `fn min_by_key[K: Ord](own self, key: own MutFn(Self.Item) -> K) -> Option[Self.Item]` | |
-| `max_by_key` | `fn max_by_key[K: Ord](own self, key: own MutFn(Self.Item) -> K) -> Option[Self.Item]` | |
+| `min` | `fn min(own self) -> Option[Self.Item] where Self.Item: Ord` | `None` if empty; the first of several equal items |
+| `max` | `fn max(own self) -> Option[Self.Item] where Self.Item: Ord` | `None` if empty; the last of several equal items |
+| `min_by` | `fn min_by(own self, cmp: own MutFn(Self.Item, Self.Item) -> Ordering) -> Option[Self.Item]` | The first of several equal items |
+| `max_by` | `fn max_by(own self, cmp: own MutFn(Self.Item, Self.Item) -> Ordering) -> Option[Self.Item]` | The last of several equal items |
+| `min_by_key` | `fn min_by_key[K: Ord](own self, key: own MutFn(Self.Item) -> K) -> Option[Self.Item]` | The first of several equal keys |
+| `max_by_key` | `fn max_by_key[K: Ord](own self, key: own MutFn(Self.Item) -> K) -> Option[Self.Item]` | The last of several equal keys |
 | `any` | `fn any(own self, pred: own MutFn(own Self.Item) -> bool) -> bool` | Stops at the first `true` |
 | `all` | `fn all(own self, pred: own MutFn(own Self.Item) -> bool) -> bool` | Stops at the first `false` |
 | `find` | `fn find(own self, pred: own MutFn(Self.Item) -> bool) -> Option[Self.Item]` | First item that passes |
