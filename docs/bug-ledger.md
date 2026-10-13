@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 602 |
 | double-free | 427 |
 | codegen-gap | 253 |
-| missing-feature | 230 |
+| missing-feature | 231 |
 | other | 171 |
 | perf | 153 |
 | diagnostics | 152 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2854 |
-| interp | 902 |
-| typecheck | 370 |
+| codegen | 2855 |
+| interp | 903 |
+| typecheck | 371 |
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
@@ -593,6 +593,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-4 | 2026-10-13 | typecheck | medium | On the MIR backends `let s: String = cs.into_iter().collect();` (with `cs: Vec[char]`) is refused with "expected 'String', found 'Vec[char]'": `Vec.into_iter()` has no library iterator, so its `collect()` can only build a `Vec`, while `for x in v.into_iter()` works | — |
 | B-2026-10-13-5 | 2026-10-13 | typecheck | medium | A hand-written conditional impl's bound is not checked where a generic call needs the trait: with `impl[T: Show] Show for Wrap[T]` and no `impl Show for Plain`, `print_it(Wrap { v: Plain { n: 1 } })` (`fn print_it[X: Show](x: ref X)`) passes `karac check` and the MIR type check, and the MIR builder then stops with "the method call `.show` with no resolved callee is not lowered yet" in `Wrap[Plain].show` | — |
 | B-2026-10-13-6 | 2026-10-13 | typecheck+interp+codegen | low | The remainder of B-2026-10-06-74, two halves: (1) `karac check` refuses `*k` on an item taken from an iterator first bound to a name (`let mut it = w.iter(); let Some(k) = it.next() ...; *k`, for a `Vec[i64]` and a `VecDeque[i64]`) while both MIR backends run it, though `w.iter().next()` unbound now passes; (2) SPEC QUESTION: docs/library/iterators.md gives `find` / `filter` / `position` / `take_while` / `skip_while` / `partition` a bare `Self.Item` predicate, so `(1..n).find(|j| w[*j] ...)` is an error (`j` is an `i64` copy; check refuses it), but runtime/stdlib/source/iter.kara declares them `MutFn(ref Self.Item)`, so both MIR backends accept `*j`; Thread A reads the doc as right and the MIR acceptance as leniency, and the two documents need to agree | — |
+| B-2026-10-13-7 | 2026-10-13 | typecheck+interp+codegen | medium | The MIR backends have no `Iterator.min` / `max` / `min_by` / `max_by` / `min_by_key` / `max_by_key` and no `Vec.min` / `max`, all in the library spec: `m.iter().max()`, `(0..4).max()` and `m.iter().map(f).max()` are refused with "no method 'max' on type 'VecIter'" (`Range`, `IterMap`), and `m.max()` reaches the run as "call of unknown function Vec[i64].max"; `karac check` accepts `min` / `max` but types the result by value, so the spec's `*m.iter().max().unwrap()` and `*m.max().unwrap()` are refused ("found 'i64'"), and it has no `min_by` / `max_by_key` either | — |
 
 ### Relocated
 
