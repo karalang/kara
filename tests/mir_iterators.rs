@@ -1124,3 +1124,19 @@ fn main() {
 "#;
     assert_runs(src, "3 0 30\n");
 }
+
+/// A bare `s.chars().collect()` builds any `FromIterator[char]` target, a
+/// `String` included, not only a `Vec[char]` (B-2026-10-13-10).
+#[test]
+fn chars_collect_into_a_string() {
+    let src = r#"
+fn main() {
+    let text = String.from("héllo");
+    let s: String = text.chars().collect();
+    let v: Vec[char] = text.chars().collect();
+    let t: String = "abc".chars().collect();
+    println(f"{s} {v.len()} {t}");
+}
+"#;
+    assert_runs(src, "héllo 5 abc\n");
+}

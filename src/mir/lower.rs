@@ -7455,16 +7455,18 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// `s.chars().collect()` into a `Vec[char]`: push each char.
-    fn collect_chars(&mut self, e: &'a Expr, text: &'a Expr, dest: Place) -> R<()> {
+    /// Whether the `collect()` call `e` builds a `Vec[char]`.
+    fn collects_char_vec(&mut self, e: &'a Expr) -> R<bool> {
         let vt = self.expr_ty(e)?;
         let char_t = self.tys().tcx().intern(HK::Char);
-        let is_char_vec = matches!(self.tys().tcx().kind(vt), HK::Intrinsic {
+        Ok(matches!(self.tys().tcx().kind(vt), HK::Intrinsic {
             kind: IntrinsicKind::Vec,
             args,
-        } if self.tys().tcx().list(args)[0] == char_t);
-        if !is_char_vec {
-            return self.unsupported(e.span, "collecting chars into this type");
-        }
+        } if self.tys().tcx().list(args)[0] == char_t))
+    }
+
+    fn collect_chars(&mut self, e: &'a Expr, text: &'a Expr, dest: Place) -> R<()> {
+        let vt = self.expr_ty(e)?;
         let name = self.tys().display(vt);
         self.push_scope();
         let v = self.scoped_temp(vt);
@@ -11269,7 +11271,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.clone_into(p, t, dest);
             return Ok(());
         }
-        if method == "collect" && args.is_empty() {
+        // Into a `Vec[char]`, walked in place; any other target collects
+        // through the library's `StrChars` like any iterator.
+        if method == "collect" && args.is_empty() && self.collects_char_vec(e)? {
             if let Some(text) = self.chars_of(object)? {
                 return self.collect_chars(e, text, dest);
             }
