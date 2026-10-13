@@ -4624,8 +4624,54 @@ impl<'a> super::TypeChecker<'a> {
         // than here is what also covers the impl-block bound gate, which
         // reaches the impl table through `Env::first_unsatisfied_bound` and
         // never passes through this function.
-        self.env
+        if !self
+            .env
             .type_satisfies_trait(&ty_name, &ty_args, trait_name)
+        {
+            return false;
+        }
+        // A conditional impl (`impl[T: Show] Show for Wrap[T]`) covers
+        // `Wrap[X]` only when `X` meets its bounds, so a head match alone
+        // is not enough (B-2026-10-13-5). The bounds are asked of this
+        // function, which knows the `#[derive]` stand-ins the impl table
+        // does not. An argument not yet inferred is not refused, and a
+        // trait reached only through a supertrait or an alias keeps the
+        // head-match answer.
+        if ty_args.iter().any(|a| {
+            matches!(
+                a,
+                Type::Error | Type::TypeVar(_) | Type::AssocProjection { .. }
+            )
+        }) {
+            return true;
+        }
+        let Some(ix) = self.env.impls_by_trait.get(trait_name) else {
+            return true;
+        };
+        let heads: Vec<&super::env::ImplInfo> = ix
+            .iter()
+            .map(|&i| &self.env.impls[i])
+            .filter(|imp| {
+                imp.target_type == ty_name
+                    && super::types::impl_args_match(&imp.target_args, &ty_args)
+            })
+            .collect();
+        heads.is_empty()
+            || heads.iter().any(|imp| {
+                self.env
+                    .impl_bounds_discharge_by(imp, &ty_args, &|t, bound| match (
+                        bound.path.last(),
+                        &bound.generic_args,
+                    ) {
+                        // A closure argument's function trait is settled by
+                        // the call that takes the closure, not re-asked here.
+                        (Some(n), _) if matches!(n.as_str(), "Fn" | "MutFn" | "OnceFn") => true,
+                        (Some(n), None) if bound.assoc_bindings.is_empty() => {
+                            self.type_satisfies_bound(t, n)
+                        }
+                        _ => self.env.bound_satisfied(t, bound),
+                    })
+            })
     }
 
     /// Walk a where-clause and discharge each `ConstPredicate(expr)`

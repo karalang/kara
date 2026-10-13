@@ -727,6 +727,20 @@ impl TypeEnv {
     /// type-argument instantiation" key extension that unblocks
     /// `impl Option[Ordering]`.
     pub fn impl_bounds_discharge(&self, imp: &ImplInfo, target_args: &[Type]) -> bool {
+        self.impl_bounds_discharge_by(imp, target_args, &|ty, bound| {
+            self.bound_satisfied(ty, bound)
+        })
+    }
+
+    /// [`Self::impl_bounds_discharge`] with the question "does `ty` meet
+    /// `bound`" asked of `satisfied`, for a caller that knows more than
+    /// the impl table (the checker's `#[derive]` stand-ins).
+    pub(super) fn impl_bounds_discharge_by(
+        &self,
+        imp: &ImplInfo,
+        target_args: &[Type],
+        satisfied: &dyn Fn(&Type, &TraitBound) -> bool,
+    ) -> bool {
         let Some(gp) = &imp.generic_params else {
             // No impl-level generic params → no inline bounds; the where
             // clause (if present) couldn't reference any names anyway.
@@ -768,7 +782,7 @@ impl TypeEnv {
                 continue;
             }
             for bound in &param.bounds {
-                if !self.bound_satisfied(subst_ty, bound) {
+                if !satisfied(subst_ty, bound) {
                     return false;
                 }
             }
@@ -813,7 +827,7 @@ impl TypeEnv {
                     continue;
                 }
                 for bound in bounds {
-                    if !self.bound_satisfied(target_ty, bound) {
+                    if !satisfied(target_ty, bound) {
                         return false;
                     }
                 }
@@ -1015,7 +1029,7 @@ impl TypeEnv {
         }
     }
 
-    fn bound_satisfied(&self, ty: &Type, bound: &TraitBound) -> bool {
+    pub(super) fn bound_satisfied(&self, ty: &Type, bound: &TraitBound) -> bool {
         let Some(trait_name) = bound.path.last() else {
             return false;
         };

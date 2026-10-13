@@ -889,3 +889,46 @@ fn main() {
         }
     }
 }
+
+// B-2026-10-13-5 — a conditional impl is used where its bounds hold
+// (nested, through a where clause, and from a generic caller), and a
+// program whose argument misses a bound is refused at type check rather
+// than reaching the builder with an unresolved `.show`.
+#[test]
+fn mir_conditional_impl_bounds_are_checked() {
+    const PRELUDE: &str = r#"trait Show { fn show(ref self) -> String; }
+impl Show for i64 { fn show(ref self) -> String { "i".to_string() } }
+struct Wrap[T] { v: T }
+impl[T: Show] Show for Wrap[T] { fn show(ref self) -> String { f"w({self.v.show()})" } }
+struct Pair[A, B] { a: A, b: B }
+impl[A, B] Show for Pair[A, B] where A: Show, B: Show {
+    fn show(ref self) -> String { f"{self.a.show()},{self.b.show()}" }
+}
+struct Plain { n: i64 }
+fn print_it[X: Show](x: ref X) { println(x.show()); }
+"#;
+    let src = format!(
+        "{PRELUDE}fn lift[T: Show](x: own T) {{ print_it(Wrap {{ v: x }}); }}
+fn main() {{
+    print_it(Wrap {{ v: 3 }});
+    print_it(Wrap {{ v: Wrap {{ v: 4 }} }});
+    print_it(Pair {{ a: 1, b: Wrap {{ v: 2 }} }});
+    lift(5);
+}}
+"
+    );
+    let want = "w(i)\nw(w(i))\ni,w(i)\nw(i)\n";
+    let interp = karac::mir::lower::run_source(&src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(&src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+    let bad = format!("{PRELUDE}fn main() {{ print_it(Wrap {{ v: Plain {{ n: 1 }} }}); }}\n");
+    let err = karac::mir::lower::run_source(&bad).expect_err("refused");
+    assert!(
+        format!("{err:?}").contains("`Wrap[Plain]` does not implement `Show`"),
+        "{err:?}"
+    );
+}

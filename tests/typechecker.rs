@@ -53248,3 +53248,56 @@ fn main() {
 "#,
     );
 }
+
+// B-2026-10-13-5 — a conditional impl covers a type only when its arguments
+// meet the impl's bounds: `impl[T: Show] Show for Wrap[T]` does not make
+// `Wrap[Plain]` a `Show` when `Plain` is not one, inline bound or
+// where-clause alike, so a generic call needing `Show` refuses it here
+// instead of the MIR builder stopping on the unresolved `.show`.
+const CONDITIONAL_IMPL_PRELUDE: &str = r#"trait Show { fn show(ref self) -> String; }
+impl Show for i64 { fn show(ref self) -> String { "i".to_string() } }
+struct Wrap[T] { v: T }
+impl[T: Show] Show for Wrap[T] { fn show(ref self) -> String { f"w({self.v.show()})" } }
+struct Pair[A, B] { a: A, b: B }
+impl[A, B] Show for Pair[A, B] where A: Show, B: Show {
+    fn show(ref self) -> String { f"{self.a.show()},{self.b.show()}" }
+}
+struct Plain { n: i64 }
+fn print_it[X: Show](x: ref X) { println(x.show()); }
+"#;
+
+#[test]
+fn conditional_impl_bounds_are_checked_at_a_generic_call() {
+    typecheck_ok(&format!(
+        "{CONDITIONAL_IMPL_PRELUDE}fn lift[T: Show](x: own T) {{ print_it(Wrap {{ v: x }}); }}
+fn main() {{
+    print_it(Wrap {{ v: 3 }});
+    print_it(Wrap {{ v: Wrap {{ v: 4 }} }});
+    print_it(Pair {{ a: 1, b: Wrap {{ v: 2 }} }});
+    lift(5);
+}}
+"
+    ));
+    for (call, ty) in [
+        (
+            "Wrap { v: Plain { n: 1 } }",
+            "`Wrap[Plain]` does not implement `Show`",
+        ),
+        (
+            "Pair { a: 1, b: Plain { n: 1 } }",
+            "`Pair[i64, Plain]` does not implement `Show`",
+        ),
+        (
+            "Wrap { v: Wrap { v: Plain { n: 1 } } }",
+            "`Wrap[Wrap[Plain]]` does not implement `Show`",
+        ),
+    ] {
+        let errs = typecheck_errors(&format!(
+            "{CONDITIONAL_IMPL_PRELUDE}fn main() {{ print_it({call}); }}\n"
+        ));
+        assert!(
+            errs.iter().any(|e| e.message.contains(ty)),
+            "{call}: {errs:?}"
+        );
+    }
+}
