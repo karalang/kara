@@ -5021,6 +5021,17 @@ impl<'a> Interp<'a> {
                 self.table_holes.remove(&id);
                 Ok(Value::Unit)
             }
+            ("drain_entries", []) => {
+                // Every entry moved out into a `Vec`, in iteration order
+                // (a map's as its `(key, value)` pair); the table is left
+                // empty.
+                let out = self.table_entries(id)?;
+                self.vec_elems(id)?.clear();
+                self.key_index.remove(&id);
+                self.table_holes.remove(&id);
+                let vname = self.tys.display(ret);
+                Ok(self.alloc_box(&vname, Value::Agg(out)))
+            }
             _ => err(format!("call of unknown function {name}")),
         }
     }

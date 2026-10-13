@@ -475,11 +475,27 @@ impl[T] VecDeque[T] {
     fn default() -> VecDeque[T] {
         VecDeque.new()
     }
+
+    /// The elements moved out, front to back.
+    fn into_iter(own self) -> VecIntoIter[T] {
+        let mut d = self;
+        let mut v: Vec[T] = Vec.new();
+        while let Some(x) = d.pop_front() {
+            v.push(x);
+        }
+        v.into_iter()
+    }
 }
 
 impl[T] Set[T] {
     fn default() -> Set[T] {
         Set.new()
+    }
+
+    /// The elements moved out, in the set's iteration order.
+    fn into_iter(own self) -> VecIntoIter[T] {
+        let mut c = self;
+        c.drain_entries().into_iter()
     }
 }
 
@@ -487,16 +503,34 @@ impl[T] SortedSet[T] {
     fn default() -> SortedSet[T] {
         SortedSet.new()
     }
+
+    /// The elements moved out, in the set's iteration order.
+    fn into_iter(own self) -> VecIntoIter[T] {
+        let mut c = self;
+        c.drain_entries().into_iter()
+    }
 }
 
 impl[K, V] Map[K, V] {
     fn default() -> Map[K, V] {
         Map.new()
     }
+
+    /// The entries, each a `(key, value)` pair, moved out, in the map's iteration order.
+    fn into_iter(own self) -> VecIntoIter[(K, V)] {
+        let mut c = self;
+        c.drain_entries().into_iter()
+    }
 }
 
 impl[K, V] SortedMap[K, V] {
     fn default() -> SortedMap[K, V] {
         SortedMap.new()
+    }
+
+    /// The entries, each a `(key, value)` pair, moved out, in the map's iteration order.
+    fn into_iter(own self) -> VecIntoIter[(K, V)] {
+        let mut c = self;
+        c.drain_entries().into_iter()
     }
 }

@@ -7015,9 +7015,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                 args,
                 ..
             } if method == "into_iter" && args.is_empty() => {
-                let t = self.expr_ty(object)?;
-                let (_, t) = self.strip_ty_full(t);
-                matches!(self.tys().tcx().kind(t), HK::Intrinsic { .. })
+                let ot = self.expr_ty(object)?;
+                let (kind, t) = self.strip_ty_full(ot);
+                match kind {
+                    // An owned set, map or deque of non-`Copy` elements
+                    // moves them out through the library's `into_iter`
+                    // (B-2026-10-13-14); one of `Copy` elements is read in
+                    // place below.
+                    HK::Intrinsic { kind, args }
+                        if kind != IntrinsicKind::Vec
+                            && t == ot
+                            && !self
+                                .tys()
+                                .tcx()
+                                .list(args)
+                                .into_iter()
+                                .all(|a| self.is_copy(a)) =>
+                    {
+                        false
+                    }
+                    HK::Intrinsic { .. } => true,
+                    _ => false,
+                }
             }
             _ => false,
         };
@@ -13067,7 +13086,6 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// `extend` takes the source.
     fn extend_from_iterable(
         &mut self,
-        e: &'a Expr,
         object: &'a Expr,
         recv: Ty,
         src: &'a CallArg,
@@ -13095,15 +13113,6 @@ impl<'l, 'a> Bx<'l, 'a> {
                     IntrinsicKind::Map => "vec_extend_map",
                     IntrinsicKind::SortedMap => "vec_extend_sorted_map",
                 };
-                // The helpers move out of the collection with a `for` loop,
-                // which is lowered for `Copy` elements only so far
-                // (B-2026-10-13-14).
-                if !sargs.iter().all(|&t| self.is_copy(t)) {
-                    return self.unsupported(
-                        e.span,
-                        "`extend` from a collection of non-`Copy` elements (B-2026-10-13-14)",
-                    );
-                }
                 (helper, sargs.to_vec())
             }
             _ => ("vec_extend_iter", vec![elem, st]),
@@ -13149,7 +13158,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => ot,
         };
         if let ("extend", [src]) = (method, args) {
-            if self.extend_from_iterable(e, object, base, src, dest.clone())? {
+            if self.extend_from_iterable(object, base, src, dest.clone())? {
                 return Ok(());
             }
         }
@@ -13289,7 +13298,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                         && (crate::ast::is_mutating_collection_method(method)
                             || matches!(
                                 method,
-                                "push_str" | "set" | "sort_unstable" | "sort_unstable_by" | "entry"
+                                "push_str"
+                                    | "set"
+                                    | "sort_unstable"
+                                    | "sort_unstable_by"
+                                    | "entry"
+                                    | "drain_entries"
                             ));
                     self.recv_place(object, mutates)?
                 };

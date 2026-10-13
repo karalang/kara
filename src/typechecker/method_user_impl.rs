@@ -92,6 +92,21 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 (name.clone(), 1, Type::Ref(Box::new(entry)))
             }
+            // `drain_entries()` moves every entry out of a set or map, in
+            // iteration order, and leaves it empty: what the library's
+            // `into_iter` takes the elements with (B-2026-10-13-14).
+            (Type::Named { name, args: targs }, "drain_entries") => {
+                let entry = match (name.as_str(), targs.as_slice()) {
+                    ("Set" | "SortedSet", [t]) => t.clone(),
+                    ("Map" | "SortedMap", [k, v]) => Type::Tuple(vec![k.clone(), v.clone()]),
+                    _ => return None,
+                };
+                let vec = Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![entry],
+                };
+                (name.clone(), 0, vec)
+            }
             (Type::Str, "char_at_byte" | "char_before_byte") => {
                 ("String".to_string(), 1, Type::Char)
             }

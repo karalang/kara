@@ -437,6 +437,23 @@ impl<'ctx> Cx<'ctx, '_> {
                     cx.rt("map_clear", &[h.into()])
                 })?;
             }
+            ("drain_entries", []) => {
+                // Every entry moved out into a `Vec`, in iteration order;
+                // the table is left empty, with nothing of its own to drop.
+                let h = self.load_ptr(hp)?;
+                let n = self.mrt_i64("map_len", &[h.into()])?;
+                let size = self.layout(t.entry)?.size;
+                let d = self.place_ptr(dest)?;
+                self.rt("vec_alloc", &[d.into(), n.into(), self.i64(size).into()])?;
+                let buf = self.load_ptr(d)?;
+                self.count_loop(n, |cx, i| {
+                    let at = cx.entry_at(h, i)?;
+                    let out = cx.elem_ptr(buf, i, size)?;
+                    cx.copy(out, at, t.entry)
+                })?;
+                let live = self.builder.build_is_not_null(h, "").map_err(e)?;
+                self.if_then(live, |cx| cx.rt("map_clear", &[h.into()]))?;
+            }
             ("get_or", [k, default]) if is_map => {
                 let v = t.val.unwrap_or(t.key);
                 let h = self.load_ptr(hp)?;

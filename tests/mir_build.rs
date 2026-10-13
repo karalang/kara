@@ -609,3 +609,74 @@ fn mir_str_receiver_parse() {
         }
     }
 }
+
+/// `c.into_iter()` on an owned set, map or deque of non-`Copy` elements
+/// moves them out, in a `for`, a `collect` and an `extend`; a `break`
+/// drops what is left (B-2026-10-13-14).
+const INTO_ITER_COLLECTIONS: &str = r#"
+struct D { id: i64 }
+impl Drop for D { fn drop(mut ref self) { println(f"drop {self.id}"); } }
+fn main() {
+    let mut found: Set[Vec[i64]] = Set.new();
+    found.insert(vec![1, 2]);
+    found.insert(vec![3]);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for s in found.into_iter() {
+        out.push(s);
+    }
+    println(f"{out.len()} {out[0].len() + out[1].len()}");
+    let mut names: Set[String] = Set.new();
+    names.insert("a".to_string());
+    let got: Vec[String] = names.into_iter().collect();
+    println(f"{got}");
+    let mut q: VecDeque[String] = VecDeque.new();
+    q.push_back("x".to_string());
+    q.push_front("w".to_string());
+    for s in q.into_iter() { println(s); }
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(1, "one".to_string());
+    for (k, v) in m.into_iter() { println(f"{k} {v}"); }
+    let mut sm: SortedMap[i64, D] = SortedMap.new();
+    sm.insert(2, D { id: 20 });
+    sm.insert(1, D { id: 10 });
+    sm.insert(3, D { id: 30 });
+    for (k, d) in sm.into_iter() {
+        if k == 2 { break; }
+        println(f"got {k} {d.id}");
+    }
+    println("after");
+    let mut ss: SortedSet[String] = SortedSet.new();
+    ss.insert("b".to_string());
+    ss.insert("a".to_string());
+    let mut e: Vec[String] = Vec.new();
+    e.extend(ss);
+    println(f"{e}");
+    let mut c: Set[i64] = Set.new();
+    c.insert(3);
+    for x in c.into_iter() { println(f"{x}"); }
+}
+"#;
+
+#[test]
+fn mir_into_iter_moves_out_of_every_collection() {
+    let want = "2 3
+[a]
+w
+x
+1 one
+got 1 10
+drop 10
+drop 20
+drop 30
+after
+[a, b]
+3
+";
+    let interp = karac::mir::lower::run_source(INTO_ITER_COLLECTIONS).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(INTO_ITER_COLLECTIONS, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
