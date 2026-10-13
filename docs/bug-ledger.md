@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 253 |
 | missing-feature | 241 |
 | other | 172 |
-| perf | 160 |
+| perf | 161 |
 | diagnostics | 155 |
 | false-positive | 154 |
 | crash | 114 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2870 |
+| codegen | 2871 |
 | interp | 912 |
 | typecheck | 381 |
 | other | 115 |
 | ownership | 85 |
 | cli | 75 |
-| runtime | 64 |
+| runtime | 65 |
 | parser | 61 |
 | autopar | 59 |
 | resolver | 35 |
@@ -601,6 +601,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-33 | 2026-10-13 | ownership | medium | The MIR borrow checker refuses a write to a `mut` field of a shared value reached by indexing a borrowed `Vec` (`nodes[i].val = v` with `nodes` a `ref Vec[Node]` or a bare `Vec[Node]` parameter: "mutable borrow of (*_1) through a shared reference [E0517]") under `__mir-run`, `__mir-llvm-run` and `build --mir`, where `karac check` passes it and core-semantics §5.9 makes such a field writable through any handle | — |
 | B-2026-10-13-34 | 2026-10-13 | codegen+runtime | medium | `i64.parse` on the MIR compiled backend costs about 30 ns for a 2-byte slice, because `karac_mir_parse_int` copies the text into a fresh heap `String`, trims it and parses an `i128` on every call: kata 539's bench spends 1.3 to 1.4 s of its 1.90 s in 42M parses, against 0.51 s for the whole Rust mirror | — |
 | B-2026-10-13-35 | 2026-10-13 | codegen+runtime | medium | Collecting chars into a `String` on the MIR compiled backend (`chars.iter().collect()` from a `Vec[char]`) costs about 6 ns a char, a runtime call chain `karac_mir_string_push_char` -> `string_push_str` -> `vec_reserve` per char with nothing reserved up front: kata 541's bench spends some 1.25 s of its 2.01 s there, against 0.70 s for the whole Rust mirror | — |
+| B-2026-10-13-36 | 2026-10-13 | codegen+runtime | medium | `VecDeque` `push_back` / `pop_front` on the MIR compiled backend are out-of-line runtime calls (`karac_mir_deque_push` / `_pop`) that wrap with integer `%` and copy the element with a sized `memcpy` call: kata 542's breadth-first search bench runs 0.41 s, 0.28 s with a `Vec` and head index in place of the deque, 0.19 s in Rust with `VecDeque` | — |
 
 ### Relocated
 
