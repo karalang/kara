@@ -6126,16 +6126,25 @@ impl<'a> Interp<'a> {
                 // `s[a..b]`: a new String; out of range, inverted or off a
                 // char boundary panics, unlike `substring`.
                 let (lo, hi) = (int(1)?, int(2)?);
-                let ok = 0 <= lo
-                    && lo <= hi
-                    && hi <= s.len() as i128
-                    && s.is_char_boundary(lo as usize)
-                    && s.is_char_boundary(hi as usize);
-                if !ok {
+                let len = s.len() as i128;
+                let msg = if !(0 <= lo && lo <= hi && hi <= len) {
+                    Some(format!(
+                        "string slice bounds {lo}..{hi} out of range (len {len})"
+                    ))
+                } else if !s.is_char_boundary(lo as usize) || !s.is_char_boundary(hi as usize) {
+                    Some(format!(
+                        "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range {lo}..{hi} does not \
+                         fall on UTF-8 char boundaries of {s:?}"
+                    ))
+                } else {
+                    None
+                };
+                if let Some(msg) = msg {
+                    self.panic_message = Some(msg);
                     if self.trace {
-                        self.events.push(Event::Abort(AbortReason::Panic));
+                        self.events.push(Event::Abort(AbortReason::BoundsCheck));
                     }
-                    return Err(Stop::Abort(AbortReason::Panic));
+                    return Err(Stop::Abort(AbortReason::BoundsCheck));
                 }
                 let t = s[lo as usize..hi as usize].to_string();
                 new_string(self, t)

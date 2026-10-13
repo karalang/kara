@@ -374,7 +374,8 @@ impl<'ctx> Cx<'ctx, '_> {
                     ],
                     8,
                 )?;
-                self.abort_on(r, "explicit panic")?;
+                // The runtime sets the message: the bounds, or the cut char.
+                self.abort_on(r, "index out of bounds")?;
             }
             ("char_at_byte", [s, i]) => {
                 let (p, n) = self.str_parts(s)?;

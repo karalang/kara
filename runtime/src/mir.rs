@@ -430,6 +430,21 @@ pub unsafe extern "C" fn karac_mir_str_map(out: *mut RawVec, op: i32, s: *const 
 /// which panics when out of range or inverted; both panic off a char
 /// boundary. Mode 2 is `String.slice`: a start out of range is empty, the
 /// end clamps, and a cut inside a char is lossy, so its text may be new.
+/// The message of a string cut [`str_range`] refuses, as the interpreter
+/// words it, for the abort that follows.
+fn str_range_panic(s: &str, lo: i64, hi: i64) {
+    let len = s.len() as i64;
+    let msg = if !(0 <= lo && lo <= hi && hi <= len) {
+        format!("string slice bounds {lo}..{hi} out of range (len {len})")
+    } else {
+        format!(
+            "E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range {lo}..{hi} does not fall on \
+             UTF-8 char boundaries of {s:?}"
+        )
+    };
+    PANIC.with(|p| *p.borrow_mut() = Some(msg));
+}
+
 fn str_range(s: &str, lo: i64, hi: i64, mode: i32) -> Option<std::borrow::Cow<'_, str>> {
     let len = s.len() as i64;
     if mode == 2 {
@@ -475,7 +490,10 @@ pub unsafe extern "C" fn karac_mir_str_slice(
     match str_range(s, lo, hi, mode) {
         // SAFETY: as above.
         Some(t) => unsafe { string_of(out, t.as_bytes()) },
-        None => return 1,
+        None => {
+            str_range_panic(s, lo, hi);
+            return 1;
+        }
     }
     0
 }
@@ -504,7 +522,10 @@ pub unsafe extern "C" fn karac_mir_str_view(
             let t = t.leak();
             (t.as_ptr(), t.len())
         }
-        None => return 1,
+        None => {
+            str_range_panic(s, lo, hi);
+            return 1;
+        }
     };
     // SAFETY: as above.
     unsafe {

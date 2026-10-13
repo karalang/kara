@@ -384,3 +384,47 @@ fn mir_build_line_tables_drive_gdb() {
         );
     }
 }
+
+/// A string cut past the end, or inside a char, panics as a bounds error
+/// naming the cut, compiled and interpreted alike, not as an explicit
+/// `panic(..)` (B-2026-10-13-13).
+#[test]
+fn mir_string_slice_panics_name_the_cut() {
+    let cases = [
+        (
+            "fn main() {\n    let s = String.from(\"abc\");\n    let n = s.len() + 2;\n    \
+             println(f\"{s[1..n]}\");\n}\n",
+            "runtime error: string slice bounds 1..5 out of range (len 3)\n",
+        ),
+        (
+            "fn main() {\n    let s = String.from(\"h\\u{e9}llo\");\n    let n = s.len() - 4;\n    \
+             println(f\"{s[0..n]}\");\n}\n",
+            "runtime error: E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY: byte range 0..2 does not fall \
+             on UTF-8 char boundaries of \"h\u{e9}llo\"\n",
+        ),
+    ];
+    for (src, want) in cases {
+        let dir = Scratch::new();
+        let file = dir.path().join("main.kara");
+        std::fs::write(&file, src).unwrap();
+        let interp = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .args(["__mir-run", file.to_str().unwrap()])
+            .output()
+            .unwrap();
+        let first = |b: &[u8]| {
+            String::from_utf8_lossy(b)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_string()
+                + "\n"
+        };
+        assert_eq!(first(&interp.stderr), want, "__mir-run");
+        let Some(exe) = cli_build(&dir, src, &[]) else {
+            return;
+        };
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(run.status.code(), Some(101));
+        assert_eq!(first(&run.stderr), want, "compiled");
+    }
+}
