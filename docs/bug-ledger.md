@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 602 |
 | double-free | 427 |
 | codegen-gap | 253 |
-| missing-feature | 237 |
+| missing-feature | 238 |
 | other | 171 |
 | perf | 156 |
 | diagnostics | 154 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2864 |
 | interp | 909 |
-| typecheck | 376 |
+| typecheck | 377 |
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
@@ -598,6 +598,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-19 | 2026-10-13 | typecheck | medium | `Vec.extend` accepts only a `Vec`, `Slice` or `Array`, where the spec gives `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)`: `d.extend(v.iter().cloned())`, `d.extend(v.iter().map(f))`, `d.extend(0..3)`, `d.extend(v.into_iter())` and `d.extend(a_set)` are all refused by `karac check`, `karac run --interp` and both MIR backends with a misleading "no method 'extend' on type 'Vec'" | — |
 | B-2026-10-13-20 | 2026-10-13 | codegen+runtime | low | An f-string with one integer hole, `f"{n}"`, costs three allocations, two frees and four thread-local `RefCell` borrows on the v2 compiled backend: 44M `f"{i % 7}"` take 2.7 s on `karac build --mir` against 0.3 s on legacy `karac build` (about 9x), and kata 504's bench runs 3.7 s on `--mir` against 1.6 s on legacy | — |
 | B-2026-10-13-21 | 2026-10-13 | interp+codegen | high | An `as` cast to a narrower integer, widened implicitly into a wider binding or return slot, is never widened by the MIR: `let y: i64 = x as u8;` and `fn f(c: char) -> i64 { c as i32 }` assign the narrow value straight into the `i64` place, so `karac __mir-run` stops at "invalid MIR: assigning u8 to _2 of type i64" and the compiled backend stores 1 or 4 bytes into an 8-byte slot and reads garbage (`let y: i64 = 300 as u8` printed 94505382909996, not 44) | — |
+| B-2026-10-13-22 | 2026-10-13 | typecheck | low | `f64.powi` does not exist, though design.md's own example calls it: `phi.powi(n as i32)` is refused by `karac check` and every backend with "no method 'powi' on type 'f64'"; only `pow(f64)` is implemented, and no library doc lists the float math methods at all | — |
 
 ### Relocated
 
