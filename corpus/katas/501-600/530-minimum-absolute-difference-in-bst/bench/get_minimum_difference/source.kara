@@ -1,0 +1,103 @@
+// Benchmark for #530: the ★ arm (in-order, recursively); see
+// get_minimum_difference.kara.
+//
+// An in-order walk of a search tree meets its values in ascending
+// order, so the smallest difference between any two values is the
+// smallest difference between two met one after the other.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+struct Walk {
+    prev: Option[i64],
+    best: i64,
+}
+
+fn visit(node: Option[TreeNode], walk: mut ref Walk) {
+    let Some(n) = node else {
+        return;
+    };
+    visit(n.left, walk);
+    if let Some(p) = walk.prev {
+        walk.best = walk.best.min(n.val - p);
+    }
+    walk.prev = Some(n.val);
+    visit(n.right, walk);
+}
+
+fn get_minimum_difference(root: Option[TreeNode]) -> i64 {
+    let mut walk = Walk { prev: None, best: i64.MAX };
+    visit(root, mut walk);
+    walk.best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A search tree of the values, inserted in the order given; an equal
+// value goes left or right by a coin flip from seed.
+fn build(values: Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
+    let root = TreeNode { val: values[0], left: None, right: None };
+    for i in 1..values.len() {
+        let v = values[i];
+        let mut node = root;
+        loop {
+            if v < node.val or (v == node.val and next_random(seed) % 2 == 0) {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+// 100 random search trees of 10,000 different values (the problem's
+// most), drawn from 0 to 10,000, 0 to 20,000, ... up to 0 to 100,000
+// in turn, built once. Then the answer for each tree is found 50 times.
+fn main() {
+    let trees = 100;
+    let mut seed: i64 = 530;
+    let mut all: Vec[Option[TreeNode]] = Vec.new();
+    for t in 0..trees {
+        let range = 10000 * (1 + t % 10) + 1;
+        let mut pool: Vec[i64] = Vec.new();
+        for v in 0..range {
+            pool.push(v);
+        }
+        // The first 10,000 places of a shuffle of the pool.
+        for i in 0..10000 {
+            let j = i + (next_random(mut seed) * 32768 + next_random(mut seed)) % (range - i);
+            pool.swap(i, j);
+        }
+        pool.truncate(10000);
+        all.push(build(pool, mut seed));
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..50 {
+        for t in 0..trees {
+            let answer = get_minimum_difference(all[t]);
+            total += answer;
+            checksum = (checksum * 31 + answer) % 1000000007;
+        }
+    }
+    println(f"{trees} trees of 10000 values, 50 times each: total {total}, checksum {checksum}");
+}

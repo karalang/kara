@@ -1,0 +1,345 @@
+// Differential test for LeetCode #528: Random Pick with Weight.
+//
+// Copies of the four arms, each held to the properties below on 300
+// cases: a short list of 1 to 10 weights up to 20 for P1, a longer one
+// of 1 to 30 weights up to 100 for P2 and P4, and a single weight up to
+// 100,000 for P3.
+// Properties:
+//   P1  from the same seed, the picks are the definition's: every index
+//       written out as many times as its weight, and the drawn point
+//       read off that list (100 picks)
+//   P2  every pick is an index of the list (3,000 picks)
+//   P3  a single weight is always picked
+//   P4  over those 3,000 picks every index gets its share, within 5
+//       standard deviations
+//   P5  the same seed twice gives the same 50 picks
+
+// ---- the seeded generator, shared by the arms and the definition
+
+// A seeded generator: 15 random bits a step, and a uniform draw below n
+// built from two steps.
+struct Draw {
+    seed: i64,
+}
+
+impl Draw {
+    fn new(seed: i64) -> Draw {
+        Draw { seed: seed }
+    }
+
+    fn step(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.seed / 65536
+    }
+
+    // Uniform in [0, n) for n up to 2^30: 30 random bits, drawn again
+    // when they land in the last, incomplete run of n.
+    fn below(mut ref self, n: i64) -> i64 {
+        let limit = 1073741824 / n * n;
+        loop {
+            let high = self.step();
+            let low = self.step();
+            let r = high * 32768 + low;
+            if r < limit {
+                return r % n;
+            }
+        }
+    }
+}
+
+// ---- star: random_pick_with_weight.kara
+
+struct SolutionStar {
+    // ends[i]: the sum of the weights up to and including i.
+    ends: Vec[i64],
+    draw: Draw,
+}
+
+impl SolutionStar {
+    fn new(w: Vec[i64], seed: i64) -> SolutionStar {
+        let mut ends: Vec[i64] = Vec.new();
+        let mut total = 0;
+        for x in w.iter() {
+            total += *x;
+            ends.push(total);
+        }
+        SolutionStar { ends: ends, draw: Draw.new(seed) }
+    }
+
+    fn pick_index(mut ref self) -> i64 {
+        let r = self.draw.below(self.ends[self.ends.len() - 1]);
+        // The first index whose run ends past r.
+        let mut low = 0;
+        let mut high = self.ends.len() - 1;
+        while low < high {
+            let mid = (low + high) / 2;
+            if self.ends[mid] > r {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+        low
+    }
+}
+
+// ---- linear: random_pick_with_weight_linear.kara
+
+struct SolutionLinear {
+    w: Vec[i64],
+    total: i64,
+    draw: Draw,
+}
+
+impl SolutionLinear {
+    fn new(w: Vec[i64], seed: i64) -> SolutionLinear {
+        let mut total = 0;
+        for x in w.iter() {
+            total += *x;
+        }
+        SolutionLinear { w: w.clone(), total: total, draw: Draw.new(seed) }
+    }
+
+    fn pick_index(mut ref self) -> i64 {
+        let mut r = self.draw.below(self.total);
+        for i in 0..self.w.len() {
+            if r < self.w[i] {
+                return i;
+            }
+            r -= self.w[i];
+        }
+        self.w.len() - 1
+    }
+}
+
+// ---- floor: random_pick_with_weight_floor.kara
+
+struct SolutionFloor {
+    starts: SortedMap[i64, i64],
+    total: i64,
+    draw: Draw,
+}
+
+impl SolutionFloor {
+    fn new(w: Vec[i64], seed: i64) -> SolutionFloor {
+        let mut starts: SortedMap[i64, i64] = SortedMap.new();
+        let mut total = 0;
+        for i in 0..w.len() {
+            starts.insert(total, i);
+            total += w[i];
+        }
+        SolutionFloor { starts: starts, total: total, draw: Draw.new(seed) }
+    }
+
+    fn pick_index(mut ref self) -> i64 {
+        let r = self.draw.below(self.total);
+        match self.starts.floor(r) {
+            Some((_, i)) => *i,
+            None => 0,
+        }
+    }
+}
+
+// ---- fenwick: random_pick_with_weight_fenwick.kara
+
+struct SolutionFenwick {
+    // tree[i], 1-based: the sum of the weights in (i - lowbit(i), i].
+    tree: Vec[i64],
+    total: i64,
+    draw: Draw,
+}
+
+impl SolutionFenwick {
+    fn new(w: Vec[i64], seed: i64) -> SolutionFenwick {
+        let n = w.len();
+        let mut tree: Vec[i64] = vec![0; n + 1];
+        let mut total = 0;
+        for i in 0..n {
+            total += w[i];
+            let mut j = i + 1;
+            while j <= n {
+                tree[j] += w[i];
+                j += j & -j;
+            }
+        }
+        SolutionFenwick { tree: tree, total: total, draw: Draw.new(seed) }
+    }
+
+    fn pick_index(mut ref self) -> i64 {
+        let mut r = self.draw.below(self.total);
+        let n = self.tree.len() - 1;
+        let mut step = 1;
+        while step * 2 <= n {
+            step *= 2;
+        }
+        // pos ends as the count of weights whose sum is <= r: the index.
+        let mut pos = 0;
+        while step > 0 {
+            if pos + step <= n and self.tree[pos + step] <= r {
+                pos += step;
+                r -= self.tree[pos];
+            }
+            step /= 2;
+        }
+        pos
+    }
+}
+
+// ---- differential harness -------------------------------------------------
+
+// Each arm's `Solution` behind one face: the same weights and seed,
+// `count` picks.
+fn answer(which: i64, w: Vec[i64], seed: i64, count: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if which == 0 {
+        let mut s = SolutionStar.new(w, seed);
+        for _ in 0..count {
+            out.push(s.pick_index());
+        }
+    } else if which == 1 {
+        let mut s = SolutionLinear.new(w, seed);
+        for _ in 0..count {
+            out.push(s.pick_index());
+        }
+    } else if which == 2 {
+        let mut s = SolutionFloor.new(w, seed);
+        for _ in 0..count {
+            out.push(s.pick_index());
+        }
+    } else {
+        let mut s = SolutionFenwick.new(w, seed);
+        for _ in 0..count {
+            out.push(s.pick_index());
+        }
+    }
+    out
+}
+
+// The definition: every index written out as many times as its weight,
+// and the drawn point read off that list.
+fn definition(w: Vec[i64], seed: i64, count: i64) -> Vec[i64] {
+    let mut flat: Vec[i64] = Vec.new();
+    for i in 0..w.len() {
+        for _ in 0..w[i] {
+            flat.push(i);
+        }
+    }
+    let mut draw = Draw.new(seed);
+    let mut out: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        out.push(flat[draw.below(flat.len())]);
+    }
+    out
+}
+
+// Whether every count is within 5 standard deviations of its share.
+fn fair(counts: Vec[i64], w: Vec[i64], picks: i64) -> bool {
+    let mut total = 0;
+    for x in w.iter() {
+        total += *x;
+    }
+    for i in 0..counts.len() {
+        let p = w[i] as f64 / total as f64;
+        let mean = picks as f64 * p;
+        let sd = (picks as f64 * p * (1.0 - p)).sqrt();
+        let off = counts[i] as f64 - mean;
+        if off > 5.0 * sd + 1.0 or off < -5.0 * sd - 1.0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_weights(seed: mut ref i64, most: i64, heaviest: i64) -> Vec[i64] {
+    let n = 1 + next_random(seed) % most;
+    let mut w: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        w.push(1 + next_random(seed) % heaviest);
+    }
+    w
+}
+
+fn main() {
+    let names = vec!["star", "linear", "floor", "fenwick"];
+    let cases = 300;
+    let mut seed: i64 = 5280;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // A short list of 1 to 10 weights up to 20 for P1, a longer one of
+        // 1 to 30 up to 100 for P2 and P4, and one weight for P3.
+        let short = random_weights(mut seed, 10, 20);
+        let w = random_weights(mut seed, 30, 100);
+        let single = vec![1 + next_random(mut seed) % 100000];
+        let want = definition(short, c, 100);
+        for which in 0..4 {
+            // P1: the picks are the definition's, from the same seed.
+            checks += 1;
+            let got = answer(which, short, c, 100);
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {short} gave {got}, want {want}");
+                }
+            }
+            // P2: every pick is an index of the list.
+            checks += 1;
+            let got = answer(which, w, c, 3000);
+            let mut counts = vec![0; w.len()];
+            let mut in_range = true;
+            for i in got.iter() {
+                if *i < 0 or *i >= w.len() {
+                    in_range = false;
+                } else {
+                    counts[*i] += 1;
+                }
+            }
+            if not in_range {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {w} picked out of range");
+                }
+            }
+            // P3: a single weight is always picked.
+            checks += 1;
+            if answer(which, single, c, 20) != vec![0; 20] {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {single}");
+                }
+            }
+            // P4: over 3,000 picks every index gets its share, within 5
+            // standard deviations.
+            checks += 1;
+            if in_range and not fair(counts, w, 3000) {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {w} gave counts {counts}");
+                }
+            }
+            // P5: the same seed twice gives the same picks.
+            checks += 1;
+            if answer(which, w, c + 7, 50) != answer(which, w, c + 7, 50) {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {w} differs on one seed");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

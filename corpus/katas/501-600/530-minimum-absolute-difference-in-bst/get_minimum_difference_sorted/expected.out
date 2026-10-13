@@ -1,0 +1,9 @@
+example 1: [4, 2, 6, 1, 3] -> 1
+example 2: [1, 0, 48, 12, 49] -> 1
+two nodes: [0, 100000] -> 100000
+equal values: [7, 7, 3] -> 0
+rising chain: [1, 3, 6, 10, 15] -> 2
+falling chain: [100, 50, 20, 5] -> 15
+closest across the root: [50, 20, 80, 45, 56] -> 5
+300 random trees: 9086 values, 142 with a repeat, checksum 584368651
+10000 values: 3

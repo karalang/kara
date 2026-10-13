@@ -1,0 +1,98 @@
+// LeetCode #531: Lonely Pixel I -- through the transpose.
+//
+// The columns of the picture are the rows of its transpose, so a row
+// question asked of both answers it: a lonely pixel at (r, c) is the
+// only black pixel in row r of the picture and in row c of the
+// transpose. O(mn) time and O(mn) space for the copy.
+
+// How many black pixels the row holds.
+fn blacks(row: Vec[char]) -> i64 {
+    row.iter().filter(|p| *p == 'B').count()
+}
+
+fn find_lonely_pixel(picture: Vec[Vec[char]]) -> i64 {
+    let (m, n) = (picture.len(), picture[0].len());
+    let mut transpose: Vec[Vec[char]] = Vec.new();
+    for c in 0..n {
+        let mut column: Vec[char] = Vec.new();
+        for r in 0..m {
+            column.push(picture[r][c]);
+        }
+        transpose.push(column);
+    }
+    let mut lonely = 0;
+    for r in 0..m {
+        if blacks(picture[r]) != 1 {
+            continue;
+        }
+        for c in 0..n {
+            if picture[r][c] == 'B' and blacks(transpose[c]) == 1 {
+                lonely += 1;
+            }
+        }
+    }
+    lonely
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn parse(rows: Vec[Str]) -> Vec[Vec[char]] {
+    let mut picture: Vec[Vec[char]] = Vec.new();
+    for row in rows.iter() {
+        picture.push(row.chars().collect());
+    }
+    picture
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random m by n picture with each pixel black with chance `per_mille`
+// in 1,000.
+fn random_picture(seed: mut ref i64, m: i64, n: i64, per_mille: i64) -> Vec[Vec[char]] {
+    let mut picture: Vec[Vec[char]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[char] = Vec.new();
+        for _ in 0..n {
+            row.push(if next_random(seed) % 1000 < per_mille { 'B' } else { 'W' });
+        }
+        picture.push(row);
+    }
+    picture
+}
+
+fn show(name: Str, rows: Vec[Str]) {
+    println(f"{name}: {rows} -> {find_lonely_pixel(parse(rows.clone()))}");
+}
+
+fn main() {
+    show("example 1", vec!["WWB", "WBW", "BWW"]);
+    show("example 2", vec!["BBB", "BBW", "BBB"]);
+    show("one black", vec!["B"]);
+    show("one white", vec!["W"]);
+    show("two in a row", vec!["WBWB", "WWWW", "BWWW"]);
+    show("two in a column", vec!["BW", "WW", "BW", "WB"]);
+    show("all white", vec!["WWWW", "WWWW", "WWWW"]);
+    // 300 random pictures of 1 to 20 by 1 to 20, black with a chance of
+    // 2% to 30%.
+    let mut seed: i64 = 531;
+    let mut total = 0;
+    let mut none = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let m = 1 + next_random(mut seed) % 20;
+        let n = 1 + next_random(mut seed) % 20;
+        let per_mille = 20 + next_random(mut seed) % 281;
+        let answer = find_lonely_pixel(random_picture(mut seed, m, n, per_mille));
+        total += answer;
+        if answer == 0 {
+            none += 1;
+        }
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"300 random pictures: {total} lonely, {none} with none, checksum {checksum}");
+    // The largest: 500 by 500, black with a chance of 2 in 1,000.
+    println(f"500 by 500: {find_lonely_pixel(random_picture(mut seed, 500, 500, 2))}");
+}

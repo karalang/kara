@@ -1,0 +1,263 @@
+// Differential test for LeetCode #530: Minimum Absolute Difference in
+// BST.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random search trees of 2 to 30 values from 0 to 9, 0 to 999, or 0 to
+// 100,000, in turn, built by inserting the values in a random order.
+// Properties:
+//   P1  the answer is the definition's: the smallest difference over
+//       every pair of values
+//   P2  the tree is the same, in shape and values, after the call
+//   P3  one more copy of a value already there makes the answer 0
+//   P4  every value v made 100,000 - v, which turns the tree left to
+//       right, gives the same answer
+//   P5  the answer is between 0 and 100,000
+
+// ---- star: get_minimum_difference.kara
+
+struct WalkStar {
+    prev: Option[i64],
+    best: i64,
+}
+
+fn visit_star(node: Option[TreeNode], walk: mut ref WalkStar) {
+    let Some(n) = node else {
+        return;
+    };
+    visit_star(n.left, walk);
+    if let Some(p) = walk.prev {
+        walk.best = walk.best.min(n.val - p);
+    }
+    walk.prev = Some(n.val);
+    visit_star(n.right, walk);
+}
+
+fn get_minimum_difference_star(root: Option[TreeNode]) -> i64 {
+    let mut walk = WalkStar { prev: None, best: i64.MAX };
+    visit_star(root, mut walk);
+    walk.best
+}
+
+// ---- stack: get_minimum_difference_stack.kara
+
+fn get_minimum_difference_stack(root: Option[TreeNode]) -> i64 {
+    let mut stack: Vec[TreeNode] = Vec.new();
+    let mut cur = root;
+    let mut prev: Option[i64] = None;
+    let mut best = i64.MAX;
+    loop {
+        while let Some(n) = cur {
+            stack.push(n);
+            cur = n.left;
+        }
+        let Some(n) = stack.pop() else {
+            break;
+        };
+        if let Some(p) = prev {
+            best = best.min(n.val - p);
+        }
+        prev = Some(n.val);
+        cur = n.right;
+    }
+    best
+}
+
+// ---- morris: get_minimum_difference_morris.kara
+
+fn get_minimum_difference_morris(root: Option[TreeNode]) -> i64 {
+    let mut cur = root;
+    let mut prev: Option[i64] = None;
+    let mut best = i64.MAX;
+    while let Some(n) = cur {
+        if let Some(l) = n.left {
+            let mut pred = l;
+            loop {
+                match pred.right {
+                    Some(r) => {
+                        if r.ref_eq(n) {
+                            break;
+                        }
+                        pred = r;
+                    }
+                    None => {
+                        break;
+                    }
+                }
+            }
+            if pred.right.is_none() {
+                pred.right = Some(n);
+                cur = n.left;
+                continue;
+            }
+            pred.right = None;
+        }
+        if let Some(p) = prev {
+            best = best.min(n.val - p);
+        }
+        prev = Some(n.val);
+        cur = n.right;
+    }
+    best
+}
+
+// ---- sorted: get_minimum_difference_sorted.kara
+
+fn get_minimum_difference_sorted(root: Option[TreeNode]) -> i64 {
+    let mut values: Vec[i64] = Vec.new();
+    let mut todo: Vec[Option[TreeNode]] = vec![root];
+    while let Some(node) = todo.pop() {
+        if let Some(n) = node {
+            values.push(n.val);
+            todo.push(n.left);
+            todo.push(n.right);
+        }
+    }
+    values.sort();
+    let mut best = i64.MAX;
+    for i in 1..values.len() {
+        best = best.min(values[i] - values[i - 1]);
+    }
+    best
+}
+
+// ---- differential harness -------------------------------------------------
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn build(values: Vec[i64], seed: mut ref i64) -> Option[TreeNode] {
+    if values.is_empty() {
+        return None;
+    }
+    let root = TreeNode { val: values[0], left: None, right: None };
+    for i in 1..values.len() {
+        let v = values[i];
+        let mut node = root;
+        loop {
+            if v < node.val or (v == node.val and next_random(seed) % 2 == 0) {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(TreeNode { val: v, left: None, right: None });
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+fn answer(which: i64, root: Option[TreeNode]) -> i64 {
+    if which == 0 {
+        get_minimum_difference_star(root)
+    } else if which == 1 {
+        get_minimum_difference_stack(root)
+    } else if which == 2 {
+        get_minimum_difference_morris(root)
+    } else {
+        get_minimum_difference_sorted(root)
+    }
+}
+
+// The tree in pre-order, -1 for a missing child. A left-over Morris
+// thread would make a cycle, so at most `budget` nodes are visited and
+// -2 marks where the walk stopped.
+fn shape(node: Option[TreeNode], out: mut ref Vec[i64], budget: mut ref i64) {
+    if *budget == 0 {
+        out.push(-2);
+        return;
+    }
+    match node {
+        Some(n) => {
+            *budget -= 1;
+            out.push(n.val);
+            shape(n.left, out, budget);
+            shape(n.right, out, budget);
+        }
+        None => out.push(-1),
+    }
+}
+
+// The definition: the smallest difference over every pair of values.
+fn definition(values: Vec[i64]) -> i64 {
+    let mut best = i64.MAX;
+    for i in 0..values.len() {
+        for j in i + 1..values.len() {
+            best = best.min((values[i] - values[j]).abs());
+        }
+    }
+    best
+}
+
+fn main() {
+    let names = vec!["star", "stack", "morris", "sorted"];
+    let count = 1000;
+    let mut seed: i64 = 5300;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        let range = if t % 3 == 0 { 10 } else if t % 3 == 1 { 1000 } else { 100001 };
+        let size = 2 + next_random(mut seed) % 29;
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            values.push((next_random(mut seed) * 32768 + next_random(mut seed)) % range);
+        }
+        let want = definition(values.clone());
+        // One more copy of a value already there.
+        let mut repeated = values.clone();
+        repeated.push(values[next_random(mut seed) % size]);
+        // Every value v as 100,000 - v: the tree turned left to right.
+        let mut flipped: Vec[i64] = Vec.new();
+        for v in values.iter() {
+            flipped.push(100000 - *v);
+        }
+        let tree_seed = next_random(mut seed);
+        for which in 0..4 {
+            let mut s = tree_seed;
+            let root = build(values.clone(), mut s);
+            let mut before: Vec[i64] = Vec.new();
+            let mut budget = size + 1;
+            shape(root, mut before, mut budget);
+            let got = answer(which, root);
+            let mut after: Vec[i64] = Vec.new();
+            let mut budget = size + 1;
+            shape(root, mut after, mut budget);
+            let mut s = tree_seed;
+            let again = answer(which, build(repeated.clone(), mut s));
+            let mut s = tree_seed;
+            let turned = answer(which, build(flipped.clone(), mut s));
+            let ok = vec![got == want, before == after, again == 0, turned == got, got >= 0 and got <= 100000];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: {values} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

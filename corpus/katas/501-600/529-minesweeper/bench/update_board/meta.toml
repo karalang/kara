@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/529-minesweeper/bench/update_board.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "5fa208779"
+extracted_src = "21e14414"
+model_rev = "1aa23105"
+model_src = "21e14414"

@@ -1,0 +1,247 @@
+// Differential test for LeetCode #531: Lonely Pixel I.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random pictures of 1 to 12 by 1 to 12, a third of them sparse (black
+// with a chance of 2% to 12%) and the rest black with a chance of 0 to
+// 60%.
+// Properties:
+//   P1  the answer is the definition's: every two black pixels that
+//       share a row or a column make each other not lonely, and the
+//       black pixels left over are lonely
+//   P2  the transposed picture gives the same answer
+//   P3  the rows in a shuffled order give the same answer
+//   P4  the answer is at most the smaller side and at most the number of
+//       black pixels
+//   P5  one more row and column, white but for a black pixel where they
+//       cross, give one more
+
+// ---- star: find_lonely_pixel.kara
+
+fn find_lonely_pixel_star(picture: Vec[Vec[char]]) -> i64 {
+    let (m, n) = (picture.len(), picture[0].len());
+    let mut rows = vec![0; m];
+    let mut cols = vec![0; n];
+    for r in 0..m {
+        for c in 0..n {
+            if picture[r][c] == 'B' {
+                rows[r] += 1;
+                cols[c] += 1;
+            }
+        }
+    }
+    let mut lonely = 0;
+    for r in 0..m {
+        for c in 0..n {
+            if picture[r][c] == 'B' and rows[r] == 1 and cols[c] == 1 {
+                lonely += 1;
+            }
+        }
+    }
+    lonely
+}
+
+// ---- scan: find_lonely_pixel_scan.kara
+
+fn find_lonely_pixel_scan(picture: Vec[Vec[char]]) -> i64 {
+    let (m, n) = (picture.len(), picture[0].len());
+    let mut lonely = 0;
+    for r in 0..m {
+        for c in 0..n {
+            if picture[r][c] != 'B' {
+                continue;
+            }
+            let mut alone = true;
+            for k in 0..n {
+                if k != c and picture[r][k] == 'B' {
+                    alone = false;
+                }
+            }
+            for k in 0..m {
+                if k != r and picture[k][c] == 'B' {
+                    alone = false;
+                }
+            }
+            if alone {
+                lonely += 1;
+            }
+        }
+    }
+    lonely
+}
+
+// ---- single: find_lonely_pixel_single.kara
+
+fn find_lonely_pixel_single(picture: Vec[Vec[char]]) -> i64 {
+    let n = picture[0].len();
+    let mut cols = vec![0; n];
+    let mut single: Vec[Option[i64]] = Vec.new();
+    for row in picture.iter() {
+        let mut found: Option[i64] = None;
+        let mut blacks = 0;
+        for c in 0..n {
+            if row[c] == 'B' {
+                cols[c] += 1;
+                blacks += 1;
+                found = Some(c);
+            }
+        }
+        single.push(if blacks == 1 { found } else { None });
+    }
+    let mut lonely = 0;
+    for s in single.iter() {
+        if let Some(c) = *s {
+            if cols[c] == 1 {
+                lonely += 1;
+            }
+        }
+    }
+    lonely
+}
+
+// ---- transpose: find_lonely_pixel_transpose.kara
+
+fn blacks_transpose(row: Vec[char]) -> i64 {
+    row.iter().filter(|p| *p == 'B').count()
+}
+
+fn find_lonely_pixel_transpose(picture: Vec[Vec[char]]) -> i64 {
+    let (m, n) = (picture.len(), picture[0].len());
+    let mut transpose: Vec[Vec[char]] = Vec.new();
+    for c in 0..n {
+        let mut column: Vec[char] = Vec.new();
+        for r in 0..m {
+            column.push(picture[r][c]);
+        }
+        transpose.push(column);
+    }
+    let mut lonely = 0;
+    for r in 0..m {
+        if blacks_transpose(picture[r]) != 1 {
+            continue;
+        }
+        for c in 0..n {
+            if picture[r][c] == 'B' and blacks_transpose(transpose[c]) == 1 {
+                lonely += 1;
+            }
+        }
+    }
+    lonely
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, picture: Vec[Vec[char]]) -> i64 {
+    if which == 0 {
+        find_lonely_pixel_star(picture)
+    } else if which == 1 {
+        find_lonely_pixel_scan(picture)
+    } else if which == 2 {
+        find_lonely_pixel_single(picture)
+    } else {
+        find_lonely_pixel_transpose(picture)
+    }
+}
+
+// The definition, by pairs: every two black pixels that share a row or a
+// column make each other not lonely; the black pixels left over are.
+fn definition(picture: Vec[Vec[char]]) -> i64 {
+    let mut blacks: Vec[(i64, i64)] = Vec.new();
+    for r in 0..picture.len() {
+        for c in 0..picture[r].len() {
+            if picture[r][c] == 'B' {
+                blacks.push((r, c));
+            }
+        }
+    }
+    let mut crowded = vec![false; blacks.len()];
+    for i in 0..blacks.len() {
+        for j in i + 1..blacks.len() {
+            let ((a, b), (c, d)) = (blacks[i], blacks[j]);
+            if a == c or b == d {
+                crowded[i] = true;
+                crowded[j] = true;
+            }
+        }
+    }
+    crowded.iter().filter(|x| not *x).count()
+}
+
+fn main() {
+    let names = vec!["star", "scan", "single", "transpose"];
+    let count = 1000;
+    let mut seed: i64 = 5310;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        let m = 1 + next_random(mut seed) % 12;
+        let n = 1 + next_random(mut seed) % 12;
+        // Sparse pictures a third of the time, so lonely pixels are common.
+        let per_mille = if t % 3 == 0 { 20 + next_random(mut seed) % 100 } else { next_random(mut seed) % 600 };
+        let mut picture: Vec[Vec[char]] = Vec.new();
+        let mut blacks = 0;
+        for _ in 0..m {
+            let mut row: Vec[char] = Vec.new();
+            for _ in 0..n {
+                let black = next_random(mut seed) % 1000 < per_mille;
+                row.push(if black { 'B' } else { 'W' });
+                if black {
+                    blacks += 1;
+                }
+            }
+            picture.push(row);
+        }
+        let want = definition(picture.clone());
+        let mut transpose: Vec[Vec[char]] = Vec.new();
+        for c in 0..n {
+            let mut column: Vec[char] = Vec.new();
+            for r in 0..m {
+                column.push(picture[r][c]);
+            }
+            transpose.push(column);
+        }
+        // The rows in a shuffled order.
+        let mut shuffled = picture.clone();
+        for i in (1..m).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            shuffled.swap(i, j);
+        }
+        // One more row and column, white but for a black pixel where they
+        // cross.
+        let mut grown = picture.clone();
+        for row in grown.iter_mut() {
+            row.push('W');
+        }
+        let mut last = vec!['W'; n + 1];
+        last[n] = 'B';
+        grown.push(last);
+        for which in 0..4 {
+            let got = answer(which, picture.clone());
+            let ok = vec![
+                got == want,
+                answer(which, transpose.clone()) == got,
+                answer(which, shuffled.clone()) == got,
+                got >= 0 and got <= m.min(n) and got <= blacks,
+                answer(which, grown.clone()) == got + 1,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: {m} by {n} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

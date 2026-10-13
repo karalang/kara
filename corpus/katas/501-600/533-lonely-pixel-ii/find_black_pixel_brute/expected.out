@@ -1,0 +1,9 @@
+example 1: [WBWBBW, WBWBBW, WBWBBW, WWBWBW], target = 3 -> 6
+example 2: [WWB, WWB, WWB], target = 1 -> 0
+one black: [B], target = 1 -> 1
+one white: [W], target = 1 -> 0
+rows differ: [BB, BW], target = 1 -> 0
+two equal rows: [BWB, WWW, BWB], target = 2 -> 4
+count is right, rows are not: [BBW, BWB, WBB], target = 2 -> 0
+300 random pictures: 930 lonely, 133 with none, checksum 189442062
+186 by 200: target 5 -> 165, 4 -> 0

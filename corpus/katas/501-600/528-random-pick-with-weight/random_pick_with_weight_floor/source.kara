@@ -1,0 +1,155 @@
+// LeetCode #528: Random Pick with Weight -- a sorted map of run starts.
+//
+// Key every index by the start of its run in a `SortedMap`. The run a
+// point falls in is the entry with the largest start not past it,
+// which `floor` finds.
+
+// A seeded generator: 15 random bits a step, and a uniform draw below n
+// built from two steps.
+struct Draw {
+    seed: i64,
+}
+
+impl Draw {
+    fn new(seed: i64) -> Draw {
+        Draw { seed: seed }
+    }
+
+    fn step(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.seed / 65536
+    }
+
+    // Uniform in [0, n) for n up to 2^30: 30 random bits, drawn again
+    // when they land in the last, incomplete run of n.
+    fn below(mut ref self, n: i64) -> i64 {
+        let limit = 1073741824 / n * n;
+        loop {
+            let high = self.step();
+            let low = self.step();
+            let r = high * 32768 + low;
+            if r < limit {
+                return r % n;
+            }
+        }
+    }
+}
+
+struct Solution {
+    starts: SortedMap[i64, i64],
+    total: i64,
+    draw: Draw,
+}
+
+impl Solution {
+    fn new(w: Vec[i64], seed: i64) -> Solution {
+        let mut starts: SortedMap[i64, i64] = SortedMap.new();
+        let mut total = 0;
+        for i in 0..w.len() {
+            starts.insert(total, i);
+            total += w[i];
+        }
+        Solution { starts: starts, total: total, draw: Draw.new(seed) }
+    }
+
+    fn pick_index(mut ref self) -> i64 {
+        let r = self.draw.below(self.total);
+        match self.starts.floor(r) {
+            Some((_, i)) => *i,
+            None => 0,
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// Whether every count is within 5 standard deviations of its share.
+fn fair(counts: Vec[i64], w: Vec[i64], picks: i64) -> bool {
+    let mut total = 0;
+    for x in w.iter() {
+        total += *x;
+    }
+    for i in 0..counts.len() {
+        let p = w[i] as f64 / total as f64;
+        let mean = picks as f64 * p;
+        let sd = (picks as f64 * p * (1.0 - p)).sqrt();
+        let off = counts[i] as f64 - mean;
+        if off > 5.0 * sd + 1.0 or off < -5.0 * sd - 1.0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn picks(w: Vec[i64], seed: i64, count: i64) -> Vec[i64] {
+    let mut solution = Solution.new(w, seed);
+    let mut out: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        out.push(solution.pick_index());
+    }
+    out
+}
+
+fn main() {
+    // The examples: one weight, then [1, 3].
+    println(f"[1]: {picks(vec![1], 1, 5)}");
+    println(f"[1, 3]: {picks(vec![1, 3], 2, 12)}");
+    // Zero-free edge shapes: a heavy last weight, a heavy first one, all
+    // equal.
+    println(f"[1, 1, 1, 1, 100]: {picks(vec![1, 1, 1, 1, 100], 3, 12)}");
+    println(f"[100, 1, 1]: {picks(vec![100, 1, 1], 4, 12)}");
+    println(f"[5; 6]: {picks(vec![5; 6], 5, 12)}");
+    // 100,000 picks from [1, 2, 3, 4]: the counts, and whether each is
+    // within 5 standard deviations of its share.
+    let w = vec![1, 2, 3, 4];
+    let mut solution = Solution.new(w, 6);
+    let mut counts = vec![0; 4];
+    for _ in 0..100000 {
+        counts[solution.pick_index()] += 1;
+    }
+    println(f"[1, 2, 3, 4], 100000 picks: {counts}, fair {fair(counts, w, 100000)}");
+    // 300 random lists of 1 to 50 weights from 1 to 100, 200 picks each.
+    let mut seed: i64 = 528;
+    let mut checksum = 0;
+    let mut in_range = true;
+    for c in 0..300 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let n = 1 + seed / 65536 % 50;
+        let mut w: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            w.push(1 + seed / 65536 % 100);
+        }
+        let mut solution = Solution.new(w, 1000 + c);
+        for _ in 0..200 {
+            let i = solution.pick_index();
+            if i < 0 or i >= n {
+                in_range = false;
+            }
+            checksum = (checksum * 31 + i) % 1000000007;
+        }
+    }
+    println(f"300 random lists, 200 picks each: in range {in_range}, checksum {checksum}");
+    // The largest: 10,000 weights up to 100,000 and 10,000 picks (the
+    // problem's most calls), spread over 10 bands of indices.
+    let mut w: Vec[i64] = Vec.new();
+    for _ in 0..10000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let high = seed / 65536;
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        w.push(1 + (high * 32768 + seed / 65536) % 100000);
+    }
+    let mut band_weights = vec![0; 10];
+    for i in 0..10000 {
+        band_weights[i / 1000] += w[i];
+    }
+    let mut solution = Solution.new(w, 9);
+    let mut bands = vec![0; 10];
+    let mut checksum = 0;
+    for _ in 0..10000 {
+        let i = solution.pick_index();
+        bands[i / 1000] += 1;
+        checksum = (checksum * 31 + i) % 1000000007;
+    }
+    println(f"10000 weights, 10000 picks: bands {bands}, fair {fair(bands, band_weights, 10000)}, checksum {checksum}");
+}

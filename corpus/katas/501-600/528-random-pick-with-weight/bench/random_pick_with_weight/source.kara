@@ -1,0 +1,98 @@
+// Benchmark for LeetCode #528: Random Pick with Weight -- the ★ arm
+// (prefix sums and a binary search); see ../random_pick_with_weight.kara.
+
+// A seeded generator: 15 random bits a step, and a uniform draw below n
+// built from two steps.
+struct Draw {
+    seed: i64,
+}
+
+impl Draw {
+    fn new(seed: i64) -> Draw {
+        Draw { seed: seed }
+    }
+
+    fn step(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.seed / 65536
+    }
+
+    // Uniform in [0, n) for n up to 2^30: 30 random bits, drawn again
+    // when they land in the last, incomplete run of n.
+    fn below(mut ref self, n: i64) -> i64 {
+        let limit = 1073741824 / n * n;
+        loop {
+            let high = self.step();
+            let low = self.step();
+            let r = high * 32768 + low;
+            if r < limit {
+                return r % n;
+            }
+        }
+    }
+}
+
+struct Solution {
+    // ends[i]: the sum of the weights up to and including i.
+    ends: Vec[i64],
+    draw: Draw,
+}
+
+impl Solution {
+    fn new(w: Vec[i64], seed: i64) -> Solution {
+        let mut ends: Vec[i64] = Vec.new();
+        let mut total = 0;
+        for x in w.iter() {
+            total += *x;
+            ends.push(total);
+        }
+        Solution { ends: ends, draw: Draw.new(seed) }
+    }
+
+    fn pick_index(mut ref self) -> i64 {
+        let r = self.draw.below(self.ends[self.ends.len() - 1]);
+        // The first index whose run ends past r.
+        let mut low = 0;
+        let mut high = self.ends.len() - 1;
+        while low < high {
+            let mid = (low + high) / 2;
+            if self.ends[mid] > r {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+        low
+    }
+}
+
+// 20 lists of 10,000 weights (the problem's longest) from 1 to 100,000
+// made once; then in each of 50 rounds every list gets a fresh solution,
+// seeded by round and list, and 10,000 picks (the problem's most calls).
+fn main() {
+    let mut seed: i64 = 528;
+    let mut lists: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..20 {
+        let mut w: Vec[i64] = Vec.new();
+        for _ in 0..10000 {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            let high = seed / 65536;
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            w.push(1 + (high * 32768 + seed / 65536) % 100000);
+        }
+        lists.push(w);
+    }
+    let mut total = 0;
+    let mut checksum = 0;
+    for round in 0..50 {
+        for l in 0..lists.len() {
+            let mut solution = Solution.new(lists[l], round * 20 + l);
+            for _ in 0..10000 {
+                let i = solution.pick_index();
+                total += i;
+                checksum = (checksum * 31 + i) % 1000000007;
+            }
+        }
+    }
+    println(f"20 lists of 10000, 50 rounds of 10000 picks: total {total}, checksum {checksum}");
+}

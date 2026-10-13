@@ -1,0 +1,481 @@
+// Differential test for LeetCode #529: Minesweeper.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random boards of 1 to 10 by 1 to 10 with up to 30% mines, a third of
+// them with an earlier click already made, clicked on a square still
+// unrevealed.
+// Properties:
+//   P1  the board is the definition's, through union-find: the click's
+//       group of touching squares no mine touches, and every unrevealed
+//       square touching the group, are revealed
+//   P2  only unrevealed squares change: an 'E' to 'B' or a digit, and a
+//       mine only when it was clicked, to 'X'
+//   P3  every revealed digit is its mine count, and every blank touches
+//       no mine and no unrevealed square
+//   P4  the same click again changes nothing
+//   P5  the board turned on its diagonal and clicked at (c, r) gives the
+//       result turned the same way
+
+// ---- star: update_board.kara
+
+fn mines_around_star(board: Vec[Vec[char]], r: i64, c: i64) -> i64 {
+    let mut count = 0;
+    for dr in -1..=1 {
+        for dc in -1..=1 {
+            let (y, x) = (r + dr, c + dc);
+            if (dr != 0 or dc != 0) and y >= 0 and y < board.len() and x >= 0 and x < board[0].len() {
+                if board[y][x] == 'M' or board[y][x] == 'X' {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
+fn reveal_star(board: mut ref Vec[Vec[char]], r: i64, c: i64) {
+    if board[r][c] != 'E' {
+        return;
+    }
+    let count = mines_around_star(board, r, c);
+    if count > 0 {
+        board[r][c] = (48 + count) as u8 as char;
+        return;
+    }
+    board[r][c] = 'B';
+    for dr in -1..=1 {
+        for dc in -1..=1 {
+            let (y, x) = (r + dr, c + dc);
+            if y >= 0 and y < board.len() and x >= 0 and x < board[0].len() {
+                reveal_star(board, y, x);
+            }
+        }
+    }
+}
+
+fn update_board_star(board: own Vec[Vec[char]], click: Vec[i64]) -> Vec[Vec[char]] {
+    let mut board = board;
+    let (r, c) = (click[0], click[1]);
+    if board[r][c] == 'M' {
+        board[r][c] = 'X';
+    } else {
+        reveal_star(mut board, r, c);
+    }
+    board
+}
+
+// ---- queue: update_board_queue.kara
+
+fn mines_around_queue(board: Vec[Vec[char]], r: i64, c: i64) -> i64 {
+    let mut count = 0;
+    for dr in -1..=1 {
+        for dc in -1..=1 {
+            let (y, x) = (r + dr, c + dc);
+            if (dr != 0 or dc != 0) and y >= 0 and y < board.len() and x >= 0 and x < board[0].len() {
+                if board[y][x] == 'M' or board[y][x] == 'X' {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
+fn update_board_queue(board: own Vec[Vec[char]], click: Vec[i64]) -> Vec[Vec[char]] {
+    let mut board = board;
+    let (r, c) = (click[0], click[1]);
+    if board[r][c] == 'M' {
+        board[r][c] = 'X';
+        return board;
+    }
+    if board[r][c] != 'E' {
+        return board;
+    }
+    let (m, n) = (board.len(), board[0].len());
+    let mut queued: Vec[Vec[bool]] = vec![vec![false; n]; m];
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    queue.push_back((r, c));
+    queued[r][c] = true;
+    while let Some((y, x)) = queue.pop_front() {
+        let count = mines_around_queue(board, y, x);
+        if count > 0 {
+            board[y][x] = (48 + count) as u8 as char;
+            continue;
+        }
+        board[y][x] = 'B';
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let (v, u) = (y + dy, x + dx);
+                if v >= 0 and v < m and u >= 0 and u < n and board[v][u] == 'E' and not queued[v][u] {
+                    queued[v][u] = true;
+                    queue.push_back((v, u));
+                }
+            }
+        }
+    }
+    board
+}
+
+// ---- stack: update_board_stack.kara
+
+fn mines_around_stack(board: Vec[Vec[char]], r: i64, c: i64) -> i64 {
+    let mut count = 0;
+    for dr in -1..=1 {
+        for dc in -1..=1 {
+            let (y, x) = (r + dr, c + dc);
+            if (dr != 0 or dc != 0) and y >= 0 and y < board.len() and x >= 0 and x < board[0].len() {
+                if board[y][x] == 'M' or board[y][x] == 'X' {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
+fn open_stack(board: mut ref Vec[Vec[char]], r: i64, c: i64) -> bool {
+    let count = mines_around_stack(board, r, c);
+    if count > 0 {
+        board[r][c] = (48 + count) as u8 as char;
+        false
+    } else {
+        board[r][c] = 'B';
+        true
+    }
+}
+
+fn update_board_stack(board: own Vec[Vec[char]], click: Vec[i64]) -> Vec[Vec[char]] {
+    let mut board = board;
+    let (r, c) = (click[0], click[1]);
+    if board[r][c] == 'M' {
+        board[r][c] = 'X';
+        return board;
+    }
+    if board[r][c] != 'E' {
+        return board;
+    }
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    if open_stack(mut board, r, c) {
+        stack.push((r, c));
+    }
+    while let Some((y, x)) = stack.pop() {
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let (v, u) = (y + dy, x + dx);
+                if v >= 0 and v < board.len() and u >= 0 and u < board[0].len() and board[v][u] == 'E' {
+                    if open_stack(mut board, v, u) {
+                        stack.push((v, u));
+                    }
+                }
+            }
+        }
+    }
+    board
+}
+
+// ---- sweep: update_board_sweep.kara
+
+fn update_board_sweep(board: own Vec[Vec[char]], click: Vec[i64]) -> Vec[Vec[char]] {
+    let mut board = board;
+    let (r, c) = (click[0], click[1]);
+    if board[r][c] == 'M' {
+        board[r][c] = 'X';
+        return board;
+    }
+    if board[r][c] != 'E' {
+        return board;
+    }
+    let (m, n) = (board.len(), board[0].len());
+    let mut around: Vec[Vec[i64]] = vec![vec![0; n]; m];
+    for y in 0..m {
+        for x in 0..n {
+            if board[y][x] == 'M' or board[y][x] == 'X' {
+                for v in (y - 1).max(0)..(y + 2).min(m) {
+                    for u in (x - 1).max(0)..(x + 2).min(n) {
+                        around[v][u] += 1;
+                    }
+                }
+                // The square itself was counted with its neighbours.
+                around[y][x] -= 1;
+            }
+        }
+    }
+    let shown = |k: i64| if k == 0 { 'B' } else { (48 + k) as u8 as char };
+    board[r][c] = shown(around[r][c]);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for y in 0..m {
+            for x in 0..n {
+                if board[y][x] != 'E' {
+                    continue;
+                }
+                let mut touches_blank = false;
+                for v in (y - 1).max(0)..(y + 2).min(m) {
+                    for u in (x - 1).max(0)..(x + 2).min(n) {
+                        if board[v][u] == 'B' {
+                            touches_blank = true;
+                        }
+                    }
+                }
+                if touches_blank {
+                    board[y][x] = shown(around[y][x]);
+                    changed = true;
+                }
+            }
+        }
+    }
+    board
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn answer(which: i64, board: Vec[Vec[char]], click: Vec[i64]) -> Vec[Vec[char]] {
+    if which == 0 {
+        update_board_star(board.clone(), click)
+    } else if which == 1 {
+        update_board_queue(board.clone(), click)
+    } else if which == 2 {
+        update_board_stack(board.clone(), click)
+    } else {
+        update_board_sweep(board.clone(), click)
+    }
+}
+
+fn count_mines(board: Vec[Vec[char]], r: i64, c: i64) -> i64 {
+    let mut count = 0;
+    for y in r - 1..=r + 1 {
+        for x in c - 1..=c + 1 {
+            if (y != r or x != c) and y >= 0 and y < board.len() and x >= 0 and x < board[0].len() {
+                if board[y][x] == 'M' or board[y][x] == 'X' {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
+fn find(parent: mut ref Vec[i64], i: i64) -> i64 {
+    let mut root = i;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    root
+}
+
+// The definition through union-find: join every pair of touching
+// unrevealed squares that no mine touches. Clicking such a square
+// reveals its whole group and every unrevealed square touching the
+// group; clicking any other unrevealed square reveals just its digit.
+fn definition(board: Vec[Vec[char]], click: Vec[i64]) -> Vec[Vec[char]] {
+    let mut out = board.clone();
+    let (m, n) = (board.len(), board[0].len());
+    let (r, c) = (click[0], click[1]);
+    if board[r][c] == 'M' {
+        out[r][c] = 'X';
+        return out;
+    }
+    if board[r][c] != 'E' {
+        return out;
+    }
+    let zero = |y: i64, x: i64| board[y][x] == 'E' and count_mines(board, y, x) == 0;
+    let mut parent: Vec[i64] = (0..m * n).collect();
+    for y in 0..m {
+        for x in 0..n {
+            if not zero(y, x) {
+                continue;
+            }
+            for v in y - 1..=y + 1 {
+                for u in x - 1..=x + 1 {
+                    if v >= 0 and v < m and u >= 0 and u < n and zero(v, u) {
+                        let a = find(mut parent, y * n + x);
+                        let b = find(mut parent, v * n + u);
+                        parent[a] = b;
+                    }
+                }
+            }
+        }
+    }
+    if not zero(r, c) {
+        out[r][c] = (48 + count_mines(board, r, c)) as u8 as char;
+        return out;
+    }
+    let group = find(mut parent, r * n + c);
+    for y in 0..m {
+        for x in 0..n {
+            if board[y][x] != 'E' {
+                continue;
+            }
+            // Revealed when it is in the group, or touches a member.
+            let mut revealed = false;
+            for v in y - 1..=y + 1 {
+                for u in x - 1..=x + 1 {
+                    if v >= 0 and v < m and u >= 0 and u < n and zero(v, u) and find(mut parent, v * n + u) == group {
+                        revealed = true;
+                    }
+                }
+            }
+            if revealed {
+                let k = count_mines(board, y, x);
+                out[y][x] = if k == 0 { 'B' } else { (48 + k) as u8 as char };
+            }
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random board of 1 to `most` by 1 to `most`, up to 30% mines, with
+// an earlier click already made on it one time in three.
+fn random_case(seed: mut ref i64, most: i64) -> (Vec[Vec[char]], Vec[i64]) {
+    let m = 1 + next_random(seed) % most;
+    let n = 1 + next_random(seed) % most;
+    let percent = next_random(seed) % 31;
+    let mut board: Vec[Vec[char]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[char] = Vec.new();
+        for _ in 0..n {
+            row.push(if next_random(seed) % 100 < percent { 'M' } else { 'E' });
+        }
+        board.push(row);
+    }
+    if next_random(seed) % 3 == 0 {
+        let (r, c) = (next_random(seed) % m, next_random(seed) % n);
+        if board[r][c] == 'E' {
+            board = definition(board, vec![r, c]);
+        }
+    }
+    let mut open: Vec[Vec[i64]] = Vec.new();
+    for r in 0..m {
+        for c in 0..n {
+            if board[r][c] == 'E' or board[r][c] == 'M' {
+                open.push(vec![r, c]);
+            }
+        }
+    }
+    let click = if open.is_empty() { vec![0, 0] } else { open[next_random(seed) % open.len()].clone() };
+    (board, click)
+}
+
+fn transpose(board: Vec[Vec[char]]) -> Vec[Vec[char]] {
+    let mut out: Vec[Vec[char]] = Vec.new();
+    for x in 0..board[0].len() {
+        let mut row: Vec[char] = Vec.new();
+        for y in 0..board.len() {
+            row.push(board[y][x]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn main() {
+    let names = vec!["star", "queue", "stack", "sweep"];
+    let cases = 1000;
+    let mut seed: i64 = 5290;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for _ in 0..cases {
+        let (board, click) = random_case(mut seed, 10);
+        let want = definition(board, click);
+        let (r, c) = (click[0], click[1]);
+        for which in 0..4 {
+            // P1: the board is the definition's.
+            checks += 1;
+            let got = answer(which, board, click);
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {board} at {click} gave {got}, want {want}");
+                }
+            }
+            // P2: only unrevealed squares changed: an 'E' to 'B' or a
+            // digit, and a mine only when it was clicked, to 'X'.
+            checks += 1;
+            let mut only_unrevealed = got.len() == board.len();
+            for y in 0..got.len().min(board.len()) {
+                for x in 0..board[y].len() {
+                    let (was, now) = (board[y][x], got[y][x]);
+                    if was == now {
+                        continue;
+                    }
+                    let ok_e = was == 'E' and (now == 'B' or (now >= '1' and now <= '8'));
+                    let ok_m = was == 'M' and now == 'X' and y == r and x == c;
+                    if not ok_e and not ok_m {
+                        only_unrevealed = false;
+                    }
+                }
+            }
+            if not only_unrevealed {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {board} at {click} gave {got}");
+                }
+            }
+            // P3: a revealed digit is its mine count, and a blank touches
+            // no mine and no unrevealed square.
+            checks += 1;
+            let mut consistent = true;
+            for y in 0..got.len() {
+                for x in 0..got[y].len() {
+                    if board[y][x] != 'E' or got[y][x] == 'E' {
+                        continue;
+                    }
+                    let k = count_mines(got, y, x);
+                    if got[y][x] == 'B' {
+                        if k != 0 {
+                            consistent = false;
+                        }
+                        for v in y - 1..=y + 1 {
+                            for u in x - 1..=x + 1 {
+                                if v >= 0 and v < got.len() and u >= 0 and u < got[0].len() and got[v][u] == 'E' {
+                                    consistent = false;
+                                }
+                            }
+                        }
+                    } else if got[y][x] != (48 + k) as u8 as char {
+                        consistent = false;
+                    }
+                }
+            }
+            if not consistent {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {board} at {click} gave {got}");
+                }
+            }
+            // P4: the same click again changes nothing.
+            checks += 1;
+            if got[r][c] != 'X' and answer(which, got, click) != got {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {board} at {click} changes on a second click");
+                }
+            }
+            // P5: the board turned on its diagonal, clicked at (c, r),
+            // gives the result turned the same way.
+            checks += 1;
+            if answer(which, transpose(board), vec![c, r]) != transpose(got) {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {board} at {click} differs transposed");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

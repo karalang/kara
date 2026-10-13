@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/533-lonely-pixel-ii/differential.kara"
+dedup_of = []
+expect = "error:E0236"
+exit = 1
+tags = ["closure", "differential", "lib:map", "lib:sortedset"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "5fa208779"
+extracted_src = "72a1017d"
+model_rev = "1aa23105"
+model_src = "72a1017d"

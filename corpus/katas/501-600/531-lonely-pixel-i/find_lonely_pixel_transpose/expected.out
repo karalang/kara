@@ -1,0 +1,9 @@
+example 1: [WWB, WBW, BWW] -> 3
+example 2: [BBB, BBW, BBB] -> 0
+one black: [B] -> 1
+one white: [W] -> 0
+two in a row: [WBWB, WWWW, BWWW] -> 1
+two in a column: [BW, WW, BW, WB] -> 1
+all white: [WWWW, WWWW, WWWW] -> 0
+300 random pictures: 224 lonely, 163 with none, checksum 169407310
+500 by 500: 74

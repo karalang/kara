@@ -1,0 +1,7 @@
+example 1: B1E1B/B1M1B/B111B/BBBBB
+example 2: B1E1B/B1X1B/B111B/BBBBB
+one square: B and X
+a digit: EM/1E
+walled off: B2MEE/25MEE/MMMEE
+500 random boards: 7517 blank, 315 exploded, checksum 706108911
+50 by 50, clicked at (0, 0): 2128 blank, 57 unrevealed, 315 digits; row 0 BBBBBBBBBBBBBBBBBBBB1MEE1BBBBBBBBBBBBBBBBBBB2M2BBB

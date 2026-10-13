@@ -1,0 +1,131 @@
+// LeetCode #533: Lonely Pixel II -- column by column.
+//
+// Count the black pixels of every row first. Then take each column that
+// holds `target` black pixels: the first row black in it must hold
+// `target` too, and every other row black in it must equal that row.
+// When both hold, all `target` of the column's pixels are lonely.
+// O(mn + m n^2) time at worst.
+
+fn find_black_pixel(picture: Vec[Vec[char]], target: i64) -> i64 {
+    let (m, n) = (picture.len(), picture[0].len());
+    let mut in_row = vec![0; m];
+    for r in 0..m {
+        for c in 0..n {
+            if picture[r][c] == 'B' {
+                in_row[r] += 1;
+            }
+        }
+    }
+    let mut lonely = 0;
+    for c in 0..n {
+        let mut first: Option[i64] = None;
+        let mut blacks = 0;
+        let mut same = true;
+        for r in 0..m {
+            if picture[r][c] != 'B' {
+                continue;
+            }
+            blacks += 1;
+            match first {
+                None => first = Some(r),
+                Some(f) => {
+                    if picture[r] != picture[f] {
+                        same = false;
+                    }
+                }
+            }
+        }
+        if let Some(f) = first {
+            if blacks == target and in_row[f] == target and same {
+                lonely += target;
+            }
+        }
+    }
+    lonely
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn parse(rows: Vec[Str]) -> Vec[Vec[char]] {
+    let mut picture: Vec[Vec[char]] = Vec.new();
+    for row in rows.iter() {
+        picture.push(row.chars().collect());
+    }
+    picture
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random picture n wide. Each of `planted` rows is made with exactly
+// `target` black pixels and written `target` times (a quarter of the time
+// once more), so lonely pixels can occur; then `extra` rows black with
+// chance `percent` in 100 are added, and the rows shuffled.
+fn random_picture(seed: mut ref i64, n: i64, target: i64, planted: i64, extra: i64, percent: i64) -> Vec[Vec[char]] {
+    let mut picture: Vec[Vec[char]] = Vec.new();
+    for _ in 0..planted {
+        let mut cols: Vec[i64] = (0..n).collect();
+        let mut row = vec!['W'; n];
+        for i in 0..target {
+            let j = i + next_random(seed) % (n - i);
+            cols.swap(i, j);
+            row[cols[i]] = 'B';
+        }
+        let copies = if next_random(seed) % 4 == 0 { target + 1 } else { target };
+        for _ in 0..copies {
+            picture.push(row.clone());
+        }
+    }
+    for _ in 0..extra {
+        let mut row: Vec[char] = Vec.new();
+        for _ in 0..n {
+            row.push(if next_random(seed) % 100 < percent { 'B' } else { 'W' });
+        }
+        picture.push(row);
+    }
+    for i in (1..picture.len()).rev() {
+        let j = next_random(seed) % (i + 1);
+        picture.swap(i, j);
+    }
+    picture
+}
+
+fn show(name: Str, rows: Vec[Str], target: i64) {
+    println(f"{name}: {rows}, target = {target} -> {find_black_pixel(parse(rows.clone()), target)}");
+}
+
+fn main() {
+    show("example 1", vec!["WBWBBW", "WBWBBW", "WBWBBW", "WWBWBW"], 3);
+    show("example 2", vec!["WWB", "WWB", "WWB"], 1);
+    show("one black", vec!["B"], 1);
+    show("one white", vec!["W"], 1);
+    show("rows differ", vec!["BB", "BW"], 1);
+    show("two equal rows", vec!["BWB", "WWW", "BWB"], 2);
+    show("count is right, rows are not", vec!["BBW", "BWB", "WBB"], 2);
+    // 300 random pictures 1 to 20 wide, for a target from 1 to 4, with 0
+    // to 3 planted rows and 0 to 10 more black with a chance of 0 to 20%.
+    let mut seed: i64 = 533;
+    let mut total = 0;
+    let mut none = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 20;
+        let target = 1 + next_random(mut seed) % n.min(4);
+        let planted = next_random(mut seed) % 4;
+        let extra = if planted == 0 { 1 + next_random(mut seed) % 10 } else { next_random(mut seed) % 11 };
+        let percent = next_random(mut seed) % 21;
+        let answer = find_black_pixel(random_picture(mut seed, n, target, planted, extra, percent), target);
+        total += answer;
+        if answer == 0 {
+            none += 1;
+        }
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"300 random pictures: {total} lonely, {none} with none, checksum {checksum}");
+    // The largest: 200 wide (the problem's most), 20 rows planted for a
+    // target of 5 (100 to 120 rows) and 80 more black with a chance of 1%.
+    let picture = random_picture(mut seed, 200, 5, 20, 80, 1);
+    println(f"{picture.len()} by 200: target 5 -> {find_black_pixel(picture, 5)}, 4 -> {find_black_pixel(picture, 4)}");
+}

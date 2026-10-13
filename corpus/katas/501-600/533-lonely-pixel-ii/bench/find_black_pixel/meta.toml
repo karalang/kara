@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/533-lonely-pixel-ii/bench/find_black_pixel.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:map", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "5fa208779"
+extracted_src = "86eeb5ae"
+model_rev = "1aa23105"
+model_src = "86eeb5ae"
