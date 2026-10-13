@@ -1,0 +1,86 @@
+// LeetCode #522: Longest Uncommon Subsequence II -- every subsequence.
+//
+// List every subsequence of every word (at most 2^10 each), counting for
+// each one how many words have it. The answer is the longest that only
+// one word has.
+
+fn find_lus_length(strs: Vec[String]) -> i64 {
+    let mut words_with: Map[String, i64] = Map.new();
+    for word in strs.iter() {
+        let letters: Vec[char] = word.chars().collect();
+        let mut mine: Set[String] = Set.new();
+        for mask in 1..(1 << letters.len()) {
+            let mut s = String.new();
+            for i in 0..letters.len() {
+                if (mask >> i) & 1 == 1 {
+                    s.push(letters[i]);
+                }
+            }
+            mine.insert(s);
+        }
+        for s in mine.iter() {
+            *words_with.entry(s.clone()).or_insert(0) += 1;
+        }
+    }
+    let mut best = -1;
+    for (s, n) in words_with.iter() {
+        if *n == 1 {
+            best = best.max(s.len());
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut word = String.new();
+    for _ in 0..len {
+        word.push((97 + next_random(seed) % letters) as u8 as char);
+    }
+    word
+}
+
+fn show(strs: Vec[String]) {
+    println(f"{strs}: {find_lus_length(strs)}");
+}
+
+fn main() {
+    show(vec!["aba".to_string(), "cdc".to_string(), "eae".to_string()]);
+    show(vec!["aaa".to_string(), "aaa".to_string(), "aa".to_string()]);
+    show(vec!["a".to_string(), "b".to_string()]);
+    show(vec!["a".to_string(), "a".to_string()]);
+    show(vec!["abc".to_string(), "abc".to_string(), "ab".to_string(), "abcd".to_string()]);
+    show(vec!["aabbcc".to_string(), "aabbcc".to_string(), "cb".to_string()]);
+    show(vec!["aabbcc".to_string(), "aabbcc".to_string(), "c".to_string(), "e".to_string(), "aabbcd".to_string()]);
+    // 1,000 random lists of 2 to 50 words of 1 to 10 letters from 1 to 3
+    // letters, with words copied from earlier in the list one time in
+    // three.
+    let mut seed: i64 = 522;
+    let mut none = 0;
+    let mut checksum = 0;
+    for _ in 0..1000 {
+        let letters = 1 + next_random(mut seed) % 3;
+        let n = 2 + next_random(mut seed) % 49;
+        let mut strs: Vec[String] = Vec.new();
+        for k in 0..n {
+            if k > 0 and next_random(mut seed) % 3 == 0 {
+                let from = next_random(mut seed) % k;
+                strs.push(strs[from].clone());
+            } else {
+                strs.push(random_word(mut seed, 1 + next_random(mut seed) % 10, letters));
+            }
+        }
+        let answer = find_lus_length(strs);
+        if answer == -1 {
+            none += 1;
+        }
+        checksum = (checksum * 31 + answer + 1) % 1000000007;
+    }
+    println(f"1000 random lists: {none} with none, checksum {checksum}");
+}

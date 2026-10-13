@@ -1,0 +1,230 @@
+// Differential test for LeetCode #523: Continuous Subarray Sum.
+//
+// Copies of the four arms, each held to the properties below on 2,000
+// cases: a short array of 1 to 12 numbers up to 30 with k up to 60 for
+// P1, and an array of 1 to 60 numbers up to 999 with k up to 1,000 for
+// the rest. Properties:
+//   P1  the answer is the brute force's, which sums every run of two or
+//       more numbers
+//   P2  the array back to front gives the same answer
+//   P3  every number and k multiplied by c (2 to 5) give the same answer
+//   P4  two zeros put in side by side anywhere make it true
+//   P5  with k = 1 it is true exactly when there are two or more numbers
+
+// ---- star: check_subarray_sum.kara
+
+fn check_subarray_sum_star(nums: Vec[i64], k: i64) -> bool {
+    let mut first: Map[i64, i64] = Map.new();
+    first.insert(0, -1);
+    let mut rem = 0;
+    for i in 0..nums.len() {
+        rem = (rem + nums[i]) % k;
+        match first.get(rem) {
+            Some(j) => {
+                if i - *j >= 2 {
+                    return true;
+                }
+            }
+            None => {
+                first.insert(rem, i);
+            }
+        }
+    }
+    false
+}
+
+// ---- lag: check_subarray_sum_lag.kara
+
+fn check_subarray_sum_lag(nums: Vec[i64], k: i64) -> bool {
+    let mut seen: Set[i64] = Set.new();
+    let mut prev = 0;
+    let mut rem = 0;
+    for x in nums.iter() {
+        rem = (rem + *x) % k;
+        if seen.contains(rem) {
+            return true;
+        }
+        seen.insert(prev);
+        prev = rem;
+    }
+    false
+}
+
+// ---- sorted: check_subarray_sum_sorted.kara
+
+fn check_subarray_sum_sorted(nums: Vec[i64], k: i64) -> bool {
+    let mut pairs: Vec[(i64, i64)] = vec![(0, 0)];
+    let mut rem = 0;
+    for i in 0..nums.len() {
+        rem = (rem + nums[i]) % k;
+        pairs.push((rem, i + 1));
+    }
+    pairs.sort();
+    let mut start = 0;
+    for i in 1..=pairs.len() {
+        if i == pairs.len() or pairs[i].0 != pairs[start].0 {
+            if pairs[i - 1].1 - pairs[start].1 >= 2 {
+                return true;
+            }
+            start = i;
+        }
+    }
+    false
+}
+
+// ---- span: check_subarray_sum_span.kara
+
+fn check_subarray_sum_span(nums: Vec[i64], k: i64) -> bool {
+    let mut first: Map[i64, i64] = Map.new();
+    let mut last: Map[i64, i64] = Map.new();
+    first.insert(0, 0);
+    last.insert(0, 0);
+    let mut rem = 0;
+    for i in 0..nums.len() {
+        rem = (rem + nums[i]) % k;
+        if not first.contains_key(rem) {
+            first.insert(rem, i + 1);
+        }
+        last.insert(rem, i + 1);
+    }
+    for (r, a) in first.iter() {
+        if last[r] - *a >= 2 {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn answer(which: i64, nums: Vec[i64], k: i64) -> bool {
+    if which == 0 {
+        check_subarray_sum_star(nums, k)
+    } else if which == 1 {
+        check_subarray_sum_lag(nums, k)
+    } else if which == 2 {
+        check_subarray_sum_sorted(nums, k)
+    } else {
+        check_subarray_sum_span(nums, k)
+    }
+}
+
+// Every run of two or more numbers, summed.
+fn brute(nums: Vec[i64], k: i64) -> bool {
+    for i in 0..nums.len() {
+        let mut sum = nums[i];
+        for j in i + 1..nums.len() {
+            sum += nums[j];
+            if sum % k == 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_nums(seed: mut ref i64, n: i64, most: i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        nums.push(next_random(seed) % (most + 1));
+    }
+    nums
+}
+
+fn main() {
+    let names = vec!["star", "lag", "sorted", "span"];
+    let cases = 2000;
+    let mut seed: i64 = 5230;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for _ in 0..cases {
+        // A short array of 1 to 12 numbers up to 30 with k up to 60, for
+        // P1; a longer one of 1 to 60 numbers up to 999 with k up to
+        // 1,000 for the rest.
+        let short = random_nums(mut seed, 1 + next_random(mut seed) % 12, 30);
+        let k_short = 1 + next_random(mut seed) % 60;
+        let nums = random_nums(mut seed, 1 + next_random(mut seed) % 60, 999);
+        let k = 1 + next_random(mut seed) % 1000;
+        let mut reversed: Vec[i64] = Vec.new();
+        for i in 0..nums.len() {
+            reversed.push(nums[nums.len() - 1 - i]);
+        }
+        let c = 2 + next_random(mut seed) % 4;
+        let mut scaled: Vec[i64] = Vec.new();
+        for x in nums.iter() {
+            scaled.push(*x * c);
+        }
+        let at = next_random(mut seed) % (nums.len() + 1);
+        let mut zeros: Vec[i64] = Vec.new();
+        for i in 0..=nums.len() {
+            if i == at {
+                zeros.push(0);
+                zeros.push(0);
+            }
+            if i < nums.len() {
+                zeros.push(nums[i]);
+            }
+        }
+        let want = brute(short, k_short);
+        for which in 0..4 {
+            // P1: the answer is the brute force's, on the short array.
+            checks += 1;
+            let got = answer(which, short, k_short);
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {short}, k = {k_short} gave {got}");
+                }
+            }
+            // P2: the array back to front gives the same answer.
+            checks += 1;
+            let got = answer(which, nums, k);
+            if answer(which, reversed, k) != got {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {nums}, k = {k} differs back to front");
+                }
+            }
+            // P3: every number and k times c gives the same answer.
+            checks += 1;
+            if answer(which, scaled, k * c) != got {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {nums}, k = {k} times {c}");
+                }
+            }
+            // P4: two zeros put in side by side make it true.
+            checks += 1;
+            if not answer(which, zeros, k) {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {zeros}, k = {k}");
+                }
+            }
+            // P5: with k = 1 it is true exactly when there are two or
+            // more numbers.
+            checks += 1;
+            if answer(which, nums, 1) != (nums.len() >= 2) {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {nums}, k = 1");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

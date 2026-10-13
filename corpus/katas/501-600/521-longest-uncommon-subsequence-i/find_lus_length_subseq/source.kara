@@ -1,0 +1,86 @@
+// LeetCode #521: Longest Uncommon Subsequence I -- test each whole word.
+//
+// The longest uncommon subsequence, when there is one, is a whole word:
+// any longer stretch of a word that is uncommon stays uncommon. So try
+// each word in turn and keep its length when it is not a subsequence of
+// the other, checked by a greedy walk.
+
+fn is_subsequence(small: Str, big: Str) -> bool {
+    let s: Vec[char] = small.chars().collect();
+    let mut i = 0;
+    for c in big.chars() {
+        if i < s.len() and s[i] == c {
+            i += 1;
+        }
+    }
+    i == s.len()
+}
+
+fn find_lus_length(a: Str, b: Str) -> i64 {
+    let mut best = -1;
+    if not is_subsequence(a, b) {
+        best = best.max(a.len());
+    }
+    if not is_subsequence(b, a) {
+        best = best.max(b.len());
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random word of `len` letters from the first `letters` of the
+// alphabet.
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut word = String.new();
+    for _ in 0..len {
+        word.push((97 + next_random(seed) % letters) as u8 as char);
+    }
+    word
+}
+
+fn show(a: Str, b: Str) {
+    println(f"a = \"{a}\", b = \"{b}\": {find_lus_length(a, b)}");
+}
+
+fn main() {
+    show("aba", "cdc");
+    show("aaa", "bbb");
+    show("aaa", "aaa");
+    show("a", "a");
+    show("a", "b");
+    show("ab", "abc");
+    show("abc", "ab");
+    show("ab", "ba");
+    show("abcd", "abc");
+    // 3,000 random pairs of 1 to 100 letters from 1 to 3 letters: a
+    // third of them equal, a third one letter off, a third unrelated.
+    let mut seed: i64 = 521;
+    let mut none = 0;
+    let mut checksum = 0;
+    for i in 0..3000 {
+        let letters = 1 + next_random(mut seed) % 3;
+        let a = random_word(mut seed, 1 + next_random(mut seed) % 100, letters);
+        let kind = i % 3;
+        let b = if kind == 0 {
+            a.clone()
+        } else if kind == 1 {
+            let mut c = a.clone();
+            c.push((97 + next_random(mut seed) % letters) as u8 as char);
+            c
+        } else {
+            random_word(mut seed, 1 + next_random(mut seed) % 100, letters)
+        };
+        let n = find_lus_length(a, b);
+        if n == -1 {
+            none += 1;
+        }
+        checksum = (checksum * 31 + n + 1) % 1000000007;
+    }
+    println(f"3000 random pairs: {none} with none, checksum {checksum}");
+}

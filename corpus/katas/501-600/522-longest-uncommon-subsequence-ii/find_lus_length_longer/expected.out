@@ -1,0 +1,8 @@
+[aba, cdc, eae]: 3
+[aaa, aaa, aa]: -1
+[a, b]: 1
+[a, a]: -1
+[abc, abc, ab, abcd]: 4
+[aabbcc, aabbcc, cb]: 2
+[aabbcc, aabbcc, c, e, aabbcd]: 6
+1000 random lists: 259 with none, checksum 984279191

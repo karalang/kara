@@ -1,0 +1,10 @@
+a = "aba", b = "cdc": 3
+a = "aaa", b = "bbb": 3
+a = "aaa", b = "aaa": -1
+a = "a", b = "a": -1
+a = "a", b = "b": 1
+a = "ab", b = "abc": 3
+a = "abc", b = "ab": 3
+a = "ab", b = "ba": 2
+a = "abcd", b = "abc": 4
+3000 random pairs: 1001 with none, checksum 449713057

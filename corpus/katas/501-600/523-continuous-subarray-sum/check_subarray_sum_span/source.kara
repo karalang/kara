@@ -1,0 +1,82 @@
+// LeetCode #523: Continuous Subarray Sum -- first and last of each
+// remainder.
+//
+// One pass records, for every prefix remainder, the first and the last
+// prefix length that leave it; a second pass over the map looks for a
+// remainder whose last is at least two past its first.
+
+fn check_subarray_sum(nums: Vec[i64], k: i64) -> bool {
+    let mut first: Map[i64, i64] = Map.new();
+    let mut last: Map[i64, i64] = Map.new();
+    first.insert(0, 0);
+    last.insert(0, 0);
+    let mut rem = 0;
+    for i in 0..nums.len() {
+        rem = (rem + nums[i]) % k;
+        if not first.contains_key(rem) {
+            first.insert(rem, i + 1);
+        }
+        last.insert(rem, i + 1);
+    }
+    for (r, a) in first.iter() {
+        if last[r] - *a >= 2 {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], k: i64) {
+    println(f"{nums}, k = {k}: {check_subarray_sum(nums, k)}");
+}
+
+fn main() {
+    show(vec![23, 2, 4, 6, 7], 6);
+    show(vec![23, 2, 6, 4, 7], 6);
+    show(vec![23, 2, 6, 4, 7], 13);
+    show(vec![0, 0], 1);
+    show(vec![0], 1);
+    show(vec![5, 0, 0, 0], 3);
+    show(vec![1, 0], 2);
+    show(vec![1, 2, 12], 6);
+    show(vec![6], 6);
+    show(vec![2, 4], 6);
+    show(vec![1000000000, 1000000000], 2147483647);
+    // 3,000 random arrays of 1 to 30 numbers from 0 to 999, k from 1
+    // to 1,000.
+    let mut seed: i64 = 523;
+    let mut yes = 0;
+    let mut checksum = 0;
+    for i in 0..3000 {
+        let n = 1 + next_random(mut seed) % 30;
+        let k = 1 + next_random(mut seed) % 1000;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % 1000);
+        }
+        if check_subarray_sum(nums, k) {
+            yes += 1;
+            checksum = (checksum * 31 + i + 1) % 1000000007;
+        }
+    }
+    println(f"3000 random arrays: {yes} true, checksum {checksum}");
+    // The largest: 100,000 numbers summing under 2^31 with k = 2^31 - 1,
+    // so no run reaches a multiple; and the same with k the sum of the
+    // middle 50,000.
+    let mut big: Vec[i64] = Vec.new();
+    for _ in 0..100000 {
+        big.push(1 + next_random(mut seed) % 20000);
+    }
+    let mut middle = 0;
+    for i in 25000..75000 {
+        middle += big[i];
+    }
+    println(f"100000 numbers, k = 2147483647: {check_subarray_sum(big, 2147483647)}; k = {middle}: {check_subarray_sum(big, middle)}");
+}

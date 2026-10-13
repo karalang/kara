@@ -1,0 +1,320 @@
+// Differential test for LeetCode #522: Longest Uncommon Subsequence II.
+//
+// Copies of the four arms, each held to the properties below on 400
+// cases of words from 1 to 3 letters, one word in three a copy of an
+// earlier one: a short list of 2 to 8 words of up to 6 letters for P1,
+// and a long one of 2 to 20 words of up to 10 letters for the rest.
+// Properties:
+//   P1  the answer is the definition's: every subsequence of every word
+//       tried against every word
+//   P2  the list back to front gives the same answer
+//   P3  every word twice has none (-1)
+//   P4  the answer is -1 or the length of a word the list holds once
+//   P5  a word of z's longer than every word in the list is the answer
+
+// ---- star: find_lus_length.kara
+
+fn is_subsequence_star(small: Str, big: Str) -> bool {
+    let s: Vec[char] = small.chars().collect();
+    let mut i = 0;
+    for c in big.chars() {
+        if i < s.len() and s[i] == c {
+            i += 1;
+        }
+    }
+    i == s.len()
+}
+
+fn find_lus_length_star(strs: Vec[String]) -> i64 {
+    let mut order: Vec[i64] = (0..strs.len()).collect();
+    order.sort_by(|a, b| strs[b].len().cmp(strs[a].len()));
+    for i in order.iter() {
+        let mut uncommon = true;
+        for j in 0..strs.len() {
+            if j != *i and is_subsequence_star(strs[*i], strs[j]) {
+                uncommon = false;
+                break;
+            }
+        }
+        if uncommon {
+            return strs[*i].len();
+        }
+    }
+    -1
+}
+
+// ---- every: find_lus_length_every.kara
+
+fn is_subsequence_every(small: Str, big: Str) -> bool {
+    let s: Vec[char] = small.chars().collect();
+    let mut i = 0;
+    for c in big.chars() {
+        if i < s.len() and s[i] == c {
+            i += 1;
+        }
+    }
+    i == s.len()
+}
+
+fn find_lus_length_every(strs: Vec[String]) -> i64 {
+    let mut best = -1;
+    for i in 0..strs.len() {
+        let mut uncommon = true;
+        for j in 0..strs.len() {
+            if j != i and is_subsequence_every(strs[i], strs[j]) {
+                uncommon = false;
+            }
+        }
+        if uncommon {
+            best = best.max(strs[i].len());
+        }
+    }
+    best
+}
+
+// ---- longer: find_lus_length_longer.kara
+
+fn is_subsequence_longer(small: Str, big: Str) -> bool {
+    let s: Vec[char] = small.chars().collect();
+    let mut i = 0;
+    for c in big.chars() {
+        if i < s.len() and s[i] == c {
+            i += 1;
+        }
+    }
+    i == s.len()
+}
+
+fn find_lus_length_longer(strs: Vec[String]) -> i64 {
+    let mut count: Map[String, i64] = Map.new();
+    for s in strs.iter() {
+        *count.entry(s.clone()).or_insert(0) += 1;
+    }
+    let mut best = -1;
+    for s in strs.iter() {
+        if count[s] > 1 or s.len() <= best {
+            continue;
+        }
+        let mut uncommon = true;
+        for t in strs.iter() {
+            if t.len() > s.len() and is_subsequence_longer(s, t) {
+                uncommon = false;
+                break;
+            }
+        }
+        if uncommon {
+            best = s.len();
+        }
+    }
+    best
+}
+
+// ---- brute: find_lus_length_brute.kara
+
+fn find_lus_length_brute(strs: Vec[String]) -> i64 {
+    let mut words_with: Map[String, i64] = Map.new();
+    for word in strs.iter() {
+        let letters: Vec[char] = word.chars().collect();
+        let mut mine: Set[String] = Set.new();
+        for mask in 1..(1 << letters.len()) {
+            let mut s = String.new();
+            for i in 0..letters.len() {
+                if (mask >> i) & 1 == 1 {
+                    s.push(letters[i]);
+                }
+            }
+            mine.insert(s);
+        }
+        for s in mine.iter() {
+            *words_with.entry(s.clone()).or_insert(0) += 1;
+        }
+    }
+    let mut best = -1;
+    for (s, n) in words_with.iter() {
+        if *n == 1 {
+            best = best.max(s.len());
+        }
+    }
+    best
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn answer(which: i64, strs: Vec[String]) -> i64 {
+    if which == 0 {
+        find_lus_length_star(strs)
+    } else if which == 1 {
+        find_lus_length_every(strs)
+    } else if which == 2 {
+        find_lus_length_longer(strs)
+    } else {
+        find_lus_length_brute(strs)
+    }
+}
+
+// The definition: the longest string that is a subsequence of exactly
+// one word in the list, trying every subsequence of every word against
+// every word with a plain walk.
+fn reference(strs: Vec[String]) -> i64 {
+    let mut best = -1;
+    for word in strs.iter() {
+        let letters: Vec[char] = word.chars().collect();
+        for mask in 1..(1 << letters.len()) {
+            let mut s: Vec[char] = Vec.new();
+            for i in 0..letters.len() {
+                if (mask >> i) & 1 == 1 {
+                    s.push(letters[i]);
+                }
+            }
+            if s.len() <= best {
+                continue;
+            }
+            let mut holders = 0;
+            for other in strs.iter() {
+                let mut k = 0;
+                for c in other.chars() {
+                    if k < s.len() and s[k] == c {
+                        k += 1;
+                    }
+                }
+                if k == s.len() {
+                    holders += 1;
+                }
+            }
+            if holders == 1 {
+                best = s.len();
+            }
+        }
+    }
+    best
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(seed: mut ref i64, len: i64, letters: i64) -> String {
+    let mut word = String.new();
+    for _ in 0..len {
+        word.push((97 + next_random(seed) % letters) as u8 as char);
+    }
+    word
+}
+
+// `n` random words of 1 to `most` letters, one in three a copy of an
+// earlier word.
+fn random_list(seed: mut ref i64, n: i64, most: i64, letters: i64) -> Vec[String] {
+    let mut strs: Vec[String] = Vec.new();
+    for k in 0..n {
+        if k > 0 and next_random(seed) % 3 == 0 {
+            let from = next_random(seed) % k;
+            strs.push(strs[from].clone());
+        } else {
+            strs.push(random_word(seed, 1 + next_random(seed) % most, letters));
+        }
+    }
+    strs
+}
+
+fn main() {
+    let names = vec!["star", "every", "longer", "brute"];
+    let cases = 400;
+    let mut seed: i64 = 5220;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for _ in 0..cases {
+        let letters = 1 + next_random(mut seed) % 3;
+        // A short list of 2 to 8 words of up to 6 letters for P1, a
+        // long one of 2 to 20 words of up to 10 letters for the rest.
+        let short = random_list(mut seed, 2 + next_random(mut seed) % 7, 6, letters);
+        let long = random_list(mut seed, 2 + next_random(mut seed) % 19, 10, letters);
+        let mut reversed: Vec[String] = Vec.new();
+        for k in 0..long.len() {
+            reversed.push(long[long.len() - 1 - k].clone());
+        }
+        let mut doubled = long.clone();
+        for w in long.iter() {
+            doubled.push(w.clone());
+        }
+        let mut most = 0;
+        for w in long.iter() {
+            most = most.max(w.len());
+        }
+        let mut stranger = long.clone();
+        let mut z = String.new();
+        for _ in 0..most + 1 {
+            z.push('z');
+        }
+        stranger.push(z);
+        let want = reference(short);
+        for which in 0..4 {
+            // P1: the answer is the definition's, on the short list.
+            checks += 1;
+            let got = answer(which, short);
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {short} gave {got}, want {want}");
+                }
+            }
+            // P2: the list back to front gives the same answer.
+            checks += 1;
+            let got = answer(which, long);
+            if answer(which, reversed) != got {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {long} differs back to front");
+                }
+            }
+            // P3: every word twice has none.
+            checks += 1;
+            if answer(which, doubled) != -1 {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {long} doubled");
+                }
+            }
+            // P4: the answer is -1 or the length of a word seen once.
+            checks += 1;
+            let mut ok = got == -1;
+            for w in long.iter() {
+                if w.len() == got {
+                    let mut seen = 0;
+                    for v in long.iter() {
+                        if v == w {
+                            seen += 1;
+                        }
+                    }
+                    if seen == 1 {
+                        ok = true;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {long} gave {got}");
+                }
+            }
+            // P5: a word of z's longer than every word is the answer.
+            checks += 1;
+            if answer(which, stranger) != most + 1 {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {stranger}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

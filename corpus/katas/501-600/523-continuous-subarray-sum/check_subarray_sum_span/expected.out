@@ -1,0 +1,13 @@
+[23, 2, 4, 6, 7], k = 6: true
+[23, 2, 6, 4, 7], k = 6: true
+[23, 2, 6, 4, 7], k = 13: false
+[0, 0], k = 1: true
+[0], k = 1: false
+[5, 0, 0, 0], k = 3: true
+[1, 0], k = 2: false
+[1, 2, 12], k = 6: false
+[6], k = 6: false
+[2, 4], k = 6: true
+[1000000000, 1000000000], k = 2147483647: false
+3000 random arrays: 962 true, checksum 717969725
+100000 numbers, k = 2147483647: false; k = 429345103: true
