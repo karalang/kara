@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/469-convex-polygon/bench/convex_polygon.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "aa6226e1f"
+extracted_src = "2ba3d847"
+model_rev = "1aa23105"
+model_src = "2ba3d847"

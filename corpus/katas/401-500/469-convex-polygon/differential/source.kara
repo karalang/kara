@@ -1,0 +1,346 @@
+// Differential test for LeetCode #469: Convex Polygon.
+//
+// Copies of the four arms, each run on 1,500 random polygons, half of
+// them small. Properties:
+//   P1  a polygon built convex is convex, and one with an edge pushed in
+//       to a point strictly inside is not
+//   P2  starting from another vertex keeps the answer
+//   P3  going round the other way keeps it
+//   P4  a quarter turn with a scale and a shift keeps it, and so does a
+//       mirror image
+//   P5  a new vertex at the middle of an edge keeps it
+
+// ---- turns: convex_polygon.kara
+
+fn is_convex_turns(points: Vec[(i64, i64)]) -> bool {
+    let n = points.len();
+    let mut sign = 0;
+    for i in 0..n {
+        let (x0, y0) = points[i];
+        let (x1, y1) = points[(i + 1) % n];
+        let (x2, y2) = points[(i + 2) % n];
+        let cross = (x1 - x0) * (y2 - y1) - (y1 - y0) * (x2 - x1);
+        if cross != 0 {
+            let s = if cross > 0 { 1 } else { -1 };
+            if sign == 0 {
+                sign = s;
+            } else if s != sign {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ---- halfplane: convex_polygon_halfplane.kara
+
+fn is_convex_halfplane(points: Vec[(i64, i64)]) -> bool {
+    let n = points.len();
+    for i in 0..n {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[(i + 1) % n];
+        let mut left = false;
+        let mut right = false;
+        for (x, y) in points {
+            let side = (x2 - x1) * (y - y1) - (y2 - y1) * (x - x1);
+            if side > 0 {
+                left = true;
+            } else if side < 0 {
+                right = true;
+            }
+        }
+        if left and right {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- hull: convex_polygon_hull.kara
+
+fn cross_hull(o: (i64, i64), a: (i64, i64), b: (i64, i64)) -> i64 {
+    let (ox, oy) = o;
+    let (ax, ay) = a;
+    let (bx, by) = b;
+    (ax - ox) * (by - oy) - (ay - oy) * (bx - ox)
+}
+
+fn chain_hull(sorted: ref Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut hull: Vec[(i64, i64)] = Vec.new();
+    for p in sorted {
+        while hull.len() >= 2 and cross_hull(hull[hull.len() - 2], hull[hull.len() - 1], *p) < 0 {
+            hull.pop();
+        }
+        hull.push(*p);
+    }
+    hull
+}
+
+fn is_convex_hull(points: Vec[(i64, i64)]) -> bool {
+    let mut sorted = points.clone();
+    sorted.sort();
+    let lower = chain_hull(sorted);
+    sorted.reverse();
+    let upper = chain_hull(sorted);
+    let mut on_hull: Set[(i64, i64)] = Set.new();
+    for p in lower {
+        on_hull.insert(*p);
+    }
+    for p in upper {
+        on_hull.insert(*p);
+    }
+    on_hull.len() == points.len()
+}
+
+// ---- directions: convex_polygon_directions.kara
+
+fn earlier_directions(a: (i64, i64), b: (i64, i64)) -> bool {
+    let (ax, ay) = a;
+    let (bx, by) = b;
+    let upper_a = ay > 0 or (ay == 0 and ax > 0);
+    let upper_b = by > 0 or (by == 0 and bx > 0);
+    if upper_a != upper_b {
+        return upper_a;
+    }
+    ax * by - ay * bx > 0
+}
+
+fn is_convex_directions(points: Vec[(i64, i64)]) -> bool {
+    let n = points.len();
+    let mut area = 0;
+    for i in 0..n {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[(i + 1) % n];
+        area += x1 * y2 - x2 * y1;
+    }
+    let mut directions: Vec[(i64, i64)] = Vec.new();
+    for i in 0..n {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[(i + 1) % n];
+        directions.push((x2 - x1, y2 - y1));
+    }
+    if area < 0 {
+        // Walk the other way round: the edges in reverse, each flipped.
+        directions.reverse();
+        for i in 0..n {
+            let (dx, dy) = directions[i];
+            directions[i] = (-dx, -dy);
+        }
+    }
+    let mut wraps = 0;
+    for i in 0..n {
+        if earlier_directions(directions[(i + 1) % n], directions[i]) {
+            wraps += 1;
+        }
+    }
+    wraps <= 1
+}
+
+// ---- harness
+
+fn answer(arm: i64, points: Vec[(i64, i64)]) -> bool {
+    if arm == 0 {
+        is_convex_turns(points)
+    } else if arm == 1 {
+        is_convex_halfplane(points)
+    } else if arm == 2 {
+        is_convex_hull(points)
+    } else {
+        is_convex_directions(points)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// True when direction a comes before direction b, counterclockwise from
+// the positive x axis.
+fn before(a: (i64, i64), b: (i64, i64)) -> bool {
+    let (ax, ay) = a;
+    let (bx, by) = b;
+    let upper_a = ay > 0 or (ay == 0 and ax > 0);
+    let upper_b = by > 0 or (by == 0 and bx > 0);
+    if upper_a != upper_b {
+        return upper_a;
+    }
+    ax * by - ay * bx > 0
+}
+
+// A convex polygon, counterclockwise: random edge vectors and one that
+// closes them, laid end to end in angle order. Parallel vectors leave
+// collinear vertices. The coordinates are even, so every edge has a
+// midpoint on the grid.
+fn random_convex(edges: i64, size: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut vectors: Vec[(i64, i64)] = Vec.new();
+    let mut sx = 0;
+    let mut sy = 0;
+    while vectors.len() < edges - 1 {
+        let x = next_random(seed) % (2 * size + 1) - size;
+        let y = next_random(seed) % (2 * size + 1) - size;
+        if x != 0 or y != 0 {
+            vectors.push((x, y));
+            sx += x;
+            sy += y;
+        }
+    }
+    if sx != 0 or sy != 0 {
+        vectors.push((-sx, -sy));
+    }
+    // Insertion sort by angle.
+    for i in 1..vectors.len() {
+        let mut j = i;
+        while j > 0 and before(vectors[j], vectors[j - 1]) {
+            vectors.swap(j, j - 1);
+            j -= 1;
+        }
+    }
+    let mut points: Vec[(i64, i64)] = Vec.new();
+    let mut x = next_random(seed) % 100;
+    let mut y = next_random(seed) % 100;
+    for (dx, dy) in vectors {
+        points.push((2 * x, 2 * y));
+        x += dx;
+        y += dy;
+    }
+    points
+}
+
+fn area2(points: ref Vec[(i64, i64)]) -> i64 {
+    let n = points.len();
+    let mut total = 0;
+    for i in 0..n {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[(i + 1) % n];
+        total += x1 * y2 - x2 * y1;
+    }
+    total
+}
+
+// True when q is strictly inside the counterclockwise convex polygon.
+fn inside(points: ref Vec[(i64, i64)], q: (i64, i64)) -> bool {
+    let n = points.len();
+    let (qx, qy) = q;
+    for i in 0..n {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[(i + 1) % n];
+        if (x2 - x1) * (qy - y1) - (y2 - y1) * (qx - x1) <= 0 {
+            return false;
+        }
+    }
+    true
+}
+
+// A convex polygon with one edge pushed in: a new vertex between the
+// edge's two ends, part of the way from its midpoint toward the centre.
+// When rounding keeps that point from lying strictly inside, the
+// midpoint itself is used, and the polygon stays convex. Also says
+// whether it does.
+fn dented(points: Vec[(i64, i64)], seed: mut ref i64) -> (Vec[(i64, i64)], bool) {
+    let n = points.len();
+    let mut cx = 0;
+    let mut cy = 0;
+    for (x, y) in points {
+        cx += x;
+        cy += y;
+    }
+    cx = cx / n;
+    cy = cy / n;
+    let at = next_random(seed) % n;
+    let (x1, y1) = points[at];
+    let (x2, y2) = points[(at + 1) % n];
+    let mx = (x1 + x2) / 2;
+    let my = (y1 + y2) / 2;
+    let depth = 2 + next_random(seed) % 4;
+    let mut dent = (mx + (cx - mx) / depth, my + (cy - my) / depth);
+    let pushed_in = inside(points, dent);
+    if not pushed_in {
+        dent = (mx, my);
+    }
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for i in 0..n {
+        out.push(points[i]);
+        if i == at {
+            out.push(dent);
+        }
+    }
+    (out, not pushed_in)
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4690;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    let mut case = 0;
+    while case < 1500 {
+        let edges = if next_random(mut seed) % 2 == 0 { 3 + next_random(mut seed) % 6 } else { 3 + next_random(mut seed) % 38 };
+        let size = [2, 5, 30, 3000][next_random(mut seed) % 4];
+        let base = random_convex(edges, size, mut seed);
+        if area2(base) == 0 {
+            continue;
+        }
+        let mut points = base.clone();
+        let mut expected = true;
+        if next_random(mut seed) % 2 == 0 {
+            let (out, convex) = dented(base, mut seed);
+            points = out;
+            expected = convex;
+        }
+        let n = points.len();
+        // P2: start from another vertex; P3: the other way round.
+        let start = next_random(mut seed) % n;
+        let mut rotated: Vec[(i64, i64)] = Vec.new();
+        for i in 0..n {
+            rotated.push(points[(start + i) % n]);
+        }
+        let mut reversed = points.clone();
+        reversed.reverse();
+        // P4: a quarter turn, a mirror image, a shift and a scale.
+        let k = 2 + next_random(mut seed) % 4;
+        let dx = next_random(mut seed) % 2001 - 1000;
+        let dy = next_random(mut seed) % 2001 - 1000;
+        let mut moved: Vec[(i64, i64)] = Vec.new();
+        let mut mirrored: Vec[(i64, i64)] = Vec.new();
+        for (x, y) in points {
+            moved.push((-y * k + dx, x * k + dy));
+            mirrored.push((-x, y));
+        }
+        // P5: a vertex at the middle of one edge, on a grid of twice the
+        // resolution.
+        let at = next_random(mut seed) % n;
+        let mut split: Vec[(i64, i64)] = Vec.new();
+        for i in 0..n {
+            let (x1, y1) = points[i];
+            let (x2, y2) = points[(i + 1) % n];
+            split.push((2 * x1, 2 * y1));
+            if i == at {
+                split.push((x1 + x2, y1 + y2));
+            }
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let got = answer(arm, points);
+            report(1, arm, case, got == expected, mut failures);
+            report(2, arm, case, answer(arm, rotated) == got, mut failures);
+            report(3, arm, case, answer(arm, reversed) == got, mut failures);
+            report(4, arm, case, answer(arm, moved) == got and answer(arm, mirrored) == got, mut failures);
+            report(5, arm, case, answer(arm, split) == got, mut failures);
+        }
+        case += 1;
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

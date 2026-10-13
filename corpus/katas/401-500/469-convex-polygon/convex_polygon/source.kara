@@ -1,0 +1,187 @@
+// LeetCode #469: Convex Polygon -- the sign of every turn.
+//
+// Walk the polygon and take the cross product of each edge with the
+// next: its sign says whether the walk turns left or right at that
+// vertex, and 0 means it goes straight on. The polygon is convex when
+// the turns that are not straight all go the same way. O(n).
+
+fn is_convex(points: Vec[(i64, i64)]) -> bool {
+    let n = points.len();
+    let mut sign = 0;
+    for i in 0..n {
+        let (x0, y0) = points[i];
+        let (x1, y1) = points[(i + 1) % n];
+        let (x2, y2) = points[(i + 2) % n];
+        let cross = (x1 - x0) * (y2 - y1) - (y1 - y0) * (x2 - x1);
+        if cross != 0 {
+            let s = if cross > 0 { 1 } else { -1 };
+            if sign == 0 {
+                sign = s;
+            } else if s != sign {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(name: Str, points: Vec[(i64, i64)]) {
+    println(f"{name}: {is_convex(points)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// True when direction a comes before direction b, counterclockwise from
+// the positive x axis.
+fn before(a: (i64, i64), b: (i64, i64)) -> bool {
+    let (ax, ay) = a;
+    let (bx, by) = b;
+    let upper_a = ay > 0 or (ay == 0 and ax > 0);
+    let upper_b = by > 0 or (by == 0 and bx > 0);
+    if upper_a != upper_b {
+        return upper_a;
+    }
+    ax * by - ay * bx > 0
+}
+
+// A convex polygon, counterclockwise: random edge vectors and one that
+// closes them, laid end to end in angle order. Parallel vectors leave
+// collinear vertices. The coordinates are even, so every edge has a
+// midpoint on the grid.
+fn random_convex(edges: i64, size: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut vectors: Vec[(i64, i64)] = Vec.new();
+    let mut sx = 0;
+    let mut sy = 0;
+    while vectors.len() < edges - 1 {
+        let x = next_random(seed) % (2 * size + 1) - size;
+        let y = next_random(seed) % (2 * size + 1) - size;
+        if x != 0 or y != 0 {
+            vectors.push((x, y));
+            sx += x;
+            sy += y;
+        }
+    }
+    if sx != 0 or sy != 0 {
+        vectors.push((-sx, -sy));
+    }
+    // Insertion sort by angle.
+    for i in 1..vectors.len() {
+        let mut j = i;
+        while j > 0 and before(vectors[j], vectors[j - 1]) {
+            vectors.swap(j, j - 1);
+            j -= 1;
+        }
+    }
+    let mut points: Vec[(i64, i64)] = Vec.new();
+    let mut x = next_random(seed) % 100;
+    let mut y = next_random(seed) % 100;
+    for (dx, dy) in vectors {
+        points.push((2 * x, 2 * y));
+        x += dx;
+        y += dy;
+    }
+    points
+}
+
+fn area2(points: ref Vec[(i64, i64)]) -> i64 {
+    let n = points.len();
+    let mut total = 0;
+    for i in 0..n {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[(i + 1) % n];
+        total += x1 * y2 - x2 * y1;
+    }
+    total
+}
+
+// True when q is strictly inside the counterclockwise convex polygon.
+fn inside(points: ref Vec[(i64, i64)], q: (i64, i64)) -> bool {
+    let n = points.len();
+    let (qx, qy) = q;
+    for i in 0..n {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[(i + 1) % n];
+        if (x2 - x1) * (qy - y1) - (y2 - y1) * (qx - x1) <= 0 {
+            return false;
+        }
+    }
+    true
+}
+
+// A convex polygon with one edge pushed in: a new vertex between the
+// edge's two ends, part of the way from its midpoint toward the centre.
+// When rounding keeps that point from lying strictly inside, the
+// midpoint itself is used, and the polygon stays convex.
+fn dented(points: Vec[(i64, i64)], seed: mut ref i64) -> Vec[(i64, i64)] {
+    let n = points.len();
+    let mut cx = 0;
+    let mut cy = 0;
+    for (x, y) in points {
+        cx += x;
+        cy += y;
+    }
+    cx = cx / n;
+    cy = cy / n;
+    let at = next_random(seed) % n;
+    let (x1, y1) = points[at];
+    let (x2, y2) = points[(at + 1) % n];
+    let mx = (x1 + x2) / 2;
+    let my = (y1 + y2) / 2;
+    let depth = 2 + next_random(seed) % 4;
+    let mut dent = (mx + (cx - mx) / depth, my + (cy - my) / depth);
+    if not inside(points, dent) {
+        dent = (mx, my);
+    }
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for i in 0..n {
+        out.push(points[i]);
+        if i == at {
+            out.push(dent);
+        }
+    }
+    out
+}
+
+fn main() {
+    show("square", vec![(0, 0), (0, 5), (5, 5), (5, 0)]);
+    show("square with a dent", vec![(0, 0), (0, 10), (10, 10), (10, 0), (5, 5)]);
+    show("triangle", vec![(0, 0), (4, 0), (0, 3)]);
+    show("triangle, other way round", vec![(0, 0), (0, 3), (4, 0)]);
+    show("points along the edges", vec![(0, 0), (2, 0), (4, 0), (4, 2), (4, 4), (0, 4), (0, 2)]);
+    show("arrow", vec![(0, 0), (4, 2), (0, 4), (1, 2)]);
+    show("hexagon", vec![(2, 0), (4, 0), (6, 3), (4, 6), (2, 6), (0, 3)]);
+    show("L shape", vec![(0, 0), (6, 0), (6, 2), (2, 2), (2, 6), (0, 6)]);
+    show("thin wedge", vec![(0, 0), (10000, 1), (10000, 2)]);
+    show("almost straight", vec![(0, 0), (5000, 1), (10000, 2), (10000, 5), (0, 5)]);
+    show("bent in by one", vec![(0, 0), (5000, 1), (10000, 0), (10000, 5), (0, 5)]);
+    // 300 random polygons, convex or dented, 3 to 40 vertices: how many
+    // are convex, and a checksum of the answers in order.
+    let count = 300;
+    let mut seed: i64 = 469;
+    let mut convex = 0;
+    let mut checksum: i64 = 0;
+    let mut made = 0;
+    while made < count {
+        let edges = 3 + next_random(mut seed) % 38;
+        let size = [3, 30, 3000][next_random(mut seed) % 3];
+        let mut points = random_convex(edges, size, mut seed);
+        if area2(points) == 0 {
+            continue;
+        }
+        if next_random(mut seed) % 2 == 0 {
+            points = dented(points, mut seed);
+        }
+        made += 1;
+        let answer = is_convex(points);
+        if answer {
+            convex += 1;
+        }
+        checksum = (checksum * 3 + if answer { 1 } else { 2 }) % 1000000007;
+    }
+    println(f"{count} random polygons: {convex} convex, checksum {checksum}");
+}
