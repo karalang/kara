@@ -921,3 +921,20 @@ fn main() {
     assert!(main.contains("shout(const \"abc\")"), "{main}");
     assert!(!main.contains("String.from(const \"abc\")"), "{main}");
 }
+
+/// `collect()` passed straight to `push` takes the `Vec`'s element type as
+/// its target, as a `let` annotation would give it (B-2026-10-12-34).
+#[test]
+fn collect_into_a_push_takes_the_element_type() {
+    let src = r#"
+fn main() {
+    let cs: Vec[char] = "hey".chars().collect();
+    let mut v: Vec[String] = Vec.new();
+    v.push(cs.iter().collect());
+    let mut w: Vec[Vec[char]] = Vec.new();
+    w.push(cs.iter().cloned().collect());
+    println(f"{v[0]} {w[0].len()}");
+}
+"#;
+    assert_runs(src, "hey 3\n");
+}

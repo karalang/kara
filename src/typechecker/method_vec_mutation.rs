@@ -111,10 +111,10 @@ impl<'a> super::TypeChecker<'a> {
                     self.record_expr_type(&args[0].value.span, &elem);
                     return Some(Type::Unit);
                 }
-                // An empty `[]`, `None`, or `Ok(x)` / `Err(e)` / `Some(x)`
-                // leaves a type parameter with nothing to solve it when
-                // inferred alone, so it is checked against the slot, as a
-                // `let` with an annotation checks it.
+                // An empty `[]`, `None`, `Ok(x)` / `Err(e)` / `Some(x)`, or
+                // a `collect()` leaves a type parameter with nothing to solve
+                // it when inferred alone, so it is checked against the slot,
+                // as a `let` with an annotation checks it.
                 let arg = &args[0].value;
                 let ctor = |name: &str| matches!(name, "Ok" | "Err" | "Some" | "None");
                 let open_value = match &arg.kind {
@@ -131,6 +131,11 @@ impl<'a> super::TypeChecker<'a> {
                         ExprKind::Path { segments, .. } => segments.last().is_some_and(|n| ctor(n)),
                         _ => false,
                     },
+                    // The library's `collect` (on the MIR pipeline) is
+                    // generic in its target; the legacy one makes a `Vec`.
+                    ExprKind::MethodCall { method, args, .. } => {
+                        self.library_methods_from_source && method == "collect" && args.is_empty()
+                    }
                     _ => false,
                 };
                 let arg_ty = if open_value && super::exprs::expectation_is_concrete(&elem) {
