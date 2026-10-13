@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 253 |
 | missing-feature | 241 |
 | other | 172 |
-| perf | 158 |
+| perf | 159 |
 | diagnostics | 155 |
 | false-positive | 154 |
 | crash | 114 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2868 |
+| codegen | 2869 |
 | interp | 912 |
 | typecheck | 381 |
 | other | 115 |
 | ownership | 85 |
 | cli | 75 |
-| runtime | 62 |
+| runtime | 63 |
 | parser | 61 |
 | autopar | 59 |
 | resolver | 35 |
@@ -600,6 +600,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-31 | 2026-10-13 | codegen+runtime | medium | Walking a `Str`'s `chars()` on the MIR compiled backend costs about 3.6 ns a char against 1.0 for its `bytes()` and 0.9 for Rust's `chars()`, and a char predicate such as `is_ascii_uppercase` is a runtime call that finds the method by comparing names: kata 520's bench (`word.chars().filter(|c| c.is_ascii_uppercase()).count()`) runs 2.0 to 2.2 s under `karac build --mir` against 0.20 to 0.25 s for `rustc -O` | — |
 | B-2026-10-13-32 | 2026-10-13 | typecheck | low | The MIR front end accepts `*c` on a `filter` closure's `char` parameter over `chars()`, which `karac check` refuses ("unary '*' requires 'ref T' ... found 'char'") as docs/library/iterators.md's `fn filter[F: MutFn(Self.Item) -> bool]` says it should: `w.chars().filter(|c| *c == 'Q').count()` prints 2 under `karac __mir-run` and builds under `karac build --mir` | — |
 | B-2026-10-13-33 | 2026-10-13 | ownership | medium | The MIR borrow checker refuses a write to a `mut` field of a shared value reached by indexing a borrowed `Vec` (`nodes[i].val = v` with `nodes` a `ref Vec[Node]` or a bare `Vec[Node]` parameter: "mutable borrow of (*_1) through a shared reference [E0517]") under `__mir-run`, `__mir-llvm-run` and `build --mir`, where `karac check` passes it and core-semantics §5.9 makes such a field writable through any handle | — |
+| B-2026-10-13-34 | 2026-10-13 | codegen+runtime | medium | `i64.parse` on the MIR compiled backend costs about 30 ns for a 2-byte slice, because `karac_mir_parse_int` copies the text into a fresh heap `String`, trims it and parses an `i128` on every call: kata 539's bench spends 1.3 to 1.4 s of its 1.90 s in 42M parses, against 0.51 s for the whole Rust mirror | — |
 
 ### Relocated
 
