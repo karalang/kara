@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 172 |
 | perf | 156 |
 | diagnostics | 154 |
-| false-positive | 152 |
+| false-positive | 153 |
 | crash | 114 |
 | soundness | 99 |
 | use-after-free | 90 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2866 |
 | interp | 912 |
-| typecheck | 379 |
+| typecheck | 380 |
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
@@ -579,7 +579,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-6 | 2026-10-12 | typecheck+interp | medium | The v1 spec gives every number type `fn parse(s: Str) -> Result[Self, ParseError]` (docs/library/core-types.md § Parsing; strings.md; the error-type list in library/README.md), but the compiler still returns `Option[Self]` and has no `ParseError`: the spec's own example `match i64.parse(line.trim()) { Ok(n) => ..., Err(e) => ... }` is refused by `karac check` and `karac __mir-run` | — |
 | B-2026-10-12-7 | 2026-10-12 | typecheck+interp | medium | `Str.split` / `lines` / `split_whitespace` return an eager `Vec[String]` of copies, but the v1 spec (docs/library/strings.md) gives them `impl Iterator[Item = Str]` of views: strings.md's own example `let parts: Vec[Str] = line.split(",").collect();` is refused by `karac check` ("no method 'collect' on type 'Vec'") | — |
 | B-2026-10-12-14 | 2026-10-12 | ownership | medium | `karac check` treats `Str` as move-only: using a `Str` parameter twice (`String.from(s)` then `String.from(s)`) is refused as "value 's' moved here, used again here", `let y = x;` moves a `Str`, and reading `v[0]` out of a `Vec[Str]` is refused as a move out of a collection element; docs/design.md § Strings says `Str` "is `Copy`", and `karac __mir-run` already runs the twice-used parameter | — |
-| B-2026-10-12-16 | 2026-10-12 | typecheck | low | `karac check` drops the `ref` from a binding matched through a TUPLE scrutinee: `match (m.get("a"), m.get("b")) { (Some(i), Some(j)) => *i + *j, .. }` is refused ("unary '*' requires 'ref T' ... found 'i64'"), while `if let Some(i) = m.get("a") { *i }` passes; `karac __mir-run` runs both and prints the right sum | — |
 | B-2026-10-12-18 | 2026-10-12 | resolver | medium | `karac fix` rewrites a call to an undefined name into a call of an unrelated local: `abs(a)` (where `abs` is a method, `a.abs()`) gets "undefined name 'abs', did you mean 'a'?" with a machine-applicable replacement, and `karac fix` turns it into `a(a)`, which then fails as "type 'i64' is not callable" | — |
 | B-2026-10-12-19 | 2026-10-12 | typecheck | medium | `karac fix` answers a move out of `for c in node.children` (a field of an OWNED local) with `#[derive(Clone)]` + `.clone()` instead of `.into_iter()`, turning a consuming walk into a copying one | — |
 | B-2026-10-12-22 | 2026-10-12 | typecheck | low | `karac check` accepts `m.get(k) == Some(n)` on a `Map[u8, i64]`, comparing `Option[ref i64]` with `Option[i64]`, which `karac __mir-run` refuses ("cannot compare 'Option[ref i64]' and 'Option[i64]'") and which check itself refuses for `Vec.get`; the legacy interpreter runs it | — |
@@ -598,6 +597,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-25 | 2026-10-13 | resolver | low | `mem.swap(a, b)`, `mem.replace(d, v)` and `mem.take(d)`, the spelling core-semantics.md §3.7 and design.md give for the move-out fixes, do not resolve ("undefined name 'mem'"); only the bare prelude `swap` / `replace` / `take` work, and `import std.mem` is an unknown module | — |
 | B-2026-10-13-26 | 2026-10-13 | interp+codegen | medium | `chars()` on a `Str` is not an iterator value on the MIR pipeline: `.enumerate()`, `.filter()`, `.rev()`, `.all()`, `.next()` and the rest are refused at build ("an iterator value is not lowered yet" / "`enumerate` over chars is not lowered yet") and `.map(..).collect()` into a `String` mistypes as `Vec[char]`, though `karac check` accepts them and the same calls on a `String` run | — |
 | B-2026-10-13-27 | 2026-10-13 | typecheck | medium | No standard type has a usable `Default`: `String.default()`, `i64.default()`, `Vec.default()` and `Map.default()` are all "no associated function 'default'", `#[derive(Default)]` on a struct with a `Vec` field is refused (E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT), and `take(place)` accepts a `String` or `i64` place but refuses a `Vec` one as not `Default` | — |
+| B-2026-10-13-28 | 2026-10-13 | typecheck | low | `karac check` loses the `ref` of a `Map.get` result once it is stored in a tuple local: `let t = (m.get("a"), 5); match t { (Some(i), k) => *i + k, _ => 0 }` is refused ("unary '*' requires 'ref T' ... found 'i64'"), while the same match on the tuple literal passes since B-2026-10-12-16 and `__mir-run` runs both | — |
 
 ### Relocated
 
@@ -3933,6 +3933,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-12-12 | parser | low | A parameter mode written before the parameter's NAME (`fn new(own nums: Vec[i64])`, `ref v: T`, `mut v: T`) is reported as "'own' is a reserved keywo… | 7533c1c83e |
 | B-2026-10-12-13 | typecheck | medium | A string literal is not typed as `Str` where a `Str` is expected, except as a call argument or inside `Some(...)`: `let x: Str = "abc";`, `let v: Vec… | 9c36e8b3da |
 | B-2026-10-12-15 | interp | medium | `karac __mir-run` refuses `let x: Str = text[0..2];` (a range index of a `String`, bound with a `Str` annotation) with "typecheck: expected 'StringSl… | e9427c9038 |
+| B-2026-10-12-16 | typecheck | low | `karac check` drops the `ref` from a binding matched through a TUPLE scrutinee: `match (m.get("a"), m.get("b")) { (Some(i), Some(j)) => *i + *j, . | cf9d460e9c |
 | B-2026-10-12-17 | resolver | medium | The MIR pipeline resolves the Kāra library source in the user program's scope: a user `struct Skip`, or an enum variant `Token.Skip`, is refused by `… | e44d71929c |
 | B-2026-10-12-20 | ownership | medium | Storing a PARAMETER of a `shared` type in a `weak` field counts as a MOVE in `karac check`: `fn link(at: N, b: N) { b.prev = at; at.next = Some(b); }… | f70fec32cd |
 | B-2026-10-12-21 | resolver | low | The MIR pipeline still resolves the Kāra library source in the user program's scope: a user `struct Peekable` or enum variant `Peekable` is refused b… | 8690c27ce7 |
