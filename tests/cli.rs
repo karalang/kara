@@ -11313,6 +11313,45 @@ fn test_fix_integer_bang_reaches_bitwise_not() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// B-2026-10-13-16 — one `karac fix` pass writes `~` for a Rust-style `!x`
+/// on an integer, and `not` for one on a `bool`, so the file checks clean
+/// after a single pass rather than trading the parse error for a type error.
+#[test]
+fn test_fix_integer_bang_is_bitwise_not_in_one_pass() {
+    let path = fix_scratch_file(
+        "int-bang-one-pass",
+        "fn main() {\n    let row: i64 = 6;\n    let m: i64 = 2;\n    let b = false;\n    \
+         println(f\"{m & !row == 0} {!b} {!(m & 1)}\");\n}\n",
+    );
+    let out = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "fix failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("m & ~row == 0")
+            && rewritten.contains("{not b}")
+            && rewritten.contains("{~(m & 1)}"),
+        "expected `~` on the integers and `not` on the bool, got: {rewritten}"
+    );
+    let check = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "file does not check after one pass: {}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 /// B-2026-08-17-11 — E0200's widening repair is machine-applicable: the
 /// mixed-int diagnostic carries an ` as <wide>` insertion at the narrow
 /// operand, and `karac fix` applies it. The fixed program computes the

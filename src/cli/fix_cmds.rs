@@ -122,6 +122,7 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
         // bare assignment `match` arm body. Both halves or neither, so they
         // live only here, never in the single-edit map.
         fixes.groups(pipeline.parsed.fix_diffs.values());
+        complement_integer_bangs(filename, &source, &mut fixes);
         if fixes.edits.is_empty() {
             for err in &pipeline.parsed.errors {
                 eprintln!(
@@ -339,6 +340,55 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
 
 /// The fixes `karac fix` collects, each edit tagged with the fix it belongs
 /// to so a multi-edit envelope is kept or dropped whole.
+/// The parser recovers a Rust-style `!x` as `not x` before any type is
+/// known, and on an integer operand `not` is a new error whose own fix is the
+/// complement `~` (B-2026-10-13-16). So `karac fix` looks one pass ahead: it
+/// checks the source with this pass's parse fixes applied and, where the
+/// checker asks for `~` in place of a `not` that one of them wrote, writes
+/// `~` now. Nothing changes when that source does not parse or check.
+fn complement_integer_bangs(filename: &str, source: &str, fixes: &mut FixSet) {
+    let is_bang = |e: &crate::resolver::TextEdit| {
+        e.length == 1
+            && source.get(e.offset..e.offset + 1) == Some("!")
+            && e.replacement.trim_end() == "not"
+    };
+    if !fixes.edits.iter().any(|(_, e)| is_bang(e)) {
+        return;
+    }
+    let deduped = dedupe_fixes(fixes.edits.clone());
+    let Some(patched) = apply_edits(source, deduped.iter().map(|(_, e)| e)) else {
+        return;
+    };
+    let mut pipeline = Pipeline::new(filename, &patched).strict_core();
+    if pipeline.has_parse_errors() {
+        return;
+    }
+    pipeline.run_all_checks();
+    let Some(typed) = pipeline.typed.as_ref() else {
+        return;
+    };
+    let complements: std::collections::HashSet<usize> = typed
+        .errors
+        .iter()
+        .filter_map(|e| e.fix_it.as_ref())
+        .filter(|f| f.replacement == "~")
+        .map(|f| f.span.offset)
+        .collect();
+    for (_, edit) in fixes.edits.iter_mut().filter(|(_, e)| is_bang(e)) {
+        // Where this edit's `not` starts in the patched source: shifted by
+        // every applied edit before it.
+        let at = deduped
+            .iter()
+            .filter(|(_, e)| e.offset < edit.offset)
+            .fold(edit.offset as isize, |at, (_, e)| {
+                at + e.replacement.len() as isize - e.length as isize
+            });
+        if complements.contains(&(at as usize)) {
+            edit.replacement = "~".to_string();
+        }
+    }
+}
+
 #[derive(Default)]
 struct FixSet {
     edits: Vec<(usize, crate::resolver::TextEdit)>,
