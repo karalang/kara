@@ -1,0 +1,269 @@
+// Differential test for LeetCode #506: Relative Ranks.
+//
+// Copies of the four arms, on 1,500 random lists of 1 to 12 different
+// scores, j * spread plus less than spread for the j-th, shuffled, with
+// spread 1, 3 or 1,000 in turn.
+// Properties:
+//   P1  the ranks are the reference's, which places the athletes by
+//       selection, the highest score not yet placed each round
+//   P2  every place from 1 to n is named exactly once
+//   P3  three times every score plus 7 keeps the ranks
+//   P4  the athletes in reverse order get their ranks reversed
+//   P5  every score taken from the highest turns place p into n + 1 - p
+
+// ---- star: find_relative_ranks.kara
+
+fn find_relative_ranks_star(score: Vec[i64]) -> Vec[String] {
+    let n = score.len();
+    let mut order: Vec[i64] = (0..n).collect();
+    order.sort_by_key(|i| -score[i]);
+    let mut answer = vec![""; n];
+    for place in 0..n {
+        answer[order[place]] = match place {
+            0 => "Gold Medal",
+            1 => "Silver Medal",
+            2 => "Bronze Medal",
+            _ => f"{place + 1}",
+        };
+    }
+    answer
+}
+
+// ---- heap: find_relative_ranks_heap.kara
+
+fn find_relative_ranks_heap(score: Vec[i64]) -> Vec[String] {
+    let n = score.len();
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.max_first();
+    for i in 0..n {
+        queue.push((score[i], i));
+    }
+    let mut answer: Vec[String] = Vec.new();
+    for _ in 0..n {
+        answer.push(String.new());
+    }
+    let mut place = 1;
+    while let Some((_, i)) = queue.pop() {
+        answer[i] = if place == 1 {
+            "Gold Medal"
+        } else if place == 2 {
+            "Silver Medal"
+        } else if place == 3 {
+            "Bronze Medal"
+        } else {
+            place.to_string()
+        };
+        place += 1;
+    }
+    answer
+}
+
+// ---- buckets: find_relative_ranks_buckets.kara
+
+fn find_relative_ranks_buckets(score: Vec[i64]) -> Vec[String] {
+    let n = score.len();
+    let top = *score.iter().max().unwrap();
+    // who[s] is 1 + the index of the athlete who scored s, or 0.
+    let mut who = vec![0; top + 1];
+    for i in 0..n {
+        who[score[i]] = i + 1;
+    }
+    let medals = ["Gold Medal", "Silver Medal", "Bronze Medal"];
+    let mut answer: Vec[String] = vec![String.new(); n];
+    let mut place = 0;
+    let mut s = top;
+    while s >= 0 {
+        if who[s] != 0 {
+            answer[who[s] - 1] = if place < 3 { medals[place].to_string() } else { f"{place + 1}" };
+            place += 1;
+        }
+        s -= 1;
+    }
+    answer
+}
+
+// ---- count: find_relative_ranks_count.kara
+
+fn medal_count(place: i64) -> String {
+    match place {
+        1 => "Gold Medal",
+        2 => "Silver Medal",
+        3 => "Bronze Medal",
+        _ => f"{place}",
+    }
+}
+
+fn find_relative_ranks_count(score: Vec[i64]) -> Vec[String] {
+    score.iter().map(|s| medal_count(1 + score.iter().filter(|t| *t > s).count())).collect()
+}
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, score: Vec[i64]) -> Vec[String] {
+    match which {
+        0 => find_relative_ranks_star(score),
+        1 => find_relative_ranks_heap(score),
+        2 => find_relative_ranks_buckets(score),
+        _ => find_relative_ranks_count(score),
+    }
+}
+
+fn rank_name(place: i64) -> String {
+    if place == 1 {
+        "Gold Medal"
+    } else if place == 2 {
+        "Silver Medal"
+    } else if place == 3 {
+        "Bronze Medal"
+    } else {
+        f"{place}"
+    }
+}
+
+// The place a rank names, or 0 when it names none.
+fn place_of(rank: String) -> i64 {
+    if rank == "Gold Medal" {
+        1
+    } else if rank == "Silver Medal" {
+        2
+    } else if rank == "Bronze Medal" {
+        3
+    } else {
+        match i64.parse(rank) {
+            Ok(p) => if p >= 4 { p } else { 0 },
+            Err(_) => 0,
+        }
+    }
+}
+
+// The reference: selection, the highest score not yet placed taking the
+// next place each round.
+fn reference(score: Vec[i64]) -> Vec[String] {
+    let n = score.len();
+    let mut answer: Vec[String] = Vec.new();
+    let mut placed: Vec[bool] = Vec.new();
+    for _ in 0..n {
+        answer.push(String.new());
+        placed.push(false);
+    }
+    for place in 1..=n {
+        let mut pick = -1;
+        for i in 0..n {
+            if not placed[i] and (pick == -1 or score[i] > score[pick]) {
+                pick = i;
+            }
+        }
+        placed[pick] = true;
+        answer[pick] = rank_name(place);
+    }
+    answer
+}
+
+fn main() {
+    let names = ["star", "heap", "buckets", "count"];
+    let cases = 1500;
+    let mut seed: i64 = 5060;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property = [0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // 1 to 12 different scores: the j-th is j * spread plus less than
+        // spread, shuffled, with spread 1, 3 or 1,000 in turn.
+        let n = 1 + next_random(mut seed) % 12;
+        let spread = if c % 3 == 0 { 1 } else if c % 3 == 1 { 3 } else { 1000 };
+        let mut score: Vec[i64] = Vec.new();
+        for j in 0..n {
+            score.push(j * spread + next_random(mut seed) % spread);
+        }
+        let mut k = n - 1;
+        while k > 0 {
+            score.swap(k, next_random(mut seed) % (k + 1));
+            k -= 1;
+        }
+        let want = reference(score);
+        let top = *score.iter().max().unwrap();
+        let stretched: Vec[i64] = score.iter().map(|s| *s * 3 + 7).collect();
+        let backward: Vec[i64] = score.iter().rev().cloned().collect();
+        let upside: Vec[i64] = score.iter().map(|s| top - *s).collect();
+        for which in 0..4 {
+            let got = arm(which, score);
+            // P1: the reference's ranks.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {score} gave {got}, want {want}");
+                }
+            }
+            // P2: every place from 1 to n is named exactly once.
+            checks += 1;
+            let mut seen = vec![false; n + 1];
+            let mut ok = got.len() == n;
+            if ok {
+                for rank in got {
+                    let p = place_of(rank);
+                    if p < 1 or p > n or seen[p] {
+                        ok = false;
+                    } else {
+                        seen[p] = true;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {score} gave {got}");
+                }
+            }
+            // P3: three times every score plus 7 keeps the ranks.
+            checks += 1;
+            let other = arm(which, stretched);
+            if other != got {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {stretched} gave {other}, not {got}");
+                }
+            }
+            // P4: the athletes in reverse order get their ranks reversed.
+            checks += 1;
+            let other = arm(which, backward);
+            let expect: Vec[String] = got.iter().rev().cloned().collect();
+            if other != expect {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {backward} gave {other}, want {expect}");
+                }
+            }
+            // P5: every score taken from the highest turns place p into
+            // place n + 1 - p.
+            checks += 1;
+            let other = arm(which, upside);
+            let mut ok = other.len() == n and got.len() == n;
+            if ok {
+                for i in 0..n {
+                    if place_of(other[i]) != n + 1 - place_of(got[i]) {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {upside} gave {other}, against {got}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

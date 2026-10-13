@@ -1,0 +1,147 @@
+// LeetCode #505: The Maze II -- Dijkstra without a queue.
+//
+// The distances and the settled cells in grids. Each round scans every
+// cell for the nearest one not yet settled, settles it, and relaxes the
+// rolls from it; the destination's settling is the answer, and a round
+// that finds nothing means it cannot be reached. O((mn)^2) time.
+
+fn shortest_distance(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> i64 {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let mut dist = vec![vec![-1; cols]; rows];
+    let mut settled = vec![vec![false; cols]; rows];
+    dist[start[0]][start[1]] = 0;
+    let moves = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    loop {
+        let mut pick: Option[(i64, i64)] = None;
+        for r in 0..rows {
+            for c in 0..cols {
+                if not settled[r][c] and dist[r][c] != -1 {
+                    match pick {
+                        Some((pr, pc)) => {
+                            if dist[r][c] < dist[pr][pc] {
+                                pick = Some((r, c));
+                            }
+                        }
+                        None => pick = Some((r, c)),
+                    }
+                }
+            }
+        }
+        let Some((r, c)) = pick else {
+            return -1;
+        };
+        if r == destination[0] and c == destination[1] {
+            return dist[r][c];
+        }
+        settled[r][c] = true;
+        for (dr, dc) in moves {
+            let mut nr = r;
+            let mut nc = c;
+            let mut steps = 0;
+            while nr + dr >= 0 and nr + dr < rows and nc + dc >= 0 and nc + dc < cols and maze[nr + dr][nc + dc] == 0 {
+                nr += dr;
+                nc += dc;
+                steps += 1;
+            }
+            let d = dist[r][c] + steps;
+            if dist[nr][nc] == -1 or d < dist[nr][nc] {
+                dist[nr][nc] = d;
+            }
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(name: String, maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) {
+    println(f"{name}: from {start} to {destination} -> {shortest_distance(maze, start, destination)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let first = vec![
+        vec![0, 0, 1, 0, 0],
+        vec![0, 0, 0, 0, 0],
+        vec![0, 0, 0, 1, 0],
+        vec![1, 1, 0, 1, 1],
+        vec![0, 0, 0, 0, 0],
+    ];
+    show("example 1", first, vec![0, 4], vec![4, 4]);
+    show("example 2", first, vec![0, 4], vec![3, 2]);
+    show("example 3", vec![
+        vec![0, 0, 0, 0, 0],
+        vec![1, 1, 0, 0, 1],
+        vec![0, 0, 0, 0, 0],
+        vec![0, 1, 0, 0, 1],
+        vec![0, 1, 0, 0, 0],
+    ], vec![4, 3], vec![0, 1]);
+    show("two cells", vec![vec![0, 0]], vec![0, 0], vec![0, 1]);
+    show("rolls past", vec![vec![0, 0, 0, 0, 0]], vec![0, 4], vec![0, 2]);
+    show("a column", vec![vec![0], vec![0], vec![0], vec![0]], vec![3, 0], vec![0, 0]);
+    // The far corner of an open room, two rolls either way.
+    show("a room", vec![
+        vec![0, 0, 0],
+        vec![0, 0, 0],
+        vec![0, 0, 0],
+    ], vec![0, 0], vec![2, 2]);
+    show("walled in", vec![
+        vec![0, 1, 0],
+        vec![1, 1, 0],
+        vec![0, 0, 0],
+    ], vec![0, 0], vec![2, 2]);
+    // The short way is a dead end: the ball stops only by the long one.
+    show("the long way", vec![
+        vec![0, 0, 0, 0],
+        vec![1, 1, 1, 0],
+        vec![0, 0, 0, 0],
+    ], vec![0, 0], vec![2, 0]);
+    // 300 random mazes of 1 to 12 by 1 to 12 cells, a wall in each cell
+    // with odds of 1 in 5, 1 in 3 or 1 in 2 in turn, with a start and a
+    // destination in two different open cells.
+    let count = 300;
+    let mut seed: i64 = 505;
+    let mut reached = 0;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for k in 0..count {
+        let rows = 1 + next_random(mut seed) % 12;
+        let cols = 1 + next_random(mut seed) % 12;
+        let odds = if k % 3 == 0 { 5 } else if k % 3 == 1 { 3 } else { 2 };
+        let mut maze: Vec[Vec[i64]] = Vec.new();
+        let mut open: Vec[(i64, i64)] = Vec.new();
+        for r in 0..rows {
+            let mut line: Vec[i64] = Vec.new();
+            for c in 0..cols {
+                if next_random(mut seed) % odds == 0 {
+                    line.push(1);
+                } else {
+                    line.push(0);
+                    open.push((r, c));
+                }
+            }
+            maze.push(line);
+        }
+        if open.len() < 2 {
+            continue;
+        }
+        let a = next_random(mut seed) % open.len();
+        let mut b = next_random(mut seed) % (open.len() - 1);
+        if b >= a {
+            b += 1;
+        }
+        let (sr, sc) = open[a];
+        let (dr, dc) = open[b];
+        let d = shortest_distance(maze, vec![sr, sc], vec![dr, dc]);
+        if d != -1 {
+            reached += 1;
+            total += d;
+        }
+        checksum = (checksum * 31 + d + 1) % 1000000007;
+    }
+    println(f"{count} random mazes: the destination reached in {reached}, distance {total} in all, checksum {checksum}");
+}

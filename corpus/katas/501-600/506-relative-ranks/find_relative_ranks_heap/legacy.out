@@ -1,0 +1,7 @@
+example 1: [5, 4, 3, 2, 1] -> [Gold Medal, Silver Medal, Bronze Medal, 4, 5]
+example 2: [10, 3, 8, 9, 4] -> [Gold Medal, 5, Bronze Medal, Silver Medal, 4]
+one athlete: [7] -> [Gold Medal]
+two: [1, 2] -> [Silver Medal, Gold Medal]
+rising: [1, 2, 3, 4, 5, 6] -> [6, 5, 4, Bronze Medal, Silver Medal, Gold Medal]
+the extremes: [0, 1000000, 500000, 999999] -> [4, Gold Medal, Bronze Medal, Silver Medal]
+300 random lists: 4668 athletes, checksum 590118472

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/506-relative-ranks/find_relative_ranks_heap.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:runtime: invalid MIR:"
+classified_with = "acb321f26"
+extracted_src = "c9e83f9d"
+model_rev = "1aa23105"
+model_src = "c9e83f9d"

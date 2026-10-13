@@ -1,0 +1,66 @@
+// LeetCode #506: Relative Ranks -- counting the higher scores.
+//
+// An athlete's place is one more than the number of athletes who scored
+// higher: one map over the scores, each counting with a filter over all
+// of them. O(n^2) time, no sorting.
+
+fn medal(place: i64) -> String {
+    match place {
+        1 => "Gold Medal",
+        2 => "Silver Medal",
+        3 => "Bronze Medal",
+        _ => f"{place}",
+    }
+}
+
+fn find_relative_ranks(score: Vec[i64]) -> Vec[String] {
+    score.iter().map(|s| medal(1 + score.iter().filter(|t| *t > s).count())).collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(name: String, score: Vec[i64]) {
+    println(f"{name}: {score} -> {find_relative_ranks(score)}");
+}
+
+fn main() {
+    show("example 1", vec![5, 4, 3, 2, 1]);
+    show("example 2", vec![10, 3, 8, 9, 4]);
+    show("one athlete", vec![7]);
+    show("two", vec![1, 2]);
+    show("rising", vec![1, 2, 3, 4, 5, 6]);
+    show("the extremes", vec![0, 1000000, 500000, 999999]);
+    // 300 random lists of 1 to 30 different scores: the j-th of n is
+    // j * spread plus less than spread, shuffled, with spread 3, 1,000
+    // or 33,000 in turn.
+    let count = 300;
+    let mut seed: i64 = 506;
+    let mut athletes = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let n = 1 + next_random(mut seed) % 30;
+        let spread = if c % 3 == 0 { 3 } else if c % 3 == 1 { 1000 } else { 33000 };
+        let mut score: Vec[i64] = Vec.new();
+        for j in 0..n {
+            score.push(j * spread + next_random(mut seed) % spread);
+        }
+        let mut k = n - 1;
+        while k > 0 {
+            score.swap(k, next_random(mut seed) % (k + 1));
+            k -= 1;
+        }
+        for rank in find_relative_ranks(score) {
+            athletes += 1;
+            for ch in rank.chars() {
+                let code: i64 = ch as i32;
+                checksum = (checksum * 31 + code) % 1000000007;
+            }
+        }
+    }
+    println(f"{count} random lists: {athletes} athletes, checksum {checksum}");
+}

@@ -1,0 +1,70 @@
+// LeetCode #504: Base 7 -- the digits as a decimal number.
+//
+// Build an integer whose decimal digits are the base 7 digits: the k-th
+// remainder of the division by 7 is worth 10^k. The largest input,
+// 10^7, has 9 base 7 digits, so the integer stays below 10^9. Printing
+// it, with the sign of the input, is the answer.
+
+fn convert_to_base7(num: i64) -> String {
+    let mut n = num.abs();
+    let mut value = 0;
+    let mut place = 1;
+    while n > 0 {
+        value += n % 7 * place;
+        place *= 10;
+        n /= 7;
+    }
+    if num < 0 {
+        value = -value;
+    }
+    f"{value}"
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(num: i64) {
+    println(f"{num} -> \"{convert_to_base7(num)}\"");
+}
+
+fn main() {
+    show(100);
+    show(-7);
+    show(0);
+    show(6);
+    show(7);
+    show(48);
+    show(49);
+    show(-1);
+    show(10000000);
+    show(-10000000);
+    // 300 random numbers from -100 to 100 or from the whole range
+    // -10^7 to 10^7, in turn.
+    let count = 300;
+    let mut seed: i64 = 504;
+    let mut digits = 0;
+    let mut negative = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let num = if c % 2 == 0 {
+            next_random(mut seed) % 201 - 100
+        } else {
+            (next_random(mut seed) * 65536 + next_random(mut seed)) % 20000001 - 10000000
+        };
+        let s = convert_to_base7(num);
+        if num < 0 {
+            negative += 1;
+            digits += s.len() - 1;
+        } else {
+            digits += s.len();
+        }
+        // Read as decimal, the base 7 digits name one number.
+        let read = i64.parse(s).unwrap();
+        checksum = (checksum * 31 + read % 1000000007 + 1000000007) % 1000000007;
+    }
+    println(f"{count} random numbers: {digits} digits, {negative} negative, checksum {checksum}");
+}

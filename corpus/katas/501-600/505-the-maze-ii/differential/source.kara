@@ -1,0 +1,332 @@
+// Differential test for LeetCode #505: The Maze II.
+//
+// Copies of the four arms, on 1,500 random mazes of 1 to 9 by 1 to 9
+// cells, a wall in each cell with odds of 1 in 5, 1 in 3 or 1 in 2 in
+// turn, at least three open cells, and a start, a destination and a
+// third cell, all different and open.
+// Properties:
+//   P1  the distance is the reference's, which sweeps every cell and
+//       direction until no distance improves
+//   P2  -1, or at least the rows and columns between the two cells, and
+//       of the same parity
+//   P3  the maze transposed gives the same distance
+//   P4  the maze upside down gives the same distance
+//   P5  stopping at the third cell on the way is never shorter
+
+// ---- star: shortest_distance.kara
+
+fn shortest_distance_star(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> i64 {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let mut best = vec![vec![-1; cols]; rows];
+    let mut queue: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    queue.push((0, start[0], start[1]));
+    let moves = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    while let Some((d, r, c)) = queue.pop() {
+        if best[r][c] != -1 {
+            continue;
+        }
+        best[r][c] = d;
+        if r == destination[0] and c == destination[1] {
+            return d;
+        }
+        for (dr, dc) in moves {
+            let mut nr = r;
+            let mut nc = c;
+            let mut steps = 0;
+            while nr + dr >= 0 and nr + dr < rows and nc + dc >= 0 and nc + dc < cols and maze[nr + dr][nc + dc] == 0 {
+                nr += dr;
+                nc += dc;
+                steps += 1;
+            }
+            if steps > 0 and best[nr][nc] == -1 {
+                queue.push((d + steps, nr, nc));
+            }
+        }
+    }
+    -1
+}
+
+// ---- relax: shortest_distance_relax.kara
+
+fn shortest_distance_relax(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> i64 {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let mut dist = vec![vec![i64.MAX; cols]; rows];
+    dist[start[0]][start[1]] = 0;
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    queue.push_back((start[0], start[1]));
+    let moves = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    while let Some((r, c)) = queue.pop_front() {
+        for (dr, dc) in moves {
+            let mut nr = r;
+            let mut nc = c;
+            let mut steps = 0;
+            while nr + dr >= 0 and nr + dr < rows and nc + dc >= 0 and nc + dc < cols and maze[nr + dr][nc + dc] == 0 {
+                nr += dr;
+                nc += dc;
+                steps += 1;
+            }
+            if dist[r][c] + steps < dist[nr][nc] {
+                dist[nr][nc] = dist[r][c] + steps;
+                queue.push_back((nr, nc));
+            }
+        }
+    }
+    let d = dist[destination[0]][destination[1]];
+    if d == i64.MAX { -1 } else { d }
+}
+
+// ---- scan: shortest_distance_scan.kara
+
+fn shortest_distance_scan(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> i64 {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let mut dist = vec![vec![-1; cols]; rows];
+    let mut settled = vec![vec![false; cols]; rows];
+    dist[start[0]][start[1]] = 0;
+    let moves = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    loop {
+        let mut pick: Option[(i64, i64)] = None;
+        for r in 0..rows {
+            for c in 0..cols {
+                if not settled[r][c] and dist[r][c] != -1 {
+                    match pick {
+                        Some((pr, pc)) => {
+                            if dist[r][c] < dist[pr][pc] {
+                                pick = Some((r, c));
+                            }
+                        }
+                        None => pick = Some((r, c)),
+                    }
+                }
+            }
+        }
+        let Some((r, c)) = pick else {
+            return -1;
+        };
+        if r == destination[0] and c == destination[1] {
+            return dist[r][c];
+        }
+        settled[r][c] = true;
+        for (dr, dc) in moves {
+            let mut nr = r;
+            let mut nc = c;
+            let mut steps = 0;
+            while nr + dr >= 0 and nr + dr < rows and nc + dc >= 0 and nc + dc < cols and maze[nr + dr][nc + dc] == 0 {
+                nr += dr;
+                nc += dc;
+                steps += 1;
+            }
+            let d = dist[r][c] + steps;
+            if dist[nr][nc] == -1 or d < dist[nr][nc] {
+                dist[nr][nc] = d;
+            }
+        }
+    }
+}
+
+// ---- dfs: shortest_distance_dfs.kara
+
+fn explore_dfs(maze: Vec[Vec[i64]], r: i64, c: i64, d: i64, best: mut ref Vec[Vec[i64]]) {
+    if best[r][c] != -1 and best[r][c] <= d {
+        return;
+    }
+    best[r][c] = d;
+    let rows = maze.len();
+    let cols = maze[0].len();
+    for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        let mut nr = r;
+        let mut nc = c;
+        let mut steps = 0;
+        while nr + dr >= 0 and nr + dr < rows and nc + dc >= 0 and nc + dc < cols and maze[nr + dr][nc + dc] == 0 {
+            nr += dr;
+            nc += dc;
+            steps += 1;
+        }
+        if steps > 0 {
+            explore_dfs(maze, nr, nc, d + steps, best);
+        }
+    }
+}
+
+fn shortest_distance_dfs(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> i64 {
+    let mut best = vec![vec![-1; maze[0].len()]; maze.len()];
+    explore_dfs(maze, start[0], start[1], 0, mut best);
+    best[destination[0]][destination[1]]
+}
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> i64 {
+    match which {
+        0 => shortest_distance_star(maze, start, destination),
+        1 => shortest_distance_relax(maze, start, destination),
+        2 => shortest_distance_scan(maze, start, destination),
+        _ => shortest_distance_dfs(maze, start, destination),
+    }
+}
+
+// The reference: sweep every cell and direction, again and again, until
+// no distance improves.
+fn reference(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> i64 {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let mut dist = vec![vec![-1; cols]; rows];
+    dist[start[0]][start[1]] = 0;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for r in 0..rows {
+            for c in 0..cols {
+                if dist[r][c] == -1 {
+                    continue;
+                }
+                for (dr, dc) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                    let mut nr = r;
+                    let mut nc = c;
+                    while nr + dr >= 0 and nr + dr < rows and nc + dc >= 0 and nc + dc < cols and maze[nr + dr][nc + dc] == 0 {
+                        nr += dr;
+                        nc += dc;
+                    }
+                    let d = dist[r][c] + (nr - r).abs() + (nc - c).abs();
+                    if dist[nr][nc] == -1 or d < dist[nr][nc] {
+                        dist[nr][nc] = d;
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    dist[destination[0]][destination[1]]
+}
+
+fn transposed(maze: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for c in 0..maze[0].len() {
+        let mut line: Vec[i64] = Vec.new();
+        for r in 0..maze.len() {
+            line.push(maze[r][c]);
+        }
+        out.push(line);
+    }
+    out
+}
+
+fn main() {
+    let names = ["star", "relax", "scan", "dfs"];
+    let cases = 1500;
+    let mut seed: i64 = 5050;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property = [0, 0, 0, 0, 0];
+    let mut c = 0;
+    while c < cases {
+        // 1 to 9 by 1 to 9 cells, a wall in each cell with odds of 1 in
+        // 5, 1 in 3 or 1 in 2 in turn, and at least three open cells.
+        let rows = 1 + next_random(mut seed) % 9;
+        let cols = 1 + next_random(mut seed) % 9;
+        let odds = if c % 3 == 0 { 5 } else if c % 3 == 1 { 3 } else { 2 };
+        let mut maze: Vec[Vec[i64]] = Vec.new();
+        let mut open: Vec[(i64, i64)] = Vec.new();
+        for r in 0..rows {
+            let mut line: Vec[i64] = Vec.new();
+            for col in 0..cols {
+                if next_random(mut seed) % odds == 0 {
+                    line.push(1);
+                } else {
+                    line.push(0);
+                    open.push((r, col));
+                }
+            }
+            maze.push(line);
+        }
+        if open.len() < 3 {
+            continue;
+        }
+        c += 1;
+        // Three different open cells: the start, the destination and a
+        // cell between them for P5.
+        let a = next_random(mut seed) % open.len();
+        let mut b = next_random(mut seed) % (open.len() - 1);
+        if b >= a {
+            b += 1;
+        }
+        let mut m = next_random(mut seed) % open.len();
+        while m == a or m == b {
+            m = (m + 1) % open.len();
+        }
+        let (sr, sc) = open[a];
+        let (dr, dc) = open[b];
+        let (mr, mc) = open[m];
+        let start = vec![sr, sc];
+        let destination = vec![dr, dc];
+        let want = reference(maze, start, destination);
+        let flipped: Vec[Vec[i64]] = maze.iter().rev().cloned().collect();
+        let across = transposed(maze);
+        for which in 0..4 {
+            let got = arm(which, maze, start, destination);
+            // P1: the reference's distance.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {maze} from {start} to {destination} gave {got}, want {want}");
+                }
+            }
+            // P2: -1, or at least the rows and columns between the two
+            // cells, and of the same parity: each step moves one cell.
+            checks += 1;
+            let apart = (dr - sr).abs() + (dc - sc).abs();
+            if got != -1 and (got < apart or (got - apart) % 2 != 0) {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {maze} from {start} to {destination} gave {got}");
+                }
+            }
+            // P3: the maze transposed gives the same distance.
+            checks += 1;
+            let other = arm(which, across, vec![sc, sr], vec![dc, dr]);
+            if other != got {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {maze} transposed gave {other}, not {got}");
+                }
+            }
+            // P4: the maze upside down gives the same distance.
+            checks += 1;
+            let other = arm(which, flipped, vec![rows - 1 - sr, sc], vec![rows - 1 - dr, dc]);
+            if other != got {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {maze} upside down gave {other}, not {got}");
+                }
+            }
+            // P5: stopping at a third cell on the way is never shorter.
+            let there = arm(which, maze, start, vec![mr, mc]);
+            let on = arm(which, maze, vec![mr, mc], destination);
+            if there != -1 and on != -1 {
+                checks += 1;
+                if got == -1 or got > there + on {
+                    failures += 1;
+                    by_property[4] += 1;
+                    if failures <= 5 {
+                        println(f"P5 {names[which]}: {maze} from {start} to {destination} gave {got}, by [{mr}, {mc}] {there} + {on}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

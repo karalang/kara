@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/504-base-7/convert_to_base7_decimal.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "acb321f26"
+extracted_src = "72b1b0e8"
+model_rev = "1aa23105"
+model_src = "72b1b0e8"

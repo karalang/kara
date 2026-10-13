@@ -1,0 +1,261 @@
+// Differential test for LeetCode #504: Base 7.
+//
+// Copies of the four arms, on 1,500 random numbers from -400 to 400,
+// from -10^5 to 10^5, or from the whole range -10^7 to 10^7.
+// Properties:
+//   P1  the string is the reference's, which tries the digits 6 down to
+//       0 at each power of 7
+//   P2  the string is canonical base 7 and reads back as the number
+//   P3  seven times the number is the same digits and a 0
+//   P4  the negated number gains or loses the '-', nothing else
+//   P5  for a number not below 0, the next one counts up a digit
+
+// ---- star: convert_to_base7.kara
+
+fn convert_to_base7_star(num: i64) -> String {
+    if num == 0 {
+        return "0";
+    }
+    let mut n = num.abs();
+    let mut digits: Vec[i64] = Vec.new();
+    while n > 0 {
+        digits.push(n % 7);
+        n /= 7;
+    }
+    let mut out = if num < 0 { "-" } else { "" };
+    for d in digits.iter().rev() {
+        out.push_str(f"{d}");
+    }
+    out
+}
+
+// ---- recursive: convert_to_base7_recursive.kara
+
+fn convert_to_base7_recursive(num: i64) -> String {
+    if num < 0 {
+        return "-" + convert_to_base7_recursive(-num);
+    }
+    if num < 7 {
+        return f"{num}";
+    }
+    convert_to_base7_recursive(num / 7) + f"{num % 7}"
+}
+
+// ---- decimal: convert_to_base7_decimal.kara
+
+fn convert_to_base7_decimal(num: i64) -> String {
+    let mut n = num.abs();
+    let mut value = 0;
+    let mut place = 1;
+    while n > 0 {
+        value += n % 7 * place;
+        place *= 10;
+        n /= 7;
+    }
+    if num < 0 {
+        value = -value;
+    }
+    f"{value}"
+}
+
+// ---- powers: convert_to_base7_powers.kara
+
+fn convert_to_base7_powers(num: i64) -> String {
+    let glyphs: Vec[char] = "0123456".chars().collect();
+    let mut n = num.abs();
+    let mut power = 1;
+    while power * 7 <= n {
+        power *= 7;
+    }
+    let mut out = String.new();
+    if num < 0 {
+        out.push('-');
+    }
+    while power > 0 {
+        out.push(glyphs[n / power]);
+        n %= power;
+        power /= 7;
+    }
+    out
+}
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, num: i64) -> String {
+    match which {
+        0 => convert_to_base7_star(num),
+        1 => convert_to_base7_recursive(num),
+        2 => convert_to_base7_decimal(num),
+        _ => convert_to_base7_powers(num),
+    }
+}
+
+// The reference: from the highest power of 7 down, each digit is the
+// largest of 0 to 6 whose multiple of the power still fits.
+fn reference(num: i64) -> String {
+    let glyphs: Vec[char] = "0123456".chars().collect();
+    let mut n = if num < 0 { -num } else { num };
+    let mut powers: Vec[i64] = vec![1];
+    while powers[powers.len() - 1] * 7 <= n {
+        powers.push(powers[powers.len() - 1] * 7);
+    }
+    let mut out: Vec[char] = Vec.new();
+    if num < 0 {
+        out.push('-');
+    }
+    let mut k = powers.len() - 1;
+    while k >= 0 {
+        let mut d = 6;
+        while d * powers[k] > n {
+            d -= 1;
+        }
+        out.push(glyphs[d]);
+        n -= d * powers[k];
+        k -= 1;
+    }
+    out.iter().collect()
+}
+
+fn digit_value(c: char) -> i64 {
+    match c {
+        '0' => 0,
+        '1' => 1,
+        '2' => 2,
+        '3' => 3,
+        '4' => 4,
+        '5' => 5,
+        '6' => 6,
+        _ => -1,
+    }
+}
+
+// Reads s as a base 7 number in canonical form: an optional '-' first,
+// then digits 0 to 6, no leading zero unless the whole number is "0",
+// and no "-0". None when s is not in that form.
+fn read_base7(s: String) -> Option[i64] {
+    let chars: Vec[char] = s.chars().collect();
+    let negative = chars.len() > 0 and chars[0] == '-';
+    let start = if negative { 1 } else { 0 };
+    if chars.len() == start {
+        return None;
+    }
+    if chars[start] == '0' and (chars.len() > start + 1 or negative) {
+        return None;
+    }
+    let mut value = 0;
+    for i in start..chars.len() {
+        let d = digit_value(chars[i]);
+        if d < 0 {
+            return None;
+        }
+        value = value * 7 + d;
+    }
+    Some(if negative { -value } else { value })
+}
+
+// s + 1 in base 7, for a non-negative s: the trailing 6s become 0s and
+// the digit before them goes up by one, or a 1 goes in front.
+fn increment(s: String) -> String {
+    let glyphs: Vec[char] = "0123456".chars().collect();
+    let mut chars: Vec[char] = s.chars().collect();
+    let mut k = chars.len() - 1;
+    while k >= 0 and chars[k] == '6' {
+        chars[k] = '0';
+        k -= 1;
+    }
+    let mut out = String.new();
+    if k < 0 {
+        out.push('1');
+    } else {
+        chars[k] = glyphs[digit_value(chars[k]) + 1];
+    }
+    for c in chars {
+        out.push(c);
+    }
+    out
+}
+
+fn main() {
+    let names = ["star", "recursive", "decimal", "powers"];
+    let cases = 1500;
+    let mut seed: i64 = 5040;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property = [0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // From -400 to 400, from -10^5 to 10^5, or from the whole range
+        // -10^7 to 10^7, in turn.
+        let num = if c % 3 == 0 {
+            next_random(mut seed) % 801 - 400
+        } else if c % 3 == 1 {
+            next_random(mut seed) % 200001 - 100000
+        } else {
+            (next_random(mut seed) * 65536 + next_random(mut seed)) % 20000001 - 10000000
+        };
+        let want = reference(num);
+        for which in 0..4 {
+            let got = arm(which, num);
+            // P1: the reference's string.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {num} gave {got}, want {want}");
+                }
+            }
+            // P2: the string is canonical base 7 and reads back as num.
+            checks += 1;
+            if read_base7(got) != Some(num) {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {num} gave {got}");
+                }
+            }
+            // P3: seven times the number is the same digits and a 0.
+            checks += 1;
+            let times = arm(which, num * 7);
+            let expect = if num == 0 { "0" } else { got + "0" };
+            if times != expect {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {num * 7} gave {times}, want {expect}");
+                }
+            }
+            // P4: the negated number gains or loses the sign, nothing else.
+            checks += 1;
+            let negated = arm(which, -num);
+            let expect = if num > 0 { "-" + got } else if num < 0 { got[1..got.len()].to_string() } else { "0" };
+            if negated != expect {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {-num} gave {negated}, want {expect}");
+                }
+            }
+            // P5: for a non-negative number, the next one counts up a digit.
+            if num >= 0 {
+                checks += 1;
+                let next = arm(which, num + 1);
+                let expect = increment(got);
+                if next != expect {
+                    failures += 1;
+                    by_property[4] += 1;
+                    if failures <= 5 {
+                        println(f"P5 {names[which]}: {num + 1} gave {next}, want {expect}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}
