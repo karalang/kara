@@ -1,0 +1,79 @@
+// LeetCode #487: Max Consecutive Ones II -- the run before the last 0.
+//
+// With one 0 flipped, the best run ending here is the 1s since the last
+// 0, plus that 0, plus the 1s just before it. So keep two counts: `run`,
+// the 1s since the last 0, and `before`, the run before that 0 plus the
+// 0 itself (0 before any 0 is seen). One pass, two numbers of state, so
+// it works on a stream too.
+
+fn find_max_consecutive_ones(nums: Vec[i64]) -> i64 {
+    let mut best = 0;
+    let mut before = 0;
+    let mut run = 0;
+    for x in nums {
+        if x == 1 {
+            run += 1;
+        } else {
+            before = run + 1;
+            run = 0;
+        }
+        if before + run > best {
+            best = before + run;
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn list(v: Vec[i64]) -> String {
+    let mut line = String.new();
+    for x in v {
+        if not line.is_empty() {
+            line.push_str(", ");
+        }
+        line.push_str(f"{x}");
+    }
+    line
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"[{list(nums)}] -> {find_max_consecutive_ones(nums)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![1, 0, 1, 1, 0]);
+    show(vec![1, 0, 1, 1, 0, 1]);
+    show(vec![0]);
+    show(vec![1]);
+    show(vec![0, 0, 0]);
+    show(vec![1, 1, 1, 1]);
+    show(vec![1, 0, 0, 1, 1, 0, 1, 1, 1, 0]);
+    show(vec![0, 1, 1, 1, 0, 1, 1, 1]);
+    // 300 random arrays of 1 to 60 numbers, 1 with odds of 1 in 2, 3 in 4
+    // or 15 in 16 in turn.
+    let count = 300;
+    let mut seed: i64 = 487;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let odds = if c % 3 == 0 { 8 } else if c % 3 == 1 { 12 } else { 15 };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 60 {
+            if next_random(mut seed) % 16 < odds {
+                nums.push(1);
+            } else {
+                nums.push(0);
+            }
+        }
+        let best = find_max_consecutive_ones(nums);
+        total += best;
+        checksum = (checksum * 31 + best + nums.len()) % 1000000007;
+    }
+    println(f"{count} random arrays: runs add up to {total}, checksum {checksum}");
+}
