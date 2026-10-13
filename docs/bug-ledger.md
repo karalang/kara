@@ -100,8 +100,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 234 |
 | other | 171 |
 | perf | 153 |
+| diagnostics | 153 |
 | false-positive | 152 |
-| diagnostics | 152 |
 | crash | 114 |
 | soundness | 99 |
 | use-after-free | 90 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2857 |
-| interp | 905 |
+| codegen | 2858 |
+| interp | 906 |
 | typecheck | 373 |
 | other | 115 |
 | ownership | 83 |
@@ -597,6 +597,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-10 | 2026-10-13 | interp+codegen | medium | On the MIR backends `let s: String = text.chars().collect();` (chars collected into a `String` with no adaptor between) is refused with "collecting chars into this type is not lowered yet", while `karac check` and the legacy interpreter accept it, and the same collect after `.rev()`, `.filter(..)`, `.skip(..)`, `.take(..)` or `.map(..)` runs on both MIR backends | — |
 | B-2026-10-13-11 | 2026-10-13 | typecheck | low | `PriorityQueue.peek` is typed `Option[T]` by value instead of the spec's `Option[ref T]`, so the spec's own `*pq.peek().unwrap()` and `Some(x) => *x` are refused by `karac check` and both MIR backends ("unary '*' requires 'ref T' ... found 'i64'"), and `let s = pq.peek().unwrap()` on a `PriorityQueue[String]` is accepted as an owned `String` | — |
 | B-2026-10-13-12 | 2026-10-13 | typecheck | low | `char.is_ascii_lowercase()`, `is_ascii_uppercase()` and `is_ascii_alphanumeric()` are refused by `karac check`, the legacy interpreter and both MIR backends ("no method 'is_ascii_lowercase' on type 'char'"), though `is_ascii_digit`, `is_ascii_alphabetic`, `is_lowercase` and `to_ascii_uppercase` are accepted and the MIR codegen's native table already lists all three; the `char` method surface is not in docs/library at all | — |
+| B-2026-10-13-13 | 2026-10-13 | interp+codegen | low | On both MIR backends a string slice `s[a..b]` that runs past the end, or cuts a code point, stops with `runtime error: explicit panic`, the report a `panic(..)` call gets, where legacy names the bounds (`string slice bounds 1..5 out of range (len 3)`, `E_STRING_SLICE_NOT_AT_CHAR_BOUNDARY`); design.md § Panic record makes the kind (`explicit` vs `index_out_of_bounds`) part of the language contract | — |
 
 ### Relocated
 
