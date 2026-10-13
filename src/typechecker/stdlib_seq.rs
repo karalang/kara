@@ -930,6 +930,20 @@ impl<'a> super::TypeChecker<'a> {
                     args: Vec::new(),
                 }
             }
+            // `s.parse()` reaches here only when no expected `Option[T]`
+            // names the target (`try_apply_parse_coercion` takes the
+            // annotated forms): say how to name it (B-2026-10-12-5).
+            "parse" if args.is_empty() => {
+                self.type_error(
+                    "`.parse()` on a string takes its target from an expected `Option[T]` \
+                     (`let n: Option[i64] = s.parse();`); with none here, name the type: \
+                     `i64.parse(s)`"
+                        .to_string(),
+                    *span,
+                    TypeErrorKind::NoMethodFound,
+                );
+                Type::Error
+            }
             // Unknown string method — typo-suggestion diagnostic if close to
             // a known name. `len` / `is_empty` / `contains` joined the
             // enumerated list 2026-05-22; `push_str` joined 2026-05-23;

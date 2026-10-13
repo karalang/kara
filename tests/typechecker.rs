@@ -53158,3 +53158,24 @@ fn float_powi_takes_an_i32_exponent() {
         );
     }
 }
+
+/// B-2026-10-12-5: `.parse()` against an expected `Option[T]` takes a `Str`
+/// receiver; with no expected type, the error names `i64.parse(s)` rather
+/// than a missing method on `String`.
+#[test]
+fn str_receiver_parse_takes_its_target_from_context() {
+    typecheck_ok(
+        "fn whole(s: Str) -> Option[i64] {\n    s.parse()\n}\n\
+         fn head(s: Str) -> Option[i64] {\n    let m: Option[i64] = s[0..1].parse();\n    m\n}\n\
+         fn main() {\n    println(f\"{whole(\"4\").unwrap()} {head(\"4\").unwrap()}\");\n}\n",
+    );
+    let errs = typecheck_errors(
+        "fn f(s: Str) -> i64 {\n    s.parse().unwrap()\n}\n\
+         fn main() {\n    println(f\"{f(\"4\")}\");\n}\n",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("name the type: `i64.parse(s)`")),
+        "unannotated: {errs:?}"
+    );
+}

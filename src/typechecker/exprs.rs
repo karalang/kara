@@ -4814,10 +4814,16 @@ impl<'a> super::TypeChecker<'a> {
         ) {
             return None;
         }
-        // Receiver must be a `String` / `str`.
+        // Receiver must be text: a `String`, a `Str` view (a `Str`
+        // parameter, a slice `s[a..b]`; B-2026-10-12-5), or a borrow of one.
         let recv_ty = self.infer_expr(object);
-        let is_string = matches!(&recv_ty, Type::Str)
-            || matches!(&recv_ty, Type::Named { name, args } if name == "String" && args.is_empty());
+        let text = match &recv_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            t => t,
+        };
+        let is_string = matches!(text, Type::Str)
+            || matches!(text, Type::Named { name, args }
+                if (name == "String" || name == "StringSlice") && args.is_empty());
         if !is_string {
             return None;
         }

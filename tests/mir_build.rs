@@ -588,3 +588,24 @@ fn mir_float_powi_agrees_on_both_backends() {
         }
     }
 }
+
+/// B-2026-10-12-5: the string-receiver `.parse()` sugar takes a `Str` (a
+/// `Str` parameter, a slice of one, `as_str()`) as it takes a `String`.
+#[test]
+fn mir_str_receiver_parse() {
+    const SRC: &str = "fn whole(s: Str) -> Option[i64] {\n    s.parse()\n}\n\
+        fn head(s: Str) -> i64 {\n    let m: Option[i64] = s[0..1].parse();\n    m.unwrap()\n}\n\
+        fn byref(s: ref String) -> Option[u8] {\n    s.parse()\n}\n\
+        fn main() {\n    let t = String.from(\"42\");\n    \
+        let x: Option[f64] = t.as_str().parse();\n    \
+        println(f\"{whole(\"42\").unwrap()} {head(\"42\")} {byref(t).unwrap()} {x.unwrap()}\");\n    \
+        let bad: Option[i64] = \"4x\".parse();\n    println(f\"{bad.is_none()}\");\n}\n";
+    let want = "42 4 42 42.0\ntrue\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
