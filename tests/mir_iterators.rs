@@ -964,3 +964,28 @@ fn main() {
 "#;
     assert_runs(src, "el 3 9 60 3\n");
 }
+
+/// `chars()` and a slice's `iter()` run from either end, so `.rev()`
+/// reverses them; `chars()` steps back over a multi-byte char whole
+/// (B-2026-10-12-35).
+#[test]
+fn chars_and_a_slice_iterator_run_backwards() {
+    let src = r#"
+fn main() {
+    let s = "héllo→x";
+    let r: String = s.chars().rev().collect();
+    println(r);
+    let mut it = s.chars();
+    let a = it.next_back();
+    let b = it.next();
+    println(f"{a} {b} {it.count()}");
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    let w: Vec[i64] = v[1..].iter().rev().cloned().collect();
+    println(f"{w[0]} {w.len()}");
+}
+"#;
+    assert_runs(src, "x→olléh\nSome(x) Some(h) 5\n3 2\n");
+}

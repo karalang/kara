@@ -46,6 +46,16 @@ impl[T] Iterator for SliceIter[T] {
     }
 }
 
+impl[T] DoubleEndedIterator for SliceIter[T] {
+    fn next_back(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        self.back = self.back - 1;
+        self.s.get(self.back)
+    }
+}
+
 impl[T] Slice[T] {
     /// The elements, front to back, each borrowed.
     fn iter(self) -> SliceIter[T] {
