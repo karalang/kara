@@ -820,3 +820,41 @@ fn main() {
         }
     }
 }
+
+// B-2026-10-13-27 — `T.default()` on a scalar, `String` or a collection, a
+// derived `Default` over collection, `Option` and tuple fields, and
+// `take(place)` of a collection place, on both backends.
+#[test]
+fn mir_standard_types_are_default() {
+    const SRC: &str = r#"#[derive(Default)]
+struct Config { names: Vec[String], count: i64, title: String, tags: Map[String, i64], best: Option[String], pair: (i64, String), q: VecDeque[u8], seen: Set[i64] }
+#[derive(Default)]
+struct Outer { c: Config, on: bool }
+fn main() {
+    let c = Config.default();
+    println(f"{c.names.len()} {c.count} [{c.title}] {c.tags.len()} {c.best} {c.pair.0} [{c.pair.1}] {c.q.len()} {c.seen.len()}");
+    let o = Outer.default();
+    let inner = o.c;
+    println(f"{inner.names.len()} {o.on}");
+    let mut w: Vec[Vec[i64]] = vec![vec![1, 2], vec![3]];
+    let t = take(mut w[0]);
+    let s = String.default();
+    let v: Vec[i64] = Vec.default();
+    println(f"{t.len()} {w[0].len()} [{s}] {v.len()}");
+    let x = i64.default();
+    let b = bool.default();
+    let f = f64.default();
+    let ch = char.default();
+    let u = u8.default();
+    println(f"{x} {b} {f} {ch as u32} {u}");
+}
+"#;
+    let want = "0 0 [] 0 None 0 [] 0 0\n0 false\n2 0 [] 0\n0 false 0.0 0 0\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

@@ -9255,6 +9255,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                     if let Some(t) = self.type_param(tp) {
                         return self.type_param_call(e, t, m, args, dest);
                     }
+                    // `i64.default()`, `String.default()`: a standard type's
+                    // zero or empty value, the type the call has
+                    // (B-2026-10-13-27).
+                    if let ("default", []) = (m.as_str(), args) {
+                        let t = self.expr_ty(e)?;
+                        return self.type_param_call(e, t, m, args, dest);
+                    }
                 }
             }
         }
@@ -11214,6 +11221,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         if let Some(owner) = self.primitive_owner(object) {
             if self.operator_call(owner, method, args, dest.clone())? {
                 return Ok(());
+            }
+            // `i64.default()`: the type's zero (B-2026-10-13-27).
+            if let ("default", []) = (method, args) {
+                let t = self.expr_ty(e)?;
+                return self.type_param_call(e, t, method, args, dest);
             }
             // `i64.parse(s)`, `f64.parse(s)`: a library function of a
             // primitive type, named after it. Copy arguments go by value,

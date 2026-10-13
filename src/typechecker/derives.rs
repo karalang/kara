@@ -2484,7 +2484,11 @@ impl super::env::TypeEnv {
             | Type::Char
             | Type::Str
             | Type::Unit => true,
+            // The standard collections default to empty and `Option` to
+            // `None`, whatever their element types (B-2026-10-13-27).
+            Type::Named { name, .. } if is_builtin_default_head(name) => true,
             Type::Named { name, .. } | Type::Shared(name) => self.type_has_default_method(name),
+            Type::Tuple(parts) => parts.iter().all(|t| self.type_supports_default(t)),
             Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => true,
             _ => false,
         }
@@ -2500,6 +2504,15 @@ impl super::env::TypeEnv {
             .iter()
             .any(|imp| imp.target_type == name && imp.methods.contains_key("default"))
     }
+}
+
+/// A standard type that is `Default` whatever its arguments: the
+/// collections (empty) and `Option` (`None`).
+pub(super) fn is_builtin_default_head(name: &str) -> bool {
+    matches!(
+        name,
+        "Vec" | "VecDeque" | "Set" | "SortedSet" | "Map" | "SortedMap" | "Option"
+    )
 }
 
 /// Whether the type's lint overrides include `#[allow(derive_clone_allocates)]`

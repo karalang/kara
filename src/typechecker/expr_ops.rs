@@ -1356,6 +1356,17 @@ impl<'a> super::TypeChecker<'a> {
             // exemption, `Clock.now()` / `RandomSource.next()` /
             // `:provide RandomSource = FakeRng {}` followed by
             // `RandomSource.next()` all break at typecheck.
+            // design.md § `Default`: `T.default()` on a scalar, `String` or a
+            // standard collection is its zero or empty value
+            // (B-2026-10-13-27). A library impl of `default` won above.
+            if member == "default" {
+                if let Some(t) = self.builtin_default_type(type_name) {
+                    return Type::Function {
+                        params: Vec::new(),
+                        return_type: Box::new(t),
+                    };
+                }
+            }
             if self.is_known_type_name(type_name)
                 && !crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&type_name.as_str())
                 // A comptime-derived type's associated fns (e.g. a derived

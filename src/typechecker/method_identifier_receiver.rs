@@ -507,6 +507,14 @@ impl<'a> super::TypeChecker<'a> {
                 // widths never reached here either, so even once the gate above
                 // admits them they would fall through to a worse message. The
                 // two sites have to move together.
+                // design.md § `Default`: `T.default()` on a scalar, `String`
+                // or a standard collection is its zero or empty value
+                // (B-2026-10-13-27). A library impl of `default` won above.
+                if method == "default" && args.is_empty() {
+                    if let Some(t) = self.builtin_default_type(type_name) {
+                        return Some(t);
+                    }
+                }
                 if crate::prelude::PRELUDE_PRIMITIVES.contains(&type_name.as_str())
                     && type_name != "String"
                 {
@@ -672,6 +680,29 @@ impl<'a> super::TypeChecker<'a> {
 
     /// `ref`/`mut ref` peeled off an argument type, so a borrowed integer is
     /// compared at its bare width rather than rejected for its binding mode.
+    /// The type `T.default()` builds when `T` names a scalar, `String` or a
+    /// standard collection (B-2026-10-13-27), with fresh variables for a
+    /// collection's element types.
+    pub(super) fn builtin_default_type(&mut self, type_name: &str) -> Option<Type> {
+        if let Some(t) = self.primitive_type(type_name) {
+            return matches!(
+                t,
+                Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char | Type::Str
+            )
+            .then_some(t);
+        }
+        let arity = match type_name {
+            "Vec" | "VecDeque" | "Set" | "SortedSet" | "Option" => 1,
+            "Map" | "SortedMap" => 2,
+            _ => return None,
+        };
+        let args = (0..arity).map(|_| self.env.fresh_type_var()).collect();
+        Some(Type::Named {
+            name: type_name.to_string(),
+            args,
+        })
+    }
+
     fn peel_refs_for_try_from(t: &Type) -> Type {
         match t {
             Type::Ref(inner) | Type::MutRef(inner) => Self::peel_refs_for_try_from(inner),

@@ -17486,20 +17486,20 @@ fn use_it() {
 }
 
 #[test]
-fn test_derive_default_container_field_rejected() {
-    // A container/generic field type is out of v1 scope: the derive
-    // validator reports it cleanly rather than failing in codegen.
-    let errors = typecheck_errors(
+fn test_derive_default_container_field_accepted() {
+    // A standard collection is `Default` as its empty value, `Option` as
+    // `None` and a tuple of `Default` parts as their tuple, so a derived
+    // `Default` takes them (B-2026-10-13-27; this test pinned the refusal
+    // before).
+    typecheck_desugared_ok(
         r#"
 #[derive(Default)]
-struct Bad { items: Vec[i64] }
+struct Good { items: Vec[i64], names: Map[String, i64], best: Option[String], pair: (i64, String) }
+fn main() {
+    let g = Good.default();
+    println(f"{g.items.len()} {g.names.len()} {g.best.is_none()} {g.pair.0}");
+}
 "#,
-    );
-    assert!(
-        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch
-            && e.message.contains("E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT")
-            && e.message.contains("items")),
-        "expected clean non-Default field diagnostic, got: {errors:?}"
     );
 }
 
@@ -53196,6 +53196,27 @@ fn main() {
     let mut y: Str = "a";
     y = "bc";
     println(f"{f(x)} {v.len()} {t.1} {g()} {y} {kind('7')}");
+}
+"#,
+    );
+}
+
+// B-2026-10-13-27 — the scalars, `String`, the standard collections and
+// `Option` are `Default`: `T.default()` names their zero or empty value, and
+// `take(place)` accepts a collection place.
+#[test]
+fn standard_types_are_default() {
+    typecheck_ok(
+        r#"fn main() {
+    let s = String.default();
+    let x = i64.default();
+    let b = bool.default();
+    let v: Vec[i64] = Vec.default();
+    let m: Map[i64, i64] = Map.default();
+    let o: Option[i64] = Option.default();
+    let mut w: Vec[Vec[i64]] = vec![vec![1, 2], vec![3]];
+    let t = take(mut w[0]);
+    println(f"[{s}] {x} {b} {v.len()} {m.len()} {o.is_none()} {t.len()}");
 }
 "#,
     );

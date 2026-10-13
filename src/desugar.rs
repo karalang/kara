@@ -1317,6 +1317,39 @@ fn default_field_expr(
     defaultable: &std::collections::HashSet<String>,
 ) -> Option<Expr> {
     let span = ty.span;
+    let dummy = |kind| Expr {
+        id: crate::ids::NodeId::DUMMY,
+        kind,
+        span,
+    };
+    // A standard collection is `Default` as its empty value and `Option` as
+    // `None`, whatever their arguments; a tuple of `Default` parts is the
+    // tuple of their defaults (B-2026-10-13-27).
+    if let TypeKind::Tuple(parts) = &ty.kind {
+        let parts = parts
+            .iter()
+            .map(|p| default_field_expr(p, defaultable))
+            .collect::<Option<Vec<_>>>()?;
+        return Some(dummy(ExprKind::Tuple(parts)));
+    }
+    if let TypeKind::Path(p) = &ty.kind {
+        if let [head] = p.segments.as_slice() {
+            match head.as_str() {
+                "Vec" | "VecDeque" | "Set" | "SortedSet" | "Map" | "SortedMap" => {
+                    let callee = dummy(ExprKind::Path {
+                        segments: vec![head.clone(), "new".to_string()],
+                        generic_args: None,
+                    });
+                    return Some(dummy(ExprKind::Call {
+                        callee: Box::new(callee),
+                        args: Vec::new(),
+                    }));
+                }
+                "Option" => return Some(dummy(ExprKind::Identifier("None".to_string()))),
+                _ => {}
+            }
+        }
+    }
     let name = type_leaf_name(ty)?;
     let kind = match name.as_str() {
         "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
