@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/509-fibonacci-number/differential.kara"
+dedup_of = []
+expect = "error:E0236"
+exit = 1
+tags = ["differential"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "425d17bcc"
+extracted_src = "6258633f"
+model_rev = "1aa23105"
+model_src = "6258633f"

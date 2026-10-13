@@ -1,0 +1,10 @@
+example 1: [2, 1, 3], node 1 -> 2
+example 2: [5, 3, 6, 2, 4, 1], node 6 -> null
+down the right subtree: [5, 3, 6, 2, 4, 1], node 3 -> 4
+up two levels: [5, 3, 6, 2, 4, 1], node 4 -> 5
+the smallest: [5, 3, 6, 2, 4, 1], node 1 -> 2
+one node: [7], node 7 -> null
+a chain to the right: [1, 2, 3, 4], node 2 -> 3
+a chain to the left: [4, 3, 2, 1], node 1 -> 2
+the extremes: [-100000, 100000, 0], node 0 -> 100000
+300 random trees: 6242 nodes, 300 without a successor, checksum 923539807

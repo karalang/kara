@@ -1,0 +1,289 @@
+// Differential test for LeetCode #510: Inorder Successor in BST II.
+//
+// Copies of the four arms, on 1,500 random search trees of 1 to 30
+// different values, each node pointing back at its parent. Properties:
+//   P1  the successor is the next larger value
+//   P2  the answer is the tree's own node with that value
+//   P3  successors from the smallest node visit every value in order,
+//       then stop
+//   P4  the same values inserted in another order give the same answer
+//   P5  the tree, parent links included, is as it was
+
+// ---- star: inorder_successor.kara
+
+fn inorder_successor_star(node: Node) -> Option[Node] {
+    if let Some(r) = node.right {
+        let mut cur = r;
+        while let Some(l) = cur.left {
+            cur = l;
+        }
+        return Some(cur);
+    }
+    let mut up = node.parent;
+    while let Some(p) = up {
+        if p.val > node.val {
+            return Some(p);
+        }
+        up = p.parent;
+    }
+    None
+}
+
+// ---- identity: inorder_successor_identity.kara
+
+fn inorder_successor_identity(node: Node) -> Option[Node] {
+    if let Some(r) = node.right {
+        let mut cur = r;
+        while let Some(l) = cur.left {
+            cur = l;
+        }
+        return Some(cur);
+    }
+    let mut child = node;
+    while let Some(p) = child.parent {
+        match p.left {
+            Some(l) if l.ref_eq(child) => return Some(p),
+            _ => child = p,
+        }
+    }
+    None
+}
+
+// ---- search: inorder_successor_search.kara
+
+fn inorder_successor_search(node: Node) -> Option[Node] {
+    let mut root = node;
+    while let Some(p) = root.parent {
+        root = p;
+    }
+    let mut best: Option[Node] = None;
+    let mut cur = Some(root);
+    while let Some(c) = cur {
+        if c.val > node.val {
+            best = Some(c);
+            cur = c.left;
+        } else {
+            cur = c.right;
+        }
+    }
+    best
+}
+
+// ---- walk: inorder_successor_walk.kara
+
+fn inorder_successor_walk(node: Node) -> Option[Node] {
+    let mut root = node;
+    while let Some(p) = root.parent {
+        root = p;
+    }
+    let mut stack: Vec[Node] = Vec.new();
+    let mut cur = Some(root);
+    let mut found = false;
+    loop {
+        while let Some(c) = cur {
+            stack.push(c);
+            cur = c.left;
+        }
+        let Some(top) = stack.pop() else {
+            return None;
+        };
+        if found {
+            return Some(top);
+        }
+        if top.ref_eq(node) {
+            found = true;
+        }
+        cur = top.right;
+    }
+}
+// ---- differential harness -------------------------------------------------
+
+shared struct Node {
+    val: i64,
+    mut left: Option[Node],
+    mut right: Option[Node],
+    mut parent: weak Node,
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn build(values: Vec[i64]) -> Node {
+    let root = Node { val: values[0], left: None, right: None, parent: None };
+    for i in 1..values.len() {
+        let v = values[i];
+        let leaf = Node { val: v, left: None, right: None, parent: None };
+        let mut node = root;
+        loop {
+            if v < node.val {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        leaf.parent = node;
+                        node.left = Some(leaf);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        leaf.parent = node;
+                        node.right = Some(leaf);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+fn find(root: Node, v: i64) -> Node {
+    let mut node = root;
+    while node.val != v {
+        let next = if v < node.val { node.left } else { node.right };
+        node = next.expect("v is in the tree");
+    }
+    node
+}
+
+fn arm(which: i64, node: Node) -> Option[Node] {
+    match which {
+        0 => inorder_successor_star(node),
+        1 => inorder_successor_identity(node),
+        2 => inorder_successor_search(node),
+        _ => inorder_successor_walk(node),
+    }
+}
+
+fn value(node: Option[Node]) -> i64 {
+    match node {
+        Some(n) => n.val,
+        None => -1000000,
+    }
+}
+
+// The tree in preorder, each node as its value and its parent's, a
+// missing child or parent written as -1,000,000.
+fn shape(node: Option[Node], out: mut ref Vec[i64]) {
+    match node {
+        None => out.push(-1000000),
+        Some(n) => {
+            out.push(n.val);
+            out.push(value(n.parent));
+            shape(n.left, out);
+            shape(n.right, out);
+        }
+    }
+}
+
+fn main() {
+    let names = vec!["star", "identity", "search", "walk"];
+    let cases = 1500;
+    let mut seed: i64 = 5100;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // 1 to 30 different values, spread 1, 3 or 1,000 apart in turn,
+        // shuffled, and one of them as the node.
+        let spread = if c % 3 == 0 { 1 } else if c % 3 == 1 { 3 } else { 1000 };
+        let size = 1 + next_random(mut seed) % 30;
+        let mut values: Vec[i64] = Vec.new();
+        for j in 0..size {
+            values.push(j * spread + next_random(mut seed) % spread - 15000);
+        }
+        let sorted = values.clone();
+        for i in 1..size {
+            let k = next_random(mut seed) % (i + 1);
+            values.swap(i, k);
+        }
+        // The same values inserted in another order, another shape.
+        let mut other = values.clone();
+        for i in 1..size {
+            let k = next_random(mut seed) % (i + 1);
+            other.swap(i, k);
+        }
+        let at = next_random(mut seed) % size;
+        let target = sorted[at];
+        let want = if at + 1 < size { sorted[at + 1] } else { -1000000 };
+        for which in 0..4 {
+            let root = build(values);
+            let mut before: Vec[i64] = Vec.new();
+            shape(Some(root), mut before);
+            let got = arm(which, find(root, target));
+            // P1: the successor is the next larger value.
+            checks += 1;
+            if value(got) != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {values}, node {target} gave {value(got)}, want {want}");
+                }
+            }
+            // P2: the answer is the tree's own node with that value.
+            checks += 1;
+            let own = match got {
+                Some(s) => {
+                    let found = find(root, s.val);
+                    found.ref_eq(s)
+                }
+                None => true,
+            };
+            if not own {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {values}, node {target} gave a node not in the tree");
+                }
+            }
+            // P3: successors from the smallest node visit every value in
+            // order, then stop.
+            checks += 1;
+            let mut seen: Vec[i64] = Vec.new();
+            let mut cur = Some(find(root, sorted[0]));
+            while let Some(n) = cur {
+                seen.push(n.val);
+                if seen.len() > size {
+                    break;
+                }
+                cur = arm(which, n);
+            }
+            if seen != sorted {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {values} walked {seen}");
+                }
+            }
+            // P4: the same values in another shape give the same answer.
+            checks += 1;
+            let again = value(arm(which, find(build(other), target)));
+            if again != value(got) {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {other}, node {target} gave {again}, in {values} {value(got)}");
+                }
+            }
+            // P5: the tree is as it was.
+            checks += 1;
+            let mut after: Vec[i64] = Vec.new();
+            shape(Some(root), mut after);
+            if after != before {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {values} changed");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

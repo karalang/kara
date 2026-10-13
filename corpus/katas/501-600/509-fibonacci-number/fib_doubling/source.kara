@@ -1,0 +1,50 @@
+// LeetCode #509: Fibonacci Number -- fast doubling.
+//
+// From (F(k), F(k + 1)) the identities F(2k) = F(k) (2 F(k + 1) - F(k))
+// and F(2k + 1) = F(k)^2 + F(k + 1)^2 give the pair at 2k and 2k + 1.
+// Halve n down to 0, then double back up, adding one where n's bit is
+// set. O(log n).
+
+fn pair(n: i64) -> (i64, i64) {
+    if n == 0 {
+        return (0, 1);
+    }
+    let (a, b) = pair(n / 2);
+    let c = a * (2 * b - a);
+    let d = a * a + b * b;
+    if n % 2 == 0 { (c, d) } else { (d, c + d) }
+}
+
+fn fib(n: i64) -> i64 {
+    pair(n).0
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    println(f"n = 2: {fib(2)}");
+    println(f"n = 3: {fib(3)}");
+    println(f"n = 4: {fib(4)}");
+    let mut all: Vec[i64] = Vec.new();
+    for n in 0..=30 {
+        all.push(fib(n));
+    }
+    println(f"0 to 30: {all}");
+    // 300 random n from 0 to 30.
+    let mut seed: i64 = 509;
+    let count = 300;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let n = next_random(mut seed) % 31;
+        let f = fib(n);
+        total += f;
+        checksum = (checksum * 31 + f) % 1000000007;
+    }
+    println(f"{count} random n: total {total}, checksum {checksum}");
+}
