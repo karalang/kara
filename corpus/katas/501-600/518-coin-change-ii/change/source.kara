@@ -1,0 +1,71 @@
+// LeetCode #518: Coin Change II -- one row, coins on the outside.
+//
+// ways[a] is the number of ways to make a from the coins taken so far.
+// Taking the coins one at a time on the outside loop counts each
+// combination once, in coin order, never its rearrangements: adding
+// coin c lets every amount a reuse ways[a - c], already updated for c,
+// so c may be used any number of times. O(n * amount) time,
+// O(amount) space.
+
+fn change(amount: i64, coins: Vec[i64]) -> i64 {
+    let mut ways: Vec[i64] = vec![0; amount + 1];
+    ways[0] = 1;
+    for c in coins.iter() {
+        for a in *c..=amount {
+            ways[a] += ways[a - *c];
+        }
+    }
+    ways[amount]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(amount: i64, coins: Vec[i64]) {
+    let mut text = String.from("[");
+    for i in 0..coins.len() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(f"{coins[i]}");
+    }
+    text.push_str("]");
+    println(f"{amount}, {text}: {change(amount, coins)}");
+}
+
+fn main() {
+    show(5, vec![1, 2, 5]);
+    show(3, vec![2]);
+    show(10, vec![10]);
+    show(0, vec![7]);
+    show(7, vec![2, 4]);
+    show(500, vec![1, 2, 5, 10, 20, 50, 100, 200]);
+    show(5000, vec![11, 24, 37, 50]);
+    // 300 random amounts from 0 to 300 with 1 to 8 different coins from
+    // 1 to 60.
+    let mut seed: i64 = 518;
+    let count = 300;
+    let mut none = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let amount = next_random(mut seed) % 301;
+        let k = 1 + next_random(mut seed) % 8;
+        let mut coins: Vec[i64] = Vec.new();
+        while coins.len() < k {
+            let c = 1 + next_random(mut seed) % 60;
+            if not coins.contains(c) {
+                coins.push(c);
+            }
+        }
+        let v = change(amount, coins);
+        if v == 0 {
+            none += 1;
+        }
+        checksum = (checksum * 31 + v % 1000000007) % 1000000007;
+    }
+    println(f"{count} random amounts: {none} cannot be made, checksum {checksum}");
+}

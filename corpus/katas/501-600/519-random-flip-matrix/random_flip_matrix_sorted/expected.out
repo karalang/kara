@@ -1,0 +1,9 @@
+example: three flips flip every cell true, a flip after the reset is a cell true
+one cell: [0, 0], then after the reset [0, 0]
+1 by 7, 2100 times: every cell flipped once true, every cell its share at every turn true
+3 by 1, 900 times: every cell flipped once true, every cell its share at every turn true
+2 by 3, 1800 times: every cell flipped once true, every cell its share at every turn true
+3 by 3, 2700 times: every cell flipped once true, every cell its share at every turn true
+3 by 3, 4500 resets after 4 flips: the flips different cells true, the first flip after a reset fair true
+largest: 999 flips different cells true, rows even true, columns even true
+one seed twice the same true, another seed other flips true

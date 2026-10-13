@@ -1,0 +1,463 @@
+// Differential test for LeetCode #519: Random Flip Matrix.
+//
+// Copies of the four arms. The arms draw differently, so each is held
+// to the properties on its own: 1,500 random grids of up to 3, 40 or
+// 300 on a side in turn, with 30 calls each, about one in eight a reset,
+// for P1 and P2, and ten seeded runs for P3 to P5. Properties:
+//   P1  every flip is a cell of the grid
+//   P2  no cell is flipped twice between resets
+//   P3  the first flip of a fresh grid of 2 to 12 cells, from 3,000
+//       seeds: every cell its share, within 5 standard deviations
+//   P4  every cell of a grid of 2 to 6 cells flipped, then a reset, 200
+//       times per cell on one solution: every cell its share at every
+//       turn
+//   P5  after a reset partway through a grid of 4 to 12 cells, the next
+//       flip gives every cell its share
+
+// ---- the shared generator
+
+// A seeded generator: 15 random bits a step, and a uniform draw below n
+// built from two steps.
+struct Draw {
+    seed: i64,
+}
+
+impl Draw {
+    fn new(seed: i64) -> Draw {
+        Draw { seed: seed }
+    }
+
+    fn step(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.seed / 65536
+    }
+
+    // Uniform in [0, n) for n up to 2^30: 30 random bits, drawn again
+    // when they land in the last, incomplete run of n.
+    fn below(mut ref self, n: i64) -> i64 {
+        let limit = 1073741824 / n * n;
+        loop {
+            let high = self.step();
+            let low = self.step();
+            let r = high * 32768 + low;
+            if r < limit {
+                return r % n;
+            }
+        }
+    }
+}
+
+// ---- star: random_flip_matrix.kara
+
+struct SolutionStar {
+    m: i64,
+    n: i64,
+    free: i64,
+    moved: Map[i64, i64],
+    draw: Draw,
+}
+
+impl SolutionStar {
+    fn new(m: i64, n: i64, seed: i64) -> SolutionStar {
+        SolutionStar { m: m, n: n, free: m * n, moved: Map.new(), draw: Draw.new(seed) }
+    }
+
+    // What slot `i` of the shuffled cells holds: the cell moved there,
+    // or the slot's own cell when nothing was.
+    fn at(ref self, i: i64) -> i64 {
+        match self.moved.get(i) {
+            Some(cell) => *cell,
+            None => i,
+        }
+    }
+
+    fn flip(mut ref self) -> Vec[i64] {
+        let r = self.draw.below(self.free);
+        self.free -= 1;
+        let cell = self.at(r);
+        // The last free slot's cell takes the drawn slot's place.
+        let last = self.at(self.free);
+        self.moved[r] = last;
+        vec![cell / self.n, cell % self.n]
+    }
+
+    fn reset(mut ref self) {
+        self.moved.clear();
+        self.free = self.m * self.n;
+    }
+}
+
+// ---- reject: random_flip_matrix_reject.kara
+
+struct SolutionReject {
+    m: i64,
+    n: i64,
+    flipped: Set[i64],
+    draw: Draw,
+}
+
+impl SolutionReject {
+    fn new(m: i64, n: i64, seed: i64) -> SolutionReject {
+        SolutionReject { m: m, n: n, flipped: Set.new(), draw: Draw.new(seed) }
+    }
+
+    fn flip(mut ref self) -> Vec[i64] {
+        loop {
+            let cell = self.draw.below(self.m * self.n);
+            if not self.flipped.contains(cell) {
+                self.flipped.insert(cell);
+                return vec![cell / self.n, cell % self.n];
+            }
+        }
+    }
+
+    fn reset(mut ref self) {
+        self.flipped.clear();
+    }
+}
+
+// ---- sorted: random_flip_matrix_sorted.kara
+
+struct SolutionSorted {
+    m: i64,
+    n: i64,
+    taken: Vec[i64],
+    draw: Draw,
+}
+
+impl SolutionSorted {
+    fn new(m: i64, n: i64, seed: i64) -> SolutionSorted {
+        SolutionSorted { m: m, n: n, taken: Vec.new(), draw: Draw.new(seed) }
+    }
+
+    fn flip(mut ref self) -> Vec[i64] {
+        let k = self.draw.below(self.m * self.n - self.taken.len());
+        // The k-th free cell: every flipped cell at or below it pushes
+        // it one further. They are in order, so the first one past it
+        // ends the walk, and the count walked is where it goes.
+        let mut cell = k;
+        let mut before = 0;
+        while before < self.taken.len() and self.taken[before] <= cell {
+            cell += 1;
+            before += 1;
+        }
+        self.taken.insert(before, cell);
+        vec![cell / self.n, cell % self.n]
+    }
+
+    fn reset(mut ref self) {
+        self.taken.clear();
+    }
+}
+
+// ---- rows: random_flip_matrix_rows.kara
+
+struct SolutionRows {
+    m: i64,
+    n: i64,
+    free: i64,
+    flipped_in_row: Vec[i64],
+    flipped: Set[i64],
+    draw: Draw,
+}
+
+impl SolutionRows {
+    fn new(m: i64, n: i64, seed: i64) -> SolutionRows {
+        SolutionRows { m: m, n: n, free: m * n, flipped_in_row: vec![0; m], flipped: Set.new(), draw: Draw.new(seed) }
+    }
+
+    fn flip(mut ref self) -> Vec[i64] {
+        let mut k = self.draw.below(self.free);
+        // The row holding the k-th free cell, then the cell in it.
+        let mut i = 0;
+        while k >= self.n - self.flipped_in_row[i] {
+            k -= self.n - self.flipped_in_row[i];
+            i += 1;
+        }
+        let mut j = 0;
+        loop {
+            if not self.flipped.contains(i * self.n + j) {
+                if k == 0 {
+                    break;
+                }
+                k -= 1;
+            }
+            j += 1;
+        }
+        self.flipped.insert(i * self.n + j);
+        self.flipped_in_row[i] += 1;
+        self.free -= 1;
+        vec![i, j]
+    }
+
+    fn reset(mut ref self) {
+        self.flipped_in_row = vec![0; self.m];
+        self.flipped.clear();
+        self.free = self.m * self.n;
+    }
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// An arm's answers to `ops` on an m by n grid from `seed`: a flip's cell
+// for a flip (1), nothing for a reset (0).
+fn answers(which: i64, m: i64, n: i64, seed: i64, ops: Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if which == 0 {
+        let mut s = SolutionStar.new(m, n, seed);
+        for op in ops.iter() {
+            if *op == 1 {
+                out.push(s.flip());
+            } else {
+                s.reset();
+                out.push(Vec.new());
+            }
+        }
+    } else if which == 1 {
+        let mut s = SolutionReject.new(m, n, seed);
+        for op in ops.iter() {
+            if *op == 1 {
+                out.push(s.flip());
+            } else {
+                s.reset();
+                out.push(Vec.new());
+            }
+        }
+    } else if which == 2 {
+        let mut s = SolutionSorted.new(m, n, seed);
+        for op in ops.iter() {
+            if *op == 1 {
+                out.push(s.flip());
+            } else {
+                s.reset();
+                out.push(Vec.new());
+            }
+        }
+    } else {
+        let mut s = SolutionRows.new(m, n, seed);
+        for op in ops.iter() {
+            if *op == 1 {
+                out.push(s.flip());
+            } else {
+                s.reset();
+                out.push(Vec.new());
+            }
+        }
+    }
+    out
+}
+
+// The cell's number row by row, or -1 when it is not a cell of an m by
+// n grid.
+fn number_of(m: i64, n: i64, p: Vec[i64]) -> i64 {
+    if p.len() != 2 or p[0] < 0 or p[0] >= m or p[1] < 0 or p[1] >= n {
+        return -1;
+    }
+    p[0] * n + p[1]
+}
+
+// Whether every count is within 5 standard deviations of its share,
+// one of `counts.len()`, of `n` draws.
+fn fair(counts: Vec[i64], n: i64) -> bool {
+    let p = 1.0 / counts.len() as f64;
+    let sd = (n as f64 * p * (1.0 - p)).sqrt();
+    for c in counts.iter() {
+        if (*c as f64 - n as f64 * p).abs() > 5.0 * sd + 0.000001 {
+            return false;
+        }
+    }
+    true
+}
+
+// A grid of 1 to 3 rows holding `low` to `high` cells, as (m, n).
+fn small_grid(seed: mut ref i64, low: i64, high: i64) -> (i64, i64) {
+    loop {
+        let m = 1 + next_random(seed) % 3;
+        let n = 1 + next_random(seed) % high;
+        if m * n >= low and m * n <= high {
+            return (m, n);
+        }
+    }
+}
+
+fn main() {
+    let names = vec!["star", "reject", "sorted", "rows"];
+    let cases = 1500;
+    let runs = 10;
+    let mut seed: i64 = 5190;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // A grid of up to 3, 40 or 300 on a side, and 30 calls, about
+        // one in eight a reset, and always one when the grid is full.
+        let side = if c % 3 == 0 { 3 } else if c % 3 == 1 { 40 } else { 300 };
+        let m = 1 + next_random(mut seed) % side;
+        let n = 1 + next_random(mut seed) % side;
+        let mut ops: Vec[i64] = Vec.new();
+        let mut free = m * n;
+        for _ in 0..30 {
+            if free == 0 or next_random(mut seed) % 8 == 0 {
+                ops.push(0);
+                free = m * n;
+            } else {
+                ops.push(1);
+                free -= 1;
+            }
+        }
+        let s = next_random(mut seed);
+        for which in 0..4 {
+            let got = answers(which, m, n, s, ops.clone());
+            // P1: every flip is a cell of the grid.
+            checks += 1;
+            let mut ok = got.len() == ops.len();
+            if ok {
+                for i in 0..ops.len() {
+                    if ops[i] == 1 and number_of(m, n, got[i].clone()) < 0 {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {m} by {n}, {ops} from {s} gave {got}");
+                }
+            }
+            // P2: no cell is flipped twice between resets.
+            checks += 1;
+            let mut ok = got.len() == ops.len();
+            let mut flipped: Set[i64] = Set.new();
+            if ok {
+                for i in 0..ops.len() {
+                    if ops[i] == 0 {
+                        flipped.clear();
+                    } else {
+                        let k = number_of(m, n, got[i].clone());
+                        if k >= 0 {
+                            if flipped.contains(k) {
+                                ok = false;
+                            }
+                            flipped.insert(k);
+                        }
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {m} by {n}, {ops} from {s} gave {got}");
+                }
+            }
+        }
+    }
+    for _ in 0..runs {
+        let (m3, n3) = small_grid(mut seed, 2, 12);
+        let (m4, n4) = small_grid(mut seed, 2, 6);
+        let (m5, n5) = small_grid(mut seed, 4, 12);
+        let cells4 = m4 * n4;
+        let cells5 = m5 * n5;
+        // P5's calls: some flips, a reset, a flip, a reset, 3,000 times.
+        let mut ops5: Vec[i64] = Vec.new();
+        let mut firsts: Vec[i64] = Vec.new();
+        for _ in 0..3000 {
+            let t = 1 + next_random(mut seed) % (cells5 - 1);
+            for _ in 0..t {
+                ops5.push(1);
+            }
+            ops5.push(0);
+            firsts.push(ops5.len());
+            ops5.push(1);
+            ops5.push(0);
+        }
+        let s = next_random(mut seed);
+        for which in 0..4 {
+            // P3: the first flip of a fresh grid of 2 to 12 cells, from
+            // 3,000 seeds: every cell its share.
+            checks += 1;
+            let mut counts = vec![0; m3 * n3];
+            for i in 0..3000 {
+                let got = answers(which, m3, n3, s + i * 7919, vec![1]);
+                let k = number_of(m3, n3, got[0].clone());
+                if k >= 0 {
+                    counts[k] += 1;
+                }
+            }
+            if not fair(counts.clone(), 3000) {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {m3} by {n3} from {s}: {counts}");
+                }
+            }
+            // P4: every cell of a grid of 2 to 6 cells flipped, reset,
+            // 200 times per cell on one solution: every cell its share
+            // at every turn.
+            checks += 1;
+            let times = 200 * cells4;
+            let mut ops4: Vec[i64] = Vec.new();
+            for t in 0..times {
+                if t > 0 {
+                    ops4.push(0);
+                }
+                for _ in 0..cells4 {
+                    ops4.push(1);
+                }
+            }
+            let got = answers(which, m4, n4, s, ops4);
+            let mut at_turn = vec![0; cells4 * cells4];
+            let mut turn = 0;
+            for p in got {
+                if p.len() == 0 {
+                    turn = 0;
+                } else {
+                    let k = number_of(m4, n4, p);
+                    if k >= 0 {
+                        at_turn[turn * cells4 + k] += 1;
+                    }
+                    turn += 1;
+                }
+            }
+            let mut ok = true;
+            for t in 0..cells4 {
+                ok = ok and fair(at_turn[t * cells4..(t + 1) * cells4].to_vec(), times);
+            }
+            if not ok {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {m4} by {n4} from {s}: {at_turn}");
+                }
+            }
+            // P5: after a reset partway through a grid of 4 to 12 cells,
+            // the next flip gives every cell its share.
+            checks += 1;
+            let got = answers(which, m5, n5, s, ops5.clone());
+            let mut counts = vec![0; cells5];
+            for i in firsts.iter() {
+                let k = number_of(m5, n5, got[*i].clone());
+                if k >= 0 {
+                    counts[k] += 1;
+                }
+            }
+            if not fair(counts.clone(), 3000) {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {m5} by {n5} from {s}: {counts}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases and {runs} runs, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

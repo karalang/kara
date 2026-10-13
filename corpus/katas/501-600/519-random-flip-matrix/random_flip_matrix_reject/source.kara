@@ -1,0 +1,224 @@
+// LeetCode #519: Random Flip Matrix -- draw again on a flipped cell.
+//
+// Keep the flipped cells in a set and draw a cell of the whole grid
+// until it is one not flipped. Every free cell is equally likely, as
+// each draw is; the draws per flip grow as the grid fills, the cells
+// over the free ones on average.
+
+// A seeded generator: 15 random bits a step, and a uniform draw below n
+// built from two steps.
+struct Draw {
+    seed: i64,
+}
+
+impl Draw {
+    fn new(seed: i64) -> Draw {
+        Draw { seed: seed }
+    }
+
+    fn step(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.seed / 65536
+    }
+
+    // Uniform in [0, n) for n up to 2^30: 30 random bits, drawn again
+    // when they land in the last, incomplete run of n.
+    fn below(mut ref self, n: i64) -> i64 {
+        let limit = 1073741824 / n * n;
+        loop {
+            let high = self.step();
+            let low = self.step();
+            let r = high * 32768 + low;
+            if r < limit {
+                return r % n;
+            }
+        }
+    }
+}
+
+struct Solution {
+    m: i64,
+    n: i64,
+    flipped: Set[i64],
+    draw: Draw,
+}
+
+impl Solution {
+    fn new(m: i64, n: i64, seed: i64) -> Solution {
+        Solution { m: m, n: n, flipped: Set.new(), draw: Draw.new(seed) }
+    }
+
+    fn flip(mut ref self) -> Vec[i64] {
+        loop {
+            let cell = self.draw.below(self.m * self.n);
+            if not self.flipped.contains(cell) {
+                self.flipped.insert(cell);
+                return vec![cell / self.n, cell % self.n];
+            }
+        }
+    }
+
+    fn reset(mut ref self) {
+        self.flipped.clear();
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// Whether every count is within 5 standard deviations of its share,
+// `weights[i]` of every `total`, of `n` draws.
+fn fair(counts: Vec[i64], weights: Vec[i64], total: i64, n: i64) -> bool {
+    for i in 0..counts.len() {
+        let p = weights[i] as f64 / total as f64;
+        let sd = (n as f64 * p * (1.0 - p)).sqrt();
+        if (counts[i] as f64 - n as f64 * p).abs() > 5.0 * sd + 0.000001 {
+            return false;
+        }
+    }
+    true
+}
+
+// The cell's number row by row, or -1 when it is not a cell of an m by
+// n grid.
+fn number_of(m: i64, n: i64, p: Vec[i64]) -> i64 {
+    if p.len() != 2 or p[0] < 0 or p[0] >= m or p[1] < 0 or p[1] >= n {
+        return -1;
+    }
+    p[0] * n + p[1]
+}
+
+// Flips every cell of an m by n grid, resets, and again, `runs` times
+// on one solution: whether each run flips every cell once, and whether
+// every cell gets its share at every turn.
+fn permutations(m: i64, n: i64, runs: i64, seed: i64) {
+    let cells = m * n;
+    let mut solution = Solution.new(m, n, seed);
+    let mut at_turn = vec![0; cells * cells];
+    let mut once = true;
+    for run in 0..runs {
+        if run > 0 {
+            solution.reset();
+        }
+        let mut seen = vec![false; cells];
+        for turn in 0..cells {
+            let k = number_of(m, n, solution.flip());
+            if k < 0 or seen[k] {
+                once = false;
+            } else {
+                seen[k] = true;
+                at_turn[turn * cells + k] += 1;
+            }
+        }
+    }
+    let mut even = once;
+    for turn in 0..cells {
+        let counts = at_turn[turn * cells..(turn + 1) * cells].to_vec();
+        even = even and fair(counts, vec![1; cells], cells, runs);
+    }
+    println(f"{m} by {n}, {runs} times: every cell flipped once {once}, every cell its share at every turn {even}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // The example: a 3 by 1 grid, three flips, a reset, a flip.
+    let mut solution = Solution.new(3, 1, 1);
+    let mut seen = vec![false; 3];
+    let mut once = true;
+    for _ in 0..3 {
+        let k = number_of(3, 1, solution.flip());
+        if k < 0 or seen[k] {
+            once = false;
+        } else {
+            seen[k] = true;
+        }
+    }
+    solution.reset();
+    let after = number_of(3, 1, solution.flip()) >= 0;
+    println(f"example: three flips flip every cell {once}, a flip after the reset is a cell {after}");
+    // One cell: flip, reset, flip.
+    let mut solution = Solution.new(1, 1, 2);
+    let first = solution.flip();
+    solution.reset();
+    let second = solution.flip();
+    println(f"one cell: {first}, then after the reset {second}");
+    permutations(1, 7, 2100, 3);
+    permutations(3, 1, 900, 4);
+    permutations(2, 3, 1800, 5);
+    permutations(3, 3, 2700, 6);
+    // Reset after 4 flips of 9: the 4 are different cells, and the
+    // first flip after each reset is fair again.
+    let mut solution = Solution.new(3, 3, 7);
+    let mut first_after = vec![0; 9];
+    let mut distinct = true;
+    let resets = 4500;
+    for _ in 0..resets {
+        let mut seen = vec![false; 9];
+        for _ in 0..4 {
+            let k = number_of(3, 3, solution.flip());
+            if k < 0 or seen[k] {
+                distinct = false;
+            } else {
+                seen[k] = true;
+            }
+        }
+        solution.reset();
+        let k = number_of(3, 3, solution.flip());
+        if k < 0 {
+            distinct = false;
+        } else {
+            first_after[k] += 1;
+        }
+        solution.reset();
+    }
+    println(f"3 by 3, {resets} resets after 4 flips: the flips different cells {distinct}, the first flip after a reset fair {fair(first_after, vec![1; 9], 9, resets)}");
+    // The problem's largest: 10,000 by 10,000, 999 flips and a reset.
+    // The flips should be different cells and spread evenly over 20
+    // bands of rows and 20 bands of columns.
+    let size = 10000;
+    let mut solution = Solution.new(size, size, 8);
+    let mut seen: Set[i64] = Set.new();
+    let mut by_row = vec![0; 20];
+    let mut by_column = vec![0; 20];
+    let mut ok = true;
+    let flips = 999;
+    for _ in 0..flips {
+        let p = solution.flip();
+        let k = number_of(size, size, p);
+        if k < 0 or seen.contains(k) {
+            ok = false;
+        } else {
+            seen.insert(k);
+            by_row[p[0] / 500] += 1;
+            by_column[p[1] / 500] += 1;
+        }
+    }
+    solution.reset();
+    println(f"largest: {flips} flips different cells {ok}, rows even {fair(by_row, vec![1; 20], 20, flips)}, columns even {fair(by_column, vec![1; 20], 20, flips)}");
+    // One seed twice gives the same 300 flips on a 100 by 100 grid,
+    // resets included; another seed others.
+    let mut seed: i64 = 519;
+    let mut a = Solution.new(100, 100, 11);
+    let mut b = Solution.new(100, 100, 11);
+    let mut c = Solution.new(100, 100, 12);
+    let mut same = true;
+    let mut differ = false;
+    for _ in 0..300 {
+        if next_random(mut seed) % 50 == 0 {
+            a.reset();
+            b.reset();
+            c.reset();
+        }
+        let pa = a.flip();
+        if b.flip() != pa {
+            same = false;
+        }
+        if c.flip() != pa {
+            differ = true;
+        }
+    }
+    println(f"one seed twice the same {same}, another seed other flips {differ}");
+}

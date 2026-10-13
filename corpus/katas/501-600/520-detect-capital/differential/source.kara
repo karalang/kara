@@ -1,0 +1,235 @@
+// Differential test for LeetCode #520: Detect Capital.
+//
+// Copies of the four arms, each held to the properties below on 2,000
+// random words of up to 5 and up to 100 letters in turn: all capitals,
+// all lower case, a capital then lower case, any mix, or one of the
+// first three with one letter's case turned. Properties:
+//   P1  the answer is the rule's, checked letter by letter
+//   P2  the word in capitals is right
+//   P3  the word in lower case is right, and so is it with a capital
+//       first
+//   P4  a word of 3 or more letters in capitals, in lower case or with
+//       a capital first, with one letter from the third on turned, is
+//       wrong
+//   P5  only the cases matter: every capital an `A` and every lower-case
+//       letter an `a` gives the same answer
+
+// ---- star: detect_capital_use.kara
+
+fn detect_capital_use_star(word: Str) -> bool {
+    let capitals = word.chars().filter(|c| c.is_ascii_uppercase()).count();
+    capitals == 0 or capitals == word.len() or (capitals == 1 and word.chars().next().unwrap().is_ascii_uppercase())
+}
+
+// ---- case: detect_capital_use_case.kara
+
+fn detect_capital_use_case(word: Str) -> bool {
+    word == word.to_uppercase() or word[1..] == word[1..].to_lowercase()
+}
+
+// ---- second: detect_capital_use_second.kara
+
+fn detect_capital_use_second(word: Str) -> bool {
+    let letters: Vec[char] = word.chars().collect();
+    if letters.len() == 1 {
+        return true;
+    }
+    let capitals = letters[1].is_ascii_uppercase();
+    if capitals and not letters[0].is_ascii_uppercase() {
+        return false;
+    }
+    for i in 2..letters.len() {
+        if letters[i].is_ascii_uppercase() != capitals {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- states: detect_capital_use_states.kara
+
+enum State {
+    Start,
+    FirstCapital,
+    Lower,
+    Upper,
+}
+
+fn detect_capital_use_states(word: Str) -> bool {
+    let mut state = State.Start;
+    for c in word.chars() {
+        let capital = c.is_ascii_uppercase();
+        state = match state {
+            State.Start => if capital { State.FirstCapital } else { State.Lower },
+            State.FirstCapital => if capital { State.Upper } else { State.Lower },
+            State.Lower => if capital { return false; } else { State.Lower },
+            State.Upper => if capital { State.Upper } else { return false; },
+        };
+    }
+    true
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn answer(which: i64, word: Str) -> bool {
+    if which == 0 {
+        detect_capital_use_star(word)
+    } else if which == 1 {
+        detect_capital_use_case(word)
+    } else if which == 2 {
+        detect_capital_use_second(word)
+    } else {
+        detect_capital_use_states(word)
+    }
+}
+
+// The rule as written: every letter a capital, every letter lower case,
+// or a capital and then lower case.
+fn reference(word: Str) -> bool {
+    let letters: Vec[char] = word.chars().collect();
+    let mut all_capitals = true;
+    let mut all_lower = true;
+    let mut rest_lower = true;
+    for i in 0..letters.len() {
+        if letters[i].is_ascii_uppercase() {
+            all_lower = false;
+            if i > 0 {
+                rest_lower = false;
+            }
+        } else {
+            all_capitals = false;
+        }
+    }
+    all_capitals or all_lower or (rest_lower and letters[0].is_ascii_uppercase())
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random word of 1 to `most` letters: all capitals, all lower case, a
+// capital then lower case, any mix, or one of the first three with one
+// letter's case turned.
+fn random_word(seed: mut ref i64, most: i64) -> String {
+    let len = 1 + next_random(seed) % most;
+    let kind = next_random(seed) % 5;
+    let shape = if kind == 4 { next_random(seed) % 3 } else { kind };
+    let mut letters: Vec[char] = Vec.new();
+    for i in 0..len {
+        let c = (97 + next_random(seed) % 26) as u8 as char;
+        let capital = if shape == 0 {
+            true
+        } else if shape == 1 {
+            false
+        } else if shape == 2 {
+            i == 0
+        } else {
+            next_random(seed) % 2 == 0
+        };
+        letters.push(if capital { c.to_ascii_uppercase() } else { c });
+    }
+    if kind == 4 {
+        let at = next_random(seed) % len;
+        letters[at] = turned(letters[at]);
+    }
+    let mut word = String.new();
+    for c in letters.iter() {
+        word.push(*c);
+    }
+    word
+}
+
+fn turned(c: char) -> char {
+    if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c.to_ascii_uppercase() }
+}
+
+fn main() {
+    let names = vec!["star", "case", "second", "states"];
+    let cases = 2000;
+    let mut seed: i64 = 5200;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // Words of up to 5 letters and up to 100 in turn.
+        let word = random_word(mut seed, if c % 2 == 0 { 5 } else { 100 });
+        let letters: Vec[char] = word.chars().collect();
+        let mut upper = String.new();
+        let mut lower = String.new();
+        let mut title = String.new();
+        let mut plain = String.new();
+        for i in 0..letters.len() {
+            upper.push(letters[i].to_ascii_uppercase());
+            lower.push(letters[i].to_ascii_lowercase());
+            title.push(if i == 0 { letters[i].to_ascii_uppercase() } else { letters[i].to_ascii_lowercase() });
+            plain.push(if letters[i].is_ascii_uppercase() { 'A' } else { 'a' });
+        }
+        // P4's word: all capitals, all lower case or a capital then
+        // lower case, of 3 or more letters, with one letter from the
+        // third on turned.
+        let base = if next_random(mut seed) % 3 == 0 { upper.clone() } else if next_random(mut seed) % 2 == 0 { lower.clone() } else { title.clone() };
+        let mut spoiled = String.new();
+        if letters.len() >= 3 {
+            let at = 2 + next_random(mut seed) % (letters.len() - 2);
+            for (i, c) in base.chars().enumerate() {
+                spoiled.push(if i == at { turned(c) } else { c });
+            }
+        }
+        let want = reference(word);
+        for which in 0..4 {
+            let got = answer(which, word);
+            // P1: the answer is the rule's.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {word} gave {got}, want {want}");
+                }
+            }
+            // P2: every letter a capital is right.
+            checks += 1;
+            if not answer(which, upper) {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {upper} gave false");
+                }
+            }
+            // P3: every letter lower case is right, and so is a capital
+            // then lower case.
+            checks += 1;
+            if not answer(which, lower) or not answer(which, title) {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {lower} or {title} gave false");
+                }
+            }
+            // P4: a right word with one letter from the third on turned
+            // is wrong.
+            checks += 1;
+            if spoiled.len() > 0 and answer(which, spoiled) {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {spoiled} gave true");
+                }
+            }
+            // P5: only the cases matter, not the letters.
+            checks += 1;
+            if answer(which, plain) != got {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {plain} and {word} differ");
+                }
+            }
+        }
+    }
+    println(f"{cases} words, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

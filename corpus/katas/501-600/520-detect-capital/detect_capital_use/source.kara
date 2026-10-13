@@ -1,0 +1,67 @@
+// LeetCode #520: Detect Capital -- count the capitals.
+//
+// A word uses capitals right when it has none, when every letter is
+// one, or when the only one is the first letter. Count them, and look
+// at the first letter only when there is exactly one.
+
+fn detect_capital_use(word: Str) -> bool {
+    let capitals = word.chars().filter(|c| c.is_ascii_uppercase()).count();
+    capitals == 0 or capitals == word.len() or (capitals == 1 and word.chars().next().unwrap().is_ascii_uppercase())
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random word of 1 to 100 letters: all capitals, all lower case, a
+// capital then lower case, any mix, or one of the first three with one
+// letter's case turned.
+fn random_word(seed: mut ref i64) -> String {
+    let len = 1 + next_random(seed) % 100;
+    let kind = next_random(seed) % 5;
+    let shape = if kind == 4 { next_random(seed) % 3 } else { kind };
+    let mut letters: Vec[char] = Vec.new();
+    for i in 0..len {
+        let c = (97 + next_random(seed) % 26) as u8 as char;
+        let capital = if shape == 0 {
+            true
+        } else if shape == 1 {
+            false
+        } else if shape == 2 {
+            i == 0
+        } else {
+            next_random(seed) % 2 == 0
+        };
+        letters.push(if capital { c.to_ascii_uppercase() } else { c });
+    }
+    if kind == 4 {
+        let at = next_random(seed) % len;
+        letters[at] = if letters[at].is_ascii_uppercase() { letters[at].to_ascii_lowercase() } else { letters[at].to_ascii_uppercase() };
+    }
+    let mut word = String.new();
+    for c in letters.iter() {
+        word.push(*c);
+    }
+    word
+}
+
+fn main() {
+    let words = vec!["USA", "FlaG", "leetcode", "Google", "g", "G", "gG", "Gg", "GG", "gg", "GGg", "ggG", "mL", "aBC", "ABc", "AbC"];
+    for w in words.iter() {
+        println(f"{w}: {detect_capital_use(w)}");
+    }
+    let mut seed: i64 = 520;
+    let mut right = 0;
+    let mut checksum = 0;
+    for i in 0..3000 {
+        let word = random_word(mut seed);
+        if detect_capital_use(word) {
+            right += 1;
+            checksum = (checksum * 31 + (i + 1) * word.len()) % 1000000007;
+        }
+    }
+    println(f"3000 random words: {right} use capitals right, checksum {checksum}");
+}

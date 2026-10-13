@@ -1,0 +1,103 @@
+// Benchmark for LeetCode #519: Random Flip Matrix -- the ★ arm (a
+// shuffle kept in a map); see ../random_flip_matrix.kara.
+
+// A seeded generator: 15 random bits a step, and a uniform draw below n
+// built from two steps.
+struct Draw {
+    seed: i64,
+}
+
+impl Draw {
+    fn new(seed: i64) -> Draw {
+        Draw { seed: seed }
+    }
+
+    fn step(mut ref self) -> i64 {
+        self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+        self.seed / 65536
+    }
+
+    // Uniform in [0, n) for n up to 2^30: 30 random bits, drawn again
+    // when they land in the last, incomplete run of n.
+    fn below(mut ref self, n: i64) -> i64 {
+        let limit = 1073741824 / n * n;
+        loop {
+            let high = self.step();
+            let low = self.step();
+            let r = high * 32768 + low;
+            if r < limit {
+                return r % n;
+            }
+        }
+    }
+}
+
+struct Solution {
+    m: i64,
+    n: i64,
+    free: i64,
+    moved: Map[i64, i64],
+    draw: Draw,
+}
+
+impl Solution {
+    fn new(m: i64, n: i64, seed: i64) -> Solution {
+        Solution { m: m, n: n, free: m * n, moved: Map.new(), draw: Draw.new(seed) }
+    }
+
+    // What slot `i` of the shuffled cells holds: the cell moved there,
+    // or the slot's own cell when nothing was.
+    fn at(ref self, i: i64) -> i64 {
+        match self.moved.get(i) {
+            Some(cell) => *cell,
+            None => i,
+        }
+    }
+
+    fn flip(mut ref self) -> Vec[i64] {
+        let r = self.draw.below(self.free);
+        self.free -= 1;
+        let cell = self.at(r);
+        // The last free slot's cell takes the drawn slot's place.
+        let last = self.at(self.free);
+        self.moved[r] = last;
+        vec![cell / self.n, cell % self.n]
+    }
+
+    fn reset(mut ref self) {
+        self.moved.clear();
+        self.free = self.m * self.n;
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 10,000 grids of up to 10,000 by 10,000, 1,000 calls on each: a reset
+// one time in a hundred and whenever the grid is full, else a flip.
+fn main() {
+    let mut seed: i64 = 519;
+    let mut checksum: i64 = 0;
+    let grids = 10000;
+    for g in 0..grids {
+        let high = next_random(mut seed);
+        let m = 1 + (high * 32768 + next_random(mut seed)) % 10000;
+        let high = next_random(mut seed);
+        let n = 1 + (high * 32768 + next_random(mut seed)) % 10000;
+        let mut solution = Solution.new(m, n, g);
+        let mut free = m * n;
+        for _ in 0..1000 {
+            if free == 0 or next_random(mut seed) % 100 == 0 {
+                solution.reset();
+                free = m * n;
+            } else {
+                let p = solution.flip();
+                free -= 1;
+                checksum = (checksum * 31 + p[0] * 10000 + p[1]) % 1000000007;
+            }
+        }
+    }
+    println(f"{grids} grids, 1000 calls each: checksum {checksum}");
+}
