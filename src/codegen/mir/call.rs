@@ -191,14 +191,20 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// Writes a reference to the `el` at `at` into `d`: its address, or
-    /// for a `str` or slice the two words a reference to one is.
+    /// for a `str` or slice the two words a reference to one is, or for an
+    /// `el` that is a reference, that reference.
     pub(super) fn store_ref(
         &mut self,
         d: PointerValue<'ctx>,
         at: PointerValue<'ctx>,
         el: Ty,
     ) -> R<()> {
-        if matches!(self.tys.kind(el), TyKind::Str | TyKind::Slice(_)) {
+        // An element that is itself a reference is the result (a borrow of
+        // a borrow is the borrow), as is a view, which is its own header.
+        if matches!(
+            self.tys.kind(el),
+            TyKind::Str | TyKind::Slice(_) | TyKind::Ref(_) | TyKind::MutRef(_)
+        ) {
             self.copy(d, at, el)
         } else {
             self.store(d, at.into())

@@ -7029,6 +7029,29 @@ impl<'a> Interp<'a> {
         Ok(v)
     }
 
+    /// A native's result with each reference to a slot that holds a
+    /// reference replaced by the reference it holds, at the top and one
+    /// level into an enum or aggregate (`Option[ref T]`, a map entry's
+    /// `(ref K, ref V)`). A borrow of a borrow is the borrow: `index`,
+    /// `get` or `first` of a `Vec[ref T]` is the element, a `ref T`.
+    pub(super) fn collapse_ref_of_ref(&mut self, v: Value) -> Value {
+        let through = |me: &mut Self, v: Value| match &v {
+            Value::Ref(a) => match me.slot(a) {
+                Ok(inner @ Value::Ref(_)) => inner,
+                _ => v,
+            },
+            _ => v,
+        };
+        match v {
+            Value::Ref(_) => through(self, v),
+            Value::Variant(i, fields) => {
+                Value::Variant(i, fields.into_iter().map(|f| through(self, f)).collect())
+            }
+            Value::Agg(parts) => Value::Agg(parts.into_iter().map(|f| through(self, f)).collect()),
+            v => v,
+        }
+    }
+
     fn slot(&mut self, addr: &Addr) -> R<Value> {
         Ok(self.slot_mut(addr)?.clone())
     }
@@ -7984,6 +8007,7 @@ impl<'a> Interp<'a> {
                         let (v, _) = self.operand(body, recv)?;
                         let (i, _) = self.operand(body, index)?;
                         let ret = self.vec_index(n, &v, &i)?;
+                        let ret = self.collapse_ref_of_ref(ret);
                         return self.finish_call(body, destination, target, ret, n);
                     }
                 }
@@ -8021,6 +8045,7 @@ impl<'a> Interp<'a> {
                             .map_err(|e| Stop::Error(format!("call destination: {e}")))?
                             .ty;
                         let v = self.native(name, vals, &arg_tys, ret_ty)?;
+                        let v = self.collapse_ref_of_ref(v);
                         self.inline_str(v, ret_ty)?
                     }
                 };

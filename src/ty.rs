@@ -384,12 +384,23 @@ impl TyCtxt {
         let args = self.intern_list(args);
         self.intern(TyKind::Adt { def, args })
     }
+    /// `ref inner` (`mut ref` when `mutable`). A borrow of a borrow is the
+    /// borrow (design.md; the checker's `ref_of`): `ref (ref T)` and
+    /// `ref (mut ref T)` are `ref T`, `mut ref (mut ref T)` is `mut ref T`,
+    /// and `mut ref (ref T)` is `ref T`.
     pub fn reference(&self, inner: Ty, mutable: bool) -> Ty {
-        self.intern(if mutable {
-            TyKind::MutRef(inner)
-        } else {
-            TyKind::Ref(inner)
-        })
+        self.intern(self.ref_kind(inner, mutable))
+    }
+
+    /// The kind of [`Self::reference`].
+    fn ref_kind(&self, inner: Ty, mutable: bool) -> TyKind {
+        match self.kind(inner) {
+            TyKind::Ref(t) => TyKind::Ref(t),
+            TyKind::MutRef(t) if mutable => TyKind::MutRef(t),
+            TyKind::MutRef(t) => TyKind::Ref(t),
+            _ if mutable => TyKind::MutRef(inner),
+            _ => TyKind::Ref(inner),
+        }
     }
 
     // ── queries ─────────────────────────────────────────────────────
@@ -523,8 +534,8 @@ impl TyCtxt {
                 elem: self.subst(elem, args, const_args),
                 mutable,
             },
-            TyKind::Ref(t) => TyKind::Ref(self.subst(t, args, const_args)),
-            TyKind::MutRef(t) => TyKind::MutRef(self.subst(t, args, const_args)),
+            TyKind::Ref(t) => self.ref_kind(self.subst(t, args, const_args), false),
+            TyKind::MutRef(t) => self.ref_kind(self.subst(t, args, const_args), true),
             TyKind::Weak(t) => TyKind::Weak(self.subst(t, args, const_args)),
             TyKind::RawPtr { mutable, pointee } => TyKind::RawPtr {
                 mutable,
@@ -590,8 +601,8 @@ impl TyCtxt {
                 elem: go(elem),
                 mutable,
             },
-            TyKind::Ref(t) => TyKind::Ref(go(t)),
-            TyKind::MutRef(t) => TyKind::MutRef(go(t)),
+            TyKind::Ref(t) => self.ref_kind(go(t), false),
+            TyKind::MutRef(t) => self.ref_kind(go(t), true),
             TyKind::Weak(t) => TyKind::Weak(go(t)),
             TyKind::Proj { base, assoc } => TyKind::Proj {
                 base: go(base),
@@ -982,8 +993,8 @@ impl TyCtxt {
                 once: true,
                 mutable: false,
             },
-            Type::Ref(inner) => TyKind::Ref(lower(inner)?),
-            Type::MutRef(inner) => TyKind::MutRef(lower(inner)?),
+            Type::Ref(inner) => self.ref_kind(lower(inner)?, false),
+            Type::MutRef(inner) => self.ref_kind(lower(inner)?, true),
             Type::Pointer { is_mut, inner } => TyKind::RawPtr {
                 mutable: *is_mut,
                 pointee: lower(inner)?,

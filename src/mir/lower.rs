@@ -1740,6 +1740,18 @@ impl<'l, 'a> Bx<'l, 'a> {
     fn assign(&mut self, place: impl Into<Place>, rv: Rvalue) {
         let place = place.into();
         let pt = self.place_type(&place);
+        // A borrow of a place that holds a reference is that reference
+        // (a borrow of a borrow is the borrow): a reborrow through it.
+        let rv = match rv {
+            Rvalue::Ref(kind, p) if self.is_reference(self.place_type(&p)) => {
+                let kind = match self.tys().tcx().kind(self.place_type(&p)) {
+                    HK::Ref(_) => BorrowKind::Shared,
+                    _ => kind,
+                };
+                Rvalue::Ref(kind, p.project(ProjElem::Deref))
+            }
+            rv => rv,
+        };
         let rv = match rv {
             // A closure or function item stored in a function-typed slot
             // is erased to that type.
@@ -1786,6 +1798,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let bb = self.cur;
         self.b.assign(bb, place, rv);
+    }
+
+    /// Whether `t` is a `ref` or `mut ref`.
+    fn is_reference(&self, t: Ty) -> bool {
+        matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
     }
 
     /// Whether `t` is the generic type `full` names, written with no
@@ -3756,6 +3773,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 {
                     return Ok(p);
                 }
+                // `*x` of an `x: ref T` whose `T` is itself a reference: the
+                // borrow of a borrow is the borrow, so `x` is that `T`.
+                if matches!(self.tys().tcx().kind(pt), HK::Ref(_) | HK::MutRef(_))
+                    && self.expr_ty(e)? == pt
+                {
+                    return Ok(p);
+                }
                 Ok(p.project(ProjElem::Deref))
             }
             _ => self.temp_place(e),
@@ -3891,6 +3915,19 @@ impl<'l, 'a> Bx<'l, 'a> {
             vec![Operand::Move(Place::local(r)), idx],
             Place::local(out),
         );
+        // An element that is a reference is what the native gives (a
+        // borrow of a borrow is the borrow): the place is `out` itself.
+        // Through a shared one nothing can be written, so a mutable place
+        // of it could only replace the element, which needs the slot.
+        if self.is_reference(elem) {
+            if mutable && matches!(self.tys().tcx().kind(elem), HK::Ref(_)) {
+                return self.unsupported(
+                    e.span,
+                    "replacing a reference element of a collection in place",
+                );
+            }
+            return Ok(Place::local(out));
+        }
         Ok(Place::local(out).project(ProjElem::Deref))
     }
 

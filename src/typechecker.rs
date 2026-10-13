@@ -6399,6 +6399,21 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+        // `collect`'s `V` is the item read as a value (`i64` for a `ref i64`
+        // item), unless the collection holds the references themselves:
+        // `let v: Vec[ref i64] = a.iter().collect()` collects `ref i64`, the
+        // `V` its `C: FromIterator[V]` bound asks for.
+        for frame in node_call_subs.values_mut() {
+            let (Some(v), Some(Type::Named { args, .. })) = (frame.get("V"), frame.get("C")) else {
+                continue;
+            };
+            if let [elem @ Type::Ref(inner)] = args.as_slice() {
+                if **inner == *v {
+                    let elem = elem.clone();
+                    frame.insert("V".to_string(), elem);
+                }
+            }
+        }
         (node_types, node_call_subs)
     }
 

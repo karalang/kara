@@ -484,6 +484,10 @@ impl<'a> Interp<'a> {
             } if destination.projection.is_empty()
                 && inst.name.starts_with("Vec[")
                 && (inst.name.ends_with("].index") || inst.name.ends_with("].index_mut"))
+                // An element that is a reference is the result itself
+                // (`collapse_ref_of_ref`), which the native call gives.
+                && !inst.name.starts_with("Vec[ref ")
+                && !inst.name.starts_with("Vec[mut ref ")
                 && !self.program.bodies.contains_key(&inst.name) =>
             {
                 let [Operand::Copy(r) | Operand::Move(r), index] = args.as_slice() else {
@@ -555,6 +559,7 @@ impl<'a> Interp<'a> {
             arg_tys.push(t);
         }
         let v = self.native(name, vals, &arg_tys, ret_ty)?;
+        let v = self.collapse_ref_of_ref(v);
         let ret = self.inline_str(v, ret_ty)?;
         self.finish_call(body, destination, target, ret, name)
     }
