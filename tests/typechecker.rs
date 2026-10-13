@@ -53179,3 +53179,24 @@ fn str_receiver_parse_takes_its_target_from_context() {
         "unannotated: {errs:?}"
     );
 }
+
+// B-2026-10-12-13 — a string literal is a `Str` wherever a `Str` is expected,
+// not only as a call argument: a `let` annotation, a `vec!` element, a tuple
+// slot, a tail expression and an assignment (design.md § String literals).
+#[test]
+fn string_literal_takes_an_expected_str() {
+    typecheck_ok(
+        r#"fn f(s: Str) -> i64 { s.len() }
+fn g() -> Str { "abc" }
+fn kind(c: char) -> Str { if c.is_ascii_digit() { "digit" } else { "other" } }
+fn main() {
+    let x: Str = "abc";
+    let v: Vec[Str] = vec!["ab", "c"];
+    let t: (Str, i64) = ("ab", 1);
+    let mut y: Str = "a";
+    y = "bc";
+    println(f"{f(x)} {v.len()} {t.1} {g()} {y} {kind('7')}");
+}
+"#,
+    );
+}

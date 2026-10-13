@@ -680,3 +680,33 @@ after
         }
     }
 }
+
+// B-2026-10-12-13 — a string literal where a `Str` is expected is the view of
+// its static data on both backends: a `let` annotation, a `vec!` element, a
+// tuple slot, a tail expression, an assignment, a struct field, a match arm.
+#[test]
+fn mir_string_literal_takes_an_expected_str() {
+    const SRC: &str = r#"struct P { name: Str, n: i64 }
+fn f(s: Str) -> i64 { s.len() }
+fn g() -> Str { "abc" }
+fn pick(b: bool) -> Str { match b { true => "yes", false => "no" } }
+fn main() {
+    let x: Str = "abc";
+    let v: Vec[Str] = vec!["ab", "c"];
+    let t: (Str, i64) = ("ab", 1);
+    let mut y: Str = "a";
+    y = "bc";
+    let p = P { name: "lbl", n: 2 };
+    println(f"{f(x)} {x} {v[0]} {f(v[1])} {t.0} {f(t.0)} {g()} {y} {f(y)}");
+    println(f"{p.name} {p.n} {pick(true)} {pick(false)}");
+}
+"#;
+    let want = "3 abc ab 1 ab 2 abc bc 2\nlbl 2 yes no\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

@@ -4443,6 +4443,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(());
         }
         match &e.kind {
+            // A literal the checker typed `Str` (a `Str` was expected) is the
+            // view of its static data (design.md § String literals).
+            ExprKind::StringLit(s)
+                if matches!(self.tys().tcx().kind(self.place_type(&dest)), HK::StaticStr) =>
+            {
+                let op = self.static_str(s);
+                self.assign(dest, Rvalue::Use(op));
+                Ok(())
+            }
             ExprKind::StringLit(s) => {
                 let op = self.static_str(s);
                 self.call_native("String.from", vec![op], dest);

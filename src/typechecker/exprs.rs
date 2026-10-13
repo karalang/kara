@@ -988,6 +988,18 @@ impl<'a> super::TypeChecker<'a> {
                 return ty;
             }
         }
+        // design.md § String literals: a string literal is a `Str` wherever
+        // a `Str` is expected, the same way an integer literal takes an
+        // expected integer type: a `let` annotation, a `vec!` element, a
+        // tuple slot, a tail expression, an assignment (B-2026-10-12-13).
+        // The literal views static data, so nothing is allocated.
+        if let ExprKind::StringLit(_) = &expr.kind {
+            let want = resolve_type_var_top(expected, &self.env.substitutions);
+            if is_str_view(&want) {
+                self.record_expr_type(&expr.span, &want);
+                return want;
+            }
+        }
         // A payload-free variant of a generic enum (`None`) against that enum
         // with a borrowed argument (`Option[ref T]`) takes the context's type.
         // It synthesizes as the enum's own `Option[T]`, and a borrow of a type
@@ -1399,6 +1411,7 @@ impl<'a> super::TypeChecker<'a> {
                 let elem_needs_expected = |e: &Expr, slot: &Type| {
                     elem_is_inferred_ctor(e)
                         || Self::literal_needs_array_slot(e, slot)
+                        || (matches!(e.kind, ExprKind::StringLit(_)) && is_str_view(slot))
                         || (library
                             && !matches!(slot, Type::Ref(_) | Type::MutRef(_))
                             && matches!(
