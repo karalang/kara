@@ -1,0 +1,471 @@
+// Differential test for LeetCode #468: Validate IP Address.
+//
+// Copies of the four arms, each run on 1,500 random cases.
+// Properties:
+//   P1  an address built with a known answer gets it: four numbers up
+//       to 255 or eight groups of 1 to 4 hex digits are valid, and one
+//       fault (a part too many or too few, a leading zero, a number
+//       above 255, a group of 5 digits, an empty part, a letter out of
+//       place, a separator of the other kind) makes it neither
+//   P2  swapping the case of every letter keeps the answer
+//   P3  a valid address with one character replaced by a letter outside
+//       its alphabet is neither
+//   P4  a zero put in front of one part makes an IPv4 address neither,
+//       and keeps an IPv6 address valid exactly when that group had
+//       fewer than 4 digits
+//   P5  a valid address with one separator removed, doubled or
+//       replaced by the other kind is neither
+
+// ---- split: validate_ip.kara
+
+fn ipv4_part_split(part: Str) -> bool {
+    if part.len() == 0 or part.len() > 3 {
+        return false;
+    }
+    let mut value = 0;
+    for c in part.chars() {
+        if not c.is_ascii_digit() {
+            return false;
+        }
+        value = value * 10 + (c as i64 - 48);
+    }
+    if part.len() > 1 and part.starts_with("0") {
+        return false;
+    }
+    value <= 255
+}
+
+fn ipv6_group_split(group: Str) -> bool {
+    if group.len() == 0 or group.len() > 4 {
+        return false;
+    }
+    for c in group.chars() {
+        if not c.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+    true
+}
+
+fn answer_split(query_ip: String) -> String {
+    if query_ip.contains(".") {
+        let mut parts = 0;
+        for part in query_ip.split(".") {
+            if not ipv4_part_split(part) {
+                return String.from("Neither");
+            }
+            parts += 1;
+        }
+        if parts == 4 {
+            return String.from("IPv4");
+        }
+    } else if query_ip.contains(":") {
+        let mut groups = 0;
+        for group in query_ip.split(":") {
+            if not ipv6_group_split(group) {
+                return String.from("Neither");
+            }
+            groups += 1;
+        }
+        if groups == 8 {
+            return String.from("IPv6");
+        }
+    }
+    String.from("Neither")
+}
+
+// ---- scan: validate_ip_scan.kara
+
+fn part_ok_scan(separator: char, length: i64, decimal: bool, first: char, value: i64) -> bool {
+    if separator == '.' {
+        length >= 1 and length <= 3 and decimal and not (length > 1 and first == '0') and value <= 255
+    } else {
+        length >= 1 and length <= 4
+    }
+}
+
+fn answer_scan(query_ip: String) -> String {
+    let mut separator = ' ';
+    let mut parts = 1;
+    let mut length = 0;
+    let mut decimal = true;
+    let mut first = ' ';
+    let mut value = 0;
+    for c in query_ip.chars() {
+        if c == '.' or c == ':' {
+            if separator == ' ' {
+                separator = c;
+            } else if c != separator {
+                return String.from("Neither");
+            }
+            if not part_ok_scan(separator, length, decimal, first, value) {
+                return String.from("Neither");
+            }
+            parts += 1;
+            length = 0;
+            decimal = true;
+            value = 0;
+        } else if c.is_ascii_hexdigit() {
+            if length == 0 {
+                first = c;
+            }
+            if c.is_ascii_digit() {
+                value = value * 10 + (c as i64 - 48);
+            } else {
+                decimal = false;
+            }
+            length += 1;
+            if length > 4 {
+                return String.from("Neither");
+            }
+        } else {
+            return String.from("Neither");
+        }
+    }
+    if separator == ' ' or not part_ok_scan(separator, length, decimal, first, value) {
+        return String.from("Neither");
+    }
+    if separator == '.' and parts == 4 {
+        String.from("IPv4")
+    } else if separator == ':' and parts == 8 {
+        String.from("IPv6")
+    } else {
+        String.from("Neither")
+    }
+}
+
+// ---- parse: validate_ip_parse.kara
+
+fn parse_ipv4_parse(cs: ref Vec[char]) -> bool {
+    let mut pos = 0;
+    for k in 0..4 {
+        if k > 0 {
+            if pos >= cs.len() or cs[pos] != '.' {
+                return false;
+            }
+            pos += 1;
+        }
+        let start = pos;
+        let mut value = 0;
+        while pos < cs.len() and pos - start < 3 and cs[pos].is_ascii_digit() {
+            value = value * 10 + (cs[pos] as i64 - 48);
+            pos += 1;
+        }
+        if pos == start or value > 255 or (pos - start > 1 and cs[start] == '0') {
+            return false;
+        }
+    }
+    pos == cs.len()
+}
+
+fn parse_ipv6_parse(cs: ref Vec[char]) -> bool {
+    let mut pos = 0;
+    for k in 0..8 {
+        if k > 0 {
+            if pos >= cs.len() or cs[pos] != ':' {
+                return false;
+            }
+            pos += 1;
+        }
+        let start = pos;
+        while pos < cs.len() and pos - start < 4 and cs[pos].is_ascii_hexdigit() {
+            pos += 1;
+        }
+        if pos == start {
+            return false;
+        }
+    }
+    pos == cs.len()
+}
+
+fn answer_parse(query_ip: String) -> String {
+    let cs: Vec[char] = query_ip.chars().collect();
+    if parse_ipv4_parse(cs) {
+        String.from("IPv4")
+    } else if parse_ipv6_parse(cs) {
+        String.from("IPv6")
+    } else {
+        String.from("Neither")
+    }
+}
+
+// ---- canon: validate_ip_canon.kara
+
+fn is_ipv4_canon(query_ip: ref String) -> bool {
+    let mut values: Vec[i64] = Vec.new();
+    for part in query_ip.split(".") {
+        if part.len() == 0 or part.len() > 3 {
+            return false;
+        }
+        let mut value = 0;
+        for c in part.chars() {
+            if not c.is_ascii_digit() {
+                return false;
+            }
+            value = value * 10 + (c as i64 - 48);
+        }
+        if value > 255 {
+            return false;
+        }
+        values.push(value);
+    }
+    if values.len() != 4 {
+        return false;
+    }
+    let canonical = f"{values[0]}.{values[1]}.{values[2]}.{values[3]}";
+    canonical == query_ip
+}
+
+fn is_ipv6_canon(query_ip: ref String) -> bool {
+    let mut expanded = String.new();
+    for group in query_ip.split(":") {
+        if group.len() == 0 or group.len() > 4 {
+            return false;
+        }
+        if expanded.len() > 0 {
+            expanded.push(':');
+        }
+        for _ in group.len()..4 {
+            expanded.push('0');
+        }
+        for c in group.chars() {
+            expanded.push(c.to_ascii_lowercase());
+        }
+    }
+    if expanded.len() != 39 {
+        return false;
+    }
+    let mut i = 0;
+    for c in expanded.chars() {
+        let ok = if i % 5 == 4 { c == ':' } else { (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') };
+        if not ok {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn answer_canon(query_ip: String) -> String {
+    if is_ipv4_canon(query_ip) {
+        String.from("IPv4")
+    } else if is_ipv6_canon(query_ip) {
+        String.from("IPv6")
+    } else {
+        String.from("Neither")
+    }
+}
+
+// ---- harness
+
+fn answer(arm: i64, query_ip: String) -> String {
+    if arm == 0 {
+        answer_split(query_ip)
+    } else if arm == 1 {
+        answer_scan(query_ip)
+    } else if arm == 2 {
+        answer_parse(query_ip)
+    } else {
+        answer_canon(query_ip)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn pick(alphabet: Str, seed: mut ref i64) -> char {
+    let letters: Vec[char] = alphabet.chars().collect();
+    letters[next_random(seed) % letters.len()]
+}
+
+// The parts of a valid address: four numbers up to 255 when `ipv4` (a
+// quarter of them at a boundary), else eight groups of 1 to 4 hex digits
+// in mixed case.
+fn valid_parts(ipv4: bool, seed: mut ref i64) -> Vec[String] {
+    let mut parts: Vec[String] = Vec.new();
+    if ipv4 {
+        for _ in 0..4 {
+            let value = if next_random(seed) % 4 == 0 {
+                [0, 9, 10, 99, 100, 199, 200, 249, 250, 255][next_random(seed) % 10]
+            } else {
+                next_random(seed) % 256
+            };
+            parts.push(f"{value}");
+        }
+    } else {
+        for _ in 0..8 {
+            let mut group = String.new();
+            for _ in 0..1 + next_random(seed) % 4 {
+                group.push(pick("0123456789abcdefABCDEF", seed));
+            }
+            parts.push(group);
+        }
+    }
+    parts
+}
+
+fn join(parts: ref Vec[String], separator: char) -> String {
+    let mut s = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            s.push(separator);
+        }
+        s.push_str(parts[i]);
+    }
+    s
+}
+
+// An address and its answer: valid half the time, else with one fault: a
+// part too many or too few, a leading zero or a group of 5 digits, a
+// number above 255 or an empty group, a letter out of place, or one
+// separator of the other kind.
+fn known_query(seed: mut ref i64) -> (String, String) {
+    let ipv4 = next_random(seed) % 2 == 0;
+    let separator = if ipv4 { '.' } else { ':' };
+    let mut parts = valid_parts(ipv4, seed);
+    let fault = next_random(seed) % 10;
+    let at = next_random(seed) % parts.len();
+    if fault == 5 {
+        if next_random(seed) % 2 == 0 {
+            parts.pop();
+        } else {
+            let extra = parts[at].clone();
+            parts.push(extra);
+        }
+    } else if fault == 6 {
+        if ipv4 {
+            parts[at] = f"0{parts[at]}";
+        } else {
+            let mut group = String.new();
+            for _ in 0..5 {
+                group.push(pick("0123456789abcdefABCDEF", seed));
+            }
+            parts[at] = group;
+        }
+    } else if fault == 7 {
+        if ipv4 {
+            let value = if next_random(seed) % 2 == 0 { 256 + next_random(seed) % 4 } else { 256 + next_random(seed) % 744 };
+            parts[at] = f"{value}";
+        } else {
+            parts[at] = String.new();
+        }
+    } else if fault == 8 {
+        let letter = if ipv4 { pick("aeFx", seed) } else { pick("gGxz", seed) };
+        parts[at].push(letter);
+    }
+    let mut query = join(parts, separator);
+    if fault == 9 {
+        let other = if ipv4 { ':' } else { '.' };
+        query = edit_separator(query, next_random(seed) % (parts.len() - 1), other);
+    }
+    let expected = if fault < 5 {
+        if ipv4 { "IPv4" } else { "IPv6" }
+    } else {
+        "Neither"
+    };
+    (query, String.from(expected))
+}
+
+// A jumble of the characters an address uses.
+fn jumble(seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..1 + next_random(seed) % 40 {
+        s.push(pick("0123456789abcdefABCDEFgG.:", seed));
+    }
+    s
+}
+
+fn swap_case(s: ref String) -> String {
+    let mut t = String.new();
+    for c in s.chars() {
+        if c >= 'a' and c <= 'z' {
+            t.push(c.to_ascii_uppercase());
+        } else {
+            t.push(c.to_ascii_lowercase());
+        }
+    }
+    t
+}
+
+fn replace_at(s: ref String, at: i64, x: char) -> String {
+    let mut t = String.new();
+    let mut i = 0;
+    for c in s.chars() {
+        t.push(if i == at { x } else { c });
+        i += 1;
+    }
+    t
+}
+
+// The separator after part `at` removed (`with` a space), written twice
+// (`with` the same separator) or replaced (`with` another).
+fn edit_separator(s: ref String, at: i64, with: char) -> String {
+    let mut t = String.new();
+    let mut seen = 0;
+    for c in s.chars() {
+        if c == '.' or c == ':' {
+            if seen == at {
+                if with == c {
+                    t.push(c);
+                    t.push(c);
+                } else if with != ' ' {
+                    t.push(with);
+                }
+            } else {
+                t.push(c);
+            }
+            seen += 1;
+        } else {
+            t.push(c);
+        }
+    }
+    t
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4680;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        let (query, expected) = known_query(mut seed);
+        let mixed = if next_random(mut seed) % 2 == 0 { query.clone() } else { jumble(mut seed) };
+        let swapped = swap_case(mixed);
+        let ipv4 = next_random(mut seed) % 2 == 0;
+        let separator = if ipv4 { '.' } else { ':' };
+        let parts = valid_parts(ipv4, mut seed);
+        let valid = join(parts, separator);
+        let outside = if ipv4 { pick("aFgxzG", mut seed) } else { pick("gGhxzZ", mut seed) };
+        let replaced = replace_at(valid, next_random(mut seed) % valid.len(), outside);
+        let at = next_random(mut seed) % parts.len();
+        let mut padded_parts = parts.clone();
+        padded_parts[at] = f"0{parts[at]}";
+        let padded = join(padded_parts, separator);
+        let padded_expected = if not ipv4 and parts[at].len() < 4 { "IPv6" } else { "Neither" };
+        let with = [' ', separator, if ipv4 { ':' } else { '.' }][next_random(mut seed) % 3];
+        let edited = edit_separator(valid, next_random(mut seed) % (parts.len() - 1), with);
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, answer(arm, query) == expected, mut failures);
+            report(2, arm, case, answer(arm, swapped) == answer(arm, mixed), mut failures);
+            report(3, arm, case, answer(arm, replaced) == "Neither", mut failures);
+            report(4, arm, case, answer(arm, padded) == padded_expected, mut failures);
+            report(5, arm, case, answer(arm, edited) == "Neither", mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}
