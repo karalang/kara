@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 253 |
-| missing-feature | 240 |
+| missing-feature | 241 |
 | other | 172 |
 | perf | 156 |
 | diagnostics | 154 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2866 |
 | interp | 912 |
-| typecheck | 378 |
+| typecheck | 379 |
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
@@ -597,6 +597,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-24 | 2026-10-13 | typecheck+interp | low | `Vec.append` and `Vec.extend_from_slice` are accepted by `karac check` and run on both v2 backends, but docs/library/collections.md says "There is no `append`" and has no `extend_from_slice` row: either the spec or the implementation is wrong | — |
 | B-2026-10-13-25 | 2026-10-13 | resolver | low | `mem.swap(a, b)`, `mem.replace(d, v)` and `mem.take(d)`, the spelling core-semantics.md §3.7 and design.md give for the move-out fixes, do not resolve ("undefined name 'mem'"); only the bare prelude `swap` / `replace` / `take` work, and `import std.mem` is an unknown module | — |
 | B-2026-10-13-26 | 2026-10-13 | interp+codegen | medium | `chars()` on a `Str` is not an iterator value on the MIR pipeline: `.enumerate()`, `.filter()`, `.rev()`, `.all()`, `.next()` and the rest are refused at build ("an iterator value is not lowered yet" / "`enumerate` over chars is not lowered yet") and `.map(..).collect()` into a `String` mistypes as `Vec[char]`, though `karac check` accepts them and the same calls on a `String` run | — |
+| B-2026-10-13-27 | 2026-10-13 | typecheck | medium | No standard type has a usable `Default`: `String.default()`, `i64.default()`, `Vec.default()` and `Map.default()` are all "no associated function 'default'", `#[derive(Default)]` on a struct with a `Vec` field is refused (E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT), and `take(place)` accepts a `String` or `i64` place but refuses a `Vec` one as not `Default` | — |
 
 ### Relocated
 
