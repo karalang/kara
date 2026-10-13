@@ -15,13 +15,16 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 
+/// Header (or query) pairs, in the order they came.
+pub type Headers = Vec<(String, String)>;
+
 /// One request, as read off the wire.
 #[derive(Default)]
 pub struct Request {
     pub method: String,
     /// The request target: the path, then `?` and the query if there is one.
     pub target: String,
-    pub headers: Vec<(String, String)>,
+    pub headers: Headers,
     pub body: Vec<u8>,
     /// Whether the connection stays open after the response.
     keep_alive: bool,
@@ -42,7 +45,7 @@ impl Request {
 
     /// The query's `(key, value)` pairs in order, form-decoded; a part with
     /// no `=` has an empty value and an empty part is skipped.
-    pub fn query(&self) -> Vec<(String, String)> {
+    pub fn query(&self) -> Headers {
         let Some((_, q)) = self.target.split_once('?') else {
             return Vec::new();
         };
@@ -112,7 +115,7 @@ impl Server {
     /// the next one accepted. A connection that sends something unreadable
     /// is dropped; only a failing `accept` is an error, its `HttpError`
     /// message returned.
-    pub fn next(&mut self) -> Result<Request, String> {
+    pub fn accept_request(&mut self) -> Result<Request, String> {
         let fail = |e: std::io::Error| format!("accept failed: {e}");
         loop {
             if self.conn.is_none() {
@@ -133,7 +136,7 @@ impl Server {
         }
     }
 
-    /// Answers the request [`Self::next`] returned last.
+    /// Answers the request [`Self::accept_request`] returned last.
     pub fn respond(&mut self, status: i64, body: &[u8], headers: &[(String, String)]) {
         let Some((_, w)) = self.conn.as_mut() else {
             return;

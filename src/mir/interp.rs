@@ -1139,7 +1139,9 @@ impl<'a> Interp<'a> {
                 let [recv, Value::Int(a), Value::Int(b)] = args.as_slice() else {
                     return err(format!("{name} takes a receiver and two indices"));
                 };
-                let text = self.string_at(recv)?;
+                // Only the piece is copied, so a loop of short slices stays
+                // linear (B-2026-10-13-2).
+                let text = self.str_ref(recv)?;
                 let len = text.len() as i128;
                 let piece = if *a < 0 || *a > len {
                     String::new()
@@ -2190,8 +2192,10 @@ impl<'a> Interp<'a> {
                 *self.slot_mut(&at)? = val.clone();
                 Ok(Value::Unit)
             }
-            (false, "len", [s]) => Ok(Value::Int(self.string_at(s)?.len() as i128)),
-            (false, "is_empty", [s]) => Ok(Value::Bool(self.string_at(s)?.is_empty())),
+            // Read in place: a copy here makes every `while i < s.len()`
+            // and `chars()` loop quadratic (B-2026-10-13-2).
+            (false, "len", [s]) => Ok(Value::Int(self.str_ref(s)?.len() as i128)),
+            (false, "is_empty", [s]) => Ok(Value::Bool(self.str_ref(s)?.is_empty())),
             (false, "clone", [s]) => {
                 let text = self.string_at(s)?;
                 Ok(self.alloc_box(ty_name, Value::Str(text)))
@@ -2200,7 +2204,10 @@ impl<'a> Interp<'a> {
                 let text = self.string_at(a)? + &self.string_at(b)?;
                 Ok(self.alloc_box(ty_name, Value::Str(text)))
             }
-            (false, "eq", [a, b]) => Ok(Value::Bool(self.string_at(a)? == self.string_at(b)?)),
+            (false, "eq", [a, b]) => {
+                let a = self.string_at(a)?;
+                Ok(Value::Bool(self.str_ref(b)? == a))
+            }
             (false, "push_str" | "push" | "clear", [s, rest @ ..]) => {
                 let tail = match rest {
                     [Value::Char(c)] => c.to_string(),
@@ -8959,7 +8966,7 @@ impl<'a> Interp<'a> {
                     Err((_, body, _)) => body.return_ty(),
                 };
                 let message = loop {
-                    match server.next() {
+                    match server.accept_request() {
                         Ok(req) => self.http_request = req,
                         Err(message) => break message,
                     }
@@ -9035,7 +9042,7 @@ impl<'a> Interp<'a> {
         resp: &Value,
         rty: Ty,
         name: &str,
-    ) -> R<(i64, String, Vec<(String, String)>)> {
+    ) -> R<(i64, String, crate::http1::Headers)> {
         let Value::Agg(fs) = resp else {
             return err(format!("{name}: a handler returned {resp:?}"));
         };

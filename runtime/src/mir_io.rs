@@ -544,7 +544,7 @@ pub unsafe extern "C" fn karac_mir_http_bind(
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_http_next(server: *mut http1::Server, msg: *mut RawVec) -> i32 {
     // SAFETY: the caller's contract.
-    match unsafe { (*server).next() } {
+    match unsafe { (*server).accept_request() } {
         Ok(req) => {
             MIR_REQUEST.with(|r| *r.borrow_mut() = req);
             1
