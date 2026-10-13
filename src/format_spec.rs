@@ -449,8 +449,79 @@ impl FormatSpec {
     }
 }
 
+/// How `Display` shows a float (core-types.md § Printing): the shortest
+/// digits that read back as the same value, always with a `.` or an
+/// exponent, so a float never reads as an integer (`1.0`, not `1`). The
+/// exponent form is used when the decimal exponent is below -4 or at least
+/// 16, as Python's `repr` (`1e+16`, `1e-05`); the special values are `NaN`,
+/// `inf` and `-inf`. The MIR interpreter and the compiled MIR backend's
+/// runtime both print through this.
+pub fn display_f64(v: f64) -> String {
+    shown_float(v, format!("{v:e}"), v.to_string())
+}
+
+/// [`display_f64`] with an `f32`'s own shortest digits.
+pub fn display_f32(v: f32) -> String {
+    shown_float(f64::from(v), format!("{v:e}"), v.to_string())
+}
+
+/// `v` shown from its shortest digits in Rust's `{:e}` (`sci`: `1e16`,
+/// `-1.5e-5`) and `Display` (`plain`: always decimal, `-0` for -0.0) forms.
+fn shown_float(v: f64, sci: String, plain: String) -> String {
+    if v.is_nan() {
+        return "NaN".to_string();
+    }
+    if v.is_infinite() {
+        return if v > 0.0 { "inf" } else { "-inf" }.to_string();
+    }
+    if v != 0.0 {
+        if let Some((mantissa, exp)) = sci.split_once('e') {
+            let exp: i32 = exp.parse().unwrap_or(0);
+            if !(-4..16).contains(&exp) {
+                let sign = if exp < 0 { '-' } else { '+' };
+                return format!("{mantissa}e{sign}{:02}", exp.unsigned_abs());
+            }
+        }
+    }
+    if plain.contains('.') {
+        plain
+    } else {
+        plain + ".0"
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn display_f64_follows_the_printing_rules() {
+        let cases: [(f64, &str); 18] = [
+            (1.0, "1.0"),
+            (0.1, "0.1"),
+            (2.5, "2.5"),
+            (-3.0, "-3.0"),
+            (0.0, "0.0"),
+            (-0.0, "-0.0"),
+            (1e15, "1000000000000000.0"),
+            (1e16, "1e+16"),
+            (1.5e16, "1.5e+16"),
+            (-2.5e300, "-2.5e+300"),
+            (0.0001, "0.0001"),
+            (0.00001, "1e-05"),
+            (1.25e-7, "1.25e-07"),
+            (5e-324, "5e-324"),
+            (123456.789, "123456.789"),
+            (f64::NAN, "NaN"),
+            (f64::INFINITY, "inf"),
+            (f64::NEG_INFINITY, "-inf"),
+        ];
+        for (v, want) in cases {
+            assert_eq!(display_f64(v), want, "{v:?}");
+        }
+        assert_eq!(display_f32(0.1), "0.1");
+        assert_eq!(display_f32(2.0), "2.0");
+        assert_eq!(display_f32(1e20), "1e+20");
+    }
+
     use super::*;
 
     fn spec(s: &str) -> FormatSpec {

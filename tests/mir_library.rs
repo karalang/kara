@@ -331,7 +331,7 @@ fn main() {
     println("");
 }
 "#;
-    assert_runs(src, "true false true true true\n1\n-1 0.5 2.5 \n");
+    assert_runs(src, "true false true true true\n1\n-1.0 0.5 2.5 \n");
 }
 
 /// The library source is generic over `T`; a program's own type named `T`

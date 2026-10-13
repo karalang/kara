@@ -122,12 +122,12 @@ pub extern "C" fn karac_mir_fmt_i128(lo: u64, hi: u64, signed: bool) {
 
 #[no_mangle]
 pub extern "C" fn karac_mir_fmt_f64(v: f64) {
-    append(&v.to_string());
+    append(&crate::fmt::format_spec::display_f64(v));
 }
 
 #[no_mangle]
 pub extern "C" fn karac_mir_fmt_f32(v: f32) {
-    append(&v.to_string());
+    append(&crate::fmt::format_spec::display_f32(v));
 }
 
 #[no_mangle]

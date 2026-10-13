@@ -883,7 +883,11 @@ fn main() -> () {
         let r = interp::run(&prog, &m.tys, "main", vec![]);
         // 257 has no bf16 (8 significant bits): it rounds to even, 256;
         // 2049 has no f16 (11 bits) and rounds to 2048.
-        assert_eq!(r.output, "25620489223372036854775807\n", "{:?}", r.outcome);
+        assert_eq!(
+            r.output, "256.02048.09223372036854775807\n",
+            "{:?}",
+            r.outcome
+        );
         assert_eq!(ty::FloatTy::BF16.round(1.1), 1.1015625);
         assert_eq!(ty::FloatTy::F16.round(65520.0), f64::INFINITY);
     }
@@ -927,7 +931,11 @@ fn main() -> () {
         let sq = (u64::MAX as u128) * (u64::MAX as u128);
         assert_eq!(
             r.output,
-            format!("{sq} 1 true {} {}\n", u64::MAX, sq as f64),
+            format!(
+                "{sq} 1 true {} {}\n",
+                u64::MAX,
+                crate::format_spec::display_f64(sq as f64)
+            ),
             "{:?}",
             r.outcome
         );

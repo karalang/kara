@@ -6838,7 +6838,7 @@ impl<'a> Interp<'a> {
             Value::Int(i) => i.to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Char(c) => c.to_string(),
-            Value::Float(f) => f.to_string(),
+            Value::Float(f) => crate::format_spec::display_f64(*f),
             Value::Unit => "()".to_string(),
             Value::Ref(addr) => {
                 let inner = self.slot(addr)?;

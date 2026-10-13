@@ -14175,7 +14175,7 @@ fn main() -> Result[(), String] {
 "#;
         let r = super::run_source(src).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(
-            r.output, "[<1>, <2>] Some(<3>) fast_path slow\n1 true true\nllo\n4000000000\n",
+            r.output, "[<1>, <2>] Some(<3>) fast_path slow\n1 true true\nllo\n4000000000.0\n",
             "{:?}",
             r.outcome
         );
@@ -14565,7 +14565,7 @@ fn main() {
             r.output,
             "Vector(5, 7, 6, 14)\nVector(true, false, false, false)\nVector(1, 2, 3, 6)\n\
              17\n8\n71\nVector(8, 3, 5, 1)\nVector(5, 3, 8, 1)\nVector(8, 1)\n\
-             Vector(1, 5, 9, 8)\nVector(7, 7, 7, 7)\nVector(60, 10, 20, 20)\nVector(3, -4)\n\
+             Vector(1, 5, 9, 8)\nVector(7, 7, 7, 7)\nVector(60, 10, 20, 20)\nVector(3.0, -4.0)\n\
              Some(Vector(18446744073709551615, 1))\nVector(255, 0)\n"
         );
     }
@@ -14679,7 +14679,7 @@ fn main() {
         assert_eq!(r.outcome, interp::Outcome::Returned(interp::Value::Unit));
         assert_eq!(
             r.output,
-            "10 1 0.75\n44 2147483647 42\n-294967296 true\nout of range for i8\n\
+            "10 1.0 0.75\n44 2147483647 42\n-294967296 true\nout of range for i8\n\
              ß true false\ntrue\n1 2 3 true\n3 3\n9\ndcba\n"
         );
     }
@@ -14704,7 +14704,7 @@ fn main() {
         assert_eq!(
             r.output,
             "4609434218613702656 1069547520 4609434218613702656 13835058055282163712\n\
-             1.5 1.5 -2\n"
+             1.5 1.5 -2.0\n"
         );
     }
 
@@ -14786,7 +14786,7 @@ fn main() {
             Ok((
                 "+36893488147419103228\n\
                  -170141183460469231731687303715884105728\n\
-                 65504 inf 1.1015625\n"
+                 65504.0 inf 1.1015625\n"
                     .to_string(),
                 Some(0)
             ))
@@ -14814,7 +14814,7 @@ fn main() {
                 "3.015625 1.046875\n\
                  0.6931471824645996 1.4142135381698608 1.2599210739135742\n\
                  0.6931471805599453 1.4142135623730951 1.1071487177940904\n\
-                 16777216 0.10000000149011612\n"
+                 16777216.0 0.10000000149011612\n"
                     .to_string(),
                 Some(0)
             ))
@@ -15020,7 +15020,7 @@ fn main() {
 "#;
         assert_eq!(
             run_source(src),
-            Ok(("5 3 7 40 2 5 7 200 4 9 2 true\n".to_string(), Some(0)))
+            Ok(("5 3 7 40 2 5.0 7 200 4 9 2 true\n".to_string(), Some(0)))
         );
     }
 
@@ -15485,7 +15485,7 @@ fn main() {
         assert_eq!(
             run_source(src),
             Ok((
-                "3 4000000000 3 3 3 3 4000000000 3 1.5\n".to_string(),
+                "3.0 4000000000.0 3 3.0 3 3.0 4000000000 3.0 1.5\n".to_string(),
                 Some(0)
             ))
         );
