@@ -140,11 +140,6 @@ fn main() {
 fn file_and_clock_natives_match_the_interpreter() {
     let dir = Scratch::new("files");
     let src = FILES.replace("DIR", &dir.path().to_string_lossy());
-    // The OS's wording for a refused connection.
-    let refused = std::net::TcpStream::connect("127.0.0.1:1")
-        .err()
-        .map(|e| e.to_string())
-        .unwrap_or_default();
     let (interp, built) = interp_and_build(dir.path(), &src);
     assert_eq!(
         interp,
