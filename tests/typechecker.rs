@@ -53061,3 +53061,24 @@ fn main() { println(apply(|x| x == "a", 2)); }
     );
     assert!(!errs.is_empty(), "a closure the bound's signature rejects");
 }
+
+/// B-2026-10-13-8: a primitive's associated constant right before a block is
+/// the constant, then the block. `i64.MAX {` used to parse as the path of a
+/// module-qualified struct literal, which the checker then refused with "no
+/// associated function 'MAX' on type 'i64'".
+#[test]
+fn primitive_constant_before_a_block_is_not_a_struct_literal_path() {
+    for body in [
+        "if need == i64.MAX { println(\"max\"); } else { println(\"not\"); }",
+        "if need < i64.MAX { println(\"less\"); }",
+        "if need < i64.MAX {}",
+        "while need < i64.MAX { println(\"once\"); break; }",
+        "match need == i64.MAX { true => println(\"max\"), false => println(\"not\") }",
+        "for i in 0..i64.MAX { println(f\"{i}\"); break; }",
+        "if 1.5 < f64.MAX { println(\"f\"); }",
+    ] {
+        typecheck_ok(&format!(
+            "fn main() {{\n    let need = 5;\n    {body}\n}}\n"
+        ));
+    }
+}

@@ -2416,10 +2416,14 @@ impl super::Parser {
         // (`i64.MAX`, `f64.NAN` -- lowercase primitive, uppercase const, no
         // brace) would be misparsed as a path instead of a field access. Other
         // lowercase-rooted `.` forms (`v.field`, `m.func()`, `m.Type(..)`) stay
-        // in the postfix loop.
+        // in the postfix loop. The brace must also open a struct literal's
+        // body, and the root must not be a primitive type: before a block,
+        // `if n == i64.MAX { .. }` is the constant and then the `if` body
+        // (B-2026-10-13-8).
         let module_qualified_struct_lit = !starts_upper(&name)
+            && !is_primitive_type_name(&name)
             && matches!(self.peek_token_ref_at(1), Token::Identifier { name: ref seg, .. } if starts_upper(seg))
-            && matches!(self.peek_token_ref_at(2), Token::LeftBrace);
+            && self.looks_like_struct_literal_at(self.pos + 2);
         if self.check(&Token::Dot) && (starts_upper(&name) || module_qualified_struct_lit) {
             let mut path = vec![name];
             while self.eat(&Token::Dot) {
@@ -3535,4 +3539,29 @@ impl super::Parser {
         self.advance();
         Some(op)
     }
+}
+
+/// Whether `name` is a primitive type, which can root an associated constant
+/// (`i64.MAX`) but never a module path.
+fn is_primitive_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "f16"
+            | "bf16"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "char"
+    )
 }
