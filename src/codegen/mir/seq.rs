@@ -33,6 +33,101 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(v.try_as_basic_value().unwrap_basic().into_int_value())
     }
 
+    /// Appends the `et` at `x` to the `Vec` at `v`: in line while there
+    /// is room (a typed copy and a length bump), through the runtime only
+    /// to grow.
+    pub(super) fn vec_push(
+        &mut self,
+        v: PointerValue<'ctx>,
+        x: PointerValue<'ctx>,
+        et: Ty,
+    ) -> R<()> {
+        let size = self.layout(et)?.size;
+        if size == 0 {
+            return self.rt("vec_push", &[v.into(), x.into(), self.i64(0).into()]);
+        }
+        let lenp = self.offset(v, 8)?;
+        let len = self.load_i64(lenp)?;
+        let cap = self.load_i64(self.offset(v, 16)?)?;
+        let full = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, len, cap, "full")
+            .map_err(e)?;
+        self.if_then(full, |cx| {
+            cx.rt(
+                "vec_reserve",
+                &[v.into(), cx.i64(1).into(), cx.i64(size).into()],
+            )
+        })?;
+        let buf = self.load_ptr(v)?;
+        let at = self.elem_ptr(buf, len, size)?;
+        self.copy(at, x, et)?;
+        let len = self
+            .builder
+            .build_int_add(len, self.i64(1), "")
+            .map_err(e)?;
+        self.store(lenp, len.into())
+    }
+
+    /// The char starting at byte `i` of the text `p[..n]`, or -1 when
+    /// there is none: an ASCII byte in line, anything else through the
+    /// runtime.
+    fn char_at_byte(
+        &mut self,
+        p: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        i: IntValue<'ctx>,
+    ) -> R<IntValue<'ctx>> {
+        let f = self.cur_fn()?;
+        let slot = self.entry_slot(8, "ch")?;
+        let (look, fast, slow, done) = (
+            self.llcx.append_basic_block(f, "ch.look"),
+            self.llcx.append_basic_block(f, "ch.ascii"),
+            self.llcx.append_basic_block(f, "ch.slow"),
+            self.llcx.append_basic_block(f, "ch.done"),
+        );
+        // Unsigned, so a negative index is out of range too.
+        let inside = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, n, "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(inside, look, slow)
+            .map_err(e)?;
+        self.builder.position_at_end(look);
+        let bp = self.elem_ptr(p, i, 1)?;
+        let b = self
+            .builder
+            .build_load(self.llcx.i8_type(), bp, "")
+            .map_err(e)?
+            .into_int_value();
+        let ascii = self
+            .builder
+            .build_int_compare(
+                IntPredicate::ULT,
+                b,
+                self.llcx.i8_type().const_int(0x80, false),
+                "",
+            )
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(ascii, fast, slow)
+            .map_err(e)?;
+        self.builder.position_at_end(fast);
+        let c = self
+            .builder
+            .build_int_z_extend(b, self.llcx.i64_type(), "")
+            .map_err(e)?;
+        self.store(slot, c.into())?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(slow);
+        let c = self.rt_int("char_at_byte", &[p.into(), n.into(), i.into()], 64)?;
+        self.store(slot, c.into())?;
+        self.builder.build_unconditional_branch(done).map_err(e)?;
+        self.builder.position_at_end(done);
+        self.load_i64(slot)
+    }
+
     /// The index of the variant named `name` of the enum `ty`.
     pub(super) fn variant_of(&self, ty: Ty, name: &str) -> R<u32> {
         let (adt, _) = self
@@ -221,7 +316,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("char_at_byte", [s, i]) => {
                 let (p, n) = self.str_parts(s)?;
                 let i = self.int_arg(i)?;
-                let c = self.rt_int("char_at_byte", &[p.into(), n.into(), i.into()], 64)?;
+                let c = self.char_at_byte(p, n, i)?;
                 let ok = self.non_negative(c)?;
                 self.abort_unless(ok, "explicit panic")?;
                 let c = self

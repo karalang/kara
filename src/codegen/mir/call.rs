@@ -663,9 +663,8 @@ impl<'ctx> Cx<'ctx, '_> {
             ("Vec", "push") => {
                 let v = self.ref_arg(&args[0])?;
                 let et = self.vec_elem(name, &args[0])?;
-                let size = self.layout(et)?.size;
                 let x = self.operand_as(&args[1], et)?;
-                self.rt("vec_push", &[v.into(), x.into(), self.i64(size).into()])
+                self.vec_push(v, x, et)
             }
             ("String", "push_str") => {
                 let v = self.ref_arg(&args[0])?;
