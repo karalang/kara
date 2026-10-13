@@ -5725,6 +5725,9 @@ impl<'a> super::TypeChecker<'a> {
     /// Is `value` a `SortedMap.floor` / `ceiling` call on the MIR pipeline?
     /// See [`Self::current_scrutinee_clone_view`].
     pub(super) fn lib_clone_view_scrutinee(&self, value: &Expr) -> bool {
+        if self.core_iter_next_scrutinee(value) {
+            return true;
+        }
         if !self.library_methods_from_source || self.cli_lint_overrides.strict_core {
             return false;
         }
@@ -5741,6 +5744,50 @@ impl<'a> super::TypeChecker<'a> {
             ty = inner;
         }
         matches!(ty, Type::Named { name, .. } if name == "SortedMap")
+    }
+
+    /// `c.iter().next()` on a core collection (B-2026-10-06-74): the item is
+    /// a `ref T` (docs/library/collections.md's iteration table), so a `Copy`
+    /// part a pattern binds out of it is a view that `*k` reads, as the same
+    /// item bound by `for k in c.iter()` already is. Under `karac check` and
+    /// on the MIR pipeline; the legacy backends type the item by value.
+    fn core_iter_next_scrutinee(&self, value: &Expr) -> bool {
+        if !self.library_methods_from_source && !self.cli_lint_overrides.strict_core {
+            return false;
+        }
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &value.kind
+        else {
+            return false;
+        };
+        if method != "next" || !args.is_empty() {
+            return false;
+        }
+        let ExprKind::MethodCall {
+            object: collection,
+            method: iter,
+            args: iter_args,
+            ..
+        } = &object.kind
+        else {
+            return false;
+        };
+        if iter != "iter" || !iter_args.is_empty() {
+            return false;
+        }
+        let Some(ty) = self.expr_types.get(&SpanKey::from_span(&collection.span)) else {
+            return false;
+        };
+        let mut t = ty;
+        while let Type::Ref(inner) | Type::MutRef(inner) = t {
+            t = inner;
+        }
+        Self::for_iterable_is_core_collection(t)
+            || matches!(t, Type::Named { name, .. } if name == "VecDeque")
     }
 
     /// Is `value` the receiver of a library `mut ref self` method? The MIR

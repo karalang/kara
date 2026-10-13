@@ -3264,3 +3264,28 @@ fn an_index_read_of_a_counted_handle_composite_is_accepted() {
         "E_INDEX_MOVE_NON_COPY",
     );
 }
+
+#[test]
+fn deref_of_a_copy_item_of_iter_next_is_accepted() {
+    // B-2026-10-06-74: `c.iter().next()` yields `ref T` items, so `*k` reads
+    // a `Copy` part bound out of one, as it does under `for k in c.iter()`.
+    accepted(
+        "iter-next-deref",
+        "fn main() {\n\
+         \x20   let v: Vec[i64] = vec![4, 5];\n\
+         \x20   let Some(k) = v.iter().next() else { return; };\n\
+         \x20   let x = *k;\n\
+         \x20   let mut s: SortedSet[i64] = SortedSet.new();\n\
+         \x20   s.insert(3);\n\
+         \x20   let Some(t) = s.iter().next() else { return; };\n\
+         \x20   let mut m: Map[i64, i64] = Map.new();\n\
+         \x20   m.insert(1, 2);\n\
+         \x20   let Some((a, b)) = m.iter().next() else { return; };\n\
+         \x20   let mut sm: SortedMap[i64, i64] = SortedMap.new();\n\
+         \x20   sm.insert(7, 8);\n\
+         \x20   if let Some((c, d)) = sm.iter().next() {\n\
+         \x20       println(f\"{x} {*t} {*a + *b} {*c + *d}\");\n\
+         \x20   }\n\
+         }\n",
+    );
+}
