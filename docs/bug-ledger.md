@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 253 |
 | missing-feature | 237 |
 | other | 171 |
-| perf | 155 |
+| perf | 156 |
 | diagnostics | 154 |
 | false-positive | 152 |
 | crash | 114 |
@@ -110,14 +110,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2862 |
+| codegen | 2863 |
 | interp | 908 |
 | typecheck | 376 |
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
 | parser | 61 |
-| runtime | 59 |
+| runtime | 60 |
 | autopar | 59 |
 | resolver | 34 |
 | effect | 30 |
@@ -598,6 +598,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-17 | 2026-10-13 | typecheck+interp+codegen | medium | `ref_eq` has no v2 form: the spec's method `a.ref_eq(b)` on a `shared` handle (design.md § Equality, "a method the compiler provides on every `shared`, `sync` and `frozen` handle type") is refused by `karac check` and both MIR backends ("no method 'ref_eq' on type 'N'"), and the legacy free function `ref_eq(a, b)` that `karac check` still accepts is unknown to `karac __mir-run` ("call of unknown function ref_eq") and not lowered by `__mir-llvm-run` ("native `ref_eq` is not lowered yet"), so no program that compares `shared` handles by identity runs on v2 | — |
 | B-2026-10-13-18 | 2026-10-13 | codegen+runtime | medium | `Vec.sort_by_key` and `sort_by` on the MIR compiled backend run about 3.5-4x slower than Rust's `sort_by_key`: `karac_mir_sort_ctx` (runtime/src/mir.rs) is a bottom-up merge sort that calls the comparison through a function pointer for every comparison, and the emitted comparison calls the key closure, not inlined, for each side. Sorting 1M indices by an i64 key 10 times takes 2.74-2.78 s on `karac build --mir` and 0.65-0.77 s on `rustc -O`; in kata 502's bench the sort is 63% of all instructions | — |
 | B-2026-10-13-19 | 2026-10-13 | typecheck | medium | `Vec.extend` accepts only a `Vec`, `Slice` or `Array`, where the spec gives `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)`: `d.extend(v.iter().cloned())`, `d.extend(v.iter().map(f))`, `d.extend(0..3)`, `d.extend(v.into_iter())` and `d.extend(a_set)` are all refused by `karac check`, `karac run --interp` and both MIR backends with a misleading "no method 'extend' on type 'Vec'" | — |
+| B-2026-10-13-20 | 2026-10-13 | codegen+runtime | low | An f-string with one integer hole, `f"{n}"`, costs three allocations, two frees and four thread-local `RefCell` borrows on the v2 compiled backend: 44M `f"{i % 7}"` take 2.7 s on `karac build --mir` against 0.3 s on legacy `karac build` (about 9x), and kata 504's bench runs 3.7 s on `--mir` against 1.6 s on legacy | — |
 
 ### Relocated
 
