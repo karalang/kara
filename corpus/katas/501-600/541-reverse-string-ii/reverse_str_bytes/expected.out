@@ -1,0 +1,15 @@
+"abcdefg", k = 2 -> "bacdfeg"
+"abcd", k = 2 -> "bacd"
+"a", k = 1 -> "a"
+"abcdef", k = 1 -> "abcdef"
+"abcdef", k = 3 -> "cbadef"
+"abcdef", k = 6 -> "fedcba"
+"abcdef", k = 10 -> "fedcba"
+"abcdefghijk", k = 4 -> "dcbaefghkji"
+300 random words: 10120 letters, checksum 532459814
+10000 letters, k = 1: starts dscbeujmdvkh, ends rndtbwdaiyqb, checksum 809532156
+10000 letters, k = 7: starts juebcsdmdvkh, ends indtbwdabqyi, checksum 103317160
+10000 letters, k = 100: starts hwmyszqupdrd, ends rndtbwdaiyqb, checksum 604639601
+10000 letters, k = 4999: starts pawjvheerpae, ends rndtbwdaiybq, checksum 490001981
+10000 letters, k = 5000: starts upawjvheerpa, ends rndtbwdaiyqb, checksum 671150682
+10000 letters, k = 10000: starts bqyiadwbtdnr, ends hkvdmjuebcsd, checksum 98106891

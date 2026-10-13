@@ -1,0 +1,118 @@
+// LeetCode #542: 01 Matrix -- breadth-first search from every 0 at once.
+//
+// Every 0 starts in the queue at distance 0 and every 1 unknown. Taking
+// cells off the queue in order, each unknown neighbour gets the cell's
+// distance plus one and joins the queue, so each cell is reached first
+// along a shortest path from its nearest 0. O(m n) time.
+
+fn update_matrix(mat: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = mat.len();
+    let n = mat[0].len();
+    let mut dist = vec![vec![-1; n]; m];
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    for r in 0..m {
+        for c in 0..n {
+            if mat[r][c] == 0 {
+                dist[r][c] = 0;
+                queue.push_back((r, c));
+            }
+        }
+    }
+    let steps = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    while let Some((r, c)) = queue.pop_front() {
+        for (dr, dc) in steps {
+            let (nr, nc) = (r + dr, c + dc);
+            if nr >= 0 and nr < m and nc >= 0 and nc < n and dist[nr][nc] < 0 {
+                dist[nr][nc] = dist[r][c] + 1;
+                queue.push_back((nr, nc));
+            }
+        }
+    }
+    dist
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// An m by n grid, each cell 1 with chance ones / 100, and one cell
+// picked at random set to 0.
+fn random_grid(m: i64, n: i64, ones: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut g: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..m {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            row.push(if next_random(seed) % 100 < ones { 1 } else { 0 });
+        }
+        g.push(row);
+    }
+    let r = next_random(seed) % m;
+    let c = next_random(seed) % n;
+    g[r][c] = 0;
+    g
+}
+
+fn mix(h: i64, g: Vec[Vec[i64]]) -> i64 {
+    let mut h = h;
+    for row in g.iter() {
+        for x in row.iter() {
+            h = (h * 31 + x + 1) % 1000000007;
+        }
+    }
+    h
+}
+
+fn largest(g: Vec[Vec[i64]]) -> i64 {
+    let mut most = 0;
+    for row in g.iter() {
+        for x in row.iter() {
+            most = most.max(*x);
+        }
+    }
+    most
+}
+
+fn show(name: Str, mat: Vec[Vec[i64]]) {
+    println(f"{name}: {mat} -> {update_matrix(mat)}");
+}
+
+fn summary(name: Str, mat: Vec[Vec[i64]]) {
+    let d = update_matrix(mat);
+    println(f"{name}: largest distance {largest(d)}, checksum {mix(0, d)}");
+}
+
+fn main() {
+    let mut seed: i64 = 542;
+    show("example 1", vec![vec![0, 0, 0], vec![0, 1, 0], vec![0, 0, 0]]);
+    show("example 2", vec![vec![0, 0, 0], vec![0, 1, 0], vec![1, 1, 1]]);
+    show("one cell", vec![vec![0]]);
+    show("one row", vec![vec![1, 1, 0, 1, 1, 1]]);
+    show("one column", vec![vec![1], vec![0], vec![1], vec![1]]);
+    show("a 0 in the corner", vec![vec![1, 1, 1], vec![1, 1, 1], vec![1, 1, 0]]);
+    // 300 random grids of 1 to 12 by 1 to 12, with 1s at 30, 70 or 95
+    // in 100 in turn.
+    let count = 300;
+    let mut cells = 0;
+    let mut h: i64 = 0;
+    for t in 0..count {
+        let m = 1 + next_random(mut seed) % 12;
+        let n = 1 + next_random(mut seed) % 12;
+        let ones = if t % 3 == 0 { 30 } else if t % 3 == 1 { 70 } else { 95 };
+        cells += m * n;
+        h = mix(h, update_matrix(random_grid(m, n, ones, mut seed)));
+    }
+    println(f"{count} random grids: {cells} cells, checksum {h}");
+    // The largest, 10,000 cells (the problem's most): 100 by 100 with
+    // 1s at 99 in 100, 100 by 100 all 1 but a 0 in the top left corner,
+    // and 10,000 by 1 all 1 but the top.
+    summary("100 by 100, 1s at 99 in 100", random_grid(100, 100, 99, mut seed));
+    let mut corner = vec![vec![1; 100]; 100];
+    corner[0][0] = 0;
+    summary("100 by 100, one 0 in a corner", corner);
+    let mut column = vec![vec![1; 1]; 10000];
+    column[0][0] = 0;
+    summary("10000 by 1, a 0 at the top", column);
+}

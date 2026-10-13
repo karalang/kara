@@ -1,0 +1,185 @@
+// Differential test for LeetCode #541: Reverse String II.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random words of 1 to 60 letters, from the whole alphabet or every
+// other time from a to c, with k from 1 to 70.
+// Properties:
+//   P1  the answer is the definition's: the word cut into pieces of k,
+//       the 1st, 3rd, 5th, ... reversed and the rest kept
+//   P2  the answer has the word's letters, as many of each
+//   P3  done twice, it gives the word back
+//   P4  with k at least the word's length the word comes back reversed,
+//       and with k = 1 unchanged
+//   P5  after a word of a whole number of blocks of 2k, the answer is
+//       the two words' answers one after the other
+
+// ---- star: reverse_str.kara
+
+fn reverse_str_star(s: Str, k: i64) -> String {
+    let mut chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut start = 0;
+    while start < n {
+        let mut i = start;
+        let mut j = (start + k).min(n) - 1;
+        while i < j {
+            chars.swap(i, j);
+            i += 1;
+            j -= 1;
+        }
+        start += 2 * k;
+    }
+    chars.iter().collect()
+}
+
+// ---- bytes: reverse_str_bytes.kara
+
+fn reverse_str_bytes(s: Str, k: i64) -> String {
+    let mut b: Vec[u8] = s.bytes().to_vec();
+    let n = b.len();
+    let mut start = 0;
+    while start < n {
+        let end = (start + k).min(n);
+        b[start..end].reverse();
+        start += 2 * k;
+    }
+    String.from_utf8(b).unwrap()
+}
+
+// ---- blocks: reverse_str_blocks.kara
+
+fn reverse_str_blocks(s: Str, k: i64) -> String {
+    let n = s.len();
+    let mut out = String.new();
+    let mut start = 0;
+    while start < n {
+        let mid = (start + k).min(n);
+        let end = (start + 2 * k).min(n);
+        for c in s[start..mid].chars().rev() {
+            out.push(c);
+        }
+        out.push_str(s[mid..end]);
+        start += 2 * k;
+    }
+    out
+}
+
+// ---- index: reverse_str_index.kara
+
+fn reverse_str_index(s: Str, k: i64) -> String {
+    let b = s.bytes();
+    let n = b.len();
+    let mut out = String.new();
+    for i in 0..n {
+        let start = i - i % (2 * k);
+        let m = k.min(n - start);
+        let from = if i - start < m { start + m - 1 - (i - start) } else { i };
+        out.push(b[from] as char);
+    }
+    out
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut w = String.new();
+    for _ in 0..n {
+        w.push((b'a' + (next_random(seed) % letters) as u8) as char);
+    }
+    w
+}
+
+fn answer(which: i64, s: Str, k: i64) -> String {
+    if which == 0 {
+        reverse_str_star(s, k)
+    } else if which == 1 {
+        reverse_str_bytes(s, k)
+    } else if which == 2 {
+        reverse_str_blocks(s, k)
+    } else {
+        reverse_str_index(s, k)
+    }
+}
+
+fn reversed(s: Str) -> String {
+    s.chars().rev().collect()
+}
+
+// The definition: the word cut into pieces of k, the 1st, 3rd, 5th, ...
+// pieces reversed, the others kept, joined back.
+fn definition(s: Str, k: i64) -> String {
+    let mut out = String.new();
+    let mut piece = 0;
+    let mut a = 0;
+    while a < s.len() {
+        let b = (a + k).min(s.len());
+        if piece % 2 == 0 {
+            out.push_str(reversed(s[a..b]).as_str());
+        } else {
+            out.push_str(s[a..b]);
+        }
+        piece += 1;
+        a = b;
+    }
+    out
+}
+
+fn sorted_letters(s: Str) -> Vec[char] {
+    let mut v: Vec[char] = s.chars().collect();
+    v.sort();
+    v
+}
+
+fn main() {
+    let names = vec!["star", "bytes", "blocks", "index"];
+    let count = 1000;
+    let mut seed: i64 = 5410;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 60 letters from the whole alphabet, or every other time
+        // from a to c; k from 1 to 70.
+        let n = 1 + next_random(mut seed) % 60;
+        let k = 1 + next_random(mut seed) % 70;
+        let letters = if t % 2 == 0 { 26 } else { 3 };
+        let w = random_word(n, letters, mut seed);
+        let want = definition(w.as_str(), k);
+        // A word whose length is a whole number of blocks of 2k, and a
+        // second word after it.
+        let head = random_word(2 * k * (1 + next_random(mut seed) % 2), letters, mut seed);
+        let joined = f"{head}{w}";
+        for which in 0..4 {
+            let got = answer(which, w.as_str(), k);
+            let twice = answer(which, got.as_str(), k);
+            let whole = answer(which, w.as_str(), n + next_random(mut seed) % 5);
+            let ones = answer(which, w.as_str(), 1);
+            let both = answer(which, joined.as_str(), k);
+            let ok = vec![
+                got == want,
+                sorted_letters(got.as_str()) == sorted_letters(w.as_str()),
+                twice == w,
+                whole == reversed(w.as_str()) and ones == w,
+                both == f"{answer(which, head.as_str(), k)}{got}",
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: \"{w}\", k = {k} -> \"{got}\", want \"{want}\"");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

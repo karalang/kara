@@ -1,0 +1,10 @@
+example 1: [[0, 0, 0], [0, 1, 0], [0, 0, 0]] -> [[0, 0, 0], [0, 1, 0], [0, 0, 0]]
+example 2: [[0, 0, 0], [0, 1, 0], [1, 1, 1]] -> [[0, 0, 0], [0, 1, 0], [1, 2, 1]]
+one cell: [[0]] -> [[0]]
+one row: [[1, 1, 0, 1, 1, 1]] -> [[2, 1, 0, 1, 2, 3]]
+one column: [[1], [0], [1], [1]] -> [[1], [0], [1], [2]]
+a 0 in the corner: [[1, 1, 1], [1, 1, 1], [1, 1, 0]] -> [[4, 3, 2], [3, 2, 1], [2, 1, 0]]
+300 random grids: 12728 cells, checksum 135589336
+100 by 100, 1s at 99 in 100: largest distance 33, checksum 504550093
+100 by 100, one 0 in a corner: largest distance 198, checksum 780334291
+10000 by 1, a 0 at the top: largest distance 9999, checksum 166442834

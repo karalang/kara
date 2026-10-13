@@ -1,0 +1,318 @@
+// Differential test for LeetCode #542: 01 Matrix.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random grids of 1 to 10 by 1 to 10, with 1s at 30, 70 or 95 in 100
+// in turn and one random cell set to 0.
+// Properties:
+//   P1  the answer is the definition's: the smallest |dr| + |dc| from
+//       the cell to any 0
+//   P2  0 exactly on the 0s, neighbours apart by at most 1, and every
+//       cell above 0 next to one exactly 1 lower
+//   P3  the grid transposed gives the answer transposed
+//   P4  the grid mirrored left to right gives the answer mirrored
+//   P5  every 1 is at least 1 away, and no cell more than m + n - 2
+
+// ---- star: update_matrix.kara
+
+fn update_matrix_star(mat: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = mat.len();
+    let n = mat[0].len();
+    let mut dist = vec![vec![-1; n]; m];
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    for r in 0..m {
+        for c in 0..n {
+            if mat[r][c] == 0 {
+                dist[r][c] = 0;
+                queue.push_back((r, c));
+            }
+        }
+    }
+    let steps = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    while let Some((r, c)) = queue.pop_front() {
+        for (dr, dc) in steps {
+            let (nr, nc) = (r + dr, c + dc);
+            if nr >= 0 and nr < m and nc >= 0 and nc < n and dist[nr][nc] < 0 {
+                dist[nr][nc] = dist[r][c] + 1;
+                queue.push_back((nr, nc));
+            }
+        }
+    }
+    dist
+}
+
+// ---- dp: update_matrix_dp.kara
+
+fn update_matrix_dp(mat: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = mat.len();
+    let n = mat[0].len();
+    let far = m + n;
+    let mut dist = vec![vec![far; n]; m];
+    for r in 0..m {
+        for c in 0..n {
+            if mat[r][c] == 0 {
+                dist[r][c] = 0;
+            } else {
+                if r > 0 {
+                    dist[r][c] = dist[r][c].min(dist[r - 1][c] + 1);
+                }
+                if c > 0 {
+                    dist[r][c] = dist[r][c].min(dist[r][c - 1] + 1);
+                }
+            }
+        }
+    }
+    for r in (0..m).rev() {
+        for c in (0..n).rev() {
+            if r + 1 < m {
+                dist[r][c] = dist[r][c].min(dist[r + 1][c] + 1);
+            }
+            if c + 1 < n {
+                dist[r][c] = dist[r][c].min(dist[r][c + 1] + 1);
+            }
+        }
+    }
+    dist
+}
+
+// ---- layers: update_matrix_layers.kara
+
+fn update_matrix_layers(mat: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = mat.len();
+    let n = mat[0].len();
+    let mut dist = vec![vec![-1; n]; m];
+    let mut frontier: Vec[(i64, i64)] = Vec.new();
+    for r in 0..m {
+        for c in 0..n {
+            if mat[r][c] == 0 {
+                dist[r][c] = 0;
+                frontier.push((r, c));
+            }
+        }
+    }
+    let mut d = 0;
+    while not frontier.is_empty() {
+        d += 1;
+        let mut next: Vec[(i64, i64)] = Vec.new();
+        for (r, c) in frontier.iter() {
+            for (nr, nc) in [(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)] {
+                if nr >= 0 and nr < m and nc >= 0 and nc < n and dist[nr][nc] < 0 {
+                    dist[nr][nc] = d;
+                    next.push((nr, nc));
+                }
+            }
+        }
+        frontier = next;
+    }
+    dist
+}
+
+// ---- sweeps: update_matrix_sweeps.kara
+
+fn update_matrix_sweeps(mat: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = mat.len();
+    let n = mat[0].len();
+    let mut dist = vec![vec![0; n]; m];
+    for r in 0..m {
+        for c in 0..n {
+            if mat[r][c] == 1 {
+                dist[r][c] = m + n;
+            }
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for r in 0..m {
+            for c in 0..n {
+                let mut best = dist[r][c];
+                if r > 0 {
+                    best = best.min(dist[r - 1][c] + 1);
+                }
+                if r + 1 < m {
+                    best = best.min(dist[r + 1][c] + 1);
+                }
+                if c > 0 {
+                    best = best.min(dist[r][c - 1] + 1);
+                }
+                if c + 1 < n {
+                    best = best.min(dist[r][c + 1] + 1);
+                }
+                if best < dist[r][c] {
+                    dist[r][c] = best;
+                    changed = true;
+                }
+            }
+        }
+    }
+    dist
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, mat: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    if which == 0 {
+        update_matrix_star(mat)
+    } else if which == 1 {
+        update_matrix_dp(mat)
+    } else if which == 2 {
+        update_matrix_layers(mat)
+    } else {
+        update_matrix_sweeps(mat)
+    }
+}
+
+// The definition: for each cell, the fewest steps to any 0, which on a
+// grid with no walls is the smallest |dr| + |dc| over the 0s.
+fn definition(mat: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = mat.len();
+    let n = mat[0].len();
+    let mut out = vec![vec![0; n]; m];
+    for r in 0..m {
+        for c in 0..n {
+            let mut best = i64.MAX;
+            for zr in 0..m {
+                for zc in 0..n {
+                    if mat[zr][zc] == 0 {
+                        best = best.min((r - zr).abs() + (c - zc).abs());
+                    }
+                }
+            }
+            out[r][c] = best;
+        }
+    }
+    out
+}
+
+fn transposed(g: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out = vec![vec![0; g.len()]; g[0].len()];
+    for r in 0..g.len() {
+        for c in 0..g[0].len() {
+            out[c][r] = g[r][c];
+        }
+    }
+    out
+}
+
+fn mirrored(g: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for row in g.iter() {
+        let mut r = row.clone();
+        r.reverse();
+        out.push(r);
+    }
+    out
+}
+
+// Neighbours differ by at most 1, and every cell above 0 has a
+// neighbour exactly one lower; 0 exactly on the 0s.
+fn consistent(mat: Vec[Vec[i64]], d: Vec[Vec[i64]]) -> bool {
+    let m = mat.len();
+    let n = mat[0].len();
+    if d.len() != m {
+        return false;
+    }
+    for r in 0..m {
+        if d[r].len() != n {
+            return false;
+        }
+    }
+    for r in 0..m {
+        for c in 0..n {
+            if (d[r][c] == 0) != (mat[r][c] == 0) {
+                return false;
+            }
+            let mut lower = false;
+            for (nr, nc) in [(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)] {
+                if nr >= 0 and nr < m and nc >= 0 and nc < n {
+                    if (d[nr][nc] - d[r][c]).abs() > 1 {
+                        return false;
+                    }
+                    if d[nr][nc] == d[r][c] - 1 {
+                        lower = true;
+                    }
+                }
+            }
+            if d[r][c] > 0 and not lower {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn main() {
+    let names = vec!["star", "dp", "layers", "sweeps"];
+    let count = 1000;
+    let mut seed: i64 = 5420;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 10 by 1 to 10, 1s at 30, 70 or 95 in 100 in turn, one
+        // random cell set to 0.
+        let m = 1 + next_random(mut seed) % 10;
+        let n = 1 + next_random(mut seed) % 10;
+        let ones = if t % 3 == 0 { 30 } else if t % 3 == 1 { 70 } else { 95 };
+        let mut mat: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                row.push(if next_random(mut seed) % 100 < ones { 1 } else { 0 });
+            }
+            mat.push(row);
+        }
+        let zr = next_random(mut seed) % m;
+        let zc = next_random(mut seed) % n;
+        mat[zr][zc] = 0;
+        let want = definition(mat.clone());
+        for which in 0..4 {
+            let got = answer(which, mat.clone());
+            let mut ones_at_least_one = true;
+            if got.len() == m {
+                for r in 0..m {
+                    for c in 0..n {
+                        if got[r].len() == n and mat[r][c] == 1 and got[r][c] < 1 {
+                            ones_at_least_one = false;
+                        }
+                    }
+                }
+            }
+            let ok = vec![
+                got == want,
+                consistent(mat.clone(), got.clone()),
+                answer(which, transposed(mat.clone())) == transposed(got.clone()),
+                answer(which, mirrored(mat.clone())) == mirrored(got.clone()),
+                ones_at_least_one and largest_at_most(got.clone(), m + n - 2),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: {mat} -> {got}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
+
+fn largest_at_most(d: Vec[Vec[i64]], bound: i64) -> bool {
+    for row in d.iter() {
+        for x in row.iter() {
+            if *x > bound {
+                return false;
+            }
+        }
+    }
+    true
+}

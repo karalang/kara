@@ -1,0 +1,78 @@
+// LeetCode #541: Reverse String II -- each place's source worked out.
+//
+// Place i is in the block that starts at i - i % 2k. If it is in that
+// block's first part, of length m = min(k, n - start), it takes the
+// character m - 1 places further from the start than it is; otherwise
+// it keeps its own. O(n) time.
+
+fn reverse_str(s: Str, k: i64) -> String {
+    let b = s.bytes();
+    let n = b.len();
+    let mut out = String.new();
+    for i in 0..n {
+        let start = i - i % (2 * k);
+        let m = k.min(n - start);
+        let from = if i - start < m { start + m - 1 - (i - start) } else { i };
+        out.push(b[from] as char);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_word(n: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut w = String.new();
+    for _ in 0..n {
+        w.push((b'a' + (next_random(seed) % letters) as u8) as char);
+    }
+    w
+}
+
+fn mix(h: i64, w: Str) -> i64 {
+    let mut h = h;
+    for b in w.bytes() {
+        h = (h * 31 + b as i64) % 1000000007;
+    }
+    h
+}
+
+fn show(s: Str, k: i64) {
+    println(f"\"{s}\", k = {k} -> \"{reverse_str(s, k)}\"");
+}
+
+fn main() {
+    let mut seed: i64 = 541;
+    show("abcdefg", 2);
+    show("abcd", 2);
+    show("a", 1);
+    show("abcdef", 1);
+    show("abcdef", 3);
+    show("abcdef", 6);
+    show("abcdef", 10);
+    show("abcdefghijk", 4);
+    // 300 random words of 1 to 60 letters from a to z, with k from 1 to
+    // 70.
+    let count = 300;
+    let mut total = 0;
+    let mut h: i64 = 0;
+    for _ in 0..count {
+        let n = 1 + next_random(mut seed) % 60;
+        let k = 1 + next_random(mut seed) % 70;
+        let w = random_word(n, 26, mut seed);
+        total += n;
+        h = mix(h, reverse_str(w.as_str(), k));
+    }
+    println(f"{count} random words: {total} letters, checksum {h}");
+    // The largest: 10,000 letters (the problem's most), with k from 1
+    // to 10,000.
+    let w = random_word(10000, 26, mut seed);
+    for k in [1, 7, 100, 4999, 5000, 10000] {
+        let r = reverse_str(w.as_str(), k);
+        println(f"10000 letters, k = {k}: starts {r[0..12]}, ends {r[9988..10000]}, checksum {mix(0, r.as_str())}");
+    }
+}
