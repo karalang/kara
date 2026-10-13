@@ -63,6 +63,7 @@ pub mod formatter;
 pub mod git_fetch;
 pub mod gpu_wgsl;
 pub mod hasher_kind;
+pub mod http1;
 pub mod ids;
 pub mod impl_dispatch;
 pub mod import_alias;

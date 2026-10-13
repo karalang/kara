@@ -1,5 +1,5 @@
 //! The I/O natives on the MIR backend (redesign M2): `File`, `Clock`,
-//! processes, TCP and the HTTP client.
+//! processes, TCP, and the HTTP client and server.
 //! The program runs on the MIR interpreter (`karac __mir-run`) and, built
 //! ahead of time (`karac build --mir`), as a native binary; both must print
 //! the same, byte for byte.
@@ -499,5 +499,260 @@ fn http_client_natives_match_the_interpreter() {
     );
     if let Some(built) = built {
         assert_eq!(built, interp);
+    }
+}
+
+/// `Server.serve` with a function handler returning a program's own
+/// `Response`, whose `headers` the server sends: the handler echoes what
+/// `Request`'s methods read.
+const SERVE: &str = r#"
+struct Response { status: i64, body: String, headers: Vec[(String, String)] }
+
+fn handle(req: Request) -> Response {
+    let mut out = f"{req.method()} {req.path()} [{req.body()}]";
+    for (k, v) in req.query() {
+        out = out + f" {k}={v}";
+    }
+    match req.header("x-a".to_string()) {
+        Some(v) => { out = out + f" x-a:{v}"; }
+        None => { out = out + " no x-a"; }
+    }
+    let mut hosts = 0;
+    for (k, _) in req.headers() {
+        if k.to_lowercase() == "host" {
+            hosts = hosts + 1;
+        }
+    }
+    out = out + f" hosts={hosts}";
+    let mut headers: Vec[(String, String)] = Vec.new();
+    headers.push(("X-Trace-Id".to_string(), "abc-123".to_string()));
+    headers.push(("Content-Type".to_string(), "text/plain".to_string()));
+    let status = if req.path() == "/missing" { 404 } else { 200 };
+    Response { status: status, body: out, headers: headers }
+}
+
+fn main() {
+    match Server.serve("127.0.0.1:0".to_string(), handle) {
+        Ok(_) => println("served"),
+        Err(e) => println(f"serve: {e.message()}"),
+    }
+}
+"#;
+
+/// `Server.serve` with a closure handler and `std.http`'s `Response`.
+const SERVE_CLOSURE: &str = r#"
+fn main() {
+    let greeting = "hello".to_string();
+    let r = Server.serve("127.0.0.1:0".to_string(), |req| {
+        Response { status: 200, body: f"{greeting} {req.path()}" }
+    });
+    match r {
+        Ok(_) => println("served"),
+        Err(e) => println(f"serve: {e.message()}"),
+    }
+}
+"#;
+
+/// A `Server.serve` that cannot bind.
+const SERVE_UNBOUND: &str = r#"
+fn handle(req: Request) -> Response {
+    Response { status: 200, body: req.path() }
+}
+
+fn main() {
+    match Server.serve("999.0.0.1:0".to_string(), handle) {
+        Ok(_) => println("served"),
+        Err(e) => println(f"serve: {e.message()}"),
+    }
+}
+"#;
+
+/// Starts a server program, sends it `requests(port)` once it prints its
+/// `BOUND_PORT`, and stops it: the transcript of what came back.
+fn exchange(mut cmd: Command, requests: fn(u16) -> String) -> String {
+    use std::io::{BufRead, BufReader, Read};
+    let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn the server");
+    let mut out = BufReader::new(child.stdout.take().expect("stdout"));
+    let mut line = String::new();
+    let _ = out.read_line(&mut line);
+    let Some(port) = line.trim().strip_prefix("BOUND_PORT=") else {
+        let _ = child.kill();
+        let mut err = String::new();
+        let _ = child
+            .stderr
+            .take()
+            .expect("stderr")
+            .read_to_string(&mut err);
+        panic!("the server printed {line:?}, not its port: {err}");
+    };
+    let transcript = requests(port.parse().expect("a port"));
+    let _ = child.kill();
+    let _ = child.wait();
+    transcript
+}
+
+/// Sends `raw` on `s` and appends the response to `t`: its head and body
+/// (by `content-length`), and `closed` when the server then closes.
+fn round_trip(s: &mut std::net::TcpStream, raw: &str, closes: bool, t: &mut String) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    s.write_all(raw.as_bytes()).expect("send");
+    let mut r = BufReader::new(s.try_clone().expect("clone"));
+    let mut len = 0;
+    loop {
+        let mut h = String::new();
+        r.read_line(&mut h).expect("a response line");
+        let h = h.trim_end().to_string();
+        t.push_str(&h);
+        t.push('\n');
+        if h.is_empty() {
+            break;
+        }
+        if let Some(n) = h.strip_prefix("content-length: ") {
+            len = n.parse().expect("a length");
+        }
+    }
+    let mut body = vec![0; len];
+    r.read_exact(&mut body).expect("the body");
+    t.push_str(&String::from_utf8_lossy(&body));
+    t.push('\n');
+    if closes {
+        let mut rest = Vec::new();
+        let _ = r.read_to_end(&mut rest);
+        t.push_str(&format!("closed after {} more bytes\n", rest.len()));
+    }
+}
+
+fn connect(port: u16) -> std::net::TcpStream {
+    let s = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    s.set_read_timeout(Some(std::time::Duration::from_secs(20)))
+        .expect("timeout");
+    s
+}
+
+/// Three requests on one kept-alive connection (a query and a header, a
+/// sized body, a chunked body that closes it), then an HTTP/1.0 request.
+fn serve_requests(port: u16) -> String {
+    let mut t = String::new();
+    let mut s = connect(port);
+    round_trip(
+        &mut s,
+        "GET /a/b?x=1+2&y=%41&flag&&z= HTTP/1.1\r\nHost: h\r\nX-A: hi\r\n\r\n",
+        false,
+        &mut t,
+    );
+    round_trip(
+        &mut s,
+        "POST /post HTTP/1.1\r\nHost: h\r\nContent-Length: 7\r\n\r\npayload",
+        false,
+        &mut t,
+    );
+    round_trip(
+        &mut s,
+        "PUT /c HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n\
+         3\r\nabc\r\n3;x=y\r\ndef\r\n0\r\n\r\n",
+        true,
+        &mut t,
+    );
+    round_trip(
+        &mut connect(port),
+        "GET /missing HTTP/1.0\r\n\r\n",
+        true,
+        &mut t,
+    );
+    t
+}
+
+fn closure_requests(port: u16) -> String {
+    let mut t = String::new();
+    round_trip(
+        &mut connect(port),
+        "GET /p HTTP/1.1\r\nConnection: close\r\n\r\n",
+        true,
+        &mut t,
+    );
+    t
+}
+
+/// `Server.serve` and `Request` on both backends: the same requests get
+/// the same bytes back.
+#[test]
+fn http_server_natives_match_the_interpreter() {
+    let dir = Scratch::new("serve");
+    let karac = env!("CARGO_BIN_EXE_karac");
+    let (unbound, built) = interp_and_build(dir.path(), SERVE_UNBOUND);
+    assert_eq!(
+        unbound,
+        "serve: 999.0.0.1:0: bind failed: invalid socket address syntax\n"
+    );
+    if let Some(built) = built {
+        assert_eq!(built, unbound);
+    }
+    let reply = |status: &str, body: &str, close: bool| {
+        format!(
+            "HTTP/1.1 {status}\nX-Trace-Id: abc-123\nContent-Type: text/plain\n\
+             content-length: {}\n{}\n{body}\n{}",
+            body.len(),
+            if close { "connection: close\n" } else { "" },
+            if close {
+                "closed after 0 more bytes\n"
+            } else {
+                ""
+            },
+        )
+    };
+    let want = [
+        reply(
+            "200 OK",
+            "GET /a/b [] x=1 2 y=A flag= z= x-a:hi hosts=1",
+            false,
+        ),
+        reply("200 OK", "POST /post [payload] no x-a hosts=1", false),
+        reply("200 OK", "PUT /c [abcdef] no x-a hosts=1", true),
+        reply("404 Not Found", "GET /missing [] no x-a hosts=0", true),
+    ]
+    .concat();
+    let closure_want = "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 8\n\
+                        connection: close\n\nhello /p\nclosed after 0 more bytes\n";
+    for (name, src, requests, want) in [
+        (
+            "serve",
+            SERVE,
+            serve_requests as fn(u16) -> String,
+            want.as_str(),
+        ),
+        ("closure", SERVE_CLOSURE, closure_requests, closure_want),
+    ] {
+        let file = dir.path().join(format!("{name}.kara"));
+        std::fs::write(&file, src).unwrap();
+        let mut interp = Command::new(karac);
+        interp.args(["__mir-run", file.to_str().unwrap()]);
+        assert_eq!(
+            exchange(interp, requests),
+            want,
+            "{name} on the interpreter"
+        );
+        let exe = dir.path().join(name);
+        let built = Command::new(karac)
+            .args([
+                "build",
+                "--mir",
+                file.to_str().unwrap(),
+                "-o",
+                exe.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        let linked = common::link_or_skip(if built.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&built.stderr).to_string())
+        });
+        if linked.is_some() {
+            assert_eq!(exchange(Command::new(&exe), requests), want, "{name} built");
+        }
     }
 }

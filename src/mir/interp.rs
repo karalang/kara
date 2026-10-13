@@ -613,6 +613,7 @@ fn run_with(
         interners: Vec::new(),
         http_builders: Vec::new(),
         http_headers: rustc_hash::FxHashMap::default(),
+        http_request: crate::http1::Request::default(),
         cancel_after: match tasks {
             Tasks::CancelAfter(n) => Some(n),
             _ => None,
@@ -907,6 +908,9 @@ struct Interp<'a> {
     /// own for as long as the response lives (`karac_runtime_http_client_mir_send`
     /// keys the compiled backend's the same way).
     http_headers: rustc_hash::FxHashMap<AllocId, Vec<(String, String)>>,
+    /// The request a `Server.serve` handler is answering, which `Request`'s
+    /// methods read.
+    http_request: crate::http1::Request,
 }
 
 /// A request `RequestBuilder` assembles: method, url, headers in order,
@@ -1479,6 +1483,9 @@ impl<'a> Interp<'a> {
             }
             ("TcpListener" | "TcpStream", _) => {
                 self.tcp_method(name, base, method, args, arg_tys, ret)
+            }
+            ("Server", "serve") | ("Request", _) => {
+                self.http_server_method(name, base, method, args, arg_tys, ret)
             }
             ("TaskGroup" | "TaskHandle", _) => self.task_method(name, base, method, args, arg_tys),
             ("Vec", "from_array") => {
@@ -8864,6 +8871,202 @@ impl<'a> Interp<'a> {
     fn http_error(&mut self, message: String, ret: Ty) -> R<Value> {
         let message = self.alloc_box("String", Value::Str(message));
         self.variant_named(ret, None, "Err", vec![Value::Agg(vec![message])])
+    }
+
+    /// `Server.serve` and `Request`'s methods, over the blocking
+    /// one-request-at-a-time server of `crate::http1`, which the compiled
+    /// backend's runtime runs too. `serve` answers until it can accept no
+    /// more; a `Request` is empty, its methods reading the request being
+    /// answered.
+    fn http_server_method(
+        &mut self,
+        name: &str,
+        base: &str,
+        method: &str,
+        args: Vec<Value>,
+        arg_tys: &[Ty],
+        ret: Ty,
+    ) -> R<Value> {
+        // An `own String` argument is spent here.
+        let text_of = |me: &mut Self, i: usize| -> R<String> {
+            let v = &args[i];
+            let text = me.string_at(v)?;
+            if let (Value::Box(_), Some(&t)) = (v, arg_tys.get(i)) {
+                if !matches!(me.tys.kind(t), TyKind::Ref(_) | TyKind::MutRef(_)) {
+                    me.drop_value(v.clone(), t)?;
+                }
+            }
+            Ok(text)
+        };
+        let pairs = |me: &mut Self, pairs: Vec<(String, String)>| {
+            let elems = pairs
+                .into_iter()
+                .map(|(k, v)| {
+                    let k = me.alloc_box("String", Value::Str(k));
+                    let v = me.alloc_box("String", Value::Str(v));
+                    Value::Agg(vec![k, v])
+                })
+                .collect();
+            let vname = me.tys.display(ret);
+            me.alloc_box(&vname, Value::Agg(elems))
+        };
+        match (base, method) {
+            ("Server", "serve") => {
+                let (Some(f), Some(&fty)) = (args.get(1), arg_tys.get(1)) else {
+                    return err(format!("{name} takes an address and a handler"));
+                };
+                let addr = text_of(self, 0)?;
+                // A `Fn` value is called through a reference to it, kept in
+                // a scratch slot; a function item or closure is held.
+                let program: &'a Program = self.program;
+                let mut handler = match f {
+                    Value::Erased { body, env } => {
+                        let body = program
+                            .bodies
+                            .get(body)
+                            .ok_or_else(|| Stop::Error(format!("{name}: no body for {body}")))?;
+                        let slot = self.alloc(HeapObj {
+                            count: 1,
+                            weak: 0,
+                            value: f.clone(),
+                        });
+                        Err((slot, body, usize::from(env.is_some())))
+                    }
+                    _ => Ok(self.hold_callee(f.clone(), fty, name)?),
+                };
+                let release = |me: &mut Self, handler: Result<Callee<'a>, _>| -> R<()> {
+                    match handler {
+                        Ok(callee) => me.release_callee(callee, fty),
+                        Err((slot, _, _)) => {
+                            let f = std::mem::replace(&mut me.live(slot)?.value, Value::Uninit);
+                            me.free_slot(slot);
+                            me.drop_value(f, fty)
+                        }
+                    }
+                };
+                let mut server = match crate::http1::Server::bind(&addr) {
+                    Ok((server, port)) => {
+                        self.write_out(false, &format!("BOUND_PORT={port}\n"));
+                        server
+                    }
+                    Err(message) => {
+                        release(self, handler)?;
+                        return self.http_error(message, ret);
+                    }
+                };
+                let rty = match &handler {
+                    Ok(callee) => callee.body.return_ty(),
+                    Err((_, body, _)) => body.return_ty(),
+                };
+                let message = loop {
+                    match server.next() {
+                        Ok(req) => self.http_request = req,
+                        Err(message) => break message,
+                    }
+                    // The handler gets the (empty) request by reference or
+                    // by value, as its parameter says.
+                    let slot = self.alloc(HeapObj {
+                        count: 1,
+                        weak: 0,
+                        value: Value::Agg(Vec::new()),
+                    });
+                    let req = Value::Ref(Addr {
+                        root: Root::Heap(slot),
+                        path: Path::new(),
+                    });
+                    let resp = match &mut handler {
+                        Ok(callee) => self.call_callee(callee, vec![req]),
+                        Err((f, body, skip)) => {
+                            let by_ref = body.locals.get(*skip + 1).is_some_and(|l| {
+                                matches!(self.tys.kind(l.ty), TyKind::Ref(_) | TyKind::MutRef(_))
+                            });
+                            let arg = if by_ref { req } else { Value::Agg(Vec::new()) };
+                            let at = Value::Ref(Addr {
+                                root: Root::Heap(*f),
+                                path: Path::new(),
+                            });
+                            self.call_erased(at, vec![arg])
+                        }
+                    };
+                    self.free_slot(slot);
+                    let resp = resp?;
+                    let (status, body, headers) = self.response_parts(&resp, rty, name)?;
+                    self.drop_value(resp, rty)?;
+                    server.respond(status, body.as_bytes(), &headers);
+                };
+                release(self, handler)?;
+                self.http_error(message, ret)
+            }
+            ("Request", "path") => {
+                let text = self.http_request.path().to_string();
+                Ok(self.alloc_box("String", Value::Str(text)))
+            }
+            ("Request", "method") => {
+                let text = self.http_request.method.clone();
+                Ok(self.alloc_box("String", Value::Str(text)))
+            }
+            ("Request", "body") => {
+                let text = self.http_request.body_text();
+                Ok(self.alloc_box("String", Value::Str(text)))
+            }
+            ("Request", "header") if args.len() == 2 => {
+                let want = text_of(self, 1)?;
+                let found = self.http_request.header(&want).map(str::to_string);
+                let found = found.map(|v| self.alloc_box("String", Value::Str(v)));
+                self.option(ret, found)
+            }
+            ("Request", "headers") => {
+                let all = self.http_request.headers.clone();
+                Ok(pairs(self, all))
+            }
+            ("Request", "query") => {
+                let all = self.http_request.query();
+                Ok(pairs(self, all))
+            }
+            _ => err(format!("call of unknown function {name}")),
+        }
+    }
+
+    /// A handler's `Response`, by field name: its `status`, its `body` and
+    /// its `headers` when the type has them (a program may declare its own
+    /// `Response` with a `headers: Vec[(String, String)]`).
+    fn response_parts(
+        &mut self,
+        resp: &Value,
+        rty: Ty,
+        name: &str,
+    ) -> R<(i64, String, Vec<(String, String)>)> {
+        let Value::Agg(fs) = resp else {
+            return err(format!("{name}: a handler returned {resp:?}"));
+        };
+        let names: Vec<String> = match self.tys.tcx().adt_of(rty) {
+            Some((adt, _)) => adt.variants[0]
+                .fields
+                .iter()
+                .map(|(f, _)| f.clone())
+                .collect(),
+            None => return err(format!("{name}: a handler returning no struct")),
+        };
+        let field = |n: &str| names.iter().position(|f| f == n).and_then(|k| fs.get(k));
+        let status = match field("status") {
+            Some(Value::Int(n)) => *n as i64,
+            _ => return err(format!("{name}: a Response without a `status`")),
+        };
+        let body = match field("body") {
+            Some(v) => self.string_at(&v.clone())?,
+            None => String::new(),
+        };
+        let mut headers = Vec::new();
+        if let Some(Value::Box(id)) = field("headers").cloned() {
+            for pair in self.vec_elems(id)?.clone() {
+                if let Value::Agg(kv) = pair {
+                    if let [k, v] = kv.as_slice() {
+                        headers.push((self.string_at(k)?, self.string_at(v)?));
+                    }
+                }
+            }
+        }
+        Ok((status, body, headers))
     }
 
     /// `Interner.intern`, `.resolve` and `.len`. A symbol is its string's

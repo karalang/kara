@@ -487,3 +487,195 @@ pub unsafe extern "C" fn karac_runtime_http_client_mir_headers(body: *const u8, 
         })
     };
 }
+
+// `Server.serve` on the MIR backend: the blocking one-request-at-a-time
+// server the MIR interpreter runs too (`src/http1.rs`, shared by `#[path]`).
+#[cfg(feature = "net")]
+#[path = "../../src/http1.rs"]
+mod http1;
+
+#[cfg(feature = "net")]
+thread_local! {
+    /// The request the handler is answering, which `Request`'s methods read.
+    static MIR_REQUEST: std::cell::RefCell<http1::Request> = Default::default();
+}
+
+/// Binds `addr` for `Server.serve`: the server, printing `BOUND_PORT=<n>`
+/// first as legacy does, or null with the `HttpError` message as a
+/// `String` at `msg`.
+///
+/// # Safety
+///
+/// `addr` describes `len` readable bytes and `msg` is writable for a
+/// `String`.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_http_bind(
+    addr: *const u8,
+    len: usize,
+    msg: *mut RawVec,
+) -> *mut http1::Server {
+    // SAFETY: the caller's contract.
+    let addr = unsafe { bytes_at(addr, len) };
+    match http1::Server::bind(&String::from_utf8_lossy(addr)) {
+        Ok((server, port)) => {
+            use std::io::Write;
+            println!("BOUND_PORT={port}");
+            let _ = std::io::stdout().flush();
+            Box::into_raw(Box::new(server))
+        }
+        Err(m) => {
+            // SAFETY: the caller's contract.
+            unsafe { string_of(msg, m.as_bytes()) };
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Waits for the next request and makes it the one `Request`'s methods
+/// read: 1, or 0 with the `HttpError` message as a `String` at `msg`, when
+/// the server can accept no more. A server that fails is freed.
+///
+/// # Safety
+///
+/// `server` came from [`karac_mir_http_bind`] and has not failed, and `msg`
+/// is writable for a `String`.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_http_next(server: *mut http1::Server, msg: *mut RawVec) -> i32 {
+    // SAFETY: the caller's contract.
+    match unsafe { (*server).next() } {
+        Ok(req) => {
+            MIR_REQUEST.with(|r| *r.borrow_mut() = req);
+            1
+        }
+        Err(m) => {
+            // SAFETY: the caller's contract; nothing uses the server again.
+            unsafe {
+                string_of(msg, m.as_bytes());
+                drop(Box::from_raw(server));
+            }
+            0
+        }
+    }
+}
+
+/// Answers the current request with `status`, the body's bytes and
+/// `headers` pairs of `String`s (`headers_len` of them; null for none).
+///
+/// # Safety
+///
+/// `server` came from [`karac_mir_http_bind`], `body` describes `body_len`
+/// readable bytes, and `headers` holds `headers_len` `(String, String)`s.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_http_respond(
+    server: *mut http1::Server,
+    status: i64,
+    body: *const u8,
+    body_len: usize,
+    headers: *const RawVec,
+    headers_len: usize,
+) {
+    let mut pairs = Vec::with_capacity(headers_len);
+    for i in 0..headers_len {
+        // SAFETY: the caller's contract: two `String`s per pair.
+        let (k, v) = unsafe {
+            let k = &*headers.add(2 * i);
+            let v = &*headers.add(2 * i + 1);
+            (bytes_at(k.ptr, k.len), bytes_at(v.ptr, v.len))
+        };
+        pairs.push((
+            String::from_utf8_lossy(k).into_owned(),
+            String::from_utf8_lossy(v).into_owned(),
+        ));
+    }
+    // SAFETY: the caller's contract.
+    unsafe { (*server).respond(status, bytes_at(body, body_len), &pairs) };
+}
+
+/// `Request`'s methods, on the current request: `op` 0 `path`, 1 `method`
+/// and 2 `body`, each a `String` at `out`; 3 `header(name)`, 1 with its
+/// value at `out` or 0; 4 `headers` and 5 `query`, a `Vec[(String,
+/// String)]` at `out`.
+///
+/// # Safety
+///
+/// `name` describes `name_len` readable bytes, and `out` is writable for
+/// the result.
+#[cfg(feature = "net")]
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_http_request(
+    op: i32,
+    name: *const u8,
+    name_len: usize,
+    out: *mut RawVec,
+) -> i32 {
+    MIR_REQUEST.with(|r| {
+        let r = r.borrow();
+        // SAFETY: the caller's contract.
+        unsafe {
+            match op {
+                0 => string_of(out, r.path().as_bytes()),
+                1 => string_of(out, r.method.as_bytes()),
+                2 => string_of(out, &r.body),
+                3 => {
+                    let name = String::from_utf8_lossy(bytes_at(name, name_len));
+                    match r.header(&name) {
+                        Some(v) => string_of(out, v.as_bytes()),
+                        None => return 0,
+                    }
+                }
+                4 => pairs_of(out, &r.headers),
+                _ => pairs_of(out, &r.query()),
+            }
+        }
+        1
+    })
+}
+
+/// The `len` bytes at `p`, or none when `p` is null.
+///
+/// # Safety
+///
+/// `p` is null or describes `len` readable bytes.
+#[cfg(feature = "net")]
+unsafe fn bytes_at<'a>(p: *const u8, len: usize) -> &'a [u8] {
+    if p.is_null() || len == 0 {
+        &[]
+    } else {
+        // SAFETY: the caller's contract.
+        unsafe { std::slice::from_raw_parts(p, len) }
+    }
+}
+
+/// Writes a fresh `Vec[(String, String)]` of `pairs` at `out`.
+///
+/// # Safety
+///
+/// `out` is writable for a `Vec`.
+#[cfg(feature = "net")]
+unsafe fn pairs_of(out: *mut RawVec, pairs: &[(String, String)]) {
+    let n = pairs.len();
+    let items = if n == 0 {
+        std::ptr::null_mut()
+    } else {
+        karac_realloc_or_panic(std::ptr::null_mut(), n * 2 * std::mem::size_of::<RawVec>())
+    };
+    for (i, (k, v)) in pairs.iter().enumerate() {
+        // SAFETY: `items` has room for `n` pairs.
+        unsafe {
+            let at = items.cast::<RawVec>().add(2 * i);
+            string_of(at, k.as_bytes());
+            string_of(at.add(1), v.as_bytes());
+        }
+    }
+    // SAFETY: the caller's contract.
+    unsafe {
+        out.write(RawVec {
+            ptr: items,
+            len: n,
+            cap: n,
+        })
+    };
+}

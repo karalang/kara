@@ -514,6 +514,14 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // socket calls.
     #[cfg(feature = "net")]
     keep!(mir_io::karac_mir_tcp);
+    // `Server.serve` and `Request` on the MIR backend (`src/http1.rs`).
+    #[cfg(feature = "net")]
+    keep!(
+        mir_io::karac_mir_http_bind,
+        mir_io::karac_mir_http_next,
+        mir_io::karac_mir_http_respond,
+        mir_io::karac_mir_http_request,
+    );
     // `std.http`'s client on the MIR backend (full archive only).
     #[cfg(feature = "tls")]
     keep!(
