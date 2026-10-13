@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 602 |
 | double-free | 427 |
 | codegen-gap | 253 |
-| missing-feature | 233 |
+| missing-feature | 234 |
 | other | 171 |
 | perf | 153 |
 | false-positive | 152 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2857 |
 | interp | 905 |
-| typecheck | 372 |
+| typecheck | 373 |
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
@@ -596,6 +596,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-9 | 2026-10-13 | interp+codegen | medium | f64 Display does not follow the v1 spec's rendering on any backend: `println(1.0)` prints `1`, `println([1.0, 2.5])` prints `[1, 2.5]`, `println(1e16)` prints `10000000000000000` and `println(0.00001)` prints `0.00001`, where docs/library/core-types.md § Printing says `1.0`, `[1.0, 2.5]`, `1e+16` and `1e-05` (always a `.` or an exponent; exponent form below 1e-4 and from 1e16, as Python's repr) | — |
 | B-2026-10-13-10 | 2026-10-13 | interp+codegen | medium | On the MIR backends `let s: String = text.chars().collect();` (chars collected into a `String` with no adaptor between) is refused with "collecting chars into this type is not lowered yet", while `karac check` and the legacy interpreter accept it, and the same collect after `.rev()`, `.filter(..)`, `.skip(..)`, `.take(..)` or `.map(..)` runs on both MIR backends | — |
 | B-2026-10-13-11 | 2026-10-13 | typecheck | low | `PriorityQueue.peek` is typed `Option[T]` by value instead of the spec's `Option[ref T]`, so the spec's own `*pq.peek().unwrap()` and `Some(x) => *x` are refused by `karac check` and both MIR backends ("unary '*' requires 'ref T' ... found 'i64'"), and `let s = pq.peek().unwrap()` on a `PriorityQueue[String]` is accepted as an owned `String` | — |
+| B-2026-10-13-12 | 2026-10-13 | typecheck | low | `char.is_ascii_lowercase()`, `is_ascii_uppercase()` and `is_ascii_alphanumeric()` are refused by `karac check`, the legacy interpreter and both MIR backends ("no method 'is_ascii_lowercase' on type 'char'"), though `is_ascii_digit`, `is_ascii_alphabetic`, `is_lowercase` and `to_ascii_uppercase` are accepted and the MIR codegen's native table already lists all three; the `char` method surface is not in docs/library at all | — |
 
 ### Relocated
 
