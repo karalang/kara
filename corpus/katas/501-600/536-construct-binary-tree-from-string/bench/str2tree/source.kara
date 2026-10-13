@@ -1,0 +1,118 @@
+// Benchmark for #536: the ★ arm (recursive descent); see ../README.md
+// § Benchmarks.
+//
+// 20 random trees of 5,500 nodes, values from -1000 to 1000, written as
+// the problem writes them once (each near 30,000 characters, the
+// problem's most); then each string is read into a tree in each of 100
+// rounds. Sink: the nodes read, and a checksum over their values.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// The tree that starts at byte i, leaving i just past it.
+fn parse(b: Slice[u8], i: mut ref i64) -> TreeNode {
+    let mut sign = 1;
+    if b[*i] == b'-' {
+        sign = -1;
+        *i += 1;
+    }
+    let mut val = 0;
+    while *i < b.len() and b[*i] >= b'0' and b[*i] <= b'9' {
+        val = val * 10 + (b[*i] - b'0') as i64;
+        *i += 1;
+    }
+    let node = TreeNode { val: sign * val, left: None, right: None };
+    if *i < b.len() and b[*i] == b'(' {
+        *i += 1;
+        node.left = Some(parse(b, i));
+        *i += 1;
+    }
+    if *i < b.len() and b[*i] == b'(' {
+        *i += 1;
+        node.right = Some(parse(b, i));
+        *i += 1;
+    }
+    node
+}
+
+fn str2tree(s: Str) -> Option[TreeNode] {
+    if s.is_empty() {
+        return None;
+    }
+    let mut i = 0;
+    Some(parse(s.bytes(), mut i))
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random tree of n nodes; a node with one child has it on the left.
+fn random_tree(seed: mut ref i64, n: i64) -> Option[TreeNode] {
+    if n == 0 {
+        return None;
+    }
+    let val = next_random(seed) % 2001 - 1000;
+    let rest = n - 1;
+    let left = if rest == 0 {
+        0
+    } else if next_random(seed) % 3 == 0 {
+        rest
+    } else {
+        1 + next_random(seed) % rest
+    };
+    let l = random_tree(seed, left);
+    let r = random_tree(seed, rest - left);
+    Some(TreeNode { val: val, left: l, right: r })
+}
+
+fn render(node: Option[TreeNode], out: mut ref String) {
+    let Some(n) = node else {
+        return;
+    };
+    out.push_str(f"{n.val}");
+    if n.left.is_some() {
+        out.push('(');
+        render(n.left, out);
+        out.push(')');
+    }
+    if n.right.is_some() {
+        out.push('(');
+        render(n.right, out);
+        out.push(')');
+    }
+}
+
+// Node count and a checksum over the values, in preorder.
+fn walk(node: Option[TreeNode], stats: mut ref Vec[i64]) {
+    let Some(n) = node else {
+        return;
+    };
+    stats[0] += 1;
+    stats[1] = (stats[1] * 31 + n.val + 1000) % 1000000007;
+    walk(n.left, stats);
+    walk(n.right, stats);
+}
+
+fn main() {
+    let mut seed: i64 = 536;
+    let mut strings: Vec[String] = Vec.new();
+    for _ in 0..20 {
+        let tree = random_tree(mut seed, 5500);
+        let mut s = String.new();
+        render(tree, mut s);
+        strings.push(s);
+    }
+    let rounds = 100;
+    let mut stats = vec![0, 0];
+    for _ in 0..rounds {
+        for s in strings.iter() {
+            walk(str2tree(s), mut stats);
+        }
+    }
+    println(f"{strings.len()} strings, {rounds} rounds: {stats[0]} nodes, checksum {stats[1]}");
+}

@@ -1,0 +1,97 @@
+// LeetCode #537: Complex Number Multiplication -- three products.
+//
+// Gauss's trick multiplies two complex numbers with three products
+// instead of four: with k1 = c(a + b), k2 = a(d - c) and k3 = b(c + d),
+// the real part is k1 - k3 and the imaginary part k1 + k2.
+
+fn parts(num: Str) -> (i64, i64) {
+    let plus = num.find("+").unwrap();
+    let re = i64.parse(num[0..plus]).unwrap();
+    let im = i64.parse(num[plus + 1..num.len() - 1]).unwrap();
+    (re, im)
+}
+
+fn complex_number_multiply(num1: Str, num2: Str) -> String {
+    let (a, b) = parts(num1);
+    let (c, d) = parts(num2);
+    let k1 = c * (a + b);
+    let k2 = a * (d - c);
+    let k3 = b * (c + d);
+    f"{k1 - k3}+{k1 + k2}i"
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A number written as the problem writes it, with both parts from -100
+// to 100.
+fn random_number(seed: mut ref i64) -> String {
+    let re = next_random(seed) % 201 - 100;
+    let im = next_random(seed) % 201 - 100;
+    f"{re}+{im}i"
+}
+
+fn show(a: Str, b: Str) {
+    println(f"({a}) * ({b}) = {complex_number_multiply(a, b)}");
+}
+
+// A checksum over the bytes of a string.
+fn sum_of(s: Str, start: i64) -> i64 {
+    let mut h = start;
+    for b in s.bytes().iter() {
+        h = (h * 131 + *b as i64) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    // The examples; i times i; the units; zero; a number by its
+    // conjugate; the corners of the range; mixed signs.
+    show("1+1i", "1+1i");
+    show("1+-1i", "1+-1i");
+    show("0+1i", "0+1i");
+    show("1+0i", "-7+3i");
+    show("-1+0i", "-7+3i");
+    show("0+0i", "100+100i");
+    show("3+4i", "3+-4i");
+    show("100+100i", "100+100i");
+    show("-100+-100i", "100+-100i");
+    show("-100+100i", "-100+100i");
+    show("12+-34i", "-56+78i");
+    // 3,000 random pairs: how many products are real, and a checksum
+    // over the products as written.
+    let mut seed: i64 = 537;
+    let mut real = 0;
+    let mut checksum = 0;
+    for i in 0..3000 {
+        let a = random_number(mut seed);
+        // One pair in ten is a number and its conjugate.
+        let b = if i % 10 == 0 {
+            let plus = a.find("+").unwrap();
+            let im = i64.parse(a[plus + 1..a.len() - 1]).unwrap();
+            f"{a[0..plus]}+{-im}i"
+        } else {
+            random_number(mut seed)
+        };
+        let p = complex_number_multiply(a, b);
+        if p.ends_with("+0i") {
+            real += 1;
+        }
+        checksum = sum_of(p, checksum);
+    }
+    println(f"3000 random pairs: {real} real, checksum {checksum}");
+    // Every number from -100 to 100 in both parts times one fixed
+    // number, 40,401 products.
+    let mut checksum = 0;
+    for re in -100..101 {
+        for im in -100..101 {
+            let a = f"{re}+{im}i";
+            checksum = sum_of(complex_number_multiply(a, "-37+59i"), checksum);
+        }
+    }
+    println(f"every number times -37+59i: checksum {checksum}");
+}

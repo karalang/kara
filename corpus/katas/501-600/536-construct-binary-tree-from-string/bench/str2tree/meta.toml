@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/536-construct-binary-tree-from-string/bench/str2tree.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["shared", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "cf63089f9"
+extracted_src = "841d9e0c"
+model_rev = "1aa23105"
+model_src = "841d9e0c"

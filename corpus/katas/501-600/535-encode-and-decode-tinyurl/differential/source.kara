@@ -1,0 +1,434 @@
+// Differential test for LeetCode #535: Encode and Decode TinyURL.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random lists of URLs, a third of them 63 to 150 long and the rest 1
+// to 30: a quarter of the URLs repeat an earlier one, a quarter are an
+// earlier one's twin under a hash of the form h * 31 + c ("Aa" and "BB"
+// swapped at the end, or "Aa" added), and the rest are fresh, from a
+// host of 1 to 4 letters and a path of up to 12 characters.
+// Properties:
+//   P1  every short URL decodes to its URL, decoded in a shuffled order
+//       after every encode
+//   P2  different URLs get different short URLs
+//   P3  every short URL is http://tinyurl.com/ and a code of letters and
+//       digits
+//   P4  on a fresh codec, each short URL decodes right at once, and the
+//       one before it still does after this encode
+//   P5  two codecs fed the URLs in turn each decode their own
+
+// ---- star: encode_and_decode_tinyurl.kara
+
+struct CodecStar {
+    by_code: Map[String, String],
+    by_url: Map[String, String],
+    next: i64,
+}
+
+fn digit_star(d: i64) -> char {
+    if d < 10 {
+        (b'0' + d as u8) as char
+    } else if d < 36 {
+        (b'a' + (d - 10) as u8) as char
+    } else {
+        (b'A' + (d - 36) as u8) as char
+    }
+}
+
+fn base62_star(n: i64) -> String {
+    let mut rev: Vec[char] = Vec.new();
+    let mut m = n;
+    loop {
+        rev.push(digit_star(m % 62));
+        m /= 62;
+        if m == 0 {
+            break;
+        }
+    }
+    let mut code = String.new();
+    for i in (0..rev.len()).rev() {
+        code.push(rev[i]);
+    }
+    code
+}
+
+impl CodecStar {
+    fn new() -> CodecStar {
+        CodecStar { by_code: Map.new(), by_url: Map.new(), next: 0 }
+    }
+
+    fn encode(mut ref self, long_url: Str) -> String {
+        let code = match self.by_url.get(long_url) {
+            Some(code) => code.clone(),
+            None => {
+                let code = base62_star(self.next);
+                self.next += 1;
+                self.by_code.insert(code.clone(), long_url.to_string());
+                self.by_url.insert(long_url.to_string(), code.clone());
+                code
+            }
+        };
+        "http://tinyurl.com/".to_string() + code
+    }
+
+    fn decode(ref self, short_url: Str) -> String {
+        let code = short_url["http://tinyurl.com/".len()..short_url.len()];
+        self.by_code.get(code).unwrap().clone()
+    }
+}
+
+// ---- index: encode_and_decode_tinyurl_index.kara
+
+struct CodecIndex {
+    urls: Vec[String],
+}
+
+impl CodecIndex {
+    fn new() -> CodecIndex {
+        CodecIndex { urls: Vec.new() }
+    }
+
+    fn encode(mut ref self, long_url: Str) -> String {
+        self.urls.push(long_url.to_string());
+        f"http://tinyurl.com/{self.urls.len() - 1}"
+    }
+
+    fn decode(ref self, short_url: Str) -> String {
+        let code = short_url["http://tinyurl.com/".len()..short_url.len()];
+        let i = i64.parse(code).unwrap();
+        self.urls[i].clone()
+    }
+}
+
+// ---- hash: encode_and_decode_tinyurl_hash.kara
+
+struct CodecHash {
+    slots: Map[i64, String],
+}
+
+fn digit_hash(d: i64) -> char {
+    if d < 10 {
+        (b'0' + d as u8) as char
+    } else if d < 36 {
+        (b'a' + (d - 10) as u8) as char
+    } else {
+        (b'A' + (d - 36) as u8) as char
+    }
+}
+
+fn value_hash(c: u8) -> i64 {
+    if c <= b'9' {
+        (c - b'0') as i64
+    } else if c <= b'Z' {
+        (c - b'A') as i64 + 36
+    } else {
+        (c - b'a') as i64 + 10
+    }
+}
+
+impl CodecHash {
+    fn new() -> CodecHash {
+        CodecHash { slots: Map.new() }
+    }
+
+    fn encode(mut ref self, long_url: Str) -> String {
+        let mut h = 0;
+        for b in long_url.bytes().iter() {
+            h = (h * 31 + *b as i64) % 1000000007;
+        }
+        loop {
+            match self.slots.get(h) {
+                Some(u) => {
+                    if u == long_url {
+                        break;
+                    }
+                    h = (h + 1) % 1000000007;
+                }
+                None => {
+                    self.slots.insert(h, long_url.to_string());
+                    break;
+                }
+            }
+        }
+        let mut rev: Vec[char] = Vec.new();
+        let mut m = h;
+        loop {
+            rev.push(digit_hash(m % 62));
+            m /= 62;
+            if m == 0 {
+                break;
+            }
+        }
+        let mut short = "http://tinyurl.com/".to_string();
+        for i in (0..rev.len()).rev() {
+            short.push(rev[i]);
+        }
+        short
+    }
+
+    fn decode(ref self, short_url: Str) -> String {
+        let mut h = 0;
+        for b in short_url.bytes()["http://tinyurl.com/".len()..short_url.len()].iter() {
+            h = h * 62 + value_hash(*b);
+        }
+        self.slots[h].clone()
+    }
+}
+
+// ---- random: encode_and_decode_tinyurl_random.kara
+
+struct CodecRandom {
+    by_code: Map[String, String],
+    by_url: Map[String, String],
+    seed: i64,
+}
+
+impl CodecRandom {
+    fn new() -> CodecRandom {
+        CodecRandom { by_code: Map.new(), by_url: Map.new(), seed: 7 }
+    }
+
+    fn draw(mut ref self) -> String {
+        let alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let mut code = String.new();
+        for _ in 0..6 {
+            self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+            code.push(alphabet.bytes()[self.seed / 65536 % 62] as char);
+        }
+        code
+    }
+
+    fn encode(mut ref self, long_url: Str) -> String {
+        if let Some(code) = self.by_url.get(long_url) {
+            return "http://tinyurl.com/".to_string() + code;
+        }
+        let mut code = self.draw();
+        while self.by_code.contains_key(code) {
+            code = self.draw();
+        }
+        self.by_code.insert(code.clone(), long_url.to_string());
+        self.by_url.insert(long_url.to_string(), code.clone());
+        "http://tinyurl.com/".to_string() + code
+    }
+
+    fn decode(ref self, short_url: Str) -> String {
+        let code = short_url["http://tinyurl.com/".len()..short_url.len()];
+        self.by_code.get(code).unwrap().clone()
+    }
+}
+
+// ---- differential harness -------------------------------------------------
+
+enum AnyCodec {
+    Star(CodecStar),
+    Index(CodecIndex),
+    Hash(CodecHash),
+    Random(CodecRandom),
+}
+
+impl AnyCodec {
+    fn new(arm: i64) -> AnyCodec {
+        match arm {
+            0 => AnyCodec.Star(CodecStar.new()),
+            1 => AnyCodec.Index(CodecIndex.new()),
+            2 => AnyCodec.Hash(CodecHash.new()),
+            _ => AnyCodec.Random(CodecRandom.new()),
+        }
+    }
+
+    fn encode(mut ref self, long_url: Str) -> String {
+        match self {
+            AnyCodec.Star(c) => c.encode(long_url),
+            AnyCodec.Index(c) => c.encode(long_url),
+            AnyCodec.Hash(c) => c.encode(long_url),
+            AnyCodec.Random(c) => c.encode(long_url),
+        }
+    }
+
+    fn decode(ref self, short_url: Str) -> String {
+        match self {
+            AnyCodec.Star(c) => c.decode(short_url),
+            AnyCodec.Index(c) => c.decode(short_url),
+            AnyCodec.Hash(c) => c.decode(short_url),
+            AnyCodec.Random(c) => c.decode(short_url),
+        }
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random URL with a host of 1 to 4 letters and a path of 0 to `most`
+// characters from a, b, A, B, 0 and "/", so that URLs often share long
+// prefixes.
+fn random_url(seed: mut ref i64, most: i64) -> String {
+    let mut url = "https://".to_string();
+    let host = 1 + next_random(seed) % 4;
+    for _ in 0..host {
+        url.push((b'a' + (next_random(seed) % 26) as u8) as char);
+    }
+    url.push_str(".com/");
+    let marks = "abAB0/";
+    let path = next_random(seed) % (most + 1);
+    for _ in 0..path {
+        url.push(marks.bytes()[next_random(seed) % 6] as char);
+    }
+    url
+}
+
+// Whether a short URL is http://tinyurl.com/ and 1 or more letters and
+// digits.
+fn well_formed(short: Str) -> bool {
+    let prefix = "http://tinyurl.com/";
+    if not short.starts_with(prefix) or short.len() == prefix.len() {
+        return false;
+    }
+    for b in short.bytes()[prefix.len()..short.len()].iter() {
+        if not b.is_ascii_alphanumeric() {
+            return false;
+        }
+    }
+    true
+}
+
+fn main() {
+    let mut seed: i64 = 535;
+    let mut fails = vec![0; 5];
+    let mut checks = 0;
+    let cases = 1000;
+    for case in 0..cases {
+        // A third of the cases hold 63 to 150 URLs, so that counters
+        // need two base-62 digits; the rest 1 to 30.
+        let n = if case % 3 == 0 {
+            63 + next_random(mut seed) % 88
+        } else {
+            1 + next_random(mut seed) % 30
+        };
+        let mut urls: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let kind = next_random(mut seed) % 4;
+            if kind == 0 and urls.len() > 0 {
+                let j = next_random(mut seed) % urls.len();
+                urls.push(urls[j].clone());
+            } else if kind == 1 and urls.len() > 0 {
+                // A twin that a hash of the form h * 31 + c cannot tell
+                // apart: "Aa" and "BB" at the end swapped, or "Aa" added.
+                let j = next_random(mut seed) % urls.len();
+                let u = urls[j].clone();
+                let cut = u.len() - 2;
+                if u.ends_with("Aa") {
+                    urls.push(u[0..cut].to_string() + "BB");
+                } else if u.ends_with("BB") {
+                    urls.push(u[0..cut].to_string() + "Aa");
+                } else {
+                    urls.push(u + "Aa");
+                }
+            } else {
+                urls.push(random_url(mut seed, 12));
+            }
+        }
+        let mut order: Vec[i64] = (0..n).collect();
+        for i in (1..n).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            order.swap(i, j);
+        }
+        for arm in 0..4 {
+            checks += 5;
+            let mut codec = AnyCodec.new(arm);
+            let mut shorts: Vec[String] = Vec.new();
+            for u in urls.iter() {
+                shorts.push(codec.encode(u));
+            }
+            // P1: every short URL decodes to its URL, in a shuffled order.
+            let mut p1 = true;
+            for i in order.iter() {
+                if codec.decode(shorts[*i]) != urls[*i] {
+                    p1 = false;
+                }
+            }
+            if not p1 {
+                fails[0] += 1;
+            }
+            // P2: different URLs get different short URLs.
+            let mut owner: Map[String, String] = Map.new();
+            let mut p2 = true;
+            for i in 0..n {
+                match owner.get(shorts[i]) {
+                    Some(u) => {
+                        if u != urls[i] {
+                            p2 = false;
+                        }
+                    }
+                    None => {
+                        owner.insert(shorts[i].clone(), urls[i].clone());
+                    }
+                }
+            }
+            if not p2 {
+                fails[1] += 1;
+            }
+            // P3: every short URL is http://tinyurl.com/ and a code of
+            // letters and digits.
+            let mut p3 = true;
+            for s in shorts.iter() {
+                if not well_formed(s) {
+                    p3 = false;
+                }
+            }
+            if not p3 {
+                fails[2] += 1;
+            }
+            // P4: on a fresh codec, each short URL decodes right at once,
+            // and the one before it still does after this encode.
+            let mut fresh = AnyCodec.new(arm);
+            let mut p4 = true;
+            let mut last: Vec[String] = Vec.new();
+            for i in 0..n {
+                let s = fresh.encode(urls[i]);
+                if fresh.decode(s) != urls[i] {
+                    p4 = false;
+                }
+                if i > 0 and fresh.decode(last[i - 1]) != urls[i - 1] {
+                    p4 = false;
+                }
+                last.push(s);
+            }
+            if not p4 {
+                fails[3] += 1;
+            }
+            // P5: two codecs fed the URLs in turn each decode their own.
+            let mut even = AnyCodec.new(arm);
+            let mut odd = AnyCodec.new(arm);
+            let mut halves: Vec[String] = Vec.new();
+            for i in 0..n {
+                if i % 2 == 0 {
+                    halves.push(even.encode(urls[i]));
+                } else {
+                    halves.push(odd.encode(urls[i]));
+                }
+            }
+            let mut p5 = true;
+            for i in 0..n {
+                let back = if i % 2 == 0 {
+                    even.decode(halves[i])
+                } else {
+                    odd.decode(halves[i])
+                };
+                if back != urls[i] {
+                    p5 = false;
+                }
+            }
+            if not p5 {
+                fails[4] += 1;
+            }
+        }
+    }
+    let total = fails[0] + fails[1] + fails[2] + fails[3] + fails[4];
+    if total == 0 {
+        println(f"{cases} cases, 4 arms, {checks} checks, 0 failures");
+    } else {
+        println(f"{cases} cases, 4 arms, {checks} checks, {total} failures");
+        println(f"by property: P1 {fails[0]}, P2 {fails[1]}, P3 {fails[2]}, P4 {fails[3]}, P5 {fails[4]}");
+    }
+}

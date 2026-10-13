@@ -1,0 +1,250 @@
+// LeetCode #535: Encode and Decode TinyURL -- random codes.
+//
+// Draw six random letters and digits for each new URL, and draw again
+// while the code is taken. A code then says nothing about the URL or
+// how many came before it. A second map takes a URL to the code it
+// already has, so a URL encoded twice gets one short URL.
+
+struct Codec {
+    by_code: Map[String, String],
+    by_url: Map[String, String],
+    seed: i64,
+}
+
+impl Codec {
+    fn new() -> Codec {
+        Codec { by_code: Map.new(), by_url: Map.new(), seed: 7 }
+    }
+
+    // Six random characters from 0-9, a-z and A-Z.
+    fn draw(mut ref self) -> String {
+        let alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let mut code = String.new();
+        for _ in 0..6 {
+            self.seed = (self.seed * 1103515245 + 12345) % 2147483648;
+            code.push(alphabet.bytes()[self.seed / 65536 % 62] as char);
+        }
+        code
+    }
+
+    fn encode(mut ref self, long_url: Str) -> String {
+        if let Some(code) = self.by_url.get(long_url) {
+            return "http://tinyurl.com/".to_string() + code;
+        }
+        let mut code = self.draw();
+        while self.by_code.contains_key(code) {
+            code = self.draw();
+        }
+        self.by_code.insert(code.clone(), long_url.to_string());
+        self.by_url.insert(long_url.to_string(), code.clone());
+        "http://tinyurl.com/".to_string() + code
+    }
+
+    fn decode(ref self, short_url: Str) -> String {
+        let code = short_url["http://tinyurl.com/".len()..short_url.len()];
+        self.by_code.get(code).unwrap().clone()
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random URL: https://, a host of 3 to 10 letters, .com/, and a path
+// of 0 to `most` characters from letters, digits and "/-_.?=&".
+fn random_url(seed: mut ref i64, most: i64) -> String {
+    let marks = "/-_.?=&";
+    let mut url = "https://".to_string();
+    let host = 3 + next_random(seed) % 8;
+    for _ in 0..host {
+        url.push((b'a' + (next_random(seed) % 26) as u8) as char);
+    }
+    url.push_str(".com/");
+    let path = next_random(seed) % (most + 1);
+    for _ in 0..path {
+        let k = next_random(seed) % 69;
+        if k < 26 {
+            url.push((b'a' + k as u8) as char);
+        } else if k < 52 {
+            url.push((b'A' + (k - 26) as u8) as char);
+        } else if k < 62 {
+            url.push((b'0' + (k - 52) as u8) as char);
+        } else {
+            url.push(marks.bytes()[k - 62] as char);
+        }
+    }
+    url
+}
+
+// A checksum over the bytes of a string.
+fn sum_of(s: Str, start: i64) -> i64 {
+    let mut h = start;
+    for b in s.bytes().iter() {
+        h = (h * 131 + *b as i64) % 1000000007;
+    }
+    h
+}
+
+// Whether a short URL is http://tinyurl.com/ and 1 or more letters and
+// digits.
+fn well_formed(short: Str) -> bool {
+    let prefix = "http://tinyurl.com/";
+    if not short.starts_with(prefix) or short.len() == prefix.len() {
+        return false;
+    }
+    for b in short.bytes()[prefix.len()..short.len()].iter() {
+        if not b.is_ascii_alphanumeric() {
+            return false;
+        }
+    }
+    true
+}
+
+// Encodes every URL, then decodes the short URLs in an order drawn from
+// `seed`: how many come back right, whether different URLs got
+// different short URLs, whether every short URL is well formed, and a
+// checksum over what came back.
+fn run(urls: Vec[String], seed: mut ref i64) -> String {
+    let mut codec = Codec.new();
+    let mut shorts: Vec[String] = Vec.new();
+    for u in urls.iter() {
+        shorts.push(codec.encode(u));
+    }
+    let n = urls.len();
+    let mut order: Vec[i64] = (0..n).collect();
+    for i in (1..n).rev() {
+        let j = next_random(seed) % (i + 1);
+        order.swap(i, j);
+    }
+    let mut right = 0;
+    let mut checksum = 0;
+    for i in order.iter() {
+        let back = codec.decode(shorts[*i]);
+        if back == urls[*i] {
+            right += 1;
+        }
+        checksum = sum_of(back, checksum);
+    }
+    let mut owner: Map[String, String] = Map.new();
+    let mut distinct = true;
+    let mut formed = true;
+    for i in 0..n {
+        match owner.get(shorts[i]) {
+            Some(u) => {
+                if u != urls[i] {
+                    distinct = false;
+                }
+            }
+            None => {
+                owner.insert(shorts[i].clone(), urls[i].clone());
+            }
+        }
+        if not well_formed(shorts[i]) {
+            formed = false;
+        }
+    }
+    f"{right} of {n} back, distinct {distinct}, well formed {formed}, checksum {checksum}"
+}
+
+fn main() {
+    // The example, and the same URL encoded twice.
+    let url = "https://leetcode.com/problems/design-tinyurl";
+    let mut codec = Codec.new();
+    let short = codec.encode(url);
+    println(f"{url} -> back {codec.decode(short)}");
+    let again = codec.encode(url);
+    println(f"encoded twice: back {codec.decode(short) == url} and {codec.decode(again) == url}");
+    // Two codecs: each decodes only what it encoded, so neither sees the
+    // other's URLs.
+    let mut first = Codec.new();
+    let mut second = Codec.new();
+    let a = first.encode("https://a.com/x");
+    let b = second.encode("https://b.com/y");
+    let c = first.encode("https://c.com/z");
+    println(f"two codecs: {first.decode(a)} {second.decode(b)} {first.decode(c)}");
+    // URLs that differ only in "Aa" for "BB", which a hash of the form
+    // h * 31 + c maps to one value; the shortest URL; and one of 10,000
+    // characters, the problem's most.
+    let mut seed: i64 = 535;
+    let mut close: Vec[String] = Vec.new();
+    for p in vec!["AaAa", "AaBB", "BBAa", "BBBB", "Aa", "BB"].iter() {
+        close.push("https://x.com/".to_string() + p);
+    }
+    println(f"Aa for BB: {run(close, mut seed)}");
+    println(f"shortest: {run(vec!["h://a".to_string()], mut seed)}");
+    let mut long = "https://long.com/".to_string();
+    while long.len() < 10000 {
+        long.push((b'a' + (next_random(mut seed) % 26) as u8) as char);
+    }
+    println(f"10000 characters: {run(vec![long], mut seed)}");
+    // 300 random rounds of 1 to 40 URLs up to 60 characters: some
+    // repeated, some twins that differ in "Aa" for "BB" at the end.
+    let mut total = 0;
+    let mut count = 0;
+    let mut checksum = 0;
+    let mut all_distinct = true;
+    let mut all_formed = true;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 40;
+        count += n;
+        let mut urls: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let kind = next_random(mut seed) % 4;
+            if kind == 0 and urls.len() > 0 {
+                let j = next_random(mut seed) % urls.len();
+                urls.push(urls[j].clone());
+            } else if kind == 1 and urls.len() > 0 {
+                // A URL ending in "Aa" gets its twin ending in "BB", and
+                // the other way round; any other gets "Aa" added.
+                let j = next_random(mut seed) % urls.len();
+                let u = urls[j].clone();
+                let cut = u.len() - 2;
+                if u.ends_with("Aa") {
+                    urls.push(u[0..cut].to_string() + "BB");
+                } else if u.ends_with("BB") {
+                    urls.push(u[0..cut].to_string() + "Aa");
+                } else {
+                    urls.push(u + "Aa");
+                }
+            } else {
+                urls.push(random_url(mut seed, 60));
+            }
+        }
+        let mut codec = Codec.new();
+        let mut shorts: Vec[String] = Vec.new();
+        for u in urls.iter() {
+            shorts.push(codec.encode(u));
+        }
+        for i in 0..n {
+            let back = codec.decode(shorts[i]);
+            if back == urls[i] {
+                total += 1;
+            }
+            checksum = sum_of(back, checksum);
+            if not well_formed(shorts[i]) {
+                all_formed = false;
+            }
+            for j in 0..i {
+                if shorts[j] == shorts[i] and urls[j] != urls[i] {
+                    all_distinct = false;
+                }
+            }
+        }
+    }
+    println(f"300 random rounds: {total} of {count} back, distinct {all_distinct}, well formed {all_formed}, checksum {checksum}");
+    // The largest: 10,000 URLs up to 200 characters, a fifth of them
+    // repeats.
+    let mut urls: Vec[String] = Vec.new();
+    for i in 0..10000 {
+        if i % 5 == 4 {
+            let j = next_random(mut seed) % urls.len();
+            urls.push(urls[j].clone());
+        } else {
+            urls.push(random_url(mut seed, 200));
+        }
+    }
+    println(f"10000 URLs: {run(urls, mut seed)}");
+}

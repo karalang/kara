@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/535-encode-and-decode-tinyurl/bench/encode_and_decode_tinyurl.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:map", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "cf63089f9"
+extracted_src = "8ea49ac3"
+model_rev = "1aa23105"
+model_src = "8ea49ac3"

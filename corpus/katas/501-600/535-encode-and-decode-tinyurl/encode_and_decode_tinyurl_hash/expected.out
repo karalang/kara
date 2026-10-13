@@ -1,0 +1,8 @@
+https://leetcode.com/problems/design-tinyurl -> back https://leetcode.com/problems/design-tinyurl
+encoded twice: back true and true
+two codecs: https://a.com/x https://b.com/y https://c.com/z
+Aa for BB: 6 of 6 back, distinct true, well formed true, checksum 59050461
+shortest: 1 of 1 back, distinct true, well formed true, checksum 759193673
+10000 characters: 1 of 1 back, distinct true, well formed true, checksum 110532372
+300 random rounds: 6357 of 6357 back, distinct true, well formed true, checksum 948069350
+10000 URLs: 10000 of 10000 back, distinct true, well formed true, checksum 406132773

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/537-complex-number-multiplication/differential.kara"
+dedup_of = []
+expect = "error:E0236"
+exit = 1
+tags = ["differential"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "cf63089f9"
+extracted_src = "6d57c183"
+model_rev = "1aa23105"
+model_src = "6d57c183"

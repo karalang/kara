@@ -1,0 +1,188 @@
+// LeetCode #536: Construct Binary Tree from String -- recursive descent.
+//
+// A tree is a number, then its left subtree in parentheses if it has
+// one, then its right subtree in parentheses if it has one. Read it
+// with one position that every call moves on: read the number, then
+// for each '(' read a subtree and step over its ')'. O(n).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// The tree that starts at byte i, leaving i just past it.
+fn parse(b: Slice[u8], i: mut ref i64) -> TreeNode {
+    let mut sign = 1;
+    if b[*i] == b'-' {
+        sign = -1;
+        *i += 1;
+    }
+    let mut val = 0;
+    while *i < b.len() and b[*i] >= b'0' and b[*i] <= b'9' {
+        val = val * 10 + (b[*i] - b'0') as i64;
+        *i += 1;
+    }
+    let node = TreeNode { val: sign * val, left: None, right: None };
+    if *i < b.len() and b[*i] == b'(' {
+        *i += 1;
+        node.left = Some(parse(b, i));
+        *i += 1;
+    }
+    if *i < b.len() and b[*i] == b'(' {
+        *i += 1;
+        node.right = Some(parse(b, i));
+        *i += 1;
+    }
+    node
+}
+
+fn str2tree(s: Str) -> Option[TreeNode] {
+    if s.is_empty() {
+        return None;
+    }
+    let mut i = 0;
+    Some(parse(s.bytes(), mut i))
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The tree level by level, as LeetCode writes it: "null" for a missing
+// child, with the nulls at the end left off.
+fn level_order(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(slot) = queue.pop_front() {
+        match slot {
+            Some(node) => {
+                out.push(f"{node.val}");
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => out.push("null".to_string()),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    "[".to_string() + out.join(",") + "]"
+}
+
+// The tree written back as the problem writes it.
+fn render(node: Option[TreeNode], out: mut ref String) {
+    let Some(n) = node else {
+        return;
+    };
+    out.push_str(f"{n.val}");
+    if n.left.is_some() {
+        out.push('(');
+        render(n.left, out);
+        out.push(')');
+    }
+    if n.right.is_some() {
+        out.push('(');
+        render(n.right, out);
+        out.push(')');
+    }
+}
+
+fn written(root: Option[TreeNode]) -> String {
+    let mut out = String.new();
+    render(root, mut out);
+    out
+}
+
+// Node count, height and a checksum over the values in preorder.
+fn shape(node: Option[TreeNode], depth: i64, stats: mut ref Vec[i64]) {
+    let Some(n) = node else {
+        return;
+    };
+    stats[0] += 1;
+    stats[1] = stats[1].max(depth);
+    stats[2] = (stats[2] * 31 + n.val + 1000) % 1000000007;
+    shape(n.left, depth + 1, stats);
+    shape(n.right, depth + 1, stats);
+}
+
+// A random tree of n nodes with values from -1000 to 1000. A node with
+// one child has it on the left, as the problem's strings can only say.
+fn random_tree(seed: mut ref i64, n: i64) -> Option[TreeNode] {
+    if n == 0 {
+        return None;
+    }
+    let val = next_random(seed) % 2001 - 1000;
+    let rest = n - 1;
+    let left = if rest == 0 {
+        0
+    } else if next_random(seed) % 3 == 0 {
+        rest
+    } else {
+        1 + next_random(seed) % rest
+    };
+    let l = random_tree(seed, left);
+    let r = random_tree(seed, rest - left);
+    Some(TreeNode { val: val, left: l, right: r })
+}
+
+fn show(s: Str) {
+    let tree = str2tree(s);
+    println(f"\"{s}\" -> {level_order(tree)}, written back {written(tree) == s}");
+}
+
+fn main() {
+    // The three examples, the empty string, one node, negative and
+    // zero values, a left child only, and chains to the left.
+    show("4(2(3)(1))(6(5))");
+    show("4(2(3)(1))(6(5)(7))");
+    show("-4(2(3)(1))(6(5)(7))");
+    show("");
+    show("7");
+    show("-0");
+    show("0(-12)(345)");
+    show("1(2)");
+    show("1(2(3(4(5))))");
+    show("-1(-2(-3)(-4))(-5(-6)(-7))");
+    // 300 random trees of 0 to 60 nodes, written as the problem writes
+    // them and read back.
+    let mut seed: i64 = 536;
+    let mut back = 0;
+    let mut stats = vec![0, 0, 0];
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 61;
+        let tree = random_tree(mut seed, n);
+        let s = written(tree);
+        let read = str2tree(s);
+        if written(read) == s and level_order(read) == level_order(tree) {
+            back += 1;
+        }
+        shape(read, 0, mut stats);
+    }
+    println(f"300 random trees: {back} read back, {stats[0]} nodes, checksum {stats[2]}");
+    // The largest: a string near 30,000 characters (the problem's most),
+    // once a random tree of 5,500 nodes and once a chain of 5,000 to the
+    // left.
+    let tree = random_tree(mut seed, 5500);
+    let s = written(tree);
+    let mut stats = vec![0, 0, 0];
+    shape(str2tree(s), 0, mut stats);
+    println(f"{s.len()} characters, random: {stats[0]} nodes, height {stats[1]}, checksum {stats[2]}, written back {written(str2tree(s)) == s}");
+    let mut chain = String.new();
+    for i in 0..5000 {
+        chain.push_str(f"{i % 10}");
+        if i < 4999 {
+            chain.push('(');
+        }
+    }
+    for _ in 0..4999 {
+        chain.push(')');
+    }
+    let mut stats = vec![0, 0, 0];
+    shape(str2tree(chain), 0, mut stats);
+    println(f"{chain.len()} characters, chain: {stats[0]} nodes, height {stats[1]}, checksum {stats[2]}");
+}

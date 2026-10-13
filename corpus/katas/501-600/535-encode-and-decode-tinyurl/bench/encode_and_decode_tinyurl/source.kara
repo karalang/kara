@@ -1,0 +1,129 @@
+// Benchmark for #535: the ★ arm (a counter written in base 62); see
+// ../README.md § Benchmarks.
+//
+// 20,000 random URLs of up to 100 path characters, a fifth of them
+// repeats, made once; then in each of 50 rounds a fresh codec encodes
+// every URL and decodes every short URL back. Sink: how many came back
+// right, and the total length of the short URLs.
+
+struct Codec {
+    by_code: Map[String, String],
+    by_url: Map[String, String],
+    next: i64,
+}
+
+// The digits of base 62: 0-9, then a-z, then A-Z.
+fn digit(d: i64) -> char {
+    if d < 10 {
+        (b'0' + d as u8) as char
+    } else if d < 36 {
+        (b'a' + (d - 10) as u8) as char
+    } else {
+        (b'A' + (d - 36) as u8) as char
+    }
+}
+
+// n in base 62, most significant digit first; "0" for 0.
+fn base62(n: i64) -> String {
+    let mut rev: Vec[char] = Vec.new();
+    let mut m = n;
+    loop {
+        rev.push(digit(m % 62));
+        m /= 62;
+        if m == 0 {
+            break;
+        }
+    }
+    let mut code = String.new();
+    for i in (0..rev.len()).rev() {
+        code.push(rev[i]);
+    }
+    code
+}
+
+impl Codec {
+    fn new() -> Codec {
+        Codec { by_code: Map.new(), by_url: Map.new(), next: 0 }
+    }
+
+    fn encode(mut ref self, long_url: Str) -> String {
+        let code = match self.by_url.get(long_url) {
+            Some(code) => code.clone(),
+            None => {
+                let code = base62(self.next);
+                self.next += 1;
+                self.by_code.insert(code.clone(), long_url.to_string());
+                self.by_url.insert(long_url.to_string(), code.clone());
+                code
+            }
+        };
+        "http://tinyurl.com/".to_string() + code
+    }
+
+    fn decode(ref self, short_url: Str) -> String {
+        let code = short_url["http://tinyurl.com/".len()..short_url.len()];
+        self.by_code.get(code).unwrap().clone()
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random URL: https://, a host of 3 to 10 letters, .com/, and a path
+// of 0 to `most` characters from letters, digits and "/-_.?=&".
+fn random_url(seed: mut ref i64, most: i64) -> String {
+    let marks = "/-_.?=&";
+    let mut url = "https://".to_string();
+    let host = 3 + next_random(seed) % 8;
+    for _ in 0..host {
+        url.push((b'a' + (next_random(seed) % 26) as u8) as char);
+    }
+    url.push_str(".com/");
+    let path = next_random(seed) % (most + 1);
+    for _ in 0..path {
+        let k = next_random(seed) % 69;
+        if k < 26 {
+            url.push((b'a' + k as u8) as char);
+        } else if k < 52 {
+            url.push((b'A' + (k - 26) as u8) as char);
+        } else if k < 62 {
+            url.push((b'0' + (k - 52) as u8) as char);
+        } else {
+            url.push(marks.bytes()[k - 62] as char);
+        }
+    }
+    url
+}
+
+fn main() {
+    let mut seed: i64 = 535;
+    let mut urls: Vec[String] = Vec.new();
+    for i in 0..20000 {
+        if i % 5 == 4 {
+            let j = next_random(mut seed) % urls.len();
+            urls.push(urls[j].clone());
+        } else {
+            urls.push(random_url(mut seed, 100));
+        }
+    }
+    let rounds = 50;
+    let mut right = 0;
+    let mut length = 0;
+    for _ in 0..rounds {
+        let mut codec = Codec.new();
+        let mut shorts: Vec[String] = Vec.new();
+        for u in urls.iter() {
+            let s = codec.encode(u);
+            length += s.len();
+            shorts.push(s);
+        }
+        for i in 0..urls.len() {
+            if codec.decode(shorts[i]) == urls[i] {
+                right += 1;
+            }
+        }
+    }
+    println(f"{urls.len()} URLs, {rounds} rounds: {right} back, short length {length}");
+}

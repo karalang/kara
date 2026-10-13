@@ -1,0 +1,190 @@
+// Differential test for LeetCode #537: Complex Number Multiplication.
+//
+// Copies of the four arms, each held to the properties below on 2,000
+// random pairs whose parts run from -100 to 100, or one time in four
+// from -10^4 to 10^4 (as large as a product of two numbers in range),
+// and a third number in range.
+// Properties:
+//   P1  the product is the definition's: the four products of the
+//       parts, each times the power of i it carries
+//   P2  the numbers the other way round give the same product
+//   P3  times 1+0i is the number, and times 0+1i turns it a quarter
+//   P4  (x y) z = x (y z)
+//   P5  a number times its conjugate is the square of its size
+
+// ---- star: complex_number_multiply.kara
+
+fn parts_star(num: Str) -> (i64, i64) {
+    let halves: Vec[Str] = num.split("+").collect();
+    let re = i64.parse(halves[0]).unwrap();
+    let im = i64.parse(halves[1][0..halves[1].len() - 1]).unwrap();
+    (re, im)
+}
+
+fn complex_number_multiply_star(num1: Str, num2: Str) -> String {
+    let (a, b) = parts_star(num1);
+    let (c, d) = parts_star(num2);
+    f"{a * c - b * d}+{a * d + b * c}i"
+}
+
+// ---- scan: complex_number_multiply_scan.kara
+
+fn read_int_scan(b: Slice[u8], i: mut ref i64) -> i64 {
+    let negative = b[*i] == b'-';
+    if negative {
+        *i += 1;
+    }
+    let mut n = 0;
+    while *i < b.len() and b[*i] >= b'0' and b[*i] <= b'9' {
+        n = n * 10 + (b[*i] - b'0') as i64;
+        *i += 1;
+    }
+    if negative { -n } else { n }
+}
+
+fn complex_number_multiply_scan(num1: Str, num2: Str) -> String {
+    let mut i = 0;
+    let a = read_int_scan(num1.bytes(), mut i);
+    i += 1;
+    let b = read_int_scan(num1.bytes(), mut i);
+    let mut j = 0;
+    let c = read_int_scan(num2.bytes(), mut j);
+    j += 1;
+    let d = read_int_scan(num2.bytes(), mut j);
+    f"{a * c - b * d}+{a * d + b * c}i"
+}
+
+// ---- gauss: complex_number_multiply_gauss.kara
+
+fn parts_gauss(num: Str) -> (i64, i64) {
+    let plus = num.find("+").unwrap();
+    let re = i64.parse(num[0..plus]).unwrap();
+    let im = i64.parse(num[plus + 1..num.len() - 1]).unwrap();
+    (re, im)
+}
+
+fn complex_number_multiply_gauss(num1: Str, num2: Str) -> String {
+    let (a, b) = parts_gauss(num1);
+    let (c, d) = parts_gauss(num2);
+    let k1 = c * (a + b);
+    let k2 = a * (d - c);
+    let k3 = b * (c + d);
+    f"{k1 - k3}+{k1 + k2}i"
+}
+
+// ---- matrix: complex_number_multiply_matrix.kara
+
+fn matrix_matrix(num: Str) -> Array[Array[i64, 2], 2] {
+    let plus = num.find("+").unwrap();
+    let a = i64.parse(num[0..plus]).unwrap();
+    let b = i64.parse(num[plus + 1..num.len() - 1]).unwrap();
+    [[a, -b], [b, a]]
+}
+
+fn complex_number_multiply_matrix(num1: Str, num2: Str) -> String {
+    let x = matrix_matrix(num1);
+    let y = matrix_matrix(num2);
+    let mut p = [[0, 0], [0, 0]];
+    for r in 0..2 {
+        for c in 0..2 {
+            for k in 0..2 {
+                p[r][c] += x[r][k] * y[k][c];
+            }
+        }
+    }
+    f"{p[0][0]}+{p[1][0]}i"
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn answer(which: i64, a: Str, b: Str) -> String {
+    match which {
+        0 => complex_number_multiply_star(a, b),
+        1 => complex_number_multiply_scan(a, b),
+        2 => complex_number_multiply_gauss(a, b),
+        _ => complex_number_multiply_matrix(a, b),
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A part from -100 to 100, or one time in four from -10^4 to 10^4, as
+// the products of two numbers in range are.
+fn random_part(seed: mut ref i64) -> i64 {
+    if next_random(seed) % 4 == 0 {
+        next_random(seed) % 20001 - 10000
+    } else {
+        next_random(seed) % 201 - 100
+    }
+}
+
+// The definition: the four products of the parts, each times the power
+// of i it carries (i^0 = 1, i^1 = i, i^2 = -1), summed part by part.
+fn definition(a: i64, b: i64, c: i64, d: i64) -> String {
+    let terms = [(a * c, 0), (a * d, 1), (b * c, 1), (b * d, 2)];
+    let mut re = 0;
+    let mut im = 0;
+    for t in terms.iter() {
+        let (value, power) = *t;
+        if power == 0 {
+            re += value;
+        } else if power == 1 {
+            im += value;
+        } else {
+            re -= value;
+        }
+    }
+    f"{re}+{im}i"
+}
+
+fn main() {
+    let mut seed: i64 = 537;
+    let mut fails = vec![0; 5];
+    let mut checks = 0;
+    let cases = 2000;
+    for _ in 0..cases {
+        let a = random_part(mut seed);
+        let b = random_part(mut seed);
+        let c = random_part(mut seed);
+        let d = random_part(mut seed);
+        let e = next_random(mut seed) % 201 - 100;
+        let f = next_random(mut seed) % 201 - 100;
+        let x = f"{a}+{b}i";
+        let y = f"{c}+{d}i";
+        let z = f"{e}+{f}i";
+        for which in 0..4 {
+            checks += 5;
+            let p = answer(which, x, y);
+            // P1: the product is the definition's.
+            if p != definition(a, b, c, d) {
+                fails[0] += 1;
+            }
+            // P2: the numbers the other way round give the same product.
+            if answer(which, y, x) != p {
+                fails[1] += 1;
+            }
+            // P3: times 1 is the number; times i turns it a quarter.
+            if answer(which, x, "1+0i") != x or answer(which, x, "0+1i") != f"{-b}+{a}i" {
+                fails[2] += 1;
+            }
+            // P4: (x y) z = x (y z).
+            if answer(which, p, z) != answer(which, x, answer(which, y, z)) {
+                fails[3] += 1;
+            }
+            // P5: a number times its conjugate is the square of its size.
+            if answer(which, x, f"{a}+{-b}i") != f"{a * a + b * b}+0i" {
+                fails[4] += 1;
+            }
+        }
+    }
+    let total = fails[0] + fails[1] + fails[2] + fails[3] + fails[4];
+    if total == 0 {
+        println(f"{cases} cases, 4 arms, {checks} checks, 0 failures");
+    } else {
+        println(f"{cases} cases, 4 arms, {checks} checks, {total} failures");
+        println(f"by property: P1 {fails[0]}, P2 {fails[1]}, P3 {fails[2]}, P4 {fails[3]}, P5 {fails[4]}");
+    }
+}
