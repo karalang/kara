@@ -1,0 +1,158 @@
+// LeetCode #499: The Maze III -- Dijkstra on a sorted set.
+//
+// The frontier is a `SortedSet` of (distance, instructions, row,
+// column), with exactly one entry per cell: when a cell gets a better
+// pair, its old entry is removed and the new one inserted. The least
+// entry is settled each round. Where each roll stops is worked out
+// first, for every cell and direction, so the search only looks it up.
+
+fn find_shortest_way(maze: Vec[Vec[i64]], ball: Vec[i64], hole: Vec[i64]) -> String {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let moves = vec![(1, 0, "d"), (0, -1, "l"), (0, 1, "r"), (-1, 0, "u")];
+    // stop[k][r][c]: where a roll in direction k from (r, c) ends.
+    let mut stop: Vec[Vec[Vec[(i64, i64)]]] = Vec.new();
+    for (dr, dc, _) in moves {
+        let mut table: Vec[Vec[(i64, i64)]] = Vec.new();
+        for row in 0..rows {
+            let mut line: Vec[(i64, i64)] = Vec.new();
+            for col in 0..cols {
+                let mut r = row;
+                let mut c = col;
+                while r + dr >= 0 and r + dr < rows and c + dc >= 0 and c + dc < cols and maze[r + dr][c + dc] == 0 {
+                    r += dr;
+                    c += dc;
+                    if r == hole[0] and c == hole[1] {
+                        break;
+                    }
+                }
+                line.push((r, c));
+            }
+            table.push(line);
+        }
+        stop.push(table);
+    }
+    let mut best: Map[(i64, i64), (i64, String)] = Map.new();
+    let mut frontier: SortedSet[(i64, String, i64, i64)] = SortedSet.new();
+    best.insert((ball[0], ball[1]), (0, ""));
+    frontier.insert((0, "", ball[0], ball[1]));
+    let mut settled: Set[(i64, i64)] = Set.new();
+    while let Some(least) = frontier.min() {
+        let (dist, path, row, col) = least.clone();
+        frontier.remove((dist, path.clone(), row, col));
+        settled.insert((row, col));
+        if row == hole[0] and col == hole[1] {
+            return path;
+        }
+        for k in 0..4 {
+            let (r, c) = stop[k][row][col];
+            let steps = (r - row).abs() + (c - col).abs();
+            if steps == 0 or settled.contains((r, c)) {
+                continue;
+            }
+            let name = moves[k].2.clone();
+            let next = (dist + steps, path + name);
+            match best.get((r, c)) {
+                Some((d, p)) => {
+                    if next.0 > *d or (next.0 == *d and next.1 >= p) {
+                        continue;
+                    }
+                    frontier.remove((*d, p.clone(), r, c));
+                }
+                None => {}
+            }
+            frontier.insert((next.0, next.1.clone(), r, c));
+            best.insert((r, c), next);
+        }
+    }
+    "impossible"
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(name: String, maze: Vec[Vec[i64]], ball: Vec[i64], hole: Vec[i64]) {
+    println(f"{name}: from {ball} to {hole} -> {find_shortest_way(maze, ball, hole)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let first = vec![
+        vec![0, 0, 0, 0, 0],
+        vec![1, 1, 0, 0, 1],
+        vec![0, 0, 0, 0, 0],
+        vec![0, 1, 0, 0, 1],
+        vec![0, 1, 0, 0, 0],
+    ];
+    show("example 1", first, vec![4, 3], vec![0, 1]);
+    show("example 2", first, vec![4, 3], vec![3, 0]);
+    show("example 3", vec![
+        vec![0, 0, 0, 0, 0, 0, 0],
+        vec![0, 0, 1, 0, 0, 1, 0],
+        vec![0, 0, 0, 0, 1, 0, 0],
+        vec![0, 0, 0, 0, 0, 0, 1],
+    ], vec![0, 4], vec![3, 5]);
+    show("two cells", vec![vec![0, 0]], vec![0, 0], vec![0, 1]);
+    show("a hole mid-row", vec![vec![0, 0, 0, 0, 0]], vec![0, 4], vec![0, 2]);
+    show("a column", vec![vec![0], vec![0], vec![0], vec![0]], vec![3, 0], vec![0, 0]);
+    // Two ways of length 4 to the far corner: "dr" and "rd"; "dr" wins.
+    show("a tie", vec![
+        vec![0, 0, 0],
+        vec![0, 0, 0],
+        vec![0, 0, 0],
+    ], vec![0, 0], vec![2, 2]);
+    show("walled in", vec![
+        vec![0, 1, 0],
+        vec![1, 1, 0],
+        vec![0, 0, 0],
+    ], vec![0, 0], vec![2, 2]);
+    // 300 random mazes of 1 to 12 by 1 to 12 cells, a wall in each cell
+    // with odds of 1 in 5, 1 in 3 or 1 in 2 in turn, with a ball and a
+    // hole in two different open cells.
+    let count = 300;
+    let mut seed: i64 = 499;
+    let mut reached = 0;
+    let mut letters = 0;
+    let mut checksum: i64 = 0;
+    for k in 0..count {
+        let rows = 1 + next_random(mut seed) % 12;
+        let cols = 1 + next_random(mut seed) % 12;
+        let odds = if k % 3 == 0 { 5 } else if k % 3 == 1 { 3 } else { 2 };
+        let mut maze: Vec[Vec[i64]] = Vec.new();
+        let mut open: Vec[(i64, i64)] = Vec.new();
+        for r in 0..rows {
+            let mut line: Vec[i64] = Vec.new();
+            for c in 0..cols {
+                if next_random(mut seed) % odds == 0 {
+                    line.push(1);
+                } else {
+                    line.push(0);
+                    open.push((r, c));
+                }
+            }
+            maze.push(line);
+        }
+        if open.len() < 2 {
+            continue;
+        }
+        let a = next_random(mut seed) % open.len();
+        let mut b = next_random(mut seed) % (open.len() - 1);
+        if b >= a {
+            b += 1;
+        }
+        let (br, bc) = open[a];
+        let (hr, hc) = open[b];
+        let way = find_shortest_way(maze, vec![br, bc], vec![hr, hc]);
+        if way != "impossible" {
+            reached += 1;
+            letters += way.len();
+        }
+        for ch in way.chars() {
+            checksum = (checksum * 31 + ch as i64) % 1000000007;
+        }
+    }
+    println(f"{count} random mazes: the hole reached in {reached}, {letters} instructions in all, checksum {checksum}");
+}

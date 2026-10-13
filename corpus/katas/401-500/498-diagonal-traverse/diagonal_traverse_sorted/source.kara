@@ -1,0 +1,64 @@
+// LeetCode #498: Diagonal Traverse -- sorting the cells.
+//
+// Every cell's place in the zigzag is fixed by its diagonal, row +
+// column, and within the diagonal by its row: rising on the odd
+// diagonals, falling on the even ones. Sort the cells by that pair.
+
+fn find_diagonal_order(mat: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut cells: Vec[(i64, i64, i64)] = Vec.new();
+    for r in 0..mat.len() {
+        for c in 0..mat[r].len() {
+            let d = r + c;
+            let within = if d % 2 == 1 { r } else { -r };
+            cells.push((d, within, mat[r][c]));
+        }
+    }
+    cells.sort();
+    cells.iter().map(|(_, _, v)| v).collect()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(name: String, mat: Vec[Vec[i64]]) {
+    println(f"{name}: {mat} -> {find_diagonal_order(mat)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("example 1", vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]]);
+    show("example 2", vec![vec![1, 2], vec![3, 4]]);
+    show("one cell", vec![vec![-100000]]);
+    show("one row", vec![vec![1, 2, 3, 4, 5]]);
+    show("one column", vec![vec![1], vec![2], vec![3], vec![4]]);
+    show("wide", vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8]]);
+    show("tall", vec![vec![1, 2], vec![3, 4], vec![5, 6], vec![7, 8]]);
+    show("three by five", vec![vec![1, 2, 3, 4, 5], vec![6, 7, 8, 9, 10], vec![11, 12, 13, 14, 15]]);
+    // 300 random matrices of 1 to 12 by 1 to 12 with values from
+    // -100,000 to 100,000; the checksum weighs each value by its place.
+    let count = 300;
+    let mut seed: i64 = 498;
+    let mut cells = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let m = 1 + next_random(mut seed) % 12;
+        let n = 1 + next_random(mut seed) % 12;
+        let mut mat: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                row.push(next_random(mut seed) % 200001 - 100000);
+            }
+            mat.push(row);
+        }
+        let order = find_diagonal_order(mat);
+        for v in order {
+            cells += 1;
+            checksum = (checksum * 31 + v + 100000) % 1000000007;
+        }
+    }
+    println(f"{count} random matrices: {cells} cells, checksum {checksum}");
+}

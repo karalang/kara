@@ -1,0 +1,9 @@
+example 1: from [4, 3] to [0, 1] -> lul
+example 2: from [4, 3] to [3, 0] -> impossible
+example 3: from [0, 4] to [3, 5] -> dldr
+two cells: from [0, 0] to [0, 1] -> r
+a hole mid-row: from [0, 4] to [0, 2] -> l
+a column: from [3, 0] to [0, 0] -> u
+a tie: from [0, 0] to [2, 2] -> dr
+walled in: from [0, 0] to [2, 2] -> impossible
+300 random mazes: the hole reached in 154, 368 instructions in all, checksum 871481630

@@ -1,0 +1,301 @@
+// Differential test for LeetCode #498: Diagonal Traverse.
+//
+// Copies of the four arms, on 1,500 random matrices: 1 to 15 by 1 to
+// 15, then 1 to 3 rows, then 1 to 3 columns, in turn, with values from
+// -100,000 to 100,000. P2 to P5 run each arm on a matrix of the same
+// shape holding each cell's label, row * n + column. Properties:
+//   P1  the order is the reference's, which checks every cell of the
+//       matrix for each diagonal in turn
+//   P2  every cell comes out exactly once
+//   P3  the transpose reads each diagonal the other way
+//   P4  each step goes one cell along the diagonal or on to the next
+//       diagonal
+//   P5  the top-left cell comes first and the bottom-right cell last
+
+// ---- star: diagonal_traverse.kara
+
+fn find_diagonal_order_star(mat: Vec[Vec[i64]]) -> Vec[i64] {
+    let m = mat.len();
+    let n = mat[0].len();
+    let mut out: Vec[i64] = Vec.new();
+    let mut r = 0;
+    let mut c = 0;
+    let mut up = true;
+    while out.len() < m * n {
+        out.push(mat[r][c]);
+        if up {
+            if c == n - 1 {
+                r += 1;
+                up = false;
+            } else if r == 0 {
+                c += 1;
+                up = false;
+            } else {
+                r -= 1;
+                c += 1;
+            }
+        } else {
+            if r == m - 1 {
+                c += 1;
+                up = true;
+            } else if c == 0 {
+                r += 1;
+                up = true;
+            } else {
+                r += 1;
+                c -= 1;
+            }
+        }
+    }
+    out
+}
+
+// ---- reverse: diagonal_traverse_reverse.kara
+
+fn find_diagonal_order_reverse(mat: Vec[Vec[i64]]) -> Vec[i64] {
+    let m = mat.len();
+    let n = mat[0].len();
+    let mut out: Vec[i64] = Vec.new();
+    for d in 0..m + n - 1 {
+        let mut diagonal: Vec[i64] = Vec.new();
+        let mut r = if d < n { 0 } else { d - n + 1 };
+        while r < m and r <= d {
+            diagonal.push(mat[r][d - r]);
+            r += 1;
+        }
+        if d % 2 == 0 {
+            diagonal.reverse();
+        }
+        out.extend(diagonal);
+    }
+    out
+}
+
+// ---- sorted: diagonal_traverse_sorted.kara
+
+fn find_diagonal_order_sorted(mat: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut cells: Vec[(i64, i64, i64)] = Vec.new();
+    for r in 0..mat.len() {
+        for c in 0..mat[r].len() {
+            let d = r + c;
+            let within = if d % 2 == 1 { r } else { -r };
+            cells.push((d, within, mat[r][c]));
+        }
+    }
+    cells.sort();
+    cells.iter().map(|(_, _, v)| v).collect()
+}
+
+// ---- direct: diagonal_traverse_direct.kara
+
+fn find_diagonal_order_direct(mat: Vec[Vec[i64]]) -> Vec[i64] {
+    let m = mat.len();
+    let n = mat[0].len();
+    let mut out: Vec[i64] = Vec.new();
+    for d in 0..m + n - 1 {
+        // The rows the diagonal covers.
+        let top = if d < n { 0 } else { d - n + 1 };
+        let bottom = if d < m { d } else { m - 1 };
+        if d % 2 == 1 {
+            for r in top..bottom + 1 {
+                out.push(mat[r][d - r]);
+            }
+        } else {
+            for r in (top..bottom + 1).rev() {
+                out.push(mat[r][d - r]);
+            }
+        }
+    }
+    out
+}
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, mat: Vec[Vec[i64]]) -> Vec[i64] {
+    match which {
+        0 => find_diagonal_order_star(mat),
+        1 => find_diagonal_order_reverse(mat),
+        2 => find_diagonal_order_sorted(mat),
+        _ => find_diagonal_order_direct(mat),
+    }
+}
+
+// Every cell of the whole matrix checked for each diagonal in turn:
+// rows rising on the odd diagonals, falling on the even ones.
+fn reference(mat: Vec[Vec[i64]]) -> Vec[i64] {
+    let m = mat.len();
+    let n = mat[0].len();
+    let mut out: Vec[i64] = Vec.new();
+    for d in 0..m + n - 1 {
+        for k in 0..m {
+            let r = if d % 2 == 1 { k } else { m - 1 - k };
+            for c in 0..n {
+                if r + c == d {
+                    out.push(mat[r][c]);
+                }
+            }
+        }
+    }
+    out
+}
+
+// The output split into its runs of one diagonal each, given the
+// diagonal of each label.
+fn runs(order: Vec[i64], diagonal_of: Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut current: Vec[i64] = Vec.new();
+    let mut last = -1;
+    for x in order {
+        let d = diagonal_of[x];
+        if d != last and current.len() > 0 {
+            out.push(current.clone());
+            current = Vec.new();
+        }
+        current.push(x);
+        last = d;
+    }
+    if current.len() > 0 {
+        out.push(current);
+    }
+    out
+}
+
+fn main() {
+    let names = vec!["star", "reverse", "sorted", "direct"];
+    let cases = 1500;
+    let mut seed: i64 = 4980;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    for c in 0..cases {
+        // 1 to 15 by 1 to 15, then wide (1 to 3 rows), then tall (1 to 3
+        // columns), values from -100,000 to 100,000.
+        let m = if c % 3 == 2 { 1 + next_random(mut seed) % 3 } else { 1 + next_random(mut seed) % 15 };
+        let n = if c % 3 == 1 { 1 + next_random(mut seed) % 3 } else { 1 + next_random(mut seed) % 15 };
+        let mut mat: Vec[Vec[i64]] = Vec.new();
+        // Each cell's label r * n + c, the label's row, column and
+        // diagonal, and the transpose of the labels.
+        let mut labels: Vec[Vec[i64]] = Vec.new();
+        let mut row_of: Vec[i64] = Vec.new();
+        let mut column_of: Vec[i64] = Vec.new();
+        let mut diagonal_of: Vec[i64] = Vec.new();
+        for r in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            let mut label_row: Vec[i64] = Vec.new();
+            for k in 0..n {
+                row.push(next_random(mut seed) % 200001 - 100000);
+                label_row.push(r * n + k);
+                row_of.push(r);
+                column_of.push(k);
+                diagonal_of.push(r + k);
+            }
+            mat.push(row);
+            labels.push(label_row);
+        }
+        let mut transposed: Vec[Vec[i64]] = Vec.new();
+        for k in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for r in 0..m {
+                row.push(labels[r][k]);
+            }
+            transposed.push(row);
+        }
+        let want = reference(mat);
+        for which in 0..4 {
+            let got = arm(which, mat);
+            // P1: the reference's order.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {mat} gave {got}, want {want}");
+                }
+            }
+            // P2: on the labels, every cell exactly once.
+            checks += 1;
+            let order = arm(which, labels);
+            let mut seen = vec![0; m * n];
+            let mut ok = order.len() == m * n;
+            for x in order {
+                if x < 0 or x >= m * n {
+                    ok = false;
+                } else {
+                    seen[x] += 1;
+                }
+            }
+            for s in seen {
+                if s != 1 {
+                    ok = false;
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {m} by {n} gave {order}");
+                }
+                continue;
+            }
+            // P3: the transpose reads each diagonal the other way.
+            checks += 1;
+            let other = arm(which, transposed);
+            let mine = runs(order, diagonal_of);
+            let theirs = runs(other, diagonal_of);
+            let mut ok = mine.len() == theirs.len();
+            if ok {
+                for k in 0..mine.len() {
+                    let mut back = theirs[k].clone();
+                    back.reverse();
+                    if back != mine[k] {
+                        ok = false;
+                    }
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {m} by {n} gave {order}, transposed {other}");
+                }
+            }
+            // P4: each step goes one cell along the diagonal, or on to
+            // the next diagonal.
+            checks += 1;
+            let mut ok = true;
+            for i in 1..order.len() {
+                let a = order[i - 1];
+                let b = order[i];
+                let along = diagonal_of[a] == diagonal_of[b] and (row_of[b] - row_of[a]).abs() == 1;
+                let next = diagonal_of[b] == diagonal_of[a] + 1;
+                if not along and not next {
+                    ok = false;
+                }
+            }
+            if not ok {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {m} by {n} gave {order}");
+                }
+            }
+            // P5: top left first, bottom right last.
+            checks += 1;
+            if order[0] != 0 or order[order.len() - 1] != m * n - 1 {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {m} by {n} gave {order}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

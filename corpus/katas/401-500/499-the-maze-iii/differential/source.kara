@@ -1,0 +1,481 @@
+// Differential test for LeetCode #499: The Maze III.
+//
+// Copies of the four arms, on 1,500 random mazes of 1 to 9 by 1 to 9
+// cells (a wall in each cell with odds of 1 in 5, 1 in 3 or 1 in 2 in
+// turn, at least three open cells), with a ball and a hole in two
+// different open cells. Properties:
+//   P1  the instructions are the reference's, which finds the least
+//       distance from every cell to the hole by relaxing until nothing
+//       changes, then from the ball takes the first letter in
+//       alphabetical order that keeps to a least distance
+//   P2  the instructions roll the ball into the hole: every roll moves
+//       it, and it drops in at the end of the last one and not before
+//   P3  the maze transposed gives a way of the same length
+//   P4  the maze upside down gives a way of the same length
+//   P5  a wall added in a cell the way never rolls over makes the way
+//       no longer, and never impossible
+
+// ---- star: the_maze_iii.kara
+
+fn find_shortest_way_star(maze: Vec[Vec[i64]], ball: Vec[i64], hole: Vec[i64]) -> String {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let moves = vec![(1, 0, "d"), (0, -1, "l"), (0, 1, "r"), (-1, 0, "u")];
+    let mut done = vec![vec![false; cols]; rows];
+    let mut queue: PriorityQueue[(i64, String, i64, i64)] = PriorityQueue.new();
+    queue.push((0, "", ball[0], ball[1]));
+    while let Some((dist, path, row, col)) = queue.pop() {
+        if done[row][col] {
+            continue;
+        }
+        done[row][col] = true;
+        if row == hole[0] and col == hole[1] {
+            return path;
+        }
+        for (dr, dc, name) in moves {
+            let mut r = row;
+            let mut c = col;
+            let mut steps = 0;
+            while r + dr >= 0 and r + dr < rows and c + dc >= 0 and c + dc < cols and maze[r + dr][c + dc] == 0 {
+                r += dr;
+                c += dc;
+                steps += 1;
+                if r == hole[0] and c == hole[1] {
+                    break;
+                }
+            }
+            if steps > 0 and not done[r][c] {
+                queue.push((dist + steps, path + name, r, c));
+            }
+        }
+    }
+    "impossible"
+}
+
+// ---- relax: the_maze_iii_relax.kara
+
+fn better_relax(dist: i64, path: String, best: Option[(i64, String)]) -> bool {
+    match best {
+        None => true,
+        Some((d, p)) => dist < d or (dist == d and path < p),
+    }
+}
+
+fn find_shortest_way_relax(maze: Vec[Vec[i64]], ball: Vec[i64], hole: Vec[i64]) -> String {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let moves = vec![(1, 0, "d"), (0, -1, "l"), (0, 1, "r"), (-1, 0, "u")];
+    let mut best: Vec[Vec[Option[(i64, String)]]] = Vec.new();
+    for _ in 0..rows {
+        let mut line: Vec[Option[(i64, String)]] = Vec.new();
+        for _ in 0..cols {
+            line.push(None);
+        }
+        best.push(line);
+    }
+    best[ball[0]][ball[1]] = Some((0, ""));
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    queue.push_back((ball[0], ball[1]));
+    while let Some((row, col)) = queue.pop_front() {
+        if row == hole[0] and col == hole[1] {
+            continue;
+        }
+        let (dist, path) = best[row][col].clone().unwrap();
+        for (dr, dc, name) in moves {
+            let mut r = row;
+            let mut c = col;
+            let mut steps = 0;
+            while r + dr >= 0 and r + dr < rows and c + dc >= 0 and c + dc < cols and maze[r + dr][c + dc] == 0 {
+                r += dr;
+                c += dc;
+                steps += 1;
+                if r == hole[0] and c == hole[1] {
+                    break;
+                }
+            }
+            let next_path = path + name;
+            if steps > 0 and better_relax(dist + steps, next_path, best[r][c].clone()) {
+                best[r][c] = Some((dist + steps, next_path));
+                queue.push_back((r, c));
+            }
+        }
+    }
+    match best[hole[0]][hole[1]].clone() {
+        Some((_, path)) => path,
+        None => "impossible",
+    }
+}
+
+// ---- scan: the_maze_iii_scan.kara
+
+fn find_shortest_way_scan(maze: Vec[Vec[i64]], ball: Vec[i64], hole: Vec[i64]) -> String {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let moves = vec![(1, 0, "d"), (0, -1, "l"), (0, 1, "r"), (-1, 0, "u")];
+    let unknown = rows * cols * 1000;
+    let mut dist = vec![unknown; rows * cols];
+    let mut path: Vec[String] = Vec.new();
+    for _ in 0..rows * cols {
+        path.push("");
+    }
+    let mut settled = vec![false; rows * cols];
+    dist[ball[0] * cols + ball[1]] = 0;
+    loop {
+        let mut at = -1;
+        for i in 0..rows * cols {
+            if not settled[i] and dist[i] < unknown {
+                if at < 0 or dist[i] < dist[at] or (dist[i] == dist[at] and path[i] < path[at]) {
+                    at = i;
+                }
+            }
+        }
+        if at < 0 {
+            return "impossible";
+        }
+        settled[at] = true;
+        let row = at / cols;
+        let col = at % cols;
+        if row == hole[0] and col == hole[1] {
+            return path[at].clone();
+        }
+        for (dr, dc, name) in moves {
+            let mut r = row;
+            let mut c = col;
+            let mut steps = 0;
+            while r + dr >= 0 and r + dr < rows and c + dc >= 0 and c + dc < cols and maze[r + dr][c + dc] == 0 {
+                r += dr;
+                c += dc;
+                steps += 1;
+                if r == hole[0] and c == hole[1] {
+                    break;
+                }
+            }
+            let to = r * cols + c;
+            let d = dist[at] + steps;
+            let p = path[at].clone() + name;
+            if steps > 0 and not settled[to] and (d < dist[to] or (d == dist[to] and p < path[to])) {
+                dist[to] = d;
+                path[to] = p;
+            }
+        }
+    }
+}
+
+// ---- sorted: the_maze_iii_sorted.kara
+
+fn find_shortest_way_sorted(maze: Vec[Vec[i64]], ball: Vec[i64], hole: Vec[i64]) -> String {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let moves = vec![(1, 0, "d"), (0, -1, "l"), (0, 1, "r"), (-1, 0, "u")];
+    // stop[k][r][c]: where a roll in direction k from (r, c) ends.
+    let mut stop: Vec[Vec[Vec[(i64, i64)]]] = Vec.new();
+    for (dr, dc, _) in moves {
+        let mut table: Vec[Vec[(i64, i64)]] = Vec.new();
+        for row in 0..rows {
+            let mut line: Vec[(i64, i64)] = Vec.new();
+            for col in 0..cols {
+                let mut r = row;
+                let mut c = col;
+                while r + dr >= 0 and r + dr < rows and c + dc >= 0 and c + dc < cols and maze[r + dr][c + dc] == 0 {
+                    r += dr;
+                    c += dc;
+                    if r == hole[0] and c == hole[1] {
+                        break;
+                    }
+                }
+                line.push((r, c));
+            }
+            table.push(line);
+        }
+        stop.push(table);
+    }
+    let mut best: Map[(i64, i64), (i64, String)] = Map.new();
+    let mut frontier: SortedSet[(i64, String, i64, i64)] = SortedSet.new();
+    best.insert((ball[0], ball[1]), (0, ""));
+    frontier.insert((0, "", ball[0], ball[1]));
+    let mut settled: Set[(i64, i64)] = Set.new();
+    while let Some(least) = frontier.min() {
+        let (dist, path, row, col) = least.clone();
+        frontier.remove((dist, path.clone(), row, col));
+        settled.insert((row, col));
+        if row == hole[0] and col == hole[1] {
+            return path;
+        }
+        for k in 0..4 {
+            let (r, c) = stop[k][row][col];
+            let steps = (r - row).abs() + (c - col).abs();
+            if steps == 0 or settled.contains((r, c)) {
+                continue;
+            }
+            let name = moves[k].2.clone();
+            let next = (dist + steps, path + name);
+            match best.get((r, c)) {
+                Some((d, p)) => {
+                    if next.0 > *d or (next.0 == *d and next.1 >= p) {
+                        continue;
+                    }
+                    frontier.remove((*d, p.clone(), r, c));
+                }
+                None => {}
+            }
+            frontier.insert((next.0, next.1.clone(), r, c));
+            best.insert((r, c), next);
+        }
+    }
+    "impossible"
+}
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, maze: Vec[Vec[i64]], ball: Vec[i64], hole: Vec[i64]) -> String {
+    match which {
+        0 => find_shortest_way_star(maze, ball, hole),
+        1 => find_shortest_way_relax(maze, ball, hole),
+        2 => find_shortest_way_scan(maze, ball, hole),
+        _ => find_shortest_way_sorted(maze, ball, hole),
+    }
+}
+
+// Where a roll from (row, col) by (dr, dc) ends, and how far it goes.
+fn roll(maze: Vec[Vec[i64]], hole: Vec[i64], row: i64, col: i64, dr: i64, dc: i64) -> (i64, i64, i64) {
+    let mut r = row;
+    let mut c = col;
+    let mut steps = 0;
+    while r + dr >= 0 and r + dr < maze.len() and c + dc >= 0 and c + dc < maze[0].len() and maze[r + dr][c + dc] == 0 {
+        r += dr;
+        c += dc;
+        steps += 1;
+        if r == hole[0] and c == hole[1] {
+            break;
+        }
+    }
+    (r, c, steps)
+}
+
+fn direction(letter: char) -> (i64, i64) {
+    match letter {
+        'd' => (1, 0),
+        'l' => (0, -1),
+        'r' => (0, 1),
+        _ => (-1, 0),
+    }
+}
+
+// Distances only, then letters: the least distance from every cell to
+// the hole, by relaxing until nothing changes, and then from the ball
+// the first letter in alphabetical order whose roll keeps to a least
+// distance, again and again. Returns "impossible" or the instructions.
+fn reference(maze: Vec[Vec[i64]], ball: Vec[i64], hole: Vec[i64]) -> String {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let far = 1000000;
+    let mut to_hole = vec![vec![far; cols]; rows];
+    to_hole[hole[0]][hole[1]] = 0;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for r in 0..rows {
+            for c in 0..cols {
+                if maze[r][c] == 1 or (r == hole[0] and c == hole[1]) {
+                    continue;
+                }
+                for letter in "dlru".chars() {
+                    let (dr, dc) = direction(letter);
+                    let (sr, sc, steps) = roll(maze, hole, r, c, dr, dc);
+                    if steps > 0 and to_hole[sr][sc] + steps < to_hole[r][c] {
+                        to_hole[r][c] = to_hole[sr][sc] + steps;
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    if to_hole[ball[0]][ball[1]] == far {
+        return "impossible";
+    }
+    let mut way = String.new();
+    let mut r = ball[0];
+    let mut c = ball[1];
+    while not (r == hole[0] and c == hole[1]) {
+        for letter in "dlru".chars() {
+            let (dr, dc) = direction(letter);
+            let (sr, sc, steps) = roll(maze, hole, r, c, dr, dc);
+            if steps > 0 and steps + to_hole[sr][sc] == to_hole[r][c] {
+                way.push(letter);
+                r = sr;
+                c = sc;
+                break;
+            }
+        }
+    }
+    way
+}
+
+// The distance the instructions roll the ball, or -1 when one of them
+// does not move it, or it drops in the hole early, or ends elsewhere.
+fn follow(maze: Vec[Vec[i64]], ball: Vec[i64], hole: Vec[i64], way: String) -> i64 {
+    let mut r = ball[0];
+    let mut c = ball[1];
+    let mut total = 0;
+    for letter in way.chars() {
+        if r == hole[0] and c == hole[1] {
+            return -1;
+        }
+        let (dr, dc) = direction(letter);
+        let (sr, sc, steps) = roll(maze, hole, r, c, dr, dc);
+        if steps == 0 {
+            return -1;
+        }
+        r = sr;
+        c = sc;
+        total += steps;
+    }
+    if r == hole[0] and c == hole[1] { total } else { -1 }
+}
+
+fn main() {
+    let names = vec!["star", "relax", "scan", "sorted"];
+    let cases = 1500;
+    let mut seed: i64 = 4990;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    let mut c = 0;
+    while c < cases {
+        // 1 to 9 by 1 to 9 cells, a wall in each cell with odds of 1 in
+        // 5, 1 in 3 or 1 in 2 in turn, a ball and a hole in two
+        // different open cells.
+        let rows = 1 + next_random(mut seed) % 9;
+        let cols = 1 + next_random(mut seed) % 9;
+        let odds = if c % 3 == 0 { 5 } else if c % 3 == 1 { 3 } else { 2 };
+        let mut maze: Vec[Vec[i64]] = Vec.new();
+        let mut open: Vec[(i64, i64)] = Vec.new();
+        for r in 0..rows {
+            let mut line: Vec[i64] = Vec.new();
+            for k in 0..cols {
+                if next_random(mut seed) % odds == 0 {
+                    line.push(1);
+                } else {
+                    line.push(0);
+                    open.push((r, k));
+                }
+            }
+            maze.push(line);
+        }
+        if open.len() < 3 {
+            continue;
+        }
+        c += 1;
+        let a = next_random(mut seed) % open.len();
+        let mut b = next_random(mut seed) % (open.len() - 1);
+        if b >= a {
+            b += 1;
+        }
+        let ball = vec![open[a].0, open[a].1];
+        let hole = vec![open[b].0, open[b].1];
+        // The maze transposed and turned upside down, and with one more
+        // wall in an open cell that is neither the ball nor the hole.
+        let mut transposed: Vec[Vec[i64]] = Vec.new();
+        for k in 0..cols {
+            let mut line: Vec[i64] = Vec.new();
+            for r in 0..rows {
+                line.push(maze[r][k]);
+            }
+            transposed.push(line);
+        }
+        let mut flipped: Vec[Vec[i64]] = Vec.new();
+        for r in 0..rows {
+            flipped.push(maze[rows - 1 - r].clone());
+        }
+        let mut w = next_random(mut seed) % open.len();
+        while w == a or w == b {
+            w = (w + 1) % open.len();
+        }
+        let mut walled = maze.clone();
+        walled[open[w].0][open[w].1] = 1;
+        let want = reference(maze, ball, hole);
+        for which in 0..4 {
+            let got = arm(which, maze, ball, hole);
+            // P1: the reference's instructions.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {maze} from {ball} to {hole} gave {got}, want {want}");
+                }
+            }
+            let length = if got == "impossible" { -1 } else { follow(maze, ball, hole, got) };
+            // P2: the instructions roll the ball into the hole.
+            checks += 1;
+            if got != "impossible" and length < 0 {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {maze} from {ball} to {hole} gave {got}");
+                }
+            }
+            // P3: transposed, the way is as long.
+            checks += 1;
+            let other = arm(which, transposed, vec![ball[1], ball[0]], vec![hole[1], hole[0]]);
+            let other_length = if other == "impossible" { -1 } else { follow(transposed, vec![ball[1], ball[0]], vec![hole[1], hole[0]], other) };
+            if other_length != length {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {maze} from {ball} to {hole} gave {got}, transposed {other}");
+                }
+            }
+            // P4: upside down, the way is as long.
+            checks += 1;
+            let up_ball = vec![rows - 1 - ball[0], ball[1]];
+            let up_hole = vec![rows - 1 - hole[0], hole[1]];
+            let other = arm(which, flipped, up_ball, up_hole);
+            let other_length = if other == "impossible" { -1 } else { follow(flipped, up_ball, up_hole, other) };
+            if other_length != length {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {maze} from {ball} to {hole} gave {got}, upside down {other}");
+                }
+            }
+            // P5: a wall added where the way never rolls makes it no
+            // longer, and never impossible.
+            if length >= 0 {
+                let mut crossed = false;
+                let mut r = ball[0];
+                let mut k = ball[1];
+                for letter in got.chars() {
+                    let (dr, dc) = direction(letter);
+                    while not (r == hole[0] and k == hole[1]) and r + dr >= 0 and r + dr < rows and k + dc >= 0 and k + dc < cols and maze[r + dr][k + dc] == 0 {
+                        r += dr;
+                        k += dc;
+                        if r == open[w].0 and k == open[w].1 {
+                            crossed = true;
+                        }
+                    }
+                }
+                if not crossed {
+                    checks += 1;
+                    let other = arm(which, walled, ball, hole);
+                    let other_length = if other == "impossible" { -1 } else { follow(walled, ball, hole, other) };
+                    if other_length < 0 or other_length > length {
+                        failures += 1;
+                        by_property[4] += 1;
+                        if failures <= 5 {
+                            println(f"P5 {names[which]}: {walled} from {ball} to {hole} gave {other}, before {got}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}
