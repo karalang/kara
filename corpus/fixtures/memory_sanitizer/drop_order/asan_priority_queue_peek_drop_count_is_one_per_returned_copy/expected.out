@@ -1,8 +1,6 @@
 built
 peek 1
-drop 1 a1
 peek 1
-drop 1 a1
 3
 draining
 pop 1

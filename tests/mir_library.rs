@@ -1085,3 +1085,28 @@ fn main() {
 "#;
     assert_runs(src, "[la][ua][a][p][w][w][]\n[la][ua][a][p][w] false\n");
 }
+
+/// `PriorityQueue.peek` is a view of the root, `Option[ref T]` as
+/// docs/library/collections.md gives it: `*q.peek().unwrap()` reads it, and
+/// peeking copies nothing (B-2026-10-13-11).
+#[test]
+fn a_priority_queue_peek_is_a_view_of_the_root() {
+    let src = r#"
+fn main() {
+    let mut pq: PriorityQueue[i64] = PriorityQueue.new();
+    pq.push(5);
+    pq.push(1);
+    pq.push(4);
+    let top = *pq.peek().unwrap();
+    match pq.peek() { Some(x) => println(f"{*x} {top}"), None => {} }
+    let mut names: PriorityQueue[String] = PriorityQueue.max_first();
+    names.push("bo".to_string());
+    names.push("zed".to_string());
+    match names.peek() { Some(n) => println(f"{n} {n.len()}"), None => {} }
+    println(f"{pq.len()} {names.len()}");
+    let e: PriorityQueue[i64] = PriorityQueue.new();
+    println(f"{e.peek().is_none()}");
+}
+"#;
+    assert_runs(src, "1 1\nzed 3\n3 2\ntrue\n");
+}
