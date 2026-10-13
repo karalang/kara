@@ -1,0 +1,72 @@
+// Benchmark for #483: the ★ arm (the most 1s first, a float root) on a
+// large workload.
+//
+// LeetCode #483: Smallest Good Base -- the most 1s first, a float root.
+//
+// n written as m 1s in base k is 1 + k + ... + k^(m-1), which lies
+// between k^(m-1) and (k+1)^(m-1), so k is the integer (m-1)-th root of
+// n. More 1s means a smaller base, so try m from the most possible down
+// (base 2: n < 2^m, so m < 63 for n below 2^62) to 3; the root comes
+// from `f64.pow` and is checked exactly, with its neighbour above in case
+// the float fell just short. Two 1s always work, with k = n - 1.
+
+// Whether n is m 1s in base k, without overflowing: the sum stops as
+// soon as the next term would take it past n.
+fn is_ones(n: i64, k: i64, m: i64) -> bool {
+    let mut sum = 1;
+    let mut term = 1;
+    for _ in 1..m {
+        if term > (n - sum) / k {
+            return false;
+        }
+        term *= k;
+        sum += term;
+    }
+    sum == n
+}
+
+fn smallest_good_base(n: String) -> String {
+    let value = i64.parse(n).unwrap();
+    let mut m = 63;
+    while m >= 3 {
+        let root = (value as f64).pow(1.0 / (m - 1) as f64) as i64;
+        for k in root..root + 2 {
+            if k >= 2 and is_ones(value, k, m) {
+                return f"{k}";
+            }
+        }
+        m -= 1;
+    }
+    f"{value - 1}"
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn main() {
+    // 50,000 values: two in three counting down from 10^18 by 7, and
+    // every third m 1s in base k, for k from 2 up and m from 3 to 8 in
+    // turn while the value stays below 10^18.
+    let count = 50000;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for i in 0..count {
+        let mut n = 1000000000000000000 - 7 * i;
+        if i % 3 == 2 {
+            let k = 2 + i / 3;
+            let m = 3 + (i / 3) % 6;
+            n = 1;
+            let mut term = 1;
+            for _ in 1..m {
+                if term > (1000000000000000000 - n) / k {
+                    break;
+                }
+                term *= k;
+                n += term;
+            }
+        }
+        let base = i64.parse(smallest_good_base(f"{n}")).unwrap();
+        total += base % 1000;
+        checksum = (checksum * 31 + base % 1000000007) % 1000000007;
+    }
+    println(f"{count} values: bases add up to {total} (mod 1000 each), checksum {checksum}");
+}

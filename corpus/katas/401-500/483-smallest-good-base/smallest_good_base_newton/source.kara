@@ -1,0 +1,120 @@
+// LeetCode #483: Smallest Good Base -- integer roots, no floats.
+//
+// As in the ★ arm, the base for m 1s can only be the integer (m-1)-th
+// root of n, since n lies between k^(m-1) and (k+1)^(m-1). Here the root
+// is found in integers by Newton's method, x <- ((d-1) x + n / x^(d-1)) / d,
+// from a start above it, which falls to the root and stops. The powers
+// in the step are bounded by n / x^(d-1), so nothing overflows.
+
+// The largest x with x^d <= n, for d >= 2.
+fn integer_root(n: i64, d: i64) -> i64 {
+    // 2^(bits / d + 1) is above the root.
+    let mut bits = 0;
+    let mut rest = n;
+    while rest > 0 {
+        bits += 1;
+        rest /= 2;
+    }
+    let mut x: i64 = 1;
+    for _ in 0..bits / d + 1 {
+        x *= 2;
+    }
+    loop {
+        // n / x^(d-1), dividing step by step so no power is formed.
+        let mut quotient = n;
+        for _ in 1..d {
+            quotient /= x;
+        }
+        let next = ((d - 1) * x + quotient) / d;
+        if next >= x {
+            return x;
+        }
+        x = next;
+    }
+}
+
+// Whether n is m 1s in base k: n's digits in base k, all 1, m of them.
+fn is_ones(n: i64, k: i64, m: i64) -> bool {
+    let mut rest = n;
+    let mut digits = 0;
+    while rest > 0 {
+        if rest % k != 1 {
+            return false;
+        }
+        rest /= k;
+        digits += 1;
+    }
+    digits == m
+}
+
+fn smallest_good_base(n: String) -> String {
+    let value = i64.parse(n).unwrap();
+    let mut m = 62;
+    while m >= 3 {
+        let k = integer_root(value, m - 1);
+        if k >= 2 and is_ones(value, k, m) {
+            return f"{k}";
+        }
+        m -= 1;
+    }
+    f"{value - 1}"
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: String) {
+    println(f"n = {n} -> {smallest_good_base(n)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(String.from("13"));
+    show(String.from("4681"));
+    show(String.from("1000000000000000000"));
+    show(String.from("3"));
+    show(String.from("15"));
+    show(String.from("21"));
+    show(String.from("1000000"));
+    show(String.from("2251799813685247"));
+    show(String.from("999999999999999999"));
+    show(String.from("919818571896748567"));
+    // 300 random cases. Two in three are m ones in a random base k (k
+    // from 2 up, m from 3 up, the value at most 10^18), whose answer is k
+    // or smaller; the rest are random from 3 to 10^12, or to 10^18 for
+    // one case in ten.
+    let count = 300;
+    let mut seed: i64 = 483;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let mut n: i64 = 0;
+        if c % 3 != 2 {
+            let k = 2 + next_random(mut seed) % 2000;
+            let m = 3 + next_random(mut seed) % 6;
+            n = 1;
+            let mut term = 1;
+            for _ in 1..m {
+                if term > 1000000000000000000 / k {
+                    break;
+                }
+                term *= k;
+                n += term;
+            }
+        } else {
+            let r = (next_random(mut seed) * 32768 + next_random(mut seed)) * 32768 + next_random(mut seed);
+            if c % 30 == 29 {
+                n = 3 + (r * 32768 + next_random(mut seed)) % 999999999999999998;
+            } else {
+                n = 3 + r % 999999999998;
+            }
+        }
+        let base = i64.parse(smallest_good_base(f"{n}")).unwrap();
+        total += base % 1000000007;
+        checksum = (checksum * 31 + base % 1000000007 + n % 1000) % 1000000007;
+    }
+    println(f"{count} random cases: bases add up to {total} (mod 10^9 + 7 each), checksum {checksum}");
+}

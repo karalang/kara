@@ -1,0 +1,91 @@
+// LeetCode #484: Find Permutation -- 1 to n, each run of Ds reversed.
+//
+// Start from 1, 2, ..., n, the smallest permutation, which fits every I.
+// A run of Ds from position a to b needs the numbers at a to b + 1 to
+// fall, and the smallest way to do that, without touching anything to
+// its left, is to reverse those numbers in place. Runs are separated by
+// Is, so the reversals never overlap.
+
+fn find_permutation(s: String) -> Vec[i64] {
+    let letters: Vec[char] = s.chars().collect();
+    let n = letters.len() + 1;
+    let mut perm: Vec[i64] = Vec.new();
+    for i in 0..n {
+        perm.push(i + 1);
+    }
+    let mut i = 0;
+    while i < letters.len() {
+        if letters[i] == 'D' {
+            let start = i;
+            while i < letters.len() and letters[i] == 'D' {
+                i += 1;
+            }
+            // Reverse perm[start..=i].
+            let mut low = start;
+            let mut high = i;
+            while low < high {
+                perm.swap(low, high);
+                low += 1;
+                high -= 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    perm
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn list(v: Vec[i64]) -> String {
+    let mut line = String.new();
+    for x in v {
+        if not line.is_empty() {
+            line.push_str(", ");
+        }
+        line.push_str(f"{x}");
+    }
+    line
+}
+
+fn show(s: String) {
+    println(f"'{s}' -> [{list(find_permutation(s))}]");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(String.from("I"));
+    show(String.from("DI"));
+    show(String.from("D"));
+    show(String.from("DDDD"));
+    show(String.from("IIII"));
+    show(String.from("DIDID"));
+    show(String.from("IDDIIDDDI"));
+    show(String.from("DDIDDDIIDD"));
+    // 300 random patterns of 1 to 40 letters, D with odds of 1 in 4, 1 in
+    // 2 or 3 in 4 in turn.
+    let count = 300;
+    let mut seed: i64 = 484;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let mut s = String.new();
+        let size = 1 + next_random(mut seed) % 40;
+        for _ in 0..size {
+            if next_random(mut seed) % 4 <= c % 3 {
+                s.push('D');
+            } else {
+                s.push('I');
+            }
+        }
+        for x in find_permutation(s) {
+            total += 1;
+            checksum = (checksum * 31 + x) % 1000000007;
+        }
+    }
+    println(f"{count} random patterns: {total} numbers, checksum {checksum}");
+}

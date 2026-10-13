@@ -1,0 +1,85 @@
+// LeetCode #484: Find Permutation -- the smallest number that leaves
+// room.
+//
+// Greedily, left to right: if the Ds right after position i number d,
+// the d positions after it need d numbers smaller than it, so it must
+// be at least the (d + 1)-th smallest number not used yet, and that is
+// the one to take; the rest of the run then takes the numbers below it
+// the same way. The unused numbers stay in a sorted `Vec`, and the pick
+// is removed from it by index.
+
+fn find_permutation(s: String) -> Vec[i64] {
+    let letters: Vec[char] = s.chars().collect();
+    let n = letters.len() + 1;
+    // falls[i]: the number of Ds starting at position i.
+    let mut falls: Vec[i64] = vec![0; n];
+    for i in (0..n - 1).rev() {
+        if letters[i] == 'D' {
+            falls[i] = falls[i + 1] + 1;
+        }
+    }
+    let mut unused: Vec[i64] = Vec.new();
+    for x in 1..n + 1 {
+        unused.push(x);
+    }
+    let mut perm: Vec[i64] = Vec.new();
+    for i in 0..n {
+        perm.push(unused.remove(falls[i]));
+    }
+    perm
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn list(v: Vec[i64]) -> String {
+    let mut line = String.new();
+    for x in v {
+        if not line.is_empty() {
+            line.push_str(", ");
+        }
+        line.push_str(f"{x}");
+    }
+    line
+}
+
+fn show(s: String) {
+    println(f"'{s}' -> [{list(find_permutation(s))}]");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(String.from("I"));
+    show(String.from("DI"));
+    show(String.from("D"));
+    show(String.from("DDDD"));
+    show(String.from("IIII"));
+    show(String.from("DIDID"));
+    show(String.from("IDDIIDDDI"));
+    show(String.from("DDIDDDIIDD"));
+    // 300 random patterns of 1 to 40 letters, D with odds of 1 in 4, 1 in
+    // 2 or 3 in 4 in turn.
+    let count = 300;
+    let mut seed: i64 = 484;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let mut s = String.new();
+        let size = 1 + next_random(mut seed) % 40;
+        for _ in 0..size {
+            if next_random(mut seed) % 4 <= c % 3 {
+                s.push('D');
+            } else {
+                s.push('I');
+            }
+        }
+        for x in find_permutation(s) {
+            total += 1;
+            checksum = (checksum * 31 + x) % 1000000007;
+        }
+    }
+    println(f"{count} random patterns: {total} numbers, checksum {checksum}");
+}

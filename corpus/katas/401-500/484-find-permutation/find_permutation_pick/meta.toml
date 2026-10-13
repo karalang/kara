@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/484-find-permutation/find_permutation_pick.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "3a31f21ad"
+extracted_src = "4b764fa5"
+model_rev = "1aa23105"
+model_src = "4b764fa5"

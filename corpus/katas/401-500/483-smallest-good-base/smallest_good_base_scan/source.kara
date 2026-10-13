@@ -1,0 +1,100 @@
+// LeetCode #483: Smallest Good Base -- small bases one by one.
+//
+// A base with four or more 1s satisfies k^3 < n, so every such base is
+// at most the cube root of n, at most 10^6: try them in order, reading
+// n's digits in each. Past that only three 1s (k^2 + k + 1 = n) or two
+// (k = n - 1) are left.
+
+fn all_ones(n: i64, k: i64) -> bool {
+    let mut rest = n;
+    while rest > 0 {
+        if rest % k != 1 {
+            return false;
+        }
+        rest /= k;
+    }
+    true
+}
+
+fn smallest_good_base(n: String) -> String {
+    let value = i64.parse(n).unwrap();
+    let mut k = 2;
+    while k * k * k < value {
+        if all_ones(value, k) {
+            return f"{k}";
+        }
+        k += 1;
+    }
+    // k^2 < k^2 + k + 1 < (k + 1)^2, so three 1s can only be in base
+    // isqrt(n): the float square root, fixed up to be exact.
+    let mut root = (value as f64).sqrt() as i64;
+    while root * root > value {
+        root -= 1;
+    }
+    while (root + 1) * (root + 1) <= value {
+        root += 1;
+    }
+    if root >= 2 and root * root + root + 1 == value {
+        return f"{root}";
+    }
+    f"{value - 1}"
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(n: String) {
+    println(f"n = {n} -> {smallest_good_base(n)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(String.from("13"));
+    show(String.from("4681"));
+    show(String.from("1000000000000000000"));
+    show(String.from("3"));
+    show(String.from("15"));
+    show(String.from("21"));
+    show(String.from("1000000"));
+    show(String.from("2251799813685247"));
+    show(String.from("999999999999999999"));
+    show(String.from("919818571896748567"));
+    // 300 random cases. Two in three are m ones in a random base k (k
+    // from 2 up, m from 3 up, the value at most 10^18), whose answer is k
+    // or smaller; the rest are random from 3 to 10^12, or to 10^18 for
+    // one case in ten.
+    let count = 300;
+    let mut seed: i64 = 483;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let mut n: i64 = 0;
+        if c % 3 != 2 {
+            let k = 2 + next_random(mut seed) % 2000;
+            let m = 3 + next_random(mut seed) % 6;
+            n = 1;
+            let mut term = 1;
+            for _ in 1..m {
+                if term > 1000000000000000000 / k {
+                    break;
+                }
+                term *= k;
+                n += term;
+            }
+        } else {
+            let r = (next_random(mut seed) * 32768 + next_random(mut seed)) * 32768 + next_random(mut seed);
+            if c % 30 == 29 {
+                n = 3 + (r * 32768 + next_random(mut seed)) % 999999999999999998;
+            } else {
+                n = 3 + r % 999999999998;
+            }
+        }
+        let base = i64.parse(smallest_good_base(f"{n}")).unwrap();
+        total += base % 1000000007;
+        checksum = (checksum * 31 + base % 1000000007 + n % 1000) % 1000000007;
+    }
+    println(f"{count} random cases: bases add up to {total} (mod 10^9 + 7 each), checksum {checksum}");
+}
