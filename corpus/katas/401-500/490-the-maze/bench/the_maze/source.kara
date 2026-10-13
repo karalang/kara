@@ -1,0 +1,79 @@
+// Benchmark for #490: the ★ arm (breadth first over stopping cells); see
+// ../the_maze.kara.
+
+fn has_path(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> bool {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let mut seen: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..rows {
+        let mut line: Vec[bool] = Vec.new();
+        for _ in 0..cols {
+            line.push(false);
+        }
+        seen.push(line);
+    }
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    queue.push_back((start[0], start[1]));
+    seen[start[0]][start[1]] = true;
+    while let Some((row, col)) = queue.pop_front() {
+        if row == destination[0] and col == destination[1] {
+            return true;
+        }
+        for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let mut r = row;
+            let mut c = col;
+            while r + dr >= 0 and r + dr < rows and c + dc >= 0 and c + dc < cols and maze[r + dr][c + dc] == 0 {
+                r += dr;
+                c += dc;
+            }
+            if not seen[r][c] {
+                seen[r][c] = true;
+                queue.push_back((r, c));
+            }
+        }
+    }
+    false
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 60 mazes of 300 by 300 cells, a wall in each cell with odds of 1 in
+    // 6, and a start and a destination on open cells, built once, then
+    // each solved once.
+    let n = 300;
+    let mut mazes: Vec[Vec[Vec[i64]]] = Vec.new();
+    let mut starts: Vec[Vec[i64]] = Vec.new();
+    let mut destinations: Vec[Vec[i64]] = Vec.new();
+    let mut seed: i64 = 490;
+    for _ in 0..60 {
+        let mut maze: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            let mut line: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                line.push(if next_random(mut seed) % 6 == 0 { 1 } else { 0 });
+            }
+            maze.push(line);
+        }
+        let start = vec![next_random(mut seed) % n, next_random(mut seed) % n];
+        let destination = vec![next_random(mut seed) % n, next_random(mut seed) % n];
+        maze[start[0]][start[1]] = 0;
+        maze[destination[0]][destination[1]] = 0;
+        mazes.push(maze);
+        starts.push(start);
+        destinations.push(destination);
+    }
+    let mut reached = 0;
+    let mut checksum: i64 = 0;
+    for k in 0..mazes.len() {
+        let found = has_path(mazes[k], starts[k], destinations[k]);
+        if found {
+            reached += 1;
+        }
+        checksum = (checksum * 31 + (if found { 7 } else { 3 })) % 1000000007;
+    }
+    println(f"60 mazes of 300 by 300: the destination reached in {reached}, checksum {checksum}");
+}

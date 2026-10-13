@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/491-non-decreasing-subsequences/differential.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["differential", "lib:map", "lib:set"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:a `for` loop over a collection"
+classified_with = "34fa8873c"
+extracted_src = "a2af2ef9"
+model_rev = "1aa23105"
+model_src = "a2af2ef9"

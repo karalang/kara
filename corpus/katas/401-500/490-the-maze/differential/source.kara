@@ -1,0 +1,347 @@
+// Differential test for LeetCode #490: The Maze.
+//
+// Copies of the four arms, on 1,500 random mazes of 1 to 8 by 1 to 8
+// cells (a wall in each cell with odds of 1 in 5, 1 in 3 or 1 in 2 in
+// turn), with three different open cells: a start, a destination and a
+// further destination. Properties:
+//   P1  the answer is whether the destination is among the stopping
+//       cells marked from the start until nothing changes
+//   P2  the maze transposed gives the same answer
+//   P3  the maze upside down gives the same answer
+//   P4  start to destination and destination to further destination
+//       make start to further destination
+//   P5  a destination the ball reaches has a wall or the edge beside it
+
+// ---- star: the_maze.kara
+
+fn has_path_star(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> bool {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let mut seen: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..rows {
+        let mut line: Vec[bool] = Vec.new();
+        for _ in 0..cols {
+            line.push(false);
+        }
+        seen.push(line);
+    }
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    queue.push_back((start[0], start[1]));
+    seen[start[0]][start[1]] = true;
+    while let Some((row, col)) = queue.pop_front() {
+        if row == destination[0] and col == destination[1] {
+            return true;
+        }
+        for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let mut r = row;
+            let mut c = col;
+            while r + dr >= 0 and r + dr < rows and c + dc >= 0 and c + dc < cols and maze[r + dr][c + dc] == 0 {
+                r += dr;
+                c += dc;
+            }
+            if not seen[r][c] {
+                seen[r][c] = true;
+                queue.push_back((r, c));
+            }
+        }
+    }
+    false
+}
+
+// ---- dfs: the_maze_dfs.kara
+
+fn search_dfs(maze: Vec[Vec[i64]], row: i64, col: i64, destination: Vec[i64], seen: mut ref Set[(i64, i64)]) -> bool {
+    if row == destination[0] and col == destination[1] {
+        return true;
+    }
+    seen.insert((row, col));
+    for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        let mut r = row;
+        let mut c = col;
+        while r + dr >= 0 and r + dr < maze.len() and c + dc >= 0 and c + dc < maze[0].len() and maze[r + dr][c + dc] == 0 {
+            r += dr;
+            c += dc;
+        }
+        if not seen.contains((r, c)) and search_dfs(maze, r, c, destination, seen) {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_path_dfs(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> bool {
+    let mut seen: Set[(i64, i64)] = Set.new();
+    search_dfs(maze, start[0], start[1], destination, mut seen)
+}
+
+// ---- table: the_maze_table.kara
+
+fn has_path_table(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> bool {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    // stop_left[r][c] is the column a ball from (r, c) rolling left stops
+    // in; likewise right, and up and down give rows.
+    let mut stop_left: Vec[Vec[i64]] = Vec.new();
+    let mut stop_right: Vec[Vec[i64]] = Vec.new();
+    let mut stop_up: Vec[Vec[i64]] = Vec.new();
+    let mut stop_down: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        stop_left.push(vec![0; cols]);
+        stop_right.push(vec![0; cols]);
+        stop_up.push(vec![0; cols]);
+        stop_down.push(vec![0; cols]);
+    }
+    for r in 0..rows {
+        let mut edge = 0;
+        for c in 0..cols {
+            if maze[r][c] == 1 {
+                edge = c + 1;
+            } else {
+                stop_left[r][c] = edge;
+            }
+        }
+        edge = cols - 1;
+        let mut c = cols - 1;
+        while c >= 0 {
+            if maze[r][c] == 1 {
+                edge = c - 1;
+            } else {
+                stop_right[r][c] = edge;
+            }
+            c -= 1;
+        }
+    }
+    for c in 0..cols {
+        let mut edge = 0;
+        for r in 0..rows {
+            if maze[r][c] == 1 {
+                edge = r + 1;
+            } else {
+                stop_up[r][c] = edge;
+            }
+        }
+        edge = rows - 1;
+        let mut r = rows - 1;
+        while r >= 0 {
+            if maze[r][c] == 1 {
+                edge = r - 1;
+            } else {
+                stop_down[r][c] = edge;
+            }
+            r -= 1;
+        }
+    }
+    let mut seen: Set[(i64, i64)] = Set.new();
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    queue.push_back((start[0], start[1]));
+    seen.insert((start[0], start[1]));
+    while let Some((r, c)) = queue.pop_front() {
+        if r == destination[0] and c == destination[1] {
+            return true;
+        }
+        let stops = vec![(stop_up[r][c], c), (stop_down[r][c], c), (r, stop_left[r][c]), (r, stop_right[r][c])];
+        for next in stops {
+            if not seen.contains(next) {
+                seen.insert(next);
+                queue.push_back(next);
+            }
+        }
+    }
+    false
+}
+
+// ---- backward: the_maze_backward.kara
+
+fn has_path_backward(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> bool {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let mut good: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..rows {
+        good.push(vec![false; cols]);
+    }
+    let mut stack: Vec[(i64, i64)] = vec![(destination[0], destination[1])];
+    good[destination[0]][destination[1]] = true;
+    while let Some((row, col)) = stack.pop() {
+        for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            // The ball stops here rolling in (dr, dc) only if blocked ahead.
+            let ar = row + dr;
+            let ac = col + dc;
+            if ar >= 0 and ar < rows and ac >= 0 and ac < cols and maze[ar][ac] == 0 {
+                continue;
+            }
+            // Every open cell behind, back to a wall, rolls here.
+            let mut r = row - dr;
+            let mut c = col - dc;
+            while r >= 0 and r < rows and c >= 0 and c < cols and maze[r][c] == 0 {
+                if not good[r][c] {
+                    good[r][c] = true;
+                    stack.push((r, c));
+                }
+                r -= dr;
+                c -= dc;
+            }
+        }
+    }
+    good[start[0]][start[1]]
+}
+
+// ---- differential harness ---------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> bool {
+    match which {
+        0 => has_path_star(maze, start, destination),
+        1 => has_path_dfs(maze, start, destination),
+        2 => has_path_table(maze, start, destination),
+        _ => has_path_backward(maze, start, destination),
+    }
+}
+
+// Every stopping cell the ball can reach, by marking until nothing
+// changes: each pass rolls the ball four ways from every cell marked.
+fn fixpoint(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> bool {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    let mut reach: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..rows {
+        reach.push(vec![false; cols]);
+    }
+    reach[start[0]][start[1]] = true;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for row in 0..rows {
+            for col in 0..cols {
+                if not reach[row][col] {
+                    continue;
+                }
+                for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                    let mut r = row;
+                    let mut c = col;
+                    while r + dr >= 0 and r + dr < rows and c + dc >= 0 and c + dc < cols and maze[r + dr][c + dc] == 0 {
+                        r += dr;
+                        c += dc;
+                    }
+                    if not reach[r][c] {
+                        reach[r][c] = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    reach[destination[0]][destination[1]]
+}
+
+fn main() {
+    let names = vec!["star", "dfs", "table", "backward"];
+    let cases = 1500;
+    let mut seed: i64 = 4900;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0, 0];
+    let mut made = 0;
+    while made < cases {
+        // a maze of 1 to 8 by 1 to 8 cells, a wall in each cell with odds
+        // of 1 in 5, 1 in 3 or 1 in 2 in turn, and three open cells: the
+        // start, the destination and another destination, all different.
+        let odds = if made % 3 == 0 { 20 } else if made % 3 == 1 { 33 } else { 50 };
+        let rows = 1 + next_random(mut seed) % 8;
+        let cols = 1 + next_random(mut seed) % 8;
+        let mut maze: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut line: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                line.push(if next_random(mut seed) % 100 < odds { 1 } else { 0 });
+            }
+            maze.push(line);
+        }
+        let start = vec![next_random(mut seed) % rows, next_random(mut seed) % cols];
+        let destination = vec![next_random(mut seed) % rows, next_random(mut seed) % cols];
+        let further = vec![next_random(mut seed) % rows, next_random(mut seed) % cols];
+        if start == destination or further == destination or further == start {
+            continue;
+        }
+        maze[start[0]][start[1]] = 0;
+        maze[destination[0]][destination[1]] = 0;
+        maze[further[0]][further[1]] = 0;
+        made += 1;
+        let want = fixpoint(maze, start, destination);
+        let mut transposed: Vec[Vec[i64]] = Vec.new();
+        for c in 0..cols {
+            let mut line: Vec[i64] = Vec.new();
+            for r in 0..rows {
+                line.push(maze[r][c]);
+            }
+            transposed.push(line);
+        }
+        let mut flipped = maze.clone();
+        flipped.reverse();
+        let mut blocked = false;
+        for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let r = destination[0] + dr;
+            let c = destination[1] + dc;
+            if r < 0 or r >= rows or c < 0 or c >= cols or maze[r][c] == 1 {
+                blocked = true;
+            }
+        }
+        for which in 0..4 {
+            let got = arm(which, maze, start, destination);
+            // P1: the stopping cells marked until nothing changes.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {maze} from {start} to {destination} gave {got}");
+                }
+            }
+            // P2: the maze transposed gives the same answer.
+            checks += 1;
+            if arm(which, transposed, vec![start[1], start[0]], vec![destination[1], destination[0]]) != got {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {maze} from {start} to {destination} transposed");
+                }
+            }
+            // P3: the maze upside down gives the same answer.
+            checks += 1;
+            if arm(which, flipped, vec![rows - 1 - start[0], start[1]], vec![rows - 1 - destination[0], destination[1]]) != got {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {maze} from {start} to {destination} upside down");
+                }
+            }
+            // P4: start to destination and destination to further make
+            // start to further.
+            checks += 1;
+            if got and arm(which, maze, destination, further) and not arm(which, maze, start, further) {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {maze} from {start} by {destination} to {further}");
+                }
+            }
+            // P5: a destination the ball reaches has a wall or the edge
+            // beside it.
+            checks += 1;
+            if got and not blocked {
+                failures += 1;
+                by_property[4] += 1;
+                if failures <= 5 {
+                    println(f"P5 {names[which]}: {maze} from {start} to {destination}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

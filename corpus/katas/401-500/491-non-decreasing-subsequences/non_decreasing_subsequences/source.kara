@@ -1,0 +1,81 @@
+// LeetCode #491: Non-decreasing Subsequences -- backtracking.
+//
+// Grow a subsequence one number at a time, each from later in the array
+// and no smaller than the last; record it once it has two numbers. At
+// each depth a value is tried at most once (a `Set` of the values tried
+// there), since trying it again from a later index can only repeat
+// subsequences already found.
+
+fn extend(nums: Vec[i64], from: i64, current: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    if current.len() >= 2 {
+        out.push(current.clone());
+    }
+    let mut tried: Set[i64] = Set.new();
+    for i in from..nums.len() {
+        if tried.contains(nums[i]) {
+            continue;
+        }
+        if current.len() == 0 or nums[i] >= current[current.len() - 1] {
+            tried.insert(nums[i]);
+            current.push(nums[i]);
+            extend(nums, i + 1, current, out);
+            current.pop();
+        }
+    }
+}
+
+fn find_subsequences(nums: Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut current: Vec[i64] = Vec.new();
+    extend(nums, 0, mut current, mut out);
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn sorted_answer(nums: Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out = find_subsequences(nums);
+    out.sort();
+    out
+}
+
+fn show(name: String, nums: Vec[i64]) {
+    let out = sorted_answer(nums);
+    println(f"{name}: {nums} -> {out.len()}: {out}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("example 1", vec![4, 6, 7, 7]);
+    show("example 2", vec![4, 4, 3, 2, 1]);
+    show("one number", vec![5]);
+    show("all equal", vec![2, 2, 2, 2]);
+    show("falling", vec![5, 4, 3, 2, 1]);
+    show("negatives", vec![-1, -3, -1, 0, -3]);
+    show("rising", vec![1, 2, 3, 4]);
+    // 300 random arrays of 1 to 12 numbers from -3 to 3.
+    let count = 300;
+    let mut seed: i64 = 491;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let size = 1 + next_random(mut seed) % 12;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            nums.push(next_random(mut seed) % 7 - 3);
+        }
+        let out = sorted_answer(nums);
+        total += out.len();
+        for s in out {
+            for x in s {
+                checksum = (checksum * 31 + x + 4) % 1000000007;
+            }
+            checksum = (checksum * 31 + 9) % 1000000007;
+        }
+    }
+    println(f"{count} random arrays: {total} subsequences, checksum {checksum}");
+}

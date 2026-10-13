@@ -1,0 +1,107 @@
+// LeetCode #490: The Maze -- depth first, recursively.
+//
+// From a stopping cell, roll each way to the next stopping cell and
+// search on from there, marking cells as they are reached so that each
+// is searched once. Stops as soon as the destination is reached.
+
+fn search(maze: Vec[Vec[i64]], row: i64, col: i64, destination: Vec[i64], seen: mut ref Set[(i64, i64)]) -> bool {
+    if row == destination[0] and col == destination[1] {
+        return true;
+    }
+    seen.insert((row, col));
+    for (dr, dc) in vec![(-1, 0), (1, 0), (0, -1), (0, 1)] {
+        let mut r = row;
+        let mut c = col;
+        while r + dr >= 0 and r + dr < maze.len() and c + dc >= 0 and c + dc < maze[0].len() and maze[r + dr][c + dc] == 0 {
+            r += dr;
+            c += dc;
+        }
+        if not seen.contains((r, c)) and search(maze, r, c, destination, seen) {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_path(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> bool {
+    let mut seen: Set[(i64, i64)] = Set.new();
+    search(maze, start[0], start[1], destination, mut seen)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(name: String, maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) {
+    println(f"{name}: from {start} to {destination} -> {has_path(maze, start, destination)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let first = vec![
+        vec![0, 0, 1, 0, 0],
+        vec![0, 0, 0, 0, 0],
+        vec![0, 0, 0, 1, 0],
+        vec![1, 1, 0, 1, 1],
+        vec![0, 0, 0, 0, 0],
+    ];
+    show("example 1", first, vec![0, 4], vec![4, 4]);
+    show("example 2", first, vec![0, 4], vec![3, 2]);
+    show("example 3", vec![
+        vec![0, 0, 0, 0, 0],
+        vec![1, 1, 0, 0, 1],
+        vec![0, 0, 0, 0, 0],
+        vec![0, 1, 0, 0, 1],
+        vec![0, 1, 0, 0, 0],
+    ], vec![4, 3], vec![0, 1]);
+    show("two cells", vec![vec![0, 0]], vec![0, 0], vec![0, 1]);
+    show("the middle of a row", vec![vec![0, 0, 0]], vec![0, 0], vec![0, 1]);
+    show("a column", vec![vec![0], vec![0], vec![0], vec![0]], vec![3, 0], vec![0, 0]);
+    show("an open room's corner", vec![
+        vec![0, 0, 0, 0],
+        vec![0, 0, 0, 0],
+        vec![0, 0, 0, 0],
+    ], vec![1, 1], vec![2, 3]);
+    show("an open room's middle", vec![
+        vec![0, 0, 0, 0],
+        vec![0, 0, 0, 0],
+        vec![0, 0, 0, 0],
+    ], vec![0, 0], vec![1, 2]);
+    // 300 random mazes of 1 to 12 by 1 to 12 cells, a wall in each cell
+    // with odds of 1 in 5, 1 in 3 or 1 in 2 in turn, and the start and the
+    // destination two different open cells.
+    let count = 300;
+    let mut seed: i64 = 490;
+    let mut reached = 0;
+    let mut checksum: i64 = 0;
+    let mut made = 0;
+    while made < count {
+        let odds = if made % 3 == 0 { 20 } else if made % 3 == 1 { 33 } else { 50 };
+        let rows = 1 + next_random(mut seed) % 12;
+        let cols = 1 + next_random(mut seed) % 12;
+        let mut maze: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut line: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                line.push(if next_random(mut seed) % 100 < odds { 1 } else { 0 });
+            }
+            maze.push(line);
+        }
+        let start = vec![next_random(mut seed) % rows, next_random(mut seed) % cols];
+        let destination = vec![next_random(mut seed) % rows, next_random(mut seed) % cols];
+        if start == destination {
+            continue;
+        }
+        maze[start[0]][start[1]] = 0;
+        maze[destination[0]][destination[1]] = 0;
+        made += 1;
+        let found = has_path(maze, start, destination);
+        if found {
+            reached += 1;
+        }
+        checksum = (checksum * 31 + (if found { 7 } else { 3 }) + rows * cols) % 1000000007;
+    }
+    println(f"{count} random mazes: the destination reached in {reached}, checksum {checksum}");
+}

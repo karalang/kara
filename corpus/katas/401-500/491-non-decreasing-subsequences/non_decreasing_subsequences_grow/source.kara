@@ -1,0 +1,85 @@
+// LeetCode #491: Non-decreasing Subsequences -- growing them all at once.
+//
+// Walk the array keeping every distinct non-decreasing subsequence found
+// so far, one number long included. Each new number extends every one
+// that ends no higher than it, and starts one of its own; a `Set` drops
+// the ones seen before. At the end keep those of two or more numbers.
+
+fn find_subsequences(nums: Vec[i64]) -> Vec[Vec[i64]] {
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    let mut seen: Set[Vec[i64]] = Set.new();
+    for x in nums {
+        let count = all.len();
+        for k in 0..count {
+            if all[k][all[k].len() - 1] <= x {
+                let mut longer = all[k].clone();
+                longer.push(x);
+                if not seen.contains(longer) {
+                    seen.insert(longer.clone());
+                    all.push(longer);
+                }
+            }
+        }
+        let single = vec![x];
+        if not seen.contains(single) {
+            seen.insert(single.clone());
+            all.push(single);
+        }
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for s in all.into_iter() {
+        if s.len() >= 2 {
+            out.push(s);
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn sorted_answer(nums: Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out = find_subsequences(nums);
+    out.sort();
+    out
+}
+
+fn show(name: String, nums: Vec[i64]) {
+    let out = sorted_answer(nums);
+    println(f"{name}: {nums} -> {out.len()}: {out}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("example 1", vec![4, 6, 7, 7]);
+    show("example 2", vec![4, 4, 3, 2, 1]);
+    show("one number", vec![5]);
+    show("all equal", vec![2, 2, 2, 2]);
+    show("falling", vec![5, 4, 3, 2, 1]);
+    show("negatives", vec![-1, -3, -1, 0, -3]);
+    show("rising", vec![1, 2, 3, 4]);
+    // 300 random arrays of 1 to 12 numbers from -3 to 3.
+    let count = 300;
+    let mut seed: i64 = 491;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let size = 1 + next_random(mut seed) % 12;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            nums.push(next_random(mut seed) % 7 - 3);
+        }
+        let out = sorted_answer(nums);
+        total += out.len();
+        for s in out {
+            for x in s {
+                checksum = (checksum * 31 + x + 4) % 1000000007;
+            }
+            checksum = (checksum * 31 + 9) % 1000000007;
+        }
+    }
+    println(f"{count} random arrays: {total} subsequences, checksum {checksum}");
+}

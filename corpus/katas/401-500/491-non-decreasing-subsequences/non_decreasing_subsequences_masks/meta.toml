@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/401-500/491-non-decreasing-subsequences/non_decreasing_subsequences_masks.kara"
+dedup_of = []
+expect = "panic:-6"
+exit = -6
+tags = ["lib:set"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -6
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:a `for` loop over a collection"
+classified_with = "34fa8873c"
+extracted_src = "eb883bad"
+model_rev = "1aa23105"
+model_src = "eb883bad"

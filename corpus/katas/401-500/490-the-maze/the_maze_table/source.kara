@@ -1,0 +1,159 @@
+// LeetCode #490: The Maze -- the stops worked out first.
+//
+// Where a ball rolling left from (r, c) stops depends only on the row:
+// it is the cell just right of the nearest wall to the left. One sweep
+// along each row in each direction (and down each column) fills four
+// tables of stops, in O(rows × cols) in all; then a breadth-first search
+// over stopping cells only looks them up.
+
+fn has_path(maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) -> bool {
+    let rows = maze.len();
+    let cols = maze[0].len();
+    // stop_left[r][c] is the column a ball from (r, c) rolling left stops
+    // in; likewise right, and up and down give rows.
+    let mut stop_left: Vec[Vec[i64]] = Vec.new();
+    let mut stop_right: Vec[Vec[i64]] = Vec.new();
+    let mut stop_up: Vec[Vec[i64]] = Vec.new();
+    let mut stop_down: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        stop_left.push(vec![0; cols]);
+        stop_right.push(vec![0; cols]);
+        stop_up.push(vec![0; cols]);
+        stop_down.push(vec![0; cols]);
+    }
+    for r in 0..rows {
+        let mut edge = 0;
+        for c in 0..cols {
+            if maze[r][c] == 1 {
+                edge = c + 1;
+            } else {
+                stop_left[r][c] = edge;
+            }
+        }
+        edge = cols - 1;
+        let mut c = cols - 1;
+        while c >= 0 {
+            if maze[r][c] == 1 {
+                edge = c - 1;
+            } else {
+                stop_right[r][c] = edge;
+            }
+            c -= 1;
+        }
+    }
+    for c in 0..cols {
+        let mut edge = 0;
+        for r in 0..rows {
+            if maze[r][c] == 1 {
+                edge = r + 1;
+            } else {
+                stop_up[r][c] = edge;
+            }
+        }
+        edge = rows - 1;
+        let mut r = rows - 1;
+        while r >= 0 {
+            if maze[r][c] == 1 {
+                edge = r - 1;
+            } else {
+                stop_down[r][c] = edge;
+            }
+            r -= 1;
+        }
+    }
+    let mut seen: Set[(i64, i64)] = Set.new();
+    let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+    queue.push_back((start[0], start[1]));
+    seen.insert((start[0], start[1]));
+    while let Some((r, c)) = queue.pop_front() {
+        if r == destination[0] and c == destination[1] {
+            return true;
+        }
+        let stops = vec![(stop_up[r][c], c), (stop_down[r][c], c), (r, stop_left[r][c]), (r, stop_right[r][c])];
+        for next in stops {
+            if not seen.contains(next) {
+                seen.insert(next);
+                queue.push_back(next);
+            }
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(name: String, maze: Vec[Vec[i64]], start: Vec[i64], destination: Vec[i64]) {
+    println(f"{name}: from {start} to {destination} -> {has_path(maze, start, destination)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let first = vec![
+        vec![0, 0, 1, 0, 0],
+        vec![0, 0, 0, 0, 0],
+        vec![0, 0, 0, 1, 0],
+        vec![1, 1, 0, 1, 1],
+        vec![0, 0, 0, 0, 0],
+    ];
+    show("example 1", first, vec![0, 4], vec![4, 4]);
+    show("example 2", first, vec![0, 4], vec![3, 2]);
+    show("example 3", vec![
+        vec![0, 0, 0, 0, 0],
+        vec![1, 1, 0, 0, 1],
+        vec![0, 0, 0, 0, 0],
+        vec![0, 1, 0, 0, 1],
+        vec![0, 1, 0, 0, 0],
+    ], vec![4, 3], vec![0, 1]);
+    show("two cells", vec![vec![0, 0]], vec![0, 0], vec![0, 1]);
+    show("the middle of a row", vec![vec![0, 0, 0]], vec![0, 0], vec![0, 1]);
+    show("a column", vec![vec![0], vec![0], vec![0], vec![0]], vec![3, 0], vec![0, 0]);
+    show("an open room's corner", vec![
+        vec![0, 0, 0, 0],
+        vec![0, 0, 0, 0],
+        vec![0, 0, 0, 0],
+    ], vec![1, 1], vec![2, 3]);
+    show("an open room's middle", vec![
+        vec![0, 0, 0, 0],
+        vec![0, 0, 0, 0],
+        vec![0, 0, 0, 0],
+    ], vec![0, 0], vec![1, 2]);
+    // 300 random mazes of 1 to 12 by 1 to 12 cells, a wall in each cell
+    // with odds of 1 in 5, 1 in 3 or 1 in 2 in turn, and the start and the
+    // destination two different open cells.
+    let count = 300;
+    let mut seed: i64 = 490;
+    let mut reached = 0;
+    let mut checksum: i64 = 0;
+    let mut made = 0;
+    while made < count {
+        let odds = if made % 3 == 0 { 20 } else if made % 3 == 1 { 33 } else { 50 };
+        let rows = 1 + next_random(mut seed) % 12;
+        let cols = 1 + next_random(mut seed) % 12;
+        let mut maze: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut line: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                line.push(if next_random(mut seed) % 100 < odds { 1 } else { 0 });
+            }
+            maze.push(line);
+        }
+        let start = vec![next_random(mut seed) % rows, next_random(mut seed) % cols];
+        let destination = vec![next_random(mut seed) % rows, next_random(mut seed) % cols];
+        if start == destination {
+            continue;
+        }
+        maze[start[0]][start[1]] = 0;
+        maze[destination[0]][destination[1]] = 0;
+        made += 1;
+        let found = has_path(maze, start, destination);
+        if found {
+            reached += 1;
+        }
+        checksum = (checksum * 31 + (if found { 7 } else { 3 }) + rows * cols) % 1000000007;
+    }
+    println(f"{count} random mazes: the destination reached in {reached}, checksum {checksum}");
+}

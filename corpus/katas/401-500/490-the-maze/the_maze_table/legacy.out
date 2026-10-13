@@ -1,0 +1,9 @@
+example 1: from [0, 4] to [4, 4] -> true
+example 2: from [0, 4] to [3, 2] -> false
+example 3: from [4, 3] to [0, 1] -> false
+two cells: from [0, 0] to [0, 1] -> true
+the middle of a row: from [0, 0] to [0, 1] -> false
+a column: from [3, 0] to [0, 0] -> true
+an open room's corner: from [1, 1] to [2, 3] -> true
+an open room's middle: from [0, 0] to [1, 2] -> false
+300 random mazes: the destination reached in 93, checksum 592345652
