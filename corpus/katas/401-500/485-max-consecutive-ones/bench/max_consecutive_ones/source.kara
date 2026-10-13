@@ -1,0 +1,57 @@
+// Benchmark for #485: the ★ arm (a running count) on a large workload.
+//
+// LeetCode #485: Max Consecutive Ones -- a running count.
+//
+// Count the 1s in the current run, start again at every 0, and keep the
+// largest count seen.
+
+fn find_max_consecutive_ones(nums: Vec[i64]) -> i64 {
+    let mut best = 0;
+    let mut run = 0;
+    for x in nums {
+        if x == 1 {
+            run += 1;
+            if run > best {
+                best = run;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    best
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 arrays of 100,000 numbers, 1 with odds from 80 in 100 to 99 in
+    // 100, built once, then each scanned 50 times.
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    let mut seed: i64 = 485;
+    for a in 0..20 {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..100000 {
+            if next_random(mut seed) % 100 < 80 + a {
+                nums.push(1);
+            } else {
+                nums.push(0);
+            }
+        }
+        arrays.push(nums);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..50 {
+        for nums in arrays.iter() {
+            let best = find_max_consecutive_ones(nums);
+            total += best;
+            checksum = (checksum * 31 + best) % 1000000007;
+        }
+    }
+    println(f"1000 scans of 100000 numbers: runs add up to {total}, checksum {checksum}");
+}

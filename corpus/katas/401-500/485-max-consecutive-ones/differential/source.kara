@@ -1,0 +1,200 @@
+// Differential test for LeetCode #485: Max Consecutive Ones.
+//
+// Copies of the four arms, on 1,500 random arrays a of 1 to 25 numbers,
+// with a second array b of 0 to 25 (1 with odds of 1 in 2, 3 in 4 or 15
+// in 16 in turn). Properties:
+//   P1  the answer is the longest slice of 1s, every slice checked
+//   P2  the array reversed gives the same answer
+//   P3  a, then a 0, then b gives the larger of a's and b's answers
+//   P4  a 1 turned to 0 never makes the answer larger, and a 0 turned to
+//       1 never smaller
+
+// ---- star: max_consecutive_ones.kara
+
+fn find_max_consecutive_ones_star(nums: Vec[i64]) -> i64 {
+    let mut best = 0;
+    let mut run = 0;
+    for x in nums {
+        if x == 1 {
+            run += 1;
+            if run > best {
+                best = run;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    best
+}
+
+// ---- zeros: max_consecutive_ones_zeros.kara
+
+fn find_max_consecutive_ones_zeros(nums: Vec[i64]) -> i64 {
+    let mut best = 0;
+    let mut last_zero = -1;
+    for (i, x) in nums.iter().enumerate() {
+        if *x == 0 {
+            last_zero = i;
+        } else {
+            best = best.max(i - last_zero);
+        }
+    }
+    best
+}
+
+// ---- fold: max_consecutive_ones_fold.kara
+
+fn find_max_consecutive_ones_fold(nums: Vec[i64]) -> i64 {
+    let (_, best) = nums.iter().fold((0, 0), |(run, best), x| {
+        if *x == 1 {
+            (run + 1, best.max(run + 1))
+        } else {
+            (0, best)
+        }
+    });
+    best
+}
+
+// ---- jump: max_consecutive_ones_jump.kara
+
+fn find_max_consecutive_ones_jump(nums: Vec[i64]) -> i64 {
+    let mut best = 0;
+    let mut i = 0;
+    while i < nums.len() {
+        if nums[i] == 1 {
+            let mut end = i;
+            while end < nums.len() and nums[end] == 1 {
+                end += 1;
+            }
+            best = best.max(end - i);
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    best
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, nums: Vec[i64]) -> i64 {
+    match which {
+        0 => find_max_consecutive_ones_star(nums),
+        1 => find_max_consecutive_ones_zeros(nums),
+        2 => find_max_consecutive_ones_fold(nums),
+        _ => find_max_consecutive_ones_jump(nums),
+    }
+}
+
+// The longest slice of 1s, by checking every slice.
+fn brute(nums: Vec[i64]) -> i64 {
+    let mut best = 0;
+    for i in 0..nums.len() {
+        for j in i + 1..nums.len() + 1 {
+            let mut all_ones = true;
+            for k in i..j {
+                if nums[k] != 1 {
+                    all_ones = false;
+                }
+            }
+            if all_ones and j - i > best {
+                best = j - i;
+            }
+        }
+    }
+    best
+}
+
+fn random_array(seed: mut ref i64, size: i64, odds: i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..size {
+        if next_random(seed) % 16 < odds {
+            nums.push(1);
+        } else {
+            nums.push(0);
+        }
+    }
+    nums
+}
+
+fn main() {
+    let names = vec!["star", "zeros", "fold", "jump"];
+    let cases = 1500;
+    let mut seed: i64 = 4850;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0, 0];
+    for c in 0..cases {
+        // a of 1 to 25 numbers and b of 0 to 25, 1 with odds of 1 in 2,
+        // 3 in 4 or 15 in 16 in turn.
+        let odds = if c % 3 == 0 { 8 } else if c % 3 == 1 { 12 } else { 15 };
+        let size = 1 + next_random(mut seed) % 25;
+        let a = random_array(mut seed, size, odds);
+        let size = next_random(mut seed) % 26;
+        let b = random_array(mut seed, size, odds);
+        let mut reversed = a.clone();
+        reversed.reverse();
+        let mut joined = a.clone();
+        joined.push(0);
+        for x in b.iter() {
+            joined.push(*x);
+        }
+        let at = next_random(mut seed) % a.len();
+        let mut flipped = a.clone();
+        flipped[at] = 1 - flipped[at];
+        let want = brute(a);
+        for which in 0..4 {
+            let got = arm(which, a);
+            // P1: the longest slice of 1s, every slice checked.
+            checks += 1;
+            if got != want {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: {a} gave {got}, want {want}");
+                }
+            }
+            // P2: the array reversed gives the same answer.
+            checks += 1;
+            let other = arm(which, reversed);
+            if other != got {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: {reversed} gave {other}, not {got}");
+                }
+            }
+            // P3: a, then a 0, then b gives the larger of the two answers.
+            checks += 1;
+            let other = arm(which, joined);
+            let larger = got.max(arm(which, b));
+            if other != larger {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: {joined} gave {other}, want {larger}");
+                }
+            }
+            // P4: a 1 turned to 0 never makes the answer larger, and a 0
+            // turned to 1 never smaller.
+            checks += 1;
+            let other = arm(which, flipped);
+            if (a[at] == 1 and other > got) or (a[at] == 0 and other < got) {
+                failures += 1;
+                by_property[3] += 1;
+                if failures <= 5 {
+                    println(f"P4 {names[which]}: {flipped} gave {other}, from {got}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}");
+    }
+}
