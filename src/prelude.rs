@@ -775,6 +775,7 @@ pub const LIBRARY_SOURCE_TYPES: &[&str] = &[
     "SortedMap",
     "String",
     "Slice",
+    "VecDeque",
 ];
 
 /// Library methods written in Kāra (redesign A2), from

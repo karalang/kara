@@ -147,6 +147,36 @@ impl[T] Set[T] {
     }
 }
 
+/// The elements of a deque, front to back, each borrowed.
+struct DequeIter[T] {
+    d: ref VecDeque[T],
+    front: i64,
+    back: i64,
+}
+
+impl[T] Iterator for DequeIter[T] {
+    type Item = ref T;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        let i = self.front;
+        self.front = i + 1;
+        Some(self.d.entry_at(i))
+    }
+}
+
+impl[T] DoubleEndedIterator for DequeIter[T] {
+    fn next_back(mut ref self) -> Option[Self.Item] {
+        if self.front >= self.back {
+            return None;
+        }
+        self.back = self.back - 1;
+        Some(self.d.entry_at(self.back))
+    }
+}
+
 /// The elements of a sorted set, in ascending order, each borrowed.
 struct SortedSetIter[T] {
     s: ref SortedSet[T],
@@ -348,6 +378,11 @@ impl[T] Vec[T] {
 }
 
 impl[T] VecDeque[T] {
+    /// The elements, front to back, each borrowed.
+    fn iter(ref self) -> DequeIter[T] {
+        DequeIter { d: self, front: 0, back: self.len() }
+    }
+
     fn default() -> VecDeque[T] {
         VecDeque.new()
     }

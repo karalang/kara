@@ -989,3 +989,22 @@ fn main() {
 "#;
     assert_runs(src, "x→olléh\nSome(x) Some(h) 5\n3 2\n");
 }
+
+/// A deque's `iter()` is an iterator value like a Vec's, so it can be
+/// stepped, summed, reversed and collected, not only looped over.
+#[test]
+fn a_deque_iterator_is_a_value() {
+    let src = r#"
+fn main() {
+    let mut d: VecDeque[i64] = VecDeque.new();
+    d.push_back(9);
+    d.push_front(1);
+    d.push_back(4);
+    let Some(q) = d.iter().next() else { return; };
+    let t: i64 = d.iter().sum();
+    let r: Vec[i64] = d.iter().rev().cloned().collect();
+    println(f"{q} {t} {r[0]} {r.len()}");
+}
+"#;
+    assert_runs(src, "1 14 4 3\n");
+}
