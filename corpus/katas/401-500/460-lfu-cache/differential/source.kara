@@ -1,0 +1,529 @@
+// Differential test for LeetCode #460: LFU Cache.
+//
+// Copies of the four arms, each run on 1,500 random sessions.
+// Properties:
+//   P1  on capacity 1 to 4, keys 0 to 5 and 1 to 40 calls, the answers
+//       are brute force's, which recounts every key's uses from the
+//       call history at each eviction
+//   P2  with room for every key, a get returns the key's last put
+//   P3  renaming the keys keeps the answers
+//   P4  adding a constant to every value adds it to every hit
+//   P5  with capacity 1, a get hits exactly the key put last
+
+// ---- buckets: lfu_cache_buckets.kara
+
+struct CacheBucketsEntry {
+    value: i64,
+    count: i64,
+    time: i64,
+}
+
+struct CacheBuckets {
+    capacity: i64,
+    entries: Map[i64, CacheBucketsEntry],
+    buckets: Map[i64, SortedMap[i64, i64]],
+    least: i64,
+    clock: i64,
+}
+
+impl CacheBuckets {
+    fn new(capacity: i64) -> CacheBuckets {
+        CacheBuckets { capacity: capacity, entries: Map.new(), buckets: Map.new(), least: 0, clock: 0 }
+    }
+
+    // Moves `key` from its bucket to the next one up, as its newest key.
+    fn touch(mut ref self, key: i64) {
+        let count = self.entries[key].count;
+        let time = self.entries[key].time;
+        self.buckets[count].remove(time);
+        if self.buckets[count].is_empty() {
+            self.buckets.remove(count);
+            if self.least == count {
+                self.least = count + 1;
+            }
+        }
+        self.clock += 1;
+        self.entries[key].count = count + 1;
+        self.entries[key].time = self.clock;
+        self.buckets.entry(count + 1).or_insert(SortedMap.new()).insert(self.clock, key);
+    }
+
+    fn get(mut ref self, key: i64) -> i64 {
+        if not self.entries.contains_key(key) {
+            return -1;
+        }
+        self.touch(key);
+        self.entries[key].value
+    }
+
+    fn put(mut ref self, key: i64, value: i64) {
+        if self.capacity == 0 {
+            return;
+        }
+        if self.entries.contains_key(key) {
+            self.entries[key].value = value;
+            self.touch(key);
+            return;
+        }
+        if self.entries.len() == self.capacity {
+            let least = self.least;
+            let Some((time, victim)) = self.buckets[least].iter().next() else { return; };
+            let (time, victim) = (*time, *victim);
+            self.buckets[least].remove(time);
+            if self.buckets[least].is_empty() {
+                self.buckets.remove(least);
+            }
+            self.entries.remove(victim);
+        }
+        self.clock += 1;
+        let now = self.clock;
+        self.entries.insert(key, CacheBucketsEntry { value: value, count: 1, time: now });
+        self.buckets.entry(1).or_insert(SortedMap.new()).insert(now, key);
+        self.least = 1;
+    }
+}
+
+// ---- set: lfu_cache_set.kara
+
+struct CacheSetEntry {
+    value: i64,
+    count: i64,
+    time: i64,
+}
+
+struct CacheSet {
+    capacity: i64,
+    entries: Map[i64, CacheSetEntry],
+    order: SortedSet[(i64, i64, i64)],
+    clock: i64,
+}
+
+impl CacheSet {
+    fn new(capacity: i64) -> CacheSet {
+        CacheSet { capacity: capacity, entries: Map.new(), order: SortedSet.new(), clock: 0 }
+    }
+
+    fn touch(mut ref self, key: i64) {
+        let count = self.entries[key].count;
+        let time = self.entries[key].time;
+        self.order.remove((count, time, key));
+        self.clock += 1;
+        self.entries[key].count = count + 1;
+        self.entries[key].time = self.clock;
+        self.order.insert((count + 1, self.clock, key));
+    }
+
+    fn get(mut ref self, key: i64) -> i64 {
+        if not self.entries.contains_key(key) {
+            return -1;
+        }
+        self.touch(key);
+        self.entries[key].value
+    }
+
+    fn put(mut ref self, key: i64, value: i64) {
+        if self.capacity == 0 {
+            return;
+        }
+        if self.entries.contains_key(key) {
+            self.entries[key].value = value;
+            self.touch(key);
+            return;
+        }
+        if self.entries.len() == self.capacity {
+            let Some(first) = self.order.iter().next() else { return; };
+            let first = *first;
+            self.order.remove(first);
+            self.entries.remove(first.2);
+        }
+        self.clock += 1;
+        self.entries.insert(key, CacheSetEntry { value: value, count: 1, time: self.clock });
+        self.order.insert((1, self.clock, key));
+    }
+}
+
+// ---- lists: lfu_cache.kara
+
+struct CacheListsNode {
+    key: i64,
+    value: i64,
+    count: i64,
+    prev: i64,
+    next: i64,
+}
+
+struct CacheLists {
+    capacity: i64,
+    nodes: Vec[CacheListsNode],
+    index: Map[i64, i64],
+    sentinels: Map[i64, i64],
+    least: i64,
+    free: i64,
+}
+
+impl CacheLists {
+    fn new(capacity: i64) -> CacheLists {
+        CacheLists { capacity: capacity, nodes: Vec.new(), index: Map.new(), sentinels: Map.new(), least: 0, free: -1 }
+    }
+
+    fn unlink(mut ref self, i: i64) {
+        let (prev, next) = (self.nodes[i].prev, self.nodes[i].next);
+        self.nodes[prev].next = next;
+        self.nodes[next].prev = prev;
+    }
+
+    // Appends node `i` to the list of `count`, making the list first if
+    // there is none.
+    fn append(mut ref self, i: i64, count: i64) {
+        if not self.sentinels.contains_key(count) {
+            let s = self.nodes.len();
+            self.nodes.push(CacheListsNode { key: -1, value: 0, count: count, prev: s, next: s });
+            self.sentinels.insert(count, s);
+        }
+        let s = self.sentinels[count];
+        let last = self.nodes[s].prev;
+        self.nodes[i].count = count;
+        self.nodes[i].prev = last;
+        self.nodes[i].next = s;
+        self.nodes[last].next = i;
+        self.nodes[s].prev = i;
+    }
+
+    fn is_empty(ref self, count: i64) -> bool {
+        let s = self.sentinels[count];
+        self.nodes[s].next == s
+    }
+
+    fn touch(mut ref self, i: i64) {
+        let count = self.nodes[i].count;
+        self.unlink(i);
+        if self.least == count and self.is_empty(count) {
+            self.least = count + 1;
+        }
+        self.append(i, count + 1);
+    }
+
+    fn get(mut ref self, key: i64) -> i64 {
+        if not self.index.contains_key(key) {
+            return -1;
+        }
+        let i = self.index[key];
+        self.touch(i);
+        self.nodes[i].value
+    }
+
+    fn put(mut ref self, key: i64, value: i64) {
+        if self.capacity == 0 {
+            return;
+        }
+        if self.index.contains_key(key) {
+            let i = self.index[key];
+            self.nodes[i].value = value;
+            self.touch(i);
+            return;
+        }
+        if self.index.len() == self.capacity {
+            let s = self.sentinels[self.least];
+            let victim = self.nodes[s].next;
+            self.unlink(victim);
+            self.index.remove(self.nodes[victim].key);
+            self.free = victim;
+        }
+        let i = if self.free >= 0 {
+            let i = self.free;
+            self.free = -1;
+            self.nodes[i].key = key;
+            self.nodes[i].value = value;
+            i
+        } else {
+            self.nodes.push(CacheListsNode { key: key, value: value, count: 0, prev: -1, next: -1 });
+            self.nodes.len() - 1
+        };
+        self.index.insert(key, i);
+        self.append(i, 1);
+        self.least = 1;
+    }
+}
+
+// ---- scan: lfu_cache_scan.kara
+
+struct CacheScan {
+    capacity: i64,
+    entries: Vec[(i64, i64, i64, i64)],
+    clock: i64,
+}
+
+impl CacheScan {
+    fn new(capacity: i64) -> CacheScan {
+        CacheScan { capacity: capacity, entries: Vec.new(), clock: 0 }
+    }
+
+    fn find(ref self, key: i64) -> i64 {
+        for i in 0..self.entries.len() {
+            if self.entries[i].0 == key {
+                return i;
+            }
+        }
+        -1
+    }
+
+    fn get(mut ref self, key: i64) -> i64 {
+        let i = self.find(key);
+        if i < 0 {
+            return -1;
+        }
+        self.clock += 1;
+        let (k, value, count, _) = self.entries[i];
+        self.entries[i] = (k, value, count + 1, self.clock);
+        value
+    }
+
+    fn put(mut ref self, key: i64, value: i64) {
+        if self.capacity == 0 {
+            return;
+        }
+        self.clock += 1;
+        let i = self.find(key);
+        if i >= 0 {
+            let count = self.entries[i].2;
+            self.entries[i] = (key, value, count + 1, self.clock);
+            return;
+        }
+        if self.entries.len() == self.capacity {
+            let mut worst = 0;
+            for j in 1..self.entries.len() {
+                let (_, _, count, time) = self.entries[j];
+                let (_, _, worst_count, worst_time) = self.entries[worst];
+                if count < worst_count or (count == worst_count and time < worst_time) {
+                    worst = j;
+                }
+            }
+            self.entries.swap_remove(worst);
+        }
+        self.entries.push((key, value, 1, self.clock));
+    }
+}
+
+// ---- harness
+
+fn run_buckets(capacity: i64, ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut cache = CacheBuckets.new(capacity);
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, key, value) in ops {
+        if kind == 0 {
+            cache.put(key, value);
+        } else {
+            answers.push(cache.get(key));
+        }
+    }
+    answers
+}
+
+fn run_set(capacity: i64, ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut cache = CacheSet.new(capacity);
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, key, value) in ops {
+        if kind == 0 {
+            cache.put(key, value);
+        } else {
+            answers.push(cache.get(key));
+        }
+    }
+    answers
+}
+
+fn run_lists(capacity: i64, ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut cache = CacheLists.new(capacity);
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, key, value) in ops {
+        if kind == 0 {
+            cache.put(key, value);
+        } else {
+            answers.push(cache.get(key));
+        }
+    }
+    answers
+}
+
+fn run_scan(capacity: i64, ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut cache = CacheScan.new(capacity);
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, key, value) in ops {
+        if kind == 0 {
+            cache.put(key, value);
+        } else {
+            answers.push(cache.get(key));
+        }
+    }
+    answers
+}
+
+fn answers(arm: i64, capacity: i64, ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    if arm == 0 {
+        run_buckets(capacity, ops)
+    } else if arm == 1 {
+        run_set(capacity, ops)
+    } else if arm == 2 {
+        run_lists(capacity, ops)
+    } else {
+        run_scan(capacity, ops)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_ops(length: i64, keys: i64, seed: mut ref i64) -> Vec[(i64, i64, i64)] {
+    let mut ops: Vec[(i64, i64, i64)] = Vec.new();
+    for _ in 0..length {
+        let kind = next_random(seed) % 2;
+        let key = next_random(seed) % keys;
+        let value = next_random(seed) % 100000;
+        ops.push((kind, key, value));
+    }
+    ops
+}
+
+// Keeps the cached keys and their values, and a history of which key
+// each successful call used. At an eviction, a key's count is the
+// number of its uses since it was last inserted, and its last use is
+// the latest of them; the victim has the least count, then the
+// earliest last use.
+fn brute(capacity: i64, ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut keys: Vec[i64] = Vec.new();
+    let mut values: Vec[i64] = Vec.new();
+    let mut inserted: Vec[i64] = Vec.new();
+    let mut history: Vec[i64] = Vec.new();
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, key, value) in ops {
+        let mut at = -1;
+        for i in 0..keys.len() {
+            if keys[i] == key {
+                at = i;
+            }
+        }
+        if kind == 1 {
+            if at < 0 {
+                answers.push(-1);
+            } else {
+                history.push(key);
+                answers.push(values[at]);
+            }
+            continue;
+        }
+        if at >= 0 {
+            values[at] = value;
+            history.push(key);
+            continue;
+        }
+        if keys.len() == capacity {
+            let mut victim = -1;
+            let mut best_count = 0;
+            let mut best_last = 0;
+            for i in 0..keys.len() {
+                let mut count = 0;
+                let mut last = -1;
+                for t in inserted[i]..history.len() {
+                    if history[t] == keys[i] {
+                        count += 1;
+                        last = t;
+                    }
+                }
+                if victim < 0 or count < best_count or (count == best_count and last < best_last) {
+                    victim = i;
+                    best_count = count;
+                    best_last = last;
+                }
+            }
+            keys.remove(victim);
+            values.remove(victim);
+            inserted.remove(victim);
+        }
+        keys.push(key);
+        values.push(value);
+        inserted.push(history.len());
+        history.push(key);
+    }
+    answers
+}
+
+fn report(p: i64, arm: i64, case: i64, ok: bool, failures: mut ref Vec[i64]) {
+    if not ok {
+        failures[0] += 1;
+        failures[p] += 1;
+        if failures[0] <= 10 {
+            println(f"FAIL P{p} arm {arm} case {case}");
+        }
+    }
+}
+
+fn main() {
+    let mut seed: i64 = 4600;
+    let mut checks: i64 = 0;
+    let mut failures = vec![0; 6];
+    for case in 0..1500 {
+        // Small sessions for brute force.
+        let small_capacity = 1 + next_random(mut seed) % 4;
+        let small = random_ops(1 + next_random(mut seed) % 40, 6, mut seed);
+        let expected = brute(small_capacity, small);
+        // A session of 1 to 200 calls on capacity 1 to 20.
+        let capacity = 1 + next_random(mut seed) % 20;
+        let keys = 1 + next_random(mut seed) % (2 * capacity + 1);
+        let ops = random_ops(1 + next_random(mut seed) % 200, keys, mut seed);
+        // Room for every key: a plain map gives the answers.
+        let mut roomy: Vec[i64] = Vec.new();
+        let mut last: Map[i64, i64] = Map.new();
+        for (kind, key, value) in ops {
+            if kind == 0 {
+                last[key] = value;
+            } else {
+                roomy.push(last.get(key) ?? -1);
+            }
+        }
+        // Keys renamed, and values shifted.
+        let mut renamed: Vec[(i64, i64, i64)] = Vec.new();
+        let mut shifted: Vec[(i64, i64, i64)] = Vec.new();
+        let shift = 1 + next_random(mut seed) % 1000;
+        for (kind, key, value) in ops {
+            renamed.push((kind, key * 7 + 3, value));
+            shifted.push((kind, key, value + shift));
+        }
+        // Capacity 1 holds the key put last.
+        let mut single: Vec[i64] = Vec.new();
+        let mut held = -1;
+        let mut held_value = 0;
+        for (kind, key, value) in ops {
+            if kind == 0 {
+                held = key;
+                held_value = value;
+            } else {
+                single.push(if key == held { held_value } else { -1 });
+            }
+        }
+        for arm in 0..4 {
+            checks += 5;
+            report(1, arm, case, answers(arm, small_capacity, small) == expected, mut failures);
+            report(2, arm, case, answers(arm, keys, ops) == roomy, mut failures);
+            let base = answers(arm, capacity, ops);
+            report(3, arm, case, answers(arm, capacity, renamed) == base, mut failures);
+            let moved = answers(arm, capacity, shifted);
+            let mut same = moved.len() == base.len();
+            if same {
+                for i in 0..base.len() {
+                    let want = if base[i] < 0 { -1 } else { base[i] + shift };
+                    if moved[i] != want {
+                        same = false;
+                    }
+                }
+            }
+            report(4, arm, case, same, mut failures);
+            report(5, arm, case, answers(arm, 1, ops) == single, mut failures);
+        }
+    }
+    println(f"1500 cases, 4 arms, {checks} checks, {failures[0]} failures");
+    if failures[0] > 0 {
+        println(f"by property: P1 {failures[1]}, P2 {failures[2]}, P3 {failures[3]}, P4 {failures[4]}, P5 {failures[5]}");
+    }
+}

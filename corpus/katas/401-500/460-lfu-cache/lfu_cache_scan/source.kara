@@ -1,0 +1,127 @@
+// LeetCode #460: LFU Cache -- the plain reference, by scanning.
+//
+// Keep the entries in a `Vec` of (key, value, count, time). A get or a
+// put looks for its key from the front; an eviction scans for the
+// least count and, among those, the oldest time, and swaps the last
+// entry into its place. O(capacity) a call.
+
+struct LFUCache {
+    capacity: i64,
+    entries: Vec[(i64, i64, i64, i64)],
+    clock: i64,
+}
+
+impl LFUCache {
+    fn new(capacity: i64) -> LFUCache {
+        LFUCache { capacity: capacity, entries: Vec.new(), clock: 0 }
+    }
+
+    fn find(ref self, key: i64) -> i64 {
+        for i in 0..self.entries.len() {
+            if self.entries[i].0 == key {
+                return i;
+            }
+        }
+        -1
+    }
+
+    fn get(mut ref self, key: i64) -> i64 {
+        let i = self.find(key);
+        if i < 0 {
+            return -1;
+        }
+        self.clock += 1;
+        let (k, value, count, _) = self.entries[i];
+        self.entries[i] = (k, value, count + 1, self.clock);
+        value
+    }
+
+    fn put(mut ref self, key: i64, value: i64) {
+        if self.capacity == 0 {
+            return;
+        }
+        self.clock += 1;
+        let i = self.find(key);
+        if i >= 0 {
+            let count = self.entries[i].2;
+            self.entries[i] = (key, value, count + 1, self.clock);
+            return;
+        }
+        if self.entries.len() == self.capacity {
+            let mut worst = 0;
+            for j in 1..self.entries.len() {
+                let (_, _, count, time) = self.entries[j];
+                let (_, _, worst_count, worst_time) = self.entries[worst];
+                if count < worst_count or (count == worst_count and time < worst_time) {
+                    worst = j;
+                }
+            }
+            self.entries.swap_remove(worst);
+        }
+        self.entries.push((key, value, 1, self.clock));
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// Runs `ops` on a cache of `capacity`: (0, key, value) is a put and
+// (1, key, _) a get. Returns every get's answer.
+fn run(capacity: i64, ops: Vec[(i64, i64, i64)]) -> Vec[i64] {
+    let mut cache = LFUCache.new(capacity);
+    let mut answers: Vec[i64] = Vec.new();
+    for (kind, key, value) in ops {
+        if kind == 0 {
+            cache.put(key, value);
+        } else {
+            answers.push(cache.get(key));
+        }
+    }
+    answers
+}
+
+fn show(name: Str, capacity: i64, ops: Vec[(i64, i64, i64)]) {
+    let answers = run(capacity, ops);
+    println(f"{name}: {answers}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show("example", 2, vec![(0, 1, 1), (0, 2, 2), (1, 1, 0), (0, 3, 3), (1, 2, 0), (1, 3, 0), (0, 4, 4), (1, 1, 0), (1, 3, 0), (1, 4, 0)]);
+    show("one slot", 1, vec![(0, 1, 10), (1, 1, 0), (0, 2, 20), (1, 1, 0), (1, 2, 0)]);
+    show("update keeps", 2, vec![(0, 1, 1), (0, 2, 2), (0, 1, 5), (0, 3, 3), (1, 1, 0), (1, 2, 0), (1, 3, 0)]);
+    show("tie to oldest", 3, vec![(0, 1, 1), (0, 2, 2), (0, 3, 3), (1, 3, 0), (1, 1, 0), (1, 2, 0), (0, 4, 4), (1, 3, 0), (1, 4, 0)]);
+    show("miss", 2, vec![(1, 7, 0), (0, 7, 70), (1, 7, 0), (1, 8, 0)]);
+    show("frequent stays", 2, vec![(0, 1, 1), (1, 1, 0), (1, 1, 0), (1, 1, 0), (0, 2, 2), (0, 3, 3), (0, 4, 4), (1, 1, 0), (1, 2, 0), (1, 3, 0), (1, 4, 0)]);
+    show("put counts", 2, vec![(0, 1, 1), (0, 1, 2), (0, 2, 3), (0, 3, 4), (1, 1, 0), (1, 2, 0), (1, 3, 0)]);
+    // 300 random sessions: capacity 1 to 10 (or to 100), 1 to 300
+    // operations over keys up to twice the capacity, half of them gets.
+    let count = 300;
+    let mut seed: i64 = 460;
+    let mut hits = 0;
+    let mut gets = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let capacity = 1 + next_random(mut seed) % [10, 100][next_random(mut seed) % 2];
+        let keys = 1 + next_random(mut seed) % (2 * capacity + 1);
+        let length = 1 + next_random(mut seed) % 300;
+        let mut ops: Vec[(i64, i64, i64)] = Vec.new();
+        for _ in 0..length {
+            let kind = next_random(mut seed) % 2;
+            let key = next_random(mut seed) % keys;
+            let value = next_random(mut seed) % 100000;
+            ops.push((kind, key, value));
+        }
+        for answer in run(capacity, ops) {
+            gets += 1;
+            if answer >= 0 {
+                hits += 1;
+            }
+            checksum = (checksum * 31 + answer + 2) % 1000000007;
+        }
+    }
+    println(f"{count} random sessions: {gets} gets, {hits} hits, checksum {checksum}");
+}
