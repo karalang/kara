@@ -1,0 +1,235 @@
+// Differential test for LeetCode #475: Heaters.
+//
+// Copies of the four arms, on 1,500 random cases: 1 to 12 houses and 1
+// to 6 heaters at positions from 1 to 50, or from 1 to 1,000,000 in one
+// case in five, in any order and possibly repeated.
+// Properties:
+//   P1  the arm's radius is the largest distance from a house to its
+//       nearest heater, every pair compared
+//   P2  the houses and the heaters in another order give the same radius
+//   P3  every position times k (1 to 5) plus d (0 to 999) gives k times
+//       the radius
+//   P4  one more heater never makes the radius larger, and one more
+//       house never makes it smaller
+//   P5  every position mirrored gives the same radius
+
+// ---- star: heaters.kara
+
+fn first_at_or_after_star(heaters: Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = heaters.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if heaters[mid] < x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn find_radius_star(houses: Vec[i64], heaters: Vec[i64]) -> i64 {
+    let mut sorted = heaters.clone();
+    sorted.sort();
+    let mut radius = 0;
+    for house in houses {
+        let at = first_at_or_after_star(sorted, house);
+        let mut nearest = i64.MAX;
+        if at < sorted.len() {
+            nearest = sorted[at] - house;
+        }
+        if at > 0 and house - sorted[at - 1] < nearest {
+            nearest = house - sorted[at - 1];
+        }
+        if nearest > radius {
+            radius = nearest;
+        }
+    }
+    radius
+}
+
+// ---- pointers: heaters_pointers.kara
+
+fn find_radius_pointers(houses: Vec[i64], heaters: Vec[i64]) -> i64 {
+    let mut hs = houses.clone();
+    hs.sort();
+    let mut ws = heaters.clone();
+    ws.sort();
+    let mut radius = 0;
+    let mut k = 0;
+    for house in hs {
+        while k + 1 < ws.len() and (ws[k + 1] - house).abs() <= (ws[k] - house).abs() {
+            k += 1;
+        }
+        radius = radius.max((ws[k] - house).abs());
+    }
+    radius
+}
+
+// ---- guess: heaters_guess.kara
+
+fn covers_guess(houses: Vec[i64], heaters: Vec[i64], radius: i64) -> bool {
+    let mut k = 0;
+    for house in houses {
+        while k < heaters.len() and heaters[k] + radius < house {
+            k += 1;
+        }
+        if k == heaters.len() or heaters[k] - radius > house {
+            return false;
+        }
+    }
+    true
+}
+
+fn find_radius_guess(houses: Vec[i64], heaters: Vec[i64]) -> i64 {
+    let mut hs = houses.clone();
+    hs.sort();
+    let mut ws = heaters.clone();
+    ws.sort();
+    let mut lo = 0;
+    let mut hi = (hs[hs.len() - 1] - ws[0]).abs().max((ws[ws.len() - 1] - hs[0]).abs());
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if covers_guess(hs, ws, mid) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// ---- ordered: heaters_ordered.kara
+
+fn find_radius_ordered(houses: Vec[i64], heaters: Vec[i64]) -> i64 {
+    let mut at: SortedMap[i64, i64] = SortedMap.new();
+    for h in heaters {
+        at.insert(h, h);
+    }
+    let mut radius = 0;
+    for house in houses {
+        let mut need = i64.MAX;
+        if let Some((before, _)) = at.floor(house) {
+            need = house - *before;
+        }
+        if let Some((after, _)) = at.ceiling(house) {
+            need = need.min(*after - house);
+        }
+        radius = radius.max(need);
+    }
+    radius
+}
+
+// ---- harness
+
+fn answer(arm: i64, houses: Vec[i64], heaters: Vec[i64]) -> i64 {
+    if arm == 0 {
+        find_radius_star(houses, heaters)
+    } else if arm == 1 {
+        find_radius_pointers(houses, heaters)
+    } else if arm == 2 {
+        find_radius_guess(houses, heaters)
+    } else {
+        find_radius_ordered(houses, heaters)
+    }
+}
+
+// Straight from the definition: each house's distance to its nearest
+// heater, every pair compared, and the largest of those.
+fn brute(houses: Vec[i64], heaters: Vec[i64]) -> i64 {
+    let mut radius = 0;
+    for house in houses {
+        let mut nearest = i64.MAX;
+        for h in heaters {
+            let d = if h > house { h - house } else { house - h };
+            if d < nearest {
+                nearest = d;
+            }
+        }
+        if nearest > radius {
+            radius = nearest;
+        }
+    }
+    radius
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shuffled(seed: mut ref i64, v: Vec[i64]) -> Vec[i64] {
+    let mut out = v.clone();
+    for i in (1..out.len()).rev() {
+        let j = next_random(seed) % (i + 1);
+        out.swap(i, j);
+    }
+    out
+}
+
+fn moved(v: Vec[i64], scale: i64, shift: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in v {
+        out.push(x * scale + shift);
+    }
+    out
+}
+
+fn main() {
+    let cases = 1500;
+    let arms = 4;
+    let mut seed: i64 = 4750;
+    let mut checks = 0;
+    let mut fails = vec![0; 6];
+    for c in 0..cases {
+        // 1 to 12 houses and 1 to 6 heaters at positions from 1 to 50,
+        // or from 1 to 1,000,000 in one case in five.
+        let span = if c % 5 == 4 { 1000000 } else { 50 };
+        let mut houses: Vec[i64] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 12 {
+            houses.push(1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % span);
+        }
+        let mut heaters: Vec[i64] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 6 {
+            heaters.push(1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % span);
+        }
+        let truth = brute(houses, heaters);
+        let houses2 = shuffled(mut seed, houses);
+        let heaters2 = shuffled(mut seed, heaters);
+        let scale = 1 + next_random(mut seed) % 5;
+        let shift = next_random(mut seed) % 1000;
+        let houses3 = moved(houses, scale, shift);
+        let heaters3 = moved(heaters, scale, shift);
+        let mut heaters4 = heaters.clone();
+        heaters4.push(1 + next_random(mut seed) % span);
+        let mut houses4 = houses.clone();
+        houses4.push(1 + next_random(mut seed) % span);
+        let houses5 = moved(houses, -1, span + 1);
+        let heaters5 = moved(heaters, -1, span + 1);
+        for arm in 0..arms {
+            let got = answer(arm, houses, heaters);
+            checks += 5;
+            if got != truth {
+                fails[1] += 1;
+            }
+            if answer(arm, houses2, heaters2) != got {
+                fails[2] += 1;
+            }
+            if answer(arm, houses3, heaters3) != got * scale {
+                fails[3] += 1;
+            }
+            if answer(arm, houses, heaters4) > got or answer(arm, houses4, heaters) < got {
+                fails[4] += 1;
+            }
+            if answer(arm, houses5, heaters5) != got {
+                fails[5] += 1;
+            }
+        }
+    }
+    let total = fails[1] + fails[2] + fails[3] + fails[4] + fails[5];
+    println(f"{cases} cases, {arms} arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"P1 {fails[1]}, P2 {fails[2]}, P3 {fails[3]}, P4 {fails[4]}, P5 {fails[5]}");
+    }
+}

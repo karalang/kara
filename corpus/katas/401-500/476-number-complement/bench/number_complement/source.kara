@@ -1,0 +1,41 @@
+// Benchmark for #476: the ★ arm (a mask of the number's own width) on
+// a large workload.
+//
+// LeetCode #476: Number Complement -- a mask of the number's own width.
+//
+// The complement flips every bit from the highest set bit down, and
+// none above it. Grow a mask of ones until it covers the number, then
+// flipping those bits is one exclusive or. O(bits).
+
+fn find_complement(num: i64) -> i64 {
+    let mut mask = 1;
+    while mask < num {
+        mask = (mask << 1) | 1;
+    }
+    num ^ mask
+}
+
+// ---- bench ------------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 30,000,000 numbers from 1 to 2^31 - 1, each of a random width from
+    // 1 to 31 bits, the highest set.
+    let count = 30000000;
+    let mut seed: i64 = 476;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let bits = 1 + next_random(mut seed) % 31;
+        let high = 1 << (bits - 1);
+        let num = high | ((next_random(mut seed) * 32768 + next_random(mut seed)) % high);
+        let got = find_complement(num);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"{count} numbers: complements add up to {total}, checksum {checksum}");
+}

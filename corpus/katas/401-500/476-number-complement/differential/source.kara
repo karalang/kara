@@ -1,0 +1,121 @@
+// Differential test for LeetCode #476: Number Complement.
+//
+// Copies of the four arms, on 1,500 random numbers of 1 to 30 bits (the
+// highest set), each with a second number of the same width.
+// Properties:
+//   P1  the complement and the number add up to all ones of the
+//       number's width, and share no bit
+//   P2  the complement is below the number's highest bit
+//   P3  the number shifted left one place has complement 2c + 1
+//   P4  the number shifted left with a 1 brought in has complement 2c
+//   P5  another number of the same width adds up with its complement
+//       to the same total
+
+// ---- star: number_complement.kara
+
+fn find_complement_star(num: i64) -> i64 {
+    let mut mask = 1;
+    while mask < num {
+        mask = (mask << 1) | 1;
+    }
+    num ^ mask
+}
+
+// ---- zeros: number_complement_zeros.kara
+
+fn find_complement_zeros(num: i64) -> i64 {
+    let width = 64 - num.leading_zeros() as i64;
+    let mask = (1 << width) - 1;
+    ~num & mask
+}
+
+// ---- bits: number_complement_bits.kara
+
+fn find_complement_bits(num: i64) -> i64 {
+    let mut rest = num;
+    let mut place = 1;
+    let mut answer = 0;
+    while rest > 0 {
+        if rest % 2 == 0 {
+            answer += place;
+        }
+        rest = rest / 2;
+        place = place * 2;
+    }
+    answer
+}
+
+// ---- text: number_complement_text.kara
+
+fn find_complement_text(num: i64) -> i64 {
+    let flipped: String = f"{num:b}".chars().map(|c| if c == '0' { '1' } else { '0' }).collect();
+    i64.from_str_radix(flipped, 2).unwrap()
+}
+
+// ---- harness
+
+fn answer(arm: i64, num: i64) -> i64 {
+    if arm == 0 {
+        find_complement_star(num)
+    } else if arm == 1 {
+        find_complement_zeros(num)
+    } else if arm == 2 {
+        find_complement_bits(num)
+    } else {
+        find_complement_text(num)
+    }
+}
+
+// The smallest power of two above `num`: 2^width.
+fn top(num: i64) -> i64 {
+    let mut p = 1;
+    while p <= num {
+        p = p * 2;
+    }
+    p
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let cases = 1500;
+    let arms = 4;
+    let mut seed: i64 = 4760;
+    let mut checks = 0;
+    let mut fails = vec![0; 6];
+    for _ in 0..cases {
+        // 1 to 30 bits, the highest set; another number of that width.
+        let bits = 1 + next_random(mut seed) % 30;
+        let high = 1 << (bits - 1);
+        let num = high | ((next_random(mut seed) * 32768 + next_random(mut seed)) % high);
+        let other = high | ((next_random(mut seed) * 32768 + next_random(mut seed)) % high);
+        let ones = top(num) - 1;
+        for arm in 0..arms {
+            let got = answer(arm, num);
+            checks += 5;
+            if got + num != ones or (got & num) != 0 {
+                fails[1] += 1;
+            }
+            if got < 0 or got >= high {
+                fails[2] += 1;
+            }
+            if answer(arm, 2 * num) != 2 * got + 1 {
+                fails[3] += 1;
+            }
+            if answer(arm, 2 * num + 1) != 2 * got {
+                fails[4] += 1;
+            }
+            if answer(arm, other) + other != got + num {
+                fails[5] += 1;
+            }
+        }
+    }
+    let total = fails[1] + fails[2] + fails[3] + fails[4] + fails[5];
+    println(f"{cases} cases, {arms} arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"P1 {fails[1]}, P2 {fails[2]}, P3 {fails[3]}, P4 {fails[4]}, P5 {fails[5]}");
+    }
+}

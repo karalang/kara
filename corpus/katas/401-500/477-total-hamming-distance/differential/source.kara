@@ -1,0 +1,197 @@
+// Differential test for LeetCode #477: Total Hamming Distance.
+//
+// Copies of the four arms, on 1,500 random lists of 1 to 12 numbers
+// from 0 to 1,000,000,000 (from 0 to 15 for one list in three), each
+// with a second random list.
+// Properties:
+//   P1  the total is the sum over every pair of the places where the
+//       two differ, counted by halving both
+//   P2  the list rotated and reversed has the same total
+//   P3  every number exclusive-ored with the same mask has the same
+//       total
+//   P4  the list followed by a copy of itself has four times the total
+//   P5  the list followed by the second list has both totals plus the
+//       distance of every number in one to every number in the other
+
+// ---- star: total_hamming_distance.kara
+
+fn total_hamming_distance_star(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut total = 0;
+    for bit in 0..30 {
+        let mut ones = 0;
+        for x in nums {
+            ones += (x >> bit) & 1;
+        }
+        total += ones * (n - ones);
+    }
+    total
+}
+
+// ---- pairs: total_hamming_distance_pairs.kara
+
+fn total_hamming_distance_pairs(nums: Vec[i64]) -> i64 {
+    let mut total = 0;
+    for i in 0..nums.len() {
+        for j in i + 1..nums.len() {
+            total += (nums[i] ^ nums[j]).count_ones() as i64;
+        }
+    }
+    total
+}
+
+// ---- online: total_hamming_distance_online.kara
+
+fn total_hamming_distance_online(nums: Vec[i64]) -> i64 {
+    let mut ones = vec![0; 30];
+    let mut seen = 0;
+    let mut total = 0;
+    for x in nums {
+        for bit in 0..30 {
+            if (x >> bit) & 1 == 1 {
+                total += seen - ones[bit];
+                ones[bit] += 1;
+            } else {
+                total += ones[bit];
+            }
+        }
+        seen += 1;
+    }
+    total
+}
+
+// ---- columns: total_hamming_distance_columns.kara
+
+fn total_hamming_distance_columns(nums: Vec[i64]) -> i64 {
+    let mut ones: Vec[i64] = Vec.new();
+    for x in nums {
+        let mut rest = x;
+        let mut column = 0;
+        while rest > 0 {
+            if column == ones.len() {
+                ones.push(0);
+            }
+            ones[column] += rest % 2;
+            rest = rest / 2;
+            column += 1;
+        }
+    }
+    let n = nums.len();
+    ones.iter().map(|k| k * (n - k)).sum()
+}
+
+// ---- harness
+
+fn answer(arm: i64, nums: Vec[i64]) -> i64 {
+    if arm == 0 {
+        total_hamming_distance_star(nums)
+    } else if arm == 1 {
+        total_hamming_distance_pairs(nums)
+    } else if arm == 2 {
+        total_hamming_distance_online(nums)
+    } else {
+        total_hamming_distance_columns(nums)
+    }
+}
+
+// The number of places at which a and b differ, by halving both.
+fn distance(a: i64, b: i64) -> i64 {
+    let mut x = a;
+    let mut y = b;
+    let mut d = 0;
+    while x > 0 or y > 0 {
+        if x % 2 != y % 2 {
+            d += 1;
+        }
+        x = x / 2;
+        y = y / 2;
+    }
+    d
+}
+
+// Every a in `left` against every b in `right`.
+fn cross(left: Vec[i64], right: Vec[i64]) -> i64 {
+    let mut total = 0;
+    for a in left {
+        for b in right {
+            total += distance(a, b);
+        }
+    }
+    total
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_list(seed: mut ref i64) -> Vec[i64] {
+    let span = if next_random(seed) % 3 == 0 { 16 } else { 1000000001 };
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..1 + next_random(seed) % 12 {
+        nums.push((next_random(seed) * 32768 + next_random(seed)) % span);
+    }
+    nums
+}
+
+fn main() {
+    let cases = 1500;
+    let arms = 4;
+    let mut seed: i64 = 4770;
+    let mut checks = 0;
+    let mut fails = vec![0; 6];
+    for _ in 0..cases {
+        let nums = random_list(mut seed);
+        let more = random_list(mut seed);
+        let n = nums.len();
+        // Every pair, by the slow distance.
+        let mut want = 0;
+        for i in 0..n {
+            for j in i + 1..n {
+                want += distance(nums[i], nums[j]);
+            }
+        }
+        // The list rotated by a random amount, then reversed.
+        let turn = next_random(mut seed) % n;
+        let mut moved: Vec[i64] = Vec.new();
+        for i in 0..n {
+            moved.push(nums[(i + turn) % n]);
+        }
+        moved.reverse();
+        // Every number exclusive-ored with one mask below 2^30.
+        let mask = (next_random(mut seed) * 32768 + next_random(mut seed)) % 1073741824;
+        let mut flipped: Vec[i64] = Vec.new();
+        for x in nums {
+            flipped.push(x ^ mask);
+        }
+        let mut twice = nums.clone();
+        twice.extend(nums.clone());
+        let mut joined = nums.clone();
+        joined.extend(more.clone());
+        let between = cross(nums, more);
+        for arm in 0..arms {
+            let got = answer(arm, nums);
+            checks += 5;
+            if got != want {
+                fails[1] += 1;
+            }
+            if answer(arm, moved) != got {
+                fails[2] += 1;
+            }
+            if answer(arm, flipped) != got {
+                fails[3] += 1;
+            }
+            if answer(arm, twice) != 4 * got {
+                fails[4] += 1;
+            }
+            if answer(arm, joined) != got + answer(arm, more) + between {
+                fails[5] += 1;
+            }
+        }
+    }
+    let total = fails[1] + fails[2] + fails[3] + fails[4] + fails[5];
+    println(f"{cases} cases, {arms} arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"P1 {fails[1]}, P2 {fails[2]}, P3 {fails[3]}, P4 {fails[4]}, P5 {fails[5]}");
+    }
+}

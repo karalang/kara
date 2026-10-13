@@ -1,0 +1,59 @@
+// LeetCode #476: Number Complement -- one bit at a time.
+//
+// Read the bits from the lowest up by halving the number, and write the
+// opposite bit at the same place in the answer; stop when nothing is
+// left, so no zero above the highest set bit is flipped. O(bits).
+
+fn find_complement(num: i64) -> i64 {
+    let mut rest = num;
+    let mut place = 1;
+    let mut answer = 0;
+    while rest > 0 {
+        if rest % 2 == 0 {
+            answer += place;
+        }
+        rest = rest / 2;
+        place = place * 2;
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn show(num: i64) {
+    println(f"{num} ({num:b}) -> {find_complement(num)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(5);
+    show(1);
+    show(2);
+    show(7);
+    show(8);
+    show(10);
+    show(1023);
+    show(1024);
+    show(2147483647);
+    show(1073741824);
+    show(1431655765);
+    // 1,000 random numbers, of 1 to 31 bits.
+    let count = 1000;
+    let mut seed: i64 = 476;
+    let mut checksum: i64 = 0;
+    let mut zeros = 0;
+    for _ in 0..count {
+        let bits = 1 + next_random(mut seed) % 31;
+        let num = (1 << (bits - 1)) | ((next_random(mut seed) * 32768 + next_random(mut seed)) % (1 << (bits - 1)));
+        let got = find_complement(num);
+        if got == 0 {
+            zeros += 1;
+        }
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"{count} random numbers: {zeros} complements are 0, checksum {checksum}");
+}

@@ -1,0 +1,63 @@
+// LeetCode #477: Total Hamming Distance -- every pair.
+//
+// The Hamming distance of two numbers is the number of ones in their
+// exclusive or. Add it up over every pair. O(n^2).
+
+fn total_hamming_distance(nums: Vec[i64]) -> i64 {
+    let mut total = 0;
+    for i in 0..nums.len() {
+        for j in i + 1..nums.len() {
+            total += (nums[i] ^ nums[j]).count_ones() as i64;
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn list(v: Vec[i64]) -> String {
+    let mut line = String.new();
+    for x in v {
+        if not line.is_empty() {
+            line.push_str(", ");
+        }
+        line.push_str(f"{x}");
+    }
+    line
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"[{list(nums)}] -> {total_hamming_distance(nums)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![4, 14, 2]);
+    show(vec![4, 14, 4]);
+    show(vec![0]);
+    show(vec![7, 7, 7]);
+    show(vec![0, 1000000000]);
+    show(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    show(vec![1073741823, 0, 1073741823, 0]);
+    // 300 random lists of 1 to 40 numbers, from 0 to 1,000,000,000
+    // (from 0 to 15 for one list in three), possibly repeated.
+    let count = 300;
+    let mut seed: i64 = 477;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let span = if c % 3 == 2 { 16 } else { 1000000001 };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 40 {
+            nums.push((next_random(mut seed) * 32768 + next_random(mut seed)) % span);
+        }
+        let got = total_hamming_distance(nums);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"{count} random lists: distances add up to {total}, checksum {checksum}");
+}

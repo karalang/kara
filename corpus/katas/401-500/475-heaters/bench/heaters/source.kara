@@ -1,0 +1,77 @@
+// Benchmark for #475: the ★ arm (sort the heaters, binary search per
+// house) on a large workload.
+//
+// LeetCode #475: Heaters -- sort the heaters, binary search per house.
+//
+// Every house needs the radius that reaches its nearest heater, and the
+// answer is the largest of those. With the heaters sorted, the nearest
+// one to a house is the first heater at or after it or the one just
+// before that, and a binary search finds the first. O((houses +
+// heaters) x log heaters).
+
+// The index of the first heater at or after `x`, or `heaters.len()`
+// when every heater is before it.
+fn first_at_or_after(heaters: Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = heaters.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if heaters[mid] < x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn find_radius(houses: Vec[i64], heaters: Vec[i64]) -> i64 {
+    let mut sorted = heaters.clone();
+    sorted.sort();
+    let mut radius = 0;
+    for house in houses {
+        let at = first_at_or_after(sorted, house);
+        let mut nearest = i64.MAX;
+        if at < sorted.len() {
+            nearest = sorted[at] - house;
+        }
+        if at > 0 and house - sorted[at - 1] < nearest {
+            nearest = house - sorted[at - 1];
+        }
+        if nearest > radius {
+            radius = nearest;
+        }
+    }
+    radius
+}
+
+// ---- bench ------------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 30,000 houses (the problem's most) at random positions from 1 to
+    // 1,000,000,000, built once; then 200 rounds, each with 30,000 new
+    // heaters in the same range.
+    let mut seed: i64 = 475;
+    let mut houses: Vec[i64] = Vec.new();
+    for _ in 0..30000 {
+        houses.push(1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000000);
+    }
+    let rounds = 200;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        let mut heaters: Vec[i64] = Vec.new();
+        for _ in 0..30000 {
+            heaters.push(1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 1000000000);
+        }
+        let got = find_radius(houses, heaters);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"{rounds} rounds of 30000 houses and 30000 heaters: radii add up to {total}, checksum {checksum}");
+}

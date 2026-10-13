@@ -1,0 +1,82 @@
+// LeetCode #475: Heaters -- the heaters in an ordered map.
+//
+// Keep the heaters as the keys of a `SortedMap`; for each house its
+// `floor` is the nearest heater at or before it and its `ceiling` the
+// nearest at or after it, so the house needs the smaller of the two
+// distances. The radius is the largest need. O((houses + heaters) x log
+// heaters).
+
+fn find_radius(houses: Vec[i64], heaters: Vec[i64]) -> i64 {
+    let mut at: SortedMap[i64, i64] = SortedMap.new();
+    for h in heaters {
+        at.insert(h, h);
+    }
+    let mut radius = 0;
+    for house in houses {
+        let mut need = i64.MAX;
+        if let Some((before, _)) = at.floor(house) {
+            need = house - *before;
+        }
+        if let Some((after, _)) = at.ceiling(house) {
+            need = need.min(*after - house);
+        }
+        radius = radius.max(need);
+    }
+    radius
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn list(v: Vec[i64]) -> String {
+    let mut line = String.new();
+    for x in v {
+        if not line.is_empty() {
+            line.push_str(", ");
+        }
+        line.push_str(f"{x}");
+    }
+    line
+}
+
+fn show(houses: Vec[i64], heaters: Vec[i64]) {
+    println(f"houses [{list(houses)}], heaters [{list(heaters)}] -> {find_radius(houses, heaters)}");
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    show(vec![1, 2, 3], vec![2]);
+    show(vec![1, 2, 3, 4], vec![1, 4]);
+    show(vec![1, 5], vec![2]);
+    show(vec![7], vec![7]);
+    show(vec![1, 1000000000], vec![1, 1000000000]);
+    show(vec![1, 1000000000], vec![500000000]);
+    show(vec![5, 4, 3, 2, 1], vec![10, 9, 8]);
+    show(vec![3, 3, 3], vec![1, 5, 1, 5]);
+    show(vec![1, 2, 3, 5, 15], vec![2, 30]);
+    // 300 random cases: 1 to 30 houses and 1 to 10 heaters, at
+    // positions from 1 to 100 (from 1 to 1,000,000,000 for one case in
+    // ten), in any order and possibly repeated.
+    let count = 300;
+    let mut seed: i64 = 475;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let span = if c % 10 == 9 { 1000000000 } else { 100 };
+        let mut houses: Vec[i64] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 30 {
+            houses.push(1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % span);
+        }
+        let mut heaters: Vec[i64] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 10 {
+            heaters.push(1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % span);
+        }
+        let got = find_radius(houses, heaters);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"{count} random cases: radii add up to {total}, checksum {checksum}");
+}

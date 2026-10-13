@@ -1,0 +1,10 @@
+houses [1, 2, 3], heaters [2] -> 1
+houses [1, 2, 3, 4], heaters [1, 4] -> 1
+houses [1, 5], heaters [2] -> 3
+houses [7], heaters [7] -> 0
+houses [1, 1000000000], heaters [1, 1000000000] -> 0
+houses [1, 1000000000], heaters [500000000] -> 500000000
+houses [5, 4, 3, 2, 1], heaters [10, 9, 8] -> 7
+houses [3, 3, 3], heaters [1, 5, 1, 5] -> 2
+houses [1, 2, 3, 5, 15], heaters [2, 30] -> 13
+300 random cases: radii add up to 8613340262, checksum 311058431
