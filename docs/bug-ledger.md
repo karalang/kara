@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 171 |
 | perf | 153 |
 | diagnostics | 152 |
-| false-positive | 149 |
+| false-positive | 150 |
 | crash | 114 |
 | soundness | 99 |
 | use-after-free | 90 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2853 |
-| interp | 901 |
-| typecheck | 369 |
+| codegen | 2854 |
+| interp | 902 |
+| typecheck | 370 |
 | other | 115 |
 | ownership | 83 |
 | cli | 75 |
@@ -530,7 +530,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-70 | 2026-10-06 | codegen+interp | high | AN OWNED-`self` METHOD THAT HANDS ITS STRUCT RECEIVER BACK ON ONLY SOME PATHS STILL RUNS ITS `Drop` BODIES TWICE ON EVERY SURFACE WHEN THE HAND-BACK PATH IS TAKEN, AND MAKES 2 INVALID ACCESSES COMPILED WHEN THE STRUCT HOLDS A `shared` FIELD -- `let b = a.maybe(true)` over `fn maybe(self, c: bool) -> S { if c { return self } println("mb"); return S { r: mk(98) } }` prints `dS4 dR4 dS4 dR4 _ end` on `--interp`, -O0 and -O2 where `dS4 dR4` is due once; `x.pick(true)` over `struct X { h: H, n: i64 }` (`H` a `shared struct` with a printing `Drop`) and `fn pick(self, c: bool) -> X { if c { return self; } mkx(9) }` prints the right `_3 end dH3` with 2 valgrind errors at -O0 | — |
 | B-2026-10-06-71 | 2026-10-06 | codegen | high | A BY-VALUE STRUCT PARAM WITH A `shared` FIELD HANDED BACK THROUGH ITS OWN OWNED-`self` METHOD MAKES 2 INVALID ACCESSES ON EVERY COMPILED SURFACE -- `let b = g(x)` over `fn g(x: X) -> X { x.me() }`, `fn me(self) -> X { self }` and `struct X { h: H, n: i64 }` with `H` a `shared struct` with a printing `Drop` prints the right `_10 end dH10` with ERROR SUMMARY 2 errors at -O0; `--interp` prints the same and is clean | — |
 | B-2026-10-06-72 | 2026-10-06 | codegen+interp | medium | A TEMP STRUCT RECEIVER OF AN OWNED-`self` METHOD THAT RETURNS A FRESH STRUCT NEVER RUNS ITS `Drop` BODIES, ON EVERY SURFACE -- `let b = S { r: mk(5) }.fresh(); println("_")` over `fn fresh(self) -> S { println("fr"); return S { r: mk(99) } }` prints `fr dS99 dR99 _ end` on `--interp`, -O0 and -O2 where `fr dS5 dR5 dS99 dR99 _ end` is due; memory balanced | — |
-| B-2026-10-06-74 | 2026-10-06 | typecheck | low | WIDER THAN PREDICATES (kata 353): `.iter()` ITEMS -- in a `for` loop, in `any`, and in `find` / `filter` / `position` / `take_while` / `skip_while` predicates -- ARE TYPED BY VALUE FOR COPY ELEMENTS, BUT design.md SAYS `ref T` / `ref Self.Item` -- `(i + 1..n).find(|j| nums[i] + nums[*j] == target)` is refused with `unary '*' requires 'ref T' ... found 'i64'` on every surface | — |
 | B-2026-10-06-75 | 2026-10-06 | codegen | low | `Iterator.find()` / `find_map()` LOUD-DEFER UNDER `karac build` WHEN THE ELEMENT OR PAYLOAD IS A TUPLE OF SCALARS OR A UNIT-ONLY ENUM -- `(0..10).find_map(|i| if i * i > 20 { Some((i, i * i)) } else { None })` and `vec![(1, 2), (3, 4)].iter().find(|p| p.0 > 2)` are refused with `only for a SCALAR payload`, while `position` and `filter().collect()` over the same tuples compile | — |
 | B-2026-10-06-76 | 2026-10-06 | codegen | low | `karac build` HAS NO LOWERING FOR A NON-EMPTY `Set[...]` LITERAL ANYWHERE, OR FOR AN EMPTY `Map[]` / `Set[]` OUTSIDE A DIRECT ANNOTATED `let` -- `let s = Set[1, 1, 2];`, `Some(Map[])` against `Option[Map[i64, i64]]`, `vec![Set[]]` and a tail-position `Map[]` all typecheck and then die with `no handler for expression kind PrefixCollectionLiteral` | — |
 | B-2026-10-06-78 | 2026-10-06 | codegen | medium | A `match` ON A TUPLE LITERAL THAT MOVES `shared` OR HEAP-FIELDED STRUCT LOCALS LEAKS EVERY ELEMENT COMPILED -- `let a = Node { v: 1 }; let b = Node { v: 2 }; match (a, b) { (x, y) => x.v + y.v }` (`Node` a `shared struct`) leaves both nodes at refcount 1, and a recursive add-two-numbers over a `shared enum` list leaks 1280 bytes in 40 blocks | — |
@@ -593,6 +592,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-1 | 2026-10-13 | typecheck | low | `Map.keys()` / `values()` and `SortedMap.keys()` / `values()` return an eager `Vec` on every front end, where docs/library/collections.md gives `fn keys(self) -> impl Iterator[Item = ref K]`: `m.keys().next()` and `m.keys().count()` are refused ("no method 'next' on type 'Vec': iterator adaptors/terminals require an explicit `.iter()`"), and taking the smallest key of a `SortedMap` copies every key | — |
 | B-2026-10-13-4 | 2026-10-13 | typecheck | medium | On the MIR backends `let s: String = cs.into_iter().collect();` (with `cs: Vec[char]`) is refused with "expected 'String', found 'Vec[char]'": `Vec.into_iter()` has no library iterator, so its `collect()` can only build a `Vec`, while `for x in v.into_iter()` works | — |
 | B-2026-10-13-5 | 2026-10-13 | typecheck | medium | A hand-written conditional impl's bound is not checked where a generic call needs the trait: with `impl[T: Show] Show for Wrap[T]` and no `impl Show for Plain`, `print_it(Wrap { v: Plain { n: 1 } })` (`fn print_it[X: Show](x: ref X)`) passes `karac check` and the MIR type check, and the MIR builder then stops with "the method call `.show` with no resolved callee is not lowered yet" in `Wrap[Plain].show` | — |
+| B-2026-10-13-6 | 2026-10-13 | typecheck+interp+codegen | low | The remainder of B-2026-10-06-74, two halves: (1) `karac check` refuses `*k` on an item taken from an iterator first bound to a name (`let mut it = w.iter(); let Some(k) = it.next() ...; *k`, for a `Vec[i64]` and a `VecDeque[i64]`) while both MIR backends run it, though `w.iter().next()` unbound now passes; (2) SPEC QUESTION: docs/library/iterators.md gives `find` / `filter` / `position` / `take_while` / `skip_while` / `partition` a bare `Self.Item` predicate, so `(1..n).find(|j| w[*j] ...)` is an error (`j` is an `i64` copy; check refuses it), but runtime/stdlib/source/iter.kara declares them `MutFn(ref Self.Item)`, so both MIR backends accept `*j`; Thread A reads the doc as right and the MIR acceptance as leniency, and the two documents need to agree | — |
 
 ### Relocated
 
@@ -3899,6 +3899,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-06-66 | interp | medium | THE INTERPRETER COPIES A WHOLE `SortedMap` / `SortedSet` ON EVERY READ OF THE BINDING, SO EVERY METHOD CALL ON ONE (`floor`, `len`, `insert`, ...) IS… | d820db989 |
 | B-2026-10-06-69 | codegen | high | A `Set` (or `SortedSet`) COPIED BY THE GENERIC MAP CLONE HELPER GETS AN 8-BYTE VALUE SLOT, AND A LATER `remove` ON IT WRITES 8 BYTES INTO A 1-BYTE ST… | 9f6a4205f |
 | B-2026-10-06-73 | typecheck | low | AN EMPTY `Vec[]` / `vec![]` LITERAL IN A TUPLE SLOT IS REFUSED EVEN WHEN THE SLOT'S TYPE IS KNOWN -- `let t: (Vec[i64], i64) = (vec![], 5);` and `fn… | 3a1f9724a |
+| B-2026-10-06-74 | typecheck | low | WIDER THAN PREDICATES (kata 353): `.iter()` ITEMS -- in a `for` loop, in `any`, and in `find` / `filter` / `position` / `take_while` / `skip_while` p… | dd329007d3 |
 | B-2026-10-06-77 | codegen | medium | A `let` BOUND TO AN `if` OR `match` THAT PICKS ONE OF TWO `ref` PARAMS LOSES ITS TYPE IN CODEGEN -- `let longer = if a.len() > b.len() { a } else { b… | ab6cba0f5 |
 | B-2026-10-06-81 | interp | high | `--interp` BUILDS EVERY SLOT OF A REPEAT LITERAL OVER ONE SHARED BUFFER -- `let mut dp = vec![vec![false; 2]; 3]; dp[2][1] = true;` makes `dp[0][1]`… | 37864d550 |
 | B-2026-10-06-82 | interp | medium | `--interp` BUILDS A NON-EMPTY `Set[...]` PREFIX LITERAL AS A `Vec` -- `Set[1, 1, 2].len()` prints 3, and `out.insert(5)` on a set made by `Set[1, 2]`… | 6bba0d11b |
