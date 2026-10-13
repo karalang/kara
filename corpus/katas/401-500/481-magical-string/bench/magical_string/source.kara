@@ -1,0 +1,45 @@
+// Benchmark for #481: the ★ arm (the string read while it is written)
+// on a large workload.
+//
+// LeetCode #481: Magical String -- the string read while it is written.
+//
+// The string starts 1, 2, 2, and from then on every digit read from the
+// third on says how long the next run is; the runs alternate between 1s
+// and 2s. A read position walks behind the end of a `Vec` and appends
+// each run as it reads its length. The read position never catches up:
+// it moves on by one each time a run of at least one digit is added.
+
+fn magical_string(n: i64) -> i64 {
+    let mut s: Vec[i64] = vec![1, 2, 2];
+    let mut read = 2;
+    while s.len() < n {
+        let next = 3 - s[s.len() - 1];
+        for _ in 0..s[read] {
+            s.push(next);
+        }
+        read += 1;
+    }
+    let mut ones = 0;
+    for i in 0..n {
+        if s[i] == 1 {
+            ones += 1;
+        }
+    }
+    ones
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn main() {
+    // 1000 rounds, n from 100000 down to 99001: each round builds the
+    // string afresh.
+    let rounds = 1000;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let ones = magical_string(100000 - r);
+        total += ones;
+        checksum = (checksum * 31 + ones) % 1000000007;
+    }
+    println(f"{rounds} rounds of n = 99001 to 100000: 1s add up to {total}, checksum {checksum}");
+}

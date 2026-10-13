@@ -1,0 +1,79 @@
+// LeetCode #481: Magical String -- the string as its own fixed point.
+//
+// Reading any correct prefix as run lengths (runs of 1s and 2s in turn)
+// gives a longer correct prefix: "122" gives "1" + "22" + "11". So start
+// from "122" and expand the whole text until it is at least n long, each
+// time about half as long again, then count the 1s among the first n
+// chars.
+
+fn magical_string(n: i64) -> i64 {
+    let mut s = String.from("122");
+    while s.len() < n {
+        let mut longer = String.new();
+        let mut digit = '1';
+        for c in s.chars() {
+            longer.push(digit);
+            if c == '2' {
+                longer.push(digit);
+            }
+            if digit == '1' {
+                digit = '2';
+            } else {
+                digit = '1';
+            }
+        }
+        s = longer;
+    }
+    s.chars().take(n).filter(|c| c == '1').count()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    println(f"n = 6 -> {magical_string(6)}");
+    println(f"n = 1 -> {magical_string(1)}");
+    let mut small = String.new();
+    for n in 1..21 {
+        if not small.is_empty() {
+            small.push_str(", ");
+        }
+        small.push_str(f"{magical_string(n)}");
+    }
+    println(f"n = 1 to 20 -> {small}");
+    // Each digit is 1 exactly when the count of 1s goes up there.
+    let mut digits = String.new();
+    let mut before = 0;
+    for n in 1..61 {
+        let now = magical_string(n);
+        if now > before {
+            digits.push('1');
+        } else {
+            digits.push('2');
+        }
+        before = now;
+    }
+    println(f"first 60 digits from the counts: {digits}");
+    println(f"n = 99999 -> {magical_string(99999)}");
+    println(f"n = 100000 -> {magical_string(100000)}");
+    // 300 random cases: n from 1 to 3000 (from 1 to 100000 for one case in
+    // fifty).
+    let count = 300;
+    let mut seed: i64 = 481;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let mut n = 1 + next_random(mut seed) % 3000;
+        if c % 50 == 49 {
+            n = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000;
+        }
+        let ones = magical_string(n);
+        total += ones;
+        checksum = (checksum * 31 + ones * 7 + n) % 1000000007;
+    }
+    println(f"{count} random cases: 1s add up to {total}, checksum {checksum}");
+}

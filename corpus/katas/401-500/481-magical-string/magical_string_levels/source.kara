@@ -1,0 +1,92 @@
+// LeetCode #481: Magical String -- a tower of readers, O(log n) memory.
+//
+// From its third digit on, the string is its own run lengths: the
+// digits from index 2 say how long the runs from the third on are. So a
+// reader that produces the digits from index 2 can take each new run's
+// length from a second reader of the same kind, which takes its own
+// from a third, and so on. Each level only remembers its current digit
+// and how much of its run is left; a level reads from the one above only
+// when its run runs out, about two digits in three, so the tower is
+// about log base 1.5 of n levels high. Every level starts inside the
+// run of two 2s, with one 2 left: that is index 2.
+
+struct Level {
+    digit: i64,
+    left: i64,
+}
+
+fn next_digit(levels: mut ref Vec[Level], at: i64) -> i64 {
+    if at == levels.len() {
+        levels.push(Level { digit: 2, left: 1 });
+    }
+    if levels[at].left == 0 {
+        let length = next_digit(levels, at + 1);
+        levels[at].digit = 3 - levels[at].digit;
+        levels[at].left = length;
+    }
+    levels[at].left -= 1;
+    levels[at].digit
+}
+
+fn magical_string(n: i64) -> i64 {
+    // Index 0 is a 1 and index 1 a 2; the tower produces the rest.
+    let mut ones = 1;
+    let mut levels: Vec[Level] = Vec.new();
+    for _ in 2..n {
+        if next_digit(mut levels, 0) == 1 {
+            ones += 1;
+        }
+    }
+    ones
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    println(f"n = 6 -> {magical_string(6)}");
+    println(f"n = 1 -> {magical_string(1)}");
+    let mut small = String.new();
+    for n in 1..21 {
+        if not small.is_empty() {
+            small.push_str(", ");
+        }
+        small.push_str(f"{magical_string(n)}");
+    }
+    println(f"n = 1 to 20 -> {small}");
+    // Each digit is 1 exactly when the count of 1s goes up there.
+    let mut digits = String.new();
+    let mut before = 0;
+    for n in 1..61 {
+        let now = magical_string(n);
+        if now > before {
+            digits.push('1');
+        } else {
+            digits.push('2');
+        }
+        before = now;
+    }
+    println(f"first 60 digits from the counts: {digits}");
+    println(f"n = 99999 -> {magical_string(99999)}");
+    println(f"n = 100000 -> {magical_string(100000)}");
+    // 300 random cases: n from 1 to 3000 (from 1 to 100000 for one case in
+    // fifty).
+    let count = 300;
+    let mut seed: i64 = 481;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for c in 0..count {
+        let mut n = 1 + next_random(mut seed) % 3000;
+        if c % 50 == 49 {
+            n = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 100000;
+        }
+        let ones = magical_string(n);
+        total += ones;
+        checksum = (checksum * 31 + ones * 7 + n) % 1000000007;
+    }
+    println(f"{count} random cases: 1s add up to {total}, checksum {checksum}");
+}

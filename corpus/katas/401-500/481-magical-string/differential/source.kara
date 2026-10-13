@@ -1,0 +1,226 @@
+// Differential test for LeetCode #481: Magical String.
+//
+// Copies of the four arms, on 1,500 random n from 1 to 1,000 (from 1 to
+// 20,000 for one case in fifty). Properties:
+//   P1  the count is the 1s among the first n digits of a reference
+//       string that is checked against the definition
+//   P2  the first n runs are 2n - count digits long, and the arm's count
+//       of 1s among those digits is the sum of the run lengths at even
+//       positions
+//   P3  n + 1 gives the same count or one more, and n = 1 gives 1
+
+// ---- star: magical_string.kara
+
+fn magical_string_star(n: i64) -> i64 {
+    let mut s: Vec[i64] = vec![1, 2, 2];
+    let mut read = 2;
+    while s.len() < n {
+        let next = 3 - s[s.len() - 1];
+        for _ in 0..s[read] {
+            s.push(next);
+        }
+        read += 1;
+    }
+    let mut ones = 0;
+    for i in 0..n {
+        if s[i] == 1 {
+            ones += 1;
+        }
+    }
+    ones
+}
+
+// ---- queue: magical_string_queue.kara
+
+fn magical_string_queue(n: i64) -> i64 {
+    if n <= 3 {
+        return 1;
+    }
+    let mut unread: VecDeque[i64] = VecDeque.new();
+    unread.push_back(2);
+    let mut written = 3;
+    let mut ones = 1;
+    let mut digit = 2;
+    while written < n {
+        let length = unread.pop_front().unwrap();
+        digit = 3 - digit;
+        for _ in 0..length {
+            if written < n and digit == 1 {
+                ones += 1;
+            }
+            unread.push_back(digit);
+            written += 1;
+        }
+    }
+    ones
+}
+
+// ---- levels: magical_string_levels.kara
+
+struct LevelLevels {
+    digit: i64,
+    left: i64,
+}
+
+fn next_digit_levels(levels: mut ref Vec[LevelLevels], at: i64) -> i64 {
+    if at == levels.len() {
+        levels.push(LevelLevels { digit: 2, left: 1 });
+    }
+    if levels[at].left == 0 {
+        let length = next_digit_levels(levels, at + 1);
+        levels[at].digit = 3 - levels[at].digit;
+        levels[at].left = length;
+    }
+    levels[at].left -= 1;
+    levels[at].digit
+}
+
+fn magical_string_levels(n: i64) -> i64 {
+    // Index 0 is a 1 and index 1 a 2; the tower produces the rest.
+    let mut ones = 1;
+    let mut levels: Vec[LevelLevels] = Vec.new();
+    for _ in 2..n {
+        if next_digit_levels(mut levels, 0) == 1 {
+            ones += 1;
+        }
+    }
+    ones
+}
+
+// ---- expand: magical_string_expand.kara
+
+fn magical_string_expand(n: i64) -> i64 {
+    let mut s = String.from("122");
+    while s.len() < n {
+        let mut longer = String.new();
+        let mut digit = '1';
+        for c in s.chars() {
+            longer.push(digit);
+            if c == '2' {
+                longer.push(digit);
+            }
+            if digit == '1' {
+                digit = '2';
+            } else {
+                digit = '1';
+            }
+        }
+        s = longer;
+    }
+    s.chars().take(n).filter(|c| c == '1').count()
+}
+
+// ---- differential harness -------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, n: i64) -> i64 {
+    match which {
+        0 => magical_string_star(n),
+        1 => magical_string_queue(n),
+        2 => magical_string_levels(n),
+        _ => magical_string_expand(n),
+    }
+}
+
+// The reference: built by the definition, then checked against it. Its
+// runs, read off the digits themselves, must have the digits as their
+// lengths and alternate starting with 1s; only one sequence does, so a
+// reference that passes is the magical string whatever built it.
+fn reference(size: i64) -> Vec[i64] {
+    let mut s: Vec[i64] = vec![1, 2, 2];
+    let mut read = 2;
+    while s.len() < size {
+        let next = 3 - s[s.len() - 1];
+        for _ in 0..s[read] {
+            s.push(next);
+        }
+        read += 1;
+    }
+    let mut runs = 0;
+    let mut at = 0;
+    while at < size {
+        let mut end = at;
+        while end < size and s[end] == s[at] {
+            end += 1;
+        }
+        if end == size {
+            break;
+        }
+        let want = if runs % 2 == 0 { 1 } else { 2 };
+        if s[at] != want or end - at != s[runs] {
+            println(f"the reference is wrong at run {runs}");
+        }
+        runs += 1;
+        at = end;
+    }
+    s
+}
+
+fn main() {
+    let names = vec!["star", "queue", "levels", "expand"];
+    let s = reference(40000);
+    // ones[n] is the number of 1s among the reference's first n digits.
+    let mut ones: Vec[i64] = vec![0];
+    for i in 0..s.len() {
+        ones.push(ones[i] + if s[i] == 1 { 1 } else { 0 });
+    }
+    let cases = 1500;
+    let mut seed: i64 = 4810;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property: Vec[i64] = vec![0, 0, 0];
+    for c in 0..cases {
+        let mut n = 1 + next_random(mut seed) % 1000;
+        if c % 50 == 49 {
+            n = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 20000;
+        }
+        for which in 0..4 {
+            let got = arm(which, n);
+            // P1: the 1s among the reference's first n digits.
+            checks += 1;
+            if got != ones[n] {
+                failures += 1;
+                by_property[0] += 1;
+                if failures <= 5 {
+                    println(f"P1 {names[which]}: n = {n} gave {got}, want {ones[n]}");
+                }
+            }
+            // P2: the first n runs are 2n - got digits long, and the 1s
+            // among them are the lengths of the runs at even positions.
+            checks += 1;
+            let length = 2 * n - got;
+            let mut even = 0;
+            let mut i = 0;
+            while i < n {
+                even += s[i];
+                i += 2;
+            }
+            let covered = arm(which, length);
+            if covered != even {
+                failures += 1;
+                by_property[1] += 1;
+                if failures <= 5 {
+                    println(f"P2 {names[which]}: n = {n}, {length} digits gave {covered}, want {even}");
+                }
+            }
+            // P3: one more digit adds one 1 or none, and n = 1 gives 1.
+            checks += 1;
+            let step = arm(which, n + 1) - got;
+            if step < 0 or step > 1 or arm(which, 1) != 1 {
+                failures += 1;
+                by_property[2] += 1;
+                if failures <= 5 {
+                    println(f"P3 {names[which]}: n = {n} to {n + 1} added {step}");
+                }
+            }
+        }
+    }
+    println(f"{cases} cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}");
+    }
+}
