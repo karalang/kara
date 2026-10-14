@@ -504,7 +504,21 @@ impl<'a> super::TypeChecker<'a> {
 
             ExprKind::Call { callee, args } => {
                 self.walk_capture_consume(callee, CaptureWalkMode::Reading, outer, shadows, reason);
-                let borrow_modes = self.callee_borrow_positions(callee);
+                // A call through a closure-valued local (`far(n, tree)` with
+                // `let far = |a: ref Vec[i64], b: ref Vec[i64]| ...`) lends
+                // where that closure's parameters borrow, as a `fn`'s
+                // signature does below. The local, not a same-named item,
+                // is what the call reaches (B-2026-10-14-23).
+                let local_fn = match &callee.kind {
+                    ExprKind::Identifier(n) => match outer.get(n.as_str()) {
+                        Some(Type::Function { params, .. } | Type::OnceFunction { params, .. }) => {
+                            Some(params.iter().map(Self::is_borrow_param_type).collect())
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let borrow_modes = local_fn.or_else(|| self.callee_borrow_positions(callee));
                 for (i, arg) in args.iter().enumerate() {
                     let is_borrow = arg.mut_marker
                         || borrow_modes

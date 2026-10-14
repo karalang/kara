@@ -3978,3 +3978,46 @@ fn an_owned_local_lent_into_a_ref_slot_is_not_moved() {
          }\n",
     );
 }
+
+/// B-2026-10-14-23: a closure that lends a capture to a closure-valued
+/// local's `ref` parameter only reads it, as it would through a `fn` with
+/// the same signature, so it can run any number of times. A capture handed
+/// to a by-value parameter of that local is still consumed.
+#[test]
+fn a_capture_lent_through_a_closure_local_is_read() {
+    accepted(
+        "closure-local-lends",
+        "fn twice(f: Fn(ref Vec[i64]) -> i64) -> i64 {\n\
+             f(vec![1, 2]) + f(vec![3, 4])\n\
+         }\n\
+         fn main() {\n\
+             let tree = vec![0, 0];\n\
+             let nuts = vec![vec![1, 2], vec![3, 4]];\n\
+             let far = |a: ref Vec[i64], b: ref Vec[i64]| (a[0] - b[0]).abs() + (a[1] - b[1]).abs();\n\
+             let t: i64 = nuts.iter().map(|n| far(n, tree)).sum();\n\
+             println(f\"{t} {twice(|n| far(n, tree))}\");\n\
+         }\n",
+    );
+    let (dir, path) = fixture(
+        "closure-local-takes",
+        "fn twice(f: Fn(ref Vec[i64]) -> i64) -> i64 {\n\
+             f(vec![1, 2]) + f(vec![3, 4])\n\
+         }\n\
+         fn main() {\n\
+             let tree = vec![0, 0];\n\
+             let eat = |a: ref Vec[i64], b: Vec[i64]| a[0] + b.len();\n\
+             println(f\"{twice(|n| eat(n, tree))}\");\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "closure-local-takes: check must reject: {err}"
+    );
+    assert!(
+        err.contains("consumes captured binding 'tree'"),
+        "closure-local-takes: expected the consumed `tree` in: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

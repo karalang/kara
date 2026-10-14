@@ -1622,7 +1622,7 @@ impl<'a> super::TypeChecker<'a> {
     /// into an `Fn(...)` slot is a hard `E_ONCE_FN_INTO_FN_SLOT` ERROR whose
     /// suggestions (clone the container, or widen the slot to `OnceFn`) are
     /// both wrong for a callee that only reads.
-    fn is_borrow_param_type(t: &Type) -> bool {
+    pub(super) fn is_borrow_param_type(t: &Type) -> bool {
         matches!(t, Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. })
     }
 
