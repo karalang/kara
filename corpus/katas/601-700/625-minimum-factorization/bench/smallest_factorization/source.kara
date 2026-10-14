@@ -1,0 +1,80 @@
+// LeetCode #625: Minimum Factorization -- greedy from the largest digit.
+//
+// Take out the factors 9, 8, ..., 2 in that order, each as often as it
+// divides, as digits. Taking the largest digits first leaves the fewest
+// digits, and fewer digits make a smaller number; then the digits
+// written smallest first are the smallest number with that product.
+// If anything other than 1 is left, a prime above 7 divides `num` and
+// no digits multiply to it. O(log num).
+
+fn smallest_factorization(num: i64) -> i64 {
+    if num < 10 {
+        return num;
+    }
+    let mut rest = num;
+    let mut answer = 0;
+    let mut place = 1;
+    let mut d = 9;
+    while d >= 2 {
+        while rest % d == 0 {
+            rest /= d;
+            answer += d * place;
+            place *= 10;
+            if answer > 2147483647 {
+                return 0;
+            }
+        }
+        d -= 1;
+    }
+    if rest == 1 { answer } else { 0 }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` numbers: every even one a product of up to 10 random digits
+// from 2 to 9 that stays within 31 bits, so most have an answer; every
+// odd one random from 1 to 2^31 - 1, so most have none.
+fn random_numbers(count: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut numbers: Vec[i64] = Vec.new();
+    for i in 0..count {
+        if i % 2 == 0 {
+            let mut product = 1;
+            for _ in 0..1 + next_random(mut seed) % 10 {
+                let d = 2 + next_random(mut seed) % 8;
+                if product * d <= 2147483647 {
+                    product *= d;
+                }
+            }
+            numbers.push(product);
+        } else {
+            let high = next_random(mut seed);
+            let low = next_random(mut seed);
+            numbers.push(1 + (high * 65536 + low) % 2147483647);
+        }
+    }
+    numbers
+}
+
+fn main() {
+    // 200,000 numbers made once; then 50 rounds answer every one,
+    // putting each answer into a checksum.
+    let count = 200000;
+    let rounds = 50;
+    let mut seed: i64 = 625;
+    let numbers = random_numbers(count, mut seed);
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..rounds {
+        for i in 0..count {
+            let a = smallest_factorization(numbers[i]);
+            if a != 0 {
+                found += 1;
+            }
+            checksum = (checksum * 31 + a) % 1000000007;
+        }
+    }
+    println(f"{count} numbers, {rounds} rounds: {found} answers, checksum {checksum}");
+}

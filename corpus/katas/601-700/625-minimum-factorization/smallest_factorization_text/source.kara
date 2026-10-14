@@ -1,0 +1,108 @@
+// LeetCode #625: Minimum Factorization -- digits as text.
+//
+// The same greedy division by 9 down to 2, the digits collected as a
+// `String`, largest first, and then reversed. Whether the number fits
+// in 31 bits is decided on the text, by its length and then by
+// comparing it with "2147483647" character by character, so the number
+// is only parsed once it is known to fit. O(log num).
+
+fn smallest_factorization(num: i64) -> i64 {
+    if num < 10 {
+        return num;
+    }
+    let mut rest = num;
+    let mut largest_first = String.new();
+    for d in vec![9, 8, 7, 6, 5, 4, 3, 2] {
+        while rest % d == 0 {
+            rest /= d;
+            largest_first.push_str(f"{d}");
+        }
+    }
+    if rest != 1 {
+        return 0;
+    }
+    let mut digits = String.new();
+    for c in largest_first.chars().rev() {
+        digits.push(c);
+    }
+    let limit = "2147483647";
+    if digits.len() > limit.len() or (digits.len() == limit.len() and digits > limit) {
+        return 0;
+    }
+    i64.parse(digits).unwrap()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(num: i64) {
+    println(f"{num} -> {smallest_factorization(num)}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(48);
+    show(15);
+    // One and a single digit; ten; a prime above 7; products whose
+    // leftover 2s and 3s make a 6, a 4 and a 9 with a 6; four and seven
+    // digits; nine 9s; nine 9s and a 2, too large for 31 bits; 2^30,
+    // ten 8s, also too large; the largest input, a prime.
+    show(1);
+    show(7);
+    show(10);
+    show(11);
+    show(12);
+    show(36);
+    show(54);
+    show(1440);
+    show(1959552);
+    show(387420489);
+    show(774840978);
+    show(1073741824);
+    show(2147483647);
+    // 300 products of up to 12 random digits from 1 to 9 (a digit that
+    // would take the product past 2^31 - 1 is skipped), which mostly
+    // have an answer, and 300 random numbers below 2^31, which mostly do
+    // not.
+    let mut seed: i64 = 625;
+    let mut sum = 0;
+    let mut checksum = 0;
+    let mut found = 0;
+    for i in 0..600 {
+        let mut num = 1;
+        if i < 300 {
+            for _ in 0..1 + next_random(mut seed) % 12 {
+                let d = 1 + next_random(mut seed) % 9;
+                if num * d <= 2147483647 {
+                    num *= d;
+                }
+            }
+        } else {
+            num = 1 + (next_random(mut seed) * 65536 + next_random(mut seed)) % 2147483647;
+        }
+        let answer = smallest_factorization(num);
+        if answer > 0 {
+            found += 1;
+        }
+        sum += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"600 random numbers: {found} with an answer, total {sum}, checksum {checksum}");
+    // Every number from 1 to 20,000.
+    sum = 0;
+    checksum = 0;
+    found = 0;
+    for num in 1..20001 {
+        let answer = smallest_factorization(num);
+        if answer > 0 {
+            found += 1;
+        }
+        sum += answer;
+        checksum = (checksum * 31 + answer) % 1000000007;
+    }
+    println(f"1 to 20000: {found} with an answer, total {sum}, checksum {checksum}");
+}
