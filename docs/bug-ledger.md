@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 605 |
 | leak | 603 |
 | double-free | 427 |
-| codegen-gap | 254 |
+| codegen-gap | 255 |
 | missing-feature | 244 |
 | other | 172 |
 | perf | 164 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2876 |
 | interp | 915 |
-| typecheck | 391 |
+| typecheck | 392 |
 | other | 115 |
 | ownership | 87 |
 | cli | 75 |
@@ -610,6 +610,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-15 | 2026-10-14 | interp | medium | The MIR interpreter has no `chunks` or `windows` on a `Vec` receiver: `v.chunks(2)` and `v.windows(2)` on a `Vec[i64]` stop `__mir-run` with "call of unknown function Vec[i64].chunks" (and `.windows`), while `karac check` passes them, `__mir-llvm-run` runs them, and the same calls on a `Slice[i64]` run on `__mir-run` | — |
 | B-2026-10-14-17 | 2026-10-14 | interp+codegen | medium | `collect()` into a `VecDeque` fails on both MIR backends: `__mir-run` stops with "expected a library value, found Agg(...)" in `IterMap[..].collect[i64, VecDeque[i64]]`, and `__mir-llvm-run` with "native `VecDeque[i64].from_iter` is not lowered yet" | — |
 | B-2026-10-14-18 | 2026-10-14 | typecheck | medium | `karac check` accepts `flatten()` over an iterator whose items are collections, `mat.iter().flatten()` on a `Vec[Vec[i64]]`, but the spec's signature (`where Self.Item: Iterator`) excludes it and both MIR backends refuse it: a program that passes `karac check` does not run | — |
+| B-2026-10-14-19 | 2026-10-14 | typecheck | medium | On the MIR backends a `collect()` that is an element of a tuple literal does not build, even where the tuple's type is written: `let t: (Vec[char], i64) = (s.chars().collect(), 1);` and `pairs.push((s.chars().collect(), 1))` into a `Vec[(Vec[char], i64)]` both fail with "an expression whose type does not lower (UnsolvedParam(\"C\")) is not lowered yet", while `karac check` passes them | — |
 
 ### Relocated
 
