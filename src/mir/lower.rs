@@ -3788,7 +3788,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                 None => self.unsupported(e.span, "`self` here"),
             },
             ExprKind::FieldAccess { object, field } => {
-                let (base, bt) = self.deref_place(object, mutable)?;
+                // A field of a `shared` value is written through any
+                // handle to it (core-semantics §5.9), so the handle is
+                // only read: `nodes[i].val = v` with `nodes` a `ref Vec`
+                // takes `index`, not `index_mut` (B-2026-10-13-33).
+                let through_shared = mutable
+                    && self.expr_ty(object).is_ok_and(|mut ot| {
+                        while let HK::Ref(inner) | HK::MutRef(inner) = self.tys().tcx().kind(ot) {
+                            ot = inner;
+                        }
+                        matches!(self.tys().tcx().kind(ot), HK::Shared { .. })
+                    });
+                let (base, bt) = self.deref_place(object, mutable && !through_shared)?;
                 match self.field_of(bt, None, field) {
                     Some((idx, ft)) => Ok(base.field(idx, ft)),
                     None => self.unsupported(e.span, &format!("the field `{field}`")),
