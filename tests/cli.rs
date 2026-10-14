@@ -193,16 +193,19 @@ fn fix_inside_an_fstring_interpolation_edits_only_the_marker() {
 
     // Unlabeled argument, and the labeled form the `mut_marker_span` field
     // exists for (`CallArg::span` starts at the LABEL, so the edit cannot be
-    // derived from it without deleting the label too).
+    // derived from it without deleting the label too). `f` takes a read-only
+    // `Slice`, so the marker is the illegal one ("`mut` marker is not legal
+    // here"): since B-2026-10-14-25 a marker on a forwarded `mut Slice` is the
+    // v1 spelling and draws no deletion to test.
     for (name, before, after) in [
         (
             "plain.kara",
-            "fn f(xs: mut Slice[i64]) -> i64 { return xs.len(); }\n\
+            "fn f(xs: Slice[i64]) -> i64 { return xs.len(); }\n\
              fn g(xs: mut Slice[i64]) {\n\
              \x20   println(f\"{f(mut xs)}\");\n\
              }\n\
              fn main() { let mut a: Array[i64, 2] = [1, 2]; g(mut a); }\n",
-            "fn f(xs: mut Slice[i64]) -> i64 { return xs.len(); }\n\
+            "fn f(xs: Slice[i64]) -> i64 { return xs.len(); }\n\
              fn g(xs: mut Slice[i64]) {\n\
              \x20   println(f\"{f(xs)}\");\n\
              }\n\
@@ -210,12 +213,12 @@ fn fix_inside_an_fstring_interpolation_edits_only_the_marker() {
         ),
         (
             "labeled.kara",
-            "fn f(xs: mut Slice[i64]) -> i64 { return xs.len(); }\n\
+            "fn f(xs: Slice[i64]) -> i64 { return xs.len(); }\n\
              fn g(xs: mut Slice[i64]) {\n\
              \x20   println(f\"{f(xs: mut xs)}\");\n\
              }\n\
              fn main() { let mut a: Array[i64, 2] = [1, 2]; g(mut a); }\n",
-            "fn f(xs: mut Slice[i64]) -> i64 { return xs.len(); }\n\
+            "fn f(xs: Slice[i64]) -> i64 { return xs.len(); }\n\
              fn g(xs: mut Slice[i64]) {\n\
              \x20   println(f\"{f(xs: xs)}\");\n\
              }\n\
