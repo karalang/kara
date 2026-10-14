@@ -1,0 +1,97 @@
+// LeetCode #635: Design Log Storage System -- prefixes compared as text.
+//
+// Every timestamp has the fixed shape `Year:Month:Day:Hour:Minute:Second`
+// with zero-padded fields, so comparing two of them as text compares
+// them as times, and cutting both to the same length first compares
+// them at that granularity. `put` keeps the logs in a list; `retrieve`
+// cuts the bounds and every timestamp to the granularity's length and
+// keeps the ids in between. O(1) per put, O(logs) per retrieve.
+
+struct LogSystem {
+    logs: Vec[(i64, String)],
+}
+
+impl LogSystem {
+    fn new() -> LogSystem {
+        LogSystem { logs: Vec.new() }
+    }
+
+    fn put(mut ref self, id: i64, timestamp: String) {
+        self.logs.push((id, timestamp.clone()));
+    }
+
+    fn retrieve(self, start: String, end: String, granularity: String) -> Vec[i64] {
+        let n = length(granularity);
+        let low = start.slice(0, n);
+        let high = end.slice(0, n);
+        let mut ids: Vec[i64] = Vec.new();
+        for (id, timestamp) in self.logs.iter() {
+            let cut = timestamp.slice(0, n);
+            if cut >= low and cut <= high {
+                ids.push(*id);
+            }
+        }
+        ids
+    }
+}
+
+// How many characters of a timestamp a granularity keeps.
+fn length(granularity: String) -> i64 {
+    match granularity {
+        "Year" => 4,
+        "Month" => 7,
+        "Day" => 10,
+        "Hour" => 13,
+        "Minute" => 16,
+        _ => 19,
+    }
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn two(value: i64) -> String {
+    if value < 10 {
+        f"0{value}"
+    } else {
+        f"{value}"
+    }
+}
+
+fn random_time(seed: mut ref i64) -> String {
+    let year = 2000 + next_random(mut seed) % 18;
+    let month = 1 + next_random(mut seed) % 12;
+    let day = 1 + next_random(mut seed) % 31;
+    let hour = next_random(mut seed) % 24;
+    let minute = next_random(mut seed) % 60;
+    let second = next_random(mut seed) % 60;
+    f"{year}:{two(month)}:{two(day)}:{two(hour)}:{two(minute)}:{two(second)}"
+}
+
+// 20,000 logs put once, then 2,000 retrieves at random granularities;
+// every id found goes into a checksum in the order it comes back.
+fn main() {
+    let names = vec!["Year", "Month", "Day", "Hour", "Minute", "Second"];
+    let mut seed: i64 = 635;
+    let mut logs = LogSystem.new();
+    for id in 1..20001 {
+        logs.put(id, random_time(mut seed));
+    }
+    let mut found = 0;
+    let mut checksum = 0;
+    for _ in 0..2000 {
+        let start = random_time(mut seed);
+        let end = random_time(mut seed);
+        let granularity = names[next_random(mut seed) % 6].clone();
+        let ids = logs.retrieve(start, end, granularity);
+        for id in ids.iter() {
+            found += 1;
+            checksum = (checksum * 31 + *id) % 1000000007;
+        }
+    }
+    println(f"20000 logs, 2000 retrieves: {found} ids, checksum {checksum}");
+}

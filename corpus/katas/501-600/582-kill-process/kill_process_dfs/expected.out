@@ -1,0 +1,11 @@
+[1, 3, 10, 5] under [3, 0, 5, 3], kill 5: [5, 10]
+[1] under [0], kill 1: [1]
+[1, 3, 10, 5] under [3, 0, 5, 3], kill 3: [1, 3, 5, 10]
+[1, 3, 10, 5] under [3, 0, 5, 3], kill 10: [10]
+[1, 2, 3, 4, 5] under [0, 1, 2, 3, 4], kill 3: [3, 4, 5]
+[4, 5, 2, 3, 1] under [2, 2, 1, 1, 0], kill 2: [2, 4, 5]
+300 random trees: 962 killed, checksum 218626240
+random tree, the root: 50000 killed, checksum 417490897
+random tree, a process partway down: 3247 killed, checksum 38991590
+one root, 49999 children: 50000 killed, checksum 417490897
+a chain of 5000, the middle: 2501 killed, checksum 598681795

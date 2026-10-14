@@ -1,0 +1,11 @@
+example 1: 12
+example 2: 3
+squirrel on a nut: 8
+squirrel at the tree: 8
+a nut at the tree: 6
+not the nearest: 8
+all alike: 17
+one cell: 0
+300 random cases: 8510 steps, checksum 428828430
+100 by 100, 5000 nuts at random: 794979
+100 by 100, 5000 nuts in a corner: 1889901

@@ -1,0 +1,11 @@
+[abc, xyz] -> zyxcba
+[abc] -> cba
+[a] -> a
+[zz, zz] -> zzzz
+[ab, ba, ab] -> bbabaa
+[lc, evol, cdy] -> ylclovecd
+[zab, zza, bz] -> zzzbzaba
+300 random lists: 3470 letters, checksum 711940372
+1000 letters, starting zzjjjrgtqnxr, checksum 218995605
+1000 letters, starting zyobzvpakwpk, checksum 914757606
+1000 letters, starting bbbbbbbbbabb, checksum 459836730

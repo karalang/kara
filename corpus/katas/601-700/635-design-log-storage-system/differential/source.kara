@@ -1,0 +1,406 @@
+// LeetCode #635: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// calls.
+
+// ---- star arm ----------------------------------------------------------
+
+struct LogSystem_star {
+    logs: Vec[(i64, String)],
+}
+
+impl LogSystem_star {
+    fn new() -> LogSystem_star {
+        LogSystem_star { logs: Vec.new() }
+    }
+
+    fn put(mut ref self, id: i64, timestamp: String) {
+        self.logs.push((id, timestamp.clone()));
+    }
+
+    fn retrieve(self, start: String, end: String, granularity: String) -> Vec[i64] {
+        let n = length_star(granularity);
+        let low = start.slice(0, n);
+        let high = end.slice(0, n);
+        let mut ids: Vec[i64] = Vec.new();
+        for (id, timestamp) in self.logs.iter() {
+            let cut = timestamp.slice(0, n);
+            if cut >= low and cut <= high {
+                ids.push(*id);
+            }
+        }
+        ids
+    }
+}
+
+// How many characters of a timestamp a granularity keeps.
+fn length_star(granularity: String) -> i64 {
+    match granularity {
+        "Year" => 4,
+        "Month" => 7,
+        "Day" => 10,
+        "Hour" => 13,
+        "Minute" => 16,
+        _ => 19,
+    }
+}
+
+// ---- numbers arm -------------------------------------------------------
+
+struct LogSystem_numbers {
+    ids: Vec[i64],
+    times: Vec[Vec[i64]],
+}
+
+impl LogSystem_numbers {
+    fn new() -> LogSystem_numbers {
+        LogSystem_numbers { ids: Vec.new(), times: Vec.new() }
+    }
+
+    fn put(mut ref self, id: i64, timestamp: String) {
+        self.ids.push(id);
+        self.times.push(fields_numbers(timestamp));
+    }
+
+    fn retrieve(self, start: String, end: String, granularity: String) -> Vec[i64] {
+        let count = depth_numbers(granularity);
+        let low = fields_numbers(start);
+        let high = fields_numbers(end);
+        let mut ids: Vec[i64] = Vec.new();
+        for i in 0..self.ids.len() {
+            if compare_numbers(self.times[i], low, count) >= 0 and compare_numbers(self.times[i], high, count) <= 0 {
+                ids.push(self.ids[i]);
+            }
+        }
+        ids
+    }
+}
+
+// The six fields of a timestamp, year first.
+fn fields_numbers(timestamp: String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for part in timestamp.split(":").iter() {
+        out.push(i64.parse(part).unwrap());
+    }
+    out
+}
+
+// -1, 0 or 1 as `a` comes before, with or after `b` on their first
+// `count` fields.
+fn compare_numbers(a: Vec[i64], b: Vec[i64], count: i64) -> i64 {
+    for i in 0..count {
+        if a[i] < b[i] {
+            return -1;
+        }
+        if a[i] > b[i] {
+            return 1;
+        }
+    }
+    0
+}
+
+// How many fields a granularity keeps.
+// `karac` refuses the string literal patterns on `as_str()` here
+// (kara B-2026-10-14-43); the README says how this arm was checked.
+fn depth_numbers(granularity: String) -> i64 {
+    match granularity.as_str() {
+        "Year" => 1,
+        "Month" => 2,
+        "Day" => 3,
+        "Hour" => 4,
+        "Minute" => 5,
+        _ => 6,
+    }
+}
+
+// ---- packed arm --------------------------------------------------------
+
+struct LogSystem_packed {
+    ids: Vec[i64],
+    keys: Vec[i64],
+}
+
+impl LogSystem_packed {
+    fn new() -> LogSystem_packed {
+        LogSystem_packed { ids: Vec.new(), keys: Vec.new() }
+    }
+
+    fn put(mut ref self, id: i64, timestamp: String) {
+        self.ids.push(id);
+        self.keys.push(pack_packed(timestamp));
+    }
+
+    fn retrieve(self, start: String, end: String, granularity: String) -> Vec[i64] {
+        let unit = scale_packed(granularity);
+        let low = pack_packed(start) / unit;
+        let high = pack_packed(end) / unit;
+        let mut ids: Vec[i64] = Vec.new();
+        for i in 0..self.ids.len() {
+            let key = self.keys[i] / unit;
+            if key >= low and key <= high {
+                ids.push(self.ids[i]);
+            }
+        }
+        ids
+    }
+}
+
+// The timestamp's digits read as one number, the colons skipped.
+fn pack_packed(timestamp: String) -> i64 {
+    let mut key = 0;
+    for ch in timestamp.chars() {
+        if ch != ':' {
+            key = key * 10 + (ch as i64 - '0' as i64);
+        }
+    }
+    key
+}
+
+// 100 to the power of the number of fields below a granularity.
+fn scale_packed(granularity: String) -> i64 {
+    match granularity {
+        "Year" => 10000000000,
+        "Month" => 100000000,
+        "Day" => 1000000,
+        "Hour" => 10000,
+        "Minute" => 100,
+        _ => 1,
+    }
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+struct LogSystem_sorted {
+    logs: SortedMap[String, Vec[i64]],
+}
+
+impl LogSystem_sorted {
+    fn new() -> LogSystem_sorted {
+        LogSystem_sorted { logs: SortedMap.new() }
+    }
+
+    fn put(mut ref self, id: i64, timestamp: String) {
+        let mut ids = self.logs.get_or(timestamp.clone(), Vec.new());
+        ids.push(id);
+        self.logs.insert(timestamp.clone(), ids);
+    }
+
+    fn retrieve(self, start: String, end: String, granularity: String) -> Vec[i64] {
+        let n = length_sorted(granularity);
+        let floor = "0000:00:00:00:00:00";
+        let ceiling = "9999:99:99:99:99:99";
+        let low = f"{start.slice(0, n)}{floor.slice(n, 19)}";
+        let high = f"{end.slice(0, n)}{ceiling.slice(n, 19)}";
+        let mut ids: Vec[i64] = Vec.new();
+        for (_, at) in self.logs.range_inclusive(low, high).iter() {
+            for id in at.iter() {
+                ids.push(*id);
+            }
+        }
+        ids
+    }
+}
+
+// How many characters of a timestamp a granularity keeps.
+// `karac` refuses the string literal patterns on `as_str()` here
+// (kara B-2026-10-14-43); the README says how this arm was checked.
+fn length_sorted(granularity: String) -> i64 {
+    match granularity.as_str() {
+        "Year" => 4,
+        "Month" => 7,
+        "Day" => 10,
+        "Hour" => 13,
+        "Minute" => 16,
+        _ => 19,
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn two(value: i64) -> String {
+    if value < 10 {
+        f"0{value}"
+    } else {
+        f"{value}"
+    }
+}
+
+// A random timestamp in a small window of two values a field, so that
+// logs and bounds often share fields.
+fn random_time(seed: mut ref i64) -> String {
+    let year = 2016 + next_random(mut seed) % 2;
+    let month = 1 + next_random(mut seed) % 2;
+    let day = 1 + next_random(mut seed) % 2;
+    let hour = next_random(mut seed) % 2;
+    let minute = next_random(mut seed) % 2;
+    let second = next_random(mut seed) % 2;
+    f"{year}:{two(month)}:{two(day)}:{two(hour)}:{two(minute)}:{two(second)}"
+}
+
+// A timestamp as a count of seconds from the start of 2000 in a
+// calendar of 12 months of 31 days each.
+fn seconds(timestamp: String) -> i64 {
+    let parts = timestamp.split(":");
+    let mut f: Vec[i64] = Vec.new();
+    for part in parts.iter() {
+        f.push(i64.parse(part).unwrap());
+    }
+    ((((f[0] - 2000) * 12 + f[1] - 1) * 31 + f[2] - 1) * 24 + f[3]) * 3600 + f[4] * 60 + f[5]
+}
+
+// The length in seconds of one step of a granularity in that calendar.
+fn unit(granularity: String) -> i64 {
+    let names = vec!["Second", "Minute", "Hour", "Day", "Month", "Year"];
+    let sizes = vec![1, 60, 3600, 86400, 2678400, 32140800];
+    let mut size = 1;
+    for i in 0..6 {
+        if names[i] == granularity {
+            size = sizes[i];
+        }
+    }
+    size
+}
+
+// The definition: a log is kept when its count of seconds, divided down
+// to whole steps of the granularity, lies between the bounds' counts
+// divided the same way.
+fn definition(times: Vec[String], start: String, end: String, granularity: String) -> Vec[i64] {
+    let u = unit(granularity);
+    let low = seconds(start) / u;
+    let high = seconds(end) / u;
+    let mut ids: Vec[i64] = Vec.new();
+    for i in 0..times.len() {
+        let at = seconds(times[i]) / u;
+        if at >= low and at <= high {
+            ids.push(i + 1);
+        }
+    }
+    ids
+}
+
+fn sorted(ids: Vec[i64]) -> Vec[i64] {
+    let mut out = ids.clone();
+    out.sort();
+    out
+}
+
+// The ids `which` retrieves after putting the logs, id i + 1 at
+// times[i], in the given order or reversed.
+fn answer(which: i64, times: Vec[String], reversed: bool, start: String, end: String, granularity: String) -> Vec[i64] {
+    let n = times.len();
+    let mut ids: Vec[i64] = Vec.new();
+    if which == 0 {
+        let mut logs = LogSystem_star.new();
+        for k in 0..n {
+            let i = if reversed { n - 1 - k } else { k };
+            logs.put(i + 1, times[i]);
+        }
+        ids = logs.retrieve(start, end, granularity);
+    } else if which == 1 {
+        let mut logs = LogSystem_numbers.new();
+        for k in 0..n {
+            let i = if reversed { n - 1 - k } else { k };
+            logs.put(i + 1, times[i]);
+        }
+        ids = logs.retrieve(start, end, granularity);
+    } else if which == 2 {
+        let mut logs = LogSystem_packed.new();
+        for k in 0..n {
+            let i = if reversed { n - 1 - k } else { k };
+            logs.put(i + 1, times[i]);
+        }
+        ids = logs.retrieve(start, end, granularity);
+    } else {
+        let mut logs = LogSystem_sorted.new();
+        for k in 0..n {
+            let i = if reversed { n - 1 - k } else { k };
+            logs.put(i + 1, times[i]);
+        }
+        ids = logs.retrieve(start, end, granularity);
+    }
+    sorted(ids)
+}
+
+fn main() {
+    let names = vec!["Year", "Month", "Day", "Hour", "Minute", "Second"];
+    let count = 1000;
+    let mut seed: i64 = 6350;
+    let mut checks = 0;
+    let mut kept = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 20 logs, two bounds in either order, a middle time, and a
+        // granularity with the one above it.
+        let n = 1 + next_random(mut seed) % 20;
+        let mut times: Vec[String] = Vec.new();
+        for _ in 0..n {
+            times.push(random_time(mut seed));
+        }
+        let start = random_time(mut seed);
+        let end = random_time(mut seed);
+        let mut three = vec![random_time(mut seed), random_time(mut seed), random_time(mut seed)];
+        three.sort();
+        let level = next_random(mut seed) % 6;
+        let granularity = names[level].clone();
+        let coarser = names[if level == 0 { 0 } else { level - 1 }].clone();
+        let second = String.from("Second");
+        let want = definition(times, start, end, granularity);
+        kept += want.len();
+        for which in 0..4 {
+            let got = answer(which, times, false, start, end, granularity);
+            let wide = answer(which, times, false, start, end, coarser);
+            let mut within = true;
+            for id in got.iter() {
+                if not wide.contains(id) {
+                    within = false;
+                }
+            }
+            let mut exact = true;
+            for i in 0..n {
+                let mut same: Vec[i64] = Vec.new();
+                for j in 0..n {
+                    if times[j] == times[i] {
+                        same.push(j + 1);
+                    }
+                }
+                if answer(which, times, false, times[i], times[i], second) != same {
+                    exact = false;
+                }
+            }
+            let whole = answer(which, times, false, three[0], three[2], second).len();
+            let left = answer(which, times, false, three[0], three[1], second).len();
+            let right = answer(which, times, false, three[1], three[2], second).len();
+            let middle = answer(which, times, false, three[1], three[1], second).len();
+            let ok = vec![
+                // P1: the ids are the definition's.
+                got == want,
+                // P2: the next coarser granularity keeps every id kept.
+                within,
+                // P3: putting the logs in reverse order changes nothing.
+                answer(which, times, true, start, end, granularity) == got,
+                // P4: a log's own time, to the second, finds exactly the
+                // logs put at that time.
+                exact,
+                // P5: to the second, a range split at a middle time keeps
+                // as many ids as its two halves, less those at the middle.
+                whole == left + right - middle,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({kept} ids kept), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

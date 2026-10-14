@@ -1,0 +1,9 @@
+[root/a 1.txt(abcd) 2.txt(efgh), root/c 3.txt(abcd), root/c/d 4.txt(efgh), root 4.txt(efgh)] -> [[root/4.txt, root/a/2.txt, root/c/d/4.txt], [root/a/1.txt, root/c/3.txt]]
+[root/a 1.txt(abcd) 2.txt(efgh), root/c 3.txt(abcd), root/c/d 4.txt(efgh)] -> [[root/a/1.txt, root/c/3.txt], [root/a/2.txt, root/c/d/4.txt]]
+[root 1.txt(a) 2.txt(b), root/x 3.txt(c)] -> []
+[d f1(x) f2(x) f3(x)] -> [[d/f1, d/f2, d/f3]]
+[a f(z), b f(z), a/b f(y), c f(z)] -> [[a/f, b/f, c/f]]
+[r a(ab) b(abc) c(ab) d(abcd) e(abc)] -> [[r/a, r/c], [r/b, r/e]]
+[root 1.txt(123) 2.txt(1234), root/n 3.txt(123)] -> [[root/1.txt, root/n/3.txt]]
+300 random systems: 552 groups, 1860 files, checksum 554537695
+5000 directories: 578 groups, 17384 files, checksum 668783004

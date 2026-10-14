@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/635-design-log-storage-system/bench/log_system.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "70f54e958"
+extracted_src = "1bda3f4f"
+model_rev = "1aa23105"
+model_src = "1bda3f4f"
