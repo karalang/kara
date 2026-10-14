@@ -1,0 +1,13 @@
+AAABBB, n = 2 -> 8
+ACABDB, n = 1 -> 6
+AAABBB, n = 3 -> 10
+A, n = 100 -> 1
+AAAABBBCCD, n = 0 -> 10
+AAAA, n = 3 -> 13
+ABCDEFGHIJKLMNOPQRSTUVWXYZ, n = 100 -> 26
+AAABBBCCCDD, n = 2 -> 11
+AAABCDE, n = 2 -> 7
+AAABCDEFG, n = 2 -> 9
+300 random lists: total 16714, checksum 288285238
+10000 tasks of 26 letters, skewed, n = 100 -> 73428
+10000 tasks of 3 letters, n = 100 -> 340977

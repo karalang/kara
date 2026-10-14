@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/621-task-scheduler/bench/least_interval.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "1bc18c769"
+extracted_src = "a8d4e1a5"
+model_rev = "1aa23105"
+model_src = "a8d4e1a5"

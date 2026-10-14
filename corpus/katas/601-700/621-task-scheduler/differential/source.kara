@@ -1,0 +1,293 @@
+// LeetCode #621: differential -- the five arms against the definition.
+//
+// Copies of the five arms, each held to five properties on random
+// lists of tasks.
+
+// ---- star arm ----------------------------------------------------------
+
+fn least_interval_star(tasks: Slice[char], n: i64) -> i64 {
+    let mut counts = vec![0; 26];
+    for t in tasks.iter() {
+        counts[(*t as i64) - ('A' as i64)] += 1;
+    }
+    let mut most = 0;
+    for c in counts.iter() {
+        if *c > most {
+            most = *c;
+        }
+    }
+    let mut tied = 0;
+    for c in counts.iter() {
+        if *c == most {
+            tied += 1;
+        }
+    }
+    let frame = (most - 1) * (n + 1) + tied;
+    frame.max(tasks.len())
+}
+
+// ---- heap arm ----------------------------------------------------------
+
+fn least_interval_heap(tasks: Slice[char], n: i64) -> i64 {
+    let mut counts = vec![0; 26];
+    for t in tasks.iter() {
+        counts[(*t as i64) - ('A' as i64)] += 1;
+    }
+    let mut ready: PriorityQueue[i64] = PriorityQueue.max_first();
+    for c in counts.iter() {
+        if *c > 0 {
+            ready.push(*c);
+        }
+    }
+    let mut cooling: VecDeque[(i64, i64)] = VecDeque.new();
+    let mut time = 0;
+    while not ready.is_empty() or not cooling.is_empty() {
+        time += 1;
+        if let Some(left) = ready.pop() {
+            if left > 1 {
+                cooling.push_back((left - 1, time + n));
+            }
+        }
+        // At most one letter starts cooling each slot, so at most one
+        // is done cooling each slot, and it is the oldest.
+        if let Some((left, until)) = cooling.pop_front() {
+            if until == time {
+                ready.push(left);
+            } else {
+                cooling.push_front((left, until));
+            }
+        }
+    }
+    time
+}
+
+// ---- rounds arm --------------------------------------------------------
+
+fn least_interval_rounds(tasks: Slice[char], n: i64) -> i64 {
+    let mut counts = vec![0; 26];
+    for t in tasks.iter() {
+        counts[(*t as i64) - ('A' as i64)] += 1;
+    }
+    let mut time = 0;
+    loop {
+        // Largest last.
+        counts.sort();
+        if counts[25] == 0 {
+            break;
+        }
+        let mut ran = 0;
+        let mut i = 25;
+        while ran <= n and i >= 0 and counts[i] > 0 {
+            counts[i] -= 1;
+            ran += 1;
+            i -= 1;
+        }
+        let left = counts.iter().any(|c| *c > 0);
+        time += if left { n + 1 } else { ran };
+    }
+    time
+}
+
+// ---- idle arm ----------------------------------------------------------
+
+fn least_interval_idle(tasks: Slice[char], n: i64) -> i64 {
+    let mut counts = vec![0; 26];
+    for t in tasks.iter() {
+        counts[(*t as i64) - ('A' as i64)] += 1;
+    }
+    counts.sort();
+    let gaps = counts[25] - 1;
+    let mut idle = gaps * n;
+    let mut i = 24;
+    while i >= 0 and idle > 0 {
+        idle -= counts[i].min(gaps);
+        i -= 1;
+    }
+    tasks.len() + idle.max(0)
+}
+
+// ---- scan arm ----------------------------------------------------------
+
+fn least_interval_scan(tasks: Slice[char], n: i64) -> i64 {
+    let mut counts = vec![0; 26];
+    for t in tasks.iter() {
+        counts[(*t as i64) - ('A' as i64)] += 1;
+    }
+    let mut allowed = vec![0; 26];
+    let mut left = tasks.len();
+    let mut time = 0;
+    while left > 0 {
+        let mut best = -1;
+        for c in 0..26 {
+            if counts[c] > 0 and allowed[c] <= time and (best < 0 or counts[c] > counts[best]) {
+                best = c;
+            }
+        }
+        if best >= 0 {
+            counts[best] -= 1;
+            allowed[best] = time + n + 1;
+            left -= 1;
+        }
+        time += 1;
+    }
+    time
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, tasks: Slice[char], n: i64) -> i64 {
+    if which == 0 {
+        least_interval_star(tasks, n)
+    } else if which == 1 {
+        least_interval_heap(tasks, n)
+    } else if which == 2 {
+        least_interval_rounds(tasks, n)
+    } else if which == 3 {
+        least_interval_idle(tasks, n)
+    } else {
+        least_interval_scan(tasks, n)
+    }
+}
+
+// The definition: the fewest slots of any schedule, found by a breadth
+// first search over every schedule a slot at a time. A state is, for
+// each of the letters A to D, the tasks it has left and the slots it
+// must still wait, packed into one number; each slot either runs a
+// letter that has tasks left and need not wait, which must then wait
+// `n` slots, or is idle. The first slot count at which a state has no
+// tasks left is the answer.
+fn definition(tasks: Slice[char], n: i64) -> i64 {
+    let mut counts = vec![0; 4];
+    for t in tasks.iter() {
+        counts[(*t as i64) - ('A' as i64)] += 1;
+    }
+    let start = pack(counts, vec![0; 4]);
+    let mut seen: Set[i64] = Set.new();
+    seen.insert(start);
+    let mut level = vec![start];
+    let mut slots = 0;
+    loop {
+        let mut next: Vec[i64] = Vec.new();
+        for state in level.iter() {
+            let (left, wait) = unpack(*state);
+            if left[0] + left[1] + left[2] + left[3] == 0 {
+                return slots;
+            }
+            // -1 is the idle slot.
+            for run in -1..4 {
+                if run >= 0 and (left[run] == 0 or wait[run] > 0) {
+                    continue;
+                }
+                let mut l2 = left.clone();
+                let mut w2: Vec[i64] = Vec.new();
+                for i in 0..4 {
+                    w2.push((wait[i] - 1).max(0));
+                }
+                if run >= 0 {
+                    l2[run] -= 1;
+                    w2[run] = n;
+                }
+                let s2 = pack(l2, w2);
+                if not seen.contains(s2) {
+                    seen.insert(s2);
+                    next.push(s2);
+                }
+            }
+        }
+        level = next;
+        slots += 1;
+    }
+}
+
+// Counts below 16 and waits below 16, four bits each.
+fn pack(left: Vec[i64], wait: Vec[i64]) -> i64 {
+    let mut s = 0;
+    for i in 0..4 {
+        s = s * 256 + left[i] * 16 + wait[i];
+    }
+    s
+}
+
+fn unpack(state: i64) -> (Vec[i64], Vec[i64]) {
+    let mut left = vec![0; 4];
+    let mut wait = vec![0; 4];
+    let mut s = state;
+    for k in 0..4 {
+        let i = 3 - k;
+        wait[i] = s % 16;
+        left[i] = (s / 16) % 16;
+        s = s / 256;
+    }
+    (left, wait)
+}
+
+// The letters renamed A to D, B to A, C to B and D to C, and the list
+// reversed.
+fn renamed(tasks: Slice[char]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut i = tasks.len() - 1;
+    while i >= 0 {
+        let k = ((tasks[i] as i64) - ('A' as i64) + 3) % 4;
+        out.push(((65 + k) as u8) as char);
+        i -= 1;
+    }
+    out
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6210;
+    let mut checks = 0;
+    let mut slots = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 10 tasks from the first 1 to 4 letters, cooling 0 to 3.
+        let size = 1 + next_random(mut seed) % 10;
+        let kinds = 1 + next_random(mut seed) % 4;
+        let n = next_random(mut seed) % 4;
+        let mut tasks: Vec[char] = Vec.new();
+        for _ in 0..size {
+            tasks.push(((65 + next_random(mut seed) % kinds) as u8) as char);
+        }
+        let want = definition(tasks, n);
+        slots += want;
+        let mut more = tasks.clone();
+        more.push(((65 + next_random(mut seed) % 4) as u8) as char);
+        for which in 0..5 {
+            let got = answer(which, tasks, n);
+            let longer = answer(which, tasks, n + 1);
+            let added = answer(which, more, n);
+            let ok = vec![
+                // P1: the definition's count.
+                got == want,
+                // P2: the letters renamed and the list reversed give the
+                // same count.
+                answer(which, renamed(tasks), n) == got,
+                // P3: with no cooling, the count is the number of tasks.
+                answer(which, tasks, 0) == size,
+                // P4: one more task makes it no shorter, and no more
+                // than `n + 1` slots longer.
+                added >= got and added <= got + n + 1,
+                // P5: cooling one slot longer makes it no shorter, and
+                // fewer than the number of tasks longer.
+                longer >= got and longer < got + size,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({slots} slots), 5 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
