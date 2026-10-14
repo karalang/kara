@@ -1,0 +1,15 @@
+x+5-3+x=6+x-2 -> x=2
+x=x -> Infinite solutions
+2x=x -> x=0
+x=x+2 -> No solution
+3=x -> x=3
+0x=5 -> No solution
+-x=-1 -> x=1
+1+2=3 -> Infinite solutions
+1+2=4 -> No solution
+2x+3=x-4 -> x=-7
+100x-250=50x+250 -> x=10
+0x=0x -> Infinite solutions
+-x+3x-2x=0 -> Infinite solutions
+300 random equations: 278 solved (x adding to 29), 20 with no solution, 2 with every x
+935 characters -> x=16

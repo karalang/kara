@@ -1,0 +1,368 @@
+// LeetCode #640: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// equations.
+
+// ---- star arm ----------------------------------------------------------
+
+// The x count and the constant of the side `text`.
+fn side_star(text: Slice[u8]) -> (i64, i64) {
+    let mut xs = 0;
+    let mut constant = 0;
+    let mut i = 0;
+    let n = text.len();
+    while i < n {
+        let mut sign = 1;
+        if text[i] == b'+' or text[i] == b'-' {
+            if text[i] == b'-' {
+                sign = -1;
+            }
+            i += 1;
+        }
+        let mut value = 0;
+        let mut digits = 0;
+        while i < n and text[i] >= b'0' and text[i] <= b'9' {
+            value = value * 10 + (text[i] - b'0') as i64;
+            digits += 1;
+            i += 1;
+        }
+        if i < n and text[i] == b'x' {
+            xs += sign * (if digits == 0 { 1 } else { value });
+            i += 1;
+        } else {
+            constant += sign * value;
+        }
+    }
+    (xs, constant)
+}
+
+fn solve_equation_star(equation: String) -> String {
+    let bytes = equation.bytes();
+    let mut eq = 0;
+    while bytes[eq] != b'=' {
+        eq += 1;
+    }
+    let (a, b) = side_star(bytes[0..eq]);
+    let (c, d) = side_star(bytes[eq + 1..bytes.len()]);
+    if a == c {
+        if b == d {
+            String.from("Infinite solutions")
+        } else {
+            String.from("No solution")
+        }
+    } else {
+        f"x={(d - b) / (a - c)}"
+    }
+}
+
+// ---- once arm ----------------------------------------------------------
+
+fn solve_equation_once(equation: String) -> String {
+    let bytes = equation.bytes();
+    let n = bytes.len();
+    let mut xs = 0;
+    let mut constant = 0;
+    let mut side = 1;
+    let mut sign = 1;
+    let mut value = 0;
+    let mut digits = 0;
+    let mut i = 0;
+    while i <= n {
+        let c = if i < n { bytes[i] } else { b'+' };
+        if c >= b'0' and c <= b'9' {
+            value = value * 10 + (c - b'0') as i64;
+            digits += 1;
+        } else if c == b'x' {
+            xs += side * sign * (if digits == 0 { 1 } else { value });
+            value = 0;
+            digits = 0;
+            sign = 0;
+        } else {
+            // A sign or `=` ends the term before it; an x term has
+            // already been counted and zeroed its sign.
+            constant += side * sign * value;
+            value = 0;
+            digits = 0;
+            sign = if c == b'-' { -1 } else { 1 };
+            if c == b'=' {
+                side = -1;
+            }
+        }
+        i += 1;
+    }
+    if xs == 0 {
+        if constant == 0 {
+            String.from("Infinite solutions")
+        } else {
+            String.from("No solution")
+        }
+    } else {
+        f"x={-constant / xs}"
+    }
+}
+
+// ---- split arm ---------------------------------------------------------
+
+fn side_split(text: String) -> (i64, i64) {
+    let mut xs = 0;
+    let mut constant = 0;
+    for term in text.replace("-", "+-").split("+").iter() {
+        if term.len() == 0 {
+            continue;
+        }
+        if term.ends_with("x") {
+            let number = term[0..term.len() - 1];
+            if number == "" {
+                xs += 1;
+            } else if number == "-" {
+                xs -= 1;
+            } else {
+                xs += i64.parse(number).unwrap();
+            }
+        } else {
+            constant += i64.parse(term).unwrap();
+        }
+    }
+    (xs, constant)
+}
+
+fn solve_equation_split(equation: String) -> String {
+    let sides = equation.split("=");
+    let (a, b) = side_split(sides[0]);
+    let (c, d) = side_split(sides[1]);
+    if a == c {
+        if b == d {
+            String.from("Infinite solutions")
+        } else {
+            String.from("No solution")
+        }
+    } else {
+        f"x={(d - b) / (a - c)}"
+    }
+}
+
+// ---- terms arm ---------------------------------------------------------
+
+struct Term_terms {
+    value: i64,
+    has_x: bool,
+    right: bool,
+}
+
+fn terms_of_terms(equation: String) -> Vec[Term_terms] {
+    let bytes = equation.bytes();
+    let mut terms: Vec[Term_terms] = Vec.new();
+    let mut right = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'=' {
+            right = true;
+            i += 1;
+            continue;
+        }
+        let mut sign = 1;
+        if bytes[i] == b'+' or bytes[i] == b'-' {
+            sign = if bytes[i] == b'-' { -1 } else { 1 };
+            i += 1;
+        }
+        let start = i;
+        let mut value = 0;
+        while i < bytes.len() and bytes[i] >= b'0' and bytes[i] <= b'9' {
+            value = value * 10 + (bytes[i] - b'0') as i64;
+            i += 1;
+        }
+        let has_x = i < bytes.len() and bytes[i] == b'x';
+        if has_x {
+            if i == start {
+                value = 1;
+            }
+            i += 1;
+        }
+        terms.push(Term_terms { value: sign * value, has_x: has_x, right: right });
+    }
+    terms
+}
+
+fn solve_equation_terms(equation: String) -> String {
+    let mut xs = 0;
+    let mut constant = 0;
+    for term in terms_of_terms(equation).iter() {
+        let v = if term.right { -term.value } else { term.value };
+        if term.has_x {
+            xs += v;
+        } else {
+            constant += v;
+        }
+    }
+    if xs == 0 {
+        if constant == 0 {
+            String.from("Infinite solutions")
+        } else {
+            String.from("No solution")
+        }
+    } else {
+        f"x={-constant / xs}"
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// One side of `terms` terms, as in the kata's harness: the text and its
+// x count and constant.
+fn random_side(terms: i64, most: i64, seed: mut ref i64) -> (String, i64, i64) {
+    let mut text = String.new();
+    let mut xs = 0;
+    let mut constant = 0;
+    for t in 0..terms {
+        let minus = next_random(mut seed) % 2 == 0;
+        if minus {
+            text.push('-');
+        } else if t > 0 {
+            text.push('+');
+        }
+        let sign = if minus { -1 } else { 1 };
+        let value = next_random(mut seed) % (most + 1);
+        if next_random(mut seed) % 2 == 0 {
+            if value == 1 and next_random(mut seed) % 4 != 0 {
+                text.push('x');
+            } else {
+                text.push_str(f"{value}x");
+            }
+            xs += sign * value;
+        } else {
+            text.push_str(f"{value}");
+            constant += sign * value;
+        }
+    }
+    (text, xs, constant)
+}
+
+// The definition: try every whole x from -300 to 300 in a x + b = c x + d.
+// None works: no solution; more than one: every x works; else that one.
+fn by_trial(a: i64, b: i64, c: i64, d: i64) -> String {
+    let mut found = 0;
+    let mut at = 0;
+    for x in -300..301 {
+        if a * x + b == c * x + d {
+            found += 1;
+            at = x;
+        }
+    }
+    if found == 0 {
+        String.from("No solution")
+    } else if found > 1 {
+        String.from("Infinite solutions")
+    } else {
+        f"x={at}"
+    }
+}
+
+// A side with every sign turned over: a leading `-` dropped, a leading
+// term without one given one, every other `+` and `-` swapped.
+fn negated(side: String) -> String {
+    let mut out = String.new();
+    let bytes = side.bytes();
+    for i in 0..bytes.len() {
+        let c = bytes[i];
+        if i == 0 and c == b'-' {
+            continue;
+        }
+        if i == 0 {
+            out.push('-');
+        }
+        if c == b'+' {
+            out.push('-');
+        } else if c == b'-' {
+            out.push('+');
+        } else {
+            out.push(c as char);
+        }
+    }
+    out
+}
+
+// The equation with every bare `x` written `1x`.
+fn with_ones(equation: String) -> String {
+    let mut out = String.new();
+    let bytes = equation.bytes();
+    for i in 0..bytes.len() {
+        if bytes[i] == b'x' and (i == 0 or bytes[i - 1] < b'0' or bytes[i - 1] > b'9') {
+            out.push('1');
+        }
+        out.push(bytes[i] as char);
+    }
+    out
+}
+
+fn answer(which: i64, equation: String) -> String {
+    if which == 0 {
+        solve_equation_star(equation)
+    } else if which == 1 {
+        solve_equation_once(equation)
+    } else if which == 2 {
+        solve_equation_split(equation)
+    } else {
+        solve_equation_terms(equation)
+    }
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6400;
+    let mut checks = 0;
+    let mut solved = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 4 terms a side, numbers from 0 to 12; the right side gets
+        // the remainder taken off it whenever a - c is not 0.
+        let (left, a, b) = random_side(1 + next_random(mut seed) % 4, 12, mut seed);
+        let mut (right, c, d) = random_side(1 + next_random(mut seed) % 4, 12, mut seed);
+        if a != c {
+            let rem = (d - b) % (a - c);
+            if rem > 0 {
+                right = f"{right}-{rem}";
+            } else if rem < 0 {
+                right = f"{right}+{-rem}";
+            }
+            d -= rem;
+        }
+        let want = by_trial(a, b, c, d);
+        if want.starts_with("x=") {
+            solved += 1;
+        }
+        let equation = f"{left}={right}";
+        let k = next_random(mut seed) % 7;
+        let both = if next_random(mut seed) % 2 == 0 { f"+{k}x" } else { f"-{k}" };
+        for which in 0..4 {
+            let got = answer(which, equation);
+            let ok = vec![
+                // P1: the answer is the definition's.
+                got == want,
+                // P2: the sides swapped give the same answer.
+                answer(which, f"{right}={left}") == got,
+                // P3: so does the same term added to both sides.
+                answer(which, f"{left}{both}={right}{both}") == got,
+                // P4: so does every bare x written as 1x.
+                answer(which, with_ones(equation)) == got,
+                // P5: so does every sign turned over.
+                answer(which, f"{negated(left)}={negated(right)}") == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({solved} with one solution), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
