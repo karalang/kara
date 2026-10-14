@@ -792,9 +792,53 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.drop_moved(&args[1..])
             }
             ("String", "push") => {
+                // An ASCII char in line, as a byte push; any other through
+                // the runtime.
                 let v = self.ref_arg(&args[0])?;
-                let c = self.operand_scalar(&args[1])?;
-                self.rt("string_push_char", &[v.into(), c.into()])
+                let c = self.operand_scalar(&args[1])?.into_int_value();
+                let ascii = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, c, c.get_type().const_int(128, false), "")
+                    .map_err(e)?;
+                let f = self.cur_fn()?;
+                let byte = self.llcx.append_basic_block(f, "push.ascii");
+                let wide = self.llcx.append_basic_block(f, "push.wide");
+                let done = self.llcx.append_basic_block(f, "push.done");
+                self.builder
+                    .build_conditional_branch(ascii, byte, wide)
+                    .map_err(e)?;
+                self.builder.position_at_end(byte);
+                let b = self
+                    .builder
+                    .build_int_truncate(c, self.llcx.i8_type(), "")
+                    .map_err(e)?;
+                let lenp = self.offset(v, 8)?;
+                let len = self.load_i64(lenp)?;
+                let cap = self.load_i64(self.offset(v, 16)?)?;
+                let full = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGE, len, cap, "full")
+                    .map_err(e)?;
+                self.if_then(full, |cx| {
+                    cx.rt(
+                        "vec_reserve",
+                        &[v.into(), cx.i64(1).into(), cx.i64(1).into()],
+                    )
+                })?;
+                let buf = self.load_ptr(v)?;
+                let at = self.elem_ptr(buf, len, 1)?;
+                self.store(at, b.into())?;
+                let len = self
+                    .builder
+                    .build_int_add(len, self.i64(1), "")
+                    .map_err(e)?;
+                self.store(lenp, len.into())?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(wide);
+                self.rt("string_push_char", &[v.into(), c.into()])?;
+                self.builder.build_unconditional_branch(done).map_err(e)?;
+                self.builder.position_at_end(done);
+                Ok(())
             }
             ("String", "add") => {
                 // Takes the left, borrows the right.

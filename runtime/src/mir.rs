@@ -342,7 +342,11 @@ pub unsafe extern "C" fn karac_mir_vec_reserve(v: *mut RawVec, more: usize, size
         }
         return;
     }
-    let cap = want.max(v.cap.saturating_mul(2)).max(4);
+    // At least 8 bytes' worth of elements up front, as Rust's own `Vec`
+    // does for bytes, so a short `String` grows once rather than twice.
+    let cap = want
+        .max(v.cap.saturating_mul(2))
+        .max(if size == 1 { 8 } else { 4 });
     let old = if v.cap == 0 && v.len > 0 {
         // A borrowed literal: copy it out before growing.
         let p = karac_realloc_or_panic(std::ptr::null_mut(), cap * size);
