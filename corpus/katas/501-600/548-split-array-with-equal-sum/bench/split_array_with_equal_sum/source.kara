@@ -1,0 +1,71 @@
+// Benchmark for #548: Split Array with Equal Sum -- the ★ arm (a set of
+// left sums per middle cut).
+//
+// With prefix sums every part's sum is one subtraction. For each middle
+// cut j, every left cut i whose two left parts are equal puts that sum
+// in a set; then any right cut k whose two right parts are equal, and
+// equal to a sum in the set, is an answer. O(n^2) time.
+
+fn split_array(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    if n < 7 {
+        return false;
+    }
+    let mut prefix = vec![0; n + 1];
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    for j in 3..n - 3 {
+        let mut sums: Set[i64] = Set.new();
+        for i in 1..j - 1 {
+            if prefix[i] == prefix[j] - prefix[i + 1] {
+                sums.insert(prefix[i]);
+            }
+        }
+        for k in j + 2..n - 1 {
+            let third = prefix[k] - prefix[j + 1];
+            if third == prefix[n] - prefix[k + 1] and sums.contains(third) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 10 random arrays of 2,000 values (the problem's most), array g
+    // from -s to s with s = 1 + g % 5 * 25, built once. Then 20 times
+    // over, one value of every array is negated and the array is
+    // answered; the answers go into the checksum.
+    let count = 10;
+    let n = 2000;
+    let mut seed: i64 = 548;
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    for g in 0..count {
+        let spread = 1 + g % 5 * 25;
+        let mut a: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            a.push(next_random(mut seed) % (2 * spread + 1) - spread);
+        }
+        all.push(a);
+    }
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..20 {
+        for g in 0..count {
+            let i = (round * 31 + g * 7) % n;
+            all[g][i] = 0 - all[g][i];
+            let bit = if split_array(all[g]) { 1 } else { 0 };
+            yes += bit;
+            checksum = (checksum * 31 + bit + 7 * g) % 1000000007;
+        }
+    }
+    println(f"{count} arrays, 20 rounds each: {yes} can be split, checksum {checksum}");
+}

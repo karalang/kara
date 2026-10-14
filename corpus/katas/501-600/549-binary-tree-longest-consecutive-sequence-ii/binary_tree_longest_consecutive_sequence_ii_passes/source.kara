@@ -1,0 +1,203 @@
+// LeetCode #549: Binary Tree Longest Consecutive Sequence II -- one walk
+// a length.
+//
+// The rising lengths and the falling lengths are found by two separate
+// walks, each storing its length for every node in a Vec by the node's
+// pre-order number, and then the two Vecs are read side by side.
+// Pre-order numbers each walk's nodes alike, so the two agree on which
+// slot is which node. O(n) time.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// The length of the run down from `node` that moves by `step` a level,
+// written for every node of the subtree into `out` at its pre-order
+// number.
+fn run(node: TreeNode, step: i64, out: mut ref Vec[i64]) -> i64 {
+    let at = out.len();
+    out.push(1);
+    let mut length = 1;
+    if let Some(l) = node.left {
+        let below = run(l, step, out);
+        if l.val == node.val + step {
+            length = below + 1;
+        }
+    }
+    if let Some(r) = node.right {
+        let below = run(r, step, out);
+        if r.val == node.val + step {
+            length = length.max(below + 1);
+        }
+    }
+    out[at] = length;
+    length
+}
+
+fn longest_consecutive(root: Option[TreeNode]) -> i64 {
+    let mut rise: Vec[i64] = Vec.new();
+    let mut fall: Vec[i64] = Vec.new();
+    if let Some(n) = root {
+        run(n, 1, mut rise);
+        run(n, -1, mut fall);
+    }
+    let mut best = 0;
+    for i in 0..rise.len() {
+        best = best.max(rise[i] + fall[i] - 1);
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree from LeetCode's level order: `None` for a missing child.
+fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
+    if values.is_empty() or values[0].is_none() {
+        return None;
+    }
+    let root = leaf(values[0].unwrap());
+    let mut queue: Vec[TreeNode] = vec![root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < values.len() {
+        let n = queue[head];
+        head += 1;
+        if let Some(v) = values[i] {
+            let c = leaf(v);
+            n.left = Some(c);
+            queue.push(c);
+        }
+        i += 1;
+        if i < values.len() {
+            if let Some(v) = values[i] {
+                let c = leaf(v);
+                n.right = Some(c);
+                queue.push(c);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A tree of `size` nodes with values from 0 to spread - 1: each new node
+// walks down from the root, going left or right with even chance, and
+// takes the first empty place it meets.
+fn random_tree(size: i64, spread: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let root = leaf(next_random(seed) % spread);
+    for _ in 1..size {
+        let c = leaf(next_random(seed) % spread);
+        let mut node = root;
+        loop {
+            if next_random(seed) % 2 == 0 {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+fn written(values: Vec[Option[i64]]) -> String {
+    let parts: Vec[String] = values.iter().map(|v| match v {
+        Some(x) => f"{x}",
+        None => "null".to_string(),
+    }).collect();
+    f"[{parts.join(",")}]"
+}
+
+fn show(name: Str, values: Vec[Option[i64]]) {
+    let d = longest_consecutive(from_level(values));
+    println(f"{name}: {written(values)} -> {d}");
+}
+
+fn main() {
+    let mut seed: i64 = 549;
+    show("example 1", vec![Some(1), Some(2), Some(3)]);
+    show("example 2", vec![Some(2), Some(1), Some(3)]);
+    show("one node", vec![Some(5)]);
+    show("falling down the left", vec![Some(4), Some(3), None, Some(2), None, Some(1)]);
+    show("a bend below the root", vec![Some(9), Some(5), None, Some(4), Some(6), Some(3), None, None, Some(7)]);
+    show("both children one higher", vec![Some(1), Some(2), Some(2), Some(3), None, None, Some(3)]);
+    show("negative values", vec![Some(-1), Some(0), Some(-2), None, Some(1), Some(-3)]);
+    show("a run that skips a value", vec![Some(1), Some(3), Some(2), Some(4), None, Some(3)]);
+    // 300 random trees of 1 to 80 nodes, values from 0 to 2, 0 to 4 or
+    // 0 to 9 in turn.
+    let count = 300;
+    let mut nodes = 0;
+    let mut total = 0;
+    let mut h: i64 = 0;
+    for t in 0..count {
+        let size = 1 + next_random(mut seed) % 80;
+        let spread = if t % 3 == 0 { 3 } else if t % 3 == 1 { 5 } else { 10 };
+        let d = longest_consecutive(random_tree(size, spread, mut seed));
+        nodes += size;
+        total += d;
+        h = (h * 31 + d) % 1000000007;
+    }
+    println(f"{count} random trees: {nodes} nodes, lengths {total}, checksum {h}");
+    // The largest, 30,000 nodes (the problem's most): a random tree, a
+    // rising chain down the left, a falling chain to the left of the
+    // root and a rising one to the right, and a complete tree whose
+    // values are the depths.
+    let d = longest_consecutive(random_tree(30000, 4, mut seed));
+    println(f"30000 nodes at random: {d}");
+    let top = leaf(-15000);
+    let mut last = top;
+    for v in 1..30000 {
+        let c = leaf(v - 15000);
+        last.left = Some(c);
+        last = c;
+    }
+    println(f"30000 nodes rising down the left: {longest_consecutive(Some(top))}");
+    let root = leaf(0);
+    let mut l = root;
+    let mut r = root;
+    for v in 1..15000 {
+        let a = leaf(0 - v);
+        l.left = Some(a);
+        l = a;
+        let b = leaf(v);
+        r.right = Some(b);
+        r = b;
+    }
+    println(f"two chains of 14999 nodes: {longest_consecutive(Some(root))}");
+    let mut values: Vec[Option[i64]] = Vec.new();
+    let mut depth = 0;
+    let mut width = 1;
+    let mut placed = 0;
+    while values.len() < 30000 {
+        values.push(Some(depth));
+        placed += 1;
+        if placed == width {
+            depth += 1;
+            width *= 2;
+            placed = 0;
+        }
+    }
+    println(f"a complete tree of 30000 nodes: {longest_consecutive(from_level(values))}");
+}

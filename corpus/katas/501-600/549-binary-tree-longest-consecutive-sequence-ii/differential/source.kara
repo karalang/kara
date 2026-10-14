@@ -1,0 +1,341 @@
+// Differential test for LeetCode #549: Binary Tree Longest
+// Consecutive Sequence II.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random trees of 1 to 30 nodes, values from 0 to 1, 0 to 2 or 0 to 4
+// in turn.
+// Properties:
+//   P1  the answer is the definition's: the longest path along tree
+//       edges whose values rise by one a step, from any node
+//   P2  the tree mirrored left to right has the same answer
+//   P3  every value negated gives the same answer
+//   P4  every value raised by 1000 gives the same answer
+//   P5  at least 1, at most the nodes and at most the values there can
+//       be, and the tree is left as it was
+
+// ---- star: binary_tree_longest_consecutive_sequence_ii.kara
+
+fn walk_star(node: TreeNode, best: mut ref i64) -> (i64, i64) {
+    let mut rise = 1;
+    let mut fall = 1;
+    if let Some(l) = node.left {
+        let (r1, f1) = walk_star(l, best);
+        if l.val == node.val + 1 {
+            rise = r1 + 1;
+        } else if l.val == node.val - 1 {
+            fall = f1 + 1;
+        }
+    }
+    if let Some(r) = node.right {
+        let (r2, f2) = walk_star(r, best);
+        if r.val == node.val + 1 {
+            rise = rise.max(r2 + 1);
+        } else if r.val == node.val - 1 {
+            fall = fall.max(f2 + 1);
+        }
+    }
+    *best = (*best).max(rise + fall - 1);
+    (rise, fall)
+}
+
+fn longest_consecutive_star(root: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    if let Some(n) = root {
+        walk_star(n, mut best);
+    }
+    best
+}
+
+// ---- stack: binary_tree_longest_consecutive_sequence_ii_stack.kara
+
+fn longest_consecutive_stack(root: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    let mut done: Vec[(i64, i64, i64)] = Vec.new();
+    let mut stack: Vec[(Option[TreeNode], bool)] = vec![(root, false)];
+    while let Some((node, finished)) = stack.pop() {
+        match node {
+            None => done.push((0, 0, 0)),
+            Some(n) => {
+                if finished {
+                    let (rv, rr, rf) = done.pop().unwrap();
+                    let (lv, lr, lf) = done.pop().unwrap();
+                    let mut rise = 1;
+                    let mut fall = 1;
+                    if lr > 0 and lv == n.val + 1 {
+                        rise = lr + 1;
+                    }
+                    if lf > 0 and lv == n.val - 1 {
+                        fall = lf + 1;
+                    }
+                    if rr > 0 and rv == n.val + 1 {
+                        rise = rise.max(rr + 1);
+                    }
+                    if rf > 0 and rv == n.val - 1 {
+                        fall = fall.max(rf + 1);
+                    }
+                    best = best.max(rise + fall - 1);
+                    done.push((n.val, rise, fall));
+                } else {
+                    stack.push((Some(n), true));
+                    stack.push((n.right, false));
+                    stack.push((n.left, false));
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- levels: binary_tree_longest_consecutive_sequence_ii_levels.kara
+
+fn longest_consecutive_levels(root: Option[TreeNode]) -> i64 {
+    let mut order: Vec[TreeNode] = Vec.new();
+    let mut left_at: Vec[i64] = Vec.new();
+    let mut right_at: Vec[i64] = Vec.new();
+    if let Some(n) = root {
+        order.push(n);
+    }
+    let mut head = 0;
+    while head < order.len() {
+        let n = order[head];
+        head += 1;
+        match n.left {
+            Some(l) => {
+                left_at.push(order.len());
+                order.push(l);
+            }
+            None => left_at.push(-1),
+        }
+        match n.right {
+            Some(r) => {
+                right_at.push(order.len());
+                order.push(r);
+            }
+            None => right_at.push(-1),
+        }
+    }
+    let size = order.len();
+    let mut rise = vec![1; size];
+    let mut fall = vec![1; size];
+    let mut best = 0;
+    for i in (0..size).rev() {
+        let v = order[i].val;
+        for c in vec![left_at[i], right_at[i]] {
+            if c >= 0 {
+                if order[c].val == v + 1 {
+                    rise[i] = rise[i].max(rise[c] + 1);
+                } else if order[c].val == v - 1 {
+                    fall[i] = fall[i].max(fall[c] + 1);
+                }
+            }
+        }
+        best = best.max(rise[i] + fall[i] - 1);
+    }
+    best
+}
+
+// ---- passes: binary_tree_longest_consecutive_sequence_ii_passes.kara
+
+fn run_passes(node: TreeNode, step: i64, out: mut ref Vec[i64]) -> i64 {
+    let at = out.len();
+    out.push(1);
+    let mut length = 1;
+    if let Some(l) = node.left {
+        let below = run_passes(l, step, out);
+        if l.val == node.val + step {
+            length = below + 1;
+        }
+    }
+    if let Some(r) = node.right {
+        let below = run_passes(r, step, out);
+        if r.val == node.val + step {
+            length = length.max(below + 1);
+        }
+    }
+    out[at] = length;
+    length
+}
+
+fn longest_consecutive_passes(root: Option[TreeNode]) -> i64 {
+    let mut rise: Vec[i64] = Vec.new();
+    let mut fall: Vec[i64] = Vec.new();
+    if let Some(n) = root {
+        run_passes(n, 1, mut rise);
+        run_passes(n, -1, mut fall);
+    }
+    let mut best = 0;
+    for i in 0..rise.len() {
+        best = best.max(rise[i] + fall[i] - 1);
+    }
+    best
+}
+
+// ---- the tree and the definition --------------------------------------------
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree of `size` nodes with values from 0 to spread - 1, each new node
+// walking down from the root at even chance and taking the first empty
+// place it meets.
+fn random_tree(size: i64, spread: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let root = leaf(next_random(seed) % spread);
+    for _ in 1..size {
+        let c = leaf(next_random(seed) % spread);
+        let mut node = root;
+        loop {
+            if next_random(seed) % 2 == 0 {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+// The longest path that starts at node `at` and steps along tree edges,
+// each step to a node whose value is one more.
+fn climb(values: Vec[i64], next: Vec[Vec[i64]], at: i64) -> i64 {
+    let mut most = 1;
+    for to in next[at].iter() {
+        if values[*to] == values[at] + 1 {
+            most = most.max(1 + climb(values, next, *to));
+        }
+    }
+    most
+}
+
+// The statement read literally: the tree as an undirected graph of
+// numbered nodes, and from every node the longest path along edges whose
+// values rise by one a step. A path that falls is the same path read the
+// other way, so rising paths cover them all; and since the values rise,
+// no path can come back to a node.
+fn definition(root: Option[TreeNode]) -> i64 {
+    let mut order: Vec[TreeNode] = Vec.new();
+    let mut next: Vec[Vec[i64]] = Vec.new();
+    if let Some(n) = root {
+        order.push(n);
+        next.push(Vec.new());
+    }
+    let mut head = 0;
+    while head < order.len() {
+        let n = order[head];
+        for child in vec![n.left, n.right] {
+            if let Some(c) = child {
+                let at = order.len();
+                order.push(c);
+                next.push(vec![head]);
+                next[head].push(at);
+            }
+        }
+        head += 1;
+    }
+    let mut values: Vec[i64] = Vec.new();
+    for n in order.iter() {
+        values.push(n.val);
+    }
+    let mut best = 0;
+    for at in 0..order.len() {
+        best = best.max(climb(values.clone(), next.clone(), at));
+    }
+    best
+}
+
+fn mirrored(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirrored(n.right), right: mirrored(n.left) }),
+    }
+}
+
+// A copy with every value v replaced by scale * v + shift.
+fn remapped(node: Option[TreeNode], scale: i64, shift: i64) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: scale * n.val + shift, left: remapped(n.left, scale, shift), right: remapped(n.right, scale, shift) }),
+    }
+}
+
+fn size_of(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => 1 + size_of(n.left) + size_of(n.right),
+    }
+}
+
+fn answer(which: i64, root: Option[TreeNode]) -> i64 {
+    if which == 0 {
+        longest_consecutive_star(root)
+    } else if which == 1 {
+        longest_consecutive_stack(root)
+    } else if which == 2 {
+        longest_consecutive_levels(root)
+    } else {
+        longest_consecutive_passes(root)
+    }
+}
+
+fn main() {
+    let names = vec!["star", "stack", "levels", "passes"];
+    let count = 1000;
+    let mut seed: i64 = 5490;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 30 nodes, values from 0 to 1, 0 to 2 or 0 to 4 in turn.
+        let size = 1 + next_random(mut seed) % 30;
+        let spread = if t % 3 == 0 { 2 } else if t % 3 == 1 { 3 } else { 5 };
+        let tree = random_tree(size, spread, mut seed);
+        let want = definition(tree);
+        let ceiling = size.min(spread);
+        for which in 0..4 {
+            let got = answer(which, tree);
+            let ok = vec![
+                got == want,
+                answer(which, mirrored(tree)) == got,
+                answer(which, remapped(tree, -1, 0)) == got,
+                answer(which, remapped(tree, 1, 1000)) == got,
+                got >= 1 and got <= ceiling and size_of(tree) == size,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: {size} nodes, got {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

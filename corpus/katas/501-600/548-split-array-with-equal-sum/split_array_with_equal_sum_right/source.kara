@@ -1,0 +1,111 @@
+// LeetCode #548: Split Array with Equal Sum -- right sums first, in a
+// sorted set.
+//
+// For each middle cut j, every right cut k whose two right parts are
+// equal puts that sum in a SortedSet, and then the left cuts are tried
+// against it: the same search as the set arm, read from the other end.
+// O(n^2 log n) time.
+
+fn split_array(nums: Vec[i64]) -> bool {
+    let n = nums.len();
+    if n < 7 {
+        return false;
+    }
+    let mut prefix = vec![0; n + 1];
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + nums[i];
+    }
+    for j in 3..n - 3 {
+        let mut sums: SortedSet[i64] = SortedSet.new();
+        for k in j + 2..n - 1 {
+            let third = prefix[k] - prefix[j + 1];
+            if third == prefix[n] - prefix[k + 1] {
+                sums.insert(third);
+            }
+        }
+        for i in 1..j - 1 {
+            if prefix[i] == prefix[j] - prefix[i + 1] and sums.contains(prefix[i]) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(name: Str, nums: Vec[i64]) {
+    println(f"{name}: {split_array(nums)}");
+}
+
+// Four parts of `size` random values, each part's last value set so the
+// part sums to `sum`, with a random cut value between them.
+fn planted(size: i64, sum: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for part in 0..4 {
+        if part > 0 {
+            nums.push(next_random(seed) % 2000001 - 1000000);
+        }
+        let mut s = 0;
+        for _ in 0..size - 1 {
+            let x = next_random(seed) % 2001 - 1000;
+            nums.push(x);
+            s += x;
+        }
+        nums.push(sum - s);
+    }
+    nums
+}
+
+fn main() {
+    show("example 1", vec![1, 2, 1, 2, 1, 2, 1]);
+    show("example 2", vec![1, 2, 1, 2, 1, 2, 1, 2]);
+    show("six values", vec![0, 0, 0, 0, 0, 0]);
+    show("seven zeros", vec![0, 0, 0, 0, 0, 0, 0]);
+    show("negative parts", vec![-1, 5, -1, 7, -1, -9, -1]);
+    show("the cuts are not in the parts", vec![2, 0, 1, 1, 9, 2, 4, 2, 0]);
+    show("equal parts but no room for cuts", vec![1, 1, 1, 1, 1, 1, 1, 1]);
+
+    // 300 random arrays of 1 to 30 values, from -1 to 1, -2 to 2 or
+    // -5 to 5 in turn.
+    let mut seed: i64 = 548;
+    let mut values = 0;
+    let mut yes = 0;
+    let mut h: i64 = 0;
+    for t in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let spread = if t % 3 == 0 { 1 } else if t % 3 == 1 { 2 } else { 5 };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % (2 * spread + 1) - spread);
+        }
+        let got = split_array(nums);
+        let bit = if got { 1 } else { 0 };
+        values += n;
+        yes += bit;
+        h = (h * 31 + bit + 7 * n) % 1000000007;
+    }
+    println(f"300 random arrays: {values} values, {yes} can be split, checksum {h}");
+
+    // 2,000 values (the problem's most), and two slow cases of 200.
+    show("2000 zeros", vec![0; 2000]);
+    let mut wide: Vec[i64] = Vec.new();
+    for _ in 0..2000 {
+        wide.push(next_random(mut seed) % 2000001 - 1000000);
+    }
+    show("2000 random values", wide);
+    show("four planted parts of 499", planted(499, 1000, mut seed));
+    let mut last_one = vec![0; 199];
+    last_one.push(1);
+    show("199 zeros and a one", last_one);
+    let mut swing: Vec[i64] = Vec.new();
+    for i in 0..200 {
+        swing.push(if i % 2 == 0 { 1000000 } else { -1000000 });
+    }
+    show("200 values swinging", swing);
+}

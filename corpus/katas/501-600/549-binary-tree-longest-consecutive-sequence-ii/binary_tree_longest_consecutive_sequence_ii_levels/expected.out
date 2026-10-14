@@ -1,0 +1,13 @@
+example 1: [1,2,3] -> 2
+example 2: [2,1,3] -> 3
+one node: [5] -> 1
+falling down the left: [4,3,null,2,null,1] -> 4
+a bend below the root: [9,5,null,4,6,3,null,null,7] -> 5
+both children one higher: [1,2,2,3,null,null,3] -> 3
+negative values: [-1,0,-2,null,1,-3] -> 5
+a run that skips a value: [1,3,2,4,null,3] -> 3
+300 random trees: 12288 nodes, lengths 829, checksum 974611138
+30000 nodes at random: 4
+30000 nodes rising down the left: 30000
+two chains of 14999 nodes: 29999
+a complete tree of 30000 nodes: 15

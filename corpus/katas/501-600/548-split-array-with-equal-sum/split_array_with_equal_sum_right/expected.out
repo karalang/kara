@@ -1,0 +1,13 @@
+example 1: true
+example 2: false
+six values: false
+seven zeros: true
+negative parts: true
+the cuts are not in the parts: true
+equal parts but no room for cuts: false
+300 random arrays: 4600 values, 84 can be split, checksum 29939555
+2000 zeros: true
+2000 random values: false
+four planted parts of 499: true
+199 zeros and a one: false
+200 values swinging: false
