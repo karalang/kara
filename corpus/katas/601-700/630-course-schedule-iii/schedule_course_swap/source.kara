@@ -1,0 +1,87 @@
+// LeetCode #630: Course Schedule III -- deadlines in order, swapping.
+//
+// Take the courses by last day, keeping the taken durations in a plain
+// `Vec`. A course that fits is added. One that does not replaces the
+// longest course taken, found by a scan, when that one is longer, which
+// keeps the count and shortens the total. O(n^2).
+
+fn schedule_course(courses: Vec[Vec[i64]]) -> i64 {
+    let mut order = courses.clone();
+    order.sort_by(|a, b| a[1].cmp(b[1]));
+    let mut taken: Vec[i64] = Vec.new();
+    let mut time = 0;
+    for course in order.iter() {
+        let duration = course[0];
+        if time + duration <= course[1] {
+            taken.push(duration);
+            time += duration;
+        } else {
+            let mut longest = 0;
+            for i in 1..taken.len() {
+                if taken[i] > taken[longest] {
+                    longest = i;
+                }
+            }
+            if taken.len() > 0 and taken[longest] > duration {
+                time += duration - taken[longest];
+                taken[longest] = duration;
+            }
+        }
+    }
+    taken.len()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(courses: Vec[Vec[i64]]) {
+    println(f"{courses} -> {schedule_course(courses)}");
+}
+
+// `count` courses, each lasting 1 to `longest` days with a last day from
+// 1 to `latest`.
+fn random_courses(count: i64, longest: i64, latest: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut courses: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let duration = 1 + next_random(mut seed) % longest;
+        let last = 1 + next_random(mut seed) % latest;
+        courses.push(vec![duration, last]);
+    }
+    courses
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(vec![vec![100, 200], vec![200, 1300], vec![1000, 1250], vec![2000, 3200]]);
+    show(vec![vec![1, 2]]);
+    show(vec![vec![3, 2], vec![4, 3]]);
+    // A long early course dropped for two later ones; three equal
+    // courses of which one fits, and of which two fit; a mix that keeps
+    // three of seven; the largest course; one longer than its last day.
+    show(vec![vec![5, 5], vec![4, 6], vec![2, 6]]);
+    show(vec![vec![1, 1], vec![1, 1], vec![1, 1]]);
+    show(vec![vec![2, 5], vec![2, 5], vec![2, 5]]);
+    show(vec![vec![7, 17], vec![3, 12], vec![10, 20], vec![9, 10], vec![5, 20], vec![10, 19], vec![18, 18]]);
+    show(vec![vec![10000, 10000]]);
+    show(vec![vec![5, 4]]);
+    // 300 random cases of 1 to 30 courses lasting 1 to 100 days with
+    // last days from 1 to 1,000.
+    let mut seed: i64 = 630;
+    let mut sum = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let c = schedule_course(random_courses(n, 100, 1000, mut seed));
+        sum += c;
+        checksum = (checksum * 31 + c) % 1000000007;
+    }
+    println(f"300 random cases: total {sum}, checksum {checksum}");
+    // 2,000 courses with the problem's largest durations and last days;
+    // 2,000 one-day courses due by day 1,000 at the latest.
+    println(f"2000 courses: {schedule_course(random_courses(2000, 10000, 10000, mut seed))}");
+    println(f"2000 one-day courses: {schedule_course(random_courses(2000, 1, 1000, mut seed))}");
+}

@@ -1,0 +1,254 @@
+// LeetCode #630: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// inputs.
+
+// ---- star arm ----------------------------------------------------------
+
+fn schedule_course_star(courses: Vec[Vec[i64]]) -> i64 {
+    let mut order = courses.clone();
+    order.sort_by(|a, b| a[1].cmp(b[1]));
+    let mut taken: PriorityQueue[i64] = PriorityQueue.max_first();
+    let mut time = 0;
+    for course in order.iter() {
+        time += course[0];
+        taken.push(course[0]);
+        if time > course[1] {
+            time -= taken.pop().unwrap();
+        }
+    }
+    taken.len()
+}
+
+// ---- swap arm ----------------------------------------------------------
+
+fn schedule_course_swap(courses: Vec[Vec[i64]]) -> i64 {
+    let mut order = courses.clone();
+    order.sort_by(|a, b| a[1].cmp(b[1]));
+    let mut taken: Vec[i64] = Vec.new();
+    let mut time = 0;
+    for course in order.iter() {
+        let duration = course[0];
+        if time + duration <= course[1] {
+            taken.push(duration);
+            time += duration;
+        } else {
+            let mut longest = 0;
+            for i in 1..taken.len() {
+                if taken[i] > taken[longest] {
+                    longest = i;
+                }
+            }
+            if taken.len() > 0 and taken[longest] > duration {
+                time += duration - taken[longest];
+                taken[longest] = duration;
+            }
+        }
+    }
+    taken.len()
+}
+
+// ---- mintime arm -------------------------------------------------------
+
+fn schedule_course_mintime(courses: Vec[Vec[i64]]) -> i64 {
+    let mut order = courses.clone();
+    order.sort_by(|a, b| a[1].cmp(b[1]));
+    let mut least = vec![i64.MAX; order.len() + 1];
+    least[0] = 0;
+    let mut most = 0;
+    for course in order.iter() {
+        let mut c = most;
+        while c >= 0 {
+            let end = least[c] + course[0];
+            if end <= course[1] and end < least[c + 1] {
+                least[c + 1] = end;
+                if c + 1 > most {
+                    most = c + 1;
+                }
+            }
+            c -= 1;
+        }
+    }
+    most
+}
+
+// ---- multiset arm ------------------------------------------------------
+
+fn schedule_course_multiset(courses: Vec[Vec[i64]]) -> i64 {
+    let mut order = courses.clone();
+    order.sort_by(|a, b| a[1].cmp(b[1]));
+    let mut taken: SortedMap[i64, i64] = SortedMap.new();
+    let mut count = 0;
+    let mut time = 0;
+    for course in order.iter() {
+        let duration = course[0];
+        taken.insert(duration, taken.get_or(duration, 0) + 1);
+        count += 1;
+        time += duration;
+        if time > course[1] {
+            if let Some((longest, times)) = taken.max() {
+                if times == 1 {
+                    taken.remove(longest);
+                } else {
+                    taken.insert(longest, times - 1);
+                }
+                count -= 1;
+                time -= longest;
+            }
+        }
+    }
+    count
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, courses: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        schedule_course_star(courses)
+    } else if which == 1 {
+        schedule_course_swap(courses)
+    } else if which == 2 {
+        schedule_course_mintime(courses)
+    } else {
+        schedule_course_multiset(courses)
+    }
+}
+
+// The definition: the most courses of any subset that can all be
+// finished. A subset can be exactly when taking it by last day finishes
+// each course by its last day, so every subset is checked that way.
+fn definition(courses: Vec[Vec[i64]]) -> i64 {
+    let n = courses.len();
+    let mut best = 0;
+    for mask in 0..(1 << n) {
+        let mut chosen: Vec[Vec[i64]] = Vec.new();
+        for i in 0..n {
+            if (mask >> i) & 1 == 1 {
+                chosen.push(courses[i].clone());
+            }
+        }
+        chosen.sort_by(|a, b| a[1].cmp(b[1]));
+        let mut time = 0;
+        let mut fits = true;
+        for course in chosen.iter() {
+            time += course[0];
+            if time > course[1] {
+                fits = false;
+            }
+        }
+        if fits {
+            best = best.max(chosen.len());
+        }
+    }
+    best
+}
+
+// The same count by a table over total time, for cases too large to
+// list: taking the courses by last day, `best[t]` is the most courses
+// with total time exactly `t` that all finish by their last days, or -1
+// if no set has that total.
+fn definition_by_time(courses: Vec[Vec[i64]]) -> i64 {
+    let mut order = courses.clone();
+    order.sort_by(|a, b| a[1].cmp(b[1]));
+    let mut latest = 0;
+    for course in order.iter() {
+        latest = latest.max(course[1]);
+    }
+    let mut best = vec![-1; latest + 1];
+    best[0] = 0;
+    for course in order.iter() {
+        let mut t = course[1];
+        while t >= course[0] {
+            if best[t - course[0]] >= 0 {
+                best[t] = best[t].max(best[t - course[0]] + 1);
+            }
+            t -= 1;
+        }
+    }
+    let mut most = 0;
+    for b in best.iter() {
+        most = most.max(*b);
+    }
+    most
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6300;
+    let mut checks = 0;
+    let mut taken = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 2 to 9 courses lasting 1 to 6 days with last days from 1 to
+        // 15, so that most do not all fit.
+        let n = 2 + next_random(mut seed) % 8;
+        let mut courses: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            let duration = 1 + next_random(mut seed) % 6;
+            let last = 1 + next_random(mut seed) % 15;
+            courses.push(vec![duration, last]);
+        }
+        let want = definition(courses);
+        taken += want;
+        // And 15 to 40 courses lasting 1 to 4 days with last days from 1
+        // to 30, too many to list, where equal courses are dropped in
+        // turn.
+        let m = 15 + next_random(mut seed) % 26;
+        let mut large: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let duration = 1 + next_random(mut seed) % 4;
+            let last = 1 + next_random(mut seed) % 30;
+            large.push(vec![duration, last]);
+        }
+        let want_large = definition_by_time(large);
+        let mut reversed: Vec[Vec[i64]] = Vec.new();
+        for i in 0..n {
+            reversed.push(courses[n - 1 - i].clone());
+        }
+        let mut with_long = courses.clone();
+        with_long.push(vec![20, 15]);
+        let mut doubled: Vec[Vec[i64]] = Vec.new();
+        for course in courses.iter() {
+            doubled.push(vec![course[0] * 2, course[1] * 2]);
+        }
+        let mut without_first: Vec[Vec[i64]] = Vec.new();
+        for i in 1..n {
+            without_first.push(courses[i].clone());
+        }
+        for which in 0..4 {
+            let got = answer(which, courses);
+            let fewer = answer(which, without_first);
+            let ok = vec![
+                // P1: the definition's count, for both cases.
+                got == want and answer(which, large) == want_large,
+                // P2: the courses in reverse order give the same count.
+                answer(which, reversed) == got,
+                // P3: a course longer than its own last day changes
+                // nothing.
+                answer(which, with_long) == got,
+                // P4: every duration and last day doubled changes
+                // nothing.
+                answer(which, doubled) == got,
+                // P5: without the first course, the count is the same
+                // or one less.
+                fewer == got or fewer == got - 1,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({taken} courses taken), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
