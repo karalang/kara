@@ -177,7 +177,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-36 | 2026-10-14 | codegen | medium | The MIR-to-LLVM backend does not lower `String.clear`: `karac __mir-llvm-run`, `__mir-llvm-asan` and `karac build --mir` refuse any program that calls it ("native `String.clear` is not lowered yet"), while `karac __mir-run` runs it right | — |
 | B-2026-10-14-37 | 2026-10-14 | resolver+typecheck | low | A user type cannot implement `Index`, `IndexMut` or `IndexSet`, so `c[k]` on a user container has no spelling: `impl Index for P` is refused at resolve ("operator traits are stdlib-only") on every pipeline, though design.md § `Index` and `IndexMut` says "User types may implement all three, so a user container supports `[]`" | — |
 | B-2026-10-14-39 | 2026-10-14 | codegen+runtime | low | A one-integer f-string `f"{n}"` still runs about 3x legacy on the v2 compiled backend after B-2026-10-13-20's fix: 44M `f"{i % 7}"` take 0.86 s on `karac build --mir` against 0.28 to 0.31 s on legacy `karac build`, and kata 504's bench 1.97 to 2.25 s against 1.51 to 1.62 s | — |
-| B-2026-10-14-42 | 2026-10-14 | typecheck | medium | A `Vec` or array passed for a generic `Slice[T]` parameter checks but leaves `T` unsolved, so typed HIR refuses the call (`UnsolvedParam("T")`) and neither MIR backend can lower it: `fn gsum[T: Clone](s: Slice[T]) -> T` called as `gsum(vi)` with `vi: Vec[i64]` | — |
 
 ### Relocated
 
@@ -4013,6 +4012,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-14-38 | ownership | medium | `karac check` refuses the spec's borrow returns that both MIR backends now run: `fn name(user: User) -> ref String { ref user.name }` and `fn head(se… | c92887c8c5 |
 | B-2026-10-14-40 | typecheck | low | `??` on a `ref Option[i64]` is refused ("'??' requires an `Option` or a `Result` on the left, found 'ref Option[i64]'"), though design.md § `*` and `… | 8eded416d9 |
 | B-2026-10-14-41 | typecheck+codegen | medium | A fixed array's `.iter()` (`mk().iter().count()`) is refused by the library-source checker, and once checked the compiled MIR backend passes a pointe… | b465d3dd05 |
+| B-2026-10-14-42 | typecheck | medium | A `Vec` or array passed for a generic `Slice[T]` parameter checks but leaves `T` unsolved, so typed HIR refuses the call (`UnsolvedParam("T")`) and n… | 0fd33c5c39 |
 
 </details>
 
