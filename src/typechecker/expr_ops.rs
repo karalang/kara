@@ -3654,7 +3654,10 @@ impl<'a> super::TypeChecker<'a> {
                 // so `*p` reads through it. A non-`Copy` value would move out
                 // of the borrow; `p` already reads it in place.
                 other if self.core_deref_of_view(operand) => {
-                    if !self.is_copy_type_during_check(&other) {
+                    // B-2026-10-14-22: a `shared` handle is copied by any read
+                    // (core-semantics §6.1, the count goes up), so `*n` through
+                    // a view of one moves nothing out of the borrow.
+                    if !self.is_copy_type_during_check(&other) && !self.is_shared_handle(&other) {
                         let fix = crate::typechecker::FixIt {
                             span: Span { length: 1, ..*span },
                             replacement: String::new(),

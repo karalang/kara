@@ -3566,3 +3566,49 @@ fn option_as_ref_is_accepted() {
          }\n",
     );
 }
+
+// B-2026-10-14-22 — `*n` through a view of a `shared` handle copies the
+// handle and counts it (core-semantics §6.1), so it moves nothing out of
+// the borrow; the same `*` on a plain struct still does.
+#[test]
+fn deref_of_a_shared_handle_view_is_a_copy() {
+    accepted(
+        "shared-handle-deref",
+        "shared struct Node {\n\
+             val: i64,\n\
+         }\n\
+         fn total(n: Option[Node]) -> i64 {\n\
+             match n {\n\
+                 Some(x) => x.val,\n\
+                 None => 0,\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let nodes: Vec[Node] = vec![Node { val: 1 }, Node { val: 2 }];\n\
+             let mut best = nodes[0];\n\
+             let mut sum = 0;\n\
+             for n in nodes.iter() {\n\
+                 sum += total(Some(*n));\n\
+                 if n.val > best.val {\n\
+                     best = *n;\n\
+                 }\n\
+             }\n\
+             println(f\"{sum} {best.val}\");\n\
+         }\n",
+    );
+    rejected_then_fixed_by(
+        "plain-struct-deref",
+        "struct Plain {\n\
+             name: String,\n\
+         }\n\
+         fn main() {\n\
+             let v: Vec[Plain] = vec![Plain { name: String.from(\"a\") }];\n\
+             for p in v.iter() {\n\
+                 let q = *p;\n\
+                 println(q.name);\n\
+             }\n\
+         }\n",
+        "out of a borrow with `*`",
+        "let q = p;",
+    );
+}

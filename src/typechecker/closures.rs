@@ -28,6 +28,26 @@ impl<'a> super::TypeChecker<'a> {
         out
     }
 
+    /// A `shared` / `par` struct or enum handle, or an `Rc` / `Arc`: a read
+    /// copies the handle and counts it (core-semantics §6.1).
+    pub(super) fn is_shared_handle(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Shared(_) | Type::Rc(_) | Type::Arc(_) => true,
+            Type::Named { name, .. } => {
+                self.env
+                    .structs
+                    .get(name)
+                    .is_some_and(|s| s.is_shared || s.is_par)
+                    || self
+                        .env
+                        .enums
+                        .get(name)
+                        .is_some_and(|s| s.is_shared || s.is_par)
+            }
+            _ => false,
+        }
+    }
+
     /// Lightweight Copy classification using the in-progress type env.
     /// Mirrors `ownership::is_copy_type` but reads from `self.env.structs`
     /// / `self.env.enums` / `self.env.distinct_types` directly — the
