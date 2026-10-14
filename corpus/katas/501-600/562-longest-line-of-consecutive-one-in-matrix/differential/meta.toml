@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/562-longest-line-of-consecutive-one-in-matrix/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["differential"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "f9b5a7a02"
+extracted_src = "ad608c95"
+model_rev = "1aa23105"
+model_src = "ad608c95"

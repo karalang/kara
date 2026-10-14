@@ -1,0 +1,232 @@
+// LeetCode #562: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// matrices.
+
+// ---- star arm ----------------------------------------------------------
+
+fn longest_line_star(mat: Vec[Vec[i64]]) -> i64 {
+    let n = mat[0].len();
+    let mut up = vec![0; n];
+    let mut diag = vec![0; n];
+    let mut anti = vec![0; n];
+    let mut best = 0;
+    for row in mat.iter() {
+        let mut next_up = vec![0; n];
+        let mut next_diag = vec![0; n];
+        let mut next_anti = vec![0; n];
+        let mut across = 0;
+        for j in 0..n {
+            if row[j] == 1 {
+                across += 1;
+                next_up[j] = up[j] + 1;
+                next_diag[j] = if j > 0 { diag[j - 1] + 1 } else { 1 };
+                next_anti[j] = if j + 1 < n { anti[j + 1] + 1 } else { 1 };
+                best = best.max(across).max(next_up[j]).max(next_diag[j]).max(next_anti[j]);
+            } else {
+                across = 0;
+            }
+        }
+        up = next_up;
+        diag = next_diag;
+        anti = next_anti;
+    }
+    best
+}
+
+// ---- brute arm ---------------------------------------------------------
+
+fn longest_line_brute(mat: Vec[Vec[i64]]) -> i64 {
+    let m = mat.len();
+    let n = mat[0].len();
+    let directions = [(0, 1), (1, 0), (1, 1), (1, -1)];
+    let mut best = 0;
+    for i in 0..m {
+        for j in 0..n {
+            for (di, dj) in directions {
+                let mut r = i;
+                let mut c = j;
+                let mut length = 0;
+                while r >= 0 and r < m and c >= 0 and c < n and mat[r][c] == 1 {
+                    length += 1;
+                    r += di;
+                    c += dj;
+                }
+                best = best.max(length);
+            }
+        }
+    }
+    best
+}
+
+// ---- starts arm --------------------------------------------------------
+
+fn is_one(mat: Vec[Vec[i64]], r: i64, c: i64) -> bool {
+    r >= 0 and r < mat.len() and c >= 0 and c < mat[0].len() and mat[r][c] == 1
+}
+
+fn longest_line_starts(mat: Vec[Vec[i64]]) -> i64 {
+    let m = mat.len();
+    let n = mat[0].len();
+    let mut best = 0;
+    for (di, dj) in [(0, 1), (1, 0), (1, 1), (1, -1)] {
+        for i in 0..m {
+            for j in 0..n {
+                if is_one(mat, i, j) and not is_one(mat, i - di, j - dj) {
+                    let mut length = 0;
+                    while is_one(mat, i + length * di, j + length * dj) {
+                        length += 1;
+                    }
+                    best = best.max(length);
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- table arm ---------------------------------------------------------
+
+fn longest_line_table(mat: Vec[Vec[i64]]) -> i64 {
+    let m = mat.len();
+    let n = mat[0].len();
+    let mut table: Vec[Vec[(i64, i64, i64, i64)]] = Vec.new();
+    let mut best = 0;
+    for i in 0..m {
+        let mut row: Vec[(i64, i64, i64, i64)] = Vec.new();
+        for j in 0..n {
+            if mat[i][j] == 0 {
+                row.push((0, 0, 0, 0));
+                continue;
+            }
+            let across = if j > 0 { row[j - 1].0 + 1 } else { 1 };
+            let down = if i > 0 { table[i - 1][j].1 + 1 } else { 1 };
+            let diagonal = if i > 0 and j > 0 { table[i - 1][j - 1].2 + 1 } else { 1 };
+            let anti = if i > 0 and j + 1 < n { table[i - 1][j + 1].3 + 1 } else { 1 };
+            best = best.max(across).max(down).max(diagonal).max(anti);
+            row.push((across, down, diagonal, anti));
+        }
+        table.push(row);
+    }
+    best
+}
+
+// ---- the definition and the properties ------------------------------------
+
+// The definition: every straight run of cells in the four directions,
+// from every cell and of every length, checked cell by cell; the longest
+// that is all ones.
+fn definition(mat: Vec[Vec[i64]]) -> i64 {
+    let m = mat.len();
+    let n = mat[0].len();
+    let mut best = 0;
+    for (di, dj) in [(0, 1), (1, 0), (1, 1), (1, -1)] {
+        for i in 0..m {
+            for j in 0..n {
+                for length in 1..m + n + 1 {
+                    let mut all_ones = true;
+                    for k in 0..length {
+                        let r = i + k * di;
+                        let c = j + k * dj;
+                        if r < 0 or r >= m or c < 0 or c >= n or mat[r][c] == 0 {
+                            all_ones = false;
+                        }
+                    }
+                    if all_ones and length > best {
+                        best = length;
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+fn answer(which: i64, mat: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        longest_line_star(mat)
+    } else if which == 1 {
+        longest_line_brute(mat)
+    } else if which == 2 {
+        longest_line_starts(mat)
+    } else {
+        longest_line_table(mat)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5620;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 8 by 1 to 8, ones half the time or 85 times in a hundred,
+        // in turn.
+        let m = 1 + step(mut seed) % 8;
+        let n = 1 + step(mut seed) % 8;
+        let percent = if t % 2 == 0 { 50 } else { 85 };
+        let mut mat: Vec[Vec[i64]] = Vec.new();
+        let mut ones = 0;
+        for _ in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                let cell = if step(mut seed) % 100 < percent { 1 } else { 0 };
+                ones += cell;
+                row.push(cell);
+            }
+            mat.push(row);
+        }
+        let want = definition(mat);
+        let mut transposed: Vec[Vec[i64]] = Vec.new();
+        for j in 0..n {
+            let mut row: Vec[i64] = Vec.new();
+            for i in 0..m {
+                row.push(mat[i][j]);
+            }
+            transposed.push(row);
+        }
+        let mut mirrored: Vec[Vec[i64]] = Vec.new();
+        for row in mat.iter() {
+            let mut flipped = row.clone();
+            flipped.reverse();
+            mirrored.push(flipped);
+        }
+        let mut more = mat.clone();
+        let fi = step(mut seed) % m;
+        let fj = step(mut seed) % n;
+        more[fi][fj] = 1;
+        let longest_side = if m > n { m } else { n };
+        for which in 0..4 {
+            let got = answer(which, mat);
+            let ok = vec![
+                // P1: the definition's length.
+                got == want,
+                // P2: no longer than the longer side, and 0 just when
+                // there are no ones.
+                got <= longest_side and (got == 0) == (ones == 0),
+                // P3: the matrix transposed gives the same length.
+                answer(which, transposed) == got,
+                // P4: the matrix mirrored left to right gives the same.
+                answer(which, mirrored) == got,
+                // P5: one more one loses nothing.
+                answer(which, more) >= got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

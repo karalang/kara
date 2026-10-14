@@ -1,0 +1,79 @@
+// Benchmark for #562: Longest Line of Consecutive One in Matrix -- the
+// ★ arm (one row of running counts).
+//
+// A one ends four lines: from the left, from above, from above left and
+// from above right. Each length is one more than the same line's length
+// at the cell before it in that direction, so walking the rows in order
+// needs only the previous row's three downward counts and the running
+// count along the row. O(m * n) time, O(n) space.
+
+fn longest_line(mat: Vec[Vec[i64]]) -> i64 {
+    let n = mat[0].len();
+    let mut up = vec![0; n];
+    let mut diag = vec![0; n];
+    let mut anti = vec![0; n];
+    let mut best = 0;
+    for row in mat.iter() {
+        let mut next_up = vec![0; n];
+        let mut next_diag = vec![0; n];
+        let mut next_anti = vec![0; n];
+        let mut across = 0;
+        for j in 0..n {
+            if row[j] == 1 {
+                across += 1;
+                next_up[j] = up[j] + 1;
+                next_diag[j] = if j > 0 { diag[j - 1] + 1 } else { 1 };
+                next_anti[j] = if j + 1 < n { anti[j + 1] + 1 } else { 1 };
+                best = best.max(across).max(next_up[j]).max(next_diag[j]).max(next_anti[j]);
+            } else {
+                across = 0;
+            }
+        }
+        up = next_up;
+        diag = next_diag;
+        anti = next_anti;
+    }
+    best
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100 random matrices of 10,000 cells (the problem's most), built
+    // once: 1 by 10000, 10 by 1000, 100 by 100, 1000 by 10 and 10000 by
+    // 1 in turn, ones 50 to 95 times in a hundred. Then 100 times over,
+    // every matrix is answered.
+    let count = 100;
+    let rounds = 100;
+    let mut seed: i64 = 562;
+    let mut matrices: Vec[Vec[Vec[i64]]] = Vec.new();
+    let mut m = 1;
+    for g in 0..count {
+        let percent = 50 + step(mut seed) % 46;
+        let mut mat: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..10000 / m {
+                row.push(if step(mut seed) % 100 < percent { 1 } else { 0 });
+            }
+            mat.push(row);
+        }
+        matrices.push(mat);
+        m = if m == 10000 { 1 } else { m * 10 };
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let got = longest_line(matrices[(round * 7 + g) % count]);
+            total += got;
+            checksum = (checksum * 31 + got) % 1000000007;
+        }
+    }
+    println(f"{count} matrices of 10000 cells, {rounds} rounds: total {total}, checksum {checksum}");
+}
