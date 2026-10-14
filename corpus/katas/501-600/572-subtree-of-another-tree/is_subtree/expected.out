@@ -1,0 +1,14 @@
+example 1: true
+example 2: false
+the whole tree: true
+a leaf: true
+a node with children: false
+another shape: false
+larger than root: false
+12 and 2: false
+-2 and 2: false
+extremes: true
+300 random pairs: 133 found, checksum 215691160
+2000 nodes, a subtree of 998: true
+a chain of 2000 ones, a chain of 1000 ending in 2: false
+a chain of 2000 ones, a chain of 1000 ones: true

@@ -1,0 +1,133 @@
+// Benchmark for #572: Subtree of Another Tree -- the ★ arm (recursion).
+//
+// sub_root is a subtree of root when the two trees are the same, or it
+// is a subtree of root's left or right subtree. Two trees are the same
+// when both are empty, or both roots have the same value and their left
+// subtrees and their right subtrees are the same. O(m * n) time,
+// O(m + n) stack, for m nodes in root and n in sub_root.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn same_tree(a: Option[TreeNode], b: Option[TreeNode]) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.val == y.val and same_tree(x.left, y.left) and same_tree(x.right, y.right),
+        _ => false,
+    }
+}
+
+fn is_subtree(root: Option[TreeNode], sub_root: Option[TreeNode]) -> bool {
+    if same_tree(root, sub_root) {
+        return true;
+    }
+    match root {
+        None => false,
+        Some(n) => is_subtree(n.left, sub_root) or is_subtree(n.right, sub_root),
+    }
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree of `size` nodes valued 0 or 1: each new node walks down from
+// the root, left or right at random, and takes the first empty place.
+fn random_tree(size: i64, seed: mut ref i64) -> TreeNode {
+    let root = leaf(next_random(seed) % 2);
+    for _ in 1..size {
+        let c = leaf(next_random(seed) % 2);
+        let mut node = root;
+        loop {
+            if next_random(seed) % 2 == 0 {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+fn copy_tree(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: copy_tree(n.left), right: copy_tree(n.right) }),
+    }
+}
+
+fn all_nodes(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
+    if let Some(n) = node {
+        out.push(n);
+        all_nodes(n.left, out);
+        all_nodes(n.right, out);
+    }
+}
+
+fn main() {
+    // 20 pairs built once: root a random tree of 2,000 nodes (the
+    // problem's most) valued 0 or 1, and sub_root a copy of one of its
+    // subtrees of at least 20 nodes, every other copy with one value
+    // changed. Then 1000 times over, every pair is answered.
+    let count = 20;
+    let rounds = 1000;
+    let mut seed: i64 = 572;
+    let mut pairs: Vec[(TreeNode, TreeNode)] = Vec.new();
+    for g in 0..count {
+        let root = random_tree(2000, mut seed);
+        let mut nodes: Vec[TreeNode] = Vec.new();
+        all_nodes(Some(root), mut nodes);
+        let mut picked = root;
+        loop {
+            picked = nodes[next_random(mut seed) % nodes.len()];
+            let mut inside: Vec[TreeNode] = Vec.new();
+            all_nodes(Some(picked), mut inside);
+            if inside.len() >= 20 {
+                break;
+            }
+        }
+        let sub = copy_tree(Some(picked)).unwrap();
+        if g % 2 == 1 {
+            let mut inside: Vec[TreeNode] = Vec.new();
+            all_nodes(Some(sub), mut inside);
+            let n = inside[next_random(mut seed) % inside.len()];
+            n.val = 1 - n.val;
+        }
+        pairs.push((root, sub));
+    }
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let (root, sub) = pairs[(round * 7 + g) % count];
+            let got = is_subtree(Some(root), Some(sub));
+            if got {
+                found += 1;
+            }
+            checksum = (checksum * 31 + (if got { g + 2 } else { 1 })) % 1000000007;
+        }
+    }
+    println(f"{count} pairs, {rounds} rounds: {found} found, checksum {checksum}");
+}

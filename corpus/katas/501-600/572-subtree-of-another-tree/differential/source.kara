@@ -1,0 +1,328 @@
+// LeetCode #572: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random pairs
+// of trees.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn same_tree_star(a: Option[TreeNode], b: Option[TreeNode]) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.val == y.val and same_tree_star(x.left, y.left) and same_tree_star(x.right, y.right),
+        _ => false,
+    }
+}
+
+fn is_subtree_star(root: Option[TreeNode], sub_root: Option[TreeNode]) -> bool {
+    if same_tree_star(root, sub_root) {
+        return true;
+    }
+    match root {
+        None => false,
+        Some(n) => is_subtree_star(n.left, sub_root) or is_subtree_star(n.right, sub_root),
+    }
+}
+
+// ---- text arm ----------------------------------------------------------
+
+fn write_tree_text(node: Option[TreeNode], out: mut ref String) {
+    match node {
+        None => out.push('#'),
+        Some(n) => {
+            out.push('^');
+            out.push_str(f"{n.val}");
+            write_tree_text(n.left, out);
+            write_tree_text(n.right, out);
+        }
+    }
+}
+
+fn is_subtree_text(root: Option[TreeNode], sub_root: Option[TreeNode]) -> bool {
+    let mut whole = String.new();
+    write_tree_text(root, mut whole);
+    let mut part = String.new();
+    write_tree_text(sub_root, mut part);
+    whole.contains(part)
+}
+
+// ---- hash arm ----------------------------------------------------------
+
+fn mix_hash(value: i64, left: i64, right: i64) -> i64 {
+    ((value + 20011) * 1000003 + left * 998244353 + right * 911382323) % 1000000007
+}
+
+fn hash_of_hash(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 7,
+        Some(n) => mix_hash(n.val, hash_of_hash(n.left), hash_of_hash(n.right)),
+    }
+}
+
+fn same_tree_hash(a: Option[TreeNode], b: Option[TreeNode]) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.val == y.val and same_tree_hash(x.left, y.left) and same_tree_hash(x.right, y.right),
+        _ => false,
+    }
+}
+
+// The subtree at `node`'s number, after setting `found` if it or any
+// subtree inside it is sub_root.
+fn search_hash(node: Option[TreeNode], sub_root: Option[TreeNode], want: i64, found: mut ref bool) -> i64 {
+    match node {
+        None => 7,
+        Some(n) => {
+            let h = mix_hash(n.val, search_hash(n.left, sub_root, want, found), search_hash(n.right, sub_root, want, found));
+            if h == want and not *found and same_tree_hash(node, sub_root) {
+                *found = true;
+            }
+            h
+        }
+    }
+}
+
+fn is_subtree_hash(root: Option[TreeNode], sub_root: Option[TreeNode]) -> bool {
+    let want = hash_of_hash(sub_root);
+    let mut found = false;
+    search_hash(root, sub_root, want, mut found);
+    found
+}
+
+// ---- stack arm ---------------------------------------------------------
+
+fn matches_at_stack(start: TreeNode, sub: TreeNode) -> bool {
+    let mut pairs: Vec[(TreeNode, TreeNode)] = vec![(start, sub)];
+    while let Some((a, b)) = pairs.pop() {
+        if a.val != b.val {
+            return false;
+        }
+        match (a.left, b.left) {
+            (Some(x), Some(y)) => pairs.push((x, y)),
+            (None, None) => {}
+            _ => return false,
+        }
+        match (a.right, b.right) {
+            (Some(x), Some(y)) => pairs.push((x, y)),
+            (None, None) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn is_subtree_stack(root: Option[TreeNode], sub_root: Option[TreeNode]) -> bool {
+    let sub = match sub_root {
+        None => return true,
+        Some(s) => s,
+    };
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while let Some(n) = stack.pop() {
+        if n.val == sub.val and matches_at_stack(n, sub) {
+            return true;
+        }
+        if let Some(c) = n.right {
+            stack.push(c);
+        }
+        if let Some(c) = n.left {
+            stack.push(c);
+        }
+    }
+    false
+}
+
+// ---- the definition and the properties ------------------------------------
+
+// The tree at `node` written out in full: `(value left right)`, with
+// `()` for a missing child.
+fn shape(node: Option[TreeNode]) -> String {
+    match node {
+        None => "()".to_string(),
+        Some(n) => f"({n.val} {shape(n.left)} {shape(n.right)})",
+    }
+}
+
+fn every_shape(node: Option[TreeNode], out: mut ref Vec[String]) {
+    if let Some(n) = node {
+        out.push(shape(node));
+        every_shape(n.left, out);
+        every_shape(n.right, out);
+    }
+}
+
+// The definition: every node of root with all of its descendants
+// written out, and sub_root written the same way; sub_root is a subtree
+// when its shape is one of them.
+fn definition(root: Option[TreeNode], sub_root: Option[TreeNode]) -> bool {
+    let mut shapes: Vec[String] = Vec.new();
+    every_shape(root, mut shapes);
+    shapes.contains(shape(sub_root))
+}
+
+fn answer(which: i64, root: Option[TreeNode], sub_root: Option[TreeNode]) -> bool {
+    if which == 0 {
+        is_subtree_star(root, sub_root)
+    } else if which == 1 {
+        is_subtree_text(root, sub_root)
+    } else if which == 2 {
+        is_subtree_hash(root, sub_root)
+    } else {
+        is_subtree_stack(root, sub_root)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn random_tree(size: i64, most: i64, seed: mut ref i64) -> TreeNode {
+    let root = leaf(next_random(seed) % (most + 1));
+    for _ in 1..size {
+        let c = leaf(next_random(seed) % (most + 1));
+        let mut node = root;
+        loop {
+            if next_random(seed) % 2 == 0 {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// A copy of the tree with every value moved by `by`, and mirrored when
+// `flip` is set.
+fn copy_tree(node: Option[TreeNode], by: i64, flip: bool) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => {
+            let l = copy_tree(n.left, by, flip);
+            let r = copy_tree(n.right, by, flip);
+            if flip {
+                Some(TreeNode { val: n.val + by, left: r, right: l })
+            } else {
+                Some(TreeNode { val: n.val + by, left: l, right: r })
+            }
+        }
+    }
+}
+
+// A copy of the tree with each value v written as 2 + 10 * v.
+fn widened(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: 2 + 10 * n.val, left: widened(n.left), right: widened(n.right) }),
+    }
+}
+
+fn all_nodes(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
+    if let Some(n) = node {
+        out.push(n);
+        all_nodes(n.left, out);
+        all_nodes(n.right, out);
+    }
+}
+
+fn size_and_depth(node: Option[TreeNode]) -> (i64, i64) {
+    match node {
+        None => (0, 0),
+        Some(n) => {
+            let (ls, ld) = size_and_depth(n.left);
+            let (rs, rd) = size_and_depth(n.right);
+            (ls + rs + 1, ld.max(rd) + 1)
+        }
+    }
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5720;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // root of 1 to 20 nodes valued 0 or 1; sub_root a copy of one of
+        // root's subtrees, that copy with one value changed, or a random
+        // tree of 1 to 4 nodes, in turn.
+        let root = random_tree(1 + next_random(mut seed) % 20, 1, mut seed);
+        let mut nodes: Vec[TreeNode] = Vec.new();
+        all_nodes(Some(root), mut nodes);
+        let picked = nodes[next_random(mut seed) % nodes.len()];
+        let sub = if t % 3 == 2 {
+            random_tree(1 + next_random(mut seed) % 4, 1, mut seed)
+        } else {
+            copy_tree(Some(picked), 0, false).unwrap()
+        };
+        if t % 3 == 1 {
+            let mut inside: Vec[TreeNode] = Vec.new();
+            all_nodes(Some(sub), mut inside);
+            let n = inside[next_random(mut seed) % inside.len()];
+            n.val = 1 - n.val;
+        }
+        // Every other pair valued 2 and 12 in place of 0 and 1, so that
+        // one value's digits end another's.
+        let (root, sub) = if t % 2 == 1 {
+            (widened(Some(root)).unwrap(), widened(Some(sub)).unwrap())
+        } else {
+            (root, sub)
+        };
+        let want = definition(Some(root), Some(sub));
+        let (root_size, root_depth) = size_and_depth(Some(root));
+        let (sub_size, sub_depth) = size_and_depth(Some(sub));
+        let by = next_random(mut seed) % 2001 - 1000;
+        for which in 0..4 {
+            let got = answer(which, Some(root), Some(sub));
+            let above = TreeNode { val: 5, left: Some(root), right: copy_tree(Some(sub), 0, false) };
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: a subtree has no more nodes and no more depth.
+                not got or (sub_size <= root_size and sub_depth <= root_depth),
+                // P3: mirroring both trees changes nothing.
+                answer(which, copy_tree(Some(root), 0, true), copy_tree(Some(sub), 0, true)) == got,
+                // P4: moving every value in both by the same amount
+                // changes nothing.
+                answer(which, copy_tree(Some(root), by, false), copy_tree(Some(sub), by, false)) == got,
+                // P5: hung under a new root beside root, a copy of
+                // sub_root is found.
+                answer(which, Some(above), Some(sub)),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

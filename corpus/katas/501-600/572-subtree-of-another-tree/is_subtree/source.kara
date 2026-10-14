@@ -1,0 +1,217 @@
+// LeetCode #572: Subtree of Another Tree -- recursion.
+//
+// sub_root is a subtree of root when the two trees are the same, or it
+// is a subtree of root's left or right subtree. Two trees are the same
+// when both are empty, or both roots have the same value and their left
+// subtrees and their right subtrees are the same. O(m * n) time,
+// O(m + n) stack, for m nodes in root and n in sub_root.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn same_tree(a: Option[TreeNode], b: Option[TreeNode]) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.val == y.val and same_tree(x.left, y.left) and same_tree(x.right, y.right),
+        _ => false,
+    }
+}
+
+fn is_subtree(root: Option[TreeNode], sub_root: Option[TreeNode]) -> bool {
+    if same_tree(root, sub_root) {
+        return true;
+    }
+    match root {
+        None => false,
+        Some(n) => is_subtree(n.left, sub_root) or is_subtree(n.right, sub_root),
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree from LeetCode's level order: `None` for a missing child.
+fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
+    if values.is_empty() or values[0].is_none() {
+        return None;
+    }
+    let root = leaf(values[0].unwrap());
+    let mut queue: Vec[TreeNode] = vec![root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < values.len() {
+        let n = queue[head];
+        head += 1;
+        if let Some(v) = values[i] {
+            let c = leaf(v);
+            n.left = Some(c);
+            queue.push(c);
+        }
+        i += 1;
+        if i < values.len() {
+            if let Some(v) = values[i] {
+                let c = leaf(v);
+                n.right = Some(c);
+                queue.push(c);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A tree of `size` nodes with values from 0 to `most`: each new node
+// walks down from the root, going left with chance lean / 100, and takes
+// the first empty place it meets.
+fn random_tree(size: i64, most: i64, lean: i64, seed: mut ref i64) -> TreeNode {
+    let root = leaf(next_random(seed) % (most + 1));
+    for _ in 1..size {
+        let c = leaf(next_random(seed) % (most + 1));
+        let mut node = root;
+        loop {
+            if next_random(seed) % 100 < lean {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// A fresh copy of the tree at `node`.
+fn copy_tree(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: copy_tree(n.left), right: copy_tree(n.right) }),
+    }
+}
+
+// Every node of the tree, in preorder.
+fn all_nodes(node: Option[TreeNode], out: mut ref Vec[TreeNode]) {
+    if let Some(n) = node {
+        out.push(n);
+        all_nodes(n.left, out);
+        all_nodes(n.right, out);
+    }
+}
+
+fn show(name: Str, root: Vec[Option[i64]], sub_root: Vec[Option[i64]]) {
+    println(f"{name}: {is_subtree(from_level(root), from_level(sub_root))}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("example 1", vec![Some(3), Some(4), Some(5), Some(1), Some(2)], vec![Some(4), Some(1), Some(2)]);
+    show("example 2", vec![Some(3), Some(4), Some(5), Some(1), Some(2), None, None, None, None, Some(0)], vec![Some(4), Some(1), Some(2)]);
+    // The whole tree; one leaf; a node that is there but has children.
+    show("the whole tree", vec![Some(1), Some(2), Some(3)], vec![Some(1), Some(2), Some(3)]);
+    show("a leaf", vec![Some(1), Some(2), Some(3)], vec![Some(3)]);
+    show("a node with children", vec![Some(1), Some(2)], vec![Some(1)]);
+    // The same values in another shape; sub_root larger than root.
+    show("another shape", vec![Some(1), Some(2), Some(3)], vec![Some(1), Some(3), Some(2)]);
+    show("larger than root", vec![Some(1)], vec![Some(1), Some(1)]);
+    // Values whose digits run together when written out: 12 is not 2,
+    // and -2 is not 2.
+    show("12 and 2", vec![Some(12)], vec![Some(2)]);
+    show("-2 and 2", vec![Some(-2)], vec![Some(2)]);
+    // The problem's extreme values.
+    show("extremes", vec![Some(-10000), Some(10000), Some(-10000)], vec![Some(10000)]);
+    // 300 random pairs: root of 1 to 60 nodes valued 0 to 2; sub_root a
+    // copy of one of root's subtrees, that copy with one value changed
+    // or one leaf added, or a random tree of 1 to 5 nodes, in turn.
+    let mut seed: i64 = 572;
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for t in 0..300 {
+        let root = random_tree(1 + next_random(mut seed) % 60, 2, 50, mut seed);
+        let mut nodes: Vec[TreeNode] = Vec.new();
+        all_nodes(Some(root), mut nodes);
+        let picked = nodes[next_random(mut seed) % nodes.len()];
+        let sub_root = if t % 4 == 3 {
+            random_tree(1 + next_random(mut seed) % 5, 2, 50, mut seed)
+        } else {
+            copy_tree(Some(picked)).unwrap()
+        };
+        if t % 4 == 1 {
+            let mut inside: Vec[TreeNode] = Vec.new();
+            all_nodes(Some(sub_root), mut inside);
+            let n = inside[next_random(mut seed) % inside.len()];
+            n.val = (n.val + 1) % 3;
+        } else if t % 4 == 2 {
+            let mut inside: Vec[TreeNode] = Vec.new();
+            all_nodes(Some(sub_root), mut inside);
+            let n = inside[next_random(mut seed) % inside.len()];
+            if n.left.is_none() {
+                n.left = Some(leaf(0));
+            } else if n.right.is_none() {
+                n.right = Some(leaf(0));
+            }
+        }
+        let got = is_subtree(Some(root), Some(sub_root));
+        if got {
+            found += 1;
+        }
+        checksum = (checksum * 31 + (if got { t + 2 } else { 1 })) % 1000000007;
+    }
+    println(f"300 random pairs: {found} found, checksum {checksum}");
+    // The problem's largest: root of 2,000 nodes and sub_root of 1,000.
+    // A random root with a copy of its subtree of most nodes up to
+    // 1,000; then a chain of 2,000 ones down the left, against a chain
+    // of 1,000 that ends in a 2, and the same ending in a 1.
+    let root = random_tree(2000, 10000, 50, mut seed);
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    all_nodes(Some(root), mut nodes);
+    let mut best = root;
+    let mut best_size = 0;
+    for n in nodes.iter() {
+        let mut inside: Vec[TreeNode] = Vec.new();
+        all_nodes(Some(n), mut inside);
+        if inside.len() <= 1000 and inside.len() > best_size {
+            best_size = inside.len();
+            best = n;
+        }
+    }
+    println(f"2000 nodes, a subtree of {best_size}: {is_subtree(Some(root), copy_tree(Some(best)))}");
+    let chain = leaf(1);
+    let mut last = chain;
+    for _ in 1..2000 {
+        let c = leaf(1);
+        last.left = Some(c);
+        last = c;
+    }
+    let short = leaf(1);
+    let mut end = short;
+    for _ in 1..1000 {
+        let c = leaf(1);
+        end.left = Some(c);
+        end = c;
+    }
+    end.val = 2;
+    println(f"a chain of 2000 ones, a chain of 1000 ending in 2: {is_subtree(Some(chain), Some(short))}");
+    end.val = 1;
+    println(f"a chain of 2000 ones, a chain of 1000 ones: {is_subtree(Some(chain), Some(short))}");
+}
