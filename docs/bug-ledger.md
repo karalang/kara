@@ -96,11 +96,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 604 |
 | leak | 603 |
 | double-free | 427 |
-| codegen-gap | 253 |
+| codegen-gap | 254 |
 | missing-feature | 242 |
 | other | 172 |
 | perf | 163 |
-| false-positive | 156 |
+| false-positive | 158 |
 | diagnostics | 155 |
 | crash | 114 |
 | soundness | 100 |
@@ -112,9 +112,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2872 |
 | interp | 913 |
-| typecheck | 384 |
+| typecheck | 386 |
 | other | 115 |
-| ownership | 85 |
+| ownership | 86 |
 | cli | 75 |
 | runtime | 66 |
 | parser | 61 |
@@ -604,6 +604,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-2 | 2026-10-14 | typecheck | medium | `s.push(c)`, `s.find(c)` and `s.split(c)` with `c` a `ref char` from `Vec[char].iter()` pass `karac check` but are refused by the MIR pipeline's typecheck (`'push' expects a Char argument, found 'ref char'`): the builtin String arms want exactly `Char` and do not peel a `ref` of a Copy type, which a user fn param and `Vec.push` both accept | — |
 | B-2026-10-14-4 | 2026-10-14 | typecheck | low | `parts[1..].join("/")` and `.concat()` on a `Slice[String]` are refused with "no method 'join' on type 'Slice'" on every pipeline, while `Vec[String].join` works and `len`/`contains`/`iter` reach the slice: the join/concat typecheck arm accepts only a `Vec`/`VecDeque` receiver; `parts[1..].to_vec().join("/")` is the copy that passes | — |
 | B-2026-10-14-5 | 2026-10-14 | codegen+runtime | medium | An f-string whose holes are `String`s or `str` slices runs about 5x slower than the same text built with `push_str` on the v2 compiled backend: kata 555's bench builds each candidate as `f"{t[k..]}{middle}{t[..k]}"` and takes 5.2 to 5.9 s on `karac build --mir`, against 0.94 to 1.10 s with `push_str` three times into a `String` (and 1.2 to 1.4 s for Rust's `format!`) | — |
+| B-2026-10-14-6 | 2026-10-14 | typecheck | medium | On the MIR backends a `collect()` that is the result of a `map` closure does not build: `words.iter().map(|w| w.chars().rev().collect()).collect()` fails with "an expression whose type does not lower (Type(UnknownParam("C"))) is not lowered yet", whether the outer annotation is `Vec[String]` or `Vec[Vec[char]]`, though `karac check` passes the second | — |
+| B-2026-10-14-7 | 2026-10-14 | typecheck | medium | `karac check` refuses `let r: Vec[String] = words.iter().map(|w| w.chars().rev().collect()).collect();` with "expected 'Vec[String]', found 'Vec[Vec[char]]'": the target of a `collect()` that is a closure's result is not taken from the outer `collect`'s annotation, and defaults to `Vec` | — |
+| B-2026-10-14-8 | 2026-10-14 | ownership | medium | `karac check` refuses any `collect()` into a non-`Vec` target inside a closure body, `|w| { let s: String = w.chars().collect(); s.len() }`, with an ownership error about a binding the user never wrote: "value '__karac_collect_dst_53' is moved inside a loop and not assigned again before the next iteration"; `karac __mir-run` runs it | — |
 
 ### Relocated
 
