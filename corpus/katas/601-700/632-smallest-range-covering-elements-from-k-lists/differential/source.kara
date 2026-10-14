@@ -1,0 +1,309 @@
+// LeetCode #632: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// inputs.
+
+// ---- star arm ----------------------------------------------------------
+
+fn smallest_range_star(nums: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut queue: PriorityQueue[(i64, i64, i64)] = PriorityQueue.new();
+    let mut high = nums[0][0];
+    for list in 0..nums.len() {
+        queue.push((nums[list][0], list, 0));
+        high = high.max(nums[list][0]);
+    }
+    let mut best_low = 0;
+    let mut best_high = 0;
+    let mut found = false;
+    loop {
+        let (low, list, at) = queue.pop().unwrap();
+        if not found or high - low < best_high - best_low {
+            best_low = low;
+            best_high = high;
+            found = true;
+        }
+        if at + 1 == nums[list].len() {
+            break;
+        }
+        let next = nums[list][at + 1];
+        high = high.max(next);
+        queue.push((next, list, at + 1));
+    }
+    vec![best_low, best_high]
+}
+
+// ---- window arm --------------------------------------------------------
+
+fn smallest_range_window(nums: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut all: Vec[(i64, i64)] = Vec.new();
+    for list in 0..nums.len() {
+        for value in nums[list].iter() {
+            all.push((*value, list));
+        }
+    }
+    all.sort();
+    let mut count = vec![0; nums.len()];
+    let mut covered = 0;
+    let mut left = 0;
+    let mut best_low = 0;
+    let mut best_high = 0;
+    let mut found = false;
+    for right in 0..all.len() {
+        let (high, list) = all[right];
+        if count[list] == 0 {
+            covered += 1;
+        }
+        count[list] += 1;
+        while covered == nums.len() {
+            let (low, first) = all[left];
+            if not found or high - low < best_high - best_low {
+                best_low = low;
+                best_high = high;
+                found = true;
+            }
+            count[first] -= 1;
+            if count[first] == 0 {
+                covered -= 1;
+            }
+            left += 1;
+        }
+    }
+    vec![best_low, best_high]
+}
+
+// ---- pointers arm ------------------------------------------------------
+
+fn smallest_range_pointers(nums: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut next = vec![0; nums.len()];
+    let mut best_low = 0;
+    let mut best_high = 0;
+    let mut found = false;
+    loop {
+        let mut lowest = 0;
+        let mut low = nums[0][next[0]];
+        let mut high = low;
+        for list in 1..nums.len() {
+            let value = nums[list][next[list]];
+            if value < low {
+                low = value;
+                lowest = list;
+            }
+            if value > high {
+                high = value;
+            }
+        }
+        if not found or high - low < best_high - best_low {
+            best_low = low;
+            best_high = high;
+            found = true;
+        }
+        next[lowest] += 1;
+        if next[lowest] == nums[lowest].len() {
+            break;
+        }
+    }
+    vec![best_low, best_high]
+}
+
+// ---- search arm --------------------------------------------------------
+
+fn smallest_range_search(nums: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut starts: Vec[i64] = Vec.new();
+    for list in nums.iter() {
+        for value in list.iter() {
+            starts.push(*value);
+        }
+    }
+    starts.sort();
+    starts.dedup();
+    let mut best_low = 0;
+    let mut best_high = 0;
+    let mut found = false;
+    for low in starts.iter() {
+        let mut high = *low;
+        let mut covers = true;
+        for list in nums.iter() {
+            let at = first_at_least_search(list, *low);
+            if at == list.len() {
+                covers = false;
+                break;
+            }
+            high = high.max(list[at]);
+        }
+        if not covers {
+            break;
+        }
+        if not found or high - *low < best_high - best_low {
+            best_low = *low;
+            best_high = high;
+            found = true;
+        }
+    }
+    vec![best_low, best_high]
+}
+
+// The index of the first value in sorted `list` that is at least
+// `target`, or the length if there is none.
+fn first_at_least_search(list: Vec[i64], target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = list.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if list[mid] < target {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` sorted lists of 1 to 6 values from -12 to 12.
+fn random_lists(count: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut nums: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut list: Vec[i64] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 6 {
+            list.push(next_random(mut seed) % 25 - 12);
+        }
+        list.sort();
+        nums.push(list);
+    }
+    nums
+}
+
+// Whether every list has a value from `low` to `high`.
+fn covers(nums: Vec[Vec[i64]], low: i64, high: i64) -> bool {
+    for list in nums.iter() {
+        let mut hit = false;
+        for value in list.iter() {
+            if *value >= low and *value <= high {
+                hit = true;
+            }
+        }
+        if not hit {
+            return false;
+        }
+    }
+    true
+}
+
+// Whether some list holds `value`.
+fn holds(nums: Vec[Vec[i64]], value: i64) -> bool {
+    for list in nums.iter() {
+        for v in list.iter() {
+            if *v == value {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// The definition: of every range from one value in the lists to
+// another that covers every list, the narrowest, and of those the one
+// that starts lowest.
+fn definition(nums: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    for list in nums.iter() {
+        for value in list.iter() {
+            values.push(*value);
+        }
+    }
+    let mut best: Vec[i64] = Vec.new();
+    for low in values.iter() {
+        for high in values.iter() {
+            if *low <= *high and covers(nums, *low, *high) {
+                let better = if best.len() == 0 {
+                    true
+                } else if *high - *low != best[1] - best[0] {
+                    *high - *low < best[1] - best[0]
+                } else {
+                    *low < best[0]
+                };
+                if better {
+                    best = vec![*low, *high];
+                }
+            }
+        }
+    }
+    best
+}
+
+fn answer(which: i64, nums: Vec[Vec[i64]]) -> Vec[i64] {
+    if which == 0 {
+        smallest_range_star(nums)
+    } else if which == 1 {
+        smallest_range_window(nums)
+    } else if which == 2 {
+        smallest_range_pointers(nums)
+    } else {
+        smallest_range_search(nums)
+    }
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6320;
+    let mut checks = 0;
+    let mut width = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 5 lists of 1 to 6 values from -12 to 12, so that many
+        // ranges tie for the narrowest.
+        let k = 1 + next_random(mut seed) % 5;
+        let nums = random_lists(k, mut seed);
+        let want = definition(nums);
+        width += want[1] - want[0];
+        let mut reversed: Vec[Vec[i64]] = Vec.new();
+        for i in 0..k {
+            reversed.push(nums[k - 1 - i].clone());
+        }
+        let mut shifted: Vec[Vec[i64]] = Vec.new();
+        for list in nums.iter() {
+            let mut moved: Vec[i64] = Vec.new();
+            for value in list.iter() {
+                moved.push(*value + 7);
+            }
+            shifted.push(moved);
+        }
+        let mut more = nums.clone();
+        more.append(random_lists(1, mut seed));
+        for which in 0..4 {
+            let got = answer(which, nums);
+            let moved = answer(which, shifted);
+            let wider = answer(which, more);
+            let ok = vec![
+                // P1: the range is the definition's.
+                got == want,
+                // P2: the range covers every list, and both ends are
+                // values in the lists.
+                covers(nums, got[0], got[1]) and holds(nums, got[0]) and holds(nums, got[1]),
+                // P3: the lists in reverse order give the same range.
+                answer(which, reversed) == got,
+                // P4: every value plus 7 gives the range plus 7.
+                moved[0] == got[0] + 7 and moved[1] == got[1] + 7,
+                // P5: one more list never makes the range narrower.
+                wider[1] - wider[0] >= got[1] - got[0],
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases (total width {width}), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

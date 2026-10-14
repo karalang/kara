@@ -1,0 +1,130 @@
+// LeetCode #632: Smallest Range Covering Elements from K Lists -- search.
+//
+// The best range starts at some value of some list. For each distinct
+// value in increasing order, a binary search in every list finds its
+// first value at least that large, and the largest of those is where
+// the shortest range starting there ends. Once some list has nothing
+// that large, no later start can cover it. O(n k log m) for n values in
+// k lists of at most m.
+
+fn smallest_range(nums: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut starts: Vec[i64] = Vec.new();
+    for list in nums.iter() {
+        for value in list.iter() {
+            starts.push(*value);
+        }
+    }
+    starts.sort();
+    starts.dedup();
+    let mut best_low = 0;
+    let mut best_high = 0;
+    let mut found = false;
+    for low in starts.iter() {
+        let mut high = *low;
+        let mut covers = true;
+        for list in nums.iter() {
+            let at = first_at_least(list, *low);
+            if at == list.len() {
+                covers = false;
+                break;
+            }
+            high = high.max(list[at]);
+        }
+        if not covers {
+            break;
+        }
+        if not found or high - *low < best_high - best_low {
+            best_low = *low;
+            best_high = high;
+            found = true;
+        }
+    }
+    vec![best_low, best_high]
+}
+
+// The index of the first value in sorted `list` that is at least
+// `target`, or the length if there is none.
+fn first_at_least(list: Vec[i64], target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = list.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if list[mid] < target {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` sorted lists of `shortest` to `longest` values from `least`
+// to `most`.
+fn random_lists(count: i64, shortest: i64, longest: i64, least: i64, most: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut nums: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut list: Vec[i64] = Vec.new();
+        for _ in 0..shortest + next_random(mut seed) % (longest - shortest + 1) {
+            let wide = next_random(mut seed) * 32768 + next_random(mut seed);
+            list.push(least + wide % (most - least + 1));
+        }
+        list.sort();
+        nums.push(list);
+    }
+    nums
+}
+
+fn show(nums: Vec[Vec[i64]]) {
+    let mut text = String.from("[");
+    for list in 0..nums.len() {
+        if list > 0 {
+            text.push_str(", ");
+        }
+        text.push_str("[");
+        for at in 0..nums[list].len() {
+            if at > 0 {
+                text.push_str(",");
+            }
+            text.push_str(f"{nums[list][at]}");
+        }
+        text.push_str("]");
+    }
+    let range = smallest_range(nums);
+    println(f"{text}] -> [{range[0]}, {range[1]}]");
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(vec![vec![4, 10, 15, 24, 26], vec![0, 9, 12, 20], vec![5, 18, 22, 30]]);
+    show(vec![vec![1, 2, 3], vec![1, 2, 3], vec![1, 2, 3]]);
+    // One list of one value; two ranges of the same width, the lower
+    // kept; the widest values; repeated values; one value per list; a
+    // value every list shares.
+    show(vec![vec![5]]);
+    show(vec![vec![1, 9], vec![4, 6]]);
+    show(vec![vec![-100000, 100000], vec![0]]);
+    show(vec![vec![1, 1, 1], vec![1]]);
+    show(vec![vec![10], vec![40], vec![20], vec![30]]);
+    show(vec![vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10], vec![-5, 10], vec![10, 20, 30]]);
+    // 300 random cases of 1 to 8 lists of 1 to 10 values from -50 to 50.
+    let mut seed: i64 = 632;
+    let mut total = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let count = 1 + next_random(mut seed) % 8;
+        let range = smallest_range(random_lists(count, 1, 10, -50, 50, mut seed));
+        total += range[1] - range[0];
+        checksum = (checksum * 31 + range[0] * 101 + range[1] + 1000000) % 1000000007;
+    }
+    println(f"300 random cases: total width {total}, checksum {checksum}");
+    // 100 lists of 50 values from the whole allowed span.
+    let range = smallest_range(random_lists(100, 50, 50, -100000, 100000, mut seed));
+    println(f"100 lists of 50 values -> [{range[0]}, {range[1]}]");
+}
