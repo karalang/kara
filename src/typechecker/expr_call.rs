@@ -2642,6 +2642,17 @@ impl<'a> super::TypeChecker<'a> {
 
         let forwarded = self.is_arg_forwarded(&arg.value, arg_ty);
 
+        // v1 spec, design.md § Call-site `mut` markers: an argument to a
+        // `mut ref` / `mut Slice` parameter is marked "whatever the
+        // argument's root", a field of a `mut ref` binding included, so on
+        // the v2 front ends a marked forward is the spelling, not an error
+        // (B-2026-10-14-25). An unmarked forward is still accepted there
+        // until the corpus is migrated to the marker.
+        let v2 = self.cli_lint_overrides.strict_core || self.library_methods_from_source;
+        if arg.mut_marker && forwarded && v2 {
+            return;
+        }
+
         if arg.mut_marker && forwarded {
             // The argument is already a mut-ref (either by type or by
             // place-root) — marking it is redundant and, in the nested

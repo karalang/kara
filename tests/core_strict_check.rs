@@ -4021,3 +4021,37 @@ fn a_capture_lent_through_a_closure_local_is_read() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// B-2026-10-14-25: design.md § Call-site `mut` markers marks an argument
+/// to a `mut ref` / `mut Slice` parameter "whatever the argument's root",
+/// so a field of a `mut ref` binding and a forwarded `mut ref` parameter
+/// take the marker. An unmarked forward is still accepted.
+#[test]
+fn a_marked_forward_of_a_mut_ref_is_accepted() {
+    accepted(
+        "marked-forward",
+        "struct Session {\n\
+             scores: Vec[i64],\n\
+         }\n\
+         fn sort_in_place(xs: mut Slice[i64]) {\n\
+             xs.sort();\n\
+         }\n\
+         fn bump(n: mut ref i64) {\n\
+             n += 1;\n\
+         }\n\
+         fn twice(n: mut ref i64) {\n\
+             bump(mut n);\n\
+             bump(n);\n\
+         }\n\
+         fn refresh(s: mut ref Session) {\n\
+             sort_in_place(mut s.scores);\n\
+         }\n\
+         fn main() {\n\
+             let mut s = Session { scores: vec![3, 1, 2] };\n\
+             refresh(mut s);\n\
+             let mut k = 1;\n\
+             twice(mut k);\n\
+             println(f\"{s.scores} {k}\");\n\
+         }\n",
+    );
+}

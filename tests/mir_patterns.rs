@@ -114,3 +114,61 @@ fn main() {
         "0 1\n",
     );
 }
+
+/// B-2026-10-14-25: a `mut` marker on an argument already rooted at a
+/// `mut ref` binding (a field of one, a forwarded parameter, a `mut ref`
+/// local from `or_insert`) is the v1 spelling and lends the same place.
+#[test]
+fn a_marked_forward_of_a_mut_ref_writes_the_same_place() {
+    assert_runs(
+        r#"
+struct Session {
+    scores: Vec[i64],
+}
+
+struct Node {
+    n: i64,
+    kids: Map[i64, Node],
+}
+
+fn sort_in_place(xs: mut Slice[i64]) {
+    xs.sort();
+}
+
+fn bump(n: mut ref i64) {
+    n += 1;
+}
+
+fn twice(n: mut ref i64) {
+    bump(mut n);
+    bump(n);
+}
+
+fn refresh(s: mut ref Session) {
+    sort_in_place(mut s.scores);
+}
+
+fn grow(node: mut ref Node, depth: i64) {
+    if depth == 0 {
+        return;
+    }
+    node.n += 1;
+    let child = node.kids.entry(depth).or_insert(Node { n: 0, kids: Map.new() });
+    grow(mut child, depth - 1);
+}
+
+fn main() {
+    let mut s = Session { scores: vec![3, 1, 2] };
+    refresh(mut s);
+    let mut k = 1;
+    twice(mut k);
+    let mut root = Node { n: 0, kids: Map.new() };
+    grow(mut root, 3);
+    let mut v = vec![1, 2];
+    bump(mut v[0]);
+    println(f"{s.scores} {k} {root.n} {root.kids.len()} {v}");
+}
+"#,
+        "[1, 2, 3] 3 1 1 [2, 2]\n",
+    );
+}
