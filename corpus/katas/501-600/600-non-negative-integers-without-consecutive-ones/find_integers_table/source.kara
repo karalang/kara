@@ -1,0 +1,77 @@
+// LeetCode #600: Non-negative Integers without Consecutive Ones -- by
+// prefix.
+//
+// Each number up to n either equals n or first falls below it at some
+// one bit of n, turned to 0, with the bits above copied from n. For that
+// count, the prefix copied must hold no two ones together, and the bits
+// below are free: ending0[k] and ending1[k] count the free k-bit strings
+// by their top bit, so the free ones below number ending0[k] +
+// ending1[k]. Check the prefix as it grows. O(log n).
+
+fn find_integers(n: i64) -> i64 {
+    let mut ending0: Vec[i64] = vec![1, 1];
+    let mut ending1: Vec[i64] = vec![0, 1];
+    for k in 2..33 {
+        ending0.push(ending0[k - 1] + ending1[k - 1]);
+        ending1.push(ending0[k - 1]);
+    }
+    let mut count = 0;
+    let mut prefix_ok = true;
+    let mut above = 0;
+    for k in (0..32).rev() {
+        let bit = (n >> k) & 1;
+        if bit == 1 and prefix_ok {
+            count += ending0[k] + ending1[k];
+        }
+        if bit == 1 and above == 1 {
+            prefix_ok = false;
+        }
+        above = bit;
+    }
+    if prefix_ok {
+        count += 1;
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64) {
+    println(f"n = {n} -> {find_integers(n)}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(5);
+    show(1);
+    show(2);
+    // Two ones together at the top; a lone one; ones apart all the way
+    // down; every bit set; the problem's largest.
+    show(3);
+    show(4);
+    show(699050);
+    show(1073741823);
+    show(1000000000);
+    // n from 1 to 40.
+    let mut small: Vec[i64] = Vec.new();
+    for n in 1..41 {
+        small.push(find_integers(n));
+    }
+    println(f"n = 1 to 40 -> {small}");
+    // 300 random n up to 1,000,000, as a total and a checksum.
+    let mut seed: i64 = 600;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + (step(mut seed) * 32768 + step(mut seed)) % 1000000;
+        let got = find_integers(n);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"300 random n up to 1000000: total {total}, checksum {checksum}");
+}

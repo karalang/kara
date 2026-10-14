@@ -1,0 +1,65 @@
+// LeetCode #600: Non-negative Integers without Consecutive Ones -- grow
+// every one.
+//
+// Every number without two ones together is 0, or grows from a smaller
+// one by a 0 bit on the right, or by a 1 bit when its last bit is 0.
+// Start from 1 and grow each number with a stack while it stays at most
+// n, counting as it goes, then add 0. O(answer), about n^0.69.
+
+fn find_integers(n: i64) -> i64 {
+    let mut count = 1;
+    let mut stack: Vec[i64] = vec![1];
+    while let Some(x) = stack.pop() {
+        if x > n {
+            continue;
+        }
+        count += 1;
+        stack.push(x * 2);
+        if x % 2 == 0 {
+            stack.push(x * 2 + 1);
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64) {
+    println(f"n = {n} -> {find_integers(n)}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(5);
+    show(1);
+    show(2);
+    // Two ones together at the top; a lone one; ones apart all the way
+    // down; every bit set; the problem's largest.
+    show(3);
+    show(4);
+    show(699050);
+    show(1073741823);
+    show(1000000000);
+    // n from 1 to 40.
+    let mut small: Vec[i64] = Vec.new();
+    for n in 1..41 {
+        small.push(find_integers(n));
+    }
+    println(f"n = 1 to 40 -> {small}");
+    // 300 random n up to 1,000,000, as a total and a checksum.
+    let mut seed: i64 = 600;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + (step(mut seed) * 32768 + step(mut seed)) % 1000000;
+        let got = find_integers(n);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"300 random n up to 1000000: total {total}, checksum {checksum}");
+}

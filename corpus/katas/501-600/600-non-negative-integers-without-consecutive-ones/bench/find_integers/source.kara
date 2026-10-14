@@ -1,0 +1,54 @@
+// Benchmark for #600: the ★ arm (walk the bits with Fibonacci counts);
+// see find_integers.kara.
+
+fn find_integers(n: i64) -> i64 {
+    let mut fib: Vec[i64] = vec![1, 2];
+    for k in 2..32 {
+        fib.push(fib[k - 1] + fib[k - 2]);
+    }
+    let mut count = 0;
+    let mut previous = false;
+    let mut k = 31;
+    while k >= 0 {
+        if (n >> k) & 1 == 1 {
+            count += fib[k];
+            if previous {
+                return count;
+            }
+            previous = true;
+        } else {
+            previous = false;
+        }
+        k -= 1;
+    }
+    count + 1
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 1,000,000 values of n from 1 to 10^9 (the problem's range), made
+    // once; then 20 times over each is solved.
+    let count = 1000000;
+    let rounds = 20;
+    let mut seed: i64 = 600;
+    let mut values: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        values.push(1 + (step(mut seed) * 32768 + step(mut seed)) % 1000000000);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let got = find_integers(values[(round * 7 + g) % count]);
+            total += got;
+            checksum = (checksum * 31 + got) % 1000000007;
+        }
+    }
+    println(f"{count} values, {rounds} rounds: total {total}, checksum {checksum}");
+}

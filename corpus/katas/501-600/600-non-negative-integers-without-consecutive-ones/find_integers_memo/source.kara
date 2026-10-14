@@ -1,0 +1,83 @@
+// LeetCode #600: Non-negative Integers without Consecutive Ones -- digit
+// DP.
+//
+// Count the bit strings from the top bit down, with a state of where we
+// are, whether the last bit set was a one, and whether the bits so far
+// equal n's (so the next may not pass n's); the free states, those below
+// n already, are memoized. O(log n).
+
+fn count_from(bits: Vec[i64], at: i64, last_one: bool, tight: bool, memo: mut ref Vec[Vec[i64]]) -> i64 {
+    if at == bits.len() {
+        return 1;
+    }
+    let last = if last_one { 1 } else { 0 };
+    if not tight and memo[at][last] >= 0 {
+        return memo[at][last];
+    }
+    let top = if tight { bits[at] } else { 1 };
+    let mut total = 0;
+    for b in 0..(top + 1) {
+        if b == 1 and last_one {
+            continue;
+        }
+        total += count_from(bits, at + 1, b == 1, tight and b == top, memo);
+    }
+    if not tight {
+        memo[at][last] = total;
+    }
+    total
+}
+
+fn find_integers(n: i64) -> i64 {
+    let mut bits: Vec[i64] = Vec.new();
+    let mut m = n;
+    while m > 0 {
+        bits.push(m % 2);
+        m = m / 2;
+    }
+    bits.reverse();
+    let mut memo = vec![vec![-1; 2]; bits.len()];
+    count_from(bits, 0, false, true, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64) {
+    println(f"n = {n} -> {find_integers(n)}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(5);
+    show(1);
+    show(2);
+    // Two ones together at the top; a lone one; ones apart all the way
+    // down; every bit set; the problem's largest.
+    show(3);
+    show(4);
+    show(699050);
+    show(1073741823);
+    show(1000000000);
+    // n from 1 to 40.
+    let mut small: Vec[i64] = Vec.new();
+    for n in 1..41 {
+        small.push(find_integers(n));
+    }
+    println(f"n = 1 to 40 -> {small}");
+    // 300 random n up to 1,000,000, as a total and a checksum.
+    let mut seed: i64 = 600;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + (step(mut seed) * 32768 + step(mut seed)) % 1000000;
+        let got = find_integers(n);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"300 random n up to 1000000: total {total}, checksum {checksum}");
+}
