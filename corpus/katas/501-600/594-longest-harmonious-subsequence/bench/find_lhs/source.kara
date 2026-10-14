@@ -1,0 +1,52 @@
+// Benchmark for #594: the ★ arm (count in a `Map`, then pair); see
+// find_lhs.kara.
+
+fn find_lhs(nums: Vec[i64]) -> i64 {
+    let mut count: Map[i64, i64] = Map.new();
+    for x in nums {
+        count[x] = count.get(x).unwrap_or(0) + 1;
+    }
+    let mut best = 0;
+    for (v, c) in count {
+        if let Some(d) = count.get(v + 1) {
+            best = max(best, c + d);
+        }
+    }
+    best
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100 arrays of 20,000 values (the problem's longest), each from a
+    // random range of 1 to 5,000 values somewhere in -10^9 to 10^9, made
+    // once; then 20 times over each is solved.
+    let count = 100;
+    let rounds = 20;
+    let mut seed: i64 = 594;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let range = 1 + (step(mut seed) * 32768 + step(mut seed)) % 5000;
+        let low = (step(mut seed) * 32768 + step(mut seed)) % 1999990000 - 999990000;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..20000 {
+            nums.push(low + (step(mut seed) * 32768 + step(mut seed)) % range);
+        }
+        arrays.push(nums);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let got = find_lhs(arrays[(round * 7 + g) % count]);
+            total += got;
+            checksum = (checksum * 31 + got) % 1000000007;
+        }
+    }
+    println(f"{count} arrays, {rounds} rounds: total {total}, checksum {checksum}");
+}

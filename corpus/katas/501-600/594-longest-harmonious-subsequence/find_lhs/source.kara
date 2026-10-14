@@ -1,0 +1,76 @@
+// LeetCode #594: Longest Harmonious Subsequence -- count, then pair.
+//
+// A harmonious subsequence takes every copy of two values that differ
+// by exactly 1, and nothing else, since order does not matter for a
+// subsequence's minimum and maximum. So count each value in a `Map`;
+// for every value v with v + 1 also present, count[v] + count[v + 1]
+// is a candidate. O(n) expected.
+
+fn find_lhs(nums: Vec[i64]) -> i64 {
+    let mut count: Map[i64, i64] = Map.new();
+    for x in nums {
+        count[x] = count.get(x).unwrap_or(0) + 1;
+    }
+    let mut best = 0;
+    for (v, c) in count {
+        if let Some(d) = count.get(v + 1) {
+            best = max(best, c + d);
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums} -> {find_lhs(nums)}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(vec![1, 3, 2, 2, 5, 2, 3, 7]);
+    show(vec![1, 2, 3, 4]);
+    show(vec![1, 1, 1, 1]);
+    // One value; two values a step apart; two values two apart; the
+    // extremes; negative values; a pair that is not the most common
+    // values; and a later pair beating an earlier one.
+    show(vec![7]);
+    show(vec![4, 5]);
+    show(vec![4, 6, 4, 6]);
+    show(vec![1000000000, 999999999, 1000000000, -1000000000, -999999999]);
+    show(vec![-3, -2, -2, -1, -3, -3]);
+    show(vec![9, 9, 9, 9, 1, 2, 3, 4]);
+    show(vec![1, 2, 5, 6, 6, 5, 6]);
+    // The longest arrays: 20,000 values from a few, and 20,000 distinct
+    // values two apart.
+    let mut seed: i64 = 594;
+    let mut few: Vec[i64] = Vec.new();
+    let mut apart: Vec[i64] = Vec.new();
+    for k in 0..20000 {
+        few.push(step(mut seed) % 50);
+        apart.push(2 * k - 20000);
+    }
+    println(f"20000 values from 0 to 49 -> {find_lhs(few)}");
+    println(f"20000 values two apart -> {find_lhs(apart)}");
+    // 300 random arrays of 1 to 40 values, from a range of 1 to 12.
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + step(mut seed) % 40;
+        let range = 1 + step(mut seed) % 12;
+        let low = step(mut seed) % 21 - 10;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(low + step(mut seed) % range);
+        }
+        let got = find_lhs(nums);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"300 random arrays: total {total}, checksum {checksum}");
+}

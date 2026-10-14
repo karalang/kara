@@ -1,0 +1,197 @@
+// LeetCode #594: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// arrays.
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_lhs_star(nums: Vec[i64]) -> i64 {
+    let mut count: Map[i64, i64] = Map.new();
+    for x in nums {
+        count[x] = count.get(x).unwrap_or(0) + 1;
+    }
+    let mut best = 0;
+    for (v, c) in count {
+        if let Some(d) = count.get(v + 1) {
+            best = max(best, c + d);
+        }
+    }
+    best
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+fn find_lhs_sorted(nums: Vec[i64]) -> i64 {
+    let mut s = nums.clone();
+    s.sort();
+    let mut best = 0;
+    let mut prev_value = 0;
+    let mut prev_len = 0;
+    let mut i = 0;
+    while i < s.len() {
+        let mut j = i;
+        while j < s.len() and s[j] == s[i] {
+            j += 1;
+        }
+        let len = j - i;
+        if prev_len > 0 and s[i] - prev_value == 1 {
+            best = max(best, prev_len + len);
+        }
+        prev_value = s[i];
+        prev_len = len;
+        i = j;
+    }
+    best
+}
+
+// ---- onepass arm -------------------------------------------------------
+
+fn find_lhs_onepass(nums: Vec[i64]) -> i64 {
+    let mut count: Map[i64, i64] = Map.new();
+    let mut best = 0;
+    for x in nums {
+        let c = count.get(x).unwrap_or(0) + 1;
+        count[x] = c;
+        if let Some(below) = count.get(x - 1) {
+            best = max(best, c + below);
+        }
+        if let Some(above) = count.get(x + 1) {
+            best = max(best, c + above);
+        }
+    }
+    best
+}
+
+// ---- ordered arm -------------------------------------------------------
+
+fn find_lhs_ordered(nums: Vec[i64]) -> i64 {
+    let mut count: SortedMap[i64, i64] = SortedMap.new();
+    for x in nums {
+        count[x] = count.get(x).unwrap_or(0) + 1;
+    }
+    let mut best = 0;
+    let mut prev: Option[(i64, i64)] = None;
+    for (v, c) in count {
+        if let Some((pv, pc)) = prev {
+            if v - pv == 1 {
+                best = max(best, pc + c);
+            }
+        }
+        prev = Some((v, c));
+    }
+    best
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, nums: Vec[i64]) -> i64 {
+    if which == 0 {
+        find_lhs_star(nums)
+    } else if which == 1 {
+        find_lhs_sorted(nums)
+    } else if which == 2 {
+        find_lhs_onepass(nums)
+    } else {
+        find_lhs_ordered(nums)
+    }
+}
+
+// The definition: every subsequence, one for each set of positions,
+// whose maximum and minimum differ by exactly 1; the longest of them,
+// or 0 when there is none.
+fn definition(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut best = 0;
+    for mask in 1..(1 << n) {
+        let mut low = 0;
+        let mut high = 0;
+        let mut len = 0;
+        for k in 0..n {
+            if (mask >> k) & 1 == 1 {
+                if len == 0 or nums[k] < low {
+                    low = nums[k];
+                }
+                if len == 0 or nums[k] > high {
+                    high = nums[k];
+                }
+                len += 1;
+            }
+        }
+        if high - low == 1 and len > best {
+            best = len;
+        }
+    }
+    best
+}
+
+fn mapped(nums: Vec[i64], scale: i64, shift: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in nums {
+        out.push(scale * x + shift);
+    }
+    out
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5940;
+    let mut checks = 0;
+    let mut nonzero = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 10 values from a range of 1 to 5 values starting at -3 to
+        // 3, so most arrays hold a pair a step apart.
+        let n = 1 + step(mut seed) % 10;
+        let range = 1 + step(mut seed) % 5;
+        let low = step(mut seed) % 7 - 3;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(low + step(mut seed) % range);
+        }
+        let want = definition(nums);
+        if want > 0 {
+            nonzero += 1;
+        }
+        let shift = step(mut seed) % 2000000 * 500 - 999999990;
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        let turn = step(mut seed) % n;
+        let mut rotated: Vec[i64] = Vec.new();
+        for k in 0..n {
+            rotated.push(nums[(k + turn) % n]);
+        }
+        let mut twice = nums.clone();
+        twice.extend(nums.clone());
+        for which in 0..4 {
+            let got = answer(which, nums);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: the values reversed, or turned round, give the same.
+                answer(which, reversed) == got and answer(which, rotated) == got,
+                // P3: every value moved by the same amount gives the same.
+                answer(which, mapped(nums, 1, shift)) == got,
+                // P4: every value negated gives the same.
+                answer(which, mapped(nums, -1, 0)) == got,
+                // P5: the array twice over gives twice the answer.
+                answer(which, twice) == 2 * got,
+            ];
+            for k in 0..5 {
+                checks += 1;
+                if not ok[k] {
+                    failures[k] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({nonzero} with an answer above 0), 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

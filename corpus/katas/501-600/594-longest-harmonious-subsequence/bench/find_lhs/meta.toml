@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/594-longest-harmonious-subsequence/bench/find_lhs.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["lib:map", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "2b8e2b9f0"
+extracted_src = "86ad7b6f"
+model_rev = "1aa23105"
+model_src = "86ad7b6f"
