@@ -1,0 +1,44 @@
+// LeetCode #544: Output Contest Matches -- rounds, in place.
+//
+// The teams start as the strings "1" to "n". Each round the i-th
+// strongest of the m left is paired with the i-th weakest, the pair
+// written over the i-th place, so the first half of the list is the
+// next round, strongest pair first. After log n rounds one string is
+// left. O(n log n) time for the copying.
+
+fn find_contest_match(n: i64) -> String {
+    let mut teams: Vec[String] = (1..n + 1).map(|t| f"{t}").collect();
+    let mut m = n;
+    while m > 1 {
+        for i in 0..m / 2 {
+            teams[i] = f"({teams[i]},{teams[m - 1 - i]})";
+        }
+        m /= 2;
+    }
+    teams[0].clone()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// A checksum over the bytes of a string.
+fn sum_of(s: Str) -> i64 {
+    let mut h = 0;
+    for b in s.bytes().iter() {
+        h = (h * 131 + *b as i64) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    // The examples and the next sizes in full; then every size the
+    // problem allows, up to 2^12 = 4096 teams, by length and checksum.
+    for n in [2, 4, 8, 16] {
+        println(f"{n} teams: {find_contest_match(n)}");
+    }
+    let mut n = 2;
+    while n <= 4096 {
+        let s = find_contest_match(n);
+        println(f"{n} teams: {s.len()} bytes, checksum {sum_of(s)}");
+        n *= 2;
+    }
+}

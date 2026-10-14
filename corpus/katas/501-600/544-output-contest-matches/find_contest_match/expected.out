@@ -1,0 +1,16 @@
+2 teams: (1,2)
+4 teams: ((1,4),(2,3))
+8 teams: (((1,8),(4,5)),((2,7),(3,6)))
+16 teams: ((((1,16),(8,9)),((4,13),(5,12))),(((2,15),(7,10)),((3,14),(6,11))))
+2 teams: 5 bytes, checksum 890914897
+4 teams: 13 bytes, checksum 142463542
+8 teams: 29 bytes, checksum 148851143
+16 teams: 68 bytes, checksum 507477581
+32 teams: 148 bytes, checksum 723675626
+64 teams: 308 bytes, checksum 633994481
+128 teams: 657 bytes, checksum 48679910
+256 teams: 1425 bytes, checksum 73679994
+512 teams: 2961 bytes, checksum 919178610
+1024 teams: 6058 bytes, checksum 404030950
+2048 teams: 13226 bytes, checksum 878320815
+4096 teams: 27562 bytes, checksum 664315264

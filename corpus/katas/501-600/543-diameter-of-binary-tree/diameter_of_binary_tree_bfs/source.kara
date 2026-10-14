@@ -1,0 +1,210 @@
+// LeetCode #543: Diameter of Binary Tree -- two searches over the graph.
+//
+// The tree is turned into an undirected graph, its nodes numbered in
+// level order. In a tree, the node farthest from any start is an end of
+// some longest path, so a breadth-first search from the root finds one
+// end, and a second from there finds how long the path is. O(n) time.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// The node farthest from `start` and its distance, the first one met in
+// search order on a tie.
+fn farthest(adj: Vec[Vec[i64]], start: i64) -> (i64, i64) {
+    let mut dist = vec![-1; adj.len()];
+    dist[start] = 0;
+    let mut queue = vec![start];
+    let mut head = 0;
+    let mut far = start;
+    while head < queue.len() {
+        let u = queue[head];
+        head += 1;
+        if dist[u] > dist[far] {
+            far = u;
+        }
+        for v in adj[u].iter() {
+            if dist[*v] < 0 {
+                dist[*v] = dist[u] + 1;
+                queue.push(*v);
+            }
+        }
+    }
+    (far, dist[far])
+}
+
+fn diameter_of_binary_tree(root: Option[TreeNode]) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    let mut queue: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        adj.push(Vec.new());
+        queue.push((r, 0));
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let (n, id) = queue[head];
+        head += 1;
+        for child in [n.left, n.right] {
+            if let Some(c) = child {
+                let cid = adj.len();
+                adj.push(vec![id]);
+                adj[id].push(cid);
+                queue.push((c, cid));
+            }
+        }
+    }
+    if adj.is_empty() {
+        return 0;
+    }
+    let (end, _) = farthest(adj, 0);
+    let (_, d) = farthest(adj, end);
+    d
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree from LeetCode's level order: `None` for a missing child.
+fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
+    if values.is_empty() or values[0].is_none() {
+        return None;
+    }
+    let root = leaf(values[0].unwrap());
+    let mut queue: Vec[TreeNode] = vec![root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < values.len() {
+        let n = queue[head];
+        head += 1;
+        if let Some(v) = values[i] {
+            let c = leaf(v);
+            n.left = Some(c);
+            queue.push(c);
+        }
+        i += 1;
+        if i < values.len() {
+            if let Some(v) = values[i] {
+                let c = leaf(v);
+                n.right = Some(c);
+                queue.push(c);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A tree of `size` nodes with values from -100 to 100: each new node
+// walks down from the root, going left with chance lean / 100, and takes
+// the first empty place it meets.
+fn random_tree(size: i64, lean: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let root = leaf(next_random(seed) % 201 - 100);
+    for _ in 1..size {
+        let c = leaf(next_random(seed) % 201 - 100);
+        let mut node = root;
+        loop {
+            if next_random(seed) % 100 < lean {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+fn written(values: Vec[Option[i64]]) -> String {
+    let parts: Vec[String] = values.iter().map(|v| match v {
+        Some(x) => f"{x}",
+        None => "null".to_string(),
+    }).collect();
+    f"[{parts.join(",")}]"
+}
+
+fn show(name: Str, values: Vec[Option[i64]]) {
+    let d = diameter_of_binary_tree(from_level(values));
+    println(f"{name}: {written(values)} -> {d}");
+}
+
+fn main() {
+    let mut seed: i64 = 543;
+    show("example 1", vec![Some(1), Some(2), Some(3), Some(4), Some(5)]);
+    show("example 2", vec![Some(1), Some(2)]);
+    show("one node", vec![Some(7)]);
+    show("a left chain", vec![Some(1), Some(2), None, Some(3), None, Some(4)]);
+    show("a zigzag", vec![Some(1), None, Some(2), Some(3), None, None, Some(4)]);
+    show("the longest path misses the root", vec![Some(1), Some(2), Some(3), Some(4), Some(5), None, None, Some(6), None, None, Some(7), Some(8), None, None, Some(9)]);
+    show("a full tree of three levels", vec![Some(-1), Some(-2), Some(-3), Some(-4), Some(-5), Some(-6), Some(-7)]);
+    // 300 random trees of 1 to 80 nodes, leaning left with chance 50,
+    // 80 or 95 in 100 in turn.
+    let count = 300;
+    let mut nodes = 0;
+    let mut total = 0;
+    let mut h: i64 = 0;
+    for t in 0..count {
+        let size = 1 + next_random(mut seed) % 80;
+        let lean = if t % 3 == 0 { 50 } else if t % 3 == 1 { 80 } else { 95 };
+        let d = diameter_of_binary_tree(random_tree(size, lean, mut seed));
+        nodes += size;
+        total += d;
+        h = (h * 31 + d) % 1000000007;
+    }
+    println(f"{count} random trees: {nodes} nodes, diameters {total}, checksum {h}");
+    // The largest, 10,000 nodes (the problem's most): a random tree, a
+    // chain down the left, two chains of about 5,000 from the root, and
+    // a complete tree.
+    let d = diameter_of_binary_tree(random_tree(10000, 50, mut seed));
+    println(f"10000 nodes at random: {d}");
+    let top = leaf(0);
+    let mut last = top;
+    for v in 1..10000 {
+        let c = leaf(v % 201 - 100);
+        last.left = Some(c);
+        last = c;
+    }
+    let d = diameter_of_binary_tree(Some(top));
+    println(f"10000 nodes down the left: {d}");
+    let root = leaf(0);
+    let mut l = root;
+    let mut r = root;
+    for v in 1..10000 {
+        let c = leaf(v % 201 - 100);
+        if v % 2 == 1 {
+            l.left = Some(c);
+            l = c;
+        } else {
+            r.right = Some(c);
+            r = c;
+        }
+    }
+    let d = diameter_of_binary_tree(Some(root));
+    println(f"two chains of 10000 nodes: {d}");
+    let mut values: Vec[Option[i64]] = Vec.new();
+    for v in 0..10000 {
+        values.push(Some(v % 201 - 100));
+    }
+    let d = diameter_of_binary_tree(from_level(values));
+    println(f"a complete tree of 10000 nodes: {d}");
+}

@@ -1,0 +1,296 @@
+// Differential test for LeetCode #543: Diameter of Binary Tree.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random trees of 1 to 40 nodes, leaning left with chance 50, 80 or 95
+// in 100 in turn, with a second random tree for P5.
+// Properties:
+//   P1  the answer is the definition's: the most edges between any
+//       two nodes
+//   P2  the tree mirrored left to right has the same answer
+//   P3  the answer is at most nodes - 1, and from height - 1 to
+//       2 (height - 1), the height counted in nodes
+//   P4  under a new root, as its left child, the answer is the larger
+//       of the old one and the old height
+//   P5  joined with a second tree under a new root, the answer is the
+//       largest of the two answers and the two heights added
+
+// ---- star: diameter_of_binary_tree.kara
+
+fn height_star(node: Option[TreeNode], best: mut ref i64) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let l = height_star(n.left, best);
+            let r = height_star(n.right, best);
+            if l + r > *best {
+                *best = l + r;
+            }
+            1 + l.max(r)
+        }
+    }
+}
+
+fn diameter_of_binary_tree_star(root: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    height_star(root, mut best);
+    best
+}
+
+// ---- pair: diameter_of_binary_tree_pair.kara
+
+fn walk_pair(node: Option[TreeNode]) -> (i64, i64) {
+    match node {
+        None => (0, 0),
+        Some(n) => {
+            let (lh, ld) = walk_pair(n.left);
+            let (rh, rd) = walk_pair(n.right);
+            (1 + lh.max(rh), (lh + rh).max(ld.max(rd)))
+        }
+    }
+}
+
+fn diameter_of_binary_tree_pair(root: Option[TreeNode]) -> i64 {
+    let (_, d) = walk_pair(root);
+    d
+}
+
+// ---- stack: diameter_of_binary_tree_stack.kara
+
+fn diameter_of_binary_tree_stack(root: Option[TreeNode]) -> i64 {
+    let mut best = 0;
+    let mut heights: Vec[i64] = Vec.new();
+    let mut stack: Vec[(Option[TreeNode], bool)] = vec![(root, false)];
+    while let Some((node, finished)) = stack.pop() {
+        match node {
+            None => heights.push(0),
+            Some(n) => {
+                if finished {
+                    let r = heights.pop().unwrap();
+                    let l = heights.pop().unwrap();
+                    best = best.max(l + r);
+                    heights.push(1 + l.max(r));
+                } else {
+                    stack.push((Some(n), true));
+                    stack.push((n.right, false));
+                    stack.push((n.left, false));
+                }
+            }
+        }
+    }
+    best
+}
+
+// ---- bfs: diameter_of_binary_tree_bfs.kara
+
+fn farthest_bfs(adj: Vec[Vec[i64]], start: i64) -> (i64, i64) {
+    let mut dist = vec![-1; adj.len()];
+    dist[start] = 0;
+    let mut queue = vec![start];
+    let mut head = 0;
+    let mut far = start;
+    while head < queue.len() {
+        let u = queue[head];
+        head += 1;
+        if dist[u] > dist[far] {
+            far = u;
+        }
+        for v in adj[u].iter() {
+            if dist[*v] < 0 {
+                dist[*v] = dist[u] + 1;
+                queue.push(*v);
+            }
+        }
+    }
+    (far, dist[far])
+}
+
+fn diameter_of_binary_tree_bfs(root: Option[TreeNode]) -> i64 {
+    let mut adj: Vec[Vec[i64]] = Vec.new();
+    let mut queue: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        adj.push(Vec.new());
+        queue.push((r, 0));
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let (n, id) = queue[head];
+        head += 1;
+        for child in [n.left, n.right] {
+            if let Some(c) = child {
+                let cid = adj.len();
+                adj.push(vec![id]);
+                adj[id].push(cid);
+                queue.push((c, cid));
+            }
+        }
+    }
+    if adj.is_empty() {
+        return 0;
+    }
+    let (end, _) = farthest_bfs(adj, 0);
+    let (_, d) = farthest_bfs(adj, end);
+    d
+}
+
+// ---- the tree and the definition --------------------------------------------
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree of `size` nodes: each new node walks down from the root, going
+// left with chance lean / 100, and takes the first empty place it meets.
+fn random_tree(size: i64, lean: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let root = leaf(next_random(seed) % 201 - 100);
+    for _ in 1..size {
+        let c = leaf(next_random(seed) % 201 - 100);
+        let mut node = root;
+        loop {
+            if next_random(seed) % 100 < lean {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+// The definition: the most edges between any two nodes. Every node is
+// numbered with its parent and depth, and for each pair the deeper of
+// the two climbs until they meet, one edge a step.
+fn definition(root: Option[TreeNode]) -> i64 {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    let mut parent: Vec[i64] = Vec.new();
+    let mut depth: Vec[i64] = Vec.new();
+    if let Some(r) = root {
+        nodes.push(r);
+        parent.push(-1);
+        depth.push(0);
+    }
+    let mut i = 0;
+    while i < nodes.len() {
+        let n = nodes[i];
+        for child in [n.left, n.right] {
+            if let Some(c) = child {
+                nodes.push(c);
+                parent.push(i);
+                depth.push(depth[i] + 1);
+            }
+        }
+        i += 1;
+    }
+    let mut best = 0;
+    for u in 0..nodes.len() {
+        for v in u + 1..nodes.len() {
+            let mut a = u;
+            let mut b = v;
+            let mut steps = 0;
+            while a != b {
+                if depth[a] >= depth[b] {
+                    a = parent[a];
+                } else {
+                    b = parent[b];
+                }
+                steps += 1;
+            }
+            best = best.max(steps);
+        }
+    }
+    best
+}
+
+fn levels(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => 1 + levels(n.left).max(levels(n.right)),
+    }
+}
+
+fn mirrored(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirrored(n.right), right: mirrored(n.left) }),
+    }
+}
+
+fn answer(which: i64, root: Option[TreeNode]) -> i64 {
+    if which == 0 {
+        diameter_of_binary_tree_star(root)
+    } else if which == 1 {
+        diameter_of_binary_tree_pair(root)
+    } else if which == 2 {
+        diameter_of_binary_tree_stack(root)
+    } else {
+        diameter_of_binary_tree_bfs(root)
+    }
+}
+
+fn main() {
+    let names = vec!["star", "pair", "stack", "bfs"];
+    let count = 1000;
+    let mut seed: i64 = 5430;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // Two trees of 1 to 40 nodes, leaning left with chance 50, 80 or
+        // 95 in 100 in turn.
+        let lean = if t % 3 == 0 { 50 } else if t % 3 == 1 { 80 } else { 95 };
+        let size = 1 + next_random(mut seed) % 40;
+        let tree = random_tree(size, lean, mut seed);
+        let other = random_tree(1 + next_random(mut seed) % 40, lean, mut seed);
+        let want = definition(tree);
+        let h = levels(tree);
+        let oh = levels(other);
+        for which in 0..4 {
+            let got = answer(which, tree);
+            let od = answer(which, other);
+            let above = Some(TreeNode { val: 0, left: tree, right: None });
+            let joined = Some(TreeNode { val: 0, left: tree, right: other });
+            let ok = vec![
+                got == want,
+                answer(which, mirrored(tree)) == got,
+                got <= size - 1 and got >= h - 1 and got <= 2 * (h - 1),
+                answer(which, above) == got.max(h),
+                answer(which, joined) == got.max(od).max(h + oh),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: {size} nodes, height {h}, got {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

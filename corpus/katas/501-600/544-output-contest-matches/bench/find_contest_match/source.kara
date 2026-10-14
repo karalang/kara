@@ -1,0 +1,39 @@
+// Benchmark for #544: Output Contest Matches -- the ★ arm (rounds, in
+// place).
+//
+// The teams start as the strings "1" to "n". Each round the i-th
+// strongest of the m left is paired with the i-th weakest, the pair
+// written over the i-th place. O(n log n) time for the copying.
+
+fn find_contest_match(n: i64) -> String {
+    let mut teams: Vec[String] = (1..n + 1).map(|t| f"{t}").collect();
+    let mut m = n;
+    while m > 1 {
+        for i in 0..m / 2 {
+            teams[i] = f"({teams[i]},{teams[m - 1 - i]})";
+        }
+        m /= 2;
+    }
+    teams[0].clone()
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn main() {
+    // 200 rounds over every size the problem allows, 2 to 4,096 teams;
+    // the length of each answer is summed, and one byte of it, picked
+    // by the round and the size, goes into the checksum.
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..200 {
+        let mut n = 2;
+        while n <= 4096 {
+            let s = find_contest_match(n);
+            let b = s.bytes()[(r * 7919 + n * 13) % s.len()] as i64;
+            total += s.len();
+            checksum = (checksum * 31 + b) % 1000000007;
+            n *= 2;
+        }
+    }
+    println(f"200 rounds of 2 to 4096 teams: {total} bytes, checksum {checksum}");
+}

@@ -1,0 +1,72 @@
+// LeetCode #544: Output Contest Matches -- the seeds' order, then the
+// brackets.
+//
+// The teams appear in the answer in a fixed order: starting from [1],
+// each round of doubling puts after every team t the team 2l + 1 - t
+// that it meets, l being the length so far. The brackets then depend
+// only on a team's place i: it opens one bracket for every block of 2,
+// 4, 8, ... teams that starts at i, which is the count of trailing zero
+// bits of i (all of them at 0), and closes one for every block ending
+// at i, the trailing zero bits of i + 1. O(n log n) time.
+
+fn find_contest_match(n: i64) -> String {
+    let mut order: Vec[i64] = vec![1];
+    while order.len() < n {
+        let l = order.len();
+        let mut next: Vec[i64] = Vec.new();
+        for t in order.iter() {
+            next.push(*t);
+            next.push(2 * l + 1 - *t);
+        }
+        order = next;
+    }
+    let mut out = String.new();
+    for i in 0..n {
+        let mut b = n;
+        while b > 1 and i % b != 0 {
+            b /= 2;
+        }
+        while b > 1 {
+            out.push('(');
+            b /= 2;
+        }
+        out.push_str(f"{order[i]}");
+        let mut b = n;
+        while b > 1 and (i + 1) % b != 0 {
+            b /= 2;
+        }
+        while b > 1 {
+            out.push(')');
+            b /= 2;
+        }
+        if i + 1 < n {
+            out.push(',');
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// A checksum over the bytes of a string.
+fn sum_of(s: Str) -> i64 {
+    let mut h = 0;
+    for b in s.bytes().iter() {
+        h = (h * 131 + *b as i64) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    // The examples and the next sizes in full; then every size the
+    // problem allows, up to 2^12 = 4096 teams, by length and checksum.
+    for n in [2, 4, 8, 16] {
+        println(f"{n} teams: {find_contest_match(n)}");
+    }
+    let mut n = 2;
+    while n <= 4096 {
+        let s = find_contest_match(n);
+        println(f"{n} teams: {s.len()} bytes, checksum {sum_of(s)}");
+        n *= 2;
+    }
+}

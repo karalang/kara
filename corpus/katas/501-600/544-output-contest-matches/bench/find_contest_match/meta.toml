@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/544-output-contest-matches/bench/find_contest_match.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "7af63998a"
+extracted_src = "17061cf8"
+model_rev = "1aa23105"
+model_src = "17061cf8"

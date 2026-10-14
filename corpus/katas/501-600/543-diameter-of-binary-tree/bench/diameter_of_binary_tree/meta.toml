@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/543-diameter-of-binary-tree/bench/diameter_of_binary_tree.kara"
+dedup_of = []
+expect = "panic:-6"
+exit = -6
+tags = ["shared", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -6
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "7af63998a"
+extracted_src = "14cc92f7"
+model_rev = "1aa23105"
+model_src = "14cc92f7"

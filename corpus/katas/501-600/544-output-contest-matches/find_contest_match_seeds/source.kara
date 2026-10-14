@@ -1,0 +1,46 @@
+// LeetCode #544: Output Contest Matches -- each group by its top seed.
+//
+// When k groups of m teams are left, the group whose best team is s
+// was made by joining the group with best team s and the one with
+// best team 2k + 1 - s, of m / 2 teams each, since the strongest of the
+// 2k groups before met the weakest. So the bracket is written
+// recursively from the top: the whole field is the group of 1 with n
+// teams. O(n log n) time for the strings.
+
+// The group of `m` teams, of `n` in all, whose best team is `s`.
+fn group(s: i64, m: i64, n: i64) -> String {
+    if m == 1 {
+        return f"{s}";
+    }
+    let k = n / m;
+    f"({group(s, m / 2, n)},{group(2 * k + 1 - s, m / 2, n)})"
+}
+
+fn find_contest_match(n: i64) -> String {
+    group(1, n, n)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// A checksum over the bytes of a string.
+fn sum_of(s: Str) -> i64 {
+    let mut h = 0;
+    for b in s.bytes().iter() {
+        h = (h * 131 + *b as i64) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    // The examples and the next sizes in full; then every size the
+    // problem allows, up to 2^12 = 4096 teams, by length and checksum.
+    for n in [2, 4, 8, 16] {
+        println(f"{n} teams: {find_contest_match(n)}");
+    }
+    let mut n = 2;
+    while n <= 4096 {
+        let s = find_contest_match(n);
+        println(f"{n} teams: {s.len()} bytes, checksum {sum_of(s)}");
+        n *= 2;
+    }
+}

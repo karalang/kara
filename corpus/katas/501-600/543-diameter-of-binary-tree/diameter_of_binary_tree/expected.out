@@ -1,0 +1,12 @@
+example 1: [1,2,3,4,5] -> 3
+example 2: [1,2] -> 1
+one node: [7] -> 0
+a left chain: [1,2,null,3,null,4] -> 3
+a zigzag: [1,null,2,3,null,null,4] -> 3
+the longest path misses the root: [1,2,3,4,5,null,null,6,null,null,7,8,null,null,9] -> 6
+a full tree of three levels: [-1,-2,-3,-4,-5,-6,-7] -> 4
+300 random trees: 11421 nodes, diameters 4541, checksum 189287857
+10000 nodes at random: 32
+10000 nodes down the left: 9999
+two chains of 10000 nodes: 9999
+a complete tree of 10000 nodes: 25

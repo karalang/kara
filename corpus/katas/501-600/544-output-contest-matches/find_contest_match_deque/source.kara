@@ -1,0 +1,47 @@
+// LeetCode #544: Output Contest Matches -- a deque per round.
+//
+// The teams of a round sit in a deque from strongest to weakest. Taking
+// the strongest off the front and the weakest off the back makes each
+// match in turn, and the matches, pushed in that order, are the next
+// round, strongest first. O(n log n) time.
+
+fn find_contest_match(n: i64) -> String {
+    let mut round: VecDeque[String] = VecDeque.new();
+    for t in 1..n + 1 {
+        round.push_back(f"{t}");
+    }
+    while round.len() > 1 {
+        let mut next: VecDeque[String] = VecDeque.new();
+        while let Some(a) = round.pop_front() {
+            let b = round.pop_back().unwrap();
+            next.push_back(f"({a},{b})");
+        }
+        round = next;
+    }
+    round.pop_front().unwrap()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// A checksum over the bytes of a string.
+fn sum_of(s: Str) -> i64 {
+    let mut h = 0;
+    for b in s.bytes().iter() {
+        h = (h * 131 + *b as i64) % 1000000007;
+    }
+    h
+}
+
+fn main() {
+    // The examples and the next sizes in full; then every size the
+    // problem allows, up to 2^12 = 4096 teams, by length and checksum.
+    for n in [2, 4, 8, 16] {
+        println(f"{n} teams: {find_contest_match(n)}");
+    }
+    let mut n = 2;
+    while n <= 4096 {
+        let s = find_contest_match(n);
+        println(f"{n} teams: {s.len()} bytes, checksum {sum_of(s)}");
+        n *= 2;
+    }
+}

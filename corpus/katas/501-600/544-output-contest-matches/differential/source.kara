@@ -1,0 +1,240 @@
+// Differential test for LeetCode #544: Output Contest Matches.
+//
+// Copies of the four arms, each held to the properties below for every
+// size the problem allows, 2 to 4,096 teams, a power of two.
+// Properties:
+//   P1  the answer is the reference's, the statement spelled out round
+//       by round
+//   P2  it reads as nested pairs, every team from 1 to n exactly once,
+//       the two sides of every pair the same size
+//   P3  in a pair of groups of c teams, the two best teams add to
+//       n / c + 1: the strongest of the groups left met the weakest
+//   P4  in every pair the side with the better best team comes first
+//   P5  every group's teams average (n + 1) / 2
+
+// ---- star: find_contest_match.kara
+
+fn find_contest_match_star(n: i64) -> String {
+    let mut teams: Vec[String] = (1..n + 1).map(|t| f"{t}").collect();
+    let mut m = n;
+    while m > 1 {
+        for i in 0..m / 2 {
+            teams[i] = f"({teams[i]},{teams[m - 1 - i]})";
+        }
+        m /= 2;
+    }
+    teams[0].clone()
+}
+
+// ---- deque: find_contest_match_deque.kara
+
+fn find_contest_match_deque(n: i64) -> String {
+    let mut round: VecDeque[String] = VecDeque.new();
+    for t in 1..n + 1 {
+        round.push_back(f"{t}");
+    }
+    while round.len() > 1 {
+        let mut next: VecDeque[String] = VecDeque.new();
+        while let Some(a) = round.pop_front() {
+            let b = round.pop_back().unwrap();
+            next.push_back(f"({a},{b})");
+        }
+        round = next;
+    }
+    round.pop_front().unwrap()
+}
+
+// ---- seeds: find_contest_match_seeds.kara
+
+fn group_seeds(s: i64, m: i64, n: i64) -> String {
+    if m == 1 {
+        return f"{s}";
+    }
+    let k = n / m;
+    f"({group_seeds(s, m / 2, n)},{group_seeds(2 * k + 1 - s, m / 2, n)})"
+}
+
+fn find_contest_match_seeds(n: i64) -> String {
+    group_seeds(1, n, n)
+}
+
+// ---- order: find_contest_match_order.kara
+
+fn find_contest_match_order(n: i64) -> String {
+    let mut order: Vec[i64] = vec![1];
+    while order.len() < n {
+        let l = order.len();
+        let mut next: Vec[i64] = Vec.new();
+        for t in order.iter() {
+            next.push(*t);
+            next.push(2 * l + 1 - *t);
+        }
+        order = next;
+    }
+    let mut out = String.new();
+    for i in 0..n {
+        let mut b = n;
+        while b > 1 and i % b != 0 {
+            b /= 2;
+        }
+        while b > 1 {
+            out.push('(');
+            b /= 2;
+        }
+        out.push_str(f"{order[i]}");
+        let mut b = n;
+        while b > 1 and (i + 1) % b != 0 {
+            b /= 2;
+        }
+        while b > 1 {
+            out.push(')');
+            b /= 2;
+        }
+        if i + 1 < n {
+            out.push(',');
+        }
+    }
+    out
+}
+
+// ---- the reference and the checks -------------------------------------------
+
+// The statement spelled out: each round a fresh list, the i-th strongest
+// left paired with the i-th weakest.
+fn reference(n: i64) -> String {
+    let mut round: Vec[String] = Vec.new();
+    for t in 1..n + 1 {
+        round.push(f"{t}");
+    }
+    while round.len() > 1 {
+        let m = round.len();
+        let mut next: Vec[String] = Vec.new();
+        for i in 0..m / 2 {
+            next.push(f"({round[i]},{round[m - 1 - i]})");
+        }
+        round = next;
+    }
+    round[0].clone()
+}
+
+struct Group {
+    count: i64,
+    best: i64,
+    total: i64,
+}
+
+struct Seen {
+    well_formed: bool,
+    sums: bool,
+    stronger_first: bool,
+    averages: bool,
+    seen: Vec[bool],
+}
+
+// Reads one group, a team or a bracketed pair, at byte `i`, and notes
+// on `st` every way it breaks the checks.
+fn parse(b: Slice[u8], i: mut ref i64, n: i64, st: mut ref Seen) -> Group {
+    if *i >= b.len() {
+        st.well_formed = false;
+        return Group { count: 0, best: 0, total: 0 };
+    }
+    if b[*i] == b'(' {
+        *i += 1;
+        let l = parse(b, i, n, st);
+        if *i >= b.len() or b[*i] != b',' {
+            st.well_formed = false;
+            return l;
+        }
+        *i += 1;
+        let r = parse(b, i, n, st);
+        if *i >= b.len() or b[*i] != b')' {
+            st.well_formed = false;
+            return l;
+        }
+        *i += 1;
+        if l.count != r.count or l.count == 0 {
+            st.well_formed = false;
+            return l;
+        }
+        if l.best + r.best != n / l.count + 1 {
+            st.sums = false;
+        }
+        if l.best > r.best {
+            st.stronger_first = false;
+        }
+        let g = Group { count: l.count + r.count, best: l.best.min(r.best), total: l.total + r.total };
+        if g.total * 2 != g.count * (n + 1) {
+            st.averages = false;
+        }
+        g
+    } else {
+        let start = *i;
+        let mut v = 0;
+        while *i < b.len() and b[*i] >= b'0' and b[*i] <= b'9' and v <= n {
+            v = v * 10 + (b[*i] - b'0') as i64;
+            *i += 1;
+        }
+        if *i == start or v < 1 or v > n {
+            st.well_formed = false;
+            return Group { count: 0, best: 0, total: 0 };
+        }
+        if st.seen[v] {
+            st.well_formed = false;
+        }
+        st.seen[v] = true;
+        Group { count: 1, best: v, total: v }
+    }
+}
+
+fn answer(which: i64, n: i64) -> String {
+    if which == 0 {
+        find_contest_match_star(n)
+    } else if which == 1 {
+        find_contest_match_deque(n)
+    } else if which == 2 {
+        find_contest_match_seeds(n)
+    } else {
+        find_contest_match_order(n)
+    }
+}
+
+fn main() {
+    let names = vec!["star", "deque", "seeds", "order"];
+    let mut cases = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    let mut n = 2;
+    while n <= 4096 {
+        cases += 1;
+        let want = reference(n);
+        for which in 0..4 {
+            let got = answer(which, n);
+            let mut st = Seen { well_formed: true, sums: true, stronger_first: true, averages: true, seen: vec![false; n + 1] };
+            let mut i = 0;
+            let root = parse(got.bytes(), mut i, n, mut st);
+            let ok = vec![
+                got == want,
+                st.well_formed and i == got.len() and root.count == n,
+                st.sums,
+                st.stronger_first,
+                st.averages,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        let shown = if got.len() > 60 { got[0..60].to_string() } else { got.clone() };
+                        println(f"FAIL P{p + 1} {names[which]}: {n} teams -> {shown}");
+                    }
+                }
+            }
+        }
+        n *= 2;
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{cases} sizes, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

@@ -1,0 +1,415 @@
+// Differential test for LeetCode #545: Boundary of Binary Tree.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random trees of 1 to 40 nodes holding 1 to n once each, leaning left
+// with chance 50, 80 or 95 in 100 in turn.
+// Properties:
+//   P1  the answer is the definition's, the statement read literally
+//   P2  the tree mirrored left to right gives the root and then the
+//       rest of the answer backwards
+//   P3  no node twice, and every leaf there
+//   P4  after the root, the nodes before the first leaf go down one
+//       level a step from depth 1, and those after the last leaf come
+//       back up one level a step to depth 1
+//   P5  between them come exactly the leaves, left to right
+
+// ---- star: boundary_of_binary_tree.kara
+
+fn is_leaf_star(n: TreeNode) -> bool {
+    n.left.is_none() and n.right.is_none()
+}
+
+fn leaves_star(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        if is_leaf_star(n) {
+            out.push(n.val);
+        } else {
+            leaves_star(n.left, out);
+            leaves_star(n.right, out);
+        }
+    }
+}
+
+fn boundary_of_binary_tree_star(root: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let Some(r) = root else {
+        return out;
+    };
+    out.push(r.val);
+    if is_leaf_star(r) {
+        return out;
+    }
+    let mut node = r.left;
+    while let Some(n) = node {
+        if is_leaf_star(n) {
+            break;
+        }
+        out.push(n.val);
+        node = if n.left.is_some() { n.left } else { n.right };
+    }
+    leaves_star(r.left, mut out);
+    leaves_star(r.right, mut out);
+    let mut right: Vec[i64] = Vec.new();
+    let mut node = r.right;
+    while let Some(n) = node {
+        if is_leaf_star(n) {
+            break;
+        }
+        right.push(n.val);
+        node = if n.right.is_some() { n.right } else { n.left };
+    }
+    for v in right.iter().rev() {
+        out.push(*v);
+    }
+    out
+}
+
+// ---- flags: boundary_of_binary_tree_flags.kara
+
+fn walk_flags(node: Option[TreeNode], on_left: bool, on_right: bool, out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        let leaf = n.left.is_none() and n.right.is_none();
+        if on_left or leaf {
+            out.push(n.val);
+        }
+        walk_flags(n.left, on_left, on_right and n.right.is_none(), out);
+        walk_flags(n.right, on_left and n.left.is_none(), on_right, out);
+        if on_right and not on_left and not leaf {
+            out.push(n.val);
+        }
+    }
+}
+
+fn boundary_of_binary_tree_flags(root: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if let Some(r) = root {
+        out.push(r.val);
+        walk_flags(r.left, true, false, mut out);
+        walk_flags(r.right, false, true, mut out);
+    }
+    out
+}
+
+// ---- stack: boundary_of_binary_tree_stack.kara
+
+fn boundary_of_binary_tree_stack(root: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let r = match root {
+        Some(r) => r,
+        None => return out,
+    };
+    out.push(r.val);
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(c) = r.right {
+        stack.push(c);
+    }
+    if let Some(c) = r.left {
+        stack.push(c);
+    }
+    if stack.is_empty() {
+        return out;
+    }
+    let mut node = r.left;
+    while let Some(n) = node {
+        if n.left.is_none() and n.right.is_none() {
+            break;
+        }
+        out.push(n.val);
+        node = if n.left.is_some() { n.left } else { n.right };
+    }
+    while let Some(n) = stack.pop() {
+        if n.left.is_none() and n.right.is_none() {
+            out.push(n.val);
+        }
+        if let Some(c) = n.right {
+            stack.push(c);
+        }
+        if let Some(c) = n.left {
+            stack.push(c);
+        }
+    }
+    let mut right: Vec[i64] = Vec.new();
+    let mut node = r.right;
+    while let Some(n) = node {
+        if n.left.is_none() and n.right.is_none() {
+            break;
+        }
+        right.push(n.val);
+        node = if n.right.is_some() { n.right } else { n.left };
+    }
+    while let Some(v) = right.pop() {
+        out.push(v);
+    }
+    out
+}
+
+// ---- mirror: boundary_of_binary_tree_mirror.kara
+
+fn mirrored_mirror(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirrored_mirror(n.right), right: mirrored_mirror(n.left) }),
+    }
+}
+
+fn left_side_mirror(r: TreeNode) -> (Vec[i64], Vec[i64]) {
+    let mut bound: Vec[i64] = Vec.new();
+    let mut node = r.left;
+    while let Some(n) = node {
+        if n.left.is_none() and n.right.is_none() {
+            break;
+        }
+        bound.push(n.val);
+        node = if n.left.is_some() { n.left } else { n.right };
+    }
+    let mut leaves: Vec[i64] = Vec.new();
+    let mut todo: Vec[TreeNode] = vec![r];
+    while let Some(n) = todo.pop() {
+        if n.left.is_none() and n.right.is_none() {
+            leaves.push(n.val);
+        }
+        if let Some(c) = n.right {
+            todo.push(c);
+        }
+        if let Some(c) = n.left {
+            todo.push(c);
+        }
+    }
+    (bound, leaves)
+}
+
+fn boundary_of_binary_tree_mirror(root: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if let Some(r) = root {
+        out.push(r.val);
+        if r.left.is_none() and r.right.is_none() {
+            return out;
+        }
+        let (left, leaves) = left_side_mirror(r);
+        let (right, _) = left_side_mirror(mirrored_mirror(root).unwrap());
+        out.extend(left);
+        out.extend(leaves);
+        for v in right.iter().rev() {
+            out.push(*v);
+        }
+    }
+    out
+}
+
+// ---- the tree and the definition --------------------------------------------
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree of `size` nodes holding 1 to `size`, each value once: each new
+// node walks down from the root, going left with chance lean / 100, and
+// takes the first empty place it meets.
+fn random_tree(size: i64, lean: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let root = leaf(1);
+    for v in 2..size + 1 {
+        let c = leaf(v);
+        let mut node = root;
+        loop {
+            if next_random(seed) % 100 < lean {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+fn mirrored(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirrored(n.right), right: mirrored(n.left) }),
+    }
+}
+
+// Each node's depth and whether it is a leaf, by value, and the leaves
+// in order from left to right.
+fn survey(node: Option[TreeNode], depth: i64, depths: mut ref Vec[i64], is_leaf: mut ref Vec[bool], leaves: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        depths[n.val] = depth;
+        if n.left.is_none() and n.right.is_none() {
+            is_leaf[n.val] = true;
+            leaves.push(n.val);
+        }
+        survey(n.left, depth + 1, depths, is_leaf, leaves);
+        survey(n.right, depth + 1, depths, is_leaf, leaves);
+    }
+}
+
+// The statement read literally: the root; the left boundary, the path
+// from the root's left child taking the left child when there is one,
+// with its leaf left off; the leaves that are not the root; the right
+// boundary the same way on the other side, bottom up.
+fn definition(root: TreeNode, size: i64) -> Vec[i64] {
+    let mut depths = vec![0; size + 1];
+    let mut is_leaf = vec![false; size + 1];
+    let mut leaves: Vec[i64] = Vec.new();
+    survey(Some(root), 0, mut depths, mut is_leaf, mut leaves);
+    let mut left: Vec[i64] = Vec.new();
+    let mut at = root.left;
+    while let Some(n) = at {
+        left.push(n.val);
+        at = if n.left.is_some() { n.left } else { n.right };
+    }
+    let mut right: Vec[i64] = Vec.new();
+    let mut at = root.right;
+    while let Some(n) = at {
+        right.push(n.val);
+        at = if n.right.is_some() { n.right } else { n.left };
+    }
+    let mut out = vec![root.val];
+    for v in left.iter() {
+        if not is_leaf[*v] {
+            out.push(*v);
+        }
+    }
+    for v in leaves.iter() {
+        if *v != root.val {
+            out.push(*v);
+        }
+    }
+    for v in right.iter().rev() {
+        if not is_leaf[*v] {
+            out.push(*v);
+        }
+    }
+    out
+}
+
+fn answer(which: i64, root: Option[TreeNode]) -> Vec[i64] {
+    if which == 0 {
+        boundary_of_binary_tree_star(root)
+    } else if which == 1 {
+        boundary_of_binary_tree_flags(root)
+    } else if which == 2 {
+        boundary_of_binary_tree_stack(root)
+    } else {
+        boundary_of_binary_tree_mirror(root)
+    }
+}
+
+fn main() {
+    let names = vec!["star", "flags", "stack", "mirror"];
+    let count = 1000;
+    let mut seed: i64 = 5450;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        let lean = if t % 3 == 0 { 50 } else if t % 3 == 1 { 80 } else { 95 };
+        let size = 1 + next_random(mut seed) % 40;
+        let tree = random_tree(size, lean, mut seed);
+        let root = tree.unwrap();
+        let want = definition(root, size);
+        let mut depths = vec![0; size + 1];
+        let mut is_leaf = vec![false; size + 1];
+        let mut leaves: Vec[i64] = Vec.new();
+        survey(tree, 0, mut depths, mut is_leaf, mut leaves);
+        for which in 0..4 {
+            let got = answer(which, tree);
+            // P2: the mirror's boundary is the root and then this one
+            // backwards.
+            let mut back = vec![root.val];
+            for k in (1..got.len()).rev() {
+                back.push(got[k]);
+            }
+            let back_ok = got.len() > 0 and answer(which, mirrored(tree)) == back;
+            // P3: every value at most once, every leaf there.
+            let mut seen = vec![0; size + 1];
+            let mut in_range = true;
+            for v in got.iter() {
+                if *v < 1 or *v > size {
+                    in_range = false;
+                } else {
+                    seen[*v] += 1;
+                }
+            }
+            let mut once = in_range;
+            for v in 1..size + 1 {
+                if seen[v] > 1 or (is_leaf[v] and seen[v] != 1) {
+                    once = false;
+                }
+            }
+            // P4 and P5 on the part after the root: inner nodes before the
+            // first leaf going down one level a step from depth 1, inner
+            // nodes after the last leaf coming up one level a step to depth
+            // 1, and between them exactly the leaves in order.
+            let mut slopes = in_range and got.len() > 0 and got[0] == root.val;
+            let mut leaves_ok = in_range;
+            if in_range and size > 1 {
+                let mut first = got.len();
+                let mut last = 0;
+                for k in 1..got.len() {
+                    if is_leaf[got[k]] {
+                        if first == got.len() {
+                            first = k;
+                        }
+                        last = k;
+                    }
+                }
+                for k in 1..first.min(got.len()) {
+                    if depths[got[k]] != k {
+                        slopes = false;
+                    }
+                }
+                for k in last + 1..got.len() {
+                    if depths[got[k]] != got.len() - k {
+                        slopes = false;
+                    }
+                }
+                if first == got.len() or last - first + 1 != leaves.len() {
+                    leaves_ok = false;
+                } else {
+                    for k in first..last + 1 {
+                        if got[k] != leaves[k - first] {
+                            leaves_ok = false;
+                        }
+                    }
+                }
+            }
+            let ok = vec![got == want, back_ok, once, slopes, leaves_ok];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: {size} nodes, got {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
