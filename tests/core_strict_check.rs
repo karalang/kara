@@ -3427,3 +3427,37 @@ fn main() {
         "cannot move 'a': it borrows its value",
     );
 }
+
+// B-2026-10-14-8 — a binding declared inside a closure body, used in a loop
+// there and moved after it, is not "moved inside a loop": each call makes it
+// afresh, so the moves are checked as any local's are. `collect()` into a
+// `String` or `Set` inside a closure desugars to exactly that shape. A move
+// that really is repeated by a loop inside the closure is still refused.
+#[test]
+fn closure_local_moved_after_its_loop_is_accepted() {
+    accepted(
+        "closure-local-after-loop",
+        "fn main() {\n\
+             let f = |n: i64| { let mut t = String.new(); for i in 0..n { t.push('x'); } t };\n\
+             println(f\"{f(2)}\");\n\
+         }\n",
+    );
+    accepted(
+        "closure-collect-string",
+        "fn main() {\n\
+             let words: Vec[String] = vec![\"ab\".to_string(), \"cd\".to_string()];\n\
+             let r: Vec[String] = words.iter().map(|w| { let s: String = w.chars().rev().collect(); s }).collect();\n\
+             let f = |w: String| { let s: Set[char] = w.chars().collect(); s.len() };\n\
+             println(f\"{r} {f(\"aab\".to_string())}\");\n\
+         }\n",
+    );
+    rejected_then_fixed(
+        "closure-local-moved-in-loop",
+        "fn take(s: own String) -> i64 { s.len() }\n\
+         fn main() {\n\
+             let f = |n: i64| { let t = String.from(\"ab\"); let mut k = 0; for i in 0..n { k += take(t); } k };\n\
+             println(f\"{f(2)}\");\n\
+         }\n",
+        "value 't' is moved inside a loop and not assigned again",
+    );
+}

@@ -292,6 +292,18 @@ fn first_witness(
     cfg: &Cfg,
     dom: &DominatorTree,
 ) -> Option<RcWitness> {
+    // B-2026-10-14-8: a binding declared INSIDE a closure body (every site
+    // of it, its `Define` included, sits in closure-body blocks) is made
+    // afresh by each invocation, so the CFG edges within the body do model
+    // whether one of its sites can run after another. The closure gates
+    // below exist for a CAPTURED binding, whose body runs at an invocation
+    // the edges do not show; a closure-local takes the directional check
+    // like any other local.
+    let closure_local = uses.iter().any(|(_, _, u)| u.kind == UseKind::Define)
+        && uses
+            .iter()
+            .all(|(b, _, _)| cfg.closure_body_blocks.contains(b));
+    let outside_closures = |b: &BlockId| closure_local || !cfg.closure_body_blocks.contains(b);
     for (i, (cb, ci, c)) in uses.iter().enumerate() {
         if c.kind != UseKind::Consume {
             continue;
@@ -405,8 +417,8 @@ fn first_witness(
             // invocation, which CFG edges do not model, so reachability carries
             // no information about whether the two sites can both execute.
             if c.consume_origin == ConsumeOrigin::Direct
-                && !cfg.closure_body_blocks.contains(cb)
-                && !cfg.closure_body_blocks.contains(ub)
+                && outside_closures(cb)
+                && outside_closures(ub)
                 && !cfg_reaches(cfg, *cb, *ub)
             {
                 continue;
