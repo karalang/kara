@@ -235,6 +235,87 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(())
     }
 
+    /// `format` without the runtime's format buffer, when its pieces
+    /// allow: text pieces alone (literal text and `str` or `String` holes)
+    /// as one exact allocation and a copy of each piece, and one integer
+    /// as its digits. False, with nothing emitted, for any other pieces.
+    fn format_direct(&mut self, args: &[Operand], dest: &Place) -> R<bool> {
+        let text = |cx: &Self, t: Ty| {
+            matches!(
+                cx.tys.kind(t),
+                TyKind::Str | TyKind::Intrinsic(IntrinsicTy::String)
+            )
+        };
+        let mut all_text = true;
+        for a in args {
+            let t = self.operand_type(a)?;
+            all_text &= match self.tys.kind(t) {
+                TyKind::Ref(i) | TyKind::MutRef(i) => text(self, i),
+                _ => text(self, t),
+            };
+        }
+        if !all_text {
+            let [a] = args else { return Ok(false) };
+            let t = self.operand_type(a)?;
+            let TyKind::Int(i) = self.tys.kind(t) else {
+                return Ok(false);
+            };
+            if matches!(i, IntTy::I128 | IntTy::U128) {
+                return Ok(false);
+            }
+            let v = self.operand_scalar(a)?.into_int_value();
+            let w = self
+                .builder
+                .build_int_cast_sign_flag(v, self.llcx.i64_type(), i.signed(), "")
+                .map_err(e)?;
+            let d = self.place_ptr(dest)?;
+            let f = if i.signed() {
+                "string_of_i64"
+            } else {
+                "string_of_u64"
+            };
+            self.rt(f, &[d.into(), w.into()])?;
+            return Ok(true);
+        }
+        let mut parts = Vec::with_capacity(args.len());
+        let mut total = self.i64(0);
+        for a in args {
+            let (p, n) = self.str_parts(a)?;
+            total = self.builder.build_int_add(total, n, "").map_err(e)?;
+            parts.push((p, n));
+        }
+        // At least one byte, so the capacity is never 0 and the block is
+        // freed with the `String`.
+        let one = self.i64(1);
+        let big = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, total, one, "")
+            .map_err(e)?;
+        let room = self
+            .builder
+            .build_select(big, total, one, "")
+            .map_err(e)?
+            .into_int_value();
+        let malloc = self.libc_fn("malloc");
+        let buf = self
+            .builder
+            .build_call(malloc, &[room.into()], "text")
+            .map_err(e)?
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let mut at = buf;
+        for (p, n) in parts {
+            self.builder.build_memcpy(at, 1, p, 1, n).map_err(e)?;
+            at = self.elem_ptr(at, n, 1)?;
+        }
+        let d = self.place_ptr(dest)?;
+        self.store(d, buf.into())?;
+        self.store(self.offset(d, 8)?, total.into())?;
+        self.store(self.offset(d, 16)?, room.into())?;
+        Ok(true)
+    }
+
     /// The `{ptr, len}` of a `str`, `ref str` or `String` operand.
     pub(super) fn str_parts(
         &mut self,
@@ -481,6 +562,9 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.drop_moved(args)
             }
             ("format", "") | (_, "to_string") if method != "to_string" || args.len() == 1 => {
+                if base == "format" && self.format_direct(args, dest)? {
+                    return self.drop_moved(args);
+                }
                 self.rt("fmt_begin", &[])?;
                 self.fmt_args(args)?;
                 let d = self.place_ptr(dest)?;

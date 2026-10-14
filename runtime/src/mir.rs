@@ -289,6 +289,34 @@ unsafe fn string_of(out: *mut RawVec, b: &[u8]) {
     };
 }
 
+/// `f"{v}"` for a signed integer `v`, as a `String` at `out`.
+///
+/// # Safety
+/// `out` is writable for a `String`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_string_of_i64(out: *mut RawVec, v: i64) {
+    let mut d = [0u8; 20];
+    let mut i = digits(v.unsigned_abs(), &mut d);
+    if v < 0 {
+        i -= 1;
+        d[i] = b'-';
+    }
+    // SAFETY: the caller's contract.
+    unsafe { string_of(out, &d[i..]) };
+}
+
+/// `f"{v}"` for an unsigned integer `v`, as a `String` at `out`.
+///
+/// # Safety
+/// `out` is writable for a `String`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_string_of_u64(out: *mut RawVec, v: u64) {
+    let mut d = [0u8; 20];
+    let i = digits(v, &mut d);
+    // SAFETY: the caller's contract.
+    unsafe { string_of(out, &d[i..]) };
+}
+
 /// `String.from(s)`: a copy of the `str` `ptr[..len]`.
 ///
 /// # Safety
@@ -2591,13 +2619,12 @@ mod tests {
         // SAFETY: the runtime wrote `len` bytes at `ptr`, from `malloc`.
         let s = unsafe { std::slice::from_raw_parts(out.ptr, out.len) }.to_vec();
         // SAFETY: as above.
-        unsafe { libc_free(out.ptr) };
+        unsafe { free(out.ptr.cast()) };
         String::from_utf8(s).unwrap()
     }
 
     extern "C" {
-        #[link_name = "free"]
-        fn libc_free(p: *mut u8);
+        fn free(ptr: *mut core::ffi::c_void);
     }
 
     /// Formats nest on the one buffer: an inner format ends with its own
