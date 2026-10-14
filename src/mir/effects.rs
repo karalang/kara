@@ -794,6 +794,17 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("File", "read" | "read_line" | "read_to_string") => {
             vec![(Reads, "File", Some(0)), (Blocks, "", None)]
         }
+        // A buffered reader or writer is keyed like the file it took; a
+        // `LinesIter`'s `next` reads its reader, and a read appends to a
+        // `String`. Making one, `lines()` and `consume` touch no file.
+        ("BufReader" | "BufWriter", "new" | "with_capacity") => vec![HEAP],
+        ("BufReader", "read" | "read_line" | "read_to_string") | ("LinesIter", "next") => {
+            vec![(Reads, "File", Some(0)), (Blocks, "", None), HEAP]
+        }
+        ("BufReader", "lines" | "consume") => vec![],
+        ("BufWriter", "write" | "write_all" | "flush") => {
+            vec![(Writes, "File", Some(0)), (Blocks, "", None)]
+        }
         // Starting, waiting on or killing a child sends to the process
         // table (`sends(ProcessTable)` in the library); a call on one child
         // is keyed by it, so two children's waits do not conflict. Its pipes

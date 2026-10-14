@@ -3358,13 +3358,18 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// `Option[t]`.
     fn option_of(&mut self, t: Ty) -> Option<Ty> {
+        self.enum_of("Option", &[t])
+    }
+
+    /// The enum named `name`, applied to `args`.
+    fn enum_of(&mut self, name: &str, args: &[Ty]) -> Option<Ty> {
         let table = &self.lcx.defs.table;
         let d = (0..table.len() as u32).map(DefId).find(|&d| {
             let e = table.get(d);
-            e.kind == DefKind::Enum && e.path.segments.last().is_some_and(|s| s == "Option")
+            e.kind == DefKind::Enum && e.path.segments.last().is_some_and(|s| s == name)
         })?;
         self.lcx.register_adt(d).ok()?;
-        Some(self.tys().tcx().adt(d, &[t]))
+        Some(self.tys().tcx().adt(d, args))
     }
 
     /// An operand that reads through a projection (`copy (*_r)`, where `_r`
@@ -7230,6 +7235,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             if let Some(next) = self.iterator_next(iterable)? {
                 return self.for_iterator(label, pattern, iterable, next, body, dest);
             }
+            if let Some(next) = self.native_next(iterable)? {
+                return self.for_iterator(label, pattern, iterable, next, body, dest);
+            }
         }
         // `for (i, x) in c.iter().enumerate()`: the loop over `c`, with `i`
         // bound to the position.
@@ -8412,6 +8420,47 @@ impl<'l, 'a> Bx<'l, 'a> {
         };
         let name = self.lcx.instance(d, args.clone());
         Ok(Some((d, args, name, ret)))
+    }
+
+    /// The library's `LinesIter` (`BufReader.lines()`, docs/library/io.md §
+    /// Buffered I/O): its `next` is the native `LinesIter.next`, typed by
+    /// its `#[compiler_builtin]` signature.
+    fn native_next(&mut self, iterable: &'a Expr) -> R<Option<NextFn>> {
+        let before = self.errors.len();
+        let Ok(t) = self.expr_ty(iterable) else {
+            self.errors.truncate(before);
+            return Ok(None);
+        };
+        let tcx = self.tys().tcx();
+        let HK::Adt { def, .. } = tcx.kind(t) else {
+            return Ok(None);
+        };
+        if !tcx.adt_of(t).is_some_and(|(a, _)| a.name == "LinesIter") {
+            return Ok(None);
+        }
+        if !self
+            .lcx
+            .defs
+            .methods
+            .get(&def)
+            .is_some_and(|m| m.contains_key("next"))
+        {
+            return Ok(None);
+        }
+        let string = self.tys().tcx().intern(HK::Str);
+        let ret = self
+            .enum_of("IoError", &[])
+            .and_then(|io| self.enum_of("Result", &[string, io]))
+            .and_then(|r| self.option_of(r));
+        let Some(ret) = ret else {
+            return self.unsupported(iterable.span, "a `LinesIter` without its library types");
+        };
+        Ok(Some((
+            DefId(u32::MAX),
+            Vec::new(),
+            "LinesIter.next".into(),
+            ret,
+        )))
     }
 
     /// `for pattern in it` over an `Iterator`: the loop owns `it` and calls
@@ -9599,6 +9648,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // stored value (`Log.set_exporter(e)`) go by value, the
                     // rest by reference.
                     let stores = stores_argument(&name);
+                    // A library handle declared `own` moves in, as into a
+                    // library method (`BufReader.new(file)` keeps the file).
+                    let owns = self
+                        .lcx
+                        .def_owner(d)
+                        .and_then(|o| self.lcx.builtin_owns.get(&(o.to_string(), name.clone())))
+                        .cloned()
+                        .unwrap_or_default();
                     let name = match (self.lcx.def_owner(d), inst_args.is_empty()) {
                         (Some(owner), true) => format!("{owner}.{name}"),
                         (Some(owner), false) => {
@@ -9612,10 +9669,21 @@ impl<'l, 'a> Bx<'l, 'a> {
                         (None, _) => name,
                     };
                     let mut ops = Vec::new();
-                    for a in args {
+                    for (i, a) in args.iter().enumerate() {
                         let t = self.expr_ty(&a.value)?;
+                        // (A library handle only, for now: the other
+                        // natives read what they are declared to own
+                        // through a borrow.)
+                        let declared_own = owns.get(i).copied().unwrap_or(false) && {
+                            let (_, b) = self.strip_ty_full(t);
+                            self.tys()
+                                .tcx()
+                                .adt_of(b)
+                                .is_some_and(|(a, _)| crate::ty::HANDLES.contains(&a.name.as_str()))
+                        };
                         // A closure moves in, as into a library method.
                         let moves = stores
+                            || declared_own
                             || self.is_fn_typed(a.value.id)
                             || matches!(a.value.kind, ExprKind::Closure { .. });
                         let by_ref = !moves && !self.is_copy(t);

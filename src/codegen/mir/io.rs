@@ -52,6 +52,9 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<Option<()>> {
         match (base, method) {
             ("File", _) => self.file_native(method, args, dest),
+            ("BufReader" | "BufWriter" | "LinesIter", _) => {
+                self.buf_native(base, method, args, dest)
+            }
             ("Command", "spawn") => self.spawn_native(args, dest).map(Some),
             ("Child" | "ChildStdout" | "ChildStderr" | "ChildStdin", _) => {
                 self.child_native(base, method, args, dest)
@@ -141,6 +144,143 @@ impl<'ctx> Cx<'ctx, '_> {
             args,
             dest,
         )?;
+        Ok(Some(()))
+    }
+
+    /// `BufReader` / `BufWriter` and a `LinesIter`'s `next`, through
+    /// `karac_mir_buf(op, handle, ptr, len, value, msg)`, as the
+    /// interpreter's `buf_method`. A `LinesIter` is its reader's handle,
+    /// which it borrows.
+    fn buf_native(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let op: u64 = match (base, method) {
+            ("BufReader", "new" | "with_capacity") => 0,
+            ("BufWriter", "new" | "with_capacity") => 1,
+            ("BufReader", "read_line") => 2,
+            ("BufReader", "read_to_string") => 3,
+            ("BufReader", "read") => 4,
+            ("LinesIter", "next") => 5,
+            ("BufWriter", "write") => 6,
+            ("BufWriter", "write_all") => 7,
+            ("BufWriter", "flush") => 8,
+            ("BufReader", "consume") => 9,
+            ("BufReader", "lines") => {
+                let (at, _) = self.behind_refs(&args[0])?;
+                let h = self.load_ptr(at)?;
+                let d = self.place_ptr(dest)?;
+                self.store(d, h.into())?;
+                return Ok(Some(()));
+            }
+            _ => return Ok(None),
+        };
+        let null = self.ptr_ty().const_null();
+        let zero = self.i64(0);
+        let i32t = self.llcx.i32_type();
+        let opv = i32t.const_int(op, false);
+        if op <= 1 {
+            // The `File` moves in and the runtime takes it, so nothing
+            // drops it here.
+            let f = self.operand_ptr(&args[0])?;
+            let file = self.load_ptr(f)?;
+            let cap = match args.get(1) {
+                Some(a) => {
+                    let p = self.operand_ptr(a)?;
+                    self.load_i64(p)?
+                }
+                None => zero,
+            };
+            let value = self.entry_slot(8, "buf.handle")?;
+            self.rt_int(
+                "buf",
+                &[
+                    opv.into(),
+                    file.into(),
+                    null.into(),
+                    cap.into(),
+                    value.into(),
+                    null.into(),
+                ],
+                32,
+            )?;
+            let h = self.load_i64(value)?;
+            let d = self.place_ptr(dest)?;
+            self.store(d, h.into())?;
+            return Ok(Some(()));
+        }
+        let (at, _) = self.behind_refs(&args[0])?;
+        let handle = self.load_ptr(at)?;
+        let (ptr, len) = match op {
+            2 | 3 => {
+                let (s, _) = self.behind_refs(&args[1])?;
+                (s, zero)
+            }
+            4 | 6 | 7 => self.view_of(&args[1])?,
+            9 => {
+                let p = self.operand_ptr(&args[1])?;
+                (null, self.load_i64(p)?)
+            }
+            _ => (null, zero),
+        };
+        if op == 9 {
+            let value = self.entry_slot(8, "buf.value")?;
+            self.rt_int(
+                "buf",
+                &[
+                    opv.into(),
+                    handle.into(),
+                    ptr.into(),
+                    len.into(),
+                    value.into(),
+                    null.into(),
+                ],
+                32,
+            )?;
+            return Ok(Some(()));
+        }
+        let call = [opv.into(), handle.into(), ptr.into(), len.into()];
+        if op != 5 {
+            self.io_call("buf", &call, args, dest)?;
+            return Ok(Some(()));
+        }
+        // `next`: `None` at the end (`-2`), else `Some` of the line's
+        // `Result`.
+        let value = self.entry_slot(8, "io.value")?;
+        let msg = self.temp(
+            self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String)),
+            "io.msg",
+        )?;
+        let mut all = call.to_vec();
+        all.push(value.into());
+        all.push(msg.into());
+        let code = self.rt_int("buf", &all, 32)?;
+        let dty = self.place_type(dest)?;
+        let d = self.place_ptr(dest)?;
+        let (some, none) = self.option_variants(dty)?;
+        let rt = self
+            .tys
+            .field_ty(dty, Some(some), 0)
+            .ok_or("an option without a payload")?;
+        let off = self.field_offset(dty, Some(some), 0)?;
+        let more = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                code,
+                i32t.const_int((-2i64) as u64, true),
+                "",
+            )
+            .map_err(e)?;
+        self.store_tag(d, dty, none)?;
+        self.if_then(more, |cx| {
+            let q = cx.offset(d, off)?;
+            cx.store_io_result_at(q, rt, code, value, msg)?;
+            cx.store_tag(d, dty, some)
+        })?;
         Ok(Some(()))
     }
 
@@ -305,6 +445,18 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<()> {
         let dty = self.place_type(dest)?;
         let d = self.place_ptr(dest)?;
+        self.store_io_result_at(d, dty, code, value, msg)
+    }
+
+    /// [`Self::store_io_result`] at `d`, a `Result` of type `dty`.
+    fn store_io_result_at(
+        &mut self,
+        d: PointerValue<'ctx>,
+        dty: Ty,
+        code: IntValue<'ctx>,
+        value: PointerValue<'ctx>,
+        msg: PointerValue<'ctx>,
+    ) -> R<()> {
         let (ok, er) = (self.variant_of(dty, "Ok")?, self.variant_of(dty, "Err")?);
         let okt = self
             .tys

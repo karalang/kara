@@ -293,6 +293,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_deque_alloc,
         mir::karac_mir_fs,
         mir_io::karac_mir_file,
+        mir_io::karac_mir_buf,
+        mir_io::karac_mir_buf_free,
         mir_io::karac_mir_process_spawn,
         mir_io::karac_mir_process,
         mir::karac_mir_fmt_spec,

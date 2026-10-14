@@ -816,3 +816,104 @@ fn file_and_socket_functions_take_str() {
         assert_eq!(built, interp);
     }
 }
+
+/// B-2026-10-14-45 — `BufReader` / `BufWriter` (docs/library/io.md §
+/// Buffered I/O): `read_line` appends and counts in `i64`, `for line in
+/// r.lines()` drops the `\n` / `\r\n` and stops at the end (or a `break`),
+/// a bad line is `Err(InvalidUtf8)` and the next one still reads, `?` on
+/// the `File` inside the constructor, a small capacity, `read` / `consume`
+/// / `read_to_string`, and a `BufWriter` that flushes when it drops.
+const BUFFERED: &str = r#"fn count(path: Str) -> Result[i64, IoError] {
+    let mut n = 0;
+    for line in BufReader.new(File.open(path)?).lines() {
+        let l = line?;
+        if l == "stop" { break; }
+        n += l.len() as i64;
+    }
+    Ok(n)
+}
+fn main() {
+    let t = "DIR/t.txt";
+    match fs.write(t, "a\nb\r\nc") { Ok(_) => {}, Err(_) => println("w") }
+    match File.open(t) {
+        Ok(f) => {
+            let r = BufReader.with_capacity(f, 2);
+            let mut s = String.new();
+            let n: i64 = r.read_line(mut s).unwrap_or(-1);
+            println(f"{n} [{s.trim()}]");
+            for line in r.lines() {
+                match line { Ok(l) => println(f"<{l}>"), Err(_) => println("e") }
+            }
+        }
+        Err(_) => println("open"),
+    }
+    let u = "DIR/u.txt";
+    match File.create(u) {
+        Ok(f) => {
+            let w = BufWriter.with_capacity(f, 4);
+            match w.write_all("hi\n".bytes()) { Ok(_) => {}, Err(_) => println("e") }
+            let n: i64 = w.write("there\n".bytes()).unwrap_or(-1);
+            println(f"wrote {n}");
+            match w.flush() { Ok(_) => {}, Err(_) => println("e") }
+            let _ = w.write_all("tail\n".bytes());
+        }
+        Err(_) => println("create"),
+    }
+    print(fs.read_to_string(u).unwrap_or(String.new()));
+    match File.open(u) {
+        Ok(f) => {
+            let r = BufReader.new(f);
+            let mut buf: Vec[u8] = vec![0; 3];
+            let n = r.read(mut buf).unwrap_or(-1);
+            println(f"read {n} {buf[0]}");
+            r.consume(1);
+            let mut rest = String.new();
+            let k = r.read_to_string(mut rest).unwrap_or(-1);
+            print(f"{k} [{rest}]\n");
+        }
+        Err(_) => println("open2"),
+    }
+    let v = "DIR/v.txt";
+    match fs.write(v, "ab\ncde\nstop\nzzzz\n") { Ok(_) => {}, Err(_) => println("w") }
+    println(f"{count(v).unwrap_or(-1)}");
+    match count("DIR/missing.txt") {
+        Ok(_) => println("?"),
+        Err(IoError.NotFound) => println("notfound"),
+        Err(_) => println("other"),
+    }
+    let b = "DIR/bad.txt";
+    match File.create(b) {
+        Ok(f) => {
+            let w = BufWriter.new(f);
+            let _ = w.write_all(vec![104u8, 255u8, 10u8, 105u8].as_slice());
+        }
+        Err(_) => println("c"),
+    }
+    match File.open(b) {
+        Ok(f) => {
+            for line in BufReader.new(f).lines() {
+                match line {
+                    Ok(l) => println(f"ok {l}"),
+                    Err(IoError.InvalidUtf8) => println("utf8"),
+                    Err(_) => println("err"),
+                }
+            }
+        }
+        Err(_) => println("o"),
+    }
+}
+"#;
+
+#[test]
+fn buffered_readers_and_writers_run() {
+    let dir = Scratch::new("buffered");
+    let src = BUFFERED.replace("DIR", &dir.path().to_string_lossy());
+    let (interp, built) = interp_and_build(dir.path(), &src);
+    assert_eq!(
+        interp,
+        "2 [a]\n<b>\n<c>\nwrote 6\nhi\nthere\ntail\nread 3 104\n10 [here\ntail\n]\n5\nnotfound\nutf8\nok i\n"
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}

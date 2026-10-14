@@ -70,6 +70,9 @@ const LIBRARY_CELLS: &[(&str, CellDrop)] = &[
     ("Sender", CellDrop::Free("karac_mir_chan_drop_sender")),
     ("Receiver", CellDrop::Free("karac_mir_chan_drop_receiver")),
     ("File", CellDrop::Free("karac_runtime_file_close")),
+    // A `BufWriter` flushes first, ignoring a failure.
+    ("BufReader", CellDrop::Free("karac_mir_buf_free")),
+    ("BufWriter", CellDrop::Free("karac_mir_buf_free")),
     ("CString", CellDrop::Free("karac_mir_cstring_free")),
     ("Interner", CellDrop::Free("karac_mir_interner_free")),
     ("OnceLock", CellDrop::Once),

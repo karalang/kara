@@ -590,6 +590,7 @@ fn run_with(
         arenas: 0,
         channels: Vec::new(),
         files: Vec::new(),
+        bufs: Vec::new(),
         procs: Procs::default(),
         sockets: Sockets::default(),
         pools: Vec::new(),
@@ -888,6 +889,8 @@ struct Interp<'a> {
     channels: Vec<Chan>,
     /// The open files behind `File` values, by id - 1; `None` once closed.
     files: Vec<Option<std::fs::File>>,
+    /// The `BufReader`s and `BufWriter`s, by id - 1; `None` once dropped.
+    bufs: Vec<Option<Buf>>,
     /// The children `Command.spawn` started and their taken pipes, by
     /// pid, as the runtime's `process.rs` keeps them.
     procs: Procs,
@@ -1579,6 +1582,9 @@ impl<'a> Interp<'a> {
                 self.channel_method(name, base, method, args, arg_tys, ret)
             }
             ("File", _) => self.file_method(name, method, args, arg_tys, ret),
+            ("BufReader" | "BufWriter" | "LinesIter", _) => {
+                self.buf_method(name, base, method, args, ret)
+            }
             ("Command", "spawn") | ("Child" | "ChildStdout" | "ChildStderr" | "ChildStdin", _) => {
                 self.process_method(name, base, method, args, arg_tys, ret)
             }
@@ -3836,6 +3842,146 @@ impl<'a> Interp<'a> {
         if let Some(i) = slot {
             self.files[i] = Some(f);
         }
+        match res {
+            Ok(v) => self.variant_named(ret, None, "Ok", vec![v]),
+            Err(e) => self.io_err(ret, e),
+        }
+    }
+
+    /// `BufReader` / `BufWriter` (docs/library/io.md § Buffered I/O): an id
+    /// into `bufs`, wrapping the `File` its constructor took out of `files`,
+    /// closed (a writer flushed first) when it drops. A `LinesIter` holds
+    /// its reader's id and owns nothing.
+    fn buf_method(
+        &mut self,
+        name: &str,
+        base: &str,
+        method: &str,
+        args: Vec<Value>,
+        ret: Ty,
+    ) -> R<Value> {
+        if let ("new" | "with_capacity", [file, rest @ ..]) = (method, args.as_slice()) {
+            let id = self.chan_id(Some(file), name)?;
+            let f = usize::try_from(id - 1)
+                .ok()
+                .and_then(|i| self.files.get_mut(i))
+                .and_then(Option::take)
+                .ok_or_else(|| Stop::Error(format!("{name} of a closed file")))?;
+            let cap = match rest {
+                [Value::Int(n)] if *n > 0 => *n as usize,
+                _ => 8192,
+            };
+            self.bufs.push(Some(if base == "BufReader" {
+                Buf::Reader(std::io::BufReader::with_capacity(cap, f))
+            } else {
+                Buf::Writer(std::io::BufWriter::with_capacity(cap, f))
+            }));
+            return Ok(Value::Agg(vec![Value::Int(self.bufs.len() as i128)]));
+        }
+        let id = self.chan_id(args.first(), name)?;
+        if method == "lines" {
+            return Ok(Value::Agg(vec![Value::Int(id)]));
+        }
+        let slot = usize::try_from(id - 1).ok();
+        let Some(Some(mut b)) = slot.and_then(|i| self.bufs.get_mut(i)).map(Option::take) else {
+            return err(format!("{name} of a closed reader or writer"));
+        };
+        let res = self.buf_op(name, method, &mut b, &args[1..], ret);
+        if let Some(i) = slot {
+            self.bufs[i] = Some(b);
+        }
+        res
+    }
+
+    /// One call of [`Self::buf_method`] on the buffered handle `b`.
+    fn buf_op(
+        &mut self,
+        name: &str,
+        method: &str,
+        b: &mut Buf,
+        args: &[Value],
+        ret: Ty,
+    ) -> R<Value> {
+        use std::io::{BufRead, Read, Write};
+        let res = match (method, b, args) {
+            ("read_line" | "read_to_string", Buf::Reader(r), [buf]) => {
+                let mut s = String::new();
+                let got = if method == "read_line" {
+                    r.read_line(&mut s)
+                } else {
+                    r.read_to_string(&mut s)
+                };
+                if got.is_ok() {
+                    let id = self.box_behind(buf)?;
+                    match &mut self.live(id)?.value {
+                        Value::Str(text) => text.push_str(&s),
+                        other => return err(format!("{name} into {other:?}")),
+                    }
+                }
+                got.map(|n| Value::Int(n as i128))
+            }
+            ("read", Buf::Reader(r), [buf]) => {
+                let (base, lo, len) = self.view_of(buf)?;
+                let mut bytes = vec![0u8; len as usize];
+                r.read(&mut bytes).map(|n| {
+                    for (i, b) in bytes[..n].iter().enumerate() {
+                        let at = base.child(lo + i as u64);
+                        if let Ok(v) = self.slot_mut(&at) {
+                            *v = Value::Int(i128::from(*b));
+                        }
+                    }
+                    Value::Int(n as i128)
+                })
+            }
+            ("consume", Buf::Reader(r), [Value::Int(n)]) => {
+                r.consume((*n).max(0) as usize);
+                return Ok(Value::Unit);
+            }
+            // A `LinesIter`'s `next`: the line without its `\n` / `\r\n`,
+            // `None` at the end.
+            ("next", Buf::Reader(r), []) => {
+                let mut s = String::new();
+                let inner = self
+                    .tys
+                    .tcx()
+                    .adt_of(ret)
+                    .and_then(|(adt, _)| adt.variants.iter().position(|v| v.name == "Some"))
+                    .and_then(|k| self.tys.field_ty(ret, Some(k as u32), 0))
+                    .ok_or_else(|| Stop::Error(format!("{name} returns no `Option`")))?;
+                let item = match r.read_line(&mut s) {
+                    Ok(0) => return self.option(ret, None),
+                    Ok(_) => {
+                        if s.ends_with('\n') {
+                            s.pop();
+                            if s.ends_with('\r') {
+                                s.pop();
+                            }
+                        }
+                        let line = self.alloc_box("String", Value::Str(s));
+                        self.variant_named(inner, None, "Ok", vec![line])?
+                    }
+                    Err(e) => self.io_err(inner, e)?,
+                };
+                return self.option(ret, Some(item));
+            }
+            ("write" | "write_all", Buf::Writer(w), [buf]) => {
+                let (base, lo, len) = self.view_of(buf)?;
+                let mut bytes = Vec::with_capacity(len as usize);
+                for i in 0..len {
+                    match self.slot(&base.child(lo + i))? {
+                        Value::Int(b) => bytes.push(b as u8),
+                        other => return err(format!("{name} of a byte holding {other:?}")),
+                    }
+                }
+                if method == "write" {
+                    w.write(&bytes).map(|n| Value::Int(n as i128))
+                } else {
+                    w.write_all(&bytes).map(|()| Value::Unit)
+                }
+            }
+            ("flush", Buf::Writer(w), []) => w.flush().map(|()| Value::Unit),
+            _ => return err(format!("call of unknown function {name}")),
+        };
         match res {
             Ok(v) => self.variant_named(ret, None, "Ok", vec![v]),
             Err(e) => self.io_err(ret, e),
@@ -8507,10 +8653,21 @@ impl<'a> Interp<'a> {
         let first = match adt.name.as_str() {
             // A `CString` holds its bytes as values.
             "Atomic" | "CString" | "Interner" => return Ok(()),
-            "Sender" | "Receiver" | "File" => {
+            "Sender" | "Receiver" | "File" | "BufReader" | "BufWriter" => {
                 if let Value::Agg(fs) = self.slot(addr)? {
                     if let [Value::Int(id)] = fs.as_slice() {
                         let id = *id;
+                        // A `BufWriter`'s own drop flushes, ignoring a
+                        // failure (docs/library/io.md § Buffered I/O).
+                        if adt.name.starts_with("Buf") {
+                            if let Some(b) = usize::try_from(id - 1)
+                                .ok()
+                                .and_then(|i| self.bufs.get_mut(i))
+                            {
+                                *b = None;
+                            }
+                            return Ok(());
+                        }
                         if adt.name == "File" {
                             if let Some(f) = usize::try_from(id - 1)
                                 .ok()
@@ -10230,6 +10387,12 @@ fn cmp_keys(xs: &[Value], ys: &[Value]) -> std::cmp::Ordering {
         }
     }
     xs.len().cmp(&ys.len())
+}
+
+/// A `BufReader` or `BufWriter` over the `File` its constructor took.
+enum Buf {
+    Reader(std::io::BufReader<std::fs::File>),
+    Writer(std::io::BufWriter<std::fs::File>),
 }
 
 /// `Vec[R].len` -> (`Vec[R]`, `len`); a plain `println` -> (`println`, ``).

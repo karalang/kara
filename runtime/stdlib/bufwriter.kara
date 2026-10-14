@@ -51,7 +51,7 @@ impl[W] BufWriter[W] {
 
     // Wrap `writer` with an explicit buffer capacity (bytes).
     #[compiler_builtin]
-    fn with_capacity(writer: own W, cap: usize) -> BufWriter[W] { BufWriter { } }
+    fn with_capacity(writer: own W, cap: i64) -> BufWriter[W] { BufWriter { } }
 
     // Write `buf` into the internal buffer, flushing to the underlying
     // writer if the buffer fills. Returns the byte count accepted.
@@ -69,7 +69,7 @@ impl[W] BufWriter[W] {
     // in the soiled state.
     #[compiler_builtin]
     #[cancel_unsafe_until(method: "flush")]
-    fn write(ref self, buf: Slice[u8]) -> Result[usize, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn write(ref self, buf: Slice[u8]) -> Result[i64, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     // Write the *entire* `buf`, looping internally until every byte is
     // accepted (or a real error occurs). Returns `Unit` on success rather

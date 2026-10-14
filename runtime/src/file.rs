@@ -625,6 +625,19 @@ pub unsafe extern "C" fn karac_runtime_file_close(handle: *mut KaracFile) {
     }
 }
 
+/// The open file behind `handle`, which this frees: a `BufReader` /
+/// `BufWriter` takes it (`mir_io::karac_mir_buf`).
+///
+/// # Safety
+///
+/// `handle` must be a live pointer returned from an open-family call and
+/// not closed; after this call it is invalid.
+pub(crate) unsafe fn take_file(handle: *mut KaracFile) -> std::fs::File {
+    // SAFETY: the caller's contract.
+    let b = unsafe { Box::from_raw(handle) };
+    b.inner.into_inner().unwrap_or_else(|p| p.into_inner())
+}
+
 /// Seek a file handle. v1 doesn't expose seek through the Kāra
 /// surface (deferred to a follow-on slice), but the FFI symbol is
 /// exported here so codegen can call it once the surface lands —

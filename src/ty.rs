@@ -222,7 +222,8 @@ pub const LIBRARY_CELLS: &[&str] = &["Mutex"];
 
 /// Library handles that are always dropped, whatever they hold: a dropped
 /// `Channel` end is what closes the channel and frees what is still queued
-/// in it, a dropped `File` closes the file, a dropped `TaskHandle`
+/// in it, a dropped `File` (or `BufReader` / `BufWriter`, a writer
+/// flushing first) closes the file, a dropped `TaskHandle`
 /// detaches its task, and the rest free the runtime allocation behind the
 /// handle (their held values, when those need dropping, go first).
 pub const HANDLES: &[&str] = &[
@@ -235,6 +236,8 @@ pub const HANDLES: &[&str] = &[
     "Arena",
     "TaskHandle",
     "Interner",
+    "BufReader",
+    "BufWriter",
 ];
 
 /// A struct or enum definition as the middle end needs it. Field types are

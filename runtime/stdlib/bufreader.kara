@@ -62,7 +62,7 @@ impl[R] BufReader[R] {
 
     // Wrap `reader` with an explicit buffer capacity (bytes).
     #[compiler_builtin]
-    fn with_capacity(reader: own R, cap: usize) -> BufReader[R] { BufReader { } }
+    fn with_capacity(reader: own R, cap: i64) -> BufReader[R] { BufReader { } }
 
     // Read until the next `\n` (inclusive) or EOF, appending the bytes
     // read into `buf`. Returns the byte count appended; `0` signals EOF.
@@ -70,18 +70,18 @@ impl[R] BufReader[R] {
     // `mut ref String` — the checklist's `mut String` shorthand realizes
     // as Kāra's mutable-borrow form.)
     #[compiler_builtin]
-    fn read_line(ref self, buf: mut ref String) -> Result[usize, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn read_line(ref self, buf: mut ref String) -> Result[i64, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
 
     // Read all remaining bytes to EOF, appending them into `buf`.
     // Returns the byte count appended.
     #[compiler_builtin]
-    fn read_to_string(ref self, buf: mut ref String) -> Result[usize, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn read_to_string(ref self, buf: mut ref String) -> Result[i64, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
 
     // Low-level byte read: drains the internal buffer first, then
     // delegates to the underlying reader. Fills up to `buf.len()`
     // bytes; returns the count read (`0` = EOF).
     #[compiler_builtin]
-    fn read(ref self, buf: mut Slice[u8]) -> Result[usize, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
 
     // Iterate the reader line by line. The returned `LinesIter` is drained
     // by a `for` loop, yielding `Result[String, IoError]` per line (trailing
@@ -108,5 +108,14 @@ impl[R] BufReader[R] {
     // cursor only — so it carries no effect; returns Unit. Mirrors Rust's
     // `BufRead::consume`; an `n` past the buffered length is clamped.
     #[compiler_builtin]
-    fn consume(ref self, n: usize) { }
+    fn consume(ref self, n: i64) { }
+}
+
+impl LinesIter {
+    // The next line, without its `\n` / `\r\n`, or `None` at EOF. A `for`
+    // loop over `lines()` calls it once per round (the MIR backends' native
+    // `LinesIter.next`); the legacy interpreter drains `Value::LinesIter`
+    // itself.
+    #[compiler_builtin]
+    fn next(mut ref self) -> Option[Result[String, IoError]] with reads(FileSystem) { None }
 }

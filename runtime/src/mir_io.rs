@@ -141,6 +141,204 @@ pub unsafe extern "C" fn karac_mir_file(
     }
 }
 
+/// A `BufReader` or `BufWriter` over the `File` its constructor took.
+pub enum KaracBuf {
+    Reader(std::io::BufReader<std::fs::File>),
+    Writer(std::io::BufWriter<std::fs::File>),
+}
+
+/// Appends `b` to the `String` at `s`, growing its buffer into a fresh
+/// allocation when it is full (a `String`'s bytes can be a constant's,
+/// which no `realloc` may touch).
+///
+/// # Safety
+/// `s` is a live `String`.
+unsafe fn push_bytes(s: *mut RawVec, b: &[u8]) {
+    if b.is_empty() {
+        return;
+    }
+    // SAFETY: the caller's contract.
+    let s = unsafe { &mut *s };
+    if s.cap - s.len < b.len() {
+        let cap = (s.len + b.len()).max(s.cap * 2);
+        let p = karac_realloc_or_panic(std::ptr::null_mut(), cap);
+        if s.len > 0 {
+            // SAFETY: the old buffer holds `len` bytes; `p` has room.
+            unsafe { std::ptr::copy_nonoverlapping(s.ptr, p, s.len) };
+        }
+        if s.cap != 0 {
+            extern "C" {
+                fn free(ptr: *mut std::ffi::c_void);
+            }
+            // SAFETY: a `String` with capacity owns its malloc'd buffer.
+            unsafe { free(s.ptr.cast()) };
+        }
+        s.ptr = p;
+        s.cap = cap;
+    }
+    // SAFETY: room for `b.len()` more bytes past `len`.
+    unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), s.ptr.add(s.len), b.len()) };
+    s.len += b.len();
+}
+
+/// The code for a failed `std::io` call, as [`io_code`] reports one.
+///
+/// # Safety
+/// `msg` is writable for a `String`.
+unsafe fn io_error_code(e: &std::io::Error, msg: *mut RawVec) -> i32 {
+    use std::io::ErrorKind as K;
+    match e.kind() {
+        K::NotFound => 0,
+        K::PermissionDenied => 1,
+        K::AlreadyExists => 2,
+        K::UnexpectedEof => 3,
+        K::InvalidData => 4,
+        K::Interrupted => 5,
+        _ => {
+            // SAFETY: the caller's contract.
+            unsafe { string_of(msg, e.to_string().as_bytes()) };
+            6
+        }
+    }
+}
+
+/// `BufReader.new` / `with_capacity` (op 0) and `BufWriter.new` /
+/// `with_capacity` (op 1) over the `File` at `handle`, which they take
+/// (`len` the capacity, `<= 0` for the default); then, on the buffered
+/// handle at `handle`: `read_line` (2) and `read_to_string` (3), appending
+/// to the `String` at `ptr`; `read` (4) into `ptr[..len]`; a `LinesIter`'s
+/// `next` (5), the line without its `\n` / `\r\n` as a fresh `String` at
+/// `msg`, or `-2` at the end; `write` (6) and `write_all` (7) of
+/// `ptr[..len]`; `flush` (8); `consume` (9) of `len` bytes.
+///
+/// # Safety
+/// `handle` is a live file handle for ops 0-1 and a live buffered handle
+/// otherwise; `ptr` holds what its op reads or writes; `value` and `msg` as
+/// [`io_code`] has them.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_buf(
+    op: i32,
+    handle: *mut std::ffi::c_void,
+    ptr: *mut u8,
+    len: i64,
+    value: *mut i64,
+    msg: *mut RawVec,
+) -> i32 {
+    use std::io::{BufRead, Read, Write};
+    if op <= 1 {
+        // SAFETY: a live handle from `karac_runtime_file_open` & co., which
+        // this takes.
+        let file = unsafe { crate::file::take_file(handle.cast()) };
+        let cap = usize::try_from(len).ok().filter(|&n| n > 0).unwrap_or(8192);
+        let buf = if op == 0 {
+            KaracBuf::Reader(std::io::BufReader::with_capacity(cap, file))
+        } else {
+            KaracBuf::Writer(std::io::BufWriter::with_capacity(cap, file))
+        };
+        // SAFETY: the caller's contract.
+        unsafe { value.write(Box::into_raw(Box::new(buf)) as i64) };
+        return -1;
+    }
+    // SAFETY: the caller's contract.
+    let buf = unsafe { &mut *handle.cast::<KaracBuf>() };
+    let n = usize::try_from(len).unwrap_or(0);
+    let res: std::io::Result<i64> = match (op, buf) {
+        (2 | 3, KaracBuf::Reader(r)) => {
+            let mut s = Vec::new();
+            let got = if op == 2 {
+                r.read_until(b'\n', &mut s)
+            } else {
+                r.read_to_end(&mut s)
+            };
+            got.and_then(|k| {
+                std::str::from_utf8(&s)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                // SAFETY: the caller's contract.
+                unsafe { push_bytes(ptr.cast(), &s) };
+                Ok(k as i64)
+            })
+        }
+        (4, KaracBuf::Reader(r)) if ptr.is_null() || n == 0 => r.read(&mut []).map(|k| k as i64),
+        (4, KaracBuf::Reader(r)) => {
+            // SAFETY: the caller's contract.
+            let out = unsafe { std::slice::from_raw_parts_mut(ptr, n) };
+            r.read(out).map(|k| k as i64)
+        }
+        (5, KaracBuf::Reader(r)) => {
+            let mut s = Vec::new();
+            match r.read_until(b'\n', &mut s) {
+                Ok(0) => return -2,
+                Ok(_) => {
+                    if s.last() == Some(&b'\n') {
+                        s.pop();
+                        if s.last() == Some(&b'\r') {
+                            s.pop();
+                        }
+                    }
+                    match std::str::from_utf8(&s) {
+                        Ok(_) => {
+                            // SAFETY: the caller's contract.
+                            unsafe { string_of(msg, &s) };
+                            return -1;
+                        }
+                        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        }
+        (6, KaracBuf::Writer(w)) => {
+            // SAFETY: the caller's contract.
+            w.write(unsafe { buf_bytes(ptr, n) }).map(|k| k as i64)
+        }
+        (7, KaracBuf::Writer(w)) => {
+            // SAFETY: the caller's contract.
+            w.write_all(unsafe { buf_bytes(ptr, n) }).map(|()| 0)
+        }
+        (8, KaracBuf::Writer(w)) => w.flush().map(|()| 0),
+        (9, KaracBuf::Reader(r)) => {
+            r.consume(n);
+            Ok(0)
+        }
+        _ => Err(std::io::Error::other("a buffered handle of the other kind")),
+    };
+    match res {
+        Ok(v) => {
+            // SAFETY: the caller's contract.
+            unsafe { value.write(v) };
+            -1
+        }
+        // SAFETY: the caller's contract.
+        Err(e) => unsafe { io_error_code(&e, msg) },
+    }
+}
+
+/// Drops a `BufReader` or `BufWriter`, closing its file; a writer flushes
+/// first and ignores a failure, as io.md has it.
+///
+/// # Safety
+/// `handle` came from [`karac_mir_buf`] and is dropped once.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_buf_free(handle: *mut std::ffi::c_void) {
+    if !handle.is_null() {
+        // SAFETY: the caller's contract.
+        drop(unsafe { Box::from_raw(handle.cast::<KaracBuf>()) });
+    }
+}
+
+/// The `len` bytes at `p`, or none when `p` is null.
+///
+/// # Safety
+/// `p` is null or describes `len` readable bytes.
+unsafe fn buf_bytes<'a>(p: *const u8, len: usize) -> &'a [u8] {
+    if p.is_null() || len == 0 {
+        &[]
+    } else {
+        // SAFETY: the caller's contract.
+        unsafe { std::slice::from_raw_parts(p, len) }
+    }
+}
+
 /// `Command.spawn`: the program, its arguments (`args_len` `String`s at
 /// `args`), its environment (`env_len` `EnvVar`s, a key and a value
 /// `String` each, at `env`) and the `Stdio` of each stream (0 inherit, 1

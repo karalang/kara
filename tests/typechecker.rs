@@ -14911,7 +14911,7 @@ fn test_file_read_takes_mut_slice_returns_result_i64() {
 }
 
 #[test]
-fn test_file_write_takes_slice_returns_result_usize() {
+fn test_file_write_takes_slice_returns_result_i64() {
     typecheck_ok(
         "fn driver() with writes(FileSystem) {
              match File.create(\"x.txt\") {
@@ -14986,10 +14986,10 @@ fn test_bufreader_with_capacity_returns_bufreader() {
 }
 
 #[test]
-fn test_bufreader_read_line_returns_result_usize() {
-    // br.read_line(buf: mut ref String) -> Result[usize, IoError].
+fn test_bufreader_read_line_returns_result_i64() {
+    // br.read_line(buf: mut ref String) -> Result[i64, IoError].
     // The destination must be a `mut` binding; the returned count
-    // solves against `usize` in the match.
+    // solves against `i64` in the match.
     typecheck_ok(
         "fn driver() with reads(FileSystem) {
              match File.open(\"x.txt\") {
@@ -15008,7 +15008,7 @@ fn test_bufreader_read_line_returns_result_usize() {
 }
 
 #[test]
-fn test_bufreader_read_to_string_returns_result_usize() {
+fn test_bufreader_read_to_string_returns_result_i64() {
     typecheck_ok(
         "fn driver() with reads(FileSystem) {
              match File.open(\"x.txt\") {
@@ -15024,7 +15024,7 @@ fn test_bufreader_read_to_string_returns_result_usize() {
 }
 
 #[test]
-fn test_bufreader_read_takes_mut_slice_returns_result_usize() {
+fn test_bufreader_read_takes_mut_slice_returns_result_i64() {
     typecheck_ok(
         "fn driver() with reads(FileSystem) {
              match File.open(\"x.txt\") {
@@ -15162,9 +15162,9 @@ fn test_bufreader_lines_for_loop_binds_result_string() {
 }
 
 #[test]
-fn test_bufreader_fill_buf_returns_result_slice_and_consume_takes_usize() {
+fn test_bufreader_fill_buf_returns_result_slice_and_consume_takes_i64() {
     // br.fill_buf() -> Result[Slice[u8], IoError]; matching Ok binds a
-    // Slice[u8] (usable where a slice is, e.g. `.len()`). br.consume(n: usize)
+    // Slice[u8] (usable where a slice is, e.g. `.len()`). br.consume(n: i64)
     // returns Unit.
     typecheck_ok(
         "fn driver() with reads(FileSystem) {
@@ -15185,7 +15185,7 @@ fn test_bufreader_fill_buf_returns_result_slice_and_consume_takes_usize() {
 
 #[test]
 fn test_bufreader_consume_wrong_arg_type_is_error() {
-    // consume expects a `usize` count; passing a String must be rejected.
+    // consume expects an `i64` count; passing a String must be rejected.
     let errs = typecheck_errors(
         "fn driver() with reads(FileSystem) {
              match File.open(\"x.txt\") {
@@ -15199,7 +15199,7 @@ fn test_bufreader_consume_wrong_arg_type_is_error() {
     );
     assert!(
         !errs.is_empty(),
-        "expected typechecker rejection for non-usize consume count; errs={:?}",
+        "expected typechecker rejection for non-integer consume count; errs={:?}",
         errs,
     );
 }
@@ -15237,9 +15237,9 @@ fn test_bufwriter_with_capacity_returns_bufwriter() {
 }
 
 #[test]
-fn test_bufwriter_write_returns_result_usize() {
-    // bw.write(buf: Slice[u8]) -> Result[usize, IoError]; the returned
-    // count solves against `usize` in the match.
+fn test_bufwriter_write_returns_result_i64() {
+    // bw.write(buf: Slice[u8]) -> Result[i64, IoError]; the returned
+    // count solves against `i64` in the match.
     typecheck_ok(
         "fn driver() with writes(FileSystem) {
              match File.create(\"x.txt\") {

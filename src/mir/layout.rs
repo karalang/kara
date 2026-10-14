@@ -126,7 +126,7 @@ fn layout_at(tys: &TyInterner, t: Ty, depth: u32) -> Option<Layout> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cell {
     /// A one-word runtime handle (`Sender`, `Receiver`, `File`, `CStr`,
-    /// `CString`).
+    /// `CString`, `BufReader`, `BufWriter`, `LinesIter`).
     Handle,
     /// The held value, in place (`Atomic[T]`, `Mutex[T]`).
     Inline(Ty),
@@ -141,7 +141,9 @@ pub fn library_cell(tys: &TyInterner, t: Ty) -> Option<Cell> {
     match tys.adt(a).name.as_str() {
         // A `CStr` / `CString` is a pointer to NUL-terminated bytes.
         // A `TaskHandle` points at a block holding its task's result.
-        "Sender" | "Receiver" | "File" | "CStr" | "CString" | "TaskHandle" => Some(Cell::Handle),
+        // A `LinesIter` is its `BufReader`'s handle, borrowed.
+        "Sender" | "Receiver" | "File" | "CStr" | "CString" | "TaskHandle" | "BufReader"
+        | "BufWriter" | "LinesIter" => Some(Cell::Handle),
         "Atomic" | "Mutex" => Some(Cell::Inline(tys.tcx().adt_of(t)?.1.first().copied()?)),
         _ => None,
     }
