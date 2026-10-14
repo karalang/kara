@@ -138,7 +138,19 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     _ => false,
                 };
-                let arg_ty = if open_value && super::exprs::expectation_is_concrete(&elem) {
+                // B-2026-10-14-10 — a tuple literal into a slot with a `ref`
+                // element (`Vec[(ref Node, i64)]`) is checked against it, so
+                // a place element is lent rather than copied.
+                let lends_into_tuple = self.cli_lint_overrides.strict_core
+                    && matches!(&arg.kind, ExprKind::Tuple(_))
+                    && matches!(
+                        resolve_type_var_top(&elem, &self.env.substitutions),
+                        Type::Tuple(slots) if slots.iter().any(|t| matches!(t, Type::Ref(_)))
+                    );
+                let arg_ty = if lends_into_tuple {
+                    let slot = resolve_type_var_top(&elem, &self.env.substitutions);
+                    self.check_expr(&args[0].value, &slot)
+                } else if open_value && super::exprs::expectation_is_concrete(&elem) {
                     self.check_expr(&args[0].value, &elem)
                 } else {
                     self.infer_expr(&args[0].value)
@@ -189,7 +201,17 @@ impl<'a> super::TypeChecker<'a> {
                 self.warn_partial_move_of_drop_struct(&args[0].value, &arg_ty);
                 // B-2026-09-06-31 — the borrowed-root twin; `v.push(w.r)` is the
                 // row's own cell and copies.
-                self.warn_borrow_projection_copy(&args[0].value, &arg_ty);
+                //
+                // B-2026-10-14-10 — a slot DECLARED `ref T` stores the view
+                // itself: `v.push(c)` into a `Vec[ref Node]` copies a
+                // reference (v2 core §1.1) and duplicates no `Node`, so the
+                // lint's claim is false there.
+                if !matches!(
+                    resolve_type_var_top(&elem, &self.env.substitutions),
+                    Type::Ref(_)
+                ) {
+                    self.warn_borrow_projection_copy(&args[0].value, &arg_ty);
+                }
                 // Unify so an unsolved element typevar bound to the
                 // receiver (e.g. `let mut v = Vec.new(); v.push(x);`)
                 // gets pinned to the first push's value type. Otherwise

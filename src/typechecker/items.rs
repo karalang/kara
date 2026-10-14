@@ -6453,6 +6453,26 @@ impl<'a> super::TypeChecker<'a> {
     /// `w.push(g)` does. Runs after the literal is typed, so each element's
     /// type is already recorded.
     pub(super) fn deny_for_element_drop_copy_in_literal(&mut self, expr: &Expr) {
+        self.deny_for_element_drop_copy_in_literal_into(expr, None);
+    }
+
+    /// [`Self::deny_for_element_drop_copy_in_literal`] for a literal checked
+    /// against `expected`. B-2026-10-14-10: under the strict check a tuple
+    /// element lent into a `ref` slot stores the view, not a copy, so it is
+    /// not linted.
+    pub(super) fn deny_for_element_drop_copy_in_literal_into(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+    ) {
+        let ref_slots: Vec<bool> = match (&expr.kind, expected) {
+            (ExprKind::Tuple(_), Some(Type::Tuple(slots)))
+                if self.cli_lint_overrides.strict_core =>
+            {
+                slots.iter().map(|t| matches!(t, Type::Ref(_))).collect()
+            }
+            _ => Vec::new(),
+        };
         let owned_args: Vec<&Expr>;
         let elems: Vec<&Expr> = match &expr.kind {
             ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => es.iter().collect(),
@@ -6465,13 +6485,14 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => return,
         };
-        for e in elems {
+        for (i, e) in elems.into_iter().enumerate() {
             if !matches!(
                 e.kind,
                 ExprKind::Identifier(_)
                     | ExprKind::FieldAccess { .. }
                     | ExprKind::TupleIndex { .. }
-            ) {
+            ) || ref_slots.get(i).copied().unwrap_or(false)
+            {
                 continue;
             }
             if let Some(ty) = self.expr_types.get(&SpanKey::from_span(&e.span)).cloned() {

@@ -3612,3 +3612,71 @@ fn deref_of_a_shared_handle_view_is_a_copy() {
         "let q = p;",
     );
 }
+
+/// B-2026-10-14-10 — v2 core §1.1: a `ref T` is `Copy`. Lending a bare `for`
+/// element into a `Vec[ref Node]` (directly or as a tuple element) and
+/// reading `v[0]` back out copy the reference and duplicate no `Node`, so
+/// none of them is a move. A `Vec[Node]` still refuses both.
+#[test]
+fn refs_held_in_a_vec_of_refs_are_copies() {
+    let header = "struct Node {\n\
+             val: i64,\n\
+             children: Vec[Node],\n\
+         }\n\
+         fn leaf(val: i64) -> Node {\n\
+             Node { val: val, children: Vec.new() }\n\
+         }\n";
+    accepted(
+        "vec-of-refs",
+        &format!(
+            "{header}\
+             fn main() {{\n\
+                 let t = Node {{ val: 1, children: vec![leaf(2), leaf(3)] }};\n\
+                 let mut v: Vec[ref Node] = Vec.new();\n\
+                 for c in t.children.iter() {{\n\
+                     v.push(c);\n\
+                 }}\n\
+                 let a = v[0];\n\
+                 let b = v[1];\n\
+                 let mut stack: Vec[(ref Node, i64)] = Vec.new();\n\
+                 for c in t.children.iter() {{\n\
+                     stack.push((c, 1));\n\
+                 }}\n\
+                 let (d, depth) = stack[1];\n\
+                 println(f\"{{a.val}} {{b.val}} {{d.val}} {{depth}}\");\n\
+             }}\n"
+        ),
+    );
+    for (tag, body, expect) in [
+        (
+            "vec-of-nodes-push",
+            "let mut v: Vec[Node] = Vec.new();\n\
+             for c in t.children.iter() {\n\
+                 v.push(c);\n\
+             }\n\
+             println(f\"{v.len()}\");\n",
+            "cannot move 'c'",
+        ),
+        (
+            "vec-of-nodes-index",
+            "let v: Vec[Node] = t.children;\n\
+             let a = v[0];\n\
+             println(f\"{a.val}\");\n",
+            "E_INDEX_MOVE_NON_COPY",
+        ),
+    ] {
+        let (dir, path) = fixture(
+            tag,
+            &format!(
+                "{header}fn main() {{\n\
+                 let t = Node {{ val: 1, children: vec![leaf(2), leaf(3)] }};\n\
+                 {body}}}\n"
+            ),
+        );
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must reject: {err}");
+        assert!(err.contains(expect), "{tag}: expected `{expect}` in: {err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

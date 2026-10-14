@@ -87,6 +87,10 @@ impl<'a> super::TypeChecker<'a> {
             Type::Tuple(types) => types.iter().all(|t| self.is_copy_type_during_check(t)),
             Type::Array { element, .. } => self.is_copy_type_during_check(element),
             Type::Slice { mutable, .. } => !mutable,
+            // B-2026-10-14-10 — v2 core §1.1: a `ref T` is `Copy`, so
+            // `let a = v[0];` over a `Vec[ref Node]` copies the reference.
+            // Strict commands only, like `StringSlice` below.
+            Type::Ref(_) => self.cli_lint_overrides.strict_core || self.library_methods_from_source,
             Type::Named { name, args } => {
                 if matches!(name.as_str(), "Option" | "Result") {
                     return args.iter().all(|a| self.is_copy_type_during_check(a));

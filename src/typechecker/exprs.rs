@@ -677,8 +677,21 @@ impl<'a> super::TypeChecker<'a> {
             self.record_node_type(expr.id, weak_store.as_ref().unwrap_or(&ty));
         }
         self.link_part_node_types(expr);
-        self.deny_for_element_drop_copy_in_literal(expr);
+        self.deny_for_element_drop_copy_in_literal_into(expr, Some(expected));
         ty
+    }
+
+    /// B-2026-10-14-10 — whether a tuple literal of element types `found`
+    /// fits the slot `expected` when each `ref` slot lends its element, as a
+    /// `let r: ref Node = c` does. Nested tuples are asked the same question.
+    fn lends_into_tuple_slots(&self, expected: &Type, found: &Type) -> bool {
+        match (expected, found) {
+            (Type::Tuple(es), Type::Tuple(fs)) if es.len() == fs.len() => es
+                .iter()
+                .zip(fs)
+                .all(|(e, f)| self.lends_into_tuple_slots(e, f)),
+            _ => self.is_subtype_with_projections(expected, found),
+        }
     }
 
     /// A borrowed receiver reads as its value type, so `self` from a
@@ -1422,12 +1435,22 @@ impl<'a> super::TypeChecker<'a> {
                 // slot too, so a `ref` to a `Copy` value is read into a value
                 // slot (`pairs.push((i, j))` with `j` an item of `v.iter()`).
                 let library = self.library_methods_from_source;
+                // B-2026-10-14-10 — under the strict check a place element
+                // lent into a `ref` slot is checked against it too, as
+                // `let r: ref Node = c` is: `(c, 1)` into `(ref Node, i64)`.
+                let strict = self.cli_lint_overrides.strict_core;
                 let elem_needs_expected = |e: &Expr, slot: &Type| {
                     elem_is_inferred_ctor(e)
                         || Self::literal_needs_array_slot(e, slot)
                         || (matches!(e.kind, ExprKind::StringLit(_)) && is_str_view(slot))
                         || (library
                             && !matches!(slot, Type::Ref(_) | Type::MutRef(_))
+                            && matches!(
+                                e.kind,
+                                ExprKind::Identifier(_) | ExprKind::FieldAccess { .. }
+                            ))
+                        || (strict
+                            && matches!(slot, Type::Ref(_))
                             && matches!(
                                 e.kind,
                                 ExprKind::Identifier(_) | ExprKind::FieldAccess { .. }
@@ -1460,6 +1483,10 @@ impl<'a> super::TypeChecker<'a> {
                     if super::types::types_compatible(&result, expected) {
                         self.record_expr_type(&expr.span, &result);
                         return result;
+                    }
+                    if strict && self.lends_into_tuple_slots(expected, &result) {
+                        self.record_expr_type(&expr.span, expected);
+                        return expected.clone();
                     }
                 }
             }
