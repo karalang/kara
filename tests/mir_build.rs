@@ -1392,3 +1392,36 @@ fn mir_if_let_on_a_bare_none() {
         }
     }
 }
+
+/// B-2026-10-14-13 — an owned local pushed into a `Vec[ref Node]` is lent,
+/// not moved: it stays usable, and the tree is dropped once, by its owner.
+#[test]
+fn mir_owned_local_pushed_into_a_vec_of_references_is_lent() {
+    const SRC: &str = r#"struct Node { val: i64, children: Vec[Node] }
+fn mk(v: i64) -> Node { Node { val: v, children: vec![Node { val: v + 1, children: Vec.new() }] } }
+fn main() {
+    let t = mk(1);
+    let u = mk(10);
+    let mut v: Vec[ref Node] = Vec.new();
+    v.push(t);
+    v.push(t);
+    v.push(u);
+    let mut total = 0;
+    for n in v.iter() { total += n.val + n.children.len(); }
+    println(f"{v.len()} {total} {t.val} {t.children[0].val}");
+}
+"#;
+    let want = "3 15 1 2\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    assert!(
+        !matches!(interp.outcome, karac::mir::interp::Outcome::Error(_)),
+        "{:?}",
+        interp.outcome
+    );
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

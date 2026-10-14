@@ -3957,3 +3957,24 @@ fn trait_impl_bare_params_borrow() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// B-2026-10-14-13 — an owned local pushed into a `ref` slot is lent, not
+/// moved (v2 core §5.3): `v.push(t)` into a `Vec[ref Node]` leaves `t`
+/// usable.
+#[test]
+fn an_owned_local_lent_into_a_ref_slot_is_not_moved() {
+    accepted(
+        "owned-lent-into-ref",
+        "struct Node {\n\
+             val: i64,\n\
+             children: Vec[Node],\n\
+         }\n\
+         fn main() {\n\
+             let t = Node { val: 1, children: Vec.new() };\n\
+             let mut v: Vec[ref Node] = Vec.new();\n\
+             v.push(t);\n\
+             v.push(t);\n\
+             println(f\"{v.len()} {v[0].val} {t.val}\");\n\
+         }\n",
+    );
+}

@@ -619,7 +619,7 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
-        self.note_view_lent_into_ref(expr, expected);
+        self.note_view_lent_into_ref(expr, expected, false);
         if let Some(ty) = self.lend_borrowed_receiver(expr, expected) {
             return ty;
         }
@@ -691,7 +691,14 @@ impl<'a> super::TypeChecker<'a> {
     /// into a `ref` slot copies the reference (v2 core §1.1) and moves
     /// nothing, however often it is lent; the strict pipeline drops a
     /// use-after-move whose consume site is recorded here.
-    pub(super) fn note_view_lent_into_ref(&mut self, expr: &Expr, slot: &Type) {
+    ///
+    ///
+    /// B-2026-10-14-13 — with `owned`, an OWNED local in the `ref` slot is
+    /// lent too, not moved: `v.push(t)` into a `Vec[ref Node]` borrows `t`
+    /// (v2 core §5.3), as the MIR pipeline lowers it. Only the stored slot
+    /// asks for that: an argument to a `ref` parameter is already a borrow,
+    /// and its span also carries a closure's by-move capture into a task.
+    pub(super) fn note_view_lent_into_ref(&mut self, expr: &Expr, slot: &Type, owned: bool) {
         if !self.cli_lint_overrides.strict_core {
             return;
         }
@@ -699,7 +706,7 @@ impl<'a> super::TypeChecker<'a> {
             &expr.kind,
             resolve_type_var_top(slot, &self.env.substitutions),
         ) {
-            if self.local_scope.is_view(n) {
+            if owned || self.local_scope.is_view(n) {
                 self.core_ref_copy_spans
                     .insert(SpanKey::from_span(&expr.span));
             }

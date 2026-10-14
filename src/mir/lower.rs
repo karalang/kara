@@ -13586,6 +13586,22 @@ impl<'l, 'a> Bx<'l, 'a> {
                             }
                         }
                     }
+                    // An owned place stored into a `ref` slot (`v.push(t)`
+                    // on a `Vec[ref Node]`) is lent, not moved (§5.3;
+                    // B-2026-10-14-13).
+                    if stores
+                        && self.is_place(&a.value)
+                        && !matches!(self.tys().tcx().kind(at), HK::Ref(_) | HK::MutRef(_))
+                    {
+                        let slot = self
+                            .lib_param_tys(base, method)
+                            .and_then(|s| s.get(rest.len()).copied())
+                            .filter(|&t| matches!(self.tys().tcx().kind(t), HK::Ref(_)));
+                        if let Some(slot) = slot {
+                            rest.push(self.operand_at(&a.value, slot)?);
+                            continue;
+                        }
+                    }
                     // A tuple literal stored is built at the slot's types,
                     // reading any `ref` element (§5.10).
                     if let (true, ExprKind::Tuple(_)) = (stores, &a.value.kind) {
