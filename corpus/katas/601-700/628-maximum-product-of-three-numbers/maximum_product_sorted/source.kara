@@ -1,0 +1,72 @@
+// LeetCode #628: Maximum Product of Three Numbers -- sorted copy.
+//
+// Sort a copy; the answer is the larger of the last three values
+// multiplied and the first two times the last. O(n log n).
+
+fn maximum_product(nums: Vec[i64]) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let n = sorted.len();
+    let top = sorted[n - 1] * sorted[n - 2] * sorted[n - 3];
+    let ends = sorted[0] * sorted[1] * sorted[n - 1];
+    top.max(ends)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums} -> {maximum_product(nums)}");
+}
+
+// `count` random values from -`spread` to `spread`.
+fn random_values(count: i64, spread: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = Vec.new();
+    for _ in 0..count {
+        nums.push(next_random(mut seed) % (2 * spread + 1) - spread);
+    }
+    nums
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(vec![1, 2, 3]);
+    show(vec![1, 2, 3, 4]);
+    show(vec![-1, -2, -3]);
+    // Two negatives beating the second and third largest; negative
+    // values only; zeros; one negative and two positives; a zero beside
+    // negatives; the extremes; repeated values.
+    show(vec![-10, -10, 1, 3, 2]);
+    show(vec![-5, -4, -3, -2, -1]);
+    show(vec![0, 0, 0]);
+    show(vec![-4, 2, 3]);
+    show(vec![-3, -2, -1, 0]);
+    show(vec![-1000, -1000, 1000]);
+    show(vec![1000, 1000, 1000, -1000]);
+    show(vec![7, 7, 7, 7, 7]);
+    show(vec![-6, 5, -6, 1, 2, 4]);
+    // 300 random cases of 3 to 50 values from -1,000 to 1,000.
+    let mut seed: i64 = 628;
+    let mut sum = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let n = 3 + next_random(mut seed) % 48;
+        let p = maximum_product(random_values(n, 1000, mut seed));
+        sum += p;
+        checksum = (checksum * 31 + p % 1000000007 + 1000000007) % 1000000007;
+    }
+    println(f"300 random cases: total {sum}, checksum {checksum}");
+    // 10,000 values, the most; 10,000 negative values; 10,000 values
+    // from -10 to 10, so most repeat.
+    println(f"10000 values: {maximum_product(random_values(10000, 1000, mut seed))}");
+    let mut negative = random_values(10000, 1000, mut seed);
+    for i in 0..negative.len() {
+        negative[i] = -1 - negative[i].abs() % 1000;
+    }
+    println(f"10000 negative values: {maximum_product(negative)}");
+    println(f"10000 small values: {maximum_product(random_values(10000, 10, mut seed))}");
+}

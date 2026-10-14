@@ -1,0 +1,65 @@
+// LeetCode #628: Maximum Product of Three Numbers -- one pass.
+//
+// The largest product is either the three largest values multiplied,
+// or the largest value times the two smallest, when those two are
+// negative and their product outweighs the second and third largest.
+// One pass keeps the three largest and the two smallest values seen so
+// far. O(n).
+
+fn maximum_product(nums: Vec[i64]) -> i64 {
+    let mut max1 = i64.MIN;
+    let mut max2 = i64.MIN;
+    let mut max3 = i64.MIN;
+    let mut min1 = i64.MAX;
+    let mut min2 = i64.MAX;
+    for x in nums.iter() {
+        let v = *x;
+        if v > max1 {
+            max3 = max2;
+            max2 = max1;
+            max1 = v;
+        } else if v > max2 {
+            max3 = max2;
+            max2 = v;
+        } else if v > max3 {
+            max3 = v;
+        }
+        if v < min1 {
+            min2 = min1;
+            min1 = v;
+        } else if v < min2 {
+            min2 = v;
+        }
+    }
+    (max1 * max2 * max3).max(max1 * min1 * min2)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 inputs of 10,000 values, the problem's most, each from -spread
+    // to spread for a random spread from 1 to 1,000, made once; then
+    // 20,000 times answers one of them, picked by the round, putting
+    // each answer into a checksum.
+    let inputs = 20;
+    let rounds = 20000;
+    let mut seed: i64 = 628;
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..inputs {
+        let spread = 1 + next_random(mut seed) % 1000;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..10000 {
+            nums.push(next_random(mut seed) % (2 * spread + 1) - spread);
+        }
+        all.push(nums);
+    }
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let p = maximum_product(all[(r * 7) % inputs]);
+        checksum = (checksum * 31 + p % 1000000007 + 1000000007) % 1000000007;
+    }
+    println(f"{inputs} inputs, {rounds} rounds: checksum {checksum}");
+}

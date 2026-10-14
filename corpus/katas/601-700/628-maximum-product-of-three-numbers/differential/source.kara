@@ -1,0 +1,200 @@
+// LeetCode #628: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// values.
+
+// ---- star arm ----------------------------------------------------------
+
+fn maximum_product_star(nums: Vec[i64]) -> i64 {
+    let mut max1 = i64.MIN;
+    let mut max2 = i64.MIN;
+    let mut max3 = i64.MIN;
+    let mut min1 = i64.MAX;
+    let mut min2 = i64.MAX;
+    for x in nums.iter() {
+        let v = *x;
+        if v > max1 {
+            max3 = max2;
+            max2 = max1;
+            max1 = v;
+        } else if v > max2 {
+            max3 = max2;
+            max2 = v;
+        } else if v > max3 {
+            max3 = v;
+        }
+        if v < min1 {
+            min2 = min1;
+            min1 = v;
+        } else if v < min2 {
+            min2 = v;
+        }
+    }
+    (max1 * max2 * max3).max(max1 * min1 * min2)
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+fn maximum_product_sorted(nums: Vec[i64]) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let n = sorted.len();
+    let top = sorted[n - 1] * sorted[n - 2] * sorted[n - 3];
+    let ends = sorted[0] * sorted[1] * sorted[n - 1];
+    top.max(ends)
+}
+
+// ---- counts arm --------------------------------------------------------
+
+fn maximum_product_counts(nums: Vec[i64]) -> i64 {
+    let mut counts = vec![0; 2001];
+    for x in nums.iter() {
+        counts[*x + 1000] += 1;
+    }
+    let mut largest: Vec[i64] = Vec.new();
+    let mut v = 1000;
+    let mut taken = 0;
+    while largest.len() < 3 {
+        if taken < counts[v + 1000] {
+            largest.push(v);
+            taken += 1;
+        } else {
+            v -= 1;
+            taken = 0;
+        }
+    }
+    let mut smallest: Vec[i64] = Vec.new();
+    v = -1000;
+    taken = 0;
+    while smallest.len() < 2 {
+        if taken < counts[v + 1000] {
+            smallest.push(v);
+            taken += 1;
+        } else {
+            v += 1;
+            taken = 0;
+        }
+    }
+    (largest[0] * largest[1] * largest[2]).max(largest[0] * smallest[0] * smallest[1])
+}
+
+// ---- heap arm ----------------------------------------------------------
+
+fn maximum_product_heap(nums: Vec[i64]) -> i64 {
+    let mut high: PriorityQueue[i64] = PriorityQueue.max_first();
+    let mut low: PriorityQueue[i64] = PriorityQueue.new();
+    for x in nums.iter() {
+        high.push(*x);
+        low.push(*x);
+    }
+    let a = high.pop().unwrap();
+    let b = high.pop().unwrap();
+    let c = high.pop().unwrap();
+    let p = low.pop().unwrap();
+    let q = low.pop().unwrap();
+    (a * b * c).max(a * p * q)
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, nums: Vec[i64]) -> i64 {
+    if which == 0 {
+        maximum_product_star(nums)
+    } else if which == 1 {
+        maximum_product_sorted(nums)
+    } else if which == 2 {
+        maximum_product_counts(nums)
+    } else {
+        maximum_product_heap(nums)
+    }
+}
+
+// The definition: the largest product over every three positions.
+fn definition(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut best = i64.MIN;
+    for i in 0..n {
+        for j in i + 1..n {
+            for k in j + 1..n {
+                best = best.max(nums[i] * nums[j] * nums[k]);
+            }
+        }
+    }
+    best
+}
+
+// Whether some three positions multiply to `p`.
+fn attained(nums: Vec[i64], p: i64) -> bool {
+    let n = nums.len();
+    for i in 0..n {
+        for j in i + 1..n {
+            for k in j + 1..n {
+                if nums[i] * nums[j] * nums[k] == p {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6280;
+    let mut checks = 0;
+    let mut values = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 3 to 8 values from -10 to 10, so that zeros, repeats and
+        // negatives are common.
+        let n = 3 + next_random(mut seed) % 6;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % 21 - 10);
+        }
+        values += n;
+        let want = definition(nums);
+        let mut reversed: Vec[i64] = Vec.new();
+        for i in 0..n {
+            reversed.push(nums[n - 1 - i]);
+        }
+        let mut doubled: Vec[i64] = Vec.new();
+        for x in nums.iter() {
+            doubled.push(*x * 2);
+        }
+        let mut with_zero = nums.clone();
+        with_zero.push(0);
+        for which in 0..4 {
+            let got = answer(which, nums);
+            let ok = vec![
+                // P1: the definition's product.
+                got == want,
+                // P2: the values in reverse order give the same product.
+                answer(which, reversed) == got,
+                // P3: every value doubled gives eight times the product.
+                answer(which, doubled) == got * 8,
+                // P4: a 0 added gives the product, or 0 if that is
+                // larger.
+                answer(which, with_zero) == got.max(0),
+                // P5: some three of the values multiply to the product.
+                attained(nums, got),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({values} values), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
