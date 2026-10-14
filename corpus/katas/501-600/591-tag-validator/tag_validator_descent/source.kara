@@ -1,0 +1,197 @@
+// LeetCode #591: Tag Validator -- recursive descent.
+//
+// The rules as a grammar: the code is one closed tag; a closed tag is a
+// start tag with a valid name, content, and the end tag with the same
+// name; content is text, cdata sections and closed tags in any order.
+// Each rule is a function that reads from a position in the code's
+// characters and returns where it stopped, or `None` where the rule
+// does not match. O(n), the recursion as deep as the tags are nested.
+
+// Whether `word` appears in `s` at `at`.
+fn at_word(s: Vec[char], at: i64, word: Str) -> bool {
+    let w: Vec[char] = word.chars().collect();
+    if at + w.len() > s.len() {
+        return false;
+    }
+    for k in 0..w.len() {
+        if s[at + k] != w[k] {
+            return false;
+        }
+    }
+    true
+}
+
+// A tag name read from `at` up to the next `>`: the name and the
+// position after the `>`.
+fn tag_name(s: Vec[char], at: i64) -> Option[(String, i64)] {
+    let mut name = String.new();
+    let mut i = at;
+    while i < s.len() {
+        if s[i] == '>' {
+            return Some((name, i + 1));
+        }
+        name.push(s[i]);
+        i += 1;
+    }
+    None
+}
+
+fn closed_tag(s: Vec[char], at: i64) -> Option[i64] {
+    if not at_word(s, at, "<") or at_word(s, at, "</") {
+        return None;
+    }
+    let (name, after) = tag_name(s, at + 1)?;
+    if name.is_empty() or name.len() > 9 {
+        return None;
+    }
+    for c in name.chars() {
+        if c < 'A' or c > 'Z' {
+            return None;
+        }
+    }
+    let end = content(s, after)?;
+    if not at_word(s, end, "</") {
+        return None;
+    }
+    let (closing, next) = tag_name(s, end + 2)?;
+    if closing != name {
+        return None;
+    }
+    Some(next)
+}
+
+// Text, cdata and closed tags from `at` until the next end tag (or the
+// end of the code); `None` if something there is not allowed.
+fn content(s: Vec[char], at: i64) -> Option[i64] {
+    let mut i = at;
+    while i < s.len() and not at_word(s, i, "</") {
+        if at_word(s, i, "<![CDATA[") {
+            let mut j = i + 9;
+            while j < s.len() and not at_word(s, j, "]]>") {
+                j += 1;
+            }
+            if j == s.len() {
+                return None;
+            }
+            i = j + 3;
+        } else if s[i] == '<' {
+            i = closed_tag(s, i)?;
+        } else {
+            i += 1;
+        }
+    }
+    Some(i)
+}
+
+fn is_valid(code: Str) -> bool {
+    let s: Vec[char] = code.chars().collect();
+    match closed_tag(s, 0) {
+        Some(end) => end == s.len(),
+        None => false,
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random snippet: a mostly well-formed tree of tags, cdata and text,
+// with now and then a wrong name, a missing end, a stray `<` or a cdata
+// left open.
+fn snippet(depth: i64, seed: mut ref i64) -> String {
+    let names: Vec[Str] = vec!["A", "B", "XY", "ABCDEFGHI", "ABCDEFGHIJ", "b", "", "A1"];
+    let texts: Vec[Str] = vec!["x", " ", ">", "]]>", "<", "!", "[", "y", "/", "..."];
+    let name = names[if step(seed) % 3 == 0 { step(seed) % names.len() } else { step(seed) % 3 }];
+    let mut out = f"<{name}>";
+    let parts = step(seed) % 4;
+    for _ in 0..parts {
+        let roll = step(seed) % 10;
+        if roll < 3 and depth > 0 {
+            out.push_str(snippet(depth - 1, seed));
+        } else if roll < 5 {
+            let inside = texts[step(seed) % texts.len()];
+            if step(seed) % 8 == 0 {
+                out.push_str(f"<![CDATA[{inside}");
+            } else {
+                out.push_str(f"<![CDATA[{inside}]]>");
+            }
+        } else {
+            out.push_str(texts[step(seed) % texts.len()]);
+        }
+    }
+    let end = step(seed) % 12;
+    if end == 0 {
+        out.push_str("</C>");
+    } else if end > 1 {
+        out.push_str(f"</{name}>");
+    }
+    out
+}
+
+fn show(code: Str) {
+    println(f"{code} -> {is_valid(code)}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    show("<DIV>This is the first line <![CDATA[<div>]]></DIV>");
+    show("<DIV>>>  ![cdata[]] <![CDATA[<div>]>]]>]]>>]</DIV>");
+    show("<A>  <B> </A>   </B>");
+    show("<DIV>  div tag is not closed  <DIV>");
+    show("<DIV>  unmatched <  </DIV>");
+    show("<DIV> closed tags with invalid tag name  <b>123</b> </DIV>");
+    show("<DIV> unmatched tags with invalid tag name  </1234567890> and <CDATA[[]]>  </DIV>");
+    show("<DIV>  unmatched start tag <B>  and unmatched end tag </C>  </DIV>");
+    // Names at the edges of their length; text and cdata outside the
+    // outer tag; two tags side by side; a cdata that hides a tag; the
+    // first `]]>` closing a cdata; nesting.
+    show("<ABCDEFGHI></ABCDEFGHI>");
+    show("<ABCDEFGHIJ></ABCDEFGHIJ>");
+    show("<></>");
+    show("<A></A>x");
+    show("x<A></A>");
+    show("<![CDATA[x]]><A></A>");
+    show("<A></A><B></B>");
+    show("<A><![CDATA[</A>]]></A>");
+    show("<A><![CDATA[x]]>]]></A>");
+    show("<A><![CDATA[x</A>");
+    show("<A><B><C></C></B></A>");
+    show("<A><B></A></B>");
+    show("<A>");
+    show("A");
+    // 300 random snippets.
+    let mut seed: i64 = 591;
+    let mut valid = 0;
+    let mut checksum: i64 = 0;
+    for k in 0..300 {
+        let code = snippet(3, mut seed);
+        if is_valid(code) {
+            valid += 1;
+            checksum = (checksum * 31 + k + code.len()) % 1000000007;
+        }
+    }
+    println(f"300 random snippets: {valid} valid, checksum {checksum}");
+    // The problem's longest, 500 characters: tags nested 38 deep, and 25
+    // tags side by side with a cdata in each.
+    let mut deep = String.new();
+    for _ in 0..38 {
+        deep.push_str("<ABCD>");
+    }
+    deep.push_str("      ");
+    for _ in 0..38 {
+        deep.push_str("</ABCD>");
+    }
+    println(f"38 deep, {deep.len()} characters: {is_valid(deep)}");
+    let mut wide = "<Z>".to_string();
+    for _ in 0..25 {
+        wide.push_str("<B><![CDATA[]]></B>");
+    }
+    while wide.len() < 496 {
+        wide.push_str(" ");
+    }
+    wide.push_str("</Z>");
+    println(f"25 side by side, {wide.len()} characters: {is_valid(wide)}");
+}

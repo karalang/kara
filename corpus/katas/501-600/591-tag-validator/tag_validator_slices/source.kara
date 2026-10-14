@@ -1,0 +1,157 @@
+// LeetCode #591: Tag Validator -- the rest of the code as a shrinking
+// view.
+//
+// The same scan as the ★ arm, written over `rest`, a `Str` view of what
+// is left to read, cut from the front as each piece is taken: a cdata
+// section through its `]]>`, a tag through its `>`, or one character of
+// text. The stack holds the open tags' names as views into the code.
+// O(n).
+
+fn is_valid(code: Str) -> bool {
+    let mut stack: Vec[Str] = Vec.new();
+    let mut rest = code;
+    let mut started = false;
+    while not rest.is_empty() {
+        if started and stack.is_empty() {
+            return false;
+        }
+        started = true;
+        if rest.starts_with("<![CDATA[") {
+            if stack.is_empty() {
+                return false;
+            }
+            let Some(k) = rest.find("]]>") else {
+                return false;
+            };
+            rest = rest[k + 3..];
+        } else if rest.starts_with("<") {
+            let Some(k) = rest.find(">") else {
+                return false;
+            };
+            let closing = rest.starts_with("</");
+            let name = if closing { rest[2..k] } else { rest[1..k] };
+            if closing {
+                if stack.pop() != Some(name) {
+                    return false;
+                }
+            } else {
+                if name.is_empty() or name.len() > 9 or not name.chars().all(|c| c.is_ascii_uppercase()) {
+                    return false;
+                }
+                stack.push(name);
+            }
+            rest = rest[k + 1..];
+        } else {
+            if stack.is_empty() {
+                return false;
+            }
+            rest = rest[1..];
+        }
+    }
+    started and stack.is_empty()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random snippet: a mostly well-formed tree of tags, cdata and text,
+// with now and then a wrong name, a missing end, a stray `<` or a cdata
+// left open.
+fn snippet(depth: i64, seed: mut ref i64) -> String {
+    let names: Vec[Str] = vec!["A", "B", "XY", "ABCDEFGHI", "ABCDEFGHIJ", "b", "", "A1"];
+    let texts: Vec[Str] = vec!["x", " ", ">", "]]>", "<", "!", "[", "y", "/", "..."];
+    let name = names[if step(seed) % 3 == 0 { step(seed) % names.len() } else { step(seed) % 3 }];
+    let mut out = f"<{name}>";
+    let parts = step(seed) % 4;
+    for _ in 0..parts {
+        let roll = step(seed) % 10;
+        if roll < 3 and depth > 0 {
+            out.push_str(snippet(depth - 1, seed));
+        } else if roll < 5 {
+            let inside = texts[step(seed) % texts.len()];
+            if step(seed) % 8 == 0 {
+                out.push_str(f"<![CDATA[{inside}");
+            } else {
+                out.push_str(f"<![CDATA[{inside}]]>");
+            }
+        } else {
+            out.push_str(texts[step(seed) % texts.len()]);
+        }
+    }
+    let end = step(seed) % 12;
+    if end == 0 {
+        out.push_str("</C>");
+    } else if end > 1 {
+        out.push_str(f"</{name}>");
+    }
+    out
+}
+
+fn show(code: Str) {
+    println(f"{code} -> {is_valid(code)}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    show("<DIV>This is the first line <![CDATA[<div>]]></DIV>");
+    show("<DIV>>>  ![cdata[]] <![CDATA[<div>]>]]>]]>>]</DIV>");
+    show("<A>  <B> </A>   </B>");
+    show("<DIV>  div tag is not closed  <DIV>");
+    show("<DIV>  unmatched <  </DIV>");
+    show("<DIV> closed tags with invalid tag name  <b>123</b> </DIV>");
+    show("<DIV> unmatched tags with invalid tag name  </1234567890> and <CDATA[[]]>  </DIV>");
+    show("<DIV>  unmatched start tag <B>  and unmatched end tag </C>  </DIV>");
+    // Names at the edges of their length; text and cdata outside the
+    // outer tag; two tags side by side; a cdata that hides a tag; the
+    // first `]]>` closing a cdata; nesting.
+    show("<ABCDEFGHI></ABCDEFGHI>");
+    show("<ABCDEFGHIJ></ABCDEFGHIJ>");
+    show("<></>");
+    show("<A></A>x");
+    show("x<A></A>");
+    show("<![CDATA[x]]><A></A>");
+    show("<A></A><B></B>");
+    show("<A><![CDATA[</A>]]></A>");
+    show("<A><![CDATA[x]]>]]></A>");
+    show("<A><![CDATA[x</A>");
+    show("<A><B><C></C></B></A>");
+    show("<A><B></A></B>");
+    show("<A>");
+    show("A");
+    // 300 random snippets.
+    let mut seed: i64 = 591;
+    let mut valid = 0;
+    let mut checksum: i64 = 0;
+    for k in 0..300 {
+        let code = snippet(3, mut seed);
+        if is_valid(code) {
+            valid += 1;
+            checksum = (checksum * 31 + k + code.len()) % 1000000007;
+        }
+    }
+    println(f"300 random snippets: {valid} valid, checksum {checksum}");
+    // The problem's longest, 500 characters: tags nested 38 deep, and 25
+    // tags side by side with a cdata in each.
+    let mut deep = String.new();
+    for _ in 0..38 {
+        deep.push_str("<ABCD>");
+    }
+    deep.push_str("      ");
+    for _ in 0..38 {
+        deep.push_str("</ABCD>");
+    }
+    println(f"38 deep, {deep.len()} characters: {is_valid(deep)}");
+    let mut wide = "<Z>".to_string();
+    for _ in 0..25 {
+        wide.push_str("<B><![CDATA[]]></B>");
+    }
+    while wide.len() < 496 {
+        wide.push_str(" ");
+    }
+    wide.push_str("</Z>");
+    println(f"25 side by side, {wide.len()} characters: {is_valid(wide)}");
+}

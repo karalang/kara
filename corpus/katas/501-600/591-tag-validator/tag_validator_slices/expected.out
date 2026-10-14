@@ -1,0 +1,25 @@
+<DIV>This is the first line <![CDATA[<div>]]></DIV> -> true
+<DIV>>>  ![cdata[]] <![CDATA[<div>]>]]>]]>>]</DIV> -> true
+<A>  <B> </A>   </B> -> false
+<DIV>  div tag is not closed  <DIV> -> false
+<DIV>  unmatched <  </DIV> -> false
+<DIV> closed tags with invalid tag name  <b>123</b> </DIV> -> false
+<DIV> unmatched tags with invalid tag name  </1234567890> and <CDATA[[]]>  </DIV> -> false
+<DIV>  unmatched start tag <B>  and unmatched end tag </C>  </DIV> -> false
+<ABCDEFGHI></ABCDEFGHI> -> true
+<ABCDEFGHIJ></ABCDEFGHIJ> -> false
+<></> -> false
+<A></A>x -> false
+x<A></A> -> false
+<![CDATA[x]]><A></A> -> false
+<A></A><B></B> -> false
+<A><![CDATA[</A>]]></A> -> true
+<A><![CDATA[x]]>]]></A> -> true
+<A><![CDATA[x</A> -> false
+<A><B><C></C></B></A> -> true
+<A><B></A></B> -> false
+<A> -> false
+A -> false
+300 random snippets: 141 valid, checksum 443576936
+38 deep, 500 characters: true
+25 side by side, 500 characters: true

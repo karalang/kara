@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/591-tag-validator/bench/tag_validator.kara"
+dedup_of = []
+expect = "error:E0515"
+exit = 1
+tags = ["closure", "bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "5ff30e5f1"
+extracted_src = "203c04ba"
+model_rev = "1aa23105"
+model_src = "203c04ba"
