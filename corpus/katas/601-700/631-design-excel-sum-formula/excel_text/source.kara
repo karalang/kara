@@ -1,0 +1,151 @@
+// LeetCode #631: Design Excel Sum Formula -- formulas kept as text.
+//
+// A formula is stored as the list of range names it was given, exactly
+// as written, and every read parses those names again and adds up the
+// cells they cover, reading formula cells the same way. Nothing is
+// worked out ahead: `set` and `sum` only store, and `get` does all the
+// work. O(the names and cells a read reaches).
+
+struct Excel {
+    width: i64,
+    numbers: Vec[i64],
+    formulas: Vec[Option[Vec[String]]],
+}
+
+impl Excel {
+    fn new(height: i64, width: char) -> Excel {
+        let columns = width as i64 - 'A' as i64 + 1;
+        let mut formulas: Vec[Option[Vec[String]]] = Vec.new();
+        for _ in 0..height * columns {
+            formulas.push(None);
+        }
+        Excel { width: columns, numbers: vec![0; height * columns], formulas }
+    }
+
+    fn set(mut ref self, row: i64, column: char, val: i64) {
+        let at = self.cell(row, column);
+        self.numbers[at] = val;
+        self.formulas[at] = None;
+    }
+
+    fn get(self, row: i64, column: char) -> i64 {
+        self.value(self.cell(row, column))
+    }
+
+    fn sum(mut ref self, row: i64, column: char, numbers: Vec[String]) -> i64 {
+        let at = self.cell(row, column);
+        self.formulas[at] = Some(numbers.clone());
+        self.value(at)
+    }
+
+    fn cell(self, row: i64, column: char) -> i64 {
+        (row - 1) * self.width + (column as i64 - 'A' as i64)
+    }
+
+    fn value(self, at: i64) -> i64 {
+        match self.formulas[at] {
+            None => self.numbers[at],
+            Some(names) => {
+                let mut total = 0;
+                for range in names.iter() {
+                    let ends = range.split(":");
+                    let first = ref ends[0];
+                    let last = ref ends[ends.len() - 1];
+                    let left = first.chars().next().unwrap() as i64 - 'A' as i64;
+                    let right = last.chars().next().unwrap() as i64 - 'A' as i64;
+                    let top = i64.parse(first.slice(1, first.len())).unwrap();
+                    let bottom = i64.parse(last.slice(1, last.len())).unwrap();
+                    for r in top..bottom + 1 {
+                        for c in left..right + 1 {
+                            total += self.value((r - 1) * self.width + c);
+                        }
+                    }
+                }
+                total
+            }
+        }
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(index: i64) -> char {
+    ('A' as i64 + index) as u8 as char
+}
+
+fn names(list: Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for name in list.iter() {
+        out.push(String.from(*name));
+    }
+    out
+}
+
+fn main() {
+    // The LeetCode example.
+    let mut excel = Excel.new(3, 'C');
+    excel.set(1, 'A', 2);
+    let first = excel.sum(3, 'C', names(vec!["A1", "A1:B2"]));
+    println(f"sum(3, C, [A1, A1:B2]) -> {first}");
+    excel.set(2, 'B', 2);
+    println(f"get(3, C) -> {excel.get(3, 'C')}");
+    // A formula reading a formula; a set clearing a formula; a range
+    // covering a whole row; a cell counted three times; negative values.
+    excel.set(1, 'B', 5);
+    let chained = excel.sum(3, 'B', names(vec!["C3", "B1"]));
+    println(f"sum(3, B, [C3, B1]) -> {chained}");
+    excel.set(1, 'A', -3);
+    println(f"get(3, B) -> {excel.get(3, 'B')}, get(3, C) -> {excel.get(3, 'C')}");
+    excel.set(3, 'C', 10);
+    println(f"get(3, B) -> {excel.get(3, 'B')}");
+    let row_sum = excel.sum(3, 'A', names(vec!["A1:C1", "B1", "B1:B1"]));
+    println(f"sum(3, A, [A1:C1, B1, B1:B1]) -> {row_sum}");
+    excel.set(1, 'C', -7);
+    println(f"get(3, A) -> {excel.get(3, 'A')}");
+    // 400 random operations on a 26 by Z sheet: a set of -1,000 to 1,000,
+    // a sum of one to three ranges of up to 2 by 2 cells in the rows
+    // above, or a get, with every result added to a checksum.
+    let mut sheet = Excel.new(26, 'Z');
+    let mut seed: i64 = 631;
+    let mut checksum = 0;
+    let mut sums = 0;
+    for _ in 0..400 {
+        let kind = next_random(mut seed) % 3;
+        let row = 1 + next_random(mut seed) % 26;
+        let column = letter(next_random(mut seed) % 26);
+        let mut result = 0;
+        if kind == 0 {
+            sheet.set(row, column, next_random(mut seed) % 2001 - 1000);
+        } else if kind == 1 and row > 1 {
+            let mut ranges: Vec[String] = Vec.new();
+            for _ in 0..1 + next_random(mut seed) % 3 {
+                let top = 1 + next_random(mut seed) % (row - 1);
+                let left = next_random(mut seed) % 26;
+                let bottom = (top + next_random(mut seed) % 2).min(row - 1);
+                let right = (left + next_random(mut seed) % 2).min(25);
+                if top == bottom and left == right {
+                    ranges.push(f"{letter(left)}{top}");
+                } else {
+                    ranges.push(f"{letter(left)}{top}:{letter(right)}{bottom}");
+                }
+            }
+            result = sheet.sum(row, column, ranges);
+            sums += 1;
+        } else {
+            result = sheet.get(row, column);
+        }
+        checksum = ((checksum * 31 + result) % 1000000007 + 1000000007) % 1000000007;
+    }
+    let mut total = 0;
+    for row in 1..27 {
+        for c in 0..26 {
+            total += sheet.get(row, letter(c));
+        }
+    }
+    println(f"400 random operations ({sums} sums): checksum {checksum}, sheet total {total}");
+}

@@ -1,0 +1,8 @@
+sum(3, C, [A1, A1:B2]) -> 4
+get(3, C) -> 6
+sum(3, B, [C3, B1]) -> 16
+get(3, B) -> 6, get(3, C) -> 1
+get(3, B) -> 15
+sum(3, A, [A1:C1, B1, B1:B1]) -> 12
+get(3, A) -> 5
+400 random operations (123 sums): checksum 292020696, sheet total 56166

@@ -1,0 +1,174 @@
+// LeetCode #631: Design Excel Sum Formula -- bench program.
+//
+// The rebuild arm, the one written the same way in all five languages:
+// every formula is the list of cells it reads, and after each write a
+// depth-first walk orders the formula cells and recomputes them all.
+// 2,000 random operations are made once on a 26 by Z sheet, then
+// replayed on a fresh sheet in each of 60 rounds.
+
+struct Excel {
+    width: i64,
+    values: Vec[i64],
+    formulas: Vec[Option[Vec[i64]]],
+}
+
+impl Excel {
+    fn new(height: i64, width: char) -> Excel {
+        let columns = width as i64 - 'A' as i64 + 1;
+        let mut formulas: Vec[Option[Vec[i64]]] = Vec.new();
+        for _ in 0..height * columns {
+            formulas.push(None);
+        }
+        Excel { width: columns, values: vec![0; height * columns], formulas }
+    }
+
+    fn set(mut ref self, row: i64, column: char, val: i64) {
+        let at = self.cell(row, column);
+        self.values[at] = val;
+        self.formulas[at] = None;
+        self.recompute();
+    }
+
+    fn get(self, row: i64, column: char) -> i64 {
+        self.values[self.cell(row, column)]
+    }
+
+    fn sum(mut ref self, row: i64, column: char, numbers: Vec[String]) -> i64 {
+        let at = self.cell(row, column);
+        let mut reads: Vec[i64] = Vec.new();
+        for range in numbers.iter() {
+            let ends = range.split(":");
+            let (top, left) = self.position(ends[0]);
+            let (bottom, right) = self.position(ends[ends.len() - 1]);
+            for r in top..bottom + 1 {
+                for c in left..right + 1 {
+                    reads.push(r * self.width + c);
+                }
+            }
+        }
+        self.formulas[at] = Some(reads);
+        self.recompute();
+        self.values[at]
+    }
+
+    fn cell(self, row: i64, column: char) -> i64 {
+        (row - 1) * self.width + (column as i64 - 'A' as i64)
+    }
+
+    // The zero-based row and column of a name such as `B12`.
+    fn position(self, name: String) -> (i64, i64) {
+        let column = name.chars().next().unwrap() as i64 - 'A' as i64;
+        let row = i64.parse(name.slice(1, name.len())).unwrap();
+        (row - 1, column)
+    }
+
+    fn recompute(mut ref self) {
+        let mut seen = vec![false; self.values.len()];
+        let mut order: Vec[i64] = Vec.new();
+        for at in 0..self.values.len() {
+            visit(self.formulas, at, mut seen, mut order);
+        }
+        for at in order.iter() {
+            if let Some(reads) = self.formulas[*at] {
+                let mut total = 0;
+                for source in reads.iter() {
+                    total += self.values[*source];
+                }
+                self.values[*at] = total;
+            }
+        }
+    }
+}
+
+// Append `at` to `order` after every cell its formula reads.
+fn visit(formulas: Vec[Option[Vec[i64]]], at: i64, seen: mut ref Vec[bool], order: mut ref Vec[i64]) {
+    if seen[at] {
+        return;
+    }
+    seen[at] = true;
+    if let Some(reads) = formulas[at] {
+        for source in reads.iter() {
+            visit(formulas, *source, mut seen, mut order);
+        }
+    }
+    order.push(at);
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(index: i64) -> char {
+    ('A' as i64 + index) as u8 as char
+}
+
+struct Op {
+    kind: i64,
+    row: i64,
+    column: char,
+    val: i64,
+    ranges: Vec[String],
+}
+
+// `count` operations on a 26 by Z sheet: a set of -1,000 to 1,000, a sum
+// of one to three ranges of up to 2 by 2 cells in the rows above, or a get.
+fn make_ops(count: i64, seed: mut ref i64) -> Vec[Op] {
+    let mut ops: Vec[Op] = Vec.new();
+    for _ in 0..count {
+        let mut kind = next_random(mut seed) % 3;
+        let row = 1 + next_random(mut seed) % 26;
+        let column = letter(next_random(mut seed) % 26);
+        let mut val = 0;
+        let mut ranges: Vec[String] = Vec.new();
+        if kind == 0 {
+            val = next_random(mut seed) % 2001 - 1000;
+        } else if kind == 1 and row > 1 {
+            for _ in 0..1 + next_random(mut seed) % 3 {
+                let top = 1 + next_random(mut seed) % (row - 1);
+                let left = next_random(mut seed) % 26;
+                let bottom = (top + next_random(mut seed) % 2).min(row - 1);
+                let right = (left + next_random(mut seed) % 2).min(25);
+                if top == bottom and left == right {
+                    ranges.push(f"{letter(left)}{top}");
+                } else {
+                    ranges.push(f"{letter(left)}{top}:{letter(right)}{bottom}");
+                }
+            }
+        } else {
+            kind = 2;
+        }
+        ops.push(Op { kind, row, column, val, ranges });
+    }
+    ops
+}
+
+fn main() {
+    let mut seed: i64 = 631;
+    let ops = make_ops(2000, mut seed);
+    let rounds = 60;
+    let mut sums = 0;
+    let mut checksum = 0;
+    let mut total = 0;
+    for _ in 0..rounds {
+        let mut sheet = Excel.new(26, 'Z');
+        for op in ops.iter() {
+            let mut result = 0;
+            if op.kind == 0 {
+                sheet.set(op.row, op.column, op.val);
+            } else if op.kind == 1 {
+                result = sheet.sum(op.row, op.column, op.ranges);
+                sums += 1;
+            } else {
+                result = sheet.get(op.row, op.column);
+            }
+            checksum = ((checksum * 31 + result) % 1000000007 + 1000000007) % 1000000007;
+        }
+        for row in 1..27 {
+            for c in 0..26 {
+                total += sheet.get(row, letter(c));
+            }
+        }
+    }
+    println(f"{ops.len()} operations, {rounds} rounds ({sums} sums): checksum {checksum}, sheet total {total}");
+}

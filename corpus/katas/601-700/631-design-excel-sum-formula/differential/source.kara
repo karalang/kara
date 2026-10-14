@@ -1,0 +1,650 @@
+// LeetCode #631: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// call sequences.
+
+// ---- star arm ----------------------------------------------------------
+
+struct Excel_star {
+    width: i64,
+    numbers: Vec[i64],
+    formulas: Vec[Option[Map[i64, i64]]],
+}
+
+impl Excel_star {
+    fn new(height: i64, width: char) -> Excel_star {
+        let columns = width as i64 - 'A' as i64 + 1;
+        let mut formulas: Vec[Option[Map[i64, i64]]] = Vec.new();
+        for _ in 0..height * columns {
+            formulas.push(None);
+        }
+        Excel_star { width: columns, numbers: vec![0; height * columns], formulas }
+    }
+
+    fn set(mut ref self, row: i64, column: char, val: i64) {
+        let at = self.cell(row, column);
+        self.numbers[at] = val;
+        self.formulas[at] = None;
+    }
+
+    fn get(self, row: i64, column: char) -> i64 {
+        self.value(self.cell(row, column))
+    }
+
+    fn sum(mut ref self, row: i64, column: char, numbers: Vec[String]) -> i64 {
+        let at = self.cell(row, column);
+        let mut reads: Map[i64, i64] = Map.new();
+        for range in numbers.iter() {
+            let ends = range.split(":");
+            let (top, left) = self.position(ends[0]);
+            let (bottom, right) = self.position(ends[ends.len() - 1]);
+            for r in top..bottom + 1 {
+                for c in left..right + 1 {
+                    let source = r * self.width + c;
+                    reads.insert(source, reads.get_or(source, 0) + 1);
+                }
+            }
+        }
+        self.formulas[at] = Some(reads);
+        self.value(at)
+    }
+
+    fn cell(self, row: i64, column: char) -> i64 {
+        (row - 1) * self.width + (column as i64 - 'A' as i64)
+    }
+
+    // The zero-based row and column of a name such as `B12`.
+    fn position(self, name: String) -> (i64, i64) {
+        let column = name.chars().next().unwrap() as i64 - 'A' as i64;
+        let row = i64.parse(name.slice(1, name.len())).unwrap();
+        (row - 1, column)
+    }
+
+    fn value(self, at: i64) -> i64 {
+        match self.formulas[at] {
+            None => self.numbers[at],
+            Some(reads) => {
+                let mut total = 0;
+                for (source, times) in reads.iter() {
+                    total += *times * self.value(*source);
+                }
+                total
+            }
+        }
+    }
+}
+
+// Run `ops` on a fresh 4 by D sheet, every set value times `scale`,
+// every range listed cell by cell when `expand`, and every set done
+// twice when `again`. Returns each sum and get result, then each cell's
+// final value; `echoes` counts writes that a get right after did not
+// read back.
+fn drive_star(ops: Vec[Op], scale: i64, expand: bool, again: bool) -> Trace {
+    let mut sheet = Excel_star.new(4, 'D');
+    let mut t = Trace { results: Vec.new(), echoes: 0 };
+    for op in ops.iter() {
+        if op.kind == 0 {
+            sheet.set(op.row, op.column, op.val * scale);
+            if again {
+                sheet.set(op.row, op.column, op.val * scale);
+            }
+            if sheet.get(op.row, op.column) != op.val * scale {
+                t.echoes += 1;
+            }
+        } else if op.kind == 1 {
+            let names = if expand { cells_of(op.ranges) } else { op.ranges.clone() };
+            let got = sheet.sum(op.row, op.column, names);
+            t.results.push(got);
+            if sheet.get(op.row, op.column) != got {
+                t.echoes += 1;
+            }
+        } else {
+            t.results.push(sheet.get(op.row, op.column));
+        }
+    }
+    for row in 1..5 {
+        for c in 0..4 {
+            t.results.push(sheet.get(row, letter(c)));
+        }
+    }
+    t
+}
+
+// ---- push arm ----------------------------------------------------------
+
+struct Excel_push {
+    width: i64,
+    values: Vec[i64],
+    reads: Vec[Map[i64, i64]],
+    readers: Vec[Map[i64, i64]],
+}
+
+impl Excel_push {
+    fn new(height: i64, width: char) -> Excel_push {
+        let columns = width as i64 - 'A' as i64 + 1;
+        let mut reads: Vec[Map[i64, i64]] = Vec.new();
+        let mut readers: Vec[Map[i64, i64]] = Vec.new();
+        for _ in 0..height * columns {
+            reads.push(Map.new());
+            readers.push(Map.new());
+        }
+        Excel_push { width: columns, values: vec![0; height * columns], reads, readers }
+    }
+
+    fn set(mut ref self, row: i64, column: char, val: i64) {
+        let at = self.cell(row, column);
+        self.forget(at);
+        let change = val - self.values[at];
+        self.values[at] = val;
+        self.spread(at, change);
+    }
+
+    fn get(self, row: i64, column: char) -> i64 {
+        self.values[self.cell(row, column)]
+    }
+
+    fn sum(mut ref self, row: i64, column: char, numbers: Vec[String]) -> i64 {
+        let at = self.cell(row, column);
+        self.forget(at);
+        let mut reads: Map[i64, i64] = Map.new();
+        for range in numbers.iter() {
+            let ends = range.split(":");
+            let (top, left) = self.position(ends[0]);
+            let (bottom, right) = self.position(ends[ends.len() - 1]);
+            for r in top..bottom + 1 {
+                for c in left..right + 1 {
+                    let source = r * self.width + c;
+                    reads.insert(source, reads.get_or(source, 0) + 1);
+                }
+            }
+        }
+        let mut total = 0;
+        for (source, times) in reads.iter() {
+            total += *times * self.values[*source];
+            self.readers[*source].insert(at, *times);
+        }
+        self.reads[at] = reads;
+        let change = total - self.values[at];
+        self.values[at] = total;
+        self.spread(at, change);
+        total
+    }
+
+    fn cell(self, row: i64, column: char) -> i64 {
+        (row - 1) * self.width + (column as i64 - 'A' as i64)
+    }
+
+    // The zero-based row and column of a name such as `B12`.
+    fn position(self, name: String) -> (i64, i64) {
+        let column = name.chars().next().unwrap() as i64 - 'A' as i64;
+        let row = i64.parse(name.slice(1, name.len())).unwrap();
+        (row - 1, column)
+    }
+
+    // Drop the formula at `at`, if any, from the cells it read.
+    fn forget(mut ref self, at: i64) {
+        let old = self.reads[at].clone();
+        for (source, _) in old.iter() {
+            self.readers[*source].remove(at);
+        }
+        self.reads[at] = Map.new();
+    }
+
+    // Add `change` to every formula reading `at`, times how often it
+    // reads it, and on through the formulas reading those.
+    fn spread(mut ref self, at: i64, change: i64) {
+        if change == 0 {
+            return;
+        }
+        let readers = self.readers[at].clone();
+        for (reader, times) in readers.iter() {
+            self.values[*reader] += change * *times;
+            self.spread(*reader, change * *times);
+        }
+    }
+}
+
+// Run `ops` on a fresh 4 by D sheet, every set value times `scale`,
+// every range listed cell by cell when `expand`, and every set done
+// twice when `again`. Returns each sum and get result, then each cell's
+// final value; `echoes` counts writes that a get right after did not
+// read back.
+fn drive_push(ops: Vec[Op], scale: i64, expand: bool, again: bool) -> Trace {
+    let mut sheet = Excel_push.new(4, 'D');
+    let mut t = Trace { results: Vec.new(), echoes: 0 };
+    for op in ops.iter() {
+        if op.kind == 0 {
+            sheet.set(op.row, op.column, op.val * scale);
+            if again {
+                sheet.set(op.row, op.column, op.val * scale);
+            }
+            if sheet.get(op.row, op.column) != op.val * scale {
+                t.echoes += 1;
+            }
+        } else if op.kind == 1 {
+            let names = if expand { cells_of(op.ranges) } else { op.ranges.clone() };
+            let got = sheet.sum(op.row, op.column, names);
+            t.results.push(got);
+            if sheet.get(op.row, op.column) != got {
+                t.echoes += 1;
+            }
+        } else {
+            t.results.push(sheet.get(op.row, op.column));
+        }
+    }
+    for row in 1..5 {
+        for c in 0..4 {
+            t.results.push(sheet.get(row, letter(c)));
+        }
+    }
+    t
+}
+
+// ---- text arm ----------------------------------------------------------
+
+struct Excel_text {
+    width: i64,
+    numbers: Vec[i64],
+    formulas: Vec[Option[Vec[String]]],
+}
+
+impl Excel_text {
+    fn new(height: i64, width: char) -> Excel_text {
+        let columns = width as i64 - 'A' as i64 + 1;
+        let mut formulas: Vec[Option[Vec[String]]] = Vec.new();
+        for _ in 0..height * columns {
+            formulas.push(None);
+        }
+        Excel_text { width: columns, numbers: vec![0; height * columns], formulas }
+    }
+
+    fn set(mut ref self, row: i64, column: char, val: i64) {
+        let at = self.cell(row, column);
+        self.numbers[at] = val;
+        self.formulas[at] = None;
+    }
+
+    fn get(self, row: i64, column: char) -> i64 {
+        self.value(self.cell(row, column))
+    }
+
+    fn sum(mut ref self, row: i64, column: char, numbers: Vec[String]) -> i64 {
+        let at = self.cell(row, column);
+        self.formulas[at] = Some(numbers.clone());
+        self.value(at)
+    }
+
+    fn cell(self, row: i64, column: char) -> i64 {
+        (row - 1) * self.width + (column as i64 - 'A' as i64)
+    }
+
+    fn value(self, at: i64) -> i64 {
+        match self.formulas[at] {
+            None => self.numbers[at],
+            Some(names) => {
+                let mut total = 0;
+                for range in names.iter() {
+                    let ends = range.split(":");
+                    let first = ref ends[0];
+                    let last = ref ends[ends.len() - 1];
+                    let left = first.chars().next().unwrap() as i64 - 'A' as i64;
+                    let right = last.chars().next().unwrap() as i64 - 'A' as i64;
+                    let top = i64.parse(first.slice(1, first.len())).unwrap();
+                    let bottom = i64.parse(last.slice(1, last.len())).unwrap();
+                    for r in top..bottom + 1 {
+                        for c in left..right + 1 {
+                            total += self.value((r - 1) * self.width + c);
+                        }
+                    }
+                }
+                total
+            }
+        }
+    }
+}
+
+// Run `ops` on a fresh 4 by D sheet, every set value times `scale`,
+// every range listed cell by cell when `expand`, and every set done
+// twice when `again`. Returns each sum and get result, then each cell's
+// final value; `echoes` counts writes that a get right after did not
+// read back.
+fn drive_text(ops: Vec[Op], scale: i64, expand: bool, again: bool) -> Trace {
+    let mut sheet = Excel_text.new(4, 'D');
+    let mut t = Trace { results: Vec.new(), echoes: 0 };
+    for op in ops.iter() {
+        if op.kind == 0 {
+            sheet.set(op.row, op.column, op.val * scale);
+            if again {
+                sheet.set(op.row, op.column, op.val * scale);
+            }
+            if sheet.get(op.row, op.column) != op.val * scale {
+                t.echoes += 1;
+            }
+        } else if op.kind == 1 {
+            let names = if expand { cells_of(op.ranges) } else { op.ranges.clone() };
+            let got = sheet.sum(op.row, op.column, names);
+            t.results.push(got);
+            if sheet.get(op.row, op.column) != got {
+                t.echoes += 1;
+            }
+        } else {
+            t.results.push(sheet.get(op.row, op.column));
+        }
+    }
+    for row in 1..5 {
+        for c in 0..4 {
+            t.results.push(sheet.get(row, letter(c)));
+        }
+    }
+    t
+}
+
+// ---- rebuild arm -------------------------------------------------------
+
+struct Excel_rebuild {
+    width: i64,
+    values: Vec[i64],
+    formulas: Vec[Option[Vec[i64]]],
+}
+
+impl Excel_rebuild {
+    fn new(height: i64, width: char) -> Excel_rebuild {
+        let columns = width as i64 - 'A' as i64 + 1;
+        let mut formulas: Vec[Option[Vec[i64]]] = Vec.new();
+        for _ in 0..height * columns {
+            formulas.push(None);
+        }
+        Excel_rebuild { width: columns, values: vec![0; height * columns], formulas }
+    }
+
+    fn set(mut ref self, row: i64, column: char, val: i64) {
+        let at = self.cell(row, column);
+        self.values[at] = val;
+        self.formulas[at] = None;
+        self.recompute();
+    }
+
+    fn get(self, row: i64, column: char) -> i64 {
+        self.values[self.cell(row, column)]
+    }
+
+    fn sum(mut ref self, row: i64, column: char, numbers: Vec[String]) -> i64 {
+        let at = self.cell(row, column);
+        let mut reads: Vec[i64] = Vec.new();
+        for range in numbers.iter() {
+            let ends = range.split(":");
+            let (top, left) = self.position(ends[0]);
+            let (bottom, right) = self.position(ends[ends.len() - 1]);
+            for r in top..bottom + 1 {
+                for c in left..right + 1 {
+                    reads.push(r * self.width + c);
+                }
+            }
+        }
+        self.formulas[at] = Some(reads);
+        self.recompute();
+        self.values[at]
+    }
+
+    fn cell(self, row: i64, column: char) -> i64 {
+        (row - 1) * self.width + (column as i64 - 'A' as i64)
+    }
+
+    // The zero-based row and column of a name such as `B12`.
+    fn position(self, name: String) -> (i64, i64) {
+        let column = name.chars().next().unwrap() as i64 - 'A' as i64;
+        let row = i64.parse(name.slice(1, name.len())).unwrap();
+        (row - 1, column)
+    }
+
+    fn recompute(mut ref self) {
+        let mut seen = vec![false; self.values.len()];
+        let mut order: Vec[i64] = Vec.new();
+        for at in 0..self.values.len() {
+            visit_rebuild(self.formulas, at, mut seen, mut order);
+        }
+        for at in order.iter() {
+            if let Some(reads) = self.formulas[*at] {
+                let mut total = 0;
+                for source in reads.iter() {
+                    total += self.values[*source];
+                }
+                self.values[*at] = total;
+            }
+        }
+    }
+}
+
+// Append `at` to `order` after every cell its formula reads.
+fn visit_rebuild(formulas: Vec[Option[Vec[i64]]], at: i64, seen: mut ref Vec[bool], order: mut ref Vec[i64]) {
+    if seen[at] {
+        return;
+    }
+    seen[at] = true;
+    if let Some(reads) = formulas[at] {
+        for source in reads.iter() {
+            visit_rebuild(formulas, *source, mut seen, mut order);
+        }
+    }
+    order.push(at);
+}
+
+// Run `ops` on a fresh 4 by D sheet, every set value times `scale`,
+// every range listed cell by cell when `expand`, and every set done
+// twice when `again`. Returns each sum and get result, then each cell's
+// final value; `echoes` counts writes that a get right after did not
+// read back.
+fn drive_rebuild(ops: Vec[Op], scale: i64, expand: bool, again: bool) -> Trace {
+    let mut sheet = Excel_rebuild.new(4, 'D');
+    let mut t = Trace { results: Vec.new(), echoes: 0 };
+    for op in ops.iter() {
+        if op.kind == 0 {
+            sheet.set(op.row, op.column, op.val * scale);
+            if again {
+                sheet.set(op.row, op.column, op.val * scale);
+            }
+            if sheet.get(op.row, op.column) != op.val * scale {
+                t.echoes += 1;
+            }
+        } else if op.kind == 1 {
+            let names = if expand { cells_of(op.ranges) } else { op.ranges.clone() };
+            let got = sheet.sum(op.row, op.column, names);
+            t.results.push(got);
+            if sheet.get(op.row, op.column) != got {
+                t.echoes += 1;
+            }
+        } else {
+            t.results.push(sheet.get(op.row, op.column));
+        }
+    }
+    for row in 1..5 {
+        for c in 0..4 {
+            t.results.push(sheet.get(row, letter(c)));
+        }
+    }
+    t
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn letter(index: i64) -> char {
+    ('A' as i64 + index) as u8 as char
+}
+
+// One call: `kind` 0 is a set, 1 a sum over `ranges`, 2 a get.
+struct Op {
+    kind: i64,
+    row: i64,
+    column: char,
+    val: i64,
+    ranges: Vec[String],
+}
+
+struct Trace {
+    results: Vec[i64],
+    echoes: i64,
+}
+
+// The cells a range name covers, each as (row, zero-based column).
+fn covered(range: String) -> Vec[(i64, i64)] {
+    let ends = range.split(":");
+    let first = ref ends[0];
+    let last = ref ends[ends.len() - 1];
+    let left = first.chars().next().unwrap() as i64 - 'A' as i64;
+    let right = last.chars().next().unwrap() as i64 - 'A' as i64;
+    let top = i64.parse(first.slice(1, first.len())).unwrap();
+    let bottom = i64.parse(last.slice(1, last.len())).unwrap();
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for r in top..bottom + 1 {
+        for c in left..right + 1 {
+            out.push((r, c));
+        }
+    }
+    out
+}
+
+// The ranges with each written out as its single cells.
+fn cells_of(ranges: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for range in ranges.iter() {
+        for (r, c) in covered(range.clone()).iter() {
+            out.push(f"{letter(*c)}{*r}");
+        }
+    }
+    out
+}
+
+// The definition: the value of a cell after the first `upto` calls is
+// decided by the last set or sum written to it among them, or 0 if none
+// was; a sum adds up the cells its ranges cover as they stand after
+// those same calls.
+fn defined(ops: Vec[Op], upto: i64, row: i64, column: char) -> i64 {
+    let mut i = upto;
+    while i > 0 {
+        i -= 1;
+        let op = ref ops[i];
+        if op.kind != 2 and op.row == row and op.column == column {
+            if op.kind == 0 {
+                return op.val;
+            }
+            let mut total = 0;
+            for range in op.ranges.iter() {
+                for (r, c) in covered(range.clone()).iter() {
+                    total += defined(ops, upto, *r, letter(*c));
+                }
+            }
+            return total;
+        }
+    }
+    0
+}
+
+// What the definition says each sum and get returns, then each cell's
+// final value.
+fn expected(ops: Vec[Op]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for i in 0..ops.len() {
+        if ops[i].kind != 0 {
+            out.push(defined(ops, i + 1, ops[i].row, ops[i].column));
+        }
+    }
+    for row in 1..5 {
+        for c in 0..4 {
+            out.push(defined(ops, ops.len(), row, letter(c)));
+        }
+    }
+    out
+}
+
+fn run(which: i64, ops: Vec[Op], scale: i64, expand: bool, again: bool) -> Trace {
+    if which == 0 {
+        drive_star(ops, scale, expand, again)
+    } else if which == 1 {
+        drive_push(ops, scale, expand, again)
+    } else if which == 2 {
+        drive_text(ops, scale, expand, again)
+    } else {
+        drive_rebuild(ops, scale, expand, again)
+    }
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6310;
+    let mut checks = 0;
+    let mut calls = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 8 to 30 calls on a 4 by D sheet: sets of -9 to 9, sums of one
+        // to three ranges of up to 2 by 2 cells in the rows above, and
+        // gets.
+        let n = 8 + next_random(mut seed) % 23;
+        let mut ops: Vec[Op] = Vec.new();
+        for _ in 0..n {
+            let mut kind = next_random(mut seed) % 3;
+            let row = 1 + next_random(mut seed) % 4;
+            let column = letter(next_random(mut seed) % 4);
+            let mut ranges: Vec[String] = Vec.new();
+            if kind == 1 and row == 1 {
+                kind = 2;
+            }
+            if kind == 1 {
+                for _ in 0..1 + next_random(mut seed) % 3 {
+                    let top = 1 + next_random(mut seed) % (row - 1);
+                    let left = next_random(mut seed) % 4;
+                    let bottom = (top + next_random(mut seed) % 2).min(row - 1);
+                    let right = (left + next_random(mut seed) % 2).min(3);
+                    if top == bottom and left == right {
+                        ranges.push(f"{letter(left)}{top}");
+                    } else {
+                        ranges.push(f"{letter(left)}{top}:{letter(right)}{bottom}");
+                    }
+                }
+            }
+            let val = next_random(mut seed) % 19 - 9;
+            ops.push(Op { kind, row, column, val, ranges });
+        }
+        calls += n;
+        let want = expected(ops);
+        for which in 0..4 {
+            let plain = run(which, ops, 1, false, false);
+            let mut doubled = true;
+            let twice = run(which, ops, 2, false, false);
+            for i in 0..plain.results.len() {
+                if twice.results[i] != plain.results[i] * 2 {
+                    doubled = false;
+                }
+            }
+            let ok = vec![
+                // P1: every sum and get, and every final value, is the
+                // definition's.
+                plain.results == want,
+                // P2: ranges written out as single cells change nothing.
+                run(which, ops, 1, true, false).results == plain.results,
+                // P3: every set value doubled doubles every result.
+                doubled,
+                // P4: a get right after a set or sum reads back what was
+                // written or returned.
+                plain.echoes == 0,
+                // P5: every set done twice changes nothing.
+                run(which, ops, 1, false, true).results == plain.results,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({calls} calls), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
