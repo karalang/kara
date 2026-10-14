@@ -1647,3 +1647,13 @@ fn main() {
     let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
     assert_eq!(interp.output, "HI 3 2 2\n");
 }
+
+/// A type error stopping the MIR pipeline says where it is
+/// (B-2026-10-14-46).
+#[test]
+fn mir_type_error_carries_its_line_and_column() {
+    const SRC: &str =
+        "fn main() {\n    let n: i64 = 1;\n    let s: String = n;\n    println(s);\n}\n";
+    let err = karac::mir::lower::build_source(SRC).err().expect("refused");
+    assert!(err.starts_with("typecheck: 3:"), "{err}");
+}

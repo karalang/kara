@@ -573,6 +573,15 @@ fn at(span: Span) -> String {
     format!("{}:{}", span.line, span.column)
 }
 
+/// A type error stopping the pipeline, at its line and column as the build
+/// stage's errors are (B-2026-10-14-46).
+fn typecheck_error(e: &crate::typechecker::TypeError) -> String {
+    if e.span.line == 0 {
+        return format!("typecheck: {}", e.message);
+    }
+    format!("typecheck: {}: {}", at(e.span), e.message)
+}
+
 impl<'a> Lcx<'a> {
     // ── items ───────────────────────────────────────────────────────
 
@@ -14527,7 +14536,7 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     let mut r = r;
     let mut tc = crate::typecheck_with_library_source(&program, &r);
     if !tc.errors.is_empty() {
-        return Err(format!("typecheck: {}", tc.errors[0].message));
+        return Err(typecheck_error(&tc.errors[0]));
     }
     // A `#[derive(X)]` backed by a `comptime fn derive_x` (`Message`'s
     // `encode` / `decode`) splices its items into the program; they are
@@ -14548,7 +14557,7 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
         }
         tc = crate::typecheck_with_library_source(&program, &r);
         if !tc.errors.is_empty() {
-            return Err(format!("typecheck: {}", tc.errors[0].message));
+            return Err(typecheck_error(&tc.errors[0]));
         }
     }
     let defs = ProgramDefs::build_for_program(&program);
