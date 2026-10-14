@@ -1,0 +1,183 @@
+// LeetCode #606: Construct String from Binary Tree -- write it out.
+//
+// Walk the tree in preorder, writing each node's value into one string
+// and each child inside parentheses. A missing child writes nothing,
+// except a missing left child beside a right one, which writes `()` so
+// that the right child is not read as the left. O(n).
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn write(node: TreeNode, out: mut ref String) {
+    out.push_str(f"{node.val}");
+    if node.left.is_some() or node.right.is_some() {
+        out.push('(');
+        if let Some(l) = node.left {
+            write(l, out);
+        }
+        out.push(')');
+    }
+    if let Some(r) = node.right {
+        out.push('(');
+        write(r, out);
+        out.push(')');
+    }
+}
+
+fn tree2str(root: Option[TreeNode]) -> String {
+    let mut out = String.new();
+    if let Some(r) = root {
+        write(r, mut out);
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree from LeetCode's level order: `None` for a missing child.
+fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
+    if values.is_empty() or values[0].is_none() {
+        return None;
+    }
+    let root = leaf(values[0].unwrap());
+    let mut queue: Vec[TreeNode] = vec![root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < values.len() {
+        let n = queue[head];
+        head += 1;
+        if let Some(v) = values[i] {
+            let c = leaf(v);
+            n.left = Some(c);
+            queue.push(c);
+        }
+        i += 1;
+        if i < values.len() {
+            if let Some(v) = values[i] {
+                let c = leaf(v);
+                n.right = Some(c);
+                queue.push(c);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A tree of `size` nodes with values from -1000 to 1000: each new node
+// walks down from the root, going left with chance lean / 100, and takes
+// the first empty place it meets.
+fn random_tree(size: i64, lean: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let root = leaf(next_random(seed) % 2001 - 1000);
+    for _ in 1..size {
+        let c = leaf(next_random(seed) % 2001 - 1000);
+        let mut node = root;
+        loop {
+            if next_random(seed) % 100 < lean {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+fn written(values: Vec[Option[i64]]) -> String {
+    let parts: Vec[String] = values.iter().map(|v| match v {
+        Some(x) => f"{x}",
+        None => "null".to_string(),
+    }).collect();
+    f"[{parts.join(",")}]"
+}
+
+fn show(name: Str, values: Vec[Option[i64]]) {
+    println(f"{name}: {written(values)} -> {tree2str(from_level(values))}");
+}
+
+// A string's length and a checksum over its characters.
+fn summary(s: String) -> String {
+    let mut h: i64 = 0;
+    for c in s.chars() {
+        h = (h * 31 + c as i64) % 1000000007;
+    }
+    f"{s.len()} characters, checksum {h}"
+}
+
+fn main() {
+    let mut seed: i64 = 606;
+    show("example 1", vec![Some(1), Some(2), Some(3), Some(4)]);
+    show("example 2", vec![Some(1), Some(2), Some(3), None, Some(4)]);
+    show("one node", vec![Some(7)]);
+    show("a left child only", vec![Some(1), Some(2)]);
+    show("a right child only", vec![Some(1), None, Some(2)]);
+    show("a right chain", vec![Some(1), None, Some(2), None, Some(3)]);
+    show("a left chain", vec![Some(1), Some(2), None, Some(3), None, Some(4)]);
+    show("negative values", vec![Some(-1), Some(-2), Some(-3), None, Some(-5), Some(-6)]);
+    show("the problem's extremes", vec![Some(1000), Some(-1000), Some(0), None, Some(-1000), Some(1000)]);
+    // 300 random trees of 1 to 80 nodes, leaning left with chance 50,
+    // 80 or 95 in 100 in turn.
+    let count = 300;
+    let mut nodes = 0;
+    let mut length = 0;
+    let mut h: i64 = 0;
+    for t in 0..count {
+        let size = 1 + next_random(mut seed) % 80;
+        let lean = if t % 3 == 0 { 50 } else if t % 3 == 1 { 80 } else { 95 };
+        let s = tree2str(random_tree(size, lean, mut seed));
+        nodes += size;
+        length += s.len();
+        for c in s.chars() {
+            h = (h * 31 + c as i64) % 1000000007;
+        }
+    }
+    println(f"{count} random trees: {nodes} nodes, {length} characters, checksum {h}");
+    // The largest, 10,000 nodes (the problem's most): a random tree, a
+    // chain down the left, a chain down the right, and a complete tree.
+    println(f"10000 nodes at random: {summary(tree2str(random_tree(10000, 50, mut seed)))}");
+    let top = leaf(0);
+    let mut last = top;
+    for v in 1..10000 {
+        let c = leaf(v % 2001 - 1000);
+        last.left = Some(c);
+        last = c;
+    }
+    println(f"10000 nodes down the left: {summary(tree2str(Some(top)))}");
+    let start = leaf(0);
+    let mut end = start;
+    for v in 1..10000 {
+        let c = leaf(v % 2001 - 1000);
+        end.right = Some(c);
+        end = c;
+    }
+    println(f"10000 nodes down the right: {summary(tree2str(Some(start)))}");
+    let mut values: Vec[Option[i64]] = Vec.new();
+    for v in 0..10000 {
+        values.push(Some(v % 2001 - 1000));
+    }
+    println(f"a complete tree of 10000 nodes: {summary(tree2str(from_level(values)))}");
+}

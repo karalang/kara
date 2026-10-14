@@ -1,0 +1,346 @@
+// LeetCode #606: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// trees.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn write_star(node: TreeNode, out: mut ref String) {
+    out.push_str(f"{node.val}");
+    if node.left.is_some() or node.right.is_some() {
+        out.push('(');
+        if let Some(l) = node.left {
+            write_star(l, out);
+        }
+        out.push(')');
+    }
+    if let Some(r) = node.right {
+        out.push('(');
+        write_star(r, out);
+        out.push(')');
+    }
+}
+
+fn tree2str_star(root: Option[TreeNode]) -> String {
+    let mut out = String.new();
+    if let Some(r) = root {
+        write_star(r, mut out);
+    }
+    out
+}
+
+// ---- concat arm --------------------------------------------------------
+
+fn tree2str_concat(root: Option[TreeNode]) -> String {
+    match root {
+        None => "".to_string(),
+        Some(n) => {
+            let left = tree2str_concat(n.left);
+            if n.right.is_some() {
+                let right = tree2str_concat(n.right);
+                f"{n.val}({left})({right})"
+            } else if n.left.is_some() {
+                f"{n.val}({left})"
+            } else {
+                f"{n.val}"
+            }
+        }
+    }
+}
+
+// ---- stack arm ---------------------------------------------------------
+
+fn tree2str_stack(root: Option[TreeNode]) -> String {
+    let mut out = String.new();
+    let mut stack: Vec[(TreeNode, bool)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, false));
+    }
+    while let Some((node, opened)) = stack.pop() {
+        if opened {
+            out.push(')');
+            continue;
+        }
+        out.push('(');
+        out.push_str(f"{node.val}");
+        if node.left.is_none() and node.right.is_some() {
+            out.push_str("()");
+        }
+        stack.push((node, true));
+        if let Some(r) = node.right {
+            stack.push((r, false));
+        }
+        if let Some(l) = node.left {
+            stack.push((l, false));
+        }
+    }
+    if out.is_empty() {
+        return out;
+    }
+    out.slice(1, out.len() - 1).to_string()
+}
+
+// ---- trim arm ----------------------------------------------------------
+
+fn full_trim(node: Option[TreeNode], out: mut ref Vec[char]) {
+    out.push('(');
+    if let Some(n) = node {
+        for c in f"{n.val}".chars() {
+            out.push(c);
+        }
+        full_trim(n.left, out);
+        full_trim(n.right, out);
+    }
+    out.push(')');
+}
+
+fn tree2str_trim(root: Option[TreeNode]) -> String {
+    if root.is_none() {
+        return "".to_string();
+    }
+    let mut text: Vec[char] = Vec.new();
+    full_trim(root, mut text);
+    // `kept` is built backwards: its last character is the next one kept
+    // after the position being read.
+    let mut kept: Vec[char] = Vec.new();
+    let mut i = text.len() - 2;
+    while i >= 1 {
+        if text[i] == ')' and text[i - 1] == '(' and (kept.is_empty() or kept[kept.len() - 1] == ')') {
+            i -= 2;
+        } else {
+            kept.push(text[i]);
+            i -= 1;
+        }
+    }
+    kept.reverse();
+    let mut out = String.new();
+    for c in kept {
+        out.push(c);
+    }
+    out
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree of `size` nodes with values from -`spread` to `spread`: each
+// new node walks down from the root, going left with chance lean / 100,
+// and takes the first empty place it meets.
+fn random_tree(size: i64, lean: i64, spread: i64, seed: mut ref i64) -> TreeNode {
+    let root = leaf(next_random(seed) % (2 * spread + 1) - spread);
+    for _ in 1..size {
+        let c = leaf(next_random(seed) % (2 * spread + 1) - spread);
+        let mut node = root;
+        loop {
+            if next_random(seed) % 100 < lean {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+fn answer(which: i64, root: TreeNode) -> String {
+    if which == 0 {
+        tree2str_star(Some(root))
+    } else if which == 1 {
+        tree2str_concat(Some(root))
+    } else if which == 2 {
+        tree2str_stack(Some(root))
+    } else {
+        tree2str_trim(Some(root))
+    }
+}
+
+// The tree written with every child in parentheses, an empty one as
+// `()`: `value(left)(right)`.
+fn canonical(node: Option[TreeNode]) -> String {
+    match node {
+        None => "".to_string(),
+        Some(n) => f"{n.val}({canonical(n.left)})({canonical(n.right)})",
+    }
+}
+
+// Reads a string of the problem's form, where a node is its value and
+// then up to two groups in parentheses, an empty group or a missing one
+// meaning no child, and returns the tree it stands for in canonical
+// form; `at` moves past what it reads.
+fn parse(text: Vec[char], at: mut ref i64) -> String {
+    let mut value = String.new();
+    while *at < text.len() and (text[*at] == '-' or text[*at].is_ascii_digit()) {
+        value.push(text[*at]);
+        *at += 1;
+    }
+    let mut groups: Vec[String] = Vec.new();
+    while groups.len() < 2 and *at < text.len() and text[*at] == '(' {
+        *at += 1;
+        if text[*at] == ')' {
+            groups.push("".to_string());
+        } else {
+            groups.push(parse(text, at));
+        }
+        *at += 1;
+    }
+    while groups.len() < 2 {
+        groups.push("".to_string());
+    }
+    f"{value}({groups[0]})({groups[1]})"
+}
+
+fn parsed(s: Str) -> String {
+    let text: Vec[char] = s.chars().collect();
+    let mut at = 0;
+    parse(text, mut at)
+}
+
+// The definition: the canonical form with its outer layer taken as the
+// string with every empty pair written, and then every `()` left out
+// that can be left out without the string standing for another tree,
+// tried from the right until none can.
+fn definition(root: TreeNode) -> String {
+    let want = canonical(Some(root));
+    let mut text: Vec[char] = want.chars().collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut j = text.len() - 2;
+        while j >= 0 {
+            if text[j] == '(' and text[j + 1] == ')' {
+                let mut shorter: Vec[char] = Vec.new();
+                for k in 0..text.len() {
+                    if k != j and k != j + 1 {
+                        shorter.push(text[k]);
+                    }
+                }
+                let mut s = String.new();
+                for c in shorter.iter() {
+                    s.push(*c);
+                }
+                if parsed(s) == want {
+                    text = shorter;
+                    changed = true;
+                }
+            }
+            j -= 1;
+        }
+    }
+    let mut out = String.new();
+    for c in text {
+        out.push(c);
+    }
+    out
+}
+
+// The tree's values in preorder.
+fn preorder(node: Option[TreeNode], out: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        out.push(n.val);
+        preorder(n.left, out);
+        preorder(n.right, out);
+    }
+}
+
+// The numbers written in a string, in order.
+fn numbers(s: Str) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut current = 0;
+    let mut sign = 1;
+    let mut reading = false;
+    for c in s.chars() {
+        if c == '-' {
+            sign = -1;
+            reading = true;
+        } else if c.is_ascii_digit() {
+            current = current * 10 + (c as i64 - 48);
+            reading = true;
+        } else if reading {
+            out.push(sign * current);
+            current = 0;
+            sign = 1;
+            reading = false;
+        }
+    }
+    if reading {
+        out.push(sign * current);
+    }
+    out
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6060;
+    let mut checks = 0;
+    let mut nodes = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 30 nodes, leaning left with chance 20, 50 or 80 in 100 in
+        // turn, with values up to 9 or up to 1000.
+        let size = 1 + next_random(mut seed) % 30;
+        let lean = if t % 3 == 0 { 20 } else if t % 3 == 1 { 50 } else { 80 };
+        let spread = if t % 2 == 0 { 9 } else { 1000 };
+        let root = random_tree(size, lean, spread, mut seed);
+        nodes += size;
+        let want = definition(root);
+        let full = canonical(Some(root));
+        let mut values: Vec[i64] = Vec.new();
+        preorder(Some(root), mut values);
+        let v = next_random(mut seed) % 2001 - 1000;
+        let above_left = TreeNode { val: v, left: Some(root), right: None };
+        let above_right = TreeNode { val: v, left: None, right: Some(root) };
+        for which in 0..4 {
+            let got = answer(which, root);
+            let ok = vec![
+                // P1: the definition's string.
+                got == want,
+                // P2: read back, it stands for the tree.
+                parsed(got) == full,
+                // P3: its numbers, in order, are the values in preorder.
+                numbers(got) == values,
+                // P4: under a new root as its left child, it is wrapped
+                // in one pair after the root's value.
+                answer(which, above_left) == f"{v}({got})",
+                // P5: as the right child, it follows an empty pair.
+                answer(which, above_right) == f"{v}()({got})",
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({nodes} nodes), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

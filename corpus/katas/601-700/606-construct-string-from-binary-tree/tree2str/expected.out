@@ -1,0 +1,14 @@
+example 1: [1,2,3,4] -> 1(2(4))(3)
+example 2: [1,2,3,null,4] -> 1(2()(4))(3)
+one node: [7] -> 7
+a left child only: [1,2] -> 1(2)
+a right child only: [1,null,2] -> 1()(2)
+a right chain: [1,null,2,null,3] -> 1()(2()(3))
+a left chain: [1,2,null,3,null,4] -> 1(2(3(4)))
+negative values: [-1,-2,-3,null,-5,-6] -> -1(-2()(-5))(-3(-6))
+the problem's extremes: [1000,-1000,0,null,-1000,1000] -> 1000(-1000()(-1000))(0(1000))
+300 random trees: 11971 nodes, 65587 characters, checksum 185975675
+10000 nodes at random: 56551 characters, checksum 674346518
+10000 nodes down the left: 53913 characters, checksum 931768955
+10000 nodes down the right: 73911 characters, checksum 202599904
+a complete tree of 10000 nodes: 53917 characters, checksum 317441878
