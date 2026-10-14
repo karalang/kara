@@ -252,7 +252,10 @@ fn legacy_run_still_accepts_use_after_move() {
 }
 
 /// §4.7: an impl may declare a weaker mode than its trait, never a stronger
-/// one. `karac fix` rewrites the impl to the trait's mode.
+/// one. `karac fix` rewrites the impl to the trait's mode. Under D5 a bare
+/// `self` and a bare `v: Vec[i64]` borrow, which is the trait's `ref`, so
+/// only the `mut ref` is stronger (B-2026-10-14-34; before it the check read
+/// an impl's bare receiver and parameters by value and refused them too).
 #[test]
 fn impl_mode_stronger_than_trait_is_an_error() {
     let (dir, path) = fixture(
@@ -267,17 +270,22 @@ fn impl_mode_stronger_than_trait_is_an_error() {
     let out = karac().arg("check").arg(&path).output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "check must reject: {err}");
-    for expect in [
-        "impl method 'P.grab' takes its receiver as `self`, but 'Grab.grab' declares `ref self`",
-        "impl method 'P.grab' takes 'v' by value, but 'Grab.grab' takes it as `ref`",
-        "impl method 'P.grab' takes 'w' as `mut ref`, but 'Grab.grab' takes it as `ref`",
-    ] {
-        assert!(err.contains(expect), "expected `{expect}` in: {err}");
+    assert!(
+        err.contains(
+            "impl method 'P.grab' takes 'w' as `mut ref`, but 'Grab.grab' takes it as `ref`"
+        ),
+        "expected the stronger `w` in: {err}"
+    );
+    for bare in ["its receiver as `self`", "takes 'v' by value"] {
+        assert!(
+            !err.contains(bare),
+            "a bare form borrows, as the trait's `ref` does: {err}"
+        );
     }
     karac().arg("fix").arg(&path).output().unwrap();
     let fixed = std::fs::read_to_string(&path).unwrap();
     assert!(
-        fixed.contains("fn grab(ref self, v: ref Vec[i64], w: ref Vec[i64]) -> i64 {"),
+        fixed.contains("fn grab(self, v: Vec[i64], w: ref Vec[i64]) -> i64 {"),
         "fix must take the trait's modes: {fixed}"
     );
     let out = karac().arg("check").arg(&path).output().unwrap();
