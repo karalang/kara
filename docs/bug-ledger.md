@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 605 |
 | leak | 603 |
 | double-free | 427 |
-| codegen-gap | 255 |
+| codegen-gap | 256 |
 | missing-feature | 248 |
 | other | 172 |
 | false-positive | 168 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2882 |
+| codegen | 2883 |
 | interp | 919 |
 | typecheck | 403 |
 | other | 115 |
@@ -607,6 +607,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-32 | 2026-10-14 | typecheck+codegen | low | The MIR front end lowers a move of a non-`Copy` field out of a `shared` value or out of a `ref` (`|q: S| q.t`, `fn get(ref self) -> String { self.word }`, `fn give(i: ref Inner) -> String { let w = i.word; w }`) instead of refusing it, so the MIR validator reports `invalid MIR: ... move out of _2.1, which is inside a shared value (core semantics §3.7)` where a typecheck/ownership diagnostic with a source position belongs | — |
 | B-2026-10-14-33 | 2026-10-14 | resolver+typecheck | low | A user type still cannot implement `Neg`, `Not`, `Index` or `IndexMut`: d02338bc95 let the binary arithmetic and bitwise operator traits through on check and MIR, and the unary and subscript traits are still refused at resolve as "operator traits are stdlib-only" | — |
 | B-2026-10-14-35 | 2026-10-14 | typecheck | low | A `mut ref` / `mut Slice` argument forwarded WITHOUT the call-site `mut` marker is still accepted by `karac check` and the MIR pipeline, though design.md § Call-site `mut` markers marks such an argument "whatever the argument's root" and says "a missing marker is an error"; d8c605558f made the marker legal there but left it optional | — |
+| B-2026-10-14-36 | 2026-10-14 | codegen | medium | The MIR-to-LLVM backend does not lower `String.clear`: `karac __mir-llvm-run`, `__mir-llvm-asan` and `karac build --mir` refuse any program that calls it ("native `String.clear` is not lowered yet"), while `karac __mir-run` runs it right | — |
 
 ### Relocated
 
