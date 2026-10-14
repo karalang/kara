@@ -97,13 +97,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 255 |
-| missing-feature | 247 |
+| missing-feature | 248 |
 | other | 172 |
 | false-positive | 168 |
 | perf | 164 |
 | diagnostics | 157 |
 | crash | 115 |
-| soundness | 102 |
+| soundness | 103 |
 | use-after-free | 90 |
 
 ### By surface
@@ -112,14 +112,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2882 |
 | interp | 919 |
-| typecheck | 400 |
+| typecheck | 402 |
 | other | 115 |
-| ownership | 89 |
+| ownership | 90 |
 | cli | 75 |
 | runtime | 66 |
 | parser | 61 |
 | autopar | 59 |
-| resolver | 36 |
+| resolver | 37 |
 | effect | 30 |
 | lexer | 11 |
 ## Current state
@@ -607,9 +607,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-25 | 2026-10-14 | typecheck | medium | `karac check` and both MIR backends refuse the call-site `mut` marker on an argument rooted at a `mut ref` binding ("this argument is already a mut-ref; drop the `mut` marker"), though design.md § Call-site `mut` markers requires it "whatever the argument's root" and its own example `sort_in_place(mut s.scores)` with `s: mut ref Session` is refused | — |
 | B-2026-10-14-26 | 2026-10-14 | ownership+interp+codegen | medium | `ref place` on a field (`ref s.field`, design.md § `*` and `ref` in expressions) does not build on either MIR backend ("E_REF_OPERAND_UNSUPPORTED: only `ref <sequence>[i]` is supported in v1"), and `karac check` refuses returning one ("this borrow-return form is not yet supported"), so the spec's own `fn name(user: User) -> ref String { ref user.name }` is refused everywhere | — |
 | B-2026-10-14-29 | 2026-10-14 | interp+codegen | medium | The MIR borrow checker keeps a `Vec[(ref Node, i64)]` borrowed for as long as a `ref Node` copied out of one of its elements is live: `let (a, n) = v[0]; v.pop(); a.val` is refused on both MIR backends ("mutable borrow of _2 while it is borrowed", E0516), though core-semantics §1.1 makes the tuple `Copy` and the copied reference keeps the origin of the node, not of the vector; the same read out of a `Vec[ref Node]` runs, and `karac check` passes both | — |
-| B-2026-10-14-30 | 2026-10-14 | resolver | medium | A user type cannot implement an arithmetic, bitwise or subscript operator trait: `impl Add for Money { ... }` is refused at resolve ("user-defined `impl Add for Money` is not supported in v1; operator traits are stdlib-only") on every backend, though design.md § Operator traits says `a + b` becomes `Add.add(a, b)` "for `i32`, `String` or a user type alike" and § Default generic arguments shows `impl Add for Money { ... }`; only `Eq`, `Ord` and `Display` are let through | — |
 | B-2026-10-14-31 | 2026-10-14 | typecheck+interp+codegen | low | `if let Some(b) = None { ... }` with the payload's type left to inference passes `karac check`, then gives invalid MIR: `karac __mir-run` stops with "invalid MIR: ... binary operands of different types i64 and ()" and `karac __mir-llvm-run` panics in src/codegen/mir/body.rs; `let y = None; if let Some(b) = y` is refused by check ("cannot infer type parameter 'T'") and `match None { Some(b) => c + b, None => 0 }` runs, so the `if let` scrutinee alone escapes both | — |
 | B-2026-10-14-32 | 2026-10-14 | typecheck+codegen | low | The MIR front end lowers a move of a non-`Copy` field out of a `shared` value or out of a `ref` (`|q: S| q.t`, `fn get(ref self) -> String { self.word }`, `fn give(i: ref Inner) -> String { let w = i.word; w }`) instead of refusing it, so the MIR validator reports `invalid MIR: ... move out of _2.1, which is inside a shared value (core semantics §3.7)` where a typecheck/ownership diagnostic with a source position belongs | — |
+| B-2026-10-14-33 | 2026-10-14 | resolver+typecheck | low | A user type still cannot implement `Neg`, `Not`, `Index` or `IndexMut`: d02338bc95 let the binary arithmetic and bitwise operator traits through on check and MIR, and the unary and subscript traits are still refused at resolve as "operator traits are stdlib-only" | — |
+| B-2026-10-14-34 | 2026-10-14 | typecheck+ownership | medium | A trait impl method declared with bare `self` where the trait declares `own self` is accepted, and `karac check` and the MIR pipeline then disagree about the call: check treats `a.shrink()` as consuming `a`, MIR borrows it, so a later use of `a` is refused by check and runs on `__mir-run` | — |
 
 ### Relocated
 
@@ -4003,6 +4004,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-22 | typecheck | medium | `karac check` refuses `*n` on a `ref` to a `shared` handle as a move out of a borrow (`borrow_projection_copy`: "cannot move a non-`Copy` value out o… | 5391da32d4 |
 | B-2026-10-14-27 | typecheck | medium | `karac check` refuses `*w` as an operand of `==` (`for w in words.iter() { if *w == target { .. | 1be6eb5497 |
 | B-2026-10-14-28 | ownership | medium | `karac check`'s ownership pass counts lending a bare `for` element into a `ref` slot as a MOVE, so lending it twice is refused: `v.push(c); v.push(c)… | 31aadf36c1 |
+| B-2026-10-14-30 | resolver | medium | A user type cannot implement an arithmetic, bitwise or subscript operator trait: `impl Add for Money { .. | d02338bc95 |
 
 </details>
 
