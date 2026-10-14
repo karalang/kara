@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/633-sum-of-square-numbers/judge_square_sum_primes.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "c8dad8035"
+extracted_src = "7c65943c"
+model_rev = "1aa23105"
+model_src = "7c65943c"

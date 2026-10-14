@@ -1,0 +1,77 @@
+// LeetCode #633: Sum of Square Numbers -- two pointers.
+//
+// `a` starts at 0 and `b` at the largest root at most sqrt(c). While
+// a <= b, a sum too small moves `a` up and a sum too large moves `b`
+// down; every pair that could add up to `c` is passed on the way.
+// O(sqrt c).
+
+fn judge_square_sum(c: i64) -> bool {
+    let mut a = 0;
+    let mut b = root(c);
+    while a <= b {
+        let sum = a * a + b * b;
+        if sum == c {
+            return true;
+        }
+        if sum < c {
+            a += 1;
+        } else {
+            b -= 1;
+        }
+    }
+    false
+}
+
+// The largest r with r * r <= n, by binary search.
+fn root(n: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = n.min(3037000499) + 1;
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        if mid * mid <= n {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // The LeetCode examples; 0, 1, 2 and 4; a prime that leaves 1 on
+    // division by 4; 3 squared, alone and doubled; 3 times 7, both once;
+    // a million; and the largest values, the last 46340 squared.
+    for c in vec![5, 3, 0, 1, 2, 4, 13, 9, 18, 21, 1000000, 2147483646, 2147483647, 2147395600] {
+        println(f"c = {c} -> {judge_square_sum(c)}");
+    }
+    // Every c from 0 to 20,000.
+    let mut yes = 0;
+    let mut checksum = 0;
+    for c in 0..20001 {
+        if judge_square_sum(c) {
+            yes += 1;
+            checksum = (checksum * 31 + c) % 1000000007;
+        }
+    }
+    println(f"0 to 20000: {yes} sums of two squares, checksum {checksum}");
+    // 300 random values from 0 to 2^31 - 1.
+    let mut seed: i64 = 633;
+    yes = 0;
+    checksum = 0;
+    for _ in 0..300 {
+        let wide = next_random(mut seed) * 32768 + next_random(mut seed);
+        let c = wide * 2 + next_random(mut seed) % 2;
+        if judge_square_sum(c) {
+            yes += 1;
+            checksum = (checksum * 31 + c) % 1000000007;
+        }
+    }
+    println(f"300 random values: {yes} sums of two squares, checksum {checksum}");
+}

@@ -1,0 +1,16 @@
+c = 5 -> true
+c = 3 -> false
+c = 0 -> true
+c = 1 -> true
+c = 2 -> true
+c = 4 -> true
+c = 13 -> true
+c = 9 -> true
+c = 18 -> true
+c = 21 -> false
+c = 1000000 -> true
+c = 2147483646 -> false
+c = 2147483647 -> false
+c = 2147395600 -> true
+0 to 20000: 5259 sums of two squares, checksum 164152140
+300 random values: 44 sums of two squares, checksum 637959429

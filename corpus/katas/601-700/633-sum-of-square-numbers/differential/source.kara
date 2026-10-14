@@ -1,0 +1,183 @@
+// LeetCode #633: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// inputs.
+
+// ---- star arm ----------------------------------------------------------
+
+fn judge_square_sum_star(c: i64) -> bool {
+    let mut a = 0;
+    let mut b = root_star(c);
+    while a <= b {
+        let sum = a * a + b * b;
+        if sum == c {
+            return true;
+        }
+        if sum < c {
+            a += 1;
+        } else {
+            b -= 1;
+        }
+    }
+    false
+}
+
+// The largest r with r * r <= n, by binary search.
+fn root_star(n: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = n.min(3037000499) + 1;
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        if mid * mid <= n {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+// ---- squares arm -------------------------------------------------------
+
+fn judge_square_sum_squares(c: i64) -> bool {
+    let mut squares: Set[i64] = Set.new();
+    let mut a = 0;
+    while a * a <= c {
+        squares.insert(a * a);
+        if squares.contains(c - a * a) {
+            return true;
+        }
+        a += 1;
+    }
+    false
+}
+
+// ---- roots arm ---------------------------------------------------------
+
+fn judge_square_sum_roots(c: i64) -> bool {
+    let mut a = 0;
+    while 2 * a * a <= c {
+        let rest = c - a * a;
+        let b = root_roots(rest);
+        if b * b == rest {
+            return true;
+        }
+        a += 1;
+    }
+    false
+}
+
+// The largest r with r * r <= n, by Newton's method from n itself.
+fn root_roots(n: i64) -> i64 {
+    if n < 2 {
+        return n;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
+// ---- primes arm --------------------------------------------------------
+
+fn judge_square_sum_primes(c: i64) -> bool {
+    if c == 0 {
+        return true;
+    }
+    let mut rest = c;
+    let mut p = 2;
+    while p * p <= rest {
+        let mut times = 0;
+        while rest % p == 0 {
+            rest /= p;
+            times += 1;
+        }
+        if p % 4 == 3 and times % 2 == 1 {
+            return false;
+        }
+        p += 1;
+    }
+    rest % 4 != 3
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: some a and b from 0 up, with a <= b, have
+// a * a + b * b == c.
+fn definition(c: i64) -> bool {
+    let mut a = 0;
+    while a * a <= c {
+        let mut b = a;
+        while a * a + b * b <= c {
+            if a * a + b * b == c {
+                return true;
+            }
+            b += 1;
+        }
+        a += 1;
+    }
+    false
+}
+
+fn answer(which: i64, c: i64) -> bool {
+    if which == 0 {
+        judge_square_sum_star(c)
+    } else if which == 1 {
+        judge_square_sum_squares(c)
+    } else if which == 2 {
+        judge_square_sum_roots(c)
+    } else {
+        judge_square_sum_primes(c)
+    }
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6330;
+    let mut checks = 0;
+    let mut yes = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // Two values from 0 to 3,000.
+        let c = next_random(mut seed) % 3001;
+        let d = next_random(mut seed) % 3001;
+        let want = definition(c);
+        if want {
+            yes += 1;
+        }
+        for which in 0..4 {
+            let got = answer(which, c);
+            let ok = vec![
+                // P1: the answer is the definition's.
+                got == want,
+                // P2: four times c has the same answer.
+                answer(which, 4 * c) == got,
+                // P3: twice c has the same answer.
+                answer(which, 2 * c) == got,
+                // P4: if c and d are both sums of two squares, so is c * d.
+                not (got and answer(which, d)) or answer(which, c * d),
+                // P5: c squared is one, and 4 * c + 3 is not.
+                answer(which, c * c) and not answer(which, 4 * c + 3),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({yes} sums of two squares), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

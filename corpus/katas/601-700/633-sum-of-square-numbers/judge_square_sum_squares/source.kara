@@ -1,0 +1,58 @@
+// LeetCode #633: Sum of Square Numbers -- a set of squares.
+//
+// Every square up to `c` goes into a `Set` as it is made, and `c` is a
+// sum of two squares exactly when, for some square a * a, the rest
+// c - a * a is in the set, counting the square just added. O(sqrt c)
+// inserts and lookups.
+
+fn judge_square_sum(c: i64) -> bool {
+    let mut squares: Set[i64] = Set.new();
+    let mut a = 0;
+    while a * a <= c {
+        squares.insert(a * a);
+        if squares.contains(c - a * a) {
+            return true;
+        }
+        a += 1;
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // The LeetCode examples; 0, 1, 2 and 4; a prime that leaves 1 on
+    // division by 4; 3 squared, alone and doubled; 3 times 7, both once;
+    // a million; and the largest values, the last 46340 squared.
+    for c in vec![5, 3, 0, 1, 2, 4, 13, 9, 18, 21, 1000000, 2147483646, 2147483647, 2147395600] {
+        println(f"c = {c} -> {judge_square_sum(c)}");
+    }
+    // Every c from 0 to 20,000.
+    let mut yes = 0;
+    let mut checksum = 0;
+    for c in 0..20001 {
+        if judge_square_sum(c) {
+            yes += 1;
+            checksum = (checksum * 31 + c) % 1000000007;
+        }
+    }
+    println(f"0 to 20000: {yes} sums of two squares, checksum {checksum}");
+    // 300 random values from 0 to 2^31 - 1.
+    let mut seed: i64 = 633;
+    yes = 0;
+    checksum = 0;
+    for _ in 0..300 {
+        let wide = next_random(mut seed) * 32768 + next_random(mut seed);
+        let c = wide * 2 + next_random(mut seed) % 2;
+        if judge_square_sum(c) {
+            yes += 1;
+            checksum = (checksum * 31 + c) % 1000000007;
+        }
+    }
+    println(f"300 random values: {yes} sums of two squares, checksum {checksum}");
+}

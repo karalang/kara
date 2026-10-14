@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/633-sum-of-square-numbers/bench/judge_square_sum.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "c8dad8035"
+extracted_src = "c9652125"
+model_rev = "1aa23105"
+model_src = "c9652125"

@@ -1,0 +1,66 @@
+// LeetCode #633: Sum of Square Numbers -- Fermat's theorem.
+//
+// A positive number is a sum of two squares exactly when every prime
+// that leaves 3 on division by 4 divides it an even number of times.
+// Trial division takes out each prime factor in turn, up to the square
+// root of what is left; whatever is left over above 1 is a prime that
+// divides once. 0 is 0 * 0 + 0 * 0. O(sqrt c).
+
+fn judge_square_sum(c: i64) -> bool {
+    if c == 0 {
+        return true;
+    }
+    let mut rest = c;
+    let mut p = 2;
+    while p * p <= rest {
+        let mut times = 0;
+        while rest % p == 0 {
+            rest /= p;
+            times += 1;
+        }
+        if p % 4 == 3 and times % 2 == 1 {
+            return false;
+        }
+        p += 1;
+    }
+    rest % 4 != 3
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // The LeetCode examples; 0, 1, 2 and 4; a prime that leaves 1 on
+    // division by 4; 3 squared, alone and doubled; 3 times 7, both once;
+    // a million; and the largest values, the last 46340 squared.
+    for c in vec![5, 3, 0, 1, 2, 4, 13, 9, 18, 21, 1000000, 2147483646, 2147483647, 2147395600] {
+        println(f"c = {c} -> {judge_square_sum(c)}");
+    }
+    // Every c from 0 to 20,000.
+    let mut yes = 0;
+    let mut checksum = 0;
+    for c in 0..20001 {
+        if judge_square_sum(c) {
+            yes += 1;
+            checksum = (checksum * 31 + c) % 1000000007;
+        }
+    }
+    println(f"0 to 20000: {yes} sums of two squares, checksum {checksum}");
+    // 300 random values from 0 to 2^31 - 1.
+    let mut seed: i64 = 633;
+    yes = 0;
+    checksum = 0;
+    for _ in 0..300 {
+        let wide = next_random(mut seed) * 32768 + next_random(mut seed);
+        let c = wide * 2 + next_random(mut seed) % 2;
+        if judge_square_sum(c) {
+            yes += 1;
+            checksum = (checksum * 31 + c) % 1000000007;
+        }
+    }
+    println(f"300 random values: {yes} sums of two squares, checksum {checksum}");
+}

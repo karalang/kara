@@ -1,0 +1,60 @@
+// LeetCode #633: Sum of Square Numbers -- bench program.
+//
+// The ★ arm on 10,000 random values from 0 to 2^31 - 1, made once and
+// then answered in turn, counting the sums of two squares and putting
+// each of them into a checksum.
+
+fn judge_square_sum(c: i64) -> bool {
+    let mut a = 0;
+    let mut b = root(c);
+    while a <= b {
+        let sum = a * a + b * b;
+        if sum == c {
+            return true;
+        }
+        if sum < c {
+            a += 1;
+        } else {
+            b -= 1;
+        }
+    }
+    false
+}
+
+// The largest r with r * r <= n, by binary search.
+fn root(n: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = n.min(3037000499) + 1;
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        if mid * mid <= n {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed: i64 = 633;
+    let mut values: Vec[i64] = Vec.new();
+    for _ in 0..10000 {
+        let wide = next_random(mut seed) * 32768 + next_random(mut seed);
+        values.push(wide * 2 + next_random(mut seed) % 2);
+    }
+    let mut yes = 0;
+    let mut checksum = 0;
+    for c in values.iter() {
+        if judge_square_sum(*c) {
+            yes += 1;
+            checksum = (checksum * 31 + *c) % 1000000007;
+        }
+    }
+    println(f"{values.len()} values: {yes} sums of two squares, checksum {checksum}");
+}
