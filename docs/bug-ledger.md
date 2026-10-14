@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 245 |
 | other | 172 |
 | perf | 164 |
-| false-positive | 161 |
+| false-positive | 162 |
 | diagnostics | 156 |
 | crash | 114 |
 | soundness | 102 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2878 |
 | interp | 916 |
-| typecheck | 393 |
+| typecheck | 394 |
 | other | 115 |
 | ownership | 87 |
 | cli | 75 |
@@ -611,6 +611,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-19 | 2026-10-14 | typecheck | medium | On the MIR backends a `collect()` that is an element of a tuple literal does not build, even where the tuple's type is written: `let t: (Vec[char], i64) = (s.chars().collect(), 1);` and `pairs.push((s.chars().collect(), 1))` into a `Vec[(Vec[char], i64)]` both fail with "an expression whose type does not lower (UnsolvedParam(\"C\")) is not lowered yet", while `karac check` passes them | — |
 | B-2026-10-14-20 | 2026-10-14 | typecheck+interp+codegen | medium | `collect()` into a `SortedSet` or `SortedMap` annotation does not build anywhere: `karac check` and `run --interp` refuse `let ss: SortedSet[i64] = v.iter().map(|x| x * 2).collect();` with "expected 'SortedSet[i64]', found 'Vec[i64]'", `__mir-run` stops with "expected a library value" and `__mir-llvm-run` with "native `SortedMap[i64, i64].from_iter` is not lowered yet" | — |
 | B-2026-10-14-21 | 2026-10-14 | codegen | medium | The MIR compiled path (`__mir-llvm-run`, `__mir-llvm-asan`, `karac build --mir`) never runs the MIR validator, so a body the MIR interpreter refuses as "invalid MIR" is compiled and run: B-2026-10-14-11's ill-typed copy became a silent exit 101 and a stack-buffer-overflow instead of an error | — |
+| B-2026-10-14-22 | 2026-10-14 | typecheck | medium | `karac check` refuses `*n` on a `ref` to a `shared` handle as a move out of a borrow (`borrow_projection_copy`: "cannot move a non-`Copy` value out of a borrow with `*`"), though the spec copies a handle on every use and both MIR backends run it: `for n in nodes.iter() { f(Some(*n)); best = *n; }` over a `Vec[Node]` of a `shared struct Node` | — |
 
 ### Relocated
 
