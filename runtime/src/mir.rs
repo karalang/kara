@@ -21,9 +21,16 @@ pub struct RawVec {
 }
 
 thread_local! {
-    /// The text being formatted, innermost last: a `println` or a
-    /// `format` pushes a buffer, appends its parts, and pops it.
-    static FMT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The text being formatted: a `println` or a `format` pushes where
+    /// its text starts, appends its parts, and pops it off the end, so
+    /// nested formats share one buffer and a format allocates nothing but
+    /// its result.
+    static FMT: RefCell<FmtBuf> = const {
+        RefCell::new(FmtBuf {
+            buf: Vec::new(),
+            starts: Vec::new(),
+        })
+    };
     /// Standard output, flushed at exit, at an abort, and before anything
     /// is written to standard error so the two stay in order on a terminal.
     static OUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -32,6 +39,22 @@ thread_local! {
 }
 
 const OUT_LIMIT: usize = 1 << 16;
+
+struct FmtBuf {
+    buf: Vec<u8>,
+    starts: Vec<usize>,
+}
+
+/// Pops the innermost format's text, handing it to `f`.
+fn fmt_pop<T>(f: impl FnOnce(&[u8]) -> T) -> T {
+    FMT.with(|b| {
+        let mut b = b.borrow_mut();
+        let start = b.starts.pop().unwrap_or(b.buf.len());
+        let out = f(&b.buf[start..]);
+        b.buf.truncate(start);
+        out
+    })
+}
 
 fn out_flush() {
     OUT.with(|o| {
@@ -73,10 +96,32 @@ unsafe fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
 }
 
 fn append(s: &str) {
-    FMT.with(|f| match f.borrow_mut().last_mut() {
-        Some(b) => b.push_str(s),
-        None => write(false, s.as_bytes()),
+    append_bytes(s.as_bytes());
+}
+
+fn append_bytes(s: &[u8]) {
+    FMT.with(|f| {
+        let mut f = f.borrow_mut();
+        if f.starts.is_empty() {
+            drop(f);
+            write(false, s);
+        } else {
+            f.buf.extend_from_slice(s);
+        }
     });
+}
+
+/// The decimal digits of `v`, at the end of `out`.
+fn digits(mut v: u64, out: &mut [u8; 20]) -> usize {
+    let mut i = out.len();
+    loop {
+        i -= 1;
+        out[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            return i;
+        }
+    }
 }
 
 /// Writes what is buffered for standard output.
@@ -88,7 +133,11 @@ pub extern "C" fn karac_mir_flush() {
 /// Starts formatting a `println` / `print` / `format`.
 #[no_mangle]
 pub extern "C" fn karac_mir_fmt_begin() {
-    FMT.with(|f| f.borrow_mut().push(String::new()));
+    FMT.with(|f| {
+        let mut f = f.borrow_mut();
+        let at = f.buf.len();
+        f.starts.push(at);
+    });
 }
 
 /// # Safety
@@ -96,18 +145,26 @@ pub extern "C" fn karac_mir_fmt_begin() {
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_fmt_str(ptr: *const u8, len: usize) {
     // SAFETY: the caller's contract; a `str` holds UTF-8.
-    let b = unsafe { bytes(ptr, len) };
-    append(&String::from_utf8_lossy(b));
+    append_bytes(unsafe { bytes(ptr, len) });
 }
 
 #[no_mangle]
 pub extern "C" fn karac_mir_fmt_i64(v: i64) {
-    append(&v.to_string());
+    let mut d = [0u8; 20];
+    let i = digits(v.unsigned_abs(), &mut d);
+    if v < 0 {
+        d[i - 1] = b'-';
+        append_bytes(&d[i - 1..]);
+    } else {
+        append_bytes(&d[i..]);
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn karac_mir_fmt_u64(v: u64) {
-    append(&v.to_string());
+    let mut d = [0u8; 20];
+    let i = digits(v, &mut d);
+    append_bytes(&d[i..]);
 }
 
 #[no_mangle]
@@ -137,18 +194,25 @@ pub extern "C" fn karac_mir_fmt_bool(v: u8) {
 
 #[no_mangle]
 pub extern "C" fn karac_mir_fmt_char(c: u32) {
-    append(&char::from_u32(c).unwrap_or('\u{fffd}').to_string());
+    let mut b = [0u8; 4];
+    append(char::from_u32(c).unwrap_or('\u{fffd}').encode_utf8(&mut b));
 }
 
 /// Ends a `println` (bit 0 of `flags`: add a newline; bit 1: to standard
 /// error).
 #[no_mangle]
 pub extern "C" fn karac_mir_print_end(flags: u32) {
-    let mut text = FMT.with(|f| f.borrow_mut().pop()).unwrap_or_default();
     if flags & 1 != 0 {
-        text.push('\n');
+        FMT.with(|f| {
+            let mut f = f.borrow_mut();
+            if f.starts.is_empty() {
+                let at = f.buf.len();
+                f.starts.push(at);
+            }
+            f.buf.push(b'\n');
+        });
     }
-    write(flags & 2 != 0, text.as_bytes());
+    fmt_pop(|text| write(flags & 2 != 0, text));
 }
 
 /// Ends a `format` into the `String` at `out`.
@@ -157,9 +221,8 @@ pub extern "C" fn karac_mir_print_end(flags: u32) {
 /// `out` is writable for a `String`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_mir_fmt_end_string(out: *mut RawVec) {
-    let text = FMT.with(|f| f.borrow_mut().pop()).unwrap_or_default();
     // SAFETY: the caller's contract.
-    unsafe { string_of(out, text.as_bytes()) };
+    fmt_pop(|text| unsafe { string_of(out, text) });
 }
 
 /// One f-string hole with a spec (`{x:.3}`, `{n:04}`, `{s:>10}`): the
@@ -194,7 +257,7 @@ pub unsafe extern "C" fn karac_mir_fmt_spec(
             3 => fs.apply_uint128(wide),
             4 => fs.apply_float(f),
             _ => {
-                let shown = FMT.with(|b| b.borrow_mut().pop()).unwrap_or_default();
+                let shown = fmt_pop(|t| String::from_utf8_lossy(t).into_owned());
                 fs.apply_str(&shown)
             }
         },
@@ -1631,7 +1694,7 @@ unsafe fn merge_passes<const N: usize>(
 /// Ends a `panic_message` format: its text is the next abort's message.
 #[no_mangle]
 pub extern "C" fn karac_mir_panic_set() {
-    let text = FMT.with(|f| f.borrow_mut().pop()).unwrap_or_default();
+    let text = fmt_pop(|t| String::from_utf8_lossy(t).into_owned());
     PANIC.with(|p| *p.borrow_mut() = Some(text));
 }
 
@@ -2509,7 +2572,54 @@ pub unsafe extern "C" fn karac_mir_pool_drop(h: *mut MirPool) {
 
 #[cfg(test)]
 mod tests {
-    use super::merge_sort;
+    use super::{
+        karac_mir_fmt_begin, karac_mir_fmt_char, karac_mir_fmt_end_string, karac_mir_fmt_i64,
+        karac_mir_fmt_str, karac_mir_fmt_u64, merge_sort, RawVec,
+    };
+
+    fn end_string() -> String {
+        let mut out = RawVec {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        // SAFETY: `out` is a writable `String`.
+        unsafe { karac_mir_fmt_end_string(&mut out) };
+        if out.ptr.is_null() {
+            return String::new();
+        }
+        // SAFETY: the runtime wrote `len` bytes at `ptr`, from `malloc`.
+        let s = unsafe { std::slice::from_raw_parts(out.ptr, out.len) }.to_vec();
+        // SAFETY: as above.
+        unsafe { libc_free(out.ptr) };
+        String::from_utf8(s).unwrap()
+    }
+
+    extern "C" {
+        #[link_name = "free"]
+        fn libc_free(p: *mut u8);
+    }
+
+    /// Formats nest on the one buffer: an inner format ends with its own
+    /// text and leaves the outer one's in place; integers print at their
+    /// extremes.
+    #[test]
+    fn formats_nest_and_print_integers() {
+        let s = |t: &str| unsafe { karac_mir_fmt_str(t.as_ptr(), t.len()) };
+        karac_mir_fmt_begin();
+        s("a");
+        karac_mir_fmt_i64(i64::MIN);
+        karac_mir_fmt_begin();
+        s("in");
+        karac_mir_fmt_u64(u64::MAX);
+        assert_eq!(end_string(), "in18446744073709551615");
+        karac_mir_fmt_i64(0);
+        karac_mir_fmt_i64(-7);
+        karac_mir_fmt_char('é' as u32);
+        assert_eq!(end_string(), "a-92233720368547758080-7é");
+        karac_mir_fmt_begin();
+        assert_eq!(end_string(), "");
+    }
 
     /// The merge is stable and sorts, for a fixed element size and for
     /// one copied by length, against `slice::sort_by_key`.
