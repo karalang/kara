@@ -1,0 +1,107 @@
+// LeetCode #581: Shortest Unsorted Continuous Subarray -- the first
+// descents, widened.
+//
+// The first place from the left where a value falls and the first from
+// the right where one rises bound a middle that is out of order. The
+// smallest and largest values in that middle then push the bounds out:
+// left past every earlier value larger than the smallest, right past
+// every later value smaller than the largest. O(n) time.
+
+fn find_unsorted_subarray(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut left = 0;
+    while left + 1 < n and nums[left] <= nums[left + 1] {
+        left += 1;
+    }
+    if left == n - 1 {
+        return 0;
+    }
+    let mut right = n - 1;
+    while nums[right - 1] <= nums[right] {
+        right -= 1;
+    }
+    let low = *nums[left..=right].iter().min().unwrap();
+    let high = *nums[left..=right].iter().max().unwrap();
+    while left > 0 and nums[left - 1] > low {
+        left -= 1;
+    }
+    while right < n - 1 and nums[right + 1] < high {
+        right += 1;
+    }
+    right - left + 1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums}: {find_unsorted_subarray(nums)}");
+}
+
+fn main() {
+    // The three LeetCode examples.
+    show(vec![2, 6, 4, 8, 10, 9, 15]);
+    show(vec![1, 2, 3, 4]);
+    show(vec![1]);
+    // Two values out of order; all equal; falling; the ends of the range.
+    show(vec![2, 1]);
+    show(vec![5, 5, 5, 5]);
+    show(vec![5, 4, 3, 2, 1]);
+    show(vec![100000, -100000]);
+    // Equal values at the edge of the subarray, inside it and outside it.
+    show(vec![1, 3, 2, 2, 2]);
+    show(vec![1, 2, 3, 3, 3, 2]);
+    show(vec![2, 2, 1, 2, 2]);
+    // A small value late pulls the start to the front; a large one early
+    // pushes the end to the back.
+    show(vec![1, 2, 3, 4, 5, 0, 6]);
+    show(vec![1, 9, 2, 3, 4, 5, 6]);
+    // 300 random arrays of 1 to 30: sorted and then 0 to 3 pairs swapped,
+    // over a range small enough to give equal values.
+    let mut seed: i64 = 581;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + step(mut seed) % 30;
+        let span = 1 + step(mut seed) % 40;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(step(mut seed) % span - span / 2);
+        }
+        nums.sort();
+        let swaps = step(mut seed) % 4;
+        for _ in 0..swaps {
+            let i = step(mut seed) % n;
+            let j = step(mut seed) % n;
+            nums.swap(i, j);
+        }
+        let got = find_unsorted_subarray(nums);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"300 random arrays: total {total}, checksum {checksum}");
+    // The problem's largest, 10,000 values: in order but for the two
+    // ends swapped, in order but for two neighbours in the middle, and
+    // falling.
+    let mut ends: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        ends.push(i * 20 - 100000);
+    }
+    ends.swap(0, 9999);
+    println(f"10000 values, the ends swapped: {find_unsorted_subarray(ends)}");
+    let mut middle: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        middle.push(i * 20 - 100000);
+    }
+    middle.swap(4999, 5000);
+    println(f"10000 values, two in the middle swapped: {find_unsorted_subarray(middle)}");
+    let mut falling: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        falling.push(99999 - i * 20);
+    }
+    println(f"10000 values falling: {find_unsorted_subarray(falling)}");
+}

@@ -1,0 +1,77 @@
+// Benchmark for #581: Shortest Unsorted Continuous Subarray -- the ★ arm
+// (two sweeps).
+//
+// Walking left to right with the largest value so far, the last place
+// where a value is below that largest must be inside the subarray, and
+// everything after it is already in place: that is the end. Walking
+// right to left with the smallest so far gives the start the same way.
+// O(n) time, O(1) space.
+
+fn find_unsorted_subarray(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut largest = nums[0];
+    let mut end = -1;
+    for i in 1..n {
+        if nums[i] < largest {
+            end = i;
+        } else {
+            largest = nums[i];
+        }
+    }
+    let mut smallest = nums[n - 1];
+    let mut start = 0;
+    for i in (0..n - 1).rev() {
+        if nums[i] > smallest {
+            start = i;
+        } else {
+            smallest = nums[i];
+        }
+    }
+    if end == -1 {
+        0
+    } else {
+        end - start + 1
+    }
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100 arrays built once, each of 10,000 values (the problem's most)
+    // drawn from the whole range, sorted, and then 1 to 3 pairs swapped
+    // at random. Then 600 times over, every array is answered.
+    let count = 100;
+    let rounds = 600;
+    let mut seed: i64 = 581;
+    let mut cases: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..10000 {
+            nums.push((next_random(mut seed) * 32768 + next_random(mut seed)) % 200001 - 100000);
+        }
+        nums.sort();
+        let swaps = 1 + next_random(mut seed) % 3;
+        for _ in 0..swaps {
+            let i = (next_random(mut seed) * 32768 + next_random(mut seed)) % 10000;
+            let j = (next_random(mut seed) * 32768 + next_random(mut seed)) % 10000;
+            nums.swap(i, j);
+        }
+        cases.push(nums);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let p = (round * 7 + g) % count;
+            let got = find_unsorted_subarray(cases[p]);
+            total += got;
+            checksum = (checksum * 31 + got) % 1000000007;
+        }
+    }
+    println(f"{count} arrays of 10000 values, {rounds} rounds: total {total}, checksum {checksum}");
+}

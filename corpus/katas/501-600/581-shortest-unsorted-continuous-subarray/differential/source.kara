@@ -1,0 +1,237 @@
+// LeetCode #581: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// arrays.
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_unsorted_subarray_star(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut largest = nums[0];
+    let mut end = -1;
+    for i in 1..n {
+        if nums[i] < largest {
+            end = i;
+        } else {
+            largest = nums[i];
+        }
+    }
+    let mut smallest = nums[n - 1];
+    let mut start = 0;
+    for i in (0..n - 1).rev() {
+        if nums[i] > smallest {
+            start = i;
+        } else {
+            smallest = nums[i];
+        }
+    }
+    if end == -1 {
+        0
+    } else {
+        end - start + 1
+    }
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+fn find_unsorted_subarray_sorted(nums: Vec[i64]) -> i64 {
+    let mut sorted = nums.clone();
+    sorted.sort();
+    let mut start = 0;
+    while start < nums.len() and nums[start] == sorted[start] {
+        start += 1;
+    }
+    if start == nums.len() {
+        return 0;
+    }
+    let mut end = nums.len() - 1;
+    while nums[end] == sorted[end] {
+        end -= 1;
+    }
+    end - start + 1
+}
+
+// ---- stack arm ---------------------------------------------------------
+
+fn find_unsorted_subarray_stack(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut stack: Vec[i64] = Vec.new();
+    let mut start = n;
+    for i in 0..n {
+        while let Some(top) = stack.last() {
+            if nums[*top] <= nums[i] {
+                break;
+            }
+            start = start.min(*top);
+            stack.pop();
+        }
+        stack.push(i);
+    }
+    stack.clear();
+    let mut end = -1;
+    for i in (0..n).rev() {
+        while let Some(top) = stack.last() {
+            if nums[*top] >= nums[i] {
+                break;
+            }
+            end = end.max(*top);
+            stack.pop();
+        }
+        stack.push(i);
+    }
+    if end == -1 {
+        0
+    } else {
+        end - start + 1
+    }
+}
+
+// ---- widen arm ---------------------------------------------------------
+
+fn find_unsorted_subarray_widen(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut left = 0;
+    while left + 1 < n and nums[left] <= nums[left + 1] {
+        left += 1;
+    }
+    if left == n - 1 {
+        return 0;
+    }
+    let mut right = n - 1;
+    while nums[right - 1] <= nums[right] {
+        right -= 1;
+    }
+    let low = *nums[left..=right].iter().min().unwrap();
+    let high = *nums[left..=right].iter().max().unwrap();
+    while left > 0 and nums[left - 1] > low {
+        left -= 1;
+    }
+    while right < n - 1 and nums[right + 1] < high {
+        right += 1;
+    }
+    right - left + 1
+}
+
+// ---- definition -----------------------------------------------------------
+
+fn is_sorted_vec(v: ref Vec[i64]) -> bool {
+    for i in 1..v.len() {
+        if v[i - 1] > v[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// The statement read literally: the shortest stretch, of length 0 and
+// up, such that sorting it alone leaves the whole array in order. Every
+// stretch of each length is tried, sorted in a copy, and the copy
+// checked.
+fn definition(nums: ref Vec[i64]) -> i64 {
+    let n = nums.len();
+    if is_sorted_vec(nums) {
+        return 0;
+    }
+    for length in 1..=n {
+        for start in 0..=n - length {
+            let mut copy = nums.clone();
+            let mut part: Vec[i64] = Vec.new();
+            for k in start..start + length {
+                part.push(copy[k]);
+            }
+            part.sort();
+            for k in 0..length {
+                copy[start + k] = part[k];
+            }
+            if is_sorted_vec(copy) {
+                return length;
+            }
+        }
+    }
+    n
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn run(arm: i64, nums: ref Vec[i64]) -> i64 {
+    match arm {
+        0 => find_unsorted_subarray_star(nums.clone()),
+        1 => find_unsorted_subarray_sorted(nums.clone()),
+        2 => find_unsorted_subarray_stack(nums.clone()),
+        _ => find_unsorted_subarray_widen(nums.clone()),
+    }
+}
+
+fn main() {
+    let names = vec!["star", "sorted", "stack", "widen"];
+    let mut seed: i64 = 5810;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property = vec![0, 0, 0, 0, 0];
+    for t in 0..1000 {
+        // 1 to 8 values from -3 to 3, now and then an end of the range;
+        // every other array sorted first and then one pair swapped.
+        let n = 1 + step(mut seed) % 8;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let pick = step(mut seed) % 12;
+            if pick == 0 {
+                nums.push(-100000);
+            } else if pick == 1 {
+                nums.push(100000);
+            } else {
+                nums.push(step(mut seed) % 7 - 3);
+            }
+        }
+        if t % 2 == 0 {
+            nums.sort();
+            let i = step(mut seed) % n;
+            let j = step(mut seed) % n;
+            nums.swap(i, j);
+        }
+        let want = definition(nums);
+        let mut sorted = nums.clone();
+        sorted.sort();
+        let mut mirrored: Vec[i64] = Vec.new();
+        for i in (0..n).rev() {
+            mirrored.push(-nums[i]);
+        }
+        let mut wrapped: Vec[i64] = Vec.new();
+        wrapped.push(-100000);
+        for x in nums.iter() {
+            wrapped.push(*x);
+        }
+        wrapped.push(100000);
+        let mut dropped = nums.clone();
+        dropped.push(-100001);
+        for arm in 0..4 {
+            let got = run(arm, nums);
+            let results = vec![
+                got == want,
+                run(arm, sorted) == 0 and (got == 0) == is_sorted_vec(nums),
+                run(arm, mirrored) == got,
+                run(arm, wrapped) == got,
+                run(arm, dropped) == n + 1,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not results[p] {
+                    failures += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"{names[arm]} P{p + 1} on {nums}: got {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1000 cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}
