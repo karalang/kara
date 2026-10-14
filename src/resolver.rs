@@ -707,10 +707,11 @@ impl StubHint {
     }
 }
 
-/// B-2026-10-14-30 — the binary operator traits a user type may implement
-/// on the v2 pipelines, by the method each operator calls.
+/// B-2026-10-14-30 — the operator traits a user type may implement on the
+/// v2 pipelines, by the method each operator calls: the binary arithmetic
+/// and bitwise traits, and the unary `Neg` and `Not` (B-2026-10-14-33).
 pub const USER_OPERATOR_TRAITS: &[&str] = &[
-    "Add", "Sub", "Mul", "Div", "Rem", "BitAnd", "BitOr", "BitXor", "Shl", "Shr",
+    "Add", "Sub", "Mul", "Div", "Rem", "BitAnd", "BitOr", "BitXor", "Shl", "Shr", "Neg", "Not",
 ];
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1570,18 +1570,18 @@ will actually see, followed by the fix.
     does take the other operand's type, so `(x: i32) + 2` is fine; it is
     only two typed expressions that never silently widen.
 
-4.  user-defined `impl Neg for T` is not supported in v1;
+4.  user-defined `impl Index for T` is not supported in v1;
     operator traits are stdlib-only
 
-    `karac check` and the v2 backends dispatch the BINARY arithmetic and
-    bitwise operators to a user impl: `a + b` on a type with `impl Add`
-    calls its `add`, `a += b` means `a = a + b`, and the same holds for
-    `Sub Mul Div Rem BitAnd BitOr BitXor Shl Shr`. The unary traits
-    (`Neg`, `Not`) and the subscript traits (`Index`, `IndexMut`) are
-    still stdlib-only there, and the legacy `run --interp` / `build`
-    pipeline refuses every user operator impl. Until then, write a named
-    method. The comparison operators `== != < <= > >=` dispatch to a
-    user impl everywhere (see rejections 2 and 6).
+    `karac check` and the v2 backends dispatch the arithmetic and bitwise
+    operators to a user impl: `a + b` on a type with `impl Add` calls its
+    `add`, `a += b` means `a = a + b`, and the same holds for `Sub Mul Div
+    Rem BitAnd BitOr BitXor Shl Shr`, and for the unary `-a` (`Neg`) and
+    `~a` (`Not`). The subscript traits (`Index`, `IndexMut`) are still
+    stdlib-only there, and the legacy `run --interp` / `build` pipeline
+    refuses every user operator impl. Until then, write a named method.
+    The comparison operators `== != < <= > >=` dispatch to a user impl
+    everywhere (see rejections 2 and 6).
 
 5.  unary 'not' requires 'bool', found 'T'
     unary '~' requires an integer or integer-lane Vector type, found 'T'

@@ -2411,6 +2411,40 @@ impl<'a> super::TypeChecker<'a> {
         Some(ret)
     }
 
+    /// B-2026-10-14-33 — `-a` / `~a` on a user type with an `impl Neg` /
+    /// `impl Not` calls its `neg` / `not`, as a binary operator calls its
+    /// impl ([`Self::user_operator_impl`]). `not a` stays logical negation on
+    /// `bool` only (design.md § Operator traits).
+    fn user_unary_operator_impl(&mut self, op: &UnaryOp, ty: &Type, span: &Span) -> Option<Type> {
+        if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
+            return None;
+        }
+        let (tr, method) = match op {
+            UnaryOp::Neg => ("Neg", "neg"),
+            UnaryOp::BitNot => ("Not", "not"),
+            _ => return None,
+        };
+        let operand = resolve_type_var_top(ty, &self.env.substitutions);
+        let (name, args) = match &operand {
+            Type::Named { name, args }
+                if self.env.structs.contains_key(name) || self.env.enums.contains_key(name) =>
+            {
+                (name.clone(), args.clone())
+            }
+            Type::Shared(name) => (name.clone(), Vec::new()),
+            _ => return None,
+        };
+        let sig = self
+            .env
+            .find_impl(tr, &name, &args)?
+            .methods
+            .get(method)?
+            .clone();
+        self.user_operator_calls
+            .insert(SpanKey::from_span(span), format!("{name}.{method}"));
+        Some(self.subst_operator_self(&sig.return_type, &operand, &name))
+    }
+
     /// `Self` and `Self.Assoc` in an operator impl's signature, read at the
     /// left operand's type `left` (named `name`).
     fn subst_operator_self(&self, t: &Type, left: &Type, name: &str) -> Type {
@@ -3514,6 +3548,9 @@ impl<'a> super::TypeChecker<'a> {
         let ty = self.infer_expr(operand);
         if ty == Type::Error {
             return Type::Error;
+        }
+        if let Some(ty) = self.user_unary_operator_impl(op, &ty, span) {
+            return ty;
         }
         // A borrowed scalar reads as its value under the value operators
         // (B-2026-09-23-2), so `not flag` / `-x` / `~x` on a `ref` or

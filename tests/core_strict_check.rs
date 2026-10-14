@@ -4055,3 +4055,69 @@ fn a_marked_forward_of_a_mut_ref_is_accepted() {
          }\n",
     );
 }
+
+/// B-2026-10-14-33: user `Neg` and `Not` impls are accepted on `karac check`,
+/// and `-t` through an `own self` impl moves `t`.
+#[test]
+fn user_neg_and_not_impls_are_accepted() {
+    let src = r#"
+#[derive(Copy, Clone)]
+struct V2 {
+    x: i64,
+    y: i64,
+}
+
+impl Neg for V2 {
+    type Output = V2;
+    fn neg(own self) -> Self.Output {
+        V2 { x: -self.x, y: -self.y }
+    }
+}
+
+struct Mask {
+    bits: i64,
+    name: String,
+}
+
+impl Not for Mask {
+    fn not(self) -> Mask {
+        Mask { bits: ~self.bits, name: self.name.clone() }
+    }
+}
+
+struct Tag {
+    s: String,
+}
+
+impl Neg for Tag {
+    fn neg(own self) -> Tag {
+        Tag { s: self.s + "!" }
+    }
+}
+
+fn main() {
+    let a = V2 { x: 1, y: -2 };
+    let b = -a;
+    let m = Mask { bits: 5, name: "m" };
+    let n = ~m;
+    let t = Tag { s: "hi" };
+    let u = -t;
+    println(f"{b.x} {b.y} {a.x} {n.bits} {m.name} {u.s}");
+}
+"#;
+    accepted("user-neg-not", src);
+    let moved = src.replace("{u.s}\");", "{u.s} {t.s}\");");
+    assert_ne!(moved, src, "the probe edit must apply");
+    let (dir, path) = fixture("user-neg-moves", &moved);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "user-neg-moves: check must reject: {err}"
+    );
+    assert!(
+        err.contains("value 't' moved here, used again here"),
+        "user-neg-moves: expected the move of `t` in: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

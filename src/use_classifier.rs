@@ -846,6 +846,25 @@ impl<'a> UseClassifier<'a> {
                 self.walk_expr(left, Mode::Reading);
                 self.walk_expr(right, Mode::Reading);
             }
+            // B-2026-10-14-33 — `-a` / `~a` on a user `Neg` / `Not` impl: an
+            // `own self` consumes the operand.
+            ExprKind::Unary { operand, .. }
+                if self
+                    .tc
+                    .user_operator_calls
+                    .contains_key(&SpanKey::from_span(&expr.span)) =>
+            {
+                let key = &self.tc.user_operator_calls[&SpanKey::from_span(&expr.span)];
+                let owned = matches!(self.method_self_modes.get(key), Some(SelfParam::Owned));
+                self.walk_expr(
+                    operand,
+                    if owned {
+                        Mode::Consuming
+                    } else {
+                        Mode::Reading
+                    },
+                );
+            }
             ExprKind::Unary { operand, .. } => {
                 self.walk_expr(operand, Mode::Reading);
             }

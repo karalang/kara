@@ -3437,7 +3437,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             let (_, tb) = self.strip_ty_full(tt);
             if let Some((d, args)) = self.user_impl_method(tb, tr, m) {
                 let tmp = self.temp(tb);
-                self.user_operator_call(target, value, d, args, Place::local(tmp))?;
+                self.user_operator_call(target, Some(value), d, args, Place::local(tmp))?;
                 let place = self.expr_place(target, true)?;
                 let (place, t) = self.write_through(place, value)?;
                 if self.needs_drop(t) {
@@ -4620,6 +4620,20 @@ impl<'l, 'a> Bx<'l, 'a> {
             } => self.range_value(e, left, right, *inclusive, dest),
             ExprKind::Binary { op, left, right } => self.binary(op.clone(), left, right, dest),
             ExprKind::Unary { op, operand } => {
+                // B-2026-10-14-33 — `-a` / `~a` on a user type with an
+                // `impl Neg` / `impl Not` calls its `neg` / `not`.
+                let user = match op {
+                    UnaryOp::Neg => Some(("Neg", "neg")),
+                    UnaryOp::BitNot => Some(("Not", "not")),
+                    _ => None,
+                };
+                if let Some((tr, m)) = user {
+                    let ot = self.expr_ty(operand)?;
+                    let (_, base) = self.strip_ty_full(ot);
+                    if let Some((d, args)) = self.user_impl_method(base, tr, m) {
+                        return self.user_operator_call(operand, None, d, args, dest);
+                    }
+                }
                 let mop = match op {
                     UnaryOp::Neg => UnOp::Neg,
                     // `!` on a bool, `~` on an integer: both are `Not`.
@@ -5437,7 +5451,7 @@ impl<'l, 'a> Bx<'l, 'a> {
         if let Some((tr, m)) = user_operator_trait(bin) {
             let (_, lbase) = self.strip_ty_full(lt0);
             if let Some((d, args)) = self.user_impl_method(lbase, tr, m) {
-                return self.user_operator_call(left, right, d, args, dest);
+                return self.user_operator_call(left, Some(right), d, args, dest);
             }
         }
         let lbase = match self.tys().tcx().kind(lt0) {
@@ -11865,18 +11879,29 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// `left <op> right` as a call of the user impl's operator method `d`,
     /// `left` the receiver and `right` the one argument, passed as
-    /// [`Self::user_method_call`] passes them (B-2026-10-14-30).
+    /// [`Self::user_method_call`] passes them (B-2026-10-14-30); with no
+    /// `right`, the unary `-left` / `~left` (B-2026-10-14-33).
     fn user_operator_call(
         &mut self,
         left: &'a Expr,
-        right: &'a Expr,
+        right: Option<&'a Expr>,
         d: DefId,
         inst_args: Vec<Ty>,
         dest: Place,
     ) -> R<()> {
         let f = self.lcx.fns[&d].f;
-        let ([p], Some(m)) = (f.params.as_slice(), f.self_param.clone()) else {
-            return self.unsupported(left.span, "an operator method that is not `fn(self, rhs)`");
+        let Some(m) = f.self_param.clone() else {
+            return self.unsupported(left.span, "an operator method without `self`");
+        };
+        let rhs = match (f.params.as_slice(), right) {
+            ([p], Some(r)) => Some((p, r)),
+            ([], None) => None,
+            _ => {
+                return self.unsupported(
+                    left.span,
+                    "an operator method whose parameters do not fit the operator",
+                )
+            }
         };
         let st = self.expr_ty(left)?;
         let (_, st) = self.strip_ty_full(st);
@@ -11888,8 +11913,13 @@ impl<'l, 'a> Bx<'l, 'a> {
             SelfParam::Ref => self.recv_place(left, false)?,
             SelfParam::MutRef => self.recv_place(left, true)?,
         };
-        let pt = self.callee_param_ty(p, &inst_args)?;
-        let rest = vec![self.arg_pending(right, pt)?];
+        let rest = match rhs {
+            Some((p, right)) => {
+                let pt = self.callee_param_ty(p, &inst_args)?;
+                vec![self.arg_pending(right, pt)?]
+            }
+            None => Vec::new(),
+        };
         let mut rest = self.finish_args(rest)?;
         let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
         ops.extend(rest);
