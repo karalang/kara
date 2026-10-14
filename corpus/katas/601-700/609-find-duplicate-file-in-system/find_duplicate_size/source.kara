@@ -1,0 +1,154 @@
+// LeetCode #609: Find Duplicate File in System -- by size first.
+//
+// The problem's follow-up, for files too large to hold as keys: group
+// the files by the length of their content, and compare contents only
+// within a group of one length, where two files can be alike. Each line
+// is cut with `find`: the directory up to the first space, then each
+// file up to its parentheses. O(total length + the comparisons).
+
+fn find_duplicate(paths: Vec[String]) -> Vec[Vec[String]] {
+    let mut by_size: Map[i64, Vec[(String, String)]] = Map.new();
+    for line in paths.iter() {
+        let space = line.find(" ").unwrap();
+        let dir = line[0..space];
+        let mut rest = line[space + 1..line.len()];
+        loop {
+            let open = rest.find("(").unwrap();
+            let close = rest.find(")").unwrap();
+            let content = rest[open + 1..close];
+            by_size.entry(content.len()).or_insert(Vec.new()).push((content.to_string(), f"{dir}/{rest[0..open]}"));
+            if close + 1 >= rest.len() {
+                break;
+            }
+            rest = rest[close + 2..rest.len()];
+        }
+    }
+    let mut groups: Vec[Vec[String]] = Vec.new();
+    for (_, files) in by_size.into_iter() {
+        let mut taken = vec![false; files.len()];
+        for i in 0..files.len() {
+            if taken[i] {
+                continue;
+            }
+            let mut group = vec![files[i].1.clone()];
+            for j in i + 1..files.len() {
+                if not taken[j] and files[j].0 == files[i].0 {
+                    taken[j] = true;
+                    group.push(files[j].1.clone());
+                }
+            }
+            if group.len() > 1 {
+                groups.push(group);
+            }
+        }
+    }
+    groups
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The groups in one order, since the problem allows any: each group's
+// paths sorted, and the groups sorted by their first path.
+fn canonical(groups: Vec[Vec[String]]) -> Vec[Vec[String]] {
+    let mut out: Vec[Vec[String]] = Vec.new();
+    for group in groups.iter() {
+        let mut g = group.clone();
+        g.sort();
+        out.push(g);
+    }
+    out.sort_by(|a, b| a[0].cmp(b[0]));
+    out
+}
+
+fn show(paths: Vec[String]) {
+    println(f"{paths} -> {canonical(find_duplicate(paths))}");
+}
+
+// A random file system: `dirs` directory lines under `root`, each with 1
+// to `most` files named by a counter, each holding one of `kinds`
+// contents of 1 to 6 letters from a, b and c.
+fn random_system(dirs: i64, most: i64, kinds: i64, seed: mut ref i64) -> Vec[String] {
+    let mut pool: Vec[String] = Vec.new();
+    for _ in 0..kinds {
+        let mut c = String.new();
+        let size = 1 + step(seed) % 6;
+        for _ in 0..size {
+            c.push(((97 + step(seed) % 3) as u8) as char);
+        }
+        pool.push(c);
+    }
+    let mut paths: Vec[String] = Vec.new();
+    let mut counter = 0;
+    for d in 0..dirs {
+        let mut line = if d == 0 { "root".to_string() } else { f"root/d{d}" };
+        let files = 1 + step(seed) % most;
+        for _ in 0..files {
+            counter += 1;
+            line.push_str(f" f{counter}.txt({pool[step(seed) % kinds]})");
+        }
+        paths.push(line);
+    }
+    paths
+}
+
+// The number of groups, of files in them, and a checksum over the groups
+// in canonical order.
+fn summary(groups: Vec[Vec[String]]) -> String {
+    let sorted = canonical(groups);
+    let mut files = 0;
+    let mut h: i64 = 0;
+    for group in sorted.iter() {
+        files += group.len();
+        for path in group.iter() {
+            for c in path.chars() {
+                h = (h * 31 + c as i64) % 1000000007;
+            }
+            h = (h * 31 + 32) % 1000000007;
+        }
+        h = (h * 31 + 59) % 1000000007;
+    }
+    f"{sorted.len()} groups, {files} files, checksum {h}"
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(vec!["root/a 1.txt(abcd) 2.txt(efgh)".to_string(), "root/c 3.txt(abcd)".to_string(), "root/c/d 4.txt(efgh)".to_string(), "root 4.txt(efgh)".to_string()]);
+    show(vec!["root/a 1.txt(abcd) 2.txt(efgh)".to_string(), "root/c 3.txt(abcd)".to_string(), "root/c/d 4.txt(efgh)".to_string()]);
+    // No duplicates; one directory whose files are all alike; one file
+    // name in three directories; contents that are prefixes of each
+    // other; a content of digits.
+    show(vec!["root 1.txt(a) 2.txt(b)".to_string(), "root/x 3.txt(c)".to_string()]);
+    show(vec!["d f1(x) f2(x) f3(x)".to_string()]);
+    show(vec!["a f(z)".to_string(), "b f(z)".to_string(), "a/b f(y)".to_string(), "c f(z)".to_string()]);
+    show(vec!["r a(ab) b(abc) c(ab) d(abcd) e(abc)".to_string()]);
+    show(vec!["root 1.txt(123) 2.txt(1234)".to_string(), "root/n 3.txt(123)".to_string()]);
+    // 300 random systems of 1 to 8 directories with up to 4 files each
+    // and 1 to 10 contents.
+    let mut seed: i64 = 609;
+    let mut groups = 0;
+    let mut files = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let dirs = 1 + step(mut seed) % 8;
+        let most = 1 + step(mut seed) % 4;
+        let kinds = 1 + step(mut seed) % 10;
+        let found = canonical(find_duplicate(random_system(dirs, most, kinds, mut seed)));
+        groups += found.len();
+        for group in found.iter() {
+            files += group.len();
+            for path in group.iter() {
+                for c in path.chars() {
+                    checksum = (checksum * 31 + c as i64) % 1000000007;
+                }
+            }
+        }
+    }
+    println(f"300 random systems: {groups} groups, {files} files, checksum {checksum}");
+    // A large one: 5,000 directories of up to 6 files and 2,000 contents.
+    println(f"5000 directories: {summary(find_duplicate(random_system(5000, 6, 2000, mut seed)))}");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/609-find-duplicate-file-in-system/find_duplicate_sorted.kara"
+dedup_of = []
+expect = "error:E0236"
+exit = 1
+tags = ["closure", "lib:sortedmap", "io:fs"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "7782aa5a3"
+extracted_src = "3be08fa3"
+model_rev = "1aa23105"
+model_src = "3be08fa3"

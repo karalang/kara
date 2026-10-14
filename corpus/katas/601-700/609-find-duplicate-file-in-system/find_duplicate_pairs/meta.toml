@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/609-find-duplicate-file-in-system/find_duplicate_pairs.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "io:fs"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "7782aa5a3"
+extracted_src = "bfd7a9ec"
+model_rev = "1aa23105"
+model_src = "bfd7a9ec"

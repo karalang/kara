@@ -1,0 +1,363 @@
+// LeetCode #609: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// file systems.
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_duplicate_star(paths: Vec[String]) -> Vec[Vec[String]] {
+    let mut by_content: Map[String, Vec[String]] = Map.new();
+    for line in paths.iter() {
+        // `split` is lazy and yields views by the spec; `karac` still
+        // returns an eager `Vec[String]` (kara B-2026-10-12-7).
+        let mut parts = line.split(" ");
+        let dir = parts.next().unwrap();
+        for file in parts {
+            let open = file.find("(").unwrap();
+            let name = file[0..open];
+            let content = file[open + 1..file.len() - 1];
+            by_content.entry(content.to_string()).or_insert(Vec.new()).push(f"{dir}/{name}");
+        }
+    }
+    let mut groups: Vec[Vec[String]] = Vec.new();
+    for (_, group) in by_content.into_iter() {
+        if group.len() > 1 {
+            groups.push(group);
+        }
+    }
+    groups
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+fn find_duplicate_sorted(paths: Vec[String]) -> Vec[Vec[String]] {
+    let mut by_content: SortedMap[String, Vec[String]] = SortedMap.new();
+    for line in paths.iter() {
+        // `split` is lazy and yields views by the spec; `karac` still
+        // returns an eager `Vec[String]` (kara B-2026-10-12-7).
+        let parts: Vec[Str] = line.split(" ").collect();
+        for k in 1..parts.len() {
+            let file = parts[k];
+            let open = file.find("(").unwrap();
+            let path = f"{parts[0]}/{file[0..open]}";
+            let content = file[open + 1..file.len() - 1].to_string();
+            let mut group = by_content.remove(content) ?? Vec.new();
+            group.push(path);
+            by_content.insert(content, group);
+        }
+    }
+    let mut groups: Vec[Vec[String]] = Vec.new();
+    for (_, group) in by_content.into_iter() {
+        if group.len() > 1 {
+            groups.push(group);
+        }
+    }
+    groups
+}
+
+// ---- pairs arm ---------------------------------------------------------
+
+fn find_duplicate_pairs(paths: Vec[String]) -> Vec[Vec[String]] {
+    let mut files: Vec[(String, String)] = Vec.new();
+    for line in paths.iter() {
+        let mut dir = String.new();
+        let mut name = String.new();
+        let mut content = String.new();
+        // 0: in the directory, 1: in a file's name, 2: in its content.
+        let mut state = 0;
+        for c in line.chars() {
+            if state == 0 {
+                if c == ' ' {
+                    state = 1;
+                } else {
+                    dir.push(c);
+                }
+            } else if state == 1 {
+                if c == '(' {
+                    state = 2;
+                } else if c != ' ' {
+                    name.push(c);
+                }
+            } else if c == ')' {
+                files.push((content.clone(), f"{dir}/{name}"));
+                name.clear();
+                content.clear();
+                state = 1;
+            } else {
+                content.push(c);
+            }
+        }
+    }
+    files.sort();
+    let mut groups: Vec[Vec[String]] = Vec.new();
+    let mut i = 0;
+    while i < files.len() {
+        let mut j = i + 1;
+        while j < files.len() and files[j].0 == files[i].0 {
+            j += 1;
+        }
+        if j - i > 1 {
+            let mut group: Vec[String] = Vec.new();
+            for k in i..j {
+                group.push(files[k].1.clone());
+            }
+            groups.push(group);
+        }
+        i = j;
+    }
+    groups
+}
+
+// ---- size arm ----------------------------------------------------------
+
+fn find_duplicate_size(paths: Vec[String]) -> Vec[Vec[String]] {
+    let mut by_size: Map[i64, Vec[(String, String)]] = Map.new();
+    for line in paths.iter() {
+        let space = line.find(" ").unwrap();
+        let dir = line[0..space];
+        let mut rest = line[space + 1..line.len()];
+        loop {
+            let open = rest.find("(").unwrap();
+            let close = rest.find(")").unwrap();
+            let content = rest[open + 1..close];
+            by_size.entry(content.len()).or_insert(Vec.new()).push((content.to_string(), f"{dir}/{rest[0..open]}"));
+            if close + 1 >= rest.len() {
+                break;
+            }
+            rest = rest[close + 2..rest.len()];
+        }
+    }
+    let mut groups: Vec[Vec[String]] = Vec.new();
+    for (_, files) in by_size.into_iter() {
+        let mut taken = vec![false; files.len()];
+        for i in 0..files.len() {
+            if taken[i] {
+                continue;
+            }
+            let mut group = vec![files[i].1.clone()];
+            for j in i + 1..files.len() {
+                if not taken[j] and files[j].0 == files[i].0 {
+                    taken[j] = true;
+                    group.push(files[j].1.clone());
+                }
+            }
+            if group.len() > 1 {
+                groups.push(group);
+            }
+        }
+    }
+    groups
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, paths: Vec[String]) -> Vec[Vec[String]] {
+    if which == 0 {
+        find_duplicate_star(paths)
+    } else if which == 1 {
+        find_duplicate_sorted(paths)
+    } else if which == 2 {
+        find_duplicate_pairs(paths)
+    } else {
+        find_duplicate_size(paths)
+    }
+}
+
+// The groups in one order: each group's paths sorted, and the groups
+// sorted by their first path.
+fn canonical(groups: Vec[Vec[String]]) -> Vec[Vec[String]] {
+    let mut out: Vec[Vec[String]] = Vec.new();
+    for group in groups.iter() {
+        let mut g = group.clone();
+        g.sort();
+        out.push(g);
+    }
+    out.sort_by(|a, b| a[0].cmp(b[0]));
+    out
+}
+
+// Every file of a system as its full path and its content, read a
+// character at a time.
+fn listing(paths: Vec[String]) -> Vec[(String, String)] {
+    let mut files: Vec[(String, String)] = Vec.new();
+    for line in paths.iter() {
+        let chars: Vec[char] = line.chars().collect();
+        let mut i = 0;
+        let mut dir = String.new();
+        while chars[i] != ' ' {
+            dir.push(chars[i]);
+            i += 1;
+        }
+        while i < chars.len() {
+            i += 1;
+            let mut name = String.new();
+            while chars[i] != '(' {
+                name.push(chars[i]);
+                i += 1;
+            }
+            i += 1;
+            let mut content = String.new();
+            while chars[i] != ')' {
+                content.push(chars[i]);
+                i += 1;
+            }
+            i += 1;
+            files.push((f"{dir}/{name}", content));
+        }
+    }
+    files
+}
+
+// The definition: every file compared with every other, and each file
+// not yet placed taking every later file with the same content; the
+// groups of two or more.
+fn definition(paths: Vec[String]) -> Vec[Vec[String]] {
+    let files = listing(paths);
+    let mut placed = vec![false; files.len()];
+    let mut groups: Vec[Vec[String]] = Vec.new();
+    for i in 0..files.len() {
+        if placed[i] {
+            continue;
+        }
+        let mut group = vec![files[i].0.clone()];
+        for j in i + 1..files.len() {
+            if files[j].1 == files[i].1 {
+                placed[j] = true;
+                group.push(files[j].0.clone());
+            }
+        }
+        if group.len() > 1 {
+            groups.push(group);
+        }
+    }
+    groups
+}
+
+// A random file system: `dirs` directory lines under `root`, each with 1
+// to `most` files named by a counter, each holding one of `kinds`
+// contents of 1 to 4 letters from a and b.
+fn random_system(dirs: i64, most: i64, kinds: i64, seed: mut ref i64) -> Vec[String] {
+    let mut pool: Vec[String] = Vec.new();
+    for _ in 0..kinds {
+        let mut c = String.new();
+        let size = 1 + step(seed) % 4;
+        for _ in 0..size {
+            c.push(if step(seed) % 2 == 0 { 'a' } else { 'b' });
+        }
+        pool.push(c);
+    }
+    let mut paths: Vec[String] = Vec.new();
+    let mut counter = 0;
+    for d in 0..dirs {
+        let mut line = if d == 0 { "root".to_string() } else { f"root/d{d}" };
+        let files = 1 + step(seed) % most;
+        for _ in 0..files {
+            counter += 1;
+            line.push_str(f" f{counter}.txt({pool[step(seed) % kinds]})");
+        }
+        paths.push(line);
+    }
+    paths
+}
+
+// The system with its lines in reverse order and each line's files in
+// reverse order.
+fn reversed(paths: Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for k in 0..paths.len() {
+        let line = paths[paths.len() - 1 - k].clone();
+        let space = line.find(" ").unwrap();
+        let mut files: Vec[String] = Vec.new();
+        let mut current = String.new();
+        for c in line[space + 1..line.len()].chars() {
+            if c == ' ' {
+                files.push(current.clone());
+                current.clear();
+            } else {
+                current.push(c);
+            }
+        }
+        files.push(current);
+        files.reverse();
+        out.push(f"{line[0..space]} {files.join(" ")}");
+    }
+    out
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6090;
+    let mut checks = 0;
+    let mut found = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 6 directories with up to 4 files each and 1 to 6 contents.
+        let dirs = 1 + step(mut seed) % 6;
+        let most = 1 + step(mut seed) % 4;
+        let kinds = 1 + step(mut seed) % 6;
+        let paths = random_system(dirs, most, kinds, mut seed);
+        let want = canonical(definition(paths));
+        found += want.len();
+        let files = listing(paths);
+        // P3: one more directory, whose file holds a content of three
+        // letters c, which no other file holds.
+        let mut fresh = paths.clone();
+        fresh.push("root/new x.txt(ccc)".to_string());
+        // P4: one more directory, whose file is a copy of a random one.
+        let copied = files[step(mut seed) % files.len()].clone();
+        let mut copy = paths.clone();
+        copy.push(f"root/new x.txt({copied.1})");
+        let mut grown: Vec[Vec[String]] = Vec.new();
+        let mut joined = false;
+        for group in want.iter() {
+            let mut g = group.clone();
+            if g.contains(copied.0) {
+                g.push("root/new/x.txt".to_string());
+                joined = true;
+            }
+            grown.push(g);
+        }
+        if not joined {
+            grown.push(vec![copied.0.clone(), "root/new/x.txt".to_string()]);
+        }
+        // P5: every content with a letter c added at its end.
+        let mut renamed: Vec[String] = Vec.new();
+        for line in paths.iter() {
+            renamed.push(line.replace(")", "c)"));
+        }
+        for which in 0..4 {
+            let got = canonical(answer(which, paths));
+            let ok = vec![
+                // P1: the definition's groups.
+                got == want,
+                // P2: the lines and their files given in reverse order
+                // change nothing.
+                canonical(answer(which, reversed(paths))) == got,
+                // P3: a file with a content of its own changes nothing.
+                canonical(answer(which, fresh)) == got,
+                // P4: a copy of a file joins that file's group, or makes
+                // a group of two with it.
+                canonical(answer(which, copy)) == canonical(grown),
+                // P5: changing every content the same way changes
+                // nothing.
+                canonical(answer(which, renamed)) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({found} groups), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

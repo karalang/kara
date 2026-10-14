@@ -1,0 +1,81 @@
+// Benchmark for #609: the ★ arm (a map from content); see
+// find_duplicate.kara.
+
+fn find_duplicate(paths: Vec[String]) -> Vec[Vec[String]] {
+    let mut by_content: Map[String, Vec[String]] = Map.new();
+    for line in paths.iter() {
+        // `split` is lazy and yields views by the spec; `karac` still
+        // returns an eager `Vec[String]` (kara B-2026-10-12-7).
+        let mut parts = line.split(" ");
+        let dir = parts.next().unwrap();
+        for file in parts {
+            let open = file.find("(").unwrap();
+            let name = file[0..open];
+            let content = file[open + 1..file.len() - 1];
+            by_content.entry(content.to_string()).or_insert(Vec.new()).push(f"{dir}/{name}");
+        }
+    }
+    let mut groups: Vec[Vec[String]] = Vec.new();
+    for (_, group) in by_content.into_iter() {
+        if group.len() > 1 {
+            groups.push(group);
+        }
+    }
+    groups
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 10 file systems of 2,000 directories with 1 to 6 files each, every
+    // file holding one of 3,000 contents of 8 to 20 letters from a to d,
+    // made once; then 300 times over one of them, picked by the round, is
+    // searched. The groups come in any order, so the checksum adds up,
+    // for each group, its size times the total length of its paths.
+    let systems = 10;
+    let rounds = 300;
+    let mut seed: i64 = 609;
+    let mut pool: Vec[String] = Vec.new();
+    for _ in 0..3000 {
+        let mut c = String.new();
+        let size = 8 + step(mut seed) % 13;
+        for _ in 0..size {
+            c.push(((97 + step(mut seed) % 4) as u8) as char);
+        }
+        pool.push(c);
+    }
+    let mut all: Vec[Vec[String]] = Vec.new();
+    for s in 0..systems {
+        let mut paths: Vec[String] = Vec.new();
+        let mut counter = 0;
+        for d in 0..2000 {
+            let mut line = f"root/s{s}/d{d}";
+            let files = 1 + step(mut seed) % 6;
+            for _ in 0..files {
+                counter += 1;
+                line.push_str(f" f{counter}.txt({pool[step(mut seed) % 3000]})");
+            }
+            paths.push(line);
+        }
+        all.push(paths);
+    }
+    let mut groups = 0;
+    let mut files = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let found = find_duplicate(all[(r * 3) % systems]);
+        groups += found.len();
+        for group in found.iter() {
+            files += group.len();
+            let mut length = 0;
+            for path in group.iter() {
+                length += path.len();
+            }
+            checksum = (checksum + group.len() * length) % 1000000007;
+        }
+    }
+    println(f"{systems} systems, {rounds} rounds: {groups} groups, {files} files, checksum {checksum}");
+}

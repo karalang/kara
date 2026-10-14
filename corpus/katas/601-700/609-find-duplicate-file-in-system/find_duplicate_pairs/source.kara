@@ -1,0 +1,165 @@
+// LeetCode #609: Find Duplicate File in System -- sort the pairs.
+//
+// Read each line a character at a time into the directory, then each
+// file's name and content, and list every file as a pair of its content
+// and its full path. Sorted, the pairs with one content stand together,
+// and every run of two or more is a group. O(total length * log files).
+
+fn find_duplicate(paths: Vec[String]) -> Vec[Vec[String]] {
+    let mut files: Vec[(String, String)] = Vec.new();
+    for line in paths.iter() {
+        let mut dir = String.new();
+        let mut name = String.new();
+        let mut content = String.new();
+        // 0: in the directory, 1: in a file's name, 2: in its content.
+        let mut state = 0;
+        for c in line.chars() {
+            if state == 0 {
+                if c == ' ' {
+                    state = 1;
+                } else {
+                    dir.push(c);
+                }
+            } else if state == 1 {
+                if c == '(' {
+                    state = 2;
+                } else if c != ' ' {
+                    name.push(c);
+                }
+            } else if c == ')' {
+                files.push((content.clone(), f"{dir}/{name}"));
+                name.clear();
+                content.clear();
+                state = 1;
+            } else {
+                content.push(c);
+            }
+        }
+    }
+    files.sort();
+    let mut groups: Vec[Vec[String]] = Vec.new();
+    let mut i = 0;
+    while i < files.len() {
+        let mut j = i + 1;
+        while j < files.len() and files[j].0 == files[i].0 {
+            j += 1;
+        }
+        if j - i > 1 {
+            let mut group: Vec[String] = Vec.new();
+            for k in i..j {
+                group.push(files[k].1.clone());
+            }
+            groups.push(group);
+        }
+        i = j;
+    }
+    groups
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The groups in one order, since the problem allows any: each group's
+// paths sorted, and the groups sorted by their first path.
+fn canonical(groups: Vec[Vec[String]]) -> Vec[Vec[String]] {
+    let mut out: Vec[Vec[String]] = Vec.new();
+    for group in groups.iter() {
+        let mut g = group.clone();
+        g.sort();
+        out.push(g);
+    }
+    out.sort_by(|a, b| a[0].cmp(b[0]));
+    out
+}
+
+fn show(paths: Vec[String]) {
+    println(f"{paths} -> {canonical(find_duplicate(paths))}");
+}
+
+// A random file system: `dirs` directory lines under `root`, each with 1
+// to `most` files named by a counter, each holding one of `kinds`
+// contents of 1 to 6 letters from a, b and c.
+fn random_system(dirs: i64, most: i64, kinds: i64, seed: mut ref i64) -> Vec[String] {
+    let mut pool: Vec[String] = Vec.new();
+    for _ in 0..kinds {
+        let mut c = String.new();
+        let size = 1 + step(seed) % 6;
+        for _ in 0..size {
+            c.push(((97 + step(seed) % 3) as u8) as char);
+        }
+        pool.push(c);
+    }
+    let mut paths: Vec[String] = Vec.new();
+    let mut counter = 0;
+    for d in 0..dirs {
+        let mut line = if d == 0 { "root".to_string() } else { f"root/d{d}" };
+        let files = 1 + step(seed) % most;
+        for _ in 0..files {
+            counter += 1;
+            line.push_str(f" f{counter}.txt({pool[step(seed) % kinds]})");
+        }
+        paths.push(line);
+    }
+    paths
+}
+
+// The number of groups, of files in them, and a checksum over the groups
+// in canonical order.
+fn summary(groups: Vec[Vec[String]]) -> String {
+    let sorted = canonical(groups);
+    let mut files = 0;
+    let mut h: i64 = 0;
+    for group in sorted.iter() {
+        files += group.len();
+        for path in group.iter() {
+            for c in path.chars() {
+                h = (h * 31 + c as i64) % 1000000007;
+            }
+            h = (h * 31 + 32) % 1000000007;
+        }
+        h = (h * 31 + 59) % 1000000007;
+    }
+    f"{sorted.len()} groups, {files} files, checksum {h}"
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(vec!["root/a 1.txt(abcd) 2.txt(efgh)".to_string(), "root/c 3.txt(abcd)".to_string(), "root/c/d 4.txt(efgh)".to_string(), "root 4.txt(efgh)".to_string()]);
+    show(vec!["root/a 1.txt(abcd) 2.txt(efgh)".to_string(), "root/c 3.txt(abcd)".to_string(), "root/c/d 4.txt(efgh)".to_string()]);
+    // No duplicates; one directory whose files are all alike; one file
+    // name in three directories; contents that are prefixes of each
+    // other; a content of digits.
+    show(vec!["root 1.txt(a) 2.txt(b)".to_string(), "root/x 3.txt(c)".to_string()]);
+    show(vec!["d f1(x) f2(x) f3(x)".to_string()]);
+    show(vec!["a f(z)".to_string(), "b f(z)".to_string(), "a/b f(y)".to_string(), "c f(z)".to_string()]);
+    show(vec!["r a(ab) b(abc) c(ab) d(abcd) e(abc)".to_string()]);
+    show(vec!["root 1.txt(123) 2.txt(1234)".to_string(), "root/n 3.txt(123)".to_string()]);
+    // 300 random systems of 1 to 8 directories with up to 4 files each
+    // and 1 to 10 contents.
+    let mut seed: i64 = 609;
+    let mut groups = 0;
+    let mut files = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let dirs = 1 + step(mut seed) % 8;
+        let most = 1 + step(mut seed) % 4;
+        let kinds = 1 + step(mut seed) % 10;
+        let found = canonical(find_duplicate(random_system(dirs, most, kinds, mut seed)));
+        groups += found.len();
+        for group in found.iter() {
+            files += group.len();
+            for path in group.iter() {
+                for c in path.chars() {
+                    checksum = (checksum * 31 + c as i64) % 1000000007;
+                }
+            }
+        }
+    }
+    println(f"300 random systems: {groups} groups, {files} files, checksum {checksum}");
+    // A large one: 5,000 directories of up to 6 files and 2,000 contents.
+    println(f"5000 directories: {summary(find_duplicate(random_system(5000, 6, 2000, mut seed)))}");
+}
