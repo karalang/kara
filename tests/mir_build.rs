@@ -1209,3 +1209,29 @@ fn mir_collect_into_sorted_set_and_map() {
         }
     }
 }
+
+// B-2026-10-14-15 — `chunks` and `windows` on a `Vec` receiver find the
+// `Slice` methods on the MIR interpreter, as on the compiled backend.
+#[test]
+fn mir_vec_chunks_and_windows() {
+    const SRC: &str = r#"fn main() {
+    let mut nums: Vec[i64] = vec![1, 4, 3, 2];
+    nums.sort();
+    let s: i64 = nums.chunks(2).iter().map(|pair| pair[0]).sum();
+    let v = vec![1, 2, 3, 4, 5];
+    let c = v.chunks(2);
+    for w in v.windows(2) {
+        println(f"{w[0]} {w[1]}");
+    }
+    println(f"{s} {c.len()} {c[2].len()} {v.windows(6).len()}");
+}
+"#;
+    let want = "1 2\n2 3\n3 4\n4 5\n4 3 1 0\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

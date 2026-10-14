@@ -1787,7 +1787,8 @@ impl<'a> Interp<'a> {
                 Ok(Value::Unit)
             }
             (_, "as_slice_mut") => self.view_method(name, "as_mut_slice", args, ret),
-            ("Vec", "get_unchecked" | "split_at" | "split_at_mut") => {
+            // B-2026-10-14-15: `chunks` and `windows` too, as on a `Slice`.
+            ("Vec", "get_unchecked" | "split_at" | "split_at_mut" | "chunks" | "windows") => {
                 self.view_method(name, method, args, ret)
             }
             (_, "as_slice" | "as_mut_slice" | "slice" | "slice_mut")
