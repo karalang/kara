@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 729 |
-| run-vs-build | 604 |
+| run-vs-build | 605 |
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 254 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2874 |
+| codegen | 2875 |
 | interp | 913 |
 | typecheck | 389 |
 | other | 115 |
@@ -610,6 +610,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-11 | 2026-10-14 | codegen | high | [CORRECTED 2026-10-14: the compiled path is not a clean failure. `__mir-llvm-asan` reports a stack-buffer-overflow, a WRITE of size 32 in the function holding the loop, so `__mir-llvm-run`'s silent exit 101 is the program running the invalid lowering] `for n in v` over a `Vec[ref Node]` does not build on the MIR backends: `__mir-run` stops with "invalid MIR: copy of (*_14) whose type Node is not Copy; assigning Node to _15 of type ref Node", and `__mir-llvm-run` exits 101 with no message at all; `karac check` passes it | — |
 | B-2026-10-14-12 | 2026-10-14 | typecheck | low | `karac check` has no `Option.as_ref`: `o.as_ref()` on an `Option[Node]` is refused with "no method 'as_ref' on type 'Option'", though docs/library/core-types.md lists `fn as_ref(self) -> Option[ref T]` and both MIR backends run it | — |
 | B-2026-10-14-13 | 2026-10-14 | typecheck+ownership | medium | Pushing an owned `Node` local into a `Vec[ref Node]` is accepted as a MOVE of the `Node` into a slot typed `ref Node`: `v.push(t)` passes `karac check`, a later `t.val` is refused as "moved" by both pipelines, and with no later use `__mir-run` reports the tree leaked at exit | — |
+| B-2026-10-14-14 | 2026-10-14 | codegen | medium | `Vec.with_capacity(n)` and `String.with_capacity(n)` reserve nothing on the MIR compiled backend: `Vec.with_capacity(5).capacity()` prints 0 under `__mir-llvm-run` and 5 under `__mir-run`, and presizing buys nothing -- kata 559's bench walk runs 2.37 to 2.45 s with each node's children `Vec` presized, the same as without, where the Rust mirror drops from 2.0 s to 0.82 to 0.87 s | — |
 
 ### Relocated
 
