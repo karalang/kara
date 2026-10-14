@@ -1,0 +1,129 @@
+// LeetCode #604: Design Compressed String Iterator -- parse the runs.
+//
+// Parse the whole text once into its runs, each a letter and a count,
+// then give out letters from the run at `index`, counting how many of
+// it are used. O(n) to build, O(1) per call.
+
+struct StringIterator {
+    runs: Vec[(char, i64)],
+    index: i64,
+    used: i64,
+}
+
+impl StringIterator {
+    fn new(compressed: Str) -> StringIterator {
+        let mut runs: Vec[(char, i64)] = Vec.new();
+        for c in compressed.chars() {
+            if c.is_ascii_digit() {
+                let last = runs.len() - 1;
+                runs[last].1 = runs[last].1 * 10 + (c as i64 - 48);
+            } else {
+                runs.push((c, 0));
+            }
+        }
+        StringIterator { runs: runs, index: 0, used: 0 }
+    }
+
+    fn next(mut ref self) -> char {
+        if not self.has_next() {
+            return ' ';
+        }
+        let c = self.runs[self.index].0;
+        self.used += 1;
+        if self.used == self.runs[self.index].1 {
+            self.index += 1;
+            self.used = 0;
+        }
+        c
+    }
+
+    fn has_next(self) -> bool {
+        self.index < self.runs.len()
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Runs `ops` on a fresh iterator, `n` a call of `next` and `h` one of
+// `has_next`, and lists the results: a letter, `_` for the space `next`
+// gives once nothing is left, or `true` / `false`.
+fn run(compressed: Str, ops: Str) -> Vec[String] {
+    let mut it = StringIterator.new(compressed);
+    let mut out: Vec[String] = Vec.new();
+    for op in ops.chars() {
+        if op == 'n' {
+            let c = it.next();
+            out.push(if c == ' ' { "_".to_string() } else { c.to_string() });
+        } else {
+            out.push(if it.has_next() { "true".to_string() } else { "false".to_string() });
+        }
+    }
+    out
+}
+
+fn show(compressed: Str, ops: Str) {
+    println(f"{compressed} {ops} -> {run(compressed, ops)}");
+}
+
+fn main() {
+    // The LeetCode example.
+    show("L1e2t1C1o1d1e1", "nnnnnnhnh");
+    // Past the end, with `has_next` before and after; one letter; counts
+    // of two and three digits; a count of exactly 10; upper and lower case
+    // of one letter.
+    show("a2b1", "hnnhnhnn");
+    show("Q1", "hnhnh");
+    show("a12B3", "nnnnnnnnnnnnnnnhn");
+    show("x10y1", "nnnnnnnnnnnhnh");
+    show("k100", "hnhnhnh");
+    show("a1A1a1", "nnnnh");
+    // The largest count: 99 letters given out, the last call `has_next`.
+    let mut ops = String.new();
+    for _ in 0..99 {
+        ops.push('n');
+    }
+    ops.push('h');
+    let got = run("z1000000000", ops);
+    println(f"z1000000000, 99 next then has_next -> {got.len()} results, the last {got[98]} {got[99]}");
+    // Every letter once, then past the end.
+    let mut alphabet = String.new();
+    for k in 0..26 {
+        alphabet.push(((97 + k) as u8) as char);
+        alphabet.push('1');
+    }
+    let all = run(alphabet, "nnnnnnnnnnnnnnnnnnnnnnnnnnnhnh");
+    println(f"a1b1...z1 and past the end -> {all}");
+    // 300 random cases: 1 to 12 runs with counts from 1 to 20 (one in ten
+    // up to 10^9), and 1 to 100 calls, two in three of them `next`.
+    let mut seed: i64 = 604;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let mut text = String.new();
+        let runs = 1 + step(mut seed) % 12;
+        for _ in 0..runs {
+            let k = step(mut seed) % 52;
+            let letter = if k < 26 { ((65 + k) as u8) as char } else { ((97 + k - 26) as u8) as char };
+            text.push(letter);
+            let count = if step(mut seed) % 10 == 0 { 1 + (step(mut seed) * 32768 + step(mut seed)) % 1000000000 } else { 1 + step(mut seed) % 20 };
+            text.push_str(f"{count}");
+        }
+        let mut calls = String.new();
+        let size = 1 + step(mut seed) % 100;
+        for _ in 0..size {
+            calls.push(if step(mut seed) % 3 == 0 { 'h' } else { 'n' });
+        }
+        for r in run(text, calls) {
+            total += 1;
+            for c in r.chars() {
+                checksum = (checksum * 31 + c as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"300 random cases: {total} results, checksum {checksum}");
+}

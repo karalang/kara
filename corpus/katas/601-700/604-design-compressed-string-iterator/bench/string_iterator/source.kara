@@ -1,0 +1,84 @@
+// Benchmark for #604: the ★ arm (read as you go); see
+// string_iterator.kara.
+
+struct StringIterator {
+    text: Vec[char],
+    at: i64,
+    current: char,
+    left: i64,
+}
+
+impl StringIterator {
+    fn new(compressed: Str) -> StringIterator {
+        StringIterator { text: compressed.chars().collect(), at: 0, current: ' ', left: 0 }
+    }
+
+    fn next(mut ref self) -> char {
+        if self.left == 0 {
+            if self.at == self.text.len() {
+                return ' ';
+            }
+            self.current = self.text[self.at];
+            self.at += 1;
+            let mut count = 0;
+            while self.at < self.text.len() and self.text[self.at].is_ascii_digit() {
+                count = count * 10 + (self.text[self.at] as i64 - 48);
+                self.at += 1;
+            }
+            self.left = count;
+        }
+        self.left -= 1;
+        self.current
+    }
+
+    fn has_next(self) -> bool {
+        self.left > 0 or self.at < self.text.len()
+    }
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 1,000 compressed texts of up to 1,000 characters (the problem's
+    // longest), runs of letters with counts from 1 to 20, one in ten up
+    // to 10^9, made once; then 200 times over each gets a fresh iterator
+    // and the problem's 100 calls, `has_next` before every `next`.
+    let count = 1000;
+    let rounds = 200;
+    let mut seed: i64 = 604;
+    let mut texts: Vec[String] = Vec.new();
+    for _ in 0..count {
+        let mut text = String.new();
+        loop {
+            let k = step(mut seed) % 52;
+            let letter = if k < 26 { ((65 + k) as u8) as char } else { ((97 + k - 26) as u8) as char };
+            let n = if step(mut seed) % 10 == 0 { 1 + (step(mut seed) * 32768 + step(mut seed)) % 1000000000 } else { 1 + step(mut seed) % 20 };
+            let run = f"{letter}{n}";
+            if text.len() + run.len() > 1000 {
+                break;
+            }
+            text.push_str(run);
+        }
+        texts.push(text);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let mut it = StringIterator.new(texts[(round * 7 + g) % count]);
+            for _ in 0..50 {
+                if it.has_next() {
+                    total += 1;
+                }
+                let c = it.next();
+                checksum = (checksum * 31 + c as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"{count} texts, {rounds} rounds: {total} letters left, checksum {checksum}");
+}

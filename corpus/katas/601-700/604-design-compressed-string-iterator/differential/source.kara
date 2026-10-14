@@ -1,0 +1,538 @@
+// LeetCode #604: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// texts and calls.
+
+// ---- star arm ----------------------------------------------------------
+
+struct StringIteratorStar {
+    text: Vec[char],
+    at: i64,
+    current: char,
+    left: i64,
+}
+
+impl StringIteratorStar {
+    fn new(compressed: Str) -> StringIteratorStar {
+        StringIteratorStar { text: compressed.chars().collect(), at: 0, current: ' ', left: 0 }
+    }
+
+    fn next(mut ref self) -> char {
+        if self.left == 0 {
+            if self.at == self.text.len() {
+                return ' ';
+            }
+            self.current = self.text[self.at];
+            self.at += 1;
+            let mut count = 0;
+            while self.at < self.text.len() and self.text[self.at].is_ascii_digit() {
+                count = count * 10 + (self.text[self.at] as i64 - 48);
+                self.at += 1;
+            }
+            self.left = count;
+        }
+        self.left -= 1;
+        self.current
+    }
+
+    fn has_next(self) -> bool {
+        self.left > 0 or self.at < self.text.len()
+    }
+}
+
+fn run_star(compressed: Str, ops: Str) -> Vec[String] {
+    let mut it = StringIteratorStar.new(compressed);
+    let mut out: Vec[String] = Vec.new();
+    for op in ops.chars() {
+        if op == 'n' {
+            out.push(shown(it.next()));
+        } else {
+            out.push(f"{it.has_next()}");
+        }
+    }
+    out
+}
+
+// Two iterators on the same text, the calls dealt to them in turn; the
+// results of each, in order.
+fn pair_star(compressed: Str, ops: Str) -> (Vec[String], Vec[String]) {
+    let mut a = StringIteratorStar.new(compressed);
+    let mut b = StringIteratorStar.new(compressed);
+    let mut first: Vec[String] = Vec.new();
+    let mut second: Vec[String] = Vec.new();
+    let mut turn = 0;
+    for op in ops.chars() {
+        let r = if turn % 2 == 0 {
+            if op == 'n' { shown(a.next()) } else { f"{a.has_next()}" }
+        } else {
+            if op == 'n' { shown(b.next()) } else { f"{b.has_next()}" }
+        };
+        if turn % 2 == 0 {
+            first.push(r);
+        } else {
+            second.push(r);
+        }
+        turn += 1;
+    }
+    (first, second)
+}
+
+// ---- runs arm ----------------------------------------------------------
+
+struct StringIteratorRuns {
+    runs: Vec[(char, i64)],
+    index: i64,
+    used: i64,
+}
+
+impl StringIteratorRuns {
+    fn new(compressed: Str) -> StringIteratorRuns {
+        let mut runs: Vec[(char, i64)] = Vec.new();
+        for c in compressed.chars() {
+            if c.is_ascii_digit() {
+                let last = runs.len() - 1;
+                runs[last].1 = runs[last].1 * 10 + (c as i64 - 48);
+            } else {
+                runs.push((c, 0));
+            }
+        }
+        StringIteratorRuns { runs: runs, index: 0, used: 0 }
+    }
+
+    fn next(mut ref self) -> char {
+        if not self.has_next() {
+            return ' ';
+        }
+        let c = self.runs[self.index].0;
+        self.used += 1;
+        if self.used == self.runs[self.index].1 {
+            self.index += 1;
+            self.used = 0;
+        }
+        c
+    }
+
+    fn has_next(self) -> bool {
+        self.index < self.runs.len()
+    }
+}
+
+fn run_runs(compressed: Str, ops: Str) -> Vec[String] {
+    let mut it = StringIteratorRuns.new(compressed);
+    let mut out: Vec[String] = Vec.new();
+    for op in ops.chars() {
+        if op == 'n' {
+            out.push(shown(it.next()));
+        } else {
+            out.push(f"{it.has_next()}");
+        }
+    }
+    out
+}
+
+// Two iterators on the same text, the calls dealt to them in turn; the
+// results of each, in order.
+fn pair_runs(compressed: Str, ops: Str) -> (Vec[String], Vec[String]) {
+    let mut a = StringIteratorRuns.new(compressed);
+    let mut b = StringIteratorRuns.new(compressed);
+    let mut first: Vec[String] = Vec.new();
+    let mut second: Vec[String] = Vec.new();
+    let mut turn = 0;
+    for op in ops.chars() {
+        let r = if turn % 2 == 0 {
+            if op == 'n' { shown(a.next()) } else { f"{a.has_next()}" }
+        } else {
+            if op == 'n' { shown(b.next()) } else { f"{b.has_next()}" }
+        };
+        if turn % 2 == 0 {
+            first.push(r);
+        } else {
+            second.push(r);
+        }
+        turn += 1;
+    }
+    (first, second)
+}
+
+// ---- search arm --------------------------------------------------------
+
+struct StringIteratorSearch {
+    letters: Vec[char],
+    ends: Vec[i64],
+    given: i64,
+}
+
+impl StringIteratorSearch {
+    fn new(compressed: Str) -> StringIteratorSearch {
+        let mut letters: Vec[char] = Vec.new();
+        let mut ends: Vec[i64] = Vec.new();
+        let mut count = 0;
+        let mut total = 0;
+        for c in compressed.chars() {
+            if c.is_ascii_digit() {
+                count = count * 10 + (c as i64 - 48);
+            } else {
+                if not letters.is_empty() {
+                    total += count;
+                    ends.push(total);
+                }
+                letters.push(c);
+                count = 0;
+            }
+        }
+        total += count;
+        ends.push(total);
+        StringIteratorSearch { letters: letters, ends: ends, given: 0 }
+    }
+
+    fn next(mut ref self) -> char {
+        if not self.has_next() {
+            return ' ';
+        }
+        let mut low = 0;
+        let mut high = self.ends.len() - 1;
+        while low < high {
+            let mid = (low + high) / 2;
+            if self.ends[mid] > self.given {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+        self.given += 1;
+        self.letters[low]
+    }
+
+    fn has_next(self) -> bool {
+        self.given < self.ends[self.ends.len() - 1]
+    }
+}
+
+fn run_search(compressed: Str, ops: Str) -> Vec[String] {
+    let mut it = StringIteratorSearch.new(compressed);
+    let mut out: Vec[String] = Vec.new();
+    for op in ops.chars() {
+        if op == 'n' {
+            out.push(shown(it.next()));
+        } else {
+            out.push(f"{it.has_next()}");
+        }
+    }
+    out
+}
+
+// Two iterators on the same text, the calls dealt to them in turn; the
+// results of each, in order.
+fn pair_search(compressed: Str, ops: Str) -> (Vec[String], Vec[String]) {
+    let mut a = StringIteratorSearch.new(compressed);
+    let mut b = StringIteratorSearch.new(compressed);
+    let mut first: Vec[String] = Vec.new();
+    let mut second: Vec[String] = Vec.new();
+    let mut turn = 0;
+    for op in ops.chars() {
+        let r = if turn % 2 == 0 {
+            if op == 'n' { shown(a.next()) } else { f"{a.has_next()}" }
+        } else {
+            if op == 'n' { shown(b.next()) } else { f"{b.has_next()}" }
+        };
+        if turn % 2 == 0 {
+            first.push(r);
+        } else {
+            second.push(r);
+        }
+        turn += 1;
+    }
+    (first, second)
+}
+
+// ---- expand arm --------------------------------------------------------
+
+struct StringIteratorExpand {
+    letters: Vec[char],
+    at: i64,
+    more: bool,
+}
+
+impl StringIteratorExpand {
+    fn new(compressed: Str) -> StringIteratorExpand {
+        let cap = 100;
+        let text: Vec[char] = compressed.chars().collect();
+        let mut letters: Vec[char] = Vec.new();
+        let mut more = false;
+        let mut i = 0;
+        while i < text.len() {
+            let c = text[i];
+            i += 1;
+            let mut count = 0;
+            while i < text.len() and text[i].is_ascii_digit() {
+                count = count * 10 + (text[i] as i64 - 48);
+                i += 1;
+            }
+            let room = cap - letters.len();
+            if count > room {
+                more = true;
+            }
+            for _ in 0..min(count, room) {
+                letters.push(c);
+            }
+        }
+        StringIteratorExpand { letters: letters, at: 0, more: more }
+    }
+
+    fn next(mut ref self) -> char {
+        if self.at == self.letters.len() {
+            return ' ';
+        }
+        self.at += 1;
+        self.letters[self.at - 1]
+    }
+
+    fn has_next(self) -> bool {
+        self.at < self.letters.len() or self.more
+    }
+}
+
+fn run_expand(compressed: Str, ops: Str) -> Vec[String] {
+    let mut it = StringIteratorExpand.new(compressed);
+    let mut out: Vec[String] = Vec.new();
+    for op in ops.chars() {
+        if op == 'n' {
+            out.push(shown(it.next()));
+        } else {
+            out.push(f"{it.has_next()}");
+        }
+    }
+    out
+}
+
+// Two iterators on the same text, the calls dealt to them in turn; the
+// results of each, in order.
+fn pair_expand(compressed: Str, ops: Str) -> (Vec[String], Vec[String]) {
+    let mut a = StringIteratorExpand.new(compressed);
+    let mut b = StringIteratorExpand.new(compressed);
+    let mut first: Vec[String] = Vec.new();
+    let mut second: Vec[String] = Vec.new();
+    let mut turn = 0;
+    for op in ops.chars() {
+        let r = if turn % 2 == 0 {
+            if op == 'n' { shown(a.next()) } else { f"{a.has_next()}" }
+        } else {
+            if op == 'n' { shown(b.next()) } else { f"{b.has_next()}" }
+        };
+        if turn % 2 == 0 {
+            first.push(r);
+        } else {
+            second.push(r);
+        }
+        turn += 1;
+    }
+    (first, second)
+}
+
+// ---- the definition and the properties --------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn shown(c: char) -> String {
+    if c == ' ' { "_".to_string() } else { c.to_string() }
+}
+
+fn answer(which: i64, compressed: Str, ops: Str) -> Vec[String] {
+    if which == 0 {
+        run_star(compressed, ops)
+    } else if which == 1 {
+        run_runs(compressed, ops)
+    } else if which == 2 {
+        run_search(compressed, ops)
+    } else {
+        run_expand(compressed, ops)
+    }
+}
+
+fn pair(which: i64, compressed: Str, ops: Str) -> (Vec[String], Vec[String]) {
+    if which == 0 {
+        pair_star(compressed, ops)
+    } else if which == 1 {
+        pair_runs(compressed, ops)
+    } else if which == 2 {
+        pair_search(compressed, ops)
+    } else {
+        pair_expand(compressed, ops)
+    }
+}
+
+// The definition: the text written out in full, every letter as many
+// times as its count says, and a position in it. `next` gives the
+// letter at the position and moves on, or a space past the end;
+// `has_next` says whether the position is before the end.
+fn definition(compressed: Str, ops: Str) -> Vec[String] {
+    let mut full: Vec[char] = Vec.new();
+    let mut letter = ' ';
+    let mut count = 0;
+    for c in compressed.chars() {
+        if c.is_ascii_digit() {
+            count = count * 10 + (c as i64 - 48);
+        } else {
+            for _ in 0..count {
+                full.push(letter);
+            }
+            letter = c;
+            count = 0;
+        }
+    }
+    for _ in 0..count {
+        full.push(letter);
+    }
+    let mut p = 0;
+    let mut out: Vec[String] = Vec.new();
+    for op in ops.chars() {
+        if op == 'n' {
+            if p < full.len() {
+                out.push(shown(full[p]));
+                p += 1;
+            } else {
+                out.push(shown(' '));
+            }
+        } else {
+            out.push(f"{p < full.len()}");
+        }
+    }
+    out
+}
+
+// A random text of `runs` runs over the letters a, b and A, so that a
+// letter often follows itself, with counts from 1 to `most`; and its
+// letters in all.
+fn random_text(runs: i64, most: i64, seed: mut ref i64) -> (String, i64) {
+    let letters = vec!['a', 'b', 'A'];
+    let mut text = String.new();
+    let mut total = 0;
+    for _ in 0..runs {
+        text.push(letters[step(seed) % 3]);
+        let count = 1 + step(seed) % most;
+        text.push_str(f"{count}");
+        total += count;
+    }
+    (text, total)
+}
+
+fn random_calls(size: i64, seed: mut ref i64) -> String {
+    let mut calls = String.new();
+    for _ in 0..size {
+        calls.push(if step(seed) % 3 == 0 { 'h' } else { 'n' });
+    }
+    calls
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6040;
+    let mut checks = 0;
+    let mut past = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 6 runs with counts up to 12, so some take two digits, and
+        // 1 to 60 calls.
+        let (text, _) = random_text(1 + step(mut seed) % 6, 12, mut seed);
+        let calls = random_calls(1 + step(mut seed) % 60, mut seed);
+        let want = definition(text, calls);
+        if want.contains(shown(' ')) {
+            past += 1;
+        }
+        // P2: a `has_next` put in at a random place.
+        let at = step(mut seed) % (calls.len() + 1);
+        let mut probed = String.new();
+        for (k, c) in calls.chars().enumerate() {
+            if k == at {
+                probed.push('h');
+            }
+            probed.push(c);
+        }
+        if at == calls.len() {
+            probed.push('h');
+        }
+        // P3: the first run of two or more split in two runs of the same
+        // letter.
+        let mut split = String.new();
+        let mut done = false;
+        let chars: Vec[char] = text.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            i += 1;
+            let mut n = 0;
+            while i < chars.len() and chars[i].is_ascii_digit() {
+                n = n * 10 + (chars[i] as i64 - 48);
+                i += 1;
+            }
+            if not done and n >= 2 {
+                split.push_str(f"{c}1{c}{n - 1}");
+                done = true;
+            } else {
+                split.push_str(f"{c}{n}");
+            }
+        }
+        // P5: a short text in front, whose letters are all taken first.
+        let (front, front_total) = random_text(1 + step(mut seed) % 3, 9, mut seed);
+        let mut joined = front.clone();
+        joined.push_str(text);
+        let mut lead = String.new();
+        for _ in 0..front_total {
+            lead.push('n');
+        }
+        lead.push_str(calls);
+        for which in 0..4 {
+            let got = answer(which, text, calls);
+            let mut without: Vec[String] = Vec.new();
+            for (k, r) in answer(which, text, probed).iter().enumerate() {
+                if k != at {
+                    without.push(r.clone());
+                }
+            }
+            let (first, second) = pair(which, text, f"{calls}{calls}");
+            let mut odd = String.new();
+            let mut even = String.new();
+            for (k, c) in f"{calls}{calls}".chars().enumerate() {
+                if k % 2 == 0 {
+                    even.push(c);
+                } else {
+                    odd.push(c);
+                }
+            }
+            let with_front = answer(which, joined, lead);
+            let mut tail: Vec[String] = Vec.new();
+            for k in front_total..with_front.len() {
+                tail.push(with_front[k].clone());
+            }
+            let ok = vec![
+                // P1: the definition's results.
+                got == want,
+                // P2: a `has_next` call changes nothing else.
+                without == got,
+                // P3: a run split in two of the same letter changes
+                // nothing.
+                answer(which, split, calls) == got,
+                // P4: two iterators on one text, called in turn, each
+                // give what one alone would.
+                first == answer(which, text, even) and second == answer(which, text, odd),
+                // P5: once a text in front is used up, the rest is an
+                // iterator on the text that follows.
+                tail == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({past} going past the end), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

@@ -1,0 +1,10 @@
+L1e2t1C1o1d1e1 nnnnnnhnh -> [L, e, e, t, C, o, true, d, true]
+a2b1 hnnhnhnn -> [true, a, a, true, b, false, _, _]
+Q1 hnhnh -> [true, Q, false, _, false]
+a12B3 nnnnnnnnnnnnnnnhn -> [a, a, a, a, a, a, a, a, a, a, a, a, B, B, B, false, _]
+x10y1 nnnnnnnnnnnhnh -> [x, x, x, x, x, x, x, x, x, x, y, false, _, false]
+k100 hnhnhnh -> [true, k, true, k, true, k, true]
+a1A1a1 nnnnh -> [a, A, a, _, false]
+z1000000000, 99 next then has_next -> 100 results, the last z true
+a1b1...z1 and past the end -> [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z, _, false, _, false]
+300 random cases: 14678 results, checksum 431175027
