@@ -1608,6 +1608,15 @@ impl<'a> super::TypeChecker<'a> {
         // the method's own type arguments like any other source method.
         if self.library_methods_from_source {
             let receiver = receiver_for_method_lookup(&obj_ty);
+            // An array takes a slice's library methods, viewed as one
+            // (`mk().iter().count()`; B-2026-10-14-41).
+            let receiver = match receiver {
+                Type::Array { element, .. } => Type::Slice {
+                    element,
+                    mutable: false,
+                },
+                other => other,
+            };
             if let Some(ty) = self.library_cursor_method(&receiver, method, args, span) {
                 return ty;
             }
@@ -1616,7 +1625,12 @@ impl<'a> super::TypeChecker<'a> {
                     SpanKey::from_span(span),
                     format!("{type_name}.{method}"),
                 );
-                self.record_node_receiver_impl_subs(span, &obj_ty, &type_name, method);
+                let recv_ty = if matches!(receiver, Type::Slice { .. }) {
+                    &receiver
+                } else {
+                    &obj_ty
+                };
+                self.record_node_receiver_impl_subs(span, recv_ty, &type_name, method);
                 return self.dispatch_user_impl_method(object, method, args, span, &receiver);
             }
         }

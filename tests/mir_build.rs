@@ -1477,3 +1477,33 @@ fn main() {
         }
     }
 }
+
+/// An array receiver of the library's `Slice` methods is viewed as a slice,
+/// on a local and on a temporary alike (B-2026-10-14-41).
+#[test]
+fn mir_array_receiver_of_a_slice_method_is_viewed() {
+    const SRC: &str = r#"
+fn mk() -> Array[i64, 3] { return [10, 20, 30]; }
+
+fn main() {
+    let m = mk();
+    println(m.iter().count());
+    let s: i64 = m.iter().sum();
+    println(s);
+    println(mk().iter().count());
+    let t: i64 = mk().iter().map(|x| x * 2).sum();
+    println(t);
+    for x in mk().iter() {
+        println(x);
+    }
+}
+"#;
+    let want = "3\n60\n3\n120\n10\n20\n30\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

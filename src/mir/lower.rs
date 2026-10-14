@@ -11979,9 +11979,41 @@ impl<'l, 'a> Bx<'l, 'a> {
                     }
                     None => None,
                 };
+                // An array or `Vec` receiver of the library's `Slice[T]`
+                // methods is viewed as a slice (`mk().iter()`;
+                // B-2026-10-14-41).
+                let slice_recv = match (self.lcx.fns[&d].impl_slice, &mode, inst_args.first()) {
+                    (true, Some(m), Some(&elem)) => {
+                        let st = self.expr_ty(object)?;
+                        let (_, st) = self.strip_ty_full(st);
+                        if matches!(self.tys().tcx().kind(st), HK::Slice { .. }) {
+                            None
+                        } else {
+                            let mutable = matches!(m, SelfParam::MutRef);
+                            let slice_t = self.tys().tcx().intern(HK::Slice { elem, mutable });
+                            let s = self.slice_view(object, None, slice_t, mutable)?;
+                            Some(match m {
+                                SelfParam::Owned => Operand::Move(Place::local(s)),
+                                _ => {
+                                    let rt = self.tys().tcx().reference(slice_t, mutable);
+                                    let r = self.temp(rt);
+                                    let kind = if mutable {
+                                        BorrowKind::Mut
+                                    } else {
+                                        BorrowKind::Shared
+                                    };
+                                    self.assign(r, Rvalue::Ref(kind, Place::local(s)));
+                                    Operand::Move(Place::local(r))
+                                }
+                            })
+                        }
+                    }
+                    _ => None,
+                };
                 // No receiver: `G[i64].mk()` names an associated function
                 // through its type, which is all the object is.
                 let recv = match mode {
+                    _ if slice_recv.is_some() => slice_recv.map(PendingRecv::Ready),
                     Some(SelfParam::Owned) => {
                         let st = self.expr_ty(object)?;
                         let (_, st) = self.strip_ty_full(st);
