@@ -608,7 +608,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-13 | 2026-10-14 | typecheck+ownership | medium | Pushing an owned `Node` local into a `Vec[ref Node]` is accepted as a MOVE of the `Node` into a slot typed `ref Node`: `v.push(t)` passes `karac check`, a later `t.val` is refused as "moved" by both pipelines, and with no later use `__mir-run` reports the tree leaked at exit | — |
 | B-2026-10-14-14 | 2026-10-14 | codegen | medium | `Vec.with_capacity(n)` and `String.with_capacity(n)` reserve nothing on the MIR compiled backend: `Vec.with_capacity(5).capacity()` prints 0 under `__mir-llvm-run` and 5 under `__mir-run`, and presizing buys nothing -- kata 559's bench walk runs 2.37 to 2.45 s with each node's children `Vec` presized, the same as without, where the Rust mirror drops from 2.0 s to 0.82 to 0.87 s | — |
 | B-2026-10-14-15 | 2026-10-14 | interp | medium | The MIR interpreter has no `chunks` or `windows` on a `Vec` receiver: `v.chunks(2)` and `v.windows(2)` on a `Vec[i64]` stop `__mir-run` with "call of unknown function Vec[i64].chunks" (and `.windows`), while `karac check` passes them, `__mir-llvm-run` runs them, and the same calls on a `Slice[i64]` run on `__mir-run` | — |
-| B-2026-10-14-16 | 2026-10-14 | typecheck | medium | `karac check` refuses every `collect()` of non-`Copy` elements into a `Set`, `VecDeque` or `Map` annotation, `let t: Set[String] = words.iter().map(|w| w.to_uppercase()).collect();`, with "cannot move '__karac_collect_it_N': it borrows its value", naming a temporary the user never wrote; both interpreters run it | — |
 | B-2026-10-14-17 | 2026-10-14 | interp+codegen | medium | `collect()` into a `VecDeque` fails on both MIR backends: `__mir-run` stops with "expected a library value, found Agg(...)" in `IterMap[..].collect[i64, VecDeque[i64]]`, and `__mir-llvm-run` with "native `VecDeque[i64].from_iter` is not lowered yet" | — |
 
 ### Relocated
@@ -3988,6 +3987,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-4 | typecheck | low | `parts[1..].join("/")` and `.concat()` on a `Slice[String]` are refused with "no method 'join' on type 'Slice'" on every pipeline, while `Vec[String]… | 04bc26e13e |
 | B-2026-10-14-7 | typecheck | medium | `karac check` refuses `let r: Vec[String] = words.iter().map(\|w\| w.chars().rev().collect()).collect();` with "expected 'Vec[String]', found 'Vec[Vec[… | 86f1298387 |
 | B-2026-10-14-8 | ownership | medium | `karac check` refuses any `collect()` into a non-`Vec` target inside a closure body, `\|w\| { let s: String = w.chars().collect(); s.len() }`, with an… | d0d9435e8a |
+| B-2026-10-14-16 | typecheck | medium | `karac check` refuses every `collect()` of non-`Copy` elements into a `Set`, `VecDeque` or `Map` annotation, `let t: Set[String] = words.iter().map(\|… | c0de09ec65 |
 
 </details>
 
