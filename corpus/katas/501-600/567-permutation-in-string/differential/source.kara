@@ -1,0 +1,245 @@
+// LeetCode #567: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// pairs of texts.
+
+// ---- star arm ----------------------------------------------------------
+
+fn check_inclusion_star(s1: String, s2: String) -> bool {
+    let a: Vec[char] = s1.chars().collect();
+    let b: Vec[char] = s2.chars().collect();
+    let k = a.len();
+    if k > b.len() {
+        return false;
+    }
+    let mut need = vec![0; 26];
+    for c in a.iter() {
+        need[*c as i64 - 'a' as i64] += 1;
+    }
+    let mut missing = k;
+    for i in 0..b.len() {
+        let enter = b[i] as i64 - 'a' as i64;
+        if need[enter] > 0 {
+            missing -= 1;
+        }
+        need[enter] -= 1;
+        if i >= k {
+            let leave = b[i - k] as i64 - 'a' as i64;
+            need[leave] += 1;
+            if need[leave] > 0 {
+                missing += 1;
+            }
+        }
+        if missing == 0 {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- compare arm -------------------------------------------------------
+
+fn check_inclusion_compare(s1: String, s2: String) -> bool {
+    let a: Vec[char] = s1.chars().collect();
+    let b: Vec[char] = s2.chars().collect();
+    let k = a.len();
+    if k > b.len() {
+        return false;
+    }
+    let mut want = vec![0; 26];
+    for c in a.iter() {
+        want[*c as i64 - 'a' as i64] += 1;
+    }
+    let mut window = vec![0; 26];
+    for i in 0..b.len() {
+        window[b[i] as i64 - 'a' as i64] += 1;
+        if i >= k {
+            window[b[i - k] as i64 - 'a' as i64] -= 1;
+        }
+        if window == want {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- map arm -----------------------------------------------------------
+
+fn shift_map(diff: mut ref Map[char, i64], c: char, by: i64) {
+    let now = (diff.get(c) ?? 0) + by;
+    if now == 0 {
+        diff.remove(c);
+    } else {
+        diff.insert(c, now);
+    }
+}
+
+fn check_inclusion_map(s1: String, s2: String) -> bool {
+    let a: Vec[char] = s1.chars().collect();
+    let b: Vec[char] = s2.chars().collect();
+    let k = a.len();
+    if k > b.len() {
+        return false;
+    }
+    let mut diff: Map[char, i64] = Map.new();
+    for c in a.iter() {
+        shift_map(mut diff, *c, -1);
+    }
+    for i in 0..b.len() {
+        shift_map(mut diff, b[i], 1);
+        if i >= k {
+            shift_map(mut diff, b[i - k], -1);
+        }
+        if diff.is_empty() {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- shrink arm --------------------------------------------------------
+
+fn check_inclusion_shrink(s1: String, s2: String) -> bool {
+    let a = s1.bytes();
+    let b = s2.bytes();
+    let mut have = vec![0; 26];
+    for x in a.iter() {
+        have[(*x - b'a') as i64] += 1;
+    }
+    let mut left = 0;
+    for right in 0..b.len() {
+        let c = (b[right] - b'a') as i64;
+        have[c] -= 1;
+        while have[c] < 0 {
+            have[(b[left] - b'a') as i64] += 1;
+            left += 1;
+        }
+        if right - left + 1 == a.len() {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- the definition and the properties ------------------------------------
+
+// The definition: every stretch of s2 as long as s1, checked letter by
+// letter against a fresh copy of s1's letters, each one found and struck
+// out; a stretch where every letter is found is a permutation of s1.
+fn definition(s1: String, s2: String) -> bool {
+    let a: Vec[char] = s1.chars().collect();
+    let b: Vec[char] = s2.chars().collect();
+    let mut start = 0;
+    while start + a.len() <= b.len() {
+        let mut left = a.clone();
+        let mut all = true;
+        for i in start..start + a.len() {
+            match left.iter().position(|c| c == b[i]) {
+                Some(p) => {
+                    left.remove(p);
+                }
+                None => {
+                    all = false;
+                }
+            }
+        }
+        if all {
+            return true;
+        }
+        start += 1;
+    }
+    false
+}
+
+fn answer(which: i64, s1: String, s2: String) -> bool {
+    if which == 0 {
+        check_inclusion_star(s1, s2)
+    } else if which == 1 {
+        check_inclusion_compare(s1, s2)
+    } else if which == 2 {
+        check_inclusion_map(s1, s2)
+    } else {
+        check_inclusion_shrink(s1, s2)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_text(length: i64, letters: i64, seed: mut ref i64) -> String {
+    let alphabet: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut s = String.new();
+    for _ in 0..length {
+        s.push(alphabet[step(seed) % letters]);
+    }
+    s
+}
+
+fn renamed(s: String, to: Vec[char]) -> String {
+    s.chars().map(|c| to[c as i64 - 'a' as i64]).collect()
+}
+
+fn reversed(s: String) -> String {
+    s.chars().rev().collect()
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5670;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // s1 of 1 to 5 letters and s2 of 1 to 25, over the first 2 to 4
+        // letters of the alphabet.
+        let letters = 2 + step(mut seed) % 3;
+        let s1 = random_text(1 + step(mut seed) % 5, letters, mut seed);
+        let s2 = random_text(1 + step(mut seed) % 25, letters, mut seed);
+        let want = definition(s1, s2);
+        // A renaming of the whole alphabet, by Fisher-Yates.
+        let mut to: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+        let mut i = 25;
+        while i > 0 {
+            to.swap(i, step(mut seed) % (i + 1));
+            i -= 1;
+        }
+        // s1's letters shuffled and put into s2 at a random place.
+        let mut shuffled: Vec[char] = s1.chars().collect();
+        let mut i = shuffled.len() - 1;
+        while i > 0 {
+            shuffled.swap(i, step(mut seed) % (i + 1));
+            i -= 1;
+        }
+        let cut = step(mut seed) % (s2.len() + 1);
+        let shuffled_text: String = shuffled.iter().collect();
+        let planted = s2[..cut].to_string() + shuffled_text + s2[cut..].to_string();
+        for which in 0..4 {
+            let got = answer(which, s1, s2);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: false when s1 is longer than s2, true when s2
+                // contains s1 itself.
+                not (s1.len() > s2.len() and got) and not (s2.contains(s1) and not got),
+                // P3: the same renaming of letters in both changes nothing.
+                answer(which, renamed(s1, to), renamed(s2, to)) == got,
+                // P4: both reversed changes nothing.
+                answer(which, reversed(s1), reversed(s2)) == got,
+                // P5: s1's letters in any order put into s2 are found.
+                answer(which, s1, planted),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

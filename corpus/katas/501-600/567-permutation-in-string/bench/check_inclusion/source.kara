@@ -1,0 +1,98 @@
+// Benchmark for #567: Permutation in String -- the ★ arm (a sliding
+// window).
+//
+// s2 holds a permutation of s1 exactly when some window of s2 as long
+// as s1 has the same letter counts. A window of that length slides
+// along s2 keeping, for each letter, how many more s1 needs than the
+// window has, and `missing`, the sum of the positive ones: entering and
+// leaving letters change one count each, and the window matches when
+// `missing` is 0. O(|s1| + |s2|) time, O(26) space.
+
+fn check_inclusion(s1: String, s2: String) -> bool {
+    let a: Vec[char] = s1.chars().collect();
+    let b: Vec[char] = s2.chars().collect();
+    let k = a.len();
+    if k > b.len() {
+        return false;
+    }
+    let mut need = vec![0; 26];
+    for c in a.iter() {
+        need[*c as i64 - 'a' as i64] += 1;
+    }
+    let mut missing = k;
+    for i in 0..b.len() {
+        let enter = b[i] as i64 - 'a' as i64;
+        if need[enter] > 0 {
+            missing -= 1;
+        }
+        need[enter] -= 1;
+        if i >= k {
+            let leave = b[i - k] as i64 - 'a' as i64;
+            need[leave] += 1;
+            if need[leave] > 0 {
+                missing += 1;
+            }
+        }
+        if missing == 0 {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_text(length: i64, letters: i64, seed: mut ref i64) -> String {
+    let alphabet: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut s = String.new();
+    for _ in 0..length {
+        s.push(alphabet[step(seed) % letters]);
+    }
+    s
+}
+
+fn main() {
+    // 100 pairs built once: s1 of 5 to 200 letters and s2 of 10,000 (the
+    // problem's most), both over the first 3 to 26 letters; every other
+    // s2 has s1's letters, shuffled, put in at a random place. Then
+    // 300 times over, every pair is answered.
+    let count = 100;
+    let rounds = 300;
+    let mut seed: i64 = 567;
+    let mut pairs: Vec[(String, String)] = Vec.new();
+    for g in 0..count {
+        let letters = 3 + step(mut seed) % 24;
+        let s1 = random_text(5 + step(mut seed) % 196, letters, mut seed);
+        let mut s2 = random_text(10000, letters, mut seed);
+        if g % 2 == 0 {
+            let mut shuffled: Vec[char] = s1.chars().collect();
+            let mut i = shuffled.len() - 1;
+            while i > 0 {
+                shuffled.swap(i, step(mut seed) % (i + 1));
+                i -= 1;
+            }
+            let cut = step(mut seed) % (10001 - s1.len());
+            let middle: String = shuffled.iter().collect();
+            s2 = s2[..cut].to_string() + middle + s2[cut + s1.len()..].to_string();
+        }
+        pairs.push((s1, s2));
+    }
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let (s1, s2) = ref pairs[(round * 7 + g) % count];
+            let got = check_inclusion(s1, s2);
+            if got {
+                found += 1;
+            }
+            checksum = (checksum * 31 + (if got { g + 2 } else { 1 })) % 1000000007;
+        }
+    }
+    println(f"{count} pairs, {rounds} rounds: {found} found, checksum {checksum}");
+}

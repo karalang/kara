@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/567-permutation-in-string/bench/check_inclusion.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["closure", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "17ca9c9b2"
+extracted_src = "7fdfe409"
+model_rev = "1aa23105"
+model_src = "7fdfe409"

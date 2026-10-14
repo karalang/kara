@@ -1,0 +1,14 @@
+"ab" in "eidbaooo": true
+"ab" in "eidboaoo": false
+"abc" in "ab": false
+"adc" in "dcda": true
+"a" in "a": true
+"a" in "b": false
+"aab" in "abab": true
+"aab" in "abba": false
+"hello" in "ooolleoooleh": false
+"xyz" in "zyxaaaaaaa": true
+"xyz" in "aaaaaaayzx": true
+300 random pairs: 200 found, checksum 638993679
+10000 letters, planted at the end: true
+10000 letters, one letter off: false

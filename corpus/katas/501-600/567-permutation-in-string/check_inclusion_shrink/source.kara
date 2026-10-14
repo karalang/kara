@@ -1,0 +1,102 @@
+// LeetCode #567: Permutation in String -- a window that shrinks.
+//
+// The window grows a letter at a time over the bytes of s2 and, whenever it
+// holds more of a letter than s1 does, gives up letters from its left
+// end until it no longer does. Every window kept that way uses no letter
+// more often than s1, so once one is as long as s1 it has exactly s1's
+// letters. O(|s1| + |s2|) time.
+
+fn check_inclusion(s1: String, s2: String) -> bool {
+    let a = s1.bytes();
+    let b = s2.bytes();
+    let mut have = vec![0; 26];
+    for x in a.iter() {
+        have[(*x - b'a') as i64] += 1;
+    }
+    let mut left = 0;
+    for right in 0..b.len() {
+        let c = (b[right] - b'a') as i64;
+        have[c] -= 1;
+        while have[c] < 0 {
+            have[(b[left] - b'a') as i64] += 1;
+            left += 1;
+        }
+        if right - left + 1 == a.len() {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s1: Str, s2: Str) {
+    println(f"\"{s1}\" in \"{s2}\": {check_inclusion(s1.to_string(), s2.to_string())}");
+}
+
+// `length` letters, each one of the first `letters` of the alphabet.
+fn random_text(length: i64, letters: i64, seed: mut ref i64) -> String {
+    let alphabet: Vec[char] = "abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut s = String.new();
+    for _ in 0..length {
+        s.push(alphabet[step(seed) % letters]);
+    }
+    s
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("ab", "eidbaooo");
+    show("ab", "eidboaoo");
+    // s1 longer than s2; a match after a false start; one letter, there
+    // and not.
+    show("abc", "ab");
+    show("adc", "dcda");
+    show("a", "a");
+    show("a", "b");
+    // Repeated letters: the counts must match, not just the letters.
+    show("aab", "abab");
+    show("aab", "abba");
+    show("hello", "ooolleoooleh");
+    // At the very start and the very end of s2.
+    show("xyz", "zyxaaaaaaa");
+    show("xyz", "aaaaaaayzx");
+    // 300 random pairs over a, b and c.
+    let mut seed: i64 = 567;
+    let mut found = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let s1 = random_text(1 + step(mut seed) % 5, 3, mut seed);
+        let s2 = random_text(1 + step(mut seed) % 30, 3, mut seed);
+        let got = check_inclusion(s1, s2);
+        if got {
+            found += 1;
+        }
+        checksum = (checksum * 31 + (if got { 2 } else { 1 })) % 1000000007;
+    }
+    println(f"300 random pairs: {found} found, checksum {checksum}");
+    // The problem's most, 10,000 letters: s1 of 5,000 random letters,
+    // and s2 of 5,000 others followed by s1 reversed, then the same with
+    // its last letter changed to the letter s1 has fewest of.
+    let s1 = random_text(5000, 26, mut seed);
+    let front = random_text(5000, 26, mut seed);
+    let back: String = s1.chars().rev().collect();
+    println(f"10000 letters, planted at the end: {check_inclusion(s1, front + back)}");
+    let mut spoiled: String = back.chars().take(4999).collect();
+    let mut least = 'a';
+    let mut fewest = 5001;
+    for c in "abcdefghijklmnopqrstuvwxyz".chars() {
+        let n = s1.chars().filter(|x| x == c).count();
+        if n < fewest {
+            fewest = n;
+            least = c;
+        }
+    }
+    spoiled.push(least);
+    println(f"10000 letters, one letter off: {check_inclusion(s1, front + spoiled)}");
+}
