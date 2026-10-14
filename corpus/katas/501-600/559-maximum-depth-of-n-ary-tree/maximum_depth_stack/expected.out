@@ -1,0 +1,8 @@
+[1,null,3,2,4,null,5,6]: 3
+example 2: 5
+empty: 0
+one node: 1
+a path of 1000: 1000
+a root with 9999 leaves: 2
+deepest last: 4
+300 random trees, 9141 nodes: depths sum to 2445, checksum 37369632

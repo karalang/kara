@@ -1,0 +1,182 @@
+// LeetCode #559: differential -- the four arms against the definition.
+//
+// Copies of the four arms, the tree type defined once, each held to five
+// properties on random trees.
+
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn depth_star(node: Node) -> i64 {
+    let mut deepest = 0;
+    for child in node.children {
+        deepest = deepest.max(depth_star(child));
+    }
+    deepest + 1
+}
+
+fn max_depth_star(root: Option[Node]) -> i64 {
+    match root {
+        Some(node) => depth_star(node),
+        None => 0,
+    }
+}
+
+// ---- chain arm ---------------------------------------------------------
+
+fn depth_chain(node: Node) -> i64 {
+    1 + node.children.iter().map(|c| depth_chain(c)).max().unwrap_or(0)
+}
+
+fn max_depth_chain(root: Option[Node]) -> i64 {
+    root.as_ref().map(|node| depth_chain(node)).unwrap_or(0)
+}
+
+// ---- levels arm --------------------------------------------------------
+
+fn max_depth_levels(root: Option[Node]) -> i64 {
+    let mut level: Vec[ref Node] = Vec.new();
+    if let Some(node) = root {
+        level.push(node);
+    }
+    let mut depth = 0;
+    while level.len() > 0 {
+        depth += 1;
+        let mut next: Vec[ref Node] = Vec.new();
+        for node in level {
+            for child in node.children.iter() {
+                next.push(child);
+            }
+        }
+        level = next;
+    }
+    depth
+}
+
+// ---- stack arm ---------------------------------------------------------
+
+fn max_depth_stack(root: Option[Node]) -> i64 {
+    let mut stack: Vec[(ref Node, i64)] = Vec.new();
+    if let Some(node) = root {
+        stack.push((node, 1));
+    }
+    let mut deepest = 0;
+    while let Some((node, d)) = stack.pop() {
+        deepest = deepest.max(d);
+        for child in node.children.iter() {
+            stack.push((child, d + 1));
+        }
+    }
+    deepest
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn leaf(val: i64) -> Node {
+    Node { val: val, children: Vec.new() }
+}
+
+fn tree(val: i64, children: own Vec[Node]) -> Node {
+    Node { val: val, children: children }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn build(i: i64, kids: Vec[Vec[i64]]) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in kids[i] {
+        children.push(build(k, kids));
+    }
+    Node { val: i, children: children }
+}
+
+fn answer(which: i64, root: Option[Node]) -> i64 {
+    if which == 0 {
+        max_depth_star(root)
+    } else if which == 1 {
+        max_depth_chain(root)
+    } else if which == 2 {
+        max_depth_levels(root)
+    } else {
+        max_depth_stack(root)
+    }
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5590;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 0 to 40 nodes, each after the first under one of the `reach`
+        // nodes before it: reach 1 is a path, a large reach a bushy tree.
+        let n = if t % 10 == 0 { 0 } else { step(mut seed) % 41 };
+        let mut kids: Vec[Vec[i64]] = Vec.new();
+        // The definition: a node's depth is its parent's plus one.
+        let mut level: Vec[i64] = Vec.new();
+        let mut want = 0;
+        let reach = if n == 0 { 1 } else { 1 + step(mut seed) % n };
+        for i in 0..n {
+            kids.push(Vec.new());
+            if i == 0 {
+                level.push(1);
+            } else {
+                let parent = i - 1 - step(mut seed) % min(i, reach);
+                kids[parent].push(i);
+                level.push(level[parent] + 1);
+            }
+            want = want.max(level[i]);
+        }
+        for which in 0..4 {
+            let root = if n == 0 { None } else { Some(build(0, kids)) };
+            let got = answer(which, root);
+            // P3: a new root above the tree.
+            let above = if n == 0 { leaf(-1) } else { tree(-1, vec![build(0, kids)]) };
+            // P4: one more leaf under the root.
+            let mut more = kids.clone();
+            let with_leaf = if n == 0 {
+                leaf(0)
+            } else {
+                more[0].push(n);
+                more.push(Vec.new());
+                build(0, more)
+            };
+            // P5: the deepest child's depth, plus one.
+            let mut deepest_child = 0;
+            if n > 0 {
+                for k in kids[0] {
+                    deepest_child = deepest_child.max(answer(which, Some(build(k, kids))));
+                }
+            }
+            let ok = vec![
+                // P1: the definition's depth.
+                got == want,
+                // P2: 0 exactly for the empty tree, and at most n.
+                (got == 0) == (n == 0) and got <= n,
+                // P3: a root above adds one.
+                answer(which, Some(above)) == got + 1,
+                // P4: a leaf under the root gives at least 2.
+                answer(which, Some(with_leaf)) == (if n == 0 { 1 } else { got.max(2) }),
+                // P5: one more than the deepest child, for a tree.
+                n == 0 or deepest_child + 1 == got,
+            ];
+            for k in 0..5 {
+                checks += 1;
+                if not ok[k] {
+                    failures[k] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

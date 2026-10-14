@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/559-maximum-depth-of-n-ary-tree/differential.kara"
+dedup_of = []
+expect = "error:E0236"
+exit = 1
+tags = ["closure", "differential", "move-from-borrow"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "c19838030"
+extracted_src = "2d82acd5"
+model_rev = "1aa23105"
+model_src = "2d82acd5"

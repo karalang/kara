@@ -1,0 +1,113 @@
+// LeetCode #559: Maximum Depth of N-ary Tree -- depth first with a
+// stack.
+//
+// No recursion: a stack of nodes paired with their depths, the deepest
+// depth popped kept as the answer, and each node's children pushed one
+// deeper. O(n), with the stack as large as the nodes waiting.
+
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+fn max_depth(root: Option[Node]) -> i64 {
+    let mut stack: Vec[(ref Node, i64)] = Vec.new();
+    if let Some(node) = root {
+        stack.push((node, 1));
+    }
+    let mut deepest = 0;
+    while let Some((node, d)) = stack.pop() {
+        deepest = deepest.max(d);
+        for child in node.children.iter() {
+            stack.push((child, d + 1));
+        }
+    }
+    deepest
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn leaf(val: i64) -> Node {
+    Node { val: val, children: Vec.new() }
+}
+
+fn tree(val: i64, children: own Vec[Node]) -> Node {
+    Node { val: val, children: children }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn build_random(i: i64, vals: Vec[i64], kids: Vec[Vec[i64]]) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in kids[i] {
+        children.push(build_random(k, vals, kids));
+    }
+    Node { val: vals[i], children: children }
+}
+
+// n nodes; each node after the first hangs under one of the `reach`
+// nodes before it, so a small reach makes a deep tree.
+fn random_tree(n: i64, seed: mut ref i64) -> Option[Node] {
+    if n == 0 {
+        return None;
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    let mut kids: Vec[Vec[i64]] = Vec.new();
+    let reach = 1 + step(seed) % n;
+    for i in 0..n {
+        vals.push(step(seed) % 10001);
+        kids.push(Vec.new());
+        if i > 0 {
+            let back = 1 + step(seed) % min(i, reach);
+            kids[i - back].push(i);
+        }
+    }
+    Some(build_random(0, vals, kids))
+}
+
+fn show(name: Str, root: Option[Node]) {
+    println(f"{name}: {max_depth(root)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("[1,null,3,2,4,null,5,6]", Some(tree(1, vec![tree(3, vec![leaf(5), leaf(6)]), leaf(2), leaf(4)])));
+    show("example 2", Some(tree(1, vec![
+        leaf(2),
+        tree(3, vec![leaf(6), tree(7, vec![tree(11, vec![leaf(14)])])]),
+        tree(4, vec![tree(8, vec![leaf(12)])]),
+        tree(5, vec![tree(9, vec![leaf(13)]), leaf(10)]),
+    ])));
+    show("empty", None);
+    show("one node", Some(leaf(7)));
+    // The deepest tree the problem allows: a path of 1,000 nodes.
+    let mut path = leaf(999);
+    for v in 0..999 {
+        path = tree(998 - v, vec![path]);
+    }
+    show("a path of 1000", Some(path));
+    // The widest: a root with 9,999 leaves.
+    let mut wide: Vec[Node] = Vec.new();
+    for v in 0..9999 {
+        wide.push(leaf(v));
+    }
+    show("a root with 9999 leaves", Some(tree(0, wide)));
+    // Uneven depths: the deepest node is under the last child.
+    show("deepest last", Some(tree(0, vec![leaf(1), tree(2, vec![leaf(4)]), tree(3, vec![tree(5, vec![leaf(6)])])])));
+    // 300 random trees of 0 to 60 nodes.
+    let mut seed: i64 = 559;
+    let mut nodes = 0;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = step(mut seed) % 61;
+        let d = max_depth(random_tree(n, mut seed));
+        nodes += n;
+        total += d;
+        checksum = (checksum * 31 + d) % 1000000007;
+    }
+    println(f"300 random trees, {nodes} nodes: depths sum to {total}, checksum {checksum}");
+}
