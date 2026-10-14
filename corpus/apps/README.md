@@ -125,6 +125,7 @@ cli/dup_finder      duplicate-file finder: chunked FNV-1a hashing, byte-for-byte
 cli/mini_grep       grep with its own regex engine (Pike VM): -i -v -c -l -n -o -C, exit statuses
 service/resp_store  Redis-style RESP2 server over TCP: strings, lists, expiry, KEYS, append-only file replayed on restart
 service/todo_api    REST API: hand-written JSON library, router of fn values, closure middleware, keep-alive pipelining
+pipeline/event_store event-sourced ledger: Aggregate trait + generic replay, append-only log, snapshots, torn-record recovery by seek
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

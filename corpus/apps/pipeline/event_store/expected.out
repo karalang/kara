@@ -1,0 +1,46 @@
+== commands
+  c1 open alice Alice Liddell        ok: opened alice
+  c2 open bob Bob | Builder          ok: opened bob
+  c3 deposit alice 120.50            ok: alice +120.50
+  c4 deposit bob 40                  ok: bob +40.00
+  c5 withdraw alice 20.25            ok: alice -20.25
+  snapshot at seq 5, log offset 139
+  c6 transfer alice bob 50           ok: alice -> bob 50.00
+  c6 transfer alice bob 50           ok: duplicate command c6 ignored
+  c7 withdraw bob 500                rejected: insufficient funds in bob: balance 90.00, wanted 500.00
+  c8 transfer bob carol 5            rejected: no account carol
+  c9 open carol Carol                ok: opened carol
+  c10 deposit carol 0.5              rejected: bad amount '0.5'
+  c11 deposit carol 1.234            rejected: bad amount '1.234'
+  c12 close carol                    ok: closed carol
+  c13 deposit carol 1                rejected: account carol is closed
+  c14 close bob                      rejected: account bob still holds 90.00
+  c15 frobnicate bob                 rejected: unknown verb 'frobnicate'
+  c16 transfer bob alice 90.00       ok: bob -> alice 90.00
+  snapshot at seq 11, log offset 306
+  c17 close bob                      ok: closed bob
+== balances
+  alice  Alice Liddell     140.25  5 events, open
+  bob    Bob | Builder       0.00  5 events, closed
+  carol  Carol               0.00  2 events, closed
+== statement for alice
+  #1   opened for Alice Liddell      0.00      0.00
+  #3   deposit                   120.50    120.50
+  #5   withdrawal                -20.25    100.25
+  #6   transfer to bob           -50.00     50.25
+  #11  transfer from bob          90.00    140.25
+== crash and recover
+  dropped a torn record of 25 bytes
+  snapshot: seq 11, 3 accounts, offset 306
+  replayed 1 events after the snapshot
+  full replay of 12 events agrees for every account
+  alice  Alice Liddell     140.25  5 events, open
+  bob    Bob | Builder       0.00  5 events, closed
+  carol  Carol               0.00  2 events, closed
+== after recovery
+  c6 transfer alice bob 50           ok: duplicate command c6 ignored
+  c18 deposit alice 99               ok: alice +99.00
+  c19 withdraw alice 0.01            ok: alice -0.01
+  alice  Alice Liddell     239.24  7 events, open
+  bob    Bob | Builder       0.00  5 events, closed
+  carol  Carol               0.00  2 events, closed

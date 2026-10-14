@@ -1,0 +1,563 @@
+// An event-sourced account ledger: commands are validated against the
+// current state and turned into events; events are appended to a log file
+// and are the only record. State is never stored directly: an `Aggregate`
+// trait folds events into a value, and one generic `replay` builds both the
+// balance view and a statement view. Every few events a snapshot records
+// the state and the log's byte offset; after a simulated crash leaves a
+// torn last line, recovery drops it, loads the snapshot, seeks to the
+// offset, replays the tail, and checks the result against a full replay.
+// Command ids make retries idempotent.
+//
+// Workarounds for compiler gaps (revert when the row is fixed):
+//   B-2026-10-14-64  `if self.account(a).exists` fails the MIR move check:
+//                    the field is bound to a local first
+//   B-2026-10-14-65  a closure with an early `return Err(..)` builds invalid
+//                    MIR: the amount parser is a top-level fn, not a closure
+//   B-2026-10-14-66  `{c:<34}` refused on a Str: written `{c.to_string():<34}`
+//   B-2026-10-14-67  join needs String elements: the words stay Vec[String]
+//   B-2026-10-12-6   parse returns Option
+//   B-2026-10-12-7   split / split_whitespace are eager Vec[String]
+//   B-2026-10-14-44  fs and File take String; read counts are usize
+
+const LOG: Str = "events.log";
+const SNAP: Str = "snapshot.txt";
+const SNAP_EVERY: i64 = 5;
+
+enum Kind {
+    Opened(String),
+    Deposited(i64),
+    Withdrew(i64),
+    SentTo(String, i64),
+    ReceivedFrom(String, i64),
+    Closed,
+}
+
+struct Event { seq: i64, cmd: String, account: String, kind: Kind }
+
+// ---- encoding: one event per line, fields split on `|` ---------------
+
+fn escape(s: Str) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        match c {
+            '|' => out.push_str("\\p"),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn unescape(s: Str) -> Result[String, String] {
+    let mut out = String.new();
+    let mut esc = false;
+    for c in s.chars() {
+        if esc {
+            match c {
+                'p' => out.push('|'),
+                '\\' => out.push('\\'),
+                'n' => out.push('\n'),
+                _ => return Err(f"bad escape \\{c}"),
+            }
+            esc = false;
+        } else if c == '\\' {
+            esc = true;
+        } else {
+            out.push(c);
+        }
+    }
+    if esc {
+        return Err("dangling backslash".to_string());
+    }
+    Ok(out)
+}
+
+fn encode(e: ref Event) -> String {
+    let body = match e.kind {
+        Kind.Opened(owner) => f"Opened|{escape(owner)}",
+        Kind.Deposited(n) => f"Deposited|{n}",
+        Kind.Withdrew(n) => f"Withdrew|{n}",
+        Kind.SentTo(to, n) => f"SentTo|{escape(to)}|{n}",
+        Kind.ReceivedFrom(from, n) => f"ReceivedFrom|{escape(from)}|{n}",
+        Kind.Closed => "Closed".to_string(),
+    };
+    f"{e.seq}|{escape(e.cmd)}|{escape(e.account)}|{body}\n"
+}
+
+fn int_field(s: Str, what: Str) -> Result[i64, String] {
+    match i64.parse(s) {
+        Some(n) => Ok(n),
+        None => Err(f"bad {what} '{s}'"),
+    }
+}
+
+fn decode(line: Str) -> Result[Event, String] {
+    let raw = line.split("|");
+    let mut f: Vec[String] = Vec.new();
+    for r in raw.iter() {
+        f.push(unescape(r)?);
+    }
+    if f.len() < 4 {
+        return Err(f"short record '{line}'");
+    }
+    let seq = int_field(f[0], "seq")?;
+    let want: Fn(i64) -> Result[(), String] = |n: i64| {
+        if f.len() == n { Ok(()) } else { Err(f"{f[3]} wants {n} fields, got {f.len()}") }
+    };
+    let kind = match f[3] {
+        "Opened" => {
+            want(5)?;
+            Kind.Opened(f[4].clone())
+        }
+        "Deposited" => {
+            want(5)?;
+            Kind.Deposited(int_field(f[4], "amount")?)
+        }
+        "Withdrew" => {
+            want(5)?;
+            Kind.Withdrew(int_field(f[4], "amount")?)
+        }
+        "SentTo" => {
+            want(6)?;
+            Kind.SentTo(f[4].clone(), int_field(f[5], "amount")?)
+        }
+        "ReceivedFrom" => {
+            want(6)?;
+            Kind.ReceivedFrom(f[4].clone(), int_field(f[5], "amount")?)
+        }
+        "Closed" => {
+            want(4)?;
+            Kind.Closed
+        }
+        _ => return Err(f"unknown event kind '{f[3]}'"),
+    };
+    Ok(Event { seq: seq, cmd: f[1].clone(), account: f[2].clone(), kind: kind })
+}
+
+// ---- aggregates --------------------------------------------------------
+
+trait Aggregate {
+    fn empty() -> Self;
+    fn apply(mut ref self, e: ref Event);
+}
+
+struct Account { exists: bool, closed: bool, owner: String, balance: i64, events: i64 }
+
+impl Aggregate for Account {
+    fn empty() -> Account {
+        Account { exists: false, closed: false, owner: String.new(), balance: 0, events: 0 }
+    }
+
+    fn apply(mut ref self, e: ref Event) {
+        self.events += 1;
+        match e.kind {
+            Kind.Opened(owner) => {
+                self.exists = true;
+                self.owner = owner.clone();
+            }
+            Kind.Deposited(n) => self.balance += n,
+            Kind.Withdrew(n) => self.balance -= n,
+            Kind.SentTo(_, n) => self.balance -= n,
+            Kind.ReceivedFrom(_, n) => self.balance += n,
+            Kind.Closed => self.closed = true,
+        }
+    }
+}
+
+struct Statement { lines: Vec[String], running: i64 }
+
+impl Aggregate for Statement {
+    fn empty() -> Statement {
+        Statement { lines: Vec.new(), running: 0 }
+    }
+
+    fn apply(mut ref self, e: ref Event) {
+        let (what, delta) = match e.kind {
+            Kind.Opened(owner) => (f"opened for {owner}", 0),
+            Kind.Deposited(n) => ("deposit".to_string(), n),
+            Kind.Withdrew(n) => ("withdrawal".to_string(), -n),
+            Kind.SentTo(to, n) => (f"transfer to {to}", -n),
+            Kind.ReceivedFrom(from, n) => (f"transfer from {from}", n),
+            Kind.Closed => ("closed".to_string(), 0),
+        };
+        self.running += delta;
+        self.lines.push(f"#{e.seq:<3} {what:<22} {money(delta):>9} {money(self.running):>9}");
+    }
+}
+
+fn replay[A: Aggregate](events: ref Vec[Event], account: Str) -> A {
+    let mut a = A.empty();
+    for e in events.iter() {
+        if e.account == account {
+            a.apply(e);
+        }
+    }
+    a
+}
+
+fn amount(w: ref Vec[String], i: i64) -> Result[i64, String] {
+    if w.len() <= i {
+        return Err("missing amount".to_string());
+    }
+    let parts = w[i].split(".");
+    let cents = match parts.len() {
+        1 => int_field(parts[0], "amount")? * 100,
+        2 => {
+            if parts[1].len() != 2 {
+                return Err(f"bad amount '{w[i]}'");
+            }
+            int_field(parts[0], "amount")? * 100 + int_field(parts[1], "amount")?
+        }
+        _ => return Err(f"bad amount '{w[i]}'"),
+    };
+    if cents <= 0 { Err("amount must be positive".to_string()) } else { Ok(cents) }
+}
+
+fn money(cents: i64) -> String {
+    let sign = if cents < 0 { "-" } else { "" };
+    let n = if cents < 0 { -cents } else { cents };
+    f"{sign}{n / 100}.{n % 100:02}"
+}
+
+// ---- the store ---------------------------------------------------------
+
+struct Store {
+    events: Vec[Event],
+    accounts: SortedMap[String, Account],
+    seen: Set[String],
+    next_seq: i64,
+    pending: String,
+    since_snap: i64,
+}
+
+impl Store {
+    fn new() -> Store {
+        Store { events: Vec.new(), accounts: SortedMap.new(), seen: Set.new(), next_seq: 1, pending: String.new(), since_snap: 0 }
+    }
+
+    fn account(self, id: Str) -> Account {
+        match self.accounts.get(id) {
+            Some(a) => Account { exists: a.exists, closed: a.closed, owner: a.owner.clone(), balance: a.balance, events: a.events },
+            None => Account.empty(),
+        }
+    }
+
+    fn record(mut ref self, cmd: Str, account: Str, kind: own Kind) {
+        let e = Event { seq: self.next_seq, cmd: cmd.to_string(), account: account.to_string(), kind: kind };
+        self.next_seq += 1;
+        self.pending.push_str(encode(e));
+        if not self.accounts.contains_key(account) {
+            self.accounts.insert(account.to_string(), Account.empty());
+        }
+        let mut a = self.accounts.remove(account).unwrap();
+        a.apply(e);
+        self.accounts.insert(account.to_string(), a);
+        self.events.push(e);
+        self.since_snap += 1;
+    }
+
+    fn live(self, id: Str) -> Result[Account, String] {
+        let a = self.account(id);
+        if not a.exists {
+            return Err(f"no account {id}");
+        }
+        if a.closed {
+            return Err(f"account {id} is closed");
+        }
+        Ok(a)
+    }
+
+    // Validates one command and records its events; Err says why not.
+    fn handle(mut ref self, line: Str) -> Result[String, String] {
+        let w = line.split_whitespace();
+        if w.len() < 3 {
+            return Err("want: <id> <verb> <account> ...".to_string());
+        }
+        let cmd = ref w[0];
+        let verb = ref w[1];
+        let acct = ref w[2];
+        if self.seen.contains(cmd) {
+            return Ok(f"duplicate command {cmd} ignored");
+        }
+        let msg = match verb.clone() {
+            "open" => {
+                let exists = self.account(acct).exists;
+                if exists {
+                    return Err(f"account {acct} already exists");
+                }
+                let owner = w[3..w.len()].join(" ");
+                self.record(cmd, acct, Kind.Opened(owner));
+                f"opened {acct}"
+            }
+            "deposit" => {
+                self.live(acct)?;
+                let n = amount(w, 3)?;
+                self.record(cmd, acct, Kind.Deposited(n));
+                f"{acct} +{money(n)}"
+            }
+            "withdraw" => {
+                let a = self.live(acct)?;
+                let n = amount(w, 3)?;
+                if n > a.balance {
+                    return Err(f"insufficient funds in {acct}: balance {money(a.balance)}, wanted {money(n)}");
+                }
+                self.record(cmd, acct, Kind.Withdrew(n));
+                f"{acct} -{money(n)}"
+            }
+            "transfer" => {
+                if w.len() < 5 {
+                    return Err("want: <id> transfer <from> <to> <amount>".to_string());
+                }
+                let to = ref w[3];
+                let a = self.live(acct)?;
+                self.live(to)?;
+                if to == acct {
+                    return Err("cannot transfer to the same account".to_string());
+                }
+                let n = amount(w, 4)?;
+                if n > a.balance {
+                    return Err(f"insufficient funds in {acct}: balance {money(a.balance)}, wanted {money(n)}");
+                }
+                self.record(cmd, acct, Kind.SentTo(to.to_string(), n));
+                self.record(cmd, to, Kind.ReceivedFrom(acct.to_string(), n));
+                f"{acct} -> {to} {money(n)}"
+            }
+            "close" => {
+                let a = self.live(acct)?;
+                if a.balance != 0 {
+                    return Err(f"account {acct} still holds {money(a.balance)}");
+                }
+                self.record(cmd, acct, Kind.Closed);
+                f"closed {acct}"
+            }
+            _ => return Err(f"unknown verb '{verb}'"),
+        };
+        self.seen.insert(cmd.to_string());
+        Ok(msg)
+    }
+
+    // Appends pending events to the log; snapshots every SNAP_EVERY events.
+    fn flush(mut ref self) -> Result[(), IoError] {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let f = File.append(LOG.to_string())?;
+        f.write(self.pending.bytes())?;
+        f.sync_data()?;
+        self.pending = String.new();
+        if self.since_snap >= SNAP_EVERY {
+            let end = f.seek(SeekFrom.End, 0)?;
+            self.snapshot(end)?;
+            self.since_snap = 0;
+        }
+        Ok(())
+    }
+
+    fn snapshot(self, offset: i64) -> Result[(), IoError] {
+        let mut s = f"seq {self.next_seq - 1}\noffset {offset}\n";
+        for c in self.seen.iter() {
+            s.push_str(f"cmd {c}\n");
+        }
+        for (id, a) in self.accounts.iter() {
+            s.push_str(f"acct {escape(id)}|{a.exists}|{a.closed}|{escape(a.owner)}|{a.balance}|{a.events}\n");
+        }
+        fs.write(SNAP.to_string(), s)?;
+        println(f"  snapshot at seq {self.next_seq - 1}, log offset {offset}");
+        Ok(())
+    }
+}
+
+// ---- recovery ----------------------------------------------------------
+
+fn read_from(path: Str, offset: i64) -> Result[String, IoError] {
+    let f = File.open(path.to_string())?;
+    let end = f.seek(SeekFrom.End, 0)?;
+    f.seek(SeekFrom.Start, offset)?;
+    let mut buf: Vec[u8] = Vec.new();
+    for _ in offset..end {
+        buf.push(0u8);
+    }
+    let mut got = 0;
+    while got < buf.len() {
+        let n = f.read(mut buf[got..buf.len()])?;
+        if n == 0 {
+            break;
+        }
+        got += n as i64;
+    }
+    match String.from_utf8(buf) {
+        Ok(s) => Ok(s),
+        Err(_) => Err(IoError.InvalidUtf8),
+    }
+}
+
+// Drops a torn last line (no trailing newline) from the log.
+fn repair(path: Str) -> Result[i64, IoError] {
+    let text = fs.read_to_string(path.to_string())?;
+    if text.is_empty() or text.ends_with("\n") {
+        return Ok(0);
+    }
+    let bytes = text.bytes();
+    let mut keep = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 10u8 {
+            keep = i + 1;
+        }
+        i += 1;
+    }
+    let torn = text.len() - keep;
+    fs.write(path.to_string(), text[0..keep].to_string())?;
+    Ok(torn)
+}
+
+fn recover() -> Result[Store, String] {
+    match repair(LOG) {
+        Ok(0) => println("  log ends cleanly"),
+        Ok(n) => println(f"  dropped a torn record of {n} bytes"),
+        Err(_) => return Err("cannot read log".to_string()),
+    }
+    let snap = match fs.read_to_string(SNAP.to_string()) {
+        Ok(t) => t,
+        Err(_) => return Err("no snapshot".to_string()),
+    };
+    let mut s = Store.new();
+    let mut offset = 0;
+    for l in snap.lines() {
+        if l.starts_with("seq ") {
+            s.next_seq = int_field(l[4..l.len()], "seq")? + 1;
+        } else if l.starts_with("offset ") {
+            offset = int_field(l[7..l.len()], "offset")?;
+        } else if l.starts_with("cmd ") {
+            s.seen.insert(l[4..l.len()].to_string());
+        } else if l.starts_with("acct ") {
+            let f = l[5..l.len()].split("|");
+            let a = Account {
+                exists: f[1] == "true",
+                closed: f[2] == "true",
+                owner: unescape(f[3])?,
+                balance: int_field(f[4], "balance")?,
+                events: int_field(f[5], "events")?,
+            };
+            s.accounts.insert(unescape(f[0])?, a);
+        }
+    }
+    println(f"  snapshot: seq {s.next_seq - 1}, {s.accounts.len()} accounts, offset {offset}");
+    let tail = match read_from(LOG, offset) {
+        Ok(t) => t,
+        Err(_) => return Err("cannot read log tail".to_string()),
+    };
+    let mut replayed = 0;
+    for l in tail.lines() {
+        let e = decode(l)?;
+        if e.seq != s.next_seq {
+            return Err(f"gap in log: expected seq {s.next_seq}, found {e.seq}");
+        }
+        s.next_seq += 1;
+        s.seen.insert(e.cmd.clone());
+        if not s.accounts.contains_key(e.account) {
+            s.accounts.insert(e.account.clone(), Account.empty());
+        }
+        let mut a = s.accounts.remove(e.account).unwrap();
+        a.apply(e);
+        s.accounts.insert(e.account.clone(), a);
+        replayed += 1;
+    }
+    println(f"  replayed {replayed} events after the snapshot");
+    // The full log must agree with snapshot + tail.
+    let all = match fs.read_to_string(LOG.to_string()) {
+        Ok(t) => t,
+        Err(_) => return Err("cannot read log".to_string()),
+    };
+    for l in all.lines() {
+        s.events.push(decode(l)?);
+    }
+    for (id, a) in s.accounts.iter() {
+        let full: Account = replay(s.events, id);
+        if full.balance != a.balance or full.events != a.events or full.closed != a.closed {
+            return Err(f"{id}: snapshot+tail {money(a.balance)} != full replay {money(full.balance)}");
+        }
+    }
+    println(f"  full replay of {s.events.len()} events agrees for every account");
+    Ok(s)
+}
+
+fn run(store: mut ref Store, cmds: Slice[Str]) {
+    for c in cmds.iter() {
+        match store.handle(c) {
+            Ok(m) => println(f"  {c.to_string():<34} ok: {m}"),
+            Err(e) => println(f"  {c.to_string():<34} rejected: {e}"),
+        }
+        match store.flush() {
+            Ok(_) => {}
+            Err(_) => println("  flush failed"),
+        }
+    }
+}
+
+fn report(store: ref Store) {
+    for (id, a) in store.accounts.iter() {
+        let state = if a.closed { "closed" } else { "open" };
+        println(f"  {id:<6} {a.owner:<14} {money(a.balance):>9}  {a.events} events, {state}");
+    }
+}
+
+fn main() {
+    match fs.write(LOG.to_string(), "") {
+        Ok(_) => {}
+        Err(_) => println("cannot reset log"),
+    }
+    let mut store = Store.new();
+    println("== commands");
+    run(mut store, [
+        "c1 open alice Alice Liddell",
+        "c2 open bob Bob | Builder",
+        "c3 deposit alice 120.50",
+        "c4 deposit bob 40",
+        "c5 withdraw alice 20.25",
+        "c6 transfer alice bob 50",
+        "c6 transfer alice bob 50",
+        "c7 withdraw bob 500",
+        "c8 transfer bob carol 5",
+        "c9 open carol Carol",
+        "c10 deposit carol 0.5",
+        "c11 deposit carol 1.234",
+        "c12 close carol",
+        "c13 deposit carol 1",
+        "c14 close bob",
+        "c15 frobnicate bob",
+        "c16 transfer bob alice 90.00",
+        "c17 close bob",
+    ]);
+    println("== balances");
+    report(store);
+    println("== statement for alice");
+    let st: Statement = replay(store.events, "alice");
+    for l in st.lines.iter() {
+        println(f"  {l}");
+    }
+
+    // A crash halfway through writing an event leaves a torn last line.
+    match File.append(LOG.to_string()) {
+        Ok(f) => {
+            match f.write("18|c18|alice|Deposited|99".bytes()) {
+                Ok(_) => {}
+                Err(_) => println("torn write failed"),
+            }
+        }
+        Err(_) => println("cannot open log"),
+    }
+    println("== crash and recover");
+    let mut back = match recover() {
+        Ok(s) => s,
+        Err(e) => {
+            println(f"  recovery failed: {e}");
+            return;
+        }
+    };
+    report(back);
+    println("== after recovery");
+    run(mut back, ["c6 transfer alice bob 50", "c18 deposit alice 99", "c19 withdraw alice 0.01"]);
+    report(back);
+}

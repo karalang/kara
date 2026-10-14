@@ -97,12 +97,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 258 |
-| missing-feature | 257 |
-| false-positive | 178 |
+| missing-feature | 258 |
+| false-positive | 181 |
 | other | 172 |
 | perf | 165 |
 | diagnostics | 161 |
-| crash | 115 |
+| crash | 116 |
 | soundness | 104 |
 | use-after-free | 90 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2889 |
+| codegen | 2891 |
 | interp | 922 |
-| typecheck | 415 |
+| typecheck | 418 |
 | other | 115 |
 | ownership | 95 |
 | cli | 76 |
@@ -196,6 +196,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-61 | 2026-10-14 | typecheck | medium | The MIR typecheck refuses calling a function value through a `ref`: `for f in fs.iter() { t += f(10); }` over a `Vec[Fn(i64) -> i64]` is "type 'ref Fn(i64) -> i64' is not callable", though design.md says a stored `Fn(..)` is called through a `ref`; `karac check` and `run --interp` accept it, and `fs[i](10)` / `(r.h)(100)` work on every surface | — |
 | B-2026-10-14-62 | 2026-10-14 | ownership | low | `karac check` accepts moving a stored function value out of a borrow, `for r in rs.iter() { let h = r.h; t += h(1000); }` with `h: Fn(i64) -> i64`, which design.md makes move-only; the MIR borrow checker refuses it ("move of (*_42).0 through a shared reference [E0517]") with no source location, so the error surfaces only at build | — |
 | B-2026-10-14-63 | 2026-10-14 | runtime | medium | `Regex` does not exist on v2: `Regex.compile`, `is_match`, `find` and `replace_all` pass `karac check` (legacy implements them), but `karac __mir-run` stops with "call of unknown function Regex.compile" and `__mir-llvm-run` with "native `Regex.is_match` is not lowered yet", and docs/library specifies no regex API at all | — |
+| B-2026-10-14-64 | 2026-10-14 | codegen | medium | The MIR move check refuses an `if` or `while` condition that reads a field of a call's owned result when that result has a non-`Copy` field: `if mk(2).ok { .. }` with `struct A { ok: bool, s: String }` stops every MIR surface with "move check main: bb2[term]: use of _2.0, which may have been moved or never initialized"; `karac check` accepts it, and `let b = mk(2).ok;` works | — |
+| B-2026-10-14-65 | 2026-10-14 | codegen | medium | A closure bound with a full `Fn(i64) -> Result[i64, String]` annotation whose body has an early `return Err("..".to_string());` builds invalid MIR: `__mir-run` stops with "invalid MIR: main.c0: bb5[0]: assigning Result[(), String] to _0 of type Result[i64, String]"; `karac check` accepts it | — |
+| B-2026-10-14-66 | 2026-10-14 | typecheck | low | A format width on a `Str` hole is refused: `let c: Str = "abc"; println(f"[{c:<6}]");` gives "format spec `<6`: format specifiers apply to int, float, and string values only (got `StringSlice`)" from `karac check` and the MIR typecheck; design.md's format grammar applies `align`/`width` to any value and `Str` is the string view | — |
+| B-2026-10-14-67 | 2026-10-14 | typecheck | medium | `join` works only on `String` elements: `Vec[i64].join(",")` and `Vec[Str].join(" ")` are refused with "Vec.join() requires String elements", and `Slice[Str].join` with "no method 'join' on type 'Slice'" (B-2026-10-14-4 gave `Slice[String]` its join), by `karac check` and the MIR typecheck; docs/library/collections.md:57 specifies `fn join(self, sep: Str) -> String where T: Display` | — |
+| B-2026-10-14-68 | 2026-10-14 | typecheck | medium | A string literal passed to a METHOD whose parameter is `Str` is still typed `String`: `let mut v: Vec[Str] = Vec.new(); v.push("a");` is refused with "expected 'StringSlice', found 'String'" by `karac check` and the MIR typecheck, while `v.push(s)` with `let s: Str = "a"` works (remainder of B-2026-10-12-13) | — |
 
 ### Relocated
 
