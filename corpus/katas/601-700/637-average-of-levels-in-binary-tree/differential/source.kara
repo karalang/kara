@@ -1,0 +1,299 @@
+// LeetCode #637: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// trees.
+
+// ---- star arm ----------------------------------------------------------
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn average_of_levels_star(root: Option[TreeNode]) -> Vec[f64] {
+    let mut averages: Vec[f64] = Vec.new();
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    if let Some(r) = root {
+        queue.push_back(r);
+    }
+    while not queue.is_empty() {
+        let count = queue.len();
+        let mut sum = 0;
+        for _ in 0..count {
+            let node = queue.pop_front().unwrap();
+            sum += node.val;
+            if let Some(l) = node.left {
+                queue.push_back(l);
+            }
+            if let Some(r) = node.right {
+                queue.push_back(r);
+            }
+        }
+        averages.push(sum as f64 / count as f64);
+    }
+    averages
+}
+
+// ---- depths arm --------------------------------------------------------
+
+fn visit_depths(node: Option[TreeNode], depth: i64, sums: mut ref Vec[i64], counts: mut ref Vec[i64]) {
+    if let Some(n) = node {
+        if depth == sums.len() {
+            sums.push(0);
+            counts.push(0);
+        }
+        sums[depth] += n.val;
+        counts[depth] += 1;
+        visit_depths(n.left, depth + 1, sums, counts);
+        visit_depths(n.right, depth + 1, sums, counts);
+    }
+}
+
+fn average_of_levels_depths(root: Option[TreeNode]) -> Vec[f64] {
+    let mut sums: Vec[i64] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    visit_depths(root, 0, mut sums, mut counts);
+    let mut averages: Vec[f64] = Vec.new();
+    for i in 0..sums.len() {
+        averages.push(sums[i] as f64 / counts[i] as f64);
+    }
+    averages
+}
+
+// ---- stack arm ---------------------------------------------------------
+
+fn average_of_levels_stack(root: Option[TreeNode]) -> Vec[f64] {
+    let mut sums: Vec[i64] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, 0));
+    }
+    while let Some((node, depth)) = stack.pop() {
+        while sums.len() <= depth {
+            sums.push(0);
+            counts.push(0);
+        }
+        sums[depth] += node.val;
+        counts[depth] += 1;
+        if let Some(r) = node.right {
+            stack.push((r, depth + 1));
+        }
+        if let Some(l) = node.left {
+            stack.push((l, depth + 1));
+        }
+    }
+    let mut averages: Vec[f64] = Vec.new();
+    for i in 0..sums.len() {
+        averages.push(sums[i] as f64 / counts[i] as f64);
+    }
+    averages
+}
+
+// ---- frontier arm ------------------------------------------------------
+
+fn average_of_levels_frontier(root: Option[TreeNode]) -> Vec[f64] {
+    let mut averages: Vec[f64] = Vec.new();
+    let mut level: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        level.push(r);
+    }
+    while level.len() > 0 {
+        let mut sum = 0;
+        let mut next: Vec[TreeNode] = Vec.new();
+        for node in level.iter() {
+            sum += node.val;
+            if let Some(l) = node.left {
+                next.push(l);
+            }
+            if let Some(r) = node.right {
+                next.push(r);
+            }
+        }
+        averages.push(sum as f64 / level.len() as f64);
+        level = next;
+    }
+    averages
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree of `size` nodes with values from -100 to 100, each new node
+// walking down from the root, left with chance lean / 100, to the first
+// empty place, as in the kata's harness.
+fn random_tree(size: i64, lean: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    for _ in 0..size {
+        let c = leaf(next_random(mut seed) % 201 - 100);
+        match root {
+            None => root = Some(c),
+            Some(r) => {
+                let mut node = r;
+                loop {
+                    if next_random(mut seed) % 100 < lean {
+                        match node.left {
+                            Some(l) => node = l,
+                            None => {
+                                node.left = Some(c);
+                                break;
+                            }
+                        }
+                    } else {
+                        match node.right {
+                            Some(n) => node = n,
+                            None => {
+                                node.right = Some(c);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// Every node's value with the path to it from the root, one letter a
+// step.
+fn paths(node: Option[TreeNode], path: String, out: mut ref Vec[(String, i64)]) {
+    if let Some(n) = node {
+        out.push((path.clone(), n.val));
+        paths(n.left, f"{path}L", out);
+        paths(n.right, f"{path}R", out);
+    }
+}
+
+// The definition: a level is the nodes whose paths have the same
+// length; its average is their values' sum over their count.
+fn definition(root: Option[TreeNode]) -> Vec[f64] {
+    let mut all: Vec[(String, i64)] = Vec.new();
+    paths(root, String.new(), mut all);
+    let mut averages: Vec[f64] = Vec.new();
+    let mut depth = 0;
+    loop {
+        let mut sum = 0;
+        let mut count = 0;
+        for (path, val) in all.iter() {
+            if path.len() == depth {
+                sum += *val;
+                count += 1;
+            }
+        }
+        if count == 0 {
+            break;
+        }
+        averages.push(sum as f64 / count as f64);
+        depth += 1;
+    }
+    averages
+}
+
+fn height(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => 1 + height(n.left).max(height(n.right)),
+    }
+}
+
+// A new tree: left and right swapped at every node, every value plus
+// `add`.
+fn mirrored(node: Option[TreeNode], swap: bool, add: i64) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => {
+            let l = mirrored(n.left, swap, add);
+            let r = mirrored(n.right, swap, add);
+            if swap {
+                Some(TreeNode { val: n.val + add, left: r, right: l })
+            } else {
+                Some(TreeNode { val: n.val + add, left: l, right: r })
+            }
+        }
+    }
+}
+
+fn answer(which: i64, root: Option[TreeNode]) -> Vec[f64] {
+    if which == 0 {
+        average_of_levels_star(root)
+    } else if which == 1 {
+        average_of_levels_depths(root)
+    } else if which == 2 {
+        average_of_levels_stack(root)
+    } else {
+        average_of_levels_frontier(root)
+    }
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6370;
+    let mut checks = 0;
+    let mut levels = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 0 to 30 nodes leaning left with chance 10 to 90 in 100.
+        let size = next_random(mut seed) % 31;
+        let lean = 10 + next_random(mut seed) % 81;
+        let tree = random_tree(size, lean, mut seed);
+        let want = definition(tree);
+        levels += want.len();
+        let top = next_random(mut seed) % 201 - 100;
+        let add = next_random(mut seed) % 21 - 10;
+        for which in 0..4 {
+            let got = answer(which, tree);
+            let flipped = answer(which, mirrored(tree, true, 0));
+            let shifted = answer(which, mirrored(tree, false, add));
+            let mut moved = shifted.len() == got.len();
+            if moved {
+                for i in 0..got.len() {
+                    let gap = shifted[i] - got[i] - add as f64;
+                    if gap > 0.000000001 or gap < -0.000000001 {
+                        moved = false;
+                    }
+                }
+            }
+            // The tree twice, under a new root.
+            let doubled = answer(which, Some(TreeNode { val: top, left: mirrored(tree, false, 0), right: mirrored(tree, false, 0) }));
+            let mut under = vec![top as f64];
+            for a in got.iter() {
+                under.push(*a);
+            }
+            let ok = vec![
+                // P1: the averages are the definition's.
+                got == want,
+                // P2: there is one average a level.
+                got.len() == height(tree),
+                // P3: the mirror image has the same averages.
+                flipped == got,
+                // P4: adding a number to every value adds it to every
+                // average.
+                moved,
+                // P5: two copies of the tree under a new root average to
+                // the root's value and then the tree's averages.
+                doubled == under,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({levels} levels), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

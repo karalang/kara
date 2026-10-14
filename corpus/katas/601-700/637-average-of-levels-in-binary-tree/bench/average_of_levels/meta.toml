@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/637-average-of-levels-in-binary-tree/bench/average_of_levels.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["shared", "lib:vecdeque", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "b47df49b2"
+extracted_src = "86eb1a75"
+model_rev = "1aa23105"
+model_src = "86eb1a75"

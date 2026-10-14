@@ -1,0 +1,107 @@
+// LeetCode #637: Average of Levels in Binary Tree -- breadth first.
+//
+// A `VecDeque` holds one level at a time: its length at the start of a
+// level is how many nodes the level has, and taking that many off the
+// front while adding their children to the back leaves the next level.
+// Each level's values are added up as integers and divided once.
+// O(nodes) time, O(widest level) space.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn average_of_levels(root: Option[TreeNode]) -> Vec[f64] {
+    let mut averages: Vec[f64] = Vec.new();
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    if let Some(r) = root {
+        queue.push_back(r);
+    }
+    while not queue.is_empty() {
+        let count = queue.len();
+        let mut sum = 0;
+        for _ in 0..count {
+            let node = queue.pop_front().unwrap();
+            sum += node.val;
+            if let Some(l) = node.left {
+                queue.push_back(l);
+            }
+            if let Some(r) = node.right {
+                queue.push_back(r);
+            }
+        }
+        averages.push(sum as f64 / count as f64);
+    }
+    averages
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+fn random_value(seed: mut ref i64) -> i64 {
+    let high = next_random(mut seed) % 65536;
+    let low = next_random(mut seed) % 65536;
+    high * 65536 + low - 2147483648
+}
+
+fn random_tree(size: i64, seed: mut ref i64) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    for _ in 0..size {
+        let c = leaf(random_value(mut seed));
+        match root {
+            None => root = Some(c),
+            Some(r) => {
+                let mut node = r;
+                loop {
+                    if next_random(mut seed) % 2 == 0 {
+                        match node.left {
+                            Some(l) => node = l,
+                            None => {
+                                node.left = Some(c);
+                                break;
+                            }
+                        }
+                    } else {
+                        match node.right {
+                            Some(n) => node = n,
+                            None => {
+                                node.right = Some(c);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// 10 trees of 10,000 nodes made once, then 4,000 rounds each averaging
+// the levels of one of them.
+fn main() {
+    let mut seed: i64 = 637;
+    let mut trees: Vec[Option[TreeNode]] = Vec.new();
+    for _ in 0..10 {
+        trees.push(random_tree(10000, mut seed));
+    }
+    let mut levels = 0;
+    let mut total = 0.0;
+    for round in 0..4000 {
+        let averages = average_of_levels(trees[round % 10]);
+        for a in averages.iter() {
+            levels += 1;
+            total += *a;
+        }
+    }
+    println(f"10 trees of 10000 nodes, 4000 rounds: {levels} levels, sum of averages {total:.3}");
+}

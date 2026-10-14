@@ -1,0 +1,180 @@
+// LeetCode #637: Average of Levels in Binary Tree -- an explicit stack.
+//
+// The same sums and counts by depth as a recursive walk, but with a
+// stack of (node, depth) pairs, so a tree of any height uses no call
+// stack. O(nodes) time, O(nodes) space at worst for the stack.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn average_of_levels(root: Option[TreeNode]) -> Vec[f64] {
+    let mut sums: Vec[i64] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, 0));
+    }
+    while let Some((node, depth)) = stack.pop() {
+        while sums.len() <= depth {
+            sums.push(0);
+            counts.push(0);
+        }
+        sums[depth] += node.val;
+        counts[depth] += 1;
+        if let Some(r) = node.right {
+            stack.push((r, depth + 1));
+        }
+        if let Some(l) = node.left {
+            stack.push((l, depth + 1));
+        }
+    }
+    let mut averages: Vec[f64] = Vec.new();
+    for i in 0..sums.len() {
+        averages.push(sums[i] as f64 / counts[i] as f64);
+    }
+    averages
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree from LeetCode's level order: `None` for a missing child.
+fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
+    if values.is_empty() or values[0].is_none() {
+        return None;
+    }
+    let root = leaf(values[0].unwrap());
+    let mut queue: Vec[TreeNode] = vec![root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < values.len() {
+        let n = queue[head];
+        head += 1;
+        if let Some(v) = values[i] {
+            let c = leaf(v);
+            n.left = Some(c);
+            queue.push(c);
+        }
+        i += 1;
+        if i < values.len() {
+            if let Some(v) = values[i] {
+                let c = leaf(v);
+                n.right = Some(c);
+                queue.push(c);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// A value from -2^31 to 2^31 - 1, the problem's range.
+fn random_value(seed: mut ref i64) -> i64 {
+    let high = next_random(mut seed) % 65536;
+    let low = next_random(mut seed) % 65536;
+    high * 65536 + low - 2147483648
+}
+
+// A tree of `size` nodes: each new node walks down from the root, going
+// left with chance lean / 100, and takes the first empty place it meets.
+// Values are from -100 to 100, or over the whole range when `wide`.
+fn random_tree(size: i64, lean: i64, wide: bool, seed: mut ref i64) -> Option[TreeNode] {
+    let mut root: Option[TreeNode] = None;
+    for _ in 0..size {
+        let v = if wide { random_value(mut seed) } else { next_random(mut seed) % 201 - 100 };
+        let c = leaf(v);
+        match root {
+            None => root = Some(c),
+            Some(r) => {
+                let mut node = r;
+                loop {
+                    if next_random(mut seed) % 100 < lean {
+                        match node.left {
+                            Some(l) => node = l,
+                            None => {
+                                node.left = Some(c);
+                                break;
+                            }
+                        }
+                    } else {
+                        match node.right {
+                            Some(n) => node = n,
+                            None => {
+                                node.right = Some(c);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+fn show(values: Vec[Option[i64]]) {
+    let averages = average_of_levels(from_level(values));
+    let mut text = String.from("[");
+    for i in 0..averages.len() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        let a = averages[i];
+        text.push_str(f"{a:.5}");
+    }
+    text.push_str("]");
+    println(f"{values.len()} values -> {text}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(vec![Some(3), Some(9), Some(20), None, None, Some(15), Some(7)]);
+    show(vec![Some(3), Some(9), Some(20), Some(15), Some(7)]);
+    // One node; a chain down the left; a level averaging to a negative
+    // half; a level of one value and a level of the largest and smallest
+    // values; a level of the largest value twice; an empty tree.
+    show(vec![Some(-7)]);
+    show(vec![Some(1), Some(2), None, Some(3), None, Some(4)]);
+    show(vec![Some(0), Some(-1), Some(0), Some(-3), Some(1)]);
+    show(vec![Some(5), Some(2147483647), Some(-2147483648), Some(1), None, None, Some(2)]);
+    show(vec![Some(-2147483648), Some(2147483647), Some(2147483647)]);
+    show(vec![]);
+    // 300 random trees of 1 to 40 nodes, leaning left with chance 20, 50
+    // or 80 in 100.
+    let mut seed: i64 = 637;
+    let mut levels = 0;
+    let mut total = 0.0;
+    for _ in 0..300 {
+        let leans = vec![20, 50, 80];
+        let size = 1 + next_random(mut seed) % 40;
+        let lean = leans[next_random(mut seed) % 3];
+        let averages = average_of_levels(random_tree(size, lean, false, mut seed));
+        for a in averages.iter() {
+            levels += 1;
+            total += *a;
+        }
+    }
+    println(f"300 random trees: {levels} levels, sum of averages {total:.4}");
+    // The problem's largest: 10,000 nodes over the whole range of values.
+    let averages = average_of_levels(random_tree(10000, 50, true, mut seed));
+    let mut sum = 0.0;
+    let mut low = averages[0];
+    for a in averages.iter() {
+        sum += *a;
+        if *a < low {
+            low = *a;
+        }
+    }
+    println(f"10000 nodes: {averages.len()} levels, sum of averages {sum:.3}, lowest {low:.3}");
+}
