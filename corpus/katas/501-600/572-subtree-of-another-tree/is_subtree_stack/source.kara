@@ -214,10 +214,10 @@ fn main() {
     let mut best_size = 0;
     for n in nodes.iter() {
         let mut inside: Vec[TreeNode] = Vec.new();
-        all_nodes(Some(n), mut inside);
+        all_nodes(Some(*n), mut inside);
         if inside.len() <= 1000 and inside.len() > best_size {
             best_size = inside.len();
-            best = n;
+            best = *n;
         }
     }
     println(f"2000 nodes, a subtree of {best_size}: {is_subtree(Some(root), copy_tree(Some(best)))}");
