@@ -1,0 +1,268 @@
+// LeetCode #563: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// trees.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+// The sum of the subtree at `node`, after adding the tilts inside it to
+// `total`.
+fn subtree_sum(node: Option[TreeNode], total: mut ref i64) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let l = subtree_sum(n.left, total);
+            let r = subtree_sum(n.right, total);
+            *total += (l - r).abs();
+            n.val + l + r
+        }
+    }
+}
+
+fn find_tilt_star(root: Option[TreeNode]) -> i64 {
+    let mut total = 0;
+    subtree_sum(root, mut total);
+    total
+}
+
+// ---- pair arm ----------------------------------------------------------
+
+// The sum and the tilt of the subtree at `node`.
+fn sum_and_tilt(node: Option[TreeNode]) -> (i64, i64) {
+    match node {
+        None => (0, 0),
+        Some(n) => {
+            let (left_sum, left_tilt) = sum_and_tilt(n.left);
+            let (right_sum, right_tilt) = sum_and_tilt(n.right);
+            (n.val + left_sum + right_sum, left_tilt + right_tilt + (left_sum - right_sum).abs())
+        }
+    }
+}
+
+fn find_tilt_pair(root: Option[TreeNode]) -> i64 {
+    sum_and_tilt(root).1
+}
+
+// ---- stack arm ---------------------------------------------------------
+
+fn find_tilt_stack(root: Option[TreeNode]) -> i64 {
+    let mut total = 0;
+    let mut stack: Vec[(TreeNode, bool)] = Vec.new();
+    let mut sums: Vec[i64] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, false));
+    }
+    while let Some((n, children_done)) = stack.pop() {
+        if not children_done {
+            stack.push((n, true));
+            if let Some(c) = n.right {
+                stack.push((c, false));
+            }
+            if let Some(c) = n.left {
+                stack.push((c, false));
+            }
+        } else {
+            let r = if n.right.is_some() { sums.pop().unwrap() } else { 0 };
+            let l = if n.left.is_some() { sums.pop().unwrap() } else { 0 };
+            total += (l - r).abs();
+            sums.push(n.val + l + r);
+        }
+    }
+    total
+}
+
+// ---- naive arm ---------------------------------------------------------
+
+fn tree_sum(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => n.val + tree_sum(n.left) + tree_sum(n.right),
+    }
+}
+
+fn find_tilt_naive(root: Option[TreeNode]) -> i64 {
+    match root {
+        None => 0,
+        Some(n) => (tree_sum(n.left) - tree_sum(n.right)).abs() + find_tilt_naive(n.left) + find_tilt_naive(n.right),
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree of `size` nodes with values from -spread to spread: each new
+// node walks down from the root, going left with chance lean / 100, and
+// takes the first empty place it meets.
+fn random_tree(size: i64, lean: i64, spread: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if size == 0 {
+        return None;
+    }
+    let root = TreeNode { val: next_random(seed) % (2 * spread + 1) - spread, left: None, right: None };
+    for _ in 1..size {
+        let c = TreeNode { val: next_random(seed) % (2 * spread + 1) - spread, left: None, right: None };
+        let mut node = root;
+        loop {
+            if next_random(seed) % 100 < lean {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+// The values in the subtree at `node`, gathered breadth first.
+fn values_below(node: Option[TreeNode]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut queue: Vec[TreeNode] = Vec.new();
+    if let Some(n) = node {
+        queue.push(n);
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let n = queue[head];
+        head += 1;
+        out.push(n.val);
+        if let Some(c) = n.left {
+            queue.push(c);
+        }
+        if let Some(c) = n.right {
+            queue.push(c);
+        }
+    }
+    out
+}
+
+// The definition: every node's left and right subtrees listed out and
+// added up, the differences' sizes summed.
+fn definition(root: Option[TreeNode]) -> i64 {
+    let mut total = 0;
+    let mut queue: Vec[TreeNode] = Vec.new();
+    if let Some(n) = root {
+        queue.push(n);
+    }
+    let mut head = 0;
+    while head < queue.len() {
+        let n = queue[head];
+        head += 1;
+        let mut left = 0;
+        for v in values_below(n.left) {
+            left += v;
+        }
+        let mut right = 0;
+        for v in values_below(n.right) {
+            right += v;
+        }
+        total += if left > right { left - right } else { right - left };
+        if let Some(c) = n.left {
+            queue.push(c);
+        }
+        if let Some(c) = n.right {
+            queue.push(c);
+        }
+    }
+    total
+}
+
+// A fresh copy of the tree at `node`, every value times `factor`, with
+// the children swapped at every node when `swap` is set.
+fn copied(node: Option[TreeNode], factor: i64, swap: bool) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => {
+            let l = copied(n.left, factor, swap);
+            let r = copied(n.right, factor, swap);
+            if swap {
+                Some(TreeNode { val: n.val * factor, left: r, right: l })
+            } else {
+                Some(TreeNode { val: n.val * factor, left: l, right: r })
+            }
+        }
+    }
+}
+
+fn answer(which: i64, root: Option[TreeNode]) -> i64 {
+    if which == 0 {
+        find_tilt_star(root)
+    } else if which == 1 {
+        find_tilt_pair(root)
+    } else if which == 2 {
+        find_tilt_stack(root)
+    } else {
+        find_tilt_naive(root)
+    }
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5630;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 0 to 30 nodes, leaning left with chance 20 to 80 in 100: values
+        // in -3..3 or in the problem's -1000..1000, in turn.
+        let size = next_random(mut seed) % 31;
+        let lean = 20 + next_random(mut seed) % 61;
+        let spread = if t % 2 == 0 { 3 } else { 1000 };
+        let tree = random_tree(size, lean, spread, mut seed);
+        let values = values_below(tree);
+        let mut weight = 0;
+        for v in values.iter() {
+            weight += if *v < 0 { -*v } else { *v };
+        }
+        let want = definition(tree);
+        let mirrored = copied(tree, 1, true);
+        let negated = copied(tree, -1, false);
+        let tripled = copied(tree, 3, false);
+        for which in 0..4 {
+            let got = answer(which, tree);
+            let ok = vec![
+                // P1: the definition's tilt.
+                got == want,
+                // P2: at least 0, at most the node count times the sum of
+                // the values' sizes, and 0 for a tree of one node or none.
+                got >= 0 and got <= values.len() * weight and (values.len() > 1 or got == 0),
+                // P3: the tree mirrored has the same tilt.
+                answer(which, mirrored) == got,
+                // P4: the values negated give the same tilt.
+                answer(which, negated) == got,
+                // P5: the values tripled give three times the tilt.
+                answer(which, tripled) == 3 * got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

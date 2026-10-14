@@ -1,0 +1,13 @@
+example 1: [1,2,3] -> 1
+example 2: [4,2,9,3,5,null,7] -> 15
+example 3: [21,7,14,1,1,2,2,3,3] -> 9
+no nodes: [] -> 0
+one node: [7] -> 0
+a left chain: [1,2,null,3,null,4] -> 20
+negative values: [-1,-2,-3,-4,-5,-6,-7] -> 7
+the problem's extremes: [1000,-1000,1000,null,-1000,1000] -> 6000
+300 random trees: 12017 nodes, tilts 9348931, checksum 706102468
+10000 nodes at random: 7595238
+10000 nodes down the left: 3288644390
+two chains of 10000 nodes: 1644323237
+a complete tree of 10000 nodes: 8107701

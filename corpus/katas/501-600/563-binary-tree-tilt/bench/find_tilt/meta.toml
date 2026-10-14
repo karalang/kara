@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/563-binary-tree-tilt/bench/find_tilt.kara"
+dedup_of = []
+expect = "panic:-6"
+exit = -6
+tags = ["shared", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -6
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "a87257d08"
+extracted_src = "4ab8b7bb"
+model_rev = "1aa23105"
+model_src = "4ab8b7bb"
