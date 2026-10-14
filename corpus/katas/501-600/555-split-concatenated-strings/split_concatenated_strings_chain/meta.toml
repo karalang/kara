@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/555-split-concatenated-strings/split_concatenated_strings_chain.kara"
+dedup_of = []
+expect = "error:E0208"
+exit = 1
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "0e1f560f0"
+extracted_src = "35ae329e"
+model_rev = "1aa23105"
+model_src = "35ae329e"

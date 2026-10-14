@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/554-brick-wall/brick_wall_merge.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "0e1f560f0"
+extracted_src = "d8175f1e"
+model_rev = "1aa23105"
+model_src = "d8175f1e"

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/555-split-concatenated-strings/bench/split_concatenated_strings.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "0e1f560f0"
+extracted_src = "f831a12f"
+model_rev = "1aa23105"
+model_src = "f831a12f"

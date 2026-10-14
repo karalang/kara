@@ -1,0 +1,105 @@
+// LeetCode #554: Brick Wall -- each candidate line tried on every row.
+//
+// A line that passes between bricks in any row is at one of that row's
+// edges, so only edge positions need trying. Each row's edges are kept
+// as a sorted Vec of running sums; for every distinct position, a
+// binary search in each row says whether the line crosses it there.
+// O(positions * rows * log bricks) time.
+
+fn least_bricks(wall: Vec[Vec[i64]]) -> i64 {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let mut candidates: Set[i64] = Set.new();
+    for row in wall.iter() {
+        let mut sums: Vec[i64] = Vec.new();
+        let mut at = 0;
+        for j in 0..row.len() - 1 {
+            at += row[j];
+            sums.push(at);
+            candidates.insert(at);
+        }
+        rows.push(sums);
+    }
+    let mut best = wall.len();
+    for x in candidates.iter() {
+        let mut crossed = 0;
+        for sums in rows.iter() {
+            if sums.binary_search(x).is_err() {
+                crossed += 1;
+            }
+        }
+        if crossed < best {
+            best = crossed;
+        }
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(wall: Vec[Vec[i64]]) {
+    println(f"{wall} -> {least_bricks(wall.clone())}");
+}
+
+// A row of bricks from 1 to `widest` wide, the last cut to fill `width`.
+fn random_row(width: i64, widest: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut row: Vec[i64] = Vec.new();
+    let mut left = width;
+    while left > 0 {
+        let w = 1 + next_random(seed) % widest;
+        let w = if w > left { left } else { w };
+        row.push(w);
+        left -= w;
+    }
+    row
+}
+
+fn main() {
+    show(vec![vec![1, 2, 2, 1], vec![3, 1, 2], vec![1, 3, 2], vec![2, 4], vec![3, 1, 2], vec![1, 3, 1, 1]]);
+    show(vec![vec![1], vec![1], vec![1]]);
+    show(vec![vec![5]]);
+    show(vec![vec![1, 1], vec![1, 1]]);
+    show(vec![vec![2147483647], vec![2147483646, 1]]);
+    show(vec![vec![1000000000, 1000000000], vec![2000000000], vec![1, 1999999999]]);
+    show(vec![vec![1, 1, 1, 1], vec![2, 2], vec![4], vec![3, 1], vec![1, 3]]);
+
+    // 300 random walls of 1 to 20 rows, 1 to 30 wide, bricks 1 to 5.
+    let mut seed: i64 = 554;
+    let mut bricks = 0;
+    let mut total = 0;
+    let mut h: i64 = 0;
+    for _ in 0..300 {
+        let rows = 1 + next_random(mut seed) % 20;
+        let width = 1 + next_random(mut seed) % 30;
+        let mut wall: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let row = random_row(width, 5, mut seed);
+            bricks += row.len();
+            wall.push(row);
+        }
+        let got = least_bricks(wall);
+        total += got;
+        h = (h * 31 + got) % 1000000007;
+    }
+    println(f"300 random walls: {bricks} bricks, total {total}, checksum {h}");
+
+    // The problem's most: 20,000 bricks over 200 rows 300 wide, and
+    // 10,000 rows of one brick 2^31 - 1 wide.
+    let mut wall: Vec[Vec[i64]] = Vec.new();
+    let mut count = 0;
+    while count < 20000 - 300 {
+        let row = random_row(300, 3, mut seed);
+        count += row.len();
+        wall.push(row);
+    }
+    println(f"{wall.len()} rows of 300, {count} bricks -> {least_bricks(wall)}");
+    let mut tall: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..10000 {
+        tall.push(vec![2147483647]);
+    }
+    println(f"10000 rows of one brick -> {least_bricks(tall)}");
+}

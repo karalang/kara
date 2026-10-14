@@ -1,0 +1,105 @@
+// LeetCode #555: Split Concatenated Strings -- candidates as iterator
+// chains.
+//
+// As the ★ arm, but each string is a Vec[char] and each candidate is
+// collected from a chain of iterators: the letters after the cut, the
+// rest of the loop's letters, then the letters before the cut.
+
+fn split_loop(strs: Vec[String]) -> String {
+    let n = strs.len();
+    let mut larger: Vec[Vec[char]] = Vec.new();
+    for s in strs.iter() {
+        let forward: Vec[char] = s.chars().collect();
+        let backward: Vec[char] = s.chars().rev().collect();
+        larger.push(if backward > forward { backward } else { forward });
+    }
+    let mut answer = String.new();
+    for i in 0..n {
+        let mut middle: Vec[char] = Vec.new();
+        for j in 1..n {
+            for c in larger[(i + j) % n].iter() {
+                middle.push(*c);
+            }
+        }
+        let forward: Vec[char] = strs[i].chars().collect();
+        let backward: Vec[char] = strs[i].chars().rev().collect();
+        for t in vec![forward, backward] {
+            for k in 0..t.len() {
+                let candidate: String = t[k..].iter().chain(middle.iter()).chain(t[..k].iter()).collect();
+                if candidate > answer {
+                    answer = candidate;
+                }
+            }
+        }
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(strs: Vec[String]) {
+    println(f"{strs} -> {split_loop(strs.clone())}");
+}
+
+fn word(length: i64, letters: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..length {
+        s.push((b'a' + (next_random(seed) % letters) as u8) as char);
+    }
+    s
+}
+
+fn main() {
+    show(vec!["abc".to_string(), "xyz".to_string()]);
+    show(vec!["abc".to_string()]);
+    show(vec!["a".to_string()]);
+    show(vec!["zz".to_string(), "zz".to_string()]);
+    show(vec!["ab".to_string(), "ba".to_string(), "ab".to_string()]);
+    show(vec!["lc".to_string(), "evol".to_string(), "cdy".to_string()]);
+    show(vec!["zab".to_string(), "zza".to_string(), "bz".to_string()]);
+
+    // 300 random lists of 1 to 6 words of 1 to 6 letters from 'a' to 'a'
+    // + 1 up to 'a' + 25.
+    let mut seed: i64 = 555;
+    let mut letters = 0;
+    let mut h: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 6;
+        let alphabet = 2 + next_random(mut seed) % 25;
+        let mut strs: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let length = 1 + next_random(mut seed) % 6;
+            strs.push(word(length, alphabet, mut seed));
+            letters += length;
+        }
+        for b in split_loop(strs).bytes() {
+            h = (h * 31 + b as i64) % 1000000007;
+        }
+    }
+    println(f"300 random lists: {letters} letters, checksum {h}");
+
+    // The problem's most: 1,000 letters, as 1,000 words of one letter, as
+    // one word of 1,000, and as 100 words of 10 from 'a' and 'b'.
+    let mut many: Vec[String] = Vec.new();
+    for _ in 0..1000 {
+        many.push(word(1, 26, mut seed));
+    }
+    let one = vec![word(1000, 26, mut seed)];
+    let mut tens: Vec[String] = Vec.new();
+    for _ in 0..100 {
+        tens.push(word(10, 2, mut seed));
+    }
+    for strs in vec![many, one, tens] {
+        let got = split_loop(strs);
+        let mut g: i64 = 0;
+        for b in got.bytes() {
+            g = (g * 131 + b as i64) % 1000000007;
+        }
+        println(f"{got.len()} letters, starting {got[..12]}, checksum {g}");
+    }
+}

@@ -1,0 +1,69 @@
+// Benchmark for #554: Brick Wall -- the ★ arm (count the edges at each
+// position).
+//
+// A line crosses every row except those with an edge where it is drawn,
+// so it should go where the most rows have an edge. A Map counts the
+// rows with an edge at each position, and the answer is the number of
+// rows less the largest count. O(bricks) time.
+
+fn least_bricks(wall: Vec[Vec[i64]]) -> i64 {
+    let mut edges: Map[i64, i64] = Map.new();
+    let mut most = 0;
+    for row in wall.iter() {
+        let mut at = 0;
+        for j in 0..row.len() - 1 {
+            at += row[j];
+            let count = edges.get(at).unwrap_or(0) + 1;
+            edges[at] = count;
+            if count > most {
+                most = count;
+            }
+        }
+    }
+    wall.len() - most
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 random walls 1,000,000 wide, bricks 1 to 10,000 wide, each built
+    // to just under 20,000 bricks (the problem's most), built once. Then
+    // 50 times over every wall is answered.
+    let count = 20;
+    let mut seed: i64 = 554;
+    let mut walls: Vec[Vec[Vec[i64]]] = Vec.new();
+    let mut bricks = 0;
+    for _ in 0..count {
+        let mut wall: Vec[Vec[i64]] = Vec.new();
+        let mut n = 0;
+        while n < 19000 {
+            let mut row: Vec[i64] = Vec.new();
+            let mut left = 1000000;
+            while left > 0 {
+                let w = 1 + (next_random(mut seed) * 32768 + next_random(mut seed)) % 10000;
+                let w = if w > left { left } else { w };
+                row.push(w);
+                left -= w;
+            }
+            n += row.len();
+            wall.push(row);
+        }
+        bricks += n;
+        walls.push(wall);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..50 {
+        for g in 0..count {
+            let got = least_bricks(walls[(round * 7 + g) % count]);
+            total += got;
+            checksum = (checksum * 31 + got) % 1000000007;
+        }
+    }
+    println(f"{count} walls, {bricks} bricks, 50 rounds each: total {total}, checksum {checksum}");
+}

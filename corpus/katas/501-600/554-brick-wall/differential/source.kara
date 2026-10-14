@@ -1,0 +1,240 @@
+// Differential test for LeetCode #554: Brick Wall.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random walls: 1 to 8 rows 1 to 12 wide with bricks 1 to 4 wide, or 1
+// to 5 rows 1 to 600 wide with bricks 1 to 150 wide, in turn.
+// Properties:
+//   P1  the answer is the definition's: a line tried at every whole
+//       position inside the wall, each row walked brick by brick
+//   P2  the answer is between 0 and the number of rows
+//   P3  the rows in the other order give the same answer
+//   P4  every row read right to left gives the same answer
+//   P5  one more row of a single brick gives one more
+
+// ---- star: brick_wall.kara
+
+fn least_bricks_star(wall: Vec[Vec[i64]]) -> i64 {
+    let mut edges: Map[i64, i64] = Map.new();
+    let mut most = 0;
+    for row in wall.iter() {
+        let mut at = 0;
+        for j in 0..row.len() - 1 {
+            at += row[j];
+            let count = edges.get(at).unwrap_or(0) + 1;
+            edges[at] = count;
+            if count > most {
+                most = count;
+            }
+        }
+    }
+    wall.len() - most
+}
+
+// ---- sorted: brick_wall_sorted.kara
+
+fn least_bricks_sorted(wall: Vec[Vec[i64]]) -> i64 {
+    let mut edges: Vec[i64] = Vec.new();
+    for row in wall.iter() {
+        let mut at = 0;
+        for j in 0..row.len() - 1 {
+            at += row[j];
+            edges.push(at);
+        }
+    }
+    edges.sort();
+    let mut most = 0;
+    let mut run = 0;
+    for i in 0..edges.len() {
+        if i > 0 and edges[i] == edges[i - 1] {
+            run += 1;
+        } else {
+            run = 1;
+        }
+        if run > most {
+            most = run;
+        }
+    }
+    wall.len() - most
+}
+
+// ---- merge: brick_wall_merge.kara
+
+fn least_bricks_merge(wall: Vec[Vec[i64]]) -> i64 {
+    let n = wall.len();
+    let mut queue: PriorityQueue[(i64, i64)] = PriorityQueue.new();
+    let mut next = vec![0; n];
+    let mut at = vec![0; n];
+    for r in 0..n {
+        if wall[r].len() > 1 {
+            at[r] = wall[r][0];
+            next[r] = 1;
+            queue.push((at[r], r));
+        }
+    }
+    let mut most = 0;
+    let mut current = 0;
+    let mut run = 0;
+    while let Some((edge, r)) = queue.pop() {
+        if run > 0 and edge == current {
+            run += 1;
+        } else {
+            current = edge;
+            run = 1;
+        }
+        if run > most {
+            most = run;
+        }
+        let k = next[r];
+        if k + 1 < wall[r].len() {
+            at[r] += wall[r][k];
+            next[r] = k + 1;
+            queue.push((at[r], r));
+        }
+    }
+    n - most
+}
+
+// ---- search: brick_wall_search.kara
+
+fn least_bricks_search(wall: Vec[Vec[i64]]) -> i64 {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let mut candidates: Set[i64] = Set.new();
+    for row in wall.iter() {
+        let mut sums: Vec[i64] = Vec.new();
+        let mut at = 0;
+        for j in 0..row.len() - 1 {
+            at += row[j];
+            sums.push(at);
+            candidates.insert(at);
+        }
+        rows.push(sums);
+    }
+    let mut best = wall.len();
+    for x in candidates.iter() {
+        let mut crossed = 0;
+        for sums in rows.iter() {
+            if sums.binary_search(x).is_err() {
+                crossed += 1;
+            }
+        }
+        if crossed < best {
+            best = crossed;
+        }
+    }
+    best
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: a line at every whole position strictly
+// inside the wall, each row walked brick by brick to see whether the
+// line passes through a brick or along an edge; the fewest crossed. With
+// no position inside (a wall one wide) the line can only cross every row.
+fn definition(wall: Vec[Vec[i64]]) -> i64 {
+    let mut width = 0;
+    for w in wall[0].iter() {
+        width += *w;
+    }
+    let mut best = wall.len();
+    for x in 1..width {
+        let mut crossed = 0;
+        for row in wall.iter() {
+            let mut left = 0;
+            for w in row.iter() {
+                if left < x and x < left + *w {
+                    crossed += 1;
+                }
+                left += *w;
+            }
+        }
+        if crossed < best {
+            best = crossed;
+        }
+    }
+    best
+}
+
+fn answer(which: i64, wall: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        least_bricks_star(wall)
+    } else if which == 1 {
+        least_bricks_sorted(wall)
+    } else if which == 2 {
+        least_bricks_merge(wall)
+    } else {
+        least_bricks_search(wall)
+    }
+}
+
+fn main() {
+    let names = vec!["star", "sorted", "merge", "search"];
+    let count = 1000;
+    let mut seed: i64 = 5540;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 8 rows 1 to 12 wide with bricks 1 to 4 wide, or 1 to 5
+        // rows 1 to 600 wide with bricks 1 to 150 wide, in turn.
+        let small = t % 2 == 0;
+        let rows = 1 + next_random(mut seed) % (if small { 8 } else { 5 });
+        let width = 1 + next_random(mut seed) % (if small { 12 } else { 600 });
+        let widest = 1 + next_random(mut seed) % (if small { 4 } else { 150 });
+        let mut wall: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut row: Vec[i64] = Vec.new();
+            let mut left = width;
+            while left > 0 {
+                let w = 1 + next_random(mut seed) % widest;
+                let w = if w > left { left } else { w };
+                row.push(w);
+                left -= w;
+            }
+            wall.push(row);
+        }
+        let want = definition(wall.clone());
+        let mut flipped: Vec[Vec[i64]] = Vec.new();
+        for row in wall.iter() {
+            let mut back = row.clone();
+            back.reverse();
+            flipped.push(back);
+        }
+        let mut upside = wall.clone();
+        upside.reverse();
+        let mut taller = wall.clone();
+        taller.push(vec![width]);
+        for which in 0..4 {
+            let got = answer(which, wall.clone());
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: between none and every row.
+                got >= 0 and got <= rows,
+                // P3: the rows in the other order give the same answer.
+                answer(which, upside.clone()) == got,
+                // P4: every row read right to left gives the same answer.
+                answer(which, flipped.clone()) == got,
+                // P5: one more row of a single brick crosses one more.
+                answer(which, taller.clone()) == got + 1,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: {wall} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
