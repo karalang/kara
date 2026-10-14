@@ -1,0 +1,20 @@
+segments rotated: 6, live bytes: 90
+app.log.6: 10 lines
+app.log.5: 9 lines
+app.log.4: 10 lines
+app.log.3: 0 lines
+app.log.2: 0 lines
+app.log.1: 0 lines
+app.log: 2 lines
+app.log.99: not found
+parsed 29, unparsable 2, span 90s, slowest 230ms
+  level,DEBUG,6
+  level,ERROR,5
+  level,INFO,14
+  level,WARN,4
+  component,auth,7
+  component,cache,7
+  component,db,8
+  component,http,7
+level total 29
+tail: 1700000177 DEBUG db request 59 served

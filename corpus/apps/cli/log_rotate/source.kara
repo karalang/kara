@@ -1,0 +1,255 @@
+// A log writer with size-based rotation, and a reader that scans every
+// rotated segment line by line, tails the live file by seeking from its end,
+// and writes a CSV summary it reads back.
+//
+// Workarounds for v2 gaps, each to revert once its row is fixed:
+//   B-2026-10-12-6   i64.parse returns Option, not Result[i64, ParseError]
+//   B-2026-10-12-7   lines() / split() are eager Vec[String]
+//   B-2026-10-14-44  File.open / File.create take ref String, not Str, and
+//                    File.read / File.write count in usize, not i64
+//   B-2026-10-14-45  BufReader is not implemented on v2: scan() reads the
+//                    whole segment with fs.read_to_string instead
+
+struct Rotator {
+    base: String,
+    max_bytes: i64,
+    keep: i64,
+    segment: i64,
+    written: i64,
+    file: File,
+}
+
+fn show(e: IoError) -> String {
+    match e {
+        IoError.NotFound => "not found".to_string(),
+        IoError.PermissionDenied => "permission denied".to_string(),
+        IoError.UnexpectedEof => "unexpected eof".to_string(),
+        IoError.Other(m) => m.clone(),
+        _ => "io error".to_string(),
+    }
+}
+
+fn segment_path(base: Str, n: i64) -> String {
+    if n == 0 { base.to_string() } else { f"{base}.{n}" }
+}
+
+impl Rotator {
+    fn open(base: Str, max_bytes: i64, keep: i64) -> Result[Rotator, IoError] {
+        let f = File.create(base.to_string())?;
+        Ok(Rotator { base: base.to_string(), max_bytes: max_bytes, keep: keep, segment: 0, written: 0, file: f })
+    }
+
+    // Closes the live file as segment N and starts a fresh one. Segment
+    // numbers count up; only the newest `keep` survive, older ones are
+    // truncated to empty so a reader skips them.
+    fn rotate(mut ref self) -> Result[(), IoError] {
+        self.file.flush()?;
+        self.segment += 1;
+        let old = segment_path(self.base, self.segment);
+        let content = fs.read_to_string(self.base)?;
+        fs.write(old, content)?;
+        if self.segment > self.keep {
+            fs.write(segment_path(self.base, self.segment - self.keep), "")?;
+        }
+        self.file = File.create(self.base)?;
+        self.written = 0;
+        Ok(())
+    }
+
+    fn write_line(mut ref self, line: Str) -> Result[(), IoError] {
+        let bytes = line.len() + 1;
+        if self.written + bytes > self.max_bytes and self.written > 0 {
+            self.rotate()?;
+        }
+        let mut s = line.to_string();
+        s.push('\n');
+        let n = self.file.write(s.bytes())?;
+        self.written += n as i64;
+        Ok(())
+    }
+}
+
+struct LogEntry { ts: i64, level: String, component: String, msg: String }
+
+fn parse_line(line: Str) -> Option[LogEntry] {
+    // Three space-separated fields, then the message (which has spaces).
+    let mut cuts: Vec[i64] = Vec.new();
+    let mut i = 0;
+    let b = line.bytes();
+    while i < line.len() and cuts.len() < 3 {
+        if b[i] == 32u8 { cuts.push(i); }
+        i += 1;
+    }
+    if cuts.len() < 3 {
+        return None;
+    }
+    let ts = match i64.parse(line[0..cuts[0]]) {
+        Some(t) => t,
+        None => return None,
+    };
+    Some(LogEntry {
+        ts: ts,
+        level: line[cuts[0] + 1..cuts[1]].to_string(),
+        component: line[cuts[1] + 1..cuts[2]].to_string(),
+        msg: line[cuts[2] + 1..line.len()].to_string(),
+    })
+}
+
+struct Summary {
+    lines: i64,
+    bad: i64,
+    by_level: SortedMap[String, i64],
+    by_component: SortedMap[String, i64],
+    first_ts: i64,
+    last_ts: i64,
+    slowest: i64,
+}
+
+fn scan(path: Str, sum: mut ref Summary) -> Result[i64, IoError] {
+    let text = fs.read_to_string(path.to_string())?;
+    let mut n = 0;
+    for l in text.lines() {
+        n += 1;
+        match parse_line(l) {
+            Some(e) => {
+                sum.lines += 1;
+                *sum.by_level.entry(e.level.clone()).or_insert(0) += 1;
+                *sum.by_component.entry(e.component.clone()).or_insert(0) += 1;
+                if sum.first_ts == 0 or e.ts < sum.first_ts { sum.first_ts = e.ts; }
+                if e.ts > sum.last_ts { sum.last_ts = e.ts; }
+                match e.msg.find("took=") {
+                    Some(i) => {
+                        let rest = e.msg[i + 5..e.msg.len()];
+                        let end = rest.find("ms") ?? rest.len();
+                        let ms = i64.parse(rest[0..end]).unwrap_or(0);
+                        if ms > sum.slowest { sum.slowest = ms; }
+                    }
+                    None => {}
+                }
+            }
+            None => sum.bad += 1,
+        }
+    }
+    Ok(n)
+}
+
+// The last line of a file, read by seeking back from the end in growing
+// steps until a newline before the final one is in view.
+fn tail_line(path: Str) -> Result[String, IoError] {
+    let f = File.open(path.to_string())?;
+    let size = f.seek(SeekFrom.End, 0)?;
+    let mut back = 16;
+    loop {
+        if back > size { back = size; }
+        f.seek(SeekFrom.Start, size - back)?;
+        let mut buf: Vec[u8] = Vec.new();
+        for _ in 0..back { buf.push(0u8); }
+        let mut got = 0;
+        while got < back {
+            let n = f.read(mut buf[got..back])?;
+            if n == 0 { return Err(IoError.UnexpectedEof); }
+            got += n as i64;
+        }
+        let text = match String.from_utf8(buf) {
+            Ok(t) => t,
+            Err(_) => return Err(IoError.InvalidUtf8),
+        };
+        let body = text.trim();
+        let bb = body.bytes();
+        let mut j = body.len() - 1;
+        while j >= 0 and bb[j] != 10u8 { j -= 1; }
+        if j >= 0 {
+            return Ok(body[j + 1..body.len()].to_string());
+        }
+        if back == size { return Ok(body.to_string()); }
+        back = back * 2;
+    }
+}
+
+fn make_line(i: i64) -> String {
+    let levels: Array[Str, 6] = ["INFO", "INFO", "WARN", "INFO", "ERROR", "DEBUG"];
+    let comps: Array[Str, 4] = ["http", "db", "cache", "auth"];
+    let level = levels[i % 6];
+    let comp = comps[(i * 7) % 4];
+    let ts = 1700000000 + i * 3;
+    if i % 9 == 4 {
+        f"{ts} {level} {comp} query done took={(i * 37) % 250}ms rows={i % 13}"
+    } else if i % 17 == 16 {
+        "garbled line without fields".to_string()
+    } else {
+        f"{ts} {level} {comp} request {i} served"
+    }
+}
+
+fn main() {
+    let mut rot = match Rotator.open("app.log", 400, 3) {
+        Ok(r) => r,
+        Err(e) => {
+            println(f"open: {show(e)}");
+            return;
+        }
+    };
+    for i in 0..60 {
+        match rot.write_line(make_line(i)) {
+            Ok(_) => {}
+            Err(e) => {
+                println(f"write {i}: {show(e)}");
+                return;
+            }
+        }
+    }
+    match rot.file.flush() {
+        Ok(_) => {}
+        Err(e) => println(f"flush: {show(e)}"),
+    }
+    println(f"segments rotated: {rot.segment}, live bytes: {rot.written}");
+
+    let mut sum = Summary {
+        lines: 0, bad: 0, by_level: SortedMap.new(), by_component: SortedMap.new(),
+        first_ts: 0, last_ts: 0, slowest: 0,
+    };
+    let mut seg = rot.segment;
+    while seg >= 0 {
+        let p = segment_path("app.log", seg);
+        match scan(p, mut sum) {
+            Ok(n) => println(f"{p}: {n} lines"),
+            Err(e) => println(f"{p}: {show(e)}"),
+        }
+        seg -= 1;
+    }
+    match scan("app.log.99", mut sum) {
+        Ok(_) => println("app.log.99 exists?"),
+        Err(e) => println(f"app.log.99: {show(e)}"),
+    }
+    println(f"parsed {sum.lines}, unparsable {sum.bad}, span {sum.last_ts - sum.first_ts}s, slowest {sum.slowest}ms");
+
+    let mut csv = "kind,name,count\n".to_string();
+    for (k, v) in sum.by_level.iter() {
+        csv.push_str(f"level,{k},{v}\n");
+    }
+    for (k, v) in sum.by_component.iter() {
+        csv.push_str(f"component,{k},{v}\n");
+    }
+    match fs.write("summary.csv", csv) {
+        Ok(_) => {}
+        Err(e) => println(f"csv: {show(e)}"),
+    }
+    match fs.read_to_string("summary.csv") {
+        Ok(text) => {
+            let mut total = 0;
+            for row in text.lines().iter().skip(1) {
+                let cols = row.split(",");
+                if cols[0] == "level" {
+                    total += i64.parse(cols[2]).unwrap_or(0);
+                }
+                println(f"  {row}");
+            }
+            println(f"level total {total}");
+        }
+        Err(e) => println(f"read csv: {show(e)}"),
+    }
+    match tail_line("app.log") {
+        Ok(l) => println(f"tail: {l}"),
+        Err(e) => println(f"tail: {show(e)}"),
+    }
+}

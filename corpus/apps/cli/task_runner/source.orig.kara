@@ -1,0 +1,318 @@
+// A small task runner: reads a task file from disk, orders the tasks by
+// their dependencies, runs each one as a child process (`sh -c`), feeds a
+// task its declared input on stdin, captures stdout, stderr and the exit
+// code, skips everything downstream of a failure, and writes a JSON report
+// that it reads back to print a summary.
+
+#[derive(Serialize, Deserialize)]
+struct TaskResult {
+    name: String,
+    status: String,
+    code: i64,
+    stdout: String,
+    stderr_lines: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Report { ok: i64, failed: i64, skipped: i64, results: Vec[TaskResult] }
+
+struct Task {
+    name: String,
+    deps: Vec[String],
+    cmd: String,
+    input: Option[String],
+    env: Vec[(String, String)],
+}
+
+const TASKS: Str = "# name | deps | command | stdin
+gen     |            | printf 'pear\\napple\\nfig\\napple\\nkiwi\\n'
+sort    | gen        | sort | @gen
+uniq    | sort       | uniq -c | @sort
+count   | sort       | wc -l | @sort
+greet   |            | echo \"hello $WHO from $STAGE\" | | WHO=runner STAGE=build
+fail    | gen        | echo broken >&2; echo half; exit 3
+after   | fail       | echo never runs
+deeper  | after uniq | echo never either
+report  | uniq count | echo report ready for $WHO | | WHO=ci
+";
+
+fn parse_tasks(text: Str) -> Result[Vec[Task], String] {
+    let mut tasks: Vec[Task] = Vec.new();
+    let mut line_no = 0;
+    for line in text.lines() {
+        line_no += 1;
+        let t = line.trim();
+        if t.is_empty() or t.starts_with("#") {
+            continue;
+        }
+        let parts: Vec[String] = t.split("|").map(|p| p.trim().to_string()).collect();
+        if parts.len() < 3 {
+            return Err(f"line {line_no}: want name | deps | command");
+        }
+        let mut deps: Vec[String] = Vec.new();
+        for d in parts[1].split_whitespace() {
+            deps.push(d.to_string());
+        }
+        let input = if parts.len() > 3 and parts[3].starts_with("@") {
+            Some(parts[3][1..parts[3].len()].to_string())
+        } else {
+            None
+        };
+        let mut env: Vec[(String, String)] = Vec.new();
+        if parts.len() > 4 {
+            for kv in parts[4].split_whitespace() {
+                match kv.find("=") {
+                    Some(i) => env.push((kv[0..i].to_string(), kv[i + 1..kv.len()].to_string())),
+                    None => return Err(f"line {line_no}: bad env [{kv}]"),
+                }
+            }
+        }
+        tasks.push(Task { name: parts[0].clone(), deps: deps, cmd: parts[2].clone(), input: input, env: env });
+    }
+    Ok(tasks)
+}
+
+fn index_of(tasks: ref Vec[Task], name: Str) -> Option[i64] {
+    let mut i = 0;
+    while i < tasks.len() {
+        if tasks[i].name == name {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+// Kahn's algorithm; ties go to the task declared first, so the order is
+// stable. A cycle or an unknown dependency is an error.
+fn order(tasks: ref Vec[Task]) -> Result[Vec[i64], String] {
+    let n = tasks.len();
+    let mut indegree: Vec[i64] = Vec.new();
+    let mut users: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        indegree.push(0);
+        users.push(Vec.new());
+    }
+    let mut i = 0;
+    while i < n {
+        for d in tasks[i].deps.iter() {
+            match index_of(tasks, d) {
+                Some(j) => {
+                    indegree[i] += 1;
+                    users[j].push(i);
+                }
+                None => return Err(f"{tasks[i].name}: unknown dependency {d}"),
+            }
+        }
+        i += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut done: Vec[bool] = Vec.new();
+    for _ in 0..n {
+        done.push(false);
+    }
+    while out.len() < n {
+        let mut pick = -1;
+        let mut k = 0;
+        while k < n {
+            if not done[k] and indegree[k] == 0 {
+                pick = k;
+                break;
+            }
+            k += 1;
+        }
+        if pick < 0 {
+            return Err("dependency cycle".to_string());
+        }
+        done[pick] = true;
+        out.push(pick);
+        for u in users[pick].iter() {
+            indegree[u] -= 1;
+        }
+    }
+    Ok(out)
+}
+
+fn count_lines(s: Str) -> i64 {
+    let mut n = 0;
+    for l in s.lines() {
+        if not l.trim().is_empty() {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn show(e: IoError) -> String {
+    match e {
+        IoError.NotFound => "not found".to_string(),
+        IoError.PermissionDenied => "permission denied".to_string(),
+        IoError.Other(m) => m,
+        _ => "io error".to_string(),
+    }
+}
+
+fn run_task(t: ref Task, input: Option[String]) -> Result[TaskResult, String] {
+    let mut cmd = Command.new("sh").arg("-c").arg(t.cmd)
+        .stdout(Stdio.Piped).stderr(Stdio.Piped);
+    for (k, v) in t.env.iter() {
+        cmd = cmd.env(k, v);
+    }
+    if input.is_some() {
+        cmd = cmd.stdin(Stdio.Piped);
+    }
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return Err(f"{t.name}: spawn: {show(e)}"),
+    };
+    match input {
+        Some(text) => match child.stdin() {
+            Some(w) => {
+                match w.write(text) {
+                    Ok(_) => {}
+                    Err(e) => return Err(f"{t.name}: stdin: {show(e)}"),
+                }
+                match w.close() {
+                    Ok(_) => {}
+                    Err(e) => return Err(f"{t.name}: close: {show(e)}"),
+                }
+            }
+            None => return Err(f"{t.name}: no stdin pipe"),
+        },
+        None => {}
+    }
+    let out = match child.stdout() {
+        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        None => String.new(),
+    };
+    let err = match child.stderr() {
+        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        None => String.new(),
+    };
+    let code = match child.wait() {
+        Ok(st) => st.code,
+        Err(e) => return Err(f"{t.name}: wait: {show(e)}"),
+    };
+    let status = if code == 0 { "ok" } else { "failed" };
+    Ok(TaskResult {
+        name: t.name.clone(),
+        status: status.to_string(),
+        code: code as i64,
+        stdout: out,
+        stderr_lines: count_lines(err),
+    })
+}
+
+fn main() {
+    match fs.write("tasks.txt", TASKS) {
+        Ok(_) => {}
+        Err(e) => {
+            println(f"write tasks: {show(e)}");
+            return;
+        }
+    }
+    let text = match fs.read_to_string("tasks.txt") {
+        Ok(t) => t,
+        Err(e) => {
+            println(f"read tasks: {show(e)}");
+            return;
+        }
+    };
+    let tasks = match parse_tasks(text) {
+        Ok(ts) => ts,
+        Err(e) => {
+            println(f"parse: {e}");
+            return;
+        }
+    };
+    println(f"{tasks.len()} tasks");
+    let plan = match order(tasks) {
+        Ok(p) => p,
+        Err(e) => {
+            println(f"plan: {e}");
+            return;
+        }
+    };
+    let mut names: Vec[String] = Vec.new();
+    for i in plan.iter() {
+        names.push(tasks[i].name.clone());
+    }
+    let joined = names.join(" ");
+    println(f"order: {joined}");
+
+    let mut outputs: Map[String, String] = Map.new();
+    let mut failed: Set[String] = Set.new();
+    let mut results: Vec[TaskResult] = Vec.new();
+    for i in plan.iter() {
+        let t = tasks[i];
+        let mut blocked: Option[String] = None;
+        for d in t.deps.iter() {
+            if failed.contains(d) {
+                blocked = Some(d.clone());
+                break;
+            }
+        }
+        match blocked {
+            Some(d) => {
+                println(f"[skip] {t.name} (needs {d})");
+                failed.insert(t.name.clone());
+                results.push(TaskResult {
+                    name: t.name.clone(), status: "skipped".to_string(), code: -1,
+                    stdout: String.new(), stderr_lines: 0,
+                });
+                continue;
+            }
+            None => {}
+        }
+        let input = match t.input {
+            Some(src) => outputs.get(src).cloned(),
+            None => None,
+        };
+        match run_task(t, input) {
+            Ok(r) => {
+                let first = r.stdout.lines().next().unwrap_or("").trim().to_string();
+                println(f"[{r.status}] {t.name} exit={r.code} lines={count_lines(r.stdout)} stderr={r.stderr_lines} first=[{first}]");
+                if r.code != 0 {
+                    failed.insert(t.name.clone());
+                }
+                outputs.insert(t.name.clone(), r.stdout.clone());
+                results.push(r);
+            }
+            Err(e) => {
+                println(f"[error] {e}");
+                failed.insert(t.name.clone());
+            }
+        }
+    }
+
+    let mut ok = 0;
+    let mut bad = 0;
+    let mut skipped = 0;
+    for r in results.iter() {
+        if r.status == "ok" { ok += 1; } else if r.status == "failed" { bad += 1; } else { skipped += 1; }
+    }
+    let report = Report { ok: ok, failed: bad, skipped: skipped, results: results };
+    match fs.write("report.json", Json.serialize(report)) {
+        Ok(_) => {}
+        Err(e) => println(f"write report: {show(e)}"),
+    }
+    let json = fs.read_to_string("report.json").unwrap_or(String.new());
+    let back: Result[Report, DeserializeError] = Json.deserialize(json);
+    match back {
+        Ok(r) => {
+            println(f"report: ok={r.ok} failed={r.failed} skipped={r.skipped}");
+            for t in r.results.iter() {
+                if t.name == "uniq" {
+                    for l in t.stdout.lines() {
+                        println(f"  uniq: {l.trim()}");
+                    }
+                }
+            }
+        }
+        Err(e) => println(f"report: {e.message}"),
+    }
+    match fs.read_to_string("missing.json") {
+        Ok(_) => println("missing.json exists?"),
+        Err(e) => println(f"missing.json: {show(e)}"),
+    }
+}

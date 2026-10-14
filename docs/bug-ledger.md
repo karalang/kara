@@ -97,11 +97,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 258 |
-| missing-feature | 250 |
+| missing-feature | 251 |
 | other | 172 |
-| false-positive | 170 |
+| false-positive | 171 |
 | perf | 165 |
-| diagnostics | 158 |
+| diagnostics | 159 |
 | crash | 115 |
 | soundness | 103 |
 | use-after-free | 90 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2885 |
-| interp | 919 |
-| typecheck | 408 |
+| codegen | 2886 |
+| interp | 920 |
+| typecheck | 410 |
 | other | 115 |
 | ownership | 91 |
-| cli | 75 |
+| cli | 76 |
 | runtime | 67 |
 | parser | 61 |
 | autopar | 59 |
@@ -178,6 +178,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-37 | 2026-10-14 | resolver+typecheck | low | A user type cannot implement `Index`, `IndexMut` or `IndexSet`, so `c[k]` on a user container has no spelling: `impl Index for P` is refused at resolve ("operator traits are stdlib-only") on every pipeline, though design.md § `Index` and `IndexMut` says "User types may implement all three, so a user container supports `[]`" | — |
 | B-2026-10-14-39 | 2026-10-14 | codegen+runtime | low | A one-integer f-string `f"{n}"` still runs about 3x legacy on the v2 compiled backend after B-2026-10-13-20's fix: 44M `f"{i % 7}"` take 0.86 s on `karac build --mir` against 0.28 to 0.31 s on legacy `karac build`, and kata 504's bench 1.97 to 2.25 s against 1.51 to 1.62 s | — |
 | B-2026-10-14-43 | 2026-10-14 | typecheck | medium | A string literal pattern does not take the `Str` type of its scrutinee: `match s.as_str() { "Year" => ... }`, or a match on a `Str` parameter, is refused with "expected 'StringSlice', found 'String'" by `karac check` and by the MIR front end, while the same match on a `String` works | — |
+| B-2026-10-14-44 | 2026-10-14 | typecheck | medium | The `std.io` / `std.net` library signatures disagree with docs/library/io.md: `File.open` / `create` / `append`, `fs.read_to_string` and `fs.write` take `ref String` and `TcpListener.bind` / `TcpStream.connect` take `own String` where io.md gives every path and address as `Str` ("Paths are borrowed"), and `File.read` / `File.write` return `Result[usize, IoError]` where io.md gives `Result[i64, IoError]`, so the spec's own spellings are refused by `karac check` and the MIR pipeline alike | — |
+| B-2026-10-14-45 | 2026-10-14 | interp+codegen | medium | `BufReader` and `BufWriter` (docs/library/io.md § Buffered I/O) do not exist on either v2 backend: `karac check` accepts `BufReader.new(f)`, `read_line`, `lines()` and `BufWriter.write_all`, legacy `karac run --interp` runs them, but `karac __mir-run` stops at `call of unknown function BufReader[File].new`, `karac __mir-llvm-run` at `native `BufReader[File].new` is not lowered yet`, and `for line in reader.lines()` is refused at MIR build with `a `for` loop over a collection is not lowered yet` | — |
+| B-2026-10-14-46 | 2026-10-14 | typecheck+cli | medium | A type error stopping the MIR pipeline is printed with no location: `karac __mir-run` / `__mir-llvm-run` / `__mir-llvm-asan` print `error[mir]: typecheck: expected 'String', found 'StringSlice'` and nothing else, because src/mir/lower.rs formats only `tc.errors[0].message` and drops its `span`, so a program that `karac check` would locate has to be bisected by hand | — |
 
 ### Relocated
 

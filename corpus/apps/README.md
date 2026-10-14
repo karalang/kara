@@ -107,6 +107,27 @@ the numbers below describe that compiler, not later ones.
   None runs on `mir-interp` yet: each stops at a type or library method that
   is not lowered.
 
+## Real I/O programs (`apps:real-io`, from 2026-10-14)
+
+Written by the real-world apps thread directly against the v2 pipeline, with
+real I/O instead of simulated waits: a TCP socket, child processes, files on
+disk. Each runs in the corpus's temp directory with no arguments and no
+stdin, so a server and its client share one thread over loopback.
+
+```
+service/kv_http     HTTP/1.1 key-value store over TCP, JSON bodies (serde derive)
+cli/task_runner     dependency-ordered `sh -c` tasks, piped stdin/stdout/stderr, JSON report
+cli/log_rotate      size-based log rotation, line scan of every segment, seek-from-end tail, CSV
+```
+
+They run only on the mir-* backends (`backends` in meta.toml); legacy is
+frozen. `source.orig.kara` is the first draft, `source.kara` the version that
+runs; each notes.md separates author errors under the v2 rules from compiler
+gaps, and each source header lists the workarounds by ledger id. kv_http and
+task_runner FAIL on every mir backend until B-2026-10-12-23 is fixed
+(`karac check` does not know `DeserializeError`); without check they match
+the mirror on all four surfaces.
+
 ## Language-design measurements
 
 On the final `source.kara` of every program, for the review thread's

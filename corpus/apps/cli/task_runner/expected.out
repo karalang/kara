@@ -1,0 +1,17 @@
+9 tasks
+order: gen sort uniq count greet fail after deeper report
+[ok] gen exit=0 lines=5 stderr=0 first=[pear]
+[ok] sort exit=0 lines=5 stderr=0 first=[apple]
+[ok] uniq exit=0 lines=4 stderr=0 first=[2 apple]
+[ok] count exit=0 lines=1 stderr=0 first=[5]
+[ok] greet exit=0 lines=1 stderr=0 first=[hello runner from build]
+[failed] fail exit=3 lines=1 stderr=1 first=[half]
+[skip] after (needs fail)
+[skip] deeper (needs after)
+[ok] report exit=0 lines=1 stderr=0 first=[report ready for ci]
+report: ok=6 failed=1 skipped=2
+  uniq: 2 apple
+  uniq: 1 fig
+  uniq: 1 kiwi
+  uniq: 1 pear
+missing.json: not found

@@ -1,0 +1,25 @@
+== create
+  HTTP/1.1 201 Created {"key":"alpha","value":"first","tags":["a"],"version":1}
+== pipelined writes
+  HTTP/1.1 201 Created {"key":"beta","value":"second","tags":["b","hot"],"version":1}
+  HTTP/1.1 201 Created {"key":"gamma","value":"third \"quoted\"","tags":[],"version":1}
+  HTTP/1.1 200 OK {"key":"alpha","value":"first, again","tags":["a","v2"],"version":2}
+== reads
+  HTTP/1.1 200 OK {"key":"alpha","value":"first, again","tags":["a","v2"],"version":2}
+  HTTP/1.1 404 Not Found {"error":"no key missing","status":404}
+  HTTP/1.1 200 OK {"count":3,"keys":["alpha","beta","gamma"]}
+== errors
+  HTTP/1.1 400 Bad Request {"error":"bad json","status":400}
+  HTTP/1.1 405 Method Not Allowed {"error":"method POST","status":405}
+  HTTP/1.1 404 Not Found {"error":"no route /nowhere","status":404}
+  HTTP/1.1 411 Length Required {"error":"PUT needs a body","status":411}
+== deletes
+  HTTP/1.1 204 No Content (empty)
+  HTTP/1.1 404 Not Found {"error":"no key beta","status":404}
+  HTTP/1.1 200 OK {"count":2,"keys":["alpha","gamma"]}
+== garbage
+  HTTP/1.1 400 Bad Request {"error":"bad request line [HELLO]","status":400}
+== short body
+  HTTP/1.1 400 Bad Request {"error":"body short by 5 bytes","status":400}
+== stats
+  HTTP/1.1 200 OK {"requests":15,"hits":1,"misses":2,"writes":5,"bytes_in":161}
