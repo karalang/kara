@@ -56,6 +56,13 @@ impl Scalar {
     }
 }
 
+/// An argument of a decoded call.
+pub(super) enum Arg {
+    Scalar(Src),
+    /// `copy (*l)`, a tuple of scalars behind a local reference.
+    DerefTuple(u32),
+}
+
 /// One statement, decoded.
 pub(super) enum Op {
     /// `dst = src`, a scalar into a scalar local.
@@ -126,6 +133,14 @@ pub(super) enum Op {
         b: i128,
         int: IntTy,
     },
+    /// A checked step its block's [`Term::Checked`] does, together with
+    /// the switch on its overflow flag (B-2026-10-14-3).
+    Fused,
+    /// `dst = copy pair.0` at the head of a [`Term::Checked`]'s
+    /// no-overflow block: the terminator has stored `dst` already and left
+    /// `pair` uninitialized, so there is nothing to do unless `pair` holds
+    /// a pair (the general steps ran instead).
+    FromPair { dst: u32, pair: u32 },
     /// `StorageLive(l)`.
     Live(u32),
     /// `StorageDead(l)` of a scalar local, which owns nothing.
@@ -154,6 +169,30 @@ pub(super) enum Term {
         recv: u32,
         moved: bool,
         index: Src,
+        target: BasicBlock,
+    },
+    /// `pair = Checked(a op b); switchInt(copy pair.1) -> [0: ok, ..]`
+    /// where `ok` starts with `dst = copy pair.0` and nothing else names
+    /// `pair`: the result goes straight to `dst`, with no pair made. An
+    /// overflow, or anything else off the happy path, runs the block's last
+    /// statement (the checked step) and its terminator the general way.
+    Checked {
+        dst: u32,
+        pair: u32,
+        op: BinOp,
+        a: Src,
+        b: Src,
+        int: IntTy,
+        ok: BasicBlock,
+    },
+    /// `dst = f(args..) -> target` of a function with a body, whose result
+    /// owns nothing to drop: `callee` indexes [`Interp::fast_callees`].
+    /// Arguments that cannot be read the quick way leave the call to the
+    /// general terminator.
+    Call {
+        callee: u32,
+        args: Box<[Arg]>,
+        dst: u32,
         target: BasicBlock,
     },
     /// A call of a library function with no body, whose result has type
@@ -278,7 +317,7 @@ impl<'a> Interp<'a> {
         if let Some(d) = self.decoded.get(&key) {
             return d.clone();
         }
-        let d: std::rc::Rc<[Block]> = body
+        let mut d: Vec<Block> = body
             .blocks
             .iter()
             .map(|b| Block {
@@ -295,8 +334,229 @@ impl<'a> Interp<'a> {
                     .unwrap_or(Term::General),
             })
             .collect();
+        self.fuse_checked(body, &mut d);
+        self.decode_calls(body, &mut d);
+        let d: std::rc::Rc<[Block]> = d.into();
         self.decoded.insert(key, d.clone());
         d
+    }
+
+    /// Folds each checked step whose pair only feeds its own overflow
+    /// switch and the copy of its result into a [`Term::Checked`]. A call
+    /// of a small arithmetic function otherwise makes a fresh pair for
+    /// every checked step in its frame and takes each apart again at
+    /// return, which is most of what such a call costs (B-2026-10-14-3).
+    fn fuse_checked(&self, body: &Body, blocks: &mut [Block]) {
+        let mut named: Option<Vec<u32>> = None;
+        let mut preds: Option<Vec<u32>> = None;
+        for bi in 0..blocks.len() {
+            let block = &body.blocks[bi];
+            let Some(last) = block.statements.len().checked_sub(1) else {
+                continue;
+            };
+            let Some(Op::Checked {
+                dst: pair,
+                op,
+                a,
+                b,
+                int,
+            }) = self.decode_statement(body, &block.statements[last].kind)
+            else {
+                continue;
+            };
+            let TerminatorKind::SwitchInt {
+                discr: Operand::Copy(flag),
+                targets,
+            } = &block.terminator.kind
+            else {
+                continue;
+            };
+            let [(0, ok)] = targets.values.as_slice() else {
+                continue;
+            };
+            if flag.local.0 != pair
+                || !matches!(
+                    flag.projection.as_slice(),
+                    [ProjElem::Field(FieldIdx(1), _)]
+                )
+                || ok.index() == bi
+            {
+                continue;
+            }
+            let Some(head) = body.blocks[ok.index()].statements.first() else {
+                continue;
+            };
+            let Some(Op::Use {
+                dst,
+                src: Src::Field(from, 0),
+            }) = self.decode_statement(body, &head.kind)
+            else {
+                continue;
+            };
+            if from != pair || dst == pair {
+                continue;
+            }
+            let named = named.get_or_insert_with(|| mentions(body));
+            let preds = preds.get_or_insert_with(|| predecessors(body));
+            // The checked step, the switch and the copy, and `ok` entered
+            // only from here.
+            if named[pair as usize] != 3 || preds[ok.index()] != 1 {
+                continue;
+            }
+            blocks[bi].ops[last] = Op::Fused;
+            blocks[bi].term = Term::Checked {
+                dst,
+                pair,
+                op,
+                a,
+                b,
+                int,
+                ok: *ok,
+            };
+            blocks[ok.index()].ops[0] = Op::FromPair { dst, pair };
+        }
+    }
+
+    /// Decodes each call of a function with a body whose arguments are
+    /// scalars or tuples of scalars behind a reference, and whose result
+    /// owns nothing: the general call looks the name up, reads each
+    /// argument through the general operand path and checks the result's
+    /// place, which is most of what calling a small function costs
+    /// (B-2026-10-14-3).
+    fn decode_calls(&mut self, body: &Body, blocks: &mut [Block]) {
+        let program: &'a Program = self.program;
+        for (bi, block) in body.blocks.iter().enumerate() {
+            if !matches!(blocks[bi].term, Term::General) {
+                continue;
+            }
+            let TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(inst),
+                        ..
+                    }),
+                args,
+                destination,
+                target: Some(target),
+                unwind: UnwindAction::Abort,
+            } = &block.terminator.kind
+            else {
+                continue;
+            };
+            let Some((name, callee)) = program.bodies.get_key_value(&inst.name) else {
+                continue;
+            };
+            if coroutine::is_resume(name)
+                || coroutine::is_drop_frame(name)
+                || !destination.projection.is_empty()
+                || args.len() != callee.arg_count
+                || self.needs_drop(body.local(destination.local).ty)
+            {
+                continue;
+            }
+            let Some(args) = args
+                .iter()
+                .map(|a| self.decode_arg(body, a))
+                .collect::<Option<Box<[Arg]>>>()
+            else {
+                continue;
+            };
+            let Ok(callee_ix) = u32::try_from(self.fast_callees.len()) else {
+                return;
+            };
+            self.fast_callees.push((name.as_str(), callee));
+            blocks[bi].term = Term::Call {
+                callee: callee_ix,
+                args,
+                dst: destination.local.0,
+                target: *target,
+            };
+        }
+    }
+
+    fn decode_arg(&self, body: &Body, a: &Operand) -> Option<Arg> {
+        if let Some((src, _)) = self.decode_src(body, a) {
+            return Some(Arg::Scalar(src));
+        }
+        let Operand::Copy(p) = a else {
+            return None;
+        };
+        let [ProjElem::Deref] = p.projection.as_slice() else {
+            return None;
+        };
+        let to = self.tys.pointee(body.local(p.local).ty)?;
+        let TyKind::Tuple(ts) = self.tys.kind(to) else {
+            return None;
+        };
+        (!ts.is_empty() && ts.iter().all(|t| plain_ty(self.tys, *t)))
+            .then_some(Arg::DerefTuple(p.local.0))
+    }
+
+    /// Runs a decoded call; `None` when an argument is not what the decoded
+    /// form reads, leaving the call, untouched, to the general terminator.
+    pub(super) fn fast_call(
+        &mut self,
+        callee: u32,
+        args: &[Arg],
+        dst: u32,
+        target: BasicBlock,
+    ) -> Option<R<Option<BasicBlock>>> {
+        let mut vals = self.small_buf();
+        for a in args {
+            let v = match *a {
+                Arg::Scalar(src) => self.peek(src).map(Scalar::value),
+                Arg::DerefTuple(l) => self.deref_tuple(l),
+            };
+            match v {
+                Some(v) => vals.push(v),
+                None => {
+                    for v in vals.drain(..) {
+                        self.recycle_value(v);
+                    }
+                    self.give_back(vals);
+                    return None;
+                }
+            }
+        }
+        for a in args {
+            if let Arg::Scalar(src) = *a {
+                self.take(src);
+            }
+        }
+        let (name, body) = self.fast_callees[callee as usize];
+        let ret = match self.call_body(name, body, vals) {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        let old = std::mem::replace(&mut self.locals()[dst as usize], ret);
+        self.recycle_value(old);
+        Some(Ok(Some(target)))
+    }
+
+    /// A copy of the tuple of scalars local `l` refers to, in a reused
+    /// buffer.
+    fn deref_tuple(&mut self, l: u32) -> Option<Value> {
+        let mut buf = self.small_buf();
+        let read = match self.frames.last().and_then(|f| f.locals.get(l as usize)) {
+            Some(Value::Ref(a)) => match self.slot_ref(a) {
+                Ok(Value::Agg(fs))
+                    if fs
+                        .iter()
+                        .all(|v| v.is_plain() && !matches!(v, Value::Uninit)) =>
+                {
+                    buf.extend(fs.iter().map(Value::copy));
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if read {
+            Some(Value::Agg(buf))
+        } else {
+            self.give_back(buf);
+            None
+        }
     }
 
     /// A bare local of a scalar type.
@@ -805,6 +1065,21 @@ impl<'a> Interp<'a> {
                 self.store_checked(dst, v, overflow);
                 true
             }
+            Op::Fused => true,
+            Op::FromPair { dst, pair } => {
+                let locals = self.locals();
+                match &locals[pair as usize] {
+                    Value::Uninit => true,
+                    Value::Agg(fs) => match fs.first() {
+                        Some(&Value::Int(i)) => {
+                            Value::overwrite(&mut locals[dst as usize], Value::Int(i));
+                            true
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                }
+            }
             Op::Live(l) => {
                 self.locals()[l as usize] = Value::Uninit;
                 true
@@ -847,6 +1122,31 @@ impl<'a> Interp<'a> {
                 };
                 self.take(*src);
                 Some(pick(targets, bits))
+            }
+            (
+                &Term::Checked {
+                    dst,
+                    pair,
+                    op,
+                    a,
+                    b,
+                    int,
+                    ok,
+                },
+                _,
+            ) => {
+                let (x, y) = (self.peek_int(a)?, self.peek_int(b)?);
+                let (v, false) = int_op(op, x, y, int)? else {
+                    return None;
+                };
+                self.take(a);
+                self.take(b);
+                let locals = self.locals();
+                if !matches!(locals[pair as usize], Value::Uninit) {
+                    locals[pair as usize] = Value::Uninit;
+                }
+                Value::overwrite(&mut locals[dst as usize], v);
+                Some(ok)
             }
             (
                 &Term::VecIndex {
@@ -898,6 +1198,109 @@ impl<'a> Interp<'a> {
             _ => None,
         }
     }
+}
+
+/// How many times `body` names each local: as a place written or read, an
+/// index, or a borrow. Storage markers do not count.
+fn mentions(body: &Body) -> Vec<u32> {
+    fn place(n: &mut [u32], p: &Place) {
+        n[p.local.index()] += 1;
+        for e in &p.projection {
+            if let ProjElem::Index(l) = e {
+                n[l.index()] += 1;
+            }
+        }
+    }
+    fn operand(n: &mut [u32], o: &Operand) {
+        if let Operand::Copy(p) | Operand::Move(p) = o {
+            place(n, p);
+        }
+    }
+    let mut n = vec![0u32; body.locals.len()];
+    for b in &body.blocks {
+        for s in &b.statements {
+            match &s.kind {
+                StatementKind::Assign(p, rv) => {
+                    place(&mut n, p);
+                    match rv {
+                        Rvalue::Ref(_, q)
+                        | Rvalue::Retain(q)
+                        | Rvalue::Discriminant(q)
+                        | Rvalue::Len(q) => place(&mut n, q),
+                        Rvalue::Use(o) | Rvalue::UnaryOp(_, o) | Rvalue::Cast(_, o, _) => {
+                            operand(&mut n, o)
+                        }
+                        Rvalue::BinaryOp(_, x, y) | Rvalue::CheckedBinaryOp(_, x, y) => {
+                            operand(&mut n, x);
+                            operand(&mut n, y);
+                        }
+                        Rvalue::Aggregate(_, ops) => {
+                            for o in ops {
+                                operand(&mut n, o);
+                            }
+                        }
+                        Rvalue::NullaryOp(..) => {}
+                    }
+                }
+                StatementKind::SetDiscriminant(p, _)
+                | StatementKind::FreeBox(p)
+                | StatementKind::BorrowFlag(
+                    FlagOp::Acquire { place: p, .. } | FlagOp::Check { place: p, .. },
+                ) => place(&mut n, p),
+                StatementKind::BorrowFlag(FlagOp::Release { .. })
+                | StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(_)
+                | StatementKind::Nop => {}
+            }
+        }
+        match &b.terminator.kind {
+            TerminatorKind::SwitchInt { discr, .. } => operand(&mut n, discr),
+            TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                ..
+            } => {
+                operand(&mut n, func);
+                for o in args {
+                    operand(&mut n, o);
+                }
+                place(&mut n, destination);
+            }
+            TerminatorKind::Drop { place: p, .. } => place(&mut n, p),
+            TerminatorKind::Goto { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Abort { .. }
+            | TerminatorKind::Unreachable => {}
+        }
+    }
+    n
+}
+
+/// How many edges enter each block of `body`.
+fn predecessors(body: &Body) -> Vec<u32> {
+    let mut n = vec![0u32; body.blocks.len()];
+    for b in &body.blocks {
+        match &b.terminator.kind {
+            TerminatorKind::Goto { target } | TerminatorKind::Drop { target, .. } => {
+                n[target.index()] += 1
+            }
+            TerminatorKind::SwitchInt { targets, .. } => {
+                for (_, t) in &targets.values {
+                    n[t.index()] += 1;
+                }
+                n[targets.otherwise.index()] += 1;
+            }
+            TerminatorKind::Call { target, .. } => {
+                if let Some(t) = target {
+                    n[t.index()] += 1;
+                }
+            }
+            TerminatorKind::Return | TerminatorKind::Abort { .. } | TerminatorKind::Unreachable => {
+            }
+        }
+    }
+    n
 }
 
 /// The block a `switchInt` on `bits` goes to.

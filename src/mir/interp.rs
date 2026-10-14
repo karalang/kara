@@ -564,6 +564,7 @@ fn run_with(
         spare_locals: Vec::new(),
         spare_bufs: Vec::new(),
         callees: Default::default(),
+        fast_callees: Vec::new(),
         decoded: Default::default(),
         droppable: Default::default(),
         heap: Vec::new(),
@@ -822,6 +823,9 @@ struct Interp<'a> {
     /// address of the name in the program (which outlives the run), so a
     /// call does not search the body map by string.
     callees: rustc_hash::FxHashMap<usize, Option<&'a Body>>,
+    /// The functions a decoded call ([`fast::Term::Call`]) names, by the
+    /// index it holds.
+    fast_callees: Vec<(&'a str, &'a Body)>,
     /// Each body's decoded scalar steps ([`fast`]), keyed by its address,
     /// made on its first call.
     decoded: rustc_hash::FxHashMap<usize, std::rc::Rc<[fast::Block]>>,
@@ -6979,8 +6983,9 @@ impl<'a> Interp<'a> {
         loop {
             let block = body.block(bb);
             let fast_block = &decoded[bb.index()];
+            // The block's statements and its terminator, counted at once.
+            self.tick_n(fast_block.ops.len() as u64 + 1)?;
             for (i, op) in fast_block.ops.iter().enumerate() {
-                self.tick()?;
                 if self.fast_op(op) {
                     continue;
                 }
@@ -6989,13 +6994,31 @@ impl<'a> Interp<'a> {
                     .map_err(|s| self.report_abort(s, st.source_info.span))
                     .map_err(|s| locate(s, body, format!("{bb}[{i}]")))?;
             }
-            self.tick()?;
             if let Some(b) = self.fast_term(&fast_block.term, &block.terminator.kind) {
                 bb = b;
                 continue;
             }
             let next = match fast_block.term {
                 fast::Term::Native { ret } => self.native_call(body, &block.terminator.kind, ret),
+                fast::Term::Call {
+                    callee,
+                    ref args,
+                    dst,
+                    target,
+                } => match self.fast_call(callee, args, dst, target) {
+                    Some(next) => next,
+                    None => self.terminator(body, &block.terminator.kind, strict),
+                },
+                // The checked step the fast terminator stood in for, then
+                // the switch on its flag.
+                fast::Term::Checked { .. } => {
+                    let i = block.statements.len() - 1;
+                    let st = &block.statements[i];
+                    self.statement(body, &st.kind)
+                        .map_err(|s| self.report_abort(s, st.source_info.span))
+                        .map_err(|s| locate(s, body, format!("{bb}[{i}]")))?;
+                    self.terminator(body, &block.terminator.kind, strict)
+                }
                 _ => self.terminator(body, &block.terminator.kind, strict),
             };
             let next = next
@@ -7070,6 +7093,15 @@ impl<'a> Interp<'a> {
             }
         }
         s
+    }
+
+    #[inline(always)]
+    fn tick_n(&mut self, n: u64) -> R<()> {
+        self.steps += n;
+        if self.steps > self.max_steps {
+            return err("step limit exceeded");
+        }
+        Ok(())
     }
 
     fn tick(&mut self) -> R<()> {

@@ -932,3 +932,56 @@ fn main() {{
         "{err:?}"
     );
 }
+
+// B-2026-10-14-3: the interpreter's decoded calls of small functions
+// (tuple arguments read through a `Vec` element's reference, a tuple or
+// scalar result) and its checked steps folded into their overflow switch
+// give what the general steps give, and an overflow inside such a call
+// still aborts.
+#[test]
+fn mir_decoded_calls_and_checked_steps() {
+    const SRC: &str = r#"fn dist(a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - b.0) * (a.0 - b.0) + (a.1 - b.1) * (a.1 - b.1)
+}
+fn mid(a: (i64, i64), b: (i64, i64)) -> (i64, i64) {
+    ((a.0 + b.0) / 2, (a.1 + b.1) / 2)
+}
+fn square(x: i64) -> i64 { x * x }
+fn main() {
+    let ps: Vec[(i64, i64)] = vec![(0, 0), (3, 4), (-6, 8)];
+    let mut total = 0;
+    for i in 0..ps.len() {
+        for j in 0..ps.len() {
+            total += dist(ps[i], ps[j]);
+        }
+    }
+    let m = mid(ps[1], ps[2]);
+    println(f"{total} {m.0} {m.1} {square(-7)}");
+}
+"#;
+    let want = "444 -1 6 49\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+    const OVERFLOW: &str = r#"fn square(x: i64) -> i64 { x * x }
+fn main() {
+    let mut t = 0;
+    for i in 0..3 {
+        t += square(i);
+    }
+    println(f"{t}");
+    println(f"{square(3037000500)}");
+}
+"#;
+    let r = karac::mir::lower::run_source(OVERFLOW).expect("MIR interpreter");
+    assert_eq!(r.output, "5\n");
+    assert!(
+        matches!(r.outcome, karac::mir::interp::Outcome::Aborted(ref why) if format!("{why:?}").contains("Overflow")),
+        "{:?}",
+        r.outcome
+    );
+}
