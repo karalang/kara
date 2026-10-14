@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 172 |
 | perf | 164 |
 | false-positive | 161 |
-| diagnostics | 155 |
+| diagnostics | 156 |
 | crash | 114 |
 | soundness | 101 |
 | use-after-free | 90 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2876 |
 | interp | 915 |
-| typecheck | 390 |
+| typecheck | 391 |
 | other | 115 |
 | ownership | 87 |
 | cli | 75 |
@@ -609,6 +609,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-14 | 2026-10-14 | codegen | medium | `Vec.with_capacity(n)` and `String.with_capacity(n)` reserve nothing on the MIR compiled backend: `Vec.with_capacity(5).capacity()` prints 0 under `__mir-llvm-run` and 5 under `__mir-run`, and presizing buys nothing -- kata 559's bench walk runs 2.37 to 2.45 s with each node's children `Vec` presized, the same as without, where the Rust mirror drops from 2.0 s to 0.82 to 0.87 s | — |
 | B-2026-10-14-15 | 2026-10-14 | interp | medium | The MIR interpreter has no `chunks` or `windows` on a `Vec` receiver: `v.chunks(2)` and `v.windows(2)` on a `Vec[i64]` stop `__mir-run` with "call of unknown function Vec[i64].chunks" (and `.windows`), while `karac check` passes them, `__mir-llvm-run` runs them, and the same calls on a `Slice[i64]` run on `__mir-run` | — |
 | B-2026-10-14-17 | 2026-10-14 | interp+codegen | medium | `collect()` into a `VecDeque` fails on both MIR backends: `__mir-run` stops with "expected a library value, found Agg(...)" in `IterMap[..].collect[i64, VecDeque[i64]]`, and `__mir-llvm-run` with "native `VecDeque[i64].from_iter` is not lowered yet" | — |
+| B-2026-10-14-18 | 2026-10-14 | typecheck | medium | `karac check` accepts `flatten()` over an iterator whose items are collections, `mat.iter().flatten()` on a `Vec[Vec[i64]]`, but the spec's signature (`where Self.Item: Iterator`) excludes it and both MIR backends refuse it: a program that passes `karac check` does not run | — |
 
 ### Relocated
 
