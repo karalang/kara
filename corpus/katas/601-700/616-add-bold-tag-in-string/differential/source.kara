@@ -1,0 +1,310 @@
+// LeetCode #616: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// strings and words.
+
+// ---- star arm ----------------------------------------------------------
+
+fn add_bold_tag_star(s: Str, words: Vec[String]) -> String {
+    let n = s.len();
+    let mut bold = vec![false; n];
+    for i in 0..n {
+        for word in words.iter() {
+            if s[i..n].starts_with(word) {
+                for k in i..i + word.len() {
+                    bold[k] = true;
+                }
+            }
+        }
+    }
+    let mut out = String.new();
+    for i in 0..n {
+        if bold[i] and (i == 0 or not bold[i - 1]) {
+            out.push_str("<b>");
+        }
+        out.push_str(s[i..i + 1]);
+        if bold[i] and (i == n - 1 or not bold[i + 1]) {
+            out.push_str("</b>");
+        }
+    }
+    out
+}
+
+// ---- merge arm ---------------------------------------------------------
+
+fn add_bold_tag_merge(s: Str, words: Vec[String]) -> String {
+    let n = s.len();
+    let mut spans: Vec[(i64, i64)] = Vec.new();
+    for word in words.iter() {
+        let m = word.len();
+        for i in 0..n - m + 1 {
+            if s[i..i + m] == word.as_str() {
+                spans.push((i, i + m));
+            }
+        }
+    }
+    spans.sort();
+    let mut merged: Vec[(i64, i64)] = Vec.new();
+    for span in spans.iter() {
+        let last = merged.len() - 1;
+        if merged.len() > 0 and span.0 <= merged[last].1 {
+            if span.1 > merged[last].1 {
+                merged[last].1 = span.1;
+            }
+        } else {
+            merged.push(*span);
+        }
+    }
+    let mut out = String.new();
+    let mut at = 0;
+    for span in merged.iter() {
+        out.push_str(s[at..span.0]);
+        out.push_str("<b>");
+        out.push_str(s[span.0..span.1]);
+        out.push_str("</b>");
+        at = span.1;
+    }
+    out.push_str(s[at..n]);
+    out
+}
+
+// ---- reach arm ---------------------------------------------------------
+
+fn add_bold_tag_reach(s: Str, words: Vec[String]) -> String {
+    let n = s.len();
+    let mut bold = vec![false; n];
+    let mut reach = 0;
+    for i in 0..n {
+        for word in words.iter() {
+            if s[i..n].starts_with(word) and i + word.len() > reach {
+                reach = i + word.len();
+            }
+        }
+        bold[i] = reach > i;
+    }
+    let mut out = String.new();
+    let mut i = 0;
+    while i < n {
+        let mut j = i;
+        while j < n and bold[j] == bold[i] {
+            j += 1;
+        }
+        if bold[i] {
+            out.push_str(f"<b>{s[i..j]}</b>");
+        } else {
+            out.push_str(s[i..j]);
+        }
+        i = j;
+    }
+    out
+}
+
+// ---- trie arm ----------------------------------------------------------
+
+fn add_bold_tag_trie(s: Str, words: Vec[String]) -> String {
+    let mut next: Vec[Map[char, i64]] = vec![Map.new()];
+    let mut ends = vec![false];
+    for word in words.iter() {
+        let mut node = 0;
+        for c in word.chars() {
+            if not next[node].contains_key(c) {
+                next.push(Map.new());
+                ends.push(false);
+                let fresh = next.len() - 1;
+                next[node].insert(c, fresh);
+            }
+            node = next[node][c];
+        }
+        ends[node] = true;
+    }
+    let chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut bold = vec![false; n];
+    for i in 0..n {
+        let mut node = 0;
+        let mut longest = 0;
+        let mut k = i;
+        while k < n and next[node].contains_key(chars[k]) {
+            node = next[node][chars[k]];
+            k += 1;
+            if ends[node] {
+                longest = k - i;
+            }
+        }
+        for j in i..i + longest {
+            bold[j] = true;
+        }
+    }
+    let mut out = String.new();
+    let mut open = false;
+    for i in 0..n {
+        if bold[i] != open {
+            out.push_str(if open { "</b>" } else { "<b>" });
+            open = bold[i];
+        }
+        out.push(chars[i]);
+    }
+    if open {
+        out.push_str("</b>");
+    }
+    out
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, s: Str, words: Vec[String]) -> String {
+    if which == 0 {
+        add_bold_tag_star(s, words)
+    } else if which == 1 {
+        add_bold_tag_merge(s, words)
+    } else if which == 2 {
+        add_bold_tag_reach(s, words)
+    } else {
+        add_bold_tag_trie(s, words)
+    }
+}
+
+// The definition: a character is bold when an occurrence of some word
+// covers it, an occurrence found by comparing the word with `s` a
+// character at a time at every start; then a `<b>` goes before every
+// bold character whose left neighbour is not bold, and a `</b>` after
+// every bold character whose right neighbour is not.
+fn definition(s: Str, words: Vec[String]) -> String {
+    let text: Vec[char] = s.chars().collect();
+    let n = text.len();
+    let mut covered = vec![false; n];
+    for word in words.iter() {
+        let w: Vec[char] = word.chars().collect();
+        for start in 0..n {
+            let mut whole = start + w.len() <= n;
+            let mut k = 0;
+            while whole and k < w.len() {
+                if text[start + k] != w[k] {
+                    whole = false;
+                }
+                k += 1;
+            }
+            if whole {
+                for p in start..start + w.len() {
+                    covered[p] = true;
+                }
+            }
+        }
+    }
+    let mut out = String.new();
+    for p in 0..n {
+        if covered[p] and (p == 0 or not covered[p - 1]) {
+            out.push_str("<b>");
+        }
+        out.push(text[p]);
+        if covered[p] and (p + 1 == n or not covered[p + 1]) {
+            out.push_str("</b>");
+        }
+    }
+    out
+}
+
+// The tags alternate, an opening one first and a closing one last, and
+// no run is empty or touches the next: no `<b></b>` and no `</b><b>`.
+fn well_formed(out: Str) -> bool {
+    let mut open = false;
+    let mut i = 0;
+    while i < out.len() {
+        let rest = out[i..out.len()];
+        if rest.starts_with("<b>") {
+            if open or rest[3..rest.len()].starts_with("</b>") {
+                return false;
+            }
+            open = true;
+            i += 3;
+        } else if rest.starts_with("</b>") {
+            if not open or rest[4..rest.len()].starts_with("<b>") {
+                return false;
+            }
+            open = false;
+            i += 4;
+        } else {
+            i += 1;
+        }
+    }
+    not open
+}
+
+// A random string of `size` characters from the first `kinds` of a, b
+// and c.
+fn random_text(size: i64, kinds: i64, seed: mut ref i64) -> String {
+    let mut t = String.new();
+    for _ in 0..size {
+        t.push(((97 + step(seed) % kinds) as u8) as char);
+    }
+    t
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6160;
+    let mut checks = 0;
+    let mut bolded = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 12 characters from a and b or from a to c, and 0 to 5
+        // distinct words of 1 to 4 characters from the same letters.
+        let kinds = 2 + step(mut seed) % 2;
+        let size = 1 + step(mut seed) % 12;
+        let s = random_text(size, kinds, mut seed);
+        let mut words: Vec[String] = Vec.new();
+        let many = step(mut seed) % 6;
+        for _ in 0..many {
+            let length = 1 + step(mut seed) % 4;
+            let w = random_text(length, kinds, mut seed);
+            if not words.contains(w) {
+                words.push(w);
+            }
+        }
+        let want = definition(s, words);
+        if want.contains("<b>") {
+            bolded += 1;
+        }
+        // P4: the words in reverse order, and a word that cannot occur.
+        let mut reordered = words.clone();
+        reordered.reverse();
+        reordered.push("x".to_string());
+        // P5: the string itself as one more word.
+        let mut whole = words.clone();
+        if not whole.contains(s) {
+            whole.push(s.clone());
+        }
+        for which in 0..4 {
+            let got = answer(which, s, words);
+            let ok = vec![
+                // P1: the definition's string.
+                got == want,
+                // P2: without its tags, the string itself.
+                got.replace("<b>", "").replace("</b>", "") == s,
+                // P3: the tags well formed and the runs apart.
+                well_formed(got),
+                // P4: the order of the words, and a word that never
+                // occurs, change nothing.
+                answer(which, s, reordered) == got,
+                // P5: with the string itself a word, all of it is bold.
+                answer(which, s, whole) == f"<b>{s}</b>",
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({bolded} with bold), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

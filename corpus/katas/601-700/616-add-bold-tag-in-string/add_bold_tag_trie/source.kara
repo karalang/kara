@@ -1,0 +1,157 @@
+// LeetCode #616: Add Bold Tag in String -- a trie of the words.
+//
+// Put the words in a trie, each node a map from a character to the
+// next node and a flag for a word ending there. From each position of
+// `s`, walk the trie as far as the characters allow and mark up to the
+// longest word that ends on the way. Then write `s` out a character at
+// a time, opening and closing the tags at the ends of each marked run.
+// O(n * the longest word).
+
+fn add_bold_tag(s: Str, words: Vec[String]) -> String {
+    let mut next: Vec[Map[char, i64]] = vec![Map.new()];
+    let mut ends = vec![false];
+    for word in words.iter() {
+        let mut node = 0;
+        for c in word.chars() {
+            if not next[node].contains_key(c) {
+                next.push(Map.new());
+                ends.push(false);
+                let fresh = next.len() - 1;
+                next[node].insert(c, fresh);
+            }
+            node = next[node][c];
+        }
+        ends[node] = true;
+    }
+    let chars: Vec[char] = s.chars().collect();
+    let n = chars.len();
+    let mut bold = vec![false; n];
+    for i in 0..n {
+        let mut node = 0;
+        let mut longest = 0;
+        let mut k = i;
+        while k < n and next[node].contains_key(chars[k]) {
+            node = next[node][chars[k]];
+            k += 1;
+            if ends[node] {
+                longest = k - i;
+            }
+        }
+        for j in i..i + longest {
+            bold[j] = true;
+        }
+    }
+    let mut out = String.new();
+    let mut open = false;
+    for i in 0..n {
+        if bold[i] != open {
+            out.push_str(if open { "</b>" } else { "<b>" });
+            open = bold[i];
+        }
+        out.push(chars[i]);
+    }
+    if open {
+        out.push_str("</b>");
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: Str, words: Vec[String]) {
+    println(f"{s} {words} -> {add_bold_tag(s, words)}");
+}
+
+// A random string of `size` characters from the first `kinds` of a, b,
+// c and d.
+fn random_text(size: i64, kinds: i64, seed: mut ref i64) -> String {
+    let mut t = String.new();
+    for _ in 0..size {
+        t.push(((97 + step(seed) % kinds) as u8) as char);
+    }
+    t
+}
+
+// How many bold runs a written string opens.
+fn runs(out: Str) -> i64 {
+    let mut count = 0;
+    for i in 0..out.len() {
+        if out[i..out.len()].starts_with("<b>") {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn main() {
+    // The LeetCode examples.
+    show("abcxyz123", vec!["abc".to_string(), "123".to_string()]);
+    show("aaabbb", vec!["aa".to_string(), "b".to_string()]);
+    // No words; a word longer than the string; occurrences that touch,
+    // that overlap, and that cover everything; a word that never occurs;
+    // one occurrence inside another; a single character.
+    show("abc", vec![]);
+    show("ab", vec!["abc".to_string()]);
+    show("abcd", vec!["ab".to_string(), "cd".to_string()]);
+    show("aaaa", vec!["aaa".to_string()]);
+    show("xyz", vec!["xyz".to_string()]);
+    show("abcabc", vec!["cab".to_string(), "zz".to_string()]);
+    show("abcdef", vec!["bcde".to_string(), "cd".to_string()]);
+    show("a", vec!["a".to_string()]);
+    show("a1b2c3", vec!["1".to_string(), "3".to_string(), "b2".to_string()]);
+    // 300 random strings of 1 to 30 characters from a to b, c or d, each
+    // with 0 to 5 random words of 1 to 4 characters.
+    let mut seed: i64 = 616;
+    let mut total = 0;
+    let mut tags = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let kinds = 2 + step(mut seed) % 3;
+        let size = 1 + step(mut seed) % 30;
+        let s = random_text(size, kinds, mut seed);
+        let mut words: Vec[String] = Vec.new();
+        let count = step(mut seed) % 6;
+        for _ in 0..count {
+            let length = 1 + step(mut seed) % 4;
+            let w = random_text(length, kinds, mut seed);
+            if not words.contains(w) {
+                words.push(w);
+            }
+        }
+        let out = add_bold_tag(s, words);
+        total += out.len();
+        tags += runs(out);
+        for c in out.chars() {
+            checksum = (checksum * 31 + c as i64) % 1000000007;
+        }
+    }
+    println(f"300 random strings: {total} characters, {tags} bold runs, checksum {checksum}");
+    // The problem's largest: a string of 1,000 characters from a to d
+    // and 100 words of 5 to 14 characters, each cut from it or made at
+    // random.
+    let big = random_text(1000, 4, mut seed);
+    let mut words: Vec[String] = Vec.new();
+    while words.len() < 100 {
+        let length = 5 + step(mut seed) % 10;
+        let w = if step(mut seed) % 2 == 0 {
+            let at = step(mut seed) % (1000 - length);
+            big[at..at + length].to_string()
+        } else {
+            random_text(length, 4, mut seed)
+        };
+        if not words.contains(w) {
+            words.push(w);
+        }
+    }
+    let out = add_bold_tag(big, words);
+    let mut h: i64 = 0;
+    for c in out.chars() {
+        h = (h * 31 + c as i64) % 1000000007;
+    }
+    println(f"1000 characters, 100 words: {out.len()} characters, {runs(out)} bold runs, checksum {h}");
+}

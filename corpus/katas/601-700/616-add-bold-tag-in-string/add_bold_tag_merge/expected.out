@@ -1,0 +1,13 @@
+abcxyz123 [abc, 123] -> <b>abc</b>xyz<b>123</b>
+aaabbb [aa, b] -> <b>aaabbb</b>
+abc [] -> abc
+ab [abc] -> ab
+abcd [ab, cd] -> <b>abcd</b>
+aaaa [aaa] -> <b>aaaa</b>
+xyz [xyz] -> <b>xyz</b>
+abcabc [cab, zz] -> ab<b>cab</b>c
+abcdef [bcde, cd] -> a<b>bcde</b>f
+a [a] -> <b>a</b>
+a1b2c3 [1, 3, b2] -> a<b>1b2</b>c<b>3</b>
+300 random strings: 8753 characters, 567 bold runs, checksum 188398908
+1000 characters, 100 words: 1259 characters, 37 bold runs, checksum 451365782

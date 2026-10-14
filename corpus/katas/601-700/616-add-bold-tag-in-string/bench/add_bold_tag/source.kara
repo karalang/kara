@@ -1,0 +1,82 @@
+// Benchmark for #616: the ★ arm (mark, then write); see
+// add_bold_tag.kara.
+
+fn add_bold_tag(s: Str, words: Vec[String]) -> String {
+    let n = s.len();
+    let mut bold = vec![false; n];
+    for i in 0..n {
+        for word in words.iter() {
+            if s[i..n].starts_with(word) {
+                for k in i..i + word.len() {
+                    bold[k] = true;
+                }
+            }
+        }
+    }
+    let mut out = String.new();
+    for i in 0..n {
+        if bold[i] and (i == 0 or not bold[i - 1]) {
+            out.push_str("<b>");
+        }
+        out.push_str(s[i..i + 1]);
+        if bold[i] and (i == n - 1 or not bold[i + 1]) {
+            out.push_str("</b>");
+        }
+    }
+    out
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_text(size: i64, seed: mut ref i64) -> String {
+    let mut t = String.new();
+    for _ in 0..size {
+        t.push(((97 + step(seed) % 4) as u8) as char);
+    }
+    t
+}
+
+fn main() {
+    // 20 cases, each a string of 1,000 characters from a to d and 100
+    // words of 5 to 14 characters, half cut from the string and half
+    // made at random, made once; then 1,000 times writes one of them out,
+    // picked by the round, adding up the lengths and putting every
+    // character into a checksum.
+    let cases = 20;
+    let rounds = 1000;
+    let mut seed: i64 = 616;
+    let mut texts: Vec[String] = Vec.new();
+    let mut lists: Vec[Vec[String]] = Vec.new();
+    for _ in 0..cases {
+        let s = random_text(1000, mut seed);
+        let mut words: Vec[String] = Vec.new();
+        while words.len() < 100 {
+            let length = 5 + step(mut seed) % 10;
+            let w = if words.len() % 2 == 0 {
+                let at = step(mut seed) % (1000 - length);
+                s[at..at + length].to_string()
+            } else {
+                random_text(length, mut seed)
+            };
+            if not words.contains(w) {
+                words.push(w);
+            }
+        }
+        texts.push(s);
+        lists.push(words);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let c = (r * 7) % cases;
+        let out = add_bold_tag(texts[c], lists[c]);
+        total += out.len();
+        for ch in out.chars() {
+            checksum = (checksum * 31 + ch as i64) % 1000000007;
+        }
+    }
+    println(f"{cases} cases, {rounds} rounds: {total} characters, checksum {checksum}");
+}
