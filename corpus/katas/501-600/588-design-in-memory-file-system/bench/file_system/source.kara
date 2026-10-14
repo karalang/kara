@@ -1,0 +1,168 @@
+// Benchmark for #588: Design In-Memory File System -- the ★ arm (a
+// tree of shared nodes).
+//
+// Each directory and file is a `shared` node, so a handle to one can
+// be held while walking down from the root and changed in place. A
+// directory keeps its entries in a `SortedMap` by name, which gives
+// `ls` its order. Every operation walks the path once: O(path length)
+// for each step, plus the entries listed or the content read.
+
+shared struct Node {
+    mut is_file: bool,
+    mut content: String,
+    mut children: SortedMap[String, Node],
+}
+
+fn new_node() -> Node {
+    Node { is_file: false, content: String.new(), children: SortedMap.new() }
+}
+
+struct FileSystem {
+    root: Node,
+}
+
+impl FileSystem {
+    fn new() -> FileSystem {
+        FileSystem { root: new_node() }
+    }
+
+    // The node at `path`, made along the way where missing when `make`
+    // is set.
+    fn walk(self, path: Str, make: bool) -> Node {
+        let mut node = self.root;
+        for name in path.split("/") {
+            if name.is_empty() {
+                continue;
+            }
+            if make and not node.children.contains_key(name) {
+                node.children.insert(name.to_string(), new_node());
+            }
+            node = node.children[name];
+        }
+        node
+    }
+
+    fn ls(self, path: Str) -> Vec[String] {
+        let node = self.walk(path, false);
+        if node.is_file {
+            return vec![path.split("/").last().unwrap().to_string()];
+        }
+        let mut names: Vec[String] = Vec.new();
+        for name in node.children.keys() {
+            names.push(name.clone());
+        }
+        names
+    }
+
+    fn mkdir(mut ref self, path: Str) {
+        self.walk(path, true);
+    }
+
+    fn add_content_to_file(mut ref self, file_path: Str, content: Str) {
+        let node = self.walk(file_path, true);
+        node.is_file = true;
+        node.content.push_str(content);
+    }
+
+    fn read_content_from_file(self, file_path: Str) -> String {
+        self.walk(file_path, false).content.clone()
+    }
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+enum Op {
+    Ls(String),
+    Mkdir(String),
+    Add(String, String),
+    Read(String),
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A path of `depth` directory names from `a` to `e`.
+fn dir_path(depth: i64, seed: mut ref i64) -> String {
+    let alphabet = "abcde";
+    let mut path = String.new();
+    for _ in 0..depth {
+        let k = next_random(seed) % 5;
+        path.push_str("/");
+        path.push_str(alphabet[k..k + 1]);
+    }
+    path
+}
+
+// A script of 300 commands (the problem's most). Directories are named
+// `a` to `e` and files `f` to `j`, so no path is ever both; `ls` and
+// `read` ask only about paths already made.
+fn script(seed: mut ref i64) -> Vec[Op] {
+    let names = "fghij";
+    let mut made: Vec[String] = vec!["/".to_string()];
+    let mut files: Vec[String] = Vec.new();
+    let mut ops: Vec[Op] = Vec.new();
+    while ops.len() < 300 {
+        let roll = next_random(seed) % 10;
+        if roll < 3 {
+            ops.push(Op.Ls(made[next_random(seed) % made.len()].clone()));
+        } else if roll < 4 and not files.is_empty() {
+            ops.push(Op.Read(files[next_random(seed) % files.len()].clone()));
+        } else if roll < 7 {
+            let path = dir_path(1 + next_random(seed) % 4, seed);
+            made.push(path.clone());
+            ops.push(Op.Mkdir(path));
+        } else {
+            let k = next_random(seed) % 5;
+            let path = f"{dir_path(next_random(seed) % 4, seed)}/{names[k..k + 1]}";
+            let mut content = String.new();
+            for _ in 0..1 + next_random(seed) % 5 {
+                let c = next_random(seed) % 5;
+                content.push_str(names[c..c + 1]);
+            }
+            made.push(path.clone());
+            files.push(path.clone());
+            ops.push(Op.Add(path, content));
+        }
+    }
+    ops
+}
+
+fn main() {
+    // 200 scripts built once; then 200 times over each is run on a new
+    // file system, and every listing and content is folded into a
+    // checksum.
+    let count = 200;
+    let rounds = 200;
+    let mut seed: i64 = 588;
+    let mut scripts: Vec[Vec[Op]] = Vec.new();
+    for _ in 0..count {
+        scripts.push(script(mut seed));
+    }
+    let mut lines = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let ops = ref scripts[(round * 7 + g) % count];
+            let mut fs = FileSystem.new();
+            for op in ops.iter() {
+                match op {
+                    Op.Ls(path) => {
+                        for name in fs.ls(path).iter() {
+                            checksum = (checksum * 31 + name.len()) % 1000000007;
+                        }
+                        lines += 1;
+                    }
+                    Op.Mkdir(path) => fs.mkdir(path),
+                    Op.Add(path, content) => fs.add_content_to_file(path, content),
+                    Op.Read(path) => {
+                        checksum = (checksum * 31 + fs.read_content_from_file(path).len()) % 1000000007;
+                        lines += 1;
+                    }
+                }
+            }
+        }
+    }
+    println(f"{count} scripts of 300 commands, {rounds} rounds: {lines} answers, checksum {checksum}");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/588-design-in-memory-file-system/file_system_owned.kara"
+dedup_of = []
+expect = "error:E0219"
+exit = 1
+tags = ["move-from-borrow", "ref-return", "lib:set", "lib:sortedmap", "io:fs"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "27945a387"
+extracted_src = "d281b1f7"
+model_rev = "1aa23105"
+model_src = "d281b1f7"

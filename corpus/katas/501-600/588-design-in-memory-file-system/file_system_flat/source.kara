@@ -1,0 +1,245 @@
+// LeetCode #588: Design In-Memory File System -- flat tables of
+// paths.
+//
+// No tree at all: a `Map` from each file's full path to its content,
+// and a `Set` of every directory's full path. Making a path adds each
+// directory on it to the set. `ls` of a directory scans both tables
+// for the paths one level below it and sorts their last names. O(path)
+// for `mkdir`, `add` and `read`; O(every path) for `ls`.
+
+struct FileSystem {
+    files: Map[String, String],
+    dirs: Set[String],
+}
+
+// The full path of every directory above `path`, the root left out.
+fn parents(path: Str) -> Vec[String] {
+    let mut found: Vec[String] = Vec.new();
+    for i in 1..path.len() {
+        if path[i..i + 1] == "/" {
+            found.push(path[0..i].to_string());
+        }
+    }
+    found
+}
+
+impl FileSystem {
+    fn new() -> FileSystem {
+        FileSystem { files: Map.new(), dirs: Set.new() }
+    }
+
+    fn ls(self, path: Str) -> Vec[String] {
+        if self.files.contains_key(path) {
+            return vec![path.split("/").last().unwrap().to_string()];
+        }
+        let prefix = if path == "/" { "/".to_string() } else { f"{path}/" };
+        let mut names: Vec[String] = Vec.new();
+        for full in self.files.keys() {
+            if full.starts_with(prefix) and not full[prefix.len()..].contains("/") {
+                names.push(full[prefix.len()..].to_string());
+            }
+        }
+        for full in self.dirs.iter() {
+            if full.starts_with(prefix) and not full[prefix.len()..].contains("/") {
+                names.push(full[prefix.len()..].to_string());
+            }
+        }
+        names.sort();
+        names
+    }
+
+    fn mkdir(mut ref self, path: Str) {
+        for dir in parents(path).into_iter() {
+            self.dirs.insert(dir);
+        }
+        self.dirs.insert(path.to_string());
+    }
+
+    fn add_content_to_file(mut ref self, file_path: Str, content: Str) {
+        for dir in parents(file_path).into_iter() {
+            self.dirs.insert(dir);
+        }
+        if not self.files.contains_key(file_path) {
+            self.files.insert(file_path.to_string(), String.new());
+        }
+        self.files[file_path.to_string()].push_str(content);
+    }
+
+    fn read_content_from_file(self, file_path: Str) -> String {
+        self.files[file_path.to_string()].clone()
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+enum Op {
+    Ls(String),
+    Mkdir(String),
+    Add(String, String),
+    Read(String),
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Runs one command and returns what it prints: a listing, joined by
+// spaces in brackets, or a file's content; nothing for the others.
+fn run(fs: mut ref FileSystem, command: Op) -> Option[String] {
+    match command {
+        Op.Ls(path) => Some(f"[{fs.ls(path).join(" ")}]"),
+        Op.Mkdir(path) => {
+            fs.mkdir(path);
+            None
+        }
+        Op.Add(path, content) => {
+            fs.add_content_to_file(path, content);
+            None
+        }
+        Op.Read(path) => Some(fs.read_content_from_file(path)),
+    }
+}
+
+fn run_all(commands: Vec[Op]) -> Vec[String] {
+    let mut fs = FileSystem.new();
+    let mut printed: Vec[String] = Vec.new();
+    for command in commands.iter() {
+        if let Some(out) = run(mut fs, command) {
+            printed.push(out);
+        }
+    }
+    printed
+}
+
+fn show(name: Str, commands: Vec[Op]) {
+    println(f"{name}: {run_all(commands).join(" ")}");
+}
+
+fn ls(path: Str) -> Op {
+    Op.Ls(path.to_string())
+}
+
+fn mkdir(path: Str) -> Op {
+    Op.Mkdir(path.to_string())
+}
+
+fn add(path: Str, content: Str) -> Op {
+    Op.Add(path.to_string(), content.to_string())
+}
+
+fn read(path: Str) -> Op {
+    Op.Read(path.to_string())
+}
+
+// A random script of `count` commands over names drawn from the first
+// `letters` letters, at most `depth` deep. It lists and reads only
+// paths it has made, and never makes a directory where a file is or
+// the reverse, so it stays within what the problem allows.
+fn script(count: i64, letters: i64, depth: i64, seed: mut ref i64) -> Vec[Op] {
+    let alphabet = "abcdefghij";
+    let mut files: Set[String] = Set.new();
+    let mut dirs: Set[String] = Set.new();
+    let mut made: Vec[String] = vec!["/".to_string()];
+    let mut commands: Vec[Op] = Vec.new();
+    while commands.len() < count {
+        let roll = step(seed) % 10;
+        if roll < 4 {
+            let path = made[step(seed) % made.len()].clone();
+            if roll < 2 or not files.contains(path) {
+                commands.push(Op.Ls(path));
+            } else {
+                commands.push(Op.Read(path));
+            }
+            continue;
+        }
+        let is_file = roll >= 7;
+        let length = 1 + step(seed) % depth;
+        let mut steps: Vec[String] = Vec.new();
+        let mut path = String.new();
+        let mut ok = true;
+        for i in 0..length {
+            let k = step(seed) % letters;
+            path.push_str("/");
+            path.push_str(alphabet[k..k + 1]);
+            let last = i == length - 1;
+            if files.contains(path) and not (last and is_file) {
+                ok = false;
+            }
+            if dirs.contains(path) and last and is_file {
+                ok = false;
+            }
+            steps.push(path.clone());
+        }
+        if not ok {
+            continue;
+        }
+        if is_file {
+            let mut content = String.new();
+            for _ in 0..1 + step(seed) % 3 {
+                let k = step(seed) % letters;
+                content.push_str(alphabet[k..k + 1]);
+            }
+            commands.push(Op.Add(path.clone(), content));
+        } else {
+            commands.push(Op.Mkdir(path.clone()));
+        }
+        for i in 0..steps.len() {
+            let is_new = not files.contains(steps[i]) and not dirs.contains(steps[i]);
+            if i == steps.len() - 1 and is_file {
+                files.insert(steps[i].clone());
+            } else {
+                dirs.insert(steps[i].clone());
+            }
+            if is_new {
+                made.push(steps[i].clone());
+            }
+        }
+    }
+    commands
+}
+
+fn checksum_of(printed: Vec[String]) -> i64 {
+    let mut checksum: i64 = 0;
+    for line in printed.iter() {
+        for b in line.bytes() {
+            checksum = (checksum * 131 + *b as i64) % 1000000007;
+        }
+        checksum = (checksum * 131 + 10) % 1000000007;
+    }
+    checksum
+}
+
+fn main() {
+    // The LeetCode example.
+    show("example", vec![ls("/"), mkdir("/a/b/c"), add("/a/b/c/d", "hello"), ls("/"), read("/a/b/c/d")]);
+    // An empty root; a file at the root; a file listed by its own
+    // path; content added twice; entries in order whatever the order
+    // they were made in; a deep path made at once; and directories and
+    // files side by side.
+    show("empty", vec![ls("/")]);
+    show("file at the root", vec![add("/f", "abc"), ls("/"), read("/f")]);
+    show("a file listed", vec![add("/a/b", "x"), ls("/a/b")]);
+    show("added twice", vec![add("/f", "ab"), add("/f", "cd"), read("/f"), add("/f", "e"), read("/f")]);
+    show("in order", vec![mkdir("/c"), mkdir("/a"), add("/b", "x"), mkdir("/aa"), ls("/")]);
+    show("deep", vec![mkdir("/a/b/c/d/e/f/g"), ls("/a/b/c/d/e/f"), ls("/a/b/c/d/e/f/g"), ls("/a")]);
+    show("side by side", vec![mkdir("/d/x"), add("/d/y", "y"), add("/d/x/z", "z"), ls("/d"), ls("/d/x"), read("/d/x/z"), ls("/d/y")]);
+    // 300 random scripts of 1 to 40 commands.
+    let mut seed: i64 = 588;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let count = 1 + step(mut seed) % 40;
+        let letters = 2 + step(mut seed) % 3;
+        let printed = run_all(script(count, letters, 4, mut seed));
+        total += printed.len();
+        checksum = (checksum * 31 + checksum_of(printed)) % 1000000007;
+    }
+    println(f"300 random scripts: {total} lines printed, checksum {checksum}");
+    // The problem's largest, 300 commands: over ten names three deep,
+    // and over two names up to 30 deep.
+    let wide = run_all(script(300, 10, 3, mut seed));
+    println(f"300 commands over ten names: {wide.len()} lines printed, checksum {checksum_of(wide)}");
+    let deep = run_all(script(300, 2, 30, mut seed));
+    println(f"300 commands, 30 deep: {deep.len()} lines printed, checksum {checksum_of(deep)}");
+}

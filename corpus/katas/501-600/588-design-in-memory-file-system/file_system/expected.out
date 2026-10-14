@@ -1,0 +1,11 @@
+example: [] [a] hello
+empty: []
+file at the root: [f] abc
+a file listed: [b]
+added twice: abcd abcde
+in order: [a aa b c]
+deep: [g] [] [b]
+side by side: [x y] [z] z [y]
+300 random scripts: 2951 lines printed, checksum 441437937
+300 commands over ten names: 173 lines printed, checksum 474402917
+300 commands, 30 deep: 121 lines printed, checksum 846993039

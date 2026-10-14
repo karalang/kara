@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/588-design-in-memory-file-system/bench/file_system.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["shared", "lib:sortedmap", "io:fs", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "27945a387"
+extracted_src = "dd9e6912"
+model_rev = "1aa23105"
+model_src = "dd9e6912"
