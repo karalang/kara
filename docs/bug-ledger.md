@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 250 |
 | other | 172 |
 | false-positive | 168 |
-| perf | 164 |
+| perf | 165 |
 | diagnostics | 158 |
 | crash | 115 |
 | soundness | 103 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2883 |
+| codegen | 2884 |
 | interp | 919 |
 | typecheck | 404 |
 | other | 115 |
 | ownership | 91 |
 | cli | 75 |
-| runtime | 66 |
+| runtime | 67 |
 | parser | 61 |
 | autopar | 59 |
 | resolver | 38 |
@@ -588,7 +588,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-11 | 2026-10-13 | typecheck | low | `PriorityQueue.peek` is typed `Option[T]` by value instead of the spec's `Option[ref T]`, so the spec's own `*pq.peek().unwrap()` and `Some(x) => *x` are refused by `karac check` and both MIR backends ("unary '*' requires 'ref T' ... found 'i64'"), and `let s = pq.peek().unwrap()` on a `PriorityQueue[String]` is accepted as an owned `String` | — |
 | B-2026-10-13-15 | 2026-10-13 | codegen | low | `karac build --mir` runs kata 495's bench 3.6x slower than C, Rust and legacy `karac build` (0.36-0.44 s against 0.07-0.12 s): the x86 code for the hot loop takes a data-dependent BRANCH for `(a - b).min(duration)` where rustc emits a cmov, and mispredicts it about 28 million times | — |
 | B-2026-10-13-18 | 2026-10-13 | codegen+runtime | medium | `Vec.sort_by_key` and `sort_by` on the MIR compiled backend run about 3.5-4x slower than Rust's `sort_by_key`: `karac_mir_sort_ctx` (runtime/src/mir.rs) is a bottom-up merge sort that calls the comparison through a function pointer for every comparison, and the emitted comparison calls the key closure, not inlined, for each side. Sorting 1M indices by an i64 key 10 times takes 2.74-2.78 s on `karac build --mir` and 0.65-0.77 s on `rustc -O`; in kata 502's bench the sort is 63% of all instructions | — |
-| B-2026-10-13-20 | 2026-10-13 | codegen+runtime | low | An f-string with one integer hole, `f"{n}"`, costs three allocations, two frees and four thread-local `RefCell` borrows on the v2 compiled backend: 44M `f"{i % 7}"` take 2.7 s on `karac build --mir` against 0.3 s on legacy `karac build` (about 9x), and kata 504's bench runs 3.7 s on `--mir` against 1.6 s on legacy | — |
 | B-2026-10-13-24 | 2026-10-13 | typecheck+interp | low | `Vec.append` and `Vec.extend_from_slice` are accepted by `karac check` and run on both v2 backends, but docs/library/collections.md says "There is no `append`" and has no `extend_from_slice` row: either the spec or the implementation is wrong | — |
 | B-2026-10-13-28 | 2026-10-13 | typecheck | low | `karac check` loses the `ref` of a `Map.get` result once it is stored in a tuple local: `let t = (m.get("a"), 5); match t { (Some(i), k) => *i + k, _ => 0 }` is refused ("unary '*' requires 'ref T' ... found 'i64'"), while the same match on the tuple literal passes since B-2026-10-12-16 and `__mir-run` runs both | — |
 | B-2026-10-13-30 | 2026-10-13 | codegen+runtime | medium | `String.push(c)` on the MIR compiled backend is an out-of-line runtime call per char (`karac_mir_string_push_char` -> `karac_mir_string_push_str` -> `karac_mir_vec_reserve`), so building strings a char at a time runs 3.6x slower than Rust: 2,000,000 keys of 200 chars take 2.78 s under `karac build --mir` against 0.77 s for `rustc -O -C overflow-checks=on` | — |
@@ -597,7 +596,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-34 | 2026-10-13 | codegen+runtime | medium | `i64.parse` on the MIR compiled backend costs about 30 ns for a 2-byte slice, because `karac_mir_parse_int` copies the text into a fresh heap `String`, trims it and parses an `i128` on every call: kata 539's bench spends 1.3 to 1.4 s of its 1.90 s in 42M parses, against 0.51 s for the whole Rust mirror | — |
 | B-2026-10-13-35 | 2026-10-13 | codegen+runtime | medium | Collecting chars into a `String` on the MIR compiled backend (`chars.iter().collect()` from a `Vec[char]`) costs about 6 ns a char, a runtime call chain `karac_mir_string_push_char` -> `string_push_str` -> `vec_reserve` per char with nothing reserved up front: kata 541's bench spends some 1.25 s of its 2.01 s there, against 0.70 s for the whole Rust mirror | — |
 | B-2026-10-13-36 | 2026-10-13 | codegen+runtime | medium | `VecDeque` `push_back` / `pop_front` on the MIR compiled backend are out-of-line runtime calls (`karac_mir_deque_push` / `_pop`) that wrap with integer `%` and copy the element with a sized `memcpy` call: kata 542's breadth-first search bench runs 0.41 s, 0.28 s with a `Vec` and head index in place of the deque, 0.19 s in Rust with `VecDeque` | — |
-| B-2026-10-14-5 | 2026-10-14 | codegen+runtime | medium | An f-string whose holes are `String`s or `str` slices runs about 5x slower than the same text built with `push_str` on the v2 compiled backend: kata 555's bench builds each candidate as `f"{t[k..]}{middle}{t[..k]}"` and takes 5.2 to 5.9 s on `karac build --mir`, against 0.94 to 1.10 s with `push_str` three times into a `String` (and 1.2 to 1.4 s for Rust's `format!`) | — |
 | B-2026-10-14-9 | 2026-10-14 | codegen | medium | Matching a borrowed `shared enum` on the MIR compiled backend retains every handle the pattern binds and releases each at the arm's end, so a read-only tree walk pays a count up and an out-of-line `drop.shared` call per child: kata 558's `count` over 210M quad-tree nodes runs 1.49 to 1.62 s on `karac build --mir` against 0.98 to 1.04 s for Rust's `count(&Quad)`, and 1.31 s for the same Rust with each child's `Rc` cloned | — |
 | B-2026-10-14-14 | 2026-10-14 | codegen | medium | `Vec.with_capacity(n)` and `String.with_capacity(n)` reserve nothing on the MIR compiled backend: `Vec.with_capacity(5).capacity()` prints 0 under `__mir-llvm-run` and 5 under `__mir-run`, and presizing buys nothing -- kata 559's bench walk runs 2.37 to 2.45 s with each node's children `Vec` presized, the same as without, where the Rust mirror drops from 2.0 s to 0.82 to 0.87 s | — |
 | B-2026-10-14-18 | 2026-10-14 | typecheck | medium | `karac check` accepts `flatten()` over an iterator whose items are collections, `mat.iter().flatten()` on a `Vec[Vec[i64]]`, but the spec's signature (`where Self.Item: Iterator`) excludes it and both MIR backends refuse it: a program that passes `karac check` does not run | — |
@@ -608,6 +606,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-36 | 2026-10-14 | codegen | medium | The MIR-to-LLVM backend does not lower `String.clear`: `karac __mir-llvm-run`, `__mir-llvm-asan` and `karac build --mir` refuse any program that calls it ("native `String.clear` is not lowered yet"), while `karac __mir-run` runs it right | — |
 | B-2026-10-14-37 | 2026-10-14 | resolver+typecheck | low | A user type cannot implement `Index`, `IndexMut` or `IndexSet`, so `c[k]` on a user container has no spelling: `impl Index for P` is refused at resolve ("operator traits are stdlib-only") on every pipeline, though design.md § `Index` and `IndexMut` says "User types may implement all three, so a user container supports `[]`" | — |
 | B-2026-10-14-38 | 2026-10-14 | ownership | medium | `karac check` refuses the spec's borrow returns that both MIR backends now run: `fn name(user: User) -> ref String { ref user.name }` and `fn head(self) -> ref Node { ref self.head }` are "this borrow-return form is not yet supported", and a `ref` local walked down a tree and returned, `let mut node = ref self.head; while let Some(n) = node.next { node = n; } node`, is refused at `node = n` as a move of a borrowing binding | — |
+| B-2026-10-14-39 | 2026-10-14 | codegen+runtime | low | A one-integer f-string `f"{n}"` still runs about 3x legacy on the v2 compiled backend after B-2026-10-13-20's fix: 44M `f"{i % 7}"` take 0.86 s on `karac build --mir` against 0.28 to 0.31 s on legacy `karac build`, and kata 504's bench 1.97 to 2.25 s against 1.51 to 1.62 s | — |
 
 ### Relocated
 
@@ -3974,6 +3973,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-16 | parser+typecheck | low | `karac fix` rewrites `!x` to `not x` whatever the operand's type, so on an INTEGER operand (Rust's bitwise complement, `m & !row == 0`) the first pas… | 56a1b16034 |
 | B-2026-10-13-17 | typecheck+interp+codegen | medium | `ref_eq` has no v2 form: the spec's method `a.ref_eq(b)` on a `shared` handle (design.md § Equality, "a method the compiler provides on every `shared… | 32540012cd |
 | B-2026-10-13-19 | typecheck | medium | `Vec.extend` accepts only a `Vec`, `Slice` or `Array`, where the spec gives `fn extend[I: IntoIterator[Item = T]](mut ref self, items: own I)`: `d.ex… | 36fc6a0f92 |
+| B-2026-10-13-20 | codegen+runtime | low | An f-string with one integer hole, `f"{n}"`, costs three allocations, two frees and four thread-local `RefCell` borrows on the v2 compiled backend: 4… | fdb1d5fc22 |
 | B-2026-10-13-21 | interp+codegen | high | An `as` cast to a narrower integer, widened implicitly into a wider binding or return slot, is never widened by the MIR: `let y: i64 = x as u8;` and… | 64dbf3323c |
 | B-2026-10-13-22 | typecheck | low | `f64.powi` does not exist, though design.md's own example calls it: `phi.powi(n as i32)` is refused by `karac check` and every backend with "no metho… | 95778e966b |
 | B-2026-10-13-23 | interp+codegen | medium | A strong handle stored into a `weak` field is downgraded only when it is a plain local: from a call result (`c.parent = get(a)`, `c.parent = b.parent… | 2cc5465a11 |
@@ -3986,6 +3986,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-2 | typecheck | medium | `s.push(c)`, `s.find(c)` and `s.split(c)` with `c` a `ref char` from `Vec[char].iter()` pass `karac check` but are refused by the MIR pipeline's type… | 4979cb27c2 |
 | B-2026-10-14-3 | interp | medium | MIR interpreter: kata 447's every-triple arm (`number_of_boomerangs_brute`) times out, 87 s against the corpus's 60 s cap: each call of a small arith… | 605f5270da |
 | B-2026-10-14-4 | typecheck | low | `parts[1..].join("/")` and `.concat()` on a `Slice[String]` are refused with "no method 'join' on type 'Slice'" on every pipeline, while `Vec[String]… | 04bc26e13e |
+| B-2026-10-14-5 | codegen+runtime | medium | An f-string whose holes are `String`s or `str` slices runs about 5x slower than the same text built with `push_str` on the v2 compiled backend: kata… | fdb1d5fc22 |
 | B-2026-10-14-6 | typecheck | medium | On the MIR backends a `collect()` that is the result of a `map` closure does not build: `words.iter().map(\|w\| w.chars().rev().collect()).collect()` f… | 0c4bec8fa5 |
 | B-2026-10-14-7 | typecheck | medium | `karac check` refuses `let r: Vec[String] = words.iter().map(\|w\| w.chars().rev().collect()).collect();` with "expected 'Vec[String]', found 'Vec[Vec[… | 86f1298387 |
 | B-2026-10-14-8 | ownership | medium | `karac check` refuses any `collect()` into a non-`Vec` target inside a closure body, `\|w\| { let s: String = w.chars().collect(); s.len() }`, with an… | d0d9435e8a |
