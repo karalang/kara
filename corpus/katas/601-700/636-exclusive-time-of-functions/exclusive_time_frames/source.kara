@@ -1,0 +1,138 @@
+// LeetCode #636: Exclusive Time of Functions -- a stack of frames.
+//
+// Each frame holds its function, its start and the time its callees
+// took in all. At an end, the call's whole length, `t - start + 1`, less
+// its callees' time is its own; the whole length then goes to the
+// caller's frame as callee time. O(logs).
+
+struct Frame {
+    id: i64,
+    start: i64,
+    inner: i64,
+}
+
+fn exclusive_time(n: i64, logs: Vec[String]) -> Vec[i64] {
+    let mut total = vec![0; n];
+    let mut stack: Vec[Frame] = Vec.new();
+    for log in logs.iter() {
+        let parts = log.split(":");
+        let id = i64.parse(parts[0]).unwrap();
+        let t = i64.parse(parts[2]).unwrap();
+        if parts[1] == "start" {
+            stack.push(Frame { id: id, start: t, inner: 0 });
+        } else {
+            let frame = stack.pop().unwrap();
+            let length = t - frame.start + 1;
+            total[frame.id] += length - frame.inner;
+            let depth = stack.len();
+            if depth > 0 {
+                stack[depth - 1].inner += length;
+            }
+        }
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random number from 0 to 2^30 - 1.
+fn wide(seed: mut ref i64) -> i64 {
+    next_random(mut seed) * 32768 + next_random(mut seed)
+}
+
+// Valid logs for `calls` calls of functions 0 to n - 1, with gaps of up
+// to `gap - 1` units between events. A start comes at least one unit
+// after the previous event; an end comes no earlier than a start just
+// before it, and at least one unit after an end.
+fn random_logs(n: i64, calls: i64, gap: i64, seed: mut ref i64) -> Vec[String] {
+    let mut logs: Vec[String] = Vec.new();
+    let mut stack: Vec[i64] = Vec.new();
+    let mut started = 0;
+    let mut start_at = 0;
+    let mut end_at = 0;
+    while started < calls or stack.len() > 0 {
+        let begin = started < calls and (stack.len() == 0 or next_random(mut seed) % 2 == 0);
+        if begin {
+            let id = next_random(mut seed) % n;
+            let t = start_at + wide(mut seed) % gap;
+            logs.push(f"{id}:start:{t}");
+            stack.push(id);
+            started += 1;
+            start_at = t + 1;
+            end_at = t;
+        } else {
+            let id = stack.pop().unwrap();
+            let t = end_at + wide(mut seed) % gap;
+            logs.push(f"{id}:end:{t}");
+            start_at = t + 1;
+            end_at = t + 1;
+        }
+    }
+    logs
+}
+
+fn show(times: Vec[i64]) -> String {
+    let mut text = String.from("[");
+    for i in 0..times.len() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(f"{times[i]}");
+    }
+    text.push_str("]");
+    text
+}
+
+fn ask(n: i64, logs: Vec[Str]) {
+    let mut owned: Vec[String] = Vec.new();
+    for log in logs.iter() {
+        owned.push(String.from(*log));
+    }
+    println(f"n = {n}, {logs.len()} logs -> {show(exclusive_time(n, owned))}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    ask(2, vec!["0:start:0", "1:start:2", "1:end:5", "0:end:6"]);
+    ask(1, vec!["0:start:0", "0:start:2", "0:end:5", "0:start:6", "0:end:6", "0:end:7"]);
+    ask(2, vec!["0:start:0", "0:start:2", "0:end:5", "1:start:6", "1:end:6", "0:end:7"]);
+    // One call of one unit; two calls back to back; a call with a gap
+    // before it; a callee filling its caller but for the first and last
+    // units; three deep; the largest timestamps.
+    ask(1, vec!["0:start:0", "0:end:0"]);
+    ask(2, vec!["0:start:0", "0:end:3", "1:start:4", "1:end:4"]);
+    ask(2, vec!["1:start:5", "1:end:9"]);
+    ask(2, vec!["0:start:0", "1:start:1", "1:end:8", "0:end:9"]);
+    ask(3, vec!["0:start:0", "1:start:1", "2:start:2", "2:end:2", "1:end:3", "0:end:4"]);
+    ask(2, vec!["0:start:0", "1:start:999999998", "1:end:999999999", "0:end:1000000000"]);
+    // 300 random cases of 1 to 5 functions and 1 to 20 calls.
+    let mut seed: i64 = 636;
+    let mut sum = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 5;
+        let calls = 1 + next_random(mut seed) % 20;
+        let logs = random_logs(n, calls, 4, mut seed);
+        let times = exclusive_time(n, logs);
+        for t in times.iter() {
+            sum += *t;
+            checksum = (checksum * 31 + *t) % 1000000007;
+        }
+    }
+    println(f"300 random cases: total {sum}, checksum {checksum}");
+    // 100 functions, 250 calls, gaps of up to 3,799,999 units, all within 10^9.
+    let logs = random_logs(100, 250, 3800000, mut seed);
+    let times = exclusive_time(100, logs);
+    let mut most = 0;
+    for i in 0..100 {
+        if times[i] > times[most] {
+            most = i;
+        }
+    }
+    println(f"100 functions, 500 logs: function {most} longest, {times[most]} units");
+}

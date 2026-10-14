@@ -1,0 +1,337 @@
+// LeetCode #636: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// logs.
+
+// ---- star arm ----------------------------------------------------------
+
+fn exclusive_time_star(n: i64, logs: Vec[String]) -> Vec[i64] {
+    let mut total = vec![0; n];
+    let mut stack: Vec[i64] = Vec.new();
+    let mut prev = 0;
+    for log in logs.iter() {
+        let parts = log.split(":");
+        let id = i64.parse(parts[0]).unwrap();
+        let t = i64.parse(parts[2]).unwrap();
+        if parts[1] == "start" {
+            if let Some(top) = stack.last() {
+                total[top] += t - prev;
+            }
+            stack.push(id);
+            prev = t;
+        } else {
+            let top = stack.pop().unwrap();
+            total[top] += t - prev + 1;
+            prev = t + 1;
+        }
+    }
+    total
+}
+
+// ---- frames arm --------------------------------------------------------
+
+struct Frame_frames {
+    id: i64,
+    start: i64,
+    inner: i64,
+}
+
+fn exclusive_time_frames(n: i64, logs: Vec[String]) -> Vec[i64] {
+    let mut total = vec![0; n];
+    let mut stack: Vec[Frame_frames] = Vec.new();
+    for log in logs.iter() {
+        let parts = log.split(":");
+        let id = i64.parse(parts[0]).unwrap();
+        let t = i64.parse(parts[2]).unwrap();
+        if parts[1] == "start" {
+            stack.push(Frame_frames { id: id, start: t, inner: 0 });
+        } else {
+            let frame = stack.pop().unwrap();
+            let length = t - frame.start + 1;
+            total[frame.id] += length - frame.inner;
+            let depth = stack.len();
+            if depth > 0 {
+                stack[depth - 1].inner += length;
+            }
+        }
+    }
+    total
+}
+
+// ---- recursive arm -----------------------------------------------------
+
+struct Event_recursive {
+    id: i64,
+    start: bool,
+    time: i64,
+}
+
+fn parse_recursive(log: String) -> Event_recursive {
+    let parts = log.split(":");
+    Event_recursive { id: i64.parse(parts[0]).unwrap(), start: parts[1] == "start", time: i64.parse(parts[2]).unwrap() }
+}
+
+// Reads the call starting at `events[at]`; returns where it ends and
+// its whole length.
+fn call_recursive(events: Vec[Event_recursive], at: i64, total: mut ref Vec[i64]) -> (i64, i64) {
+    let begin = events[at].time;
+    let id = events[at].id;
+    let mut next = at + 1;
+    let mut inner = 0;
+    while events[next].start {
+        let (after, length) = call_recursive(events, next, total);
+        inner += length;
+        next = after;
+    }
+    let length = events[next].time - begin + 1;
+    total[id] += length - inner;
+    (next + 1, length)
+}
+
+fn exclusive_time_recursive(n: i64, logs: Vec[String]) -> Vec[i64] {
+    let mut events: Vec[Event_recursive] = Vec.new();
+    for log in logs.iter() {
+        events.push(parse_recursive(log));
+    }
+    let mut total = vec![0; n];
+    let mut at = 0;
+    while at < events.len() {
+        let (after, _) = call_recursive(events, at, mut total);
+        at = after;
+    }
+    total
+}
+
+// ---- pairs arm ---------------------------------------------------------
+
+struct Call_pairs {
+    id: i64,
+    start: i64,
+    end: i64,
+    depth: i64,
+}
+
+fn exclusive_time_pairs(n: i64, logs: Vec[String]) -> Vec[i64] {
+    let mut calls: Vec[Call_pairs] = Vec.new();
+    let mut open: Vec[i64] = Vec.new();
+    for log in logs.iter() {
+        let parts = log.split(":");
+        let t = i64.parse(parts[2]).unwrap();
+        if parts[1] == "start" {
+            let id = i64.parse(parts[0]).unwrap();
+            calls.push(Call_pairs { id: id, start: t, end: t, depth: open.len() });
+            open.push(calls.len() - 1);
+        } else {
+            let at = open.pop().unwrap();
+            calls[at].end = t;
+        }
+    }
+    let mut total = vec![0; n];
+    for i in 0..calls.len() {
+        let mut own = calls[i].end - calls[i].start + 1;
+        for j in 0..calls.len() {
+            if calls[j].depth == calls[i].depth + 1 and calls[j].start > calls[i].start and calls[j].end < calls[i].end {
+                own -= calls[j].end - calls[j].start + 1;
+            }
+        }
+        total[calls[i].id] += own;
+    }
+    total
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Valid logs for `calls` calls of functions 0 to n - 1, with gaps of up
+// to `gap - 1` units between events, as in the kata's harness.
+fn random_logs(n: i64, calls: i64, gap: i64, seed: mut ref i64) -> Vec[String] {
+    let mut logs: Vec[String] = Vec.new();
+    let mut stack: Vec[i64] = Vec.new();
+    let mut started = 0;
+    let mut start_at = 0;
+    let mut end_at = 0;
+    while started < calls or stack.len() > 0 {
+        let begin = started < calls and (stack.len() == 0 or next_random(mut seed) % 2 == 0);
+        if begin {
+            let id = next_random(mut seed) % n;
+            let t = start_at + next_random(mut seed) % gap;
+            logs.push(f"{id}:start:{t}");
+            stack.push(id);
+            started += 1;
+            start_at = t + 1;
+            end_at = t;
+        } else {
+            let id = stack.pop().unwrap();
+            let t = end_at + next_random(mut seed) % gap;
+            logs.push(f"{id}:end:{t}");
+            start_at = t + 1;
+            end_at = t + 1;
+        }
+    }
+    logs
+}
+
+fn field(log: String, i: i64) -> String {
+    let parts = log.split(":");
+    parts[i].clone()
+}
+
+fn time_of(log: String) -> i64 {
+    i64.parse(field(log, 2)).unwrap()
+}
+
+// The definition: every unit of time from 0 to the last timestamp goes
+// to the function of the innermost call whose start and end units
+// include it, found by scanning all the calls.
+fn definition(n: i64, logs: Vec[String]) -> Vec[i64] {
+    let mut ids: Vec[i64] = Vec.new();
+    let mut starts: Vec[i64] = Vec.new();
+    let mut ends: Vec[i64] = Vec.new();
+    let mut depths: Vec[i64] = Vec.new();
+    let mut open: Vec[i64] = Vec.new();
+    for log in logs.iter() {
+        if field(log, 1) == "start" {
+            ids.push(i64.parse(field(log, 0)).unwrap());
+            starts.push(time_of(log));
+            ends.push(0);
+            depths.push(open.len());
+            open.push(ids.len() - 1);
+        } else {
+            let at = open.pop().unwrap();
+            ends[at] = time_of(log);
+        }
+    }
+    let mut total = vec![0; n];
+    let last = time_of(logs[logs.len() - 1]);
+    for unit in 0..last + 1 {
+        let mut inner = -1;
+        for c in 0..ids.len() {
+            if starts[c] <= unit and unit <= ends[c] and (inner < 0 or depths[c] > depths[inner]) {
+                inner = c;
+            }
+        }
+        if inner >= 0 {
+            total[ids[inner]] += 1;
+        }
+    }
+    total
+}
+
+// The logs with every timestamp moved by `by` and every function id
+// mapped through `rename`.
+fn moved(logs: Vec[String], by: i64, rename: Vec[i64]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for log in logs.iter() {
+        let id = rename[i64.parse(field(log, 0)).unwrap()];
+        out.push(f"{id}:{field(log, 1)}:{time_of(log) + by}");
+    }
+    out
+}
+
+fn answer(which: i64, n: i64, logs: Vec[String]) -> Vec[i64] {
+    if which == 0 {
+        exclusive_time_star(n, logs)
+    } else if which == 1 {
+        exclusive_time_frames(n, logs)
+    } else if which == 2 {
+        exclusive_time_recursive(n, logs)
+    } else {
+        exclusive_time_pairs(n, logs)
+    }
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6360;
+    let mut checks = 0;
+    let mut units = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 4 functions, 1 to 12 calls, gaps of 0 to 3 units.
+        let n = 1 + next_random(mut seed) % 4;
+        let calls = 1 + next_random(mut seed) % 12;
+        let logs = random_logs(n, calls, 4, mut seed);
+        let want = definition(n, logs);
+        let last = time_of(logs[logs.len() - 1]);
+        let mut same: Vec[i64] = Vec.new();
+        let mut rotated: Vec[i64] = Vec.new();
+        for i in 0..n {
+            same.push(i);
+            rotated.push((i + 1) % n);
+        }
+        let shift = 1 + next_random(mut seed) % 1000000;
+        let mut twice = logs.clone();
+        for log in moved(logs, last + 1, same).iter() {
+            twice.push(log.clone());
+        }
+        // The length of each outermost call, from their matched events.
+        let mut covered = 0;
+        let mut depth = 0;
+        let mut began = 0;
+        for log in logs.iter() {
+            if field(log, 1) == "start" {
+                if depth == 0 {
+                    began = time_of(log);
+                }
+                depth += 1;
+            } else {
+                depth -= 1;
+                if depth == 0 {
+                    covered += time_of(log) - began + 1;
+                }
+            }
+        }
+        for i in 0..n {
+            units += want[i];
+        }
+        for which in 0..4 {
+            let got = answer(which, n, logs);
+            let mut sum = 0;
+            for t in got.iter() {
+                sum += *t;
+            }
+            let renamed = answer(which, n, moved(logs, 0, rotated));
+            let mut follows = true;
+            for i in 0..n {
+                if renamed[(i + 1) % n] != got[i] {
+                    follows = false;
+                }
+            }
+            let doubled = answer(which, n, twice);
+            let mut double = true;
+            for i in 0..n {
+                if doubled[i] != 2 * got[i] {
+                    double = false;
+                }
+            }
+            let ok = vec![
+                // P1: the times are the definition's.
+                got == want,
+                // P2: they add up to the time the outermost calls cover.
+                sum == covered,
+                // P3: renaming function i to i + 1 moves its time there.
+                follows,
+                // P4: moving every timestamp later changes nothing.
+                answer(which, n, moved(logs, shift, same)) == got,
+                // P5: the logs run twice, the second time after the
+                // first, give every function twice its time.
+                double,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({units} units), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

@@ -1,0 +1,89 @@
+// LeetCode #636: Exclusive Time of Functions -- one stack and the time
+// of the last event.
+//
+// The function on top of the stack is the one running. Every log hands
+// the time since the previous event to whoever was running: a start at
+// `t` gives the caller `t - prev` and then runs the callee from `t`; an
+// end at `t` gives the callee up to the end of unit `t`, `t - prev + 1`,
+// and the caller resumes at `t + 1`. O(logs).
+
+fn exclusive_time(n: i64, logs: Vec[String]) -> Vec[i64] {
+    let mut total = vec![0; n];
+    let mut stack: Vec[i64] = Vec.new();
+    let mut prev = 0;
+    for log in logs.iter() {
+        let parts = log.split(":");
+        let id = i64.parse(parts[0]).unwrap();
+        let t = i64.parse(parts[2]).unwrap();
+        if parts[1] == "start" {
+            if let Some(top) = stack.last() {
+                total[top] += t - prev;
+            }
+            stack.push(id);
+            prev = t;
+        } else {
+            let top = stack.pop().unwrap();
+            total[top] += t - prev + 1;
+            prev = t + 1;
+        }
+    }
+    total
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn wide(seed: mut ref i64) -> i64 {
+    next_random(mut seed) * 32768 + next_random(mut seed)
+}
+
+fn random_logs(n: i64, calls: i64, gap: i64, seed: mut ref i64) -> Vec[String] {
+    let mut logs: Vec[String] = Vec.new();
+    let mut stack: Vec[i64] = Vec.new();
+    let mut started = 0;
+    let mut start_at = 0;
+    let mut end_at = 0;
+    while started < calls or stack.len() > 0 {
+        let begin = started < calls and (stack.len() == 0 or next_random(mut seed) % 2 == 0);
+        if begin {
+            let id = next_random(mut seed) % n;
+            let t = start_at + wide(mut seed) % gap;
+            logs.push(f"{id}:start:{t}");
+            stack.push(id);
+            started += 1;
+            start_at = t + 1;
+            end_at = t;
+        } else {
+            let id = stack.pop().unwrap();
+            let t = end_at + wide(mut seed) % gap;
+            logs.push(f"{id}:end:{t}");
+            start_at = t + 1;
+            end_at = t + 1;
+        }
+    }
+    logs
+}
+
+// 10 inputs of 100 functions and 250 calls made once, then 10,000 rounds
+// each answering one of them.
+fn main() {
+    let mut seed: i64 = 636;
+    let mut inputs: Vec[Vec[String]] = Vec.new();
+    for _ in 0..10 {
+        inputs.push(random_logs(100, 250, 3800000, mut seed));
+    }
+    let mut sum = 0;
+    let mut checksum = 0;
+    for round in 0..10000 {
+        let times = exclusive_time(100, inputs[round % 10]);
+        for t in times.iter() {
+            sum += *t;
+            checksum = (checksum * 31 + *t) % 1000000007;
+        }
+    }
+    println(f"10 inputs of 500 logs, 10000 rounds: total {sum}, checksum {checksum}");
+}

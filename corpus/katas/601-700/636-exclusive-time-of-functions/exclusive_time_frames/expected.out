@@ -1,0 +1,11 @@
+n = 2, 4 logs -> [3, 4]
+n = 1, 6 logs -> [8]
+n = 2, 6 logs -> [7, 1]
+n = 1, 2 logs -> [1]
+n = 2, 4 logs -> [4, 1]
+n = 2, 2 logs -> [0, 5]
+n = 2, 4 logs -> [2, 8]
+n = 3, 6 logs -> [2, 2, 1]
+n = 2, 4 logs -> [999999999, 2]
+300 random cases: total 12012, checksum 382589388
+100 functions, 500 logs: function 77 longest, 28026939 units
