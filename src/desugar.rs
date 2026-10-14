@@ -1953,6 +1953,7 @@ fn walk_stmt(stmt: &mut Stmt, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
                 collect_binding_names(pattern, &mut cx.shadowed);
             }
             if let Some(ty) = ty {
+                desugar_mapped_collect_target(ty, value);
                 desugar_collect_target(ty, value);
             }
         }
@@ -3016,6 +3017,67 @@ pub fn with_collect_through_from_iterator<R>(f: impl FnOnce() -> R) -> R {
 /// the `to_string()` of both, while `+` accepts neither uniformly. The extra
 /// `to_string()` on an already-`String` element is a copy; correctness and
 /// backend parity are worth it here, and a later type-directed pass can drop it.
+/// B-2026-10-14-7 — `let r: Vec[String] = it.map(|w| <chain>.collect()).collect();`.
+/// The annotation's element type is what the `map` closure returns, so a bare
+/// `collect()` the closure yields is built as that type, exactly as if its
+/// body had been `{ let s: String = <chain>.collect(); s }`. Kara has no
+/// turbofish, so without this the outer annotation is the only place the
+/// inner target could be written and the chain could not be spelled at all.
+/// A `Vec` element needs nothing (`collect()` builds a `Vec` already), and
+/// any other element type is left to [`desugar_collect_target_at`], which
+/// declines what it cannot build.
+fn desugar_mapped_collect_target(ty: &TypeExpr, value: &mut Expr) {
+    let TypeKind::Path(p) = &ty.kind else {
+        return;
+    };
+    if p.segments.len() != 1 || !matches!(p.segments[0].as_str(), "Vec" | "Set" | "VecDeque") {
+        return;
+    }
+    let Some([GenericArg::Type(elem)]) = p.generic_args.as_deref() else {
+        return;
+    };
+    let ExprKind::MethodCall {
+        method,
+        args,
+        object,
+        ..
+    } = &mut value.kind
+    else {
+        return;
+    };
+    if method != "collect" || !args.is_empty() {
+        return;
+    }
+    let ExprKind::MethodCall {
+        method: map,
+        args: map_args,
+        ..
+    } = &mut object.kind
+    else {
+        return;
+    };
+    if map != "map" || map_args.len() != 1 {
+        return;
+    }
+    let ExprKind::Closure { body, .. } = &mut map_args[0].value.kind else {
+        return;
+    };
+    let body: &mut Expr = body;
+    let tail = if matches!(body.kind, ExprKind::Block(_)) {
+        let ExprKind::Block(b) = &mut body.kind else {
+            return;
+        };
+        match b.final_expr.as_deref_mut() {
+            Some(e) => e,
+            None => return,
+        }
+    } else {
+        body
+    };
+    let base = tail.span;
+    desugar_collect_target_at(elem, tail, base);
+}
+
 fn desugar_collect_target(ty: &TypeExpr, value: &mut Expr) {
     desugar_collect_target_at(ty, value, ty.span);
 }

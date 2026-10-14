@@ -3461,3 +3461,33 @@ fn closure_local_moved_after_its_loop_is_accepted() {
         "value 't' is moved inside a loop and not assigned again",
     );
 }
+
+// B-2026-10-14-7 — a `collect()` that a `map` closure yields is built as the
+// element type of the outer `let` annotation, as Rust infers the inner
+// `collect` from the outer one: there is no turbofish to write it with.
+#[test]
+fn map_closure_collect_takes_the_outer_element_type() {
+    let src = "fn main() {\n\
+                   let s = \"let us code\";\n\
+                   let words: Vec[String] = s.split(\" \").iter().map(|w| w.chars().rev().collect()).collect();\n\
+                   let firsts: Vec[String] = s.split(\" \").iter().map(|w| { let n = w.len(); w.chars().take(n - 1).collect() }).collect();\n\
+                   let u: Vec[Set[char]] = s.split(\" \").iter().map(|w| w.chars().collect()).collect();\n\
+                   let v: Vec[Vec[char]] = s.split(\" \").iter().map(|w| w.chars().collect()).collect();\n\
+                   println(f\"{words.join(\" \")} {firsts} {u[1].len()} {u[2].len()} {v[0]}\");\n\
+               }\n";
+    accepted("map-closure-collect", src);
+    let (dir, path) = fixture("map-closure-collect-run", src);
+    let out = karac()
+        .arg("run")
+        .arg("--interp")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "tel su edoc [le, u, cod] 2 4 [l, e, t]\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
