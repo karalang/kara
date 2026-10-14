@@ -712,6 +712,7 @@ impl StubHint {
 /// and bitwise traits, and the unary `Neg` and `Not` (B-2026-10-14-33).
 pub const USER_OPERATOR_TRAITS: &[&str] = &[
     "Add", "Sub", "Mul", "Div", "Rem", "BitAnd", "BitOr", "BitXor", "Shl", "Shr", "Neg", "Not",
+    "Index", "IndexMut",
 ];
 
 #[derive(Debug, Clone, PartialEq)]

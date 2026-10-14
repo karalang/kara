@@ -1577,9 +1577,10 @@ will actually see, followed by the fix.
     operators to a user impl: `a + b` on a type with `impl Add` calls its
     `add`, `a += b` means `a = a + b`, and the same holds for `Sub Mul Div
     Rem BitAnd BitOr BitXor Shl Shr`, and for the unary `-a` (`Neg`) and
-    `~a` (`Not`). The subscript traits (`Index`, `IndexMut`) are still
-    stdlib-only there, and the legacy `run --interp` / `build` pipeline
-    refuses every user operator impl. Until then, write a named method.
+    `~a` (`Not`), and `c[k]` on a type with `impl Index` / `impl IndexMut`
+    is the place their `index` / `index_mut` returns. Only the legacy
+    `run --interp` / `build` pipeline still refuses a user operator impl;
+    there, write a named method.
     The comparison operators `== != < <= > >=` dispatch to a user impl
     everywhere (see rejections 2 and 6).
 

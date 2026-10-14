@@ -2445,6 +2445,89 @@ impl<'a> super::TypeChecker<'a> {
         Some(self.subst_operator_self(&sig.return_type, &operand, &name))
     }
 
+    /// B-2026-10-14-37 — `c[k]` on a user type with an `impl Index` (a read)
+    /// or `impl IndexMut` (a write) is the place `*c.index(k)` /
+    /// `*c.index_mut(k)` (design.md § `Index` and `IndexMut`): its type is
+    /// the impl's `Output`, the referent of the method's result.
+    pub(super) fn user_index_impl(
+        &mut self,
+        obj_ty: &Type,
+        idx_ty: &Type,
+        index: &Expr,
+        write: bool,
+        span: &Span,
+    ) -> Option<Type> {
+        if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
+            return None;
+        }
+        let mut recv = resolve_type_var_top(obj_ty, &self.env.substitutions);
+        while let Type::Ref(inner) | Type::MutRef(inner) = recv {
+            recv = resolve_type_var_top(&inner, &self.env.substitutions);
+        }
+        let (name, args) = match &recv {
+            Type::Named { name, args }
+                if self.env.structs.contains_key(name) || self.env.enums.contains_key(name) =>
+            {
+                (name.clone(), args.clone())
+            }
+            Type::Shared(name) => (name.clone(), Vec::new()),
+            _ => return None,
+        };
+        // The impl's own parameters (`impl[T] Index[i64] for Stack[T]`) read
+        // at the receiver's arguments.
+        let lookup = |tr: &str, method: &str| {
+            let imp = self.env.find_impl(tr, &name, &args)?;
+            let sig = imp.methods.get(method)?.clone();
+            let subs: HashMap<String, super::types::SubstValue> = imp
+                .target_generic_args
+                .iter()
+                .zip(&args)
+                .filter_map(|(t, a)| match t {
+                    Type::TypeParam(p) => {
+                        Some((p.clone(), super::types::SubstValue::Type(a.clone())))
+                    }
+                    _ => None,
+                })
+                .collect();
+            Some((sig, subs))
+        };
+        let read = lookup("Index", "index");
+        let written = lookup("IndexMut", "index_mut");
+        let (sig, subs) = match (write, written, read) {
+            (true, Some(sig), _) | (false, _, Some(sig)) | (false, Some(sig), None) => sig,
+            (true, None, Some(_)) => {
+                self.type_error(
+                    format!(
+                        "`{name}` implements `Index` but not `IndexMut`, so an element of it \
+                         cannot be written through `[]`"
+                    ),
+                    *span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Some(Type::Error);
+            }
+            _ => return None,
+        };
+        let at = |this: &Self, t: &Type| {
+            super::inference::substitute_type_params(
+                &this.subst_operator_self(t, &recv, &name),
+                &subs,
+            )
+        };
+        if let Some(p) = sig.params.first() {
+            let p = at(self, p);
+            let p = match p {
+                Type::Ref(inner) | Type::MutRef(inner) => *inner,
+                p => p,
+            };
+            self.check_assignable(&p, idx_ty, index.span);
+        }
+        Some(match at(self, &sig.return_type) {
+            Type::Ref(inner) | Type::MutRef(inner) => *inner,
+            t => t,
+        })
+    }
+
     /// `Self` and `Self.Assoc` in an operator impl's signature, read at the
     /// left operand's type `left` (named `name`).
     fn subst_operator_self(&self, t: &Type, left: &Type, name: &str) -> Type {

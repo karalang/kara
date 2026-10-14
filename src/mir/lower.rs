@@ -3961,7 +3961,19 @@ impl<'l, 'a> Bx<'l, 'a> {
             } => (self.tys().tcx().list(args)[1], false),
             HK::Slice { elem, .. } => (elem, true),
             HK::Array { .. } | HK::Vector { .. } => return Ok(self.array_index(base, idx)),
-            _ => return self.unsupported(e.span, "indexing this type"),
+            _ => {
+                // A user type's `impl Index` / `impl IndexMut`
+                // (B-2026-10-14-37).
+                let (tr, method) = if mutable {
+                    ("IndexMut", "index_mut")
+                } else {
+                    ("Index", "index")
+                };
+                return match self.user_impl_method(bt, tr, method) {
+                    Some((d, inst_args)) => self.user_index_place(base, bt, idx, d, inst_args, e),
+                    None => self.unsupported(e.span, "indexing this type"),
+                };
+            }
         };
         let (usize_t, rt, et) = {
             let tcx = self.tys().tcx();
@@ -4004,6 +4016,77 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             return Ok(Place::local(out));
         }
+        Ok(Place::local(out).project(ProjElem::Deref))
+    }
+
+    /// `base[idx]` on a user type: the place `*base.index(idx)`, or
+    /// `*base.index_mut(idx)` for a write (design.md § `Index` and
+    /// `IndexMut`, B-2026-10-14-37). The receiver is borrowed as the method's
+    /// `self` asks; an index the method borrows is lent from a temporary.
+    fn user_index_place(
+        &mut self,
+        base: Place,
+        bt: Ty,
+        idx: Operand,
+        d: DefId,
+        inst_args: Vec<Ty>,
+        e: &'a Expr,
+    ) -> R<Place> {
+        let f = self.lcx.fns[&d].f;
+        let (Some(m), [p]) = (f.self_param.clone(), f.params.as_slice()) else {
+            return self.unsupported(
+                e.span,
+                "an index method that does not take `self` and an index",
+            );
+        };
+        if self.lcx.fns[&d].impl_params == 0 {
+            self.lcx.self_tys.entry(d).or_insert(bt);
+        }
+        let borrow = match self.self_mode(f, m, bt) {
+            SelfParam::Ref => BorrowKind::Shared,
+            SelfParam::MutRef => BorrowKind::Mut,
+            SelfParam::Owned => {
+                return self.unsupported(e.span, "an index method that takes `self` by value")
+            }
+        };
+        let pt = self.callee_param_ty(p, &inst_args)?;
+        let et = self.expr_ty(e)?;
+        let (rt, out_t) = {
+            let tcx = self.tys().tcx();
+            let mutable = borrow == BorrowKind::Mut;
+            (tcx.reference(bt, mutable), tcx.reference(et, mutable))
+        };
+        let r = self.temp(rt);
+        self.assign(r, Rvalue::Ref(borrow, base));
+        let idx = match self.tys().tcx().kind(pt) {
+            HK::Ref(it) | HK::MutRef(it) if !self.is_reference(self.operand_ty(&idx)) => {
+                let v = self.temp(it);
+                self.assign(v, Rvalue::Use(idx));
+                let lent = self.temp(pt);
+                let kind = if matches!(self.tys().tcx().kind(pt), HK::MutRef(_)) {
+                    BorrowKind::Mut
+                } else {
+                    BorrowKind::Shared
+                };
+                self.assign(lent, Rvalue::Ref(kind, Place::local(v)));
+                Operand::Move(Place::local(lent))
+            }
+            _ => idx,
+        };
+        let out = self.temp(out_t);
+        let name = self.lcx.instance(d, inst_args.clone());
+        let func = self.fn_operand(&name, d, inst_args);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: vec![Operand::Move(Place::local(r)), idx],
+                destination: Place::local(out),
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
         Ok(Place::local(out).project(ProjElem::Deref))
     }
 

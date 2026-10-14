@@ -12855,13 +12855,6 @@ fn test_operators_page_quotes_live_diagnostics() {
             "fn main() { let x: i32 = 1; let y: i64 = 2; let z = x + y; }",
             "cannot mix integer types",
         ),
-        (
-            "userimpl",
-            "struct P { x: i64 }\n\
-             impl Index for P { type Output = i64; }\n\
-             fn main() { }",
-            "operator traits are stdlib-only",
-        ),
         // The two complements Kara splits where Rust spells one `!`. Pinned
         // as a PAIR: each rejects exactly the operand the other requires, and
         // the page's rejection 5 is only true while both still hold.
@@ -12890,6 +12883,31 @@ fn test_operators_page_quotes_live_diagnostics() {
             "operators page must quote the live diagnostic `{fragment}`"
         );
     }
+    // Rejection 4 is the legacy pipeline's alone since the v2 pipelines take
+    // every user operator impl, `Index` and `IndexMut` included
+    // (B-2026-10-14-37), so it is measured on `run --interp`.
+    let tmp =
+        std::env::temp_dir().join(format!("karac-cli-explain-userimpl-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("probe.kara");
+    std::fs::write(
+        &path,
+        "struct P { x: i64 }\nimpl Index for P { type Output = i64; }\nfn main() { }\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args(["run", "--interp", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let emitted = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+    let fragment = "operator traits are stdlib-only";
+    assert!(emitted.contains(fragment), "userimpl: {emitted}");
+    assert!(page.contains(fragment));
 }
 
 /// The operators page must not quote diagnostics the compiler has STOPPED

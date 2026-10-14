@@ -6469,6 +6469,11 @@ impl<'a> super::TypeChecker<'a> {
                 let lhs = std::mem::replace(&mut self.assigning_lhs, false);
                 let idx_ty = self.infer_expr(index);
                 self.assigning_lhs = lhs;
+                if let Some(t) =
+                    self.user_index_impl(&obj_ty, &idx_ty, index, index_is_lhs, &expr.span)
+                {
+                    return t;
+                }
                 // `t.0[i]` — indexing a `Vec`/`VecDeque` that lives in a TUPLE
                 // element. Codegen resolves the element's storage pointer
                 // structurally (GEP into the tuple) but needs the element's

@@ -280,3 +280,51 @@ fn main() {
         "122\n",
     );
 }
+
+// B-2026-10-14-37: `c[k]` on a user type is the place its `index` returns,
+// `c[k] = v` and `c[k] += v` write through `index_mut`.
+#[test]
+fn user_index_impls_are_called() {
+    assert_runs(
+        r#"struct Grid { w: i64, cells: Vec[i64] }
+impl Index[(i64, i64)] for Grid {
+    type Output = i64;
+    fn index(self, idx: (i64, i64)) -> ref i64 {
+        let (r, c) = idx;
+        ref self.cells[r * self.w + c]
+    }
+}
+impl IndexMut[(i64, i64)] for Grid {
+    type Output = i64;
+    fn index_mut(mut ref self, idx: (i64, i64)) -> mut ref i64 {
+        let (r, c) = idx;
+        self.cells[r * self.w + c]
+    }
+}
+struct Names { all: Vec[String] }
+impl Index[i64] for Names {
+    type Output = String;
+    fn index(self, i: i64) -> ref String { ref self.all[i] }
+}
+struct Stack[T] { items: Vec[T] }
+impl[T] Index[i64] for Stack[T] {
+    type Output = T;
+    fn index(self, i: i64) -> ref T { ref self.items[self.items.len() as i64 - 1 - i] }
+}
+fn main() {
+    let mut g = Grid { w: 2, cells: vec![1, 2, 3, 4] };
+    g[1, 0] = 30;
+    g[0, 1] += 5;
+    println(f"{g[1, 0]} {g[0, 1]} {g[(1, 1)]}");
+    let n = Names { all: vec!["ada".to_string(), "bob".to_string()] };
+    println(f"{n[1]} {n[0].len()}");
+    let c = n[0].clone();
+    println(c);
+    let s = Stack { items: vec![1, 2, 3] };
+    let t = Stack { items: vec!["a".to_string(), "b".to_string()] };
+    println(f"{s[0]} {s[2]} {t[0]} {t[1]}");
+}
+"#,
+        "30 7 4\nbob 3\nada\n3 1 b a\n",
+    );
+}

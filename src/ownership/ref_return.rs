@@ -531,6 +531,12 @@ fn classify_borrow_return(
             op: UnaryOp::Ref,
             operand,
         } if super::core_rules() => ref_place_shape(operand, ref_params, ref_locals),
+        // An element place (`self.cells[i]` as an `index_mut` body's tail)
+        // borrows its collection, so it traces the same way
+        // (B-2026-10-14-37).
+        ExprKind::Index { .. } | ExprKind::TupleIndex { .. } if super::core_rules() => {
+            ref_place_shape(e, ref_params, ref_locals)
+        }
         // Conditional borrow return (`longer`-style Tier 2): every branch
         // must itself be a borrowable shape. A value `if` needs an `else`.
         ExprKind::If {
