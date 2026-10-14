@@ -1,0 +1,87 @@
+// LeetCode #565: Array Nesting -- a set of seen indices.
+//
+// The ★ arm's walk with the marks kept in a `Set[i64]`: a start already
+// in the set lies on a cycle already measured, and a walk stops when
+// `insert` reports its index was there. O(n) expected time, O(n) space.
+
+fn array_nesting(nums: Vec[i64]) -> i64 {
+    let mut seen: Set[i64] = Set.new();
+    let mut best = 0;
+    for start in 0..nums.len() {
+        if seen.contains(start) {
+            continue;
+        }
+        let mut length = 0;
+        let mut i = start;
+        while seen.insert(i) {
+            i = nums[i];
+            length += 1;
+        }
+        best = best.max(length);
+    }
+    best
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums}: {array_nesting(nums)}");
+}
+
+// A random permutation of 0..n, by Fisher-Yates.
+fn permutation(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = (0..n).collect();
+    let mut i = n - 1;
+    while i > 0 {
+        let j = step(seed) % (i + 1);
+        nums.swap(i, j);
+        i -= 1;
+    }
+    nums
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![5, 4, 0, 3, 1, 6, 2]);
+    show(vec![0, 1, 2]);
+    // One element; two swapped; reversed, all pairs but the middle.
+    show(vec![0]);
+    show(vec![1, 0]);
+    show(vec![4, 3, 2, 1, 0]);
+    // One cycle through every index, and three cycles of different
+    // lengths.
+    show(vec![1, 2, 3, 4, 5, 0]);
+    show(vec![1, 0, 3, 4, 2, 6, 7, 8, 5]);
+    // 300 random permutations of 1 to 50 elements.
+    let mut seed: i64 = 565;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + step(mut seed) % 50;
+        let got = array_nesting(permutation(n, mut seed));
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"300 random permutations: total {total}, checksum {checksum}");
+    // The problem's most, 100,000 elements: one cycle, every index its
+    // own cycle, pairs swapped, and random.
+    let n = 100000;
+    let mut rotated: Vec[i64] = Vec.new();
+    for i in 0..n {
+        rotated.push((i + 1) % n);
+    }
+    println(f"100000 in one cycle: {array_nesting(rotated)}");
+    let identity: Vec[i64] = (0..n).collect();
+    println(f"100000 fixed: {array_nesting(identity)}");
+    let mut pairs: Vec[i64] = Vec.new();
+    for i in 0..n {
+        pairs.push(i ^ 1);
+    }
+    println(f"100000 in pairs: {array_nesting(pairs)}");
+    println(f"100000 random: {array_nesting(permutation(n, mut seed))}");
+}

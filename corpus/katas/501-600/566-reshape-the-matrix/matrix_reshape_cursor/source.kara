@@ -1,0 +1,101 @@
+// LeetCode #566: Reshape the Matrix -- a write cursor.
+//
+// The original is read row by row, and each value is written at a
+// cursor into an r by c matrix of zeros; the cursor moves along its row
+// and wraps to the next row's start after column c - 1. No division.
+// O(m * n) time.
+
+fn matrix_reshape(mat: Vec[Vec[i64]], r: i64, c: i64) -> Vec[Vec[i64]] {
+    if mat.len() * mat[0].len() != r * c {
+        return mat.clone();
+    }
+    let mut out = vec![vec![0; c]; r];
+    let mut row = 0;
+    let mut col = 0;
+    for line in mat.iter() {
+        for x in line.iter() {
+            out[row][col] = *x;
+            col += 1;
+            if col == c {
+                col = 0;
+                row += 1;
+            }
+        }
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(mat: Vec[Vec[i64]], r: i64, c: i64) {
+    println(f"{mat} to {r} by {c}: {matrix_reshape(mat, r, c)}");
+}
+
+fn main() {
+    // The two LeetCode examples: reshaped, and kept for a wrong count.
+    show(vec![vec![1, 2], vec![3, 4]], 1, 4);
+    show(vec![vec![1, 2], vec![3, 4]], 2, 4);
+    // The same shape; one value; a row to a column and back.
+    show(vec![vec![1, 2], vec![3, 4]], 2, 2);
+    show(vec![vec![7]], 1, 1);
+    show(vec![vec![1, 2, 3, 4, 5, 6]], 6, 1);
+    show(vec![vec![1], vec![2], vec![3], vec![4], vec![5], vec![6]], 1, 6);
+    // 2 by 3 to 3 by 2, and the extreme values; a count that is close.
+    show(vec![vec![1, 2, 3], vec![4, 5, 6]], 3, 2);
+    show(vec![vec![-1000, 1000], vec![1000, -1000]], 4, 1);
+    show(vec![vec![1, 2, 3], vec![4, 5, 6]], 5, 1);
+    // 300 random matrices of 1 to 8 by 1 to 8, each reshaped to a
+    // random divisor shape of its count, or to a wrong one.
+    let mut seed: i64 = 566;
+    let mut kept = 0;
+    let mut checksum: i64 = 0;
+    for t in 0..300 {
+        let m = 1 + step(mut seed) % 8;
+        let n = 1 + step(mut seed) % 8;
+        let mut mat: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                row.push(step(mut seed) % 2001 - 1000);
+            }
+            mat.push(row);
+        }
+        let mut r = 1 + step(mut seed) % (m * n);
+        while (m * n) % r != 0 {
+            r -= 1;
+        }
+        let mut c = m * n / r;
+        if t % 4 == 3 {
+            c += 1;
+        }
+        let got = matrix_reshape(mat, r, c);
+        if got.len() == m and got[0].len() == n and not (r == m and c == n) {
+            kept += 1;
+        }
+        for row in got.iter() {
+            for x in row.iter() {
+                checksum = (checksum * 31 + *x + 1000) % 1000000007;
+            }
+            checksum = (checksum * 31 + 7) % 1000000007;
+        }
+    }
+    println(f"300 random matrices: {kept} kept, checksum {checksum}");
+    // The problem's most, 100 by 100 to 1 by 10000, 10000 by 1 and back.
+    let mut big: Vec[Vec[i64]] = Vec.new();
+    for i in 0..100 {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..100 {
+            row.push((i * 100 + j) % 2001 - 1000);
+        }
+        big.push(row);
+    }
+    let wide = matrix_reshape(big, 1, 10000);
+    let tall = matrix_reshape(wide, 10000, 1);
+    let back = matrix_reshape(tall, 100, 100);
+    println(f"100 by 100: wide {wide.len()} by {wide[0].len()}, tall {tall.len()} by {tall[0].len()}, back the same {back == big}");
+}

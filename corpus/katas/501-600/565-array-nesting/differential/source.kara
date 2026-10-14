@@ -1,0 +1,226 @@
+// LeetCode #565: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// permutations.
+
+// ---- star arm ----------------------------------------------------------
+
+fn array_nesting_star(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut visited = vec![false; n];
+    let mut best = 0;
+    for start in 0..n {
+        if visited[start] {
+            continue;
+        }
+        let mut length = 0;
+        let mut i = start;
+        while not visited[i] {
+            visited[i] = true;
+            i = nums[i];
+            length += 1;
+        }
+        best = best.max(length);
+    }
+    best
+}
+
+// ---- inplace arm -------------------------------------------------------
+
+fn array_nesting_inplace(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut next = nums.clone();
+    let mut best = 0;
+    for start in 0..n {
+        let mut length = 0;
+        let mut i = start;
+        while next[i] != n {
+            let j = next[i];
+            next[i] = n;
+            i = j;
+            length += 1;
+        }
+        best = best.max(length);
+    }
+    best
+}
+
+// ---- union arm ---------------------------------------------------------
+
+fn find_union(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut x = x;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn array_nesting_union(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut parent: Vec[i64] = (0..n).collect();
+    let mut size = vec![1; n];
+    let mut best = 1;
+    for i in 0..n {
+        let mut a = find_union(mut parent, i);
+        let mut b = find_union(mut parent, nums[i]);
+        if a == b {
+            continue;
+        }
+        if size[a] < size[b] {
+            let t = a;
+            a = b;
+            b = t;
+        }
+        parent[b] = a;
+        size[a] += size[b];
+        best = best.max(size[a]);
+    }
+    best
+}
+
+// ---- set arm -----------------------------------------------------------
+
+fn array_nesting_set(nums: Vec[i64]) -> i64 {
+    let mut seen: Set[i64] = Set.new();
+    let mut best = 0;
+    for start in 0..nums.len() {
+        if seen.contains(start) {
+            continue;
+        }
+        let mut length = 0;
+        let mut i = start;
+        while seen.insert(i) {
+            i = nums[i];
+            length += 1;
+        }
+        best = best.max(length);
+    }
+    best
+}
+
+// ---- the definition and the properties ------------------------------------
+
+// The definition: every s[k] built as the statement writes it, a list
+// started at nums[k] and extended by nums of its last element until that
+// would repeat an element, and the longest list's length.
+fn definition(nums: Vec[i64]) -> i64 {
+    let mut best = 0;
+    for k in 0..nums.len() {
+        let mut s: Vec[i64] = vec![nums[k]];
+        loop {
+            let next = nums[s[s.len() - 1]];
+            if s.contains(next) {
+                break;
+            }
+            s.push(next);
+        }
+        best = best.max(s.len());
+    }
+    best
+}
+
+fn answer(which: i64, nums: Vec[i64]) -> i64 {
+    if which == 0 {
+        array_nesting_star(nums)
+    } else if which == 1 {
+        array_nesting_inplace(nums)
+    } else if which == 2 {
+        array_nesting_union(nums)
+    } else {
+        array_nesting_set(nums)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn permutation(n: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut nums: Vec[i64] = (0..n).collect();
+    let mut i = n - 1;
+    while i > 0 {
+        let j = step(seed) % (i + 1);
+        nums.swap(i, j);
+        i -= 1;
+    }
+    nums
+}
+
+// A permutation of 1 to 30 elements: random, made of cycles of random
+// lengths laid out in order, or the identity with a few swaps, in turn.
+fn random_case(t: i64, seed: mut ref i64) -> Vec[i64] {
+    let n = 1 + step(seed) % 30;
+    if t % 3 == 0 {
+        return permutation(n, seed);
+    }
+    let mut nums: Vec[i64] = (0..n).collect();
+    if t % 3 == 1 {
+        let mut start = 0;
+        while start < n {
+            let length = (1 + step(seed) % 8).min(n - start);
+            for j in 0..length {
+                nums[start + j] = start + (j + 1) % length;
+            }
+            start += length;
+        }
+    } else {
+        for _ in 0..step(seed) % 4 {
+            nums.swap(step(seed) % n, step(seed) % n);
+        }
+    }
+    nums
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5650;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        let nums = random_case(t, mut seed);
+        let n = nums.len();
+        let want = definition(nums);
+        // The same permutation with its indices renamed, its inverse,
+        // and with a cycle of 1 to 40 new indices added after it.
+        let sigma = permutation(n, mut seed);
+        let mut renamed = vec![0; n];
+        let mut inverse = vec![0; n];
+        for i in 0..n {
+            renamed[sigma[i]] = sigma[nums[i]];
+            inverse[nums[i]] = i;
+        }
+        let m = 1 + step(mut seed) % 40;
+        let mut extended = nums.clone();
+        for j in 0..m {
+            extended.push(n + (j + 1) % m);
+        }
+        for which in 0..4 {
+            let got = answer(which, nums);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: at least 1 and at most n.
+                got >= 1 and got <= n,
+                // P3: renaming the indices changes nothing.
+                answer(which, renamed) == got,
+                // P4: the inverse has the same cycles.
+                answer(which, inverse) == got,
+                // P5: a cycle of m new indices gives the larger of the two.
+                answer(which, extended) == got.max(m),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

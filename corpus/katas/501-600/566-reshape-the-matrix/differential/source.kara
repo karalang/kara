@@ -1,0 +1,200 @@
+// LeetCode #566: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// matrices and shapes.
+
+// ---- star arm ----------------------------------------------------------
+
+fn matrix_reshape_star(mat: Vec[Vec[i64]], r: i64, c: i64) -> Vec[Vec[i64]] {
+    let m = mat.len();
+    let n = mat[0].len();
+    if m * n != r * c {
+        return mat.clone();
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..r {
+        let mut row: Vec[i64] = Vec.new();
+        for j in 0..c {
+            let k = i * c + j;
+            row.push(mat[k / n][k % n]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+// ---- flat arm ----------------------------------------------------------
+
+fn matrix_reshape_flat(mat: Vec[Vec[i64]], r: i64, c: i64) -> Vec[Vec[i64]] {
+    let flat: Vec[i64] = mat.iter().flat_map(|row| row.iter()).collect();
+    if flat.len() != r * c {
+        return mat.clone();
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..r {
+        out.push(flat[i * c..(i + 1) * c].to_vec());
+    }
+    out
+}
+
+// ---- cursor arm --------------------------------------------------------
+
+fn matrix_reshape_cursor(mat: Vec[Vec[i64]], r: i64, c: i64) -> Vec[Vec[i64]] {
+    if mat.len() * mat[0].len() != r * c {
+        return mat.clone();
+    }
+    let mut out = vec![vec![0; c]; r];
+    let mut row = 0;
+    let mut col = 0;
+    for line in mat.iter() {
+        for x in line.iter() {
+            out[row][col] = *x;
+            col += 1;
+            if col == c {
+                col = 0;
+                row += 1;
+            }
+        }
+    }
+    out
+}
+
+// ---- fromfn arm --------------------------------------------------------
+
+fn matrix_reshape_fromfn(mat: Vec[Vec[i64]], r: i64, c: i64) -> Vec[Vec[i64]] {
+    let n = mat[0].len();
+    if mat.len() * n != r * c {
+        return mat.clone();
+    }
+    Vec.from_fn(r, |i| Vec.from_fn(c, |j| mat[(i * c + j) / n][(i * c + j) % n]))
+}
+
+// ---- the definition and the properties ------------------------------------
+
+// The definition: the original's values read row by row onto a list,
+// then the new matrix filled row by row from the front of that list.
+// Kept as the original when the counts differ.
+fn definition(mat: Vec[Vec[i64]], r: i64, c: i64) -> Vec[Vec[i64]] {
+    let mut values: Vec[i64] = Vec.new();
+    for row in mat.iter() {
+        for x in row.iter() {
+            values.push(*x);
+        }
+    }
+    if values.len() != r * c {
+        return mat.clone();
+    }
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut next = 0;
+    while out.len() < r {
+        let mut row: Vec[i64] = Vec.new();
+        while row.len() < c {
+            row.push(values[next]);
+            next += 1;
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn answer(which: i64, mat: Vec[Vec[i64]], r: i64, c: i64) -> Vec[Vec[i64]] {
+    if which == 0 {
+        matrix_reshape_star(mat, r, c)
+    } else if which == 1 {
+        matrix_reshape_flat(mat, r, c)
+    } else if which == 2 {
+        matrix_reshape_cursor(mat, r, c)
+    } else {
+        matrix_reshape_fromfn(mat, r, c)
+    }
+}
+
+fn row_major(mat: Vec[Vec[i64]]) -> Vec[i64] {
+    let mut values: Vec[i64] = Vec.new();
+    for row in mat.iter() {
+        for x in row.iter() {
+            values.push(*x);
+        }
+    }
+    values
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5660;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 6 by 1 to 6, values in -1000..1000 or in 0..2; a shape
+        // with the same count, then any shape of 1 to 12 by 1 to 12, in
+        // turn.
+        let m = 1 + step(mut seed) % 6;
+        let n = 1 + step(mut seed) % 6;
+        let spread = if t % 4 < 2 { 2001 } else { 3 };
+        let mut mat: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                row.push(step(mut seed) % spread - spread / 2);
+            }
+            mat.push(row);
+        }
+        let mut r = 1 + step(mut seed) % (m * n);
+        let mut c = 1;
+        if t % 2 == 0 {
+            while (m * n) % r != 0 {
+                r -= 1;
+            }
+            c = m * n / r;
+        } else {
+            r = 1 + step(mut seed) % 12;
+            c = 1 + step(mut seed) % 12;
+        }
+        let want = definition(mat, r, c);
+        let fits = m * n == r * c;
+        for which in 0..4 {
+            let got = answer(which, mat, r, c);
+            let long = answer(which, mat, 1, m * n);
+            let mut shaped = true;
+            if fits {
+                shaped = got.len() == r;
+                for row in got.iter() {
+                    if row.len() != c {
+                        shaped = false;
+                    }
+                }
+            } else {
+                shaped = got == mat;
+            }
+            let ok = vec![
+                // P1: the definition's matrix.
+                got == want,
+                // P2: r rows of c when the counts match, else the original.
+                shaped,
+                // P3: reshaped back to m by n it is the original.
+                answer(which, got, m, n) == mat,
+                // P4: the same values in the same row-major order.
+                row_major(got) == row_major(mat),
+                // P5: by way of one long row, the same matrix; a shape
+                // that does not fit keeps the long row.
+                answer(which, long, r, c) == (if fits { got.clone() } else { long.clone() }),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

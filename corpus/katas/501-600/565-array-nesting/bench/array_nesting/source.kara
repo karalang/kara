@@ -1,0 +1,77 @@
+// Benchmark for #565: Array Nesting -- the ★ arm (walk each cycle once).
+//
+// `nums` is a permutation, so following i -> nums[i] from any start goes
+// round a cycle and comes back, and s[k] is the cycle through k. The
+// cycles split the indices, so each is walked once from its first
+// unvisited index, marking as it goes, and the longest walk is the
+// answer. O(n) time, O(n) space for the marks.
+
+fn array_nesting(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut visited = vec![false; n];
+    let mut best = 0;
+    for start in 0..n {
+        if visited[start] {
+            continue;
+        }
+        let mut length = 0;
+        let mut i = start;
+        while not visited[i] {
+            visited[i] = true;
+            i = nums[i];
+            length += 1;
+        }
+        best = best.max(length);
+    }
+    best
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 permutations of 100,000 (the problem's most) built once, in
+    // turn a random one by Fisher-Yates and one made of cycles of 1 to
+    // 2,000 indices laid out in order. Then 100 times over, every
+    // permutation is answered.
+    let count = 20;
+    let rounds = 100;
+    let n = 100000;
+    let mut seed: i64 = 565;
+    let mut perms: Vec[Vec[i64]] = Vec.new();
+    for g in 0..count {
+        let mut nums: Vec[i64] = (0..n).collect();
+        if g % 2 == 0 {
+            let mut i = n - 1;
+            while i > 0 {
+                let j = (step(mut seed) * 32768 + step(mut seed)) % (i + 1);
+                nums.swap(i, j);
+                i -= 1;
+            }
+        } else {
+            let mut start = 0;
+            while start < n {
+                let length = (1 + step(mut seed) % 2000).min(n - start);
+                for j in 0..length {
+                    nums[start + j] = start + (j + 1) % length;
+                }
+                start += length;
+            }
+        }
+        perms.push(nums);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let got = array_nesting(perms[(round * 7 + g) % count]);
+            total += got;
+            checksum = (checksum * 31 + got) % 1000000007;
+        }
+    }
+    println(f"{count} permutations of {n}, {rounds} rounds: total {total}, checksum {checksum}");
+}
