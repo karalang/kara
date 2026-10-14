@@ -1,0 +1,103 @@
+== pipelined delivery
+S: 220 example.test ESMTP sink
+C: EHLO client.example.org
+S: 250-example.test greets client.example.org | 250-SIZE 600 | 250-PIPELINING | 250 8BITMIME
+C: MAIL FROM:<Alice@Example.org>
+S: 250 2.1.0 Ok
+C: RCPT TO:<bob@example.test>
+S: 250 2.1.5 Ok
+C: RCPT TO:<carol@example.test>
+S: 250 2.1.5 Ok
+C: DATA
+S: 354 End data with <CR><LF>.<CR><LF>
+C: <message, 8 lines>
+S: 250 2.0.0 Ok: queued as Q0001
+C: MAIL FROM: <alice@example.org>
+S: 250 2.1.0 Ok
+C: RCPT TO:<dave@example.test>
+S: 250 2.1.5 Ok
+C: DATA
+S: 354 End data with <CR><LF>.<CR><LF>
+C: <message, 3 lines>
+S: 250 2.0.0 Ok: queued as Q0002
+C: QUIT
+S: 221 2.0.0 Bye
+== errors and limits
+S: 220 example.test ESMTP sink
+C: MAIL FROM:<x@example.org>
+S: 503 5.5.1 Error: send HELO/EHLO first
+C: HELO
+S: 501 5.5.4 Syntax: EHLO hostname
+C: helo old.example.org
+S: 250 example.test
+C: RCPT TO:<bob@example.test>
+S: 503 5.5.1 Error: need MAIL command
+C: MAIL FROM:alice@example.org
+S: 501 5.5.4 Syntax: MAIL FROM:<address>
+C: mail from:<eve@example.org>
+S: 250 2.1.0 Ok
+C: MAIL FROM:<eve@example.org>
+S: 503 5.5.1 Error: nested MAIL command
+C: RCPT TO:<root@elsewhere.org>
+S: 550 5.1.1 <root@elsewhere.org>: Recipient address rejected: not local
+C: DATA
+S: 554 5.5.1 Error: no valid recipients
+C: RCPT TO:<a@example.test>
+S: 250 2.1.5 Ok
+C: RCPT TO:<b@example.test>
+S: 250 2.1.5 Ok
+C: RCPT TO:<c@example.test>
+S: 250 2.1.5 Ok
+C: RCPT TO:<d@example.test>
+S: 452 4.5.3 Error: too many recipients
+C: VRFY bob
+S: 252 2.0.0 Cannot VRFY user, but will accept message
+C: NOOP
+S: 250 2.0.0 Ok
+C: STARTTLS
+S: 500 5.5.2 Error: command not recognized
+C: DATA
+S: 354 End data with <CR><LF>.<CR><LF>
+C: <message, 43 lines>
+S: 552 5.3.4 Error: message file too big
+C: RSET
+S: 250 2.0.0 Ok
+C: DATA
+S: 503 5.5.1 Error: need RCPT command
+C: QUIT
+S: 221 2.0.0 Bye
+C: NOOP
+S: (no reply)
+== mime message
+S: 220 example.test ESMTP sink
+C: EHLO mua.example.org
+S: 250-example.test greets mua.example.org | 250-SIZE 600 | 250-PIPELINING | 250 8BITMIME
+C: MAIL FROM:<carol@example.test>
+S: 250 2.1.0 Ok
+C: RCPT TO:<bob@example.test>
+S: 250 2.1.5 Ok
+C: DATA
+S: 354 End data with <CR><LF>.<CR><LF>
+C: <message, 17 lines>
+S: 250 2.0.0 Ok: queued as Q0003
+C: QUIT
+S: 221 2.0.0 Bye
+stored 3: Q0001 Q0002 Q0003
+== maildir
+Q0001.eml 295 bytes
+    from <alice@example.org> to bob@example.test, carol@example.test
+    subject: lunch on friday?
+    received: from client.example.org by example.test with ESMTP id Q0001
+    3 body lines, last: see you.
+Q0002.eml 167 bytes
+    from <alice@example.org> to dave@example.test
+    subject: second
+    received: from client.example.org by example.test with ESMTP id Q0002
+    1 body lines, last: one line
+Q0003.eml 439 bytes
+    from <carol@example.test> to bob@example.test
+    subject: report attached
+    received: from mua.example.org by example.test with ESMTP id Q0003
+    2 parts
+    part 1: text/plain, 17 chars: Numbers attached.
+    part 2: text/csv, base64, 32 bytes decoded, first line: region,total

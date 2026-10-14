@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | codegen-gap | 258 |
 | missing-feature | 258 |
-| false-positive | 181 |
+| false-positive | 182 |
 | other | 172 |
 | perf | 166 |
 | diagnostics | 161 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2891 |
 | interp | 922 |
-| typecheck | 418 |
+| typecheck | 419 |
 | other | 115 |
 | ownership | 95 |
 | cli | 76 |
@@ -202,6 +202,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-67 | 2026-10-14 | typecheck | medium | `join` works only on `String` elements: `Vec[i64].join(",")` and `Vec[Str].join(" ")` are refused with "Vec.join() requires String elements", and `Slice[Str].join` with "no method 'join' on type 'Slice'" (B-2026-10-14-4 gave `Slice[String]` its join), by `karac check` and the MIR typecheck; docs/library/collections.md:57 specifies `fn join(self, sep: Str) -> String where T: Display` | — |
 | B-2026-10-14-68 | 2026-10-14 | typecheck | medium | A string literal passed to a METHOD whose parameter is `Str` is still typed `String`: `let mut v: Vec[Str] = Vec.new(); v.push("a");` is refused with "expected 'StringSlice', found 'String'" by `karac check` and the MIR typecheck, while `v.push(s)` with `let s: Str = "a"` works (remainder of B-2026-10-12-13) | — |
 | B-2026-10-14-69 | 2026-10-14 | runtime | medium | A short `Vec` grown by `push` allocates twice on the MIR compiled backend (first block 4 elements, then 8) where legacy allocates once (8): kata 638's `Map[Vec[i64], i64]` memo bench is 2.0x legacy, 1.2x with the first block raised to 8 | — |
+| B-2026-10-14-70 | 2026-10-14 | typecheck | medium | `karac check` still refuses chained field receivers (`self.env.to.len()`, `self.env.to.push(x)`) with the `chained_field_receiver` error, a legacy-codegen deferral ("deferred to v1.x in codegen ... fails `karac build`"), although every v2 surface runs them: the corpus mir-* backends run check first, so any v2 program with a nested-field method call fails | — |
 
 ### Relocated
 

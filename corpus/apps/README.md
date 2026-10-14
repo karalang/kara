@@ -140,6 +140,7 @@ cli/mini_grep       grep with its own regex engine (Pike VM): -i -v -c -l -n -o 
 service/resp_store  Redis-style RESP2 server over TCP: strings, lists, expiry, KEYS, append-only file replayed on restart
 service/todo_api    REST API: hand-written JSON library, router of fn values, closure middleware, keep-alive pipelining
 pipeline/event_store event-sourced ledger: Aggregate trait + generic replay, append-only log, snapshots, torn-record recovery by seek
+service/smtp_sink   SMTP receiver over TCP: RFC 5321 replies and limits, dot unstuffing, maildir, MIME + base64 report
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

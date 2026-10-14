@@ -1,0 +1,596 @@
+// An SMTP receiver ("mail sink") over TCP. It speaks the server half of
+// RFC 5321 for one domain: EHLO/HELO, MAIL FROM, RCPT TO, DATA with dot
+// unstuffing, RSET, NOOP, VRFY, QUIT, with the reply codes and the
+// command-sequence rules (503 bad sequence, 550 unknown recipient, 452 too
+// many recipients, 552 message too large). Each accepted message gets a
+// queue id and a Received header and is written to a maildir, one file per
+// message. A report then reads the maildir back and parses each message:
+// unfolded headers, multipart/mixed bodies split on their boundary, and
+// base64 parts decoded.
+//
+// The server and its client run in one thread: the client connects, writes
+// a whole pipelined session and shuts down its write side; the server
+// accepts, reads to EOF, answers every command, and the client reads the
+// replies and pairs them with what it sent.
+
+const ADDR: Str = "127.0.0.1:47734";
+const DOMAIN: Str = "example.test";
+const MAILDIR: Str = "maildir";
+const MAX_RCPT: i64 = 3;
+const MAX_SIZE: i64 = 600;
+
+enum Phase { Connected, Greeted, InMail, InRcpt }
+
+struct Envelope { from: String, to: Vec[String] }
+
+struct Server { phase: Phase, helo: String, env: Envelope, next_id: i64, stored: Vec[String] }
+
+impl Server {
+    fn new() -> Server {
+        Server { phase: Phase.Connected, helo: String.new(),
+                 env: Envelope { from: String.new(), to: Vec.new() }, next_id: 1, stored: Vec.new() }
+    }
+
+    fn reset(mut ref self) {
+        self.env = Envelope { from: String.new(), to: Vec.new() };
+        if self.phase != Phase.Connected {
+            self.phase = Phase.Greeted;
+        }
+    }
+
+    // One command line; returns the reply (one or more CRLF lines).
+    fn command(mut ref self, line: Str) -> String {
+        let (verb, arg) = match line.find(" ") {
+            Some(i) => (line[0..i].to_uppercase(), line[i + 1..line.len()].trim()),
+            None => (line.to_uppercase(), ""),
+        };
+        match verb.as_str() {
+            "EHLO" | "HELO" => {
+                if arg.is_empty() {
+                    return "501 5.5.4 Syntax: EHLO hostname\r\n".to_string();
+                }
+                self.helo = arg.to_string();
+                self.phase = Phase.Greeted;
+                self.env = Envelope { from: String.new(), to: Vec.new() };
+                if verb == "HELO" {
+                    return f"250 {DOMAIN}\r\n";
+                }
+                f"250-{DOMAIN} greets {arg}\r\n250-SIZE {MAX_SIZE}\r\n250-PIPELINING\r\n250 8BITMIME\r\n"
+            }
+            "MAIL" => {
+                if self.phase == Phase.Connected {
+                    return "503 5.5.1 Error: send HELO/EHLO first\r\n".to_string();
+                }
+                if self.phase != Phase.Greeted {
+                    return "503 5.5.1 Error: nested MAIL command\r\n".to_string();
+                }
+                match path_arg(arg, "FROM:") {
+                    Some(addr) => {
+                        self.env.from = addr;
+                        self.phase = Phase.InMail;
+                        "250 2.1.0 Ok\r\n".to_string()
+                    }
+                    None => "501 5.5.4 Syntax: MAIL FROM:<address>\r\n".to_string(),
+                }
+            }
+            "RCPT" => {
+                if self.phase != Phase.InMail && self.phase != Phase.InRcpt {
+                    return "503 5.5.1 Error: need MAIL command\r\n".to_string();
+                }
+                let addr = match path_arg(arg, "TO:") {
+                    Some(a) => a,
+                    None => return "501 5.5.4 Syntax: RCPT TO:<address>\r\n".to_string(),
+                };
+                if !addr.ends_with(f"@{DOMAIN}") {
+                    return f"550 5.1.1 <{addr}>: Recipient address rejected: not local\r\n";
+                }
+                if self.env.to.len() >= MAX_RCPT {
+                    return "452 4.5.3 Error: too many recipients\r\n".to_string();
+                }
+                self.env.to.push(addr);
+                self.phase = Phase.InRcpt;
+                "250 2.1.5 Ok\r\n".to_string()
+            }
+            "DATA" => {
+                if self.phase != Phase.InRcpt {
+                    if self.phase == Phase.InMail {
+                        return "554 5.5.1 Error: no valid recipients\r\n".to_string();
+                    }
+                    return "503 5.5.1 Error: need RCPT command\r\n".to_string();
+                }
+                "354 End data with <CR><LF>.<CR><LF>\r\n".to_string()
+            }
+            "RSET" => {
+                self.reset();
+                "250 2.0.0 Ok\r\n".to_string()
+            }
+            "NOOP" => "250 2.0.0 Ok\r\n".to_string(),
+            "VRFY" => "252 2.0.0 Cannot VRFY user, but will accept message\r\n".to_string(),
+            "QUIT" => "221 2.0.0 Bye\r\n".to_string(),
+            _ => "500 5.5.2 Error: command not recognized\r\n".to_string(),
+        }
+    }
+
+    // The body after a 354, already unstuffed. Stores it or refuses it.
+    fn message(mut ref self, body: Str) -> String {
+        if body.len() > MAX_SIZE {
+            self.reset();
+            return "552 5.3.4 Error: message file too big\r\n".to_string();
+        }
+        let id = f"Q{pad(self.next_id, 4)}";
+        self.next_id += 1;
+        let mut text = f"Return-Path: <{self.env.from}>\r\n";
+        text.push_str(f"Received: from {self.helo} by {DOMAIN} with ESMTP id {id}\r\n");
+        text.push_str(f"Delivered-To: {self.env.to.join(", ")}\r\n");
+        text.push_str(body);
+        let path = f"{MAILDIR}/new/{id}.eml";
+        match fs.write(path, text) {
+            Ok(_) => {
+                self.stored.push(id.clone());
+                self.reset();
+                f"250 2.0.0 Ok: queued as {id}\r\n"
+            }
+            Err(_) => {
+                self.reset();
+                "451 4.3.0 Error: queue file write error\r\n".to_string()
+            }
+        }
+    }
+}
+
+fn pad(n: i64, width: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < width {
+        s = "0".to_string() + s;
+    }
+    s
+}
+
+// `FROM:<a@b>` (case-insensitive keyword, optional space after the colon).
+fn path_arg(arg: Str, key: Str) -> Option[String] {
+    if arg.len() < key.len() || arg[0..key.len()].to_uppercase() != key {
+        return None;
+    }
+    let rest = arg[key.len()..arg.len()].trim();
+    if !rest.starts_with("<") {
+        return None;
+    }
+    let close = rest.find(">")?;
+    let addr = rest[1..close];
+    if addr.is_empty() || !addr.contains("@") {
+        return None;
+    }
+    Some(addr.to_lowercase())
+}
+
+// Serves a whole pipelined input; returns every reply in order.
+fn serve(srv: mut ref Server, input: Str) -> String {
+    // A new connection starts a new SMTP session.
+    srv.phase = Phase.Connected;
+    srv.helo = String.new();
+    srv.env = Envelope { from: String.new(), to: Vec.new() };
+    let mut out = f"220 {DOMAIN} ESMTP sink\r\n";
+    let lines: Vec[Str] = input.split("\r\n").collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        i += 1;
+        if line.is_empty() && i == lines.len() {
+            break;
+        }
+        let reply = srv.command(line);
+        let quit = reply.starts_with("221");
+        let data = reply.starts_with("354");
+        out.push_str(reply);
+        if quit {
+            break;
+        }
+        if data {
+            let mut body = String.new();
+            let mut ended = false;
+            while i < lines.len() {
+                let l = lines[i];
+                i += 1;
+                if l == "." {
+                    ended = true;
+                    break;
+                }
+                let l = if l.starts_with("..") { l[1..l.len()] } else { l };
+                body.push_str(l);
+                body.push_str("\r\n");
+            }
+            if !ended {
+                out.push_str("451 4.3.0 Error: connection lost in DATA\r\n");
+                break;
+            }
+            out.push_str(srv.message(body));
+        }
+    }
+    out
+}
+
+fn read_all(conn: ref TcpStream) -> Result[String, String] {
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut buf: Array[u8, 64] = [0u8; 64];
+    loop {
+        match conn.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                for i in 0..n {
+                    bytes.push(buf[i]);
+                }
+            }
+            Err(_) => return Err("read failed".to_string()),
+        }
+    }
+    match String.from_utf8(bytes) {
+        Ok(s) => Ok(s),
+        Err(_) => Err("not utf-8".to_string()),
+    }
+}
+
+// One step the client sends: a command line, or a message body for DATA.
+enum Step { Cmd(String), Body(String) }
+
+fn wire(steps: ref Vec[Step]) -> String {
+    let mut w = String.new();
+    for s in steps.iter() {
+        match s {
+            Step.Cmd(c) => {
+                w.push_str(c);
+                w.push_str("\r\n");
+            }
+            Step.Body(b) => {
+                for l in b.split("\n") {
+                    if l.starts_with(".") {
+                        w.push_str(".");
+                    }
+                    w.push_str(l);
+                    w.push_str("\r\n");
+                }
+                w.push_str(".\r\n");
+            }
+        }
+    }
+    w
+}
+
+// Splits the reply stream into replies: a reply ends at `NNN ` (space).
+fn replies(text: Str) -> Vec[Vec[String]] {
+    let mut all: Vec[Vec[String]] = Vec.new();
+    let mut cur: Vec[String] = Vec.new();
+    for l in text.split("\r\n") {
+        if l.is_empty() {
+            continue;
+        }
+        cur.push(l.to_string());
+        if l.len() < 4 || l[3..4] == " " {
+            all.push(cur);
+            cur = Vec.new();
+        }
+    }
+    all
+}
+
+fn session(listener: ref TcpListener, srv: mut ref Server, label: Str, steps: ref Vec[Step]) {
+    println(f"== {label}");
+    let client = match TcpStream.connect(ADDR) {
+        Ok(c) => c,
+        Err(_) => {
+            println("connect failed");
+            return;
+        }
+    };
+    match client.write_all(wire(steps).bytes()) {
+        Ok(_) => {}
+        Err(_) => println("client write failed"),
+    }
+    match client.shutdown_write() {
+        Ok(_) => {}
+        Err(_) => println("shutdown failed"),
+    }
+    match listener.accept() {
+        Ok(conn) => {
+            let out = match read_all(conn) {
+                Ok(raw) => serve(srv, raw),
+                Err(e) => f"421 4.3.0 {e}\r\n",
+            };
+            match conn.write_all(out.bytes()) {
+                Ok(_) => {}
+                Err(_) => println("server write failed"),
+            }
+        }
+        Err(_) => println("accept failed"),
+    }
+    let text = match read_all(client) {
+        Ok(t) => t,
+        Err(e) => {
+            println(f"client read: {e}");
+            return;
+        }
+    };
+    let rs = replies(text);
+    println(f"S: {rs[0].join(" | ")}");
+    let mut k = 1;
+    for s in steps.iter() {
+        match s {
+            Step.Cmd(c) => println(f"C: {c}"),
+            Step.Body(b) => println(f"C: <message, {b.split("\n").count()} lines>"),
+        }
+        if k < rs.len() {
+            println(f"S: {rs[k].join(" | ")}");
+        } else {
+            println("S: (no reply)");
+        }
+        k += 1;
+    }
+}
+
+// ---- reading the maildir back --------------------------------------
+
+struct Header { name: String, value: String }
+
+// Splits a message at the first empty line; unfolds continuation lines.
+fn parse(text: Str) -> (Vec[Header], String) {
+    let mut hs: Vec[Header] = Vec.new();
+    let lines: Vec[Str] = text.split("\r\n").collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let l = lines[i];
+        i += 1;
+        if l.is_empty() {
+            break;
+        }
+        if (l.starts_with(" ") || l.starts_with("\t")) && hs.len() > 0 {
+            let last = hs.len() - 1;
+            hs[last].value.push_str(" ");
+            hs[last].value.push_str(l.trim());
+            continue;
+        }
+        match l.find(":") {
+            Some(c) => hs.push(Header { name: l[0..c].to_lowercase(), value: l[c + 1..l.len()].trim().to_string() }),
+            None => {}
+        }
+    }
+    let mut body = String.new();
+    while i < lines.len() {
+        body.push_str(lines[i]);
+        if i + 1 < lines.len() {
+            body.push_str("\n");
+        }
+        i += 1;
+    }
+    (hs, body)
+}
+
+fn header(hs: ref Vec[Header], name: Str) -> String {
+    for h in hs.iter() {
+        if h.name == name {
+            return h.value.clone();
+        }
+    }
+    String.new()
+}
+
+// `boundary="xyz"` or `boundary=xyz` out of a Content-Type value.
+fn boundary(ct: Str) -> Option[String] {
+    let at = ct.find("boundary=")?;
+    let rest = ct[at + 9..ct.len()];
+    if rest.starts_with("\"") {
+        let end = rest[1..rest.len()].find("\"")?;
+        return Some(rest[1..end + 1].to_string());
+    }
+    let end = match rest.find(";") {
+        Some(e) => e,
+        None => rest.len(),
+    };
+    Some(rest[0..end].trim().to_string())
+}
+
+fn b64_value(c: u8) -> i64 {
+    if c >= 65u8 && c <= 90u8 { return (c - 65u8) as i64; }
+    if c >= 97u8 && c <= 122u8 { return (c - 97u8) as i64 + 26; }
+    if c >= 48u8 && c <= 57u8 { return (c - 48u8) as i64 + 52; }
+    if c == 43u8 { return 62; }
+    if c == 47u8 { return 63; }
+    -1
+}
+
+fn b64_decode(text: Str) -> Result[Vec[u8], String] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut acc = 0;
+    let mut bits = 0;
+    for c in text.bytes().iter() {
+        if *c == 61u8 || *c == 10u8 || *c == 13u8 || *c == 32u8 {
+            continue;
+        }
+        let v = b64_value(*c);
+        if v < 0 {
+            return Err(f"bad base64 byte {*c}");
+        }
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 255) as u8);
+        }
+    }
+    Ok(out)
+}
+
+fn report_parts(body: Str, bnd: Str) {
+    let open = f"--{bnd}";
+    let close = f"--{bnd}--";
+    let mut chunks: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut inside = false;
+    for l in body.split("\n") {
+        if l == close {
+            if inside { chunks.push(cur.clone()); }
+            inside = false;
+            break;
+        }
+        if l == open {
+            if inside { chunks.push(cur.clone()); }
+            cur = String.new();
+            inside = true;
+            continue;
+        }
+        if inside {
+            cur.push_str(l);
+            cur.push_str("\r\n");
+        }
+    }
+    println(f"    {chunks.len()} parts");
+    let mut n = 1;
+    for c in chunks.iter() {
+        let (hs, pbody) = parse(c);
+        let ct = header(hs, "content-type");
+        let enc = header(hs, "content-transfer-encoding").to_lowercase();
+        let kind = if ct.is_empty() { "text/plain".to_string() } else { ct };
+        if enc == "base64" {
+            match b64_decode(pbody) {
+                Ok(bytes) => {
+                    let first = match String.from_utf8(bytes.clone()) {
+                        Ok(s) => match s.lines().next() {
+                            Some(l) => l.to_string(),
+                            None => String.new(),
+                        },
+                        Err(_) => "(binary)".to_string(),
+                    };
+                    println(f"    part {n}: {kind}, base64, {bytes.len()} bytes decoded, first line: {first}");
+                }
+                Err(e) => println(f"    part {n}: {kind}, base64 error: {e}"),
+            }
+        } else {
+            println(f"    part {n}: {kind}, {pbody.trim().len()} chars: {pbody.trim()}");
+        }
+        n += 1;
+    }
+}
+
+fn sh(script: Str) -> Result[String, String] {
+    let child = match Command.new("sh").arg("-c").arg(script)
+        .stdout(Stdio.Piped).stderr(Stdio.Piped).spawn() {
+        Ok(c) => c,
+        Err(_) => return Err("spawn failed".to_string()),
+    };
+    let out = match child.stdout() {
+        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        None => String.new(),
+    };
+    match child.wait() {
+        Ok(st) => if st.code == 0 { Ok(out) } else { Err(f"exit {st.code}") },
+        Err(_) => Err("wait failed".to_string()),
+    }
+}
+
+fn report() {
+    println("== maildir");
+    let listing = match sh(f"ls {MAILDIR}/new | sort") {
+        Ok(l) => l,
+        Err(e) => {
+            println(f"ls: {e}");
+            return;
+        }
+    };
+    for name in listing.lines() {
+        let text = match fs.read_to_string(f"{MAILDIR}/new/{name}") {
+            Ok(t) => t,
+            Err(_) => {
+                println(f"{name}: unreadable");
+                continue;
+            }
+        };
+        let (hs, body) = parse(text);
+        println(f"{name} {text.len()} bytes");
+        println(f"    from {header(hs, "return-path")} to {header(hs, "delivered-to")}");
+        println(f"    subject: {header(hs, "subject")}");
+        println(f"    received: {header(hs, "received")}");
+        let ct = header(hs, "content-type");
+        match boundary(ct) {
+            Some(b) => report_parts(body, b),
+            None => {
+                let ls: Vec[Str] = body.lines().collect();
+                println(f"    {ls.len()} body lines, last: {ls[ls.len() - 1]}");
+            }
+        }
+    }
+}
+
+fn cmd(s: Str) -> Step {
+    Step.Cmd(s.to_string())
+}
+
+fn main() {
+    match sh(f"rm -rf {MAILDIR} && mkdir -p {MAILDIR}/new {MAILDIR}/tmp {MAILDIR}/cur") {
+        Ok(_) => {}
+        Err(e) => {
+            println(f"maildir: {e}");
+            return;
+        }
+    }
+    let listener = match TcpListener.bind(ADDR) {
+        Ok(l) => l,
+        Err(_) => {
+            println("bind failed");
+            return;
+        }
+    };
+    let mut srv = Server.new();
+
+    let mut s1: Vec[Step] = Vec.new();
+    s1.push(cmd("EHLO client.example.org"));
+    s1.push(cmd("MAIL FROM:<Alice@Example.org>"));
+    s1.push(cmd("RCPT TO:<bob@example.test>"));
+    s1.push(cmd("RCPT TO:<carol@example.test>"));
+    s1.push(cmd("DATA"));
+    s1.push(Step.Body("From: Alice <alice@example.org>\nTo: bob@example.test\nSubject: lunch\n  on friday?\n\nHi Bob,\n.hidden line starts with a dot\nsee you.".to_string()));
+    s1.push(cmd("MAIL FROM: <alice@example.org>"));
+    s1.push(cmd("RCPT TO:<dave@example.test>"));
+    s1.push(cmd("DATA"));
+    s1.push(Step.Body("Subject: second\n\none line".to_string()));
+    s1.push(cmd("QUIT"));
+    session(listener, mut srv, "pipelined delivery", s1);
+
+    let mut s2: Vec[Step] = Vec.new();
+    s2.push(cmd("MAIL FROM:<x@example.org>"));
+    s2.push(cmd("HELO"));
+    s2.push(cmd("helo old.example.org"));
+    s2.push(cmd("RCPT TO:<bob@example.test>"));
+    s2.push(cmd("MAIL FROM:alice@example.org"));
+    s2.push(cmd("mail from:<eve@example.org>"));
+    s2.push(cmd("MAIL FROM:<eve@example.org>"));
+    s2.push(cmd("RCPT TO:<root@elsewhere.org>"));
+    s2.push(cmd("DATA"));
+    s2.push(cmd("RCPT TO:<a@example.test>"));
+    s2.push(cmd("RCPT TO:<b@example.test>"));
+    s2.push(cmd("RCPT TO:<c@example.test>"));
+    s2.push(cmd("RCPT TO:<d@example.test>"));
+    s2.push(cmd("VRFY bob"));
+    s2.push(cmd("NOOP"));
+    s2.push(cmd("STARTTLS"));
+    s2.push(cmd("DATA"));
+    let mut big = "Subject: too big\n\n".to_string();
+    for i in 0..40 {
+        big.push_str(f"line {i} of a long message body\n");
+    }
+    s2.push(Step.Body(big));
+    s2.push(cmd("RSET"));
+    s2.push(cmd("DATA"));
+    s2.push(cmd("QUIT"));
+    s2.push(cmd("NOOP"));
+    session(listener, mut srv, "errors and limits", s2);
+
+    let mut s3: Vec[Step] = Vec.new();
+    s3.push(cmd("EHLO mua.example.org"));
+    s3.push(cmd("MAIL FROM:<carol@example.test>"));
+    s3.push(cmd("RCPT TO:<bob@example.test>"));
+    s3.push(cmd("DATA"));
+    s3.push(Step.Body("Subject: report attached\nMIME-Version: 1.0\nContent-Type: multipart/mixed;\n boundary=\"=_b1\"\n\nThis is a MIME message.\n--=_b1\nContent-Type: text/plain\n\nNumbers attached.\n--=_b1\nContent-Type: text/csv\nContent-Transfer-Encoding: base64\n\ncmVnaW9uLHRvdGFsCm5vcnRoLDEyMApzb3V0aCw4NQo=\n--=_b1--\n".to_string()));
+    s3.push(cmd("QUIT"));
+    session(listener, mut srv, "mime message", s3);
+
+    println(f"stored {srv.stored.len()}: {srv.stored.join(" ")}");
+    report();
+}
