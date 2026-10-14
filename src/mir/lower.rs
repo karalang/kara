@@ -13759,6 +13759,33 @@ pub fn run_source(src: &str) -> Result<interp::RunResult, String> {
     ))
 }
 
+/// Every body of `program` passes the MIR validator, or the problems it
+/// names, in the interpreter's `invalid MIR:` form. The interpreter
+/// validates before it runs; the compiled entry points call this through
+/// [`compiled_check`] so a lowering bug reads the same on every MIR backend
+/// instead of reaching LLVM (B-2026-10-14-21).
+pub fn validate_program(program: &interp::Program, tys: &TyInterner) -> Result<(), String> {
+    let mut problems = Vec::new();
+    for (name, body) in &program.bodies {
+        for e in crate::mir::validate::validate(body, tys) {
+            problems.push(format!("{name}: {e}"));
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("invalid MIR:\n{}", problems.join("\n")))
+    }
+}
+
+/// What a compiled entry point (`__mir-llvm-run`, `__mir-llvm-asan`,
+/// `karac build --mir`) checks before codegen: [`par_check`], then
+/// [`validate_program`].
+pub fn compiled_check(lowered: &Lowered) -> Result<(), String> {
+    par_check(lowered)?;
+    validate_program(&lowered.program, &lowered.tys)
+}
+
 /// Core §11.2: conflicting `par` branches are a compile error.
 /// `KARAC_MIR_EFFECTS=0` skips the check.
 pub fn par_check(lowered: &Lowered) -> Result<(), String> {

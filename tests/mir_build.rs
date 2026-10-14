@@ -51,6 +51,7 @@ fn main() {
 /// Build `src` at `opt`, link and run it: its stdout, or `None` to skip.
 fn build_and_run(src: &str, opt: u8) -> Option<String> {
     let lowered = karac::mir::lower::build_source(src).expect("MIR");
+    karac::mir::lower::compiled_check(&lowered).expect("checks");
     let ir = karac::codegen::mir::compile_mir_ir(&lowered.program, &lowered.tys).expect("IR");
     let dir = Scratch::new();
     let obj = dir.path().join("main.o");

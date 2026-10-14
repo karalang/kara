@@ -235,6 +235,29 @@ fn eat(_1: R, _2: bool) -> () {
         assert!(errors_mention(&errs, "is not Copy"), "{errs:?}");
     }
 
+    /// B-2026-10-14-21 — the compiled entry points refuse a body the
+    /// validator rejects, in the interpreter's `invalid MIR:` form, and let
+    /// a valid program through.
+    #[test]
+    fn compiled_check_refuses_invalid_mir() {
+        let (mut tys, _, rt, _) = types();
+        let body = one_block(&mut tys, &[("r", rt)], rt, |b, a, bb| {
+            b.assign(
+                bb,
+                Local::RETURN_PLACE,
+                Rvalue::Use(Operand::Copy(a[0].into())),
+            );
+            b.terminate(bb, TerminatorKind::Return);
+        });
+        let mut program = interp::Program::default();
+        program.add(body);
+        let err = crate::mir::lower::validate_program(&program, &tys).unwrap_err();
+        assert!(err.starts_with("invalid MIR:\nt: "), "{err}");
+        assert!(err.contains("is not Copy"), "{err}");
+        let lowered = crate::mir::lower::build_source("fn main() { println(\"hi\"); }").unwrap();
+        assert_eq!(crate::mir::lower::compiled_check(&lowered), Ok(()));
+    }
+
     #[test]
     fn mir_validator_rejects_move_out_of_index_and_deref() {
         let (mut tys, _, rt, _) = types();
