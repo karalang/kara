@@ -1,0 +1,63 @@
+// LeetCode #561: Array Partition -- sorted pairs as chunks.
+//
+// The ★ arm's pairs written as they are: sort, cut into chunks of two,
+// and add up each chunk's first, the smaller. O(n log n) time.
+
+fn array_pair_sum(nums: own Vec[i64]) -> i64 {
+    let mut nums = nums;
+    nums.sort();
+    nums.chunks(2).iter().map(|pair| pair[0]).sum()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums}: {array_pair_sum(nums.clone())}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![1, 4, 3, 2]);
+    show(vec![6, 2, 6, 5, 1, 2]);
+    // One pair, unequal and equal.
+    show(vec![5, -5]);
+    show(vec![7, 7]);
+    // The problem's least and most, twice each.
+    show(vec![-10000, 10000, -10000, 10000]);
+    // Falling, and all below zero.
+    show(vec![8, 7, 6, 5, 4, 3, 2, 1]);
+    show(vec![-1, -2, -3, -4]);
+    // 300 random arrays of 1 to 20 pairs in -100..100.
+    let mut seed: i64 = 561;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 2 * (1 + step(mut seed) % 20);
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(step(mut seed) % 201 - 100);
+        }
+        let s = array_pair_sum(nums);
+        total += s;
+        checksum = (checksum * 31 + s + 1000000) % 1000000007;
+    }
+    println(f"300 random arrays: total {total}, checksum {checksum}");
+    // The problem's most, 20,000 numbers: all the same, falling from
+    // 10000 to -9999, and random in -10000..10000.
+    println(f"20000 of 10000: {array_pair_sum(vec![10000; 20000])}");
+    let mut falling: Vec[i64] = Vec.new();
+    for i in 0..20000 {
+        falling.push(10000 - i);
+    }
+    println(f"20000 falling: {array_pair_sum(falling)}");
+    let mut random: Vec[i64] = Vec.new();
+    for _ in 0..20000 {
+        random.push(step(mut seed) % 20001 - 10000);
+    }
+    println(f"20000 random: {array_pair_sum(random)}");
+}

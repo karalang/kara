@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/561-array-partition/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "differential"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "mir-gap:runtime: in main at bbN[term]: in answer at bbN[term]: in array_pair_sum_chunks"
+classified_with = "e17ae2b58"
+extracted_src = "c144a4c2"
+model_rev = "1aa23105"
+model_src = "c144a4c2"

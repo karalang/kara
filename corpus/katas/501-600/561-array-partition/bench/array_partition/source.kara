@@ -1,0 +1,53 @@
+// Benchmark for #561: Array Partition -- the ★ arm (sort, then every
+// other number).
+//
+// In the best pairing the smallest number is paired with the next
+// smallest: whatever it is paired with is lost to the sum, so that
+// should be the least it can be. The same argument holds for what is
+// left, so after sorting the pairs are neighbours and the sum is every
+// number at an even place. O(n log n) time.
+
+fn array_pair_sum(nums: own Vec[i64]) -> i64 {
+    let mut nums = nums;
+    nums.sort();
+    let mut sum = 0;
+    for i in (0..nums.len()).step_by(2) {
+        sum += nums[i];
+    }
+    sum
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100 random arrays of 20,000 numbers in -10000..10000 (the
+    // problem's most), built once. Then 50 times over, every array is
+    // answered, each time on a fresh copy, since the answer sorts it.
+    let count = 100;
+    let n = 20000;
+    let rounds = 50;
+    let mut seed: i64 = 561;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(step(mut seed) % 20001 - 10000);
+        }
+        arrays.push(nums);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let s = array_pair_sum(arrays[(round * 7 + g) % count].clone());
+            total += s;
+            checksum = (checksum * 31 + s + 1000000000) % 1000000007;
+        }
+    }
+    println(f"{count} arrays of {n}, {rounds} rounds: total {total}, checksum {checksum}");
+}

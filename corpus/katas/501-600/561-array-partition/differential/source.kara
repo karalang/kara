@@ -1,0 +1,168 @@
+// LeetCode #561: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// arrays.
+
+// ---- star arm ----------------------------------------------------------
+
+fn array_pair_sum_star(nums: own Vec[i64]) -> i64 {
+    let mut nums = nums;
+    nums.sort();
+    let mut sum = 0;
+    for i in (0..nums.len()).step_by(2) {
+        sum += nums[i];
+    }
+    sum
+}
+
+// ---- counts arm --------------------------------------------------------
+
+fn array_pair_sum_counts(nums: own Vec[i64]) -> i64 {
+    let low = -10000;
+    let mut counts = vec![0; 20001];
+    for x in nums {
+        counts[x - low] += 1;
+    }
+    let mut sum = 0;
+    let mut take = true;
+    for v in 0..counts.len() {
+        for _ in 0..counts[v] {
+            if take {
+                sum += v + low;
+            }
+            take = not take;
+        }
+    }
+    sum
+}
+
+// ---- chunks arm --------------------------------------------------------
+
+fn array_pair_sum_chunks(nums: own Vec[i64]) -> i64 {
+    let mut nums = nums;
+    nums.sort();
+    nums.chunks(2).iter().map(|pair| pair[0]).sum()
+}
+
+// ---- heap arm ----------------------------------------------------------
+
+fn array_pair_sum_heap(nums: own Vec[i64]) -> i64 {
+    let mut queue = PriorityQueue.from(nums);
+    let mut sum = 0;
+    while let Some(smaller) = queue.pop() {
+        sum += smaller;
+        let _ = queue.pop();
+    }
+    sum
+}
+
+// ---- the definition and the properties ------------------------------------
+
+// The definition: every way to pair the numbers up, tried in turn -- the
+// first number left paired with each of the others, and the rest paired
+// the same way -- and the largest sum of the pairs' smaller numbers.
+fn best_pairing(left: Vec[i64]) -> i64 {
+    if left.len() == 0 {
+        return 0;
+    }
+    let mut best = i64.MIN;
+    for j in 1..left.len() {
+        let mut rest: Vec[i64] = Vec.new();
+        for t in 1..left.len() {
+            if t != j {
+                rest.push(left[t]);
+            }
+        }
+        let pair = if left[0] < left[j] { left[0] } else { left[j] };
+        let sum = pair + best_pairing(rest);
+        if sum > best {
+            best = sum;
+        }
+    }
+    best
+}
+
+fn answer(which: i64, nums: own Vec[i64]) -> i64 {
+    if which == 0 {
+        array_pair_sum_star(nums)
+    } else if which == 1 {
+        array_pair_sum_counts(nums)
+    } else if which == 2 {
+        array_pair_sum_chunks(nums)
+    } else {
+        array_pair_sum_heap(nums)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5610;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 5 pairs: in -3..3, where ties are common, or in
+        // -9000..9000, in turn, so that P4's shift stays in range.
+        let n = 1 + step(mut seed) % 5;
+        let small = t % 2 == 0;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..2 * n {
+            nums.push(if small { step(mut seed) % 7 - 3 } else { step(mut seed) % 18001 - 9000 });
+        }
+        let want = best_pairing(nums.clone());
+        let mut total = 0;
+        let mut least = i64.MAX;
+        let mut as_given = 0;
+        for i in 0..2 * n {
+            total += nums[i];
+            if nums[i] < least {
+                least = nums[i];
+            }
+            if i % 2 == 0 {
+                as_given += if nums[i] < nums[i + 1] { nums[i] } else { nums[i + 1] };
+            }
+        }
+        let mut rotated: Vec[i64] = Vec.new();
+        let turn = step(mut seed) % (2 * n);
+        for i in 0..2 * n {
+            rotated.push(nums[(i + turn) % (2 * n)]);
+        }
+        rotated.reverse();
+        let shift = if small { 5 } else { -1000 };
+        let mut shifted: Vec[i64] = Vec.new();
+        for x in nums.iter() {
+            shifted.push(x + shift);
+        }
+        for which in 0..4 {
+            let got = answer(which, nums.clone());
+            let ok = vec![
+                // P1: the definition's sum.
+                got == want,
+                // P2: no more than half the total, no less than n times
+                // the least.
+                2 * got <= total and got >= n * least,
+                // P3: the numbers in another order give the same sum.
+                answer(which, rotated.clone()) == got,
+                // P4: every number raised by c raises the sum by n * c.
+                answer(which, shifted.clone()) == got + n * shift,
+                // P5: no worse than pairing the numbers as given.
+                got >= as_given,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
