@@ -3549,3 +3549,20 @@ fn collect_into_sorted_set_and_map() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// B-2026-10-14-12 — `Option.as_ref()` (docs/library/core-types.md) lends the
+// payload, so a borrowed `Option` can be mapped without moving it.
+#[test]
+fn option_as_ref_is_accepted() {
+    accepted(
+        "option-as-ref",
+        "struct Node { val: i64 }\n\
+         fn depth(n: ref Node) -> i64 { n.val }\n\
+         fn max_depth(root: Option[Node]) -> i64 { root.as_ref().map(|node| depth(node)).unwrap_or(0) }\n\
+         fn main() {\n\
+             let o: Option[Node] = Some(Node { val: 3 });\n\
+             let n: Option[Node] = None;\n\
+             println(f\"{o.as_ref().is_some()} {max_depth(o)} {max_depth(n)} {o.is_some()}\");\n\
+         }\n",
+    );
+}

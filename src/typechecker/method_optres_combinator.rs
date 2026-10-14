@@ -70,6 +70,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "get_or_insert"
                 | "replace"
                 | "cloned"
+                | "as_ref"
         ) {
             let optres = |ty: &Type| -> Option<(bool, Type, Option<Type>)> {
                 match ty {
@@ -209,6 +210,17 @@ impl<'a> super::TypeChecker<'a> {
                         }
                         record_src(self, &t_ty);
                         Some(opt(resolve_type_var_top(&t_ty, &self.env.substitutions)))
+                    }
+                    // `Option[T].as_ref() -> Option[ref T]` (B-2026-10-14-12;
+                    // docs/library/core-types.md): a view of the payload that
+                    // leaves the receiver in place. The MIR pipeline takes the
+                    // Kara body in option.kara.
+                    "as_ref"
+                        if !is_result && args.is_empty() && !self.library_methods_from_source =>
+                    {
+                        let inner = resolve_type_var_top(&t_ty, &self.env.substitutions);
+                        record_src(self, &t_ty);
+                        Some(opt(Type::Ref(Box::new(inner))))
                     }
                     // `Option[ref T].cloned() -> Option[T]`
                     // (docs/library/collections.md: `Map.get` lends the value).
