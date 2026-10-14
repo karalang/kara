@@ -1,0 +1,202 @@
+// Differential test for LeetCode #551: Student Attendance Record I.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random records of 1 to 12 days, absent with chance 5, 10 or 20 in 100
+// and late with chance 40, 55 or 70 in 100 in turn.
+// Properties:
+//   P1  the answer is the definition's: the record cut into runs of one
+//       character, fewer than 2 days absent and no run of 3 lates
+//   P2  the record reversed gives the same answer
+//   P3  a day present added at the end gives the same answer
+//   P4  a fine record stays fine with any one day made present
+//   P5  a present day and an absence added at the end give a fine
+//       record only if it was fine with no absence; three lates added
+//       at the end never do
+
+// ---- star: student_attendance_record_i.kara
+
+fn check_record_star(s: Str) -> bool {
+    let mut absences = 0;
+    let mut lates = 0;
+    for c in s.chars() {
+        if c == 'L' {
+            lates += 1;
+            if lates == 3 {
+                return false;
+            }
+        } else {
+            lates = 0;
+            if c == 'A' {
+                absences += 1;
+                if absences == 2 {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+// ---- contains: student_attendance_record_i_contains.kara
+
+fn check_record_contains(s: Str) -> bool {
+    let absences = s.chars().filter(|c| c == 'A').count();
+    absences < 2 and not s.contains("LLL")
+}
+
+// ---- window: student_attendance_record_i_window.kara
+
+fn check_record_window(s: Str) -> bool {
+    let b = s.bytes();
+    let mut absences = 0;
+    for i in 0..b.len() {
+        if b[i] == b'A' {
+            absences += 1;
+        }
+        if i >= 2 and b[i] == b'L' and b[i - 1] == b'L' and b[i - 2] == b'L' {
+            return false;
+        }
+    }
+    absences < 2
+}
+
+// ---- states: student_attendance_record_i_states.kara
+
+fn step_states(state: i64, c: char) -> i64 {
+    if state == 6 {
+        return 6;
+    }
+    let absences = state / 3;
+    let lates = state % 3;
+    if c == 'A' {
+        if absences == 1 { 6 } else { 3 }
+    } else if c == 'L' {
+        if lates == 2 { 6 } else { absences * 3 + lates + 1 }
+    } else {
+        absences * 3
+    }
+}
+
+fn check_record_states(s: Str) -> bool {
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    for state in 0..7 {
+        table.push(vec![step_states(state, 'A'), step_states(state, 'L'), step_states(state, 'P')]);
+    }
+    let mut state = 0;
+    for c in s.chars() {
+        let column = if c == 'A' { 0 } else if c == 'L' { 1 } else { 2 };
+        state = table[state][column];
+    }
+    state != 6
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: the record cut into its runs of one
+// character; strictly fewer than 2 days absent in all, and no run of
+// lates 3 days long or longer.
+fn definition(s: Str) -> bool {
+    let days: Vec[char] = s.chars().collect();
+    let mut absent = 0;
+    let mut i = 0;
+    while i < days.len() {
+        let mut j = i;
+        while j < days.len() and days[j] == days[i] {
+            j += 1;
+        }
+        if days[i] == 'A' {
+            absent += j - i;
+        }
+        if days[i] == 'L' and j - i >= 3 {
+            return false;
+        }
+        i = j;
+    }
+    absent < 2
+}
+
+fn answer(which: i64, s: Str) -> bool {
+    if which == 0 {
+        check_record_star(s)
+    } else if which == 1 {
+        check_record_contains(s)
+    } else if which == 2 {
+        check_record_window(s)
+    } else {
+        check_record_states(s)
+    }
+}
+
+fn from_days(days: Vec[char]) -> String {
+    let mut s = String.new();
+    for c in days.iter() {
+        s.push(c);
+    }
+    s
+}
+
+fn main() {
+    let names = vec!["star", "contains", "window", "states"];
+    let count = 1000;
+    let mut seed: i64 = 5510;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    let mut fine = 0;
+    for t in 0..count {
+        // 1 to 12 days, absent with chance 5, 10 or 20 in 100 and late
+        // with chance 40, 55 or 70 in 100 in turn.
+        let n = 1 + next_random(mut seed) % 12;
+        let a = if t % 3 == 0 { 5 } else if t % 3 == 1 { 10 } else { 20 };
+        let l = if t % 3 == 0 { 40 } else if t % 3 == 1 { 55 } else { 70 };
+        let mut days: Vec[char] = Vec.new();
+        for _ in 0..n {
+            let r = next_random(mut seed) % 100;
+            days.push(if r < a { 'A' } else if r < a + l { 'L' } else { 'P' });
+        }
+        let s = from_days(days.clone());
+        let want = definition(s.as_str());
+        if want {
+            fine += 1;
+        }
+        let mut back = days.clone();
+        back.reverse();
+        let reversed = from_days(back);
+        let present_after = f"{s}P";
+        // A day picked at random made present.
+        let mut eased = days.clone();
+        eased[next_random(mut seed) % n] = 'P';
+        let eased = from_days(eased);
+        let had_absence = days.contains('A');
+        let second_absence = f"{s}PA";
+        let three_late = f"{s}LLL";
+        for which in 0..4 {
+            let got = answer(which, s.as_str());
+            let ok = vec![
+                got == want,
+                answer(which, reversed.as_str()) == got,
+                answer(which, present_after.as_str()) == got,
+                not got or answer(which, eased.as_str()),
+                answer(which, second_absence.as_str()) == (got and not had_absence) and not answer(which, three_late.as_str()),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: \"{s}\" -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({fine} fine), 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

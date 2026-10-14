@@ -1,0 +1,280 @@
+// Differential test for LeetCode #552: Student Attendance Record II.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random lengths, from 1 to 8, 1 to 20 or 1 to 300 in turn.
+// Properties:
+//   P1  the answer is the definition's: records counted a day at a time
+//       by their A's and their last two days
+//   P2  up to 18 days, where nothing wraps, more than for a day fewer
+//       and at most three times as many
+//   P3  the records with no A, and those with one A between two such
+//       records, add up to the answer
+//   P4  the answer is reduced: from 0 to 10^9 + 6
+//   P5  up to 8 days, every record written out and counted
+
+// ---- star: student_attendance_record_ii.kara
+
+fn check_record_star(n: i64) -> i64 {
+    let m = 1000000007;
+    let mut count = vec![1, 0, 0, 0, 0, 0];
+    for _ in 0..n {
+        let mut next = vec![0; 6];
+        for a in 0..2 {
+            for l in 0..3 {
+                let c = count[a * 3 + l];
+                if c == 0 {
+                    continue;
+                }
+                next[a * 3] = (next[a * 3] + c) % m;
+                if a == 0 {
+                    next[3] = (next[3] + c) % m;
+                }
+                if l < 2 {
+                    next[a * 3 + l + 1] = (next[a * 3 + l + 1] + c) % m;
+                }
+            }
+        }
+        count = next;
+    }
+    let mut total = 0;
+    for c in count.iter() {
+        total = (total + *c) % m;
+    }
+    total
+}
+
+// ---- matrix: student_attendance_record_ii_matrix.kara
+
+fn multiply_matrix(x: Vec[Vec[i64]], y: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = 1000000007;
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..6 {
+        let mut row = vec![0; 6];
+        for k in 0..6 {
+            if x[i][k] == 0 {
+                continue;
+            }
+            for j in 0..6 {
+                row[j] = (row[j] + x[i][k] * y[k][j]) % m;
+            }
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn check_record_matrix(n: i64) -> i64 {
+    let m = 1000000007;
+    let mut step: Vec[Vec[i64]] = Vec.new();
+    for from in 0..6 {
+        let a = from / 3;
+        let l = from % 3;
+        let mut row = vec![0; 6];
+        row[a * 3] += 1;
+        if a == 0 {
+            row[3] += 1;
+        }
+        if l < 2 {
+            row[from + 1] += 1;
+        }
+        step.push(row);
+    }
+    let mut power: Vec[Vec[i64]] = Vec.new();
+    for i in 0..6 {
+        let mut row = vec![0; 6];
+        row[i] = 1;
+        power.push(row);
+    }
+    let mut e = n;
+    while e > 0 {
+        if e % 2 == 1 {
+            power = multiply_matrix(power.clone(), step.clone());
+        }
+        step = multiply_matrix(step.clone(), step.clone());
+        e /= 2;
+    }
+    let mut total = 0;
+    for j in 0..6 {
+        total = (total + power[0][j]) % m;
+    }
+    total
+}
+
+// ---- split: student_attendance_record_ii_split.kara
+
+fn check_record_split(n: i64) -> i64 {
+    let m = 1000000007;
+    let mut f = vec![1, 2, 4];
+    for i in 3..n + 1 {
+        f.push((f[i - 1] + f[i - 2] + f[i - 3]) % m);
+    }
+    let mut total = f[n];
+    for i in 0..n {
+        total = (total + f[i] * f[n - 1 - i]) % m;
+    }
+    total
+}
+
+// ---- table: student_attendance_record_ii_table.kara
+
+fn check_record_table(n: i64) -> i64 {
+    let m = 1000000007;
+    let mut dp = vec![0; 6 * (n + 1)];
+    dp[0] = 1;
+    for i in 1..n + 1 {
+        let before = 6 * (i - 1);
+        let here = 6 * i;
+        for a in 0..2 {
+            dp[here + a * 3] = (dp[before + a * 3] + dp[before + a * 3 + 1] + dp[before + a * 3 + 2]) % m;
+            dp[here + a * 3 + 1] = dp[before + a * 3];
+            dp[here + a * 3 + 2] = dp[before + a * 3 + 1];
+        }
+        dp[here + 3] = (dp[here + 3] + dp[before] + dp[before + 1] + dp[before + 2]) % m;
+    }
+    let mut total = 0;
+    for k in 0..6 {
+        total = (total + dp[6 * n + k]) % m;
+    }
+    total
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally, one day at a time: a record is fine if
+// it has fewer than 2 A's and no three days LLL in a row. Records are
+// counted by how many A's they have (`absent_most` caps it) and by
+// their last two days, 0 for P, 1 for A, 2 for L, and 3 for a day before
+// the first; a new day is refused if it is a third A or makes three L's.
+// The counts for every length from 0 to n come back, in order.
+fn definition(n: i64, absent_most: i64) -> Vec[i64] {
+    let m = 1000000007;
+    // count[(a * 4 + d1) * 4 + d2]: a A's so far, the last two days d1, d2.
+    let mut count = vec![0; 2 * 16];
+    count[3 * 4 + 3] = 1;
+    let mut totals = vec![1];
+    for _ in 0..n {
+        let mut next = vec![0; 2 * 16];
+        for a in 0..2 {
+            for d1 in 0..4 {
+                for d2 in 0..4 {
+                    let c = count[(a * 4 + d1) * 4 + d2];
+                    if c == 0 {
+                        continue;
+                    }
+                    for day in 0..3 {
+                        let absent = a + if day == 1 { 1 } else { 0 };
+                        if absent > absent_most or (d1 == 2 and d2 == 2 and day == 2) {
+                            continue;
+                        }
+                        let k = (absent * 4 + d2) * 4 + day;
+                        next[k] = (next[k] + c) % m;
+                    }
+                }
+            }
+        }
+        count = next;
+        let mut total = 0;
+        for c in count.iter() {
+            total = (total + *c) % m;
+        }
+        totals.push(total);
+    }
+    totals
+}
+
+// Every record of n days written out, n at most 8, and the fine ones
+// counted one by one.
+fn brute(n: i64) -> i64 {
+    let mut records = 1;
+    for _ in 0..n {
+        records *= 3;
+    }
+    let mut fine = 0;
+    for code in 0..records {
+        let mut x = code;
+        let mut absent = 0;
+        let mut run = 0;
+        let mut ok = true;
+        for _ in 0..n {
+            let day = x % 3;
+            x /= 3;
+            if day == 2 {
+                run += 1;
+                if run == 3 {
+                    ok = false;
+                }
+            } else {
+                run = 0;
+                if day == 1 {
+                    absent += 1;
+                }
+            }
+        }
+        if ok and absent < 2 {
+            fine += 1;
+        }
+    }
+    fine
+}
+
+fn answer(which: i64, n: i64) -> i64 {
+    if which == 0 {
+        check_record_star(n)
+    } else if which == 1 {
+        check_record_matrix(n)
+    } else if which == 2 {
+        check_record_split(n)
+    } else {
+        check_record_table(n)
+    }
+}
+
+fn main() {
+    let names = vec!["star", "matrix", "split", "table"];
+    let m = 1000000007;
+    let count = 1000;
+    let mut seed: i64 = 5520;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // n from 1 to 8, 1 to 20 or 1 to 300 in turn.
+        let top = if t % 3 == 0 { 8 } else if t % 3 == 1 { 20 } else { 300 };
+        let n = 1 + next_random(mut seed) % top;
+        let want = definition(n, 1)[n];
+        let none = definition(n, 0);
+        let mut split = none[n];
+        for i in 0..n {
+            split = (split + none[i] * none[n - 1 - i]) % m;
+        }
+        let small = if n <= 8 { brute(n) } else { -1 };
+        for which in 0..4 {
+            let got = answer(which, n);
+            let ok = vec![
+                got == want,
+                n < 2 or n > 18 or (got > answer(which, n - 1) and got <= 3 * answer(which, n - 1)),
+                got == split,
+                got >= 0 and got < m,
+                n > 8 or got == small,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: n = {n}, got {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

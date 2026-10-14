@@ -1,0 +1,96 @@
+// LeetCode #552: Student Attendance Record II -- the step as a matrix.
+//
+// The six states of the rolled arm, (absences, lates at the end), and
+// one day's step written as a 6 x 6 matrix of how many ways each state
+// leads to each. n days are that matrix to the power n, found by
+// squaring, applied to the start state. O(log n) matrix products.
+
+fn multiply(x: Vec[Vec[i64]], y: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = 1000000007;
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..6 {
+        let mut row = vec![0; 6];
+        for k in 0..6 {
+            if x[i][k] == 0 {
+                continue;
+            }
+            for j in 0..6 {
+                row[j] = (row[j] + x[i][k] * y[k][j]) % m;
+            }
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn check_record(n: i64) -> i64 {
+    let m = 1000000007;
+    // step[from][to]: ways one day takes state `from` to state `to`.
+    let mut step: Vec[Vec[i64]] = Vec.new();
+    for from in 0..6 {
+        let a = from / 3;
+        let l = from % 3;
+        let mut row = vec![0; 6];
+        row[a * 3] += 1;
+        if a == 0 {
+            row[3] += 1;
+        }
+        if l < 2 {
+            row[from + 1] += 1;
+        }
+        step.push(row);
+    }
+    let mut power: Vec[Vec[i64]] = Vec.new();
+    for i in 0..6 {
+        let mut row = vec![0; 6];
+        row[i] = 1;
+        power.push(row);
+    }
+    let mut e = n;
+    while e > 0 {
+        if e % 2 == 1 {
+            power = multiply(power.clone(), step.clone());
+        }
+        step = multiply(step.clone(), step.clone());
+        e /= 2;
+    }
+    let mut total = 0;
+    for j in 0..6 {
+        total = (total + power[0][j]) % m;
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    println(f"example 1: n = 2 -> {check_record(2)}");
+    println(f"example 2: n = 1 -> {check_record(1)}");
+    println(f"example 3: n = 10101 -> {check_record(10101)}");
+    let mut small: Vec[i64] = Vec.new();
+    for n in 1..13 {
+        small.push(check_record(n));
+    }
+    println(f"n = 1 to 12: {small}");
+
+    // 300 random lengths from 1 to 2000.
+    let mut seed: i64 = 552;
+    let mut days = 0;
+    let mut h: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 2000;
+        days += n;
+        h = (h * 31 + check_record(n)) % 1000000007;
+    }
+    println(f"300 random lengths: {days} days, checksum {h}");
+
+    // Up to 100,000 days (the problem's most).
+    for n in vec![1000, 9999, 50000, 99999, 100000] {
+        println(f"n = {n} -> {check_record(n)}");
+    }
+}

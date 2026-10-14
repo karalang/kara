@@ -1,0 +1,16 @@
+"PPALLP" -> true
+"PPALLL" -> false
+"P" -> true
+"A" -> true
+"AA" -> false
+"LL" -> true
+"LLL" -> false
+"LLPLLPLLA" -> true
+"ALLPLLLA" -> false
+"PLLAPLL" -> true
+"APA" -> false
+300 random records: 3183 days, 144 fine, checksum 670736529
+1000 days present: true
+333 pairs of lates and one absence: true
+three lates on the last days: false
+absent on the first and last days: false

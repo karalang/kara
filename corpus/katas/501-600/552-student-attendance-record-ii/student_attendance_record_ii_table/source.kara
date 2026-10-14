@@ -1,0 +1,65 @@
+// LeetCode #552: Student Attendance Record II -- the whole table, kept.
+//
+// dp[i][a][l], the records of i days with a absences and ending in
+// exactly l lates, for every i, filled forward from dp[0][0][0] = 1. A
+// state is reached from the day before by a P (from any lates), an A
+// (from no absence) or an L (from one late fewer). Flat in one Vec of
+// 6 (n + 1) entries. O(n) time and memory.
+
+fn check_record(n: i64) -> i64 {
+    let m = 1000000007;
+    let mut dp = vec![0; 6 * (n + 1)];
+    dp[0] = 1;
+    for i in 1..n + 1 {
+        let before = 6 * (i - 1);
+        let here = 6 * i;
+        for a in 0..2 {
+            // A P ends every run of lates, keeping the absences.
+            dp[here + a * 3] = (dp[before + a * 3] + dp[before + a * 3 + 1] + dp[before + a * 3 + 2]) % m;
+            // An L lengthens a run of lates.
+            dp[here + a * 3 + 1] = dp[before + a * 3];
+            dp[here + a * 3 + 2] = dp[before + a * 3 + 1];
+        }
+        // An A after no absence, from any run of lates.
+        dp[here + 3] = (dp[here + 3] + dp[before] + dp[before + 1] + dp[before + 2]) % m;
+    }
+    let mut total = 0;
+    for k in 0..6 {
+        total = (total + dp[6 * n + k]) % m;
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    println(f"example 1: n = 2 -> {check_record(2)}");
+    println(f"example 2: n = 1 -> {check_record(1)}");
+    println(f"example 3: n = 10101 -> {check_record(10101)}");
+    let mut small: Vec[i64] = Vec.new();
+    for n in 1..13 {
+        small.push(check_record(n));
+    }
+    println(f"n = 1 to 12: {small}");
+
+    // 300 random lengths from 1 to 2000.
+    let mut seed: i64 = 552;
+    let mut days = 0;
+    let mut h: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 2000;
+        days += n;
+        h = (h * 31 + check_record(n)) % 1000000007;
+    }
+    println(f"300 random lengths: {days} days, checksum {h}");
+
+    // Up to 100,000 days (the problem's most).
+    for n in vec![1000, 9999, 50000, 99999, 100000] {
+        println(f"n = {n} -> {check_record(n)}");
+    }
+}

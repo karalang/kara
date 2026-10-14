@@ -1,0 +1,119 @@
+// LeetCode #551: Student Attendance Record I -- a small automaton.
+//
+// The state is (absences, lates in a row) with absences 0 or 1 and lates
+// 0 to 2, numbered absences * 3 + lates, and 6 for a record already
+// failed. A table gives the next state for each state and character;
+// the record is fine if the walk ends anywhere but 6. O(n) time.
+
+fn step(state: i64, c: char) -> i64 {
+    if state == 6 {
+        return 6;
+    }
+    let absences = state / 3;
+    let lates = state % 3;
+    if c == 'A' {
+        if absences == 1 { 6 } else { 3 }
+    } else if c == 'L' {
+        if lates == 2 { 6 } else { absences * 3 + lates + 1 }
+    } else {
+        absences * 3
+    }
+}
+
+fn check_record(s: Str) -> bool {
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    for state in 0..7 {
+        table.push(vec![step(state, 'A'), step(state, 'L'), step(state, 'P')]);
+    }
+    let mut state = 0;
+    for c in s.chars() {
+        let column = if c == 'A' { 0 } else if c == 'L' { 1 } else { 2 };
+        state = table[state][column];
+    }
+    state != 6
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A record of n days: absent with chance a in 100, late with chance l
+// in 100, present otherwise.
+fn random_record(n: i64, a: i64, l: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        let r = next_random(seed) % 100;
+        if r < a {
+            s.push('A');
+        } else if r < a + l {
+            s.push('L');
+        } else {
+            s.push('P');
+        }
+    }
+    s
+}
+
+fn show(s: Str) {
+    println(f"\"{s}\" -> {check_record(s)}");
+}
+
+fn main() {
+    show("PPALLP");
+    show("PPALLL");
+    show("P");
+    show("A");
+    show("AA");
+    show("LL");
+    show("LLL");
+    show("LLPLLPLLA");
+    show("ALLPLLLA");
+    show("PLLAPLL");
+    show("APA");
+
+    // 300 random records of 1 to 20 days, absent with chance 3, 10 or
+    // 20 in 100 and late with chance 30, 50 or 70 in 100 in turn.
+    let mut seed: i64 = 551;
+    let mut days = 0;
+    let mut fine = 0;
+    let mut h: i64 = 0;
+    for t in 0..300 {
+        let n = 1 + next_random(mut seed) % 20;
+        let a = if t % 3 == 0 { 3 } else if t % 3 == 1 { 10 } else { 20 };
+        let l = if t % 3 == 0 { 30 } else if t % 3 == 1 { 50 } else { 70 };
+        let s = random_record(n, a, l, mut seed);
+        let bit = if check_record(s) { 1 } else { 0 };
+        days += n;
+        fine += bit;
+        h = (h * 31 + bit + 7 * n) % 1000000007;
+    }
+    println(f"300 random records: {days} days, {fine} fine, checksum {h}");
+
+    // 1,000 days (the problem's most).
+    let mut present = String.new();
+    for _ in 0..1000 {
+        present.push('P');
+    }
+    println(f"1000 days present: {check_record(present)}");
+    let mut late_pairs = String.new();
+    for _ in 0..333 {
+        late_pairs.push_str("LLP");
+    }
+    late_pairs.push('A');
+    println(f"333 pairs of lates and one absence: {check_record(late_pairs)}");
+    let mut last_three = String.new();
+    for _ in 0..997 {
+        last_three.push('P');
+    }
+    last_three.push_str("LLL");
+    println(f"three lates on the last days: {check_record(last_three)}");
+    let mut far_apart = String.from("A");
+    for _ in 0..998 {
+        far_apart.push('P');
+    }
+    far_apart.push('A');
+    println(f"absent on the first and last days: {check_record(far_apart)}");
+}

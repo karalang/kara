@@ -1,0 +1,56 @@
+// LeetCode #552: Student Attendance Record II -- around the one absence.
+//
+// A winning record has no A, or exactly one. Let f[i] count the records
+// of i days made of P and L alone with no three lates in a row; then
+// f[i] = f[i - 1] + f[i - 2] + f[i - 3] from three days on, by whether
+// the record ends in P, PL or PLL. With no absence there are f[n]; with
+// one on day i there are f[i] ways before it and f[n - 1 - i] after it.
+// O(n) time.
+
+fn check_record(n: i64) -> i64 {
+    let m = 1000000007;
+    // f[1] = 2 and f[2] = 4: no three days yet, so every mix of P and L.
+    let mut f = vec![1, 2, 4];
+    for i in 3..n + 1 {
+        f.push((f[i - 1] + f[i - 2] + f[i - 3]) % m);
+    }
+    let mut total = f[n];
+    for i in 0..n {
+        total = (total + f[i] * f[n - 1 - i]) % m;
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    println(f"example 1: n = 2 -> {check_record(2)}");
+    println(f"example 2: n = 1 -> {check_record(1)}");
+    println(f"example 3: n = 10101 -> {check_record(10101)}");
+    let mut small: Vec[i64] = Vec.new();
+    for n in 1..13 {
+        small.push(check_record(n));
+    }
+    println(f"n = 1 to 12: {small}");
+
+    // 300 random lengths from 1 to 2000.
+    let mut seed: i64 = 552;
+    let mut days = 0;
+    let mut h: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 2000;
+        days += n;
+        h = (h * 31 + check_record(n)) % 1000000007;
+    }
+    println(f"300 random lengths: {days} days, checksum {h}");
+
+    // Up to 100,000 days (the problem's most).
+    for n in vec![1000, 9999, 50000, 99999, 100000] {
+        println(f"n = {n} -> {check_record(n)}");
+    }
+}

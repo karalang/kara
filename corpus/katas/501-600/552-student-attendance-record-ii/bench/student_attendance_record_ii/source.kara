@@ -1,0 +1,53 @@
+// Benchmark for #552: Student Attendance Record II -- the ★ arm (six
+// counters, rolled).
+//
+// A record that can still win is in one of six states: 0 or 1
+// absences, and 0, 1 or 2 lates at its end. Each day adds a P, an A or
+// an L to every record counted so far. Six counters, rolled forward n
+// times. O(n) time.
+
+fn check_record(n: i64) -> i64 {
+    let m = 1000000007;
+    // count[a * 3 + l]: records with a absences ending in l lates.
+    let mut count = vec![1, 0, 0, 0, 0, 0];
+    for _ in 0..n {
+        let mut next = vec![0; 6];
+        for a in 0..2 {
+            for l in 0..3 {
+                let c = count[a * 3 + l];
+                if c == 0 {
+                    continue;
+                }
+                next[a * 3] = (next[a * 3] + c) % m;
+                if a == 0 {
+                    next[3] = (next[3] + c) % m;
+                }
+                if l < 2 {
+                    next[a * 3 + l + 1] = (next[a * 3 + l + 1] + c) % m;
+                }
+            }
+        }
+        count = next;
+    }
+    let mut total = 0;
+    for c in count.iter() {
+        total = (total + *c) % m;
+    }
+    total
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn main() {
+    // 100 lengths near 100,000 (the problem's most), length k being
+    // 100,000 - (k * 997) % 1000, each answered once; the answers go
+    // into the checksum.
+    let mut checksum: i64 = 0;
+    let mut days = 0;
+    for k in 0..100 {
+        let n = 100000 - (k * 997) % 1000;
+        days += n;
+        checksum = (checksum * 31 + check_record(n)) % 1000000007;
+    }
+    println(f"100 lengths, {days} days: checksum {checksum}");
+}
