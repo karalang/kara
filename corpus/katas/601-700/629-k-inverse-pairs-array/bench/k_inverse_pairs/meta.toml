@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/629-k-inverse-pairs-array/bench/k_inverse_pairs.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "ead49e635"
+extracted_src = "8b53bda7"
+model_rev = "1aa23105"
+model_src = "8b53bda7"

@@ -1,0 +1,106 @@
+// LeetCode #629: K Inverse Pairs Array -- generating function.
+//
+// The counts for n are the coefficients of the product over i from 1 to
+// n of (1 + x + ... + x^(i-1)), which is the product of (1 - x^i) times
+// (1 - x)^(-n). Multiply out the first product up to x^k, then take each
+// coefficient a_j against the coefficient of x^(k-j) in (1 - x)^(-n),
+// the binomial C(k - j + n - 1, n - 1), from factorials and their
+// inverses mod 1,000,000,007. O(n * k + (n + k) log mod).
+
+fn k_inverse_pairs(n: i64, k: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut a = vec![0; k + 1];
+    a[0] = 1;
+    for i in 1..n + 1 {
+        if i > k {
+            break;
+        }
+        let mut j = k;
+        while j >= i {
+            a[j] = (a[j] - a[j - i] + modulus) % modulus;
+            j -= 1;
+        }
+    }
+    let top = k + n;
+    let mut factorial = vec![1; top + 1];
+    for i in 1..top + 1 {
+        factorial[i] = factorial[i - 1] * i % modulus;
+    }
+    let mut inverse = vec![1; top + 1];
+    inverse[top] = power(factorial[top], modulus - 2, modulus);
+    let mut i = top;
+    while i > 0 {
+        inverse[i - 1] = inverse[i] * i % modulus;
+        i -= 1;
+    }
+    let mut total = 0;
+    for j in 0..k + 1 {
+        let m = k - j;
+        let ways = factorial[m + n - 1] * inverse[n - 1] % modulus * inverse[m] % modulus;
+        total = (total + a[j] * ways) % modulus;
+    }
+    total
+}
+
+fn power(base: i64, exponent: i64, modulus: i64) -> i64 {
+    let mut result = 1;
+    let mut b = base % modulus;
+    let mut e = exponent;
+    while e > 0 {
+        if e % 2 == 1 {
+            result = result * b % modulus;
+        }
+        b = b * b % modulus;
+        e /= 2;
+    }
+    result
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64, k: i64) {
+    println(f"n = {n}, k = {k} -> {k_inverse_pairs(n, k)}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(3, 0);
+    show(3, 1);
+    // One value; two; every pair inverted and one past it; small counts;
+    // the most inverse pairs for 20 values; the largest inputs.
+    show(1, 0);
+    show(1, 1);
+    show(2, 1);
+    show(3, 3);
+    show(3, 4);
+    show(4, 2);
+    show(5, 5);
+    show(10, 20);
+    show(20, 190);
+    show(1000, 0);
+    show(1000, 1);
+    show(1000, 1000);
+    // 200 random cases, n from 1 to 60 and k from 0 to 300.
+    let mut seed: i64 = 629;
+    let mut sum = 0;
+    let mut checksum = 0;
+    for _ in 0..200 {
+        let n = 1 + next_random(mut seed) % 60;
+        let k = next_random(mut seed) % 301;
+        let c = k_inverse_pairs(n, k);
+        sum += c;
+        checksum = (checksum * 31 + c) % 1000000007;
+    }
+    println(f"200 random cases: total {sum}, checksum {checksum}");
+    // Every k for 30 values, summed: 30! mod 1,000,000,007.
+    let mut all = 0;
+    for k in 0..436 {
+        all = (all + k_inverse_pairs(30, k)) % 1000000007;
+    }
+    println(f"n = 30, every k: {all}");
+}

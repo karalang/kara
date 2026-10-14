@@ -1,0 +1,41 @@
+// LeetCode #629: K Inverse Pairs Array -- rolling DP with a window sum.
+//
+// Put the largest value, `i`, into an arrangement of 1..i-1: placed
+// t places from the end it adds t inverse pairs, for t from 0 to i - 1.
+// So the count for (i, j) is the sum of the counts for (i - 1, j - t),
+// a sliding window over the previous row that adds one count and drops
+// one as `j` grows. One row is kept at a time. O(n * k).
+
+fn k_inverse_pairs(n: i64, k: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut row = vec![0; k + 1];
+    row[0] = 1;
+    for i in 2..n + 1 {
+        let mut next = vec![0; k + 1];
+        let mut window = 0;
+        for j in 0..k + 1 {
+            window = (window + row[j]) % modulus;
+            if j >= i {
+                window = (window - row[j - i] + modulus) % modulus;
+            }
+            next[j] = window;
+        }
+        row = next;
+    }
+    row[k]
+}
+
+fn main() {
+    // 100 rounds, each counting the arrangements of n values with k
+    // inverse pairs for n and k from 500 to 1,000, the problem's most,
+    // stepped by the round, putting each count into a checksum.
+    let rounds = 100;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let n = 500 + (r * 37) % 501;
+        let k = 500 + (r * 91) % 501;
+        let c = k_inverse_pairs(n, k);
+        checksum = (checksum * 31 + c) % 1000000007;
+    }
+    println(f"{rounds} rounds: checksum {checksum}");
+}

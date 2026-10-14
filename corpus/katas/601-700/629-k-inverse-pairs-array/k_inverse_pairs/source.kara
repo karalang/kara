@@ -1,0 +1,75 @@
+// LeetCode #629: K Inverse Pairs Array -- rolling DP with a window sum.
+//
+// Put the largest value, `i`, into an arrangement of 1..i-1: placed
+// t places from the end it adds t inverse pairs, for t from 0 to i - 1.
+// So the count for (i, j) is the sum of the counts for (i - 1, j - t),
+// a sliding window over the previous row that adds one count and drops
+// one as `j` grows. One row is kept at a time. O(n * k).
+
+fn k_inverse_pairs(n: i64, k: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut row = vec![0; k + 1];
+    row[0] = 1;
+    for i in 2..n + 1 {
+        let mut next = vec![0; k + 1];
+        let mut window = 0;
+        for j in 0..k + 1 {
+            window = (window + row[j]) % modulus;
+            if j >= i {
+                window = (window - row[j - i] + modulus) % modulus;
+            }
+            next[j] = window;
+        }
+        row = next;
+    }
+    row[k]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64, k: i64) {
+    println(f"n = {n}, k = {k} -> {k_inverse_pairs(n, k)}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(3, 0);
+    show(3, 1);
+    // One value; two; every pair inverted and one past it; small counts;
+    // the most inverse pairs for 20 values; the largest inputs.
+    show(1, 0);
+    show(1, 1);
+    show(2, 1);
+    show(3, 3);
+    show(3, 4);
+    show(4, 2);
+    show(5, 5);
+    show(10, 20);
+    show(20, 190);
+    show(1000, 0);
+    show(1000, 1);
+    show(1000, 1000);
+    // 200 random cases, n from 1 to 60 and k from 0 to 300.
+    let mut seed: i64 = 629;
+    let mut sum = 0;
+    let mut checksum = 0;
+    for _ in 0..200 {
+        let n = 1 + next_random(mut seed) % 60;
+        let k = next_random(mut seed) % 301;
+        let c = k_inverse_pairs(n, k);
+        sum += c;
+        checksum = (checksum * 31 + c) % 1000000007;
+    }
+    println(f"200 random cases: total {sum}, checksum {checksum}");
+    // Every k for 30 values, summed: 30! mod 1,000,000,007.
+    let mut all = 0;
+    for k in 0..436 {
+        all = (all + k_inverse_pairs(30, k)) % 1000000007;
+    }
+    println(f"n = 30, every k: {all}");
+}

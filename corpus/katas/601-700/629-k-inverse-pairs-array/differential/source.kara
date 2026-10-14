@@ -1,0 +1,247 @@
+// LeetCode #629: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// inputs.
+
+// ---- star arm ----------------------------------------------------------
+
+fn k_inverse_pairs_star(n: i64, k: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut row = vec![0; k + 1];
+    row[0] = 1;
+    for i in 2..n + 1 {
+        let mut next = vec![0; k + 1];
+        let mut window = 0;
+        for j in 0..k + 1 {
+            window = (window + row[j]) % modulus;
+            if j >= i {
+                window = (window - row[j - i] + modulus) % modulus;
+            }
+            next[j] = window;
+        }
+        row = next;
+    }
+    row[k]
+}
+
+// ---- table arm ---------------------------------------------------------
+
+fn k_inverse_pairs_table(n: i64, k: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        table.push(vec![0; k + 1]);
+    }
+    table[1][0] = 1;
+    for i in 2..n + 1 {
+        table[i][0] = 1;
+        for j in 1..k + 1 {
+            let mut count = table[i][j - 1] + table[i - 1][j];
+            if j >= i {
+                count -= table[i - 1][j - i];
+            }
+            table[i][j] = (count % modulus + modulus) % modulus;
+        }
+    }
+    table[n][k]
+}
+
+// ---- memo arm ----------------------------------------------------------
+
+fn k_inverse_pairs_memo(n: i64, k: i64) -> i64 {
+    let mut memo: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n + 1 {
+        memo.push(vec![-1; k + 1]);
+    }
+    count_memo(n, k, mut memo)
+}
+
+fn count_memo(n: i64, k: i64, memo: mut ref Vec[Vec[i64]]) -> i64 {
+    if k < 0 {
+        return 0;
+    }
+    if k == 0 {
+        return 1;
+    }
+    if n == 1 {
+        return 0;
+    }
+    if memo[n][k] >= 0 {
+        return memo[n][k];
+    }
+    let modulus = 1000000007;
+    let total = count_memo(n, k - 1, mut memo) + count_memo(n - 1, k, mut memo) - count_memo(n - 1, k - n, mut memo);
+    let result = (total % modulus + modulus) % modulus;
+    memo[n][k] = result;
+    result
+}
+
+// ---- series arm --------------------------------------------------------
+
+fn k_inverse_pairs_series(n: i64, k: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut a = vec![0; k + 1];
+    a[0] = 1;
+    for i in 1..n + 1 {
+        if i > k {
+            break;
+        }
+        let mut j = k;
+        while j >= i {
+            a[j] = (a[j] - a[j - i] + modulus) % modulus;
+            j -= 1;
+        }
+    }
+    let top = k + n;
+    let mut factorial = vec![1; top + 1];
+    for i in 1..top + 1 {
+        factorial[i] = factorial[i - 1] * i % modulus;
+    }
+    let mut inverse = vec![1; top + 1];
+    inverse[top] = power_series(factorial[top], modulus - 2, modulus);
+    let mut i = top;
+    while i > 0 {
+        inverse[i - 1] = inverse[i] * i % modulus;
+        i -= 1;
+    }
+    let mut total = 0;
+    for j in 0..k + 1 {
+        let m = k - j;
+        let ways = factorial[m + n - 1] * inverse[n - 1] % modulus * inverse[m] % modulus;
+        total = (total + a[j] * ways) % modulus;
+    }
+    total
+}
+
+fn power_series(base: i64, exponent: i64, modulus: i64) -> i64 {
+    let mut result = 1;
+    let mut b = base % modulus;
+    let mut e = exponent;
+    while e > 0 {
+        if e % 2 == 1 {
+            result = result * b % modulus;
+        }
+        b = b * b % modulus;
+        e /= 2;
+    }
+    result
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, n: i64, k: i64) -> i64 {
+    if which == 0 {
+        k_inverse_pairs_star(n, k)
+    } else if which == 1 {
+        k_inverse_pairs_table(n, k)
+    } else if which == 2 {
+        k_inverse_pairs_memo(n, k)
+    } else {
+        k_inverse_pairs_series(n, k)
+    }
+}
+
+// Every arrangement of 1..n, built a value at a time; `inversions`
+// counts the pairs so far, each new value adding one for every larger
+// value already placed.
+fn arrange(n: i64, used: mut ref Vec[bool], placed: i64, inversions: i64, counts: mut ref Vec[i64]) {
+    if placed == n {
+        counts[inversions] += 1;
+        return;
+    }
+    for v in 1..n + 1 {
+        if not used[v] {
+            let mut larger = 0;
+            for w in v + 1..n + 1 {
+                if used[w] {
+                    larger += 1;
+                }
+            }
+            used[v] = true;
+            arrange(n, mut used, placed + 1, inversions + larger, mut counts);
+            used[v] = false;
+        }
+    }
+}
+
+// The definition: for n from 1 to 8, the number of arrangements of 1..n
+// with each count of inverse pairs, by listing every arrangement.
+fn definition_table() -> Vec[Vec[i64]] {
+    let mut table: Vec[Vec[i64]] = Vec.new();
+    table.push(Vec.new());
+    for n in 1..9 {
+        let mut used = vec![false; n + 1];
+        let mut counts = vec![0; n * (n - 1) / 2 + 1];
+        arrange(n, mut used, 0, 0, mut counts);
+        table.push(counts);
+    }
+    table
+}
+
+fn main() {
+    let table = definition_table();
+    let modulus = 1000000007;
+    let count = 600;
+    let mut seed: i64 = 6290;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // A small n, with k sometimes past the most inverse pairs, for
+        // the definition; a larger m with k2 within range, and a k past
+        // the most for m.
+        let n = 1 + next_random(mut seed) % 8;
+        let most = n * (n - 1) / 2;
+        let k = next_random(mut seed) % (most + 4);
+        let m = 9 + next_random(mut seed) % 8;
+        let most_m = m * (m - 1) / 2;
+        let k2 = next_random(mut seed) % (most_m + 1);
+        let past = most_m + 1 + next_random(mut seed) % 4;
+        let want = if k <= most { table[n][k] } else { 0 };
+        let mut factorial = 1;
+        for i in 2..n + 1 {
+            factorial *= i;
+        }
+        for which in 0..4 {
+            let got = answer(which, n, k);
+            let mut all = 0;
+            for j in 0..most + 1 {
+                all += answer(which, n, j);
+            }
+            let at_m = answer(which, m, k2);
+            let mut below = 0;
+            for t in 0..k2.min(m - 1) + 1 {
+                below = (below + answer(which, m - 1, k2 - t)) % modulus;
+            }
+            let ok = vec![
+                // P1: the definition's count.
+                got == want,
+                // P2: k pairs and the most less k pairs are equally
+                // common, since reversing an arrangement swaps them.
+                at_m == answer(which, m, most_m - k2),
+                // P3: the counts for every k add up to n!.
+                all == factorial,
+                // P4: no arrangement has more than m(m - 1)/2 pairs.
+                answer(which, m, past) == 0,
+                // P5: the count for (m, k2) is the sum, over the places
+                // the largest value can go, of the counts for m - 1.
+                at_m == below,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
