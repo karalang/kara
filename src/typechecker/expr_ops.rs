@@ -2631,7 +2631,7 @@ impl<'a> super::TypeChecker<'a> {
                 } = &side.kind
                 {
                     let key = SpanKey::from_span(&side.span);
-                    if self.borrowed_deref_operands.insert(key.clone()) {
+                    if self.borrowed_deref_operands.insert(key) {
                         borrowed.push(key);
                     }
                 }
