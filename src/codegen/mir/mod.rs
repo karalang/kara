@@ -62,6 +62,11 @@ use crate::mir::layout::{self, Layout};
 use crate::mir::ty::{FloatTy, TyKind};
 use crate::mir::{Body, Place, TerminatorKind, Ty, TyInterner};
 
+/// The largest body, in blocks and in statements, that is hinted for
+/// inlining ([`Cx::lower_body`]).
+const INLINE_HINT_MAX_BLOCKS: usize = 16;
+const INLINE_HINT_MAX_STATEMENTS: usize = 24;
+
 pub(crate) type R<T> = Result<T, String>;
 
 /// The LLVM name of the body `name`: prefixed, so a Kāra function cannot
@@ -409,6 +414,20 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     /// block, then each block's statements and terminator.
     fn lower_body(&mut self, body: &'p Body) -> R<()> {
         let f = self.direct_function(&body.instance.name)?;
+        // A small body (an iterator's `next`, an accessor) is hinted for
+        // inlining, which lifts O2's inline threshold for it from 225 to 325:
+        // with every value passed by pointer, a body this size can cost
+        // just over 225 and stay a call in the loop that runs it.
+        // `KARAC_MIR_INLINEHINT=0` leaves the hint out.
+        let statements: usize = body.blocks.iter().map(|b| b.statements.len()).sum();
+        if body.blocks.len() <= INLINE_HINT_MAX_BLOCKS
+            && statements <= INLINE_HINT_MAX_STATEMENTS
+            && std::env::var("KARAC_MIR_INLINEHINT").as_deref() != Ok("0")
+        {
+            let kind = Attribute::get_named_enum_kind_id("inlinehint");
+            let hint = self.llcx.create_enum_attribute(kind, 0);
+            f.add_attribute(AttributeLoc::Function, hint);
+        }
         let entry = self.llcx.append_basic_block(f, "entry");
         self.builder.position_at_end(entry);
         let name = &body.instance.name;
