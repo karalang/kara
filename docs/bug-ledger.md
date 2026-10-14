@@ -97,13 +97,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 258 |
-| missing-feature | 255 |
-| false-positive | 175 |
+| missing-feature | 256 |
+| false-positive | 178 |
 | other | 172 |
 | perf | 165 |
 | diagnostics | 161 |
 | crash | 115 |
-| soundness | 103 |
+| soundness | 104 |
 | use-after-free | 90 |
 
 ### By surface
@@ -112,15 +112,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2889 |
 | interp | 922 |
-| typecheck | 413 |
+| typecheck | 415 |
 | other | 115 |
-| ownership | 93 |
+| ownership | 95 |
 | cli | 76 |
 | runtime | 68 |
 | parser | 63 |
 | autopar | 59 |
 | resolver | 40 |
-| effect | 30 |
+| effect | 31 |
 | lexer | 11 |
 ## Current state
 
@@ -190,6 +190,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-55 | 2026-10-14 | typecheck | medium | `karac check` accepts ANY method name on the ambient resources `fs`, `env` and `stdout`: `fs.bogus_op("x".to_string())` and `env.bogus_op()` print `All checks passed.`, and the program fails only when run (MIR build: "a type that failed to check is not lowered yet"; interpreter: "ambient resource 'FileSystem' has no default method 'bogus_op' yet") | — |
 | B-2026-10-14-56 | 2026-10-14 | codegen | medium | The MIR builder refuses a `match` on a field reached through a call that returns a `ref`: `match m.get(k).unwrap().v { V.T(_) => 1, V.L(_) => 2 }` and `match first(xs).v { .. }` (with `fn first(v: ref Vec[It]) -> ref It`) stop with "cannot move a non-`Copy` value out of a borrowed place" even when no pattern binds anything, while `karac check` accepts them and `match xs[0].v` / `let it = m.get(k).unwrap(); match it.v` build | — |
 | B-2026-10-14-57 | 2026-10-14 | parser | low | `let (mut a, b) = ..` (Rust's spelling) is refused with "'mut' is a reserved keyword and cannot be used as an identifier", which does not say that syntax.md puts `mut` before the whole pattern (`let mut (a, b) = ..`) or offer that fix | — |
+| B-2026-10-14-58 | 2026-10-14 | effect | medium | `karac check` refuses a function that calls a RECURSIVE allocating function as a value for a bare `Fn(..)` slot ("argument 1 has effect allocates(Heap) not declared in slot [pure]"; for a `let g: Fn(i64) -> String = show;` binding too), though design.md § Effects says `allocates(Heap)` and `panics` are default-permitted in function types; the same function without the recursive callee is accepted | — |
+| B-2026-10-14-59 | 2026-10-14 | typecheck | medium | A closure with an early `return None;` and a tail `Some(..)` is refused with "closure returns conflicting types: 'Option[String]' vs 'Option[T]'" (and "cannot infer type parameter 'T'" when the `return` carries the `Some`), by `karac check` and the MIR typecheck alike; closures cannot declare a return type, so the only way out is annotating the binding with a full `Fn(..)` type | — |
+| B-2026-10-14-60 | 2026-10-14 | ownership | medium | `karac check` refuses the basic find-and-return-a-reference lookup: `for (k, it) in v.iter() { if k == name { return Some(it); } }` in `fn pick(v: ref Vec[(String, i64)], name: Str) -> Option[ref i64]` (and `for s in v.iter() { return Some(s); }` into `Option[ref String]`) is "returned borrowed collection holds an element that borrows function-local storage" plus `borrow_projection_copy` "cannot move 'it'", though the element borrows the caller's `v`; the MIR backends run it | — |
+| B-2026-10-14-61 | 2026-10-14 | typecheck | medium | The MIR typecheck refuses calling a function value through a `ref`: `for f in fs.iter() { t += f(10); }` over a `Vec[Fn(i64) -> i64]` is "type 'ref Fn(i64) -> i64' is not callable", though design.md says a stored `Fn(..)` is called through a `ref`; `karac check` and `run --interp` accept it, and `fs[i](10)` / `(r.h)(100)` work on every surface | — |
+| B-2026-10-14-62 | 2026-10-14 | ownership | low | `karac check` accepts moving a stored function value out of a borrow, `for r in rs.iter() { let h = r.h; t += h(1000); }` with `h: Fn(i64) -> i64`, which design.md makes move-only; the MIR borrow checker refuses it ("move of (*_42).0 through a shared reference [E0517]") with no source location, so the error surfaces only at build | — |
 
 ### Relocated
 

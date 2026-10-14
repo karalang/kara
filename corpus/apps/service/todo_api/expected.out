@@ -1,0 +1,63 @@
+== create
+  [1] HTTP/1.1 200 OK {"ok":true,"todos":0}
+  [2] HTTP/1.1 201 Created {"id":1,"title":"buy milk","done":false,"tags":["home","errand"]}
+  [3] HTTP/1.1 201 Created {"id":2,"title":"write \"report\"\n\tdraft été","done":false,"tags":["work"]}
+  [4] HTTP/1.1 201 Created {"id":3,"title":"call mum","done":false,"tags":[]}
+  [5] HTTP/1.1 200 OK [{"id":1,"title":"buy milk","done":false,"tags":["home","errand"]},{"id":2,"title":"write \"report\"\n\tdraft été","done":false,"tags":["work"]},{"id":3,"title":"call mum","done":false,"tags":[]}]
+== update
+  [6] HTTP/1.1 200 OK {"id":1,"title":"buy milk","done":true,"tags":["home","errand"]}
+  [7] HTTP/1.1 200 OK [{"id":1,"title":"buy milk","done":true,"tags":["home","errand"]}]
+  [8] HTTP/1.1 200 OK [{"id":2,"title":"write \"report\"\n\tdraft été","done":false,"tags":["work"]}]
+  [9] HTTP/1.1 200 OK []
+  [10] HTTP/1.1 200 OK {"id":2,"title":"write \"report\"\n\tdraft été","done":false,"tags":["work"]}
+  [11] HTTP/1.1 204 No Content
+  [12] HTTP/1.1 404 Not Found {"error":"no todo 3"}
+== errors
+  [13] HTTP/1.1 401 Unauthorized {"error":"missing bearer token"}
+  [14] HTTP/1.1 401 Unauthorized {"error":"missing bearer token"}
+  [15] HTTP/1.1 405 Method Not Allowed {"error":"use GET, PATCH, DELETE"}
+  [16] HTTP/1.1 404 Not Found {"error":"no route for /nope"}
+  [17] HTTP/1.1 400 Bad Request {"error":"bad id 'abc'"}
+  [18] HTTP/1.1 400 Bad Request {"error":"title must be a string"}
+  [19] HTTP/1.1 400 Bad Request {"error":"title is required"}
+  [20] HTTP/1.1 400 Bad Request {"error":"tags must be strings"}
+  [21] HTTP/1.1 400 Bad Request {"error":"invalid JSON: expected ':', found '\"' at offset 9"}
+  [22] HTTP/1.1 400 Bad Request {"error":"invalid JSON: unexpected ']' at offset 6"}
+  [23] HTTP/1.1 400 Bad Request {"error":"invalid JSON: bad escape '\\q' at offset 17"}
+  [24] HTTP/1.1 400 Bad Request {"error":"invalid JSON: trailing characters at offset 15"}
+  [25] HTTP/1.1 400 Bad Request {"error":"invalid JSON: invalid literal, expected true at offset 3"}
+  [26] HTTP/1.1 400 Bad Request {"error":"done must be a boolean"}
+  [27] HTTP/1.1 404 Not Found {"error":"no todo 9"}
+== limits
+  [28] HTTP/1.1 400 Bad Request {"error":"body too large"}
+  [29] HTTP/1.1 200 OK {"ok":true,"todos":2}
+== access log
+  #1 GET /health -> 200 (21 bytes)
+  #2 POST /todos -> 201 (65 bytes)
+  #3 POST /todos -> 201 (79 bytes)
+  #4 POST /todos -> 201 (50 bytes)
+  #5 GET /todos -> 200 (198 bytes)
+  #6 PATCH /todos/1 -> 200 (64 bytes)
+  #7 GET /todos -> 200 (66 bytes)
+  #8 GET /todos -> 200 (81 bytes)
+  #9 GET /todos -> 200 (2 bytes)
+  #10 GET /todos/2 -> 200 (79 bytes)
+  #11 DELETE /todos/3 -> 204 (0 bytes)
+  #12 GET /todos/3 -> 404 (21 bytes)
+  #13 POST /todos -> 401 (32 bytes)
+  #14 DELETE /todos/1 -> 401 (32 bytes)
+  #15 PUT /todos/1 -> 405 (34 bytes)
+  #16 GET /nope -> 404 (30 bytes)
+  #17 GET /todos/abc -> 400 (24 bytes)
+  #18 POST /todos -> 400 (34 bytes)
+  #19 POST /todos -> 400 (29 bytes)
+  #20 POST /todos -> 400 (32 bytes)
+  #21 POST /todos -> 400 (62 bytes)
+  #22 POST /todos -> 400 (52 bytes)
+  #23 POST /todos -> 400 (55 bytes)
+  #24 POST /todos -> 400 (58 bytes)
+  #25 POST /todos -> 400 (68 bytes)
+  #26 PATCH /todos/2 -> 400 (34 bytes)
+  #27 PATCH /todos/9 -> 404 (21 bytes)
+  #28 POST /todos -> 400 (26 bytes)
+  #29 GET /health -> 200 (21 bytes)

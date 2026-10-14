@@ -123,6 +123,7 @@ cli/archive         binary archive format with CRC-32: pack, list, extract, dete
 cli/site_gen        static site generator: markdown subset to HTML, front matter, env config, index + sitemap
 cli/dup_finder      duplicate-file finder: chunked FNV-1a hashing, byte-for-byte confirm, prune, CSV manifest
 service/resp_store  Redis-style RESP2 server over TCP: strings, lists, expiry, KEYS, append-only file replayed on restart
+service/todo_api    REST API: hand-written JSON library, router of fn values, closure middleware, keep-alive pipelining
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
