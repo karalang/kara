@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 255 |
 | missing-feature | 246 |
 | other | 172 |
-| false-positive | 166 |
+| false-positive | 167 |
 | perf | 164 |
 | diagnostics | 156 |
 | crash | 114 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 917 |
 | typecheck | 398 |
 | other | 115 |
-| ownership | 88 |
+| ownership | 89 |
 | cli | 75 |
 | runtime | 66 |
 | parser | 61 |
@@ -601,7 +601,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-36 | 2026-10-13 | codegen+runtime | medium | `VecDeque` `push_back` / `pop_front` on the MIR compiled backend are out-of-line runtime calls (`karac_mir_deque_push` / `_pop`) that wrap with integer `%` and copy the element with a sized `memcpy` call: kata 542's breadth-first search bench runs 0.41 s, 0.28 s with a `Vec` and head index in place of the deque, 0.19 s in Rust with `VecDeque` | — |
 | B-2026-10-14-5 | 2026-10-14 | codegen+runtime | medium | An f-string whose holes are `String`s or `str` slices runs about 5x slower than the same text built with `push_str` on the v2 compiled backend: kata 555's bench builds each candidate as `f"{t[k..]}{middle}{t[..k]}"` and takes 5.2 to 5.9 s on `karac build --mir`, against 0.94 to 1.10 s with `push_str` three times into a `String` (and 1.2 to 1.4 s for Rust's `format!`) | — |
 | B-2026-10-14-9 | 2026-10-14 | codegen | medium | Matching a borrowed `shared enum` on the MIR compiled backend retains every handle the pattern binds and releases each at the arm's end, so a read-only tree walk pays a count up and an out-of-line `drop.shared` call per child: kata 558's `count` over 210M quad-tree nodes runs 1.49 to 1.62 s on `karac build --mir` against 0.98 to 1.04 s for Rust's `count(&Quad)`, and 1.31 s for the same Rust with each child's `Rc` cloned | — |
-| B-2026-10-14-10 | 2026-10-14 | typecheck | medium | `karac check` does not treat the elements of a `Vec[ref T]` as the `Copy` references the spec makes them: `for c in t.children.iter() { v.push(c); }` into `v: Vec[ref Node]` is refused with `borrow_projection_copy` ("cannot move 'c': it borrows its value"), the same into `Vec[(ref Node, i64)]` adds "expected '(ref Node, i64)', found '(Node, i64)'", and `let a = v[0];` is refused with E_INDEX_MOVE_NON_COPY on both pipelines; `__mir-run` and `__mir-llvm-run` run the two pushes | — |
 | B-2026-10-14-13 | 2026-10-14 | typecheck+ownership | medium | Pushing an owned `Node` local into a `Vec[ref Node]` is accepted as a MOVE of the `Node` into a slot typed `ref Node`: `v.push(t)` passes `karac check`, a later `t.val` is refused as "moved" by both pipelines, and with no later use `__mir-run` reports the tree leaked at exit | — |
 | B-2026-10-14-14 | 2026-10-14 | codegen | medium | `Vec.with_capacity(n)` and `String.with_capacity(n)` reserve nothing on the MIR compiled backend: `Vec.with_capacity(5).capacity()` prints 0 under `__mir-llvm-run` and 5 under `__mir-run`, and presizing buys nothing -- kata 559's bench walk runs 2.37 to 2.45 s with each node's children `Vec` presized, the same as without, where the Rust mirror drops from 2.0 s to 0.82 to 0.87 s | — |
 | B-2026-10-14-18 | 2026-10-14 | typecheck | medium | `karac check` accepts `flatten()` over an iterator whose items are collections, `mat.iter().flatten()` on a `Vec[Vec[i64]]`, but the spec's signature (`where Self.Item: Iterator`) excludes it and both MIR backends refuse it: a program that passes `karac check` does not run | — |
@@ -612,6 +611,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-25 | 2026-10-14 | typecheck | medium | `karac check` and both MIR backends refuse the call-site `mut` marker on an argument rooted at a `mut ref` binding ("this argument is already a mut-ref; drop the `mut` marker"), though design.md § Call-site `mut` markers requires it "whatever the argument's root" and its own example `sort_in_place(mut s.scores)` with `s: mut ref Session` is refused | — |
 | B-2026-10-14-26 | 2026-10-14 | ownership+interp+codegen | medium | `ref place` on a field (`ref s.field`, design.md § `*` and `ref` in expressions) does not build on either MIR backend ("E_REF_OPERAND_UNSUPPORTED: only `ref <sequence>[i]` is supported in v1"), and `karac check` refuses returning one ("this borrow-return form is not yet supported"), so the spec's own `fn name(user: User) -> ref String { ref user.name }` is refused everywhere | — |
 | B-2026-10-14-27 | 2026-10-14 | typecheck | medium | `karac check` refuses `*w` as an operand of `==` (`for w in words.iter() { if *w == target { ... } }` over a `Vec[String]`) with `borrow_projection_copy` ("cannot move a non-`Copy` value out of a borrow with `*`"), though design.md § `*` and `ref` in expressions says `==` borrows `*r` and needs no copy, and both MIR backends run it; the unstarred `w == target`, which that section calls a type error, passes | — |
+| B-2026-10-14-28 | 2026-10-14 | ownership | medium | `karac check`'s ownership pass counts lending a bare `for` element into a `ref` slot as a MOVE, so lending it twice is refused: `v.push(c); v.push(c);` into `Vec[ref Node]`, `stack.push((c, 1)); stack.push((c, 2));` into `Vec[(ref Node, i64)]`, and `let r: ref Node = c; let s: ref Node = c;` are each "value 'c' moved here, used again here", while `__mir-run` runs all three | — |
 
 ### Relocated
 
@@ -3991,6 +3991,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-6 | typecheck | medium | On the MIR backends a `collect()` that is the result of a `map` closure does not build: `words.iter().map(\|w\| w.chars().rev().collect()).collect()` f… | 0c4bec8fa5 |
 | B-2026-10-14-7 | typecheck | medium | `karac check` refuses `let r: Vec[String] = words.iter().map(\|w\| w.chars().rev().collect()).collect();` with "expected 'Vec[String]', found 'Vec[Vec[… | 86f1298387 |
 | B-2026-10-14-8 | ownership | medium | `karac check` refuses any `collect()` into a non-`Vec` target inside a closure body, `\|w\| { let s: String = w.chars().collect(); s.len() }`, with an… | d0d9435e8a |
+| B-2026-10-14-10 | typecheck | medium | `karac check` does not treat the elements of a `Vec[ref T]` as the `Copy` references the spec makes them: `for c in t.children.iter() { v.push(c); }`… | 8139c5e826 |
 | B-2026-10-14-11 | codegen | high | [CORRECTED 2026-10-14: the compiled path is not a clean failure | 188b79d9a4 |
 | B-2026-10-14-12 | typecheck | low | `karac check` has no `Option.as_ref`: `o.as_ref()` on an `Option[Node]` is refused with "no method 'as_ref' on type 'Option'", though docs/library/co… | 2453b6bef8 |
 | B-2026-10-14-15 | interp | medium | The MIR interpreter has no `chunks` or `windows` on a `Vec` receiver: `v.chunks(2)` and `v.windows(2)` on a `Vec[i64]` stop `__mir-run` with "call of… | ad97b06d77 |
