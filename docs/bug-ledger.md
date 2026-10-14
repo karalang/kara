@@ -607,7 +607,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-38 | 2026-10-14 | ownership | medium | `karac check` refuses the spec's borrow returns that both MIR backends now run: `fn name(user: User) -> ref String { ref user.name }` and `fn head(self) -> ref Node { ref self.head }` are "this borrow-return form is not yet supported", and a `ref` local walked down a tree and returned, `let mut node = ref self.head; while let Some(n) = node.next { node = n; } node`, is refused at `node = n` as a move of a borrowing binding | — |
 | B-2026-10-14-39 | 2026-10-14 | codegen+runtime | low | A one-integer f-string `f"{n}"` still runs about 3x legacy on the v2 compiled backend after B-2026-10-13-20's fix: 44M `f"{i % 7}"` take 0.86 s on `karac build --mir` against 0.28 to 0.31 s on legacy `karac build`, and kata 504's bench 1.97 to 2.25 s against 1.51 to 1.62 s | — |
 | B-2026-10-14-40 | 2026-10-14 | typecheck | low | `??` on a `ref Option[i64]` is refused ("'??' requires an `Option` or a `Result` on the left, found 'ref Option[i64]'"), though design.md § `*` and `ref` in expressions reads a `ref T` of a `Copy` `T` as a `T` wherever one is expected, operator operands included: both MIR backends refuse `v ?? 0` over `for v in values.iter()`, which `karac check` accepts, and all three refuse `r ?? 0` with `let r = ref values[0]` | — |
-| B-2026-10-14-41 | 2026-10-14 | typecheck+codegen | medium | A fixed array's `.iter()` (`mk().iter().count()`) is refused by the library-source checker, and once checked the compiled MIR backend passes a pointer to the array where the `Slice[T]` method wants a slice view, so count/sum read 0 | — |
 
 ### Relocated
 
@@ -4012,6 +4011,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-32 | typecheck+codegen | low | The MIR front end lowers a move of a non-`Copy` field out of a `shared` value or out of a `ref` (`\|q: S\| q.t`, `fn get(ref self) -> String { self.wor… | 2abd05a1a8 |
 | B-2026-10-14-33 | resolver+typecheck | low | A user type still cannot implement `Neg`, `Not`, `Index` or `IndexMut`: d02338bc95 let the binary arithmetic and bitwise operator traits through on c… | fb86de2dcd |
 | B-2026-10-14-34 | typecheck+ownership | medium | A trait impl method declared with bare `self` where the trait declares `own self` is accepted, and `karac check` and the MIR pipeline then disagree a… | 20adf3d84c |
+| B-2026-10-14-41 | typecheck+codegen | medium | A fixed array's `.iter()` (`mk().iter().count()`) is refused by the library-source checker, and once checked the compiled MIR backend passes a pointe… | b465d3dd05 |
 
 </details>
 
