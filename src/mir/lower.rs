@@ -13230,8 +13230,18 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// evaluated only then (design.md § Optional chaining). `left` is taken
     /// by value, as `unwrap_or` takes its receiver.
     fn nil_coalesce(&mut self, left: &'a Expr, right: &'a Expr, dest: Place) -> R<()> {
-        let lt = self.expr_ty(left)?;
+        let mut lt = self.expr_ty(left)?;
         let unsupported = |s: &mut Self| s.unsupported(left.span, "`??` on this type");
+        // A `ref` of a `Copy` `Option` / `Result` reads the wrapper through
+        // the reference (design.md § `*` and `ref` in expressions,
+        // B-2026-10-14-40).
+        let through_ref = match self.tys().tcx().kind(lt) {
+            HK::Ref(inner) | HK::MutRef(inner) => {
+                lt = inner;
+                true
+            }
+            _ => false,
+        };
         let Some((adt, _)) = self.tys().tcx().adt_of(lt) else {
             return unsupported(self);
         };
@@ -13247,8 +13257,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         let p = if self.is_place(left) && self.is_local_rooted(left) {
             self.expr_place(left, false)?
         } else {
-            let l = self.temp_of(left, lt)?;
+            let left_ty = self.expr_ty(left)?;
+            let l = self.temp_of(left, left_ty)?;
             Place::local(l)
+        };
+        let p = if through_ref {
+            p.project(ProjElem::Deref)
+        } else {
+            p
         };
         let i64_t = self.tys().tcx().intern(HK::Int(IntSize::I64));
         let d = self.temp(i64_t);

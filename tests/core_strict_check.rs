@@ -4121,3 +4121,26 @@ fn main() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// B-2026-10-14-40: a `ref` of a `Copy` `Option` / `Result` is read as the
+// wrapper on the left of `??` (design.md § `*` and `ref` in expressions).
+#[test]
+fn coalesce_reads_a_ref_of_a_copy_wrapper() {
+    let src = r#"
+fn f(o: mut ref Option[i64]) -> i64 { o ?? 5 }
+
+fn main() {
+    let values: Vec[Option[i64]] = vec![Some(3), None, Some(4)];
+    let mut sum = 0;
+    for v in values.iter() { sum += v ?? 0; }
+    let r = ref values[0];
+    sum += r ?? 0;
+    let rs: Vec[Result[i64, i64]] = vec![Ok(7), Err(1)];
+    for x in rs.iter() { sum += x ?? 100; }
+    let mut o: Option[i64] = None;
+    sum += f(mut o);
+    println(f"{sum}");
+}
+"#;
+    accepted("coalesce-ref", src);
+}

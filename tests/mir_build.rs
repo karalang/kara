@@ -1507,3 +1507,31 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-14-40 — `??` reads a `ref` of a `Copy` `Option` / `Result`
+/// through the reference on the compiled backend too.
+#[test]
+fn mir_coalesce_reads_a_ref_of_a_copy_wrapper() {
+    const SRC: &str = r#"fn f(o: mut ref Option[i64]) -> i64 { o ?? 5 }
+fn main() {
+    let values: Vec[Option[i64]] = vec![Some(3), None, Some(4)];
+    let mut sum = 0;
+    for v in values.iter() { sum += v ?? 0; }
+    let r = ref values[0];
+    sum += r ?? 0;
+    let rs: Vec[Result[i64, i64]] = vec![Ok(7), Err(1)];
+    for x in rs.iter() { sum += x ?? 100; }
+    let mut o: Option[i64] = None;
+    sum += f(mut o);
+    println(f"{sum}");
+}
+"#;
+    let want = "122\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

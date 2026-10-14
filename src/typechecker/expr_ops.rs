@@ -3917,6 +3917,19 @@ impl<'a> super::TypeChecker<'a> {
     /// key the desugared call will present.
     pub(super) fn infer_nil_coalesce(&mut self, left: &Expr, right: &Expr, span: &Span) -> Type {
         let l_ty = resolve_type_var_top(&self.infer_expr(left), &self.env.substitutions);
+        // design.md § `*` and `ref` in expressions: a `ref` of a `Copy`
+        // wrapper is read as the wrapper, an operator operand included, so
+        // `v ?? 0` over `values.iter()` is `*v ?? 0` (B-2026-10-14-40).
+        let l_ty = match &l_ty {
+            Type::Ref(inner) | Type::MutRef(inner)
+                if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+                    && matches!(&**inner, Type::Named { name, .. } if name == "Option" || name == "Result")
+                    && self.is_copy_type_during_check(inner) =>
+            {
+                (**inner).clone()
+            }
+            _ => l_ty,
+        };
 
         // `Option[T]` -> (T, no error payload); `Result[T, E]` -> (T, E).
         let wrapped = match &l_ty {
