@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/623-add-one-row-to-tree/bench/add_one_row.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["shared", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "1aaf2d259"
+extracted_src = "ab2e3e63"
+model_rev = "1aa23105"
+model_src = "ab2e3e63"

@@ -1,0 +1,117 @@
+// LeetCode #623: Add One Row to Tree -- recursion with the level.
+//
+// Walk down from the root keeping the level, and at every node one level
+// above `depth` hang two new nodes of value `val`: a left one that takes
+// over the old left subtree as its left, and a right one that takes over
+// the old right subtree as its right. A row at depth 1 is a new root with
+// the whole tree as its left subtree. Changes the tree in place;
+// O(nodes above the new row).
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn add_one_row(root: Option[TreeNode], val: i64, depth: i64) -> Option[TreeNode] {
+    if depth == 1 {
+        return Some(TreeNode { val: val, left: root, right: None });
+    }
+    insert(root, val, depth, 1);
+    root
+}
+
+fn insert(node: Option[TreeNode], val: i64, depth: i64, level: i64) {
+    if let Some(n) = node {
+        if level == depth - 1 {
+            n.left = Some(TreeNode { val: val, left: n.left, right: None });
+            n.right = Some(TreeNode { val: val, left: None, right: n.right });
+        } else {
+            insert(n.left, val, depth, level + 1);
+            insert(n.right, val, depth, level + 1);
+        }
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree of `size` nodes with values from -100 to 100: each new node
+// walks down from the root, going left with chance lean / 100, and takes
+// the first empty place it meets.
+fn random_tree(size: i64, lean: i64, seed: mut ref i64) -> TreeNode {
+    let root = leaf(next_random(mut seed) % 201 - 100);
+    for _ in 1..size {
+        let c = leaf(next_random(mut seed) % 201 - 100);
+        let mut node = root;
+        loop {
+            if next_random(mut seed) % 100 < lean {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    root
+}
+
+// Takes the row at `depth` (2 or more) out again, giving each node at
+// level `depth - 1` back its left child's left subtree and its right
+// child's right subtree, and counts the row's nodes and puts their
+// values into the checksum on the way.
+fn undo(node: Option[TreeNode], depth: i64, level: i64, count: mut ref i64, h: mut ref i64) {
+    if let Some(n) = node {
+        if level == depth - 1 {
+            let l = n.left.unwrap();
+            let r = n.right.unwrap();
+            *count += 2;
+            *h = (*h * 31 + l.val + r.val + 400000) % 1000000007;
+            n.left = l.left;
+            n.right = r.right;
+        } else {
+            undo(n.left, depth, level + 1, mut count, mut h);
+            undo(n.right, depth, level + 1, mut count, mut h);
+        }
+    }
+}
+
+fn main() {
+    // 20 trees of 10,000 nodes, the problem's most, leaning left with
+    // chance 30 to 70 in 100, made once; then 4,000 times adds a row at
+    // depth 2 to 21 to one of them, both picked by the round, and takes
+    // it out again, reading the row.
+    let trees = 20;
+    let rounds = 4000;
+    let mut seed: i64 = 623;
+    let mut all: Vec[TreeNode] = Vec.new();
+    for _ in 0..trees {
+        let lean = 30 + next_random(mut seed) % 41;
+        all.push(random_tree(10000, lean, mut seed));
+    }
+    let mut count = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let depth = 2 + (r / trees) % 20;
+        let root = add_one_row(Some(all[r % trees]), r % 201 - 100, depth);
+        undo(root, depth, 1, mut count, mut checksum);
+    }
+    println(f"{trees} trees, {rounds} rounds: {count} row nodes, checksum {checksum}");
+}

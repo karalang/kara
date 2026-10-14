@@ -1,0 +1,11 @@
+[4,2,6,3,1,5], val = 1, depth = 2 -> [4,1,1,2,null,null,6,3,1,5]
+[4,2,null,3,1], val = 1, depth = 3 -> [4,2,null,1,1,3,null,null,1]
+[7], val = 5, depth = 1 -> [5,7]
+[7], val = 5, depth = 2 -> [7,5,5]
+[1,2,3], val = -9, depth = 1 -> [-9,1,null,2,3]
+[1,2,3,4,null,null,5], val = 0, depth = 4 -> [1,2,3,4,null,null,5,0,0,0,0]
+[1,null,2,null,3,null,4], val = 8, depth = 3 -> [1,null,2,8,8,null,null,null,3,null,4]
+[1,2,3,null,4,5], val = 100000, depth = 3 -> [1,2,3,100000,100000,100000,100000,null,null,null,4,5]
+300 random trees: 64132 characters, checksum 533295144
+10000 nodes, depth 3: 83610 characters, checksum 651052156
+10000 nodes, depth 18: 84076 characters, checksum 516344162

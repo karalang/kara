@@ -1,0 +1,436 @@
+// LeetCode #623: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// trees. The arms share one `TreeNode`, declared below.
+
+// ---- star arm ----------------------------------------------------------
+
+fn add_one_row_star(root: Option[TreeNode], val: i64, depth: i64) -> Option[TreeNode] {
+    if depth == 1 {
+        return Some(TreeNode { val: val, left: root, right: None });
+    }
+    insert_star(root, val, depth, 1);
+    root
+}
+
+fn insert_star(node: Option[TreeNode], val: i64, depth: i64, level: i64) {
+    if let Some(n) = node {
+        if level == depth - 1 {
+            n.left = Some(TreeNode { val: val, left: n.left, right: None });
+            n.right = Some(TreeNode { val: val, left: None, right: n.right });
+        } else {
+            insert_star(n.left, val, depth, level + 1);
+            insert_star(n.right, val, depth, level + 1);
+        }
+    }
+}
+
+// ---- levels arm --------------------------------------------------------
+
+fn add_one_row_levels(root: Option[TreeNode], val: i64, depth: i64) -> Option[TreeNode] {
+    if depth == 1 {
+        return Some(TreeNode { val: val, left: root, right: None });
+    }
+    let mut level: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        level.push(r);
+    }
+    for _ in 2..depth {
+        if level.is_empty() {
+            break;
+        }
+        let mut next: Vec[TreeNode] = Vec.new();
+        for n in level.iter() {
+            if let Some(l) = n.left {
+                next.push(l);
+            }
+            if let Some(r) = n.right {
+                next.push(r);
+            }
+        }
+        level = next;
+    }
+    for n in level.iter() {
+        n.left = Some(TreeNode { val: val, left: n.left, right: None });
+        n.right = Some(TreeNode { val: val, left: None, right: n.right });
+    }
+    root
+}
+
+// ---- stack arm ---------------------------------------------------------
+
+fn add_one_row_stack(root: Option[TreeNode], val: i64, depth: i64) -> Option[TreeNode] {
+    if depth == 1 {
+        return Some(TreeNode { val: val, left: root, right: None });
+    }
+    let mut stack: Vec[(TreeNode, i64)] = Vec.new();
+    if let Some(r) = root {
+        stack.push((r, 1));
+    }
+    while let Some((n, level)) = stack.pop() {
+        if level == depth - 1 {
+            n.left = Some(TreeNode { val: val, left: n.left, right: None });
+            n.right = Some(TreeNode { val: val, left: None, right: n.right });
+            continue;
+        }
+        if let Some(l) = n.left {
+            stack.push((l, level + 1));
+        }
+        if let Some(r) = n.right {
+            stack.push((r, level + 1));
+        }
+    }
+    root
+}
+
+// ---- copy arm ----------------------------------------------------------
+
+fn add_one_row_copy(root: Option[TreeNode], val: i64, depth: i64) -> Option[TreeNode] {
+    with_row_copy(root, val, depth, true)
+}
+
+fn with_row_copy(node: Option[TreeNode], val: i64, depth: i64, on_left: bool) -> Option[TreeNode] {
+    if depth == 1 {
+        let copied = with_row_copy(node, val, 0, true);
+        if on_left {
+            return Some(TreeNode { val: val, left: copied, right: None });
+        }
+        return Some(TreeNode { val: val, left: None, right: copied });
+    }
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode {
+            val: n.val,
+            left: with_row_copy(n.left, val, depth - 1, true),
+            right: with_row_copy(n.right, val, depth - 1, false),
+        }),
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, root: Option[TreeNode], val: i64, depth: i64) -> Option[TreeNode] {
+    if which == 0 {
+        add_one_row_star(root, val, depth)
+    } else if which == 1 {
+        add_one_row_levels(root, val, depth)
+    } else if which == 2 {
+        add_one_row_stack(root, val, depth)
+    } else {
+        add_one_row_copy(root, val, depth)
+    }
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree from LeetCode's level order: `None` for a missing child.
+fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
+    if values.is_empty() or values[0].is_none() {
+        return None;
+    }
+    let root = leaf(values[0].unwrap());
+    let mut queue: Vec[TreeNode] = vec![root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < values.len() {
+        let n = queue[head];
+        head += 1;
+        if let Some(v) = values[i] {
+            let c = leaf(v);
+            n.left = Some(c);
+            queue.push(c);
+        }
+        i += 1;
+        if i < values.len() {
+            if let Some(v) = values[i] {
+                let c = leaf(v);
+                n.right = Some(c);
+                queue.push(c);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// LeetCode's level order of a tree, as values, without trailing `None`s.
+fn to_values(root: Option[TreeNode]) -> Vec[Option[i64]] {
+    let mut out: Vec[Option[i64]] = Vec.new();
+    let mut queue: Vec[Option[TreeNode]] = vec![root];
+    let mut head = 0;
+    while head < queue.len() {
+        let node = queue[head];
+        head += 1;
+        match node {
+            Some(n) => {
+                out.push(Some(n.val));
+                queue.push(n.left);
+                queue.push(n.right);
+            }
+            None => out.push(None),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1].is_none() {
+        out.pop();
+    }
+    out
+}
+
+// Every node of a tree by its path from the root, `L` and `R` for the
+// steps, with its value.
+fn by_path(values: Vec[Option[i64]]) -> SortedMap[String, i64] {
+    let mut paths: SortedMap[String, i64] = SortedMap.new();
+    let mut queue: Vec[(Option[TreeNode], String)] = vec![(from_level(values), String.new())];
+    let mut head = 0;
+    while head < queue.len() {
+        let (node, path) = queue[head].clone();
+        head += 1;
+        if let Some(n) = node {
+            paths.insert(path.clone(), n.val);
+            queue.push((n.left, f"{path}L"));
+            queue.push((n.right, f"{path}R"));
+        }
+    }
+    paths
+}
+
+// A tree in level order from its nodes by path, walking the paths
+// breadth first.
+fn from_paths(paths: SortedMap[String, i64]) -> Vec[Option[i64]] {
+    let mut out: Vec[Option[i64]] = Vec.new();
+    let mut queue: Vec[String] = vec![String.new()];
+    let mut head = 0;
+    while head < queue.len() {
+        let path = queue[head].clone();
+        head += 1;
+        match paths.get(path) {
+            Some(v) => {
+                out.push(Some(v));
+                queue.push(f"{path}L");
+                queue.push(f"{path}R");
+            }
+            None => out.push(None),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1].is_none() {
+        out.pop();
+    }
+    out
+}
+
+// The definition, on paths: a node whose path is shorter than
+// `depth - 1` steps keeps it. A node deeper down moves one level, the
+// step it takes out of level `depth - 1` doubled, since it now passes
+// through the new node on that same side; at depth 1 that step is a
+// left one put in front. Every node at level `depth - 1`, a path of
+// `depth - 2` steps, gets new children of value `val` at both its
+// paths, and at depth 1 the new node is the root.
+fn definition(values: Vec[Option[i64]], val: i64, depth: i64) -> Vec[Option[i64]] {
+    let old = by_path(values);
+    let mut paths: SortedMap[String, i64] = SortedMap.new();
+    if depth == 1 {
+        paths.insert(String.new(), val);
+    }
+    for (path, v) in old.iter() {
+        let steps = path.len();
+        if steps < depth - 1 {
+            paths.insert(path.clone(), *v);
+        } else if depth == 1 {
+            paths.insert(f"L{path}", *v);
+        } else {
+            let cut = depth - 2;
+            let side = path[cut..cut + 1].to_string();
+            paths.insert(f"{path[0..cut]}{side}{path[cut..steps]}", *v);
+        }
+        if steps == depth - 2 {
+            paths.insert(f"{path}L", val);
+            paths.insert(f"{path}R", val);
+        }
+    }
+    from_paths(paths)
+}
+
+// A tree of `size` nodes with values from -9 to 9: each new node walks
+// down from the root, going left with chance lean / 100, and takes the
+// first empty place it meets.
+fn random_tree(size: i64, lean: i64, seed: mut ref i64) -> Vec[Option[i64]] {
+    let root = leaf(next_random(mut seed) % 19 - 9);
+    for _ in 1..size {
+        let c = leaf(next_random(mut seed) % 19 - 9);
+        let mut node = root;
+        loop {
+            if next_random(mut seed) % 100 < lean {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    to_values(Some(root))
+}
+
+// One arm's tree with the row added, given and returned in level order,
+// the tree built fresh for every call since three arms change it.
+fn added(which: i64, values: Vec[Option[i64]], val: i64, depth: i64) -> Vec[Option[i64]] {
+    to_values(answer(which, from_level(values), val, depth))
+}
+
+// The tree with the row at `depth` taken out again: each node at level
+// `depth - 1` gets back its left child's left subtree and its right
+// child's right subtree, and at depth 1 the root's left subtree is the
+// tree.
+fn without_row(values: Vec[Option[i64]], depth: i64) -> Vec[Option[i64]] {
+    let root = from_level(values);
+    if depth == 1 {
+        return to_values(root.unwrap().left);
+    }
+    let mut level: Vec[TreeNode] = vec![root.unwrap()];
+    for _ in 2..depth {
+        let mut next: Vec[TreeNode] = Vec.new();
+        for n in level.iter() {
+            if let Some(l) = n.left {
+                next.push(l);
+            }
+            if let Some(r) = n.right {
+                next.push(r);
+            }
+        }
+        level = next;
+    }
+    for n in level.iter() {
+        n.left = n.left.and_then(|c| c.left);
+        n.right = n.right.and_then(|c| c.right);
+    }
+    to_values(root)
+}
+
+// The tree with every node's children swapped.
+fn mirrored(values: Vec[Option[i64]]) -> Vec[Option[i64]] {
+    let root = from_level(values);
+    let mut stack: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        stack.push(r);
+    }
+    while let Some(n) = stack.pop() {
+        let l = n.left;
+        n.left = n.right;
+        n.right = l;
+        if let Some(c) = n.left {
+            stack.push(c);
+        }
+        if let Some(c) = n.right {
+            stack.push(c);
+        }
+    }
+    to_values(root)
+}
+
+fn nodes(values: Vec[Option[i64]]) -> i64 {
+    by_path(values).len()
+}
+
+// The number of nodes at a level, the root's level being 1.
+fn on_level(values: Vec[Option[i64]], level: i64) -> i64 {
+    let mut count = 0;
+    for (path, _) in by_path(values).iter() {
+        if path.len() == level - 1 {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn height(values: Vec[Option[i64]]) -> i64 {
+    let mut most = 0;
+    for (path, _) in by_path(values).iter() {
+        most = most.max(path.len() + 1);
+    }
+    most
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6230;
+    let mut checks = 0;
+    let mut made = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // A tree of 1 to 12 nodes, leaning left with chance 20, 50 or 80
+        // in 100; a depth from 1 to one below its deepest level; a row
+        // value from -9 to 9.
+        let leans = vec![20, 50, 80];
+        let size = 1 + next_random(mut seed) % 12;
+        let tree = random_tree(size, leans[next_random(mut seed) % 3], mut seed);
+        let depth = 1 + next_random(mut seed) % (height(tree) + 1);
+        let a = next_random(mut seed) % 19 - 9;
+        let want = definition(tree, a, depth);
+        let new_nodes = if depth == 1 { 1 } else { 2 * on_level(tree, depth - 1) };
+        made += new_nodes;
+        for which in 0..4 {
+            let got = added(which, tree, a, depth);
+            let ok = vec![
+                // P1: the definition's tree.
+                got == want,
+                // P2: one new node at depth 1, else two for every node
+                // at level `depth - 1`.
+                nodes(got) == nodes(tree) + new_nodes,
+                // P3: taking the row out again gives the tree back.
+                without_row(got, depth) == tree,
+                // P4: the new level holds that many nodes, all of value
+                // `a`.
+                on_level(got, depth) == new_nodes and level_holds(got, depth, a),
+                // P5: below depth 1, the mirror image of the tree gives
+                // the mirror image of the answer. (At depth 1 the old
+                // tree goes on the left, so the problem is not
+                // symmetric there.)
+                depth == 1 or added(which, mirrored(tree), a, depth) == mirrored(got),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({made} new nodes), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
+
+// Every node at a level holds `v`.
+fn level_holds(values: Vec[Option[i64]], level: i64, v: i64) -> bool {
+    for (path, x) in by_path(values).iter() {
+        if path.len() == level - 1 and *x != v {
+            return false;
+        }
+    }
+    true
+}
