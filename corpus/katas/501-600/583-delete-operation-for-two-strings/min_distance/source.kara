@@ -1,0 +1,87 @@
+// LeetCode #583: Delete Operation for Two Strings -- via the longest
+// common subsequence.
+//
+// What is left after the deletions is a string both words contain as
+// a subsequence, so the fewest deletions keep the longest common
+// subsequence and delete the rest: m + n - 2 * lcs. The table holds
+// the LCS of every pair of prefixes. O(m * n) time.
+
+fn min_distance(word1: String, word2: String) -> i64 {
+    let a: Vec[char] = word1.chars().collect();
+    let b: Vec[char] = word2.chars().collect();
+    let m = a.len();
+    let n = b.len();
+    let mut lcs = vec![vec![0; n + 1]; m + 1];
+    for i in 1..=m {
+        for j in 1..=n {
+            if a[i - 1] == b[j - 1] {
+                lcs[i][j] = lcs[i - 1][j - 1] + 1;
+            } else {
+                lcs[i][j] = lcs[i - 1][j].max(lcs[i][j - 1]);
+            }
+        }
+    }
+    m + n - 2 * lcs[m][n]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn word(len: i64, letters: i64, seed: mut ref i64) -> String {
+    let alphabet = "abcdefghijklmnopqrstuvwxyz";
+    let mut s = String.new();
+    for _ in 0..len {
+        let k = step(seed) % letters;
+        s.push_str(alphabet[k..k + 1]);
+    }
+    s
+}
+
+fn show(word1: Str, word2: Str) {
+    println(f"\"{word1}\" and \"{word2}\": {min_distance(word1.to_string(), word2.to_string())}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("sea", "eat");
+    show("leetcode", "etco");
+    // The same word; no letter in common; one letter; one word inside
+    // the other; a word and its reverse; letters repeated.
+    show("kata", "kata");
+    show("abc", "xyz");
+    show("a", "a");
+    show("a", "b");
+    show("subsequence", "sue");
+    show("stressed", "desserts");
+    show("aaaa", "aa");
+    // 300 random pairs of 1 to 12 letters from the first 2 to 4.
+    let mut seed: i64 = 583;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let letters = 2 + step(mut seed) % 3;
+        let m = 1 + step(mut seed) % 12;
+        let n = 1 + step(mut seed) % 12;
+        let w1 = word(m, letters, mut seed);
+        let w2 = word(n, letters, mut seed);
+        let got = min_distance(w1, w2);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"300 random pairs: {total} deletions, checksum {checksum}");
+    // The problem's largest, 500 letters each: random over all 26 and
+    // over two; the same word twice; and two words with no letter in
+    // common.
+    let w1 = word(500, 26, mut seed);
+    let w2 = word(500, 26, mut seed);
+    println(f"500 and 500, 26 letters: {min_distance(w1, w2)}");
+    let w3 = word(500, 2, mut seed);
+    let w4 = word(500, 2, mut seed);
+    println(f"500 and 500, 2 letters: {min_distance(w3, w4)}");
+    println(f"500, the same word: {min_distance(w1.clone(), w1.clone())}");
+    println(f"500 of a and 500 of b: {min_distance("a".repeat(500), "b".repeat(500))}");
+}

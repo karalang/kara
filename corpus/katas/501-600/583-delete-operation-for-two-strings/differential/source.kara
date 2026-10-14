@@ -1,0 +1,218 @@
+// LeetCode #583: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// pairs of words.
+
+// ---- star arm ----------------------------------------------------------
+
+fn min_distance_star(word1: String, word2: String) -> i64 {
+    let a: Vec[char] = word1.chars().collect();
+    let b: Vec[char] = word2.chars().collect();
+    let m = a.len();
+    let n = b.len();
+    let mut lcs = vec![vec![0; n + 1]; m + 1];
+    for i in 1..=m {
+        for j in 1..=n {
+            if a[i - 1] == b[j - 1] {
+                lcs[i][j] = lcs[i - 1][j - 1] + 1;
+            } else {
+                lcs[i][j] = lcs[i - 1][j].max(lcs[i][j - 1]);
+            }
+        }
+    }
+    m + n - 2 * lcs[m][n]
+}
+
+// ---- direct arm --------------------------------------------------------
+
+fn min_distance_direct(word1: String, word2: String) -> i64 {
+    let a: Vec[char] = word1.chars().collect();
+    let b: Vec[char] = word2.chars().collect();
+    let m = a.len();
+    let n = b.len();
+    let mut cost = vec![vec![0; n + 1]; m + 1];
+    for i in 0..=m {
+        for j in 0..=n {
+            if i == 0 or j == 0 {
+                cost[i][j] = i + j;
+            } else if a[i - 1] == b[j - 1] {
+                cost[i][j] = cost[i - 1][j - 1];
+            } else {
+                cost[i][j] = 1 + cost[i - 1][j].min(cost[i][j - 1]);
+            }
+        }
+    }
+    cost[m][n]
+}
+
+// ---- rows arm ----------------------------------------------------------
+
+fn min_distance_rows(word1: String, word2: String) -> i64 {
+    let a = word1.bytes();
+    let b = word2.bytes();
+    let m = a.len();
+    let n = b.len();
+    let mut prev = vec![0; n + 1];
+    for i in 1..=m {
+        let mut row = vec![0; n + 1];
+        for j in 1..=n {
+            if a[i - 1] == b[j - 1] {
+                row[j] = prev[j - 1] + 1;
+            } else {
+                row[j] = prev[j].max(row[j - 1]);
+            }
+        }
+        prev = row;
+    }
+    m + n - 2 * prev[n]
+}
+
+// ---- memo arm ----------------------------------------------------------
+
+fn deletions_memo(a: ref Vec[char], b: ref Vec[char], i: i64, j: i64, memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if i == a.len() {
+        return b.len() - j;
+    }
+    if j == b.len() {
+        return a.len() - i;
+    }
+    if let Some(known) = memo.get((i, j)) {
+        return *known;
+    }
+    let best = if a[i] == b[j] {
+        deletions_memo(a, b, i + 1, j + 1, memo)
+    } else {
+        1 + deletions_memo(a, b, i + 1, j, memo).min(deletions_memo(a, b, i, j + 1, memo))
+    };
+    memo.insert((i, j), best);
+    best
+}
+
+fn min_distance_memo(word1: String, word2: String) -> i64 {
+    let a: Vec[char] = word1.chars().collect();
+    let b: Vec[char] = word2.chars().collect();
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    deletions_memo(a, b, 0, 0, mut memo)
+}
+
+// ---- definition -----------------------------------------------------------
+
+// The statement read literally: what is left of word1 after its
+// deletions is one of its subsequences, tried here one bitmask at a
+// time, and it must also be left of word2, so it must be a subsequence
+// of word2 too. The fewest deletions keep the longest such string.
+fn is_subsequence(s: ref Vec[char], t: ref Vec[char]) -> bool {
+    let mut k = 0;
+    for c in t.iter() {
+        if k < s.len() and s[k] == *c {
+            k += 1;
+        }
+    }
+    k == s.len()
+}
+
+fn definition(word1: Str, word2: Str) -> i64 {
+    let a: Vec[char] = word1.chars().collect();
+    let b: Vec[char] = word2.chars().collect();
+    let m = a.len();
+    let n = b.len();
+    let mut longest = 0;
+    for mask in 0..(1 << m) {
+        let mut kept: Vec[char] = Vec.new();
+        for i in 0..m {
+            if (mask >> i) & 1 == 1 {
+                kept.push(a[i]);
+            }
+        }
+        if kept.len() > longest and is_subsequence(kept, b) {
+            longest = kept.len();
+        }
+    }
+    m + n - 2 * longest
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn word(len: i64, letters: i64, seed: mut ref i64) -> String {
+    let alphabet = "abcdefghijklmnopqrstuvwxyz";
+    let mut s = String.new();
+    for _ in 0..len {
+        let k = step(seed) % letters;
+        s.push_str(alphabet[k..k + 1]);
+    }
+    s
+}
+
+fn reversed(s: Str) -> String {
+    let mut r = String.new();
+    for c in s.chars().rev() {
+        r.push(c);
+    }
+    r
+}
+
+fn run(arm: i64, word1: Str, word2: Str) -> i64 {
+    match arm {
+        0 => min_distance_star(word1.to_string(), word2.to_string()),
+        1 => min_distance_direct(word1.to_string(), word2.to_string()),
+        2 => min_distance_rows(word1.to_string(), word2.to_string()),
+        _ => min_distance_memo(word1.to_string(), word2.to_string()),
+    }
+}
+
+fn main() {
+    let names = vec!["star", "direct", "rows", "memo"];
+    let mut seed: i64 = 5830;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property = vec![0, 0, 0, 0, 0];
+    for _ in 0..1000 {
+        // Two words of 1 to 8 letters from the first 2 or 3, and a
+        // letter from them to put on the end of both.
+        let letters = 2 + step(mut seed) % 2;
+        let m = 1 + step(mut seed) % 8;
+        let n = 1 + step(mut seed) % 8;
+        let w1 = word(m, letters, mut seed);
+        let w2 = word(n, letters, mut seed);
+        let tail = word(1, letters, mut seed);
+        let want = definition(w1, w2);
+        let r1 = reversed(w1);
+        let r2 = reversed(w2);
+        let e1 = f"{w1}{tail}";
+        let e2 = f"{w2}{tail}";
+        for arm in 0..4 {
+            let got = run(arm, w1, w2);
+            // P2: at least the difference in length, at most both words,
+            // and every letter kept is kept in both, so m + n - got is
+            // even.
+            let diff = if m > n { m - n } else { n - m };
+            let bounded = got >= diff and got <= m + n and (m + n - got) % 2 == 0;
+            let results = vec![
+                got == want,
+                bounded,
+                run(arm, w2, w1) == got,
+                run(arm, r1, r2) == got,
+                run(arm, e1, e2) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not results[p] {
+                    failures += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"{names[arm]} P{p + 1} on \"{w1}\" and \"{w2}\": got {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1000 cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

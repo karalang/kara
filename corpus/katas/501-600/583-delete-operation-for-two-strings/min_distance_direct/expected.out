@@ -1,0 +1,14 @@
+"sea" and "eat": 2
+"leetcode" and "etco": 4
+"kata" and "kata": 0
+"abc" and "xyz": 6
+"a" and "a": 0
+"a" and "b": 2
+"subsequence" and "sue": 8
+"stressed" and "desserts": 8
+"aaaa" and "aa": 2
+300 random pairs: 1891 deletions, checksum 824538156
+500 and 500, 26 letters: 690
+500 and 500, 2 letters: 198
+500, the same word: 0
+500 of a and 500 of b: 1000
