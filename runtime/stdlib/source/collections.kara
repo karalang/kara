@@ -472,6 +472,18 @@ impl[T] FromIterator[T] for Set[T] {
     }
 }
 
+// B-2026-10-14-17: front to back, in the iterator's order.
+impl[T] FromIterator[T] for VecDeque[T] {
+    fn from_iter[I: Iterator[Item = T]](iter: own I) -> VecDeque[T] {
+        let mut it = iter;
+        let mut out: VecDeque[T] = VecDeque.new();
+        while let Some(x) = it.next() {
+            out.push_back(x);
+        }
+        out
+    }
+}
+
 // `v.extend(items)` from a source that is not a `Vec`, slice or array: the
 // MIR builder calls one of these (docs/library/collections.md, `extend`
 // takes any `IntoIterator[Item = T]`). Each item moves onto the end in order.

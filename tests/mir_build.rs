@@ -1098,3 +1098,26 @@ fn mir_join_and_concat_of_a_string_slice() {
         }
     }
 }
+
+// B-2026-10-14-17 — `collect()` into a `VecDeque` builds it front to back
+// on both MIR backends, through the library's `FromIterator` impl, as a
+// `Vec`, `Set`, `Map` or `String` target does.
+#[test]
+fn mir_collect_into_a_vec_deque() {
+    const SRC: &str = r#"fn main() {
+    let v: Vec[i64] = vec![3, 1, 2, 3];
+    let d: VecDeque[i64] = v.iter().map(|x| x * 2).collect();
+    let words: Vec[String] = vec!["b".to_string(), "a".to_string()];
+    let ds: VecDeque[String] = words.iter().map(|w| w.to_uppercase()).collect();
+    println(f"{d.len()} {d.front()} {d.back()} {ds.front()} {ds.back()}");
+}
+"#;
+    let want = "4 Some(6) Some(6) Some(B) Some(A)\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
