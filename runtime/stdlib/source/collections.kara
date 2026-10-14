@@ -472,6 +472,29 @@ impl[T] FromIterator[T] for Set[T] {
     }
 }
 
+// B-2026-10-14-20: the ordered twins of `Set` and `Map`.
+impl[T] FromIterator[T] for SortedSet[T] {
+    fn from_iter[I: Iterator[Item = T]](iter: own I) -> SortedSet[T] {
+        let mut it = iter;
+        let mut out: SortedSet[T] = SortedSet.new();
+        while let Some(x) = it.next() {
+            out.insert(x);
+        }
+        out
+    }
+}
+
+impl[K, V] FromIterator[(K, V)] for SortedMap[K, V] {
+    fn from_iter[I: Iterator[Item = (K, V)]](iter: own I) -> SortedMap[K, V] {
+        let mut it = iter;
+        let mut out: SortedMap[K, V] = SortedMap.new();
+        while let Some((k, v)) = it.next() {
+            out.insert(k, v);
+        }
+        out
+    }
+}
+
 // B-2026-10-14-17: front to back, in the iterator's order.
 impl[T] FromIterator[T] for VecDeque[T] {
     fn from_iter[I: Iterator[Item = T]](iter: own I) -> VecDeque[T] {

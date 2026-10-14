@@ -3520,3 +3520,32 @@ fn collect_of_strings_into_set_deque_and_map() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// B-2026-10-14-20 — `collect()` into a `SortedSet` or `SortedMap` annotation,
+// the ordered twins of the `Set` and `Map` targets.
+#[test]
+fn collect_into_sorted_set_and_map() {
+    let src = "fn main() {\n\
+                   let v: Vec[i64] = vec![3, 1, 2, 3];\n\
+                   let ss: SortedSet[i64] = v.iter().map(|x| x * 2).collect();\n\
+                   let sm: SortedMap[i64, i64] = v.iter().map(|x| (x * 1, x * 10)).collect();\n\
+                   let words: Vec[String] = vec![\"b\".to_string(), \"a\".to_string(), \"b\".to_string()];\n\
+                   let ws: SortedSet[String] = words.iter().map(|w| w.to_uppercase()).collect();\n\
+                   println(f\"{ss.len()} {ss.contains(4)} {sm.len()} {sm.get(2)} {ws.len()} {ws.contains(\"A\")}\");\n\
+               }\n";
+    accepted("collect-into-sorted", src);
+    let (dir, path) = fixture("collect-into-sorted-run", src);
+    let out = karac()
+        .arg("run")
+        .arg("--interp")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "3 true 3 Some(20) 2 true\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

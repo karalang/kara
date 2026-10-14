@@ -2833,9 +2833,11 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
 #[derive(Clone, Copy)]
 enum CollectTarget {
     Str,
-    Set,
+    /// `Set` or `SortedSet` (B-2026-10-14-20), by the name it is built with.
+    Set(&'static str),
     VecDeque,
-    Map,
+    /// `Map` or `SortedMap` (B-2026-10-14-20), likewise.
+    Map(&'static str),
 }
 
 /// Recognize a supported `collect()` target from a `let`'s type annotation.
@@ -2851,9 +2853,11 @@ fn collect_target_of(ty: &TypeExpr) -> Option<CollectTarget> {
     let nargs = p.generic_args.as_ref().map_or(0, |a| a.len());
     match (p.segments[0].as_str(), nargs) {
         ("String", 0) => Some(CollectTarget::Str),
-        ("Set", 1) => Some(CollectTarget::Set),
+        ("Set", 1) => Some(CollectTarget::Set("Set")),
+        ("SortedSet", 1) => Some(CollectTarget::Set("SortedSet")),
         ("VecDeque", 1) => Some(CollectTarget::VecDeque),
-        ("Map", 2) => Some(CollectTarget::Map),
+        ("Map", 2) => Some(CollectTarget::Map("Map")),
+        ("SortedMap", 2) => Some(CollectTarget::Map("SortedMap")),
         _ => None,
     }
 }
@@ -3172,11 +3176,10 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
             kind: ExprKind::StringLit(String::new()),
             span: s2,
         },
-        CollectTarget::Set | CollectTarget::VecDeque | CollectTarget::Map => {
+        CollectTarget::Set(_) | CollectTarget::VecDeque | CollectTarget::Map(_) => {
             let coll = match target {
-                CollectTarget::Set => "Set",
-                CollectTarget::VecDeque => "VecDeque",
-                _ => "Map",
+                CollectTarget::Set(name) | CollectTarget::Map(name) => name,
+                _ => "VecDeque",
             };
             Expr {
                 id: crate::ids::NodeId::DUMMY,
@@ -3222,7 +3225,7 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
                 s7,
             )
         }
-        CollectTarget::Set => collect_method_call(
+        CollectTarget::Set(_) => collect_method_call(
             collect_ident(&dst_name, s6),
             "insert",
             vec![collect_arg(collect_ident(&it_name, s4))],
@@ -3234,7 +3237,7 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
             vec![collect_arg(collect_ident(&it_name, s4))],
             s7,
         ),
-        CollectTarget::Map => {
+        CollectTarget::Map(_) => {
             // The element is the `(K, V)` pair every `Map` FromIterator takes.
             let k = Expr {
                 id: crate::ids::NodeId::DUMMY,

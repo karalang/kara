@@ -1182,3 +1182,30 @@ fn main() {
         }
     }
 }
+
+// B-2026-10-14-20 — `collect()` into a `SortedSet` or `SortedMap` builds it
+// in key order on both MIR backends, through the library's `FromIterator`.
+#[test]
+fn mir_collect_into_sorted_set_and_map() {
+    const SRC: &str = r#"fn main() {
+    let v: Vec[i64] = vec![3, 1, 2, 3];
+    let ss: SortedSet[i64] = v.iter().map(|x| x * 2).collect();
+    let sm: SortedMap[i64, i64] = v.iter().map(|x| (x * 1, x * 10)).collect();
+    let words: Vec[String] = vec!["b".to_string(), "a".to_string(), "b".to_string()];
+    let ws: SortedSet[String] = words.iter().map(|w| w.to_uppercase()).collect();
+    let mut keys: Vec[i64] = Vec.new();
+    for k in ss.iter() { keys.push(*k); }
+    let mut names: Vec[String] = Vec.new();
+    for w in ws.iter() { names.push(w.clone()); }
+    println(f"{keys} {sm.len()} {sm.get(2)} {names}");
+}
+"#;
+    let want = "[2, 4, 6] 3 Some(20) [A, B]\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
