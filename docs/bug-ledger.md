@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 258 |
 | false-positive | 181 |
 | other | 172 |
-| perf | 165 |
+| perf | 166 |
 | diagnostics | 161 |
 | crash | 116 |
 | soundness | 104 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 115 |
 | ownership | 95 |
 | cli | 76 |
-| runtime | 69 |
+| runtime | 70 |
 | parser | 63 |
 | autopar | 59 |
 | resolver | 40 |
@@ -201,6 +201,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-66 | 2026-10-14 | typecheck | low | A format width on a `Str` hole is refused: `let c: Str = "abc"; println(f"[{c:<6}]");` gives "format spec `<6`: format specifiers apply to int, float, and string values only (got `StringSlice`)" from `karac check` and the MIR typecheck; design.md's format grammar applies `align`/`width` to any value and `Str` is the string view | — |
 | B-2026-10-14-67 | 2026-10-14 | typecheck | medium | `join` works only on `String` elements: `Vec[i64].join(",")` and `Vec[Str].join(" ")` are refused with "Vec.join() requires String elements", and `Slice[Str].join` with "no method 'join' on type 'Slice'" (B-2026-10-14-4 gave `Slice[String]` its join), by `karac check` and the MIR typecheck; docs/library/collections.md:57 specifies `fn join(self, sep: Str) -> String where T: Display` | — |
 | B-2026-10-14-68 | 2026-10-14 | typecheck | medium | A string literal passed to a METHOD whose parameter is `Str` is still typed `String`: `let mut v: Vec[Str] = Vec.new(); v.push("a");` is refused with "expected 'StringSlice', found 'String'" by `karac check` and the MIR typecheck, while `v.push(s)` with `let s: Str = "a"` works (remainder of B-2026-10-12-13) | — |
+| B-2026-10-14-69 | 2026-10-14 | runtime | medium | A short `Vec` grown by `push` allocates twice on the MIR compiled backend (first block 4 elements, then 8) where legacy allocates once (8): kata 638's `Map[Vec[i64], i64]` memo bench is 2.0x legacy, 1.2x with the first block raised to 8 | — |
 
 ### Relocated
 
