@@ -1121,3 +1121,64 @@ fn mir_collect_into_a_vec_deque() {
         }
     }
 }
+
+// B-2026-10-14-11 — a `for` over a `Vec[ref Node]` binds each element, the
+// reference itself (it was read through once more, a `Node` copied into a
+// `ref Node` slot), and the element borrows the tree, not the `Vec`, so a
+// breadth-first walk can replace its level with the next one.
+#[test]
+fn mir_for_over_a_vec_of_references() {
+    const SRC: &str = r#"struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+fn mk(v: i64) -> Node {
+    Node { val: v, children: vec![Node { val: v + 1, children: Vec.new() }, Node { val: v + 2, children: Vec.new() }] }
+}
+
+fn depth(root: ref Node) -> i64 {
+    let mut level: Vec[ref Node] = Vec.new();
+    level.push(root);
+    let mut d = 0;
+    while level.len() > 0 {
+        d += 1;
+        let mut next: Vec[ref Node] = Vec.new();
+        for node in level {
+            for child in node.children.iter() {
+                next.push(child);
+            }
+        }
+        level = next;
+    }
+    d
+}
+
+fn main() {
+    let roots = vec![mk(1), mk(10)];
+    let mut v: Vec[ref Node] = Vec.new();
+    for r in roots.iter() {
+        v.push(r);
+    }
+    let mut total = 0;
+    for n in v {
+        total += n.val;
+    }
+    for n in v.iter() {
+        total += n.children.len();
+    }
+    for (i, n) in v.iter().enumerate() {
+        total += i * n.val;
+    }
+    println(f"{total} {depth(roots[0])}");
+}
+"#;
+    let want = "25 2\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

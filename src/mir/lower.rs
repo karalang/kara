@@ -7769,7 +7769,15 @@ impl<'l, 'a> Bx<'l, 'a> {
                 ],
                 Place::local(r),
             );
-            (Place::local(r).project(ProjElem::Deref), true)
+            // An element that is itself a reference (`Vec[ref Node]`) is
+            // what the native gives, a borrow of a borrow being the borrow,
+            // so `r` holds the element and is not read through
+            // (B-2026-10-14-11).
+            if matches!(self.tys().tcx().kind(elem), HK::Ref(_) | HK::MutRef(_)) {
+                (Place::local(r), true)
+            } else {
+                (Place::local(r).project(ProjElem::Deref), true)
+            }
         };
         let mut binds = Vec::new();
         if let Some(ip) = idx {
@@ -14212,7 +14220,18 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
                             | "swap_remove"
                     )
                 );
-            if views.contains(&i.name) || moves_out {
+            // An element read out of a sequence of shared references
+            // (`Vec[ref Node].index`) is one of those references, so it
+            // borrows what the sequence's elements borrow, not the
+            // sequence (B-2026-10-14-11).
+            let ref_elem = !names.contains(i.name.as_str())
+                && i.name.rsplit_once('.').is_some_and(|(owner, m)| {
+                    matches!(m, "index" | "get" | "first" | "last")
+                        && ["Vec[ref ", "VecDeque[ref ", "Slice[ref "]
+                            .iter()
+                            .any(|p| owner.starts_with(p))
+                });
+            if views.contains(&i.name) || moves_out || ref_elem {
                 crate::mir::ResultBorrows::ReceiverValue
             } else if !names.contains(i.name.as_str()) || receivers.contains(&i.name) {
                 crate::mir::ResultBorrows::Receiver
