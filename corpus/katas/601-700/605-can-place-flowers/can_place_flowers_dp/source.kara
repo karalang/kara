@@ -1,0 +1,84 @@
+// LeetCode #605: Can Place Flowers -- dynamic programming.
+//
+// Over the plots from the left, keep the most new flowers that fit so
+// far in two cases: the last plot empty, or the last plot holding a
+// flower. A plot that already has one must hold it, after an empty plot;
+// an empty plot may stay empty after either, or take a new flower after
+// an empty one. A case that cannot happen is held as -1. O(n).
+
+fn can_place_flowers(flowerbed: Vec[i64], n: i64) -> bool {
+    let none = -1;
+    let mut empty = 0;
+    let mut full = none;
+    for plot in flowerbed {
+        if plot == 1 {
+            full = empty;
+            empty = none;
+        } else {
+            let was_empty = empty;
+            empty = max(empty, full);
+            full = if was_empty == none { none } else { was_empty + 1 };
+        }
+    }
+    max(empty, full) >= n
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(flowerbed: Vec[i64], n: i64) {
+    println(f"{flowerbed}, n = {n} -> {can_place_flowers(flowerbed, n)}");
+}
+
+// The largest n the bed takes: the first n refused, less one.
+fn largest(flowerbed: Vec[i64]) -> i64 {
+    let mut n = 0;
+    while can_place_flowers(flowerbed, n + 1) {
+        n += 1;
+    }
+    n
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(vec![1, 0, 0, 0, 1], 1);
+    show(vec![1, 0, 0, 0, 1], 2);
+    // One plot, empty or not; n = 0; flowers at both edges; empty
+    // stretches at the edges; flowers every other plot.
+    show(vec![0], 1);
+    show(vec![1], 1);
+    show(vec![1], 0);
+    show(vec![0, 0], 2);
+    show(vec![0, 0, 0], 2);
+    show(vec![0, 0, 1, 0, 0], 2);
+    show(vec![1, 0, 0, 0, 0, 1], 2);
+    show(vec![1, 0, 1, 0, 1, 0, 1], 1);
+    show(vec![0, 1, 0, 1, 0, 1, 0], 0);
+    // The problem's largest: 20,000 empty plots.
+    let empty = vec![0; 20000];
+    println(f"20000 empty plots: n = 10000 -> {can_place_flowers(empty, 10000)}, n = 10001 -> {can_place_flowers(empty, 10001)}");
+    // 300 random beds of 1 to 40 plots, flowers never side by side, and
+    // the largest n each takes.
+    let mut seed: i64 = 605;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let size = 1 + step(mut seed) % 40;
+        let mut bed: Vec[i64] = Vec.new();
+        for i in 0..size {
+            if step(mut seed) % 3 == 0 and (i == 0 or bed[i - 1] == 0) {
+                bed.push(1);
+            } else {
+                bed.push(0);
+            }
+        }
+        let got = largest(bed);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"300 random beds: largest n in all {total}, checksum {checksum}");
+}

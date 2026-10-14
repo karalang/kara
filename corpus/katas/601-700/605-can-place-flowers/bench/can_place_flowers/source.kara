@@ -1,0 +1,57 @@
+// Benchmark for #605: the ★ arm (plant greedily); see
+// can_place_flowers.kara.
+
+fn can_place_flowers(flowerbed: Vec[i64], n: i64) -> bool {
+    let mut bed = flowerbed.clone();
+    let mut planted = 0;
+    for i in 0..bed.len() {
+        if bed[i] == 0 and (i == 0 or bed[i - 1] == 0) and (i == bed.len() - 1 or bed[i + 1] == 0) {
+            bed[i] = 1;
+            planted += 1;
+        }
+    }
+    planted >= n
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100 beds of 20,000 plots (the problem's largest), each with
+    // flowers about one plot in 2 to 6, never side by side, made once;
+    // then 50 times over each is asked about an n from 0 to 7,999.
+    let count = 100;
+    let rounds = 50;
+    let size = 20000;
+    let mut seed: i64 = 605;
+    let mut beds: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let spread = 2 + step(mut seed) % 5;
+        let mut bed: Vec[i64] = Vec.new();
+        for i in 0..size {
+            if step(mut seed) % spread == 0 and (i == 0 or bed[i - 1] == 0) {
+                bed.push(1);
+            } else {
+                bed.push(0);
+            }
+        }
+        beds.push(bed);
+    }
+    let mut yes = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let n = (round * 397 + g * 113) % 8000;
+            let fits = can_place_flowers(beds[(round * 7 + g) % count], n);
+            if fits {
+                yes += 1;
+            }
+            checksum = (checksum * 31 + n * 2 + (if fits { 1 } else { 0 })) % 1000000007;
+        }
+    }
+    println(f"{count} beds, {rounds} rounds: {yes} fit, checksum {checksum}");
+}

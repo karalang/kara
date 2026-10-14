@@ -1,0 +1,13 @@
+[1, 0, 0, 0, 1], n = 1 -> true
+[1, 0, 0, 0, 1], n = 2 -> false
+[0], n = 1 -> true
+[1], n = 1 -> false
+[1], n = 0 -> true
+[0, 0], n = 2 -> false
+[0, 0, 0], n = 2 -> true
+[0, 0, 1, 0, 0], n = 2 -> true
+[1, 0, 0, 0, 0, 1], n = 2 -> false
+[1, 0, 1, 0, 1, 0, 1], n = 1 -> false
+[0, 1, 0, 1, 0, 1, 0], n = 0 -> true
+20000 empty plots: n = 10000 -> true, n = 10001 -> false
+300 random beds: largest n in all 1447, checksum 697516248

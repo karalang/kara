@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/605-can-place-flowers/can_place_flowers_dp.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "bcc792ca8"
+extracted_src = "1238e77b"
+model_rev = "1aa23105"
+model_src = "1238e77b"

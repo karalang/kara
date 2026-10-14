@@ -1,0 +1,238 @@
+// LeetCode #605: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// beds.
+
+// ---- star arm ----------------------------------------------------------
+
+fn can_place_flowers_star(flowerbed: Vec[i64], n: i64) -> bool {
+    let mut bed = flowerbed.clone();
+    let mut planted = 0;
+    for i in 0..bed.len() {
+        if bed[i] == 0 and (i == 0 or bed[i - 1] == 0) and (i == bed.len() - 1 or bed[i + 1] == 0) {
+            bed[i] = 1;
+            planted += 1;
+        }
+    }
+    planted >= n
+}
+
+// ---- gaps arm ----------------------------------------------------------
+
+fn can_place_flowers_gaps(flowerbed: Vec[i64], n: i64) -> bool {
+    let mut room = 0;
+    let mut zeros = 1;
+    for plot in flowerbed {
+        if plot == 0 {
+            zeros += 1;
+        } else {
+            room += (zeros - 1) / 2;
+            zeros = 0;
+        }
+    }
+    room += zeros / 2;
+    room >= n
+}
+
+// ---- dp arm ------------------------------------------------------------
+
+fn can_place_flowers_dp(flowerbed: Vec[i64], n: i64) -> bool {
+    let none = -1;
+    let mut empty = 0;
+    let mut full = none;
+    for plot in flowerbed {
+        if plot == 1 {
+            full = empty;
+            empty = none;
+        } else {
+            let was_empty = empty;
+            empty = max(empty, full);
+            full = if was_empty == none { none } else { was_empty + 1 };
+        }
+    }
+    max(empty, full) >= n
+}
+
+// ---- skip arm ----------------------------------------------------------
+
+fn can_place_flowers_skip(flowerbed: Vec[i64], n: i64) -> bool {
+    let mut planted = 0;
+    let mut i = 0;
+    while i < flowerbed.len() {
+        if planted >= n {
+            return true;
+        }
+        if flowerbed[i] == 1 {
+            i += 2;
+        } else if i + 1 == flowerbed.len() or flowerbed[i + 1] == 0 {
+            planted += 1;
+            i += 2;
+        } else {
+            i += 3;
+        }
+    }
+    planted >= n
+}
+
+// ---- the definition and the properties --------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, flowerbed: Vec[i64], n: i64) -> bool {
+    if which == 0 {
+        can_place_flowers_star(flowerbed, n)
+    } else if which == 1 {
+        can_place_flowers_gaps(flowerbed, n)
+    } else if which == 2 {
+        can_place_flowers_dp(flowerbed, n)
+    } else {
+        can_place_flowers_skip(flowerbed, n)
+    }
+}
+
+// The definition: every set of plots tried, by the bits of a mask; a
+// set counts when each of its plots is empty and no two flowers, old or
+// new, stand side by side. The most plots in any set that counts.
+fn most(flowerbed: Vec[i64]) -> i64 {
+    let size = flowerbed.len();
+    let mut best = 0;
+    let mut subsets = 1;
+    for _ in 0..size {
+        subsets *= 2;
+    }
+    for mask in 0..subsets {
+        let mut bed = flowerbed.clone();
+        let mut added = 0;
+        let mut fits = true;
+        let mut m = mask;
+        for i in 0..size {
+            if m % 2 == 1 {
+                if bed[i] == 1 {
+                    fits = false;
+                }
+                bed[i] = 1;
+                added += 1;
+            }
+            m = m / 2;
+        }
+        for i in 1..size {
+            if bed[i] == 1 and bed[i - 1] == 1 {
+                fits = false;
+            }
+        }
+        if fits {
+            best = max(best, added);
+        }
+    }
+    best
+}
+
+// A random bed of `size` plots, flowers never side by side.
+fn random_bed(size: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut bed: Vec[i64] = Vec.new();
+    for i in 0..size {
+        if step(seed) % 3 == 0 and (i == 0 or bed[i - 1] == 0) {
+            bed.push(1);
+        } else {
+            bed.push(0);
+        }
+    }
+    bed
+}
+
+// The largest n an arm says the bed takes.
+fn largest(which: i64, flowerbed: Vec[i64]) -> i64 {
+    let mut n = 0;
+    while answer(which, flowerbed, n + 1) {
+        n += 1;
+    }
+    n
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6050;
+    let mut checks = 0;
+    let mut full = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 12 plots, and a second bed of 1 to 6.
+        let bed = random_bed(1 + step(mut seed) % 12, mut seed);
+        let other = random_bed(1 + step(mut seed) % 6, mut seed);
+        let want = most(bed);
+        if want == 0 {
+            full += 1;
+        }
+        let mut reversed = bed.clone();
+        reversed.reverse();
+        // P4: the two beds with an empty plot, a flower and an empty plot
+        // between them.
+        let mut joined = bed.clone();
+        joined.push(0);
+        joined.push(1);
+        joined.push(0);
+        for plot in other.iter() {
+            joined.push(*plot);
+        }
+        // P5: a new flower in a plot that can take one, if any.
+        let mut open: Vec[i64] = Vec.new();
+        for i in 0..bed.len() {
+            if bed[i] == 0 and (i == 0 or bed[i - 1] == 0) and (i == bed.len() - 1 or bed[i + 1] == 0) {
+                open.push(i);
+            }
+        }
+        for which in 0..4 {
+            // P1 and P2 over every n from 0 to two past the size.
+            let mut agrees = true;
+            let mut monotone = true;
+            for n in 0..bed.len() + 3 {
+                let got = answer(which, bed, n);
+                if got != (n <= want) {
+                    agrees = false;
+                }
+                if got and n > 0 and not answer(which, bed, n - 1) {
+                    monotone = false;
+                }
+            }
+            let mine = largest(which, bed);
+            let mut planted = true;
+            if not open.is_empty() {
+                let mut fuller = bed.clone();
+                fuller[open[step(mut seed) % open.len()]] = 1;
+                let less = largest(which, fuller);
+                planted = less >= mine - 2 and less <= mine - 1;
+            }
+            let ok = vec![
+                // P1: n fits exactly when it is at most the definition's
+                // most.
+                agrees,
+                // P2: a bed that takes n takes n - 1.
+                monotone,
+                // P3: the bed read backwards takes as many.
+                largest(which, reversed) == mine,
+                // P4: an empty plot, a flower and an empty plot between
+                // two beds keep them apart, so the joined bed takes what
+                // the two take.
+                largest(which, joined) == mine + largest(which, other),
+                // P5: a new flower in a plot that could take one leaves
+                // one or two fewer: none of the bed's plots but it and its
+                // two neighbours change.
+                planted,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({full} taking no more), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
