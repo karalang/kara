@@ -3750,3 +3750,63 @@ fn deref_of_a_view_compared_is_a_borrow() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// B-2026-10-14-28 — lending the same bare `for` element into a `ref` slot
+/// more than once copies the reference each time (v2 core §1.1, §4.6), so
+/// the ownership pass must not call the second lend a use after a move. An
+/// owned local pushed twice into a `Vec[Node]` is still a move.
+#[test]
+fn a_view_lent_into_ref_slots_twice_is_not_moved() {
+    let header = "struct Node {\n\
+             val: i64,\n\
+             children: Vec[Node],\n\
+         }\n\
+         fn leaf(val: i64) -> Node {\n\
+             Node { val: val, children: Vec.new() }\n\
+         }\n";
+    accepted(
+        "view-lent-twice",
+        &format!(
+            "{header}\
+             fn main() {{\n\
+                 let t = Node {{ val: 1, children: vec![leaf(2), leaf(3)] }};\n\
+                 let mut v: Vec[ref Node] = Vec.new();\n\
+                 let mut stack: Vec[(ref Node, i64)] = Vec.new();\n\
+                 for c in t.children.iter() {{\n\
+                     v.push(c);\n\
+                     v.push(c);\n\
+                     stack.push((c, 1));\n\
+                     stack.push((c, 2));\n\
+                     let r: ref Node = c;\n\
+                     let s: ref Node = c;\n\
+                     println(f\"{{r.val}} {{s.val}}\");\n\
+                 }}\n\
+                 println(f\"{{v.len()}} {{stack.len()}}\");\n\
+             }}\n"
+        ),
+    );
+    let (dir, path) = fixture(
+        "owned-pushed-twice",
+        &format!(
+            "{header}\
+             fn main() {{\n\
+                 let t = leaf(1);\n\
+                 let mut v: Vec[Node] = Vec.new();\n\
+                 v.push(t);\n\
+                 v.push(t);\n\
+                 println(f\"{{v.len()}}\");\n\
+             }}\n"
+        ),
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "owned-pushed-twice: check must reject: {err}"
+    );
+    assert!(
+        err.contains("moved here, used again here"),
+        "owned-pushed-twice: expected the use-after-move in: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

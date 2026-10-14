@@ -619,6 +619,7 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        self.note_view_lent_into_ref(expr, expected);
         if let Some(ty) = self.lend_borrowed_receiver(expr, expected) {
             return ty;
         }
@@ -684,6 +685,25 @@ impl<'a> super::TypeChecker<'a> {
         self.link_part_node_types(expr);
         self.deny_for_element_drop_copy_in_literal_into(expr, Some(expected));
         ty
+    }
+
+    /// B-2026-10-14-28 — a view (a bare `for` element, a `ref` binding) lent
+    /// into a `ref` slot copies the reference (v2 core §1.1) and moves
+    /// nothing, however often it is lent; the strict pipeline drops a
+    /// use-after-move whose consume site is recorded here.
+    pub(super) fn note_view_lent_into_ref(&mut self, expr: &Expr, slot: &Type) {
+        if !self.cli_lint_overrides.strict_core {
+            return;
+        }
+        if let (ExprKind::Identifier(n), Type::Ref(_)) = (
+            &expr.kind,
+            resolve_type_var_top(slot, &self.env.substitutions),
+        ) {
+            if self.local_scope.is_view(n) {
+                self.core_ref_copy_spans
+                    .insert(SpanKey::from_span(&expr.span));
+            }
+        }
     }
 
     /// B-2026-10-14-10 — whether a tuple literal of element types `found`

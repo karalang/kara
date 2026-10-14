@@ -218,6 +218,8 @@ impl<'a> super::TypeChecker<'a> {
                 ) {
                     self.warn_borrow_projection_copy(&args[0].value, &arg_ty);
                 }
+                // B-2026-10-14-28 — and pushing it twice moves nothing either.
+                self.note_view_lent_into_ref(&args[0].value, &elem);
                 // Unify so an unsolved element typevar bound to the
                 // receiver (e.g. `let mut v = Vec.new(); v.push(x);`)
                 // gets pinned to the first push's value type. Otherwise
