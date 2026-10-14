@@ -1,0 +1,81 @@
+// Benchmark for #568: Maximum Vacation Days -- the ★ arm (dynamic
+// programming over the weeks).
+//
+// `best[c]` is the most vacation days that can be taken in the weeks
+// so far ending the last of them in city c, or -1 when c cannot be
+// reached by then. Week 0 starts in city 0, which can stay or take one
+// of its flights; each later week starts wherever the last ended. So
+// week w's `best[j]` is days[j][w] plus the largest last `best[i]` over
+// the cities i that are j or have a flight to j. The answer is the
+// largest at the end. O(k * n^2) time, O(n) space.
+
+fn max_vacation_days(flights: Vec[Vec[i64]], days: Vec[Vec[i64]]) -> i64 {
+    let n = flights.len();
+    let k = days[0].len();
+    let mut best = vec![-1; n];
+    best[0] = 0;
+    for w in 0..k {
+        let mut next = vec![-1; n];
+        for j in 0..n {
+            for i in 0..n {
+                if best[i] >= 0 and (i == j or flights[i][j] == 1) {
+                    next[j] = next[j].max(best[i] + days[j][w]);
+                }
+            }
+        }
+        best = next;
+    }
+    best.iter().max().cloned().unwrap()
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 20 cases built once, each of 100 cities and 100 weeks (the
+    // problem's most), days 0 to 7; each flight there with chance 1, 2,
+    // 5, 10, 25, 50 or 100 in 100, in turn. Then 30 times over, every
+    // case is answered.
+    let count = 20;
+    let rounds = 30;
+    let densities = vec![1, 2, 5, 10, 25, 50, 100];
+    let mut seed: i64 = 568;
+    let mut cases: Vec[(Vec[Vec[i64]], Vec[Vec[i64]])] = Vec.new();
+    for g in 0..count {
+        let density = densities[g % 7];
+        let mut flights: Vec[Vec[i64]] = Vec.new();
+        for i in 0..100 {
+            let mut row = vec![0; 100];
+            for j in 0..100 {
+                if i != j and step(mut seed) % 100 < density {
+                    row[j] = 1;
+                }
+            }
+            flights.push(row);
+        }
+        let mut days: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..100 {
+            let mut row = vec![0; 100];
+            for w in 0..100 {
+                row[w] = step(mut seed) % 8;
+            }
+            days.push(row);
+        }
+        cases.push((flights, days));
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let (flights, days) = ref cases[(round * 7 + g) % count];
+            let got = max_vacation_days(flights, days);
+            total += got;
+            checksum = (checksum * 31 + got + 1) % 1000000007;
+        }
+    }
+    println(f"{count} cases of 100 cities and 100 weeks, {rounds} rounds: {total} days, checksum {checksum}");
+}

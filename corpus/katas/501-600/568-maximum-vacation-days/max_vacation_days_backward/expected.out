@@ -1,0 +1,12 @@
+example 1: 12
+example 2: 3
+example 3: 21
+one city: 5
+chain: 14
+detour: 18
+back home: 28
+no days: 0
+300 random cases: 4658 days, checksum 517677927
+100 cities, 100 weeks, every flight: 700
+100 cities, 100 weeks, one flight in fifty: 615
+100 cities, 100 weeks, a ring: 527

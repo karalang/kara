@@ -1,0 +1,254 @@
+// LeetCode #568: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// flight and day tables.
+
+// ---- star arm ----------------------------------------------------------
+
+fn max_vacation_days_star(flights: Vec[Vec[i64]], days: Vec[Vec[i64]]) -> i64 {
+    let n = flights.len();
+    let k = days[0].len();
+    let mut best = vec![-1; n];
+    best[0] = 0;
+    for w in 0..k {
+        let mut next = vec![-1; n];
+        for j in 0..n {
+            for i in 0..n {
+                if best[i] >= 0 and (i == j or flights[i][j] == 1) {
+                    next[j] = next[j].max(best[i] + days[j][w]);
+                }
+            }
+        }
+        best = next;
+    }
+    best.iter().max().cloned().unwrap()
+}
+
+// ---- memo arm ----------------------------------------------------------
+
+fn most_memo(c: i64, w: i64, flights: Vec[Vec[i64]], days: Vec[Vec[i64]], memo: mut ref Map[(i64, i64), i64]) -> i64 {
+    if w == days[0].len() {
+        return 0;
+    }
+    if let Some(known) = memo.get((c, w)) {
+        return *known;
+    }
+    let mut result = 0;
+    for d in 0..flights.len() {
+        if d == c or flights[c][d] == 1 {
+            result = result.max(days[d][w] + most_memo(d, w + 1, flights, days, memo));
+        }
+    }
+    memo.insert((c, w), result);
+    result
+}
+
+fn max_vacation_days_memo(flights: Vec[Vec[i64]], days: Vec[Vec[i64]]) -> i64 {
+    let mut memo: Map[(i64, i64), i64] = Map.new();
+    most_memo(0, 0, flights, days, mut memo)
+}
+
+// ---- backward arm ------------------------------------------------------
+
+fn max_vacation_days_backward(flights: Vec[Vec[i64]], days: Vec[Vec[i64]]) -> i64 {
+    let n = flights.len();
+    let k = days[0].len();
+    let mut table: Vec[Vec[i64]] = Vec.from_fn(k + 1, |_| vec![0; n]);
+    let mut w = k - 1;
+    while w >= 0 {
+        for c in 0..n {
+            let mut most = 0;
+            for d in 0..n {
+                if d == c or flights[c][d] == 1 {
+                    most = most.max(days[d][w] + table[w + 1][d]);
+                }
+            }
+            table[w][c] = most;
+        }
+        w -= 1;
+    }
+    table[0][0]
+}
+
+// ---- lists arm ---------------------------------------------------------
+
+fn max_vacation_days_lists(flights: Vec[Vec[i64]], days: Vec[Vec[i64]]) -> i64 {
+    let n = flights.len();
+    let mut to: Vec[Vec[i64]] = Vec.new();
+    for c in 0..n {
+        let mut list = vec![c];
+        for d in 0..n {
+            if flights[c][d] == 1 {
+                list.push(d);
+            }
+        }
+        to.push(list);
+    }
+    let mut best: Vec[Option[i64]] = vec![None; n];
+    best[0] = Some(0);
+    for w in 0..days[0].len() {
+        let mut next: Vec[Option[i64]] = vec![None; n];
+        for c in 0..n {
+            if let Some(total) = best[c] {
+                for d in to[c].iter() {
+                    let offer = total + days[*d][w];
+                    next[*d] = match next[*d] {
+                        Some(have) => Some(have.max(offer)),
+                        None => Some(offer),
+                    };
+                }
+            }
+        }
+        best = next;
+    }
+    let mut answer = 0;
+    for b in best.iter() {
+        if let Some(total) = b {
+            answer = answer.max(*total);
+        }
+    }
+    answer
+}
+
+// ---- the definition and the properties ------------------------------------
+
+// The definition: every itinerary tried, one city a week. Week 0's city
+// is 0 or one with a flight from 0, and each later week's is the last
+// week's or one with a flight from it; the itinerary's days are added
+// up and the most kept.
+fn every_trip(city: i64, w: i64, flights: Vec[Vec[i64]], days: Vec[Vec[i64]]) -> i64 {
+    if w == days[0].len() {
+        return 0;
+    }
+    let mut most = 0;
+    for next in 0..flights.len() {
+        if next == city or flights[city][next] == 1 {
+            let trip = days[next][w] + every_trip(next, w + 1, flights, days);
+            if trip > most {
+                most = trip;
+            }
+        }
+    }
+    most
+}
+
+fn definition(flights: Vec[Vec[i64]], days: Vec[Vec[i64]]) -> i64 {
+    every_trip(0, 0, flights, days)
+}
+
+fn answer(which: i64, flights: Vec[Vec[i64]], days: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        max_vacation_days_star(flights, days)
+    } else if which == 1 {
+        max_vacation_days_memo(flights, days)
+    } else if which == 2 {
+        max_vacation_days_backward(flights, days)
+    } else {
+        max_vacation_days_lists(flights, days)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5680;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 4 cities and 1 to 4 weeks; any number of flights, days 0
+        // to 7.
+        let n = 1 + step(mut seed) % 4;
+        let k = 1 + step(mut seed) % 4;
+        let density = step(mut seed) % 101;
+        let mut flights: Vec[Vec[i64]] = Vec.new();
+        for i in 0..n {
+            let mut row = vec![0; n];
+            for j in 0..n {
+                if i != j and step(mut seed) % 100 < density {
+                    row[j] = 1;
+                }
+            }
+            flights.push(row);
+        }
+        let mut days: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            let mut row = vec![0; k];
+            for w in 0..k {
+                row[w] = step(mut seed) % 8;
+            }
+            days.push(row);
+        }
+        let want = definition(flights, days);
+        // Staying home every week, and the best city every week.
+        let mut home = 0;
+        let mut ceiling = 0;
+        for w in 0..k {
+            home += days[0][w];
+            let mut top = 0;
+            for c in 0..n {
+                top = top.max(days[c][w]);
+            }
+            ceiling += top;
+        }
+        // One more flight, from a to b, when there are two cities.
+        let mut more = flights.clone();
+        let a = step(mut seed) % n;
+        let b = step(mut seed) % n;
+        if a != b {
+            more[a][b] = 1;
+        }
+        // The cities other than 0 renamed: city c becomes to[c].
+        let mut to: Vec[i64] = Vec.from_fn(n, |c| c);
+        let mut i = n - 1;
+        while i > 1 {
+            to.swap(i, 1 + step(mut seed) % i);
+            i -= 1;
+        }
+        let mut renamed_flights: Vec[Vec[i64]] = Vec.from_fn(n, |_| vec![0; n]);
+        let mut renamed_days: Vec[Vec[i64]] = Vec.from_fn(n, |_| vec![0; k]);
+        for c in 0..n {
+            for d in 0..n {
+                renamed_flights[to[c]][to[d]] = flights[c][d];
+            }
+            renamed_days[to[c]] = days[c].clone();
+        }
+        // Every day one more.
+        let mut plus: Vec[Vec[i64]] = days.clone();
+        for c in 0..n {
+            for w in 0..k {
+                plus[c][w] += 1;
+            }
+        }
+        for which in 0..4 {
+            let got = answer(which, flights, days);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: no less than staying home, no more than the best
+                // city every week.
+                home <= got and got <= ceiling,
+                // P3: one more flight never gives fewer days.
+                answer(which, more, days) >= got,
+                // P4: renaming the cities other than 0 changes nothing.
+                answer(which, renamed_flights, renamed_days) == got,
+                // P5: one more day everywhere gives one more a week.
+                answer(which, flights, plus) == got + k,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

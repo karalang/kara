@@ -1,0 +1,111 @@
+// LeetCode #568: Maximum Vacation Days -- dynamic programming over the
+// weeks.
+//
+// `best[c]` is the most vacation days that can be taken in the weeks
+// so far ending the last of them in city c, or -1 when c cannot be
+// reached by then. Week 0 starts in city 0, which can stay or take one
+// of its flights; each later week starts wherever the last ended. So
+// week w's `best[j]` is days[j][w] plus the largest last `best[i]` over
+// the cities i that are j or have a flight to j. The answer is the
+// largest at the end. O(k * n^2) time, O(n) space.
+
+fn max_vacation_days(flights: Vec[Vec[i64]], days: Vec[Vec[i64]]) -> i64 {
+    let n = flights.len();
+    let k = days[0].len();
+    let mut best = vec![-1; n];
+    best[0] = 0;
+    for w in 0..k {
+        let mut next = vec![-1; n];
+        for j in 0..n {
+            for i in 0..n {
+                if best[i] >= 0 and (i == j or flights[i][j] == 1) {
+                    next[j] = next[j].max(best[i] + days[j][w]);
+                }
+            }
+        }
+        best = next;
+    }
+    best.iter().max().cloned().unwrap()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(label: Str, flights: Vec[Vec[i64]], days: Vec[Vec[i64]]) {
+    println(f"{label}: {max_vacation_days(flights, days)}");
+}
+
+// n cities and k weeks: each flight there with chance `density` in 100,
+// each week's days 0 to `most`.
+fn random_case(n: i64, k: i64, density: i64, most: i64, seed: mut ref i64) -> (Vec[Vec[i64]], Vec[Vec[i64]]) {
+    let mut flights: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let mut row = vec![0; n];
+        for j in 0..n {
+            if i != j and step(seed) % 100 < density {
+                row[j] = 1;
+            }
+        }
+        flights.push(row);
+    }
+    let mut days: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        let mut row = vec![0; k];
+        for w in 0..k {
+            row[w] = step(seed) % (most + 1);
+        }
+        days.push(row);
+    }
+    (flights, days)
+}
+
+fn main() {
+    // The three LeetCode examples.
+    show("example 1", vec![vec![0, 1, 1], vec![1, 0, 1], vec![1, 1, 0]], vec![vec![1, 3, 1], vec![6, 0, 3], vec![3, 3, 3]]);
+    show("example 2", vec![vec![0, 0, 0], vec![0, 0, 0], vec![0, 0, 0]], vec![vec![1, 1, 1], vec![7, 7, 7], vec![7, 7, 7]]);
+    show("example 3", vec![vec![0, 1, 1], vec![1, 0, 1], vec![1, 1, 0]], vec![vec![7, 0, 0], vec![0, 7, 0], vec![0, 0, 7]]);
+    // One city, one week.
+    show("one city", vec![vec![0]], vec![vec![5]]);
+    // A one-way chain 0 -> 1 -> 2: city 2 is reachable from week 1 on,
+    // and there is no way back.
+    show("chain", vec![vec![0, 1, 0], vec![0, 0, 1], vec![0, 0, 0]], vec![vec![7, 0, 0], vec![0, 0, 0], vec![0, 7, 7]]);
+    // Going for the best week early costs more later.
+    show("detour", vec![vec![0, 1, 1], vec![0, 0, 0], vec![0, 0, 0]], vec![vec![0, 0, 0], vec![7, 0, 0], vec![6, 6, 6]]);
+    // A flight back home only.
+    show("back home", vec![vec![0, 1], vec![1, 0]], vec![vec![0, 7, 0, 7], vec![7, 0, 7, 0]]);
+    // No days anywhere.
+    show("no days", vec![vec![0, 1], vec![1, 0]], vec![vec![0, 0], vec![0, 0]]);
+    // 300 random cases of 1 to 6 cities and 1 to 6 weeks.
+    let mut seed: i64 = 568;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + step(mut seed) % 6;
+        let k = 1 + step(mut seed) % 6;
+        let density = step(mut seed) % 101;
+        let (flights, days) = random_case(n, k, density, 7, mut seed);
+        let got = max_vacation_days(flights, days);
+        total += got;
+        checksum = (checksum * 31 + got + 1) % 1000000007;
+    }
+    println(f"300 random cases: {total} days, checksum {checksum}");
+    // The problem's most, 100 cities and 100 weeks: every flight, then
+    // one flight in fifty, then a ring where each city flies only to the
+    // next.
+    let (all, days) = random_case(100, 100, 100, 7, mut seed);
+    println(f"100 cities, 100 weeks, every flight: {max_vacation_days(all, days)}");
+    let (some, days) = random_case(100, 100, 2, 7, mut seed);
+    println(f"100 cities, 100 weeks, one flight in fifty: {max_vacation_days(some, days)}");
+    let mut ring: Vec[Vec[i64]] = Vec.new();
+    for i in 0..100 {
+        let mut row = vec![0; 100];
+        row[(i + 1) % 100] = 1;
+        ring.push(row);
+    }
+    let (_, days) = random_case(100, 100, 0, 7, mut seed);
+    println(f"100 cities, 100 weeks, a ring: {max_vacation_days(ring, days)}");
+}
