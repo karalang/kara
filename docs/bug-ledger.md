@@ -96,25 +96,25 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 604 |
 | leak | 603 |
 | double-free | 427 |
-| codegen-gap | 254 |
+| codegen-gap | 255 |
 | missing-feature | 242 |
 | other | 172 |
 | perf | 164 |
-| false-positive | 158 |
+| false-positive | 160 |
 | diagnostics | 155 |
 | crash | 114 |
-| soundness | 100 |
+| soundness | 101 |
 | use-after-free | 90 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2873 |
+| codegen | 2874 |
 | interp | 913 |
-| typecheck | 386 |
+| typecheck | 389 |
 | other | 115 |
-| ownership | 86 |
+| ownership | 87 |
 | cli | 75 |
 | runtime | 66 |
 | parser | 61 |
@@ -606,6 +606,10 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-7 | 2026-10-14 | typecheck | medium | `karac check` refuses `let r: Vec[String] = words.iter().map(|w| w.chars().rev().collect()).collect();` with "expected 'Vec[String]', found 'Vec[Vec[char]]'": the target of a `collect()` that is a closure's result is not taken from the outer `collect`'s annotation, and defaults to `Vec` | — |
 | B-2026-10-14-8 | 2026-10-14 | ownership | medium | `karac check` refuses any `collect()` into a non-`Vec` target inside a closure body, `|w| { let s: String = w.chars().collect(); s.len() }`, with an ownership error about a binding the user never wrote: "value '__karac_collect_dst_53' is moved inside a loop and not assigned again before the next iteration"; `karac __mir-run` runs it | — |
 | B-2026-10-14-9 | 2026-10-14 | codegen | medium | Matching a borrowed `shared enum` on the MIR compiled backend retains every handle the pattern binds and releases each at the arm's end, so a read-only tree walk pays a count up and an out-of-line `drop.shared` call per child: kata 558's `count` over 210M quad-tree nodes runs 1.49 to 1.62 s on `karac build --mir` against 0.98 to 1.04 s for Rust's `count(&Quad)`, and 1.31 s for the same Rust with each child's `Rc` cloned | — |
+| B-2026-10-14-10 | 2026-10-14 | typecheck | medium | `karac check` does not treat the elements of a `Vec[ref T]` as the `Copy` references the spec makes them: `for c in t.children.iter() { v.push(c); }` into `v: Vec[ref Node]` is refused with `borrow_projection_copy` ("cannot move 'c': it borrows its value"), the same into `Vec[(ref Node, i64)]` adds "expected '(ref Node, i64)', found '(Node, i64)'", and `let a = v[0];` is refused with E_INDEX_MOVE_NON_COPY on both pipelines; `__mir-run` and `__mir-llvm-run` run the two pushes | — |
+| B-2026-10-14-11 | 2026-10-14 | codegen | medium | `for n in v` over a `Vec[ref Node]` does not build on the MIR backends: `__mir-run` stops with "invalid MIR: copy of (*_14) whose type Node is not Copy; assigning Node to _15 of type ref Node", and `__mir-llvm-run` exits 101 with no message at all; `karac check` passes it | — |
+| B-2026-10-14-12 | 2026-10-14 | typecheck | low | `karac check` has no `Option.as_ref`: `o.as_ref()` on an `Option[Node]` is refused with "no method 'as_ref' on type 'Option'", though docs/library/core-types.md lists `fn as_ref(self) -> Option[ref T]` and both MIR backends run it | — |
+| B-2026-10-14-13 | 2026-10-14 | typecheck+ownership | medium | Pushing an owned `Node` local into a `Vec[ref Node]` is accepted as a MOVE of the `Node` into a slot typed `ref Node`: `v.push(t)` passes `karac check`, a later `t.val` is refused as "moved" by both pipelines, and with no later use `__mir-run` reports the tree leaked at exit | — |
 
 ### Relocated
 
