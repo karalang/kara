@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/582-kill-process/kill_process_dfs.kara"
+dedup_of = []
+expect = "error:E0236"
+exit = 1
+tags = ["lib:map"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "13e2cf856"
+extracted_src = "1550ae08"
+model_rev = "1aa23105"
+model_src = "1550ae08"

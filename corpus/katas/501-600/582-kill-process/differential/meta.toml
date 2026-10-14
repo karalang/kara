@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/582-kill-process/differential.kara"
+dedup_of = []
+expect = "error:E0236"
+exit = 1
+tags = ["differential", "lib:map", "lib:set", "lib:vecdeque"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "13e2cf856"
+extracted_src = "eb40f3a4"
+model_rev = "1aa23105"
+model_src = "eb40f3a4"

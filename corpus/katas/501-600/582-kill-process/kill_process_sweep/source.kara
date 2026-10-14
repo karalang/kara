@@ -1,0 +1,123 @@
+// LeetCode #582: Kill Process -- sweeps until nothing changes.
+//
+// No index of children: a set of killed processes starts with `kill`,
+// and every sweep over the list kills each process whose parent is in
+// the set. When a sweep kills nothing new, every descendant is in it.
+// O(n * sweeps) time; a sweep in list order can reach many generations
+// at once, and needs at most as many sweeps as the tree is deep.
+
+fn kill_process(pid: Vec[i64], ppid: Vec[i64], kill: i64) -> Vec[i64] {
+    let mut dead: Set[i64] = Set.new();
+    dead.insert(kill);
+    let mut killed = vec![kill];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..pid.len() {
+            if dead.contains(ppid[i]) and not dead.contains(pid[i]) {
+                dead.insert(pid[i]);
+                killed.push(pid[i]);
+                changed = true;
+            }
+        }
+    }
+    killed
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn sorted_kill(pid: Vec[i64], ppid: Vec[i64], kill: i64) -> Vec[i64] {
+    let mut got = kill_process(pid, ppid, kill);
+    got.sort();
+    got
+}
+
+fn show(pid: Vec[i64], ppid: Vec[i64], kill: i64) {
+    println(f"{pid} under {ppid}, kill {kill}: {sorted_kill(pid, ppid, kill)}");
+}
+
+// A random tree of n processes numbered 1 to n in a shuffled order,
+// each one's parent an earlier one, so that the first is the root.
+fn random_tree(n: i64, seed: mut ref i64, pid: mut ref Vec[i64], ppid: mut ref Vec[i64]) {
+    let mut names: Vec[i64] = Vec.new();
+    for i in 1..=n {
+        names.push(i);
+    }
+    for i in (1..n).rev() {
+        let j = (step(seed) * 32768 + step(seed)) % (i + 1);
+        names.swap(i, j);
+    }
+    for i in 0..n {
+        pid.push(names[i]);
+        if i == 0 {
+            ppid.push(0);
+        } else {
+            ppid.push(names[(step(seed) * 32768 + step(seed)) % i]);
+        }
+    }
+}
+
+fn summary(label: Str, killed: Vec[i64]) {
+    let mut checksum: i64 = 0;
+    for k in killed.iter() {
+        checksum = (checksum * 31 + *k) % 1000000007;
+    }
+    println(f"{label}: {killed.len()} killed, checksum {checksum}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![1, 3, 10, 5], vec![3, 0, 5, 3], 5);
+    show(vec![1], vec![0], 1);
+    // The root; a leaf; a chain killed in the middle; a parent listed
+    // after its children.
+    show(vec![1, 3, 10, 5], vec![3, 0, 5, 3], 3);
+    show(vec![1, 3, 10, 5], vec![3, 0, 5, 3], 10);
+    show(vec![1, 2, 3, 4, 5], vec![0, 1, 2, 3, 4], 3);
+    show(vec![4, 5, 2, 3, 1], vec![2, 2, 1, 1, 0], 2);
+    // 300 random trees of 1 to 30 processes, a random one killed.
+    let mut seed: i64 = 582;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + step(mut seed) % 30;
+        let mut pid: Vec[i64] = Vec.new();
+        let mut ppid: Vec[i64] = Vec.new();
+        random_tree(n, mut seed, mut pid, mut ppid);
+        let kill = pid[step(mut seed) % n];
+        let got = sorted_kill(pid, ppid, kill);
+        total += got.len();
+        for k in got.iter() {
+            checksum = (checksum * 31 + *k) % 1000000007;
+        }
+        checksum = (checksum * 31 + 7) % 1000000007;
+    }
+    println(f"300 random trees: {total} killed, checksum {checksum}");
+    // The problem's largest, 50,000 processes: a random tree killed at
+    // the root and at a process partway down; a root with every other
+    // process its child; and a chain of 5,000 killed in the middle.
+    let mut pid: Vec[i64] = Vec.new();
+    let mut ppid: Vec[i64] = Vec.new();
+    random_tree(50000, mut seed, mut pid, mut ppid);
+    summary("random tree, the root", sorted_kill(pid, ppid, pid[0]));
+    summary("random tree, a process partway down", sorted_kill(pid, ppid, pid[40]));
+    let mut flat_pid: Vec[i64] = Vec.new();
+    let mut flat_ppid: Vec[i64] = Vec.new();
+    for i in 1..=50000 {
+        flat_pid.push(i);
+        flat_ppid.push(if i == 1 { 0 } else { 1 });
+    }
+    summary("one root, 49999 children", sorted_kill(flat_pid, flat_ppid, 1));
+    let mut chain_pid: Vec[i64] = Vec.new();
+    let mut chain_ppid: Vec[i64] = Vec.new();
+    for i in 1..=5000 {
+        chain_pid.push(i);
+        chain_ppid.push(i - 1);
+    }
+    summary("a chain of 5000, the middle", sorted_kill(chain_pid, chain_ppid, 2500));
+}

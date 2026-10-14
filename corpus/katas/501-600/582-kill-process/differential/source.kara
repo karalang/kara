@@ -1,0 +1,229 @@
+// LeetCode #582: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// process trees.
+
+// ---- star arm ----------------------------------------------------------
+
+fn kill_process_star(pid: Vec[i64], ppid: Vec[i64], kill: i64) -> Vec[i64] {
+    let mut children: Map[i64, Vec[i64]] = Map.new();
+    for i in 0..pid.len() {
+        children.entry(ppid[i]).or_insert(Vec.new()).push(pid[i]);
+    }
+    let mut killed: Vec[i64] = Vec.new();
+    let mut queue: VecDeque[i64] = VecDeque.new();
+    queue.push_back(kill);
+    while let Some(p) = queue.pop_front() {
+        killed.push(p);
+        if let Some(kids) = children.get(p) {
+            for k in kids.iter() {
+                queue.push_back(*k);
+            }
+        }
+    }
+    killed
+}
+
+// ---- dfs arm -----------------------------------------------------------
+
+fn kill_all_dfs(p: i64, children: ref Map[i64, Vec[i64]], killed: mut ref Vec[i64]) {
+    killed.push(p);
+    if let Some(kids) = children.get(p) {
+        for k in kids.iter() {
+            kill_all_dfs(*k, children, killed);
+        }
+    }
+}
+
+fn kill_process_dfs(pid: Vec[i64], ppid: Vec[i64], kill: i64) -> Vec[i64] {
+    let mut children: Map[i64, Vec[i64]] = Map.new();
+    for i in 0..pid.len() {
+        if let Some(kids) = children.get_mut(ppid[i]) {
+            kids.push(pid[i]);
+        } else {
+            children.insert(ppid[i], vec![pid[i]]);
+        }
+    }
+    let mut killed: Vec[i64] = Vec.new();
+    kill_all_dfs(kill, children, mut killed);
+    killed
+}
+
+// ---- sweep arm ---------------------------------------------------------
+
+fn kill_process_sweep(pid: Vec[i64], ppid: Vec[i64], kill: i64) -> Vec[i64] {
+    let mut dead: Set[i64] = Set.new();
+    dead.insert(kill);
+    let mut killed = vec![kill];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..pid.len() {
+            if dead.contains(ppid[i]) and not dead.contains(pid[i]) {
+                dead.insert(pid[i]);
+                killed.push(pid[i]);
+                changed = true;
+            }
+        }
+    }
+    killed
+}
+
+// ---- climb arm ---------------------------------------------------------
+
+fn kill_process_climb(pid: Vec[i64], ppid: Vec[i64], kill: i64) -> Vec[i64] {
+    let mut parent: Map[i64, i64] = Map.new();
+    for i in 0..pid.len() {
+        parent.insert(pid[i], ppid[i]);
+    }
+    let mut killed: Vec[i64] = Vec.new();
+    for p in pid.iter() {
+        let mut at = *p;
+        while at != 0 and at != kill {
+            at = parent[at];
+        }
+        if at == kill {
+            killed.push(*p);
+        }
+    }
+    killed
+}
+
+// ---- definition -----------------------------------------------------------
+
+// The statement read literally: a process dies when it is `kill`, or
+// when its parent dies. Each process's parent is found by searching the
+// list, and the question asked again of that parent.
+fn dies(p: i64, pid: ref Vec[i64], ppid: ref Vec[i64], kill: i64) -> bool {
+    if p == kill {
+        return true;
+    }
+    for i in 0..pid.len() {
+        if pid[i] == p {
+            return ppid[i] != 0 and dies(ppid[i], pid, ppid, kill);
+        }
+    }
+    false
+}
+
+fn definition(pid: ref Vec[i64], ppid: ref Vec[i64], kill: i64) -> Vec[i64] {
+    let mut killed: Vec[i64] = Vec.new();
+    for p in pid.iter() {
+        if dies(*p, pid, ppid, kill) {
+            killed.push(*p);
+        }
+    }
+    killed.sort();
+    killed
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn run(arm: i64, pid: ref Vec[i64], ppid: ref Vec[i64], kill: i64) -> Vec[i64] {
+    let mut got = match arm {
+        0 => kill_process_star(pid.clone(), ppid.clone(), kill),
+        1 => kill_process_dfs(pid.clone(), ppid.clone(), kill),
+        2 => kill_process_sweep(pid.clone(), ppid.clone(), kill),
+        _ => kill_process_climb(pid.clone(), ppid.clone(), kill),
+    };
+    got.sort();
+    got
+}
+
+fn main() {
+    let names = vec!["star", "dfs", "sweep", "climb"];
+    let mut seed: i64 = 5820;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property = vec![0, 0, 0, 0, 0];
+    for _ in 0..1000 {
+        // A random tree of 1 to 10 processes with names from 1 to 20 in
+        // a random order, each one's parent an earlier one, and the list
+        // then shuffled so that parents can come after their children.
+        let n = 1 + step(mut seed) % 10;
+        let mut names_used: Vec[i64] = Vec.new();
+        while names_used.len() < n {
+            let name = 1 + step(mut seed) % 20;
+            if not names_used.contains(name) {
+                names_used.push(name);
+            }
+        }
+        let mut pid: Vec[i64] = Vec.new();
+        let mut ppid: Vec[i64] = Vec.new();
+        for i in 0..n {
+            pid.push(names_used[i]);
+            ppid.push(if i == 0 { 0 } else { names_used[step(mut seed) % i] });
+        }
+        for i in (1..n).rev() {
+            let j = step(mut seed) % (i + 1);
+            pid.swap(i, j);
+            ppid.swap(i, j);
+        }
+        let kill = pid[step(mut seed) % n];
+        let want = definition(pid, ppid, kill);
+        // The same list turned round.
+        let mut rev_pid: Vec[i64] = Vec.new();
+        let mut rev_ppid: Vec[i64] = Vec.new();
+        for i in (0..n).rev() {
+            rev_pid.push(pid[i]);
+            rev_ppid.push(ppid[i]);
+        }
+        // Every process renamed to 100 more.
+        let mut up_pid: Vec[i64] = Vec.new();
+        let mut up_ppid: Vec[i64] = Vec.new();
+        for i in 0..n {
+            up_pid.push(pid[i] + 100);
+            up_ppid.push(if ppid[i] == 0 { 0 } else { ppid[i] + 100 });
+        }
+        for arm in 0..4 {
+            let got = run(arm, pid, ppid, kill);
+            // P2: `kill` once, no repeats, every one a process.
+            let mut well_formed = got.contains(kill);
+            for i in 0..got.len() {
+                if not pid.contains(got[i]) or (i > 0 and got[i] == got[i - 1]) {
+                    well_formed = false;
+                }
+            }
+            let mut up_want: Vec[i64] = Vec.new();
+            for g in got.iter() {
+                up_want.push(*g + 100);
+            }
+            // P5: `kill`, and what killing each child kills.
+            let mut joined = vec![kill];
+            for i in 0..n {
+                if ppid[i] == kill {
+                    for g in run(arm, pid, ppid, pid[i]).iter() {
+                        joined.push(*g);
+                    }
+                }
+            }
+            joined.sort();
+            let results = vec![
+                got == want,
+                well_formed,
+                run(arm, rev_pid, rev_ppid, kill) == got,
+                run(arm, up_pid, up_ppid, kill + 100) == up_want,
+                joined == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not results[p] {
+                    failures += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"{names[arm]} P{p + 1} on {pid} under {ppid}, kill {kill}: got {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1000 cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}
