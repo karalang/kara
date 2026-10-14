@@ -1235,3 +1235,27 @@ fn mir_vec_chunks_and_windows() {
         }
     }
 }
+
+/// B-2026-10-14-6 — a `map` closure's bare `collect()` takes its target from
+/// the outer `let` annotation's element type on the MIR pipeline too.
+#[test]
+fn mir_map_closure_collect_takes_the_outer_element_type() {
+    const SRC: &str = r#"fn main() {
+    let words: Vec[String] = vec!["ab".to_string(), "cd".to_string()];
+    let r: Vec[Vec[char]] = words.iter().map(|w| w.chars().rev().collect()).collect();
+    println(f"{r}");
+    let s: Vec[String] = words.iter().map(|w| w.chars().rev().collect()).collect();
+    println(f"{s}");
+    let t: Vec[String] = words.iter().map(|w| { let n = w.len(); w.chars().take(n - 1).collect() }).collect();
+    println(f"{t}");
+}
+"#;
+    let want = "[[b, a], [d, c]]\n[ba, dc]\n[a, c]\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

@@ -3078,8 +3078,65 @@ fn desugar_mapped_collect_target(ty: &TypeExpr, value: &mut Expr) {
     } else {
         body
     };
+    // B-2026-10-14-6 — on the MIR pipeline `collect()` is the library's,
+    // generic in its target, and the collect-target desugar stands down. So
+    // the closure's `collect()` is given its target the way a programmer
+    // would write it, `{ let s: T = <..>.collect(); s }`, for every element
+    // type (a `Vec` one included: nothing else defaults the target there).
+    if COLLECT_THROUGH_FROM_ITERATOR.with(|c| c.get()) {
+        annotate_mapped_collect(elem, tail);
+        return;
+    }
     let base = tail.span;
     desugar_collect_target_at(elem, tail, base);
+}
+
+/// `<chain>.collect()` → `{ let __karac_mapped_collect_N: T = <chain>.collect(); __karac_mapped_collect_N }`.
+fn annotate_mapped_collect(elem: &TypeExpr, tail: &mut Expr) {
+    match &tail.kind {
+        ExprKind::MethodCall {
+            method,
+            args,
+            object,
+            ..
+        } if method == "collect" && args.is_empty() && is_iterator_chain(object) => {}
+        _ => return,
+    }
+    let base = tail.span;
+    let name = format!("__karac_mapped_collect_{}", base.offset);
+    let s1 = collect_synth_span(&base, 1);
+    let s2 = collect_synth_span(&base, 2);
+    let placeholder = Expr {
+        id: crate::ids::NodeId::DUMMY,
+        kind: ExprKind::Error,
+        span: base,
+    };
+    let original = std::mem::replace(tail, placeholder);
+    let let_stmt = Stmt {
+        id: crate::ids::NodeId::DUMMY,
+        span: s1,
+        kind: StmtKind::Let {
+            is_mut: false,
+            pattern: Pattern {
+                id: crate::ids::NodeId::DUMMY,
+                kind: PatternKind::Binding(name.clone()),
+                span: s1,
+            },
+            ty: Some(elem.clone()),
+            value: original,
+        },
+    };
+    // The block takes the annotation's span, as the collect-target desugar's
+    // does: the original call keeps its own span inside the `let`.
+    *tail = Expr {
+        id: crate::ids::NodeId::DUMMY,
+        kind: ExprKind::Block(Block {
+            stmts: vec![let_stmt],
+            final_expr: Some(Box::new(collect_ident(&name, s2))),
+            span: elem.span,
+        }),
+        span: elem.span,
+    };
 }
 
 fn desugar_collect_target(ty: &TypeExpr, value: &mut Expr) {
