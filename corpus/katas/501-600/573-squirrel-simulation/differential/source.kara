@@ -1,0 +1,207 @@
+// LeetCode #573: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// grids.
+
+// ---- star arm ----------------------------------------------------------
+
+fn distance_star(a: Vec[i64], b: Vec[i64]) -> i64 {
+    (a[0] - b[0]).abs() + (a[1] - b[1]).abs()
+}
+
+fn min_distance_star(height: i64, width: i64, tree: Vec[i64], squirrel: Vec[i64], nuts: Vec[Vec[i64]]) -> i64 {
+    let mut total = 0;
+    let mut best_saving = i64.MIN;
+    for nut in nuts.iter() {
+        let to_tree = distance_star(nut, tree);
+        total += 2 * to_tree;
+        best_saving = best_saving.max(to_tree - distance_star(nut, squirrel));
+    }
+    total - best_saving
+}
+
+// ---- first arm ---------------------------------------------------------
+
+fn distance_first(a: Vec[i64], b: Vec[i64]) -> i64 {
+    (a[0] - b[0]).abs() + (a[1] - b[1]).abs()
+}
+
+fn min_distance_first(height: i64, width: i64, tree: Vec[i64], squirrel: Vec[i64], nuts: Vec[Vec[i64]]) -> i64 {
+    let mut best = i64.MAX;
+    for f in 0..nuts.len() {
+        let mut walk = distance_first(squirrel, nuts[f]) + distance_first(nuts[f], tree);
+        for i in 0..nuts.len() {
+            if i != f {
+                walk += 2 * distance_first(nuts[i], tree);
+            }
+        }
+        best = best.min(walk);
+    }
+    best
+}
+
+// ---- chain arm ---------------------------------------------------------
+
+fn min_distance_chain(height: i64, width: i64, tree: Vec[i64], squirrel: Vec[i64], nuts: Vec[Vec[i64]]) -> i64 {
+    let far = |a: ref Vec[i64], b: ref Vec[i64]| (a[0] - b[0]).abs() + (a[1] - b[1]).abs();
+    let round_trips: i64 = nuts.iter().map(|n| 2 * far(n, tree)).sum();
+    let saving = nuts.iter().map(|n| far(n, tree) - far(n, squirrel)).max().unwrap();
+    round_trips - saving
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+fn distance_sorted(a: Vec[i64], b: Vec[i64]) -> i64 {
+    (a[0] - b[0]).abs() + (a[1] - b[1]).abs()
+}
+
+fn min_distance_sorted(height: i64, width: i64, tree: Vec[i64], squirrel: Vec[i64], nuts: Vec[Vec[i64]]) -> i64 {
+    let mut extra: Vec[(i64, i64)] = Vec.new();
+    for i in 0..nuts.len() {
+        extra.push((distance_sorted(nuts[i], squirrel) - distance_sorted(nuts[i], tree), i));
+    }
+    extra.sort();
+    let (_, first) = extra[0];
+    let mut walk = distance_sorted(squirrel, nuts[first]) + distance_sorted(nuts[first], tree);
+    for (_, i) in extra[1..].iter() {
+        walk += 2 * distance_sorted(nuts[*i], tree);
+    }
+    walk
+}
+
+// ---- the definition and the properties ------------------------------------
+
+// The fewest steps between two cells, found by walking the grid breadth
+// first, one cell up, down, left or right at a time.
+fn steps(height: i64, width: i64, from: Vec[i64], to: Vec[i64]) -> i64 {
+    let mut seen = vec![false; height * width];
+    let mut queue: Vec[(i64, i64, i64)] = vec![(from[0], from[1], 0)];
+    seen[from[0] * width + from[1]] = true;
+    let mut head = 0;
+    while head < queue.len() {
+        let (r, c, d) = queue[head];
+        head += 1;
+        if r == to[0] and c == to[1] {
+            return d;
+        }
+        let moves = vec![(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)];
+        for (nr, nc) in moves.iter() {
+            if *nr >= 0 and *nr < height and *nc >= 0 and *nc < width and not seen[*nr * width + *nc] {
+                seen[*nr * width + *nc] = true;
+                queue.push((*nr, *nc, d + 1));
+            }
+        }
+    }
+    -1
+}
+
+// The shortest whole walk over every order of the nuts left: from
+// `at`, to the next nut and back to the tree, and so on.
+fn every_order(height: i64, width: i64, tree: Vec[i64], at: Vec[i64], nuts: Vec[Vec[i64]], used: mut ref Vec[bool], left: i64) -> i64 {
+    if left == 0 {
+        return 0;
+    }
+    let mut best = -1;
+    for i in 0..nuts.len() {
+        if not used[i] {
+            used[i] = true;
+            let walk = steps(height, width, at, nuts[i]) + steps(height, width, nuts[i], tree) + every_order(height, width, tree, tree, nuts, used, left - 1);
+            used[i] = false;
+            if best < 0 or walk < best {
+                best = walk;
+            }
+        }
+    }
+    best
+}
+
+// The definition: every order of collecting the nuts tried, the
+// squirrel starting where it is and every later trip from the tree,
+// with every step counted on the grid.
+fn definition(height: i64, width: i64, tree: Vec[i64], squirrel: Vec[i64], nuts: Vec[Vec[i64]]) -> i64 {
+    let mut used = vec![false; nuts.len()];
+    every_order(height, width, tree, squirrel, nuts, mut used, nuts.len())
+}
+
+fn answer(which: i64, height: i64, width: i64, tree: Vec[i64], squirrel: Vec[i64], nuts: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        min_distance_star(height, width, tree, squirrel, nuts)
+    } else if which == 1 {
+        min_distance_first(height, width, tree, squirrel, nuts)
+    } else if which == 2 {
+        min_distance_chain(height, width, tree, squirrel, nuts)
+    } else {
+        min_distance_sorted(height, width, tree, squirrel, nuts)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn manhattan(a: Vec[i64], b: Vec[i64]) -> i64 {
+    (a[0] - b[0]).abs() + (a[1] - b[1]).abs()
+}
+
+fn transposed(cell: Vec[i64]) -> Vec[i64] {
+    vec![cell[1], cell[0]]
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5730;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // A grid of 1 to 6 by 1 to 6, and 1 to 5 nuts anywhere on it.
+        let height = 1 + next_random(mut seed) % 6;
+        let width = 1 + next_random(mut seed) % 6;
+        let tree = vec![next_random(mut seed) % height, next_random(mut seed) % width];
+        let squirrel = vec![next_random(mut seed) % height, next_random(mut seed) % width];
+        let mut nuts: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 5 {
+            nuts.push(vec![next_random(mut seed) % height, next_random(mut seed) % width]);
+        }
+        let want = definition(height, width, tree, squirrel, nuts);
+        let mut round_trips = 0;
+        let mut farthest = 0;
+        for n in nuts.iter() {
+            round_trips += 2 * manhattan(n, tree);
+            farthest = farthest.max(manhattan(n, tree));
+        }
+        let flipped: Vec[Vec[i64]] = nuts.iter().map(|n| transposed(n)).collect();
+        let mut backwards = nuts.clone();
+        backwards.reverse();
+        let mut with_tree = nuts.clone();
+        with_tree.push(tree.clone());
+        for which in 0..4 {
+            let got = answer(which, height, width, tree, squirrel, nuts);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: at least the round trips less the longest leg from
+                // the tree, at most the round trips plus the walk to the
+                // tree.
+                round_trips - farthest <= got and got <= round_trips + manhattan(squirrel, tree),
+                // P3: the grid turned on its side changes nothing.
+                answer(which, width, height, transposed(tree), transposed(squirrel), flipped) == got,
+                // P4: the nuts in the other order change nothing.
+                answer(which, height, width, tree, squirrel, backwards) == got,
+                // P5: one more nut at the tree changes nothing.
+                answer(which, height, width, tree, squirrel, with_tree) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

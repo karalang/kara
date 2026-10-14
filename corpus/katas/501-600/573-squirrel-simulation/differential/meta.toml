@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/573-squirrel-simulation/differential.kara"
+dedup_of = []
+expect = "error:E0235"
+exit = 1
+tags = ["closure", "differential"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "c54e76eca"
+extracted_src = "a34d71e4"
+model_rev = "1aa23105"
+model_src = "a34d71e4"

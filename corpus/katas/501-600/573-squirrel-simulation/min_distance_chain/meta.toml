@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/573-squirrel-simulation/min_distance_chain.kara"
+dedup_of = []
+expect = "error:E0235"
+exit = 1
+tags = ["closure"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "c54e76eca"
+extracted_src = "8b02a656"
+model_rev = "1aa23105"
+model_src = "8b02a656"
