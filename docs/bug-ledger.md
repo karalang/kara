@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 258 |
-| missing-feature | 251 |
+| missing-feature | 252 |
 | other | 172 |
 | false-positive | 171 |
 | perf | 165 |
@@ -111,15 +111,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2886 |
-| interp | 920 |
-| typecheck | 410 |
+| interp | 921 |
+| typecheck | 411 |
 | other | 115 |
 | ownership | 91 |
 | cli | 76 |
 | runtime | 67 |
 | parser | 61 |
 | autopar | 59 |
-| resolver | 38 |
+| resolver | 39 |
 | effect | 30 |
 | lexer | 11 |
 ## Current state
@@ -175,12 +175,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-29 | 2026-10-14 | interp+codegen | medium | The MIR borrow checker keeps a `Vec[(ref Node, i64)]` borrowed for as long as a `ref Node` copied out of one of its elements is live: `let (a, n) = v[0]; v.pop(); a.val` is refused on both MIR backends ("mutable borrow of _2 while it is borrowed", E0516), though core-semantics §1.1 makes the tuple `Copy` and the copied reference keeps the origin of the node, not of the vector; the same read out of a `Vec[ref Node]` runs, and `karac check` passes both | — |
 | B-2026-10-14-35 | 2026-10-14 | typecheck | low | A `mut ref` / `mut Slice` argument forwarded WITHOUT the call-site `mut` marker is still accepted by `karac check` and the MIR pipeline, though design.md § Call-site `mut` markers marks such an argument "whatever the argument's root" and says "a missing marker is an error"; d8c605558f made the marker legal there but left it optional | — |
 | B-2026-10-14-36 | 2026-10-14 | codegen | medium | The MIR-to-LLVM backend does not lower `String.clear`: `karac __mir-llvm-run`, `__mir-llvm-asan` and `karac build --mir` refuse any program that calls it ("native `String.clear` is not lowered yet"), while `karac __mir-run` runs it right | — |
-| B-2026-10-14-37 | 2026-10-14 | resolver+typecheck | low | A user type cannot implement `Index`, `IndexMut` or `IndexSet`, so `c[k]` on a user container has no spelling: `impl Index for P` is refused at resolve ("operator traits are stdlib-only") on every pipeline, though design.md § `Index` and `IndexMut` says "User types may implement all three, so a user container supports `[]`" | — |
 | B-2026-10-14-39 | 2026-10-14 | codegen+runtime | low | A one-integer f-string `f"{n}"` still runs about 3x legacy on the v2 compiled backend after B-2026-10-13-20's fix: 44M `f"{i % 7}"` take 0.86 s on `karac build --mir` against 0.28 to 0.31 s on legacy `karac build`, and kata 504's bench 1.97 to 2.25 s against 1.51 to 1.62 s | — |
 | B-2026-10-14-43 | 2026-10-14 | typecheck | medium | A string literal pattern does not take the `Str` type of its scrutinee: `match s.as_str() { "Year" => ... }`, or a match on a `Str` parameter, is refused with "expected 'StringSlice', found 'String'" by `karac check` and by the MIR front end, while the same match on a `String` works | — |
 | B-2026-10-14-44 | 2026-10-14 | typecheck | medium | The `std.io` / `std.net` library signatures disagree with docs/library/io.md: `File.open` / `create` / `append`, `fs.read_to_string` and `fs.write` take `ref String` and `TcpListener.bind` / `TcpStream.connect` take `own String` where io.md gives every path and address as `Str` ("Paths are borrowed"), and `File.read` / `File.write` return `Result[usize, IoError]` where io.md gives `Result[i64, IoError]`, so the spec's own spellings are refused by `karac check` and the MIR pipeline alike | — |
 | B-2026-10-14-45 | 2026-10-14 | interp+codegen | medium | `BufReader` and `BufWriter` (docs/library/io.md § Buffered I/O) do not exist on either v2 backend: `karac check` accepts `BufReader.new(f)`, `read_line`, `lines()` and `BufWriter.write_all`, legacy `karac run --interp` runs them, but `karac __mir-run` stops at `call of unknown function BufReader[File].new`, `karac __mir-llvm-run` at `native `BufReader[File].new` is not lowered yet`, and `for line in reader.lines()` is refused at MIR build with `a `for` loop over a collection is not lowered yet` | — |
 | B-2026-10-14-46 | 2026-10-14 | typecheck+cli | medium | A type error stopping the MIR pipeline is printed with no location: `karac __mir-run` / `__mir-llvm-run` / `__mir-llvm-asan` print `error[mir]: typecheck: expected 'String', found 'StringSlice'` and nothing else, because src/mir/lower.rs formats only `tc.errors[0].message` and drops its `span`, so a program that `karac check` would locate has to be bisected by hand | — |
+| B-2026-10-14-47 | 2026-10-14 | resolver+typecheck+interp | low | `IndexSet` (design.md § `Index` and `IndexMut`: `c[key] = value` calls `IndexSet.index_set(c, key, value)` when `c`'s type implements it, else `*IndexMut.index_mut(c, key) = value`) does not exist: the stdlib declares no `IndexSet` trait, so a user keyed container cannot take `c[k] = v` for a key that is not present yet, and the user `Index` / `IndexMut` support B-2026-10-14-37 added writes only through `index_mut` | — |
 
 ### Relocated
 
@@ -4013,6 +4013,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-14-32 | typecheck+codegen | low | The MIR front end lowers a move of a non-`Copy` field out of a `shared` value or out of a `ref` (`\|q: S\| q.t`, `fn get(ref self) -> String { self.wor… | 2abd05a1a8 |
 | B-2026-10-14-33 | resolver+typecheck | low | A user type still cannot implement `Neg`, `Not`, `Index` or `IndexMut`: d02338bc95 let the binary arithmetic and bitwise operator traits through on c… | fb86de2dcd |
 | B-2026-10-14-34 | typecheck+ownership | medium | A trait impl method declared with bare `self` where the trait declares `own self` is accepted, and `karac check` and the MIR pipeline then disagree a… | 20adf3d84c |
+| B-2026-10-14-37 | resolver+typecheck | low | A user type cannot implement `Index`, `IndexMut` or `IndexSet`, so `c[k]` on a user container has no spelling: `impl Index for P` is refused at resol… | 54c31a6cb0 |
 | B-2026-10-14-38 | ownership | medium | `karac check` refuses the spec's borrow returns that both MIR backends now run: `fn name(user: User) -> ref String { ref user.name }` and `fn head(se… | c92887c8c5 |
 | B-2026-10-14-40 | typecheck | low | `??` on a `ref Option[i64]` is refused ("'??' requires an `Option` or a `Result` on the left, found 'ref Option[i64]'"), though design.md § `*` and `… | 8eded416d9 |
 | B-2026-10-14-41 | typecheck+codegen | medium | A fixed array's `.iter()` (`mk().iter().count()`) is refused by the library-source checker, and once checked the compiled MIR backend passes a pointe… | b465d3dd05 |
