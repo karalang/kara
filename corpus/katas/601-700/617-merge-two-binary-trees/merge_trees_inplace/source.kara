@@ -1,0 +1,168 @@
+// LeetCode #617: Merge Two Binary Trees -- into the first tree.
+//
+// Add the second tree into the first: where both have a node, the
+// first's node takes the sum and its children are merged in turn; where
+// only the second has a node, that subtree is hung on the first as it
+// is. No node is made. O(nodes in both).
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn merge_trees(root1: Option[TreeNode], root2: Option[TreeNode]) -> Option[TreeNode] {
+    if root1.is_none() {
+        return root2;
+    }
+    let a = root1.unwrap();
+    if let Some(b) = root2 {
+        a.val = a.val + b.val;
+        a.left = merge_trees(a.left, b.left);
+        a.right = merge_trees(a.right, b.right);
+    }
+    Some(a)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree from LeetCode's level order: `None` for a missing child.
+fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
+    if values.is_empty() or values[0].is_none() {
+        return None;
+    }
+    let root = leaf(values[0].unwrap());
+    let mut queue: Vec[TreeNode] = vec![root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < values.len() {
+        let n = queue[head];
+        head += 1;
+        if let Some(v) = values[i] {
+            let c = leaf(v);
+            n.left = Some(c);
+            queue.push(c);
+        }
+        i += 1;
+        if i < values.len() {
+            if let Some(v) = values[i] {
+                let c = leaf(v);
+                n.right = Some(c);
+                queue.push(c);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// LeetCode's level order of a tree, without the trailing `null`s.
+fn to_level(root: Option[TreeNode]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut queue: Vec[Option[TreeNode]] = vec![root];
+    let mut head = 0;
+    while head < queue.len() {
+        let node = queue[head];
+        head += 1;
+        match node {
+            Some(n) => {
+                parts.push(f"{n.val}");
+                queue.push(n.left);
+                queue.push(n.right);
+            }
+            None => parts.push("null".to_string()),
+        }
+    }
+    while parts.len() > 0 and parts[parts.len() - 1] == "null" {
+        parts.pop();
+    }
+    f"[{parts.join(",")}]"
+}
+
+// A tree of `size` nodes with values from -10,000 to 10,000: each new
+// node walks down from the root, going left with chance lean / 100, and
+// takes the first empty place it meets.
+fn random_tree(size: i64, lean: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if size == 0 {
+        return None;
+    }
+    let root = leaf(next_random(mut seed) % 20001 - 10000);
+    for _ in 1..size {
+        let c = leaf(next_random(mut seed) % 20001 - 10000);
+        let mut node = root;
+        loop {
+            if next_random(mut seed) % 100 < lean {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Some(root)
+}
+
+fn show(first: Vec[Option[i64]], second: Vec[Option[i64]]) {
+    let a = to_level(from_level(first));
+    let b = to_level(from_level(second));
+    println(f"{a} + {b} -> {to_level(merge_trees(from_level(first), from_level(second)))}");
+}
+
+// A string's length and a checksum over its characters.
+fn summary(s: String) -> String {
+    let mut h: i64 = 0;
+    for c in s.chars() {
+        h = (h * 31 + c as i64) % 1000000007;
+    }
+    f"{s.len()} characters, checksum {h}"
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(vec![Some(1), Some(3), Some(2), Some(5)], vec![Some(2), Some(1), Some(3), None, Some(4), None, Some(7)]);
+    show(vec![Some(1)], vec![Some(1), Some(2)]);
+    // Both empty; one empty either way; two trees with no place in
+    // common below the root; chains down opposite sides; sums of zero.
+    show(vec![], vec![]);
+    show(vec![], vec![Some(4), Some(5)]);
+    show(vec![Some(4), None, Some(6)], vec![]);
+    show(vec![Some(1), Some(2)], vec![Some(10), None, Some(20)]);
+    show(vec![Some(1), Some(2), None, Some(3), None, Some(4)], vec![Some(1), None, Some(2), None, Some(3), None, Some(4)]);
+    show(vec![Some(5), Some(-3), Some(7)], vec![Some(-5), Some(3), Some(-7), Some(1)]);
+    // 300 random pairs of trees of 0 to 40 nodes each, leaning left with
+    // chance 20, 50 or 80 in 100.
+    let mut seed: i64 = 617;
+    let mut total = String.new();
+    for _ in 0..300 {
+        let leans = vec![20, 50, 80];
+        let first = random_tree(next_random(mut seed) % 41, leans[next_random(mut seed) % 3], mut seed);
+        let second = random_tree(next_random(mut seed) % 41, leans[next_random(mut seed) % 3], mut seed);
+        total.push_str(to_level(merge_trees(first, second)));
+    }
+    println(f"300 random pairs: {summary(total)}");
+    // The problem's largest: two trees of 2,000 nodes, one leaning left
+    // and one leaning right.
+    let first = random_tree(2000, 70, mut seed);
+    let second = random_tree(2000, 30, mut seed);
+    println(f"2000 + 2000 nodes: {summary(to_level(merge_trees(first, second)))}");
+}

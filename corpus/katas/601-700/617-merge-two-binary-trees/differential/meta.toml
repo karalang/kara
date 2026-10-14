@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/617-merge-two-binary-trees/differential.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["closure", "differential", "shared", "lib:sortedmap", "lib:vecdeque"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "4bf1e8e2f"
+extracted_src = "94b939b0"
+model_rev = "1aa23105"
+model_src = "94b939b0"

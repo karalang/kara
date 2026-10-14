@@ -1,0 +1,317 @@
+// LeetCode #617: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// trees. The arms share one `TreeNode`, declared below.
+
+// ---- star arm ----------------------------------------------------------
+
+fn merge_trees_star(root1: Option[TreeNode], root2: Option[TreeNode]) -> Option[TreeNode] {
+    match (root1, root2) {
+        (Some(a), Some(b)) => Some(TreeNode {
+            val: a.val + b.val,
+            left: merge_trees_star(a.left, b.left),
+            right: merge_trees_star(a.right, b.right),
+        }),
+        (Some(a), None) => Some(a),
+        (None, other) => other,
+    }
+}
+
+// ---- inplace arm -------------------------------------------------------
+
+fn merge_trees_inplace(root1: Option[TreeNode], root2: Option[TreeNode]) -> Option[TreeNode] {
+    if root1.is_none() {
+        return root2;
+    }
+    let a = root1.unwrap();
+    if let Some(b) = root2 {
+        a.val = a.val + b.val;
+        a.left = merge_trees_inplace(a.left, b.left);
+        a.right = merge_trees_inplace(a.right, b.right);
+    }
+    Some(a)
+}
+
+// ---- stack arm ---------------------------------------------------------
+
+fn merge_trees_stack(root1: Option[TreeNode], root2: Option[TreeNode]) -> Option[TreeNode] {
+    if root1.is_none() {
+        return root2;
+    }
+    if root2.is_none() {
+        return root1;
+    }
+    let mut stack: Vec[(TreeNode, TreeNode)] = vec![(root1.unwrap(), root2.unwrap())];
+    while let Some((a, b)) = stack.pop() {
+        a.val = a.val + b.val;
+        match (a.left, b.left) {
+            (Some(x), Some(y)) => stack.push((x, y)),
+            (None, Some(y)) => a.left = Some(y),
+            _ => {}
+        }
+        match (a.right, b.right) {
+            (Some(x), Some(y)) => stack.push((x, y)),
+            (None, Some(y)) => a.right = Some(y),
+            _ => {}
+        }
+    }
+    root1
+}
+
+// ---- copy arm ----------------------------------------------------------
+
+fn value_copy(node: Option[TreeNode]) -> i64 {
+    match node {
+        Some(n) => n.val,
+        None => 0,
+    }
+}
+
+fn merge_trees_copy(root1: Option[TreeNode], root2: Option[TreeNode]) -> Option[TreeNode] {
+    if root1.is_none() and root2.is_none() {
+        return None;
+    }
+    let root = TreeNode { val: value_copy(root1) + value_copy(root2), left: None, right: None };
+    let mut queue: VecDeque[(TreeNode, Option[TreeNode], Option[TreeNode])] = VecDeque.new();
+    queue.push_back((root, root1, root2));
+    while let Some((node, a, b)) = queue.pop_front() {
+        let a_left = a.and_then(|n| n.left);
+        let b_left = b.and_then(|n| n.left);
+        if a_left.is_some() or b_left.is_some() {
+            let child = TreeNode { val: value_copy(a_left) + value_copy(b_left), left: None, right: None };
+            node.left = Some(child);
+            queue.push_back((child, a_left, b_left));
+        }
+        let a_right = a.and_then(|n| n.right);
+        let b_right = b.and_then(|n| n.right);
+        if a_right.is_some() or b_right.is_some() {
+            let child = TreeNode { val: value_copy(a_right) + value_copy(b_right), left: None, right: None };
+            node.right = Some(child);
+            queue.push_back((child, a_right, b_right));
+        }
+    }
+    Some(root)
+}
+
+// ---- the definition and the properties ------------------------------------
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, root1: Option[TreeNode], root2: Option[TreeNode]) -> Option[TreeNode] {
+    if which == 0 {
+        merge_trees_star(root1, root2)
+    } else if which == 1 {
+        merge_trees_inplace(root1, root2)
+    } else if which == 2 {
+        merge_trees_stack(root1, root2)
+    } else {
+        merge_trees_copy(root1, root2)
+    }
+}
+
+fn leaf(v: i64) -> TreeNode {
+    TreeNode { val: v, left: None, right: None }
+}
+
+// A tree from LeetCode's level order: `None` for a missing child.
+fn from_level(values: Vec[Option[i64]]) -> Option[TreeNode] {
+    if values.is_empty() or values[0].is_none() {
+        return None;
+    }
+    let root = leaf(values[0].unwrap());
+    let mut queue: Vec[TreeNode] = vec![root];
+    let mut head = 0;
+    let mut i = 1;
+    while i < values.len() {
+        let n = queue[head];
+        head += 1;
+        if let Some(v) = values[i] {
+            let c = leaf(v);
+            n.left = Some(c);
+            queue.push(c);
+        }
+        i += 1;
+        if i < values.len() {
+            if let Some(v) = values[i] {
+                let c = leaf(v);
+                n.right = Some(c);
+                queue.push(c);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// LeetCode's level order of a tree, as values, without trailing `None`s.
+fn to_values(root: Option[TreeNode]) -> Vec[Option[i64]] {
+    let mut out: Vec[Option[i64]] = Vec.new();
+    let mut queue: Vec[Option[TreeNode]] = vec![root];
+    let mut head = 0;
+    while head < queue.len() {
+        let node = queue[head];
+        head += 1;
+        match node {
+            Some(n) => {
+                out.push(Some(n.val));
+                queue.push(n.left);
+                queue.push(n.right);
+            }
+            None => out.push(None),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1].is_none() {
+        out.pop();
+    }
+    out
+}
+
+// Every node of a tree by its path from the root, `L` and `R` for the
+// steps, with its value.
+fn by_path(values: Vec[Option[i64]]) -> SortedMap[String, i64] {
+    let mut paths: SortedMap[String, i64] = SortedMap.new();
+    let mut queue: Vec[(Option[TreeNode], String)] = vec![(from_level(values), String.new())];
+    let mut head = 0;
+    while head < queue.len() {
+        let (node, path) = queue[head].clone();
+        head += 1;
+        if let Some(n) = node {
+            paths.insert(path.clone(), n.val);
+            queue.push((n.left, f"{path}L"));
+            queue.push((n.right, f"{path}R"));
+        }
+    }
+    paths
+}
+
+// The definition: the merged tree has a node at every path where either
+// tree has one, holding the sum of what the two have there; it is
+// written in level order by walking the paths breadth first.
+fn definition(first: Vec[Option[i64]], second: Vec[Option[i64]]) -> Vec[Option[i64]] {
+    let a = by_path(first);
+    let b = by_path(second);
+    let mut out: Vec[Option[i64]] = Vec.new();
+    let mut queue: Vec[String] = vec![String.new()];
+    let mut head = 0;
+    while head < queue.len() {
+        let path = queue[head].clone();
+        head += 1;
+        if a.contains_key(path) or b.contains_key(path) {
+            out.push(Some((a.get(path) ?? 0) + (b.get(path) ?? 0)));
+            queue.push(f"{path}L");
+            queue.push(f"{path}R");
+        } else {
+            out.push(None);
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1].is_none() {
+        out.pop();
+    }
+    out
+}
+
+// A tree of `size` nodes with values from -9 to 9: each new node walks
+// down from the root, going left with chance lean / 100, and takes the
+// first empty place it meets.
+fn random_tree(size: i64, lean: i64, seed: mut ref i64) -> Vec[Option[i64]] {
+    if size == 0 {
+        return Vec.new();
+    }
+    let root = leaf(next_random(mut seed) % 19 - 9);
+    for _ in 1..size {
+        let c = leaf(next_random(mut seed) % 19 - 9);
+        let mut node = root;
+        loop {
+            if next_random(mut seed) % 100 < lean {
+                match node.left {
+                    Some(l) => node = l,
+                    None => {
+                        node.left = Some(c);
+                        break;
+                    }
+                }
+            } else {
+                match node.right {
+                    Some(r) => node = r,
+                    None => {
+                        node.right = Some(c);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    to_values(Some(root))
+}
+
+fn total(values: Vec[Option[i64]]) -> i64 {
+    let mut sum = 0;
+    for v in values.iter() {
+        // `v` is a `ref Option[i64]`, read as the `Option` since that is
+        // `Copy`; the MIR front end refuses it here (kara B-2026-10-14-40).
+        sum += v ?? 0;
+    }
+    sum
+}
+
+// One arm's merge of two trees given in level order, each built fresh,
+// since some arms change their first tree.
+fn merged(which: i64, first: Vec[Option[i64]], second: Vec[Option[i64]]) -> Vec[Option[i64]] {
+    to_values(answer(which, from_level(first), from_level(second)))
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6170;
+    let mut checks = 0;
+    let mut nodes = 0;
+    let mut failures = vec![0; 5];
+    let leans = vec![20, 50, 80];
+    for _ in 0..count {
+        // Three trees of 0 to 12 nodes each, leaning left with chance
+        // 20, 50 or 80 in 100.
+        let mut trees: Vec[Vec[Option[i64]]] = Vec.new();
+        for _ in 0..3 {
+            let size = next_random(mut seed) % 13;
+            trees.push(random_tree(size, leans[next_random(mut seed) % 3], mut seed));
+        }
+        let want = definition(trees[0], trees[1]);
+        nodes += by_path(want).len();
+        for which in 0..4 {
+            let got = merged(which, trees[0], trees[1]);
+            let ok = vec![
+                // P1: the definition's tree.
+                got == want,
+                // P2: the trees in the other order give the same tree.
+                merged(which, trees[1], trees[0]) == got,
+                // P3: an empty tree on either side changes nothing.
+                merged(which, trees[0], Vec.new()) == trees[0] and merged(which, Vec.new(), trees[1]) == trees[1],
+                // P4: the values add up to both trees' values.
+                total(got) == total(trees[0]) + total(trees[1]),
+                // P5: merging a third tree in gives the same tree either
+                // way round.
+                merged(which, got, trees[2]) == merged(which, trees[0], merged(which, trees[1], trees[2])),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({nodes} merged nodes), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
