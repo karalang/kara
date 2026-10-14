@@ -1,0 +1,192 @@
+// Differential test for LeetCode #557: Reverse Words in a String III.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random texts: 1 to 6 words of 1 to 5 characters from `a`, `b` and
+// `c`, or 1 to 3 words of 1 to 60 from all 94 printable characters but
+// the space, in turn.
+// Properties:
+//   P1  the answer is the definition's, worked out place by place
+//   P2  the answer is as long as the text
+//   P3  the spaces are where they were
+//   P4  reversing the answer again gives the text back
+//   P5  the answer has the same characters as the text
+
+// ---- star: reverse_words_in_a_string_iii.kara
+
+fn reverse_words_star(s: String) -> String {
+    let mut words: Vec[String] = Vec.new();
+    for w in s.split(" ") {
+        let r: String = w.chars().rev().collect();
+        words.push(r);
+    }
+    words.join(" ")
+}
+
+// ---- bytes: reverse_words_in_a_string_iii_bytes.kara
+
+fn reverse_words_bytes(s: String) -> String {
+    let mut b = s.bytes().to_vec();
+    let n = b.len();
+    let mut start = 0;
+    while start < n {
+        let mut end = start;
+        while end < n and b[end] != b' ' {
+            end += 1;
+        }
+        let mut i = start;
+        let mut j = end - 1;
+        while i < j {
+            b.swap(i, j);
+            i += 1;
+            j -= 1;
+        }
+        start = end + 1;
+    }
+    String.from_utf8(b).unwrap()
+}
+
+// ---- stack: reverse_words_in_a_string_iii_stack.kara
+
+fn reverse_words_stack(s: String) -> String {
+    let mut out = String.new();
+    let mut stack: Vec[char] = Vec.new();
+    for c in s.chars() {
+        if c == ' ' {
+            while let Some(top) = stack.pop() {
+                out.push(top);
+            }
+            out.push(' ');
+        } else {
+            stack.push(c);
+        }
+    }
+    while let Some(top) = stack.pop() {
+        out.push(top);
+    }
+    out
+}
+
+// ---- chain: reverse_words_in_a_string_iii_chain.kara
+
+fn reverse_words_chain(s: String) -> String {
+    let words: Vec[String] = s.split(" ").iter().map(|w| w.chars().rev().collect()).collect();
+    words.join(" ")
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally, position by position: a space stays
+// where it is, and the character at place i of a word that runs from
+// `start` to `end` is the one at place start + end - i.
+fn definition(s: String) -> String {
+    let c: Vec[char] = s.chars().collect();
+    let n = c.len();
+    let mut out = String.new();
+    for i in 0..n {
+        if c[i] == ' ' {
+            out.push(' ');
+            continue;
+        }
+        let mut start = i;
+        while start > 0 and c[start - 1] != ' ' {
+            start -= 1;
+        }
+        let mut end = i;
+        while end + 1 < n and c[end + 1] != ' ' {
+            end += 1;
+        }
+        out.push(c[start + end - i]);
+    }
+    out
+}
+
+fn answer(which: i64, s: String) -> String {
+    if which == 0 {
+        reverse_words_star(s)
+    } else if which == 1 {
+        reverse_words_bytes(s)
+    } else if which == 2 {
+        reverse_words_stack(s)
+    } else {
+        reverse_words_chain(s)
+    }
+}
+
+fn sorted_chars(s: String) -> Vec[char] {
+    let mut v: Vec[char] = s.chars().collect();
+    v.sort();
+    v
+}
+
+fn main() {
+    let names = vec!["star", "bytes", "stack", "chain"];
+    let count = 1000;
+    let mut seed: i64 = 5570;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 6 words of 1 to 5 characters from `a`, `b` and `c`, or 1
+        // to 3 words of 1 to 60 from all 94 printable ones, in turn.
+        let small = t % 2 == 0;
+        let words = 1 + next_random(mut seed) % (if small { 6 } else { 3 });
+        let mut s = String.new();
+        for k in 0..words {
+            if k > 0 {
+                s.push(' ');
+            }
+            let length = 1 + next_random(mut seed) % (if small { 5 } else { 60 });
+            for _ in 0..length {
+                if small {
+                    s.push((b'a' + (next_random(mut seed) % 3) as u8) as char);
+                } else {
+                    s.push((b'!' + (next_random(mut seed) % 94) as u8) as char);
+                }
+            }
+        }
+        let want = definition(s.clone());
+        for which in 0..4 {
+            let got = answer(which, s.clone());
+            let g: Vec[char] = got.chars().collect();
+            let o: Vec[char] = s.chars().collect();
+            let mut spaces_kept = g.len() == o.len();
+            if spaces_kept {
+                for i in 0..o.len() {
+                    if (o[i] == ' ') != (g[i] == ' ') {
+                        spaces_kept = false;
+                    }
+                }
+            }
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: as long as the input.
+                got.len() == s.len(),
+                // P3: the spaces where they were.
+                spaces_kept,
+                // P4: reversing again gives the input back.
+                answer(which, got.clone()) == s,
+                // P5: the same characters.
+                sorted_chars(got.clone()) == sorted_chars(s.clone()),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: \"{s}\" -> \"{got}\", want \"{want}\"");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

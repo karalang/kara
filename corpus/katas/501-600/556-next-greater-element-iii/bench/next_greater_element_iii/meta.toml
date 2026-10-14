@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/556-next-greater-element-iii/bench/next_greater_element_iii.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "7894306ce"
+extracted_src = "c8739022"
+model_rev = "1aa23105"
+model_src = "c8739022"

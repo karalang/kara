@@ -1,0 +1,74 @@
+// LeetCode #556: Next Greater Element III -- one larger digit at a time.
+//
+// For every place from the right, every digit larger than the one there
+// is tried in it, from the right's digits, and the rest of the right's
+// digits sorted rising after it; the first place where that works gives
+// the smallest such number. Each try sorts the suffix afresh, so this is
+// O(digits^3 log digits), a plain search kept apart from the swaps of
+// the ★ arm.
+
+fn next_greater_element(n: i64) -> i64 {
+    let digits: Vec[i64] = n.to_string().bytes().iter().map(|b| (b - b'0') as i64).collect();
+    let len = digits.len();
+    let mut cut = len - 1;
+    while cut >= 0 {
+        let mut best = -1;
+        for k in cut + 1..len {
+            if digits[k] > digits[cut] and (best < 0 or digits[k] < digits[best]) {
+                best = k;
+            }
+        }
+        if best >= 0 {
+            let mut tail: Vec[i64] = Vec.new();
+            for k in cut..len {
+                if k != best {
+                    tail.push(digits[k]);
+                }
+            }
+            tail.sort();
+            let mut out = 0;
+            for k in 0..cut {
+                out = out * 10 + digits[k];
+            }
+            out = out * 10 + digits[best];
+            for v in tail.iter() {
+                out = out * 10 + *v;
+            }
+            return if out > 2147483647 { -1 } else { out };
+        }
+        cut -= 1;
+    }
+    -1
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: i64) {
+    println(f"{n} -> {next_greater_element(n)}");
+}
+
+fn main() {
+    for n in vec![12, 21, 1, 11, 230241, 12443322, 1999999999, 2147483476, 2147483486, 2147483647, 1234567890, 9876543210 / 10] {
+        show(n);
+    }
+
+    // 300 random numbers of 1 to 10 digits, up to 2^31 - 1.
+    let mut seed: i64 = 556;
+    let mut found = 0;
+    let mut h: i64 = 0;
+    for t in 0..300 {
+        let top = if t % 3 == 0 { 1000 } else if t % 3 == 1 { 10000000 } else { 2147483647 };
+        let n = 1 + (next_random(mut seed) * 65536 + next_random(mut seed)) % top;
+        let got = next_greater_element(n);
+        if got > 0 {
+            found += 1;
+        }
+        h = (h * 31 + got + 1) % 1000000007;
+    }
+    println(f"300 random numbers: {found} have a next, checksum {h}");
+}

@@ -1,0 +1,9 @@
+"Let's take LeetCode contest" -> "s'teL ekat edoCteeL tsetnoc"
+"Mr Ding" -> "rM gniD"
+"a" -> "a"
+"ab cd" -> "ba dc"
+"racecar level noon" -> "racecar level noon"
+"12345 !?.,; (x)" -> "54321 ;,.?! )x("
+300 random texts: 23783 characters, checksum 752035193
+50000 characters -> 50000, starting bazyxwvuts, checksum 208967602
+49999 characters -> 49999, starting a b c d e , checksum 106295506

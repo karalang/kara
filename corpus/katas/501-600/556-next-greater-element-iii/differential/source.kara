@@ -1,0 +1,264 @@
+// Differential test for LeetCode #556: Next Greater Element III.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random numbers: from 1 to 1,000, from 1 to 10^7, or within 20,000 of
+// 2^31 - 1, in turn.
+// Properties:
+//   P1  the answer is the definition's: every order of the digits tried
+//       (up to 7 digits), or every number up to 2^31 - 1 (near it)
+//   P2  the answer is -1, or larger than n and within 32 bits
+//   P3  the answer has the same digits as n
+//   P4  below 10^9, the answer is -1 exactly when n's digits fall from
+//       left to right
+//   P5  the answer's own next is larger again, or -1
+
+// ---- star: next_greater_element_iii.kara
+
+fn next_greater_element_star(n: i64) -> i64 {
+    let mut d: Vec[i64] = Vec.new();
+    let mut x = n;
+    while x > 0 {
+        d.push(x % 10);
+        x /= 10;
+    }
+    d.reverse();
+    let len = d.len();
+    let mut i = len - 2;
+    while i >= 0 and d[i] >= d[i + 1] {
+        i -= 1;
+    }
+    if i < 0 {
+        return -1;
+    }
+    let mut j = len - 1;
+    while d[j] <= d[i] {
+        j -= 1;
+    }
+    d.swap(i, j);
+    d[i + 1..].reverse();
+    let mut out = 0;
+    for v in d.iter() {
+        out = out * 10 + *v;
+    }
+    if out > 2147483647 { -1 } else { out }
+}
+
+// ---- text: next_greater_element_iii_text.kara
+
+fn next_greater_element_text(n: i64) -> i64 {
+    let mut c: Vec[char] = n.to_string().chars().collect();
+    let len = c.len();
+    let mut i = len - 2;
+    while i >= 0 and c[i] >= c[i + 1] {
+        i -= 1;
+    }
+    if i < 0 {
+        return -1;
+    }
+    let mut j = len - 1;
+    while c[j] <= c[i] {
+        j -= 1;
+    }
+    c.swap(i, j);
+    c[i + 1..].reverse();
+    let text: String = c.iter().collect();
+    let out = i64.parse(text).expect("digits");
+    if out > 2147483647 { -1 } else { out }
+}
+
+// ---- counts: next_greater_element_iii_counts.kara
+
+fn next_greater_element_counts(n: i64) -> i64 {
+    let mut count = vec![0; 10];
+    let mut rest = n;
+    while rest > 0 {
+        let d = rest % 10;
+        rest /= 10;
+        let mut up = d + 1;
+        while up < 10 and count[up] == 0 {
+            up += 1;
+        }
+        if up < 10 {
+            count[up] -= 1;
+            count[d] += 1;
+            let mut out = rest * 10 + up;
+            for v in 0..10 {
+                for _ in 0..count[v] {
+                    out = out * 10 + v;
+                }
+            }
+            return if out > 2147483647 { -1 } else { out };
+        }
+        count[d] += 1;
+    }
+    -1
+}
+
+// ---- scan: next_greater_element_iii_scan.kara
+
+fn next_greater_element_scan(n: i64) -> i64 {
+    let digits: Vec[i64] = n.to_string().bytes().iter().map(|b| (b - b'0') as i64).collect();
+    let len = digits.len();
+    let mut cut = len - 1;
+    while cut >= 0 {
+        let mut best = -1;
+        for k in cut + 1..len {
+            if digits[k] > digits[cut] and (best < 0 or digits[k] < digits[best]) {
+                best = k;
+            }
+        }
+        if best >= 0 {
+            let mut tail: Vec[i64] = Vec.new();
+            for k in cut..len {
+                if k != best {
+                    tail.push(digits[k]);
+                }
+            }
+            tail.sort();
+            let mut out = 0;
+            for k in 0..cut {
+                out = out * 10 + digits[k];
+            }
+            out = out * 10 + digits[best];
+            for v in tail.iter() {
+                out = out * 10 + *v;
+            }
+            return if out > 2147483647 { -1 } else { out };
+        }
+        cut -= 1;
+    }
+    -1
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn digit_counts(n: i64) -> Vec[i64] {
+    let mut count = vec![0; 10];
+    let mut x = n;
+    while x > 0 {
+        count[x % 10] += 1;
+        x /= 10;
+    }
+    count
+}
+
+// Every number the digits make, in every order (leading zeros let
+// through, since they only make numbers with fewer digits than n).
+fn arrangements(left: mut ref Vec[i64], value: i64, out: mut ref Vec[i64]) {
+    let mut any = false;
+    for d in 0..10 {
+        if left[d] > 0 {
+            any = true;
+            left[d] -= 1;
+            arrangements(left, value * 10 + d, out);
+            left[d] += 1;
+        }
+    }
+    if not any {
+        out.push(value);
+    }
+}
+
+// The statement read literally, two ways. Up to 7 digits: every order
+// of the digits, the smallest above n that fits in 32 bits. Near 2^31:
+// every number from n + 1 up to 2^31 - 1 tried in turn, the first with
+// the same digits.
+fn definition(n: i64) -> i64 {
+    if n < 10000000 {
+        let mut left = digit_counts(n);
+        let mut all: Vec[i64] = Vec.new();
+        arrangements(mut left, 0, mut all);
+        let mut best = -1;
+        for v in all.iter() {
+            if *v > n and *v <= 2147483647 and (best < 0 or *v < best) {
+                best = *v;
+            }
+        }
+        return best;
+    }
+    let want = digit_counts(n);
+    let mut m = n + 1;
+    while m <= 2147483647 {
+        if digit_counts(m) == want {
+            return m;
+        }
+        m += 1;
+    }
+    -1
+}
+
+fn answer(which: i64, n: i64) -> i64 {
+    if which == 0 {
+        next_greater_element_star(n)
+    } else if which == 1 {
+        next_greater_element_text(n)
+    } else if which == 2 {
+        next_greater_element_counts(n)
+    } else {
+        next_greater_element_scan(n)
+    }
+}
+
+fn main() {
+    let names = vec!["star", "text", "counts", "scan"];
+    let count = 1000;
+    let mut seed: i64 = 5560;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // From 1 to 1,000, from 1 to 10^7, or within 20,000 of 2^31 - 1,
+        // in turn.
+        let r = next_random(mut seed) * 65536 + next_random(mut seed);
+        let n = if t % 3 == 0 { 1 + r % 1000 } else if t % 3 == 1 { 1 + r % 10000000 } else { 2147483647 - r % 20000 };
+        let want = definition(n);
+        let mut digits: Vec[i64] = Vec.new();
+        let mut x = n;
+        while x > 0 {
+            digits.push(x % 10);
+            x /= 10;
+        }
+        // Read from the right, the digits never fall: n is its digits
+        // largest first.
+        let mut largest_first = true;
+        for k in 1..digits.len() {
+            if digits[k] < digits[k - 1] {
+                largest_first = false;
+            }
+        }
+        for which in 0..4 {
+            let got = answer(which, n);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: -1, or larger than n and within 32 bits.
+                got == -1 or (got > n and got <= 2147483647),
+                // P3: the same digits as n.
+                got == -1 or digit_counts(got) == digit_counts(n),
+                // P4: below 10^9 nothing overflows, so -1 exactly when
+                // n's digits fall from left to right.
+                n >= 1000000000 or (got == -1) == largest_first,
+                // P5: the answer's own next is larger again, or -1.
+                got == -1 or answer(which, got) == -1 or answer(which, got) > got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: {n} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

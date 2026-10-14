@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/557-reverse-words-in-a-string-iii/reverse_words_in_a_string_iii_chain.kara"
+dedup_of = []
+expect = "error:E0200"
+exit = 1
+tags = ["closure"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "7894306ce"
+extracted_src = "3066cee0"
+model_rev = "1aa23105"
+model_src = "3066cee0"

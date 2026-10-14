@@ -1,0 +1,56 @@
+// Benchmark for #557: Reverse Words in a String III -- the ★ arm (split,
+// reverse, join).
+//
+// Splitting on a space gives every word; each word's chars are collected
+// backwards into a String, and the reversed words are joined with single
+// spaces again. O(length) time.
+
+fn reverse_words(s: String) -> String {
+    let mut words: Vec[String] = Vec.new();
+    for w in s.split(" ") {
+        let r: String = w.chars().rev().collect();
+        words.push(r);
+    }
+    words.join(" ")
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100 random texts of just under 50,000 characters (the problem's
+    // most), words of 1 to 12 printable characters, built once. Then 50
+    // times over every text is answered; the length of each answer and
+    // its first and middle bytes go into the checksum.
+    let count = 100;
+    let mut seed: i64 = 557;
+    let mut texts: Vec[String] = Vec.new();
+    let mut words = 0;
+    for _ in 0..count {
+        let mut s = String.new();
+        while s.len() < 49980 {
+            if s.len() > 0 {
+                s.push(' ');
+            }
+            let length = 1 + next_random(mut seed) % 12;
+            for _ in 0..length {
+                s.push((b'!' + (next_random(mut seed) % 94) as u8) as char);
+            }
+            words += 1;
+        }
+        texts.push(s);
+    }
+    let mut checksum: i64 = 0;
+    for round in 0..50 {
+        for g in 0..count {
+            let got = reverse_words(texts[(round * 7 + g) % count]);
+            let b = got.bytes();
+            checksum = (checksum * 31 + b.len() + b[0] as i64 * 7 + b[b.len() / 2] as i64) % 1000000007;
+        }
+    }
+    println(f"{count} texts, {words} words, 50 rounds each: checksum {checksum}");
+}
