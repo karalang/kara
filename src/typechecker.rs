@@ -29,6 +29,20 @@ pub(super) type NestedEnumInstKey = (String, String, String);
 /// only its HEAD: `G[G[R2]]` and `G[G[i64]]` share that head, and a message
 /// naming `G[G]` would not tell the author which instantiation to change.
 pub(super) type NestedEnumInstSite = (Span, String);
+
+/// A call's bounds on parameters the call itself left unsolved, with what is
+/// needed to resolve them once the context has (B-2026-10-14-48).
+pub(super) struct DeferredCallBounds {
+    pub(super) constraints: Vec<WhereConstraint>,
+    pub(super) name_to_id: std::collections::HashMap<String, types::TypeVarId>,
+    pub(super) id_to_name: std::collections::HashMap<types::TypeVarId, String>,
+    pub(super) const_id_to_name: std::collections::HashMap<types::ConstVarId, String>,
+    pub(super) receiver_subs: std::collections::HashMap<String, types::SubstValue>,
+    /// The call's node, where the context's answer for a parameter only the
+    /// result names is recorded.
+    pub(super) node: Option<crate::ids::NodeId>,
+    pub(super) span: Span,
+}
 use std::collections::HashSet;
 
 mod alloc_rejection;
@@ -2762,6 +2776,9 @@ pub struct TypeChecker<'a> {
     /// function-trait bound on the method (`F: MutFn(own Self.Item) -> U`)
     /// is read under.
     pub(super) call_bound_receiver_subs: Option<std::collections::HashMap<String, SubstValue>>,
+    /// Call bounds whose parameter only the context solves, checked at the
+    /// end of `check` ([`Self::discharge_deferred_call_bounds`]).
+    pub(super) deferred_call_bounds: Vec<DeferredCallBounds>,
     pub(super) dbg_arg_types: FxHashMap<SpanKey, Type>,
     /// Per-existential capture sets, keyed by the SpanKey of the
     /// `TypeKind::ImplTrait` AST node. See the public copy on
@@ -3260,6 +3277,7 @@ impl<'a> TypeChecker<'a> {
             fn_value_param_types: FxHashMap::default(),
             error_fix_diffs: FxHashMap::default(),
             call_bound_receiver_subs: None,
+            deferred_call_bounds: Vec::new(),
             dbg_arg_types: FxHashMap::default(),
             impl_trait_captures: FxHashMap::default(),
             method_unwrap_inner_types: FxHashMap::default(),
@@ -3589,6 +3607,7 @@ impl<'a> TypeChecker<'a> {
         // offenders gathered during body inference. Must run before `errors`
         // moves into the result below.
         self.emit_nested_enum_inst_errors();
+        self.discharge_deferred_call_bounds();
         let distinct_type_traits = self.env.distinct_types.clone();
         let distinct_bases = self.env.distinct_bases.clone();
         let compiler_builtins = self.env.compiler_builtins.clone();

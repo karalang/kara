@@ -3546,6 +3546,36 @@ impl<'a> super::TypeChecker<'a> {
             // discharge call covers both inline and where-clause surfaces.
             let all_param_names: Vec<String> = name_to_id.keys().cloned().collect();
             self.discharge_type_bounds(wc, &solutions, &all_param_names, discharge_span);
+            // A bound on a parameter only the context solves (`collect`'s
+            // `C: FromIterator[V]`) is checked once the context has solved
+            // it (B-2026-10-14-48).
+            if self.library_methods_from_source {
+                let pending: Vec<WhereConstraint> = wc
+                    .constraints
+                    .iter()
+                    .filter(|c| {
+                        matches!(c, WhereConstraint::TypeBound { type_name, .. }
+                            if name_to_id.contains_key(type_name) && !solutions.contains_key(type_name))
+                    })
+                    .cloned()
+                    .collect();
+                if !pending.is_empty() {
+                    self.deferred_call_bounds.push(super::DeferredCallBounds {
+                        constraints: pending,
+                        name_to_id: name_to_id.clone(),
+                        id_to_name: id_to_name.clone(),
+                        const_id_to_name: const_id_to_name.clone(),
+                        receiver_subs: self.call_bound_receiver_subs.clone().unwrap_or_default(),
+                        node: self
+                            .current_call_node
+                            .filter(|(n, k)| {
+                                *k == SpanKey::from_span(record_subs_for_span) && !n.is_dummy()
+                            })
+                            .map(|(n, _)| n),
+                        span: *discharge_span,
+                    });
+                }
+            }
         }
 
         // GAT slice 8c — implicit-trigger walker for
@@ -3611,6 +3641,173 @@ impl<'a> super::TypeChecker<'a> {
         self.discharge_gat_decl_constraints_in(&pre_resolve_ret, discharge_span);
 
         ret
+    }
+
+    /// Check the bounds `check_call_args_with_substitution_full` deferred
+    /// because their parameter was still unsolved at the call: by now the
+    /// context has solved it. Only a concrete answer is checked, and a
+    /// parameterized bound (`FromIterator[V]`) holds when ANY impl of the
+    /// trait for the type takes those arguments (B-2026-10-14-48).
+    pub(super) fn discharge_deferred_call_bounds(&mut self) {
+        for d in std::mem::take(&mut self.deferred_call_bounds) {
+            let mut solutions: HashMap<String, Type> = HashMap::new();
+            for (n, sv) in &d.receiver_subs {
+                if let SubstValue::Type(t) = sv {
+                    solutions.insert(n.clone(), t.clone());
+                }
+            }
+            for (n, &id) in &d.name_to_id {
+                let t = resolve_type_vars(
+                    &Type::TypeVar(id),
+                    &self.env.substitutions,
+                    &d.id_to_name,
+                    &self.env.const_substitutions,
+                    &d.const_id_to_name,
+                );
+                // The context's answer for a parameter only the result names
+                // is recorded at the call's node rather than solved.
+                let t = match d
+                    .node
+                    .and_then(|node| self.node_call_subs.get(&node)?.get(n))
+                {
+                    Some(c) if contains_type_param(&t) || !type_is_fully_concrete(&t) => c.clone(),
+                    _ => t,
+                };
+                if type_is_fully_concrete(&t) && !contains_type_param(&t) {
+                    solutions.insert(n.clone(), t);
+                }
+            }
+            let names: Vec<String> = d
+                .name_to_id
+                .keys()
+                .chain(d.receiver_subs.keys())
+                .cloned()
+                .collect();
+            let subs: HashMap<String, SubstValue> = solutions
+                .iter()
+                .map(|(k, v)| (k.clone(), SubstValue::Type(v.clone())))
+                .collect();
+            for c in &d.constraints {
+                let WhereConstraint::TypeBound {
+                    type_name, bounds, ..
+                } = c
+                else {
+                    continue;
+                };
+                let Some(concrete) = solutions.get(type_name).cloned() else {
+                    continue;
+                };
+                for bound in bounds {
+                    let Some(trait_name) = bound.path.last() else {
+                        continue;
+                    };
+                    if !self.type_satisfies_bound(&concrete, trait_name) {
+                        let message = self.render_unsatisfied_bound_message(
+                            type_name, trait_name, &concrete, bound,
+                        );
+                        self.type_error(message, d.span, TypeErrorKind::TypeMismatch);
+                        continue;
+                    }
+                    let Some(arg_asts) = &bound.generic_args else {
+                        continue;
+                    };
+                    let want: Vec<Type> = arg_asts
+                        .iter()
+                        .filter_map(|a| match a {
+                            GenericArg::Type(te) => {
+                                let t = self.lower_type_expr(te, &names);
+                                Some(substitute_type_params(&t, &subs))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    if want
+                        .iter()
+                        .any(|t| contains_type_param(t) || !type_is_fully_concrete(t))
+                    {
+                        continue;
+                    }
+                    // An item is read as a value (`ItemValues`): a `ref` to a
+                    // `Copy` part is the part (`(x, x * 2)` over `v.iter()`).
+                    let want: Vec<Type> = want.iter().map(|t| self.read_as_value(t)).collect();
+                    let Some((ty_name, ty_args)) = impl_table_key(&concrete) else {
+                        continue;
+                    };
+                    let mut offered: Vec<Vec<Type>> = Vec::new();
+                    for imp in &self.env.impls {
+                        if imp.target_type != ty_name
+                            || imp.trait_name.as_deref() != Some(trait_name.as_str())
+                            || !impl_args_match(&imp.target_args, &ty_args)
+                        {
+                            continue;
+                        }
+                        let mut bound_params = HashMap::new();
+                        super::env::bind_impl_params(
+                            &imp.target_generic_args,
+                            &ty_args,
+                            &mut bound_params,
+                        );
+                        let isubs: HashMap<String, SubstValue> = bound_params
+                            .into_iter()
+                            .map(|(k, v)| (k, SubstValue::Type(v)))
+                            .collect();
+                        offered.push(
+                            imp.trait_args
+                                .iter()
+                                .map(|t| substitute_type_params(t, &isubs))
+                                .collect(),
+                        );
+                    }
+                    // Only a type whose every impl is concrete can be said
+                    // to take none of these arguments.
+                    let decidable = !offered.is_empty()
+                        && offered
+                            .iter()
+                            .flatten()
+                            .all(|t| type_is_fully_concrete(t) && !contains_type_param(t));
+                    let offered: Vec<Vec<Type>> = offered
+                        .iter()
+                        .map(|a| a.iter().map(|t| self.read_as_value(t)).collect())
+                        .collect();
+                    if decidable && !offered.contains(&want) {
+                        let render =
+                            |v: &[Type]| v.iter().map(type_display).collect::<Vec<_>>().join(", ");
+                        let have = offered
+                            .iter()
+                            .map(|a| format!("`{trait_name}[{}]`", render(a)))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        self.type_error(
+                            format!(
+                                "trait bound `{}: {}[{}]` is not satisfied; `{}` implements {}, \
+                                 not `{}[{}]`",
+                                type_name,
+                                trait_name,
+                                render(&want),
+                                type_display(&concrete),
+                                have,
+                                trait_name,
+                                render(&want),
+                            ),
+                            d.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// `t` read as a value: a `ref` to a `Copy` type, alone or as a tuple's
+    /// part, is that type.
+    fn read_as_value(&self, t: &Type) -> Type {
+        match t {
+            Type::Ref(inner) | Type::MutRef(inner) if self.is_copy_type_during_check(inner) => {
+                self.read_as_value(inner)
+            }
+            Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| self.read_as_value(t)).collect()),
+            _ => t.clone(),
+        }
     }
 
     /// Walk a where-clause and discharge each `TypeBound { T: Trait, ... }`

@@ -1620,3 +1620,30 @@ fn main() {
         }
     }
 }
+
+/// `collect`'s `C: FromIterator[V]` holds for the collection the context
+/// names: `String` collects `char`s, not `String`s or numbers
+/// (B-2026-10-14-48).
+#[test]
+fn mir_collect_checks_from_iterator_for_the_context_type() {
+    for src in [
+        "fn main() { let w: Vec[String] = [\"ab\".to_string()]; let s: String = w.iter().map(|x| x.to_uppercase()).collect(); println(s); }",
+        "fn main() { let v: Vec[i64] = [1, 2]; let s: String = v.into_iter().collect(); println(s); }",
+    ] {
+        let err = karac::mir::lower::build_source(src).err().expect("refused");
+        assert!(err.contains("FromIterator"), "{err}");
+    }
+    const SRC: &str = r#"
+fn main() {
+    let s = "hi";
+    let up: String = s.chars().map(|c| c.to_ascii_uppercase()).collect();
+    let v: Vec[i64] = [3, 1, 3];
+    let w: Vec[i64] = v.iter().map(|x| x * 2).collect();
+    let st: Set[i64] = v.iter().map(|x| x).collect();
+    let m: Map[i64, i64] = v.iter().map(|x| (x, x + 1)).collect();
+    println(f"{up} {w.len()} {st.len()} {m.len()}");
+}
+"#;
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, "HI 3 2 2\n");
+}
