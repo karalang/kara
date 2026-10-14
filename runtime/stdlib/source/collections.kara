@@ -63,6 +63,27 @@ impl[T] Slice[T] {
     }
 }
 
+impl Slice[String] {
+    /// The texts, with `sep` between each adjacent pair (B-2026-10-14-4).
+    fn join(self, sep: Str) -> String {
+        let mut out = String.new();
+        let mut first = true;
+        for x in self.iter() {
+            if not first {
+                out.push_str(sep);
+            }
+            first = false;
+            out.push_str(x);
+        }
+        out
+    }
+
+    /// The texts, with nothing between.
+    fn concat(self) -> String {
+        self.join("")
+    }
+}
+
 /// The elements of a `Vec`, front to back, each moved out. `front` holds
 /// the next ones reversed, so `pop` takes the first; `back` holds the last
 /// ones in order, so `pop` takes the last. Each side refills from the other

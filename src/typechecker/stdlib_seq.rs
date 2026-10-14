@@ -1541,6 +1541,37 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Error
             }
+            // `join` / `concat` of a `Slice[String]` are the library's
+            // (runtime/stdlib/source/collections.kara), which the MIR
+            // pipeline types from source; a check without the library
+            // gives them the same signatures (B-2026-10-14-4).
+            "join" | "concat" if matches!(elem, Type::Str) => {
+                let want = usize::from(method == "join");
+                if args.len() != want {
+                    self.type_error(
+                        format!(
+                            "Slice.{method}() expects {want} argument(s), found {}",
+                            args.len()
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                for a in args {
+                    let t = self.infer_expr(&a.value);
+                    if !is_str_like(&t) {
+                        self.type_error(
+                            format!(
+                                "'join' expects a String or Str separator, found '{}'",
+                                type_display(&t)
+                            ),
+                            a.value.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Str
+            }
             _ => self.require_known_method(
                 "Slice",
                 method,

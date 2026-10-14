@@ -53301,3 +53301,17 @@ fn main() {{
         );
     }
 }
+
+// B-2026-10-14-4 — `karac check` gives a `Slice[String]` the library's
+// `join` / `concat`, with a literal or a `Str` separator.
+#[test]
+fn string_slice_join_and_concat_check() {
+    typecheck_ok(
+        r#"fn main() {
+    let parts: Vec[String] = vec![String.from("a"), String.from("b")];
+    let sep = String.from("-");
+    println(f"{parts[1..].join("/")} {parts.as_slice().concat()} {parts[..].join(sep.as_str())}");
+}
+"#,
+    );
+}

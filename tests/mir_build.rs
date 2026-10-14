@@ -1070,3 +1070,31 @@ fn mir_text_methods_read_a_ref_char() {
         }
     }
 }
+
+// B-2026-10-14-4 — `join` and `concat` reach a `Slice[String]` (a range
+// index, `as_slice()`), with a literal or a `Str` separator, as they reach
+// a `Vec[String]`.
+#[test]
+fn mir_join_and_concat_of_a_string_slice() {
+    const SRC: &str = r#"fn main() {
+    let parts: Vec[String] = vec![String.from("a"), String.from("b"), String.from("c")];
+    let rest = parts[1..].join("/");
+    println(f"{rest}");
+    println(parts.as_slice().join(", "));
+    println(parts[1..].concat());
+    let sep = String.from("-");
+    println(parts[..2].join(sep.as_str()));
+    println(parts.join("|"));
+    let empty: Vec[String] = Vec.new();
+    println(f"[{empty[..].join(",")}]");
+}
+"#;
+    let want = "b/c\na, b, c\nbc\na-b\na|b|c\n[]\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
