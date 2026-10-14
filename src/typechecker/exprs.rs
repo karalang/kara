@@ -121,6 +121,11 @@ fn tuple_index_parts(index: &Expr) -> Vec<Option<&Expr>> {
 /// own name — after which `T` could not be inferred at all
 /// (`let b = Boxed { v: Some("x".to_string()) }`). Reuses the existing
 /// `contains_type_param` from the types module. B-2026-08-05-25.
+/// A zero-argument `.collect()`: its target is whatever the context names.
+pub(super) fn is_bare_collect(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::MethodCall { method, args, .. } if method == "collect" && args.is_empty())
+}
+
 pub(super) fn expectation_is_concrete(t: &Type) -> bool {
     !contains_type_var(t) && !contains_type_param(t)
 }
@@ -1455,6 +1460,9 @@ impl<'a> super::TypeChecker<'a> {
                                 e.kind,
                                 ExprKind::Identifier(_) | ExprKind::FieldAccess { .. }
                             ))
+                        // B-2026-10-14-19 — the library's `collect()` is
+                        // generic in its target, which only the slot names.
+                        || (library && is_bare_collect(e))
                 };
                 if elems
                     .iter()

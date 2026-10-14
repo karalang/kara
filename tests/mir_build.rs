@@ -1259,3 +1259,27 @@ fn mir_map_closure_collect_takes_the_outer_element_type() {
         }
     }
 }
+
+/// B-2026-10-14-19 — a `collect()` that is an element of a tuple literal
+/// takes its target from the tuple's slot, written on a `let` or named by
+/// the `Vec` it is pushed into.
+#[test]
+fn mir_collect_in_a_tuple_literal_takes_the_slot_type() {
+    const SRC: &str = r#"fn main() {
+    let s = "abc".to_string();
+    let t: (Vec[char], i64) = (s.chars().collect(), 1);
+    let mut pairs: Vec[(Vec[char], i64)] = Vec.new();
+    pairs.push((s.chars().collect(), 2));
+    let u: (String, i64) = (s.chars().rev().collect(), 3);
+    println(f"{t.0.len()} {pairs[0].0.len()} {pairs[0].1} {u.0} {u.1}");
+}
+"#;
+    let want = "3 3 2 cba 3\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

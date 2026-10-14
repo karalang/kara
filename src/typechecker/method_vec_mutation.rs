@@ -136,6 +136,12 @@ impl<'a> super::TypeChecker<'a> {
                     ExprKind::MethodCall { method, args, .. } => {
                         self.library_methods_from_source && method == "collect" && args.is_empty()
                     }
+                    // B-2026-10-14-19 — and a tuple literal holding one.
+                    ExprKind::Tuple(es) => {
+                        self.library_methods_from_source
+                            && matches!(&elem, Type::Tuple(_))
+                            && es.iter().any(super::exprs::is_bare_collect)
+                    }
                     _ => false,
                 };
                 // B-2026-10-14-10 — a tuple literal into a slot with a `ref`
