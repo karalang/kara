@@ -1,0 +1,415 @@
+// LeetCode #558: differential -- the four arms against the definition.
+//
+// Copies of the four arms, the tree type defined once, each held to five
+// properties on random pairs of grids.
+
+shared enum Quad {
+    Leaf(bool),
+    Split(Quad, Quad, Quad, Quad),
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn intersect_star(a: Quad, b: Quad) -> Quad {
+    match a {
+        Quad.Leaf(v) => {
+            if v { a } else { b }
+        }
+        Quad.Split(a1, a2, a3, a4) => match b {
+            Quad.Leaf(w) => {
+                if w { b } else { a }
+            }
+            Quad.Split(b1, b2, b3, b4) => {
+                let top_left = intersect_star(a1, b1);
+                let top_right = intersect_star(a2, b2);
+                let bottom_left = intersect_star(a3, b3);
+                let bottom_right = intersect_star(a4, b4);
+                match (top_left, top_right, bottom_left, bottom_right) {
+                    (Quad.Leaf(p), Quad.Leaf(q), Quad.Leaf(r), Quad.Leaf(s)) => {
+                        if p == q and q == r and r == s {
+                            return Quad.Leaf(p);
+                        }
+                    }
+                    _ => {}
+                }
+                Quad.Split(top_left, top_right, bottom_left, bottom_right)
+            }
+        },
+    }
+}
+
+// ---- pair arm ----------------------------------------------------------
+
+fn intersect_pair(a: Quad, b: Quad) -> Quad {
+    match (a, b) {
+        (Quad.Leaf(true), _) => a,
+        (Quad.Leaf(false), _) => b,
+        (_, Quad.Leaf(true)) => b,
+        (_, Quad.Leaf(false)) => a,
+        (Quad.Split(a1, a2, a3, a4), Quad.Split(b1, b2, b3, b4)) => {
+            let parts = vec![intersect_pair(a1, b1), intersect_pair(a2, b2), intersect_pair(a3, b3), intersect_pair(a4, b4)];
+            match (parts[0], parts[1], parts[2], parts[3]) {
+                (Quad.Leaf(p), Quad.Leaf(q), Quad.Leaf(r), Quad.Leaf(s)) if p == q and q == r and r == s => {
+                    Quad.Leaf(p)
+                }
+                _ => Quad.Split(parts[0], parts[1], parts[2], parts[3]),
+            }
+        }
+    }
+}
+
+// ---- node arm ----------------------------------------------------------
+
+shared struct Node {
+    is_leaf: bool,
+    val: bool,
+    top_left: Option[Node],
+    top_right: Option[Node],
+    bottom_left: Option[Node],
+    bottom_right: Option[Node],
+}
+
+fn leaf(val: bool) -> Node {
+    Node { is_leaf: true, val: val, top_left: None, top_right: None, bottom_left: None, bottom_right: None }
+}
+
+fn or_nodes(a: Node, b: Node) -> Node {
+    if a.is_leaf {
+        return if a.val { a } else { b };
+    }
+    if b.is_leaf {
+        return if b.val { b } else { a };
+    }
+    let top_left = or_nodes(a.top_left.unwrap(), b.top_left.unwrap());
+    let top_right = or_nodes(a.top_right.unwrap(), b.top_right.unwrap());
+    let bottom_left = or_nodes(a.bottom_left.unwrap(), b.bottom_left.unwrap());
+    let bottom_right = or_nodes(a.bottom_right.unwrap(), b.bottom_right.unwrap());
+    if top_left.is_leaf and top_right.is_leaf and bottom_left.is_leaf and bottom_right.is_leaf
+        and top_left.val == top_right.val and top_right.val == bottom_left.val
+        and bottom_left.val == bottom_right.val {
+        return leaf(top_left.val);
+    }
+    Node {
+        is_leaf: false,
+        val: true,
+        top_left: Some(top_left),
+        top_right: Some(top_right),
+        bottom_left: Some(bottom_left),
+        bottom_right: Some(bottom_right),
+    }
+}
+
+fn to_node(q: Quad) -> Node {
+    match q {
+        Quad.Leaf(v) => leaf(v),
+        Quad.Split(a, b, c, d) => Node {
+            is_leaf: false,
+            val: true,
+            top_left: Some(to_node(a)),
+            top_right: Some(to_node(b)),
+            bottom_left: Some(to_node(c)),
+            bottom_right: Some(to_node(d)),
+        },
+    }
+}
+
+fn to_quad(n: Node) -> Quad {
+    if n.is_leaf {
+        return Quad.Leaf(n.val);
+    }
+    Quad.Split(
+        to_quad(n.top_left.unwrap()),
+        to_quad(n.top_right.unwrap()),
+        to_quad(n.bottom_left.unwrap()),
+        to_quad(n.bottom_right.unwrap()),
+    )
+}
+
+fn intersect_node(a: Quad, b: Quad) -> Quad {
+    to_quad(or_nodes(to_node(a), to_node(b)))
+}
+
+// ---- grid arm ----------------------------------------------------------
+
+fn depth(q: Quad) -> i64 {
+    match q {
+        Quad.Leaf(_) => 0,
+        Quad.Split(a, b, c, d) => 1 + depth(a).max(depth(b)).max(depth(c)).max(depth(d)),
+    }
+}
+
+fn paint(q: Quad, grid: mut ref Vec[Vec[bool]], row: i64, col: i64, size: i64) {
+    match q {
+        Quad.Leaf(v) => {
+            for r in row..row + size {
+                for c in col..col + size {
+                    grid[r][c] = v;
+                }
+            }
+        }
+        Quad.Split(a, b, c, d) => {
+            let half = size / 2;
+            paint(a, grid, row, col, half);
+            paint(b, grid, row, col + half, half);
+            paint(c, grid, row + half, col, half);
+            paint(d, grid, row + half, col + half, half);
+        }
+    }
+}
+
+fn intersect_grid(a: Quad, b: Quad) -> Quad {
+    let n = 1 << depth(a).max(depth(b));
+    let mut one = vec![vec![false; n]; n];
+    let mut two = vec![vec![false; n]; n];
+    paint(a, mut one, 0, 0, n);
+    paint(b, mut two, 0, 0, n);
+    // Level 0: one leaf per cell, ORed.
+    let mut level: Vec[Vec[Quad]] = Vec.new();
+    for r in 0..n {
+        let mut row: Vec[Quad] = Vec.new();
+        for c in 0..n {
+            row.push(Quad.Leaf(one[r][c] or two[r][c]));
+        }
+        level.push(row);
+    }
+    // Each pass merges every 2 by 2 block of nodes into one.
+    let mut side = n;
+    while side > 1 {
+        side /= 2;
+        let mut next: Vec[Vec[Quad]] = Vec.new();
+        for r in 0..side {
+            let mut row: Vec[Quad] = Vec.new();
+            for c in 0..side {
+                let tl = level[2 * r][2 * c].clone();
+                let tr = level[2 * r][2 * c + 1].clone();
+                let bl = level[2 * r + 1][2 * c].clone();
+                let br = level[2 * r + 1][2 * c + 1].clone();
+                let merged = match (tl, tr, bl, br) {
+                    (Quad.Leaf(p), Quad.Leaf(q), Quad.Leaf(s), Quad.Leaf(t)) if p == q and q == s and s == t => {
+                        Some(Quad.Leaf(p))
+                    }
+                    _ => None,
+                };
+                row.push(merged.unwrap_or(Quad.Split(tl, tr, bl, br)));
+            }
+            next.push(row);
+        }
+        level = next;
+    }
+    level[0][0].clone()
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn build(grid: Vec[Vec[i64]], row: i64, col: i64, size: i64) -> Quad {
+    if size == 1 {
+        return Quad.Leaf(grid[row][col] == 1);
+    }
+    let half = size / 2;
+    let top_left = build(grid, row, col, half);
+    let top_right = build(grid, row, col + half, half);
+    let bottom_left = build(grid, row + half, col, half);
+    let bottom_right = build(grid, row + half, col + half, half);
+    match (top_left, top_right, bottom_left, bottom_right) {
+        (Quad.Leaf(a), Quad.Leaf(b), Quad.Leaf(c), Quad.Leaf(d)) => {
+            if a == b and b == c and c == d {
+                return Quad.Leaf(a);
+            }
+        }
+        _ => {}
+    }
+    Quad.Split(top_left, top_right, bottom_left, bottom_right)
+}
+
+fn construct(grid: Vec[Vec[i64]]) -> Quad {
+    build(grid, 0, 0, grid.len())
+}
+
+fn serialize(root: Quad) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut queue: Vec[Option[Quad]] = vec![Some(root.clone())];
+    let mut at = 0;
+    while at < queue.len() {
+        let item = queue[at].clone();
+        at += 1;
+        match item {
+            Some(Quad.Leaf(v)) => {
+                let bit = if v { 1 } else { 0 };
+                parts.push(f"[1,{bit}]");
+                for _ in 0..4 {
+                    queue.push(None);
+                }
+            }
+            Some(Quad.Split(a, b, c, d)) => {
+                parts.push("[0,1]".to_string());
+                queue.push(Some(a));
+                queue.push(Some(b));
+                queue.push(Some(c));
+                queue.push(Some(d));
+            }
+            None => {
+                parts.push("null".to_string());
+            }
+        }
+    }
+    while parts.len() > 0 and parts[parts.len() - 1] == "null" {
+        parts.pop();
+    }
+    f"[{parts.join(",")}]"
+}
+
+// The definition: OR the two grids cell by cell and build the tree of
+// the result.
+fn definition(one: Vec[Vec[i64]], two: Vec[Vec[i64]]) -> Quad {
+    let n = one.len();
+    let mut grid = vec![vec![0; n]; n];
+    for r in 0..n {
+        for c in 0..n {
+            grid[r][c] = if one[r][c] == 1 or two[r][c] == 1 { 1 } else { 0 };
+        }
+    }
+    construct(grid)
+}
+
+// The cells a tree stands for, at side n.
+fn fill(q: Quad, grid: mut ref Vec[Vec[i64]], row: i64, col: i64, size: i64) {
+    match q {
+        Quad.Leaf(v) => {
+            for r in row..row + size {
+                for c in col..col + size {
+                    grid[r][c] = if v { 1 } else { 0 };
+                }
+            }
+        }
+        Quad.Split(a, b, c, d) => {
+            let half = size / 2;
+            if half > 0 {
+                fill(a, grid, row, col, half);
+                fill(b, grid, row, col + half, half);
+                fill(c, grid, row + half, col, half);
+                fill(d, grid, row + half, col + half, half);
+            }
+        }
+    }
+}
+
+fn cells(q: Quad, n: i64) -> Vec[Vec[i64]] {
+    let mut grid = vec![vec![-1; n]; n];
+    fill(q, mut grid, 0, 0, n);
+    grid
+}
+
+// No split has four leaves of one value under it.
+fn canonical(q: Quad) -> bool {
+    match q {
+        Quad.Leaf(_) => true,
+        Quad.Split(a, b, c, d) => {
+            match (a, b, c, d) {
+                (Quad.Leaf(p), Quad.Leaf(r), Quad.Leaf(s), Quad.Leaf(t)) => {
+                    if p == r and r == s and s == t {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+            canonical(a) and canonical(b) and canonical(c) and canonical(d)
+        }
+    }
+}
+
+fn answer(which: i64, a: Quad, b: Quad) -> Quad {
+    if which == 0 {
+        intersect_star(a, b)
+    } else if which == 1 {
+        intersect_pair(a, b)
+    } else if which == 2 {
+        intersect_node(a, b)
+    } else {
+        intersect_grid(a, b)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_grid(n: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut block = 1;
+    let mut j = step(seed) % 7;
+    while j > 0 and block < n {
+        block *= 2;
+        j -= 1;
+    }
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        grid.push(vec![0; n]);
+    }
+    for br in 0..n / block {
+        for bc in 0..n / block {
+            let v = step(seed) % 2;
+            for r in 0..block {
+                for c in 0..block {
+                    grid[br * block + r][bc * block + c] = v;
+                }
+            }
+        }
+    }
+    let flips = step(seed) % 4;
+    for _ in 0..flips {
+        let r = step(seed) % n;
+        let c = step(seed) % n;
+        grid[r][c] = 1 - grid[r][c];
+    }
+    grid
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5580;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // Two random grids of side 1 to 32; every fourth case, one grid
+        // twice.
+        let n = 1 << (step(mut seed) % 6);
+        let one = random_grid(n, mut seed);
+        let two = if t % 4 == 3 { one.clone() } else { random_grid(n, mut seed) };
+        let want = serialize(definition(one.clone(), two.clone()));
+        let mut ored = vec![vec![0; n]; n];
+        for r in 0..n {
+            for c in 0..n {
+                ored[r][c] = if one[r][c] == 1 or two[r][c] == 1 { 1 } else { 0 };
+            }
+        }
+        let a = construct(one);
+        let b = construct(two);
+        for which in 0..4 {
+            let got = answer(which, a, b);
+            let text = serialize(got);
+            let ok = vec![
+                // P1: the definition's tree.
+                text == want,
+                // P2: no split that should have merged.
+                canonical(got),
+                // P3: the cells are the ORed cells.
+                cells(got, n) == ored,
+                // P4: the order of the trees does not matter.
+                serialize(answer(which, b, a)) == text,
+                // P5: ORing the first tree in again changes nothing.
+                serialize(answer(which, got, a)) == text,
+            ];
+            for k in 0..5 {
+                checks += 1;
+                if not ok[k] {
+                    failures[k] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

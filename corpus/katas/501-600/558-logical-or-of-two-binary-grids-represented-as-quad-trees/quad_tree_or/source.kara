@@ -1,0 +1,208 @@
+// LeetCode #558: Logical OR of Two Binary Grids Represented as
+// Quad-Trees -- recursion, then a merge.
+//
+// A leaf of 1 covers its region whatever the other tree holds there,
+// and a leaf of 0 leaves the other tree's region as it is. Only where
+// both trees split is there work: the four quarters are ORed in turn,
+// and four leaves of one value that come back merge into one leaf.
+// Each node of the two trees is visited at most once: O(nodes).
+//
+// The tree is a `shared enum`, as in kata 427: a region is either a
+// leaf with its value or a split into four quarters (top left, top
+// right, bottom left, bottom right).
+
+shared enum Quad {
+    Leaf(bool),
+    Split(Quad, Quad, Quad, Quad),
+}
+
+fn intersect(a: Quad, b: Quad) -> Quad {
+    match a {
+        Quad.Leaf(v) => {
+            if v { a } else { b }
+        }
+        Quad.Split(a1, a2, a3, a4) => match b {
+            Quad.Leaf(w) => {
+                if w { b } else { a }
+            }
+            Quad.Split(b1, b2, b3, b4) => {
+                let top_left = intersect(a1, b1);
+                let top_right = intersect(a2, b2);
+                let bottom_left = intersect(a3, b3);
+                let bottom_right = intersect(a4, b4);
+                match (top_left, top_right, bottom_left, bottom_right) {
+                    (Quad.Leaf(p), Quad.Leaf(q), Quad.Leaf(r), Quad.Leaf(s)) => {
+                        if p == q and q == r and r == s {
+                            return Quad.Leaf(p);
+                        }
+                    }
+                    _ => {}
+                }
+                Quad.Split(top_left, top_right, bottom_left, bottom_right)
+            }
+        },
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+// Kata 427's construction: build the four quarters, and merge four
+// leaves of one value into one.
+fn build(grid: Vec[Vec[i64]], row: i64, col: i64, size: i64) -> Quad {
+    if size == 1 {
+        return Quad.Leaf(grid[row][col] == 1);
+    }
+    let half = size / 2;
+    let top_left = build(grid, row, col, half);
+    let top_right = build(grid, row, col + half, half);
+    let bottom_left = build(grid, row + half, col, half);
+    let bottom_right = build(grid, row + half, col + half, half);
+    match (top_left, top_right, bottom_left, bottom_right) {
+        (Quad.Leaf(a), Quad.Leaf(b), Quad.Leaf(c), Quad.Leaf(d)) => {
+            if a == b and b == c and c == d {
+                return Quad.Leaf(a);
+            }
+        }
+        _ => {}
+    }
+    Quad.Split(top_left, top_right, bottom_left, bottom_right)
+}
+
+fn construct(grid: Vec[Vec[i64]]) -> Quad {
+    build(grid, 0, 0, grid.len())
+}
+
+// LeetCode's serialization: breadth first, each node as [isLeaf,val]
+// (a split shows val 1), a leaf followed by four nulls for its missing
+// children, and the trailing nulls dropped.
+fn serialize(root: Quad) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut queue: Vec[Option[Quad]] = vec![Some(root.clone())];
+    let mut at = 0;
+    while at < queue.len() {
+        let item = queue[at].clone();
+        at += 1;
+        match item {
+            Some(Quad.Leaf(v)) => {
+                let bit = if v { 1 } else { 0 };
+                parts.push(f"[1,{bit}]");
+                for _ in 0..4 {
+                    queue.push(None);
+                }
+            }
+            Some(Quad.Split(a, b, c, d)) => {
+                parts.push("[0,1]".to_string());
+                queue.push(Some(a));
+                queue.push(Some(b));
+                queue.push(Some(c));
+                queue.push(Some(d));
+            }
+            None => {
+                parts.push("null".to_string());
+            }
+        }
+    }
+    while parts.len() > 0 and parts[parts.len() - 1] == "null" {
+        parts.pop();
+    }
+    f"[{parts.join(",")}]"
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random n by n grid with structure for the tree to find: blocks of
+// a random power-of-two size, each all 0 or all 1, then a few cells
+// flipped.
+fn random_grid(n: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut block = 1;
+    let mut j = step(seed) % 7;
+    while j > 0 and block < n {
+        block *= 2;
+        j -= 1;
+    }
+    let mut grid: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        grid.push(vec![0; n]);
+    }
+    for br in 0..n / block {
+        for bc in 0..n / block {
+            let v = step(seed) % 2;
+            for r in 0..block {
+                for c in 0..block {
+                    grid[br * block + r][bc * block + c] = v;
+                }
+            }
+        }
+    }
+    let flips = step(seed) % 4;
+    for _ in 0..flips {
+        let r = step(seed) % n;
+        let c = step(seed) % n;
+        grid[r][c] = 1 - grid[r][c];
+    }
+    grid
+}
+
+fn show(one: Vec[Vec[i64]], two: Vec[Vec[i64]]) {
+    println(serialize(intersect(construct(one), construct(two))));
+}
+
+fn main() {
+    // The two LeetCode examples, as the grids their trees stand for.
+    show(
+        vec![vec![1, 1, 1, 1], vec![1, 1, 1, 1], vec![0, 0, 0, 0], vec![0, 0, 0, 0]],
+        vec![vec![1, 1, 0, 0], vec![1, 1, 1, 1], vec![1, 1, 0, 0], vec![1, 1, 0, 0]],
+    );
+    show(vec![vec![0]], vec![vec![0]]);
+    let board = vec![vec![0, 1, 0, 1], vec![1, 0, 1, 0], vec![0, 1, 0, 1], vec![1, 0, 1, 0]];
+    let other = vec![vec![1, 0, 1, 0], vec![0, 1, 0, 1], vec![1, 0, 1, 0], vec![0, 1, 0, 1]];
+    // A leaf of 1 against a checkerboard, and a leaf of 0.
+    show(vec![vec![1; 4]; 4], board.clone());
+    show(board.clone(), vec![vec![0; 4]; 4]);
+    // A checkerboard and its complement: every split merges back up.
+    show(board.clone(), other);
+    // Two cells, one in each grid.
+    show(vec![vec![1, 0], vec![0, 0]], vec![vec![0, 0], vec![0, 1]]);
+    // Kata 427's second example ORed with itself.
+    let blocks = vec![
+        vec![1, 1, 1, 1, 0, 0, 0, 0],
+        vec![1, 1, 1, 1, 0, 0, 0, 0],
+        vec![1, 1, 1, 1, 1, 1, 1, 1],
+        vec![1, 1, 1, 1, 1, 1, 1, 1],
+        vec![1, 1, 1, 1, 0, 0, 0, 0],
+        vec![1, 1, 1, 1, 0, 0, 0, 0],
+        vec![1, 1, 1, 1, 0, 0, 0, 0],
+        vec![1, 1, 1, 1, 0, 0, 0, 0],
+    ];
+    show(blocks.clone(), blocks);
+    // 64 by 64, one 1 in each grid, side by side: a split at every
+    // level down to them.
+    let mut left: Vec[Vec[i64]] = vec![vec![0; 64]; 64];
+    let mut right: Vec[Vec[i64]] = vec![vec![0; 64]; 64];
+    left[37][22] = 1;
+    right[37][23] = 1;
+    show(left, right);
+    // 300 random pairs of grids of sides 1 to 64.
+    let mut seed: i64 = 558;
+    let mut nodes = 0;
+    let mut leaves = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 << (step(mut seed) % 7);
+        let one = random_grid(n, mut seed);
+        let two = random_grid(n, mut seed);
+        let text = serialize(intersect(construct(one), construct(two)));
+        for b in text.bytes() {
+            checksum = (checksum * 31 + b as i64) % 1000000007;
+            if b == b'[' {
+                nodes += 1;
+            }
+        }
+        leaves += text.split("[1,").len() - 1;
+    }
+    // The outer bracket of each list is counted as a node above.
+    println(f"300 random pairs: {nodes - 300} nodes, {leaves} leaves, checksum {checksum}");
+}

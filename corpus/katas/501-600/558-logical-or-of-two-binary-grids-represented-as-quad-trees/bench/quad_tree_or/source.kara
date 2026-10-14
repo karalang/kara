@@ -1,0 +1,117 @@
+// Benchmark for #558: Logical OR of Two Binary Grids Represented as
+// Quad-Trees -- the ★ arm (recursion, then a merge).
+//
+// A leaf of 1 wins, a leaf of 0 gives the other tree, and two splits are
+// ORed quarter by quarter, four leaves of one value merging into one.
+// O(nodes). The tree is a `shared enum`, so the answer shares the
+// subtrees it keeps with the two trees it came from.
+
+shared enum Quad {
+    Leaf(bool),
+    Split(Quad, Quad, Quad, Quad),
+}
+
+fn intersect(a: Quad, b: Quad) -> Quad {
+    match a {
+        Quad.Leaf(v) => {
+            if v { a } else { b }
+        }
+        Quad.Split(a1, a2, a3, a4) => match b {
+            Quad.Leaf(w) => {
+                if w { b } else { a }
+            }
+            Quad.Split(b1, b2, b3, b4) => {
+                let top_left = intersect(a1, b1);
+                let top_right = intersect(a2, b2);
+                let bottom_left = intersect(a3, b3);
+                let bottom_right = intersect(a4, b4);
+                match (top_left, top_right, bottom_left, bottom_right) {
+                    (Quad.Leaf(p), Quad.Leaf(q), Quad.Leaf(r), Quad.Leaf(s)) => {
+                        if p == q and q == r and r == s {
+                            return Quad.Leaf(p);
+                        }
+                    }
+                    _ => {}
+                }
+                Quad.Split(top_left, top_right, bottom_left, bottom_right)
+            }
+        },
+    }
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn build(grid: Vec[Vec[i64]], row: i64, col: i64, size: i64) -> Quad {
+    if size == 1 {
+        return Quad.Leaf(grid[row][col] == 1);
+    }
+    let half = size / 2;
+    let top_left = build(grid, row, col, half);
+    let top_right = build(grid, row, col + half, half);
+    let bottom_left = build(grid, row + half, col, half);
+    let bottom_right = build(grid, row + half, col + half, half);
+    match (top_left, top_right, bottom_left, bottom_right) {
+        (Quad.Leaf(a), Quad.Leaf(b), Quad.Leaf(c), Quad.Leaf(d)) => {
+            if a == b and b == c and c == d {
+                return Quad.Leaf(a);
+            }
+        }
+        _ => {}
+    }
+    Quad.Split(top_left, top_right, bottom_left, bottom_right)
+}
+
+fn count(q: Quad) -> i64 {
+    match q {
+        Quad.Leaf(_) => 1,
+        Quad.Split(a, b, c, d) => 1 + count(a) + count(b) + count(c) + count(d),
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 200 random 64 by 64 grids, each painted with blocks of a random
+    // power-of-two side and then 40 cells flipped, turned into trees
+    // once. Then 300 times over, every tree is ORed with another and
+    // the answer's nodes counted.
+    let n = 64;
+    let count_trees = 200;
+    let rounds = 300;
+    let mut seed: i64 = 558;
+    let mut trees: Vec[Quad] = Vec.new();
+    for _ in 0..count_trees {
+        let block = 1 << (step(mut seed) % 5);
+        let mut grid = vec![vec![0; n]; n];
+        for br in 0..n / block {
+            for bc in 0..n / block {
+                let v = if step(mut seed) % 3 == 0 { 1 } else { 0 };
+                for r in 0..block {
+                    for c in 0..block {
+                        grid[br * block + r][bc * block + c] = v;
+                    }
+                }
+            }
+        }
+        for _ in 0..40 {
+            let r = step(mut seed) % n;
+            let c = step(mut seed) % n;
+            grid[r][c] = 1 - grid[r][c];
+        }
+        trees.push(build(grid, 0, 0, n));
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for i in 0..count_trees {
+            let other = (i * 7 + round + 1) % count_trees;
+            let nodes = count(intersect(trees[i], trees[other]));
+            total += nodes;
+            checksum = (checksum * 31 + nodes) % 1000000007;
+        }
+    }
+    println(f"{count_trees} trees, {rounds} rounds: {total} nodes, checksum {checksum}");
+}

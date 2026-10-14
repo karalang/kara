@@ -1,0 +1,16 @@
+source = "kara-katas/leetcode/501-600/558-logical-or-of-two-binary-grids-represented-as-quad-trees/bench/quad_tree_or.kara"
+dedup_of = []
+expect = "skip"
+exit = 0
+tags = ["needs-driver", "shared", "bench"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = -1
+rules = []
+backends = []
+env = {}
+note = "legacy run timed out after 60s"
+bucket = "skip:legacy run timed out after 60s"
+classified_with = "5b82548ad"
+extracted_src = "94c81f27"
