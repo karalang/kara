@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/560-subarray-sum-equals-k/subarray_sum_prefix.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "136e21850"
+extracted_src = "a04c39ad"
+model_rev = "1aa23105"
+model_src = "a04c39ad"

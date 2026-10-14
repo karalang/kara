@@ -1,0 +1,171 @@
+// LeetCode #560: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// arrays.
+
+// ---- star arm ----------------------------------------------------------
+
+fn subarray_sum_star(nums: Vec[i64], k: i64) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    seen.insert(0, 1);
+    let mut sum = 0;
+    let mut count = 0;
+    for x in nums {
+        sum += x;
+        count += seen.get(sum - k) ?? 0;
+        seen[sum] = (seen.get(sum) ?? 0) + 1;
+    }
+    count
+}
+
+// ---- brute arm ---------------------------------------------------------
+
+fn subarray_sum_brute(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut count = 0;
+    for i in 0..n {
+        let mut sum = 0;
+        for j in i..n {
+            sum += nums[j];
+            if sum == k {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// ---- prefix arm --------------------------------------------------------
+
+fn subarray_sum_prefix(nums: Vec[i64], k: i64) -> i64 {
+    let mut prefix = vec![0];
+    for x in nums {
+        prefix.push(prefix[prefix.len() - 1] + x);
+    }
+    let mut count = 0;
+    for j in 1..prefix.len() {
+        for i in 0..j {
+            if prefix[j] - prefix[i] == k {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// ---- entry arm ---------------------------------------------------------
+
+fn subarray_sum_entry(nums: Vec[i64], k: i64) -> i64 {
+    let mut seen: SortedMap[i64, i64] = SortedMap.new();
+    seen.insert(0, 1);
+    let mut sum = 0;
+    let mut count = 0;
+    for x in nums {
+        sum += x;
+        if let Some(c) = seen.get(sum - k) {
+            count += c;
+        }
+        *seen.entry(sum).or_insert(0) += 1;
+    }
+    count
+}
+
+// ---- the definition and the properties ------------------------------------
+
+// The definition: every subarray, summed from scratch.
+fn definition(nums: Vec[i64], k: i64) -> i64 {
+    let n = nums.len();
+    let mut count = 0;
+    for i in 0..n {
+        for j in i..n {
+            let mut sum = 0;
+            for t in i..j + 1 {
+                sum += nums[t];
+            }
+            if sum == k {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn answer(which: i64, nums: Vec[i64], k: i64) -> i64 {
+    if which == 0 {
+        subarray_sum_star(nums, k)
+    } else if which == 1 {
+        subarray_sum_brute(nums, k)
+    } else if which == 2 {
+        subarray_sum_prefix(nums, k)
+    } else {
+        subarray_sum_entry(nums, k)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5600;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 25 elements: in -3..3 with k in -4..4, or in -1000..1000
+        // with k a sum that some subarray has, in turn.
+        let n = 1 + step(mut seed) % 25;
+        let small = t % 2 == 0;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(if small { step(mut seed) % 7 - 3 } else { step(mut seed) % 2001 - 1000 });
+        }
+        let k = if small {
+            step(mut seed) % 9 - 4
+        } else {
+            let i = step(mut seed) % n;
+            let j = i + step(mut seed) % (n - i);
+            let mut s = 0;
+            for t in i..j + 1 {
+                s += nums[t];
+            }
+            s
+        };
+        let want = definition(nums, k);
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        let mut negated: Vec[i64] = Vec.new();
+        for x in nums {
+            negated.push(-x);
+        }
+        let mut longer = nums.clone();
+        longer.push(step(mut seed) % 7 - 3);
+        for which in 0..4 {
+            let got = answer(which, nums, k);
+            let ok = vec![
+                // P1: the definition's count.
+                got == want,
+                // P2: no more than there are subarrays.
+                got >= 0 and got <= n * (n + 1) / 2,
+                // P3: the array reversed has the same count.
+                answer(which, reversed, k) == got,
+                // P4: the array negated has the same count for -k.
+                answer(which, negated, -k) == got,
+                // P5: one more element at the end loses nothing.
+                answer(which, longer, k) >= got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

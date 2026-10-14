@@ -1,0 +1,55 @@
+// Benchmark for #560: Subarray Sum Equals K -- the ★ arm (prefix sums in
+// a Map).
+//
+// Each prefix sum s ends as many subarrays summing to k as there were
+// earlier prefix sums s - k, counted in a Map as the array is walked.
+// O(n).
+
+fn subarray_sum(nums: Vec[i64], k: i64) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    seen.insert(0, 1);
+    let mut sum = 0;
+    let mut count = 0;
+    for x in nums {
+        sum += x;
+        count += seen.get(sum - k) ?? 0;
+        seen[sum] = (seen.get(sum) ?? 0) + 1;
+    }
+    count
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100 random arrays of 20,000 values in -1000..1000 (the problem's
+    // most), built once. Then 20 times over, every array is answered for
+    // a k drawn from -1000..1000.
+    let count = 100;
+    let n = 20000;
+    let rounds = 20;
+    let mut seed: i64 = 560;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(step(mut seed) % 2001 - 1000);
+        }
+        arrays.push(nums);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let k = step(mut seed) % 2001 - 1000;
+            let c = subarray_sum(arrays[(round * 7 + g) % count], k);
+            total += c;
+            checksum = (checksum * 31 + c) % 1000000007;
+        }
+    }
+    println(f"{count} arrays of {n}, {rounds} rounds: {total} subarrays, checksum {checksum}");
+}

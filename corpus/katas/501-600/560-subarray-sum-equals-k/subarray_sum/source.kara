@@ -1,0 +1,74 @@
+// LeetCode #560: Subarray Sum Equals K -- prefix sums in a Map.
+//
+// A subarray from i to j sums to k exactly when the prefix sum up to j
+// minus the prefix sum before i is k. So walk the array once, keeping
+// how many times each prefix sum has been seen (the empty prefix, 0,
+// once at the start): each new prefix sum s ends as many subarrays
+// summing to k as there were earlier prefix sums s - k. O(n) time and
+// O(n) space.
+
+fn subarray_sum(nums: Vec[i64], k: i64) -> i64 {
+    let mut seen: Map[i64, i64] = Map.new();
+    seen.insert(0, 1);
+    let mut sum = 0;
+    let mut count = 0;
+    for x in nums {
+        sum += x;
+        count += seen.get(sum - k) ?? 0;
+        seen[sum] = (seen.get(sum) ?? 0) + 1;
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], k: i64) {
+    println(f"{nums} k={k}: {subarray_sum(nums, k)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![1, 1, 1], 2);
+    show(vec![1, 2, 3], 3);
+    // One element, equal to k and not.
+    show(vec![5], 5);
+    show(vec![5], -5);
+    // Zeros: every one of the 10 subarrays sums to 0.
+    show(vec![0, 0, 0, 0], 0);
+    // Negatives: sums go down as well as up.
+    show(vec![1, -1, 1, -1], 0);
+    show(vec![-3, 1, 2, -3, 4], -3);
+    // k reached only by the whole array.
+    show(vec![1000, -1, 1000, -1, 1000], 2998);
+    // 300 random arrays of 1 to 40 elements in -5..5, k in -8..8.
+    let mut seed: i64 = 560;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + step(mut seed) % 40;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(step(mut seed) % 11 - 5);
+        }
+        let k = step(mut seed) % 17 - 8;
+        let c = subarray_sum(nums, k);
+        total += c;
+        checksum = (checksum * 31 + c) % 1000000007;
+    }
+    println(f"300 random arrays: {total} subarrays, checksum {checksum}");
+    // 5,000 elements (the problem allows 20,000; this keeps the
+    // quadratic arms quick under the interpreters). All zeros with k = 0
+    // counts every subarray; values of -1000 to 1000 far fewer.
+    let zeros = vec![0; 5000];
+    println(f"5000 zeros, k=0: {subarray_sum(zeros, 0)}");
+    let mut big: Vec[i64] = Vec.new();
+    for _ in 0..5000 {
+        big.push(step(mut seed) % 2001 - 1000);
+    }
+    println(f"5000 values, k=0: {subarray_sum(big, 0)}");
+}
