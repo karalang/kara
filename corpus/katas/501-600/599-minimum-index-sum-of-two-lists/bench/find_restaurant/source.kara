@@ -1,0 +1,100 @@
+// Benchmark for #599: the ★ arm (index the first list in a `Map`, then
+// walk the second); see find_restaurant.kara.
+
+fn find_restaurant(list1: Vec[String], list2: Vec[String]) -> Vec[String] {
+    let mut index: Map[String, i64] = Map.new();
+    for (i, s) in list1.iter().enumerate() {
+        index[s.clone()] = i;
+    }
+    let mut best = list1.len() + list2.len();
+    let mut answer: Vec[String] = Vec.new();
+    for (j, s) in list2.iter().enumerate() {
+        if let Some(i) = index.get(s) {
+            let sum = i + j;
+            if sum < best {
+                best = sum;
+                answer.clear();
+            }
+            if sum == best {
+                answer.push(s.clone());
+            }
+        }
+    }
+    answer
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Spells k in lower-case letters, base 26, the last letter the units,
+// since a name holds only letters and spaces.
+fn spell(k: i64) -> String {
+    let mut out = String.new();
+    let mut n = k;
+    let mut letters: Vec[char] = Vec.new();
+    loop {
+        letters.push(((97 + n % 26) as u8) as char);
+        n = n / 26;
+        if n == 0 {
+            break;
+        }
+    }
+    letters.reverse();
+    for c in letters {
+        out.push(c);
+    }
+    out
+}
+
+fn main() {
+    // A pool of 3,000 names of up to 25 letters and spaces, then 100 pairs of
+    // lists of 1,000 different names each (the problem's longest), drawn
+    // from the pool, made once; then 100 times over each pair is
+    // solved.
+    let count = 100;
+    let rounds = 100;
+    let mut seed: i64 = 599;
+    let mut pool: Vec[String] = Vec.new();
+    for k in 0..3000 {
+        let number = step(mut seed) * 32768 + step(mut seed);
+        pool.push(f"restaurant {spell(k)} at {spell(number)}");
+    }
+    let mut order: Vec[i64] = Vec.new();
+    for k in 0..pool.len() {
+        order.push(k);
+    }
+    let mut pairs: Vec[(Vec[String], Vec[String])] = Vec.new();
+    for _ in 0..count {
+        let mut lists: Vec[Vec[String]] = Vec.new();
+        for _ in 0..2 {
+            let mut list: Vec[String] = Vec.new();
+            for k in 0..1000 {
+                let j = k + step(mut seed) % (pool.len() - k);
+                order.swap(k, j);
+                list.push(pool[order[k]].clone());
+            }
+            lists.push(list);
+        }
+        let second = lists.pop().unwrap();
+        let first = lists.pop().unwrap();
+        pairs.push((first, second));
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let pair = ref pairs[(round * 7 + g) % count];
+            let got = find_restaurant(pair.0, pair.1);
+            total += got.len();
+            for s in got {
+                checksum = (checksum * 31 + s.len()) % 1000000007;
+                checksum = (checksum * 31 + s.bytes()[s.len() - 1] as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"{count} pairs, {rounds} rounds: total {total}, checksum {checksum}");
+}

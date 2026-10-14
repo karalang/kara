@@ -1,0 +1,11 @@
+[Shogun, Tapioca Express, Burger King, KFC] [Piatti, The Grill at Torrey Pines, Hungry Hunter Steakhouse, Shogun] -> [Shogun]
+[Shogun, Tapioca Express, Burger King, KFC] [KFC, Shogun, Burger King] -> [Shogun]
+[happy, sad, good] [sad, happy, good] -> [happy, sad]
+[A] [A] -> [A]
+[a, b, c, d] [d, c, b, a] -> [a, b, c, d]
+[x, y, z] [p, q, z] -> [z]
+[KFC, kfc, Kfc] [kFC, Kfc] -> [Kfc]
+[m, n, o, p] [p, o, x, y, m] -> [o, p]
+1000 and 1000 sharing the last -> [both]
+1000 and the same reversed -> 1000 names tie
+300 random cases: 339 names in all, checksum 664855404

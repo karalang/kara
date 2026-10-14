@@ -1,0 +1,178 @@
+// LeetCode #598: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// matrices.
+
+// ---- star arm ----------------------------------------------------------
+
+fn max_count_star(m: i64, n: i64, ops: Vec[Vec[i64]]) -> i64 {
+    let mut rows = m;
+    let mut cols = n;
+    for op in ops {
+        rows = min(rows, op[0]);
+        cols = min(cols, op[1]);
+    }
+    rows * cols
+}
+
+// ---- iter arm ----------------------------------------------------------
+
+fn max_count_iter(m: i64, n: i64, ops: Vec[Vec[i64]]) -> i64 {
+    let rows = ops.iter().map(|op| op[0]).min().unwrap_or(m);
+    let cols = ops.iter().map(|op| op[1]).min().unwrap_or(n);
+    rows * cols
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+fn max_count_sorted(m: i64, n: i64, ops: Vec[Vec[i64]]) -> i64 {
+    let mut a: Vec[i64] = Vec.new();
+    let mut b: Vec[i64] = Vec.new();
+    for op in ops {
+        a.push(op[0]);
+        b.push(op[1]);
+    }
+    if a.is_empty() {
+        return m * n;
+    }
+    a.sort();
+    b.sort();
+    a[0] * b[0]
+}
+
+// ---- histogram arm -----------------------------------------------------
+
+fn reach_all_histogram(size: i64, sides: Vec[i64]) -> i64 {
+    let mut ending = vec![0; size + 1];
+    for s in sides {
+        ending[s] += 1;
+    }
+    let mut reaching = 0;
+    let mut count = 0;
+    let mut x = size - 1;
+    while x >= 0 {
+        reaching += ending[x + 1];
+        if reaching == sides.len() {
+            count += 1;
+        }
+        x -= 1;
+    }
+    count
+}
+
+fn max_count_histogram(m: i64, n: i64, ops: Vec[Vec[i64]]) -> i64 {
+    let mut a: Vec[i64] = Vec.new();
+    let mut b: Vec[i64] = Vec.new();
+    for op in ops {
+        a.push(op[0]);
+        b.push(op[1]);
+    }
+    reach_all_histogram(m, a) * reach_all_histogram(n, b)
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, m: i64, n: i64, ops: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        max_count_star(m, n, ops)
+    } else if which == 1 {
+        max_count_iter(m, n, ops)
+    } else if which == 2 {
+        max_count_sorted(m, n, ops)
+    } else {
+        max_count_histogram(m, n, ops)
+    }
+}
+
+// The definition: the matrix itself, every operation applied to it cell
+// by cell, then the cells equal to its largest value counted.
+fn definition(m: i64, n: i64, ops: Vec[Vec[i64]]) -> i64 {
+    let mut grid = vec![vec![0; n]; m];
+    for op in ops {
+        for x in 0..op[0] {
+            for y in 0..op[1] {
+                grid[x][y] += 1;
+            }
+        }
+    }
+    let mut largest = 0;
+    for row in grid {
+        for v in row {
+            largest = max(largest, v);
+        }
+    }
+    let mut count = 0;
+    for row in grid {
+        for v in row {
+            if v == largest {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5980;
+    let mut checks = 0;
+    let mut whole = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // Sides from 1 to 8 and 0 to 6 operations.
+        let m = 1 + step(mut seed) % 8;
+        let n = 1 + step(mut seed) % 8;
+        let k = step(mut seed) % 7;
+        let mut ops: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..k {
+            ops.push(vec![1 + step(mut seed) % m, 1 + step(mut seed) % n]);
+        }
+        let want = definition(m, n, ops);
+        if want == m * n {
+            whole += 1;
+        }
+        let mut reversed = ops.clone();
+        reversed.reverse();
+        let mut turned: Vec[Vec[i64]] = Vec.new();
+        for op in ops {
+            turned.push(vec![op[1], op[0]]);
+        }
+        let mut covering = ops.clone();
+        covering.push(vec![m, n]);
+        let mut corner = ops.clone();
+        corner.push(vec![1, 1]);
+        for which in 0..4 {
+            let got = answer(which, m, n, ops);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: the operations in the opposite order give the same.
+                answer(which, m, n, reversed) == got,
+                // P3: the matrix and every operation turned on its side.
+                answer(which, n, m, turned) == got,
+                // P4: one more operation over the whole matrix changes
+                // nothing.
+                answer(which, m, n, covering) == got,
+                // P5: one more operation on the corner cell leaves it alone
+                // at the top.
+                answer(which, m, n, corner) == 1,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({whole} with every cell at the top), 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

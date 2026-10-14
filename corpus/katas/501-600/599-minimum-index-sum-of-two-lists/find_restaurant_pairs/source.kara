@@ -1,0 +1,149 @@
+// LeetCode #599: Minimum Index Sum of Two Lists -- every pair.
+//
+// Compare every string of list1 with every string of list2; each equal
+// pair is a common string with index sum i + j, kept as in the ★ arm.
+// O(n * m) string comparisons.
+
+fn find_restaurant(list1: Vec[String], list2: Vec[String]) -> Vec[String] {
+    let mut best = list1.len() + list2.len();
+    let mut answer: Vec[String] = Vec.new();
+    for i in 0..list1.len() {
+        for j in 0..list2.len() {
+            if list1[i] == list2[j] {
+                if i + j < best {
+                    best = i + j;
+                    answer.clear();
+                }
+                if i + j == best {
+                    answer.push(list1[i].clone());
+                }
+            }
+        }
+    }
+    answer
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn strings(words: Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in words {
+        out.push(w.to_string());
+    }
+    out
+}
+
+// Spells k in lower-case letters, base 26, the last letter the units.
+fn spell(k: i64) -> String {
+    let mut out = String.new();
+    let mut n = k;
+    let mut letters: Vec[char] = Vec.new();
+    loop {
+        letters.push(((97 + n % 26) as u8) as char);
+        n = n / 26;
+        if n == 0 {
+            break;
+        }
+    }
+    letters.reverse();
+    for c in letters {
+        out.push(c);
+    }
+    out
+}
+
+// The answer in sorted order, since any order is allowed.
+fn sorted_answer(list1: Vec[String], list2: Vec[String]) -> Vec[String] {
+    let mut got = find_restaurant(list1, list2);
+    got.sort();
+    got
+}
+
+fn show(list1: Vec[String], list2: Vec[String]) {
+    println(f"{list1} {list2} -> {sorted_answer(list1, list2)}");
+}
+
+// `size` different names out of `pool`, in a random order.
+fn pick(pool: Vec[String], size: i64, seed: mut ref i64) -> Vec[String] {
+    let mut order: Vec[i64] = Vec.new();
+    for k in 0..pool.len() {
+        order.push(k);
+    }
+    let mut out: Vec[String] = Vec.new();
+    for k in 0..size {
+        let j = k + step(seed) % (pool.len() - k);
+        order.swap(k, j);
+        out.push(pool[order[k]].clone());
+    }
+    out
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(strings(vec!["Shogun", "Tapioca Express", "Burger King", "KFC"]), strings(vec!["Piatti", "The Grill at Torrey Pines", "Hungry Hunter Steakhouse", "Shogun"]));
+    show(strings(vec!["Shogun", "Tapioca Express", "Burger King", "KFC"]), strings(vec!["KFC", "Shogun", "Burger King"]));
+    show(strings(vec!["happy", "sad", "good"]), strings(vec!["sad", "happy", "good"]));
+    // One string each; a list and its reverse, where every string ties;
+    // the only common string last in both; case counting; and a common
+    // string with a smaller sum than a nearer-looking one.
+    show(strings(vec!["A"]), strings(vec!["A"]));
+    show(strings(vec!["a", "b", "c", "d"]), strings(vec!["d", "c", "b", "a"]));
+    show(strings(vec!["x", "y", "z"]), strings(vec!["p", "q", "z"]));
+    show(strings(vec!["KFC", "kfc", "Kfc"]), strings(vec!["kFC", "Kfc"]));
+    show(strings(vec!["m", "n", "o", "p"]), strings(vec!["p", "o", "x", "y", "m"]));
+    // The longest lists: 1,000 names each, sharing one, the last of both;
+    // and sharing every name, in opposite orders.
+    let mut seed: i64 = 599;
+    let mut left: Vec[String] = Vec.new();
+    let mut right: Vec[String] = Vec.new();
+    for k in 0..1000 {
+        left.push(f"left place {spell(k)}");
+        right.push(f"right place {spell(k)}");
+    }
+    left.push("both".to_string());
+    right.push("both".to_string());
+    left.remove(0);
+    right.remove(0);
+    println(f"1000 and 1000 sharing the last -> {sorted_answer(left, right)}");
+    let mut forward: Vec[String] = Vec.new();
+    let mut backward: Vec[String] = Vec.new();
+    for k in 0..1000 {
+        forward.push(f"place {spell(k)}");
+        backward.push(f"place {spell(999 - k)}");
+    }
+    println(f"1000 and the same reversed -> {sorted_answer(forward, backward).len()} names tie");
+    // 300 random cases: 1 to 12 names each out of a pool of 16, with one
+    // name of list1 put into list2 when they share none.
+    let pool = strings(vec!["Shogun", "KFC", "Piatti", "Burger King", "Tapioca Express", "sad", "happy", "good", "The Grill", "Noodle Bar", "Taqueria", "Dim Sum", "Pho", "Deli", "Bistro", "Ramen"]);
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + step(mut seed) % 12;
+        let m = 1 + step(mut seed) % 12;
+        let list1 = pick(pool, n, mut seed);
+        let mut list2 = pick(pool, m, mut seed);
+        let mut shared = false;
+        for s in list2.iter() {
+            if list1.contains(s) {
+                shared = true;
+            }
+        }
+        if not shared {
+            let at = step(mut seed) % m;
+            list2[at] = list1[step(mut seed) % n].clone();
+        }
+        let got = sorted_answer(list1, list2);
+        total += got.len();
+        for s in got {
+            for c in s.chars() {
+                checksum = (checksum * 31 + c as i64) % 1000000007;
+            }
+        }
+    }
+    println(f"300 random cases: {total} names in all, checksum {checksum}");
+}

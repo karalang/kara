@@ -1,0 +1,89 @@
+// LeetCode #598: Range Addition II -- count by row and column.
+//
+// Cell (x, y) gets one from each operation with a > x and b > y, so the
+// maximum is k, the number of operations, at (0, 0). Count how many
+// operations reach past each row: a histogram of the a's, summed from
+// the bottom up. The rows every operation reaches are those whose sum is
+// k; likewise for columns. The cells at the maximum are those rows times
+// those columns. O(m + n + k).
+
+fn reach_all(size: i64, sides: Vec[i64]) -> i64 {
+    let mut ending = vec![0; size + 1];
+    for s in sides {
+        ending[s] += 1;
+    }
+    let mut reaching = 0;
+    let mut count = 0;
+    let mut x = size - 1;
+    while x >= 0 {
+        reaching += ending[x + 1];
+        if reaching == sides.len() {
+            count += 1;
+        }
+        x -= 1;
+    }
+    count
+}
+
+fn max_count(m: i64, n: i64, ops: Vec[Vec[i64]]) -> i64 {
+    let mut a: Vec[i64] = Vec.new();
+    let mut b: Vec[i64] = Vec.new();
+    for op in ops {
+        a.push(op[0]);
+        b.push(op[1]);
+    }
+    reach_all(m, a) * reach_all(n, b)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(m: i64, n: i64, ops: Vec[Vec[i64]]) {
+    println(f"m = {m}, n = {n}, ops = {ops} -> {max_count(m, n, ops)}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(3, 3, vec![vec![2, 2], vec![3, 3]]);
+    let mut many: Vec[Vec[i64]] = Vec.new();
+    for k in 0..12 {
+        many.push(if k % 4 == 0 { vec![2, 2] } else { vec![3, 3] });
+    }
+    show(3, 3, many);
+    show(3, 3, Vec.new());
+    // One cell; one operation over the whole matrix; a single row; the
+    // smallest sides coming from different operations; and every cell
+    // of the largest matrix, untouched.
+    show(1, 1, vec![vec![1, 1]]);
+    show(4, 5, vec![vec![4, 5]]);
+    show(1, 6, vec![vec![1, 4], vec![1, 6]]);
+    show(5, 5, vec![vec![2, 5], vec![5, 3], vec![4, 4]]);
+    show(40000, 40000, Vec.new());
+    // 10,000 operations, the problem's most, on the largest matrix.
+    let mut seed: i64 = 598;
+    let mut big: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..10000 {
+        big.push(vec![30000 + step(mut seed) % 10001, 20000 + step(mut seed) % 20001]);
+    }
+    println(f"10000 operations on 40000 x 40000 -> {max_count(40000, 40000, big)}");
+    // 300 random cases: sides from 1 to 30, up to 12 operations.
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let m = 1 + step(mut seed) % 30;
+        let n = 1 + step(mut seed) % 30;
+        let k = step(mut seed) % 13;
+        let mut ops: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..k {
+            ops.push(vec![1 + step(mut seed) % m, 1 + step(mut seed) % n]);
+        }
+        let got = max_count(m, n, ops);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"300 random cases: total {total}, checksum {checksum}");
+}

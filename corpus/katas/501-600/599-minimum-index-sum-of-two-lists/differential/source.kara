@@ -1,0 +1,243 @@
+// LeetCode #599: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// lists.
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_restaurant_star(list1: Vec[String], list2: Vec[String]) -> Vec[String] {
+    let mut index: Map[String, i64] = Map.new();
+    for (i, s) in list1.iter().enumerate() {
+        index[s.clone()] = i;
+    }
+    let mut best = list1.len() + list2.len();
+    let mut answer: Vec[String] = Vec.new();
+    for (j, s) in list2.iter().enumerate() {
+        if let Some(i) = index.get(s) {
+            let sum = i + j;
+            if sum < best {
+                best = sum;
+                answer.clear();
+            }
+            if sum == best {
+                answer.push(s.clone());
+            }
+        }
+    }
+    answer
+}
+
+// ---- pairs arm ---------------------------------------------------------
+
+fn find_restaurant_pairs(list1: Vec[String], list2: Vec[String]) -> Vec[String] {
+    let mut best = list1.len() + list2.len();
+    let mut answer: Vec[String] = Vec.new();
+    for i in 0..list1.len() {
+        for j in 0..list2.len() {
+            if list1[i] == list2[j] {
+                if i + j < best {
+                    best = i + j;
+                    answer.clear();
+                }
+                if i + j == best {
+                    answer.push(list1[i].clone());
+                }
+            }
+        }
+    }
+    answer
+}
+
+// ---- bysum arm ---------------------------------------------------------
+
+fn find_restaurant_bysum(list1: Vec[String], list2: Vec[String]) -> Vec[String] {
+    let mut answer: Vec[String] = Vec.new();
+    for s in 0..(list1.len() + list2.len() - 1) {
+        for i in 0..list1.len() {
+            let j = s - i;
+            if j >= 0 and j < list2.len() and list1[i] == list2[j] {
+                answer.push(list1[i].clone());
+            }
+        }
+        if not answer.is_empty() {
+            return answer;
+        }
+    }
+    answer
+}
+
+// ---- merge arm ---------------------------------------------------------
+
+fn indexed_merge(list: Vec[String]) -> Vec[(String, i64)] {
+    let mut out: Vec[(String, i64)] = Vec.new();
+    for (i, s) in list.iter().enumerate() {
+        out.push((s.clone(), i));
+    }
+    out.sort();
+    out
+}
+
+fn find_restaurant_merge(list1: Vec[String], list2: Vec[String]) -> Vec[String] {
+    let a = indexed_merge(list1);
+    let b = indexed_merge(list2);
+    let mut best = list1.len() + list2.len();
+    let mut answer: Vec[String] = Vec.new();
+    let mut x = 0;
+    let mut y = 0;
+    while x < a.len() and y < b.len() {
+        if a[x].0 < b[y].0 {
+            x += 1;
+        } else if a[x].0 > b[y].0 {
+            y += 1;
+        } else {
+            let sum = a[x].1 + b[y].1;
+            if sum < best {
+                best = sum;
+                answer.clear();
+            }
+            if sum == best {
+                answer.push(a[x].0.clone());
+            }
+            x += 1;
+            y += 1;
+        }
+    }
+    answer
+}
+
+// ---- the definition and the properties --------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, list1: Vec[String], list2: Vec[String]) -> Vec[String] {
+    let mut got = if which == 0 {
+        find_restaurant_star(list1, list2)
+    } else if which == 1 {
+        find_restaurant_pairs(list1, list2)
+    } else if which == 2 {
+        find_restaurant_bysum(list1, list2)
+    } else {
+        find_restaurant_merge(list1, list2)
+    };
+    got.sort();
+    got
+}
+
+// The definition, read off the statement: the common strings are those
+// of list1 that list2 also holds; each one's index sum is where it stands
+// in list1 plus where it stands in list2; the answer is the common
+// strings whose sum is the least of them, in sorted order.
+fn definition(list1: Vec[String], list2: Vec[String]) -> Vec[String] {
+    let mut common: Vec[String] = Vec.new();
+    for s in list1.iter() {
+        if list2.contains(s) {
+            common.push(s.clone());
+        }
+    }
+    let mut sums: Vec[i64] = Vec.new();
+    for s in common.iter() {
+        let i = list1.iter().position(|t| t == s).unwrap();
+        let j = list2.iter().position(|t| t == s).unwrap();
+        sums.push(i + j);
+    }
+    let least = sums.iter().min().unwrap();
+    let mut out: Vec[String] = Vec.new();
+    for k in 0..common.len() {
+        if sums[k] == least {
+            out.push(common[k].clone());
+        }
+    }
+    out.sort();
+    out
+}
+
+// `size` different names out of `pool`, in a random order.
+fn pick(pool: Vec[String], size: i64, seed: mut ref i64) -> Vec[String] {
+    let mut order: Vec[i64] = Vec.new();
+    for k in 0..pool.len() {
+        order.push(k);
+    }
+    let mut out: Vec[String] = Vec.new();
+    for k in 0..size {
+        let j = k + step(seed) % (pool.len() - k);
+        order.swap(k, j);
+        out.push(pool[order[k]].clone());
+    }
+    out
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5990;
+    // Names that differ by case, by length and by order, so that an arm
+    // comparing less than the whole string is caught.
+    let mut pool: Vec[String] = Vec.new();
+    for w in vec!["a", "b", "ab", "ba", "abc", "A", "B", "aa", "c", "ca"] {
+        pool.push(w.to_string());
+    }
+    let fresh = "new".to_string();
+    let mut checks = 0;
+    let mut ties = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 8 names each, at least one shared.
+        let n = 1 + step(mut seed) % 8;
+        let m = 1 + step(mut seed) % 8;
+        let list1 = pick(pool, n, mut seed);
+        let mut list2 = pick(pool, m, mut seed);
+        let mut shared = false;
+        for s in list2.iter() {
+            if list1.contains(s) {
+                shared = true;
+            }
+        }
+        if not shared {
+            let at = step(mut seed) % m;
+            list2[at] = list1[step(mut seed) % n].clone();
+        }
+        let want = definition(list1, list2);
+        if want.len() > 1 {
+            ties += 1;
+        }
+        let mut longer1 = list1.clone();
+        longer1.push(fresh.clone());
+        let mut longer2 = list2.clone();
+        longer2.push(fresh.clone());
+        let mut front1: Vec[String] = vec![fresh.clone()];
+        front1.extend(list1.clone());
+        let mut front2: Vec[String] = vec![fresh.clone()];
+        front2.extend(list2.clone());
+        for which in 0..4 {
+            let got = answer(which, list1, list2);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: the two lists swapped give the same strings.
+                answer(which, list2, list1) == got,
+                // P3: one more string, the last of both lists, changes
+                // nothing.
+                answer(which, longer1, longer2) == got,
+                // P4: one more string, the first of both lists, is the
+                // whole answer.
+                answer(which, front1, front2) == vec![fresh.clone()],
+                // P5: one more string at the front of list1 only raises
+                // every sum by one and changes nothing.
+                answer(which, front1, list2) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({ties} with a tie), 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
