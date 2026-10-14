@@ -1,0 +1,13 @@
+example 1: [(1, 1), (2, 0), (2, 4), (3, 3), (4, 2)]
+example 2: [(1, 2), (2, 2), (4, 2)]
+one tree: [(5, 5)]
+two trees: [(0, 0), (3, 4)]
+upright line: [(2, 0), (2, 1), (2, 2), (2, 3), (2, 4)]
+slanting line: [(0, 0), (1, 1), (2, 2), (3, 3)]
+3 by 3 square: [(0, 0), (0, 1), (0, 2), (1, 0), (1, 2), (2, 0), (2, 1), (2, 2)]
+triangle: [(0, 0), (0, 2), (0, 4), (2, 0), (2, 2), (4, 0)]
+one inside: [(0, 0), (0, 10), (10, 0)]
+300 random gardens: 2279 on the fence, checksum 675400249
+3000 at random: 125 on the fence, checksum 672993807
+50 by 60 grid: 216 on the fence, checksum 365171883
+diamond: 152 on the fence, checksum 940417552

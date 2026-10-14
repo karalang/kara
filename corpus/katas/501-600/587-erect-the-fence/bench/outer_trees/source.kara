@@ -1,0 +1,80 @@
+// Benchmark for #587: Erect the Fence -- the ★ arm (the monotone chain).
+//
+// The trees sorted by x, then y, are swept left to right for the lower
+// side of the fence and right to left for the upper side. A tree
+// joins the side being built after every earlier tree that would make
+// a clockwise turn there is dropped; trees in a straight line are
+// kept, since the rope touches them. A tree on both sides, as the two
+// ends always are, is kept once. O(n log n).
+
+fn cross(o: (i64, i64), a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+}
+
+fn outer_trees(trees: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut points = trees.clone();
+    points.sort();
+    let mut fence: Vec[(i64, i64)] = Vec.new();
+    for p in points.iter() {
+        while fence.len() >= 2 and cross(fence[fence.len() - 2], fence[fence.len() - 1], *p) < 0 {
+            fence.pop();
+        }
+        fence.push(*p);
+    }
+    let lower = fence.len();
+    for p in points.iter().rev() {
+        while fence.len() > lower and cross(fence[fence.len() - 2], fence[fence.len() - 1], *p) < 0 {
+            fence.pop();
+        }
+        fence.push(*p);
+    }
+    fence.sort();
+    fence.dedup();
+    fence
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 50 gardens built once, each of 1,000 to 3,000 trees (the
+    // problem's most) at distinct random places on the 101 by 101 grid;
+    // then 300 times over every garden is fenced.
+    let count = 50;
+    let rounds = 300;
+    let mut seed: i64 = 587;
+    let mut gardens: Vec[Vec[(i64, i64)]] = Vec.new();
+    for _ in 0..count {
+        let size = 1000 + next_random(mut seed) % 2001;
+        let mut taken = vec![false; 101 * 101];
+        let mut trees: Vec[(i64, i64)] = Vec.new();
+        while trees.len() < size {
+            let x = next_random(mut seed) % 101;
+            let y = next_random(mut seed) % 101;
+            if not taken[x * 101 + y] {
+                taken[x * 101 + y] = true;
+                trees.push((x, y));
+            }
+        }
+        gardens.push(trees);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let p = (round * 7 + g) % count;
+            let fence = outer_trees(gardens[p]);
+            let mut sum = 0;
+            for t in fence.iter() {
+                sum += t.0 * 101 + t.1;
+            }
+            total += fence.len();
+            checksum = (checksum * 31 + sum) % 1000000007;
+        }
+    }
+    println(f"{count} gardens, {rounds} rounds: {total} on the fence, checksum {checksum}");
+}

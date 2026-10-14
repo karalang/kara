@@ -1,0 +1,312 @@
+// LeetCode #587: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// gardens.
+
+// ---- star arm ----------------------------------------------------------
+
+fn cross_star(o: (i64, i64), a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+}
+
+fn outer_trees_star(trees: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut points = trees.clone();
+    points.sort();
+    let mut fence: Vec[(i64, i64)] = Vec.new();
+    for p in points.iter() {
+        while fence.len() >= 2 and cross_star(fence[fence.len() - 2], fence[fence.len() - 1], *p) < 0 {
+            fence.pop();
+        }
+        fence.push(*p);
+    }
+    let lower = fence.len();
+    for p in points.iter().rev() {
+        while fence.len() > lower and cross_star(fence[fence.len() - 2], fence[fence.len() - 1], *p) < 0 {
+            fence.pop();
+        }
+        fence.push(*p);
+    }
+    fence.sort();
+    fence.dedup();
+    fence
+}
+
+// ---- wrap arm ----------------------------------------------------------
+
+fn cross_wrap(o: (i64, i64), a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+}
+
+fn distance_wrap(a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - b.0) * (a.0 - b.0) + (a.1 - b.1) * (a.1 - b.1)
+}
+
+fn between_wrap(a: (i64, i64), p: (i64, i64), b: (i64, i64)) -> bool {
+    p.0 >= a.0.min(b.0) and p.0 <= a.0.max(b.0) and p.1 >= a.1.min(b.1) and p.1 <= a.1.max(b.1)
+}
+
+fn outer_trees_wrap(trees: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let n = trees.len();
+    if n <= 3 {
+        return trees.clone();
+    }
+    let mut start = 0;
+    for i in 1..n {
+        if trees[i] < trees[start] {
+            start = i;
+        }
+    }
+    let mut on_fence = vec![false; n];
+    let mut p = start;
+    loop {
+        let mut q = (p + 1) % n;
+        for r in 0..n {
+            let turn = cross_wrap(trees[p], trees[q], trees[r]);
+            if turn < 0 or (turn == 0 and distance_wrap(trees[p], trees[r]) > distance_wrap(trees[p], trees[q])) {
+                q = r;
+            }
+        }
+        for r in 0..n {
+            if cross_wrap(trees[p], trees[q], trees[r]) == 0 and between_wrap(trees[p], trees[r], trees[q]) {
+                on_fence[r] = true;
+            }
+        }
+        p = q;
+        if p == start {
+            break;
+        }
+    }
+    let mut fence: Vec[(i64, i64)] = Vec.new();
+    for i in 0..n {
+        if on_fence[i] {
+            fence.push(trees[i]);
+        }
+    }
+    fence
+}
+
+// ---- graham arm --------------------------------------------------------
+
+fn cross_graham(o: (i64, i64), a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+}
+
+fn distance_graham(a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - b.0) * (a.0 - b.0) + (a.1 - b.1) * (a.1 - b.1)
+}
+
+fn outer_trees_graham(trees: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let n = trees.len();
+    if n <= 3 {
+        return trees.clone();
+    }
+    let mut pivot = trees[0];
+    for t in trees.iter() {
+        if t.1 < pivot.1 or (t.1 == pivot.1 and t.0 < pivot.0) {
+            pivot = *t;
+        }
+    }
+    let mut points = trees.clone();
+    points.sort_by(|a, b| {
+        let turn = cross_graham(pivot, a, b);
+        if turn != 0 {
+            0.cmp(turn)
+        } else {
+            distance_graham(pivot, a).cmp(distance_graham(pivot, b))
+        }
+    });
+    let mut last = n - 1;
+    while last > 0 and cross_graham(pivot, points[last - 1], points[n - 1]) == 0 {
+        last -= 1;
+    }
+    points[last..n].reverse();
+    let mut stack: Vec[(i64, i64)] = Vec.new();
+    for p in points.iter() {
+        while stack.len() >= 2 and cross_graham(stack[stack.len() - 2], stack[stack.len() - 1], *p) < 0 {
+            stack.pop();
+        }
+        stack.push(*p);
+    }
+    stack
+}
+
+// ---- corners arm -------------------------------------------------------
+
+fn cross_corners(o: (i64, i64), a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+}
+
+fn on_side_corners(a: (i64, i64), b: (i64, i64), p: (i64, i64)) -> bool {
+    cross_corners(a, b, p) == 0 and (p.0 - a.0) * (p.0 - b.0) <= 0 and (p.1 - a.1) * (p.1 - b.1) <= 0
+}
+
+fn outer_trees_corners(trees: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut points = trees.clone();
+    points.sort();
+    if points.len() <= 2 {
+        return points;
+    }
+    let mut corners: Vec[(i64, i64)] = Vec.new();
+    for p in points.iter() {
+        while corners.len() >= 2 and cross_corners(corners[corners.len() - 2], corners[corners.len() - 1], *p) <= 0 {
+            corners.pop();
+        }
+        corners.push(*p);
+    }
+    let lower = corners.len();
+    for p in points.iter().rev() {
+        while corners.len() > lower and cross_corners(corners[corners.len() - 2], corners[corners.len() - 1], *p) <= 0 {
+            corners.pop();
+        }
+        corners.push(*p);
+    }
+    corners.pop();
+    let mut fence: Vec[(i64, i64)] = Vec.new();
+    for p in points.iter() {
+        for i in 0..corners.len() {
+            if on_side_corners(corners[i], corners[(i + 1) % corners.len()], *p) {
+                fence.push(*p);
+                break;
+            }
+        }
+    }
+    fence
+}
+
+// ---- definition -----------------------------------------------------------
+
+// The statement read literally: a straight stretch of rope runs between
+// two trees when every tree is on one side of the line through them, or
+// on it, and the trees lying on that stretch are on the fence. A single
+// tree is its own fence.
+fn definition(trees: ref Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let n = trees.len();
+    let mut on_fence = vec![n == 1; n];
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                let a = trees[i];
+                let b = trees[j];
+                let mut left = 0;
+                let mut right = 0;
+                for t in trees.iter() {
+                    let side = (b.0 - a.0) * (t.1 - a.1) - (b.1 - a.1) * (t.0 - a.0);
+                    if side > 0 {
+                        left += 1;
+                    }
+                    if side < 0 {
+                        right += 1;
+                    }
+                }
+                if left == 0 or right == 0 {
+                    for k in 0..n {
+                        let t = trees[k];
+                        let side = (b.0 - a.0) * (t.1 - a.1) - (b.1 - a.1) * (t.0 - a.0);
+                        if side == 0 and (t.0 - a.0) * (t.0 - b.0) <= 0 and (t.1 - a.1) * (t.1 - b.1) <= 0 {
+                            on_fence[k] = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut fence: Vec[(i64, i64)] = Vec.new();
+    for k in 0..n {
+        if on_fence[k] {
+            fence.push(trees[k]);
+        }
+    }
+    fence.sort();
+    fence
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn run(arm: i64, trees: ref Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut got = match arm {
+        0 => outer_trees_star(trees.clone()),
+        1 => outer_trees_wrap(trees.clone()),
+        2 => outer_trees_graham(trees.clone()),
+        _ => outer_trees_corners(trees.clone()),
+    };
+    got.sort();
+    got
+}
+
+fn main() {
+    let names = vec!["star", "wrap", "graham", "corners"];
+    let mut seed: i64 = 5870;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property = vec![0, 0, 0, 0, 0];
+    for _ in 0..1000 {
+        // 1 to 12 trees at distinct random places on a grid of 3 by 3
+        // to 6 by 6, small enough for many to fall in a line.
+        let size = 3 + step(mut seed) % 4;
+        let count = 1 + step(mut seed) % 12.min(size * size);
+        let mut taken = vec![false; size * size];
+        let mut trees: Vec[(i64, i64)] = Vec.new();
+        while trees.len() < count {
+            let x = step(mut seed) % size;
+            let y = step(mut seed) % size;
+            if not taken[x * size + y] {
+                taken[x * size + y] = true;
+                trees.push((x, y));
+            }
+        }
+        let want = definition(trees);
+        let mut sorted = trees.clone();
+        sorted.sort();
+        // The same trees in reverse order, and turned a quarter round.
+        let mut reversed: Vec[(i64, i64)] = Vec.new();
+        for t in trees.iter().rev() {
+            reversed.push(*t);
+        }
+        let mut turned: Vec[(i64, i64)] = Vec.new();
+        for t in trees.iter() {
+            turned.push((-t.1, t.0));
+        }
+        for arm in 0..4 {
+            let got = run(arm, trees);
+            // P2: no tree twice, only trees of the garden, and the
+            // first and last in sorted order always on the fence.
+            let mut well_formed = got.contains(sorted[0]) and got.contains(sorted[count - 1]);
+            for i in 0..got.len() {
+                if not trees.contains(got[i]) or (i > 0 and got[i] == got[i - 1]) {
+                    well_formed = false;
+                }
+            }
+            let mut turned_want: Vec[(i64, i64)] = Vec.new();
+            for t in got.iter() {
+                turned_want.push((-t.1, t.0));
+            }
+            turned_want.sort();
+            let results = vec![
+                got == want,
+                well_formed,
+                run(arm, reversed) == got,
+                run(arm, turned) == turned_want,
+                run(arm, got) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not results[p] {
+                    failures += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"{names[arm]} P{p + 1} on {trees}: got {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1000 cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

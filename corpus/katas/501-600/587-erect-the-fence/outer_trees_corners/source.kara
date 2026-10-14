@@ -1,0 +1,147 @@
+// LeetCode #587: Erect the Fence -- the corners, then the sides.
+//
+// The monotone chain is run keeping only the corners, where the rope
+// turns: a tree in a straight line with its neighbours is dropped too.
+// Then every tree is tested against each side between two corners,
+// and is on the fence when it lies on one. O(n log n + n * c), c the
+// corners.
+
+fn cross(o: (i64, i64), a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+}
+
+fn on_side(a: (i64, i64), b: (i64, i64), p: (i64, i64)) -> bool {
+    cross(a, b, p) == 0 and (p.0 - a.0) * (p.0 - b.0) <= 0 and (p.1 - a.1) * (p.1 - b.1) <= 0
+}
+
+fn outer_trees(trees: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut points = trees.clone();
+    points.sort();
+    if points.len() <= 2 {
+        return points;
+    }
+    let mut corners: Vec[(i64, i64)] = Vec.new();
+    for p in points.iter() {
+        while corners.len() >= 2 and cross(corners[corners.len() - 2], corners[corners.len() - 1], *p) <= 0 {
+            corners.pop();
+        }
+        corners.push(*p);
+    }
+    let lower = corners.len();
+    for p in points.iter().rev() {
+        while corners.len() > lower and cross(corners[corners.len() - 2], corners[corners.len() - 1], *p) <= 0 {
+            corners.pop();
+        }
+        corners.push(*p);
+    }
+    corners.pop();
+    let mut fence: Vec[(i64, i64)] = Vec.new();
+    for p in points.iter() {
+        for i in 0..corners.len() {
+            if on_side(corners[i], corners[(i + 1) % corners.len()], *p) {
+                fence.push(*p);
+                break;
+            }
+        }
+    }
+    fence
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` trees at distinct random places with both coordinates below
+// `size`.
+fn forest(count: i64, size: i64, seed: mut ref i64) -> Vec[(i64, i64)] {
+    let mut taken = vec![false; size * size];
+    let mut trees: Vec[(i64, i64)] = Vec.new();
+    while trees.len() < count {
+        let x = step(seed) % size;
+        let y = step(seed) % size;
+        if not taken[x * size + y] {
+            taken[x * size + y] = true;
+            trees.push((x, y));
+        }
+    }
+    trees
+}
+
+fn sorted_fence(trees: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut fence = outer_trees(trees);
+    fence.sort();
+    fence
+}
+
+fn checksum_of(fence: Vec[(i64, i64)]) -> i64 {
+    let mut checksum: i64 = 0;
+    for t in fence.iter() {
+        checksum = (checksum * 31 + t.0 * 101 + t.1) % 1000000007;
+    }
+    checksum
+}
+
+fn show(name: Str, trees: Vec[(i64, i64)]) {
+    println(f"{name}: {sorted_fence(trees)}");
+}
+
+fn summary(name: Str, trees: Vec[(i64, i64)]) {
+    let fence = sorted_fence(trees);
+    println(f"{name}: {fence.len()} on the fence, checksum {checksum_of(fence)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("example 1", vec![(1, 1), (2, 2), (2, 0), (2, 4), (3, 3), (4, 2)]);
+    show("example 2", vec![(1, 2), (2, 2), (4, 2)]);
+    // One tree; two; trees in a straight line, upright and slanting;
+    // a 3 by 3 square; a triangle with trees along its sides and one
+    // inside; and one tree well inside three.
+    show("one tree", vec![(5, 5)]);
+    show("two trees", vec![(0, 0), (3, 4)]);
+    show("upright line", vec![(2, 0), (2, 4), (2, 1), (2, 3), (2, 2)]);
+    show("slanting line", vec![(0, 0), (3, 3), (1, 1), (2, 2)]);
+    let mut square: Vec[(i64, i64)] = Vec.new();
+    for x in 0..3 {
+        for y in 0..3 {
+            square.push((x, y));
+        }
+    }
+    show("3 by 3 square", square);
+    show("triangle", vec![(0, 0), (4, 0), (0, 4), (2, 0), (2, 2), (0, 2), (1, 1)]);
+    show("one inside", vec![(0, 0), (10, 0), (0, 10), (3, 3)]);
+    // 300 random gardens of 1 to 30 trees on an 11 by 11 grid.
+    let mut seed: i64 = 587;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let count = 1 + step(mut seed) % 30;
+        let fence = sorted_fence(forest(count, 11, mut seed));
+        total += fence.len();
+        checksum = (checksum * 31 + checksum_of(fence)) % 1000000007;
+    }
+    println(f"300 random gardens: {total} on the fence, checksum {checksum}");
+    // The problem's largest: 3,000 trees at random on the 101 by 101
+    // grid; all 3,000 of a 50 by 60 grid; and the 2,965 inside a
+    // diamond of radius 38, whose fence is the 152 on its edge.
+    summary("3000 at random", forest(3000, 101, mut seed));
+    let mut grid: Vec[(i64, i64)] = Vec.new();
+    for x in 0..50 {
+        for y in 0..60 {
+            grid.push((x, y));
+        }
+    }
+    summary("50 by 60 grid", grid);
+    let mut diamond: Vec[(i64, i64)] = Vec.new();
+    for x in 0..=100 {
+        for y in 0..=100 {
+            if (x - 50).abs() + (y - 50).abs() <= 38 {
+                diamond.push((x, y));
+            }
+        }
+    }
+    summary("diamond", diamond);
+}
