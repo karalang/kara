@@ -1,0 +1,125 @@
+// LeetCode #590: N-ary Tree Postorder Traversal -- lists joined.
+//
+// Each node returns its own postorder: its children's lists appended
+// in order, then its value. Every value is copied once for each node
+// above it, so O(n * depth).
+
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+fn listed(node: Node) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for child in node.children.iter() {
+        out.extend(listed(child));
+    }
+    out.push(node.val);
+    out
+}
+
+fn postorder(root: Option[Node]) -> Vec[i64] {
+    match root {
+        Some(node) => listed(node),
+        None => Vec.new(),
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn leaf(val: i64) -> Node {
+    Node { val: val, children: Vec.new() }
+}
+
+fn tree(val: i64, children: own Vec[Node]) -> Node {
+    Node { val: val, children: children }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn build_random(i: i64, vals: Vec[i64], kids: Vec[Vec[i64]]) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in kids[i] {
+        children.push(build_random(k, vals, kids));
+    }
+    Node { val: vals[i], children: children }
+}
+
+// n nodes; each node after the first hangs under one of the `reach`
+// nodes before it, so a small reach makes a deep tree.
+fn random_tree(n: i64, seed: mut ref i64) -> Option[Node] {
+    if n == 0 {
+        return None;
+    }
+    let mut vals: Vec[i64] = Vec.new();
+    let mut kids: Vec[Vec[i64]] = Vec.new();
+    let reach = 1 + step(seed) % n;
+    for i in 0..n {
+        vals.push(step(seed) % 10001);
+        kids.push(Vec.new());
+        if i > 0 {
+            let back = 1 + step(seed) % min(i, reach);
+            kids[i - back].push(i);
+        }
+    }
+    Some(build_random(0, vals, kids))
+}
+
+fn checksum_of(vals: Vec[i64]) -> i64 {
+    let mut checksum: i64 = 0;
+    for v in vals {
+        checksum = (checksum * 31 + v) % 1000000007;
+    }
+    checksum
+}
+
+fn show(name: Str, root: Option[Node]) {
+    println(f"{name}: {postorder(root)}");
+}
+
+fn show_long(name: Str, root: Option[Node]) {
+    let got = postorder(root);
+    println(f"{name}: {got.len()} values, first {got[0..5]}, checksum {checksum_of(got)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("[1,null,3,2,4,null,5,6]", Some(tree(1, vec![tree(3, vec![leaf(5), leaf(6)]), leaf(2), leaf(4)])));
+    show("example 2", Some(tree(1, vec![
+        leaf(2),
+        tree(3, vec![leaf(6), tree(7, vec![tree(11, vec![leaf(14)])])]),
+        tree(4, vec![tree(8, vec![leaf(12)])]),
+        tree(5, vec![tree(9, vec![leaf(13)]), leaf(10)]),
+    ])));
+    show("empty", None);
+    show("one node", Some(leaf(7)));
+    // The same value at several nodes, and a subtree after a leaf.
+    show("repeated values", Some(tree(4, vec![leaf(4), tree(4, vec![leaf(0), leaf(4)]), leaf(0)])));
+    show("last child deepest", Some(tree(0, vec![leaf(1), tree(2, vec![leaf(3)]), tree(4, vec![tree(5, vec![leaf(6)])])])));
+    // The deepest tree the problem allows: a path of 1,000 nodes.
+    let mut path = leaf(999);
+    for v in 0..999 {
+        path = tree(998 - v, vec![path]);
+    }
+    show_long("a path of 1000", Some(path));
+    // The widest: a root with 9,999 leaves.
+    let mut wide: Vec[Node] = Vec.new();
+    for v in 0..9999 {
+        wide.push(leaf(9999 - v));
+    }
+    show_long("a root with 9999 leaves", Some(tree(10000, wide)));
+    // 300 random trees of 0 to 60 nodes.
+    let mut seed: i64 = 590;
+    let mut nodes = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = step(mut seed) % 61;
+        let got = postorder(random_tree(n, mut seed));
+        nodes += got.len();
+        checksum = (checksum * 1000003 + checksum_of(got)) % 1000000007;
+    }
+    println(f"300 random trees: {nodes} values, checksum {checksum}");
+}

@@ -1,0 +1,235 @@
+// LeetCode #590: differential -- the four arms against the definition.
+//
+// Copies of the four arms, the tree type defined once, each held to five
+// properties on random trees.
+
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn walk_star(node: Node, out: mut ref Vec[i64]) {
+    for child in node.children {
+        walk_star(child, out);
+    }
+    out.push(node.val);
+}
+
+fn postorder_star(root: Option[Node]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if let Some(node) = root {
+        walk_star(node, mut out);
+    }
+    out
+}
+
+// ---- reversed arm ------------------------------------------------------
+
+fn postorder_reversed(root: Option[Node]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[ref Node] = Vec.new();
+    if let Some(node) = root {
+        stack.push(node);
+    }
+    while let Some(node) = stack.pop() {
+        out.push(node.val);
+        for child in node.children.iter() {
+            stack.push(child);
+        }
+    }
+    out.reverse();
+    out
+}
+
+// ---- marks arm ---------------------------------------------------------
+
+fn postorder_marks(root: Option[Node]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut stack: Vec[(ref Node, bool)] = Vec.new();
+    if let Some(node) = root {
+        stack.push((node, false));
+    }
+    while let Some((node, expanded)) = stack.pop() {
+        if expanded {
+            out.push(node.val);
+        } else {
+            stack.push((node, true));
+            for child in node.children.iter().rev() {
+                stack.push((child, false));
+            }
+        }
+    }
+    out
+}
+
+// ---- concat arm --------------------------------------------------------
+
+fn listed_concat(node: Node) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for child in node.children.iter() {
+        out.extend(listed_concat(child));
+    }
+    out.push(node.val);
+    out
+}
+
+fn postorder_concat(root: Option[Node]) -> Vec[i64] {
+    match root {
+        Some(node) => listed_concat(node),
+        None => Vec.new(),
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn leaf(val: i64) -> Node {
+    Node { val: val, children: Vec.new() }
+}
+
+fn tree(val: i64, children: own Vec[Node]) -> Node {
+    Node { val: val, children: children }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn build(i: i64, vals: Vec[i64], kids: Vec[Vec[i64]]) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in kids[i] {
+        children.push(build(k, vals, kids));
+    }
+    Node { val: vals[i], children: children }
+}
+
+fn answer(which: i64, root: Option[Node]) -> Vec[i64] {
+    if which == 0 {
+        postorder_star(root)
+    } else if which == 1 {
+        postorder_reversed(root)
+    } else if which == 2 {
+        postorder_marks(root)
+    } else {
+        postorder_concat(root)
+    }
+}
+
+// Whether the path `a` comes before the path `b`: at the first place
+// they differ the smaller child index, or else the longer, which is
+// the descendant.
+fn before(a: Vec[i64], b: Vec[i64]) -> bool {
+    for k in 0..min(a.len(), b.len()) {
+        if a[k] != b[k] {
+            return a[k] < b[k];
+        }
+    }
+    a.len() > b.len()
+}
+
+fn sorted_copy(v: Vec[i64]) -> Vec[i64] {
+    let mut s = v.clone();
+    s.sort();
+    s
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5900;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 0 to 40 nodes, each after the first under one of the `reach`
+        // nodes before it: reach 1 is a path, a large reach a bushy tree.
+        // Values from 0 to 9, so most trees repeat some.
+        let n = if t % 10 == 0 { 0 } else { step(mut seed) % 41 };
+        let mut kids: Vec[Vec[i64]] = Vec.new();
+        let mut vals: Vec[i64] = Vec.new();
+        // The definition: every node's path from the root, the index of
+        // the child taken at each step; postorder lists the nodes by
+        // their paths, a descendant before its ancestors and siblings'
+        // subtrees in the order of the siblings.
+        let mut paths: Vec[Vec[i64]] = Vec.new();
+        let reach = if n == 0 { 1 } else { 1 + step(mut seed) % n };
+        for i in 0..n {
+            kids.push(Vec.new());
+            vals.push(step(mut seed) % 10);
+            if i == 0 {
+                paths.push(Vec.new());
+            } else {
+                let parent = i - 1 - step(mut seed) % min(i, reach);
+                let mut path = paths[parent].clone();
+                path.push(kids[parent].len());
+                kids[parent].push(i);
+                paths.push(path);
+            }
+        }
+        let mut order: Vec[i64] = Vec.new();
+        for i in 0..n {
+            let mut at = order.len();
+            while at > 0 and before(paths[i], paths[order[at - 1]]) {
+                at -= 1;
+            }
+            order.insert(at, i);
+        }
+        let mut want: Vec[i64] = Vec.new();
+        for i in order {
+            want.push(vals[i]);
+        }
+        for which in 0..4 {
+            let root = if n == 0 { None } else { Some(build(0, vals, kids)) };
+            let got = answer(which, root);
+            // P3: a new root above the tree.
+            let above = if n == 0 { leaf(-1) } else { tree(-1, vec![build(0, vals, kids)]) };
+            let mut above_want = got.clone();
+            above_want.push(-1);
+            // P4: each child's subtree in turn, then the root.
+            let mut joined: Vec[i64] = Vec.new();
+            if n > 0 {
+                for k in kids[0] {
+                    joined.extend(answer(which, Some(build(k, vals, kids))));
+                }
+                joined.push(vals[0]);
+            }
+            // P5: one more leaf, the root's first child, comes first.
+            let mut more = kids.clone();
+            let mut more_vals = vals.clone();
+            let with_leaf = if n == 0 {
+                leaf(-2)
+            } else {
+                more[0].insert(0, n);
+                more.push(Vec.new());
+                more_vals.push(-2);
+                build(0, more_vals, more)
+            };
+            let mut leaf_want = vec![-2];
+            leaf_want.extend(got.clone());
+            let ok = vec![
+                // P1: the definition's list.
+                got == want,
+                // P2: the tree's values, each as often as it holds them,
+                // the root's last.
+                sorted_copy(got) == sorted_copy(vals) and (n == 0 or got[n - 1] == vals[0]),
+                // P3: a root above comes last.
+                answer(which, Some(above)) == above_want,
+                // P4: each child's postorder, then the root.
+                got == joined,
+                // P5: a first leaf under the root comes first.
+                answer(which, Some(with_leaf)) == leaf_want,
+            ];
+            for k in 0..5 {
+                checks += 1;
+                if not ok[k] {
+                    failures[k] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
