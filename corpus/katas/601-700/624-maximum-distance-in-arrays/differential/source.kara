@@ -1,0 +1,225 @@
+// LeetCode #624: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// arrays.
+
+// ---- star arm ----------------------------------------------------------
+
+fn max_distance_star(arrays: Vec[Vec[i64]]) -> i64 {
+    let mut low = arrays[0][0];
+    let mut high = arrays[0][arrays[0].len() - 1];
+    let mut best = 0;
+    for i in 1..arrays.len() {
+        let first = arrays[i][0];
+        let last = arrays[i][arrays[i].len() - 1];
+        best = best.max(last - low).max(high - first);
+        low = low.min(first);
+        high = high.max(last);
+    }
+    best
+}
+
+// ---- pairs arm ---------------------------------------------------------
+
+fn max_distance_pairs(arrays: Vec[Vec[i64]]) -> i64 {
+    let mut best = 0;
+    for i in 0..arrays.len() {
+        for j in 0..arrays.len() {
+            if i != j {
+                best = best.max(arrays[j][arrays[j].len() - 1] - arrays[i][0]);
+            }
+        }
+    }
+    best
+}
+
+// ---- toptwo arm --------------------------------------------------------
+
+fn max_distance_toptwo(arrays: Vec[Vec[i64]]) -> i64 {
+    // The two smallest first values and their arrays, smallest first,
+    // and the two largest last values, largest first.
+    let mut low = vec![(i64.MAX, -1), (i64.MAX, -1)];
+    let mut high = vec![(i64.MIN, -1), (i64.MIN, -1)];
+    for i in 0..arrays.len() {
+        let first = arrays[i][0];
+        let last = arrays[i][arrays[i].len() - 1];
+        if first < low[0].0 {
+            low[1] = low[0];
+            low[0] = (first, i);
+        } else if first < low[1].0 {
+            low[1] = (first, i);
+        }
+        if last > high[0].0 {
+            high[1] = high[0];
+            high[0] = (last, i);
+        } else if last > high[1].0 {
+            high[1] = (last, i);
+        }
+    }
+    if low[0].1 != high[0].1 {
+        high[0].0 - low[0].0
+    } else {
+        (high[0].0 - low[1].0).max(high[1].0 - low[0].0)
+    }
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+fn max_distance_sorted(arrays: Vec[Vec[i64]]) -> i64 {
+    let mut firsts: Vec[(i64, i64)] = Vec.new();
+    let mut lasts: Vec[(i64, i64)] = Vec.new();
+    for i in 0..arrays.len() {
+        firsts.push((arrays[i][0], i));
+        lasts.push((-arrays[i][arrays[i].len() - 1], i));
+    }
+    firsts.sort();
+    lasts.sort();
+    let mut best = i64.MIN;
+    for a in 0..2 {
+        for b in 0..2 {
+            if firsts[a].1 != lasts[b].1 {
+                best = best.max(-lasts[b].0 - firsts[a].0);
+            }
+        }
+    }
+    best
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, arrays: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        max_distance_star(arrays)
+    } else if which == 1 {
+        max_distance_pairs(arrays)
+    } else if which == 2 {
+        max_distance_toptwo(arrays)
+    } else {
+        max_distance_sorted(arrays)
+    }
+}
+
+// The definition: the largest `|a - b|` over every value `a` of one
+// array and every value `b` of another, not only the ends.
+fn definition(arrays: Vec[Vec[i64]]) -> i64 {
+    let mut best = 0;
+    for i in 0..arrays.len() {
+        for j in 0..arrays.len() {
+            if i == j {
+                continue;
+            }
+            for a in arrays[i].iter() {
+                for b in arrays[j].iter() {
+                    best = best.max((*a - *b).abs());
+                }
+            }
+        }
+    }
+    best
+}
+
+// `count` arrays of 1 to 5 sorted values from -20 to 20.
+fn random_arrays(count: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % 5 {
+            values.push(next_random(mut seed) % 41 - 20);
+        }
+        values.sort();
+        arrays.push(values);
+    }
+    arrays
+}
+
+// Every value with `c` added.
+fn shifted(arrays: Vec[Vec[i64]], c: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for a in arrays.iter() {
+        let mut values: Vec[i64] = Vec.new();
+        for v in a.iter() {
+            values.push(*v + c);
+        }
+        out.push(values);
+    }
+    out
+}
+
+// Every value negated, each array reversed so it stays sorted.
+fn negated(arrays: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for a in arrays.iter() {
+        let mut values: Vec[i64] = Vec.new();
+        let mut i = a.len() - 1;
+        while i >= 0 {
+            values.push(-a[i]);
+            i -= 1;
+        }
+        out.push(values);
+    }
+    out
+}
+
+fn reversed(arrays: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut i = arrays.len() - 1;
+    while i >= 0 {
+        out.push(arrays[i].clone());
+        i -= 1;
+    }
+    out
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6240;
+    let mut checks = 0;
+    let mut values = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 2 to 6 arrays; a shift from -50 to 50 for P3; an array to copy
+        // for P5.
+        let arrays = random_arrays(2 + next_random(mut seed) % 5, mut seed);
+        let c = next_random(mut seed) % 101 - 50;
+        let k = next_random(mut seed) % arrays.len();
+        for a in arrays.iter() {
+            values += a.len();
+        }
+        let want = definition(arrays);
+        let mut more = arrays.clone();
+        more.push(arrays[k].clone());
+        let spread = arrays[k][arrays[k].len() - 1] - arrays[k][0];
+        for which in 0..4 {
+            let got = answer(which, arrays);
+            let ok = vec![
+                // P1: the definition's distance.
+                got == want,
+                // P2: the arrays in reverse order give the same distance.
+                answer(which, reversed(arrays)) == got,
+                // P3: a constant added to every value changes nothing.
+                answer(which, shifted(arrays, c)) == got,
+                // P4: every value negated changes nothing.
+                answer(which, negated(arrays)) == got,
+                // P5: a copy of one array added makes its own spread
+                // available too, and nothing else.
+                answer(which, more) == got.max(spread),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({values} values), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

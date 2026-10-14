@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/624-maximum-distance-in-arrays/bench/max_distance.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "049307dc2"
+extracted_src = "151ec558"
+model_rev = "1aa23105"
+model_src = "151ec558"

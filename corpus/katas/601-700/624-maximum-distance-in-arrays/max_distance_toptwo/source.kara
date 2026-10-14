@@ -1,0 +1,95 @@
+// LeetCode #624: Maximum Distance in Arrays -- the two best ends.
+//
+// Find the two smallest first values and the two largest last values,
+// with the arrays they come from. If the smallest first value and the
+// largest last value come from different arrays, they are the answer;
+// if from the same one, the answer pairs one of them with the runner-up
+// on the other side, whichever is farther. O(arrays).
+
+fn max_distance(arrays: Vec[Vec[i64]]) -> i64 {
+    // The two smallest first values and their arrays, smallest first,
+    // and the two largest last values, largest first.
+    let mut low = vec![(i64.MAX, -1), (i64.MAX, -1)];
+    let mut high = vec![(i64.MIN, -1), (i64.MIN, -1)];
+    for i in 0..arrays.len() {
+        let first = arrays[i][0];
+        let last = arrays[i][arrays[i].len() - 1];
+        if first < low[0].0 {
+            low[1] = low[0];
+            low[0] = (first, i);
+        } else if first < low[1].0 {
+            low[1] = (first, i);
+        }
+        if last > high[0].0 {
+            high[1] = high[0];
+            high[0] = (last, i);
+        } else if last > high[1].0 {
+            high[1] = (last, i);
+        }
+    }
+    if low[0].1 != high[0].1 {
+        high[0].0 - low[0].0
+    } else {
+        (high[0].0 - low[1].0).max(high[1].0 - low[0].0)
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(arrays: Vec[Vec[i64]]) {
+    println(f"{arrays} -> {max_distance(arrays)}");
+}
+
+// `count` arrays of 1 to `longest` sorted values from `-spread` to
+// `spread`.
+fn random_arrays(count: i64, longest: i64, spread: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut values: Vec[i64] = Vec.new();
+        for _ in 0..1 + next_random(mut seed) % longest {
+            values.push(next_random(mut seed) % (2 * spread + 1) - spread);
+        }
+        values.sort();
+        arrays.push(values);
+    }
+    arrays
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(vec![vec![1, 2, 3], vec![4, 5], vec![1, 2, 3]]);
+    show(vec![vec![1], vec![1]]);
+    // Two arrays the other way round; the smallest and the largest value
+    // in one array, with the runner-up on either side deciding; negative
+    // values only; single values; every array the same.
+    show(vec![vec![4, 5], vec![1, 2, 3]]);
+    show(vec![vec![-10, 10], vec![-5, 0], vec![2, 3]]);
+    show(vec![vec![-10, 10], vec![-1, 0], vec![-8, 3]]);
+    show(vec![vec![-9, -7], vec![-3, -2, -1], vec![-6]]);
+    show(vec![vec![3], vec![-2], vec![7], vec![0]]);
+    show(vec![vec![1, 2], vec![1, 2], vec![1, 2]]);
+    // 300 random cases of 2 to 20 arrays of 1 to 10 values from -10,000
+    // to 10,000.
+    let mut seed: i64 = 624;
+    let mut total = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let arrays = random_arrays(2 + next_random(mut seed) % 19, 10, 10000, mut seed);
+        let d = max_distance(arrays);
+        total += d;
+        checksum = (checksum * 31 + d) % 1000000007;
+    }
+    println(f"300 random cases: total {total}, checksum {checksum}");
+    // 1,000 arrays of up to 100 values, and 2,000 arrays of up to 50
+    // where one array holds both the smallest and the largest value.
+    let wide = random_arrays(1000, 100, 10000, mut seed);
+    println(f"1000 arrays of up to 100: {max_distance(wide)}");
+    let mut shared = random_arrays(2000, 50, 9000, mut seed);
+    shared[1234] = vec![-10000, 0, 10000];
+    println(f"2000 arrays of up to 50, both ends in one: {max_distance(shared)}");
+}
