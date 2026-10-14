@@ -111,6 +111,30 @@ fn tuple_index_parts(index: &Expr) -> Vec<Option<&Expr>> {
     }
 }
 
+/// A zero-argument `.collect()`: its target is whatever the context names.
+pub(super) fn is_bare_collect(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::MethodCall { method, args, .. } if method == "collect" && args.is_empty())
+}
+
+/// The element types of a `Slice` parameter and the `Vec` or array argument
+/// viewed as it, through any references.
+fn slice_view_elements<'t>(param: &'t Type, arg: &'t Type) -> Option<(&'t Type, &'t Type)> {
+    fn strip(t: &Type) -> &Type {
+        match t {
+            Type::Ref(t) | Type::MutRef(t) => strip(t),
+            t => t,
+        }
+    }
+    let Type::Slice { element: pe, .. } = strip(param) else {
+        return None;
+    };
+    match strip(arg) {
+        Type::Named { name, args, .. } if name == "Vec" && args.len() == 1 => Some((pe, &args[0])),
+        Type::Array { element, .. } => Some((pe, element)),
+        _ => None,
+    }
+}
+
 /// Is this expectation solid enough to seed a generic call from? It must carry
 /// no inference metavar AND no un-instantiated type parameter.
 ///
@@ -121,11 +145,6 @@ fn tuple_index_parts(index: &Expr) -> Vec<Option<&Expr>> {
 /// own name — after which `T` could not be inferred at all
 /// (`let b = Boxed { v: Some("x".to_string()) }`). Reuses the existing
 /// `contains_type_param` from the types module. B-2026-08-05-25.
-/// A zero-argument `.collect()`: its target is whatever the context names.
-pub(super) fn is_bare_collect(e: &Expr) -> bool {
-    matches!(&e.kind, ExprKind::MethodCall { method, args, .. } if method == "collect" && args.is_empty())
-}
-
 pub(super) fn expectation_is_concrete(t: &Type) -> bool {
     !contains_type_var(t) && !contains_type_param(t)
 }
@@ -3136,6 +3155,16 @@ impl<'a> super::TypeChecker<'a> {
                     &mut self.env.substitutions,
                     &mut self.env.const_substitutions,
                 );
+                // A `Vec` or array passed for a `Slice[T]` is viewed as one,
+                // so its element solves `T` (B-2026-10-14-42).
+                if let Some((pe, ae)) = slice_view_elements(sub_param_ty, arg_ty) {
+                    unify_types(
+                        pe,
+                        ae,
+                        &mut self.env.substitutions,
+                        &mut self.env.const_substitutions,
+                    );
+                }
                 // A function value for a parameter with a function-trait
                 // bound (`f: F` where `F: Fn(i64) -> U`) also solves the
                 // parameters only its bound mentions: `app(double, 4)` fixes

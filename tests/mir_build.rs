@@ -1535,3 +1535,35 @@ fn main() {
         }
     }
 }
+
+/// A `Vec` or array passed for a generic `Slice[T]` parameter solves `T`
+/// from its element (B-2026-10-14-42).
+#[test]
+fn mir_vec_for_a_generic_slice_param_solves_its_element() {
+    const SRC: &str = r#"
+fn first[T: Clone](s: Slice[T]) -> T { s[0].clone() }
+fn count[T](s: Slice[T]) -> i64 { s.len() }
+fn bump[T](s: mut Slice[T], v: own T) { s[0] = v; }
+
+fn main() {
+    let vi: Vec[i64] = [10, 20, 30];
+    println(first(vi));
+    println(count(vi));
+    let vs: Vec[String] = ["a".to_string(), "b".to_string()];
+    println(first(vs));
+    let a: Array[f64, 2] = [1.5, 2.5];
+    println(first(a));
+    let mut w: Vec[i64] = [1, 2];
+    bump(mut w, 7);
+    println(w[0]);
+}
+"#;
+    let want = "10\n3\na\n1.5\n7\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

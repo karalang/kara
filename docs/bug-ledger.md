@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 605 |
 | leak | 603 |
 | double-free | 427 |
-| codegen-gap | 257 |
+| codegen-gap | 258 |
 | missing-feature | 250 |
 | other | 172 |
 | false-positive | 169 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2885 |
 | interp | 919 |
-| typecheck | 406 |
+| typecheck | 407 |
 | other | 115 |
 | ownership | 91 |
 | cli | 75 |
@@ -177,6 +177,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-36 | 2026-10-14 | codegen | medium | The MIR-to-LLVM backend does not lower `String.clear`: `karac __mir-llvm-run`, `__mir-llvm-asan` and `karac build --mir` refuse any program that calls it ("native `String.clear` is not lowered yet"), while `karac __mir-run` runs it right | — |
 | B-2026-10-14-37 | 2026-10-14 | resolver+typecheck | low | A user type cannot implement `Index`, `IndexMut` or `IndexSet`, so `c[k]` on a user container has no spelling: `impl Index for P` is refused at resolve ("operator traits are stdlib-only") on every pipeline, though design.md § `Index` and `IndexMut` says "User types may implement all three, so a user container supports `[]`" | — |
 | B-2026-10-14-39 | 2026-10-14 | codegen+runtime | low | A one-integer f-string `f"{n}"` still runs about 3x legacy on the v2 compiled backend after B-2026-10-13-20's fix: 44M `f"{i % 7}"` take 0.86 s on `karac build --mir` against 0.28 to 0.31 s on legacy `karac build`, and kata 504's bench 1.97 to 2.25 s against 1.51 to 1.62 s | — |
+| B-2026-10-14-42 | 2026-10-14 | typecheck | medium | A `Vec` or array passed for a generic `Slice[T]` parameter checks but leaves `T` unsolved, so typed HIR refuses the call (`UnsolvedParam("T")`) and neither MIR backend can lower it: `fn gsum[T: Clone](s: Slice[T]) -> T` called as `gsum(vi)` with `vi: Vec[i64]` | — |
 
 ### Relocated
 

@@ -5151,7 +5151,8 @@ fn test_slice_8z_mut_slice_t_arg_synthesizes_slice_header() {
     // State-struct field is the slice struct shape.
     let state_line = ir
         .lines()
-        .find(|l| l.starts_with("%kara.state.driver = type {"))
+        // The instance's struct: the call solves `T` from the Vec's element (B-2026-10-14-42).
+        .find(|l| l.contains("kara.state.driver") && l.contains("= type {"))
         .unwrap_or_else(|| panic!("no state struct in IR:\n{ir}"));
     assert!(
         state_line.contains("{ ptr, i64 }"),
@@ -5243,7 +5244,8 @@ fn test_slice_8af_mut_slice_t_composite_element_type() {
     // of element type.
     let state_line = ir
         .lines()
-        .find(|l| l.starts_with("%kara.state.driver = type {"))
+        // The instance's struct: the call solves `T` from the Vec's element (B-2026-10-14-42).
+        .find(|l| l.contains("kara.state.driver") && l.contains("= type {"))
         .unwrap_or_else(|| panic!("no state struct in IR:\n{ir}"));
     assert!(
             state_line.contains("{ ptr, i64 }"),
