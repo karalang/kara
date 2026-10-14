@@ -96,8 +96,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 605 |
 | leak | 603 |
 | double-free | 427 |
+| missing-feature | 259 |
 | codegen-gap | 258 |
-| missing-feature | 258 |
 | false-positive | 182 |
 | other | 172 |
 | perf | 166 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2891 |
-| interp | 922 |
+| codegen | 2892 |
+| interp | 923 |
 | typecheck | 419 |
 | other | 115 |
 | ownership | 95 |
@@ -177,7 +177,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-36 | 2026-10-14 | codegen | medium | The MIR-to-LLVM backend does not lower `String.clear`: `karac __mir-llvm-run`, `__mir-llvm-asan` and `karac build --mir` refuse any program that calls it ("native `String.clear` is not lowered yet"), while `karac __mir-run` runs it right | — |
 | B-2026-10-14-39 | 2026-10-14 | codegen+runtime | low | A one-integer f-string `f"{n}"` still runs about 3x legacy on the v2 compiled backend after B-2026-10-13-20's fix: 44M `f"{i % 7}"` take 0.86 s on `karac build --mir` against 0.28 to 0.31 s on legacy `karac build`, and kata 504's bench 1.97 to 2.25 s against 1.51 to 1.62 s | — |
 | B-2026-10-14-43 | 2026-10-14 | typecheck | medium | A string literal pattern does not take the `Str` type of its scrutinee: `match s.as_str() { "Year" => ... }`, or a match on a `Str` parameter, is refused with "expected 'StringSlice', found 'String'" by `karac check` and by the MIR front end, while the same match on a `String` works | — |
-| B-2026-10-14-45 | 2026-10-14 | interp+codegen | medium | `BufReader` and `BufWriter` (docs/library/io.md § Buffered I/O) do not exist on either v2 backend: `karac check` accepts `BufReader.new(f)`, `read_line`, `lines()` and `BufWriter.write_all`, legacy `karac run --interp` runs them, but `karac __mir-run` stops at `call of unknown function BufReader[File].new`, `karac __mir-llvm-run` at `native `BufReader[File].new` is not lowered yet`, and `for line in reader.lines()` is refused at MIR build with `a `for` loop over a collection is not lowered yet` | — |
 | B-2026-10-14-46 | 2026-10-14 | typecheck+cli | medium | A type error stopping the MIR pipeline is printed with no location: `karac __mir-run` / `__mir-llvm-run` / `__mir-llvm-asan` print `error[mir]: typecheck: expected 'String', found 'StringSlice'` and nothing else, because src/mir/lower.rs formats only `tc.errors[0].message` and drops its `span`, so a program that `karac check` would locate has to be bisected by hand | — |
 | B-2026-10-14-47 | 2026-10-14 | resolver+typecheck+interp | low | `IndexSet` (design.md § `Index` and `IndexMut`: `c[key] = value` calls `IndexSet.index_set(c, key, value)` when `c`'s type implements it, else `*IndexMut.index_mut(c, key) = value`) does not exist: the stdlib declares no `IndexSet` trait, so a user keyed container cannot take `c[k] = v` for a key that is not present yet, and the user `Index` / `IndexMut` support B-2026-10-14-37 added writes only through `index_mut` | — |
 | B-2026-10-14-48 | 2026-10-14 | resolver | medium | The library module paths of docs/library/README.md do not resolve: `import std.sync.{channel, Sender, Receiver}` (concurrency.md's own example), `import std.net.{TcpListener, TcpError}`, `import std.io.{File}` and `import std.sync.{TaskGroup}` / `{Mutex}` all stop with `unknown module` on `karac check` and the MIR pipeline, and the spec's channel constructor `channel(cap)` is an undefined name: the implementation has the names as globals and channels only as the older `Channel.new()` / `Channel.bounded(cap)` | — |
@@ -203,6 +202,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-68 | 2026-10-14 | typecheck | medium | A string literal passed to a METHOD whose parameter is `Str` is still typed `String`: `let mut v: Vec[Str] = Vec.new(); v.push("a");` is refused with "expected 'StringSlice', found 'String'" by `karac check` and the MIR typecheck, while `v.push(s)` with `let s: Str = "a"` works (remainder of B-2026-10-12-13) | — |
 | B-2026-10-14-69 | 2026-10-14 | runtime | medium | A short `Vec` grown by `push` allocates twice on the MIR compiled backend (first block 4 elements, then 8) where legacy allocates once (8): kata 638's `Map[Vec[i64], i64]` memo bench is 2.0x legacy, 1.2x with the first block raised to 8 | — |
 | B-2026-10-14-70 | 2026-10-14 | typecheck | medium | `karac check` still refuses chained field receivers (`self.env.to.len()`, `self.env.to.push(x)`) with the `chained_field_receiver` error, a legacy-codegen deferral ("deferred to v1.x in codegen ... fails `karac build`"), although every v2 surface runs them: the corpus mir-* backends run check first, so any v2 program with a nested-field method call fails | — |
+| B-2026-10-14-72 | 2026-10-14 | interp+codegen | low | `BufReader.fill_buf()` (docs/library/io.md § Buffered I/O) is missing on both v2 backends: `karac check` and legacy `run --interp` accept and run it, but `__mir-run` stops at `call of unknown function BufReader[File].fill_buf` and `__mir-llvm-run` at `native `BufReader[File].fill_buf` is not lowered yet` | — |
 
 ### Relocated
 
@@ -4041,6 +4041,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-14-41 | typecheck+codegen | medium | A fixed array's `.iter()` (`mk().iter().count()`) is refused by the library-source checker, and once checked the compiled MIR backend passes a pointe… | b465d3dd05 |
 | B-2026-10-14-42 | typecheck | medium | A `Vec` or array passed for a generic `Slice[T]` parameter checks but leaves `T` unsolved, so typed HIR refuses the call (`UnsolvedParam("T")`) and n… | 0fd33c5c39 |
 | B-2026-10-14-44 | typecheck | medium | The `std.io` / `std.net` library signatures disagree with docs/library/io.md: `File.open` / `create` / `append`, `fs.read_to_string` and `fs.write` t… | 3ce50ff51e |
+| B-2026-10-14-45 | interp+codegen | medium | `BufReader` and `BufWriter` (docs/library/io.md § Buffered I/O) do not exist on either v2 backend: `karac check` accepts `BufReader.new(f)`, `read_li… | c274de40ea |
 
 </details>
 
