@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 255 |
 | missing-feature | 246 |
 | other | 172 |
-| false-positive | 167 |
+| false-positive | 168 |
 | perf | 164 |
 | diagnostics | 156 |
 | crash | 114 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2879 |
-| interp | 917 |
+| codegen | 2880 |
+| interp | 918 |
 | typecheck | 398 |
 | other | 115 |
 | ownership | 89 |
@@ -611,6 +611,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-26 | 2026-10-14 | ownership+interp+codegen | medium | `ref place` on a field (`ref s.field`, design.md § `*` and `ref` in expressions) does not build on either MIR backend ("E_REF_OPERAND_UNSUPPORTED: only `ref <sequence>[i]` is supported in v1"), and `karac check` refuses returning one ("this borrow-return form is not yet supported"), so the spec's own `fn name(user: User) -> ref String { ref user.name }` is refused everywhere | — |
 | B-2026-10-14-27 | 2026-10-14 | typecheck | medium | `karac check` refuses `*w` as an operand of `==` (`for w in words.iter() { if *w == target { ... } }` over a `Vec[String]`) with `borrow_projection_copy` ("cannot move a non-`Copy` value out of a borrow with `*`"), though design.md § `*` and `ref` in expressions says `==` borrows `*r` and needs no copy, and both MIR backends run it; the unstarred `w == target`, which that section calls a type error, passes | — |
 | B-2026-10-14-28 | 2026-10-14 | ownership | medium | `karac check`'s ownership pass counts lending a bare `for` element into a `ref` slot as a MOVE, so lending it twice is refused: `v.push(c); v.push(c);` into `Vec[ref Node]`, `stack.push((c, 1)); stack.push((c, 2));` into `Vec[(ref Node, i64)]`, and `let r: ref Node = c; let s: ref Node = c;` are each "value 'c' moved here, used again here", while `__mir-run` runs all three | — |
+| B-2026-10-14-29 | 2026-10-14 | interp+codegen | medium | The MIR borrow checker keeps a `Vec[(ref Node, i64)]` borrowed for as long as a `ref Node` copied out of one of its elements is live: `let (a, n) = v[0]; v.pop(); a.val` is refused on both MIR backends ("mutable borrow of _2 while it is borrowed", E0516), though core-semantics §1.1 makes the tuple `Copy` and the copied reference keeps the origin of the node, not of the vector; the same read out of a `Vec[ref Node]` runs, and `karac check` passes both | — |
 
 ### Relocated
 
