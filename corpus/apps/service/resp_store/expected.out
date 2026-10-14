@@ -1,0 +1,161 @@
+== basics
+> PING
+PONG
+> SET greeting hello
+OK
+> GET greeting
+"hello"
+> GET missing
+(nil)
+> APPEND greeting _world
+(integer) 11
+> STRLEN greeting
+(integer) 11
+> SET n 41
+OK
+> INCR n
+(integer) 42
+> INCRBY n -50
+(integer) -8
+> DECR n
+(integer) -9
+> INCR greeting
+(error) ERR value is not an integer or out of range
+> EXISTS greeting n nope
+(integer) 2
+> INCRBY n 9223372036854775807
+(integer) 9223372036854775798
+> INCRBY n 10
+(error) ERR increment or decrement would overflow
+> GET n
+"9223372036854775798"
+== lists
+> RPUSH q a b c
+(integer) 3
+> LPUSH q z
+(integer) 4
+> LRANGE q 0 -1
+1) "z"
+2) "a"
+3) "b"
+4) "c"
+> LRANGE q 1 2
+1) "a"
+2) "b"
+> LPOP q
+"z"
+> LLEN q
+(integer) 3
+> TYPE q
+list
+> GET q
+(error) WRONGTYPE Operation against a key holding the wrong kind of value
+> TYPE nope
+none
+> LRANGE nope 0 -1
+(empty array)
+> RPUSH greeting x
+(error) WRONGTYPE Operation against a key holding the wrong kind of value
+== expiry
+> SET temp 1
+OK
+> EXPIRE temp 3
+(integer) 1
+> TTL temp
+(integer) 2
+> GET temp
+"1"
+> PING
+PONG
+> GET temp
+(nil)
+> TTL temp
+(integer) -2
+> TTL greeting
+(integer) -1
+> SET keep yes
+OK
+> EXPIRE keep 100
+(integer) 1
+== inline
+> SET user:1 ann
+OK
+> SET user:2 bob
+OK
+> SET admin x
+OK
+> KEYS user:*
+1) "user:1"
+2) "user:2"
+> KEYS *
+1) "admin"
+2) "greeting"
+3) "keep"
+4) "n"
+5) "q"
+6) "user:1"
+7) "user:2"
+> KEYS ?dmin
+1) "admin"
+> DBSIZE
+(integer) 7
+> DEL user:1 user:9
+(integer) 1
+> FROB x
+(error) ERR unknown command 'FROB'
+> GET
+(error) ERR wrong number of arguments for 'get' command
+== binary-safe
+> SET multi "line one\r\nline two"
+OK
+> GET multi
+"line one\r\nline two"
+> STRLEN multi
+(integer) 18
+> SET once 1 NX
+OK
+> SET once 2 NX
+(nil)
+> GET once
+"1"
+> SET once 3 XX
+(error) ERR syntax error
+== truncated
+> PING
+PONG
+> SET last ok
+OK
+(error) ERR Protocol error: unexpected end of input
+== restart (21 records logged, 9 keys in memory)
+replayed 21 records (713 bytes), clock 55
+== after restart
+> DBSIZE
+(integer) 9
+> KEYS *
+1) "admin"
+2) "greeting"
+3) "keep"
+4) "last"
+5) "multi"
+6) "n"
+7) "once"
+8) "q"
+9) "user:2"
+> GET greeting
+"hello_world"
+> GET n
+"9223372036854775798"
+> LRANGE q 0 -1
+1) "a"
+2) "b"
+3) "c"
+> GET multi
+"line one\r\nline two"
+> TTL keep
+(integer) 74
+> GET temp
+(nil)
+> GET once
+"1"
+> GET last
+"ok"

@@ -98,10 +98,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | codegen-gap | 258 |
 | missing-feature | 255 |
-| false-positive | 174 |
+| false-positive | 175 |
 | other | 172 |
 | perf | 165 |
-| diagnostics | 160 |
+| diagnostics | 161 |
 | crash | 115 |
 | soundness | 103 |
 | use-after-free | 90 |
@@ -110,14 +110,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2888 |
+| codegen | 2889 |
 | interp | 922 |
 | typecheck | 413 |
 | other | 115 |
 | ownership | 93 |
 | cli | 76 |
 | runtime | 68 |
-| parser | 62 |
+| parser | 63 |
 | autopar | 59 |
 | resolver | 40 |
 | effect | 30 |
@@ -189,6 +189,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-53 | 2026-10-14 | ownership | medium | `karac check` reports a `String` passed to `fs.write(path, content)` as MOVED, so `fs.write(p, out)` followed by any use of `out` is refused ("value 'out' moved here, used again here"), though the library declares `contents: ref String` and docs/library/io.md `content: Str`, and every MIR surface accepts the program | — |
 | B-2026-10-14-54 | 2026-10-14 | runtime | medium | The file system library is two functions: docs/library/io.md specifies only `fs.read_to_string` and `fs.write` (v2 adds `read_lines`), so a Kāra program cannot list a directory, create or remove a directory, remove, rename or copy a file, test whether a path exists, or read a file's size or modification time without shelling out to `sh` | — |
 | B-2026-10-14-55 | 2026-10-14 | typecheck | medium | `karac check` accepts ANY method name on the ambient resources `fs`, `env` and `stdout`: `fs.bogus_op("x".to_string())` and `env.bogus_op()` print `All checks passed.`, and the program fails only when run (MIR build: "a type that failed to check is not lowered yet"; interpreter: "ambient resource 'FileSystem' has no default method 'bogus_op' yet") | — |
+| B-2026-10-14-56 | 2026-10-14 | codegen | medium | The MIR builder refuses a `match` on a field reached through a call that returns a `ref`: `match m.get(k).unwrap().v { V.T(_) => 1, V.L(_) => 2 }` and `match first(xs).v { .. }` (with `fn first(v: ref Vec[It]) -> ref It`) stop with "cannot move a non-`Copy` value out of a borrowed place" even when no pattern binds anything, while `karac check` accepts them and `match xs[0].v` / `let it = m.get(k).unwrap(); match it.v` build | — |
+| B-2026-10-14-57 | 2026-10-14 | parser | low | `let (mut a, b) = ..` (Rust's spelling) is refused with "'mut' is a reserved keyword and cannot be used as an identifier", which does not say that syntax.md puts `mut` before the whole pattern (`let mut (a, b) = ..`) or offer that fix | — |
 
 ### Relocated
 

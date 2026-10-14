@@ -1,0 +1,864 @@
+// A Redis-compatible key-value server (a RESP2 subset) with an append-only
+// file. Strings, lists, counters, expiry on a logical clock, glob KEYS,
+// inline commands, binary-safe bulk values and a truncated frame. Every
+// successful write is appended to `store.aof` in RESP; expiry is logged as
+// an absolute EXPIREAT, as Redis rewrites it. After the sessions, the server
+// "restarts": a fresh store replays the file and answers the same reads.
+//
+// The server and its client run in one thread: the client connects, writes
+// a batch of commands and shuts down its write side; the server accepts,
+// reads to end of input, answers every command, and closes; the client
+// decodes the replies and prints them the way redis-cli does.
+//
+// Workarounds for v2 gaps, each to revert once its row is fixed:
+//   B-2026-10-12-6   i64.parse returns Option, not Result
+//   B-2026-10-12-3   SortedMap has no get_mut: take_list removes the entry
+//                    and the caller inserts it back
+//   B-2026-10-14-43  a string literal pattern cannot match a `Str`, so the
+//                    dispatch matches the uppercased String itself
+//   B-2026-10-14-44  fs / File / TcpStream / TcpListener take String, and
+//                    File.write counts in usize
+//   B-2026-10-14-51  `let rest = self.text[a..b]` in a method is refused by
+//                    check, so RespReader.line slices without binding
+//   B-2026-10-14-56  `match m.get(k).unwrap().value { .. }` is refused by
+//                    the MIR builder, so the entry is bound first
+
+const ADDR: Str = "127.0.0.1:47732";
+const AOF: Str = "store.aof";
+const CLOCK: Str = "store.clock";
+
+enum Value { Text(String), List(VecDeque[String]) }
+
+struct Item { value: Value, expires_at: i64 }
+
+enum Reply { Simple(String), Error(String), Int(i64), Bulk(Option[String]), Many(Vec[Reply]) }
+
+struct Store { items: SortedMap[String, Item], now: i64, log: String, records: i64 }
+
+fn to_int(s: Str) -> Option[i64] {
+    match i64.parse(s) {
+        Some(n) => Some(n),
+        None => None,
+    }
+}
+
+fn ok() -> Reply { Reply.Simple("OK".to_string()) }
+
+fn err(msg: Str) -> Reply { Reply.Error(f"ERR {msg}") }
+
+fn wrongtype() -> Reply {
+    Reply.Error("WRONGTYPE Operation against a key holding the wrong kind of value".to_string())
+}
+
+fn not_int() -> Reply { err("value is not an integer or out of range") }
+
+fn bulk(s: Str) -> Reply { Reply.Bulk(Some(s.to_string())) }
+
+fn encode_cmd(args: ref Vec[String]) -> String {
+    let mut out = f"*{args.len()}\r\n";
+    for a in args.iter() {
+        out.push_str(f"${a.len()}\r\n");
+        out.push_str(a);
+        out.push_str("\r\n");
+    }
+    out
+}
+
+fn encode(r: ref Reply, out: mut ref String) {
+    match r {
+        Reply.Simple(s) => out.push_str(f"+{s}\r\n"),
+        Reply.Error(s) => out.push_str(f"-{s}\r\n"),
+        Reply.Int(n) => out.push_str(f":{n}\r\n"),
+        Reply.Bulk(None) => out.push_str("$-1\r\n"),
+        Reply.Bulk(Some(s)) => {
+            out.push_str(f"${s.len()}\r\n");
+            out.push_str(s);
+            out.push_str("\r\n");
+        }
+        Reply.Many(items) => {
+            out.push_str(f"*{items.len()}\r\n");
+            for it in items.iter() {
+                encode(it, out);
+            }
+        }
+    }
+}
+
+// Glob match as Redis KEYS does it: `*` any run, `?` one character.
+fn glob(p: Slice[char], s: Slice[char]) -> bool {
+    if p.is_empty() {
+        return s.is_empty();
+    }
+    if p[0] == '*' {
+        let mut i = 0;
+        while i <= s.len() {
+            if glob(p[1..p.len()], s[i..s.len()]) {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+    if s.is_empty() {
+        return false;
+    }
+    if p[0] == '?' or p[0] == s[0] {
+        return glob(p[1..p.len()], s[1..s.len()]);
+    }
+    false
+}
+
+// Takes a list entry out of the map with its deadline, for a change in
+// place (SortedMap has no get_mut, B-2026-10-12-3). The caller has checked
+// the key holds a list.
+fn take_list(items: mut ref SortedMap[String, Item], key: Str) -> (VecDeque[String], i64) {
+    match items.remove(key) {
+        Some(it) => {
+            let exp = it.expires_at;
+            match it.value {
+                Value.List(q) => (q, exp),
+                Value.Text(_) => (VecDeque.new(), -1),
+            }
+        }
+        None => (VecDeque.new(), -1),
+    }
+}
+
+impl Store {
+    fn new() -> Store {
+        Store { items: SortedMap.new(), now: 0, log: String.new(), records: 0 }
+    }
+
+    // Drops `key` if its deadline has passed; true if it is live.
+    fn live(mut ref self, key: Str) -> bool {
+        let dead = match self.items.get(key) {
+            Some(it) => it.expires_at >= 0 and self.now >= it.expires_at,
+            None => return false,
+        };
+        if dead {
+            self.items.remove(key);
+        }
+        not dead
+    }
+
+    fn purge(mut ref self) {
+        let mut dead: Vec[String] = Vec.new();
+        for (k, it) in self.items.iter() {
+            if it.expires_at >= 0 and self.now >= it.expires_at {
+                dead.push(k.clone());
+            }
+        }
+        for k in dead.iter() {
+            self.items.remove(k);
+        }
+    }
+
+    fn record(mut ref self, args: ref Vec[String]) {
+        self.log.push_str(encode_cmd(args));
+        self.records += 1;
+    }
+
+    fn set_text(mut ref self, key: Str, text: own String) {
+        self.items.insert(key.to_string(), Item { value: Value.Text(text), expires_at: -1 });
+    }
+
+    fn text_of(mut ref self, key: Str) -> Result[Option[String], Reply] {
+        if not self.live(key) {
+            return Ok(None);
+        }
+        match self.items.get(key) {
+            Some(it) => match it.value {
+                Value.Text(s) => Ok(Some(s.clone())),
+                Value.List(_) => Err(wrongtype()),
+            },
+            None => Ok(None),
+        }
+    }
+
+    fn incr_by(mut ref self, key: Str, by: i64) -> Reply {
+        let cur = match self.text_of(key) {
+            Ok(Some(s)) => match to_int(s) {
+                Some(n) => n,
+                None => return not_int(),
+            },
+            Ok(None) => 0,
+            Err(r) => return r,
+        };
+        let next = match cur.checked_add(by) {
+            Some(n) => n,
+            None => return err("increment or decrement would overflow"),
+        };
+        let keep = match self.items.get(key) {
+            Some(it) => it.expires_at,
+            None => -1,
+        };
+        self.items.insert(key.to_string(), Item { value: Value.Text(f"{next}"), expires_at: keep });
+        Reply.Int(next)
+    }
+
+    fn push(mut ref self, key: Str, vals: Slice[String], front: bool) -> Reply {
+        if self.live(key) {
+            match self.items.get(key) {
+                Some(it) => match it.value {
+                    Value.Text(_) => return wrongtype(),
+                    Value.List(_) => {}
+                },
+                None => {}
+            }
+        } else {
+            self.items.insert(key.to_string(), Item { value: Value.List(VecDeque.new()), expires_at: -1 });
+        }
+        let mut (q, exp) = take_list(mut self.items, key);
+        for v in vals.iter() {
+            if front {
+                q.push_front(v.clone());
+            } else {
+                q.push_back(v.clone());
+            }
+        }
+        let n = q.len();
+        self.items.insert(key.to_string(), Item { value: Value.List(q), expires_at: exp });
+        Reply.Int(n)
+    }
+
+    fn list_reply(mut ref self, key: Str, start: i64, stop: i64) -> Reply {
+        if not self.live(key) {
+            return Reply.Many(Vec.new());
+        }
+        match self.items.get(key) {
+            Some(it) => match it.value {
+                Value.List(q) => {
+                    let n = q.len();
+                    let mut a = if start < 0 { n + start } else { start };
+                    let mut b = if stop < 0 { n + stop } else { stop };
+                    if a < 0 { a = 0; }
+                    if b >= n { b = n - 1; }
+                    let mut out: Vec[Reply] = Vec.new();
+                    let mut i = a;
+                    while i <= b {
+                        out.push(bulk(q.get(i).unwrap()));
+                        i += 1;
+                    }
+                    Reply.Many(out)
+                }
+                Value.Text(_) => wrongtype(),
+            },
+            None => Reply.Many(Vec.new()),
+        }
+    }
+
+    // Runs one command. `logging` is off while replaying the file.
+    fn exec(mut ref self, args: ref Vec[String], logging: bool) -> Reply {
+        self.now += 1;
+        if args.is_empty() {
+            return err("empty command");
+        }
+        let name = args[0].to_uppercase();
+        let argc = args.len();
+        let bad = err(f"wrong number of arguments for '{args[0].to_lowercase()}' command");
+        match name {
+            "PING" => {
+                if argc == 1 { Reply.Simple("PONG".to_string()) }
+                else if argc == 2 { bulk(args[1]) }
+                else { bad }
+            }
+            "ECHO" => if argc == 2 { bulk(args[1]) } else { bad },
+            "SET" => {
+                if not (argc == 3 or argc == 4) {
+                    return bad;
+                }
+                let nx = argc == 4 and args[3].to_uppercase() == "NX";
+                if argc == 4 and not nx {
+                    return err("syntax error");
+                }
+                if nx and self.live(args[1]) {
+                    return Reply.Bulk(None);
+                }
+                self.set_text(args[1], args[2].clone());
+                if logging {
+                    self.record(args);
+                }
+                ok()
+            }
+            "GET" => {
+                if argc != 2 {
+                    return bad;
+                }
+                match self.text_of(args[1]) {
+                    Ok(v) => Reply.Bulk(v),
+                    Err(r) => r,
+                }
+            }
+            "STRLEN" => {
+                if argc != 2 {
+                    return bad;
+                }
+                match self.text_of(args[1]) {
+                    Ok(Some(s)) => Reply.Int(s.len()),
+                    Ok(None) => Reply.Int(0),
+                    Err(r) => r,
+                }
+            }
+            "APPEND" => {
+                if argc != 3 {
+                    return bad;
+                }
+                let mut cur = match self.text_of(args[1]) {
+                    Ok(Some(s)) => s,
+                    Ok(None) => String.new(),
+                    Err(r) => return r,
+                };
+                cur.push_str(args[2]);
+                let n = cur.len();
+                self.set_text(args[1], cur);
+                if logging {
+                    self.record(args);
+                }
+                Reply.Int(n)
+            }
+            "INCR" | "DECR" | "INCRBY" => {
+                let by = if name == "INCRBY" {
+                    if argc != 3 {
+                        return bad;
+                    }
+                    match to_int(args[2]) {
+                        Some(n) => n,
+                        None => return not_int(),
+                    }
+                } else {
+                    if argc != 2 {
+                        return bad;
+                    }
+                    if name == "INCR" { 1 } else { -1 }
+                };
+                let r = self.incr_by(args[1], by);
+                match r {
+                    Reply.Int(_) => if logging { self.record(args); },
+                    _ => {}
+                }
+                r
+            }
+            "DEL" | "EXISTS" => {
+                if argc < 2 {
+                    return bad;
+                }
+                let mut n = 0;
+                for k in args[1..argc].iter() {
+                    if self.live(k) {
+                        n += 1;
+                        if name == "DEL" {
+                            self.items.remove(k);
+                        }
+                    }
+                }
+                if name == "DEL" and n > 0 and logging {
+                    self.record(args);
+                }
+                Reply.Int(n)
+            }
+            "LPUSH" | "RPUSH" => {
+                if argc < 3 {
+                    return bad;
+                }
+                let r = self.push(args[1], args[2..argc], name == "LPUSH");
+                match r {
+                    Reply.Int(_) => if logging { self.record(args); },
+                    _ => {}
+                }
+                r
+            }
+            "LPOP" => {
+                if argc != 2 {
+                    return bad;
+                }
+                if not self.live(args[1]) {
+                    return Reply.Bulk(None);
+                }
+                let it = self.items.get(args[1]).unwrap();
+                match it.value {
+                    Value.Text(_) => return wrongtype(),
+                    Value.List(_) => {}
+                }
+                let mut (q, exp) = take_list(mut self.items, args[1]);
+                let r = Reply.Bulk(q.pop_front());
+                if not q.is_empty() {
+                    self.items.insert(args[1].clone(), Item { value: Value.List(q), expires_at: exp });
+                }
+                if logging {
+                    self.record(args);
+                }
+                r
+            }
+            "LLEN" => {
+                if argc != 2 {
+                    return bad;
+                }
+                if not self.live(args[1]) {
+                    return Reply.Int(0);
+                }
+                let it = self.items.get(args[1]).unwrap();
+                match it.value {
+                    Value.List(q) => Reply.Int(q.len()),
+                    Value.Text(_) => wrongtype(),
+                }
+            }
+            "LRANGE" => {
+                if argc != 4 {
+                    return bad;
+                }
+                match (to_int(args[2]), to_int(args[3])) {
+                    (Some(a), Some(b)) => self.list_reply(args[1], a, b),
+                    _ => not_int(),
+                }
+            }
+            "EXPIRE" | "EXPIREAT" => {
+                if argc != 3 {
+                    return bad;
+                }
+                let n = match to_int(args[2]) {
+                    Some(n) => n,
+                    None => return not_int(),
+                };
+                if not self.live(args[1]) {
+                    return Reply.Int(0);
+                }
+                let at = if name == "EXPIRE" { self.now + n } else { n };
+                let mut it = self.items.remove(args[1]).unwrap();
+                it.expires_at = at;
+                self.items.insert(args[1].clone(), it);
+                if logging {
+                    self.record(vec!["EXPIREAT".to_string(), args[1].clone(), f"{at}"]);
+                }
+                Reply.Int(1)
+            }
+            "TTL" => {
+                if argc != 2 {
+                    return bad;
+                }
+                if not self.live(args[1]) {
+                    return Reply.Int(-2);
+                }
+                let at = self.items.get(args[1]).unwrap().expires_at;
+                if at < 0 { Reply.Int(-1) } else { Reply.Int(at - self.now) }
+            }
+            "TYPE" => {
+                if argc != 2 {
+                    return bad;
+                }
+                if not self.live(args[1]) {
+                    return Reply.Simple("none".to_string());
+                }
+                let it = self.items.get(args[1]).unwrap();
+                match it.value {
+                    Value.Text(_) => Reply.Simple("string".to_string()),
+                    Value.List(_) => Reply.Simple("list".to_string()),
+                }
+            }
+            "KEYS" => {
+                if argc != 2 {
+                    return bad;
+                }
+                self.purge();
+                let pat: Vec[char] = args[1].chars().collect();
+                let mut out: Vec[Reply] = Vec.new();
+                for k in self.items.keys() {
+                    let s: Vec[char] = k.chars().collect();
+                    if glob(pat, s) {
+                        out.push(bulk(k));
+                    }
+                }
+                Reply.Many(out)
+            }
+            "DBSIZE" => {
+                self.purge();
+                Reply.Int(self.items.len())
+            }
+            "FLUSHALL" => {
+                self.items.clear();
+                if logging {
+                    self.record(args);
+                }
+                ok()
+            }
+            _ => err(f"unknown command '{args[0]}'"),
+        }
+    }
+}
+
+// Reads commands off the raw input: RESP arrays of bulk strings, or inline
+// commands split on whitespace. Err on a frame the input ends inside.
+struct RespReader { text: String, at: i64 }
+
+impl RespReader {
+    fn line(mut ref self) -> Result[String, String] {
+        match self.text[self.at..self.text.len()].find("\r\n") {
+            Some(i) => {
+                let l = self.text[self.at..self.at + i].to_string();
+                self.at += i + 2;
+                Ok(l)
+            }
+            None => Err("Protocol error: unexpected end of input".to_string()),
+        }
+    }
+
+    fn next(mut ref self) -> Result[Option[Vec[String]], String] {
+        if self.at >= self.text.len() {
+            return Ok(None);
+        }
+        let head = self.line()?;
+        if not head.starts_with("*") {
+            let mut args: Vec[String] = Vec.new();
+            for w in head.split_whitespace() {
+                args.push(w.to_string());
+            }
+            return Ok(Some(args));
+        }
+        let n = match to_int(head[1..head.len()]) {
+            Some(n) => n,
+            None => return Err("Protocol error: invalid multibulk length".to_string()),
+        };
+        let mut args: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let h = self.line()?;
+            if not h.starts_with("$") {
+                return Err(f"Protocol error: expected '$', got '{h}'");
+            }
+            let len = match to_int(h[1..h.len()]) {
+                Some(n) => n,
+                None => return Err("Protocol error: invalid bulk length".to_string()),
+            };
+            if self.at + len + 2 > self.text.len() {
+                return Err("Protocol error: unexpected end of input".to_string());
+            }
+            args.push(self.text[self.at..self.at + len].to_string());
+            self.at += len + 2;
+        }
+        Ok(Some(args))
+    }
+}
+
+fn serve(store: mut ref Store, raw: own String) -> String {
+    let mut p = RespReader { text: raw, at: 0 };
+    let mut out = String.new();
+    loop {
+        match p.next() {
+            Ok(Some(args)) => encode(store.exec(args, true), mut out),
+            Ok(None) => break,
+            Err(e) => {
+                encode(Reply.Error(f"ERR {e}"), mut out);
+                break;
+            }
+        }
+    }
+    out
+}
+
+// redis-cli style: quotes a value, escaping control characters.
+fn show(s: Str) -> String {
+    let mut out = String.from("\"");
+    for c in s.chars() {
+        match c {
+            '\r' => out.push_str("\\r"),
+            '\n' => out.push_str("\\n"),
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn show_arg(s: Str) -> String {
+    for c in s.chars() {
+        if c == ' ' or c == '"' or c == '\r' or c == '\n' {
+            return show(s);
+        }
+    }
+    s.to_string()
+}
+
+// Client side: decodes one reply starting at `at`, returns it and the end.
+fn decode(text: Str, at: i64) -> Result[(Reply, i64), String] {
+    let rest = text[at..text.len()];
+    let eol = match rest.find("\r\n") {
+        Some(i) => i,
+        None => return Err("short reply".to_string()),
+    };
+    let body = rest[1..eol].to_string();
+    let next = at + eol + 2;
+    if rest.starts_with("+") {
+        return Ok((Reply.Simple(body), next));
+    }
+    if rest.starts_with("-") {
+        return Ok((Reply.Error(body), next));
+    }
+    let n = match to_int(body) {
+        Some(n) => n,
+        None => return Err(f"bad length {body}"),
+    };
+    if rest.starts_with(":") {
+        return Ok((Reply.Int(n), next));
+    }
+    if rest.starts_with("$") {
+        if n < 0 {
+            return Ok((Reply.Bulk(None), next));
+        }
+        return Ok((Reply.Bulk(Some(text[next..next + n].to_string())), next + n + 2));
+    }
+    if rest.starts_with("*") {
+        let mut items: Vec[Reply] = Vec.new();
+        let mut pos = next;
+        for _ in 0..n {
+            let (r, p) = decode(text, pos)?;
+            items.push(r);
+            pos = p;
+        }
+        return Ok((Reply.Many(items), pos));
+    }
+    Err("unknown reply type".to_string())
+}
+
+fn print_reply(r: ref Reply) {
+    match r {
+        Reply.Simple(s) => println(s),
+        Reply.Error(s) => println(f"(error) {s}"),
+        Reply.Int(n) => println(f"(integer) {n}"),
+        Reply.Bulk(None) => println("(nil)"),
+        Reply.Bulk(Some(s)) => println(show(s)),
+        Reply.Many(items) => {
+            if items.is_empty() {
+                println("(empty array)");
+            }
+            let mut i = 1;
+            for it in items.iter() {
+                match it {
+                    Reply.Bulk(Some(s)) => println(f"{i}) {show(s)}"),
+                    _ => println(f"{i}) ?"),
+                }
+                i += 1;
+            }
+        }
+    }
+}
+
+fn read_all(conn: ref TcpStream) -> Result[String, String] {
+    let mut bytes: Vec[u8] = Vec.new();
+    let mut buf: Array[u8, 64] = [0u8; 64];
+    loop {
+        match conn.read(mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                for i in 0..n {
+                    bytes.push(buf[i]);
+                }
+            }
+            Err(_) => return Err("read failed".to_string()),
+        }
+    }
+    match String.from_utf8(bytes) {
+        Ok(s) => Ok(s),
+        Err(_) => Err("not utf-8".to_string()),
+    }
+}
+
+fn append_file(path: Str, text: Str) -> Result[(), IoError] {
+    let f = File.append(path.to_string())?;
+    let bytes = text.bytes();
+    let mut off = 0;
+    while off < bytes.len() {
+        off += f.write(bytes[off..bytes.len()])? as i64;
+    }
+    f.sync_data()?;
+    Ok(())
+}
+
+// One client session: send `wire` (with `cmds` for display), let the server
+// answer, print each command and its reply, then flush the AOF.
+fn session(listener: ref TcpListener, store: mut ref Store, label: Str, cmds: ref Vec[Vec[String]], wire: Str) {
+    println(f"== {label}");
+    let client = match TcpStream.connect(ADDR.to_string()) {
+        Ok(c) => c,
+        Err(_) => {
+            println("connect failed");
+            return;
+        }
+    };
+    match client.write_all(wire.bytes()) {
+        Ok(_) => {}
+        Err(_) => println("client write failed"),
+    }
+    match client.shutdown_write() {
+        Ok(_) => {}
+        Err(_) => println("shutdown failed"),
+    }
+    match listener.accept() {
+        Ok(conn) => {
+            let out = match read_all(conn) {
+                Ok(raw) => serve(store, raw),
+                Err(e) => f"-ERR {e}\r\n",
+            };
+            match conn.write_all(out.bytes()) {
+                Ok(_) => {}
+                Err(_) => println("server write failed"),
+            }
+        }
+        Err(_) => println("accept failed"),
+    }
+    let resp = match read_all(client) {
+        Ok(r) => r,
+        Err(e) => {
+            println(f"client read: {e}");
+            return;
+        }
+    };
+    let mut at = 0;
+    let mut i = 0;
+    while at < resp.len() {
+        match decode(resp, at) {
+            Ok((r, next)) => {
+                if i < cmds.len() {
+                    let shown: Vec[String] = cmds[i].iter().map(|a| show_arg(a)).collect();
+                    println(f"> {shown.join(" ")}");
+                }
+                print_reply(r);
+                at = next;
+            }
+            Err(e) => {
+                println(f"decode: {e}");
+                break;
+            }
+        }
+        i += 1;
+    }
+    if not store.log.is_empty() {
+        match append_file(AOF, store.log) {
+            Ok(_) => {}
+            Err(_) => println("aof append failed"),
+        }
+        store.log = String.new();
+    }
+    match fs.write(CLOCK.to_string(), f"{store.now}") {
+        Ok(_) => {}
+        Err(_) => println("clock write failed"),
+    }
+}
+
+fn words(line: Str) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    for w in line.split_whitespace() {
+        v.push(w.to_string());
+    }
+    v
+}
+
+// A batch sent as RESP arrays; `extra` is appended raw after them.
+fn resp_session(listener: ref TcpListener, store: mut ref Store, label: Str, lines: Slice[Str], extra: Str) {
+    let mut cmds: Vec[Vec[String]] = Vec.new();
+    let mut wire = String.new();
+    for l in lines.iter() {
+        let c = words(l);
+        wire.push_str(encode_cmd(c));
+        cmds.push(c);
+    }
+    wire.push_str(extra);
+    session(listener, store, label, cmds, wire);
+}
+
+fn restart() -> Result[Store, String] {
+    let mut s = Store.new();
+    let text = match fs.read_to_string(AOF.to_string()) {
+        Ok(t) => t,
+        Err(_) => return Err("no aof".to_string()),
+    };
+    let size = text.len();
+    let mut p = RespReader { text: text, at: 0 };
+    let mut n = 0;
+    loop {
+        match p.next()? {
+            Some(args) => {
+                s.exec(args, false);
+                n += 1;
+            }
+            None => break,
+        }
+    }
+    s.now = match fs.read_to_string(CLOCK.to_string()) {
+        Ok(t) => to_int(t.trim()).unwrap_or(0),
+        Err(_) => 0,
+    };
+    println(f"replayed {n} records ({size} bytes), clock {s.now}");
+    Ok(s)
+}
+
+fn main() {
+    let listener = match TcpListener.bind(ADDR.to_string()) {
+        Ok(l) => l,
+        Err(_) => {
+            println("bind failed");
+            return;
+        }
+    };
+    let mut store = Store.new();
+    match fs.write(AOF.to_string(), "") {
+        Ok(_) => {}
+        Err(_) => println("aof reset failed"),
+    }
+
+    resp_session(listener, mut store, "basics", [
+        "PING", "SET greeting hello", "GET greeting", "GET missing",
+        "APPEND greeting _world", "STRLEN greeting", "SET n 41", "INCR n",
+        "INCRBY n -50", "DECR n", "INCR greeting", "EXISTS greeting n nope",
+        "INCRBY n 9223372036854775807", "INCRBY n 10", "GET n",
+    ], "");
+    resp_session(listener, mut store, "lists", [
+        "RPUSH q a b c", "LPUSH q z", "LRANGE q 0 -1", "LRANGE q 1 2",
+        "LPOP q", "LLEN q", "TYPE q", "GET q", "TYPE nope", "LRANGE nope 0 -1",
+        "RPUSH greeting x",
+    ], "");
+    resp_session(listener, mut store, "expiry", [
+        "SET temp 1", "EXPIRE temp 3", "TTL temp", "GET temp", "PING",
+        "GET temp", "TTL temp", "TTL greeting", "SET keep yes", "EXPIRE keep 100",
+    ], "");
+
+    // Inline commands, as a telnet user would type them.
+    let inline: Array[Str, 10] = [
+        "SET user:1 ann", "SET user:2 bob", "SET admin x", "KEYS user:*",
+        "KEYS *", "KEYS ?dmin", "DBSIZE", "DEL user:1 user:9", "FROB x", "GET",
+    ];
+    let mut cmds: Vec[Vec[String]] = Vec.new();
+    let mut wire = String.new();
+    for l in inline.iter() {
+        cmds.push(words(l));
+        wire.push_str(f"{l}\r\n");
+    }
+    session(listener, mut store, "inline", cmds, wire);
+
+    // A bulk value holding CRLF and spaces, which only RESP can carry.
+    let multi = vec!["SET".to_string(), "multi".to_string(), "line one\r\nline two".to_string()];
+    let mut bin: Vec[Vec[String]] = vec![multi.clone(), words("GET multi"), words("STRLEN multi"),
+        words("SET once 1 NX"), words("SET once 2 NX"), words("GET once"), words("SET once 3 XX")];
+    let mut wire = String.new();
+    for c in bin.iter() {
+        wire.push_str(encode_cmd(c));
+    }
+    session(listener, mut store, "binary-safe", bin, wire);
+
+    // The input ends inside a frame: the server answers what came before.
+    resp_session(listener, mut store, "truncated", ["PING", "SET last ok"], "*2\r\n$3\r\nGET\r\n$5\r\nab");
+
+    let records = store.records;
+    let before = store.items.len();
+    println(f"== restart ({records} records logged, {before} keys in memory)");
+    let mut fresh = match restart() {
+        Ok(s) => s,
+        Err(e) => {
+            println(f"restart failed: {e}");
+            return;
+        }
+    };
+    resp_session(listener, mut fresh, "after restart", [
+        "DBSIZE", "KEYS *", "GET greeting", "GET n", "LRANGE q 0 -1", "GET multi",
+        "TTL keep", "GET temp", "GET once", "GET last",
+    ], "");
+}
