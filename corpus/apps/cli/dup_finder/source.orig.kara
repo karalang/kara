@@ -1,0 +1,314 @@
+// A duplicate-file finder: builds a small directory tree on disk, lists it,
+// streams every file through FNV-1a 64 in fixed-size chunks, groups files by
+// size and hash, confirms each group byte for byte, reports the groups and
+// the bytes they waste, then removes every copy but the first and writes a
+// CSV manifest of what it did. Empty files are counted, never grouped.
+//
+// The file system library has no directory listing, mkdir or remove, so
+// those go through `sh` (see notes.md).
+
+const CHUNK: i64 = 64;
+
+struct FileInfo { path: String, size: i64, hash: u64 }
+
+fn show(e: IoError) -> String {
+    match e {
+        IoError.NotFound => "not found".to_string(),
+        IoError.PermissionDenied => "permission denied".to_string(),
+        IoError.Other(m) => m.clone(),
+        _ => "io error".to_string(),
+    }
+}
+
+// Single-quotes a path for `sh`, so names with spaces or quotes survive.
+fn quote(path: Str) -> String {
+    let mut out = String.from("'");
+    for c in path.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+// RFC 4180: quote a field only if it holds a comma, a quote or a newline.
+fn csv_field(s: Str) -> String {
+    if not (s.contains(",") or s.contains("\"") or s.contains("\n")) {
+        return s.to_string();
+    }
+    let mut out = String.from("\"");
+    for c in s.chars() {
+        if c == '"' {
+            out.push_str("\"\"");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn sh(script: Str) -> Result[String, String] {
+    let child = match Command.new("sh").arg("-c").arg(script)
+        .stdout(Stdio.Piped).stderr(Stdio.Piped).spawn() {
+        Ok(c) => c,
+        Err(e) => return Err(f"spawn: {show(e)}"),
+    };
+    let out = match child.stdout() {
+        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        None => String.new(),
+    };
+    let err = match child.stderr() {
+        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        None => String.new(),
+    };
+    match child.wait() {
+        Ok(st) => if st.code == 0 { Ok(out) } else { Err(f"exit {st.code}: {err.trim()}") },
+        Err(e) => Err(f"wait: {show(e)}"),
+    }
+}
+
+fn write_bytes(path: Str, bytes: Slice[u8]) -> Result[(), IoError] {
+    let f = File.create(path)?;
+    let mut off = 0;
+    while off < bytes.len() {
+        let n = f.write(bytes[off..bytes.len()])?;
+        off += n;
+    }
+    Ok(())
+}
+
+fn read_bytes(path: Str) -> Result[Vec[u8], IoError] {
+    let f = File.open(path)?;
+    let mut out: Vec[u8] = Vec.new();
+    let mut buf: Vec[u8] = Vec.new();
+    for _ in 0..CHUNK {
+        buf.push(0u8);
+    }
+    loop {
+        let n = f.read(mut buf[0..CHUNK])?;
+        if n == 0 {
+            break;
+        }
+        for i in 0..n {
+            out.push(buf[i]);
+        }
+    }
+    Ok(out)
+}
+
+// Streams the file in CHUNK-byte reads: the size and hash, never the bytes.
+fn scan(path: Str) -> Result[FileInfo, IoError] {
+    let f = File.open(path)?;
+    let mut buf: Vec[u8] = Vec.new();
+    for _ in 0..CHUNK {
+        buf.push(0u8);
+    }
+    let mut h: u64 = 14695981039346656037u64;
+    let mut size = 0;
+    loop {
+        let n = f.read(mut buf[0..CHUNK])?;
+        if n == 0 {
+            break;
+        }
+        for i in 0..n {
+            h = (h ^ (buf[i] as u64)).wrapping_mul(1099511628211u64);
+        }
+        size += n;
+    }
+    Ok(FileInfo { path: path.to_string(), size: size, hash: h })
+}
+
+fn pattern(n: i64, seed: i64) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for i in 0..n {
+        v.push(((i * 31 + seed) % 251) as u8);
+    }
+    v
+}
+
+fn build_tree() -> Result[i64, String] {
+    sh("rm -rf tree && mkdir -p tree/docs tree/backup/old tree/img tree/data")?;
+    let texts: Array[(Str, Str), 8] = [
+        ("tree/docs/readme.txt", "hello world\n"),
+        ("tree/backup/readme.txt", "hello world\n"),
+        ("tree/backup/old/readme.copy", "hello world\n"),
+        ("tree/docs/notes.txt", "hello wordl\n"),
+        ("tree/docs/my notes.txt", "hello wordl\n"),
+        ("tree/docs/it's.txt", "unique text, nobody else has it\n"),
+        ("tree/empty", ""),
+        ("tree/docs/empty", ""),
+    ];
+    let mut files = 0;
+    for (path, text) in texts.iter() {
+        match fs.write(path, text) {
+            Ok(_) => files += 1,
+            Err(e) => return Err(f"{path}: {show(e)}"),
+        }
+    }
+    let logo = pattern(300, 7);
+    let mut logo2 = pattern(300, 7);
+    logo2[299] = logo2[299] ^ 1u8;
+    let big = pattern(5000, 3);
+    let blobs: Vec[(Str, Vec[u8])] = vec![
+        ("tree/img/logo.bin", logo.clone()),
+        ("tree/backup/logo.bin", logo),
+        ("tree/img/logo2.bin", logo2),
+        ("tree/data/a.log", big.clone()),
+        ("tree/data/b.log", big.clone()),
+        ("tree/backup/a,b.log", big.clone()),
+        ("tree/backup/old/a.log", big),
+    ];
+    for (path, bytes) in blobs.iter() {
+        match write_bytes(path, bytes) {
+            Ok(_) => files += 1,
+            Err(e) => return Err(f"{path}: {show(e)}"),
+        }
+    }
+    Ok(files)
+}
+
+fn list(root: Str) -> Result[Vec[String], String] {
+    let out = sh(f"find {quote(root)} -type f")?;
+    let mut paths: Vec[String] = Vec.new();
+    for l in out.lines() {
+        if not l.is_empty() {
+            paths.push(l.to_string());
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn same_bytes(a: Str, b: Str) -> Result[bool, IoError] {
+    let x = read_bytes(a)?;
+    let y = read_bytes(b)?;
+    Ok(x == y)
+}
+
+fn main() {
+    let made = match build_tree() {
+        Ok(n) => n,
+        Err(m) => {
+            println(f"build failed: {m}");
+            return;
+        }
+    };
+    println(f"wrote {made} files");
+
+    let paths = match list("tree") {
+        Ok(p) => p,
+        Err(m) => {
+            println(f"list failed: {m}");
+            return;
+        }
+    };
+    println(f"found {paths.len()} files");
+
+    let mut empties = 0;
+    let mut groups: SortedMap[String, Vec[FileInfo]] = SortedMap.new();
+    let mut total = 0;
+    for p in paths.iter() {
+        let e = match scan(p) {
+            Ok(e) => e,
+            Err(err) => {
+                println(f"{p}: {show(err)}");
+                continue;
+            }
+        };
+        total += e.size;
+        if e.size == 0 {
+            empties += 1;
+            continue;
+        }
+        let key = f"{e.size:08}-{e.hash:016x}";
+        match groups.get_mut(key) {
+            Some(g) => g.push(e),
+            None => {
+                groups.insert(key, vec![e]);
+            }
+        }
+    }
+    println(f"scanned {total} bytes, {empties} empty files skipped");
+
+    let mut wasted = 0;
+    let mut dup_groups = 0;
+    let mut removals: Vec[(String, String, i64)] = Vec.new();
+    for (key, g) in groups.iter() {
+        if g.len() < 2 {
+            continue;
+        }
+        let keep = g[0].path.clone();
+        let mut members: Vec[String] = Vec.new();
+        for e in g.iter() {
+            if e.path == keep {
+                continue;
+            }
+            match same_bytes(keep, e.path) {
+                Ok(true) => {
+                    members.push(e.path.clone());
+                    removals.push((keep.clone(), e.path.clone(), e.size));
+                }
+                Ok(false) => println(f"hash collision: {keep} vs {e.path}"),
+                Err(err) => println(f"{e.path}: {show(err)}"),
+            }
+        }
+        if members.is_empty() {
+            continue;
+        }
+        dup_groups += 1;
+        wasted += g[0].size * members.len();
+        println(f"group {dup_groups}: {g[0].size} bytes, hash {g[0].hash:016x}");
+        println(f"  keep   {keep}");
+        for m in members.iter() {
+            println(f"  copy   {m}");
+        }
+    }
+    println(f"{dup_groups} duplicate groups, {removals.len()} copies, {wasted} bytes wasted");
+
+    let mut csv = String.from("kept,removed,bytes\n");
+    let mut removed = 0;
+    for (keep, gone, size) in removals.iter() {
+        match sh(f"rm -- {quote(gone)}") {
+            Ok(_) => removed += 1,
+            Err(m) => println(f"rm {gone}: {m}"),
+        }
+        csv.push_str(f"{csv_field(keep)},{csv_field(gone)},{size}\n");
+    }
+    println(f"removed {removed} files");
+    match fs.write("dups.csv", csv) {
+        Ok(_) => {}
+        Err(e) => println(f"dups.csv: {show(e)}"),
+    }
+
+    let after = match list("tree") {
+        Ok(p) => p,
+        Err(m) => {
+            println(f"list failed: {m}");
+            return;
+        }
+    };
+    let mut left = 0;
+    for p in after.iter() {
+        match scan(p) {
+            Ok(e) => left += e.size,
+            Err(err) => println(f"{p}: {show(err)}"),
+        }
+    }
+    println(f"after: {after.len()} files, {left} bytes ({total - left} freed)");
+    for p in after.iter() {
+        println(f"  {p}");
+    }
+    match fs.read_lines("dups.csv") {
+        Ok(lines) => {
+            println(f"manifest: {lines.len() - 1} rows");
+            for l in lines.iter() {
+                println(f"  {l}");
+            }
+        }
+        Err(e) => println(f"dups.csv: {show(e)}"),
+    }
+}

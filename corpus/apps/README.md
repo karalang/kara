@@ -121,6 +121,7 @@ cli/log_rotate      size-based log rotation, line scan of every segment, seek-fr
 pipeline/flag_eval  feature flags from a JSON file, JSON-lines requests and decisions, config reload
 cli/archive         binary archive format with CRC-32: pack, list, extract, detect corruption
 cli/site_gen        static site generator: markdown subset to HTML, front matter, env config, index + sitemap
+cli/dup_finder      duplicate-file finder: chunked FNV-1a hashing, byte-for-byte confirm, prune, CSV manifest
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

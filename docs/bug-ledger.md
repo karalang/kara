@@ -97,11 +97,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 258 |
-| missing-feature | 254 |
+| missing-feature | 255 |
 | false-positive | 174 |
 | other | 172 |
 | perf | 165 |
-| diagnostics | 159 |
+| diagnostics | 160 |
 | crash | 115 |
 | soundness | 103 |
 | use-after-free | 90 |
@@ -112,11 +112,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2888 |
 | interp | 922 |
-| typecheck | 412 |
+| typecheck | 413 |
 | other | 115 |
 | ownership | 93 |
 | cli | 76 |
-| runtime | 67 |
+| runtime | 68 |
 | parser | 62 |
 | autopar | 59 |
 | resolver | 40 |
@@ -187,6 +187,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-51 | 2026-10-14 | ownership | medium | `karac check` refuses binding a range view of a FIELD to a local in a method, `let s = self.bytes[a..b]; s` (and `Ok(s)`), with "slice from temporary value escapes the enclosing statement", though `self.bytes` is a place and not a temporary; the same body returned without the binding passes, and every MIR surface accepts both | — |
 | B-2026-10-14-52 | 2026-10-14 | codegen | high | `CONST.iter()` on a `const` array runs ZERO iterations on the MIR compiled backends: `const AA: Array[i64, 3] = [1, 2, 3]; for x in AA.iter() { s += *x; }` leaves `s` at 0 under `karac __mir-llvm-run` and `karac build --mir` with no error, and `__mir-llvm-asan` reports a stack-buffer-overflow READ of size 16, because the call passes an 8-byte pointer to the array where `Slice[i64].iter` reads a 16-byte (ptr, len) slice | — |
 | B-2026-10-14-53 | 2026-10-14 | ownership | medium | `karac check` reports a `String` passed to `fs.write(path, content)` as MOVED, so `fs.write(p, out)` followed by any use of `out` is refused ("value 'out' moved here, used again here"), though the library declares `contents: ref String` and docs/library/io.md `content: Str`, and every MIR surface accepts the program | — |
+| B-2026-10-14-54 | 2026-10-14 | runtime | medium | The file system library is two functions: docs/library/io.md specifies only `fs.read_to_string` and `fs.write` (v2 adds `read_lines`), so a Kāra program cannot list a directory, create or remove a directory, remove, rename or copy a file, test whether a path exists, or read a file's size or modification time without shelling out to `sh` | — |
+| B-2026-10-14-55 | 2026-10-14 | typecheck | medium | `karac check` accepts ANY method name on the ambient resources `fs`, `env` and `stdout`: `fs.bogus_op("x".to_string())` and `env.bogus_op()` print `All checks passed.`, and the program fails only when run (MIR build: "a type that failed to check is not lowered yet"; interpreter: "ambient resource 'FileSystem' has no default method 'bogus_op' yet") | — |
 
 ### Relocated
 

@@ -1,0 +1,38 @@
+wrote 15 files
+found 15 files
+scanned 20992 bytes, 2 empty files skipped
+group 1: 12 bytes, hash 782e1488cd5a68b7
+  keep   tree/backup/old/readme.copy
+  copy   tree/backup/readme.txt
+  copy   tree/docs/readme.txt
+group 2: 12 bytes, hash bcbb9c88f3f8ad17
+  keep   tree/docs/my notes.txt
+  copy   tree/docs/notes.txt
+group 3: 300 bytes, hash e80d5b1d44738bdd
+  keep   tree/backup/logo.bin
+  copy   tree/img/logo.bin
+group 4: 5000 bytes, hash 8494287a91a99461
+  keep   tree/backup/a,b.log
+  copy   tree/backup/old/a.log
+  copy   tree/data/a.log
+  copy   tree/data/b.log
+4 duplicate groups, 7 copies, 15336 bytes wasted
+removed 7 files
+after: 8 files, 5656 bytes (15336 freed)
+  tree/backup/a,b.log
+  tree/backup/logo.bin
+  tree/backup/old/readme.copy
+  tree/docs/empty
+  tree/docs/it's.txt
+  tree/docs/my notes.txt
+  tree/empty
+  tree/img/logo2.bin
+manifest: 7 rows
+  kept,removed,bytes
+  tree/backup/old/readme.copy,tree/backup/readme.txt,12
+  tree/backup/old/readme.copy,tree/docs/readme.txt,12
+  tree/docs/my notes.txt,tree/docs/notes.txt,12
+  tree/backup/logo.bin,tree/img/logo.bin,300
+  "tree/backup/a,b.log",tree/backup/old/a.log,5000
+  "tree/backup/a,b.log",tree/data/a.log,5000
+  "tree/backup/a,b.log",tree/data/b.log,5000
