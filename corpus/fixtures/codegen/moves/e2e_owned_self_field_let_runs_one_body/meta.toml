@@ -4,13 +4,14 @@ expect = "stdout"
 exit = 0
 tags = ["drop", "move-from-borrow"]
 class = "e"
-expected_from = "assert"
+expected_from = "pin"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []
 backends = []
 env = {}
-bucket = "mir-gap:typecheck"
-classified_with = "5a266e1a1"
+note = "a pin from the drop model, read off the program: `borrowedlet(mut ref self)` binds `let e = ref self.e`, a borrow, so nothing drops in it, and `a8`, the only local still owning a value at the end of `main`, drops once after `end`, the enum's body (`dE`) before its payload's (`dR8`). legacy.out and the codegen test's literal drop `a8` twice inside `borrowedlet` and never at the end (a legacy double drop; legacy is frozen). Equal to the MIR pipeline's stdout at ea2a2da2be e-spec: legacy differs from the drop model; v2 matches it"
+bucket = "e-spec"
+classified_with = "4828943da"
 model_rev = "1aa23105"
 model_src = "71a17b17"
