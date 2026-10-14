@@ -1,0 +1,346 @@
+// LeetCode #592: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// expressions.
+
+// ---- star arm ----------------------------------------------------------
+
+fn gcd_star(a: i64, b: i64) -> i64 {
+    if b == 0 { a.abs() } else { gcd_star(b, a % b) }
+}
+
+// The number made of the digits from `i`, and where they stop.
+fn digits_star(e: Vec[char], i: i64) -> (i64, i64) {
+    let mut value = 0;
+    let mut j = i;
+    while j < e.len() and e[j].is_ascii_digit() {
+        value = value * 10 + (e[j] as i64 - '0' as i64);
+        j += 1;
+    }
+    (value, j)
+}
+
+fn fraction_addition_star(expression: Str) -> String {
+    let e: Vec[char] = expression.chars().collect();
+    let mut num = 0;
+    let mut den = 1;
+    let mut i = 0;
+    while i < e.len() {
+        let mut sign = 1;
+        if e[i] == '-' or e[i] == '+' {
+            if e[i] == '-' {
+                sign = -1;
+            }
+            i += 1;
+        }
+        let (a, after_a) = digits_star(e, i);
+        let (b, after_b) = digits_star(e, after_a + 1);
+        i = after_b;
+        let common = den / gcd_star(den, b) * b;
+        num = num * (common / den) + sign * a * (common / b);
+        den = common;
+        let g = gcd_star(num, den);
+        num /= g;
+        den /= g;
+    }
+    f"{num}/{den}"
+}
+
+// ---- common arm --------------------------------------------------------
+
+fn gcd_common(a: i64, b: i64) -> i64 {
+    if b == 0 { a.abs() } else { gcd_common(b, a % b) }
+}
+
+fn fraction_addition_common(expression: Str) -> String {
+    let all = 2520;
+    let mut total = 0;
+    let mut sign = 1;
+    let mut value = 0;
+    let mut numerator = 0;
+    for c in expression.chars() {
+        if c.is_ascii_digit() {
+            value = value * 10 + c.to_digit(10).unwrap() as i64;
+        } else if c == '/' {
+            numerator = sign * value;
+            value = 0;
+        } else {
+            if numerator != 0 {
+                total += numerator * (all / value);
+            }
+            sign = if c == '-' { -1 } else { 1 };
+            value = 0;
+            numerator = 0;
+        }
+    }
+    total += numerator * (all / value);
+    let g = gcd_common(total, all);
+    f"{total / g}/{all / g}"
+}
+
+// ---- split arm ---------------------------------------------------------
+
+fn gcd_split(a: i64, b: i64) -> i64 {
+    if b == 0 { a.abs() } else { gcd_split(b, a % b) }
+}
+
+fn pieces_split(expression: Str) -> Vec[Str] {
+    let mut out: Vec[Str] = Vec.new();
+    let mut start = 0;
+    for (i, c) in expression.chars().enumerate() {
+        if i > 0 and (c == '+' or c == '-') {
+            out.push(expression[start..i]);
+            start = i;
+        }
+    }
+    out.push(expression[start..]);
+    out
+}
+
+fn fraction_addition_split(expression: Str) -> String {
+    let mut num = 0;
+    let mut den = 1;
+    for piece in pieces_split(expression) {
+        let slash = piece.find("/").unwrap();
+        let a = i64.parse(piece[0..slash]).unwrap();
+        let b = i64.parse(piece[slash + 1..]).unwrap();
+        num = num * b + a * den;
+        den *= b;
+        let g = gcd_split(num, den);
+        num /= g;
+        den /= g;
+    }
+    f"{num}/{den}"
+}
+
+// ---- rational arm ------------------------------------------------------
+
+#[derive(Copy, Clone)]
+struct Fraction {
+    num: i64,
+    den: i64,
+}
+
+fn gcd_rational(a: i64, b: i64) -> i64 {
+    if b == 0 { a.abs() } else { gcd_rational(b, a % b) }
+}
+
+impl Fraction {
+    fn new(num: i64, den: i64) -> Fraction {
+        let g = gcd_rational(num, den);
+        Fraction { num: num / g, den: den / g }
+    }
+}
+
+impl Add for Fraction {
+    type Output = Fraction;
+    fn add(own self, rhs: own Fraction) -> Fraction {
+        Fraction.new(self.num * rhs.den + rhs.num * self.den, self.den * rhs.den)
+    }
+}
+
+fn fraction_addition_rational(expression: Str) -> String {
+    let mut sum = Fraction.new(0, 1);
+    let mut rest = expression;
+    while not rest.is_empty() {
+        let mut end = 1;
+        while end < rest.len() and rest[end..end + 1] != "+" and rest[end..end + 1] != "-" {
+            end += 1;
+        }
+        let piece = rest[0..end];
+        let slash = piece.find("/").unwrap();
+        let num = i64.parse(piece[0..slash]).unwrap();
+        let den = i64.parse(piece[slash + 1..]).unwrap();
+        sum = sum + Fraction.new(num, den);
+        rest = rest[end..];
+    }
+    f"{sum.num}/{sum.den}"
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, expression: Str) -> String {
+    if which == 0 {
+        fraction_addition_star(expression)
+    } else if which == 1 {
+        fraction_addition_common(expression)
+    } else if which == 2 {
+        fraction_addition_split(expression)
+    } else {
+        fraction_addition_rational(expression)
+    }
+}
+
+// The greatest common divisor by subtraction, of two numbers at least 0
+// and not both 0.
+fn common_divisor(a: i64, b: i64) -> i64 {
+    let mut x = a;
+    let mut y = b;
+    while x != 0 and y != 0 {
+        if x >= y {
+            x -= y;
+        } else {
+            y -= x;
+        }
+    }
+    x + y
+}
+
+// The definition: over the product of every denominator, fraction k's
+// numerator is its own times every other denominator; add them, then
+// divide both by their greatest common divisor, the sign kept on top.
+fn definition(signs: Vec[i64], nums: Vec[i64], dens: Vec[i64]) -> String {
+    let mut den = 1;
+    for b in dens {
+        den *= b;
+    }
+    let mut num = 0;
+    for k in 0..nums.len() {
+        num += signs[k] * nums[k] * (den / dens[k]);
+    }
+    let g = common_divisor(num.abs(), den);
+    f"{num / g}/{den / g}"
+}
+
+// The expression the problem writes for the fractions: each `-` or `+`
+// in front, but no `+` in front of the first.
+fn render(signs: Vec[i64], nums: Vec[i64], dens: Vec[i64]) -> String {
+    let mut out = String.new();
+    for k in 0..nums.len() {
+        if signs[k] < 0 {
+            out.push('-');
+        } else if k > 0 {
+            out.push('+');
+        }
+        out.push_str(f"{nums[k]}/{dens[k]}");
+    }
+    out
+}
+
+fn coprime(a: i64, b: i64) -> bool {
+    common_divisor(a, b) == 1
+}
+
+fn reversed(v: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = v.len();
+    while k > 0 {
+        k -= 1;
+        out.push(v[k]);
+    }
+    out
+}
+
+fn negated(v: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for x in v {
+        out.push(-x);
+    }
+    out
+}
+
+// Whether `s` is `p/q` with `q` at least 1 and the two sharing no
+// factor, so `0/1` is the only way to write 0.
+fn lowest_terms(s: Str) -> bool {
+    let slash = match s.find("/") {
+        Some(at) => at,
+        None => return false,
+    };
+    let p = match i64.parse(s[0..slash]) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let q = match i64.parse(s[slash + 1..]) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    q >= 1 and common_divisor(p.abs(), q) == 1
+}
+
+// The answer with its sign turned over: `0/1` stays as it is.
+fn flipped(s: Str) -> String {
+    if s.starts_with("0/") {
+        s.to_string()
+    } else if s.starts_with("-") {
+        s[1..].to_string()
+    } else {
+        f"-{s}"
+    }
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5920;
+    let mut checks = 0;
+    let mut zeros = 0;
+    let mut wholes = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 8 irreducible fractions with numerators and denominators
+        // from 1 to 10. Every fourth case draws them from 1/1, 1/2, 1/3,
+        // 2/1 and 2/3 (or redraws from the rest), so that terms repeat.
+        let n = 1 + step(mut seed) % 8;
+        let few = t % 4 == 0;
+        let mut signs: Vec[i64] = Vec.new();
+        let mut nums: Vec[i64] = Vec.new();
+        let mut dens: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let mut a = 1 + step(mut seed) % (if few { 2 } else { 10 });
+            let mut b = 1 + step(mut seed) % (if few { 3 } else { 10 });
+            while not coprime(a, b) {
+                a = 1 + step(mut seed) % 10;
+                b = 1 + step(mut seed) % 10;
+            }
+            signs.push(if step(mut seed) % 2 == 0 { -1 } else { 1 });
+            nums.push(a);
+            dens.push(b);
+        }
+        let e = render(signs, nums, dens);
+        let want = definition(signs, nums, dens);
+        if want.starts_with("0/") {
+            zeros += 1;
+        } else if want.ends_with("/1") {
+            wholes += 1;
+        }
+        // P3: one more fraction, added and then taken away.
+        let a = 1 + step(mut seed) % 10;
+        let b = 1 + step(mut seed) % 10;
+        let extra = if coprime(a, b) { f"+{a}/{b}-{a}/{b}" } else { "+1/1-1/1".to_string() };
+        let padded = f"{e}{extra}";
+        // P4: the fractions in the opposite order.
+        let backwards = render(reversed(signs), reversed(nums), reversed(dens));
+        // P5: every sign turned over.
+        let opposite = render(negated(signs), nums, dens);
+        for which in 0..4 {
+            let got = answer(which, e);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: in lowest terms, with the sign on top.
+                lowest_terms(got),
+                // P3: a fraction added and taken away changes nothing.
+                answer(which, padded) == got,
+                // P4: the order of the fractions changes nothing.
+                answer(which, backwards) == got,
+                // P5: every sign turned over turns the answer's over.
+                answer(which, opposite) == flipped(got),
+            ];
+            for k in 0..5 {
+                checks += 1;
+                if not ok[k] {
+                    failures[k] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({zeros} zero, {wholes} other whole), 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
