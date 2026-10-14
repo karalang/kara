@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 255 |
-| missing-feature | 246 |
+| missing-feature | 247 |
 | other | 172 |
 | false-positive | 168 |
 | perf | 164 |
@@ -119,7 +119,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | runtime | 66 |
 | parser | 61 |
 | autopar | 59 |
-| resolver | 35 |
+| resolver | 36 |
 | effect | 30 |
 | lexer | 11 |
 ## Current state
@@ -610,6 +610,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-26 | 2026-10-14 | ownership+interp+codegen | medium | `ref place` on a field (`ref s.field`, design.md § `*` and `ref` in expressions) does not build on either MIR backend ("E_REF_OPERAND_UNSUPPORTED: only `ref <sequence>[i]` is supported in v1"), and `karac check` refuses returning one ("this borrow-return form is not yet supported"), so the spec's own `fn name(user: User) -> ref String { ref user.name }` is refused everywhere | — |
 | B-2026-10-14-28 | 2026-10-14 | ownership | medium | `karac check`'s ownership pass counts lending a bare `for` element into a `ref` slot as a MOVE, so lending it twice is refused: `v.push(c); v.push(c);` into `Vec[ref Node]`, `stack.push((c, 1)); stack.push((c, 2));` into `Vec[(ref Node, i64)]`, and `let r: ref Node = c; let s: ref Node = c;` are each "value 'c' moved here, used again here", while `__mir-run` runs all three | — |
 | B-2026-10-14-29 | 2026-10-14 | interp+codegen | medium | The MIR borrow checker keeps a `Vec[(ref Node, i64)]` borrowed for as long as a `ref Node` copied out of one of its elements is live: `let (a, n) = v[0]; v.pop(); a.val` is refused on both MIR backends ("mutable borrow of _2 while it is borrowed", E0516), though core-semantics §1.1 makes the tuple `Copy` and the copied reference keeps the origin of the node, not of the vector; the same read out of a `Vec[ref Node]` runs, and `karac check` passes both | — |
+| B-2026-10-14-30 | 2026-10-14 | resolver | medium | A user type cannot implement an arithmetic, bitwise or subscript operator trait: `impl Add for Money { ... }` is refused at resolve ("user-defined `impl Add for Money` is not supported in v1; operator traits are stdlib-only") on every backend, though design.md § Operator traits says `a + b` becomes `Add.add(a, b)` "for `i32`, `String` or a user type alike" and § Default generic arguments shows `impl Add for Money { ... }`; only `Eq`, `Ord` and `Display` are let through | — |
 
 ### Relocated
 
