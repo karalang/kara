@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 253 |
 | missing-feature | 242 |
 | other | 172 |
-| perf | 162 |
+| perf | 163 |
 | false-positive | 156 |
 | diagnostics | 155 |
 | crash | 114 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2871 |
+| codegen | 2872 |
 | interp | 913 |
 | typecheck | 384 |
 | other | 115 |
 | ownership | 85 |
 | cli | 75 |
-| runtime | 65 |
+| runtime | 66 |
 | parser | 61 |
 | autopar | 59 |
 | resolver | 35 |
@@ -603,6 +603,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-1 | 2026-10-14 | typecheck | medium | `v[n.val] = x` is refused with "shared struct field 'Node.val' is not declared mut" when the INDEX reads a non-`mut` field of a `shared struct`: the assignment-target flag leaks from the indexed place into the index expression, so a read is checked as a write (`v[n.val] += x`, `let i = n.val; v[i] = x` and a plain struct's field all pass) | — |
 | B-2026-10-14-2 | 2026-10-14 | typecheck | medium | `s.push(c)`, `s.find(c)` and `s.split(c)` with `c` a `ref char` from `Vec[char].iter()` pass `karac check` but are refused by the MIR pipeline's typecheck (`'push' expects a Char argument, found 'ref char'`): the builtin String arms want exactly `Char` and do not peel a `ref` of a Copy type, which a user fn param and `Vec.push` both accept | — |
 | B-2026-10-14-4 | 2026-10-14 | typecheck | low | `parts[1..].join("/")` and `.concat()` on a `Slice[String]` are refused with "no method 'join' on type 'Slice'" on every pipeline, while `Vec[String].join` works and `len`/`contains`/`iter` reach the slice: the join/concat typecheck arm accepts only a `Vec`/`VecDeque` receiver; `parts[1..].to_vec().join("/")` is the copy that passes | — |
+| B-2026-10-14-5 | 2026-10-14 | codegen+runtime | medium | An f-string whose holes are `String`s or `str` slices runs about 5x slower than the same text built with `push_str` on the v2 compiled backend: kata 555's bench builds each candidate as `f"{t[k..]}{middle}{t[..k]}"` and takes 5.2 to 5.9 s on `karac build --mir`, against 0.94 to 1.10 s with `push_str` three times into a `String` (and 1.2 to 1.4 s for Rust's `format!`) | — |
 
 ### Relocated
 
