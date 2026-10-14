@@ -13,14 +13,21 @@ use super::ty::{FnKind, IntTy, Ty, TyInterner, TyKind};
 
 /// Every structural error in `body`, in block order. Empty means valid.
 pub fn validate(body: &Body, tys: &TyInterner) -> Vec<String> {
-    let mut v = Validator {
-        body,
-        tys,
-        errors: Vec::new(),
-        loc: String::new(),
-    };
+    let mut v = Validator::new(body, tys);
     v.run();
     v.errors
+}
+
+/// Where `body` moves a non-`Copy` value out of a place core semantics
+/// §3.7 forbids moving from: the source span of each such statement or
+/// terminator, and whether the place is inside a `shared` value (else it
+/// is behind a reference or an index). The front end reports these at
+/// the source line (B-2026-10-14-32); the validator still refuses any
+/// that a later pass makes.
+pub fn forbidden_moves(body: &Body, tys: &TyInterner) -> Vec<(crate::token::Span, bool)> {
+    let mut v = Validator::new(body, tys);
+    v.run();
+    v.moves
 }
 
 struct Validator<'a> {
@@ -28,9 +35,22 @@ struct Validator<'a> {
     tys: &'a TyInterner,
     errors: Vec<String>,
     loc: String,
+    span: crate::token::Span,
+    moves: Vec<(crate::token::Span, bool)>,
 }
 
-impl Validator<'_> {
+impl<'a> Validator<'a> {
+    fn new(body: &'a Body, tys: &'a TyInterner) -> Self {
+        Validator {
+            body,
+            tys,
+            errors: Vec::new(),
+            loc: String::new(),
+            span: SourceInfo::dummy().span,
+            moves: Vec::new(),
+        }
+    }
+
     fn err(&mut self, msg: impl AsRef<str>) {
         self.errors.push(format!("{}: {}", self.loc, msg.as_ref()));
     }
@@ -71,9 +91,11 @@ impl Validator<'_> {
         for (bi, block) in body.blocks.iter().enumerate() {
             for (si, st) in block.statements.iter().enumerate() {
                 self.loc = format!("bb{bi}[{si}]");
+                self.span = st.source_info.span;
                 self.statement(&st.kind);
             }
             self.loc = format!("bb{bi}[term]");
+            self.span = block.terminator.source_info.span;
             self.terminator(&block.terminator.kind);
         }
     }
@@ -178,11 +200,24 @@ impl Validator<'_> {
             Operand::Move(p) => {
                 let ty = self.place(p)?;
                 let what = pretty::place(self.body, self.tys, p);
+                // A function value behind a reference is a non-escaping
+                // parameter, which the borrow checker reports in its own
+                // terms (§9.3), so it is not one of the front end's moves.
+                let positioned = !matches!(
+                    self.tys.kind(ty),
+                    TyKind::Fn { .. } | TyKind::Closure(..) | TyKind::FnDef(_)
+                );
                 if p.is_move_forbidden() && !self.frame_field(p) {
+                    if positioned {
+                        self.moves.push((self.span, false));
+                    }
                     self.err(format!(
                         "move out of {what}, which is behind a reference or an index (core semantics §3.7)"
                     ));
                 } else if passes_through_shared(self.body, self.tys, p) {
+                    if positioned {
+                        self.moves.push((self.span, true));
+                    }
                     self.err(format!(
                         "move out of {what}, which is inside a shared value (core semantics §3.7)"
                     ));

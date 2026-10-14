@@ -14370,6 +14370,38 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     if !lowered.errors.is_empty() {
         return Err(format!("build: {}", lowered.errors.join("; ")));
     }
+    // Core semantics §3.7: a move of a non-`Copy` value out of a borrowed
+    // place or a `shared` value is the program's error, so say where it is
+    // in the program, as `karac check` does, rather than leave it to the
+    // validator's MIR-level report (B-2026-10-14-32).
+    let mut moves: Vec<(Span, bool)> = Vec::new();
+    for body in lowered.program.bodies.values() {
+        for (span, shared) in crate::mir::validate::forbidden_moves(body, &lowered.tys) {
+            if span.line > 0 && span.offset < user_len && !moves.iter().any(|m| m.0 == span) {
+                moves.push((span, shared));
+            }
+        }
+    }
+    if !moves.is_empty() {
+        moves.sort_by_key(|m| m.0.offset);
+        let msgs: Vec<String> = moves
+            .iter()
+            .map(|(span, shared)| {
+                let from = if *shared {
+                    "a `shared` value"
+                } else {
+                    "a borrowed place"
+                };
+                format!(
+                    "{}: cannot move a non-`Copy` value out of {from}: take a copy with \
+                     `.clone()`, use it in place, or take it with `mem.replace` / `mem.swap` \
+                     / `Option.take()` (core semantics §3.7)",
+                    at(*span)
+                )
+            })
+            .collect();
+        return Err(format!("build: {}", msgs.join("; ")));
+    }
     // `KARAC_MIR_DUMP=built` or `=elaborated` prints every body to stderr.
     let dump = std::env::var("KARAC_MIR_DUMP").ok();
     let names: FxHashSet<String> = lowered.program.bodies.keys().cloned().collect();

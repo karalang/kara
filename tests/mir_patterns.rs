@@ -227,3 +227,33 @@ fn main() {
         "-1 2 1 -6 m hi!\n",
     );
 }
+
+// B-2026-10-14-32: a move of a non-`Copy` field out of a `ref` or out of a
+// `shared` value is refused at its source line (core semantics §3.7), as
+// `karac check` refuses it, not by the MIR validator naming MIR locals.
+#[test]
+fn a_move_out_of_a_borrowed_or_shared_place_is_refused_at_its_line() {
+    let src = r#"shared struct Inner { word: String }
+impl Inner { fn get(ref self) -> String { self.word } }
+fn give(i: ref Inner) -> String { let w = i.word; w }
+shared struct S { v: i64, t: String }
+fn main() {
+    let a = Inner { word: "hi" };
+    let s = S { v: 1, t: "t" };
+    let j = |q: S| q.t;
+    println(f"{a.get()} {give(a)} {j(s)}");
+}
+"#;
+    let err = match karac::mir::lower::build_source(src) {
+        Ok(_) => panic!("built"),
+        Err(e) => e,
+    };
+    assert!(!err.contains("invalid MIR"), "{err}");
+    for want in [
+        "2:43: cannot move a non-`Copy` value out of a borrowed place",
+        "3:43: cannot move a non-`Copy` value out of a borrowed place",
+        "8:20: cannot move a non-`Copy` value out of a `shared` value",
+    ] {
+        assert!(err.contains(want), "{want}\n{err}");
+    }
+}
