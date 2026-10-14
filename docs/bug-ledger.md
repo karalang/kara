@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 253 |
 | missing-feature | 241 |
 | other | 172 |
-| perf | 161 |
+| perf | 162 |
 | false-positive | 156 |
 | diagnostics | 155 |
 | crash | 114 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2871 |
-| interp | 912 |
+| interp | 913 |
 | typecheck | 383 |
 | other | 115 |
 | ownership | 85 |
@@ -603,6 +603,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-36 | 2026-10-13 | codegen+runtime | medium | `VecDeque` `push_back` / `pop_front` on the MIR compiled backend are out-of-line runtime calls (`karac_mir_deque_push` / `_pop`) that wrap with integer `%` and copy the element with a sized `memcpy` call: kata 542's breadth-first search bench runs 0.41 s, 0.28 s with a `Vec` and head index in place of the deque, 0.19 s in Rust with `VecDeque` | — |
 | B-2026-10-14-1 | 2026-10-14 | typecheck | medium | `v[n.val] = x` is refused with "shared struct field 'Node.val' is not declared mut" when the INDEX reads a non-`mut` field of a `shared struct`: the assignment-target flag leaks from the indexed place into the index expression, so a read is checked as a write (`v[n.val] += x`, `let i = n.val; v[i] = x` and a plain struct's field all pass) | — |
 | B-2026-10-14-2 | 2026-10-14 | typecheck | medium | `s.push(c)`, `s.find(c)` and `s.split(c)` with `c` a `ref char` from `Vec[char].iter()` pass `karac check` but are refused by the MIR pipeline's typecheck (`'push' expects a Char argument, found 'ref char'`): the builtin String arms want exactly `Char` and do not peel a `ref` of a Copy type, which a user fn param and `Vec.push` both accept | — |
+| B-2026-10-14-3 | 2026-10-14 | interp | medium | MIR interpreter: kata 447's every-triple arm (`number_of_boomerangs_brute`) times out, 87 s against the corpus's 60 s cap: each call of a small arithmetic function made a fresh `(result, overflow)` pair for every checked step in its frame and took it apart at return, and read its tuple arguments through the general call path | — |
 
 ### Relocated
 
