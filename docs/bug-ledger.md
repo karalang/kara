@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 256 |
-| missing-feature | 248 |
+| missing-feature | 249 |
 | other | 172 |
 | false-positive | 168 |
 | perf | 164 |
@@ -112,14 +112,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2883 |
 | interp | 919 |
-| typecheck | 403 |
+| typecheck | 404 |
 | other | 115 |
 | ownership | 90 |
 | cli | 75 |
 | runtime | 66 |
 | parser | 61 |
 | autopar | 59 |
-| resolver | 37 |
+| resolver | 38 |
 | effect | 30 |
 | lexer | 11 |
 ## Current state
@@ -605,9 +605,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-26 | 2026-10-14 | ownership+interp+codegen | medium | `ref place` on a field (`ref s.field`, design.md § `*` and `ref` in expressions) does not build on either MIR backend ("E_REF_OPERAND_UNSUPPORTED: only `ref <sequence>[i]` is supported in v1"), and `karac check` refuses returning one ("this borrow-return form is not yet supported"), so the spec's own `fn name(user: User) -> ref String { ref user.name }` is refused everywhere | — |
 | B-2026-10-14-29 | 2026-10-14 | interp+codegen | medium | The MIR borrow checker keeps a `Vec[(ref Node, i64)]` borrowed for as long as a `ref Node` copied out of one of its elements is live: `let (a, n) = v[0]; v.pop(); a.val` is refused on both MIR backends ("mutable borrow of _2 while it is borrowed", E0516), though core-semantics §1.1 makes the tuple `Copy` and the copied reference keeps the origin of the node, not of the vector; the same read out of a `Vec[ref Node]` runs, and `karac check` passes both | — |
 | B-2026-10-14-32 | 2026-10-14 | typecheck+codegen | low | The MIR front end lowers a move of a non-`Copy` field out of a `shared` value or out of a `ref` (`|q: S| q.t`, `fn get(ref self) -> String { self.word }`, `fn give(i: ref Inner) -> String { let w = i.word; w }`) instead of refusing it, so the MIR validator reports `invalid MIR: ... move out of _2.1, which is inside a shared value (core semantics §3.7)` where a typecheck/ownership diagnostic with a source position belongs | — |
-| B-2026-10-14-33 | 2026-10-14 | resolver+typecheck | low | A user type still cannot implement `Neg`, `Not`, `Index` or `IndexMut`: d02338bc95 let the binary arithmetic and bitwise operator traits through on check and MIR, and the unary and subscript traits are still refused at resolve as "operator traits are stdlib-only" | — |
 | B-2026-10-14-35 | 2026-10-14 | typecheck | low | A `mut ref` / `mut Slice` argument forwarded WITHOUT the call-site `mut` marker is still accepted by `karac check` and the MIR pipeline, though design.md § Call-site `mut` markers marks such an argument "whatever the argument's root" and says "a missing marker is an error"; d8c605558f made the marker legal there but left it optional | — |
 | B-2026-10-14-36 | 2026-10-14 | codegen | medium | The MIR-to-LLVM backend does not lower `String.clear`: `karac __mir-llvm-run`, `__mir-llvm-asan` and `karac build --mir` refuse any program that calls it ("native `String.clear` is not lowered yet"), while `karac __mir-run` runs it right | — |
+| B-2026-10-14-37 | 2026-10-14 | resolver+typecheck | low | A user type cannot implement `Index`, `IndexMut` or `IndexSet`, so `c[k]` on a user container has no spelling: `impl Index for P` is refused at resolve ("operator traits are stdlib-only") on every pipeline, though design.md § `Index` and `IndexMut` says "User types may implement all three, so a user container supports `[]`" | — |
 
 ### Relocated
 
@@ -4006,6 +4006,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-28 | ownership | medium | `karac check`'s ownership pass counts lending a bare `for` element into a `ref` slot as a MOVE, so lending it twice is refused: `v.push(c); v.push(c)… | 31aadf36c1 |
 | B-2026-10-14-30 | resolver | medium | A user type cannot implement an arithmetic, bitwise or subscript operator trait: `impl Add for Money { .. | d02338bc95 |
 | B-2026-10-14-31 | typecheck+interp+codegen | low | `if let Some(b) = None { .. | b022fcd4e0 |
+| B-2026-10-14-33 | resolver+typecheck | low | A user type still cannot implement `Neg`, `Not`, `Index` or `IndexMut`: d02338bc95 let the binary arithmetic and bitwise operator traits through on c… | fb86de2dcd |
 | B-2026-10-14-34 | typecheck+ownership | medium | A trait impl method declared with bare `self` where the trait declares `own self` is accepted, and `karac check` and the MIR pipeline then disagree a… | 20adf3d84c |
 
 </details>
