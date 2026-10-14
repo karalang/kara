@@ -97,10 +97,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 254 |
-| missing-feature | 243 |
+| missing-feature | 244 |
 | other | 172 |
 | perf | 164 |
-| false-positive | 160 |
+| false-positive | 161 |
 | diagnostics | 155 |
 | crash | 114 |
 | soundness | 101 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2875 |
-| interp | 914 |
-| typecheck | 389 |
+| codegen | 2876 |
+| interp | 915 |
+| typecheck | 390 |
 | other | 115 |
 | ownership | 87 |
 | cli | 75 |
@@ -602,7 +602,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-1 | 2026-10-14 | typecheck | medium | `v[n.val] = x` is refused with "shared struct field 'Node.val' is not declared mut" when the INDEX reads a non-`mut` field of a `shared struct`: the assignment-target flag leaks from the indexed place into the index expression, so a read is checked as a write (`v[n.val] += x`, `let i = n.val; v[i] = x` and a plain struct's field all pass) | — |
 | B-2026-10-14-5 | 2026-10-14 | codegen+runtime | medium | An f-string whose holes are `String`s or `str` slices runs about 5x slower than the same text built with `push_str` on the v2 compiled backend: kata 555's bench builds each candidate as `f"{t[k..]}{middle}{t[..k]}"` and takes 5.2 to 5.9 s on `karac build --mir`, against 0.94 to 1.10 s with `push_str` three times into a `String` (and 1.2 to 1.4 s for Rust's `format!`) | — |
 | B-2026-10-14-6 | 2026-10-14 | typecheck | medium | On the MIR backends a `collect()` that is the result of a `map` closure does not build: `words.iter().map(|w| w.chars().rev().collect()).collect()` fails with "an expression whose type does not lower (Type(UnknownParam("C"))) is not lowered yet", whether the outer annotation is `Vec[String]` or `Vec[Vec[char]]`, though `karac check` passes the second | — |
-| B-2026-10-14-7 | 2026-10-14 | typecheck | medium | `karac check` refuses `let r: Vec[String] = words.iter().map(|w| w.chars().rev().collect()).collect();` with "expected 'Vec[String]', found 'Vec[Vec[char]]'": the target of a `collect()` that is a closure's result is not taken from the outer `collect`'s annotation, and defaults to `Vec` | — |
 | B-2026-10-14-9 | 2026-10-14 | codegen | medium | Matching a borrowed `shared enum` on the MIR compiled backend retains every handle the pattern binds and releases each at the arm's end, so a read-only tree walk pays a count up and an out-of-line `drop.shared` call per child: kata 558's `count` over 210M quad-tree nodes runs 1.49 to 1.62 s on `karac build --mir` against 0.98 to 1.04 s for Rust's `count(&Quad)`, and 1.31 s for the same Rust with each child's `Rc` cloned | — |
 | B-2026-10-14-10 | 2026-10-14 | typecheck | medium | `karac check` does not treat the elements of a `Vec[ref T]` as the `Copy` references the spec makes them: `for c in t.children.iter() { v.push(c); }` into `v: Vec[ref Node]` is refused with `borrow_projection_copy` ("cannot move 'c': it borrows its value"), the same into `Vec[(ref Node, i64)]` adds "expected '(ref Node, i64)', found '(Node, i64)'", and `let a = v[0];` is refused with E_INDEX_MOVE_NON_COPY on both pipelines; `__mir-run` and `__mir-llvm-run` run the two pushes | — |
 | B-2026-10-14-11 | 2026-10-14 | codegen | high | [CORRECTED 2026-10-14: the compiled path is not a clean failure. `__mir-llvm-asan` reports a stack-buffer-overflow, a WRITE of size 32 in the function holding the loop, so `__mir-llvm-run`'s silent exit 101 is the program running the invalid lowering] `for n in v` over a `Vec[ref Node]` does not build on the MIR backends: `__mir-run` stops with "invalid MIR: copy of (*_14) whose type Node is not Copy; assigning Node to _15 of type ref Node", and `__mir-llvm-run` exits 101 with no message at all; `karac check` passes it | — |
@@ -610,6 +609,8 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-13 | 2026-10-14 | typecheck+ownership | medium | Pushing an owned `Node` local into a `Vec[ref Node]` is accepted as a MOVE of the `Node` into a slot typed `ref Node`: `v.push(t)` passes `karac check`, a later `t.val` is refused as "moved" by both pipelines, and with no later use `__mir-run` reports the tree leaked at exit | — |
 | B-2026-10-14-14 | 2026-10-14 | codegen | medium | `Vec.with_capacity(n)` and `String.with_capacity(n)` reserve nothing on the MIR compiled backend: `Vec.with_capacity(5).capacity()` prints 0 under `__mir-llvm-run` and 5 under `__mir-run`, and presizing buys nothing -- kata 559's bench walk runs 2.37 to 2.45 s with each node's children `Vec` presized, the same as without, where the Rust mirror drops from 2.0 s to 0.82 to 0.87 s | — |
 | B-2026-10-14-15 | 2026-10-14 | interp | medium | The MIR interpreter has no `chunks` or `windows` on a `Vec` receiver: `v.chunks(2)` and `v.windows(2)` on a `Vec[i64]` stop `__mir-run` with "call of unknown function Vec[i64].chunks" (and `.windows`), while `karac check` passes them, `__mir-llvm-run` runs them, and the same calls on a `Slice[i64]` run on `__mir-run` | — |
+| B-2026-10-14-16 | 2026-10-14 | typecheck | medium | `karac check` refuses every `collect()` of non-`Copy` elements into a `Set`, `VecDeque` or `Map` annotation, `let t: Set[String] = words.iter().map(|w| w.to_uppercase()).collect();`, with "cannot move '__karac_collect_it_N': it borrows its value", naming a temporary the user never wrote; both interpreters run it | — |
+| B-2026-10-14-17 | 2026-10-14 | interp+codegen | medium | `collect()` into a `VecDeque` fails on both MIR backends: `__mir-run` stops with "expected a library value, found Agg(...)" in `IterMap[..].collect[i64, VecDeque[i64]]`, and `__mir-llvm-run` with "native `VecDeque[i64].from_iter` is not lowered yet" | — |
 
 ### Relocated
 
@@ -3985,6 +3986,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-2 | typecheck | medium | `s.push(c)`, `s.find(c)` and `s.split(c)` with `c` a `ref char` from `Vec[char].iter()` pass `karac check` but are refused by the MIR pipeline's type… | 4979cb27c2 |
 | B-2026-10-14-3 | interp | medium | MIR interpreter: kata 447's every-triple arm (`number_of_boomerangs_brute`) times out, 87 s against the corpus's 60 s cap: each call of a small arith… | 605f5270da |
 | B-2026-10-14-4 | typecheck | low | `parts[1..].join("/")` and `.concat()` on a `Slice[String]` are refused with "no method 'join' on type 'Slice'" on every pipeline, while `Vec[String]… | 04bc26e13e |
+| B-2026-10-14-7 | typecheck | medium | `karac check` refuses `let r: Vec[String] = words.iter().map(\|w\| w.chars().rev().collect()).collect();` with "expected 'Vec[String]', found 'Vec[Vec[… | 86f1298387 |
 | B-2026-10-14-8 | ownership | medium | `karac check` refuses any `collect()` into a non-`Vec` target inside a closure body, `\|w\| { let s: String = w.chars().collect(); s.len() }`, with an… | d0d9435e8a |
 
 </details>
