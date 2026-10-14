@@ -1,0 +1,194 @@
+// LeetCode #575: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// candies.
+
+// ---- star arm ----------------------------------------------------------
+
+fn distribute_candies_star(candy_type: Vec[i64]) -> i64 {
+    let mut kinds: Set[i64] = Set.new();
+    for c in candy_type.iter() {
+        kinds.insert(*c);
+    }
+    kinds.len().min(candy_type.len() / 2)
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+fn distribute_candies_sorted(candy_type: Vec[i64]) -> i64 {
+    let mut sorted = candy_type.clone();
+    sorted.sort();
+    let mut kinds = 1;
+    for i in 1..sorted.len() {
+        if sorted[i] != sorted[i - 1] {
+            kinds += 1;
+        }
+    }
+    kinds.min(sorted.len() / 2)
+}
+
+// ---- seen arm ----------------------------------------------------------
+
+fn distribute_candies_seen(candy_type: Vec[i64]) -> i64 {
+    let limit = candy_type.len() / 2;
+    let mut seen = vec![false; 200001];
+    let mut kinds = 0;
+    for c in candy_type.iter() {
+        let slot = *c + 100000;
+        if not seen[slot] {
+            seen[slot] = true;
+            kinds += 1;
+            if kinds == limit {
+                break;
+            }
+        }
+    }
+    kinds
+}
+
+// ---- chain arm ---------------------------------------------------------
+
+fn distribute_candies_chain(candy_type: Vec[i64]) -> i64 {
+    let kinds: Set[i64] = candy_type.iter().cloned().collect();
+    kinds.len().min(candy_type.len() / 2)
+}
+
+// ---- definition -----------------------------------------------------------
+
+// The number of different values among the picked candies, each one
+// counted at its first place.
+fn types_in(picked: ref Vec[i64]) -> i64 {
+    let mut count = 0;
+    for i in 0..picked.len() {
+        let mut first = true;
+        for j in 0..i {
+            if picked[j] == picked[i] {
+                first = false;
+            }
+        }
+        if first {
+            count += 1;
+        }
+    }
+    count
+}
+
+// The most types over every way to pick `left` more candies from
+// `candies[start..]` to go with those already picked.
+fn best_pick(candies: ref Vec[i64], start: i64, left: i64, picked: mut ref Vec[i64]) -> i64 {
+    if left == 0 {
+        return types_in(picked);
+    }
+    let mut best = 0;
+    for i in start..candies.len() {
+        picked.push(candies[i]);
+        best = best.max(best_pick(candies, i + 1, left - 1, picked));
+        picked.pop();
+    }
+    best
+}
+
+// The statement read literally: Alice eats n / 2 of the candies; of
+// every choice of n / 2 of them, the one with the most types.
+fn definition(candies: ref Vec[i64]) -> i64 {
+    let mut picked: Vec[i64] = Vec.new();
+    best_pick(candies, 0, candies.len() / 2, mut picked)
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn run(arm: i64, candies: ref Vec[i64]) -> i64 {
+    match arm {
+        0 => distribute_candies_star(candies.clone()),
+        1 => distribute_candies_sorted(candies.clone()),
+        2 => distribute_candies_seen(candies.clone()),
+        _ => distribute_candies_chain(candies.clone()),
+    }
+}
+
+fn main() {
+    let names = vec!["star", "sorted", "seen", "chain"];
+    let mut seed: i64 = 5750;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property = vec![0, 0, 0, 0, 0];
+    for t in 0..1000 {
+        // 2 to 10 candies over a pool of 1 to 6 types, the ends of the
+        // range among them now and then.
+        let n = 2 * (1 + step(mut seed) % 5);
+        let size = 1 + step(mut seed) % 6;
+        let mut pool: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            let pick = step(mut seed) % 10;
+            if pick == 0 {
+                pool.push(-100000);
+            } else if pick == 1 {
+                pool.push(100000);
+            } else {
+                pool.push(step(mut seed) % 21 - 10);
+            }
+        }
+        let mut candies: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            candies.push(pool[step(mut seed) % size]);
+        }
+        let want = definition(candies);
+        let mut kinds = 0;
+        for i in 0..candies.len() {
+            let mut first = true;
+            for j in 0..i {
+                if candies[j] == candies[i] {
+                    first = false;
+                }
+            }
+            if first {
+                kinds += 1;
+            }
+        }
+        // The same candies in another order: rotated by a random amount
+        // and then reversed.
+        let shift = step(mut seed) % n;
+        let mut moved: Vec[i64] = Vec.new();
+        for i in 0..n {
+            moved.push(candies[(n - 1 - i + shift) % n]);
+        }
+        // Each type renamed: negated, and the zero type sent to 99999.
+        let mut renamed: Vec[i64] = Vec.new();
+        for c in candies.iter() {
+            renamed.push(if *c == 0 { 99999 } else { -*c });
+        }
+        // Two candies of a type not among them, put in at random places.
+        let mut grown = candies.clone();
+        grown.insert(step(mut seed) % (n + 1), 50000 + t);
+        grown.insert(step(mut seed) % (n + 2), 50000 + t);
+        for arm in 0..4 {
+            let got = run(arm, candies);
+            let results = vec![
+                got == want,
+                got >= 1 and got <= n / 2 and got <= kinds,
+                run(arm, moved) == got,
+                run(arm, renamed) == got,
+                run(arm, grown) == got + 1,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not results[p] {
+                    failures += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"{names[arm]} P{p + 1} on {candies}: got {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1000 cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

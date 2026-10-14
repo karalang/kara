@@ -1,0 +1,79 @@
+// LeetCode #575: Distribute Candies -- a set of the types.
+//
+// Alice eats n / 2 candies, so she can eat at most n / 2 types, and
+// at most as many types as there are. Every type can be had once, so
+// the answer is the smaller of the two. O(n) time with a hash set.
+
+fn distribute_candies(candy_type: Vec[i64]) -> i64 {
+    let mut kinds: Set[i64] = Set.new();
+    for c in candy_type.iter() {
+        kinds.insert(*c);
+    }
+    kinds.len().min(candy_type.len() / 2)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(candy_type: Vec[i64]) {
+    println(f"{candy_type}: {distribute_candies(candy_type)}");
+}
+
+fn main() {
+    // The three LeetCode examples.
+    show(vec![1, 1, 2, 2, 3, 3]);
+    show(vec![1, 1, 2, 3]);
+    show(vec![6, 6, 6, 6]);
+    // Two candies, alike and not; every candy its own type; the types
+    // at the ends of the range; one type and one stray.
+    show(vec![5, 5]);
+    show(vec![5, -5]);
+    show(vec![4, 3, 2, 1, 0, -1]);
+    show(vec![-100000, 100000, -100000, 100000]);
+    show(vec![7, 7, 7, 7, 7, 8]);
+    // As many types as n / 2 exactly, and one more.
+    show(vec![1, 1, 1, 2, 2, 3]);
+    show(vec![1, 1, 2, 3, 4, 4]);
+    // 300 random cases of 2 to 40 candies over 1 to 30 types, the
+    // types spread over the whole range.
+    let mut seed: i64 = 575;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let n = 2 * (1 + step(mut seed) % 20);
+        let types = 1 + step(mut seed) % 30;
+        let mut pool: Vec[i64] = Vec.new();
+        for _ in 0..types {
+            pool.push((step(mut seed) * 32768 + step(mut seed)) % 200001 - 100000);
+        }
+        let mut candy_type: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            candy_type.push(pool[step(mut seed) % types]);
+        }
+        let got = distribute_candies(candy_type);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"300 random cases: {total} types eaten, checksum {checksum}");
+    // The problem's largest, 10,000 candies: every one its own type,
+    // then 4,999 types, then two.
+    let mut all: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        all.push(i * 20 - 100000);
+    }
+    println(f"10000 candies, all different: {distribute_candies(all)}");
+    let mut many: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        many.push(i % 4999);
+    }
+    println(f"10000 candies, 4999 types: {distribute_candies(many)}");
+    let mut two: Vec[i64] = Vec.new();
+    for i in 0..10000 {
+        two.push(if i % 3 == 0 { -100000 } else { 100000 });
+    }
+    println(f"10000 candies, 2 types: {distribute_candies(two)}");
+}
