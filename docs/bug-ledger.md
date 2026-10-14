@@ -100,8 +100,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 241 |
 | other | 172 |
 | perf | 161 |
+| false-positive | 155 |
 | diagnostics | 155 |
-| false-positive | 154 |
 | crash | 114 |
 | soundness | 100 |
 | use-after-free | 90 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2871 |
 | interp | 912 |
-| typecheck | 381 |
+| typecheck | 382 |
 | other | 115 |
 | ownership | 85 |
 | cli | 75 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 11 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-13). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-10-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -602,6 +602,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-13-34 | 2026-10-13 | codegen+runtime | medium | `i64.parse` on the MIR compiled backend costs about 30 ns for a 2-byte slice, because `karac_mir_parse_int` copies the text into a fresh heap `String`, trims it and parses an `i128` on every call: kata 539's bench spends 1.3 to 1.4 s of its 1.90 s in 42M parses, against 0.51 s for the whole Rust mirror | — |
 | B-2026-10-13-35 | 2026-10-13 | codegen+runtime | medium | Collecting chars into a `String` on the MIR compiled backend (`chars.iter().collect()` from a `Vec[char]`) costs about 6 ns a char, a runtime call chain `karac_mir_string_push_char` -> `string_push_str` -> `vec_reserve` per char with nothing reserved up front: kata 541's bench spends some 1.25 s of its 2.01 s there, against 0.70 s for the whole Rust mirror | — |
 | B-2026-10-13-36 | 2026-10-13 | codegen+runtime | medium | `VecDeque` `push_back` / `pop_front` on the MIR compiled backend are out-of-line runtime calls (`karac_mir_deque_push` / `_pop`) that wrap with integer `%` and copy the element with a sized `memcpy` call: kata 542's breadth-first search bench runs 0.41 s, 0.28 s with a `Vec` and head index in place of the deque, 0.19 s in Rust with `VecDeque` | — |
+| B-2026-10-14-1 | 2026-10-14 | typecheck | medium | `v[n.val] = x` is refused with "shared struct field 'Node.val' is not declared mut" when the INDEX reads a non-`mut` field of a `shared struct`: the assignment-target flag leaks from the indexed place into the index expression, so a read is checked as a write (`v[n.val] += x`, `let i = n.val; v[i] = x` and a plain struct's field all pass) | — |
 
 ### Relocated
 
