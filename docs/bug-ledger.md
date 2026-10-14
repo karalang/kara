@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 254 |
 | missing-feature | 242 |
 | other | 172 |
-| perf | 163 |
+| perf | 164 |
 | false-positive | 158 |
 | diagnostics | 155 |
 | crash | 114 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2872 |
+| codegen | 2873 |
 | interp | 913 |
 | typecheck | 386 |
 | other | 115 |
@@ -606,6 +606,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-6 | 2026-10-14 | typecheck | medium | On the MIR backends a `collect()` that is the result of a `map` closure does not build: `words.iter().map(|w| w.chars().rev().collect()).collect()` fails with "an expression whose type does not lower (Type(UnknownParam("C"))) is not lowered yet", whether the outer annotation is `Vec[String]` or `Vec[Vec[char]]`, though `karac check` passes the second | — |
 | B-2026-10-14-7 | 2026-10-14 | typecheck | medium | `karac check` refuses `let r: Vec[String] = words.iter().map(|w| w.chars().rev().collect()).collect();` with "expected 'Vec[String]', found 'Vec[Vec[char]]'": the target of a `collect()` that is a closure's result is not taken from the outer `collect`'s annotation, and defaults to `Vec` | — |
 | B-2026-10-14-8 | 2026-10-14 | ownership | medium | `karac check` refuses any `collect()` into a non-`Vec` target inside a closure body, `|w| { let s: String = w.chars().collect(); s.len() }`, with an ownership error about a binding the user never wrote: "value '__karac_collect_dst_53' is moved inside a loop and not assigned again before the next iteration"; `karac __mir-run` runs it | — |
+| B-2026-10-14-9 | 2026-10-14 | codegen | medium | Matching a borrowed `shared enum` on the MIR compiled backend retains every handle the pattern binds and releases each at the arm's end, so a read-only tree walk pays a count up and an out-of-line `drop.shared` call per child: kata 558's `count` over 210M quad-tree nodes runs 1.49 to 1.62 s on `karac build --mir` against 0.98 to 1.04 s for Rust's `count(&Quad)`, and 1.31 s for the same Rust with each child's `Rc` cloned | — |
 
 ### Relocated
 
