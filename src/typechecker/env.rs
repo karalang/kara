@@ -185,6 +185,16 @@ pub struct ImplInfo {
 /// e.g. `Column[T]` → `[TypeParam("T")]`) against a concrete receiver's args
 /// (`actual`, e.g. `[f64]`), recursing through compound forms. First binding
 /// wins. Only the parameterized-bound arg check uses this (B-2026-07-02-42).
+/// Whether a `From` / `TryFrom` impl whose conversion takes `param` converts
+/// a `source`. A conversion that borrows its argument (`fn from(i: ref
+/// Inches)`, and a bare `fn from(i: Inches)`, which the strict check and
+/// the MIR builder read as that borrow under D5) still converts an
+/// `Inches`: an impl may take a weaker mode than its trait (core semantics
+/// §4.7, B-2026-10-14-34).
+pub(super) fn conversion_param_takes(param: &Type, source: &Type) -> bool {
+    param == source || matches!(param, Type::Ref(inner) if **inner == *source)
+}
+
 pub(super) fn bind_impl_params(decl: &[Type], actual: &[Type], out: &mut HashMap<String, Type>) {
     for (d, a) in decl.iter().zip(actual.iter()) {
         bind_impl_param_one(d, a, out);
@@ -1234,7 +1244,11 @@ impl TypeEnv {
             .find(|imp| {
                 imp.target_type == target
                     && impl_args_match(&imp.target_args, target_args)
-                    && imp.methods.get("from").and_then(|sig| sig.params.first()) == Some(source)
+                    && imp
+                        .methods
+                        .get("from")
+                        .and_then(|sig| sig.params.first())
+                        .is_some_and(|p| conversion_param_takes(p, source))
             })
     }
 
@@ -1259,7 +1273,7 @@ impl TypeEnv {
                         .methods
                         .get("try_from")
                         .and_then(|sig| sig.params.first())
-                        == Some(source)
+                        .is_some_and(|p| conversion_param_takes(p, source))
             })
     }
 

@@ -3891,3 +3891,61 @@ fn user_operator_impls_are_accepted() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// B-2026-10-14-34: a trait impl's own bare `self` and parameters borrow,
+/// as an inherent impl's do, whatever the trait declares (core semantics
+/// §4.7: an impl may be weaker than its trait, and a call on a concrete type
+/// uses the impl's modes). The check used to give the impl the trait's
+/// `own`, so it moved what the MIR pipeline borrows.
+#[test]
+fn trait_impl_bare_params_borrow() {
+    accepted(
+        "impl-bare-self",
+        "trait Shrink {\n\
+             fn shrink(own self) -> i64;\n\
+         }\n\
+         struct P {\n\
+             x: i64,\n\
+             s: String,\n\
+         }\n\
+         impl Shrink for P {\n\
+             fn shrink(self) -> i64 {\n\
+                 self.x - 1\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let a = P { x: 2, s: String.from(\"hi\") };\n\
+             let r = a.shrink();\n\
+             println(f\"{r} {a.x} {a.s}\");\n\
+         }\n",
+    );
+    let (dir, path) = fixture(
+        "impl-bare-param",
+        "trait Mk {\n\
+             fn mk(v: own String) -> Self;\n\
+         }\n\
+         struct P {\n\
+             s: String,\n\
+         }\n\
+         impl Mk for P {\n\
+             fn mk(v: String) -> P {\n\
+                 P { s: v }\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let q = P.mk(String.from(\"yo\"));\n\
+             println(f\"{q.s}\");\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "impl-bare-param: check must reject: {err}"
+    );
+    assert!(
+        err.contains("cannot give away parameter `v`"),
+        "impl-bare-param: expected the borrowed `v` in: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

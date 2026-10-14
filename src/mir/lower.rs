@@ -6708,7 +6708,18 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             let p = item.f.params.first()?;
             let t = *self.lcx.node_types.get(&p.pattern.id)?;
-            if self.lcx.mir_ty(t, &[]).ok() == Some(source) {
+            // A `from` that borrows its source (`i: ref Inches`, or a bare
+            // `i: Inches`, which D5 reads as that borrow) converts an
+            // `Inches` too: an impl may be weaker than its trait (core
+            // semantics §4.7, B-2026-10-14-34). The callers lend it.
+            let Ok(pt) = self.lcx.mir_ty(t, &[]) else {
+                continue;
+            };
+            let pt = match self.tys().tcx().kind(pt) {
+                HK::Ref(inner) => inner,
+                _ => pt,
+            };
+            if pt == source {
                 return Some(d);
             }
         }

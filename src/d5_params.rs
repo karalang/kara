@@ -39,10 +39,10 @@ const COPY_BOUNDS: &[&str] = &["Copy", "Numeric", "Integer", "Float"];
 /// The parameters of function types are rewritten the same way
 /// ([`borrow_fn_type_params`]).
 ///
-/// A trait method's parameters take the modes the trait declares, so an
-/// impl of a user trait follows the trait's rewrite position by position,
-/// and an impl of a standard-library trait (`From`, `Add`, ...) keeps the
-/// modes the library spells, as the library is not rewritten.
+/// An impl of a user trait borrows wherever the trait's rewrite does,
+/// position by position, and every impl, of a user or a standard-library
+/// trait (`From`, `Add`, ...), also borrows at its own bare `self` and
+/// parameters, since an impl may be weaker than its trait (§4.7).
 pub fn borrow_bare_params(program: &mut Program) {
     let mut copy: FxHashSet<String> = COPY_SCALARS.iter().map(|s| s.to_string()).collect();
     for item in &program.items {
@@ -109,27 +109,31 @@ pub fn borrow_bare_params(program: &mut Program) {
                     if m.stdlib_origin {
                         continue;
                     }
-                    match &trait_name {
-                        // An impl of a user trait takes the trait's modes.
-                        Some(tn) => {
-                            if let Some((self_borrows, modes)) =
-                                traits.get(&(tn.clone(), m.name.clone()))
-                            {
-                                if *self_borrows && !m.self_is_own {
-                                    m.self_param = Some(SelfParam::Ref);
-                                }
-                                apply(&mut m.params, modes);
+                    // An impl of a user trait takes the trait's borrows.
+                    if let Some(tn) = &trait_name {
+                        if let Some((self_borrows, modes)) =
+                            traits.get(&(tn.clone(), m.name.clone()))
+                        {
+                            if *self_borrows && !m.self_is_own {
+                                m.self_param = Some(SelfParam::Ref);
                             }
-                        }
-                        None => {
-                            let copy = with_bounds(
-                                &copy,
-                                &[gp.as_ref(), m.generic_params.as_ref()],
-                                &[wc.as_ref(), m.where_clause.as_ref()],
-                            );
-                            borrow_fn(m, &copy);
+                            apply(&mut m.params, modes);
                         }
                     }
+                    // Its own bare `self` and parameters borrow as well, in
+                    // a trait impl as in an inherent one: an impl may declare
+                    // a weaker mode than its trait, and a call on a concrete
+                    // type uses the impl's (core semantics §4.7). The MIR
+                    // builder reads an impl's bare receiver and parameters
+                    // that way already (`self_mode`, `param_mode_ty`), so
+                    // reading the trait's `own` here made the strict check
+                    // move what MIR borrows (B-2026-10-14-34).
+                    let copy = with_bounds(
+                        &copy,
+                        &[gp.as_ref(), m.generic_params.as_ref()],
+                        &[wc.as_ref(), m.where_clause.as_ref()],
+                    );
+                    borrow_fn(m, &copy);
                 }
             }
             _ => {}
