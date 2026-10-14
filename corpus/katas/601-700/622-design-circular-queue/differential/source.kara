@@ -1,0 +1,542 @@
+// LeetCode #622: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each with a driver that runs a script on it,
+// held to five properties on random scripts.
+
+// ---- star arm ----------------------------------------------------------
+
+struct MyCircularQueue_star {
+    data: Vec[i64],
+    head: i64,
+    count: i64,
+}
+
+impl MyCircularQueue_star {
+    fn new(k: i64) -> MyCircularQueue_star {
+        MyCircularQueue_star { data: vec![0; k], head: 0, count: 0 }
+    }
+
+    fn en_queue(mut ref self, value: i64) -> bool {
+        if self.count == self.data.len() {
+            return false;
+        }
+        let at = (self.head + self.count) % self.data.len();
+        self.data[at] = value;
+        self.count += 1;
+        true
+    }
+
+    fn de_queue(mut ref self) -> bool {
+        if self.count == 0 {
+            return false;
+        }
+        self.head = (self.head + 1) % self.data.len();
+        self.count -= 1;
+        true
+    }
+
+    fn front(self) -> i64 {
+        if self.count == 0 { -1 } else { self.data[self.head] }
+    }
+
+    fn rear(self) -> i64 {
+        if self.count == 0 { -1 } else { self.data[(self.head + self.count - 1) % self.data.len()] }
+    }
+
+    fn is_empty(self) -> bool {
+        self.count == 0
+    }
+
+    fn is_full(self) -> bool {
+        self.count == self.data.len()
+    }
+}
+
+// What one arm's queue returned, and its state after every operation.
+fn drive_star(k: i64, ops: Vec[Op], shift: i64) -> Trace {
+    let mut q = MyCircularQueue_star.new(k);
+    // Moves the queue's start `shift` places before the script runs.
+    for i in 0..shift {
+        let _in = q.en_queue(i % 1001);
+        let _out = q.de_queue();
+    }
+    let mut t = new_trace();
+    for op in ops.iter() {
+        let result = match op {
+            Op.EnQueue(value) => f"{q.en_queue(*value)}",
+            Op.DeQueue => f"{q.de_queue()}",
+            Op.Front => f"{q.front()}",
+            Op.Rear => f"{q.rear()}",
+            Op.IsEmpty => f"{q.is_empty()}",
+            Op.IsFull => f"{q.is_full()}",
+        };
+        t.results.push(result);
+        t.fronts.push(q.front());
+        t.rears.push(q.rear());
+        t.empties.push(q.is_empty());
+        t.fulls.push(q.is_full());
+    }
+    t
+}
+
+// ---- slots arm ---------------------------------------------------------
+
+struct MyCircularQueue_slots {
+    data: Vec[i64],
+    head: i64,
+    tail: i64,
+}
+
+impl MyCircularQueue_slots {
+    fn new(k: i64) -> MyCircularQueue_slots {
+        MyCircularQueue_slots { data: vec![0; k + 1], head: 0, tail: 0 }
+    }
+
+    fn en_queue(mut ref self, value: i64) -> bool {
+        if self.is_full() {
+            return false;
+        }
+        self.data[self.tail] = value;
+        self.tail = (self.tail + 1) % self.data.len();
+        true
+    }
+
+    fn de_queue(mut ref self) -> bool {
+        if self.is_empty() {
+            return false;
+        }
+        self.head = (self.head + 1) % self.data.len();
+        true
+    }
+
+    fn front(self) -> i64 {
+        if self.is_empty() { -1 } else { self.data[self.head] }
+    }
+
+    fn rear(self) -> i64 {
+        if self.is_empty() { -1 } else { self.data[(self.tail + self.data.len() - 1) % self.data.len()] }
+    }
+
+    fn is_empty(self) -> bool {
+        self.head == self.tail
+    }
+
+    fn is_full(self) -> bool {
+        (self.tail + 1) % self.data.len() == self.head
+    }
+}
+
+// What one arm's queue returned, and its state after every operation.
+fn drive_slots(k: i64, ops: Vec[Op], shift: i64) -> Trace {
+    let mut q = MyCircularQueue_slots.new(k);
+    // Moves the queue's start `shift` places before the script runs.
+    for i in 0..shift {
+        let _in = q.en_queue(i % 1001);
+        let _out = q.de_queue();
+    }
+    let mut t = new_trace();
+    for op in ops.iter() {
+        let result = match op {
+            Op.EnQueue(value) => f"{q.en_queue(*value)}",
+            Op.DeQueue => f"{q.de_queue()}",
+            Op.Front => f"{q.front()}",
+            Op.Rear => f"{q.rear()}",
+            Op.IsEmpty => f"{q.is_empty()}",
+            Op.IsFull => f"{q.is_full()}",
+        };
+        t.results.push(result);
+        t.fronts.push(q.front());
+        t.rears.push(q.rear());
+        t.empties.push(q.is_empty());
+        t.fulls.push(q.is_full());
+    }
+    t
+}
+
+// ---- linked arm --------------------------------------------------------
+
+shared struct Cell_linked {
+    value: i64,
+    mut next: Option[Cell_linked],
+}
+
+struct MyCircularQueue_linked {
+    head: Option[Cell_linked],
+    tail: Option[Cell_linked],
+    count: i64,
+    capacity: i64,
+}
+
+impl MyCircularQueue_linked {
+    fn new(k: i64) -> MyCircularQueue_linked {
+        MyCircularQueue_linked { head: None, tail: None, count: 0, capacity: k }
+    }
+
+    fn en_queue(mut ref self, value: i64) -> bool {
+        if self.count == self.capacity {
+            return false;
+        }
+        let cell = Cell_linked { value: value, next: None };
+        match self.tail {
+            Some(last) => last.next = Some(cell),
+            None => self.head = Some(cell),
+        }
+        self.tail = Some(cell);
+        self.count += 1;
+        true
+    }
+
+    fn de_queue(mut ref self) -> bool {
+        match self.head {
+            None => false,
+            Some(first) => {
+                self.head = first.next;
+                if self.head.is_none() {
+                    self.tail = None;
+                }
+                self.count -= 1;
+                true
+            }
+        }
+    }
+
+    fn front(self) -> i64 {
+        match self.head {
+            Some(first) => first.value,
+            None => -1,
+        }
+    }
+
+    fn rear(self) -> i64 {
+        match self.tail {
+            Some(last) => last.value,
+            None => -1,
+        }
+    }
+
+    fn is_empty(self) -> bool {
+        self.count == 0
+    }
+
+    fn is_full(self) -> bool {
+        self.count == self.capacity
+    }
+}
+
+// What one arm's queue returned, and its state after every operation.
+fn drive_linked(k: i64, ops: Vec[Op], shift: i64) -> Trace {
+    let mut q = MyCircularQueue_linked.new(k);
+    // Moves the queue's start `shift` places before the script runs.
+    for i in 0..shift {
+        let _in = q.en_queue(i % 1001);
+        let _out = q.de_queue();
+    }
+    let mut t = new_trace();
+    for op in ops.iter() {
+        let result = match op {
+            Op.EnQueue(value) => f"{q.en_queue(*value)}",
+            Op.DeQueue => f"{q.de_queue()}",
+            Op.Front => f"{q.front()}",
+            Op.Rear => f"{q.rear()}",
+            Op.IsEmpty => f"{q.is_empty()}",
+            Op.IsFull => f"{q.is_full()}",
+        };
+        t.results.push(result);
+        t.fronts.push(q.front());
+        t.rears.push(q.rear());
+        t.empties.push(q.is_empty());
+        t.fulls.push(q.is_full());
+    }
+    t
+}
+
+// ---- deque arm ---------------------------------------------------------
+
+struct MyCircularQueue_deque {
+    items: VecDeque[i64],
+    capacity: i64,
+}
+
+impl MyCircularQueue_deque {
+    fn new(k: i64) -> MyCircularQueue_deque {
+        MyCircularQueue_deque { items: VecDeque.new(), capacity: k }
+    }
+
+    fn en_queue(mut ref self, value: i64) -> bool {
+        if self.items.len() == self.capacity {
+            return false;
+        }
+        self.items.push_back(value);
+        true
+    }
+
+    fn de_queue(mut ref self) -> bool {
+        self.items.pop_front().is_some()
+    }
+
+    fn front(self) -> i64 {
+        self.items.front() ?? -1
+    }
+
+    fn rear(self) -> i64 {
+        self.items.back() ?? -1
+    }
+
+    fn is_empty(self) -> bool {
+        self.items.is_empty()
+    }
+
+    fn is_full(self) -> bool {
+        self.items.len() == self.capacity
+    }
+}
+
+// What one arm's queue returned, and its state after every operation.
+fn drive_deque(k: i64, ops: Vec[Op], shift: i64) -> Trace {
+    let mut q = MyCircularQueue_deque.new(k);
+    // Moves the queue's start `shift` places before the script runs.
+    for i in 0..shift {
+        let _in = q.en_queue(i % 1001);
+        let _out = q.de_queue();
+    }
+    let mut t = new_trace();
+    for op in ops.iter() {
+        let result = match op {
+            Op.EnQueue(value) => f"{q.en_queue(*value)}",
+            Op.DeQueue => f"{q.de_queue()}",
+            Op.Front => f"{q.front()}",
+            Op.Rear => f"{q.rear()}",
+            Op.IsEmpty => f"{q.is_empty()}",
+            Op.IsFull => f"{q.is_full()}",
+        };
+        t.results.push(result);
+        t.fronts.push(q.front());
+        t.rears.push(q.rear());
+        t.empties.push(q.is_empty());
+        t.fulls.push(q.is_full());
+    }
+    t
+}
+
+// ---- the definition and the properties ------------------------------------
+
+enum Op {
+    EnQueue(i64),
+    DeQueue,
+    Front,
+    Rear,
+    IsEmpty,
+    IsFull,
+}
+
+struct Trace {
+    results: Vec[String],
+    fronts: Vec[i64],
+    rears: Vec[i64],
+    empties: Vec[bool],
+    fulls: Vec[bool],
+}
+
+fn new_trace() -> Trace {
+    Trace { results: Vec.new(), fronts: Vec.new(), rears: Vec.new(), empties: Vec.new(), fulls: Vec.new() }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, k: i64, ops: Vec[Op], shift: i64) -> Trace {
+    if which == 0 {
+        drive_star(k, ops, shift)
+    } else if which == 1 {
+        drive_slots(k, ops, shift)
+    } else if which == 2 {
+        drive_linked(k, ops, shift)
+    } else {
+        drive_deque(k, ops, shift)
+    }
+}
+
+// The definition: the queue is the list of values in it, front first.
+// An `enQueue` appends when the list is shorter than `k`; a `deQueue`
+// removes the first value when there is one; `Front` and `Rear` are the
+// first and last values, or -1.
+fn definition(k: i64, ops: Vec[Op]) -> Vec[String] {
+    let mut items: Vec[i64] = Vec.new();
+    let mut out: Vec[String] = Vec.new();
+    for op in ops.iter() {
+        match op {
+            Op.EnQueue(value) => {
+                let ok = items.len() < k;
+                if ok {
+                    items.push(*value);
+                }
+                out.push(f"{ok}");
+            }
+            Op.DeQueue => {
+                let ok = items.len() > 0;
+                if ok {
+                    items.remove(0);
+                }
+                out.push(f"{ok}");
+            }
+            Op.Front => out.push(f"{if items.is_empty() { -1 } else { items[0] }}"),
+            Op.Rear => out.push(f"{if items.is_empty() { -1 } else { items[items.len() - 1] }}"),
+            Op.IsEmpty => out.push(f"{items.is_empty()}"),
+            Op.IsFull => out.push(f"{items.len() == k}"),
+        }
+    }
+    out
+}
+
+// `count` random operations, about two in five an `enQueue` of a value
+// from 0 to 9 and one in four a `deQueue`.
+fn script(count: i64, seed: mut ref i64) -> Vec[Op] {
+    let mut ops: Vec[Op] = Vec.new();
+    for _ in 0..count {
+        let roll = next_random(mut seed) % 40;
+        if roll < 16 {
+            ops.push(Op.EnQueue(next_random(mut seed) % 10));
+        } else if roll < 26 {
+            ops.push(Op.DeQueue);
+        } else if roll < 30 {
+            ops.push(Op.Front);
+        } else if roll < 34 {
+            ops.push(Op.Rear);
+        } else if roll < 37 {
+            ops.push(Op.IsEmpty);
+        } else {
+            ops.push(Op.IsFull);
+        }
+    }
+    ops
+}
+
+// P2: after every operation, `Front` and `Rear` are -1 exactly when the
+// queue is empty, and it is never both empty and full.
+fn consistent(t: Trace) -> bool {
+    for i in 0..t.results.len() {
+        if (t.fronts[i] == -1) != t.empties[i] or (t.rears[i] == -1) != t.empties[i] {
+            return false;
+        }
+        if t.empties[i] and t.fulls[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// P3: an `enQueue` succeeds exactly when the queue was not full and a
+// `deQueue` exactly when it was not empty, and the number of values in
+// it, counted from those successes, is 0 exactly when it is empty and
+// `k` exactly when it is full.
+fn counted(k: i64, ops: Vec[Op], t: Trace) -> bool {
+    let mut size = 0;
+    let mut was_empty = true;
+    let mut was_full = false;
+    for i in 0..ops.len() {
+        match ops[i] {
+            Op.EnQueue(_) => {
+                if t.results[i] != f"{not was_full}" {
+                    return false;
+                }
+                if not was_full {
+                    size += 1;
+                }
+            }
+            Op.DeQueue => {
+                if t.results[i] != f"{not was_empty}" {
+                    return false;
+                }
+                if not was_empty {
+                    size -= 1;
+                }
+            }
+            _ => {}
+        }
+        if t.empties[i] != (size == 0) or t.fulls[i] != (size == k) {
+            return false;
+        }
+        was_empty = t.empties[i];
+        was_full = t.fulls[i];
+    }
+    true
+}
+
+// P4: first in, first out: the values that leave, read as the front
+// just before each successful `deQueue`, are the values that went in,
+// in order, and the rear after each successful `enQueue` is its value.
+fn in_order(ops: Vec[Op], t: Trace) -> bool {
+    let mut entered: Vec[i64] = Vec.new();
+    let mut left = 0;
+    let mut front_before = -1;
+    for i in 0..ops.len() {
+        match ops[i] {
+            Op.EnQueue(value) => {
+                if t.results[i] == "true" {
+                    if t.rears[i] != value {
+                        return false;
+                    }
+                    entered.push(value);
+                }
+            }
+            Op.DeQueue => {
+                if t.results[i] == "true" {
+                    if left >= entered.len() or entered[left] != front_before {
+                        return false;
+                    }
+                    left += 1;
+                }
+            }
+            _ => {}
+        }
+        front_before = t.fronts[i];
+    }
+    true
+}
+
+fn same(a: Trace, b: Trace) -> bool {
+    a.results == b.results and a.fronts == b.fronts and a.rears == b.rears and a.empties == b.empties and a.fulls == b.fulls
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6220;
+    let mut checks = 0;
+    let mut operations = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // A queue of 1 to 5 and 1 to 40 operations on it; the start
+        // moved 1 to 12 places for P5.
+        let k = 1 + next_random(mut seed) % 5;
+        let ops = script(1 + next_random(mut seed) % 40, mut seed);
+        let shift = 1 + next_random(mut seed) % 12;
+        operations += ops.len();
+        let want = definition(k, ops);
+        for which in 0..4 {
+            let got = answer(which, k, ops, 0);
+            let ok = vec![
+                // P1: the definition's results.
+                got.results == want,
+                consistent(got),
+                counted(k, ops, got),
+                in_order(ops, got),
+                // P5: with the start moved first, the same results and
+                // states.
+                same(answer(which, k, ops, shift), got),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({operations} operations), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

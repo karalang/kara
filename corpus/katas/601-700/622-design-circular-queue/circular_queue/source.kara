@@ -1,0 +1,154 @@
+// LeetCode #622: Design Circular Queue -- a ring with a start and a count.
+//
+// A `Vec` of `k` slots used as a ring: `head` is the slot of the front
+// value and `count` how many values follow it, wrapping past the end.
+// The rear is `count - 1` slots after the head. Every operation is O(1).
+
+struct MyCircularQueue {
+    data: Vec[i64],
+    head: i64,
+    count: i64,
+}
+
+impl MyCircularQueue {
+    fn new(k: i64) -> MyCircularQueue {
+        MyCircularQueue { data: vec![0; k], head: 0, count: 0 }
+    }
+
+    fn en_queue(mut ref self, value: i64) -> bool {
+        if self.count == self.data.len() {
+            return false;
+        }
+        let at = (self.head + self.count) % self.data.len();
+        self.data[at] = value;
+        self.count += 1;
+        true
+    }
+
+    fn de_queue(mut ref self) -> bool {
+        if self.count == 0 {
+            return false;
+        }
+        self.head = (self.head + 1) % self.data.len();
+        self.count -= 1;
+        true
+    }
+
+    fn front(self) -> i64 {
+        if self.count == 0 { -1 } else { self.data[self.head] }
+    }
+
+    fn rear(self) -> i64 {
+        if self.count == 0 { -1 } else { self.data[(self.head + self.count - 1) % self.data.len()] }
+    }
+
+    fn is_empty(self) -> bool {
+        self.count == 0
+    }
+
+    fn is_full(self) -> bool {
+        self.count == self.data.len()
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+enum Op {
+    EnQueue(i64),
+    DeQueue,
+    Front,
+    Rear,
+    IsEmpty,
+    IsFull,
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// Runs one operation and returns what it returns, as LeetCode prints it.
+fn run(q: mut ref MyCircularQueue, op: Op) -> String {
+    match op {
+        Op.EnQueue(value) => f"{q.en_queue(value)}",
+        Op.DeQueue => f"{q.de_queue()}",
+        Op.Front => f"{q.front()}",
+        Op.Rear => f"{q.rear()}",
+        Op.IsEmpty => f"{q.is_empty()}",
+        Op.IsFull => f"{q.is_full()}",
+    }
+}
+
+// A queue of capacity `k` with the operations run on it in order, the
+// results in LeetCode's form, `null` first for the constructor.
+fn run_all(k: i64, ops: Vec[Op]) -> String {
+    let mut q = MyCircularQueue.new(k);
+    let mut out = "[null".to_string();
+    for op in ops.iter() {
+        out.push_str(",");
+        out.push_str(run(mut q, op));
+    }
+    out.push_str("]");
+    out
+}
+
+fn show(k: i64, ops: Vec[Op]) {
+    println(f"k = {k}: {run_all(k, ops)}");
+}
+
+// `count` random operations, about two in five an `enQueue` of a value
+// from 0 to 1,000 and one in four a `deQueue`.
+fn script(count: i64, seed: mut ref i64) -> Vec[Op] {
+    let mut ops: Vec[Op] = Vec.new();
+    for _ in 0..count {
+        let roll = next_random(mut seed) % 40;
+        if roll < 16 {
+            ops.push(Op.EnQueue(next_random(mut seed) % 1001));
+        } else if roll < 26 {
+            ops.push(Op.DeQueue);
+        } else if roll < 30 {
+            ops.push(Op.Front);
+        } else if roll < 34 {
+            ops.push(Op.Rear);
+        } else if roll < 37 {
+            ops.push(Op.IsEmpty);
+        } else {
+            ops.push(Op.IsFull);
+        }
+    }
+    ops
+}
+
+fn summary(s: String) -> String {
+    let mut h: i64 = 0;
+    for c in s.chars() {
+        h = (h * 31 + c as i64) % 1000000007;
+    }
+    f"{s.len()} characters, checksum {h}"
+}
+
+fn main() {
+    // The LeetCode example.
+    show(3, vec![Op.EnQueue(1), Op.EnQueue(2), Op.EnQueue(3), Op.EnQueue(4), Op.Rear, Op.IsFull, Op.DeQueue, Op.EnQueue(4), Op.Rear]);
+    // Everything on an empty queue; a queue of one, filled and emptied
+    // twice; values wrapping around a queue of two several times; a full
+    // queue emptied to the last value.
+    show(2, vec![Op.DeQueue, Op.Front, Op.Rear, Op.IsEmpty, Op.IsFull]);
+    show(1, vec![Op.EnQueue(5), Op.IsFull, Op.EnQueue(6), Op.Front, Op.Rear, Op.DeQueue, Op.IsEmpty, Op.EnQueue(7), Op.Rear, Op.DeQueue, Op.DeQueue]);
+    show(2, vec![Op.EnQueue(1), Op.EnQueue(2), Op.DeQueue, Op.EnQueue(3), Op.Front, Op.Rear, Op.DeQueue, Op.EnQueue(4), Op.Front, Op.Rear, Op.DeQueue, Op.EnQueue(5), Op.EnQueue(6), Op.Front, Op.Rear]);
+    show(4, vec![Op.EnQueue(0), Op.EnQueue(1000), Op.EnQueue(0), Op.EnQueue(1000), Op.DeQueue, Op.DeQueue, Op.DeQueue, Op.Front, Op.Rear, Op.IsEmpty, Op.DeQueue, Op.IsEmpty, Op.Front]);
+    // 300 random scripts of 1 to 60 operations on queues of 1 to 8.
+    let mut seed: i64 = 622;
+    let mut total = String.new();
+    for _ in 0..300 {
+        let k = 1 + next_random(mut seed) % 8;
+        let ops = script(1 + next_random(mut seed) % 60, mut seed);
+        total.push_str(run_all(k, ops));
+    }
+    println(f"300 random scripts: {summary(total)}");
+    // The problem's largest: 3,000 operations on a queue of 1,000, and
+    // on a queue of one.
+    let long = script(3000, mut seed);
+    println(f"3000 operations, k = 1000: {summary(run_all(1000, long))}");
+    println(f"3000 operations, k = 1: {summary(run_all(1, long))}");
+}
