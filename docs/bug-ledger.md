@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 255 |
-| missing-feature | 244 |
+| missing-feature | 245 |
 | other | 172 |
 | perf | 164 |
 | false-positive | 161 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2876 |
-| interp | 915 |
-| typecheck | 392 |
+| codegen | 2877 |
+| interp | 916 |
+| typecheck | 393 |
 | other | 115 |
 | ownership | 87 |
 | cli | 75 |
@@ -610,6 +610,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-15 | 2026-10-14 | interp | medium | The MIR interpreter has no `chunks` or `windows` on a `Vec` receiver: `v.chunks(2)` and `v.windows(2)` on a `Vec[i64]` stop `__mir-run` with "call of unknown function Vec[i64].chunks" (and `.windows`), while `karac check` passes them, `__mir-llvm-run` runs them, and the same calls on a `Slice[i64]` run on `__mir-run` | — |
 | B-2026-10-14-18 | 2026-10-14 | typecheck | medium | `karac check` accepts `flatten()` over an iterator whose items are collections, `mat.iter().flatten()` on a `Vec[Vec[i64]]`, but the spec's signature (`where Self.Item: Iterator`) excludes it and both MIR backends refuse it: a program that passes `karac check` does not run | — |
 | B-2026-10-14-19 | 2026-10-14 | typecheck | medium | On the MIR backends a `collect()` that is an element of a tuple literal does not build, even where the tuple's type is written: `let t: (Vec[char], i64) = (s.chars().collect(), 1);` and `pairs.push((s.chars().collect(), 1))` into a `Vec[(Vec[char], i64)]` both fail with "an expression whose type does not lower (UnsolvedParam(\"C\")) is not lowered yet", while `karac check` passes them | — |
+| B-2026-10-14-20 | 2026-10-14 | typecheck+interp+codegen | medium | `collect()` into a `SortedSet` or `SortedMap` annotation does not build anywhere: `karac check` and `run --interp` refuse `let ss: SortedSet[i64] = v.iter().map(|x| x * 2).collect();` with "expected 'SortedSet[i64]', found 'Vec[i64]'", `__mir-run` stops with "expected a library value" and `__mir-llvm-run` with "native `SortedMap[i64, i64].from_iter` is not lowered yet" | — |
 
 ### Relocated
 
