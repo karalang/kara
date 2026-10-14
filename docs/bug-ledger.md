@@ -92,13 +92,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 729 |
+| miscompile | 730 |
 | run-vs-build | 605 |
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 258 |
 | missing-feature | 254 |
-| false-positive | 173 |
+| false-positive | 174 |
 | other | 172 |
 | perf | 165 |
 | diagnostics | 159 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2887 |
+| codegen | 2888 |
 | interp | 922 |
 | typecheck | 412 |
 | other | 115 |
-| ownership | 92 |
+| ownership | 93 |
 | cli | 76 |
 | runtime | 67 |
 | parser | 62 |
@@ -185,6 +185,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-49 | 2026-10-14 | interp+codegen | high | `TaskGroup.spawn` runs its task to completion before returning on both v2 backends (and on legacy `--interp`), where docs/library/concurrency.md says it "starts `f` as a task that runs concurrently with the caller": a server task that blocks in `accept` while client tasks connect never returns, so the spec's own accept-loop shape, and any task that waits on another task, hangs the program | — |
 | B-2026-10-14-50 | 2026-10-14 | parser+typecheck | medium | `f()?.x` and `f()?.m()` are parsed as the removed optional-chaining operator `?.` instead of `(f()?).x`, so `?` followed by a member access is refused on every `Result` ("'?.' requires an `Option` on the left, found 'Result[..]'") by `karac check` and the MIR pipeline, where design.md says "There is no `?.`" and "`f()?.x` means `(f()?).x`"; the help line then advises replacing `?.` with `.`, which drops the propagation | — |
 | B-2026-10-14-51 | 2026-10-14 | ownership | medium | `karac check` refuses binding a range view of a FIELD to a local in a method, `let s = self.bytes[a..b]; s` (and `Ok(s)`), with "slice from temporary value escapes the enclosing statement", though `self.bytes` is a place and not a temporary; the same body returned without the binding passes, and every MIR surface accepts both | — |
+| B-2026-10-14-52 | 2026-10-14 | codegen | high | `CONST.iter()` on a `const` array runs ZERO iterations on the MIR compiled backends: `const AA: Array[i64, 3] = [1, 2, 3]; for x in AA.iter() { s += *x; }` leaves `s` at 0 under `karac __mir-llvm-run` and `karac build --mir` with no error, and `__mir-llvm-asan` reports a stack-buffer-overflow READ of size 16, because the call passes an 8-byte pointer to the array where `Slice[i64].iter` reads a 16-byte (ptr, len) slice | — |
+| B-2026-10-14-53 | 2026-10-14 | ownership | medium | `karac check` reports a `String` passed to `fs.write(path, content)` as MOVED, so `fs.write(p, out)` followed by any use of `out` is refused ("value 'out' moved here, used again here"), though the library declares `contents: ref String` and docs/library/io.md `content: Str`, and every MIR surface accepts the program | — |
 
 ### Relocated
 

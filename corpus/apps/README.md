@@ -120,6 +120,7 @@ cli/task_runner     dependency-ordered `sh -c` tasks, piped stdin/stdout/stderr,
 cli/log_rotate      size-based log rotation, line scan of every segment, seek-from-end tail, CSV
 pipeline/flag_eval  feature flags from a JSON file, JSON-lines requests and decisions, config reload
 cli/archive         binary archive format with CRC-32: pack, list, extract, detect corruption
+cli/site_gen        static site generator: markdown subset to HTML, front matter, env config, index + sitemap
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is

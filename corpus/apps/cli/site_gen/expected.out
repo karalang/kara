@@ -1,0 +1,23 @@
+intro.html: 584 bytes, 2 headings, 2 links
+guide.html: 502 bytes, 3 headings, 2 links
+faq.html: 406 bytes, 3 headings, 1 links
+index.html: 8 entries
+broken link in guide.md: nowhere.html
+1 broken links
+  <html><head><title>The guide | Kara &amp; Friends</title>
+  <h1 id="the-guide">The guide</h1>
+  <h2 id="values-types">Values &amp; types</h2>
+  <p>A <code>String</code> owns its text; a <code>Str</code> is a view: <code>&quot;a&quot; &lt; &quot;b&quot;</code> is <em>true</em>.</p>
+  <h2 id="errors">Errors</h2>
+  <p>Use <code>?</code> to propagate. Back to <a href="intro.html">the intro</a>, or the <a href="nowhere.html">missing page</a>.</p>
+  <h2 id="is-it-fast">Is it fast?</h2>
+  <h2 id="why-angle-brackets">Why &lt;angle brackets&gt;?</h2>
+  <p>They are <em>escaped</em>: 1 &lt; 2 &amp;&amp; 3 &gt; 2.</p>
+  <ul>
+  <li>download the <code>karac</code> binary</li>
+  <li>put it on your <code>PATH</code></li>
+  <li>run <code>karac --version</code></li>
+  </ul>
+  <pre><code class="language-sh">karac build hello.kara
+  ./hello
+  </code></pre>

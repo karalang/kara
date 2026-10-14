@@ -1,0 +1,324 @@
+// A static site generator: writes a few Markdown pages to disk, converts
+// each to HTML (headings with ids, paragraphs, lists, fenced code, inline
+// code, bold, emphasis, links, escaping), builds an index page with a table
+// of contents, and checks every internal link points at a page it wrote.
+// Settings come from the environment: SITE_TITLE and SITE_BASE.
+//
+// Workarounds for v2 gaps, each to revert once its row is fixed:
+//   B-2026-10-14-44  fs.write takes ref String, so a `Str` page is copied
+//   B-2026-10-14-52  `PAGES.iter()` on a const array yields nothing on the
+//                    compiled backends, so main iterates a local copy
+//   B-2026-10-14-53  `karac check` counts fs.write's content as moved, so
+//                    the page size is read before the write
+
+struct Page { slug: String, title: String, html: String, headings: Vec[(i64, String, String)], links: Vec[String] }
+
+fn escape(s: Str) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn slugify(s: Str) -> String {
+    let mut out = String.new();
+    let mut dash = false;
+    for c in s.to_lowercase().chars() {
+        if c.is_alphanumeric() {
+            out.push(c);
+            dash = false;
+        } else if not dash and out.len() > 0 {
+            out.push('-');
+            dash = true;
+        }
+    }
+    if out.ends_with("-") {
+        out = out[0..out.len() - 1].to_string();
+    }
+    out
+}
+
+// Inline markup over escaped text: `code`, **bold**, *em*, [text](href).
+// Links are collected so the build can check them.
+fn inline(text: Str, links: mut ref Vec[String]) -> String {
+    let cs: Vec[char] = text.chars().collect();
+    let mut out = String.new();
+    let mut i = 0;
+    let n = cs.len();
+    while i < n {
+        let c = cs[i];
+        if c == '`' {
+            let mut j = i + 1;
+            while j < n and cs[j] != '`' { j += 1; }
+            if j < n {
+                let mut code = String.new();
+                for k in i + 1..j { code.push(cs[k]); }
+                out.push_str(f"<code>{escape(code)}</code>");
+                i = j + 1;
+                continue;
+            }
+        }
+        if c == '*' and i + 1 < n and cs[i + 1] == '*' {
+            let mut j = i + 2;
+            while j + 1 < n and not (cs[j] == '*' and cs[j + 1] == '*') { j += 1; }
+            if j + 1 < n {
+                let mut inner = String.new();
+                for k in i + 2..j { inner.push(cs[k]); }
+                out.push_str(f"<strong>{inline(inner, links)}</strong>");
+                i = j + 2;
+                continue;
+            }
+        }
+        if c == '*' {
+            let mut j = i + 1;
+            while j < n and cs[j] != '*' { j += 1; }
+            if j < n and j > i + 1 {
+                let mut inner = String.new();
+                for k in i + 1..j { inner.push(cs[k]); }
+                out.push_str(f"<em>{inline(inner, links)}</em>");
+                i = j + 1;
+                continue;
+            }
+        }
+        if c == '[' {
+            let mut j = i + 1;
+            while j < n and cs[j] != ']' { j += 1; }
+            if j + 1 < n and cs[j + 1] == '(' {
+                let mut k = j + 2;
+                while k < n and cs[k] != ')' { k += 1; }
+                if k < n {
+                    let mut label = String.new();
+                    for x in i + 1..j { label.push(cs[x]); }
+                    let mut href = String.new();
+                    for x in j + 2..k { href.push(cs[x]); }
+                    links.push(href.clone());
+                    out.push_str(f"<a href=\"{escape(href)}\">{inline(label, links)}</a>");
+                    i = k + 1;
+                    continue;
+                }
+            }
+        }
+        out.push_str(escape(c.to_string()));
+        i += 1;
+    }
+    out
+}
+
+fn render(slug: Str, md: Str) -> Page {
+    let mut html = String.new();
+    let mut headings: Vec[(i64, String, String)] = Vec.new();
+    let mut links: Vec[String] = Vec.new();
+    let mut title = slug.to_string();
+    let mut para: Vec[String] = Vec.new();
+    let mut in_list = false;
+    let mut in_code = false;
+    let mut lines: Vec[String] = Vec.new();
+    for l in md.lines() {
+        lines.push(l.to_string());
+    }
+    lines.push(String.new());
+    for line in lines.iter() {
+        if in_code {
+            if line.starts_with("```") {
+                html.push_str("</code></pre>\n");
+                in_code = false;
+            } else {
+                html.push_str(escape(line));
+                html.push('\n');
+            }
+            continue;
+        }
+        let t = line.trim();
+        let is_item = t.starts_with("- ");
+        if (t.is_empty() or t.starts_with("#") or t.starts_with("```") or is_item) and para.len() > 0 {
+            let text = para.join(" ");
+            html.push_str(f"<p>{inline(text, mut links)}</p>\n");
+            para.clear();
+        }
+        if in_list and not is_item {
+            html.push_str("</ul>\n");
+            in_list = false;
+        }
+        if t.starts_with("```") {
+            let lang = t[3..t.len()].trim();
+            if lang.is_empty() {
+                html.push_str("<pre><code>");
+            } else {
+                html.push_str(f"<pre><code class=\"language-{lang}\">");
+            }
+            in_code = true;
+        } else if t.starts_with("#") {
+            let mut level = 0;
+            for c in t.chars() {
+                if c == '#' { level += 1; } else { break; }
+            }
+            let text = t[level..t.len()].trim();
+            let id = slugify(text);
+            if level == 1 {
+                title = text.to_string();
+            }
+            headings.push((level, text.to_string(), id.clone()));
+            html.push_str(f"<h{level} id=\"{id}\">{inline(text, mut links)}</h{level}>\n");
+        } else if is_item {
+            if not in_list {
+                html.push_str("<ul>\n");
+                in_list = true;
+            }
+            html.push_str(f"<li>{inline(t[2..t.len()], mut links)}</li>\n");
+        } else if not t.is_empty() {
+            para.push(t.to_string());
+        }
+    }
+    Page { slug: slug.to_string(), title: title, html: html, headings: headings, links: links }
+}
+
+fn wrap(site: Str, base: Str, page: ref Page) -> String {
+    f"<!doctype html>\n<html><head><title>{escape(page.title)} | {escape(site)}</title>\n<base href=\"{base}\"></head>\n<body>\n{page.html}</body></html>\n"
+}
+
+const PAGES: Array[(Str, Str), 3] = [
+    ("intro", "# Getting started
+
+Kara is a **small** language for *services* & tools.
+See [the guide](guide.html) and [the FAQ](faq.html).
+
+## Install
+
+- download the `karac` binary
+- put it on your `PATH`
+- run `karac --version`
+
+```sh
+karac build hello.kara
+./hello
+```
+"),
+    ("guide", "# The guide
+
+## Values & types
+
+A `String` owns its text; a `Str` is a view: `\"a\" < \"b\"` is *true*.
+
+## Errors
+
+Use `?` to propagate. Back to [the intro](intro.html), or the [missing page](nowhere.html).
+"),
+    ("faq", "# FAQ
+
+## Is it fast?
+
+It compiles to native code through LLVM. See [benchmarks](https://example.com/bench).
+
+## Why <angle brackets>?
+
+They are *escaped*: 1 < 2 && 3 > 2.
+"),
+];
+
+fn main() {
+    let site = match env.var("SITE_TITLE") {
+        Ok(v) => v,
+        Err(_) => "Untitled".to_string(),
+    };
+    let base = env.var("SITE_BASE").unwrap_or("/".to_string());
+    let mut pages: Vec[Page] = Vec.new();
+    let sources = PAGES;
+    for (slug, md) in sources.iter() {
+        match fs.write(f"{slug}.md", md.to_string()) {
+            Ok(_) => {}
+            Err(_) => println(f"cannot write {slug}.md"),
+        }
+    }
+    for (slug, _) in sources.iter() {
+        let md = match fs.read_to_string(f"{slug}.md") {
+            Ok(t) => t,
+            Err(_) => {
+                println(f"cannot read {slug}.md");
+                continue;
+            }
+        };
+        let page = render(slug, md);
+        let out = wrap(site, base, page);
+        let size = out.len();
+        match fs.write(f"{slug}.html", out) {
+            Ok(_) => println(f"{slug}.html: {size} bytes, {page.headings.len()} headings, {page.links.len()} links"),
+            Err(_) => println(f"cannot write {slug}.html"),
+        }
+        pages.push(page);
+    }
+
+    let mut toc = f"# {site}\n\n";
+    for p in pages.iter() {
+        toc.push_str(f"- [{p.title}]({p.slug}.html)\n");
+        for (level, text, id) in p.headings.iter() {
+            if *level == 2 {
+                toc.push_str(f"- [{p.title}: {text}]({p.slug}.html#{id})\n");
+            }
+        }
+    }
+    let index = render("index", toc);
+    match fs.write("index.html", wrap(site, base, index)) {
+        Ok(_) => println(f"index.html: {index.links.len()} entries"),
+        Err(_) => println("cannot write index.html"),
+    }
+
+    let mut known: Set[String] = Set.new();
+    for p in pages.iter() {
+        known.insert(f"{p.slug}.html");
+    }
+    let mut broken = 0;
+    for p in pages.iter() {
+        for l in p.links.iter() {
+            if l.starts_with("http://") or l.starts_with("https://") {
+                continue;
+            }
+            let target = match l.find("#") {
+                Some(i) => l[0..i].to_string(),
+                None => l.clone(),
+            };
+            if not known.contains(target) {
+                println(f"broken link in {p.slug}.md: {l}");
+                broken += 1;
+            }
+        }
+    }
+    println(f"{broken} broken links");
+    match fs.read_to_string("guide.html") {
+        Ok(h) => {
+            for line in h.lines() {
+                if line.starts_with("<h") or line.starts_with("<p>") or line.starts_with("<title>") {
+                    println(f"  {line}");
+                }
+            }
+        }
+        Err(_) => println("cannot read guide.html"),
+    }
+    match fs.read_to_string("faq.html") {
+        Ok(h) => {
+            for line in h.lines() {
+                if line.starts_with("<h2") or line.starts_with("<p>They") {
+                    println(f"  {line}");
+                }
+            }
+        }
+        Err(_) => println("cannot read faq.html"),
+    }
+    match fs.read_to_string("intro.html") {
+        Ok(h) => {
+            let mut show = false;
+            for line in h.lines() {
+                if line.starts_with("<ul>") or line.starts_with("<pre>") { show = true; }
+                if show { println(f"  {line}"); }
+                if line.starts_with("</ul>") or line.ends_with("</code></pre>") { show = false; }
+            }
+        }
+        Err(_) => println("cannot read intro.html"),
+    }
+}
