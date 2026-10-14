@@ -416,6 +416,16 @@ impl Cx<'_> {
     /// `op` holds of a place not reached through a reference, what that
     /// place's local holds. A place behind a reference holds only what
     /// came from outside this body.
+    /// Whether `op` is a reference to a `str`.
+    fn refers_to_str(&self, op: &Operand) -> bool {
+        op.place()
+            .and_then(|p| place_ty(self.body, self.tys, p).ok())
+            .is_some_and(|pt| match self.tys.kind(pt.ty) {
+                TyKind::Ref(t) | TyKind::MutRef(t) => matches!(self.tys.kind(t), TyKind::Str),
+                _ => false,
+            })
+    }
+
     fn pointee_origins(&self, o: &Origins, op: &Operand, into: &mut [bool]) {
         let Some(p) = op.place() else { return };
         for (li, l) in self.loans.iter().enumerate() {
@@ -577,6 +587,12 @@ impl Cx<'_> {
                     self.operand_origins(o, a, &mut val);
                 }
             }
+            // A `str` is itself a view (core semantics §5.2): what a native
+            // makes from a reference to one borrows the `String` it views,
+            // not the place holding the view.
+            ResultBorrows::Receiver if self.refers_to_str(&args[0]) => {
+                self.pointee_origins(o, &args[0], &mut val)
+            }
             ResultBorrows::Receiver => self.operand_origins(o, &args[0], &mut val),
             ResultBorrows::ReceiverValue => self.pointee_origins(o, &args[0], &mut val),
         }
@@ -610,7 +626,9 @@ fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
         }
         seen.push((ty, stored));
         match tys.kind(ty) {
-            TyKind::Ref(_) | TyKind::MutRef(_) | TyKind::Slice(_) | TyKind::Other => true,
+            TyKind::Ref(_) | TyKind::MutRef(_) | TyKind::Str | TyKind::Slice(_) | TyKind::Other => {
+                true
+            }
             // An erased function value may hold whatever its closure
             // captured, unless it was stored, which made it capture by move.
             TyKind::Fn { .. } => !stored,
@@ -1684,5 +1702,42 @@ fn main() -> () {
         }
         assert!(bad.is_empty(), "{}", bad.join("\n"));
         assert!(ok_checked >= 20, "only {ok_checked} runnable pins checked");
+    }
+
+    /// B-2026-10-13-29: a `Str` view of a `String` borrows it, so writing
+    /// the `String` while the view, or a view cut from it, is live is
+    /// refused; a view cut from a view held in a field leaves that field
+    /// free to be written.
+    #[test]
+    fn mir_borrowck_a_str_view_borrows_its_string() {
+        let run = |body: &str| {
+            crate::mir::lower::tests::run_source(&format!("fn main() {{\n{body}\n}}\n"))
+        };
+        let grow = "    owned.push_str(\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\");\n";
+        for view in [
+            "let v: Str = owned.as_str();",
+            "let v = owned.as_str().slice(0, 1);",
+        ] {
+            let src = format!(
+                "    let mut owned = String.from(\"ab\");\n    {view}\n{grow}    println(v);"
+            );
+            let err = run(&src).expect_err(view);
+            assert!(err.contains("[E0516]"), "{view}: {err}");
+            // Its last use before the write ends the borrow.
+            let want = if view.contains("slice") {
+                "a\n42\n"
+            } else {
+                "ab\n42\n"
+            };
+            let ok = format!("    let mut owned = String.from(\"ab\");\n    {view}\n    println(v);\n{grow}    println(owned.len());");
+            assert_eq!(run(&ok).unwrap(), (want.into(), Some(0)));
+        }
+        let field = "struct It { rest: Str }\n\
+impl It { fn step(mut ref self) -> Str { let head = self.rest.slice(0, 1); self.rest = self.rest.slice(1, self.rest.len()); head } }\n\
+fn main() {\n    let s = String.from(\"xyz\");\n    let mut it = It { rest: s.as_str() };\n    println(it.step());\n    println(it.step());\n}\n";
+        assert_eq!(
+            crate::mir::lower::tests::run_source(field).unwrap(),
+            ("x\ny\n".into(), Some(0))
+        );
     }
 }
