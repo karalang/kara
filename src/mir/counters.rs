@@ -51,6 +51,160 @@ pub fn elide_counter_checks(body: &mut Body, tys: &TyInterner) {
     }
 }
 
+/// The largest bound a loop hinted by [`unroll_full_latches`] may count
+/// to, and the most statements its blocks may hold: the legacy backend's
+/// gates for the same hint (`codegen/control_flow_bce.rs`,
+/// `UNROLL_FULL_MAX_BOUND`, where the measurements are), its statement
+/// limit scaled to MIR's several statements per source one.
+const UNROLL_FULL_MAX_BOUND: u128 = 32;
+const UNROLL_FULL_MAX_STATEMENTS: usize = 48;
+
+/// The latches of `body`'s small counting loops, whose back edges codegen
+/// marks `llvm.loop.unroll.full`: a guard `i < K` with `K` a constant of
+/// at most 32, `i` set to a constant `>= 0` just before the loop and grown
+/// by a constant `>= 1` once per trip, and a body of scalar statements
+/// with no call, no drop and no loop inside it. `default<O2>`'s unroller
+/// declines a 32-trip loop a little over its cost threshold (kata 190's
+/// bit reversal, which unrolled becomes one `llvm.bitreverse`); the hint
+/// is advisory, so a loop LLVM cannot count stays as it was.
+pub fn unroll_full_latches(body: &Body, tys: &TyInterner) -> Vec<usize> {
+    let mut out = Vec::new();
+    if body.blocks.is_empty() {
+        return out;
+    }
+    let preds = predecessors(body);
+    let idom = dominators(body, &preds);
+    let loops = natural_loops(body, &preds, &idom);
+    let writes = local_writes(body);
+    let scalar = |t: super::ty::Ty| match tys.kind(t) {
+        TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Float(_) | TyKind::Unit => true,
+        TyKind::Never => true,
+        TyKind::Tuple(ts) => ts.iter().all(|t| {
+            matches!(
+                tys.kind(*t),
+                TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Float(_)
+            )
+        }),
+        _ => false,
+    };
+    for lp in &loops {
+        let inner = loops
+            .iter()
+            .any(|o| o.header != lp.header && lp.blocks[o.header]);
+        if inner {
+            continue;
+        }
+        let mut statements = 0;
+        let cheap = lp
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, &b)| b)
+            .all(|(b, _)| {
+                let data = &body.blocks[b];
+                statements += data.statements.len();
+                let term = matches!(
+                    data.terminator.kind,
+                    TerminatorKind::Goto { .. }
+                        | TerminatorKind::SwitchInt { .. }
+                        | TerminatorKind::Abort { .. }
+                        | TerminatorKind::Unreachable
+                );
+                term && data.statements.iter().all(|s| match &s.kind {
+                    StatementKind::Assign(p, _) => scalar(body.local(p.local).ty),
+                    StatementKind::StorageLive(_)
+                    | StatementKind::StorageDead(_)
+                    | StatementKind::Nop => true,
+                    _ => false,
+                })
+            });
+        if !cheap || statements > UNROLL_FULL_MAX_STATEMENTS {
+            continue;
+        }
+        let Some(chain) = entry_chain(body, &preds, lp) else {
+            continue;
+        };
+        let counted = body.blocks.iter().enumerate().any(|(g, gb)| {
+            if !lp.blocks[g] || !lp.latches.iter().all(|&t| dominates(&idom, g, t)) {
+                return false;
+            }
+            let Some((i, (bits, signed))) = guard(body, tys, lp, gb) else {
+                return false;
+            };
+            let Some(k) = guard_bound(body, &writes, gb) else {
+                return false;
+            };
+            let nonneg = |v: u128| !signed || mask(v, bits) >> (bits - 1) == 0;
+            if !nonneg(k) || mask(k, bits) > UNROLL_FULL_MAX_BOUND {
+                return false;
+            }
+            if writes.other[i.index()] || writes.assigns[i.index()].len() != 2 {
+                return false;
+            }
+            let init = writes.assigns[i.index()].iter().any(|&(bi, si)| {
+                chain.contains(&(bi, si))
+                    && matches!(
+                        &body.blocks[bi].statements[si].kind,
+                        StatementKind::Assign(_, Rvalue::Use(Operand::Const(Const {
+                            kind: ConstKind::Scalar(v),
+                            ..
+                        }))) if nonneg(*v)
+                    )
+            });
+            let step = increment(body, &writes, i).is_some_and(|(cb, _, c)| {
+                let c = mask(c, bits);
+                c != 0 && nonneg(c) && lp.latches.iter().all(|&t| dominates(&idom, cb, t))
+            });
+            init && step
+        });
+        if counted {
+            out.extend(lp.latches.iter().copied());
+        }
+    }
+    out
+}
+
+/// The constant `K` of guard block `gb`'s `i < K`: a literal, or a local
+/// assigned only a literal.
+fn guard_bound(body: &Body, writes: &Writes, gb: &BasicBlockData) -> Option<u128> {
+    let TerminatorKind::SwitchInt {
+        discr: Operand::Copy(c),
+        ..
+    } = &gb.terminator.kind
+    else {
+        return None;
+    };
+    let rv = gb.statements.iter().rev().find_map(|s| match &s.kind {
+        StatementKind::Assign(d, rv) if d == c => Some(rv),
+        _ => None,
+    })?;
+    let Rvalue::BinaryOp(BinOp::Lt, _, bound) = rv else {
+        return None;
+    };
+    let scalar = |o: &Operand| match o {
+        Operand::Const(Const {
+            kind: ConstKind::Scalar(v),
+            ..
+        }) => Some(*v),
+        _ => None,
+    };
+    match bound {
+        Operand::Const(_) => scalar(bound),
+        Operand::Copy(p) if p.projection.is_empty() => {
+            let ws = &writes.assigns[p.local.index()];
+            if writes.other[p.local.index()] || ws.len() != 1 {
+                return None;
+            }
+            let (bi, si) = ws[0];
+            match &body.blocks[bi].statements[si].kind {
+                StatementKind::Assign(_, Rvalue::Use(o)) => scalar(o),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 struct Loop {
     header: usize,
     blocks: Vec<bool>,

@@ -317,6 +317,37 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         }
     }
 
+    /// Marks the back edge `br` `!llvm.loop !{!self,
+    /// !{!"llvm.loop.unroll.full"}}`, the self-referential loop id built
+    /// through a temporary node, as the legacy backend does
+    /// (`attach_unroll_full_metadata`).
+    fn unroll_full(&self, br: inkwell::values::InstructionValue<'ctx>) {
+        use inkwell::values::AsValueRef;
+        use llvm_sys::core::{
+            LLVMGetMDKindIDInContext, LLVMMDNodeInContext2, LLVMMDStringInContext2,
+            LLVMMetadataAsValue, LLVMSetMetadata,
+        };
+        use llvm_sys::debuginfo::{LLVMMetadataReplaceAllUsesWith, LLVMTemporaryMDNode};
+        use std::os::raw::{c_char, c_uint};
+        let ctx = self.llcx.raw();
+        // SAFETY: every node is made in `ctx`, which outlives the module,
+        // and the temporary is replaced (and so freed) before it escapes.
+        unsafe {
+            let key = b"llvm.loop.unroll.full";
+            let prop = LLVMMDStringInContext2(ctx, key.as_ptr() as *const c_char, key.len());
+            let mut prop_ops = [prop];
+            let prop = LLVMMDNodeInContext2(ctx, prop_ops.as_mut_ptr(), prop_ops.len());
+            let temp = LLVMTemporaryMDNode(ctx, std::ptr::null_mut(), 0);
+            let mut ops = [temp, prop];
+            let id = LLVMMDNodeInContext2(ctx, ops.as_mut_ptr(), ops.len());
+            LLVMMetadataReplaceAllUsesWith(temp, id);
+            let kind = b"llvm.loop";
+            let kind =
+                LLVMGetMDKindIDInContext(ctx, kind.as_ptr() as *const c_char, kind.len() as c_uint);
+            LLVMSetMetadata(br.as_value_ref(), kind, LLVMMetadataAsValue(ctx, id));
+        }
+    }
+
     /// Declares every body without lowering any, for tests that write
     /// bodies by hand.
     #[cfg(test)]
@@ -413,6 +444,12 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         self.builder
             .build_unconditional_branch(self.blocks[0])
             .map_err(|e| e.to_string())?;
+        // `KARAC_MIR_UNROLL=0` leaves out the full-unroll hints.
+        let unroll = if std::env::var("KARAC_MIR_UNROLL").as_deref() == Ok("0") {
+            Vec::new()
+        } else {
+            crate::mir::counters::unroll_full_latches(body, self.tys)
+        };
         for (i, block) in body.blocks.iter().enumerate() {
             self.builder.position_at_end(self.blocks[i]);
             for s in &block.statements {
@@ -426,6 +463,15 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
                     self.drop_terminator(place, *target)?
                 }
                 kind => self.terminator(kind)?,
+            }
+            if unroll.contains(&i) && matches!(block.terminator.kind, TerminatorKind::Goto { .. }) {
+                if let Some(br) = self
+                    .builder
+                    .get_insert_block()
+                    .and_then(|b| b.get_terminator())
+                {
+                    self.unroll_full(br);
+                }
             }
         }
         self.debug_leave();
