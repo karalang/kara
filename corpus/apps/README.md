@@ -118,13 +118,15 @@ stdin, so a server and its client share one thread over loopback.
 service/kv_http     HTTP/1.1 key-value store over TCP, JSON bodies (serde derive)
 cli/task_runner     dependency-ordered `sh -c` tasks, piped stdin/stdout/stderr, JSON report
 cli/log_rotate      size-based log rotation, line scan of every segment, seek-from-end tail, CSV
+pipeline/flag_eval  feature flags from a JSON file, JSON-lines requests and decisions, config reload
+cli/archive         binary archive format with CRC-32: pack, list, extract, detect corruption
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
 frozen. `source.orig.kara` is the first draft, `source.kara` the version that
 runs; each notes.md separates author errors under the v2 rules from compiler
-gaps, and each source header lists the workarounds by ledger id. kv_http and
-task_runner FAIL on every mir backend until B-2026-10-12-23 is fixed
+gaps, and each source header lists the workarounds by ledger id. kv_http,
+task_runner and flag_eval FAIL on every mir backend until B-2026-10-12-23 is fixed
 (`karac check` does not know `DeserializeError`); without check they match
 the mirror on all four surfaces.
 

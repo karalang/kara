@@ -97,9 +97,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 258 |
-| missing-feature | 252 |
+| missing-feature | 254 |
+| false-positive | 173 |
 | other | 172 |
-| false-positive | 171 |
 | perf | 165 |
 | diagnostics | 159 |
 | crash | 115 |
@@ -110,16 +110,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2886 |
-| interp | 921 |
-| typecheck | 411 |
+| codegen | 2887 |
+| interp | 922 |
+| typecheck | 412 |
 | other | 115 |
-| ownership | 91 |
+| ownership | 92 |
 | cli | 76 |
 | runtime | 67 |
-| parser | 61 |
+| parser | 62 |
 | autopar | 59 |
-| resolver | 39 |
+| resolver | 40 |
 | effect | 30 |
 | lexer | 11 |
 ## Current state
@@ -181,6 +181,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-45 | 2026-10-14 | interp+codegen | medium | `BufReader` and `BufWriter` (docs/library/io.md § Buffered I/O) do not exist on either v2 backend: `karac check` accepts `BufReader.new(f)`, `read_line`, `lines()` and `BufWriter.write_all`, legacy `karac run --interp` runs them, but `karac __mir-run` stops at `call of unknown function BufReader[File].new`, `karac __mir-llvm-run` at `native `BufReader[File].new` is not lowered yet`, and `for line in reader.lines()` is refused at MIR build with `a `for` loop over a collection is not lowered yet` | — |
 | B-2026-10-14-46 | 2026-10-14 | typecheck+cli | medium | A type error stopping the MIR pipeline is printed with no location: `karac __mir-run` / `__mir-llvm-run` / `__mir-llvm-asan` print `error[mir]: typecheck: expected 'String', found 'StringSlice'` and nothing else, because src/mir/lower.rs formats only `tc.errors[0].message` and drops its `span`, so a program that `karac check` would locate has to be bisected by hand | — |
 | B-2026-10-14-47 | 2026-10-14 | resolver+typecheck+interp | low | `IndexSet` (design.md § `Index` and `IndexMut`: `c[key] = value` calls `IndexSet.index_set(c, key, value)` when `c`'s type implements it, else `*IndexMut.index_mut(c, key) = value`) does not exist: the stdlib declares no `IndexSet` trait, so a user keyed container cannot take `c[k] = v` for a key that is not present yet, and the user `Index` / `IndexMut` support B-2026-10-14-37 added writes only through `index_mut` | — |
+| B-2026-10-14-48 | 2026-10-14 | resolver | medium | The library module paths of docs/library/README.md do not resolve: `import std.sync.{channel, Sender, Receiver}` (concurrency.md's own example), `import std.net.{TcpListener, TcpError}`, `import std.io.{File}` and `import std.sync.{TaskGroup}` / `{Mutex}` all stop with `unknown module` on `karac check` and the MIR pipeline, and the spec's channel constructor `channel(cap)` is an undefined name: the implementation has the names as globals and channels only as the older `Channel.new()` / `Channel.bounded(cap)` | — |
+| B-2026-10-14-49 | 2026-10-14 | interp+codegen | high | `TaskGroup.spawn` runs its task to completion before returning on both v2 backends (and on legacy `--interp`), where docs/library/concurrency.md says it "starts `f` as a task that runs concurrently with the caller": a server task that blocks in `accept` while client tasks connect never returns, so the spec's own accept-loop shape, and any task that waits on another task, hangs the program | — |
+| B-2026-10-14-50 | 2026-10-14 | parser+typecheck | medium | `f()?.x` and `f()?.m()` are parsed as the removed optional-chaining operator `?.` instead of `(f()?).x`, so `?` followed by a member access is refused on every `Result` ("'?.' requires an `Option` on the left, found 'Result[..]'") by `karac check` and the MIR pipeline, where design.md says "There is no `?.`" and "`f()?.x` means `(f()?).x`"; the help line then advises replacing `?.` with `.`, which drops the propagation | — |
+| B-2026-10-14-51 | 2026-10-14 | ownership | medium | `karac check` refuses binding a range view of a FIELD to a local in a method, `let s = self.bytes[a..b]; s` (and `Ok(s)`), with "slice from temporary value escapes the enclosing statement", though `self.bytes` is a place and not a temporary; the same body returned without the binding passes, and every MIR surface accepts both | — |
 
 ### Relocated
 

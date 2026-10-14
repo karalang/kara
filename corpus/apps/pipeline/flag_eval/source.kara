@@ -1,0 +1,296 @@
+// A feature-flag evaluator, as a service would embed it: flag definitions
+// come from a JSON file on disk, evaluation requests arrive as JSON lines,
+// and every decision is written out as a JSON line with the reason. The
+// config is then replaced with a new version and the same requests are
+// evaluated again, and the two runs are diffed.
+//
+// Rollout buckets are a stable FNV-1a hash of "flag:user", so a user stays
+// in or out of a percentage rollout across runs and machines.
+//
+// Workarounds for v2 gaps, each to revert once its row is fixed:
+//   B-2026-10-12-6   i64.parse returns Option, not Result[i64, ParseError]
+//   B-2026-10-12-7   lines() is an eager Vec[String]
+//   B-2026-10-14-44  fs.read_to_string / fs.write take ref String, not Str
+// Not worked around (no other spelling): B-2026-10-12-23, `karac check`
+// does not know DeserializeError.
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag: "op")]
+enum Rule {
+    Equals { attr: String, value: String },
+    OneOf { attr: String, values: Vec[String] },
+    AtLeast { attr: String, min: i64 },
+}
+
+#[derive(Serialize, Deserialize)]
+struct Flag {
+    name: String,
+    #[serde(default: true)]
+    enabled: bool,
+    rules: Vec[Rule],
+    #[serde(rename: "rollout_percent", default: 100)]
+    rollout: i64,
+    variant: Option[String],
+}
+
+#[derive(Serialize, Deserialize)]
+struct Config { version: i64, flags: Vec[Flag] }
+
+#[derive(Serialize, Deserialize)]
+struct EvalRequest { user: String, flag: String, attrs: SortedMap[String, String] }
+
+#[derive(Serialize, Deserialize)]
+struct Decision { user: String, flag: String, on: bool, variant: Option[String], reason: String }
+
+const CONFIG_V1: Str = "{
+  \"version\": 1,
+  \"flags\": [
+    {\"name\": \"new-checkout\", \"rules\": [{\"op\": \"Equals\", \"attr\": \"country\", \"value\": \"NZ\"}],
+     \"rollout_percent\": 50, \"variant\": \"blue\"},
+    {\"name\": \"beta-search\", \"rules\": [{\"op\": \"OneOf\", \"attr\": \"plan\", \"values\": [\"pro\", \"team\"]},
+                                         {\"op\": \"AtLeast\", \"attr\": \"age_days\", \"min\": 30}],
+     \"variant\": null},
+    {\"name\": \"dark-mode\", \"rules\": [], \"rollout_percent\": 25, \"variant\": \"dim\"},
+    {\"name\": \"legacy-export\", \"enabled\": false, \"rules\": [], \"variant\": null}
+  ]
+}";
+
+const CONFIG_V2: Str = "{
+  \"version\": 2,
+  \"flags\": [
+    {\"name\": \"new-checkout\", \"rules\": [{\"op\": \"OneOf\", \"attr\": \"country\", \"values\": [\"NZ\", \"AU\"]}],
+     \"rollout_percent\": 100, \"variant\": \"green\"},
+    {\"name\": \"beta-search\", \"rules\": [{\"op\": \"AtLeast\", \"attr\": \"age_days\", \"min\": 7}], \"variant\": null},
+    {\"name\": \"dark-mode\", \"rules\": [], \"rollout_percent\": 60, \"variant\": \"dim\"}
+  ]
+}";
+
+fn bucket(flag: Str, user: Str) -> i64 {
+    let mut h: u64 = 14695981039346656037u64;
+    let key = f"{flag}:{user}";
+    for b in key.bytes() {
+        h = h ^ (b as u64);
+        h = h.wrapping_mul(1099511628211u64);
+    }
+    (h % 100u64) as i64
+}
+
+// Why a rule did not match, or None when it did.
+fn check_rule(rule: ref Rule, attrs: ref SortedMap[String, String]) -> Option[String] {
+    match rule {
+        Rule.Equals { attr, value } => match attrs.get(attr) {
+            Some(v) => if v == value { None } else { Some(f"{attr}={v} not {value}") },
+            None => Some(f"no {attr}"),
+        },
+        Rule.OneOf { attr, values } => match attrs.get(attr) {
+            Some(v) => {
+                for want in values.iter() {
+                    if want == v {
+                        return None;
+                    }
+                }
+                Some(f"{attr}={v} not in list")
+            }
+            None => Some(f"no {attr}"),
+        },
+        Rule.AtLeast { attr, min } => match attrs.get(attr) {
+            Some(v) => match i64.parse(v) {
+                Some(n) => if n >= *min { None } else { Some(f"{attr}={n} < {min}") },
+                None => Some(f"{attr} not a number"),
+            },
+            None => Some(f"no {attr}"),
+        },
+    }
+}
+
+fn evaluate(cfg: ref Config, req: ref EvalRequest) -> Decision {
+    let mut found: Option[ref Flag] = None;
+    for f in cfg.flags.iter() {
+        if f.name == req.flag {
+            found = Some(f);
+        }
+    }
+    let flag = match found {
+        Some(f) => f,
+        None => return Decision { user: req.user.clone(), flag: req.flag.clone(), on: false, variant: None, reason: "unknown flag".to_string() },
+    };
+    let off = |why: String| Decision { user: req.user.clone(), flag: req.flag.clone(), on: false, variant: None, reason: why };
+    if not flag.enabled {
+        return off("disabled".to_string());
+    }
+    for r in flag.rules.iter() {
+        match check_rule(r, req.attrs) {
+            Some(why) => return off(why),
+            None => {}
+        }
+    }
+    let b = bucket(flag.name, req.user);
+    if b >= flag.rollout {
+        return off(f"bucket {b} >= {flag.rollout}%");
+    }
+    Decision {
+        user: req.user.clone(),
+        flag: req.flag.clone(),
+        on: true,
+        variant: flag.variant.clone(),
+        reason: f"bucket {b} < {flag.rollout}%",
+    }
+}
+
+fn load_config(path: Str) -> Result[Config, String] {
+    let text = match fs.read_to_string(path.to_string()) {
+        Ok(t) => t,
+        Err(_) => return Err(f"cannot read {path}"),
+    };
+    let parsed: Result[Config, DeserializeError] = Json.deserialize(text);
+    match parsed {
+        Ok(c) => Ok(c),
+        Err(_) => Err(f"{path}: invalid config"),
+    }
+}
+
+fn requests_file() -> String {
+    let users = ["ana", "bo", "chen", "dev", "eli", "fay"];
+    let countries = ["NZ", "AU", "US", "NZ", "DE", "AU"];
+    let plans = ["free", "pro", "team", "pro", "free", "team"];
+    let ages = ["3", "45", "12", "30", "x", "8"];
+    let flags = ["new-checkout", "beta-search", "dark-mode", "legacy-export", "no-such-flag"];
+    let mut out = String.new();
+    let mut i = 0;
+    while i < 6 {
+        for f in flags.iter() {
+            let mut attrs: SortedMap[String, String] = SortedMap.new();
+            attrs.insert("country".to_string(), countries[i].to_string());
+            attrs.insert("plan".to_string(), plans[i].to_string());
+            if i != 2 {
+                attrs.insert("age_days".to_string(), ages[i].to_string());
+            }
+            let r = EvalRequest { user: users[i].to_string(), flag: f.to_string(), attrs: attrs };
+            out.push_str(Json.serialize(r));
+            out.push('\n');
+        }
+        i += 1;
+    }
+    out.push_str("{\"user\": \"broken\"\n");
+    out
+}
+
+fn run(cfg: ref Config, input: Str, out_path: Str) -> Result[Vec[Decision], String] {
+    let mut decisions: Vec[Decision] = Vec.new();
+    let mut out = String.new();
+    let mut line_no = 0;
+    for line in input.lines() {
+        line_no += 1;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let parsed: Result[EvalRequest, DeserializeError] = Json.deserialize(line);
+        match parsed {
+            Ok(req) => {
+                let d = evaluate(cfg, req);
+                out.push_str(Json.serialize(d));
+                out.push('\n');
+                decisions.push(d);
+            }
+            Err(_) => println(f"  line {line_no}: skipped, not a request"),
+        }
+    }
+    match fs.write(out_path.to_string(), out) {
+        Ok(_) => Ok(decisions),
+        Err(_) => Err(f"cannot write {out_path}"),
+    }
+}
+
+fn summarize(label: Str, ds: ref Vec[Decision]) {
+    let mut on_by_flag: SortedMap[String, i64] = SortedMap.new();
+    let mut reasons: SortedMap[String, i64] = SortedMap.new();
+    for d in ds.iter() {
+        let n = if d.on { 1 } else { 0 };
+        *on_by_flag.entry(d.flag.clone()).or_insert(0) += n;
+        let kind = match d.reason.find(" ") {
+            Some(i) => d.reason[0..i].to_string(),
+            None => d.reason.clone(),
+        };
+        *reasons.entry(kind).or_insert(0) += 1;
+    }
+    println(f"{label}: {ds.len()} decisions");
+    for (f, n) in on_by_flag.iter() {
+        println(f"  on {f}: {n}");
+    }
+    for (r, n) in reasons.iter() {
+        println(f"  reason {r}: {n}");
+    }
+}
+
+fn main() {
+    match fs.write("requests.jsonl", requests_file()) {
+        Ok(_) => {}
+        Err(_) => println("cannot write requests"),
+    }
+    let input = fs.read_to_string("requests.jsonl").unwrap_or(String.new());
+    match fs.write("flags.json", CONFIG_V1.to_string()) {
+        Ok(_) => {}
+        Err(_) => println("cannot write config"),
+    }
+    let v1 = match load_config("flags.json") {
+        Ok(c) => c,
+        Err(e) => {
+            println(e);
+            return;
+        }
+    };
+    println(f"config v{v1.version}: {v1.flags.len()} flags");
+    let first = match run(v1, input, "decisions.v1.jsonl") {
+        Ok(ds) => ds,
+        Err(e) => {
+            println(e);
+            return;
+        }
+    };
+    summarize("v1", first);
+
+    match fs.write("flags.json", "{\"version\": 3, \"flags\": [{\"name\": 7}]}") {
+        Ok(_) => {}
+        Err(_) => println("cannot write config"),
+    }
+    match load_config("flags.json") {
+        Ok(_) => println("bad config accepted?"),
+        Err(e) => println(f"reload refused: {e}, keeping v{v1.version}"),
+    }
+    match fs.write("flags.json", CONFIG_V2.to_string()) {
+        Ok(_) => {}
+        Err(_) => println("cannot write config"),
+    }
+    let v2 = match load_config("flags.json") {
+        Ok(c) => c,
+        Err(e) => {
+            println(e);
+            return;
+        }
+    };
+    println(f"config v{v2.version}: {v2.flags.len()} flags");
+    let second = match run(v2, input, "decisions.v2.jsonl") {
+        Ok(ds) => ds,
+        Err(e) => {
+            println(e);
+            return;
+        }
+    };
+    summarize("v2", second);
+
+    println("changed decisions:");
+    let mut i = 0;
+    while i < first.len() {
+        let a = ref first[i];
+        let b = ref second[i];
+        if a.on != b.on or a.variant != b.variant {
+            let va = a.variant.clone().unwrap_or("-".to_string());
+            let vb = b.variant.clone().unwrap_or("-".to_string());
+            println(f"  {a.user} {a.flag}: {a.on}/{va} -> {b.on}/{vb} ({b.reason})");
+        }
+        i += 1;
+    }
+    let back = fs.read_to_string("decisions.v2.jsonl").unwrap_or(String.new());
+    let lines: Vec[String] = back.lines();
+    println(f"decisions.v2.jsonl: {lines.len()} lines, first {lines[0]}");
+}

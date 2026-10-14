@@ -1,0 +1,41 @@
+config v1: 4 flags
+  line 31: skipped, not a request
+v1: 30 decisions
+  on beta-search: 2
+  on dark-mode: 4
+  on legacy-export: 0
+  on new-checkout: 2
+  on no-such-flag: 0
+  reason age_days=8: 1
+  reason bucket: 10
+  reason country=AU: 2
+  reason country=DE: 1
+  reason country=US: 1
+  reason disabled: 6
+  reason no: 1
+  reason plan=free: 2
+  reason unknown: 6
+reload refused: flags.json: invalid config, keeping v1
+config v2: 3 flags
+  line 31: skipped, not a request
+v2: 30 decisions
+  on beta-search: 3
+  on dark-mode: 5
+  on legacy-export: 0
+  on new-checkout: 4
+  on no-such-flag: 0
+  reason age_days: 1
+  reason age_days=3: 1
+  reason bucket: 13
+  reason country=DE: 1
+  reason country=US: 1
+  reason no: 1
+  reason unknown: 12
+changed decisions:
+  ana new-checkout: true/blue -> true/green (bucket 44 < 100%)
+  bo new-checkout: false/- -> true/green (bucket 25 < 100%)
+  dev new-checkout: true/blue -> true/green (bucket 33 < 100%)
+  fay new-checkout: false/- -> true/green (bucket 62 < 100%)
+  fay beta-search: false/- -> true/- (bucket 0 < 100%)
+  fay dark-mode: false/- -> true/dim (bucket 53 < 60%)
+decisions.v2.jsonl: 30 lines, first {"user":"ana","flag":"new-checkout","on":true,"variant":"green","reason":"bucket 44 < 100%"}

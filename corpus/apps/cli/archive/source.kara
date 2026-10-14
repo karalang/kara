@@ -1,0 +1,248 @@
+// A tiny archiver with a binary format: pack files into one archive, list
+// it, extract it, verify every member's CRC-32, and detect a corrupted byte
+// and a truncated archive.
+//
+// Format (all integers little-endian):
+//   magic "KAR1", u32 member count, then per member:
+//   u16 name length, name bytes, u32 size, u32 crc32, data bytes.
+//
+// Workarounds for v2 gaps, each to revert once its row is fixed:
+//   B-2026-10-14-44  File.open / File.create take ref String, not Str, and
+//                    File.read / File.write count in usize, not i64
+//   B-2026-10-14-50  `c.take(n)?.iter()` parses as optional chaining, so the
+//                    `?` is parenthesized
+//   B-2026-10-14-51  `karac check` refuses `let s = self.bytes[a..b]` in
+//                    Cursor.take, so the view is returned without a binding
+
+struct Member { name: String, data: Vec[u8], crc: u32 }
+
+fn crc_table() -> Vec[u32] {
+    let mut table: Vec[u32] = Vec.new();
+    for n in 0..256 {
+        let mut c = n as u32;
+        for _ in 0..8 {
+            if c & 1u32 == 1u32 {
+                c = 0xEDB88320u32 ^ (c >> 1);
+            } else {
+                c = c >> 1;
+            }
+        }
+        table.push(c);
+    }
+    table
+}
+
+fn crc32(table: ref Vec[u32], data: Slice[u8]) -> u32 {
+    let mut c = 0xFFFFFFFFu32;
+    for b in data.iter() {
+        let idx = ((c ^ (*b as u32)) & 0xFFu32) as i64;
+        c = table[idx] ^ (c >> 8);
+    }
+    c ^ 0xFFFFFFFFu32
+}
+
+fn put_u16(out: mut ref Vec[u8], v: i64) {
+    out.push((v & 0xFF) as u8);
+    out.push(((v >> 8) & 0xFF) as u8);
+}
+
+fn put_u32(out: mut ref Vec[u8], v: u32) {
+    let mut i = 0;
+    while i < 4 {
+        out.push(((v >> (8 * i) as u32) & 0xFFu32) as u8);
+        i += 1;
+    }
+}
+
+struct Cursor { bytes: Vec[u8], at: i64 }
+
+impl Cursor {
+    fn take(mut ref self, n: i64) -> Result[Slice[u8], String] {
+        if self.at + n > self.bytes.len() {
+            return Err(f"truncated at byte {self.at}: wanted {n}, have {self.bytes.len() - self.at}");
+        }
+        let start = self.at;
+        self.at += n;
+        Ok(self.bytes[start..start + n])
+    }
+
+    fn u16(mut ref self) -> Result[i64, String] {
+        let b = self.take(2)?;
+        Ok((b[0] as i64) | ((b[1] as i64) << 8))
+    }
+
+    fn u32(mut ref self) -> Result[u32, String] {
+        let b = self.take(4)?;
+        Ok((b[0] as u32) | ((b[1] as u32) << 8) | ((b[2] as u32) << 16) | ((b[3] as u32) << 24))
+    }
+}
+
+fn pack(table: ref Vec[u32], members: ref Vec[Member]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for b in "KAR1".bytes() {
+        out.push(*b);
+    }
+    put_u32(mut out, members.len() as u32);
+    for m in members.iter() {
+        put_u16(mut out, m.name.len());
+        for b in m.name.bytes() {
+            out.push(*b);
+        }
+        put_u32(mut out, m.data.len() as u32);
+        put_u32(mut out, crc32(table, m.data));
+        for b in m.data.iter() {
+            out.push(*b);
+        }
+    }
+    out
+}
+
+fn unpack(table: ref Vec[u32], bytes: own Vec[u8]) -> Result[Vec[Member], String] {
+    let mut c = Cursor { bytes: bytes, at: 0 };
+    let magic = c.take(4)?;
+    if magic[0] != 75u8 or magic[1] != 65u8 or magic[2] != 82u8 or magic[3] != 49u8 {
+        return Err("not a KAR1 archive".to_string());
+    }
+    let count = c.u32()?;
+    let mut out: Vec[Member] = Vec.new();
+    let mut i = 0u32;
+    while i < count {
+        let name_len = c.u16()?;
+        let name = match String.from_utf8(c.take(name_len)?) {
+            Ok(s) => s,
+            Err(_) => return Err(f"member {i}: name is not UTF-8"),
+        };
+        let size = c.u32()? as i64;
+        let want = c.u32()?;
+        let mut data: Vec[u8] = Vec.new();
+        for b in (c.take(size)?).iter() {
+            data.push(*b);
+        }
+        let got = crc32(table, data);
+        if got != want {
+            return Err(f"{name}: crc {got:08x} != stored {want:08x}");
+        }
+        out.push(Member { name: name, data: data, crc: got });
+        i += 1u32;
+    }
+    if c.at != c.bytes.len() {
+        return Err(f"{c.bytes.len() - c.at} trailing bytes");
+    }
+    Ok(out)
+}
+
+fn write_bytes(path: Str, bytes: Slice[u8]) -> Result[(), IoError] {
+    let f = File.create(path.to_string())?;
+    let mut off = 0;
+    while off < bytes.len() {
+        let n = f.write(bytes[off..bytes.len()])?;
+        off += n as i64;
+    }
+    f.sync_all()?;
+    Ok(())
+}
+
+fn read_bytes(path: Str) -> Result[Vec[u8], IoError] {
+    let f = File.open(path.to_string())?;
+    let size = f.seek(SeekFrom.End, 0)?;
+    f.seek(SeekFrom.Start, 0)?;
+    let mut buf: Vec[u8] = Vec.new();
+    for _ in 0..size {
+        buf.push(0u8);
+    }
+    let mut got = 0;
+    while got < size {
+        let n = f.read(mut buf[got..size])?;
+        if n == 0 {
+            return Err(IoError.UnexpectedEof);
+        }
+        got += n as i64;
+    }
+    Ok(buf)
+}
+
+fn member(name: Str, text: Str) -> Member {
+    let mut data: Vec[u8] = Vec.new();
+    for b in text.bytes() {
+        data.push(*b);
+    }
+    Member { name: name.to_string(), data: data, crc: 0u32 }
+}
+
+fn main() {
+    let table = crc_table();
+    println(f"crc32(\"123456789\") = {crc32(table, "123456789".bytes()):08x}");
+
+    let mut binary: Vec[u8] = Vec.new();
+    for i in 0..300 {
+        binary.push(((i * 37 + 11) % 256) as u8);
+    }
+    let mut members: Vec[Member] = Vec.new();
+    members.push(member("README.md", "# demo\nA small archive.\n"));
+    members.push(member("src/main.kara", "fn main() {\n    println(\"hi\");\n}\n"));
+    members.push(member("empty.txt", ""));
+    members.push(member("notes/ünïcode.txt", "naïve café\n"));
+    members.push(Member { name: "blob.bin".to_string(), data: binary, crc: 0u32 });
+
+    let archive = pack(table, members);
+    match write_bytes("demo.kar", archive) {
+        Ok(_) => println(f"wrote demo.kar: {archive.len()} bytes"),
+        Err(_) => println("write failed"),
+    }
+
+    let bytes = match read_bytes("demo.kar") {
+        Ok(b) => b,
+        Err(_) => {
+            println("read failed");
+            return;
+        }
+    };
+    match unpack(table, bytes.clone()) {
+        Ok(ms) => {
+            for m in ms.iter() {
+                println(f"  {m.name:<20} {m.data.len():>5} bytes  crc {m.crc:08x}");
+            }
+            let mut extracted = 0;
+            for m in ms.iter() {
+                let out = m.name.replace("/", "_");
+                match write_bytes(f"x_{out}", m.data) {
+                    Ok(_) => extracted += 1,
+                    Err(_) => println(f"  cannot extract {m.name}"),
+                }
+            }
+            println(f"extracted {extracted}");
+            match fs.read_to_string("x_src_main.kara") {
+                Ok(t) => println(f"x_src_main.kara line 2: [{t.lines()[1]}]"),
+                Err(_) => println("cannot read back"),
+            }
+        }
+        Err(e) => println(f"unpack: {e}"),
+    }
+
+    let mut corrupt = bytes.clone();
+    let at = corrupt.len() - 100;
+    corrupt[at] = corrupt[at] ^ 0x40u8;
+    match unpack(table, corrupt) {
+        Ok(_) => println("corruption not detected"),
+        Err(e) => println(f"corrupted: {e}"),
+    }
+    let mut short: Vec[u8] = Vec.new();
+    for i in 0..60 {
+        short.push(bytes[i]);
+    }
+    match unpack(table, short) {
+        Ok(_) => println("truncation not detected"),
+        Err(e) => println(f"truncated: {e}"),
+    }
+    let mut extra = bytes.clone();
+    extra.push(0u8);
+    extra.push(0u8);
+    match unpack(table, extra) {
+        Ok(_) => println("trailing bytes not detected"),
+        Err(e) => println(f"padded: {e}"),
+    }
+    match unpack(table, member("x", "PK\u{3}\u{4}junk").data) {
+        Ok(_) => println("wrong magic accepted"),
+        Err(e) => println(f"zip: {e}"),
+    }
+}

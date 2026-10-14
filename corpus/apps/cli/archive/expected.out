@@ -1,0 +1,13 @@
+crc32("123456789") = cbf43926
+wrote demo.kar: 486 bytes
+  README.md               24 bytes  crc da0e07ff
+  src/main.kara           33 bytes  crc 42a5ee3e
+  empty.txt                0 bytes  crc 00000000
+  notes/ünïcode.txt       13 bytes  crc c407cb4b
+  blob.bin               300 bytes  crc 32ec5e76
+extracted 5
+x_src_main.kara line 2: [    println("hi");]
+corrupted: blob.bin: crc e20d9d26 != stored 32ec5e76
+truncated: truncated at byte 53: wanted 13, have 7
+padded: 2 trailing bytes
+zip: not a KAR1 archive
