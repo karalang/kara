@@ -3591,8 +3591,10 @@ impl<'a> super::TypeChecker<'a> {
                 // … a projection of a named place"). That is a language rule,
                 // and the limit above is the legacy backends'; the MIR backend
                 // borrows any place.
-                let core_place =
-                    self.cli_lint_overrides.strict_core && is_named_place_projection(operand);
+                // B-2026-10-14-26 — the MIR pipeline's check takes it too.
+                let core_place = (self.cli_lint_overrides.strict_core
+                    || self.library_methods_from_source)
+                    && is_named_place_projection(operand);
                 if !matches!(operand.kind, ExprKind::Index { .. }) && !core_place {
                     self.type_error(
                         "error[E_REF_OPERAND_UNSUPPORTED]: only `ref <sequence>[i]` is \

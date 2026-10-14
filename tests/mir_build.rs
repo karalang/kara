@@ -1425,3 +1425,55 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-14-26 — `ref place` on a field (design.md § `*` and `ref` in
+/// expressions) borrows that place on the MIR pipeline, bound to a local or
+/// returned, as § Returns spells it.
+#[test]
+fn mir_ref_of_a_field_borrows_it() {
+    const SRC: &str = r#"
+struct User {
+    name: String,
+    age: i64,
+}
+
+struct Node { val: i64, next: Option[Node] }
+
+struct List { head: Node }
+
+impl List {
+    fn head(self) -> ref Node { ref self.head }
+    fn last(self) -> ref Node {
+        let mut node = ref self.head;
+        while let Some(n) = node.next {
+            node = n;
+        }
+        node
+    }
+}
+
+fn name(user: User) -> ref String {
+    ref user.name
+}
+
+fn main() {
+    let u = User { name: "ada".to_string(), age: 36 };
+    println(f"{name(u)} {u.age}");
+    let h = ref u.name;
+    println(f"{h} {h.len()} {u.age}");
+    let l = List { head: Node { val: 1, next: Some(Node { val: 2, next: Some(Node { val: 3, next: None }) }) } };
+    println(f"{l.head().val} {l.last().val}");
+    let p = (u, 5);
+    let q = ref p.0.name;
+    println(f"{q} {p.1}");
+}
+"#;
+    let want = "ada 36\nada 3 36\n1 3\nada 5\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
