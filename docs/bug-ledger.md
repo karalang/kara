@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 256 |
 | missing-feature | 250 |
 | other | 172 |
-| false-positive | 168 |
+| false-positive | 169 |
 | perf | 165 |
 | diagnostics | 158 |
 | crash | 115 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2884 |
 | interp | 919 |
-| typecheck | 404 |
+| typecheck | 405 |
 | other | 115 |
 | ownership | 91 |
 | cli | 75 |
@@ -607,6 +607,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-37 | 2026-10-14 | resolver+typecheck | low | A user type cannot implement `Index`, `IndexMut` or `IndexSet`, so `c[k]` on a user container has no spelling: `impl Index for P` is refused at resolve ("operator traits are stdlib-only") on every pipeline, though design.md § `Index` and `IndexMut` says "User types may implement all three, so a user container supports `[]`" | — |
 | B-2026-10-14-38 | 2026-10-14 | ownership | medium | `karac check` refuses the spec's borrow returns that both MIR backends now run: `fn name(user: User) -> ref String { ref user.name }` and `fn head(self) -> ref Node { ref self.head }` are "this borrow-return form is not yet supported", and a `ref` local walked down a tree and returned, `let mut node = ref self.head; while let Some(n) = node.next { node = n; } node`, is refused at `node = n` as a move of a borrowing binding | — |
 | B-2026-10-14-39 | 2026-10-14 | codegen+runtime | low | A one-integer f-string `f"{n}"` still runs about 3x legacy on the v2 compiled backend after B-2026-10-13-20's fix: 44M `f"{i % 7}"` take 0.86 s on `karac build --mir` against 0.28 to 0.31 s on legacy `karac build`, and kata 504's bench 1.97 to 2.25 s against 1.51 to 1.62 s | — |
+| B-2026-10-14-40 | 2026-10-14 | typecheck | low | `??` on a `ref Option[i64]` is refused ("'??' requires an `Option` or a `Result` on the left, found 'ref Option[i64]'"), though design.md § `*` and `ref` in expressions reads a `ref T` of a `Copy` `T` as a `T` wherever one is expected, operator operands included: both MIR backends refuse `v ?? 0` over `for v in values.iter()`, which `karac check` accepts, and all three refuse `r ?? 0` with `let r = ref values[0]` | — |
 
 ### Relocated
 
