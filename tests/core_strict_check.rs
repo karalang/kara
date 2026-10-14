@@ -4144,3 +4144,58 @@ fn main() {
 "#;
     accepted("coalesce-ref", src);
 }
+
+// B-2026-10-14-38: `ref <place>` returns a borrow of the place, pinned when
+// its root is a borrowed parameter or a `ref` local, and assigning one `ref`
+// local from another copies the reference (v2 core §1.1, §5.1). A borrow of
+// an owned local or an `own` parameter still dangles.
+#[test]
+fn borrow_returns_of_a_ref_place_are_accepted() {
+    accepted(
+        "ref-place-return",
+        r#"
+struct User { name: String, age: i64 }
+struct Node { val: i64, next: Option[Node] }
+struct List { head: Node }
+impl List {
+    fn head(self) -> ref Node { ref self.head }
+    fn last(self) -> ref Node {
+        let mut node = ref self.head;
+        while let Some(n) = node.next { node = n; }
+        node
+    }
+}
+fn name(user: User) -> ref String { ref user.name }
+fn main() {
+    let u = User { name: "ada", age: 36 };
+    println(f"{name(u)} {u.age}");
+    let l = List { head: Node { val: 1, next: Some(Node { val: 2, next: Some(Node { val: 3, next: None }) }) } };
+    println(f"{l.head().val} {l.last().val}");
+}
+"#,
+    );
+    let (dir, path) = fixture(
+        "ref-place-dangles",
+        r#"
+struct User { name: String, age: i64 }
+fn bad(n: i64) -> ref String { let s = f"x{n}"; ref s }
+fn bad2(u: own User) -> ref String { ref u.name }
+fn bad3(u: User) -> ref String { let v = User { name: "q", age: 1 }; let r = ref v.name; r }
+fn main() {
+    let u = User { name: "ada", age: 36 };
+    println(bad(1));
+    println(bad2(u));
+}
+"#,
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    for at in ["3:49", "4:38", "5:90"] {
+        assert!(
+            err.contains(&format!("{at}: returned borrow does not originate")),
+            "{at}: {err}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

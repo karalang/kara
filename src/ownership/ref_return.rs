@@ -104,6 +104,19 @@ impl<'a> super::OwnershipChecker<'a> {
         let ref_returning_fns = self.ref_returning_fn_names();
         let mut ref_locals: HashSet<String> = HashSet::new();
         collect_ref_locals(&f.body, &ref_returning_fns, &mut ref_locals);
+        // v2 core §5.1: `let x = ref <place>` borrows the place, so `x` is a
+        // borrow source when the place's root is one (B-2026-10-14-38).
+        if super::core_rules() {
+            loop {
+                let before = ref_locals.len();
+                let mut found = HashSet::new();
+                collect_ref_place_locals(&f.body, &ref_params, &ref_locals, &mut found);
+                ref_locals.extend(found);
+                if ref_locals.len() == before {
+                    break;
+                }
+            }
+        }
 
         // Borrowed-collection path (B-2026-07-11-30) — separate from the Tier-1
         // ref-return classification, since the returned value is an OWNED
@@ -506,10 +519,18 @@ fn classify_borrow_return(
             ExprKind::Identifier(_) | ExprKind::SelfValue => {
                 Some(BorrowReturnShape::DanglingSource)
             }
+            // v2 core: a field chain (`self.a.b`) traces to its root.
+            _ if super::core_rules() => ref_place_shape(e, ref_params, ref_locals),
             // A field reached through a non-identifier (a chained field
             // access, a call, …) — valid per spec but Tier-2/3 codegen.
             _ => Some(BorrowReturnShape::UnsupportedForm),
         },
+        // v2 core §5.1 / design.md § Returns: `ref <place>` borrows the place,
+        // so it is pinned exactly when the place's root is (B-2026-10-14-38).
+        ExprKind::Unary {
+            op: UnaryOp::Ref,
+            operand,
+        } if super::core_rules() => ref_place_shape(operand, ref_params, ref_locals),
         // Conditional borrow return (`longer`-style Tier 2): every branch
         // must itself be a borrowable shape. A value `if` needs an `else`.
         ExprKind::If {
@@ -944,6 +965,80 @@ fn collect_string_slice_locals(
                 }
             }
         }
+    }
+}
+
+/// The root of a place reached by field, tuple-index and index projections
+/// (`self`, or a local), or `None` when `e` is not such a place.
+fn place_root(e: &Expr) -> Option<&Expr> {
+    match &e.kind {
+        ExprKind::Identifier(_) | ExprKind::SelfValue => Some(e),
+        ExprKind::FieldAccess { object, .. }
+        | ExprKind::TupleIndex { object, .. }
+        | ExprKind::Index { object, .. } => place_root(object),
+        _ => None,
+    }
+}
+
+/// A borrow of the place `e`: pinned when its root is a borrow source, a
+/// dangling borrow when its root is an owned local, and not yet supported
+/// when `e` is not a place.
+fn ref_place_shape(
+    e: &Expr,
+    ref_params: &HashSet<String>,
+    ref_locals: &HashSet<String>,
+) -> Option<BorrowReturnShape> {
+    match place_root(e).map(|r| &r.kind) {
+        Some(ExprKind::Identifier(n)) if ref_params.contains(n) || ref_locals.contains(n) => None,
+        Some(ExprKind::SelfValue) if ref_params.contains("self") => None,
+        Some(_) => Some(BorrowReturnShape::DanglingSource),
+        None => Some(BorrowReturnShape::UnsupportedForm),
+    }
+}
+
+/// Names bound by `let <name> = ref <place>;` anywhere in the block tree
+/// whose place traces to a borrow source (v2 core §5.1).
+fn collect_ref_place_locals(
+    block: &Block,
+    ref_params: &HashSet<String>,
+    ref_locals: &HashSet<String>,
+    out: &mut HashSet<String>,
+) {
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Let { pattern, value, .. } => {
+                if let (
+                    PatternKind::Binding(name),
+                    ExprKind::Unary {
+                        op: UnaryOp::Ref,
+                        operand,
+                    },
+                ) = (&pattern.kind, &value.kind)
+                {
+                    if ref_place_shape(operand, ref_params, ref_locals).is_none() {
+                        out.insert(name.clone());
+                    }
+                }
+                for_each_subblock(value, &mut |b| {
+                    collect_ref_place_locals(b, ref_params, ref_locals, out)
+                });
+            }
+            StmtKind::LetElse { value, .. }
+            | StmtKind::Expr(value)
+            | StmtKind::Assign { value, .. }
+            | StmtKind::CompoundAssign { value, .. } => for_each_subblock(value, &mut |b| {
+                collect_ref_place_locals(b, ref_params, ref_locals, out)
+            }),
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                collect_ref_place_locals(body, ref_params, ref_locals, out)
+            }
+            StmtKind::MultiAssign { .. } | StmtKind::LetUninit { .. } => {}
+        }
+    }
+    if let Some(e) = &block.final_expr {
+        for_each_subblock(e, &mut |b| {
+            collect_ref_place_locals(b, ref_params, ref_locals, out)
+        });
     }
 }
 

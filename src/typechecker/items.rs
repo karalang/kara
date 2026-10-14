@@ -7976,8 +7976,15 @@ impl<'a> super::TypeChecker<'a> {
                     let rhs_ty = self.infer_expr(value);
                     self.reject_index_move_non_copy(value, &rhs_ty);
                     // B-2026-09-01-4 — sibling of the rule above, same
-                    // value position.
-                    self.warn_borrow_projection_copy(value, &rhs_ty);
+                    // value position. v2 core §1.1: assigning to a `ref`
+                    // local copies a reference, so nothing moves out of the
+                    // borrowed place on the right (B-2026-10-14-38).
+                    let ref_target = self.cli_lint_overrides.strict_core
+                        && matches!(&target.kind, ExprKind::Identifier(t)
+                            if matches!(self.local_scope.lookup(t.as_str()), Some(Type::Ref(_))));
+                    if !ref_target {
+                        self.warn_borrow_projection_copy(value, &rhs_ty);
+                    }
                     self.warn_partial_move_of_drop_struct(value, &rhs_ty);
                     // B-2026-09-04-15 — the RC-owner spelling of the same shape.
                     self.reject_shared_field_move(value, &rhs_ty);
