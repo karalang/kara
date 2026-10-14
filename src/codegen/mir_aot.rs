@@ -56,7 +56,15 @@ pub fn compile_object(ir: &str, obj: &Path, opt: u8) -> Result<(), String> {
     empty_global(&module, "KARAC_SPAWN_SITES", entry.into());
 
     if opt > 0 {
-        let passes = format!("default<O{}>", opt.min(3));
+        let mut passes = format!("default<O{}>", opt.min(3));
+        // Every argument is passed by pointer; `default<O2>` has no
+        // argument promotion, which turns the read-only scalar ones of
+        // internal functions back into registers (their pointers are
+        // `noalias`, `mod.rs`), so it runs after, with the cleanup it
+        // leaves for.
+        if opt >= 2 && super::mir::noalias_flag() {
+            passes.push_str(",cgscc(argpromotion),function(sroa,instcombine,simplifycfg)");
+        }
         module
             .run_passes(&passes, &tm, PassBuilderOptions::create())
             .map_err(|e| format!("{passes}: {}", e.to_string()))?;

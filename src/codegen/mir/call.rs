@@ -57,7 +57,7 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     fn call_body(&mut self, name: &str, args: &[Operand], dest: &Place) -> R<()> {
-        let f = self.function(name)?;
+        let f = self.direct_function(name)?;
         let dty = self.place_type(dest)?;
         let ret = self.temp(dty, "ret")?;
         let mut vals = vec![ret.into()];

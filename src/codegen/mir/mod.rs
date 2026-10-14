@@ -93,9 +93,16 @@ pub fn compile_mir<'ctx>(
     }
     cx.c_main()?;
     cx.drain()?;
+    cx.mark_noalias();
     cx.debug_finish();
     cx.module.verify().map_err(|e| e.to_string())?;
     Ok(cx.module)
+}
+
+/// Whether direct-call parameters are marked `noalias` and promoted
+/// (`Cx::mark_noalias`); `KARAC_MIR_NOALIAS=0` turns it off.
+pub fn noalias_flag() -> bool {
+    std::env::var("KARAC_MIR_NOALIAS").as_deref() != Ok("0")
 }
 
 /// The LLVM IR of `program`, for `karac_jit_runner` to run: that binary
@@ -117,6 +124,10 @@ pub struct Cx<'ctx, 'p> {
     pub tys: &'p TyInterner,
     /// The function of each body, by its MIR name.
     pub fns: HashMap<String, FunctionValue<'ctx>>,
+    /// The bodies some caller other than a direct call reaches, which may
+    /// hand a body a pointer that is not a fresh slot of its own
+    /// ([`Cx::mark_noalias`]).
+    shared_fns: std::collections::HashSet<String>,
     /// The body being lowered, and where each of its locals lives.
     pub body: Option<&'p Body>,
     pub locals: Vec<PointerValue<'ctx>>,
@@ -148,6 +159,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             program,
             tys,
             fns: HashMap::new(),
+            shared_fns: std::collections::HashSet::new(),
             body: None,
             locals: Vec::new(),
             blocks: Vec::new(),
@@ -284,6 +296,27 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         f
     }
 
+    /// Marks every pointer parameter `noalias` on the bodies only direct
+    /// calls reach: each such call passes slots of its own (`call_body`),
+    /// so nothing else in the callee reaches them, which lets LLVM pass a
+    /// scalar argument in a register instead of through memory.
+    fn mark_noalias(&self) {
+        if !noalias_flag() {
+            return;
+        }
+        let noalias = self
+            .llcx
+            .create_enum_attribute(Attribute::get_named_enum_kind_id("noalias"), 0);
+        for (name, f) in &self.fns {
+            if self.shared_fns.contains(name) {
+                continue;
+            }
+            for i in 0..f.count_params() {
+                f.add_attribute(AttributeLoc::Param(i), noalias);
+            }
+        }
+    }
+
     /// Declares every body without lowering any, for tests that write
     /// bodies by hand.
     #[cfg(test)]
@@ -298,6 +331,13 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     /// [`Cx::drain`] if it was not already: only the bodies a program
     /// reaches are compiled, since the library's are appended to every one.
     pub fn function(&mut self, name: &str) -> R<FunctionValue<'ctx>> {
+        self.shared_fns.insert(name.to_string());
+        self.direct_function(name)
+    }
+
+    /// [`Cx::function`] for a direct call, which passes a fresh slot for
+    /// the result and for each argument.
+    pub(super) fn direct_function(&mut self, name: &str) -> R<FunctionValue<'ctx>> {
         if let Some(&f) = self.fns.get(name) {
             return Ok(f);
         }
@@ -337,7 +377,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
     /// that is not the return place or an argument, an LLVM block per MIR
     /// block, then each block's statements and terminator.
     fn lower_body(&mut self, body: &'p Body) -> R<()> {
-        let f = self.function(&body.instance.name)?;
+        let f = self.direct_function(&body.instance.name)?;
         let entry = self.llcx.append_basic_block(f, "entry");
         self.builder.position_at_end(entry);
         let name = &body.instance.name;
