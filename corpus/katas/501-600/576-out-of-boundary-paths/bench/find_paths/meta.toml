@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/576-out-of-boundary-paths/bench/find_paths.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "f6052c659"
+extracted_src = "e0a4570a"
+model_rev = "1aa23105"
+model_src = "e0a4570a"

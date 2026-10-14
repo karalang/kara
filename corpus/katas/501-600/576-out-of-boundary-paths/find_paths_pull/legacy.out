@@ -1,0 +1,13 @@
+2 by 2, 2 moves from (0, 0): 6
+1 by 3, 3 moves from (0, 1): 12
+3 by 3, 0 moves from (1, 1): 0
+1 by 1, 1 moves from (0, 0): 4
+1 by 1, 50 moves from (0, 0): 4
+1 by 5, 2 moves from (0, 2): 6
+5 by 1, 2 moves from (2, 0): 6
+5 by 5, 2 moves from (2, 2): 0
+5 by 5, 3 moves from (2, 2): 4
+300 random cases: total 10357567, checksum 105211262
+50 by 50, 50 moves from (0, 0): 678188903
+50 by 50, 50 moves from (25, 25): 276775132
+50 by 50, 50 moves from (0, 24): 912250082

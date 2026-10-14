@@ -1,0 +1,65 @@
+// Benchmark for #576: Out of Boundary Paths -- the ★ arm (the ways
+// forward, move by move).
+//
+// `ways[r][c]` counts the paths of the moves made so far that end at
+// (r, c) still in the grid. Each move sends every cell's paths to its
+// four neighbours: a neighbour outside the grid is a path out, counted
+// in the answer, and one inside carries the paths on to the next move.
+// Counts are kept modulo 10^9 + 7. O(maxMove * m * n) time.
+
+fn find_paths(m: i64, n: i64, max_move: i64, start_row: i64, start_column: i64) -> i64 {
+    let modulus = 1000000007;
+    let moves = vec![(-1, 0), (1, 0), (0, -1), (0, 1)];
+    let mut ways = vec![vec![0; n]; m];
+    ways[start_row][start_column] = 1;
+    let mut out = 0;
+    for _ in 0..max_move {
+        let mut next = vec![vec![0; n]; m];
+        for r in 0..m {
+            for c in 0..n {
+                let here = ways[r][c];
+                if here == 0 {
+                    continue;
+                }
+                for (dr, dc) in moves.iter() {
+                    let nr = r + dr;
+                    let nc = c + dc;
+                    if nr < 0 or nr >= m or nc < 0 or nc >= n {
+                        out = (out + here) % modulus;
+                    } else {
+                        next[nr][nc] = (next[nr][nc] + here) % modulus;
+                    }
+                }
+            }
+        }
+        ways = next;
+    }
+    out
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 5,000 cases of 30 to 50 by 30 to 50 with 30 to 50 moves (up to the
+    // problem's most), from a random cell, each answered once.
+    let count = 5000;
+    let mut seed: i64 = 576;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..count {
+        let m = 30 + next_random(mut seed) % 21;
+        let n = 30 + next_random(mut seed) % 21;
+        let max_move = 30 + next_random(mut seed) % 21;
+        let r = next_random(mut seed) % m;
+        let c = next_random(mut seed) % n;
+        let got = find_paths(m, n, max_move, r, c);
+        total = (total + got) % 1000000007;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"{count} cases up to 50 by 50 and 50 moves: total {total}, checksum {checksum}");
+}

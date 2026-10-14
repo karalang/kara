@@ -1,0 +1,226 @@
+// LeetCode #576: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// grids.
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_paths_star(m: i64, n: i64, max_move: i64, start_row: i64, start_column: i64) -> i64 {
+    let modulus = 1000000007;
+    let moves = vec![(-1, 0), (1, 0), (0, -1), (0, 1)];
+    let mut ways = vec![vec![0; n]; m];
+    ways[start_row][start_column] = 1;
+    let mut out = 0;
+    for _ in 0..max_move {
+        let mut next = vec![vec![0; n]; m];
+        for r in 0..m {
+            for c in 0..n {
+                let here = ways[r][c];
+                if here == 0 {
+                    continue;
+                }
+                for (dr, dc) in moves.iter() {
+                    let nr = r + dr;
+                    let nc = c + dc;
+                    if nr < 0 or nr >= m or nc < 0 or nc >= n {
+                        out = (out + here) % modulus;
+                    } else {
+                        next[nr][nc] = (next[nr][nc] + here) % modulus;
+                    }
+                }
+            }
+        }
+        ways = next;
+    }
+    out
+}
+
+// ---- memo arm ----------------------------------------------------------
+
+fn paths_from(m: i64, n: i64, r: i64, c: i64, left: i64, memo: mut ref Map[(i64, i64, i64), i64]) -> i64 {
+    if r < 0 or r >= m or c < 0 or c >= n {
+        return 1;
+    }
+    if left == 0 {
+        return 0;
+    }
+    if let Some(known) = memo.get((r, c, left)) {
+        return *known;
+    }
+    let total = (paths_from(m, n, r - 1, c, left - 1, memo)
+        + paths_from(m, n, r + 1, c, left - 1, memo)
+        + paths_from(m, n, r, c - 1, left - 1, memo)
+        + paths_from(m, n, r, c + 1, left - 1, memo)) % 1000000007;
+    memo.insert((r, c, left), total);
+    total
+}
+
+fn find_paths_memo(m: i64, n: i64, max_move: i64, start_row: i64, start_column: i64) -> i64 {
+    let mut memo: Map[(i64, i64, i64), i64] = Map.new();
+    paths_from(m, n, start_row, start_column, max_move, mut memo)
+}
+
+// ---- pull arm ----------------------------------------------------------
+
+fn find_paths_pull(m: i64, n: i64, max_move: i64, start_row: i64, start_column: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut ways = vec![0; m * n];
+    ways[start_row * n + start_column] = 1;
+    let mut out = 0;
+    for _ in 0..max_move {
+        let mut next = vec![0; m * n];
+        for r in 0..m {
+            for c in 0..n {
+                let mut edges = 0;
+                let mut sum = 0;
+                if r > 0 { sum += ways[(r - 1) * n + c]; } else { edges += 1; }
+                if r < m - 1 { sum += ways[(r + 1) * n + c]; } else { edges += 1; }
+                if c > 0 { sum += ways[r * n + c - 1]; } else { edges += 1; }
+                if c < n - 1 { sum += ways[r * n + c + 1]; } else { edges += 1; }
+                out = (out + ways[r * n + c] * edges) % modulus;
+                next[r * n + c] = sum % modulus;
+            }
+        }
+        ways = next;
+    }
+    out
+}
+
+// ---- backward arm ------------------------------------------------------
+
+fn find_paths_backward(m: i64, n: i64, max_move: i64, start_row: i64, start_column: i64) -> i64 {
+    let mut table: Vec[Vec[Vec[i64]]] = Vec.new();
+    table.push(vec![vec![0; n]; m]);
+    for k in 1..=max_move {
+        let mut layer: Vec[Vec[i64]] = Vec.new();
+        for r in 0..m {
+            let mut row: Vec[i64] = Vec.new();
+            for c in 0..n {
+                let mut count = 0;
+                for (nr, nc) in [(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)] {
+                    if nr < 0 or nr >= m or nc < 0 or nc >= n {
+                        count += 1;
+                    } else {
+                        count += table[k - 1][nr][nc];
+                    }
+                }
+                row.push(count % 1000000007);
+            }
+            layer.push(row);
+        }
+        table.push(layer);
+    }
+    table[max_move][start_row][start_column]
+}
+
+// ---- definition -----------------------------------------------------------
+
+// The statement read literally: every sequence of 1 to max_move moves,
+// each written as a number in base 4 with one digit for each move, is
+// played out from the start; a sequence counts when the ball is in the
+// grid before its last move and out after it.
+fn definition(m: i64, n: i64, max_move: i64, start_row: i64, start_column: i64) -> i64 {
+    let mut count = 0;
+    let mut sequences = 1;
+    for length in 1..=max_move {
+        sequences *= 4;
+        for code in 0..sequences {
+            let mut r = start_row;
+            let mut c = start_column;
+            let mut digits = code;
+            let mut inside = true;
+            let mut left_at = 0;
+            for k in 0..length {
+                if not inside {
+                    break;
+                }
+                let d = digits % 4;
+                digits = digits / 4;
+                if d == 0 {
+                    r -= 1;
+                } else if d == 1 {
+                    r += 1;
+                } else if d == 2 {
+                    c -= 1;
+                } else {
+                    c += 1;
+                }
+                if r < 0 or r >= m or c < 0 or c >= n {
+                    inside = false;
+                    left_at = k + 1;
+                }
+            }
+            if not inside and left_at == length {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+// ---- harness --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn run(arm: i64, m: i64, n: i64, k: i64, r: i64, c: i64) -> i64 {
+    match arm {
+        0 => find_paths_star(m, n, k, r, c),
+        1 => find_paths_memo(m, n, k, r, c),
+        2 => find_paths_pull(m, n, k, r, c),
+        _ => find_paths_backward(m, n, k, r, c),
+    }
+}
+
+fn main() {
+    let names = vec!["star", "memo", "pull", "backward"];
+    let mut seed: i64 = 5760;
+    let mut checks = 0;
+    let mut failures = 0;
+    let mut by_property = vec![0, 0, 0, 0, 0];
+    for _ in 0..1000 {
+        // 1 to 4 by 1 to 4, 0 to 6 moves, a random start.
+        let m = 1 + step(mut seed) % 4;
+        let n = 1 + step(mut seed) % 4;
+        let k = step(mut seed) % 7;
+        let r = step(mut seed) % m;
+        let c = step(mut seed) % n;
+        let want = definition(m, n, k, r, c);
+        for arm in 0..4 {
+            let got = run(arm, m, n, k, r, c);
+            // One move more: the ways out in that first move, and from
+            // each neighbour inside, its paths with the k moves left.
+            let mut one_more = 0;
+            for (nr, nc) in [(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)] {
+                if nr < 0 or nr >= m or nc < 0 or nc >= n {
+                    one_more += 1;
+                } else {
+                    one_more += run(arm, m, n, k, nr, nc);
+                }
+            }
+            let results = vec![
+                got == want,
+                run(arm, n, m, k, c, r) == got,
+                run(arm, m, n, k, m - 1 - r, n - 1 - c) == got,
+                run(arm, m, n, k + 1, r, c) >= got,
+                run(arm, m, n, k + 1, r, c) == one_more,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not results[p] {
+                    failures += 1;
+                    by_property[p] += 1;
+                    if failures <= 5 {
+                        println(f"{names[arm]} P{p + 1} on {m} by {n}, {k} moves from ({r}, {c}): got {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    println(f"1000 cases, 4 arms, {checks} checks, {failures} failures");
+    if failures > 0 {
+        println(f"by property: P1 {by_property[0]}, P2 {by_property[1]}, P3 {by_property[2]}, P4 {by_property[3]}, P5 {by_property[4]}");
+    }
+}

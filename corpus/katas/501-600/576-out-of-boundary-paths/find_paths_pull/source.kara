@@ -1,0 +1,78 @@
+// LeetCode #576: Out of Boundary Paths -- one flat row, pulled.
+//
+// The grid kept as one `Vec` of m * n counts, cell r * n + c. Each move,
+// the paths that leave are every cell's count times the number of its
+// sides on the edge of the grid, and each cell's new count is pulled in
+// as the sum of its neighbours' old ones. Counts are kept modulo
+// 10^9 + 7. O(maxMove * m * n) time.
+
+fn find_paths(m: i64, n: i64, max_move: i64, start_row: i64, start_column: i64) -> i64 {
+    let modulus = 1000000007;
+    let mut ways = vec![0; m * n];
+    ways[start_row * n + start_column] = 1;
+    let mut out = 0;
+    for _ in 0..max_move {
+        let mut next = vec![0; m * n];
+        for r in 0..m {
+            for c in 0..n {
+                let mut edges = 0;
+                let mut sum = 0;
+                if r > 0 { sum += ways[(r - 1) * n + c]; } else { edges += 1; }
+                if r < m - 1 { sum += ways[(r + 1) * n + c]; } else { edges += 1; }
+                if c > 0 { sum += ways[r * n + c - 1]; } else { edges += 1; }
+                if c < n - 1 { sum += ways[r * n + c + 1]; } else { edges += 1; }
+                out = (out + ways[r * n + c] * edges) % modulus;
+                next[r * n + c] = sum % modulus;
+            }
+        }
+        ways = next;
+    }
+    out
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(m: i64, n: i64, max_move: i64, start_row: i64, start_column: i64) {
+    println(f"{m} by {n}, {max_move} moves from ({start_row}, {start_column}): {find_paths(m, n, max_move, start_row, start_column)}");
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(2, 2, 2, 0, 0);
+    show(1, 3, 3, 0, 1);
+    // No moves; one cell, one move and many; a row and a column.
+    show(3, 3, 0, 1, 1);
+    show(1, 1, 1, 0, 0);
+    show(1, 1, 50, 0, 0);
+    show(1, 5, 2, 0, 2);
+    show(5, 1, 2, 2, 0);
+    // The middle of a grid too large to leave in the moves given, and
+    // with just enough moves.
+    show(5, 5, 2, 2, 2);
+    show(5, 5, 3, 2, 2);
+    // 300 random cases of 1 to 10 by 1 to 10, 0 to 12 moves.
+    let mut seed: i64 = 576;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let m = 1 + step(mut seed) % 10;
+        let n = 1 + step(mut seed) % 10;
+        let max_move = step(mut seed) % 13;
+        let r = step(mut seed) % m;
+        let c = step(mut seed) % n;
+        let got = find_paths(m, n, max_move, r, c);
+        total = (total + got) % 1000000007;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"300 random cases: total {total}, checksum {checksum}");
+    // The problem's largest: 50 by 50 and 50 moves, from a corner, the
+    // middle, and a cell on an edge, where the counts wrap many times.
+    show(50, 50, 50, 0, 0);
+    show(50, 50, 50, 25, 25);
+    show(50, 50, 50, 0, 24);
+}
