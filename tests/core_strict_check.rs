@@ -3680,3 +3680,73 @@ fn refs_held_in_a_vec_of_refs_are_copies() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// B-2026-10-14-27 — design.md § `*` and `ref` in expressions: `==` and `<`
+/// borrow `*r` and need no copy, so `*w == target` through a view of a
+/// `String` moves nothing. A `*w` that IS a move (a `let` or a by-value
+/// argument) is still refused.
+#[test]
+fn deref_of_a_view_compared_is_a_borrow() {
+    accepted(
+        "deref-compared",
+        "enum Item {\n\
+             File(String, i64),\n\
+             Dir(String),\n\
+         }\n\
+         fn count(words: Vec[String], target: String) -> i64 {\n\
+             let mut n = 0;\n\
+             for w in words.iter() {\n\
+                 if *w == target {\n\
+                     n += 1;\n\
+                 }\n\
+                 if *w != target and *w < target {\n\
+                     n += 10;\n\
+                 }\n\
+             }\n\
+             n\n\
+         }\n\
+         fn find(es: ref Vec[Item], name: String) -> i64 {\n\
+             for e in es.iter() {\n\
+                 match e {\n\
+                     Item.File(path, size) => {\n\
+                         if *path == name {\n\
+                             return *size;\n\
+                         }\n\
+                     }\n\
+                     Item.Dir(path) => {\n\
+                         if *path == \"/\" {\n\
+                             return -1;\n\
+                         }\n\
+                     }\n\
+                 }\n\
+             }\n\
+             0\n\
+         }\n\
+         fn main() {\n\
+             let words = vec![\"a\".to_string(), \"b\".to_string(), \"0\".to_string()];\n\
+             let es = vec![Item.Dir(\"x\".to_string()), Item.File(\"a\".to_string(), 7)];\n\
+             println(f\"{count(words, \"a\".to_string())} {find(es, \"a\".to_string())}\");\n\
+         }\n",
+    );
+    let (dir, path) = fixture(
+        "deref-moved",
+        "fn main() {\n\
+             let words = vec![\"a\".to_string(), \"b\".to_string()];\n\
+             for w in words.iter() {\n\
+                 let s = *w;\n\
+                 println(f\"{s}\");\n\
+             }\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "deref-moved: check must reject: {err}"
+    );
+    assert!(
+        err.contains("out of a borrow with `*`"),
+        "deref-moved: expected the move refusal in: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

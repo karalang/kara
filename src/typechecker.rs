@@ -2638,6 +2638,10 @@ pub struct TypeChecker<'a> {
     /// the whole chain (the overwrite hazard `map_entry_lint` documents for the
     /// same reason), so `s` in `s.r` reads back as the type of `s.r`.
     pub(super) current_fn_ref_params: FxHashSet<String>,
+    /// B-2026-10-14-27 — the `*r` operands of a comparison being inferred.
+    /// `==` and `<` borrow `*r` (design.md § `*` and `ref` in expressions),
+    /// so a deref there moves nothing out of the borrow.
+    pub(super) borrowed_deref_operands: FxHashSet<SpanKey>,
     /// Whether the function being checked takes `mut ref self` (a library
     /// method that hands out `mut ref` parts of its receiver).
     pub(super) current_fn_mut_self: bool,
@@ -3213,6 +3217,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_is_gpu: false,
             current_fn_frozen_params: FxHashSet::default(),
             current_fn_ref_params: FxHashSet::default(),
+            borrowed_deref_operands: FxHashSet::default(),
             current_fn_mut_self: false,
             current_fn_d5_params: FxHashMap::default(),
             frozen_param_use_spans: FxHashSet::default(),

@@ -2617,8 +2617,31 @@ impl<'a> super::TypeChecker<'a> {
         // comparisons / bitwise ops on refined operands operate on the base.
         // The operands' *own* recorded types (in `expr_types`) are untouched
         // — only the local types driving this binop's result are normalized.
+        // B-2026-10-14-27 — a comparison borrows its operands, so `*w ==
+        // target` reads through the view and copies nothing.
+        let compares = matches!(
+            op,
+            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
+        );
+        let mut borrowed = Vec::new();
+        if compares {
+            for side in [left, right] {
+                if let ExprKind::Unary {
+                    op: UnaryOp::Deref, ..
+                } = &side.kind
+                {
+                    let key = SpanKey::from_span(&side.span);
+                    if self.borrowed_deref_operands.insert(key.clone()) {
+                        borrowed.push(key);
+                    }
+                }
+            }
+        }
         let left_ty = strip_refinement(&self.infer_expr(left)).clone();
         let right_ty = strip_refinement(&self.infer_expr(right)).clone();
+        for key in borrowed {
+            self.borrowed_deref_operands.remove(&key);
+        }
 
         if left_ty == Type::Error || right_ty == Type::Error {
             return Type::Error;
@@ -3657,7 +3680,12 @@ impl<'a> super::TypeChecker<'a> {
                     // B-2026-10-14-22: a `shared` handle is copied by any read
                     // (core-semantics §6.1, the count goes up), so `*n` through
                     // a view of one moves nothing out of the borrow.
-                    if !self.is_copy_type_during_check(&other) && !self.is_shared_handle(&other) {
+                    if !self.is_copy_type_during_check(&other)
+                        && !self.is_shared_handle(&other)
+                        && !self
+                            .borrowed_deref_operands
+                            .contains(&SpanKey::from_span(span))
+                    {
                         let fix = crate::typechecker::FixIt {
                             span: Span { length: 1, ..*span },
                             replacement: String::new(),
