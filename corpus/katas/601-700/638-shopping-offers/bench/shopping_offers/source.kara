@@ -1,0 +1,86 @@
+// Benchmark for #638: the ★ arm (search over what is still needed, with
+// a memo keyed by the needs) on a fixed workload. See ../README.md §
+// Benchmarks.
+
+fn cheapest(price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64], memo: mut ref Map[Vec[i64], i64]) -> i64 {
+    if let Some(known) = memo.get(needs) {
+        return known;
+    }
+    let n = needs.len();
+    let mut best = 0;
+    for i in 0..n {
+        best += needs[i] * price[i];
+    }
+    for offer in special.iter() {
+        let mut rest: Vec[i64] = Vec.new();
+        let mut fits = true;
+        let mut any = false;
+        for i in 0..n {
+            if offer[i] > needs[i] {
+                fits = false;
+            }
+            if offer[i] > 0 {
+                any = true;
+            }
+            rest.push(needs[i] - offer[i]);
+        }
+        if fits and any {
+            let cost = offer[n] + cheapest(price, special, rest, memo);
+            if cost < best {
+                best = cost;
+            }
+        }
+    }
+    memo.insert(needs.clone(), best);
+    best
+}
+
+fn shopping_offers(price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64]) -> i64 {
+    let mut memo: Map[Vec[i64], i64] = Map.new();
+    cheapest(price, special, needs, mut memo)
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 20 shops of 6 items made once, each with prices of 1 to 10, 0 to 4 of
+// every item needed and 100 offers of 0 to 2 of each item costing 0 to
+// 50; then 800 rounds each pricing the needs of one shop from scratch.
+fn main() {
+    let mut seed: i64 = 638;
+    let mut prices: Vec[Vec[i64]] = Vec.new();
+    let mut needs: Vec[Vec[i64]] = Vec.new();
+    let mut offers: Vec[Vec[Vec[i64]]] = Vec.new();
+    for _ in 0..20 {
+        let mut price: Vec[i64] = Vec.new();
+        let mut need: Vec[i64] = Vec.new();
+        for _ in 0..6 {
+            price.push(1 + next_random(mut seed) % 10);
+            need.push(next_random(mut seed) % 5);
+        }
+        let mut special: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..100 {
+            let mut offer: Vec[i64] = Vec.new();
+            for _ in 0..6 {
+                offer.push(next_random(mut seed) % 3);
+            }
+            offer.push(next_random(mut seed) % 51);
+            special.push(offer);
+        }
+        prices.push(price);
+        needs.push(need);
+        offers.push(special);
+    }
+    let rounds = 800;
+    let mut total = 0;
+    let mut checksum = 0;
+    for round in 0..rounds {
+        let s = round % 20;
+        let paid = shopping_offers(prices[s], offers[s], needs[s]);
+        total += paid;
+        checksum = (checksum * 31 + paid) % 1000000007;
+    }
+    println(f"20 shops, {rounds} rounds: total {total}, checksum {checksum}");
+}

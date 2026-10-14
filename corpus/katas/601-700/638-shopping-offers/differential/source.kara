@@ -1,0 +1,356 @@
+// LeetCode #638: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// shops.
+
+// ---- star arm ----------------------------------------------------------
+
+fn cheapest_star(price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64], memo: mut ref Map[Vec[i64], i64]) -> i64 {
+    if let Some(known) = memo.get(needs) {
+        return known;
+    }
+    let n = needs.len();
+    let mut best = 0;
+    for i in 0..n {
+        best += needs[i] * price[i];
+    }
+    for offer in special.iter() {
+        let mut rest: Vec[i64] = Vec.new();
+        let mut fits = true;
+        let mut any = false;
+        for i in 0..n {
+            if offer[i] > needs[i] {
+                fits = false;
+            }
+            if offer[i] > 0 {
+                any = true;
+            }
+            rest.push(needs[i] - offer[i]);
+        }
+        if fits and any {
+            let cost = offer[n] + cheapest_star(price, special, rest, memo);
+            if cost < best {
+                best = cost;
+            }
+        }
+    }
+    memo.insert(needs.clone(), best);
+    best
+}
+
+fn shopping_offers_star(price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64]) -> i64 {
+    let mut memo: Map[Vec[i64], i64] = Map.new();
+    cheapest_star(price, special, needs, mut memo)
+}
+
+// ---- coded arm ---------------------------------------------------------
+
+fn priced_coded(code: i64, place: Vec[i64], price: Vec[i64], offers: Vec[Vec[i64]], memo: mut ref Vec[i64]) -> i64 {
+    if memo[code] >= 0 {
+        return memo[code];
+    }
+    let n = price.len();
+    let mut have: Vec[i64] = Vec.new();
+    let mut best = 0;
+    for i in 0..n {
+        let digit = code / place[i] % (place[i + 1] / place[i]);
+        have.push(digit);
+        best += digit * price[i];
+    }
+    for offer in offers.iter() {
+        let mut fits = true;
+        let mut off = 0;
+        for i in 0..n {
+            if offer[i] > have[i] {
+                fits = false;
+            }
+            off += offer[i] * place[i];
+        }
+        if fits {
+            let cost = offer[n] + priced_coded(code - off, place, price, offers, memo);
+            if cost < best {
+                best = cost;
+            }
+        }
+    }
+    memo[code] = best;
+    best
+}
+
+fn shopping_offers_coded(price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64]) -> i64 {
+    let n = price.len();
+    // place[i] is the value of a unit of item i; place[n] the count of needs.
+    let mut place = vec![1];
+    for i in 0..n {
+        place.push(place[i] * (needs[i] + 1));
+    }
+    // Only offers of something that fits into `needs` can ever be taken.
+    let mut offers: Vec[Vec[i64]] = Vec.new();
+    for offer in special.iter() {
+        let mut fits = true;
+        let mut any = false;
+        for i in 0..n {
+            if offer[i] > needs[i] {
+                fits = false;
+            }
+            if offer[i] > 0 {
+                any = true;
+            }
+        }
+        if fits and any {
+            offers.push(offer.clone());
+        }
+    }
+    let mut memo = vec![-1; place[n]];
+    priced_coded(place[n] - 1, place, price, offers, mut memo)
+}
+
+// ---- table arm ---------------------------------------------------------
+
+fn shopping_offers_table(price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64]) -> i64 {
+    let n = price.len();
+    let mut place = vec![1];
+    for i in 0..n {
+        place.push(place[i] * (needs[i] + 1));
+    }
+    let total = place[n];
+    let mut best = vec![0; total];
+    let mut have = vec![0; n];
+    for code in 0..total {
+        let mut list = 0;
+        for i in 0..n {
+            list += have[i] * price[i];
+        }
+        best[code] = list;
+        for offer in special.iter() {
+            let mut fits = true;
+            let mut any = false;
+            let mut off = 0;
+            for i in 0..n {
+                if offer[i] > have[i] {
+                    fits = false;
+                }
+                if offer[i] > 0 {
+                    any = true;
+                }
+                off += offer[i] * place[i];
+            }
+            if fits and any and offer[n] + best[code - off] < best[code] {
+                best[code] = offer[n] + best[code - off];
+            }
+        }
+        // Count `have` up by one, carrying like an odometer.
+        let mut i = 0;
+        while i < n {
+            have[i] += 1;
+            if have[i] <= needs[i] {
+                break;
+            }
+            have[i] = 0;
+            i += 1;
+        }
+    }
+    best[total - 1]
+}
+
+// ---- knapsack arm ------------------------------------------------------
+
+fn shopping_offers_knapsack(price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64]) -> i64 {
+    let n = price.len();
+    let mut place = vec![1];
+    for i in 0..n {
+        place.push(place[i] * (needs[i] + 1));
+    }
+    let total = place[n];
+    let mut cost: Vec[i64] = Vec.new();
+    for code in 0..total {
+        let mut list = 0;
+        for i in 0..n {
+            list += code / place[i] % (needs[i] + 1) * price[i];
+        }
+        cost.push(list);
+    }
+    for offer in special.iter() {
+        let mut off = 0;
+        let mut fits = true;
+        for i in 0..n {
+            off += offer[i] * place[i];
+            if offer[i] > needs[i] {
+                fits = false;
+            }
+        }
+        if not fits or off == 0 {
+            continue;
+        }
+        for code in off..total {
+            let mut holds = true;
+            for i in 0..n {
+                if code / place[i] % (needs[i] + 1) < offer[i] {
+                    holds = false;
+                    break;
+                }
+            }
+            if holds and offer[n] + cost[code - off] < cost[code] {
+                cost[code] = offer[n] + cost[code - off];
+            }
+        }
+    }
+    cost[total - 1]
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` offers for n items, each holding 0 to `most` of every item and
+// costing 0 to `dearest`.
+fn random_offers(n: i64, count: i64, most: i64, dearest: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut special: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut offer: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            offer.push(next_random(seed) % (most + 1));
+        }
+        offer.push(next_random(seed) % (dearest + 1));
+        special.push(offer);
+    }
+    special
+}
+
+// The definition: try every number of times to take each offer, from
+// offer j on, that keeps within `left`, and buy what is left at list
+// price. The cheapest of all of them.
+fn every_way(price: Vec[i64], special: Vec[Vec[i64]], j: i64, left: Vec[i64], paid: i64) -> i64 {
+    let n = price.len();
+    if j == special.len() {
+        let mut total = paid;
+        for i in 0..n {
+            total += left[i] * price[i];
+        }
+        return total;
+    }
+    let offer = special[j].clone();
+    let mut best = every_way(price, special, j + 1, left, paid);
+    let mut rest = left.clone();
+    let mut spent = paid;
+    loop {
+        let mut fits = true;
+        let mut any = false;
+        for i in 0..n {
+            if offer[i] > rest[i] {
+                fits = false;
+            }
+            if offer[i] > 0 {
+                any = true;
+            }
+        }
+        if not fits or not any {
+            break;
+        }
+        for i in 0..n {
+            rest[i] -= offer[i];
+        }
+        spent += offer[n];
+        let cost = every_way(price, special, j + 1, rest, spent);
+        if cost < best {
+            best = cost;
+        }
+    }
+    best
+}
+
+// Item i moved to place i + 1 (mod n), in prices, needs and offers.
+fn rotate(values: Vec[i64], n: i64) -> Vec[i64] {
+    let mut out = values.clone();
+    for i in 0..n {
+        out[(i + 1) % n] = values[i];
+    }
+    out
+}
+
+fn answer(which: i64, price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64]) -> i64 {
+    if which == 0 {
+        shopping_offers_star(price, special, needs)
+    } else if which == 1 {
+        shopping_offers_coded(price, special, needs)
+    } else if which == 2 {
+        shopping_offers_table(price, special, needs)
+    } else {
+        shopping_offers_knapsack(price, special, needs)
+    }
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6380;
+    let mut checks = 0;
+    let mut offers_taken = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 1 to 3 items, 0 to 4 of each needed, 0 to 4 offers of 0 to 2 of
+        // each item; items cost 0 to 10 and offers 0 to 20, so that about
+        // a third of the cases take an offer.
+        let n = 1 + next_random(mut seed) % 3;
+        let mut price: Vec[i64] = Vec.new();
+        let mut needs: Vec[i64] = Vec.new();
+        let mut list = 0;
+        for _ in 0..n {
+            price.push(next_random(mut seed) % 11);
+            needs.push(next_random(mut seed) % 5);
+            list += price[price.len() - 1] * needs[needs.len() - 1];
+        }
+        let special = random_offers(n, next_random(mut seed) % 5, 2, 20, mut seed);
+        let want = every_way(price, special, 0, needs, 0);
+        if want < list {
+            offers_taken += 1;
+        }
+        let mut turned: Vec[Vec[i64]] = Vec.new();
+        let mut backward: Vec[Vec[i64]] = Vec.new();
+        for offer in special.iter() {
+            let mut moved = rotate(offer, n);
+            moved[n] = offer[n];
+            turned.push(moved);
+        }
+        let mut k = special.len();
+        while k > 0 {
+            k -= 1;
+            backward.push(special[k].clone());
+        }
+        let q = next_random(mut seed) % 51;
+        let mut whole = needs.clone();
+        whole.push(q);
+        let mut more = special.clone();
+        more.push(whole);
+        for which in 0..4 {
+            let got = answer(which, price, special, needs);
+            let cap = if q < got { q } else { got };
+            let ok = vec![
+                // P1: the price is the definition's.
+                got == want,
+                // P2: it is between nothing and list price.
+                got >= 0 and got <= list,
+                // P3: renumbering the items changes nothing.
+                answer(which, rotate(price, n), turned, rotate(needs, n)) == got,
+                // P4: neither does the order of the offers.
+                answer(which, price, backward, needs) == got,
+                // P5: a new offer of exactly the need at price q makes it
+                // the cheaper of q and the old price.
+                answer(which, price, more, needs) == cap,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({offers_taken} beat list price), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

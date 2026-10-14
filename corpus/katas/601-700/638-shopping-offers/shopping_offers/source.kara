@@ -1,0 +1,137 @@
+// LeetCode #638: Shopping Offers -- depth-first search over what is still
+// needed, remembering the cheapest price of every need it has seen.
+//
+// What is left to buy is the whole state. Buying all of it at list price
+// is one answer; every offer that does not overshoot is another, its
+// price plus the cheapest way to buy what it leaves. An offer of nothing
+// is skipped: it cannot help, and taking it would never end the search.
+// O(S x offers x n) for the S needs reached, at most 11^6.
+
+fn cheapest(price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64], memo: mut ref Map[Vec[i64], i64]) -> i64 {
+    if let Some(known) = memo.get(needs) {
+        return known;
+    }
+    let n = needs.len();
+    let mut best = 0;
+    for i in 0..n {
+        best += needs[i] * price[i];
+    }
+    for offer in special.iter() {
+        let mut rest: Vec[i64] = Vec.new();
+        let mut fits = true;
+        let mut any = false;
+        for i in 0..n {
+            if offer[i] > needs[i] {
+                fits = false;
+            }
+            if offer[i] > 0 {
+                any = true;
+            }
+            rest.push(needs[i] - offer[i]);
+        }
+        if fits and any {
+            let cost = offer[n] + cheapest(price, special, rest, memo);
+            if cost < best {
+                best = cost;
+            }
+        }
+    }
+    memo.insert(needs.clone(), best);
+    best
+}
+
+fn shopping_offers(price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64]) -> i64 {
+    let mut memo: Map[Vec[i64], i64] = Map.new();
+    cheapest(price, special, needs, mut memo)
+}
+
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// `count` offers for n items: each holds 0 to `most` of every item and
+// costs 0 to 50.
+fn random_offers(n: i64, count: i64, most: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut special: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut offer: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            offer.push(next_random(seed) % (most + 1));
+        }
+        offer.push(next_random(seed) % 51);
+        special.push(offer);
+    }
+    special
+}
+
+fn show(values: Vec[i64]) -> String {
+    let mut text = String.from("[");
+    for i in 0..values.len() {
+        if i > 0 {
+            text.push_str(", ");
+        }
+        text.push_str(f"{values[i]}");
+    }
+    text.push_str("]");
+    text
+}
+
+fn ask(price: Vec[i64], special: Vec[Vec[i64]], needs: Vec[i64]) {
+    let mut offers = String.from("[");
+    for offer in special.iter() {
+        if offers.len() > 1 {
+            offers.push_str(", ");
+        }
+        offers.push_str(show(offer));
+    }
+    offers.push_str("]");
+    println(f"price {show(price)}, offers {offers}, needs {show(needs)} -> {shopping_offers(price, special, needs)}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    ask(vec![2, 5], vec![vec![3, 0, 5], vec![1, 2, 10]], vec![3, 2]);
+    ask(vec![2, 3, 4], vec![vec![1, 1, 0, 4], vec![2, 2, 1, 9]], vec![1, 2, 1]);
+    // No offers; nothing needed; an offer dearer than list price; an
+    // offer of nothing; offers of more than is needed; a bargain taken
+    // five times; three pair offers that cover the need between them; an
+    // item that costs nothing.
+    ask(vec![3, 4], Vec.new(), vec![2, 1]);
+    ask(vec![3, 4], vec![vec![1, 1, 1]], vec![0, 0]);
+    ask(vec![1, 1], vec![vec![1, 1, 3]], vec![2, 2]);
+    ask(vec![5], vec![vec![0, 0]], vec![3]);
+    ask(vec![5, 5], vec![vec![2, 0, 1], vec![0, 4, 1]], vec![1, 3]);
+    ask(vec![10], vec![vec![2, 1]], vec![10]);
+    ask(vec![4, 4, 4], vec![vec![1, 1, 0, 7], vec![0, 1, 1, 7], vec![1, 0, 1, 7]], vec![2, 2, 2]);
+    ask(vec![0, 7], vec![vec![3, 1, 6]], vec![3, 1]);
+    // 300 random cases of 1 to 6 items, 0 to 3 of each needed, and 0 to
+    // 12 offers of 0 to 2 of each item.
+    let mut seed: i64 = 638;
+    let mut sum = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 6;
+        let mut price: Vec[i64] = Vec.new();
+        let mut needs: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            price.push(next_random(mut seed) % 11);
+            needs.push(next_random(mut seed) % 4);
+        }
+        let count = next_random(mut seed) % 13;
+        let special = random_offers(n, count, 2, mut seed);
+        let paid = shopping_offers(price, special, needs);
+        sum += paid;
+        checksum = (checksum * 31 + paid) % 1000000007;
+    }
+    println(f"300 random cases: total {sum}, checksum {checksum}");
+    // Six items, up to 10 of an item, 100 offers of up to 3 of each.
+    let price = vec![10, 9, 8, 7, 6, 5];
+    let needs = vec![10, 9, 8, 3, 2, 1];
+    let special = random_offers(6, 100, 3, mut seed);
+    let full = 10 * 10 + 9 * 9 + 8 * 8 + 7 * 3 + 6 * 2 + 5;
+    println(f"6 items, 100 offers, needs {show(needs)}: {shopping_offers(price, special, needs)} (list price {full})");
+}
