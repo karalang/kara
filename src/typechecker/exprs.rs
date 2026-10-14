@@ -3769,7 +3769,19 @@ impl<'a> super::TypeChecker<'a> {
                         .iter()
                         .map(|a| a.iter().map(|t| self.read_as_value(t)).collect())
                         .collect();
-                    if decidable && !offered.contains(&want) {
+                    // Borrowed items for an owned collection (`Vec[String]`
+                    // from `ref String`s) are refused where MIR lowers the
+                    // `collect`, with a message that says so.
+                    let unref = |v: &[Type]| -> Vec<Type> {
+                        v.iter()
+                            .map(|t| match t {
+                                Type::Ref(i) | Type::MutRef(i) => (**i).clone(),
+                                t => t.clone(),
+                            })
+                            .collect()
+                    };
+                    let only_borrowed = offered.iter().any(|a| unref(a) == unref(&want));
+                    if decidable && !only_borrowed && !offered.contains(&want) {
                         let render =
                             |v: &[Type]| v.iter().map(type_display).collect::<Vec<_>>().join(", ");
                         let have = offered
