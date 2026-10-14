@@ -1,0 +1,99 @@
+// LeetCode #593: Valid Square -- two distinct distances.
+//
+// The six squared distances go into a `Set`. Four points are a square
+// exactly when the set holds two values and neither is 0: four points
+// with only two distances between them, all distinct, can only be a
+// square. O(1).
+
+fn dist(a: Vec[i64], b: Vec[i64]) -> i64 {
+    let dx = a[0] - b[0];
+    let dy = a[1] - b[1];
+    dx * dx + dy * dy
+}
+
+fn valid_square(p1: Vec[i64], p2: Vec[i64], p3: Vec[i64], p4: Vec[i64]) -> bool {
+    let mut seen: Set[i64] = Set.new();
+    for d in [dist(p1, p2), dist(p1, p3), dist(p1, p4), dist(p2, p3), dist(p2, p4), dist(p3, p4)] {
+        seen.insert(d);
+    }
+    seen.len() == 2 and not seen.contains(0)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(p1: Vec[i64], p2: Vec[i64], p3: Vec[i64], p4: Vec[i64]) {
+    println(f"[{p1[0]},{p1[1]}] [{p2[0]},{p2[1]}] [{p3[0]},{p3[1]}] [{p4[0]},{p4[1]}] -> {valid_square(p1, p2, p3, p4)}");
+}
+
+// Four random points: a square of random size and turn, its corners in
+// a random order (one case in three); such a square with one coordinate
+// moved by 1 (one in three); or four points from -3 to 3, which often
+// repeat (the rest).
+fn random_points(seed: mut ref i64) -> Vec[Vec[i64]] {
+    let kind = step(seed) % 3;
+    let mut points: Vec[Vec[i64]] = Vec.new();
+    if kind == 2 {
+        for _ in 0..4 {
+            points.push(vec![step(seed) % 7 - 3, step(seed) % 7 - 3]);
+        }
+        return points;
+    }
+    let x = step(seed) % 2001 - 1000;
+    let y = step(seed) % 2001 - 1000;
+    let mut dx = step(seed) % 41 - 20;
+    let dy = step(seed) % 41 - 20;
+    if dx == 0 and dy == 0 {
+        dx = 1;
+    }
+    points.push(vec![x, y]);
+    points.push(vec![x + dx, y + dy]);
+    points.push(vec![x + dx - dy, y + dy + dx]);
+    points.push(vec![x - dy, y + dx]);
+    if kind == 1 {
+        let k = step(seed) % 4;
+        let c = step(seed) % 2;
+        points[k][c] += if step(seed) % 2 == 0 { 1 } else { -1 };
+    }
+    // A random order.
+    for k in 0..3 {
+        let j = k + step(seed) % (4 - k);
+        points.swap(k, j);
+    }
+    points
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(vec![0, 0], vec![1, 1], vec![1, 0], vec![0, 1]);
+    show(vec![0, 0], vec![1, 1], vec![1, 0], vec![0, 12]);
+    show(vec![1, 0], vec![-1, 0], vec![0, 1], vec![0, -1]);
+    // A turned square; the largest; a rectangle; a rhombus; a kite; one
+    // point four times; two points twice; three corners of a square with
+    // one of them twice; and three points in a line with one off it.
+    show(vec![0, 0], vec![2, 1], vec![1, 3], vec![-1, 2]);
+    show(vec![-10000, -10000], vec![10000, 10000], vec![-10000, 10000], vec![10000, -10000]);
+    show(vec![0, 0], vec![2, 0], vec![2, 1], vec![0, 1]);
+    show(vec![0, 0], vec![2, 1], vec![3, 3], vec![1, 2]);
+    show(vec![0, 0], vec![1, 0], vec![0, 1], vec![2, 2]);
+    show(vec![5, 5], vec![5, 5], vec![5, 5], vec![5, 5]);
+    show(vec![0, 0], vec![0, 0], vec![1, 1], vec![1, 1]);
+    show(vec![0, 0], vec![1, 0], vec![0, 1], vec![0, 1]);
+    show(vec![0, 0], vec![1, 0], vec![2, 0], vec![1, 1]);
+    // 1,000 random cases.
+    let mut seed: i64 = 593;
+    let mut squares = 0;
+    let mut checksum: i64 = 0;
+    for t in 0..1000 {
+        let p = random_points(mut seed);
+        if valid_square(p[0], p[1], p[2], p[3]) {
+            squares += 1;
+            checksum = (checksum * 31 + t + 1) % 1000000007;
+        }
+    }
+    println(f"1000 random cases: {squares} squares, checksum {checksum}");
+}

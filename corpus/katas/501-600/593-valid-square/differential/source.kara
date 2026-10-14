@@ -1,0 +1,233 @@
+// LeetCode #593: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// points.
+
+// ---- star arm ----------------------------------------------------------
+
+fn dist_star(a: Vec[i64], b: Vec[i64]) -> i64 {
+    let dx = a[0] - b[0];
+    let dy = a[1] - b[1];
+    dx * dx + dy * dy
+}
+
+fn valid_square_star(p1: Vec[i64], p2: Vec[i64], p3: Vec[i64], p4: Vec[i64]) -> bool {
+    let mut d = vec![dist_star(p1, p2), dist_star(p1, p3), dist_star(p1, p4), dist_star(p2, p3), dist_star(p2, p4), dist_star(p3, p4)];
+    d.sort();
+    d[0] > 0 and d[0] == d[3] and d[4] == d[5] and d[4] == 2 * d[0]
+}
+
+// ---- set arm -----------------------------------------------------------
+
+fn dist_set(a: Vec[i64], b: Vec[i64]) -> i64 {
+    let dx = a[0] - b[0];
+    let dy = a[1] - b[1];
+    dx * dx + dy * dy
+}
+
+fn valid_square_set(p1: Vec[i64], p2: Vec[i64], p3: Vec[i64], p4: Vec[i64]) -> bool {
+    let mut seen: Set[i64] = Set.new();
+    for d in [dist_set(p1, p2), dist_set(p1, p3), dist_set(p1, p4), dist_set(p2, p3), dist_set(p2, p4), dist_set(p3, p4)] {
+        seen.insert(d);
+    }
+    seen.len() == 2 and not seen.contains(0)
+}
+
+// ---- orders arm --------------------------------------------------------
+
+fn side_orders(a: Vec[i64], b: Vec[i64]) -> (i64, i64) {
+    (b[0] - a[0], b[1] - a[1])
+}
+
+fn square_path_orders(a: Vec[i64], b: Vec[i64], c: Vec[i64], d: Vec[i64]) -> bool {
+    let sides = [side_orders(a, b), side_orders(b, c), side_orders(c, d), side_orders(d, a)];
+    let (x0, y0) = sides[0];
+    let length = x0 * x0 + y0 * y0;
+    if length == 0 {
+        return false;
+    }
+    for k in 0..4 {
+        let (x, y) = sides[k];
+        let (nx, ny) = sides[(k + 1) % 4];
+        if x * x + y * y != length or x * nx + y * ny != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn valid_square_orders(p1: Vec[i64], p2: Vec[i64], p3: Vec[i64], p4: Vec[i64]) -> bool {
+    square_path_orders(p1, p2, p3, p4) or square_path_orders(p1, p2, p4, p3) or square_path_orders(p1, p3, p2, p4)
+}
+
+// ---- turn arm ----------------------------------------------------------
+
+fn valid_square_turn(p1: Vec[i64], p2: Vec[i64], p3: Vec[i64], p4: Vec[i64]) -> bool {
+    let points = [(4 * p1[0], 4 * p1[1]), (4 * p2[0], 4 * p2[1]), (4 * p3[0], 4 * p3[1]), (4 * p4[0], 4 * p4[1])];
+    let cx = p1[0] + p2[0] + p3[0] + p4[0];
+    let cy = p1[1] + p2[1] + p3[1] + p4[1];
+    for (x, y) in points {
+        let (dx, dy) = (x - cx, y - cy);
+        if dx == 0 and dy == 0 {
+            return false;
+        }
+        if not points.contains((cx - dy, cy + dx)) {
+            return false;
+        }
+    }
+    true
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, p: Vec[Vec[i64]]) -> bool {
+    if which == 0 {
+        valid_square_star(p[0], p[1], p[2], p[3])
+    } else if which == 1 {
+        valid_square_set(p[0], p[1], p[2], p[3])
+    } else if which == 2 {
+        valid_square_orders(p[0], p[1], p[2], p[3])
+    } else {
+        valid_square_turn(p[0], p[1], p[2], p[3])
+    }
+}
+
+// The definition: some two of the points, A and B, are one side of the
+// square, and the other two are the corners that side makes: with v
+// from A to B turned a quarter to the left, B + v and A + v. Every
+// ordered pair is tried, so the square may lie on either side of AB.
+fn definition(p: Vec[Vec[i64]]) -> bool {
+    for i in 0..4 {
+        for j in 0..4 {
+            if i == j {
+                continue;
+            }
+            let vx = p[j][0] - p[i][0];
+            let vy = p[j][1] - p[i][1];
+            if vx == 0 and vy == 0 {
+                continue;
+            }
+            let c = vec![p[j][0] - vy, p[j][1] + vx];
+            let d = vec![p[i][0] - vy, p[i][1] + vx];
+            let mut rest: Vec[Vec[i64]] = Vec.new();
+            for k in 0..4 {
+                if k != i and k != j {
+                    rest.push(p[k].clone());
+                }
+            }
+            if (rest[0] == c and rest[1] == d) or (rest[0] == d and rest[1] == c) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// Each point changed by `f`: 0 moves by (tx, ty), 1 turns the plane a
+// quarter, 2 mirrors it in the x axis, 3 scales it by 3.
+fn moved(p: Vec[Vec[i64]], f: i64, tx: i64, ty: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for q in p {
+        let (x, y) = (q[0], q[1]);
+        out.push(if f == 0 {
+            vec![x + tx, y + ty]
+        } else if f == 1 {
+            vec![-y, x]
+        } else if f == 2 {
+            vec![x, -y]
+        } else {
+            vec![3 * x, 3 * y]
+        });
+    }
+    out
+}
+
+fn reordered(p: Vec[Vec[i64]], order: Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for k in order {
+        out.push(p[k].clone());
+    }
+    out
+}
+
+// Four random points: a square of random size and turn (kind 0), the
+// same with one coordinate moved by 1 (kind 1), four points from -2 to 2
+// (kind 2), or a parallelogram on two random sides from -3 to 3, which
+// is now and then a rectangle, a rhombus or a square (kind 3); in a
+// random order.
+fn case_points(seed: mut ref i64) -> Vec[Vec[i64]] {
+    let kind = step(seed) % 4;
+    let x = step(seed) % 201 - 100;
+    let y = step(seed) % 201 - 100;
+    let mut p: Vec[Vec[i64]] = Vec.new();
+    if kind == 2 {
+        for _ in 0..4 {
+            p.push(vec![step(seed) % 5 - 2, step(seed) % 5 - 2]);
+        }
+    } else if kind == 3 {
+        let (ux, uy) = (step(seed) % 7 - 3, step(seed) % 7 - 3);
+        let (wx, wy) = (step(seed) % 7 - 3, step(seed) % 7 - 3);
+        p = vec![vec![x, y], vec![x + ux, y + uy], vec![x + ux + wx, y + uy + wy], vec![x + wx, y + wy]];
+    } else {
+        let (dx, dy) = (step(seed) % 21 - 10, step(seed) % 21 - 10);
+        p = vec![vec![x, y], vec![x + dx, y + dy], vec![x + dx - dy, y + dy + dx], vec![x - dy, y + dx]];
+        if kind == 1 {
+            let k = step(seed) % 4;
+            let c = step(seed) % 2;
+            p[k][c] += if step(seed) % 2 == 0 { 1 } else { -1 };
+        }
+    }
+    for k in 0..3 {
+        let j = k + step(seed) % (4 - k);
+        p.swap(k, j);
+    }
+    p
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5930;
+    let mut checks = 0;
+    let mut squares = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        let p = case_points(mut seed);
+        let want = definition(p);
+        if want {
+            squares += 1;
+        }
+        let tx = step(mut seed) % 20001 - 10000;
+        let ty = step(mut seed) % 20001 - 10000;
+        for which in 0..4 {
+            let got = answer(which, p);
+            let ok = vec![
+                // P1: the definition's answer.
+                got == want,
+                // P2: the points in two other orders.
+                answer(which, reordered(p, vec![3, 2, 1, 0])) == got and answer(which, reordered(p, vec![1, 3, 0, 2])) == got,
+                // P3: every point moved by the same amount.
+                answer(which, moved(p, 0, tx, ty)) == got,
+                // P4: the plane turned a quarter, or mirrored.
+                answer(which, moved(p, 1, 0, 0)) == got and answer(which, moved(p, 2, 0, 0)) == got,
+                // P5: the plane scaled by 3.
+                answer(which, moved(p, 3, 0, 0)) == got,
+            ];
+            for k in 0..5 {
+                checks += 1;
+                if not ok[k] {
+                    failures[k] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({squares} squares), 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
