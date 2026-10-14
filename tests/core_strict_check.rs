@@ -3491,3 +3491,32 @@ fn map_closure_collect_takes_the_outer_element_type() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// B-2026-10-14-16 — `collect()` of non-`Copy` elements into a `Set`,
+// `VecDeque` or `Map` annotation: the loop the desugar writes takes each
+// element with `into_iter()`, since a bare `for` over a `Vec` lends them.
+#[test]
+fn collect_of_strings_into_set_deque_and_map() {
+    let src = "fn main() {\n\
+                   let words: Vec[String] = vec![\"b\".to_string(), \"a\".to_string(), \"b\".to_string()];\n\
+                   let t: Set[String] = words.iter().map(|w| w.to_uppercase()).collect();\n\
+                   let d: VecDeque[String] = words.iter().map(|w| w.to_uppercase()).collect();\n\
+                   let m: Map[String, i64] = words.iter().map(|w| (w.to_uppercase(), 1)).collect();\n\
+                   println(f\"{t.len()} {d.len()} {m.len()} {t.contains(\"A\")} {m.get(\"B\").is_some()}\");\n\
+               }\n";
+    accepted("collect-strings-into-set", src);
+    let (dir, path) = fixture("collect-strings-into-set-run", src);
+    let out = karac()
+        .arg("run")
+        .arg("--interp")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "2 3 2 true true\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

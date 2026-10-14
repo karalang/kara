@@ -3273,7 +3273,14 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
                     kind: PatternKind::Binding(it_name),
                     span: s4,
                 },
-                iterable: Box::new(collect_ident(&src_name, s1)),
+                // B-2026-10-14-16: `into_iter()`, because a bare `for` over a
+                // `Vec` lends its elements, and the append moves each one.
+                iterable: Box::new(collect_method_call(
+                    collect_ident(&src_name, s1),
+                    "into_iter",
+                    Vec::new(),
+                    collect_synth_span(&base, 10),
+                )),
                 body: Block {
                     stmts: vec![Stmt {
                         id: crate::ids::NodeId::DUMMY,
