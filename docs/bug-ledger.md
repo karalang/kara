@@ -610,7 +610,6 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-31 | 2026-10-14 | typecheck+interp+codegen | low | `if let Some(b) = None { ... }` with the payload's type left to inference passes `karac check`, then gives invalid MIR: `karac __mir-run` stops with "invalid MIR: ... binary operands of different types i64 and ()" and `karac __mir-llvm-run` panics in src/codegen/mir/body.rs; `let y = None; if let Some(b) = y` is refused by check ("cannot infer type parameter 'T'") and `match None { Some(b) => c + b, None => 0 }` runs, so the `if let` scrutinee alone escapes both | — |
 | B-2026-10-14-32 | 2026-10-14 | typecheck+codegen | low | The MIR front end lowers a move of a non-`Copy` field out of a `shared` value or out of a `ref` (`|q: S| q.t`, `fn get(ref self) -> String { self.word }`, `fn give(i: ref Inner) -> String { let w = i.word; w }`) instead of refusing it, so the MIR validator reports `invalid MIR: ... move out of _2.1, which is inside a shared value (core semantics §3.7)` where a typecheck/ownership diagnostic with a source position belongs | — |
 | B-2026-10-14-33 | 2026-10-14 | resolver+typecheck | low | A user type still cannot implement `Neg`, `Not`, `Index` or `IndexMut`: d02338bc95 let the binary arithmetic and bitwise operator traits through on check and MIR, and the unary and subscript traits are still refused at resolve as "operator traits are stdlib-only" | — |
-| B-2026-10-14-34 | 2026-10-14 | typecheck+ownership | medium | A trait impl method declared with bare `self` where the trait declares `own self` is accepted, and `karac check` and the MIR pipeline then disagree about the call: check treats `a.shrink()` as consuming `a`, MIR borrows it, so a later use of `a` is refused by check and runs on `__mir-run` | — |
 
 ### Relocated
 
@@ -4005,6 +4004,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-27 | typecheck | medium | `karac check` refuses `*w` as an operand of `==` (`for w in words.iter() { if *w == target { .. | 1be6eb5497 |
 | B-2026-10-14-28 | ownership | medium | `karac check`'s ownership pass counts lending a bare `for` element into a `ref` slot as a MOVE, so lending it twice is refused: `v.push(c); v.push(c)… | 31aadf36c1 |
 | B-2026-10-14-30 | resolver | medium | A user type cannot implement an arithmetic, bitwise or subscript operator trait: `impl Add for Money { .. | d02338bc95 |
+| B-2026-10-14-34 | typecheck+ownership | medium | A trait impl method declared with bare `self` where the trait declares `own self` is accepted, and `karac check` and the MIR pipeline then disagree a… | 20adf3d84c |
 
 </details>
 
