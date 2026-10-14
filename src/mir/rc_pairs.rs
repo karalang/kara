@@ -238,7 +238,7 @@ fn rvalue_mentions(rv: &Rvalue, l: Local) -> bool {
     }
 }
 
-fn statement_mentions(s: &StatementKind, l: Local) -> bool {
+pub(super) fn statement_mentions(s: &StatementKind, l: Local) -> bool {
     match s {
         StatementKind::Assign(d, rv) => place_mentions(d, l) || rvalue_mentions(rv, l),
         StatementKind::StorageLive(x) | StatementKind::StorageDead(x) => *x == l,
@@ -251,7 +251,7 @@ fn statement_mentions(s: &StatementKind, l: Local) -> bool {
     }
 }
 
-fn terminator_mentions(t: &TerminatorKind, l: Local) -> bool {
+pub(super) fn terminator_mentions(t: &TerminatorKind, l: Local) -> bool {
     match t {
         TerminatorKind::Goto { .. }
         | TerminatorKind::Return
