@@ -3810,3 +3810,28 @@ fn a_view_lent_into_ref_slots_twice_is_not_moved() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// B-2026-10-12-14 — design.md § Strings: a `Str` "is `Copy`, and it borrows
+/// exactly like a `ref`". Using a `Str` parameter twice, re-binding a `Str`
+/// and reading `v[0]` out of a `Vec[Str]` move nothing.
+#[test]
+fn str_is_copy_under_the_ownership_pass() {
+    accepted(
+        "str-copy",
+        "fn twice(s: Str) -> i64 {\n\
+             let a = String.from(s);\n\
+             let b = String.from(s);\n\
+             a.len() + b.len()\n\
+         }\n\
+         fn main() {\n\
+             let text = String.from(\"ab,cd\");\n\
+             println(f\"{twice(text)}\");\n\
+             let x: Str = text[0..2];\n\
+             let y = x;\n\
+             println(f\"{x} {y}\");\n\
+             let v: Vec[Str] = vec![text[0..1], text[1..2]];\n\
+             let first = v[0];\n\
+             println(f\"{first} {v.len()}\");\n\
+         }\n",
+    );
+}

@@ -1383,6 +1383,10 @@ pub(crate) fn is_copy_type_in_scope(
         // — stays non-Copy (falls through to `_ => false`), so `f(); f();` on
         // such a closure still reports the reuse.
         Type::Function { .. } => true,
+        // B-2026-10-12-14 — design.md § Strings: a `Str` "is `Copy`, and it
+        // borrows exactly like a `ref`". Strict commands only, as in the
+        // typechecker's `is_copy_type_during_check`.
+        Type::Named { name, .. } if name == "StringSlice" && core_rules() => true,
         Type::Named { name, args } => {
             if matches!(name.as_str(), "Option" | "Result") {
                 // §6.1: an `Option` or `Result` of handles and `Copy` parts
