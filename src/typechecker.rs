@@ -1683,6 +1683,10 @@ pub struct TypeCheckResult {
     /// `expr_types` for this purpose — a separate map avoids the
     /// return-type-overwrites-receiver-type race).
     pub method_callee_types: FxHashMap<SpanKey, String>,
+    /// B-2026-10-14-30 — each binary expression the v2 pipelines dispatch
+    /// to a user operator impl, by span, with its `Type.method` key, so the
+    /// ownership pass reads the operands' modes off the method.
+    pub user_operator_calls: FxHashMap<SpanKey, String>,
     /// B-2026-08-13-8. For a method call whose `(type-head, method)` pair has
     /// more than one non-generic impl, the RESOLVED impl's qualified dispatch
     /// segment. Both backends key their `Type.method` lookup off this instead of
@@ -2710,6 +2714,8 @@ pub struct TypeChecker<'a> {
     /// MethodCall span → `Type.method` canonical callee key. See the
     /// matching field on `TypeCheckResult` for the full rationale.
     pub(super) method_callee_types: FxHashMap<SpanKey, String>,
+    /// See [`TypeCheckResult::user_operator_calls`].
+    pub(super) user_operator_calls: FxHashMap<SpanKey, String>,
     /// Working half of `TypeCheckResult::method_impl_dispatch`.
     pub(super) method_impl_dispatch: FxHashMap<(SpanKey, String), String>,
     /// Working half of `TypeCheckResult::method_default_fills`.
@@ -3239,6 +3245,7 @@ impl<'a> TypeChecker<'a> {
             try_into_conversions: FxHashMap::default(),
             display_snake_case_enums: FxHashSet::default(),
             method_callee_types: FxHashMap::default(),
+            user_operator_calls: FxHashMap::default(),
             method_impl_dispatch: FxHashMap::default(),
             method_default_fills: FxHashMap::default(),
             method_defaults: crate::default_args::method_default_table(program),
@@ -3647,6 +3654,7 @@ impl<'a> TypeChecker<'a> {
             try_into_conversions: self.try_into_conversions,
             display_snake_case_enums: self.display_snake_case_enums,
             method_callee_types: self.method_callee_types,
+            user_operator_calls: self.user_operator_calls,
             method_impl_dispatch: self.method_impl_dispatch,
             method_default_fills: self.method_default_fills,
             method_impl_type_subs: self.method_impl_type_subs,

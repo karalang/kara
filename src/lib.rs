@@ -240,6 +240,15 @@ pub fn resolve(program: &Program) -> ResolveResult {
     resolver.resolve()
 }
 
+/// [`resolve`] for the v2 pipelines (`karac check`, the MIR backends),
+/// which admit a user impl of an arithmetic or bitwise operator trait
+/// (B-2026-10-14-30).
+pub fn resolve_v2(program: &Program) -> ResolveResult {
+    Resolver::new(program)
+        .with_user_operator_impls(true)
+        .resolve()
+}
+
 /// Everything `karac build` does to the AST between [`parse`] and [`resolve`],
 /// in the order it does it. Call this — not the three passes individually —
 /// from any driver that hands a parse tree to a later phase.

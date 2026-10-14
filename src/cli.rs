@@ -1279,6 +1279,7 @@ impl Pipeline {
                 .with_test_file(is_test_file)
                 .with_external_pub_refs(in_package)
                 .with_target_tombstones(target_tombstones)
+                .with_user_operator_impls(self.strict_core)
                 .resolve(),
         );
     }

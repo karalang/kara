@@ -8056,7 +8056,22 @@ impl<'a> super::TypeChecker<'a> {
                 // parameter — so every shape the plain form accepts stays
                 // accepted, including a `mut ref` operand on either side.
                 let binop = Self::compound_op_binop(op);
-                self.infer_binary(&binop, target, value, &stmt.span);
+                let result = self.infer_binary(&binop, target, value, &stmt.span);
+                // B-2026-10-14-30 — `a += b` on a user type is `a = a + b`, so
+                // the impl's result must be the type of `a` (design.md
+                // § Operator traits, compound assignment).
+                if self
+                    .user_operator_calls
+                    .contains_key(&SpanKey::from_span(&stmt.span))
+                {
+                    if let Some(tt) = self
+                        .expr_types
+                        .get(&SpanKey::from_span(&target.span))
+                        .cloned()
+                    {
+                        self.check_assignable(&tt, &result, value.span);
+                    }
+                }
                 self.check_assignment_target_is_place(target, None);
             }
             // Handled by the early return above; kept for exhaustiveness.

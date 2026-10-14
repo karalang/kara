@@ -12855,7 +12855,7 @@ fn test_operators_page_quotes_live_diagnostics() {
         (
             "userimpl",
             "struct P { x: i64 }\n\
-             impl Add for P { fn add(self, r: P) -> P { P { x: self.x } } }\n\
+             impl Neg for P { fn neg(self) -> P { P { x: self.x } } }\n\
              fn main() { }",
             "operator traits are stdlib-only",
         ),

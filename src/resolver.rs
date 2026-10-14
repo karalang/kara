@@ -707,6 +707,12 @@ impl StubHint {
     }
 }
 
+/// B-2026-10-14-30 — the binary operator traits a user type may implement
+/// on the v2 pipelines, by the method each operator calls.
+pub const USER_OPERATOR_TRAITS: &[&str] = &[
+    "Add", "Sub", "Mul", "Div", "Rem", "BitAnd", "BitOr", "BitXor", "Shl", "Shr",
+];
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolveErrorKind {
     /// `layout_unassigned_fields` (B-2026-08-21-2 follow-up) — a `layout`
@@ -1208,6 +1214,11 @@ pub struct Resolver<'a> {
     /// plain diagnostic is emitted. The CLI sets this via
     /// `Resolver::with_test_file(module.is_test_file)`.
     pub(crate) is_test_file: bool,
+    /// B-2026-10-14-30 — the v2 pipelines (`karac check`, the MIR
+    /// backends) admit a user impl of an arithmetic or bitwise operator
+    /// trait (design.md § Operator traits); the frozen legacy pipeline
+    /// keeps refusing it.
+    pub(crate) user_operator_impls: bool,
     /// `(offset, length)` of the identifier currently in CALL position — the
     /// one place a builtin function name is legal. Keyed on the exact span
     /// rather than a bool because a callee can be an `Index` wrapper carrying
@@ -1319,6 +1330,7 @@ impl<'a> Resolver<'a> {
             par_sibling_bindings: FxHashMap::default(),
             is_stdlib_source: false,
             is_test_file: false,
+            user_operator_impls: false,
             call_callee_span: None,
             target_tombstones: FxHashMap::default(),
             wildcard_ambiguities: FxHashMap::default(),
@@ -1387,6 +1399,12 @@ impl<'a> Resolver<'a> {
     /// diagnostic.
     pub fn with_test_file(mut self, is_test: bool) -> Self {
         self.is_test_file = is_test;
+        self
+    }
+
+    /// See [`Self::user_operator_impls`].
+    pub fn with_user_operator_impls(mut self, on: bool) -> Self {
+        self.user_operator_impls = on;
         self
     }
 

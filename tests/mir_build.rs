@@ -1284,3 +1284,83 @@ fn mir_collect_in_a_tuple_literal_takes_the_slot_type() {
         }
     }
 }
+
+// B-2026-10-14-30 — a user type's operator impls: `a + b` calls its `add`
+// (by value or by `ref`, `Self` and `Self.Output` results), `a += b` is
+// `a = a + b`, the bitwise traits dispatch the same way, and a `T: Add`
+// body instantiated at the user type calls the impl.
+#[test]
+fn mir_user_operator_impls() {
+    const SRC: &str = r#"struct V2 {
+    x: i64,
+    tag: String,
+}
+
+impl Add for V2 {
+    fn add(own self, rhs: own V2) -> V2 {
+        V2 { x: self.x + rhs.x, tag: self.tag + rhs.tag }
+    }
+}
+
+impl Sub for V2 {
+    fn sub(ref self, rhs: ref V2) -> Self {
+        V2 { x: self.x - rhs.x, tag: self.tag.clone() }
+    }
+}
+
+impl Mul for V2 {
+    type Output = i64;
+    fn mul(ref self, rhs: ref V2) -> Self.Output {
+        self.x * rhs.x
+    }
+}
+
+#[derive(Copy, Clone)]
+struct Bits {
+    b: i64,
+}
+
+impl BitOr for Bits {
+    fn bitor(own self, rhs: own Bits) -> Bits {
+        Bits { b: self.b | rhs.b }
+    }
+}
+
+impl Shl for Bits {
+    fn shl(own self, rhs: own Bits) -> Bits {
+        Bits { b: self.b << rhs.b }
+    }
+}
+
+fn sum2[T: Add](a: own T, b: own T) -> T {
+    a + b
+}
+
+fn main() {
+    let a = V2 { x: 3, tag: String.from("a") };
+    let b = V2 { x: 10, tag: String.from("b") };
+    let d = a - b;
+    println(f"{a * b} {d.x} {d.tag}");
+    let c = a + b;
+    println(f"{c.x} {c.tag}");
+    let mut acc = V2 { x: 0, tag: String.from("") };
+    for i in 0..4 {
+        acc += V2 { x: i, tag: f"{i}" };
+    }
+    acc -= d;
+    let s = sum2(acc, V2 { x: 100, tag: String.from("!") });
+    println(f"{s.x} {s.tag} {sum2(3, 4)}");
+    let mut m = Bits { b: 1 } | Bits { b: 4 };
+    m <<= Bits { b: 1 };
+    println(f"{m.b} {(m << Bits { b: 2 }).b}");
+}
+"#;
+    let want = "30 -7 a\n13 ab\n113 0123! 7\n10 40\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

@@ -3835,3 +3835,59 @@ fn str_is_copy_under_the_ownership_pass() {
          }\n",
     );
 }
+
+/// B-2026-10-14-30 — design.md § Operator traits: `a + b` on a user type
+/// calls its `impl Add`, so `karac check` accepts the impl and the operator,
+/// and an `own self` impl moves its left operand like any by-value call.
+#[test]
+fn user_operator_impls_are_accepted() {
+    let money = "#[derive(Copy, Clone)]\n\
+         struct Money {\n\
+             cents: i64,\n\
+         }\n\
+         impl Add for Money {\n\
+             type Output = Money;\n\
+             fn add(own self, rhs: own Money) -> Self.Output {\n\
+                 Money { cents: self.cents + rhs.cents }\n\
+             }\n\
+         }\n";
+    accepted(
+        "user-add",
+        &format!(
+            "{money}\
+             fn main() {{\n\
+                 let a = Money {{ cents: 150 }};\n\
+                 let mut c = a + Money {{ cents: 275 }};\n\
+                 c += a;\n\
+                 println(f\"{{c.cents}} {{a.cents}}\");\n\
+             }}\n"
+        ),
+    );
+    let (dir, path) = fixture(
+        "user-add-moves",
+        "struct Tag {\n\
+             s: String,\n\
+         }\n\
+         impl Add for Tag {\n\
+             fn add(own self, rhs: own Tag) -> Tag {\n\
+                 Tag { s: self.s + rhs.s }\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let a = Tag { s: String.from(\"a\") };\n\
+             let c = a + Tag { s: String.from(\"b\") };\n\
+             println(f\"{c.s} {a.s}\");\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "user-add-moves: check must reject: {err}"
+    );
+    assert!(
+        err.contains("value 'a' moved here, used again here"),
+        "user-add-moves: expected the move of `a` in: {err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

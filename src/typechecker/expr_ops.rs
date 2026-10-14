@@ -2350,6 +2350,96 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// The operator trait and method a binary operator calls on a user
+    /// type (design.md § Operator traits).
+    pub(super) fn user_operator_trait(op: &BinOp) -> Option<(&'static str, &'static str)> {
+        Some(match op {
+            BinOp::Add => ("Add", "add"),
+            BinOp::Sub => ("Sub", "sub"),
+            BinOp::Mul => ("Mul", "mul"),
+            BinOp::Div => ("Div", "div"),
+            BinOp::Mod => ("Rem", "rem"),
+            BinOp::BitAnd => ("BitAnd", "bitand"),
+            BinOp::BitOr => ("BitOr", "bitor"),
+            BinOp::BitXor => ("BitXor", "bitxor"),
+            BinOp::Shl => ("Shl", "shl"),
+            BinOp::Shr => ("Shr", "shr"),
+            _ => return None,
+        })
+    }
+
+    /// B-2026-10-14-30 — `a + b` on a user type with an `impl Add` calls its
+    /// `add` (design.md § Operator traits), on the v2 pipelines, whose
+    /// resolver admits the impl. The result is the method's return type and
+    /// the right operand is checked against its `rhs` parameter.
+    fn user_operator_impl(
+        &mut self,
+        op: &BinOp,
+        left_ty: &Type,
+        right_ty: &Type,
+        right: &Expr,
+        span: &Span,
+    ) -> Option<Type> {
+        if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
+            return None;
+        }
+        let (tr, method) = Self::user_operator_trait(op)?;
+        let left = resolve_type_var_top(left_ty, &self.env.substitutions);
+        let (name, args) = match &left {
+            Type::Named { name, args }
+                if self.env.structs.contains_key(name) || self.env.enums.contains_key(name) =>
+            {
+                (name.clone(), args.clone())
+            }
+            Type::Shared(name) => (name.clone(), Vec::new()),
+            _ => return None,
+        };
+        let sig = self
+            .env
+            .find_impl(tr, &name, &args)?
+            .methods
+            .get(method)?
+            .clone();
+        self.user_operator_calls
+            .insert(SpanKey::from_span(span), format!("{name}.{method}"));
+        let subst = |t: &Type| self.subst_operator_self(t, &left, &name);
+        let ret = subst(&sig.return_type);
+        if let Some(rhs) = sig.params.first() {
+            let rhs = subst(rhs);
+            self.check_assignable(&rhs, right_ty, right.span);
+        }
+        Some(ret)
+    }
+
+    /// `Self` and `Self.Assoc` in an operator impl's signature, read at the
+    /// left operand's type `left` (named `name`).
+    fn subst_operator_self(&self, t: &Type, left: &Type, name: &str) -> Type {
+        match t {
+            Type::Named { name: n, args } if n == "Self" && args.is_empty() => left.clone(),
+            Type::AssocProjection { param, assoc, .. } if param == "Self" => self
+                .env
+                .impl_assoc_types
+                .get(&(name.to_string(), assoc.clone()))
+                .filter(|e| e.gat_params.is_empty())
+                .map(|e| e.ty.clone())
+                .unwrap_or_else(|| t.clone()),
+            Type::Named { name: n, args } => Type::Named {
+                name: n.clone(),
+                args: args
+                    .iter()
+                    .map(|a| self.subst_operator_self(a, left, name))
+                    .collect(),
+            },
+            Type::Tuple(ts) => Type::Tuple(
+                ts.iter()
+                    .map(|a| self.subst_operator_self(a, left, name))
+                    .collect(),
+            ),
+            Type::Ref(i) => Type::Ref(Box::new(self.subst_operator_self(i, left, name))),
+            other => other.clone(),
+        }
+    }
+
     pub(super) fn arithmetic_operator_trait(op: &BinOp) -> Option<&'static str> {
         match op {
             BinOp::Add => Some("Add"),
@@ -2645,6 +2735,10 @@ impl<'a> super::TypeChecker<'a> {
 
         if left_ty == Type::Error || right_ty == Type::Error {
             return Type::Error;
+        }
+
+        if let Some(ty) = self.user_operator_impl(op, &left_ty, &right_ty, right, span) {
+            return ty;
         }
 
         // `c == None`, `a == Box1.Nil`: a variant whose parameters nothing

@@ -3430,23 +3430,37 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return Ok(());
             }
         }
+        // B-2026-10-14-30 — `a += b` on a user type is `a = a + b`, through
+        // the impl's operator method.
+        if let Some((tr, m)) = user_operator_trait(compound_binop(&op)) {
+            let tt = self.expr_ty(target)?;
+            let (_, tb) = self.strip_ty_full(tt);
+            if let Some((d, args)) = self.user_impl_method(tb, tr, m) {
+                let tmp = self.temp(tb);
+                self.user_operator_call(target, value, d, args, Place::local(tmp))?;
+                let place = self.expr_place(target, true)?;
+                let (place, t) = self.write_through(place, value)?;
+                if self.needs_drop(t) {
+                    let next = self.b.new_block();
+                    self.goto_with(
+                        TerminatorKind::Drop {
+                            place: place.clone(),
+                            target: next,
+                            unwind: UnwindAction::Abort,
+                        },
+                        next,
+                    );
+                }
+                self.assign(place, Rvalue::Use(Operand::Move(Place::local(tmp))));
+                return Ok(());
+            }
+        }
         let pending = self.prepare_place(target)?;
         let (rhs, _) = self.scalar_operand(value)?;
         let rhs = self.settle(rhs);
         let place = self.finish_place(pending, true)?;
         let (place, t) = self.write_through(place, value)?;
-        let bin = match op {
-            CompoundOp::Add => BinOp::Add,
-            CompoundOp::Sub => BinOp::Sub,
-            CompoundOp::Mul => BinOp::Mul,
-            CompoundOp::Div => BinOp::Div,
-            CompoundOp::Mod => BinOp::Rem,
-            CompoundOp::BitAnd => BinOp::BitAnd,
-            CompoundOp::BitOr => BinOp::BitOr,
-            CompoundOp::BitXor => BinOp::BitXor,
-            CompoundOp::Shl => BinOp::Shl,
-            CompoundOp::Shr => BinOp::Shr,
-        };
+        let bin = compound_binop(&op);
         if !self.is_copy(t) {
             return self.unsupported(target.span, "a compound assignment to a non-scalar");
         }
@@ -5418,6 +5432,14 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
         };
         let lt0 = self.expr_ty(left)?;
+        // B-2026-10-14-30 — `a + b` on a user type with an `impl Add` calls
+        // its `add` (design.md § Operator traits).
+        if let Some((tr, m)) = user_operator_trait(bin) {
+            let (_, lbase) = self.strip_ty_full(lt0);
+            if let Some((d, args)) = self.user_impl_method(lbase, tr, m) {
+                return self.user_operator_call(left, right, d, args, dest);
+            }
+        }
         let lbase = match self.tys().tcx().kind(lt0) {
             HK::Ref(t) | HK::MutRef(t) => t,
             _ => lt0,
@@ -11830,6 +11852,52 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(Some((d, inst)))
     }
 
+    /// `left <op> right` as a call of the user impl's operator method `d`,
+    /// `left` the receiver and `right` the one argument, passed as
+    /// [`Self::user_method_call`] passes them (B-2026-10-14-30).
+    fn user_operator_call(
+        &mut self,
+        left: &'a Expr,
+        right: &'a Expr,
+        d: DefId,
+        inst_args: Vec<Ty>,
+        dest: Place,
+    ) -> R<()> {
+        let f = self.lcx.fns[&d].f;
+        let ([p], Some(m)) = (f.params.as_slice(), f.self_param.clone()) else {
+            return self.unsupported(left.span, "an operator method that is not `fn(self, rhs)`");
+        };
+        let st = self.expr_ty(left)?;
+        let (_, st) = self.strip_ty_full(st);
+        if self.lcx.fns[&d].impl_params == 0 {
+            self.lcx.self_tys.entry(d).or_insert(st);
+        }
+        let recv = match self.self_mode(f, m, st) {
+            SelfParam::Owned => PendingRecv::Ready(self.owned_operand(left, st)?),
+            SelfParam::Ref => self.recv_place(left, false)?,
+            SelfParam::MutRef => self.recv_place(left, true)?,
+        };
+        let pt = self.callee_param_ty(p, &inst_args)?;
+        let rest = vec![self.arg_pending(right, pt)?];
+        let mut rest = self.finish_args(rest)?;
+        let mut ops = vec![self.recv_borrow_after(recv, &mut rest)?];
+        ops.extend(rest);
+        let name = self.lcx.instance(d, inst_args.clone());
+        let func = self.fn_operand(&name, d, inst_args);
+        let next = self.b.new_block();
+        self.goto_with(
+            TerminatorKind::Call {
+                func,
+                args: ops,
+                destination: dest,
+                target: Some(next),
+                unwind: UnwindAction::Abort,
+            },
+            next,
+        );
+        Ok(())
+    }
+
     fn user_method_call(
         &mut self,
         e: &'a Expr,
@@ -14136,6 +14204,40 @@ fn rename_clashing_library_items(src: &str, lib: String) -> String {
     out
 }
 
+/// The binary operator a compound assignment applies.
+fn compound_binop(op: &CompoundOp) -> BinOp {
+    match op {
+        CompoundOp::Add => BinOp::Add,
+        CompoundOp::Sub => BinOp::Sub,
+        CompoundOp::Mul => BinOp::Mul,
+        CompoundOp::Div => BinOp::Div,
+        CompoundOp::Mod => BinOp::Rem,
+        CompoundOp::BitAnd => BinOp::BitAnd,
+        CompoundOp::BitOr => BinOp::BitOr,
+        CompoundOp::BitXor => BinOp::BitXor,
+        CompoundOp::Shl => BinOp::Shl,
+        CompoundOp::Shr => BinOp::Shr,
+    }
+}
+
+/// The operator trait and method a binary operator calls on a user type
+/// (B-2026-10-14-30); the typechecker's `user_operator_trait` twin.
+fn user_operator_trait(bin: BinOp) -> Option<(&'static str, &'static str)> {
+    Some(match bin {
+        BinOp::Add => ("Add", "add"),
+        BinOp::Sub => ("Sub", "sub"),
+        BinOp::Mul => ("Mul", "mul"),
+        BinOp::Div => ("Div", "div"),
+        BinOp::Rem => ("Rem", "rem"),
+        BinOp::BitAnd => ("BitAnd", "bitand"),
+        BinOp::BitOr => ("BitOr", "bitor"),
+        BinOp::BitXor => ("BitXor", "bitxor"),
+        BinOp::Shl => ("Shl", "shl"),
+        BinOp::Shr => ("Shr", "shr"),
+        _ => return None,
+    })
+}
+
 /// Check one source file, build its MIR and elaborate drops; or the first
 /// stage that refused it.
 pub fn build_source(src: &str) -> Result<Lowered, String> {
@@ -14156,7 +14258,7 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
     if d5_params() {
         crate::d5_params::borrow_bare_params(&mut program);
     }
-    let r = crate::resolve(&program);
+    let r = crate::resolve_v2(&program);
     // Lint-backed resolve diagnostics (`float_in_serialized_type`, the
     // layout lints) are warnings, not errors, so they do not stop the build.
     if let Some(err) = r
@@ -14180,7 +14282,7 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
             return Err(format!("comptime: {e:?}"));
         }
         crate::node_ids::assign_node_ids(&mut program);
-        r = crate::resolve(&program);
+        r = crate::resolve_v2(&program);
         if let Some(err) = r
             .errors
             .iter()

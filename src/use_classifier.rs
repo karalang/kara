@@ -647,7 +647,24 @@ impl<'a> UseClassifier<'a> {
                 }
             }
             StmtKind::CompoundAssign { target, value, .. } => {
-                self.walk_expr(value, Mode::Reading);
+                // B-2026-10-14-30 — `a += b` on a user type is `a = a + b`:
+                // an `own` `rhs` consumes `b`, and `a` is stored back.
+                let owned_rhs = self
+                    .tc
+                    .user_operator_calls
+                    .get(&SpanKey::from_span(&stmt.span))
+                    .is_some_and(|key| {
+                        matches!(
+                            self.method_param_modes.get(key).and_then(|m| m.first()),
+                            Some(OwnershipMode::Own)
+                        )
+                    });
+                let mode = if owned_rhs {
+                    Mode::Consuming
+                } else {
+                    Mode::Reading
+                };
+                self.walk_expr(value, mode);
                 self.walk_expr(target, Mode::Reading);
             }
             StmtKind::Expr(e) => {
@@ -798,6 +815,31 @@ impl<'a> UseClassifier<'a> {
                 }
             }
 
+            // B-2026-10-14-30 — `a + b` dispatched to a user operator impl
+            // passes each operand as the method takes it: an `own` receiver
+            // or `rhs` consumes it.
+            ExprKind::Binary { left, right, .. }
+                if self
+                    .tc
+                    .user_operator_calls
+                    .contains_key(&SpanKey::from_span(&expr.span)) =>
+            {
+                let key = &self.tc.user_operator_calls[&SpanKey::from_span(&expr.span)];
+                let owned_self = matches!(self.method_self_modes.get(key), Some(SelfParam::Owned));
+                let owned_rhs = matches!(
+                    self.method_param_modes.get(key).and_then(|m| m.first()),
+                    Some(OwnershipMode::Own)
+                );
+                let mode = |owned: bool| {
+                    if owned {
+                        Mode::Consuming
+                    } else {
+                        Mode::Reading
+                    }
+                };
+                self.walk_expr(left, mode(owned_self));
+                self.walk_expr(right, mode(owned_rhs));
+            }
             ExprKind::Binary { left, right, .. }
             | ExprKind::Pipe { left, right }
             | ExprKind::NilCoalesce { left, right } => {

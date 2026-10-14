@@ -434,6 +434,12 @@ impl<'a> super::Resolver<'a> {
         if USER_IMPLEMENTABLE_TRAITS.contains(&trait_name) {
             return;
         }
+        // B-2026-10-14-30 — the v2 pipelines dispatch `a + b` (and the other
+        // binary arithmetic and bitwise operators) on a user type to its
+        // impl, as design.md § Operator traits says.
+        if self.user_operator_impls && crate::resolver::USER_OPERATOR_TRAITS.contains(&trait_name) {
+            return;
+        }
 
         // Vec[T] gets a tailored hint pointing at the explicit alternatives.
         let (message, suggestion) = if trait_name == "Add" && target_name == "Vec" {
