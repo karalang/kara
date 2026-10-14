@@ -1,0 +1,80 @@
+// Benchmark for #589: N-ary Tree Preorder Traversal -- the ★ arm
+// (recursion).
+//
+// A node's value comes first, then each child's preorder in turn,
+// pushed onto one list the walk carries down. Each node is visited
+// once: O(n).
+
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+fn walk(node: Node, out: mut ref Vec[i64]) {
+    out.push(node.val);
+    for child in node.children {
+        walk(child, out);
+    }
+}
+
+fn preorder(root: Option[Node]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if let Some(node) = root {
+        walk(node, mut out);
+    }
+    out
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn build_random(i: i64, vals: Vec[i64], kids: Vec[Vec[i64]]) -> Node {
+    let mut children: Vec[Node] = Vec.new();
+    for k in kids[i] {
+        children.push(build_random(k, vals, kids));
+    }
+    Node { val: vals[i], children: children }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100 random trees of 10,000 nodes (the problem's most), built once.
+    // Each node after the first hangs under one of the `reach` nodes
+    // before it: a small reach makes a deep tree, a large one a wide
+    // tree. Then 30 times over, every tree is listed in preorder, and
+    // every value listed is folded into a checksum.
+    let n = 10000;
+    let count = 100;
+    let rounds = 30;
+    let mut seed: i64 = 589;
+    let mut trees: Vec[Option[Node]] = Vec.new();
+    for _ in 0..count {
+        let reach = 2 + step(mut seed) % 1000;
+        let mut vals: Vec[i64] = Vec.new();
+        let mut kids: Vec[Vec[i64]] = Vec.new();
+        for i in 0..n {
+            vals.push(step(mut seed) % 10001);
+            kids.push(Vec.new());
+            if i > 0 {
+                let back = 1 + step(mut seed) % min(i, reach);
+                kids[i - back].push(i);
+            }
+        }
+        trees.push(Some(build_random(0, vals, kids)));
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let got = preorder(trees[(round * 7 + g) % count]);
+            total += got.len();
+            for v in got {
+                checksum = (checksum * 31 + v) % 1000000007;
+            }
+        }
+    }
+    println(f"{count} trees of {n} nodes, {rounds} rounds: {total} values listed, checksum {checksum}");
+}

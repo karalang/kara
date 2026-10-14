@@ -1,0 +1,9 @@
+[1,null,3,2,4,null,5,6]: [1, 3, 5, 6, 2, 4]
+example 2: [1, 2, 3, 6, 7, 11, 14, 4, 8, 12, 5, 9, 13, 10]
+empty: []
+one node: [7]
+repeated values: [4, 4, 4, 0, 4, 0]
+last child deepest: [0, 1, 2, 3, 4, 5, 6]
+a path of 1000: 1000 values, first [0, 1, 2, 3, 4], checksum 691508967
+a root with 9999 leaves: 10000 values, first [10000, 9999, 9998, 9997, 9996], checksum 380110249
+300 random trees: 8841 values, checksum 825158248
