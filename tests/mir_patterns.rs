@@ -85,3 +85,32 @@ fn the_mir_typecheck_records_task_captures_that_move() {
         "only `data` drops before `g`"
     );
 }
+
+/// B-2026-10-14-31: the payload of a bare `None` scrutinee in `if let` and
+/// `while let` takes its type from the body, as a `match` arm's does. It
+/// used to stay an unbound param that typed HIR read as `()`, so `c + b`
+/// built invalid MIR ("binary operands of different types i64 and ()").
+#[test]
+fn if_let_on_a_bare_none_types_its_payload_from_the_body() {
+    assert_runs(
+        r#"
+fn main() {
+    let c = 5;
+    let mut best = 0;
+    if let Some(below) = None {
+        best = c + below;
+    }
+    if let Some(b) = None {
+        let z: i64 = b;
+        best = z;
+    }
+    let o = if let Some(b) = None { c + b } else { 1 };
+    while let Some(b) = None {
+        best = c + b;
+    }
+    println(f"{best} {o}");
+}
+"#,
+        "0 1\n",
+    );
+}

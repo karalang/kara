@@ -1364,3 +1364,31 @@ fn main() {
         }
     }
 }
+
+// B-2026-10-14-31: `if let` / `while let` on a bare `None` take the
+// payload's type from the body. The compiled backend panicked in
+// src/codegen/mir/body.rs on the `()` payload typed HIR used to give it.
+#[test]
+fn mir_if_let_on_a_bare_none() {
+    const SRC: &str = r#"fn main() {
+    let c = 5;
+    let mut best = 0;
+    if let Some(below) = None {
+        best = c + below;
+    }
+    let o = if let Some(b) = None { c + b } else { 1 };
+    while let Some(b) = None {
+        best = c + b;
+    }
+    println(f"{best} {o}");
+}
+"#;
+    let want = "0 1\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

@@ -566,7 +566,7 @@ impl<'a> super::TypeChecker<'a> {
     /// [`Self::freshen_unsolved_scrutinee_params`], with the freshened type
     /// recorded for typed HIR: the arms solve what they can of it
     /// (`Err(e) => e`), and what they leave unsolved is unconstrained.
-    fn freshen_scrutinee(&mut self, scrutinee: &Expr, ty: Type) -> Type {
+    pub(super) fn freshen_scrutinee(&mut self, scrutinee: &Expr, ty: Type) -> Type {
         let fresh = self.freshen_unsolved_scrutinee_params(ty.clone());
         if fresh != ty {
             self.record_node_type(scrutinee.id, &fresh);

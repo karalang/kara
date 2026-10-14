@@ -7151,6 +7151,11 @@ impl<'a> super::TypeChecker<'a> {
                 else_branch,
             } => {
                 let scrut_ty = self.infer_expr(value);
+                // `if let Some(b) = None`: the `None`'s `T` is solved by the
+                // body, as a `match` arm solves it, rather than left an
+                // unbound param that typed HIR reads as `()`
+                // (B-2026-10-14-31).
+                let scrut_ty = self.freshen_scrutinee(value, scrut_ty);
                 // Bind the pattern's variables for the duration of the
                 // then-block so identifier-leaf bindings inside if-let
                 // (e.g. `if let Some(l) = cur.left { queue.push_back(l); }`)
@@ -7985,6 +7990,8 @@ impl<'a> super::TypeChecker<'a> {
                 ..
             } => {
                 let scrut_ty = self.infer_expr(value);
+                // As in `if let` (B-2026-10-14-31).
+                let scrut_ty = self.freshen_scrutinee(value, scrut_ty);
                 // Bind the pattern's variables for the duration of the loop
                 // body, mirroring `if let` — without this the bindings stay
                 // un-typed (silent fall-through to `Type::Error`), breaking
