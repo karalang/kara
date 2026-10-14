@@ -122,6 +122,7 @@ pipeline/flag_eval  feature flags from a JSON file, JSON-lines requests and deci
 cli/archive         binary archive format with CRC-32: pack, list, extract, detect corruption
 cli/site_gen        static site generator: markdown subset to HTML, front matter, env config, index + sitemap
 cli/dup_finder      duplicate-file finder: chunked FNV-1a hashing, byte-for-byte confirm, prune, CSV manifest
+cli/mini_grep       grep with its own regex engine (Pike VM): -i -v -c -l -n -o -C, exit statuses
 service/resp_store  Redis-style RESP2 server over TCP: strings, lists, expiry, KEYS, append-only file replayed on restart
 service/todo_api    REST API: hand-written JSON library, router of fn values, closure middleware, keep-alive pipelining
 ```

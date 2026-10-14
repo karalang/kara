@@ -1,0 +1,9 @@
+source = "corpus/apps/cli/mini_grep/source.orig.kara (v2 by hand edits, see notes.md)"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["apps", "apps:cli", "apps:real-io"]
+expected_from = "mirror"
+rules = []
+backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
+env = {}

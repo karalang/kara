@@ -1,0 +1,72 @@
+$ grep TODO src
+src/main.rs:    // TODO: read the port from ENV
+(exit 0)
+$ grep -i -n todo src
+src/main.rs:4:    // TODO: read the port from ENV
+src/net/server.rs:5:        // todo: validate port
+(exit 0)
+$ grep -c ERROR logs/app.log
+2
+(exit 0)
+$ grep -v -c INFO logs/app.log
+5
+(exit 0)
+$ grep -n took=[0-9]{4,}ms logs/app.log
+2:2026-10-14T10:00:02 WARN  slow request id=17 took=1500ms
+8:2026-10-14T10:00:08 WARN  slow request id=19 took=2200ms
+(exit 0)
+$ grep -o id=\d+ logs/app.log
+id=4242
+id=17
+id=18
+id=19
+(exit 0)
+$ grep -C 1 -n ERROR logs/app.log
+2-2026-10-14T10:00:02 WARN  slow request id=17 took=1500ms
+3:2026-10-14T10:00:03 ERROR db: connection refused (retry 1)
+4-2026-10-14T10:00:04 INFO  request id=18 took=12ms
+5:2026-10-14T10:00:05 ERROR db: connection refused (retry 2)
+6-2026-10-14T10:00:06 INFO  recovered after 2 retries
+(exit 0)
+$ grep -l -i server src logs
+src/main.rs
+src/net/server.rs
+(exit 0)
+$ grep -o [\w.]+@\w+\.(com|org) logs/notes.txt
+ops@example.com
+dev@example.org
+(exit 0)
+$ grep -o -i CR[ÈE]ME logs/notes.txt
+crème
+(exit 0)
+$ grep ^20.*(WARN|DEBUG) logs/app.log
+2026-10-14T10:00:02 WARN  slow request id=17 took=1500ms
+2026-10-14T10:00:07 DEBUG cache hit ratio=0.93
+2026-10-14T10:00:08 WARN  slow request id=19 took=2200ms
+(exit 0)
+$ grep -o \(.*?\) logs
+logs/app.log:(retry 1)
+logs/app.log:(retry 2)
+logs/notes.txt:(555)
+(exit 0)
+$ grep -c ^$ src/main.rs
+1
+(exit 0)
+$ grep -o ratio=0\.\d? logs/app.log
+ratio=0.9
+(exit 0)
+$ grep fn\s+\w+\( src/net/server.rs
+    pub fn bind(port: u16) -> Result<Server, Error> {
+    pub fn run(&self) { loop {} }
+(exit 0)
+$ grep nomatch logs
+(exit 1)
+$ grep (unclosed logs
+grep: invalid pattern: missing ')' at offset 9
+(exit 2)
+$ grep a{3,1} logs
+grep: invalid pattern: repeat range is backwards at offset 6
+(exit 2)
+$ grep x missing.txt
+grep: missing.txt: No such file or directory
+(exit 2)

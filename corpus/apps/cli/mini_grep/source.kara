@@ -1,0 +1,624 @@
+// A grep: a regular-expression engine (parser to an NFA program, run by a
+// Pike VM with leftmost-first priority, as backtracking engines report),
+// then the grep front end over files on disk: -i, -v, -c, -l, -n, -o and
+// -C context with GNU's `--` group separators and `path-N-` context lines.
+// The tree is written to disk and listed with `find` (the file library has
+// no directory listing, B-2026-10-14-54); v2 has no Regex natives
+// (B-2026-10-14-63), which is also why the engine is part of the program.
+//
+// Supported syntax: literals, `.`, `[a-z_]` / `[^...]` classes, `\d \w \s`
+// and their negations, `\` escapes, `* + ?` (greedy) and their lazy `?`
+// forms, `{m}` `{m,}` `{m,n}`, `|`, `( )`, `^`, `$`.
+//
+// Workarounds for v2 gaps, each to revert once its row is fixed:
+//   B-2026-10-14-63  no Regex natives on v2: the engine is in the program
+//   B-2026-10-14-54  no directory listing: `find` through `sh`
+//   B-2026-10-12-7   split_whitespace() / lines() are eager Vec[String]
+//   B-2026-10-14-44  Command.arg and fs.write take String
+
+shared enum Node {
+    Lit(char),
+    Any,
+    Class(Vec[(char, char)], bool),
+    Bol,
+    Eol,
+    Cat(Vec[Node]),
+    Alt(Vec[Node]),
+    Repeat(Node, i64, i64, bool),
+}
+
+enum Inst {
+    Char(char),
+    AnyChar,
+    Set(Vec[(char, char)], bool),
+    Split(i64, i64),
+    Jmp(i64),
+    AtBol,
+    AtEol,
+    Save(i64),
+    Done,
+}
+
+struct ReParser { chars: Vec[char], at: i64, fold: bool }
+
+// One character's lowercase form, for -i (text is lowercased the same way).
+fn low(c: char) -> char {
+    c.to_string().to_lowercase().chars().next().unwrap_or(c)
+}
+
+impl ReParser {
+    fn lit(self, c: char) -> char {
+        if self.fold { low(c) } else { c }
+    }
+
+    fn fail(self, msg: Str) -> String {
+        f"{msg} at offset {self.at}"
+    }
+
+    fn peek(self) -> Option[char] {
+        if self.at < self.chars.len() { Some(self.chars[self.at]) } else { None }
+    }
+
+    fn alt(mut ref self) -> Result[Node, String] {
+        let mut arms: Vec[Node] = vec![self.cat()?];
+        while self.peek() == Some('|') {
+            self.at += 1;
+            arms.push(self.cat()?);
+        }
+        if arms.len() == 1 { Ok(arms.pop().unwrap()) } else { Ok(Node.Alt(arms)) }
+    }
+
+    fn cat(mut ref self) -> Result[Node, String] {
+        let mut items: Vec[Node] = Vec.new();
+        loop {
+            match self.peek() {
+                None => break,
+                Some('|') => break,
+                Some(')') => break,
+                _ => {}
+            }
+            let atom = self.atom()?;
+            items.push(self.postfix(atom)?);
+        }
+        Ok(Node.Cat(items))
+    }
+
+    fn number(mut ref self) -> Option[i64] {
+        let start = self.at;
+        let mut n = 0;
+        while self.at < self.chars.len() and self.chars[self.at].is_ascii_digit() {
+            n = n * 10 + (self.chars[self.at] as i64 - '0' as i64);
+            self.at += 1;
+        }
+        if self.at == start { None } else { Some(n) }
+    }
+
+    fn postfix(mut ref self, atom: own Node) -> Result[Node, String] {
+        let (lo, hi) = match self.peek() {
+            Some('*') => { self.at += 1; (0, -1) }
+            Some('+') => { self.at += 1; (1, -1) }
+            Some('?') => { self.at += 1; (0, 1) }
+            Some('{') => {
+                self.at += 1;
+                let lo = match self.number() {
+                    Some(n) => n,
+                    None => return Err(self.fail("expected a count after '{'")),
+                };
+                let hi = if self.peek() == Some(',') {
+                    self.at += 1;
+                    match self.number() {
+                        Some(n) => n,
+                        None => -1,
+                    }
+                } else {
+                    lo
+                };
+                if self.peek() != Some('}') {
+                    return Err(self.fail("unterminated '{'"));
+                }
+                self.at += 1;
+                if hi >= 0 and hi < lo {
+                    return Err(self.fail("repeat range is backwards"));
+                }
+                (lo, hi)
+            }
+            _ => return Ok(atom),
+        };
+        let greedy = if self.peek() == Some('?') {
+            self.at += 1;
+            false
+        } else {
+            true
+        };
+        match self.peek() {
+            Some('*') | Some('+') => return Err(self.fail("nothing to repeat")),
+            _ => {}
+        }
+        Ok(Node.Repeat(atom, lo, hi, greedy))
+    }
+
+    fn escape_class(c: char) -> Option[(Vec[(char, char)], bool)] {
+        let digits = vec![('0', '9')];
+        let word = vec![('0', '9'), ('A', 'Z'), ('_', '_'), ('a', 'z')];
+        let space = vec![('\t', '\r'), (' ', ' ')];
+        match c {
+            'd' => Some((digits, false)),
+            'D' => Some((digits, true)),
+            'w' => Some((word, false)),
+            'W' => Some((word, true)),
+            's' => Some((space, false)),
+            'S' => Some((space, true)),
+            _ => None,
+        }
+    }
+
+    fn atom(mut ref self) -> Result[Node, String] {
+        let c = self.peek().unwrap();
+        self.at += 1;
+        match c {
+            '.' => Ok(Node.Any),
+            '^' => Ok(Node.Bol),
+            '$' => Ok(Node.Eol),
+            '*' | '+' | '?' => {
+                self.at -= 1;
+                Err(self.fail("nothing to repeat"))
+            }
+            '(' => {
+                let inner = self.alt()?;
+                if self.peek() != Some(')') {
+                    return Err(self.fail("missing ')'"));
+                }
+                self.at += 1;
+                Ok(inner)
+            }
+            '\\' => {
+                let e = match self.peek() {
+                    Some(e) => e,
+                    None => return Err(self.fail("trailing backslash")),
+                };
+                self.at += 1;
+                match ReParser.escape_class(e) {
+                    Some((ranges, neg)) => Ok(Node.Class(ranges, neg)),
+                    None => match e {
+                        'n' => Ok(Node.Lit('\n')),
+                        't' => Ok(Node.Lit('\t')),
+                        _ => Ok(Node.Lit(e)),
+                    },
+                }
+            }
+            '[' => self.class(),
+            _ => Ok(Node.Lit(self.lit(c))),
+        }
+    }
+
+    fn class(mut ref self) -> Result[Node, String] {
+        let neg = if self.peek() == Some('^') {
+            self.at += 1;
+            true
+        } else {
+            false
+        };
+        let mut ranges: Vec[(char, char)] = Vec.new();
+        let mut first = true;
+        loop {
+            let c = match self.peek() {
+                Some(c) => c,
+                None => return Err(self.fail("missing ']'")),
+            };
+            self.at += 1;
+            if c == ']' and not first {
+                break;
+            }
+            first = false;
+            let lo = if c == '\\' {
+                let e = match self.peek() {
+                    Some(e) => e,
+                    None => return Err(self.fail("missing ']'")),
+                };
+                self.at += 1;
+                match ReParser.escape_class(e) {
+                    Some((rs, false)) => {
+                        for r in rs.iter() {
+                            ranges.push(*r);
+                        }
+                        continue;
+                    }
+                    Some((_, true)) => return Err(self.fail("negated class inside [...]")),
+                    None => e,
+                }
+            } else {
+                c
+            };
+            if self.peek() == Some('-') and self.at + 1 < self.chars.len() and self.chars[self.at + 1] != ']' {
+                let hi = self.chars[self.at + 1];
+                self.at += 2;
+                if hi < lo {
+                    return Err(self.fail("class range is backwards"));
+                }
+                ranges.push((self.lit(lo), self.lit(hi)));
+            } else {
+                ranges.push((self.lit(lo), self.lit(lo)));
+            }
+        }
+        Ok(Node.Class(ranges, neg))
+    }
+}
+
+fn emit(n: ref Node, prog: mut ref Vec[Inst]) {
+    match n {
+        Node.Lit(c) => prog.push(Inst.Char(c)),
+        Node.Any => prog.push(Inst.AnyChar),
+        Node.Class(rs, neg) => prog.push(Inst.Set(rs.clone(), neg)),
+        Node.Bol => prog.push(Inst.AtBol),
+        Node.Eol => prog.push(Inst.AtEol),
+        Node.Cat(items) => {
+            for it in items.iter() {
+                emit(it, prog);
+            }
+        }
+        Node.Alt(arms) => {
+            // split L1, next; L1: arm0; jmp end; next: split ...
+            let mut jumps: Vec[i64] = Vec.new();
+            let mut i = 0;
+            while i < arms.len() {
+                if i + 1 < arms.len() {
+                    let split = prog.len();
+                    prog.push(Inst.Split(split + 1, -1));
+                    emit(arms[i], prog);
+                    jumps.push(prog.len());
+                    prog.push(Inst.Jmp(-1));
+                    let next = prog.len();
+                    prog[split] = Inst.Split(split + 1, next);
+                } else {
+                    emit(arms[i], prog);
+                }
+                i += 1;
+            }
+            let end = prog.len();
+            for j in jumps.iter() {
+                prog[*j] = Inst.Jmp(end);
+            }
+        }
+        Node.Repeat(inner, lo, hi, greedy) => {
+            for _ in 0..*lo {
+                emit(inner, prog);
+            }
+            if hi < 0 {
+                // L: split body, out; body; jmp L
+                let l = prog.len();
+                prog.push(Inst.Split(-1, -1));
+                emit(inner, prog);
+                prog.push(Inst.Jmp(l));
+                let out = prog.len();
+                prog[l] = if greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+            } else {
+                let mut holes: Vec[i64] = Vec.new();
+                for _ in *lo..*hi {
+                    holes.push(prog.len());
+                    prog.push(Inst.Split(-1, -1));
+                    emit(inner, prog);
+                }
+                let out = prog.len();
+                for h in holes.iter() {
+                    prog[*h] = if greedy { Inst.Split(*h + 1, out) } else { Inst.Split(out, *h + 1) };
+                }
+            }
+        }
+    }
+}
+
+struct Regex2 { prog: Vec[Inst], fold: bool }
+
+fn compile(pattern: Str, fold: bool) -> Result[Regex2, String] {
+    let mut p = ReParser { chars: pattern.chars().collect(), at: 0, fold: fold };
+    let node = p.alt()?;
+    if p.at < p.chars.len() {
+        return Err(p.fail("unmatched ')'"));
+    }
+    let mut prog: Vec[Inst] = vec![Inst.Save(0)];
+    emit(node, mut prog);
+    prog.push(Inst.Save(1));
+    prog.push(Inst.Done);
+    Ok(Regex2 { prog: prog, fold: fold })
+}
+
+fn in_set(rs: ref Vec[(char, char)], neg: bool, c: char) -> bool {
+    let mut hit = false;
+    for (lo, hi) in rs.iter() {
+        if c >= *lo and c <= *hi {
+            hit = true;
+            break;
+        }
+    }
+    hit != neg
+}
+
+struct Thread { pc: i64, start: i64 }
+
+// Adds the thread at `pc` and everything its epsilon moves reach, in
+// priority order, skipping instructions already on the list this step.
+fn add(prog: ref Vec[Inst], list: mut ref Vec[Thread], seen: mut ref Vec[i64], step: i64, pc: i64, start: i64, at: i64, len: i64) {
+    if seen[pc] == step {
+        return;
+    }
+    seen[pc] = step;
+    match prog[pc] {
+        Inst.Jmp(t) => add(prog, list, seen, step, t, start, at, len),
+        Inst.Split(a, b) => {
+            add(prog, list, seen, step, a, start, at, len);
+            add(prog, list, seen, step, b, start, at, len);
+        }
+        Inst.AtBol => if at == 0 { add(prog, list, seen, step, pc + 1, start, at, len); },
+        Inst.AtEol => if at == len { add(prog, list, seen, step, pc + 1, start, at, len); },
+        Inst.Save(0) => add(prog, list, seen, step, pc + 1, at, at, len),
+        Inst.Save(_) => add(prog, list, seen, step, pc + 1, start, at, len),
+        _ => list.push(Thread { pc: pc, start: start }),
+    }
+}
+
+impl Regex2 {
+    // The leftmost match at or after `from`, as (start, end) char offsets;
+    // among matches at that start, the one a backtracking engine prefers.
+    fn find_at(self, text: ref Vec[char], from: i64) -> Option[(i64, i64)] {
+        let n = text.len();
+        let mut seen: Vec[i64] = Vec.new();
+        for _ in 0..self.prog.len() {
+            seen.push(-1);
+        }
+        let mut clist: Vec[Thread] = Vec.new();
+        let mut best: Option[(i64, i64)] = None;
+        let mut step = 0;
+        let mut at = from;
+        while at <= n {
+            if best.is_none() {
+                add(self.prog, mut clist, mut seen, step, 0, at, at, n);
+            }
+            step += 1;
+            let mut nlist: Vec[Thread] = Vec.new();
+            for t in clist.iter() {
+                match self.prog[t.pc] {
+                    Inst.Done => {
+                        best = Some((t.start, at));
+                        break;
+                    }
+                    Inst.Char(c) => if at < n and text[at] == c {
+                        add(self.prog, mut nlist, mut seen, step, t.pc + 1, t.start, at + 1, n);
+                    },
+                    Inst.AnyChar => if at < n and text[at] != '\n' {
+                        add(self.prog, mut nlist, mut seen, step, t.pc + 1, t.start, at + 1, n);
+                    },
+                    Inst.Set(rs, neg) => if at < n and in_set(rs, neg, text[at]) {
+                        add(self.prog, mut nlist, mut seen, step, t.pc + 1, t.start, at + 1, n);
+                    },
+                    _ => {}
+                }
+            }
+            clist = nlist;
+            if clist.is_empty() and best.is_some() {
+                break;
+            }
+            at += 1;
+        }
+        best
+    }
+
+    fn prepare(self, line: Str) -> Vec[char] {
+        if self.fold { line.to_lowercase().chars().collect() } else { line.chars().collect() }
+    }
+}
+
+// ---- grep front end ---------------------------------------------------
+
+struct Opts { fold: bool, invert: bool, count: bool, list: bool, number: bool, only: bool, context: i64 }
+
+fn sh(script: Str) -> Result[String, String] {
+    let child = match Command.new("sh").arg("-c").arg(script.to_string()).stdout(Stdio.Piped).spawn() {
+        Ok(c) => c,
+        Err(_) => return Err("spawn failed".to_string()),
+    };
+    let out = match child.stdout() {
+        Some(r) => r.read_to_string().unwrap_or(String.new()),
+        None => String.new(),
+    };
+    match child.wait() {
+        Ok(st) => if st.code == 0 { Ok(out) } else { Err(f"exit {st.code}") },
+        Err(_) => Err("wait failed".to_string()),
+    }
+}
+
+fn expand(paths: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for p in paths.iter() {
+        match sh(f"find '{p}' -type f 2>/dev/null") {
+            Ok(listing) => {
+                let mut found: Vec[String] = Vec.new();
+                for l in listing.lines() {
+                    if not l.is_empty() {
+                        found.push(l.to_string());
+                    }
+                }
+                found.sort();
+                out.append(mut found);
+            }
+            Err(_) => out.push(p.clone()),
+        }
+    }
+    out
+}
+
+// Runs one grep command line; returns the exit status (0 match, 1 none,
+// 2 error) after printing what grep would.
+fn grep(args: ref Vec[String]) -> i64 {
+    let mut o = Opts { fold: false, invert: false, count: false, list: false, number: false, only: false, context: 0 };
+    let mut rest: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = ref args[i];
+        if a == "-C" {
+            i += 1;
+            o.context = i64.parse(args[i]).unwrap_or(0);
+        } else if a.starts_with("-") and a.len() > 1 {
+            for c in a.chars().skip(1) {
+                match c {
+                    'i' => o.fold = true,
+                    'v' => o.invert = true,
+                    'c' => o.count = true,
+                    'l' => o.list = true,
+                    'n' => o.number = true,
+                    'o' => o.only = true,
+                    _ => {
+                        println(f"grep: unknown option -{c}");
+                        return 2;
+                    }
+                }
+            }
+        } else {
+            rest.push(a.clone());
+        }
+        i += 1;
+    }
+    if rest.is_empty() {
+        println("grep: no pattern");
+        return 2;
+    }
+    let re = match compile(rest[0], o.fold) {
+        Ok(r) => r,
+        Err(e) => {
+            println(f"grep: invalid pattern: {e}");
+            return 2;
+        }
+    };
+    let files = expand(rest[1..rest.len()].to_vec());
+    let many = files.len() > 1;
+    let mut status = 1;
+    for path in files.iter() {
+        let text = match fs.read_to_string(path) {
+            Ok(t) => t,
+            Err(_) => {
+                println(f"grep: {path}: No such file or directory");
+                status = 2;
+                continue;
+            }
+        };
+        let lines: Vec[String] = text.lines();
+        let mut hits: Vec[bool] = Vec.new();
+        let mut n_hits = 0;
+        for l in lines.iter() {
+            let chars = re.prepare(l);
+            let m = re.find_at(chars, 0).is_some() != o.invert;
+            if m {
+                n_hits += 1;
+            }
+            hits.push(m);
+        }
+        if n_hits > 0 and status != 2 {
+            status = 0;
+        }
+        let prefix = if many { f"{path}" } else { String.new() };
+        if o.list {
+            if n_hits > 0 {
+                println(path);
+            }
+            continue;
+        }
+        if o.count {
+            if many { println(f"{path}:{n_hits}") } else { println(f"{n_hits}") }
+            continue;
+        }
+        let mut last_printed = -1;
+        let mut k = 0;
+        while k < lines.len() {
+            if not hits[k] {
+                k += 1;
+                continue;
+            }
+            let from = if k - o.context < 0 { 0 } else { k - o.context };
+            let to = if k + o.context >= lines.len() { lines.len() - 1 } else { k + o.context };
+            if o.context > 0 and last_printed >= 0 and from > last_printed + 1 {
+                println("--");
+            }
+            let mut j = if from > last_printed { from } else { last_printed + 1 };
+            while j <= to {
+                let sep = if hits[j] { ":" } else { "-" };
+                let mut head = String.new();
+                if many {
+                    head.push_str(f"{prefix}{sep}");
+                }
+                if o.number {
+                    head.push_str(f"{j + 1}{sep}");
+                }
+                if o.only and hits[j] and not o.invert {
+                    let chars = re.prepare(lines[j]);
+                    let orig: Vec[char] = lines[j].chars().collect();
+                    let mut at = 0;
+                    while at <= chars.len() {
+                        match re.find_at(chars, at) {
+                            Some((s, e)) => {
+                                if e > s {
+                                    let piece: String = orig[s..e].iter().collect();
+                                    println(f"{head}{piece}");
+                                    at = e;
+                                } else {
+                                    at = s + 1;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                } else if not o.only {
+                    println(f"{head}{lines[j]}");
+                }
+                j += 1;
+            }
+            last_printed = to;
+            k += 1;
+        }
+    }
+    status
+}
+
+fn write(path: Str, text: Str) {
+    match fs.write(path.to_string(), text.to_string()) {
+        Ok(_) => {}
+        Err(_) => println(f"write {path} failed"),
+    }
+}
+
+fn main() {
+    match sh("rm -rf src logs && mkdir -p src/net logs") {
+        Ok(_) => {}
+        Err(e) => println(f"setup: {e}"),
+    }
+    write("src/main.rs", "use net::Server;\n\nfn main() {\n    // TODO: read the port from ENV\n    let port = 8080;\n    let srv = Server::bind(port).expect(\"bind\");\n    srv.run();\n}\n");
+    write("src/net/server.rs", "pub struct Server { port: u16 }\n\nimpl Server {\n    pub fn bind(port: u16) -> Result<Server, Error> {\n        // todo: validate port\n        Ok(Server { port })\n    }\n    pub fn run(&self) { loop {} }\n}\n");
+    write("logs/app.log", "2026-10-14T10:00:01 INFO  started pid=4242\n2026-10-14T10:00:02 WARN  slow request id=17 took=1500ms\n2026-10-14T10:00:03 ERROR db: connection refused (retry 1)\n2026-10-14T10:00:04 INFO  request id=18 took=12ms\n2026-10-14T10:00:05 ERROR db: connection refused (retry 2)\n2026-10-14T10:00:06 INFO  recovered after 2 retries\n2026-10-14T10:00:07 DEBUG cache hit ratio=0.93\n2026-10-14T10:00:08 WARN  slow request id=19 took=2200ms\n");
+    write("logs/notes.txt", "Café menu: crème brûlée, naïve tea\nemail: ops@example.com, dev@example.org\nphone +1 (555) 010-9999\n");
+
+    let cmds: Array[Str, 19] = [
+        "TODO src",
+        "-i -n todo src",
+        "-c ERROR logs/app.log",
+        "-v -c INFO logs/app.log",
+        "-n took=[0-9]{4,}ms logs/app.log",
+        "-o id=\\d+ logs/app.log",
+        "-C 1 -n ERROR logs/app.log",
+        "-l -i server src logs",
+        "-o [\\w.]+@\\w+\\.(com|org) logs/notes.txt",
+        "-o -i CR[ÈE]ME logs/notes.txt",
+        "^20.*(WARN|DEBUG) logs/app.log",
+        "-o \\(.*?\\) logs",
+        "-c ^$ src/main.rs",
+        "-o ratio=0\\.\\d? logs/app.log",
+        "fn\\s+\\w+\\( src/net/server.rs",
+        "nomatch logs",
+        "(unclosed logs",
+        "a{3,1} logs",
+        "x missing.txt",
+    ];
+    for c in cmds.iter() {
+        println(f"$ grep {c}");
+        let args: Vec[String] = c.split_whitespace();
+        let st = grep(args);
+        println(f"(exit {st})");
+    }
+}

@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 258 |
-| missing-feature | 256 |
+| missing-feature | 257 |
 | false-positive | 178 |
 | other | 172 |
 | perf | 165 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 115 |
 | ownership | 95 |
 | cli | 76 |
-| runtime | 68 |
+| runtime | 69 |
 | parser | 63 |
 | autopar | 59 |
 | resolver | 40 |
@@ -195,6 +195,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-14-60 | 2026-10-14 | ownership | medium | `karac check` refuses the basic find-and-return-a-reference lookup: `for (k, it) in v.iter() { if k == name { return Some(it); } }` in `fn pick(v: ref Vec[(String, i64)], name: Str) -> Option[ref i64]` (and `for s in v.iter() { return Some(s); }` into `Option[ref String]`) is "returned borrowed collection holds an element that borrows function-local storage" plus `borrow_projection_copy` "cannot move 'it'", though the element borrows the caller's `v`; the MIR backends run it | — |
 | B-2026-10-14-61 | 2026-10-14 | typecheck | medium | The MIR typecheck refuses calling a function value through a `ref`: `for f in fs.iter() { t += f(10); }` over a `Vec[Fn(i64) -> i64]` is "type 'ref Fn(i64) -> i64' is not callable", though design.md says a stored `Fn(..)` is called through a `ref`; `karac check` and `run --interp` accept it, and `fs[i](10)` / `(r.h)(100)` work on every surface | — |
 | B-2026-10-14-62 | 2026-10-14 | ownership | low | `karac check` accepts moving a stored function value out of a borrow, `for r in rs.iter() { let h = r.h; t += h(1000); }` with `h: Fn(i64) -> i64`, which design.md makes move-only; the MIR borrow checker refuses it ("move of (*_42).0 through a shared reference [E0517]") with no source location, so the error surfaces only at build | — |
+| B-2026-10-14-63 | 2026-10-14 | runtime | medium | `Regex` does not exist on v2: `Regex.compile`, `is_match`, `find` and `replace_all` pass `karac check` (legacy implements them), but `karac __mir-run` stops with "call of unknown function Regex.compile" and `__mir-llvm-run` with "native `Regex.is_match` is not lowered yet", and docs/library specifies no regex API at all | — |
 
 ### Relocated
 
