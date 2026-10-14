@@ -1,0 +1,60 @@
+// Benchmark for #553: Optimal Division -- the ★ arm (the shape is always
+// the same).
+//
+// The answer is always a/(b/c/.../z): the first number divided by the
+// second number divided by all the rest in turn. It is built in one
+// String, with the brackets around the second to the last when there
+// are more than two numbers. O(n) time.
+
+fn optimal_division(nums: Vec[i64]) -> String {
+    let n = nums.len();
+    let mut out = String.new();
+    for i in 0..n {
+        if i > 0 {
+            out.push('/');
+        }
+        if i == 1 and n > 2 {
+            out.push('(');
+        }
+        out.push_str(f"{nums[i]}");
+    }
+    if n > 2 {
+        out.push(')');
+    }
+    out
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 2,000 random arrays of 1 to 10 numbers from 2 to 1000, built once.
+    // Then 500 times over every array is answered; the length of each
+    // answer and its middle byte go into the checksum.
+    let count = 2000;
+    let mut seed: i64 = 553;
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let n = 1 + next_random(mut seed) % 10;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(2 + next_random(mut seed) % 999);
+        }
+        all.push(nums);
+    }
+    let mut chars = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..500 {
+        for g in 0..count {
+            let text = optimal_division(all[(round * 7 + g) % count]);
+            let b = text.bytes();
+            chars += b.len();
+            checksum = (checksum * 31 + b.len() + b[b.len() / 2] as i64) % 1000000007;
+        }
+    }
+    println(f"{count} arrays, 500 rounds each: {chars} characters, checksum {checksum}");
+}

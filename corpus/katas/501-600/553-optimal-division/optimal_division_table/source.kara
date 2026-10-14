@@ -1,0 +1,97 @@
+// LeetCode #553: Optimal Division -- interval table, nothing assumed.
+//
+// For every run of numbers i..j, the largest and the smallest value it
+// can be bracketed to, and the expression for each. A run split at k is
+// the left part divided by the right part, so its largest is the left's
+// largest over the right's smallest and its smallest the left's smallest
+// over the right's largest. The right part is bracketed when it holds
+// more than one number; the left part never needs to be, since division
+// runs left to right. Values are f64; a split replaces the best so far
+// only when strictly better. O(n^3) time.
+
+fn optimal_division(nums: Vec[i64]) -> String {
+    let n = nums.len();
+    let mut hi = vec![0.0; n * n];
+    let mut lo = vec![0.0; n * n];
+    let mut hi_text: Vec[String] = Vec.new();
+    let mut lo_text: Vec[String] = Vec.new();
+    for _ in 0..n * n {
+        hi_text.push(String.new());
+        lo_text.push(String.new());
+    }
+    for i in 0..n {
+        hi[i * n + i] = nums[i] as f64;
+        lo[i * n + i] = nums[i] as f64;
+        hi_text[i * n + i] = f"{nums[i]}";
+        lo_text[i * n + i] = f"{nums[i]}";
+    }
+    for width in 2..n + 1 {
+        for i in 0..n - width + 1 {
+            let j = i + width - 1;
+            let mut first = true;
+            for k in i..j {
+                let right = (k + 1) * n + j;
+                let wrap = k + 1 < j;
+                let up = hi[i * n + k] / lo[right];
+                let down = lo[i * n + k] / hi[right];
+                if first or up > hi[i * n + j] {
+                    hi[i * n + j] = up;
+                    let r = if wrap { f"({lo_text[right]})" } else { lo_text[right].clone() };
+                    hi_text[i * n + j] = f"{hi_text[i * n + k]}/{r}";
+                }
+                if first or down < lo[i * n + j] {
+                    lo[i * n + j] = down;
+                    let r = if wrap { f"({hi_text[right]})" } else { hi_text[right].clone() };
+                    lo_text[i * n + j] = f"{lo_text[i * n + k]}/{r}";
+                }
+                first = false;
+            }
+        }
+    }
+    hi_text[n - 1].clone()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums} -> {optimal_division(nums.clone())}");
+}
+
+fn main() {
+    show(vec![1000, 100, 10, 2]);
+    show(vec![2, 3, 4]);
+    show(vec![7]);
+    show(vec![8, 2]);
+    show(vec![2, 1000]);
+    show(vec![6, 2, 3, 4, 5]);
+    show(vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    show(vec![1000, 999, 998, 997, 996, 995, 994, 993, 992, 991]);
+
+    // 300 random arrays of 1 to 10 distinct numbers from 2 to 1000.
+    let mut seed: i64 = 553;
+    let mut numbers = 0;
+    let mut chars = 0;
+    let mut h: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 10;
+        let mut nums: Vec[i64] = Vec.new();
+        while nums.len() < n {
+            let x = 2 + next_random(mut seed) % 999;
+            if not nums.contains(x) {
+                nums.push(x);
+            }
+        }
+        let text = optimal_division(nums);
+        numbers += n;
+        for b in text.bytes() {
+            chars += 1;
+            h = (h * 131 + b as i64) % 1000000007;
+        }
+    }
+    println(f"300 random arrays: {numbers} numbers, {chars} characters, checksum {h}");
+}

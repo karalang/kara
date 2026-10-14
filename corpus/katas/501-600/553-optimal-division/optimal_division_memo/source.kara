@@ -1,0 +1,82 @@
+// LeetCode #553: Optimal Division -- the same search, top down.
+//
+// best(i, j, want_high) is the largest (or smallest) value the numbers
+// i..j can be bracketed to, with its expression, found by trying every
+// split and recursing; a Map keyed by the triple keeps each answer once
+// found. The right part of a split is bracketed when it holds more than
+// one number. O(n^3) time.
+
+fn best(nums: Vec[i64], i: i64, j: i64, want_high: bool, memo: mut ref Map[(i64, i64, bool), (f64, String)]) -> (f64, String) {
+    if i == j {
+        return (nums[i] as f64, f"{nums[i]}");
+    }
+    if let Some(found) = memo.get((i, j, want_high)) {
+        return found.clone();
+    }
+    let mut out: (f64, String) = (0.0, String.new());
+    let mut first = true;
+    for k in i..j {
+        let (lv, lt) = best(nums, i, k, want_high, memo);
+        let (rv, rt) = best(nums, k + 1, j, not want_high, memo);
+        let v = lv / rv;
+        let better = if want_high { v > out.0 } else { v < out.0 };
+        if first or better {
+            let r = if k + 1 < j { f"({rt})" } else { rt };
+            out = (v, f"{lt}/{r}");
+            first = false;
+        }
+    }
+    memo.insert((i, j, want_high), out.clone());
+    out
+}
+
+fn optimal_division(nums: Vec[i64]) -> String {
+    let mut memo: Map[(i64, i64, bool), (f64, String)] = Map.new();
+    let (_, text) = best(nums, 0, nums.len() - 1, true, mut memo);
+    text
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums} -> {optimal_division(nums.clone())}");
+}
+
+fn main() {
+    show(vec![1000, 100, 10, 2]);
+    show(vec![2, 3, 4]);
+    show(vec![7]);
+    show(vec![8, 2]);
+    show(vec![2, 1000]);
+    show(vec![6, 2, 3, 4, 5]);
+    show(vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    show(vec![1000, 999, 998, 997, 996, 995, 994, 993, 992, 991]);
+
+    // 300 random arrays of 1 to 10 distinct numbers from 2 to 1000.
+    let mut seed: i64 = 553;
+    let mut numbers = 0;
+    let mut chars = 0;
+    let mut h: i64 = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 10;
+        let mut nums: Vec[i64] = Vec.new();
+        while nums.len() < n {
+            let x = 2 + next_random(mut seed) % 999;
+            if not nums.contains(x) {
+                nums.push(x);
+            }
+        }
+        let text = optimal_division(nums);
+        numbers += n;
+        for b in text.bytes() {
+            chars += 1;
+            h = (h * 131 + b as i64) % 1000000007;
+        }
+    }
+    println(f"300 random arrays: {numbers} numbers, {chars} characters, checksum {h}");
+}

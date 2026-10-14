@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/553-optimal-division/optimal_division.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "af2123abc"
+extracted_src = "beb0fce6"
+model_rev = "1aa23105"
+model_src = "beb0fce6"

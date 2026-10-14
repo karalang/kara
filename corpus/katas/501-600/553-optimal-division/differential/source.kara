@@ -1,0 +1,331 @@
+// Differential test for LeetCode #553: Optimal Division.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random arrays of distinct numbers: 1 to 5 from 2 to 6, 1 to 7 from 2
+// to 20 or 1 to 3 from 2 to 1000, in turn. Each answer is read back as
+// an expression and its value worked out exactly, as a fraction.
+// Properties:
+//   P1  the value is the definition's: the largest over every way to
+//       bracket the divisions, all of them tried
+//   P2  no brackets are redundant: dropping any one pair changes the
+//       value
+//   P3  the numbers in the answer are the input's, in order
+//   P4  there are n - 1 slashes
+//   P5  the value is at least that of the divisions left to right with
+//       no brackets
+
+// ---- star: optimal_division.kara
+
+fn optimal_division_star(nums: Vec[i64]) -> String {
+    let n = nums.len();
+    let mut out = String.new();
+    for i in 0..n {
+        if i > 0 {
+            out.push('/');
+        }
+        if i == 1 and n > 2 {
+            out.push('(');
+        }
+        out.push_str(f"{nums[i]}");
+    }
+    if n > 2 {
+        out.push(')');
+    }
+    out
+}
+
+// ---- join: optimal_division_join.kara
+
+fn optimal_division_join(nums: Vec[i64]) -> String {
+    let parts: Vec[String] = nums.iter().map(|x| f"{x}").collect();
+    if nums.len() == 1 {
+        return parts[0].clone();
+    }
+    if nums.len() == 2 {
+        return f"{parts[0]}/{parts[1]}";
+    }
+    let rest = parts[1..].join("/");
+    f"{parts[0]}/({rest})"
+}
+
+// ---- table: optimal_division_table.kara
+
+fn optimal_division_table(nums: Vec[i64]) -> String {
+    let n = nums.len();
+    let mut hi = vec![0.0; n * n];
+    let mut lo = vec![0.0; n * n];
+    let mut hi_text: Vec[String] = Vec.new();
+    let mut lo_text: Vec[String] = Vec.new();
+    for _ in 0..n * n {
+        hi_text.push(String.new());
+        lo_text.push(String.new());
+    }
+    for i in 0..n {
+        hi[i * n + i] = nums[i] as f64;
+        lo[i * n + i] = nums[i] as f64;
+        hi_text[i * n + i] = f"{nums[i]}";
+        lo_text[i * n + i] = f"{nums[i]}";
+    }
+    for width in 2..n + 1 {
+        for i in 0..n - width + 1 {
+            let j = i + width - 1;
+            let mut first = true;
+            for k in i..j {
+                let right = (k + 1) * n + j;
+                let wrap = k + 1 < j;
+                let up = hi[i * n + k] / lo[right];
+                let down = lo[i * n + k] / hi[right];
+                if first or up > hi[i * n + j] {
+                    hi[i * n + j] = up;
+                    let r = if wrap { f"({lo_text[right]})" } else { lo_text[right].clone() };
+                    hi_text[i * n + j] = f"{hi_text[i * n + k]}/{r}";
+                }
+                if first or down < lo[i * n + j] {
+                    lo[i * n + j] = down;
+                    let r = if wrap { f"({hi_text[right]})" } else { hi_text[right].clone() };
+                    lo_text[i * n + j] = f"{lo_text[i * n + k]}/{r}";
+                }
+                first = false;
+            }
+        }
+    }
+    hi_text[n - 1].clone()
+}
+
+// ---- memo: optimal_division_memo.kara
+
+fn best_memo(nums: Vec[i64], i: i64, j: i64, want_high: bool, memo: mut ref Map[(i64, i64, bool), (f64, String)]) -> (f64, String) {
+    if i == j {
+        return (nums[i] as f64, f"{nums[i]}");
+    }
+    if let Some(found) = memo.get((i, j, want_high)) {
+        return found.clone();
+    }
+    let mut out: (f64, String) = (0.0, String.new());
+    let mut first = true;
+    for k in i..j {
+        let (lv, lt) = best_memo(nums, i, k, want_high, memo);
+        let (rv, rt) = best_memo(nums, k + 1, j, not want_high, memo);
+        let v = lv / rv;
+        let better = if want_high { v > out.0 } else { v < out.0 };
+        if first or better {
+            let r = if k + 1 < j { f"({rt})" } else { rt };
+            out = (v, f"{lt}/{r}");
+            first = false;
+        }
+    }
+    memo.insert((i, j, want_high), out.clone());
+    out
+}
+
+fn optimal_division_memo(nums: Vec[i64]) -> String {
+    let mut memo: Map[(i64, i64, bool), (f64, String)] = Map.new();
+    let (_, text) = best_memo(nums, 0, nums.len() - 1, true, mut memo);
+    text
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+// p/q over r/s, in lowest terms; every value here is positive.
+fn divide(x: (i64, i64), y: (i64, i64)) -> (i64, i64) {
+    let p = x.0 * y.1;
+    let q = x.1 * y.0;
+    let g = gcd(p, q);
+    (p / g, q / g)
+}
+
+fn less(x: (i64, i64), y: (i64, i64)) -> bool {
+    x.0 * y.1 < y.0 * x.1
+}
+
+// Every value the numbers i..j can take under some full bracketing,
+// exactly, as fractions: the last division splits them at some k.
+fn all_values(nums: Vec[i64], i: i64, j: i64) -> Vec[(i64, i64)] {
+    if i == j {
+        return vec![(nums[i], 1)];
+    }
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for k in i..j {
+        let left = all_values(nums.clone(), i, k);
+        let right = all_values(nums.clone(), k + 1, j);
+        for x in left.iter() {
+            for y in right.iter() {
+                out.push(divide(*x, *y));
+            }
+        }
+    }
+    out
+}
+
+// The statement read literally: the largest value over every way to
+// bracket the divisions.
+fn definition(nums: Vec[i64]) -> (i64, i64) {
+    let values = all_values(nums.clone(), 0, nums.len() - 1);
+    let mut best = values[0];
+    for v in values.iter() {
+        if less(best, *v) {
+            best = *v;
+        }
+    }
+    best
+}
+
+// An expression of numbers, `/` and brackets, read left to right; its
+// value as a fraction, or (0, 0) if it does not read.
+fn parse(text: Vec[u8], at: mut ref i64) -> (i64, i64) {
+    let mut value = term(text, at);
+    while *at < text.len() and text[*at] == b'/' {
+        *at += 1;
+        let t = term(text, at);
+        if value.1 == 0 or t.1 == 0 {
+            return (0, 0);
+        }
+        value = divide(value, t);
+    }
+    value
+}
+
+fn term(text: Vec[u8], at: mut ref i64) -> (i64, i64) {
+    if *at < text.len() and text[*at] == b'(' {
+        *at += 1;
+        let v = parse(text, at);
+        if *at >= text.len() or text[*at] != b')' {
+            return (0, 0);
+        }
+        *at += 1;
+        return v;
+    }
+    let mut x = 0;
+    let start = *at;
+    while *at < text.len() and text[*at] >= b'0' and text[*at] <= b'9' {
+        x = x * 10 + (text[*at] - b'0') as i64;
+        *at += 1;
+    }
+    if *at == start { (0, 0) } else { (x, 1) }
+}
+
+fn value_of(text: Vec[u8]) -> (i64, i64) {
+    let mut at = 0;
+    let v = parse(text.clone(), mut at);
+    if at != text.len() { (0, 0) } else { v }
+}
+
+fn answer(which: i64, nums: Vec[i64]) -> String {
+    if which == 0 {
+        optimal_division_star(nums)
+    } else if which == 1 {
+        optimal_division_join(nums)
+    } else if which == 2 {
+        optimal_division_table(nums)
+    } else {
+        optimal_division_memo(nums)
+    }
+}
+
+fn main() {
+    let names = vec!["star", "join", "table", "memo"];
+    let count = 1000;
+    let mut seed: i64 = 5530;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // Distinct numbers: 1 to 5 from 2 to 6, 1 to 7 from 2 to 20, or
+        // 1 to 3 from 2 to 1000, in turn, so that every product of them
+        // times another stays inside i64.
+        let top = if t % 3 == 0 { 6 } else if t % 3 == 1 { 20 } else { 1000 };
+        let most = if t % 3 == 0 { 5 } else if t % 3 == 1 { 7 } else { 3 };
+        let n = 1 + next_random(mut seed) % most;
+        let mut nums: Vec[i64] = Vec.new();
+        while nums.len() < n {
+            let x = 2 + next_random(mut seed) % (top - 1);
+            if not nums.contains(x) {
+                nums.push(x);
+            }
+        }
+        let want = definition(nums.clone());
+        let mut plain = String.new();
+        for i in 0..n {
+            if i > 0 {
+                plain.push('/');
+            }
+            plain.push_str(f"{nums[i]}");
+        }
+        let floor = value_of(plain.bytes().to_vec());
+        for which in 0..4 {
+            let got = answer(which, nums.clone());
+            let text = got.bytes().to_vec();
+            let v = value_of(text.clone());
+            // P2: dropping any one pair of brackets changes the value.
+            let mut needed = true;
+            let mut opens: Vec[i64] = Vec.new();
+            for i in 0..text.len() {
+                if text[i] == b'(' {
+                    opens.push(i);
+                } else if text[i] == b')' {
+                    let o = opens.pop().unwrap_or(-1);
+                    if o >= 0 {
+                        let mut cut: Vec[u8] = Vec.new();
+                        for k in 0..text.len() {
+                            if k != o and k != i {
+                                cut.push(text[k]);
+                            }
+                        }
+                        if value_of(cut) == v {
+                            needed = false;
+                        }
+                    }
+                }
+            }
+            // P3: the digits, read as numbers, are the input in order.
+            let mut read: Vec[i64] = Vec.new();
+            let mut x = -1;
+            let mut slashes = 0;
+            for b in text.iter() {
+                if *b >= b'0' and *b <= b'9' {
+                    x = if x < 0 { 0 } else { x } * 10 + (*b - b'0') as i64;
+                } else {
+                    if *b == b'/' {
+                        slashes += 1;
+                    }
+                    if x >= 0 {
+                        read.push(x);
+                        x = -1;
+                    }
+                }
+            }
+            if x >= 0 {
+                read.push(x);
+            }
+            let ok = vec![
+                v.1 != 0 and v == want,
+                needed,
+                read == nums,
+                slashes == n - 1,
+                v.1 != 0 and not less(v, floor),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: {nums} -> {got}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
