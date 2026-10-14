@@ -1,0 +1,97 @@
+// LeetCode #546: Remove Boxes -- the same table, bottom up.
+//
+// dp[i][j][k], the most points from boxes i to j with k boxes of box
+// i's colour waiting before it, is filled for every span from the
+// shortest up, k running over every count of boxes there can be before
+// i. Box i goes with its k, or waits for a later box m of its colour.
+// Flat in one Vec, a fourth of it unused. O(n^4) time.
+
+fn remove_boxes(boxes: Vec[i64]) -> i64 {
+    let n = boxes.len();
+    // dp[(i * n + j) * (n + 1) + k]; spans with i > j are 0 and never
+    // stored, so `at` returns 0 for them.
+    let mut dp = vec![0; n * n * (n + 1)];
+    for len in 1..n + 1 {
+        for i in 0..n - len + 1 {
+            let j = i + len - 1;
+            for k in 0..i + 1 {
+                let rest = if i + 1 <= j { dp[((i + 1) * n + j) * (n + 1)] } else { 0 };
+                let mut most = (k + 1) * (k + 1) + rest;
+                for m in i + 1..j + 1 {
+                    if boxes[m] == boxes[i] {
+                        let between = if i + 1 <= m - 1 { dp[((i + 1) * n + m - 1) * (n + 1)] } else { 0 };
+                        most = most.max(between + dp[(m * n + j) * (n + 1) + k + 1]);
+                    }
+                }
+                dp[(i * n + j) * (n + 1) + k] = most;
+            }
+        }
+    }
+    dp[(n - 1) * (n + 1)]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(name: Str, boxes: Vec[i64]) {
+    println(f"{name}: {boxes} -> {remove_boxes(boxes)}");
+}
+
+fn main() {
+    let mut seed: i64 = 546;
+    show("example 1", vec![1, 3, 2, 2, 2, 3, 4, 3, 1]);
+    show("example 2", vec![1, 1, 1]);
+    show("example 3", vec![1]);
+    show("two colours alternating", vec![1, 2, 1, 2, 1, 2, 1]);
+    show("a nest", vec![1, 2, 3, 2, 1]);
+    show("worth waiting for", vec![1, 2, 2, 1, 1, 3, 1]);
+    // 300 random rows of 1 to 20 boxes, from 3, 5 or 10 colours in turn.
+    let count = 300;
+    let mut boxes_in = 0;
+    let mut total = 0;
+    let mut h: i64 = 0;
+    for t in 0..count {
+        let n = 1 + next_random(mut seed) % 20;
+        let colours = if t % 3 == 0 { 3 } else if t % 3 == 1 { 5 } else { 10 };
+        let mut b: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            b.push(1 + next_random(mut seed) % colours);
+        }
+        let points = remove_boxes(b);
+        boxes_in += n;
+        total += points;
+        h = (h * 31 + points) % 1000000007;
+    }
+    println(f"{count} random rows: {boxes_in} boxes, {total} points, checksum {h}");
+    // The largest, 100 boxes (the problem's most): random from 3 and
+    // from 100 colours, one colour, two alternating, and a palindrome of
+    // 50 colours.
+    let mut b: Vec[i64] = Vec.new();
+    for _ in 0..100 {
+        b.push(1 + next_random(mut seed) % 3);
+    }
+    println(f"100 boxes from 3 colours: {remove_boxes(b)}");
+    let mut b: Vec[i64] = Vec.new();
+    for _ in 0..100 {
+        b.push(1 + next_random(mut seed) % 100);
+    }
+    println(f"100 boxes from 100 colours: {remove_boxes(b)}");
+    println(f"100 boxes of one colour: {remove_boxes(vec![7; 100])}");
+    let mut b: Vec[i64] = Vec.new();
+    for i in 0..100 {
+        b.push(1 + i % 2);
+    }
+    println(f"100 boxes, two colours alternating: {remove_boxes(b)}");
+    let mut b: Vec[i64] = Vec.new();
+    for i in 0..50 {
+        b.push(1 + i);
+    }
+    for i in 0..50 {
+        b.push(50 - i);
+    }
+    println(f"a palindrome of 50 colours: {remove_boxes(b)}");
+}

@@ -1,0 +1,74 @@
+// Benchmark for #546: Remove Boxes -- the ★ arm (memoized, with the
+// boxes carried along).
+//
+// best(l, r, k) is the most points from boxes l to r when k more boxes
+// of the colour of box l sit just before it, waiting to go with it. Box
+// l's run (and its k) either goes now, or waits for a later box m of the
+// same colour, the boxes between l and m going first on their own. The
+// table is n * n * n, filled on demand. O(n^4) time.
+
+fn best(boxes: Vec[i64], l: i64, r: i64, k: i64, memo: mut ref Vec[i64]) -> i64 {
+    if l > r {
+        return 0;
+    }
+    let n = boxes.len();
+    let key = (l * n + r) * n + k;
+    if memo[key] >= 0 {
+        return memo[key];
+    }
+    // Take in the rest of box l's run, so the choices start at its end.
+    let mut i = l;
+    let mut run = k + 1;
+    while i < r and boxes[i + 1] == boxes[l] {
+        i += 1;
+        run += 1;
+    }
+    let mut most = run * run + best(boxes, i + 1, r, 0, memo);
+    for m in i + 2..r + 1 {
+        if boxes[m] == boxes[l] and boxes[m - 1] != boxes[l] {
+            most = most.max(best(boxes, i + 1, m - 1, 0, memo) + best(boxes, m, r, run, memo));
+        }
+    }
+    memo[key] = most;
+    most
+}
+
+fn remove_boxes(boxes: Vec[i64]) -> i64 {
+    let n = boxes.len();
+    let mut memo = vec![-1; n * n * n];
+    best(boxes, 0, n - 1, 0, mut memo)
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 40 random rows of 100 boxes (the problem's most), from 2 to 9
+    // colours by the row, built once. Then 5 times over every row is
+    // answered and the points go into the checksum.
+    let rows = 40;
+    let mut seed: i64 = 546;
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    for g in 0..rows {
+        let colours = 2 + g % 8;
+        let mut b: Vec[i64] = Vec.new();
+        for _ in 0..100 {
+            b.push(1 + next_random(mut seed) % colours);
+        }
+        all.push(b);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..5 {
+        for t in 0..rows {
+            let points = remove_boxes(all[t]);
+            total += points;
+            checksum = (checksum * 31 + points) % 1000000007;
+        }
+    }
+    println(f"{rows} rows, 5 times each: {total} points, checksum {checksum}");
+}

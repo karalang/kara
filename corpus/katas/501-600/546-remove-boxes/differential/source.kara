@@ -1,0 +1,243 @@
+// Differential test for LeetCode #546: Remove Boxes.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random rows of 1 to 8 boxes from 2, 3 or 5 colours in turn.
+// Properties:
+//   P1  the answer is the definition's: every order of moves tried
+//   P2  the row reversed has the same answer
+//   P3  renaming the colours, c to 11 - c, changes nothing
+//   P4  the answer is at least the number of boxes and at most the sum
+//       over colours of their count squared
+//   P5  a box of a new colour on the end adds exactly 1
+
+// ---- star: remove_boxes.kara
+
+fn best_star(boxes: Vec[i64], l: i64, r: i64, k: i64, memo: mut ref Vec[i64]) -> i64 {
+    if l > r {
+        return 0;
+    }
+    let n = boxes.len();
+    let key = (l * n + r) * n + k;
+    if memo[key] >= 0 {
+        return memo[key];
+    }
+    let mut i = l;
+    let mut run = k + 1;
+    while i < r and boxes[i + 1] == boxes[l] {
+        i += 1;
+        run += 1;
+    }
+    let mut most = run * run + best_star(boxes, i + 1, r, 0, memo);
+    for m in i + 2..r + 1 {
+        if boxes[m] == boxes[l] and boxes[m - 1] != boxes[l] {
+            most = most.max(best_star(boxes, i + 1, m - 1, 0, memo) + best_star(boxes, m, r, run, memo));
+        }
+    }
+    memo[key] = most;
+    most
+}
+
+fn remove_boxes_star(boxes: Vec[i64]) -> i64 {
+    let n = boxes.len();
+    let mut memo = vec![-1; n * n * n];
+    best_star(boxes, 0, n - 1, 0, mut memo)
+}
+
+// ---- table: remove_boxes_table.kara
+
+fn remove_boxes_table(boxes: Vec[i64]) -> i64 {
+    let n = boxes.len();
+    let mut dp = vec![0; n * n * (n + 1)];
+    for len in 1..n + 1 {
+        for i in 0..n - len + 1 {
+            let j = i + len - 1;
+            for k in 0..i + 1 {
+                let rest = if i + 1 <= j { dp[((i + 1) * n + j) * (n + 1)] } else { 0 };
+                let mut most = (k + 1) * (k + 1) + rest;
+                for m in i + 1..j + 1 {
+                    if boxes[m] == boxes[i] {
+                        let between = if i + 1 <= m - 1 { dp[((i + 1) * n + m - 1) * (n + 1)] } else { 0 };
+                        most = most.max(between + dp[(m * n + j) * (n + 1) + k + 1]);
+                    }
+                }
+                dp[(i * n + j) * (n + 1) + k] = most;
+            }
+        }
+    }
+    dp[(n - 1) * (n + 1)]
+}
+
+// ---- map: remove_boxes_map.kara
+
+fn best_map(boxes: Vec[i64], l: i64, r: i64, k: i64, memo: mut ref Map[(i64, i64, i64), i64]) -> i64 {
+    if l > r {
+        return 0;
+    }
+    if let Some(v) = memo.get((l, r, k)) {
+        return *v;
+    }
+    let mut most = (k + 1) * (k + 1) + best_map(boxes, l + 1, r, 0, memo);
+    for m in l + 1..r + 1 {
+        if boxes[m] == boxes[l] {
+            most = most.max(best_map(boxes, l + 1, m - 1, 0, memo) + best_map(boxes, m, r, k + 1, memo));
+        }
+    }
+    memo.insert((l, r, k), most);
+    most
+}
+
+fn remove_boxes_map(boxes: Vec[i64]) -> i64 {
+    let mut memo: Map[(i64, i64, i64), i64] = Map.new();
+    best_map(boxes, 0, boxes.len() - 1, 0, mut memo)
+}
+
+// ---- runs: remove_boxes_runs.kara
+
+fn best_runs(colour: Vec[i64], count: Vec[i64], l: i64, r: i64, extra: i64, n: i64, memo: mut ref Vec[i64]) -> i64 {
+    if l > r {
+        return 0;
+    }
+    let runs = colour.len();
+    let key = (l * runs + r) * (n + 1) + extra;
+    if memo[key] >= 0 {
+        return memo[key];
+    }
+    let c = count[l] + extra;
+    let mut most = c * c + best_runs(colour, count, l + 1, r, 0, n, memo);
+    for m in l + 1..r + 1 {
+        if colour[m] == colour[l] {
+            most = most.max(best_runs(colour, count, l + 1, m - 1, 0, n, memo) + best_runs(colour, count, m, r, c, n, memo));
+        }
+    }
+    memo[key] = most;
+    most
+}
+
+fn remove_boxes_runs(boxes: Vec[i64]) -> i64 {
+    let mut colour: Vec[i64] = Vec.new();
+    let mut count: Vec[i64] = Vec.new();
+    for b in boxes.iter() {
+        if colour.len() > 0 and colour[colour.len() - 1] == *b {
+            let last = count.len() - 1;
+            count[last] += 1;
+        } else {
+            colour.push(*b);
+            count.push(1);
+        }
+    }
+    let runs = colour.len();
+    let n = boxes.len();
+    let mut memo = vec![-1; runs * runs * (n + 1)];
+    best_runs(colour, count, 0, runs - 1, 0, n, mut memo)
+}
+
+// ---- the definition and the checks ------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: every way to play. Each move takes one whole run of
+// neighbouring boxes of one colour, for its length squared, and the rest
+// closes up; the best total over every order of moves, each row met
+// along the way remembered.
+fn definition(boxes: Vec[i64], memo: mut ref Map[Vec[i64], i64]) -> i64 {
+    if boxes.is_empty() {
+        return 0;
+    }
+    if let Some(v) = memo.get(boxes) {
+        return *v;
+    }
+    let n = boxes.len();
+    let mut most = 0;
+    let mut i = 0;
+    while i < n {
+        let mut j = i;
+        while j + 1 < n and boxes[j + 1] == boxes[i] {
+            j += 1;
+        }
+        let mut rest: Vec[i64] = Vec.new();
+        for k in 0..n {
+            if k < i or k > j {
+                rest.push(boxes[k]);
+            }
+        }
+        let run = j - i + 1;
+        most = most.max(run * run + definition(rest, memo));
+        i = j + 1;
+    }
+    memo.insert(boxes.clone(), most);
+    most
+}
+
+fn answer(which: i64, boxes: Vec[i64]) -> i64 {
+    if which == 0 {
+        remove_boxes_star(boxes)
+    } else if which == 1 {
+        remove_boxes_table(boxes)
+    } else if which == 2 {
+        remove_boxes_map(boxes)
+    } else {
+        remove_boxes_runs(boxes)
+    }
+}
+
+fn main() {
+    let names = vec!["star", "table", "map", "runs"];
+    let count = 1000;
+    let mut seed: i64 = 5460;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 8 boxes from 2, 3 or 5 colours in turn.
+        let n = 1 + next_random(mut seed) % 8;
+        let colours = if t % 3 == 0 { 2 } else if t % 3 == 1 { 3 } else { 5 };
+        let mut boxes: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            boxes.push(1 + next_random(mut seed) % colours);
+        }
+        let mut memo: Map[Vec[i64], i64] = Map.new();
+        let want = definition(boxes.clone(), mut memo);
+        let mut reversed: Vec[i64] = Vec.new();
+        for k in (0..n).rev() {
+            reversed.push(boxes[k]);
+        }
+        let mut renamed: Vec[i64] = Vec.new();
+        let mut longer = boxes.clone();
+        longer.push(100);
+        let mut ceiling = 0;
+        let mut per = vec![0; 11];
+        for b in boxes.iter() {
+            renamed.push(11 - *b);
+            per[*b] += 1;
+        }
+        for c in per.iter() {
+            ceiling += *c * *c;
+        }
+        for which in 0..4 {
+            let got = answer(which, boxes.clone());
+            let ok = vec![
+                got == want,
+                answer(which, reversed.clone()) == got,
+                answer(which, renamed.clone()) == got,
+                got >= n and got <= ceiling,
+                answer(which, longer.clone()) == got + 1,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: {boxes} -> {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

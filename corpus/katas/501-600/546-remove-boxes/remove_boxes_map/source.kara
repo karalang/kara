@@ -1,0 +1,95 @@
+// LeetCode #546: Remove Boxes -- memoized in a map.
+//
+// The plain recursion on (l, r, k), the k boxes before l being of box
+// l's colour: box l goes now with its k, or waits for a later box m of
+// its colour while the boxes between go first. Only the states the
+// recursion reaches are kept, in a Map keyed by the triple. O(n^4)
+// time.
+
+fn best(boxes: Vec[i64], l: i64, r: i64, k: i64, memo: mut ref Map[(i64, i64, i64), i64]) -> i64 {
+    if l > r {
+        return 0;
+    }
+    if let Some(v) = memo.get((l, r, k)) {
+        return *v;
+    }
+    let mut most = (k + 1) * (k + 1) + best(boxes, l + 1, r, 0, memo);
+    for m in l + 1..r + 1 {
+        if boxes[m] == boxes[l] {
+            most = most.max(best(boxes, l + 1, m - 1, 0, memo) + best(boxes, m, r, k + 1, memo));
+        }
+    }
+    memo.insert((l, r, k), most);
+    most
+}
+
+fn remove_boxes(boxes: Vec[i64]) -> i64 {
+    let mut memo: Map[(i64, i64, i64), i64] = Map.new();
+    best(boxes, 0, boxes.len() - 1, 0, mut memo)
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(name: Str, boxes: Vec[i64]) {
+    println(f"{name}: {boxes} -> {remove_boxes(boxes)}");
+}
+
+fn main() {
+    let mut seed: i64 = 546;
+    show("example 1", vec![1, 3, 2, 2, 2, 3, 4, 3, 1]);
+    show("example 2", vec![1, 1, 1]);
+    show("example 3", vec![1]);
+    show("two colours alternating", vec![1, 2, 1, 2, 1, 2, 1]);
+    show("a nest", vec![1, 2, 3, 2, 1]);
+    show("worth waiting for", vec![1, 2, 2, 1, 1, 3, 1]);
+    // 300 random rows of 1 to 20 boxes, from 3, 5 or 10 colours in turn.
+    let count = 300;
+    let mut boxes_in = 0;
+    let mut total = 0;
+    let mut h: i64 = 0;
+    for t in 0..count {
+        let n = 1 + next_random(mut seed) % 20;
+        let colours = if t % 3 == 0 { 3 } else if t % 3 == 1 { 5 } else { 10 };
+        let mut b: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            b.push(1 + next_random(mut seed) % colours);
+        }
+        let points = remove_boxes(b);
+        boxes_in += n;
+        total += points;
+        h = (h * 31 + points) % 1000000007;
+    }
+    println(f"{count} random rows: {boxes_in} boxes, {total} points, checksum {h}");
+    // The largest, 100 boxes (the problem's most): random from 3 and
+    // from 100 colours, one colour, two alternating, and a palindrome of
+    // 50 colours.
+    let mut b: Vec[i64] = Vec.new();
+    for _ in 0..100 {
+        b.push(1 + next_random(mut seed) % 3);
+    }
+    println(f"100 boxes from 3 colours: {remove_boxes(b)}");
+    let mut b: Vec[i64] = Vec.new();
+    for _ in 0..100 {
+        b.push(1 + next_random(mut seed) % 100);
+    }
+    println(f"100 boxes from 100 colours: {remove_boxes(b)}");
+    println(f"100 boxes of one colour: {remove_boxes(vec![7; 100])}");
+    let mut b: Vec[i64] = Vec.new();
+    for i in 0..100 {
+        b.push(1 + i % 2);
+    }
+    println(f"100 boxes, two colours alternating: {remove_boxes(b)}");
+    let mut b: Vec[i64] = Vec.new();
+    for i in 0..50 {
+        b.push(1 + i);
+    }
+    for i in 0..50 {
+        b.push(50 - i);
+    }
+    println(f"a palindrome of 50 colours: {remove_boxes(b)}");
+}

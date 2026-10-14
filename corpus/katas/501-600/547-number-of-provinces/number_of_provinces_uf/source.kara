@@ -1,0 +1,128 @@
+// LeetCode #547: Number of Provinces -- union-find.
+//
+// Every city starts as its own province. Each connection above the
+// diagonal joins the two cities' sets, the smaller under the larger,
+// and every join that merges two different sets leaves one province
+// fewer. Finds halve the path as they climb. O(n^2 a(n)) time.
+
+fn find(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut x = x;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn find_circle_num(is_connected: Vec[Vec[i64]]) -> i64 {
+    let n = is_connected.len();
+    let mut parent: Vec[i64] = (0..n).collect();
+    let mut size = vec![1; n];
+    let mut provinces = n;
+    for i in 0..n {
+        for j in i + 1..n {
+            if is_connected[i][j] == 1 {
+                let a = find(mut parent, i);
+                let b = find(mut parent, j);
+                if a != b {
+                    if size[a] < size[b] {
+                        parent[a] = b;
+                        size[b] += size[a];
+                    } else {
+                        parent[b] = a;
+                        size[a] += size[b];
+                    }
+                    provinces -= 1;
+                }
+            }
+        }
+    }
+    provinces
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// n cities, each connected only to itself.
+fn alone(n: i64) -> Vec[Vec[i64]] {
+    let mut m: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let mut row = vec![0; n];
+        row[i] = 1;
+        m.push(row);
+    }
+    m
+}
+
+fn join(m: mut ref Vec[Vec[i64]], a: i64, b: i64) {
+    m[a][b] = 1;
+    m[b][a] = 1;
+}
+
+// n cities, each pair connected with chance `chance` in 1000.
+fn random_matrix(n: i64, chance: i64, seed: mut ref i64) -> Vec[Vec[i64]] {
+    let mut m = alone(n);
+    for i in 0..n {
+        for j in i + 1..n {
+            if next_random(seed) % 1000 < chance {
+                join(mut m, i, j);
+            }
+        }
+    }
+    m
+}
+
+fn show(name: Str, m: Vec[Vec[i64]]) {
+    println(f"{name}: {find_circle_num(m)}");
+}
+
+fn main() {
+    show("example 1", vec![vec![1, 1, 0], vec![1, 1, 0], vec![0, 0, 1]]);
+    show("example 2", vec![vec![1, 0, 0], vec![0, 1, 0], vec![0, 0, 1]]);
+    show("one city", vec![vec![1]]);
+    show("two cities joined", vec![vec![1, 1], vec![1, 1]]);
+    show("a chain of four", vec![vec![1, 1, 0, 0], vec![1, 1, 1, 0], vec![0, 1, 1, 1], vec![0, 0, 1, 1]]);
+    show("the first and last of five joined", vec![vec![1, 0, 0, 0, 1], vec![0, 1, 0, 0, 0], vec![0, 0, 1, 0, 0], vec![0, 0, 0, 1, 0], vec![1, 0, 0, 0, 1]]);
+
+    // 300 random matrices of 1 to 40 cities, each pair joined with
+    // chance 2, 20 or 80 in 1000 in turn.
+    let mut seed: i64 = 547;
+    let mut cities = 0;
+    let mut total = 0;
+    let mut h: i64 = 0;
+    for t in 0..300 {
+        let n = 1 + next_random(mut seed) % 40;
+        let chance = if t % 3 == 0 { 2 } else if t % 3 == 1 { 20 } else { 80 };
+        let m = random_matrix(n, chance, mut seed);
+        let p = find_circle_num(m);
+        cities += n;
+        total += p;
+        h = (h * 31 + p) % 1000000007;
+    }
+    println(f"300 random matrices: {cities} cities, {total} provinces, checksum {h}");
+
+    // 200 cities (the problem's most).
+    show("200 cities alone", alone(200));
+    let mut all = alone(200);
+    for i in 0..200 {
+        for j in 0..200 {
+            all[i][j] = 1;
+        }
+    }
+    show("200 cities all joined", all);
+    let mut chain = alone(200);
+    for i in 0..199 {
+        join(mut chain, i, i + 1);
+    }
+    show("200 cities in a chain", chain);
+    let mut hub = alone(200);
+    for i in 0..100 {
+        join(mut hub, 199, 2 * i);
+    }
+    show("a hub joined to the even cities", hub);
+    show("200 random cities, chance 5 in 1000", random_matrix(200, 5, mut seed));
+}

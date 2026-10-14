@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/546-remove-boxes/bench/remove_boxes.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "fc31e3e9f"
+extracted_src = "fe96bae3"
+model_rev = "1aa23105"
+model_src = "fe96bae3"

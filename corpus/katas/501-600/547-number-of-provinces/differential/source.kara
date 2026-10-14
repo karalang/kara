@@ -1,0 +1,282 @@
+// Differential test for LeetCode #547: Number of Provinces.
+//
+// Copies of the four arms, each held to the properties below on 1,000
+// random matrices of 1 to 12 cities, each pair joined with chance 50,
+// 150 or 400 in 1000 in turn.
+// Properties:
+//   P1  the answer is the definition's: labels spread along every
+//       connection until nothing changes
+//   P2  the cities renumbered give the same answer
+//   P3  at least 1, at most the number of cities, and at least the
+//       cities less the connections
+//   P4  one more city joined to none adds exactly 1
+//   P5  one more city joined to every city leaves exactly 1
+
+// ---- star: number_of_provinces.kara
+
+fn visit_star(is_connected: Vec[Vec[i64]], city: i64, seen: mut ref Vec[bool]) {
+    seen[city] = true;
+    for other in 0..is_connected.len() {
+        if is_connected[city][other] == 1 and not seen[other] {
+            visit_star(is_connected, other, seen);
+        }
+    }
+}
+
+fn find_circle_num_star(is_connected: Vec[Vec[i64]]) -> i64 {
+    let n = is_connected.len();
+    let mut seen = vec![false; n];
+    let mut provinces = 0;
+    for city in 0..n {
+        if not seen[city] {
+            provinces += 1;
+            visit_star(is_connected, city, mut seen);
+        }
+    }
+    provinces
+}
+
+// ---- uf: number_of_provinces_uf.kara
+
+fn find_uf(parent: mut ref Vec[i64], x: i64) -> i64 {
+    let mut x = x;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn find_circle_num_uf(is_connected: Vec[Vec[i64]]) -> i64 {
+    let n = is_connected.len();
+    let mut parent: Vec[i64] = (0..n).collect();
+    let mut size = vec![1; n];
+    let mut provinces = n;
+    for i in 0..n {
+        for j in i + 1..n {
+            if is_connected[i][j] == 1 {
+                let a = find_uf(mut parent, i);
+                let b = find_uf(mut parent, j);
+                if a != b {
+                    if size[a] < size[b] {
+                        parent[a] = b;
+                        size[b] += size[a];
+                    } else {
+                        parent[b] = a;
+                        size[a] += size[b];
+                    }
+                    provinces -= 1;
+                }
+            }
+        }
+    }
+    provinces
+}
+
+// ---- bfs: number_of_provinces_bfs.kara
+
+fn find_circle_num_bfs(is_connected: Vec[Vec[i64]]) -> i64 {
+    let n = is_connected.len();
+    let mut seen = vec![false; n];
+    let mut queue: Vec[i64] = Vec.new();
+    let mut provinces = 0;
+    for start in 0..n {
+        if seen[start] {
+            continue;
+        }
+        provinces += 1;
+        seen[start] = true;
+        queue.push(start);
+        let mut head = queue.len() - 1;
+        while head < queue.len() {
+            let city = queue[head];
+            head += 1;
+            for other in 0..n {
+                if is_connected[city][other] == 1 and not seen[other] {
+                    seen[other] = true;
+                    queue.push(other);
+                }
+            }
+        }
+    }
+    provinces
+}
+
+// ---- closure: number_of_provinces_closure.kara
+
+fn find_circle_num_closure(is_connected: Vec[Vec[i64]]) -> i64 {
+    let n = is_connected.len();
+    let mut reach: Vec[Vec[bool]] = Vec.new();
+    for i in 0..n {
+        let mut row = vec![false; n];
+        for j in 0..n {
+            row[j] = is_connected[i][j] == 1;
+        }
+        reach.push(row);
+    }
+    for k in 0..n {
+        for i in 0..n {
+            if reach[i][k] {
+                for j in 0..n {
+                    if reach[k][j] {
+                        reach[i][j] = true;
+                    }
+                }
+            }
+        }
+    }
+    let mut provinces = 0;
+    for i in 0..n {
+        let mut lowest = true;
+        for j in 0..i {
+            if reach[i][j] {
+                lowest = false;
+            }
+        }
+        if lowest {
+            provinces += 1;
+        }
+    }
+    provinces
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The statement read literally: a province is a group of cities joined
+// directly or through other cities. Every city starts with its own
+// label, and every connection hands the smaller of its two labels to
+// both ends, until a whole pass changes nothing; then each province
+// carries one label, and the answer is how many labels are left.
+fn definition(m: Vec[Vec[i64]]) -> i64 {
+    let n = m.len();
+    let mut label: Vec[i64] = (0..n).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..n {
+            for j in 0..n {
+                if m[i][j] == 1 and label[i] != label[j] {
+                    let low = label[i].min(label[j]);
+                    label[i] = low;
+                    label[j] = low;
+                    changed = true;
+                }
+            }
+        }
+    }
+    let mut used = vec![false; n];
+    let mut count = 0;
+    for l in label.iter() {
+        if not used[*l] {
+            used[*l] = true;
+            count += 1;
+        }
+    }
+    count
+}
+
+fn answer(which: i64, m: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        find_circle_num_star(m)
+    } else if which == 1 {
+        find_circle_num_uf(m)
+    } else if which == 2 {
+        find_circle_num_bfs(m)
+    } else {
+        find_circle_num_closure(m)
+    }
+}
+
+// The matrix with one more city, joined to every city if `to_all` and
+// to none otherwise.
+fn grown(m: Vec[Vec[i64]], to_all: bool) -> Vec[Vec[i64]] {
+    let n = m.len();
+    let link = if to_all { 1 } else { 0 };
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for i in 0..n {
+        let mut row = m[i].clone();
+        row.push(link);
+        out.push(row);
+    }
+    let mut last = vec![link; n + 1];
+    last[n] = 1;
+    out.push(last);
+    out
+}
+
+fn main() {
+    let names = vec!["star", "uf", "bfs", "closure"];
+    let count = 1000;
+    let mut seed: i64 = 5470;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 12 cities, each pair joined with chance 50, 150 or 400 in
+        // 1000 in turn.
+        let n = 1 + next_random(mut seed) % 12;
+        let chance = if t % 3 == 0 { 50 } else if t % 3 == 1 { 150 } else { 400 };
+        let mut m: Vec[Vec[i64]] = Vec.new();
+        for i in 0..n {
+            let mut row = vec![0; n];
+            row[i] = 1;
+            m.push(row);
+        }
+        let mut edges = 0;
+        for i in 0..n {
+            for j in i + 1..n {
+                if next_random(mut seed) % 1000 < chance {
+                    m[i][j] = 1;
+                    m[j][i] = 1;
+                    edges += 1;
+                }
+            }
+        }
+        let want = definition(m.clone());
+        // The cities renumbered: city i becomes city order[i].
+        let mut order: Vec[i64] = (0..n).collect();
+        for i in (1..n).rev() {
+            let j = next_random(mut seed) % (i + 1);
+            let x = order[i];
+            order[i] = order[j];
+            order[j] = x;
+        }
+        let mut renumbered: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..n {
+            renumbered.push(vec![0; n]);
+        }
+        for i in 0..n {
+            for j in 0..n {
+                renumbered[order[i]][order[j]] = m[i][j];
+            }
+        }
+        for which in 0..4 {
+            let got = answer(which, m.clone());
+            let ok = vec![
+                got == want,
+                answer(which, renumbered.clone()) == got,
+                got >= 1 and got <= n and got >= n - edges,
+                answer(which, grown(m.clone(), false)) == got + 1,
+                answer(which, grown(m.clone(), true)) == 1,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                    if failures[p] <= 3 {
+                        println(f"FAIL P{p + 1} {names[which]}: {n} cities, {edges} joined, got {got}, want {want}");
+                    }
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

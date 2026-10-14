@@ -1,0 +1,79 @@
+// Benchmark for #547: Number of Provinces -- the ★ arm (depth-first
+// search).
+//
+// Every city not yet seen starts a new province, and a recursive walk
+// from it marks every city it can reach through the matrix. O(n^2)
+// time, since each city's row is read once.
+fn visit(is_connected: Vec[Vec[i64]], city: i64, seen: mut ref Vec[bool]) {
+    seen[city] = true;
+    for other in 0..is_connected.len() {
+        if is_connected[city][other] == 1 and not seen[other] {
+            visit(is_connected, other, seen);
+        }
+    }
+}
+
+fn find_circle_num(is_connected: Vec[Vec[i64]]) -> i64 {
+    let n = is_connected.len();
+    let mut seen = vec![false; n];
+    let mut provinces = 0;
+    for city in 0..n {
+        if not seen[city] {
+            provinces += 1;
+            visit(is_connected, city, mut seen);
+        }
+    }
+    provinces
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 30 random matrices of 200 cities (the problem's most), matrix g
+    // joining each pair with chance 1 + g % 10 in 1000, built once. Then
+    // 200 times over, one connection of every matrix is flipped and the
+    // matrix is answered; the provinces go into the checksum.
+    let count = 30;
+    let n = 200;
+    let mut seed: i64 = 547;
+    let mut all: Vec[Vec[Vec[i64]]] = Vec.new();
+    for g in 0..count {
+        let mut m: Vec[Vec[i64]] = Vec.new();
+        for i in 0..n {
+            let mut row = vec![0; n];
+            row[i] = 1;
+            m.push(row);
+        }
+        for i in 0..n {
+            for j in i + 1..n {
+                if next_random(mut seed) % 1000 < 1 + g % 10 {
+                    m[i][j] = 1;
+                    m[j][i] = 1;
+                }
+            }
+        }
+        all.push(m);
+    }
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..200 {
+        for g in 0..count {
+            let a = (round * 13 + g) % n;
+            let b = (round * 29 + g * 3 + 1) % n;
+            if a != b {
+                let flip = 1 - all[g][a][b];
+                all[g][a][b] = flip;
+                all[g][b][a] = flip;
+            }
+            let p = find_circle_num(all[g]);
+            total += p;
+            checksum = (checksum * 31 + p) % 1000000007;
+        }
+    }
+    println(f"{count} matrices, 200 rounds each: {total} provinces, checksum {checksum}");
+}

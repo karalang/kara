@@ -1,0 +1,12 @@
+example 1: [1, 3, 2, 2, 2, 3, 4, 3, 1] -> 23
+example 2: [1, 1, 1] -> 9
+example 3: [1] -> 1
+two colours alternating: [1, 2, 1, 2, 1, 2, 1] -> 19
+a nest: [1, 2, 3, 2, 1] -> 9
+worth waiting for: [1, 2, 2, 1, 1, 3, 1] -> 21
+300 random rows: 3134 boxes, 9062 points, checksum 837748373
+100 boxes from 3 colours: 1440
+100 boxes from 100 colours: 148
+100 boxes of one colour: 10000
+100 boxes, two colours alternating: 2550
+a palindrome of 50 colours: 200
