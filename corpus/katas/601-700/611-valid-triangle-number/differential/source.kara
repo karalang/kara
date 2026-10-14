@@ -1,0 +1,212 @@
+// LeetCode #611: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// arrays of lengths.
+
+// ---- star arm ----------------------------------------------------------
+
+fn triangle_number_star(nums: Vec[i64]) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let mut count = 0;
+    for k in 2..a.len() {
+        let mut i = 0;
+        let mut j = k - 1;
+        while i < j {
+            if a[i] + a[j] > a[k] {
+                count += j - i;
+                j -= 1;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    count
+}
+
+// ---- search arm --------------------------------------------------------
+
+fn triangle_number_search(nums: Vec[i64]) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let n = a.len();
+    let mut count = 0;
+    for i in 0..n {
+        for j in i + 1..n {
+            let sum = a[i] + a[j];
+            let mut lo = j + 1;
+            let mut hi = n;
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                if a[mid] < sum {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            count += lo - (j + 1);
+        }
+    }
+    count
+}
+
+// ---- brute arm ---------------------------------------------------------
+
+fn triangle_number_brute(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut count = 0;
+    for i in 0..n {
+        for j in i + 1..n {
+            for k in j + 1..n {
+                let (x, y, z) = (nums[i], nums[j], nums[k]);
+                if x + y > z and x + z > y and y + z > x {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
+// ---- counts arm --------------------------------------------------------
+
+fn triangle_number_counts(nums: Vec[i64]) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let mut seen = vec![0; 1002];
+    for x in a.iter() {
+        seen[*x + 1] += 1;
+    }
+    // below[v]: how many lengths are less than v, for v up to 1,001.
+    let mut below = vec![0; 1002];
+    for v in 1..1002 {
+        below[v] = below[v - 1] + seen[v];
+    }
+    let n = a.len();
+    let mut count = 0;
+    for i in 0..n {
+        for j in i + 1..n {
+            let sum = (a[i] + a[j]).min(1001);
+            let third = below[sum] - (j + 1);
+            if third > 0 {
+                count += third;
+            }
+        }
+    }
+    count
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, nums: Vec[i64]) -> i64 {
+    if which == 0 {
+        triangle_number_star(nums)
+    } else if which == 1 {
+        triangle_number_search(nums)
+    } else if which == 2 {
+        triangle_number_brute(nums)
+    } else {
+        triangle_number_counts(nums)
+    }
+}
+
+// The definition: every choice of three positions, its three lengths
+// put in order, counted when the two shorter add up to more than the
+// longest.
+fn definition(nums: Vec[i64]) -> i64 {
+    let n = nums.len();
+    let mut count = 0;
+    for i in 0..n {
+        for j in i + 1..n {
+            for k in j + 1..n {
+                let mut three = vec![nums[i], nums[j], nums[k]];
+                three.sort();
+                if three[0] + three[1] > three[2] {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 6110;
+    let mut checks = 0;
+    let mut found = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // 0 to 12 lengths: up to a bound of 1 to 10, so lengths repeat
+        // often; up to a bound of 1 to 500; or from 900 to 1,000, the
+        // problem's longest, where every pair adds up to more than 1,000.
+        let size = step(mut seed) % 13;
+        let band = step(mut seed) % 3;
+        let bound = if band == 0 { 1 + step(mut seed) % 10 } else { 1 + step(mut seed) % 500 };
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            if band == 2 {
+                nums.push(1000 - step(mut seed) % 101);
+            } else {
+                nums.push(step(mut seed) % (bound + 1));
+            }
+        }
+        // P4 and P5 need every length at most 500, so that doubled
+        // lengths and the added 1,000 stay within the problem's bounds.
+        let low = band < 2;
+        let want = definition(nums);
+        found += want;
+        // P2: the lengths shuffled.
+        let mut shuffled = nums.clone();
+        for i in 0..shuffled.len() {
+            let j = i + step(mut seed) % (shuffled.len() - i);
+            shuffled.swap(i, j);
+        }
+        // P3: a length of 0 added.
+        let mut zero = nums.clone();
+        zero.push(0);
+        // P4: every length doubled.
+        let mut doubled: Vec[i64] = Vec.new();
+        for x in nums.iter() {
+            doubled.push(2 * *x);
+        }
+        // P5: a length of 1,000 added, which no two lengths of at most
+        // 500 add up to more than.
+        let mut long = nums.clone();
+        long.push(1000);
+        for which in 0..4 {
+            let got = answer(which, nums);
+            let ok = vec![
+                // P1: the definition's count.
+                got == want,
+                // P2: the order of the lengths changes nothing.
+                answer(which, shuffled) == got,
+                // P3: a length of 0 is in no triangle.
+                answer(which, zero) == got,
+                // P4: scaling every length keeps every triangle.
+                not low or answer(which, doubled) == got,
+                // P5: a length too long for any pair is in no triangle.
+                not low or answer(which, long) == got,
+            ];
+            for p in 0..5 {
+                if p >= 3 and not low {
+                    continue;
+                }
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({found} triangles), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

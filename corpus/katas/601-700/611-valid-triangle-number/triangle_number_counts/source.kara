@@ -1,0 +1,93 @@
+// LeetCode #611: Valid Triangle Number -- counts below each length.
+//
+// The lengths are at most 1,000, so count how many lengths fall below
+// each value once. Sorted, a pair at positions i < j takes as its third
+// any later length below the pair's sum: the lengths below the sum,
+// less the j + 1 at or before position j, all of which are below it
+// too. O(n^2 + the largest length).
+
+fn triangle_number(nums: Vec[i64]) -> i64 {
+    let mut a = nums.clone();
+    a.sort();
+    let mut seen = vec![0; 1002];
+    for x in a.iter() {
+        seen[*x + 1] += 1;
+    }
+    // below[v]: how many lengths are less than v, for v up to 1,001.
+    let mut below = vec![0; 1002];
+    for v in 1..1002 {
+        below[v] = below[v - 1] + seen[v];
+    }
+    let n = a.len();
+    let mut count = 0;
+    for i in 0..n {
+        for j in i + 1..n {
+            let sum = (a[i] + a[j]).min(1001);
+            let third = below[sum] - (j + 1);
+            if third > 0 {
+                count += third;
+            }
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"{nums} -> {triangle_number(nums)}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    show(vec![2, 2, 3, 4]);
+    show(vec![4, 2, 3, 4]);
+    // Fewer than three lengths; zeros, which make no triangle; a sum
+    // that only reaches the third; three alike; a long side that every
+    // pair below falls short of; unsorted with repeats.
+    show(vec![]);
+    show(vec![5, 5]);
+    show(vec![0, 0, 0]);
+    show(vec![0, 1, 1, 1]);
+    show(vec![1, 2, 3]);
+    show(vec![7, 7, 7]);
+    show(vec![1, 1, 1, 1, 100]);
+    show(vec![10, 3, 7, 3, 10, 6, 1, 7]);
+    // 200 lengths of 1,000, the problem's longest, every triple a
+    // triangle, and the lengths 1 to 200. (200 rather than the problem's
+    // 1,000 lengths keeps the cubic arm quick; the bench takes 1,000.)
+    println(f"200 lengths of 1000 -> {triangle_number(vec![1000; 200])}");
+    let mut rising: Vec[i64] = Vec.new();
+    for v in 1..201 {
+        rising.push(v);
+    }
+    println(f"lengths 1 to 200 -> {triangle_number(rising)}");
+    // 300 random arrays of 0 to 60 lengths, each from 0 to a bound of
+    // 1 to 1,000, so some have many repeats and some few.
+    let mut seed: i64 = 611;
+    let mut total = 0;
+    let mut checksum: i64 = 0;
+    for _ in 0..300 {
+        let size = step(mut seed) % 61;
+        let bound = 1 + step(mut seed) % 1000;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..size {
+            nums.push(step(mut seed) % (bound + 1));
+        }
+        let got = triangle_number(nums);
+        total += got;
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"300 random arrays: {total} triangles, checksum {checksum}");
+    // 200 random lengths from 0 to 1,000.
+    let mut big: Vec[i64] = Vec.new();
+    for _ in 0..200 {
+        big.push(step(mut seed) % 1001);
+    }
+    println(f"200 random lengths -> {triangle_number(big)}");
+}
