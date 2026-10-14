@@ -756,3 +756,63 @@ fn http_server_natives_match_the_interpreter() {
         }
     }
 }
+
+/// B-2026-10-14-44 — io.md's spellings: paths and addresses are `Str`
+/// (a `String` still passes), and `File.read` / `write` count in `i64`.
+/// `karac check` accepts the program and both MIR backends run it.
+const STR_PATHS: &str = r#"fn main() {
+    let p: Str = "DIR/data.txt";
+    match fs.write(p, "hi\n") { Ok(_) => {}, Err(_) => println("w") }
+    match File.create(p) {
+        Ok(f) => {
+            let n: i64 = f.write("abc".bytes()).unwrap_or(0);
+            println(f"wrote {n}");
+            let _ = f.flush();
+        }
+        Err(_) => println("create"),
+    }
+    match File.append(p) {
+        Ok(f) => { let _ = f.write("de".bytes()); let _ = f.flush(); }
+        Err(_) => println("append"),
+    }
+    match File.open(p) {
+        Ok(f) => {
+            let mut buf: Vec[u8] = vec![0; 16];
+            let n: i64 = f.read(mut buf).unwrap_or(-1);
+            println(f"read {n}");
+        }
+        Err(_) => println("open"),
+    }
+    let owned = p.to_string();
+    println(fs.read_to_string(owned).unwrap_or(String.new()));
+    println(f"{fs.read_lines(p).unwrap_or(Vec.new()).len()} {owned}");
+    let a: Str = "127.0.0.1:1";
+    match TcpStream.connect(a) { Ok(_) => println("conn"), Err(_) => println("refused") }
+}
+"#;
+
+#[test]
+fn file_and_socket_functions_take_str() {
+    let dir = Scratch::new("str-paths");
+    let src = STR_PATHS.replace("DIR", &dir.path().to_string_lossy());
+    let file = dir.path().join("check.kara");
+    std::fs::write(&file, &src).unwrap();
+    let check = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args(["check", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "check: {}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let (interp, built) = interp_and_build(dir.path(), &src);
+    let path = dir.path().join("data.txt");
+    assert_eq!(
+        interp,
+        format!("wrote 3\nread 5\nabcde\n1 {}\nrefused\n", path.display())
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}

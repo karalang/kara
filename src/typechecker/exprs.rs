@@ -8546,12 +8546,12 @@ fn assoc_eq_bound_is_comparable(ty: &Type) -> bool {
 }
 
 /// `Str` (`StringSlice`), the string view a `String` argument passes as.
-fn is_str_view(ty: &Type) -> bool {
+pub(super) fn is_str_view(ty: &Type) -> bool {
     matches!(ty, Type::Named { name, args } if name == "StringSlice" && args.is_empty())
 }
 
 /// A `String`, or a reference to one: what passes as a `Str` parameter.
-fn is_string_place_type(ty: &Type) -> bool {
+pub(super) fn is_string_place_type(ty: &Type) -> bool {
     match ty {
         Type::Str => true,
         Type::Ref(inner) | Type::MutRef(inner) => matches!(inner.as_ref(), Type::Str),

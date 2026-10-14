@@ -199,7 +199,14 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     for (arg, param_ty) in args.iter().zip(sig.params.iter()) {
                         let at = self.infer_expr(&arg.value);
-                        self.check_assignable(param_ty, &at, arg.value.span);
+                        // design.md § Strings: a `String` passes as a `Str`
+                        // parameter at a call boundary (`fs.write(path, text)`
+                        // with `String`s, B-2026-10-14-44).
+                        let str_view = super::exprs::is_str_view(param_ty)
+                            && super::exprs::is_string_place_type(&at);
+                        if !str_view {
+                            self.check_assignable(param_ty, &at, arg.value.span);
+                        }
                         self.warn_partial_move_of_drop_struct(&arg.value, param_ty);
                     }
                     return Some(sig.return_type);

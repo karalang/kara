@@ -14887,13 +14887,14 @@ fn test_file_append_returns_result_file() {
 }
 
 #[test]
-fn test_file_read_takes_mut_slice_returns_result_usize() {
-    // file.read(buf: mut Slice[u8]) -> Result[usize, IoError]
+fn test_file_read_takes_mut_slice_returns_result_i64() {
+    // file.read(buf: mut Slice[u8]) -> Result[i64, IoError], the count in
+    // `i64` as docs/library/io.md has it (B-2026-10-14-44)
     // — receiver is `ref self`; buf is the mutable destination
     // (must be a `mut Slice[u8]` at the call site, which auto-coerces
     // from `mut ref Vec[u8]` per the existing mut-Slice arg shape).
     typecheck_ok(
-        "fn read_into(f: ref File, buf: mut Slice[u8]) -> Result[usize, IoError] \
+        "fn read_into(f: ref File, buf: mut Slice[u8]) -> Result[i64, IoError] \
              with reads(FileSystem) {
              f.read(buf)
          }

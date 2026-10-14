@@ -78,7 +78,7 @@ struct FileSystem { }
 
 impl FileSystem {
     #[compiler_builtin]
-    fn read_to_string(path: ref String) -> Result[String, IoError] { Err(IoError.Other("placeholder")) }
+    fn read_to_string(path: Str) -> Result[String, IoError] { Err(IoError.Other("placeholder")) }
 
     // `fs.read_lines(path)` — read a whole file and split it into lines
     // (design.md § I/O; phase-8 line 773). Slurp-first, matching the fs
@@ -89,12 +89,12 @@ impl FileSystem {
     // `karac build` rejects it loudly (codegen for the `Result[Vec[String], _]`
     // return is a tracked follow-on).
     #[compiler_builtin]
-    fn read_lines(path: ref String) -> Result[Vec[String], IoError] with reads(FileSystem) {
+    fn read_lines(path: Str) -> Result[Vec[String], IoError] with reads(FileSystem) {
         Err(IoError.Other("placeholder"))
     }
 
     #[compiler_builtin]
-    fn write(path: ref String, contents: ref String) -> Result[Unit, IoError] { Err(IoError.Other("placeholder")) }
+    fn write(path: Str, contents: Str) -> Result[Unit, IoError] { Err(IoError.Other("placeholder")) }
 }
 
 // Phase 8 `File` handle slice F1 (2026-05-26): stateful file I/O. The
@@ -112,16 +112,16 @@ struct File { }
 
 impl File {
     #[compiler_builtin]
-    fn open(path: ref String) -> Result[File, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn open(path: Str) -> Result[File, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]
-    fn create(path: ref String) -> Result[File, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn create(path: Str) -> Result[File, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]
-    fn append(path: ref String) -> Result[File, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn append(path: Str) -> Result[File, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]
-    fn read(ref self, buf: mut Slice[u8]) -> Result[usize, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
 
     // `write` soils the cancel-safe state of the receiver: buffered
     // OS-level writes may remain unflushed, and cancelling between
@@ -134,7 +134,7 @@ impl File {
     // stronger (they flush *and* fsync).
     #[compiler_builtin]
     #[cancel_unsafe_until(method: "flush,sync_all,sync_data")]
-    fn write(ref self, buf: Slice[u8]) -> Result[usize, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn write(ref self, buf: Slice[u8]) -> Result[i64, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]
     fn flush(ref self) -> Result[Unit, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
