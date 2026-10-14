@@ -1,0 +1,89 @@
+// Benchmark for #639: the ★ arm (the count of decodings of every prefix,
+// two at a time) on a fixed workload. See ../README.md § Benchmarks.
+
+fn alone(c: u8) -> i64 {
+    if c == b'*' {
+        9
+    } else if c == b'0' {
+        0
+    } else {
+        1
+    }
+}
+
+// The letters from 10 to 26 that `a` then `b` can spell.
+fn together(a: u8, b: u8) -> i64 {
+    if a == b'*' {
+        if b == b'*' {
+            15
+        } else if b <= b'6' {
+            2
+        } else {
+            1
+        }
+    } else if a == b'1' {
+        if b == b'*' { 9 } else { 1 }
+    } else if a == b'2' {
+        if b == b'*' {
+            6
+        } else if b <= b'6' {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+fn num_decodings(s: String) -> i64 {
+    let m = 1000000007;
+    let bytes = s.bytes();
+    let mut before = 1;
+    let mut last = alone(bytes[0]);
+    for i in 1..bytes.len() {
+        let next = (last * alone(bytes[i]) + before * together(bytes[i - 1], bytes[i])) % m;
+        before = last;
+        last = next;
+    }
+    last
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 20 strings of 100,000 characters made once, each a star with chance
+// 3 in 10 and otherwise a digit, 0 with chance 1 in 100 of the digits
+// but only after a 1, 2 or star; then 600 rounds each counting the
+// decodings of one of them.
+fn main() {
+    let mut seed: i64 = 639;
+    let mut texts: Vec[String] = Vec.new();
+    for _ in 0..20 {
+        let mut s = String.new();
+        let mut prev = b'1';
+        for _ in 0..100000 {
+            let mut c = b'*';
+            if next_random(mut seed) % 10 >= 3 {
+                c = b'1' + (next_random(mut seed) % 9) as u8;
+                if next_random(mut seed) % 100 == 0 and (prev == b'1' or prev == b'2' or prev == b'*') {
+                    c = b'0';
+                }
+            }
+            s.push(c as char);
+            prev = c;
+        }
+        texts.push(s);
+    }
+    let rounds = 600;
+    let mut total = 0;
+    let mut checksum = 0;
+    for round in 0..rounds {
+        let count = num_decodings(texts[round % 20]);
+        total = (total + count) % 1000000007;
+        checksum = (checksum * 31 + count) % 1000000007;
+    }
+    println(f"20 strings of 100000 characters, {rounds} rounds: total {total}, checksum {checksum}");
+}

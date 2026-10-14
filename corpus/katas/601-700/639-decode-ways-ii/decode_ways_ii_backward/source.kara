@@ -1,0 +1,133 @@
+// LeetCode #639: Decode Ways II -- counting from the end.
+//
+// rest[i] counts the decodings of the characters from i on: rest[n] is 1,
+// for nothing left, and the decodings from i begin with a letter from
+// character i alone, followed by any decoding from i + 1, or with a letter
+// from characters i and i + 1, followed by any decoding from i + 2. A
+// `*` is any digit from 1 to 9. Counts are kept modulo 10^9 + 7. O(n)
+// time and space.
+
+fn alone(c: u8) -> i64 {
+    if c == b'*' {
+        9
+    } else if c == b'0' {
+        0
+    } else {
+        1
+    }
+}
+
+// The letters from 10 to 26 that `a` then `b` can spell.
+fn together(a: u8, b: u8) -> i64 {
+    if a == b'*' {
+        if b == b'*' {
+            15
+        } else if b <= b'6' {
+            2
+        } else {
+            1
+        }
+    } else if a == b'1' {
+        if b == b'*' { 9 } else { 1 }
+    } else if a == b'2' {
+        if b == b'*' {
+            6
+        } else if b <= b'6' {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+fn num_decodings(s: String) -> i64 {
+    let m = 1000000007;
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut rest = vec![0; n + 2];
+    rest[n] = 1;
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        let mut count = alone(bytes[i]) * rest[i + 1];
+        if i + 1 < n {
+            count += together(bytes[i], bytes[i + 1]) * rest[i + 2];
+        }
+        rest[i] = count % m;
+    }
+    rest[0]
+}
+
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A string of `n` characters, each `*` with chance stars / 100 and
+// otherwise a digit, `0` with chance zeros / 100 of the digits.
+fn random_text(n: i64, stars: i64, zeros: i64, seed: mut ref i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        if next_random(seed) % 100 < stars {
+            s.push('*');
+        } else if next_random(seed) % 100 < zeros {
+            s.push('0');
+        } else {
+            let d = 1 + next_random(seed) % 9;
+            s.push_str(f"{d}");
+        }
+    }
+    s
+}
+
+fn ask(s: Str) {
+    println(f"{s} -> {num_decodings(String.from(s))}");
+}
+
+fn main() {
+    // The LeetCode examples.
+    ask("*");
+    ask("1*");
+    ask("2*");
+    // A lone 0; a 0 after 1, after 2, after 3 and after a star; a star
+    // after a 0; two stars; a star then 7; 27 and 26; a star, a 0 and a
+    // star; and 1s and stars by turns, ending in a 0.
+    ask("0");
+    ask("10");
+    ask("20");
+    ask("30");
+    ask("*0");
+    ask("0*");
+    ask("**");
+    ask("*7");
+    ask("27");
+    ask("26");
+    ask("*0*");
+    ask("1*1*1*0");
+    // 300 random strings of 1 to 30 characters.
+    let mut seed: i64 = 639;
+    let mut sum = 0;
+    let mut checksum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 30;
+        let stars = next_random(mut seed) % 60;
+        let zeros = next_random(mut seed) % 20;
+        let count = num_decodings(random_text(n, stars, zeros, mut seed));
+        sum = (sum + count) % 1000000007;
+        checksum = (checksum * 31 + count) % 1000000007;
+    }
+    println(f"300 random strings: total {sum}, checksum {checksum}");
+    // 100,000 characters, the most: all stars, and stars among the digits
+    // 1 to 9.
+    let mut stars = String.new();
+    for _ in 0..100000 {
+        stars.push('*');
+    }
+    println(f"100000 stars -> {num_decodings(stars)}");
+    let mixed = random_text(100000, 30, 0, mut seed);
+    println(f"100000 mixed characters -> {num_decodings(mixed)}");
+}

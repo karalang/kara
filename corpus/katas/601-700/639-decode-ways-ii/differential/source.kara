@@ -1,0 +1,346 @@
+// LeetCode #639: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// strings.
+
+// ---- star arm ----------------------------------------------------------
+
+fn alone_star(c: u8) -> i64 {
+    if c == b'*' {
+        9
+    } else if c == b'0' {
+        0
+    } else {
+        1
+    }
+}
+
+// The letters from 10 to 26 that `a` then `b` can spell.
+fn together_star(a: u8, b: u8) -> i64 {
+    if a == b'*' {
+        if b == b'*' {
+            15
+        } else if b <= b'6' {
+            2
+        } else {
+            1
+        }
+    } else if a == b'1' {
+        if b == b'*' { 9 } else { 1 }
+    } else if a == b'2' {
+        if b == b'*' {
+            6
+        } else if b <= b'6' {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+fn num_decodings_star(s: String) -> i64 {
+    let m = 1000000007;
+    let bytes = s.bytes();
+    let mut before = 1;
+    let mut last = alone_star(bytes[0]);
+    for i in 1..bytes.len() {
+        let next = (last * alone_star(bytes[i]) + before * together_star(bytes[i - 1], bytes[i])) % m;
+        before = last;
+        last = next;
+    }
+    last
+}
+
+// ---- table arm ---------------------------------------------------------
+
+fn alone_table(c: u8) -> i64 {
+    if c == b'*' {
+        9
+    } else if c == b'0' {
+        0
+    } else {
+        1
+    }
+}
+
+// The letters from 10 to 26 that `a` then `b` can spell.
+fn together_table(a: u8, b: u8) -> i64 {
+    if a == b'*' {
+        if b == b'*' {
+            15
+        } else if b <= b'6' {
+            2
+        } else {
+            1
+        }
+    } else if a == b'1' {
+        if b == b'*' { 9 } else { 1 }
+    } else if a == b'2' {
+        if b == b'*' {
+            6
+        } else if b <= b'6' {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+fn num_decodings_table(s: String) -> i64 {
+    let m = 1000000007;
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut ways = vec![0; n + 1];
+    ways[0] = 1;
+    for i in 1..n + 1 {
+        ways[i] = ways[i - 1] * alone_table(bytes[i - 1]) % m;
+        if i >= 2 {
+            ways[i] = (ways[i] + ways[i - 2] * together_table(bytes[i - 2], bytes[i - 1])) % m;
+        }
+    }
+    ways[n]
+}
+
+// ---- states arm --------------------------------------------------------
+
+fn num_decodings_states(s: String) -> i64 {
+    let m = 1000000007;
+    let mut done = 1;
+    let mut one = 0;
+    let mut two = 0;
+    for c in s.bytes().iter() {
+        let c = *c;
+        if c == b'*' {
+            let next = (9 * done + 9 * one + 6 * two) % m;
+            one = done;
+            two = done;
+            done = next;
+        } else {
+            let mut next = one;
+            if c <= b'6' {
+                next += two;
+            }
+            if c != b'0' {
+                next += done;
+            }
+            next = next % m;
+            one = if c == b'1' { done } else { 0 };
+            two = if c == b'2' { done } else { 0 };
+            done = next;
+        }
+    }
+    done
+}
+
+// ---- backward arm ------------------------------------------------------
+
+fn alone_backward(c: u8) -> i64 {
+    if c == b'*' {
+        9
+    } else if c == b'0' {
+        0
+    } else {
+        1
+    }
+}
+
+// The letters from 10 to 26 that `a` then `b` can spell.
+fn together_backward(a: u8, b: u8) -> i64 {
+    if a == b'*' {
+        if b == b'*' {
+            15
+        } else if b <= b'6' {
+            2
+        } else {
+            1
+        }
+    } else if a == b'1' {
+        if b == b'*' { 9 } else { 1 }
+    } else if a == b'2' {
+        if b == b'*' {
+            6
+        } else if b <= b'6' {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+fn num_decodings_backward(s: String) -> i64 {
+    let m = 1000000007;
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut rest = vec![0; n + 2];
+    rest[n] = 1;
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        let mut count = alone_backward(bytes[i]) * rest[i + 1];
+        if i + 1 < n {
+            count += together_backward(bytes[i], bytes[i + 1]) * rest[i + 2];
+        }
+        rest[i] = count % m;
+    }
+    rest[0]
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// 1 to 8 characters drawn from "**1122203456789", with at most two
+// stars, so that 1s, 2s, 0s and stars come often.
+fn random_text(seed: mut ref i64) -> String {
+    let pool = "**1122203456789".bytes();
+    let n = 1 + next_random(seed) % 8;
+    let mut s = String.new();
+    let mut stars = 0;
+    for _ in 0..n {
+        let mut c = pool[next_random(seed) % pool.len()];
+        if c == b'*' {
+            stars += 1;
+            if stars > 2 {
+                c = b'1';
+            }
+        }
+        s.push(c as char);
+    }
+    s
+}
+
+// Whether character c can stand for the digit d.
+fn can_be(c: u8, d: i64) -> bool {
+    if c == b'*' {
+        d >= 1 and d <= 9
+    } else {
+        (c - b'0') as i64 == d
+    }
+}
+
+// The definition: a decoding from position i is a letter from 1 to 26
+// spelled by the next one or two characters, followed by a decoding of
+// what is left. Every letter is tried; nothing is remembered.
+fn every_way(b: Slice[u8], i: i64) -> i64 {
+    if i == b.len() {
+        return 1;
+    }
+    let mut count = 0;
+    for letter in 1..27 {
+        if letter < 10 {
+            if can_be(b[i], letter) {
+                count += every_way(b, i + 1);
+            }
+        } else if i + 1 < b.len() and can_be(b[i], letter / 10) and can_be(b[i + 1], letter % 10) {
+            count += every_way(b, i + 2);
+        }
+    }
+    count
+}
+
+// `s` with the character at i replaced by `c`.
+fn with_at(s: String, i: i64, c: u8) -> String {
+    let b = s.bytes();
+    let mut out = String.new();
+    for j in 0..b.len() {
+        out.push(if j == i { c } else { b[j] } as char);
+    }
+    out
+}
+
+// `s` with 3 -> 4 -> 5 -> 6 -> 3 and 7 -> 8 -> 9 -> 7.
+fn rotated(s: String) -> String {
+    let mut out = String.new();
+    for c in s.bytes().iter() {
+        let c = *c;
+        let r = if c == b'6' {
+            b'3'
+        } else if c == b'9' {
+            b'7'
+        } else if c >= b'3' and c <= b'8' {
+            c + 1
+        } else {
+            c
+        };
+        out.push(r as char);
+    }
+    out
+}
+
+fn answer(which: i64, s: String) -> i64 {
+    if which == 0 {
+        num_decodings_star(s)
+    } else if which == 1 {
+        num_decodings_table(s)
+    } else if which == 2 {
+        num_decodings_states(s)
+    } else {
+        num_decodings_backward(s)
+    }
+}
+
+fn main() {
+    let m = 1000000007;
+    let count = 1000;
+    let mut seed: i64 = 6390;
+    let mut checks = 0;
+    let mut decodable = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        let s = random_text(mut seed);
+        let t = random_text(mut seed);
+        let want = every_way(s.bytes(), 0) % m;
+        if want > 0 {
+            decodable += 1;
+        }
+        let b = s.bytes();
+        let mut star = -1;
+        for i in 0..b.len() {
+            if star < 0 and b[i] == b'*' {
+                star = i;
+            }
+        }
+        let cut = next_random(mut seed) % (b.len() + 1);
+        let dead = f"{s[0..cut]}50{s[cut..b.len()]}";
+        for which in 0..4 {
+            let got = answer(which, s);
+            // P2: a star is the sum of the nine digits in its place.
+            let mut spread = got;
+            if star >= 0 {
+                spread = 0;
+                for d in 1..10 {
+                    spread = (spread + answer(which, with_at(s, star, b'0' + d as u8))) % m;
+                }
+            }
+            let ok = vec![
+                // P1: the count is the definition's.
+                got == want,
+                spread == got,
+                // P3: nothing reads across a 3 into what follows it.
+                answer(which, f"{s}3{t}") == answer(which, f"{s}3") * answer(which, t) % m,
+                // P4: a 5 then a 0 anywhere leaves no decoding.
+                answer(which, dead) == 0,
+                // P5: 3 to 6 are alike, and so are 7 to 9.
+                answer(which, rotated(s)) == got,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases ({decodable} decodable), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
