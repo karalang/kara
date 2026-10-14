@@ -97,10 +97,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 603 |
 | double-free | 427 |
 | codegen-gap | 255 |
-| missing-feature | 245 |
+| missing-feature | 246 |
 | other | 172 |
+| false-positive | 166 |
 | perf | 164 |
-| false-positive | 164 |
 | diagnostics | 156 |
 | crash | 114 |
 | soundness | 102 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2878 |
-| interp | 916 |
-| typecheck | 396 |
+| codegen | 2879 |
+| interp | 917 |
+| typecheck | 398 |
 | other | 115 |
-| ownership | 87 |
+| ownership | 88 |
 | cli | 75 |
 | runtime | 66 |
 | parser | 61 |
@@ -609,6 +609,9 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-21 | 2026-10-14 | codegen | medium | The MIR compiled path (`__mir-llvm-run`, `__mir-llvm-asan`, `karac build --mir`) never runs the MIR validator, so a body the MIR interpreter refuses as "invalid MIR" is compiled and run: B-2026-10-14-11's ill-typed copy became a silent exit 101 and a stack-buffer-overflow instead of an error | — |
 | B-2026-10-14-23 | 2026-10-14 | typecheck | medium | A closure that passes a captured non-`Copy` binding to a CLOSURE-VALUED local's `ref` parameter is judged once-callable ("consumes captured binding 'tree'"), so `nuts.iter().map(|n| far(n, tree)).sum()` with `let far = |a: ref Vec[i64], b: ref Vec[i64]| ...` is refused by `karac check` and both MIR backends; the same call to a `fn` with the same parameters is accepted | — |
 | B-2026-10-14-24 | 2026-10-14 | typecheck | medium | The `karac check` half of B-2026-10-13-7, which its fix (3a31f21ad7) left: `karac check` types the result of `min` / `max` / `next` / `last` over `v.iter()` as `Option[T]`, so the spelling that fix documents and tests/mir_iterators.rs pins, `*m.iter().max().unwrap()`, is refused ("unary '*' requires 'ref T' ... found 'i64'") while both MIR backends run it; and `min_by` / `max_by` / `min_by_key` / `max_by_key` are still "no method ... on type 'Iterator'" to `karac check` | — |
+| B-2026-10-14-25 | 2026-10-14 | typecheck | medium | `karac check` and both MIR backends refuse the call-site `mut` marker on an argument rooted at a `mut ref` binding ("this argument is already a mut-ref; drop the `mut` marker"), though design.md § Call-site `mut` markers requires it "whatever the argument's root" and its own example `sort_in_place(mut s.scores)` with `s: mut ref Session` is refused | — |
+| B-2026-10-14-26 | 2026-10-14 | ownership+interp+codegen | medium | `ref place` on a field (`ref s.field`, design.md § `*` and `ref` in expressions) does not build on either MIR backend ("E_REF_OPERAND_UNSUPPORTED: only `ref <sequence>[i]` is supported in v1"), and `karac check` refuses returning one ("this borrow-return form is not yet supported"), so the spec's own `fn name(user: User) -> ref String { ref user.name }` is refused everywhere | — |
+| B-2026-10-14-27 | 2026-10-14 | typecheck | medium | `karac check` refuses `*w` as an operand of `==` (`for w in words.iter() { if *w == target { ... } }` over a `Vec[String]`) with `borrow_projection_copy` ("cannot move a non-`Copy` value out of a borrow with `*`"), though design.md § `*` and `ref` in expressions says `==` borrows `*r` and needs no copy, and both MIR backends run it; the unstarred `w == target`, which that section calls a type error, passes | — |
 
 ### Relocated
 
