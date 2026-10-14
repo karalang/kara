@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 172 |
 | false-positive | 168 |
 | perf | 164 |
-| diagnostics | 157 |
+| diagnostics | 158 |
 | crash | 115 |
 | soundness | 103 |
 | use-after-free | 90 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2882 |
 | interp | 919 |
-| typecheck | 402 |
+| typecheck | 403 |
 | other | 115 |
 | ownership | 90 |
 | cli | 75 |
@@ -602,11 +602,11 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-14 | 2026-10-14 | codegen | medium | `Vec.with_capacity(n)` and `String.with_capacity(n)` reserve nothing on the MIR compiled backend: `Vec.with_capacity(5).capacity()` prints 0 under `__mir-llvm-run` and 5 under `__mir-run`, and presizing buys nothing -- kata 559's bench walk runs 2.37 to 2.45 s with each node's children `Vec` presized, the same as without, where the Rust mirror drops from 2.0 s to 0.82 to 0.87 s | — |
 | B-2026-10-14-18 | 2026-10-14 | typecheck | medium | `karac check` accepts `flatten()` over an iterator whose items are collections, `mat.iter().flatten()` on a `Vec[Vec[i64]]`, but the spec's signature (`where Self.Item: Iterator`) excludes it and both MIR backends refuse it: a program that passes `karac check` does not run | — |
 | B-2026-10-14-24 | 2026-10-14 | typecheck | medium | The `karac check` half of B-2026-10-13-7, which its fix (3a31f21ad7) left: `karac check` types the result of `min` / `max` / `next` / `last` over `v.iter()` as `Option[T]`, so the spelling that fix documents and tests/mir_iterators.rs pins, `*m.iter().max().unwrap()`, is refused ("unary '*' requires 'ref T' ... found 'i64'") while both MIR backends run it; and `min_by` / `max_by` / `min_by_key` / `max_by_key` are still "no method ... on type 'Iterator'" to `karac check` | — |
-| B-2026-10-14-25 | 2026-10-14 | typecheck | medium | `karac check` and both MIR backends refuse the call-site `mut` marker on an argument rooted at a `mut ref` binding ("this argument is already a mut-ref; drop the `mut` marker"), though design.md § Call-site `mut` markers requires it "whatever the argument's root" and its own example `sort_in_place(mut s.scores)` with `s: mut ref Session` is refused | — |
 | B-2026-10-14-26 | 2026-10-14 | ownership+interp+codegen | medium | `ref place` on a field (`ref s.field`, design.md § `*` and `ref` in expressions) does not build on either MIR backend ("E_REF_OPERAND_UNSUPPORTED: only `ref <sequence>[i]` is supported in v1"), and `karac check` refuses returning one ("this borrow-return form is not yet supported"), so the spec's own `fn name(user: User) -> ref String { ref user.name }` is refused everywhere | — |
 | B-2026-10-14-29 | 2026-10-14 | interp+codegen | medium | The MIR borrow checker keeps a `Vec[(ref Node, i64)]` borrowed for as long as a `ref Node` copied out of one of its elements is live: `let (a, n) = v[0]; v.pop(); a.val` is refused on both MIR backends ("mutable borrow of _2 while it is borrowed", E0516), though core-semantics §1.1 makes the tuple `Copy` and the copied reference keeps the origin of the node, not of the vector; the same read out of a `Vec[ref Node]` runs, and `karac check` passes both | — |
 | B-2026-10-14-32 | 2026-10-14 | typecheck+codegen | low | The MIR front end lowers a move of a non-`Copy` field out of a `shared` value or out of a `ref` (`|q: S| q.t`, `fn get(ref self) -> String { self.word }`, `fn give(i: ref Inner) -> String { let w = i.word; w }`) instead of refusing it, so the MIR validator reports `invalid MIR: ... move out of _2.1, which is inside a shared value (core semantics §3.7)` where a typecheck/ownership diagnostic with a source position belongs | — |
 | B-2026-10-14-33 | 2026-10-14 | resolver+typecheck | low | A user type still cannot implement `Neg`, `Not`, `Index` or `IndexMut`: d02338bc95 let the binary arithmetic and bitwise operator traits through on check and MIR, and the unary and subscript traits are still refused at resolve as "operator traits are stdlib-only" | — |
+| B-2026-10-14-35 | 2026-10-14 | typecheck | low | A `mut ref` / `mut Slice` argument forwarded WITHOUT the call-site `mut` marker is still accepted by `karac check` and the MIR pipeline, though design.md § Call-site `mut` markers marks such an argument "whatever the argument's root" and says "a missing marker is an error"; d8c605558f made the marker legal there but left it optional | — |
 
 ### Relocated
 
@@ -4000,6 +4000,7 @@ registered in the callee's prologue, not by-value struct params in general. | �
 | B-2026-10-14-21 | codegen | medium | The MIR compiled path (`__mir-llvm-run`, `__mir-llvm-asan`, `karac build --mir`) never runs the MIR validator, so a body the MIR interpreter refuses… | 8861296ae3 |
 | B-2026-10-14-22 | typecheck | medium | `karac check` refuses `*n` on a `ref` to a `shared` handle as a move out of a borrow (`borrow_projection_copy`: "cannot move a non-`Copy` value out o… | 5391da32d4 |
 | B-2026-10-14-23 | typecheck | medium | A closure that passes a captured non-`Copy` binding to a CLOSURE-VALUED local's `ref` parameter is judged once-callable ("consumes captured binding '… | 8579c4f0d7 |
+| B-2026-10-14-25 | typecheck | medium | `karac check` and both MIR backends refuse the call-site `mut` marker on an argument rooted at a `mut ref` binding ("this argument is already a mut-r… | d8c605558f |
 | B-2026-10-14-27 | typecheck | medium | `karac check` refuses `*w` as an operand of `==` (`for w in words.iter() { if *w == target { .. | 1be6eb5497 |
 | B-2026-10-14-28 | ownership | medium | `karac check`'s ownership pass counts lending a bare `for` element into a `ref` slot as a MOVE, so lending it twice is refused: `v.push(c); v.push(c)… | 31aadf36c1 |
 | B-2026-10-14-30 | resolver | medium | A user type cannot implement an arithmetic, bitwise or subscript operator trait: `impl Add for Money { .. | d02338bc95 |
