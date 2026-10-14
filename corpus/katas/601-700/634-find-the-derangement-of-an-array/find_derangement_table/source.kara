@@ -1,0 +1,35 @@
+// LeetCode #634: Find the Derangement of An Array -- a table.
+//
+// The same recurrence as the ★ arm, D(n) = (n - 1) * (D(n - 1) +
+// D(n - 2)), filled into a `Vec` of every D(i) from 0 to n, with D(0) = 1
+// and D(1) = 0. O(n) time and space.
+
+const MOD: i64 = 1000000007;
+
+fn find_derangement(n: i64) -> i64 {
+    let mut d = vec![0; n + 1];
+    d[0] = 1;
+    for i in 2..n + 1 {
+        d[i] = (i - 1) * ((d[i - 1] + d[i - 2]) % MOD) % MOD;
+    }
+    d[n]
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    // The LeetCode examples, then the first values, two either side of
+    // the modulus, and larger n up to the limit.
+    for n in vec![3, 2, 1, 4, 5, 6, 10, 12, 13, 20, 1000, 99999, 1000000] {
+        println(f"n = {n} -> {find_derangement(n)}");
+    }
+    // Every n from 1 to 2,000.
+    let mut total = 0;
+    let mut checksum = 0;
+    for n in 1..2001 {
+        let d = find_derangement(n);
+        total = (total + d) % MOD;
+        checksum = (checksum * 31 + d) % MOD;
+    }
+    println(f"1 to 2000: total {total}, checksum {checksum}");
+}

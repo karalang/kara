@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/634-find-the-derangement-of-an-array/find_derangement_series.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "1726a75c5"
+extracted_src = "94a19779"
+model_rev = "1aa23105"
+model_src = "94a19779"

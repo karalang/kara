@@ -1,0 +1,67 @@
+// LeetCode #634: Find the Derangement of An Array -- inclusion-exclusion.
+//
+// Counting permutations that fix none of the n places by inclusion and
+// exclusion over the places they do fix gives D(n) = n! * (1/0! - 1/1!
+// + 1/2! - ... + (-1)^n / n!). The division is done modulo the prime
+// 10^9 + 7: one modular power takes the inverse of n!, and multiplying
+// back down gives the inverse of every smaller factorial. O(n + log p).
+
+const MOD: i64 = 1000000007;
+
+fn find_derangement(n: i64) -> i64 {
+    let mut factorial = 1;
+    for i in 1..n + 1 {
+        factorial = factorial * i % MOD;
+    }
+    // inverse[k] is 1 / k! modulo MOD.
+    let mut inverse = vec![0; n + 1];
+    inverse[n] = power(factorial, MOD - 2);
+    let mut k = n;
+    while k > 0 {
+        inverse[k - 1] = inverse[k] * k % MOD;
+        k -= 1;
+    }
+    let mut sum = 0;
+    for k in 0..n + 1 {
+        if k % 2 == 0 {
+            sum = (sum + inverse[k]) % MOD;
+        } else {
+            sum = (sum - inverse[k] + MOD) % MOD;
+        }
+    }
+    factorial * sum % MOD
+}
+
+// base^exp modulo MOD, by squaring.
+fn power(base: i64, exp: i64) -> i64 {
+    let mut result = 1;
+    let mut b = base % MOD;
+    let mut e = exp;
+    while e > 0 {
+        if e % 2 == 1 {
+            result = result * b % MOD;
+        }
+        b = b * b % MOD;
+        e /= 2;
+    }
+    result
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    // The LeetCode examples, then the first values, two either side of
+    // the modulus, and larger n up to the limit.
+    for n in vec![3, 2, 1, 4, 5, 6, 10, 12, 13, 20, 1000, 99999, 1000000] {
+        println(f"n = {n} -> {find_derangement(n)}");
+    }
+    // Every n from 1 to 2,000.
+    let mut total = 0;
+    let mut checksum = 0;
+    for n in 1..2001 {
+        let d = find_derangement(n);
+        total = (total + d) % MOD;
+        checksum = (checksum * 31 + d) % MOD;
+    }
+    println(f"1 to 2000: total {total}, checksum {checksum}");
+}

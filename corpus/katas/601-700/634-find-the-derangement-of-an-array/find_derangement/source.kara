@@ -1,0 +1,39 @@
+// LeetCode #634: Find the Derangement of An Array -- rolling recurrence.
+//
+// In a derangement of 1..n, n goes to some place i of the n - 1 others.
+// Either i goes to n's place, leaving a derangement of the other n - 2,
+// or it does not, which is a derangement of n - 1 with i standing in
+// for n. So D(n) = (n - 1) * (D(n - 1) + D(n - 2)), with D(1) = 0 and
+// D(2) = 1, kept in two variables. O(n) time, O(1) space.
+
+const MOD: i64 = 1000000007;
+
+fn find_derangement(n: i64) -> i64 {
+    let mut before = 1;
+    let mut last = 0;
+    for i in 2..n + 1 {
+        let next = (i - 1) * ((last + before) % MOD) % MOD;
+        before = last;
+        last = next;
+    }
+    last
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn main() {
+    // The LeetCode examples, then the first values, two either side of
+    // the modulus, and larger n up to the limit.
+    for n in vec![3, 2, 1, 4, 5, 6, 10, 12, 13, 20, 1000, 99999, 1000000] {
+        println(f"n = {n} -> {find_derangement(n)}");
+    }
+    // Every n from 1 to 2,000.
+    let mut total = 0;
+    let mut checksum = 0;
+    for n in 1..2001 {
+        let d = find_derangement(n);
+        total = (total + d) % MOD;
+        checksum = (checksum * 31 + d) % MOD;
+    }
+    println(f"1 to 2000: total {total}, checksum {checksum}");
+}

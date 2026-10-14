@@ -1,0 +1,210 @@
+// LeetCode #634: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// inputs.
+
+// ---- star arm ----------------------------------------------------------
+
+fn find_derangement_star(n: i64) -> i64 {
+    let mut before = 1;
+    let mut last = 0;
+    for i in 2..n + 1 {
+        let next = (i - 1) * ((last + before) % MOD) % MOD;
+        before = last;
+        last = next;
+    }
+    last
+}
+
+// ---- table arm ---------------------------------------------------------
+
+fn find_derangement_table(n: i64) -> i64 {
+    let mut d = vec![0; n + 1];
+    d[0] = 1;
+    for i in 2..n + 1 {
+        d[i] = (i - 1) * ((d[i - 1] + d[i - 2]) % MOD) % MOD;
+    }
+    d[n]
+}
+
+// ---- alternating arm ---------------------------------------------------
+
+fn find_derangement_alternating(n: i64) -> i64 {
+    let mut d = 1;
+    for i in 1..n + 1 {
+        if i % 2 == 0 {
+            d = (i * d + 1) % MOD;
+        } else {
+            d = (i * d - 1 + MOD) % MOD;
+        }
+    }
+    d
+}
+
+// ---- series arm --------------------------------------------------------
+
+fn find_derangement_series(n: i64) -> i64 {
+    let mut factorial = 1;
+    for i in 1..n + 1 {
+        factorial = factorial * i % MOD;
+    }
+    // inverse[k] is 1 / k! modulo MOD.
+    let mut inverse = vec![0; n + 1];
+    inverse[n] = power_series(factorial, MOD - 2);
+    let mut k = n;
+    while k > 0 {
+        inverse[k - 1] = inverse[k] * k % MOD;
+        k -= 1;
+    }
+    let mut sum = 0;
+    for k in 0..n + 1 {
+        if k % 2 == 0 {
+            sum = (sum + inverse[k]) % MOD;
+        } else {
+            sum = (sum - inverse[k] + MOD) % MOD;
+        }
+    }
+    factorial * sum % MOD
+}
+
+// base^exp modulo MOD, by squaring.
+fn power_series(base: i64, exp: i64) -> i64 {
+    let mut result = 1;
+    let mut b = base % MOD;
+    let mut e = exp;
+    while e > 0 {
+        if e % 2 == 1 {
+            result = result * b % MOD;
+        }
+        b = b * b % MOD;
+        e /= 2;
+    }
+    result
+}
+
+// ---- the definition and the properties ------------------------------------
+
+const MOD: i64 = 1000000007;
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The number of ways to fill places `at` to n - 1 with the unused
+// values, no value in its own place.
+fn count(n: i64, at: i64, used: mut ref Vec[bool]) -> i64 {
+    if at == n {
+        return 1;
+    }
+    let mut ways = 0;
+    for value in 0..n {
+        if value != at and not used[value] {
+            used[value] = true;
+            ways += count(n, at + 1, mut used);
+            used[value] = false;
+        }
+    }
+    ways
+}
+
+// The definition: the permutations of 1..n with no value in its own
+// place, counted one by one.
+fn definition(n: i64) -> i64 {
+    let mut used = vec![false; n];
+    count(n, 0, mut used)
+}
+
+fn answer(which: i64, n: i64) -> i64 {
+    if which == 0 {
+        find_derangement_star(n)
+    } else if which == 1 {
+        find_derangement_table(n)
+    } else if which == 2 {
+        find_derangement_alternating(n)
+    } else {
+        find_derangement_series(n)
+    }
+}
+
+// D(k) for k from 0 to n, with D(0) = 1.
+fn all_up_to(which: i64, n: i64) -> Vec[i64] {
+    let mut d = vec![1];
+    for k in 1..n + 1 {
+        d.push(answer(which, k));
+    }
+    d
+}
+
+fn main() {
+    let mut defined = vec![1];
+    for n in 1..9 {
+        defined.push(definition(n));
+    }
+    let count = 1000;
+    let mut seed: i64 = 6340;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..count {
+        // n from 1 to 8 for the definition, m from 3 to 500 for the
+        // recurrences, q from 1 to 40 for the sum over fixed places,
+        // and r from 1 to 15 for n! / e.
+        let n = 1 + next_random(mut seed) % 8;
+        let m = 3 + next_random(mut seed) % 498;
+        let q = 1 + next_random(mut seed) % 40;
+        let r = 1 + next_random(mut seed) % 15;
+        for which in 0..4 {
+            let dm = answer(which, m);
+            let dm1 = answer(which, m - 1);
+            let dm2 = answer(which, m - 2);
+            let sign = if m % 2 == 0 { 1 } else { MOD - 1 };
+            // P4: a permutation of q fixes some set of k places and
+            // deranges the rest, so the sum of C(q, k) * D(q - k) over k
+            // is q!.
+            let d = all_up_to(which, q);
+            let mut row = vec![1];
+            let mut sum = 0;
+            let mut factorial = 1;
+            for i in 1..q + 1 {
+                factorial = factorial * i % MOD;
+                let mut next = vec![1];
+                for k in 1..i {
+                    next.push((row[k - 1] + row[k]) % MOD);
+                }
+                next.push(1);
+                row = next;
+            }
+            for k in 0..q + 1 {
+                sum = (sum + row[k] * d[q - k]) % MOD;
+            }
+            let mut exact = 1;
+            for i in 1..r + 1 {
+                exact *= i;
+            }
+            let near = (exact as f64 / 2.718281828459045).round() as i64;
+            let ok = vec![
+                // P1: the count is the definition's.
+                answer(which, n) == defined[n],
+                // P2: D(m) = (m - 1) * (D(m - 1) + D(m - 2)).
+                dm == (m - 1) * ((dm1 + dm2) % MOD) % MOD,
+                // P3: D(m) = m * D(m - 1) + (-1)^m.
+                dm == (m * dm1 + sign) % MOD,
+                // P4: the sum over fixed places is q!.
+                sum == factorial,
+                // P5: D(r) is r! / e rounded to the nearest integer.
+                answer(which, r) == near % MOD,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases (D(8) = {defined[8]}), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

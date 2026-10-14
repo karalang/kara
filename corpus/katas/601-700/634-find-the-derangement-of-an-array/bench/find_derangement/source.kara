@@ -1,0 +1,40 @@
+// LeetCode #634: Find the Derangement of An Array -- bench program.
+//
+// The ★ arm for 100 random n from 1 to 1,000,000, made once and then
+// answered in turn, adding up the answers and putting each into a
+// checksum.
+
+const MOD: i64 = 1000000007;
+
+fn find_derangement(n: i64) -> i64 {
+    let mut before = 1;
+    let mut last = 0;
+    for i in 2..n + 1 {
+        let next = (i - 1) * ((last + before) % MOD) % MOD;
+        before = last;
+        last = next;
+    }
+    last
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed: i64 = 634;
+    let mut sizes: Vec[i64] = Vec.new();
+    for _ in 0..100 {
+        let wide = next_random(mut seed) * 32768 + next_random(mut seed);
+        sizes.push(1 + wide % 1000000);
+    }
+    let mut total = 0;
+    let mut checksum = 0;
+    for n in sizes.iter() {
+        let d = find_derangement(*n);
+        total = (total + d) % MOD;
+        checksum = (checksum * 31 + d) % MOD;
+    }
+    println(f"{sizes.len()} values of n: total {total}, checksum {checksum}");
+}
