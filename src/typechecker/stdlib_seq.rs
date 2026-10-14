@@ -426,7 +426,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let arg_ty = self.infer_expr(&args[0].value);
-                    if !is_str_like(&arg_ty) && !matches!(arg_ty, Type::Char | Type::Error) {
+                    if !is_str_like(&arg_ty) && !is_char_arg(&arg_ty) {
                         self.type_error(
                             format!(
                                 "'split' expects a String or char separator, found '{}'",
@@ -847,7 +847,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let arg_ty = self.infer_expr(&args[0].value);
-                    if !matches!(arg_ty, Type::Char | Type::Error) {
+                    if !is_char_arg(&arg_ty) {
                         self.type_error(
                             format!(
                                 "'push' expects a Char argument, found '{}'",
@@ -877,7 +877,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let arg_ty = self.infer_expr(&args[0].value);
-                    if !is_str_like(&arg_ty) && !matches!(arg_ty, Type::Char | Type::Error) {
+                    if !is_str_like(&arg_ty) && !is_char_arg(&arg_ty) {
                         self.type_error(
                             format!(
                                 "'find' expects a String or char needle, found '{}'",
@@ -2007,5 +2007,16 @@ impl<'a> super::TypeChecker<'a> {
                 TypeErrorKind::WrongNumberOfArgs,
             );
         }
+    }
+}
+
+/// A char argument: a `char`, or a `ref char` read through (a `Copy` value
+/// is read through its reference where a `T` is expected, as for a user
+/// fn's parameter; B-2026-10-14-2), or an earlier error.
+fn is_char_arg(t: &Type) -> bool {
+    match t {
+        Type::Char | Type::Error => true,
+        Type::Ref(inner) => matches!(**inner, Type::Char),
+        _ => false,
     }
 }

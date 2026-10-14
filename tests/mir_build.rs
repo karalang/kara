@@ -1041,3 +1041,32 @@ fn main() {
         }
     }
 }
+
+// B-2026-10-14-2 — a `ref char` from `Vec[char].iter()` is read as its value
+// by text's char-taking methods (`push`, `find`, `split`), on a `String` and
+// on a `Str`, as it is by a user fn's `char` parameter (§5.10).
+#[test]
+fn mir_text_methods_read_a_ref_char() {
+    const SRC: &str = r#"fn main() {
+    let days: Vec[char] = vec!['a', 'b', ','];
+    let mut s = String.new();
+    for c in days.iter() {
+        s.push(c);
+    }
+    println(s);
+    let t = "x,y,ab";
+    let owned = String.from("ba,c");
+    for c in days.iter() {
+        println(f"{t.find(c)} {t.split(c).len()} {owned.find(c)} {owned.split(c).len()}");
+    }
+}
+"#;
+    let want = "ab,\nSome(4) 2 Some(1) 2\nSome(5) 2 Some(0) 2\nSome(1) 3 Some(2) 2\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

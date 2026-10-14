@@ -13451,6 +13451,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                         rest.push(self.owned_operand(&a.value, base)?);
                         continue;
                     }
+                    // Text's char argument (`push`, `find`, `split`) reads
+                    // a `ref char` as its value (§5.10; B-2026-10-14-2).
+                    if matches!(self.tys().tcx().kind(base), HK::Str | HK::StaticStr) {
+                        if let HK::Ref(t) | HK::MutRef(t) = self.tys().tcx().kind(at) {
+                            if matches!(self.tys().tcx().kind(t), HK::Char) {
+                                rest.push(self.owned_operand(&a.value, t)?);
+                                continue;
+                            }
+                        }
+                    }
                     // A borrowed value stored into a container of owned
                     // elements is a move out of the borrow, which the move
                     // check refuses (a container of references stores it).
