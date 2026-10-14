@@ -1,0 +1,102 @@
+// Benchmark for #564: Find the Closest Palindrome -- the ★ arm (five
+// candidates).
+//
+// A palindrome is fixed by its first half. The closest one to n keeps
+// n's first half, or that half one smaller or one larger, mirrored; or
+// it has a different number of digits, and then it is 99...9 (one digit
+// shorter) or 10...01 (one digit longer). The answer is the candidate
+// nearest n that is not n, the smaller on a tie. O(digits) time.
+
+// `half` followed by its first `length` / 2 digits reversed: the
+// palindrome of `length` digits whose first half is `half`. When `half`
+// has lost or gained a digit (10 - 1, 99 + 1) the result is one digit
+// short or long, and still a palindrome.
+fn mirrored(half: i64, length: i64) -> i64 {
+    let text = half.to_string();
+    let mut s = text.clone();
+    let chars: Vec[char] = text.chars().collect();
+    let mut i = (length / 2).min(chars.len()) - 1;
+    while i >= 0 {
+        s.push(chars[i]);
+        i -= 1;
+    }
+    i64.parse(s).unwrap()
+}
+
+fn nearest_palindromic(n: String) -> String {
+    let value = i64.parse(n).unwrap();
+    let length = n.len();
+    let half = i64.parse(n[..(length + 1) / 2]).unwrap();
+    let mut candidates = vec![
+        10.pow((length - 1) as u32) - 1,
+        10.pow(length as u32) + 1,
+    ];
+    for h in [half - 1, half, half + 1] {
+        candidates.push(mirrored(h, length));
+    }
+    let mut best = -1;
+    for c in candidates {
+        if c == value or c < 0 {
+            continue;
+        }
+        let d = (c - value).abs();
+        let bd = (best - value).abs();
+        if best == -1 or d < bd or (d == bd and c < best) {
+            best = c;
+        }
+    }
+    best.to_string()
+}
+
+// ---- benchmark --------------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A random number of 1 to 18 digits: plain, a palindrome, or a power of
+// ten moved by up to 3, in turn.
+fn random_number(t: i64, seed: mut ref i64) -> String {
+    let length = 1 + step(seed) % 18;
+    let mut digits: Vec[i64] = vec![1 + step(seed) % 9];
+    for _ in 1..length {
+        digits.push(step(seed) % 10);
+    }
+    if t % 3 == 1 {
+        for i in 0..length / 2 {
+            digits[length - 1 - i] = digits[i];
+        }
+    }
+    let mut value: i64 = 0;
+    for d in digits {
+        value = value * 10 + d;
+    }
+    if t % 3 == 2 {
+        value = 10.pow((length - 1) as u32) + step(seed) % 7 - 3;
+        if value < 1 {
+            value = 1;
+        }
+    }
+    value.to_string()
+}
+
+fn main() {
+    // 10,000 random numbers of 1 to 18 digits built once, as the test
+    // harness makes them. Then 300 times over, every number is answered.
+    let count = 10000;
+    let rounds = 300;
+    let mut seed: i64 = 564;
+    let mut numbers: Vec[String] = Vec.new();
+    for t in 0..count {
+        numbers.push(random_number(t, mut seed));
+    }
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        for g in 0..count {
+            let got = i64.parse(nearest_palindromic(numbers[(round * 7 + g) % count])).unwrap();
+            checksum = (checksum * 31 + got % 1000000007) % 1000000007;
+        }
+    }
+    println(f"{count} numbers, {rounds} rounds: checksum {checksum}");
+}

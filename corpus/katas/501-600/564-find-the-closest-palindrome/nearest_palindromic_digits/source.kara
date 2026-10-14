@@ -1,0 +1,134 @@
+// LeetCode #564: Find the Closest Palindrome -- the candidates in
+// arithmetic.
+//
+// The ★ arm's five candidates with no text work past reading n: the
+// first half is n divided by a power of ten, and a half is mirrored by
+// peeling its digits off with `%` and `/`. A half one smaller or larger
+// that has lost or gained a digit is skipped: the 99...9 and 10...01
+// candidates are nearer. O(digits) time.
+
+fn digit_count(x: i64) -> i64 {
+    let mut count = 1;
+    let mut rest = x / 10;
+    while rest > 0 {
+        count += 1;
+        rest /= 10;
+    }
+    count
+}
+
+fn nearest_palindromic(n: String) -> String {
+    let value = i64.parse(n).unwrap();
+    let length = n.len();
+    let low = length / 2;
+    let high = (length + 1) / 2;
+    let half = value / 10.pow(low as u32);
+    let mut best = -1;
+    let mut consider = |c: i64| {
+        if c != value and c >= 0 {
+            let d = (c - value).abs();
+            let bd = (best - value).abs();
+            if best == -1 or d < bd or (d == bd and c < best) {
+                best = c;
+            }
+        }
+    };
+    consider(10.pow((length - 1) as u32) - 1);
+    consider(10.pow(length as u32) + 1);
+    for h in [half - 1, half, half + 1] {
+        if h < 0 or digit_count(h) != high {
+            continue;
+        }
+        // h's digits, then the first `low` of them backwards.
+        let mut rest = if low == high { h } else { h / 10 };
+        let mut p = h;
+        for _ in 0..low {
+            p = p * 10 + rest % 10;
+            rest /= 10;
+        }
+        consider(p);
+    }
+    best.to_string()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(n: Str) {
+    println(f"{n} -> {nearest_palindromic(n.to_string())}");
+}
+
+// A random number of 1 to 18 digits: plain, a palindrome, or a power of
+// ten moved by up to 3, in turn.
+fn random_number(t: i64, seed: mut ref i64) -> String {
+    let length = 1 + step(seed) % 18;
+    let mut digits: Vec[i64] = vec![1 + step(seed) % 9];
+    for _ in 1..length {
+        digits.push(step(seed) % 10);
+    }
+    if t % 3 == 1 {
+        for i in 0..length / 2 {
+            digits[length - 1 - i] = digits[i];
+        }
+    }
+    let mut value: i64 = 0;
+    for d in digits {
+        value = value * 10 + d;
+    }
+    if t % 3 == 2 {
+        value = 10.pow((length - 1) as u32) + step(seed) % 7 - 3;
+        if value < 1 {
+            value = 1;
+        }
+    }
+    value.to_string()
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show("123");
+    show("1");
+    // Around powers of ten, where the answer may change length; 10 and
+    // 1000 are ties, settled by the smaller.
+    show("9");
+    show("10");
+    show("11");
+    show("99");
+    show("100");
+    show("101");
+    show("1000");
+    show("1001");
+    // A half that carries when raised or borrows when lowered.
+    show("1991");
+    show("12932");
+    show("99800");
+    // The problem's largest numbers.
+    show("100000000000000000");
+    show("807045053224792883");
+    show("999999999999999998");
+    show("999999999999999999");
+    // Every number from 1 to 3000.
+    let mut checksum: i64 = 0;
+    for v in 1..3001 {
+        let got = i64.parse(nearest_palindromic(v.to_string())).unwrap();
+        checksum = (checksum * 31 + got) % 1000000007;
+    }
+    println(f"1 to 3000: checksum {checksum}");
+    // 300 random numbers of 1 to 18 digits.
+    let mut seed: i64 = 564;
+    let mut checksum: i64 = 0;
+    let mut longer = 0;
+    for t in 0..300 {
+        let n = random_number(t, mut seed);
+        let got = nearest_palindromic(n.clone());
+        if got.len() != n.len() {
+            longer += 1;
+        }
+        checksum = (checksum * 31 + i64.parse(got).unwrap()) % 1000000007;
+    }
+    println(f"300 random numbers: {longer} answers of another length, checksum {checksum}");
+}

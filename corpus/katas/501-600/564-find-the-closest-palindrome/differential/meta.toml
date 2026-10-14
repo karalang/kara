@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/501-600/564-find-the-closest-palindrome/differential.kara"
+dedup_of = []
+expect = "error:E0273"
+exit = 1
+tags = ["closure", "differential"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "9ada89a1c"
+extracted_src = "dd19262a"
+model_rev = "1aa23105"
+model_src = "dd19262a"

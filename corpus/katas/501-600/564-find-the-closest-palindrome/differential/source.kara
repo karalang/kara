@@ -1,0 +1,273 @@
+// LeetCode #564: differential -- the four arms against the definition.
+//
+// Copies of the four arms, each held to five properties on random
+// numbers.
+
+// ---- star arm ----------------------------------------------------------
+
+// `half` followed by its first `length` / 2 digits reversed: the
+// palindrome of `length` digits whose first half is `half`. When `half`
+// has lost or gained a digit (10 - 1, 99 + 1) the result is one digit
+// short or long, and still a palindrome.
+fn mirrored_star(half: i64, length: i64) -> i64 {
+    let text = half.to_string();
+    let mut s = text.clone();
+    let chars: Vec[char] = text.chars().collect();
+    let mut i = (length / 2).min(chars.len()) - 1;
+    while i >= 0 {
+        s.push(chars[i]);
+        i -= 1;
+    }
+    i64.parse(s).unwrap()
+}
+
+fn nearest_palindromic_star(n: String) -> String {
+    let value = i64.parse(n).unwrap();
+    let length = n.len();
+    let half = i64.parse(n[..(length + 1) / 2]).unwrap();
+    let mut candidates = vec![
+        10.pow((length - 1) as u32) - 1,
+        10.pow(length as u32) + 1,
+    ];
+    for h in [half - 1, half, half + 1] {
+        candidates.push(mirrored_star(h, length));
+    }
+    let mut best = -1;
+    for c in candidates {
+        if c == value or c < 0 {
+            continue;
+        }
+        let d = (c - value).abs();
+        let bd = (best - value).abs();
+        if best == -1 or d < bd or (d == bd and c < best) {
+            best = c;
+        }
+    }
+    best.to_string()
+}
+
+// ---- digits arm --------------------------------------------------------
+
+fn digit_count_digits(x: i64) -> i64 {
+    let mut count = 1;
+    let mut rest = x / 10;
+    while rest > 0 {
+        count += 1;
+        rest /= 10;
+    }
+    count
+}
+
+fn nearest_palindromic_digits(n: String) -> String {
+    let value = i64.parse(n).unwrap();
+    let length = n.len();
+    let low = length / 2;
+    let high = (length + 1) / 2;
+    let half = value / 10.pow(low as u32);
+    let mut best = -1;
+    let mut consider = |c: i64| {
+        if c != value and c >= 0 {
+            let d = (c - value).abs();
+            let bd = (best - value).abs();
+            if best == -1 or d < bd or (d == bd and c < best) {
+                best = c;
+            }
+        }
+    };
+    consider(10.pow((length - 1) as u32) - 1);
+    consider(10.pow(length as u32) + 1);
+    for h in [half - 1, half, half + 1] {
+        if h < 0 or digit_count_digits(h) != high {
+            continue;
+        }
+        // h's digits, then the first `low` of them backwards.
+        let mut rest = if low == high { h } else { h / 10 };
+        let mut p = h;
+        for _ in 0..low {
+            p = p * 10 + rest % 10;
+            rest /= 10;
+        }
+        consider(p);
+    }
+    best.to_string()
+}
+
+// ---- sides arm ---------------------------------------------------------
+
+// `half` with its first `low` digits reversed after it.
+fn mirror_sides(half: String, low: i64) -> i64 {
+    let mut s = half.clone();
+    let digits: Vec[char] = half.chars().collect();
+    for i in (0..low).rev() {
+        s.push(digits[i]);
+    }
+    i64.parse(s).unwrap()
+}
+
+fn nearest_palindromic_sides(n: String) -> String {
+    let value = i64.parse(n).unwrap();
+    let length = n.len();
+    let low = length / 2;
+    let high = (length + 1) / 2;
+    let half = i64.parse(n[..high]).unwrap();
+    let own = mirror_sides(n[..high].to_string(), low);
+
+    let above = if own > value {
+        own
+    } else if (half + 1).to_string().len() > high {
+        10.pow(length as u32) + 1
+    } else {
+        mirror_sides((half + 1).to_string(), low)
+    };
+    let below = if own < value {
+        own
+    } else if half == 1 and length > 1 or (half - 1).to_string().len() < high {
+        10.pow((length - 1) as u32) - 1
+    } else {
+        mirror_sides((half - 1).to_string(), low)
+    };
+
+    if value - below <= above - value {
+        below.to_string()
+    } else {
+        above.to_string()
+    }
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+fn nearest_palindromic_sorted(n: String) -> String {
+    let value = i64.parse(n).unwrap();
+    let length = n.len();
+    let half = i64.parse(n[..(length + 1) / 2]).unwrap();
+    let mut texts: Vec[String] = vec![
+        "9".repeat(length - 1),
+        f"1{"0".repeat(length - 1)}1",
+    ];
+    for h in [half - 1, half, half + 1] {
+        let front = h.to_string();
+        let back: String = front.chars().rev().skip(front.len() - length / 2).collect();
+        texts.push(front + back);
+    }
+    let mut ranked: Vec[(i64, i64)] = Vec.new();
+    for t in texts {
+        if let Ok(c) = i64.parse(t) {
+            ranked.push(((c - value).abs(), c));
+        }
+    }
+    ranked.sort();
+    for (_, c) in ranked {
+        if c != value {
+            return c.to_string();
+        }
+    }
+    value.to_string()
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn is_palindrome(x: i64) -> bool {
+    let s: Vec[char] = x.to_string().chars().collect();
+    for i in 0..s.len() / 2 {
+        if s[i] != s[s.len() - 1 - i] {
+            return false;
+        }
+    }
+    true
+}
+
+// The definition: the numbers at distance 1, 2, ... from n, the smaller
+// of each pair first, until one is a palindrome.
+fn definition(value: i64) -> i64 {
+    let mut d = 1;
+    loop {
+        if value - d >= 0 and is_palindrome(value - d) {
+            return value - d;
+        }
+        if is_palindrome(value + d) {
+            return value + d;
+        }
+        d += 1;
+    }
+}
+
+fn answer(which: i64, n: String) -> String {
+    if which == 0 {
+        nearest_palindromic_star(n)
+    } else if which == 1 {
+        nearest_palindromic_digits(n)
+    } else if which == 2 {
+        nearest_palindromic_sides(n)
+    } else {
+        nearest_palindromic_sorted(n)
+    }
+}
+
+fn step(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let count = 1000;
+    let mut seed: i64 = 5640;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for t in 0..count {
+        // 1 to 6 digits: any number, a palindrome, or within 3 of a
+        // power of ten, in turn.
+        let length = 1 + step(mut seed) % 6;
+        let mut value: i64 = 1 + step(mut seed) % 9;
+        for _ in 1..length {
+            value = value * 10 + step(mut seed) % 10;
+        }
+        if t % 3 == 1 {
+            let text = value.to_string();
+            let front: String = text.chars().take((length + 1) / 2).collect();
+            let back: String = text.chars().take(length / 2).collect();
+            let back: String = back.chars().rev().collect();
+            value = i64.parse(front + back).unwrap();
+        } else if t % 3 == 2 {
+            value = 10.pow((length - 1) as u32) + step(mut seed) % 7 - 3;
+            if value < 1 {
+                value = 1;
+            }
+        }
+        let n = value.to_string();
+        let want = definition(value);
+        for which in 0..4 {
+            let got_text = answer(which, n.clone());
+            let got = i64.parse(got_text.clone()).unwrap();
+            let d = (got - value).abs();
+            let mut nearer = false;
+            for x in value - d + 1..value + d {
+                if x >= 0 and x != value and is_palindrome(x) {
+                    nearer = true;
+                }
+            }
+            let ok = vec![
+                // P1: the definition's palindrome.
+                got == want,
+                // P2: a palindrome, not n, written without leading zeros.
+                is_palindrome(got) and got != value and got_text == got.to_string(),
+                // P3: no more than one digit longer or shorter than n.
+                (got_text.len() - n.len()).abs() <= 1,
+                // P4: no other palindrome is nearer.
+                not nearer,
+                // P5: on a tie the smaller is taken.
+                not (got > value and value - d >= 0 and is_palindrome(value - d)),
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let total = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{count} cases, 4 arms, {checks} checks, {total} failures");
+    if total > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}
