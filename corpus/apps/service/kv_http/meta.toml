@@ -1,4 +1,4 @@
-source = "corpus/apps/service/kv_http/source.orig.kara (v2 by hand edits, see notes.md)"
+source = "kara-katas/apps/service/kv_http/kv_http.kara"
 dedup_of = []
 expect = "stdout"
 exit = 0
@@ -7,3 +7,4 @@ expected_from = "mirror"
 rules = []
 backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
 env = {}
+extracted_src = "9b97df37"

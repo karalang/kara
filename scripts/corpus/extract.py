@@ -6,6 +6,8 @@ Sources:
             contains `fn main`, read statically; the test files are not edited
   katas     every `.kara` with a `fn main` under --katas (karalang/kara-katas)
   examples  every single-file examples/*.kara with a `fn main`
+  apps      every kara-katas apps/<kind>/<name>/ with an app.toml, copied to
+            corpus/apps/<kind>/<name>/ (see sync_apps; --katas implies it)
 
 Each distinct program text becomes one directory with `source.kara` and a
 first `meta.toml`:
@@ -187,10 +189,94 @@ def fixture_programs(tests: Path):
                     yield dict(base, src=src, template=template)
 
 
+# kara-katas apps/<kind>/<name>/ -> corpus/apps/<kind>/<name>/. The app is
+# authored in kara-katas; corpus/apps keeps the copy the corpus gates run.
+APP_FILES = (("{name}.orig.kara", "source.orig.kara"), ("{name}.fixed.kara", "source.fixed.kara"),
+             ("{name}.py", "{name}.py"), ("expected.out", "expected.out"), ("README.md", "notes.md"))
+# app.toml holds the authoring keys; every other meta.toml key (class,
+# bucket, legacy_*, model_*, note, ...) is written by record/classify in the
+# corpus and is kept. Tags with these prefixes are classify's, also kept.
+APP_KEYS = ("expect", "exit", "tags", "expected_from", "rules", "backends", "env")
+CLASSIFY_TAG = ("lib:", "io:", "post-m1:")
+
+
+def is_app_file(f: Path, root: Path) -> bool:
+    return any((d / "app.toml").exists() for d in f.parents if d != root and root in d.parents)
+
+
+def sync_apps(aroot: Path, dest_root: Path, overwrite_changed: bool, prune: bool) -> dict:
+    """Copy each app in `aroot` (a dir holding app.toml and <name>.kara) into
+    `dest_root`. Supporting files follow kara-katas. source.kara follows it
+    too unless the corpus copy was edited since the last copy (meta.toml's
+    `extracted_src` no longer matches it, as when classify fixes it): that copy
+    is kept and listed, and --overwrite-changed replaces it."""
+    st = {"new": 0, "changed": 0, "same": 0, "kept": [], "orphan": []}
+    seen = set()
+    for app in sorted(aroot.glob("*/*/app.toml")):
+        d = app.parent
+        kind, name = d.parent.name, d.name
+        main_src = d / f"{name}.kara"
+        if not main_src.exists():
+            print(f"corpus-extract: {d} has app.toml but no {name}.kara; skipped", file=sys.stderr)
+            continue
+        out = dest_root / kind / name
+        seen.add(out)
+        out.mkdir(parents=True, exist_ok=True)
+        src = main_src.read_text()
+        h = hashlib.md5(src.encode()).hexdigest()[:8]
+        prev = read_toml(out / "meta.toml")
+        sp = out / "source.kara"
+        old = sp.read_text() if sp.exists() else None
+        if old is None:
+            state = "new"
+        elif old == src:
+            state = "same"
+        elif overwrite_changed or (prev.get("extracted_src")
+                                   and hashlib.md5(old.encode()).hexdigest()[:8] == prev["extracted_src"]):
+            state = "changed"
+        else:
+            state = "kept"
+        if state == "kept":
+            st["kept"].append(str(out.relative_to(dest_root.parent)))
+        else:
+            st[state] += 1
+            if state != "same":
+                sp.write_text(src)
+        for a, b in APP_FILES:
+            a, b = a.format(name=name), b.format(name=name)
+            if (d / a).exists():
+                if not (out / b).exists() or (out / b).read_bytes() != (d / a).read_bytes():
+                    shutil.copy(d / a, out / b)
+            elif (out / b).exists():
+                (out / b).unlink()
+        conf = read_toml(app)
+        meta = dict(prev)
+        meta["source"] = f"kara-katas/apps/{kind}/{name}/{name}.kara"
+        meta.setdefault("dedup_of", [])
+        for k in APP_KEYS:
+            if k in conf:
+                meta[k] = conf[k]
+        meta["tags"] = list(conf.get("tags", [])) + [t for t in prev.get("tags", [])
+                                                     if t.startswith(CLASSIFY_TAG) and t not in conf.get("tags", [])]
+        if state != "kept":
+            meta["extracted_src"] = h
+        write_toml(out / "meta.toml", meta)
+    if dest_root.exists():
+        st["orphan"] = sorted(str(p.parent.relative_to(dest_root.parent)) for p in dest_root.glob("*/*/source.kara")
+                              if p.parent not in seen)
+        if prune:
+            for o in st["orphan"]:
+                shutil.rmtree(dest_root.parent / o)
+    return st
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tests", default=str(ROOT / "tests"))
     ap.add_argument("--katas", help="path to a karalang/kara-katas checkout")
+    ap.add_argument("--apps", help="kara-katas apps/ dir to copy into corpus/apps/ (default: <--katas>/apps)")
+    ap.add_argument("--apps-only", action="store_true",
+                    help="only copy the apps (needs --katas or --apps); fixtures, katas, examples untouched")
     ap.add_argument("--examples", default=str(ROOT / "examples"))
     ap.add_argument("--pins", help="core pinning programs: <DIR>/<name>/{main.kara,expected.out}")
     ap.add_argument("--no-matrix", dest="matrix", action="store_false",
@@ -204,6 +290,11 @@ def main() -> int:
     args = ap.parse_args()
 
     corpus = Path(args.corpus)
+    apps_dir = Path(args.apps) if args.apps else (Path(args.katas) / "apps" if args.katas else None)
+    if args.apps_only:
+        if apps_dir is None:
+            ap.error("--apps-only needs --katas or --apps")
+        return report_apps(sync_apps(apps_dir, corpus / "apps", args.overwrite_changed, args.prune), args.prune)
     entries: dict[str, dict] = {}
     taken: set[str] = set()
     raw = {"core": 0, "drop-matrix": 0, "fixture": 0, "kata": 0, "example": 0}
@@ -270,7 +361,7 @@ def main() -> int:
     if args.katas:
         kroot = Path(args.katas)
         for f in sorted(kroot.rglob("*.kara")):
-            if "target" in f.parts or ".git" in f.parts:
+            if "target" in f.parts or ".git" in f.parts or is_app_file(f, kroot):
                 continue
             src = f.read_text()
             if not HAS_MAIN.search(src):
@@ -351,7 +442,7 @@ def main() -> int:
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
     (work / "manifest.json").write_text(json.dumps(manifest))
-    # corpus/apps/ is written by hand, not extracted: never stale.
+    # corpus/apps/ is copied from kara-katas apps/ by sync_apps, not this walk.
     stale = sorted(p.parent for p in corpus.rglob("source.kara")
                    if p.parent not in written and not p.parent.relative_to(corpus).parts[0] == "apps")
     if args.prune:
@@ -361,10 +452,22 @@ def main() -> int:
     print(f"corpus-extract: {len(entries)} entries after dedup; "
           + " ".join(f"{k}={v}" for k, v in states.items())
           + f"; {len(stale)} stale" + (" (pruned)" if args.prune else ""))
+    if apps_dir is not None and apps_dir.exists():
+        report_apps(sync_apps(apps_dir, corpus / "apps", args.overwrite_changed, args.prune), args.prune)
     if kept:
         (work / "kept.txt").write_text("\n".join(kept) + "\n")
         print(f"corpus-extract: {len(kept)} corpus sources differ from their test or kata text and were "
               f"kept (listed in {work / 'kept.txt'}); --overwrite-changed replaces them")
+    return 0
+
+
+def report_apps(st: dict, prune: bool) -> int:
+    print(f"corpus-extract: apps new={st['new']} changed={st['changed']} same={st['same']} kept={len(st['kept'])}"
+          f"; {len(st['orphan'])} corpus app(s) with no kara-katas source" + (" (pruned)" if prune and st["orphan"] else ""))
+    for k in st["kept"]:
+        print(f"  kept (corpus source.kara edited since the last copy; --overwrite-changed replaces it): {k}")
+    for o in st["orphan"]:
+        print(f"  no kara-katas source: {o}")
     return 0
 
 

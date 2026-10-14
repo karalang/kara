@@ -1,4 +1,4 @@
-source = "corpus/apps/service/job_queue/source.orig.kara (v2 by karac fix + hand edits)"
+source = "kara-katas/apps/service/job_queue/job_queue.kara"
 dedup_of = []
 expect = "stdout"
 exit = 0
@@ -13,5 +13,6 @@ env = {}
 note = "stmt-par groups (source.orig.kara lines): L269-L271 three run_worker calls, each one call_remote standing in as sleep_ms(2); the take_next selections before them are sequential"
 bucket = "a"
 classified_with = "5a266e1a1"
+extracted_src = "6ee31c1f"
 model_rev = "1aa23105"
 model_src = "6ee31c1f"

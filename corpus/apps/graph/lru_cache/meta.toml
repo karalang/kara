@@ -1,4 +1,4 @@
-source = "corpus/apps/graph/lru_cache/source.orig.kara (v2 by karac fix + hand edits)"
+source = "kara-katas/apps/graph/lru_cache/lru_cache.kara"
 dedup_of = []
 expect = "stdout"
 exit = 0
@@ -14,5 +14,6 @@ env = {}
 note = "stmt-par groups (source.orig.kara lines): L344-L345 two fs.write of separate files; L347-L348 two fs.read_to_string of those files source edited: `.cloned()` after `Map.get` at line(s) 151, 166, 173, since `Map.get` returns `Option[ref V]` (docs/library/collections.md; Thread A's 7902786668). Legacy has no `Option.cloned`, so legacy.out stays the oracle. (kata thread, 2026-10-09)"
 bucket = "a"
 classified_with = "5a266e1a1"
+extracted_src = "686692c0"
 model_rev = "1aa23105"
 model_src = "686692c0"

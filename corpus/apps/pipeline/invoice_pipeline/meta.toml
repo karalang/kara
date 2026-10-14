@@ -1,4 +1,4 @@
-source = "corpus/apps/pipeline/invoice_pipeline/source.orig.kara (v2 by karac fix + hand edits)"
+source = "kara-katas/apps/pipeline/invoice_pipeline/invoice_pipeline.kara"
 dedup_of = []
 expect = "stdout"
 exit = 0
@@ -12,5 +12,6 @@ backends = []
 env = {}
 bucket = "a"
 classified_with = "5a266e1a1"
+extracted_src = "9e55f627"
 model_rev = "1aa23105"
 model_src = "9e55f627"

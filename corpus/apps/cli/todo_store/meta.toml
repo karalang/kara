@@ -1,4 +1,4 @@
-source = "corpus/apps/cli/todo_store/source.orig.kara (v2 by karac fix + hand edits)"
+source = "kara-katas/apps/cli/todo_store/todo_store.kara"
 dedup_of = []
 expect = "stdout"
 exit = 0
@@ -13,5 +13,6 @@ env = {}
 note = "stmt-par groups (source.orig.kara lines): L328-L329 fs.write of the store and of the undo file in undo_last; L375-L376 the same pair in main; legacy_backend is legacy-interp: legacy build double-frees on the hand edit at L336 (let cmd = match cmd { Command.Undo => return .., other => other }); interp agrees (see notes.md); frozen legacy bug"
 bucket = "a"
 classified_with = "5a266e1a1"
+extracted_src = "b4a6d4dd"
 model_rev = "1aa23105"
 model_src = "b4a6d4dd"

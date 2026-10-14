@@ -1,4 +1,4 @@
-source = "corpus/apps/service/rate_limiter/source.orig.kara (v2 by karac fix + hand edits)"
+source = "kara-katas/apps/service/rate_limiter/rate_limiter.kara"
 dedup_of = []
 expect = "stdout"
 exit = 0
@@ -13,5 +13,6 @@ env = {}
 note = "legacy_backend is legacy-interp: legacy build refuses LOG_PATH.clone() on a const String (codegen: Vec/String method 'clone' is not yet supported), the clone karac fix added at L365 (see notes.md); frozen legacy bug"
 bucket = "a"
 classified_with = "5a266e1a1"
+extracted_src = "8ed9a03f"
 model_rev = "1aa23105"
 model_src = "8ed9a03f"

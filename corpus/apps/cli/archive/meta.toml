@@ -1,4 +1,4 @@
-source = "corpus/apps/cli/archive/source.orig.kara (v2 by hand edits, see notes.md)"
+source = "kara-katas/apps/cli/archive/archive.kara"
 dedup_of = []
 expect = "stdout"
 exit = 0
@@ -7,3 +7,4 @@ expected_from = "mirror"
 rules = []
 backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
 env = {}
+extracted_src = "3afbc5f8"

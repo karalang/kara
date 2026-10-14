@@ -1,4 +1,4 @@
-source = "corpus/apps/graph/dep_resolver/source.orig.kara (v2 by karac fix + hand edits)"
+source = "kara-katas/apps/graph/dep_resolver/dep_resolver.kara"
 dedup_of = []
 expect = "stdout"
 exit = 0
@@ -13,6 +13,7 @@ env = {}
 note = "stmt-par groups (source.orig.kara lines): L332-L335 four fs.write, each to its own manifest file"
 bucket = "b->a"
 classified_with = "5a266e1a1"
+extracted_src = "c6cf6aab"
 fixed_by_classify = true
 fixed_src = "c6cf6aab"
 model_rev = "1aa23105"

@@ -1,4 +1,4 @@
-source = "corpus/apps/cli/log_rotate/source.orig.kara (v2 by hand edits, see notes.md)"
+source = "kara-katas/apps/cli/log_rotate/log_rotate.kara"
 dedup_of = []
 expect = "stdout"
 exit = 0
@@ -7,3 +7,4 @@ expected_from = "mirror"
 rules = []
 backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
 env = {}
+extracted_src = "37f261ef"

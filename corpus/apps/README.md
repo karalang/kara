@@ -6,6 +6,20 @@ exist so the M1 go/no-go and M4 have real-world numbers: how much the v2
 ownership rules cost a newcomer, and whether stmt-par has waits worth
 overlapping.
 
+**Authored in kara-katas.** Since 2026-10-14 every app's source lives in
+karalang/kara-katas under `apps/<kind>/<name>/` (`<name>.kara`, its drafts,
+the mirror, `expected.out`, `README.md`, `app.toml`), and this directory is
+the copy the corpus gates run. Change an app there first, push, then copy it
+here and commit the copy:
+
+    python3 scripts/corpus/extract.py --katas ../kara-katas --apps-only
+
+A full extract with `--katas` copies the apps too. The copy keeps the
+`meta.toml` keys record/classify own; a `source.kara` edited here since the
+last copy is kept and listed (`--overwrite-changed` replaces it), so carry
+such an edit back to kara-katas. `friction.json`, `lang.json` and this README
+are corpus measurements and stay here.
+
 ```
 corpus/apps/<kind>/<name>/source.orig.kara   first draft, as the drafting agent saved it
 corpus/apps/<kind>/<name>/source.fixed.kara  source.orig.kara after `karac fix`, run to a fixed point
