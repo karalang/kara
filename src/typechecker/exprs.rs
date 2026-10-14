@@ -6372,7 +6372,12 @@ impl<'a> super::TypeChecker<'a> {
                 let range_mut_through = self.mut_through_param_arg;
                 let obj_ty = self.infer_expr(object);
                 self.mut_through_param_arg = false;
+                // The index is read, never the target of the write: `v[n.val]
+                // = x` writes `v`, so `n.val` is not checked as an assignment
+                // place (B-2026-10-14-1). The object keeps the flag above.
+                let lhs = std::mem::replace(&mut self.assigning_lhs, false);
                 let idx_ty = self.infer_expr(index);
+                self.assigning_lhs = lhs;
                 // `t.0[i]` — indexing a `Vec`/`VecDeque` that lives in a TUPLE
                 // element. Codegen resolves the element's storage pointer
                 // structurally (GEP into the tuple) but needs the element's

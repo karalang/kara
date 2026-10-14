@@ -53315,3 +53315,43 @@ fn string_slice_join_and_concat_check() {
 "#,
     );
 }
+
+// B-2026-10-14-1 — a field read in the INDEX of an assignment's target is a
+// read: `v[n.val] = x` writes `v`, so a non-`mut` field of a `shared`
+// struct is fine there, nested or through a `mut ref` parameter. The field
+// as the target itself is still refused.
+#[test]
+fn shared_field_read_as_an_index_is_not_a_write() {
+    typecheck_ok(
+        r#"shared struct Node { val: i64 }
+struct Plain { val: i64 }
+fn fill(depths: mut ref Vec[i64], n: Node) { depths[n.val] = 7; }
+fn main() {
+    let n = Node { val: 2 };
+    let mut v = vec![0; 4];
+    v[n.val] = 5;
+    fill(mut v, n);
+    let p = Plain { val: 1 };
+    v[p.val] = 9;
+    let i = n.val;
+    v[i] += 1;
+    let mut grid = vec![vec![0; 3]; 3];
+    grid[n.val][p.val] = 4;
+    println(f"{v} {grid[2]}");
+}
+"#,
+    );
+    let errs = typecheck_errors(
+        "shared struct Node { val: i64 }
+fn main() {
+    let n = Node { val: 2 };
+    n.val = 3;
+}
+",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("is not declared mut")),
+        "{errs:?}"
+    );
+}
