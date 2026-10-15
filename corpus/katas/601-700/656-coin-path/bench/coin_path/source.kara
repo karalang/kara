@@ -1,0 +1,77 @@
+// Benchmark for #656: the ★ arm (cheapest cost to the end, worked
+// backwards) on a large workload.
+
+fn cheapest_jump(coins: Vec[i64], max_jump: i64) -> Vec[i64] {
+    let n = coins.len();
+    let unreachable = i64.MAX;
+    let mut cost = vec![unreachable; n];
+    let mut next = vec![-1; n];
+    if coins[n - 1] != -1 {
+        cost[n - 1] = coins[n - 1];
+    }
+    let mut i = n - 2;
+    while i >= 0 {
+        if coins[i] != -1 {
+            let last = (i + max_jump).min(n - 1);
+            for j in i + 1..last + 1 {
+                if cost[j] != unreachable and coins[i] + cost[j] < cost[i] {
+                    cost[i] = coins[i] + cost[j];
+                    next[i] = j;
+                }
+            }
+        }
+        i -= 1;
+    }
+    let mut path: Vec[i64] = Vec.new();
+    if cost[0] == unreachable {
+        return path;
+    }
+    let mut at = 0;
+    while at != -1 {
+        path.push(at + 1);
+        at = next[at];
+    }
+    path
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // Eight rows of 100,000 coins from 0 to 100, about one in ten
+    // blocked, made once; then 40 rounds each find the cheapest path
+    // through one, picked by the round, with jumps of up to 100, and put
+    // its length, cost and indices into a checksum.
+    let inputs = 8;
+    let rounds = 40;
+    let n = 100000;
+    let mut seed: i64 = 656;
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..inputs {
+        let mut coins: Vec[i64] = Vec.new();
+        for i in 0..n {
+            if i > 0 and next_random(mut seed) % 10 == 0 {
+                coins.push(-1);
+            } else {
+                coins.push(next_random(mut seed) % 101);
+            }
+        }
+        rows.push(coins);
+    }
+    let mut steps = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let coins = ref rows[(r * 3) % inputs];
+        let path = cheapest_jump(coins, 100);
+        let mut cost = 0;
+        for p in path.iter() {
+            cost += coins[*p - 1];
+            checksum = (checksum * 31 + *p) % 1000000007;
+        }
+        steps += path.len();
+        checksum = (checksum * 31 + cost) % 1000000007;
+    }
+    println(f"{inputs} rows of {n}, {rounds} rounds: {steps} steps, checksum {checksum}");
+}

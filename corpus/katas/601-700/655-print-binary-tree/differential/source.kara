@@ -1,0 +1,344 @@
+// LeetCode #655: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random trees.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+// ---- star arm ----------------------------------------------------------
+
+fn print_tree_star(root: Option[TreeNode]) -> Vec[Vec[String]] {
+    let h = height_star(root) - 1;
+    let columns = (1 << (h + 1)) - 1;
+    let mut grid: Vec[Vec[String]] = Vec.new();
+    for _ in 0..h + 1 {
+        let mut row: Vec[String] = Vec.new();
+        for _ in 0..columns {
+            row.push("".to_string());
+        }
+        grid.push(row);
+    }
+    place_star(root, 0, (columns - 1) / 2, h, mut grid);
+    grid
+}
+
+fn height_star(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => 1 + height_star(n.left).max(height_star(n.right)),
+    }
+}
+
+fn place_star(node: Option[TreeNode], row: i64, column: i64, h: i64, grid: mut ref Vec[Vec[String]]) {
+    if let Some(n) = node {
+        grid[row][column] = f"{n.val}";
+        if row < h {
+            let step = 1 << (h - row - 1);
+            place_star(n.left, row + 1, column - step, h, grid);
+            place_star(n.right, row + 1, column + step, h, grid);
+        }
+    }
+}
+
+// ---- levels arm --------------------------------------------------------
+
+fn print_tree_levels(root: Option[TreeNode]) -> Vec[Vec[String]] {
+    let mut depth = 0;
+    let mut level: Vec[TreeNode] = Vec.new();
+    if let Some(r) = root {
+        level.push(r);
+    }
+    while not level.is_empty() {
+        depth += 1;
+        let mut next: Vec[TreeNode] = Vec.new();
+        for n in level.iter() {
+            if let Some(l) = n.left {
+                next.push(l);
+            }
+            if let Some(r) = n.right {
+                next.push(r);
+            }
+        }
+        level = next;
+    }
+    let h = depth - 1;
+    let columns = (1 << depth) - 1;
+    let mut grid: Vec[Vec[String]] = Vec.new();
+    for _ in 0..depth {
+        grid.push(vec!["".to_string(); columns]);
+    }
+    let mut queue: VecDeque[(TreeNode, i64, i64)] = VecDeque.new();
+    if let Some(r) = root {
+        queue.push_back((r, 0, (columns - 1) / 2));
+    }
+    while let Some((n, row, column)) = queue.pop_front() {
+        grid[row][column] = n.val.to_string();
+        if row < h {
+            let step = 1 << (h - row - 1);
+            if let Some(l) = n.left {
+                queue.push_back((l, row + 1, column - step));
+            }
+            if let Some(r) = n.right {
+                queue.push_back((r, row + 1, column + step));
+            }
+        }
+    }
+    grid
+}
+
+// ---- halves arm --------------------------------------------------------
+
+fn print_tree_halves(root: Option[TreeNode]) -> Vec[Vec[String]] {
+    let rows = depth_halves(root);
+    let columns = (1 << rows) - 1;
+    let mut grid: Vec[Vec[String]] = Vec.new();
+    for _ in 0..rows {
+        let mut row: Vec[String] = Vec.new();
+        row.resize(columns, String.new());
+        grid.push(row);
+    }
+    fill_halves(root, 0, 0, columns - 1, mut grid);
+    grid
+}
+
+fn depth_halves(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => {
+            let l = depth_halves(n.left);
+            let r = depth_halves(n.right);
+            1 + if l > r { l } else { r }
+        }
+    }
+}
+
+fn fill_halves(node: Option[TreeNode], row: i64, low: i64, high: i64, grid: mut ref Vec[Vec[String]]) {
+    match node {
+        None => {}
+        Some(n) => {
+            let middle = (low + high) / 2;
+            grid[row][middle] = f"{n.val}";
+            fill_halves(n.left, row + 1, low, middle - 1, grid);
+            fill_halves(n.right, row + 1, middle + 1, high, grid);
+        }
+    }
+}
+
+// ---- merge arm ---------------------------------------------------------
+
+fn print_tree_merge(root: Option[TreeNode]) -> Vec[Vec[String]] {
+    grid_of_merge(root, depth_merge(root))
+}
+
+fn depth_merge(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => 1 + depth_merge(n.left).max(depth_merge(n.right)),
+    }
+}
+
+fn grid_of_merge(node: Option[TreeNode], rows: i64) -> Vec[Vec[String]] {
+    let mut grid: Vec[Vec[String]] = Vec.new();
+    if rows == 0 {
+        return grid;
+    }
+    let width = (1 << rows) - 1;
+    let mut top: Vec[String] = Vec.new();
+    for _ in 0..width {
+        top.push("".to_string());
+    }
+    match node {
+        None => {
+            for _ in 0..rows {
+                grid.push(top.clone());
+            }
+        }
+        Some(n) => {
+            top[width / 2] = f"{n.val}";
+            grid.push(top);
+            let left = grid_of_merge(n.left, rows - 1);
+            let right = grid_of_merge(n.right, rows - 1);
+            for i in 0..rows - 1 {
+                let mut row = left[i].clone();
+                row.push("".to_string());
+                for cell in right[i].iter() {
+                    row.push(cell.clone());
+                }
+                grid.push(row);
+            }
+        }
+    }
+    grid
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, root: Option[TreeNode]) -> Vec[Vec[String]] {
+    if which == 0 {
+        print_tree_star(root)
+    } else if which == 1 {
+        print_tree_levels(root)
+    } else if which == 2 {
+        print_tree_halves(root)
+    } else {
+        print_tree_merge(root)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_tree(levels: i64, chance: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if levels == 0 {
+        return None;
+    }
+    let n = TreeNode { val: next_random(mut seed) % 199 - 99, left: None, right: None };
+    if next_random(mut seed) % 100 < chance {
+        n.left = random_tree(levels - 1, chance, mut seed);
+    }
+    if next_random(mut seed) % 100 < chance {
+        n.right = random_tree(levels - 1, chance, mut seed);
+    }
+    Some(n)
+}
+
+fn mirrored(node: Option[TreeNode]) -> Option[TreeNode] {
+    match node {
+        None => None,
+        Some(n) => Some(TreeNode { val: n.val, left: mirrored(n.right), right: mirrored(n.left) }),
+    }
+}
+
+// Every node with its path from the root, `L` and `R`.
+fn paths(node: Option[TreeNode], path: String, out: mut ref Vec[(String, i64)]) {
+    if let Some(n) = node {
+        out.push((path.clone(), n.val));
+        paths(n.left, path.clone() + "L", out);
+        paths(n.right, path.clone() + "R", out);
+    }
+}
+
+fn all_paths(depth: i64, path: String, out: mut ref Vec[String]) {
+    if path.len() < depth {
+        out.push(path.clone() + "M");
+        all_paths(depth, path.clone() + "L", out);
+        all_paths(depth, path.clone() + "R", out);
+    }
+}
+
+// The definition: every place in a full tree as deep as this one, written
+// as its path with `M` added, sorted, since `L` < `M` < `R` puts a node
+// after its left subtree and before its right one; a place's column is
+// its rank in that order, its row its path's length.
+fn definition(root: Option[TreeNode]) -> Vec[Vec[String]] {
+    let mut nodes: Vec[(String, i64)] = Vec.new();
+    paths(root, "".to_string(), mut nodes);
+    let mut depth = 0;
+    for p in nodes.iter() {
+        if p.0.len() + 1 > depth {
+            depth = p.0.len() + 1;
+        }
+    }
+    let mut places: Vec[String] = Vec.new();
+    all_paths(depth, "".to_string(), mut places);
+    places.sort();
+    let mut grid: Vec[Vec[String]] = Vec.new();
+    for _ in 0..depth {
+        let mut row: Vec[String] = Vec.new();
+        for _ in 0..places.len() {
+            row.push("".to_string());
+        }
+        grid.push(row);
+    }
+    for p in nodes.iter() {
+        let key = p.0.clone() + "M";
+        for c in 0..places.len() {
+            if places[c] == key {
+                grid[p.0.len()][c] = f"{p.1}";
+            }
+        }
+    }
+    grid
+}
+
+fn in_order(node: Option[TreeNode], out: mut ref Vec[String]) {
+    if let Some(n) = node {
+        in_order(n.left, out);
+        out.push(f"{n.val}");
+        in_order(n.right, out);
+    }
+}
+
+fn main() {
+    // 500 random trees at most 1 to 7 levels deep, each child there with
+    // chance 30 to 100 in 100.
+    let cases = 500;
+    let mut seed: i64 = 655;
+    let mut nodes = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let levels = 1 + next_random(mut seed) % 7;
+        let chance = 30 + next_random(mut seed) % 71;
+        let root = random_tree(levels, chance, mut seed);
+        let want = definition(root);
+        let mut order: Vec[String] = Vec.new();
+        in_order(root, mut order);
+        nodes += order.len();
+        for which in 0..4 {
+            let grid = answer(which, root);
+            let rows = want.len();
+            let mut shaped = grid.len() == rows;
+            for row in grid.iter() {
+                if row.len() != (1 << rows) - 1 {
+                    shaped = false;
+                }
+            }
+            // The filled cells, column by column, and their count.
+            let mut filled = 0;
+            let mut by_column: Vec[String] = Vec.new();
+            if shaped {
+                for c in 0..(1 << rows) - 1 {
+                    for r in 0..rows {
+                        if grid[r][c].len() > 0 {
+                            filled += 1;
+                            by_column.push(grid[r][c].clone());
+                        }
+                    }
+                }
+            }
+            let mut flipped = answer(which, mirrored(root));
+            for row in flipped.iter_mut() {
+                row.reverse();
+            }
+            let ok = vec![
+                // P1: the definition's grid.
+                grid == want,
+                // P2: as many rows as levels, 2^rows - 1 columns.
+                shaped,
+                // P3: one filled cell for each node.
+                filled == order.len(),
+                // P4: the mirrored tree prints each row reversed.
+                flipped == grid,
+                // P5: read column by column, the values are in order.
+                by_column == order,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{cases} trees ({nodes} nodes), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

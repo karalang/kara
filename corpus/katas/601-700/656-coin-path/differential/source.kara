@@ -1,0 +1,308 @@
+// LeetCode #656: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to five properties on random rows.
+
+// ---- star arm ----------------------------------------------------------
+
+fn cheapest_jump_star(coins: Vec[i64], max_jump: i64) -> Vec[i64] {
+    let n = coins.len();
+    let unreachable = i64.MAX;
+    let mut cost = vec![unreachable; n];
+    let mut next = vec![-1; n];
+    if coins[n - 1] != -1 {
+        cost[n - 1] = coins[n - 1];
+    }
+    let mut i = n - 2;
+    while i >= 0 {
+        if coins[i] != -1 {
+            let last = (i + max_jump).min(n - 1);
+            for j in i + 1..last + 1 {
+                if cost[j] != unreachable and coins[i] + cost[j] < cost[i] {
+                    cost[i] = coins[i] + cost[j];
+                    next[i] = j;
+                }
+            }
+        }
+        i -= 1;
+    }
+    let mut path: Vec[i64] = Vec.new();
+    if cost[0] == unreachable {
+        return path;
+    }
+    let mut at = 0;
+    while at != -1 {
+        path.push(at + 1);
+        at = next[at];
+    }
+    path
+}
+
+// ---- forward arm -------------------------------------------------------
+
+fn cheapest_jump_forward(coins: Vec[i64], max_jump: i64) -> Vec[i64] {
+    let n = coins.len();
+    let mut cost: Vec[i64] = vec![-1; n];
+    let mut best: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..n {
+        best.push(Vec.new());
+    }
+    cost[0] = coins[0];
+    best[0].push(1);
+    for i in 1..n {
+        if coins[i] == -1 {
+            continue;
+        }
+        let first = (i - max_jump).max(0);
+        for j in first..i {
+            if cost[j] == -1 {
+                continue;
+            }
+            let c = cost[j] + coins[i];
+            let mut path = best[j].clone();
+            path.push(i + 1);
+            if cost[i] == -1 or c < cost[i] or (c == cost[i] and smaller_forward(path, best[i])) {
+                cost[i] = c;
+                best[i] = path;
+            }
+        }
+    }
+    best[n - 1].clone()
+}
+
+// Whether path `a` comes before path `b`: at the first index where they
+// differ, the smaller; if one runs out first, the shorter.
+fn smaller_forward(a: Vec[i64], b: Vec[i64]) -> bool {
+    let mut k = 0;
+    while k < a.len() and k < b.len() {
+        if a[k] != b[k] {
+            return a[k] < b[k];
+        }
+        k += 1;
+    }
+    a.len() < b.len()
+}
+
+// ---- window arm --------------------------------------------------------
+
+fn cheapest_jump_window(coins: Vec[i64], max_jump: i64) -> Vec[i64] {
+    let n = coins.len();
+    let unreachable = i64.MAX;
+    let mut cost = vec![unreachable; n];
+    let mut next = vec![-1; n];
+    let mut window: VecDeque[i64] = VecDeque.new();
+    if coins[n - 1] != -1 {
+        cost[n - 1] = coins[n - 1];
+        window.push_back(n - 1);
+    }
+    let mut i = n - 2;
+    while i >= 0 {
+        while not window.is_empty() and window.front().unwrap() > i + max_jump {
+            window.pop_front();
+        }
+        if coins[i] != -1 and not window.is_empty() {
+            let j = window.front().unwrap();
+            cost[i] = coins[i] + cost[j];
+            next[i] = j;
+            while not window.is_empty() and cost[window.back().unwrap()] >= cost[i] {
+                window.pop_back();
+            }
+            window.push_back(i);
+        }
+        i -= 1;
+    }
+    let mut path: Vec[i64] = Vec.new();
+    if cost[0] == unreachable {
+        return path;
+    }
+    let mut at = 0;
+    while at != -1 {
+        path.push(at + 1);
+        at = next[at];
+    }
+    path
+}
+
+// ---- both arm ----------------------------------------------------------
+
+fn cheapest_jump_both(coins: Vec[i64], max_jump: i64) -> Vec[i64] {
+    let n = coins.len();
+    let unreachable = i64.MAX;
+    let mut from = vec![unreachable; n];
+    let mut to = vec![unreachable; n];
+    from[0] = coins[0];
+    for i in 1..n {
+        if coins[i] != -1 {
+            for j in (i - max_jump).max(0)..i {
+                if from[j] != unreachable {
+                    from[i] = from[i].min(from[j] + coins[i]);
+                }
+            }
+        }
+    }
+    if coins[n - 1] != -1 {
+        to[n - 1] = coins[n - 1];
+    }
+    let mut i = n - 2;
+    while i >= 0 {
+        if coins[i] != -1 {
+            for j in i + 1..(i + max_jump).min(n - 1) + 1 {
+                if to[j] != unreachable {
+                    to[i] = to[i].min(coins[i] + to[j]);
+                }
+            }
+        }
+        i -= 1;
+    }
+    let mut path: Vec[i64] = Vec.new();
+    let total = from[n - 1];
+    if total == unreachable {
+        return path;
+    }
+    let mut at = 0;
+    path.push(1);
+    while at != n - 1 {
+        let mut j = at + 1;
+        while not (to[j] != unreachable and from[j] == from[at] + coins[j] and from[j] + to[j] - coins[j] == total) {
+            j += 1;
+        }
+        path.push(j + 1);
+        at = j;
+    }
+    path
+}
+
+// ---- the definition and the properties -------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn answer(which: i64, coins: Vec[i64], max_jump: i64) -> Vec[i64] {
+    match which {
+        0 => cheapest_jump_star(coins, max_jump),
+        1 => cheapest_jump_forward(coins, max_jump),
+        2 => cheapest_jump_window(coins, max_jump),
+        _ => cheapest_jump_both(coins, max_jump),
+    }
+}
+
+// The definition: every path from the first index to the last, tried
+// with the smaller next index first, so they come in lexicographic order
+// and the first of the cheapest is the one kept. `best` holds its cost,
+// -1 while none is found.
+fn every_path(coins: Vec[i64], max_jump: i64, path: mut ref Vec[i64], cost: i64, best: mut ref i64, kept: mut ref Vec[i64]) {
+    let at = path[path.len() - 1] - 1;
+    if at == coins.len() - 1 {
+        if *best == -1 or cost < *best {
+            *best = cost;
+            *kept = path.clone();
+        }
+        return;
+    }
+    for j in at + 1..(at + max_jump).min(coins.len() - 1) + 1 {
+        if coins[j] != -1 {
+            path.push(j + 1);
+            every_path(coins, max_jump, path, cost + coins[j], best, kept);
+            path.pop();
+        }
+    }
+}
+
+// Whether the last index can be reached at all, by a sweep that counts
+// no cost.
+fn reachable(coins: Vec[i64], max_jump: i64) -> bool {
+    let n = coins.len();
+    let mut can = vec![false; n];
+    can[0] = coins[0] != -1;
+    for i in 1..n {
+        if coins[i] != -1 {
+            for j in (i - max_jump).max(0)..i {
+                if can[j] {
+                    can[i] = true;
+                }
+            }
+        }
+    }
+    can[n - 1]
+}
+
+fn main() {
+    // 1,000 random rows of 1 to 14 coins from 0 to 1 or 0 to 5, so that
+    // ties are common, jumps of 1 to 4, about one in six blocked.
+    let cases = 1000;
+    let mut seed: i64 = 656;
+    let mut coins_seen = 0;
+    let mut checks = 0;
+    let mut failures = vec![0; 5];
+    for _ in 0..cases {
+        let n = 1 + next_random(mut seed) % 14;
+        let jump = 1 + next_random(mut seed) % 4;
+        let top = if next_random(mut seed) % 2 == 0 { 1 } else { 5 };
+        let mut coins: Vec[i64] = Vec.new();
+        for i in 0..n {
+            if i > 0 and next_random(mut seed) % 6 == 0 {
+                coins.push(-1);
+            } else {
+                coins.push(next_random(mut seed) % (top + 1));
+            }
+        }
+        coins_seen += n;
+        let mut start: Vec[i64] = vec![1];
+        let mut best = -1;
+        let mut want: Vec[i64] = Vec.new();
+        every_path(coins, jump, mut start, coins[0], mut best, mut want);
+        // A cell to block for P5, never the first or the last.
+        let pick = 2 + next_random(mut seed) % n;
+        for which in 0..4 {
+            let got = answer(which, coins, jump);
+            // P2: empty, or from the first index to the last in steps
+            // of 1 to `jump`, over no blocked cell.
+            let mut valid = true;
+            let mut cost = 0;
+            if got.len() > 0 {
+                valid = got[0] == 1 and got[got.len() - 1] == n;
+                for k in 0..got.len() {
+                    if got[k] < 1 or got[k] > n or coins[got[k] - 1] == -1 {
+                        valid = false;
+                    } else {
+                        cost += coins[got[k] - 1];
+                    }
+                    if k > 0 and (got[k] <= got[k - 1] or got[k] - got[k - 1] > jump) {
+                        valid = false;
+                    }
+                }
+            }
+            let mut kept = true;
+            if pick < n and not got.contains(pick) {
+                let mut blocked = coins.clone();
+                blocked[pick - 1] = -1;
+                kept = answer(which, blocked, jump) == got;
+            }
+            let ok = vec![
+                // P1: the definition's path.
+                got == want,
+                // P2: a path, or nothing.
+                valid,
+                // P3: as cheap as the cheapest.
+                got.len() == 0 or cost == best,
+                // P4: nothing exactly when the end cannot be reached.
+                (got.len() == 0) == not reachable(coins, jump),
+                // P5: blocking a cell the answer does not use leaves it
+                // alone.
+                kept,
+            ];
+            for p in 0..5 {
+                checks += 1;
+                if not ok[p] {
+                    failures[p] += 1;
+                }
+            }
+        }
+    }
+    let all = failures[0] + failures[1] + failures[2] + failures[3] + failures[4];
+    println(f"{cases} rows ({coins_seen} coins), 4 arms, {checks} checks, {all} failures");
+    if all > 0 {
+        println(f"by property: P1 {failures[0]}, P2 {failures[1]}, P3 {failures[2]}, P4 {failures[3]}, P5 {failures[4]}");
+    }
+}

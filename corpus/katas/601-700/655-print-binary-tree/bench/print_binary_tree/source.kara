@@ -1,0 +1,92 @@
+// Benchmark for #655: the ★ arm (each node placed from its parent) on a
+// large workload.
+
+shared struct TreeNode {
+    mut val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn print_tree(root: Option[TreeNode]) -> Vec[Vec[String]] {
+    let h = height(root) - 1;
+    let columns = (1 << (h + 1)) - 1;
+    let mut grid: Vec[Vec[String]] = Vec.new();
+    for _ in 0..h + 1 {
+        let mut row: Vec[String] = Vec.new();
+        for _ in 0..columns {
+            row.push("".to_string());
+        }
+        grid.push(row);
+    }
+    place(root, 0, (columns - 1) / 2, h, mut grid);
+    grid
+}
+
+fn height(node: Option[TreeNode]) -> i64 {
+    match node {
+        None => 0,
+        Some(n) => 1 + height(n.left).max(height(n.right)),
+    }
+}
+
+fn place(node: Option[TreeNode], row: i64, column: i64, h: i64, grid: mut ref Vec[Vec[String]]) {
+    if let Some(n) = node {
+        grid[row][column] = f"{n.val}";
+        if row < h {
+            let step = 1 << (h - row - 1);
+            place(n.left, row + 1, column - step, h, grid);
+            place(n.right, row + 1, column + step, h, grid);
+        }
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn random_tree(levels: i64, chance: i64, seed: mut ref i64) -> Option[TreeNode] {
+    if levels == 0 {
+        return None;
+    }
+    let n = TreeNode { val: next_random(mut seed) % 199 - 99, left: None, right: None };
+    if next_random(mut seed) % 100 < chance {
+        n.left = random_tree(levels - 1, chance, mut seed);
+    }
+    if next_random(mut seed) % 100 < chance {
+        n.right = random_tree(levels - 1, chance, mut seed);
+    }
+    Some(n)
+}
+
+fn main() {
+    // Eight random trees up to 10 levels deep, the problem's deepest, each
+    // child there with chance 85 in 100, made once; then 10,000 rounds each
+    // print one, picked by the round, and count its filled cells and their
+    // characters into a checksum.
+    let inputs = 8;
+    let rounds = 10000;
+    let mut seed: i64 = 655;
+    let mut trees: Vec[Option[TreeNode]] = Vec.new();
+    for _ in 0..inputs {
+        trees.push(random_tree(10, 85, mut seed));
+    }
+    let mut cells = 0;
+    let mut checksum: i64 = 0;
+    for r in 0..rounds {
+        let grid = print_tree(trees[(r * 3) % inputs]);
+        let mut filled = 0;
+        let mut chars = 0;
+        for row in grid.iter() {
+            for cell in row.iter() {
+                if cell.len() > 0 {
+                    filled += 1;
+                    chars += cell.len();
+                }
+            }
+        }
+        cells += grid.len() * grid[0].len();
+        checksum = (checksum * 31 + filled * 1000 + chars) % 1000000007;
+    }
+    println(f"{inputs} trees, {rounds} rounds: {cells} cells, checksum {checksum}");
+}

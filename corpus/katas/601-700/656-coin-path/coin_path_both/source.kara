@@ -1,0 +1,148 @@
+// LeetCode #656: Coin Path -- costs both ways, then a greedy walk.
+//
+// `from[i]` is the cheapest way from the start to index `i` and `to[i]`
+// the cheapest from `i` to the end, each a plain table over the jumps.
+// An index lies on a cheapest path exactly when the two meet at the
+// cheapest total. Walking from the start, each step takes the smallest
+// index in reach that lies on a cheapest path and is reached at its
+// cheapest, so the walk spells the lexicographically smallest one.
+// O(n * max_jump).
+
+fn cheapest_jump(coins: Vec[i64], max_jump: i64) -> Vec[i64] {
+    let n = coins.len();
+    let unreachable = i64.MAX;
+    let mut from = vec![unreachable; n];
+    let mut to = vec![unreachable; n];
+    from[0] = coins[0];
+    for i in 1..n {
+        if coins[i] != -1 {
+            for j in (i - max_jump).max(0)..i {
+                if from[j] != unreachable {
+                    from[i] = from[i].min(from[j] + coins[i]);
+                }
+            }
+        }
+    }
+    if coins[n - 1] != -1 {
+        to[n - 1] = coins[n - 1];
+    }
+    let mut i = n - 2;
+    while i >= 0 {
+        if coins[i] != -1 {
+            for j in i + 1..(i + max_jump).min(n - 1) + 1 {
+                if to[j] != unreachable {
+                    to[i] = to[i].min(coins[i] + to[j]);
+                }
+            }
+        }
+        i -= 1;
+    }
+    let mut path: Vec[i64] = Vec.new();
+    let total = from[n - 1];
+    if total == unreachable {
+        return path;
+    }
+    let mut at = 0;
+    path.push(1);
+    while at != n - 1 {
+        let mut j = at + 1;
+        while not (to[j] != unreachable and from[j] == from[at] + coins[j] and from[j] + to[j] - coins[j] == total) {
+            j += 1;
+        }
+        path.push(j + 1);
+        at = j;
+    }
+    path
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(coins: Vec[i64], max_jump: i64) {
+    let path = cheapest_jump(coins, max_jump);
+    let mut cells: Vec[String] = Vec.new();
+    for c in coins.iter() {
+        cells.push(f"{c}");
+    }
+    let mut steps: Vec[String] = Vec.new();
+    for p in path.iter() {
+        steps.push(f"{p}");
+    }
+    println(f"[{cells.join(",")}], {max_jump} -> [{steps.join(",")}]");
+}
+
+// `n` coins from 0 to `top`, each blocked (-1) with chance `blocked` in
+// 100, the first never.
+fn random_coins(n: i64, top: i64, blocked: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut coins: Vec[i64] = Vec.new();
+    for i in 0..n {
+        if i > 0 and next_random(seed) % 100 < blocked {
+            coins.push(-1);
+        } else {
+            coins.push(next_random(seed) % (top + 1));
+        }
+    }
+    coins
+}
+
+// The path's length, cost and a checksum of its indices.
+fn summary(coins: Vec[i64], path: Vec[i64]) -> (i64, i64, i64) {
+    let mut cost = 0;
+    let mut sum = 0;
+    for p in path.iter() {
+        cost += coins[*p - 1];
+        sum = (sum * 31 + *p) % 1000000007;
+    }
+    (path.len(), cost, sum)
+}
+
+fn main() {
+    // The two LeetCode examples.
+    show(vec![1, 2, 4, -1, 2], 2);
+    show(vec![1, 2, 4, -1, 2], 1);
+    // One coin; the last blocked; every coin free, so the smallest index
+    // wins each tie; free coins that make the longest of the cheapest
+    // paths the smallest; a tie between a short path and a longer one
+    // that starts smaller.
+    show(vec![0], 1);
+    show(vec![3, 1, -1], 2);
+    show(vec![0, 0, 0, 0, 0], 3);
+    show(vec![1, 0, 0, 0, 9, 1], 4);
+    show(vec![0, 1, 0, 0], 3);
+    // 300 random rows of 1 to 60 coins, jumps of 1 to 6, a fifth blocked.
+    let mut seed: i64 = 656;
+    let mut found = 0;
+    let mut steps = 0;
+    let mut total = 0;
+    let mut sum = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 60;
+        let jump = 1 + next_random(mut seed) % 6;
+        let coins = random_coins(n, 100, 20, mut seed);
+        let path = cheapest_jump(coins, jump);
+        let (len, cost, check) = summary(coins, path);
+        if len > 0 {
+            found += 1;
+        }
+        steps += len;
+        total += cost;
+        sum = (sum * 7 + check) % 1000000007;
+    }
+    println(f"300 random rows: {found} with a path, {steps} steps, cost {total}, checksum {sum}");
+    // The problem's largest: 1,000 coins and jumps of 100, random; all
+    // free, the longest path; and jumps of 1 with one coin blocked.
+    let coins = random_coins(1000, 100, 30, mut seed);
+    let (len, cost, check) = summary(coins, cheapest_jump(coins, 100));
+    println(f"1000 random, jump 100: {len} steps, cost {cost}, checksum {check}");
+    let coins = vec![0; 1000];
+    let (len, cost, check) = summary(coins, cheapest_jump(coins, 100));
+    println(f"1000 free, jump 100: {len} steps, cost {cost}, checksum {check}");
+    let mut coins = random_coins(1000, 100, 0, mut seed);
+    coins[500] = -1;
+    let (len, cost, check) = summary(coins, cheapest_jump(coins, 1));
+    println(f"1000 with one blocked, jump 1: {len} steps, cost {cost}, checksum {check}");
+}
