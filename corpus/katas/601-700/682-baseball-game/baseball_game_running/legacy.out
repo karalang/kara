@@ -1,0 +1,12 @@
+[5 2 C D +] -> 30
+[5 -2 4 C D 9 + +] -> 27
+[1 C] -> 0
+[7] -> 7
+[-30000] -> -30000
+[3 D D D D] -> 93
+[1 1 + + + + + +] -> 54
+[10 20 + C C C] -> 0
+[4 -4 + D C +] -> -4
+[30000 30000 + + + + D C] -> 600000
+lists of 1 to 7 over 1 -2 + D C: 23408 playable, checksum 233104776
+300 random lists: 0 total 0, largest size 16163535, checksum 804639513

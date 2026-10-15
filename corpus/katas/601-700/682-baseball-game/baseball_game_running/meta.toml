@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/682-baseball-game/baseball_game_running.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "c5ba5faa3"
+extracted_src = "ba4466df"
+model_rev = "583cfb0d"
+model_src = "ba4466df"

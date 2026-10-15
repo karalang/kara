@@ -1,0 +1,121 @@
+// LeetCode #681: Next Closest Time -- raise the last digit that can rise.
+//
+// As with the next number from a set of digits, the next time keeps the
+// longest prefix it can. From the last place leftward, find the first
+// place that can take a larger given digit and still be a time, raise
+// it to the smallest such digit, and set every place after it to the
+// smallest given digit. When no place can rise, the answer is tomorrow's
+// earliest time, every place at the smallest digit. O(1) time.
+
+// The largest digit place `i` may hold, given the hour's first digit.
+fn limit(i: i64, first: u8) -> u8 {
+    if i == 0 {
+        2
+    } else if i == 1 {
+        if first == 2 { 3 } else { 9 }
+    } else if i == 2 {
+        5
+    } else {
+        9
+    }
+}
+
+fn next_closest_time(time: String) -> String {
+    let mut t: Vec[u8] = Vec.new();
+    for c in time.bytes() {
+        t.push(c);
+    }
+    let places = [0, 1, 3, 4];
+    let mut smallest = b'9';
+    for p in places {
+        if t[p] < smallest {
+            smallest = t[p];
+        }
+    }
+    let mut k = 3;
+    while k >= 0 {
+        let p = places[k];
+        let mut next = b'9' + 1;
+        for q in places {
+            let d = t[q];
+            if d > t[p] and d < next and d - b'0' <= limit(k, t[0] - b'0') {
+                next = d;
+            }
+        }
+        if next <= b'9' {
+            t[p] = next;
+            for j in k + 1..4 {
+                t[places[j]] = smallest;
+            }
+            return String.from_utf8(t).unwrap();
+        }
+        k -= 1;
+    }
+    for p in places {
+        t[p] = smallest;
+    }
+    String.from_utf8(t).unwrap()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn clock(minutes: i64) -> String {
+    let h = minutes / 60;
+    let m = minutes % 60;
+    f"{h / 10}{h % 10}:{m / 10}{m % 10}"
+}
+
+fn minutes_of(time: String) -> i64 {
+    let b = time.bytes();
+    let h = (b[0] - b'0') as i64 * 10 + (b[1] - b'0') as i64;
+    h * 60 + (b[3] - b'0') as i64 * 10 + (b[4] - b'0') as i64
+}
+
+fn show(time: String) {
+    println(f"\"{time}\" -> \"{next_closest_time(time)}\"");
+}
+
+fn main() {
+    show("19:34");
+    show("23:59");
+    show("00:00");
+    show("11:11");
+    show("13:55");
+    show("01:32");
+    show("20:48");
+    show("22:23");
+    show("06:59");
+    show("23:32");
+    show("12:09");
+    show("15:55");
+
+    // Every time of day.
+    let mut checksum = 0;
+    let mut same = 0;
+    let mut wrapped = 0;
+    let mut ahead_total = 0;
+    let mut farthest = 0;
+    let mut farthest_at = String.new();
+    for now in 0..1440 {
+        let time = clock(now);
+        let answer = next_closest_time(time);
+        let then = minutes_of(answer);
+        let mut ahead = (then - now + 1440) % 1440;
+        if ahead == 0 {
+            ahead = 1440;
+            same += 1;
+        }
+        if then <= now {
+            wrapped += 1;
+        }
+        ahead_total += ahead;
+        if ahead < 1440 and ahead > farthest {
+            farthest = ahead;
+            farthest_at = time;
+        }
+        checksum = (checksum * 1441 + then + 1) % 1000000007;
+    }
+    println(f"1440 times: {same} answer themselves, {wrapped} answer on the next day");
+    println(f"{ahead_total} minutes ahead in all; farthest but a whole day {farthest}, from \"{farthest_at}\"");
+    println(f"checksum {checksum}");
+}

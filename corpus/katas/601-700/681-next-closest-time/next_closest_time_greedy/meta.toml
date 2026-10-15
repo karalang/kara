@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/681-next-closest-time/next_closest_time_greedy.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "c5ba5faa3"
+extracted_src = "2ed3a70d"
+model_rev = "583cfb0d"
+model_src = "2ed3a70d"

@@ -1,0 +1,301 @@
+// LeetCode #681: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on every time of day.
+
+// ---- star arm ----------------------------------------------------------
+
+fn digits_of_star(minutes: i64) -> Array[i64, 4] {
+    let h = minutes / 60;
+    let m = minutes % 60;
+    [h / 10, h % 10, m / 10, m % 10]
+}
+
+fn next_closest_time_star(time: String) -> String {
+    let b = time.bytes();
+    let h = (b[0] - b'0') as i64 * 10 + (b[1] - b'0') as i64;
+    let m = (b[3] - b'0') as i64 * 10 + (b[4] - b'0') as i64;
+    let mut allowed = [false; 10];
+    for d in digits_of_star(h * 60 + m) {
+        allowed[d] = true;
+    }
+    let mut now = h * 60 + m;
+    loop {
+        now = (now + 1) % 1440;
+        let mut ok = true;
+        for d in digits_of_star(now) {
+            if not allowed[d] {
+                ok = false;
+            }
+        }
+        if ok {
+            return f"{now / 600}{now / 60 % 10}:{now % 60 / 10}{now % 10}";
+        }
+    }
+}
+
+// ---- combos arm --------------------------------------------------------
+
+fn next_closest_time_combos(time: String) -> String {
+    let b = time.bytes();
+    let digits = [b[0] - b'0', b[1] - b'0', b[3] - b'0', b[4] - b'0'];
+    let hour = (digits[0] * 10 + digits[1]) as i64;
+    let now = hour * 60 + (digits[2] * 10 + digits[3]) as i64;
+    let mut best = now;
+    let mut best_ahead = 1440;
+    for a in digits {
+        for c in digits {
+            for d in digits {
+                for e in digits {
+                    let h = (a * 10 + c) as i64;
+                    let m = (d * 10 + e) as i64;
+                    if h < 24 and m < 60 {
+                        let mut ahead = (h * 60 + m - now + 1440) % 1440;
+                        if ahead == 0 {
+                            ahead = 1440;
+                        }
+                        if ahead < best_ahead {
+                            best_ahead = ahead;
+                            best = h * 60 + m;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    f"{best / 600}{best / 60 % 10}:{best % 60 / 10}{best % 10}"
+}
+
+// ---- greedy arm --------------------------------------------------------
+
+// The largest digit place `i` may hold, given the hour's first digit.
+fn limit_greedy(i: i64, first: u8) -> u8 {
+    if i == 0 {
+        2
+    } else if i == 1 {
+        if first == 2 { 3 } else { 9 }
+    } else if i == 2 {
+        5
+    } else {
+        9
+    }
+}
+
+fn next_closest_time_greedy(time: String) -> String {
+    let mut t: Vec[u8] = Vec.new();
+    for c in time.bytes() {
+        t.push(c);
+    }
+    let places = [0, 1, 3, 4];
+    let mut smallest = b'9';
+    for p in places {
+        if t[p] < smallest {
+            smallest = t[p];
+        }
+    }
+    let mut k = 3;
+    while k >= 0 {
+        let p = places[k];
+        let mut next = b'9' + 1;
+        for q in places {
+            let d = t[q];
+            if d > t[p] and d < next and d - b'0' <= limit_greedy(k, t[0] - b'0') {
+                next = d;
+            }
+        }
+        if next <= b'9' {
+            t[p] = next;
+            for j in k + 1..4 {
+                t[places[j]] = smallest;
+            }
+            return String.from_utf8(t).unwrap();
+        }
+        k -= 1;
+    }
+    for p in places {
+        t[p] = smallest;
+    }
+    String.from_utf8(t).unwrap()
+}
+
+// ---- sorted arm --------------------------------------------------------
+
+fn next_closest_time_sorted(time: String) -> String {
+    let digits: Vec[i64] = time
+        .bytes()
+        .iter()
+        .filter(|c| *c != b':')
+        .map(|c| (*c - b'0') as i64)
+        .collect();
+    let mut times: Vec[i64] = Vec.new();
+    for a in digits.iter() {
+        for c in digits.iter() {
+            if *a * 10 + *c < 24 {
+                for d in digits.iter() {
+                    for e in digits.iter() {
+                        if *d < 6 {
+                            times.push((*a * 10 + *c) * 60 + *d * 10 + *e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    times.sort();
+    times.dedup();
+    let now = (digits[0] * 10 + digits[1]) * 60 + digits[2] * 10 + digits[3];
+    let mut lo = 0;
+    let mut hi = times.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if times[mid] <= now {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let at = if lo == times.len() { times[0] } else { times[lo] };
+    f"{at / 600}{at / 60 % 10}:{at % 60 / 10}{at % 10}"
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, time: String) -> String {
+    if which == 0 {
+        next_closest_time_star(time)
+    } else if which == 1 {
+        next_closest_time_combos(time)
+    } else if which == 2 {
+        next_closest_time_greedy(time)
+    } else {
+        next_closest_time_sorted(time)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn clock(minutes: i64) -> String {
+    let h = minutes / 60;
+    let m = minutes % 60;
+    f"{h / 10}{h % 10}:{m / 10}{m % 10}"
+}
+
+// Minutes after midnight, or -1 when `time` is not `HH:MM` for a real
+// time of day.
+fn minutes_of(time: String) -> i64 {
+    if time.len() != 5 {
+        return -1;
+    }
+    let b = time.bytes();
+    for k in [0, 1, 3, 4] {
+        if b[k] < b'0' or b[k] > b'9' {
+            return -1;
+        }
+    }
+    if b[2] != b':' {
+        return -1;
+    }
+    let h = (b[0] - b'0') as i64 * 10 + (b[1] - b'0') as i64;
+    let m = (b[3] - b'0') as i64 * 10 + (b[4] - b'0') as i64;
+    if h > 23 or m > 59 {
+        return -1;
+    }
+    h * 60 + m
+}
+
+// Whether every character of `other` is one of `allowed`.
+fn uses_only(other: String, allowed: ref Vec[char]) -> bool {
+    for c in other.chars() {
+        if not allowed.contains(c) {
+            return false;
+        }
+    }
+    true
+}
+
+fn ahead(from: i64, to: i64) -> i64 {
+    let d = (to - from + 1440) % 1440;
+    if d == 0 { 1440 } else { d }
+}
+
+// The definition: the first time written as text, `texts[t]` for
+// minute t, in the day that follows `time`, whose characters all appear
+// in `time`; `time` itself is the last of that day.
+fn definition(time: String, texts: ref Vec[String]) -> String {
+    let now = minutes_of(time);
+    let allowed: Vec[char] = time.chars().collect();
+    for step in 1..1441 {
+        let t = (now + step) % 1440;
+        if uses_only(texts[t], allowed) {
+            return texts[t].clone();
+        }
+    }
+    String.new()
+}
+
+fn main() {
+    let mut seed = 6810;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut texts: Vec[String] = Vec.new();
+    for t in 0..1440 {
+        texts.push(clock(t));
+    }
+    for now in 0..1440 {
+        let time = clock(now);
+        let want = definition(time, texts);
+        let allowed: Vec[char] = time.chars().collect();
+        let digits: Vec[char] = time.chars().filter(|c| c != ':').collect();
+        let all_same = digits[0] == digits[1] and digits[1] == digits[2] and digits[2] == digits[3];
+        for which in 0..arms {
+            let got = answer(which, time);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: a real time, all of whose digits come from the input.
+            checks += 1;
+            let then = minutes_of(got);
+            if then < 0 or not uses_only(got, allowed) {
+                fails[1] += 1;
+                continue;
+            }
+            // P3: no time made of the input's digits is nearer ahead.
+            for _ in 0..20 {
+                let mut other = String.new();
+                for k in 0..5 {
+                    if k == 2 {
+                        other.push(':');
+                    } else {
+                        other.push(digits[next_random(mut seed) % 4]);
+                    }
+                }
+                let u = minutes_of(other);
+                if u >= 0 {
+                    checks += 1;
+                    if ahead(now, u) < ahead(now, then) {
+                        fails[2] += 1;
+                    }
+                }
+            }
+            // P4: a time answers itself only when its four digits agree.
+            checks += 1;
+            if (then == now) != all_same {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for k in 0..4 {
+        if fails[k] > 0 {
+            report.push_str(f"P{k + 1}: {fails[k]} failures | ");
+        }
+        total += fails[k];
+    }
+    println(f"{report}1440 times, {arms} arms, {checks} checks, {total} failures");
+}

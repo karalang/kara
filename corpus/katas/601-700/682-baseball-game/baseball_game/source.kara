@@ -1,0 +1,148 @@
+// LeetCode #682: Baseball Game -- a stack of the valid scores.
+//
+// Keep the scores still on the record in a stack: a number is pushed,
+// `+` pushes the sum of the top two, `D` pushes double the top, and `C`
+// pops the top. The answer is the sum of what is left. O(n) time and
+// space.
+
+fn cal_points(operations: Vec[String]) -> i64 {
+    let mut record: Vec[i64] = Vec.new();
+    for op in operations.iter() {
+        if op == "+" {
+            let n = record.len();
+            record.push(record[n - 1] + record[n - 2]);
+        } else if op == "D" {
+            let n = record.len();
+            record.push(record[n - 1] * 2);
+        } else if op == "C" {
+            record.pop();
+        } else {
+            record.push(i64.parse(op).unwrap());
+        }
+    }
+    let mut total = 0;
+    for x in record.iter() {
+        total += *x;
+    }
+    total
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn ops(text: String) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    for w in text.split(" ") {
+        v.push(w.to_string());
+    }
+    v
+}
+
+fn show(text: String) {
+    println(f"[{text}] -> {cal_points(ops(text))}");
+}
+
+fn abs(x: i64) -> i64 {
+    if x < 0 { 0 - x } else { x }
+}
+
+// A random list of `n` operations that can all be played: `+` only on
+// two scores, `D` and `C` only on one, and no score past 2^30 in size,
+// as LeetCode's 32-bit bound promises.
+fn random_ops(seed: mut ref i64, n: i64) -> Vec[String] {
+    let limit = 1073741824;
+    let mut record: Vec[i64] = Vec.new();
+    let mut out: Vec[String] = Vec.new();
+    while out.len() < n {
+        let k = record.len();
+        let pick = next_random(seed) % 10;
+        if pick == 0 and k >= 1 {
+            record.pop();
+            out.push("C".to_string());
+        } else if pick == 1 and k >= 1 and abs(record[k - 1]) < limit / 2 {
+            record.push(record[k - 1] * 2);
+            out.push("D".to_string());
+        } else if pick == 2 and k >= 2 and abs(record[k - 1] + record[k - 2]) < limit {
+            record.push(record[k - 1] + record[k - 2]);
+            out.push("+".to_string());
+        } else if pick >= 3 {
+            let x = next_random(seed) % 60001 - 30000;
+            record.push(x);
+            out.push(f"{x}");
+        }
+    }
+    out
+}
+
+fn main() {
+    show("5 2 C D +");
+    show("5 -2 4 C D 9 + +");
+    show("1 C");
+    show("7");
+    show("-30000");
+    show("3 D D D D");
+    show("1 1 + + + + + +");
+    show("10 20 + C C C");
+    show("4 -4 + D C +");
+    show("30000 30000 + + + + D C");
+
+    // Every list of up to 7 operations over `1`, `-2`, `+`, `D` and `C`
+    // that can be played.
+    let words = ["1", "-2", "+", "D", "C"];
+    let mut playable = 0;
+    let mut sum = 0;
+    let mut total = 1;
+    for n in 1..8 {
+        total *= 5;
+        for code in 0..total {
+            let mut v: Vec[String] = Vec.new();
+            let mut c = code;
+            let mut depth = 0;
+            let mut ok = true;
+            for _ in 0..n {
+                let w = ref words[c % 5];
+                c /= 5;
+                if w == "+" {
+                    ok = ok and depth >= 2;
+                    depth += 1;
+                } else if w == "C" {
+                    ok = ok and depth >= 1;
+                    depth -= 1;
+                } else if w == "D" {
+                    ok = ok and depth >= 1;
+                    depth += 1;
+                } else {
+                    depth += 1;
+                }
+                v.push(w.to_string());
+            }
+            if ok {
+                playable += 1;
+                sum = (sum * 31 + cal_points(v) + 1000) % 1000000007;
+            }
+        }
+    }
+    println(f"lists of 1 to 7 over 1 -2 + D C: {playable} playable, checksum {sum}");
+
+    // Random lists of 1 to 1000 operations.
+    let mut seed = 682;
+    let mut checksum = 0;
+    let mut largest = 0;
+    let mut zero = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 1000;
+        let answer = cal_points(random_ops(mut seed, n));
+        if abs(answer) > largest {
+            largest = abs(answer);
+        }
+        if answer == 0 {
+            zero += 1;
+        }
+        checksum = (checksum * 31 + answer % 1000000007 + 1000000007) % 1000000007;
+    }
+    println(f"300 random lists: {zero} total 0, largest size {largest}, checksum {checksum}");
+}

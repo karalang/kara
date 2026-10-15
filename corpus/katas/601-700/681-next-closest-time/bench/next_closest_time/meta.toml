@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/601-700/681-next-closest-time/bench/next_closest_time.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "c5ba5faa3"
+extracted_src = "62ba93f7"
+model_rev = "583cfb0d"
+model_src = "62ba93f7"
