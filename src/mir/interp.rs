@@ -3660,14 +3660,20 @@ impl<'a> Interp<'a> {
                 if !closed && !full {
                     c.queue.push_back(v.clone());
                 }
-                match (base, method, closed, full) {
-                    (_, "try_send", true, _) | (_, "try_send", _, true) => {
+                // The MIR pipeline's `send` returns a `Result`, as
+                // `try_send` does (B-2026-10-15-11). Under the executor its
+                // `__ready` waited for room, so `Full` is only seen where
+                // no other task could make room.
+                let spec = method == "try_send"
+                    || (base != "BoundedChannel" && self.adt_is(ret, "Result"));
+                match (base, spec, closed, full) {
+                    (_, true, true, _) | (_, true, _, true) => {
                         // `Closed` before `Full`: a retry can never succeed.
                         let want = if closed { "Closed" } else { "Full" };
                         let e = self.variant_named(ret, Some("Err"), want, vec![v.clone()])?;
                         self.variant_named(ret, None, "Err", vec![e])
                     }
-                    (_, "try_send", ..) => self.variant_named(ret, None, "Ok", vec![Value::Unit]),
+                    (_, true, ..) => self.variant_named(ret, None, "Ok", vec![Value::Unit]),
                     ("BoundedChannel", ..) if full => {
                         self.drop_value(v.clone(), elem)?;
                         let e = self.variant_named(ret, Some("Err"), "Full", Vec::new())?;
@@ -3686,7 +3692,10 @@ impl<'a> Interp<'a> {
             (_, "recv" | "recv_blocking" | "try_recv") => {
                 let id = self.chan_id(args.first(), name)?;
                 let v = self.chan_mut(id, name)?.queue.pop_front();
-                if base == "BoundedChannel" || method == "try_recv" {
+                // The MIR pipeline's `recv` returns an `Option`: `None`
+                // once every sender is gone and the queue is drained, which
+                // is what its `__ready` waited for (B-2026-10-15-11).
+                if base == "BoundedChannel" || method == "try_recv" || self.adt_is(ret, "Option") {
                     return self.option(ret, v);
                 }
                 match v {
@@ -3696,6 +3705,14 @@ impl<'a> Interp<'a> {
             }
             _ => err(format!("call of unknown function {name}")),
         }
+    }
+
+    /// Whether `ty` is an instance of the library type `name`.
+    fn adt_is(&self, ty: Ty, name: &str) -> bool {
+        self.tys
+            .tcx()
+            .adt_of(ty)
+            .is_some_and(|(a, _)| a.name == name)
     }
 
     fn new_chan(&mut self, elem: Ty, cap: usize, senders: usize, receivers: usize) -> i128 {

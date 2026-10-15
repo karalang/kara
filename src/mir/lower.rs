@@ -15187,7 +15187,7 @@ fn main() {
     let tx2 = tx.clone();
     tx2.send(String.from("b"));
     tx.send(String.from("left behind"));
-    println(rx.recv());
+    println(rx.recv().unwrap());
     match rx.try_recv() {
         Some(s) => println(s),
         None => println("empty"),
@@ -15203,7 +15203,7 @@ fn main() {
         Err(SendError.Full(v)) => println(f"full {v}"),
         Err(SendError.Closed(v)) => println(f"closed {v}"),
     }
-    println(brx.recv());
+    println(brx.recv().unwrap());
     let mut q: VecDeque[i64] = VecDeque.new();
     q.push_back(7);
     q.push_back(9);

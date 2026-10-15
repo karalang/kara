@@ -8,6 +8,6 @@ fn main() {
     b.push(3);
     tx.send(a);
     tx.send(b);
-    let got = rx.recv();
+    let got = rx.recv().unwrap();
     println(f"got len: {got.len()}");
 }

@@ -4,8 +4,8 @@ fn main() {
     tx.send("first");
     let tx2 = tx.clone();
     tx2.send("second");
-    println(rx.recv());
-    println(rx.recv());
+    println(rx.recv().unwrap());
+    println(rx.recv().unwrap());
     match rx.try_recv() {
         Some(v) => println(v),
         None => println("drained"),

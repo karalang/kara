@@ -8,6 +8,6 @@ fn mk() -> Receiver[i64] {
 }
 fn main() {
     let r = mk();
-    println(r.recv());
-    println(r.recv());
+    println(r.recv().unwrap());
+    println(r.recv().unwrap());
 }

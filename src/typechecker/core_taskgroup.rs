@@ -324,9 +324,12 @@ impl Walk<'_, '_> {
                 if method == "spawn" {
                     if let ExprKind::Identifier(g) = &object.kind {
                         let decl = self.lookup(g);
-                        let group = self.open_groups.iter().map(|(i, _)| *i).find(|i| {
+                        let mut group = self.open_groups.iter().map(|(i, _)| *i).find(|i| {
                             Some(self.groups[*i].decl) == decl && &self.groups[*i].name == g
                         });
+                        if group.is_none() && decl == Some(Decl { offset: 0 }) {
+                            group = self.parameter_group(g, object);
+                        }
                         if let (Some(group), Some(arg)) = (group, args.first()) {
                             if let ExprKind::Closure { params, body, .. } = &arg.value.kind {
                                 // The body's writes are the capture itself,
@@ -404,6 +407,30 @@ impl Walk<'_, '_> {
                 self.loop_depth -= usize::from(looping);
             }
         }
+    }
+
+    /// A group passed in as a parameter (`group: ref TaskGroup`) outlives
+    /// the call, so every local of the function drops before it and a task
+    /// spawned into it takes them by move (§9.5, B-2026-10-15-11). It is
+    /// tracked as a group declared before them all, open to the end.
+    fn parameter_group(&mut self, name: &str, object: &Expr) -> Option<usize> {
+        let (ty, _) = self.node_types.get(&object.id)?;
+        let is_group = |t: &Type| matches!(t, Type::Named { name, .. } if name == "TaskGroup");
+        let held = match ty {
+            Type::Ref(inner) | Type::MutRef(inner) => is_group(inner),
+            t => is_group(t),
+        };
+        if !held {
+            return None;
+        }
+        let g = self.groups.len();
+        self.groups.push(Group {
+            name: name.to_string(),
+            decl: Decl { offset: 0 },
+            end: usize::MAX,
+        });
+        self.open_groups.push((g, 1));
+        Some(g)
     }
 
     fn method_writes_receiver(&self, call: &Expr, method: &str) -> bool {

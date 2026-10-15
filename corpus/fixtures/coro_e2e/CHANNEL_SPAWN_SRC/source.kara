@@ -7,7 +7,7 @@
             let listener = TcpListener.bind("127.0.0.1:0").unwrap();
             let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
             spawn(|| serve_one(listener, tx));
-            let v: i64 = rx.recv();
+            let v: i64 = rx.recv().unwrap();
             println(v);
         }
     

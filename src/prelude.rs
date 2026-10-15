@@ -777,6 +777,7 @@ pub const LIBRARY_SOURCE_TYPES: &[&str] = &[
     "StringSlice",
     "Slice",
     "VecDeque",
+    "Receiver",
 ];
 
 /// Library methods written in Kāra (redesign A2), from
@@ -821,6 +822,10 @@ pub const LIBRARY_SOURCES: &[(&str, &str)] = &[
     (
         "source/priority_queue.kara",
         include_str!("../runtime/stdlib/source/priority_queue.kara"),
+    ),
+    (
+        "source/sync.kara",
+        include_str!("../runtime/stdlib/source/sync.kara"),
     ),
 ];
 
@@ -1619,8 +1624,9 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
             "Atomic",
             "Channel",
             "BoundedChannel",
+            "channel",
         ],
-        &["channel", "MutexGuard"],
+        &["MutexGuard"],
     ),
     (
         &["std", "time"],
@@ -1997,6 +2003,12 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // call from "boundary-detected unknown callee" to a real
     // stdlib item without changing the boundary-detection behavior.
     "spawn",
+    // `channel[T](cap: i64) -> (Sender[T], Receiver[T])`
+    // (docs/library/concurrency.md § Channels; B-2026-10-15-11). Its body
+    // is in `runtime/stdlib/source/sync.kara`, which only the MIR pipeline
+    // appends; the checker types every call (`infer_call`), so the name
+    // resolves without the library text too.
+    "channel",
     // Phase 6 — `collect_all_vec[T, E](fs: Vec[Fn() -> Result[T, E]]) ->
     // Vec[Result[T, E]]`. Gather-all-errors homogeneous parallel
     // primitive (decl in `runtime/stdlib/task_group.kara`). Like

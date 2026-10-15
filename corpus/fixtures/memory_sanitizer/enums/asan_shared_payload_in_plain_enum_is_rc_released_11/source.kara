@@ -3,6 +3,6 @@ fn main() {
     let (tx, rx): (Sender[Pa], Receiver[Pa]) = Channel.new();
     let s = Pa { n: 7 };
     tx.send(s);
-    let v = rx.recv();
+    let v = rx.recv().unwrap();
     println(f"got:{v.n}")
 }

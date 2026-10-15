@@ -569,6 +569,63 @@ impl<'a> super::TypeChecker<'a> {
         result
     }
 
+    /// `Result[(), SendError[T]]`, what a send returns.
+    fn send_result(elem: Type) -> Type {
+        Type::Named {
+            name: "Result".to_string(),
+            args: vec![
+                Type::Unit,
+                Type::Named {
+                    name: "SendError".to_string(),
+                    args: vec![elem],
+                },
+            ],
+        }
+    }
+
+    /// What `recv` returns: on the MIR pipeline the spec's `Option[T]`,
+    /// `None` once every sender is gone and the channel is drained
+    /// (B-2026-10-15-11). Its span is kept, so a use of it as a `T` gets a
+    /// `.unwrap()` fix (`unwrap_recv_fixes`).
+    fn v2_recv(&mut self, elem: Type, option_elem: Type, span: &Span) -> Type {
+        if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
+            return elem;
+        }
+        self.option_recv_spans.insert(SpanKey::from_span(span));
+        option_elem
+    }
+
+    /// A `recv` used where its `T` is wanted, as the legacy `recv` returned
+    /// it: the error there gets the machine-applicable `.unwrap()`, which
+    /// keeps the old behaviour (a panic once the channel is closed and
+    /// empty) (B-2026-10-15-11).
+    pub(super) fn unwrap_recv_fixes(&mut self) {
+        if self.option_recv_spans.is_empty() {
+            return;
+        }
+        for err in &mut self.errors {
+            if err.fix_it.is_some()
+                || !self
+                    .option_recv_spans
+                    .contains(&SpanKey::from_span(&err.span))
+            {
+                continue;
+            }
+            err.message.push_str(
+                "; `recv` returns `Option[T]`, `None` once every sender is gone and the channel \
+                 is drained: add `.unwrap()` to panic then, or match on it",
+            );
+            err.fix_it = Some(super::FixIt {
+                span: Span {
+                    offset: err.span.offset + err.span.length,
+                    length: 0,
+                    ..err.span
+                },
+                replacement: ".unwrap()".to_string(),
+            });
+        }
+    }
+
     /// The per-method body of [`infer_channel_method`], split out so the
     /// caller can re-record the (now-pinned) element type afterwards.
     fn infer_channel_method_arm(
@@ -619,7 +676,10 @@ impl<'a> super::TypeChecker<'a> {
                     // hardcoded match here is its v1 mirror at the
                     // call-site dispatch point.
                     if let Type::Named { name, .. } = &elem {
-                        let is_scope_local = matches!(name.as_str(), "TaskHandle" | "TaskGroup");
+                        let is_scope_local = name == "TaskGroup"
+                            || (name == "TaskHandle"
+                                && !(self.cli_lint_overrides.strict_core
+                                    || self.library_methods_from_source));
                         if is_scope_local {
                             self.type_error(
                                 format!(
@@ -657,6 +717,16 @@ impl<'a> super::TypeChecker<'a> {
                         if !pin_channel_elem_from_arg(&mut self.env, &elem, &at) {
                             self.check_assignable(&elem, &at, arg.value.span);
                         }
+                    }
+                    // The MIR pipeline has the spec's `send`
+                    // (docs/library/concurrency.md § Channels;
+                    // B-2026-10-15-11): a departed receiver hands the value
+                    // back in `Err(Closed(v))` instead of panicking.
+                    if self.cli_lint_overrides.strict_core || self.library_methods_from_source {
+                        return Self::send_result(resolve_type_var_top(
+                            &elem,
+                            &self.env.substitutions,
+                        ));
                     }
                     Type::Unit
                 }
@@ -971,7 +1041,11 @@ impl<'a> super::TypeChecker<'a> {
                 // being a laxer door to the same place.
                 "try_send" => {
                     if let Type::Named { name, .. } = &elem {
-                        if matches!(name.as_str(), "TaskHandle" | "TaskGroup") {
+                        if name == "TaskGroup"
+                            || (name == "TaskHandle"
+                                && !(self.cli_lint_overrides.strict_core
+                                    || self.library_methods_from_source))
+                        {
                             self.type_error(
                                 format!(
                                     "ScopeLocal type '{}' cannot be sent across a channel; the \
@@ -1023,17 +1097,7 @@ impl<'a> super::TypeChecker<'a> {
                     // found no dispatcher. `send` cannot hit this (it returns
                     // unit) and `recv`/`try_recv` cannot either (no argument to
                     // pin from), which is why it is new with this method.
-                    let pinned = resolve_type_var_top(&elem, &self.env.substitutions);
-                    Type::Named {
-                        name: "Result".to_string(),
-                        args: vec![
-                            Type::Unit,
-                            Type::Named {
-                                name: "SendError".to_string(),
-                                args: vec![pinned],
-                            },
-                        ],
-                    }
+                    Self::send_result(resolve_type_var_top(&elem, &self.env.substitutions))
                 }
                 _ => self.require_known_method(
                     "Sender",
@@ -1054,7 +1118,7 @@ impl<'a> super::TypeChecker<'a> {
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
-                    elem
+                    self.v2_recv(elem, option_elem, span)
                 }
                 // B-2026-08-22-21 — design.md:6099's `recv_blocking`, the
                 // `blocks`-flavoured sibling of `recv`. Same signature and
@@ -1080,7 +1144,7 @@ impl<'a> super::TypeChecker<'a> {
                             TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
-                    elem
+                    self.v2_recv(elem, option_elem, span)
                 }
                 "try_recv" => {
                     if !args.is_empty() {
@@ -1091,6 +1155,23 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                     option_elem
+                }
+                // `for msg in rx.into_iter()` (B-2026-10-15-11). On the MIR
+                // pipeline the library's `ReceiverIter` answers first
+                // (`runtime/stdlib/source/sync.kara`); a check without the
+                // library text types it as the opaque iterator.
+                "into_iter" if self.cli_lint_overrides.strict_core => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Receiver.into_iter() takes no arguments".to_string(),
+                            *span,
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    Type::Named {
+                        name: "Iterator".to_string(),
+                        args: vec![elem],
+                    }
                 }
                 _ => self.require_known_method(
                     "Receiver",

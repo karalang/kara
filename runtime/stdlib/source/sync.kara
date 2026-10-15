@@ -1,0 +1,38 @@
+// Channels, as Kāra (docs/library/concurrency.md § Channels).
+//
+// The MIR pipeline appends this file to the program. The ends' own methods
+// (`send`, `try_send`, `recv`, `try_recv`, `clone`) are natives of the MIR
+// backends; what is written here is what composes them. The legacy backends
+// do not read it.
+
+/// A channel holding at most `cap` values in flight: `send` waits while it
+/// is full. `cap` is at least 1.
+#[allow(deprecated)]
+pub fn channel[T](cap: i64) -> (Sender[T], Receiver[T]) {
+    if cap < 1 {
+        panic("a channel holds at least 1 value")
+    }
+    Channel.bounded(cap)
+}
+
+/// The values a receiver takes, in the order they were sent, until every
+/// sender is gone and the channel is empty.
+struct ReceiverIter[T] {
+    rx: Receiver[T],
+}
+
+impl[T] Iterator for ReceiverIter[T] {
+    type Item = T;
+
+    fn next(mut ref self) -> Option[Self.Item] {
+        self.rx.recv()
+    }
+}
+
+impl[T] Receiver[T] {
+    /// The values received, until the channel is closed and drained.
+    fn into_iter(own self) -> ReceiverIter[T] {
+        ReceiverIter { rx: self }
+    }
+}
+

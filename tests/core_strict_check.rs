@@ -4328,7 +4328,7 @@ fn library_module_paths_resolve() {
                fn main() {\n\
                    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
                    tx.send(4);\n\
-                   println(f\"{rx.recv()}\");\n\
+                   println(f\"{rx.recv().unwrap()}\");\n\
                }\n";
     let (dir, path) = fixture("library-paths", src);
     let out = karac().arg("check").arg(&path).output().unwrap();
@@ -4346,7 +4346,7 @@ fn library_module_paths_resolve() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 
-    let src = "import std.sync.{channel, Mutx};\n\
+    let src = "import std.sync.{MutexGuard, Mutx};\n\
                import std.io.{File as F};\n\
                fn main() {}\n";
     let (dir, path) = fixture("library-paths-bad", src);
@@ -4354,7 +4354,7 @@ fn library_module_paths_resolve() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
     for want in [
-        "`std.sync.channel` is in the library spec (docs/library) but not implemented yet",
+        "`std.sync.MutexGuard` is in the library spec (docs/library) but not implemented yet",
         "`std.sync` has no item `Mutx`, did you mean `Mutex`?",
         "`std.io.File` cannot be renamed (`as F`) yet",
     ] {
@@ -4394,4 +4394,107 @@ fn a_closure_early_return_agrees_with_its_tail() {
              println(f\"{f(5).unwrap()} {g(2).unwrap()}\");\n\
          }\n",
     );
+}
+
+/// docs/library/concurrency.md's channel and `TaskGroup` surface checks
+/// (B-2026-10-15-9, B-2026-10-15-11): `channel(cap)` with the element type
+/// pinned by use, `send` as a `Result`, `recv` as an `Option`, a receiver
+/// drained by `into_iter`, `TaskGroup.new(limit: n)` and a returned
+/// `TaskHandle`.
+#[test]
+fn channels_and_task_groups_check_as_specified() {
+    accepted(
+        "channel-surface",
+        "fn producer(tx: own Sender[i64]) -> Result[(), SendError[i64]] {\n\
+             tx.send(5)?;\n\
+             Ok(())\n\
+         }\n\
+         fn start(group: ref TaskGroup, n: i64) -> TaskHandle[i64] {\n\
+             group.spawn(|| n * 2)\n\
+         }\n\
+         fn main() {\n\
+             let (tx, rx) = channel(8);\n\
+             let _ = producer(tx);\n\
+             match rx.recv() { Some(v) => println(v), None => println(\"closed\") }\n\
+             for v in rx.into_iter() { println(v); }\n\
+             let g = TaskGroup.new(limit: 4);\n\
+             let h = start(g, 21);\n\
+             println(h.join());\n\
+         }\n",
+    );
+    // `channel(0)` is a compile error.
+    let (dir, path) = fixture(
+        "channel-zero",
+        "fn main() {\n    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(0);\n}\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "channel(0) must be refused: {err}");
+    assert!(err.contains("at least 1 value"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A `recv` used where the legacy `T` was wanted is fixed with `.unwrap()`,
+/// and `karac fix` rewrites the deprecated `Channel.bounded(n)` to
+/// `channel(n)` (B-2026-10-15-11).
+#[test]
+fn legacy_channel_spellings_are_fixed() {
+    rejected_then_fixed_by(
+        "recv-as-t",
+        "fn main() {\n\
+             let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.bounded(4);\n\
+             tx.send(3).unwrap();\n\
+             let x: i64 = rx.recv();\n\
+             println(x);\n\
+         }\n",
+        "`recv` returns `Option[T]`",
+        "rx.recv().unwrap()",
+    );
+    let (dir, path) = fixture(
+        "bounded-to-channel",
+        "fn main() {\n\
+             let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.bounded(  4);\n\
+             tx.send(3).unwrap();\n\
+             println(rx.recv().unwrap());\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("deprecated item `Channel.bounded`"), "{err}");
+    karac().arg("fix").arg(&path).output().unwrap();
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    assert!(fixed.contains("= channel(4);"), "{fixed}");
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success() && !err.contains("deprecated"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A group passed in borrowed outlives the call, so a task spawned into it
+/// takes the function's locals by move rather than borrowing them past
+/// their scope (core-semantics.md §9.5; B-2026-10-15-11): using one after
+/// the spawn is E0500.
+#[test]
+fn a_task_of_a_borrowed_group_takes_locals_by_move() {
+    let (dir, path) = fixture(
+        "param-group-local",
+        "fn start(group: ref TaskGroup) -> TaskHandle[i64] {\n\
+             let v: Vec[i64] = [1, 2, 3];\n\
+             let h = group.spawn(|| v.len());\n\
+             println(v.len());\n\
+             h\n\
+         }\n\
+         fn main() {\n\
+             let g = TaskGroup.new();\n\
+             println(start(g).join());\n\
+         }\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "the use after the spawn must be refused: {err}"
+    );
+    assert!(err.contains("moved into a task of `group`"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -968,3 +968,72 @@ fn file_system_natives_match_the_interpreter() {
         assert_eq!(built, interp);
     }
 }
+
+/// docs/library/concurrency.md's channel and `TaskGroup` surface
+/// (B-2026-10-15-9, B-2026-10-15-11): `channel(cap)`, `send` returning
+/// `Result[(), SendError[T]]`, `recv` returning `Option[T]` (`None` once
+/// every sender is gone and the channel is drained), `Receiver.into_iter`,
+/// `TaskGroup.new(limit: n)` and a `TaskHandle` returned from a function.
+const CHANNELS: &str = r#"
+fn start(group: ref TaskGroup, n: i64) -> TaskHandle[i64] {
+    group.spawn(|| n * 2)
+}
+
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(2);
+    {
+        let t = tx;
+        match t.send(1) {
+            Ok(()) => println("sent 1"),
+            Err(_) => println("err"),
+        }
+        t.send(2).unwrap();
+        match t.try_send(3) {
+            Err(SendError.Full(v)) => println(f"full {v}"),
+            _ => println("?"),
+        }
+        match rx.recv() {
+            Some(v) => println(f"got {v}"),
+            None => println("none"),
+        }
+        println(rx.recv().unwrap());
+    }
+    match rx.recv() {
+        Some(v) => println(f"got {v}"),
+        None => println("closed"),
+    }
+    let (t2, r2) = channel(4);
+    {
+        let t = t2;
+        t.send("a").unwrap();
+        t.send("b").unwrap();
+    }
+    for s in r2.into_iter() {
+        println(s);
+    }
+    let (t3, r3): (Sender[String], Receiver[String]) = channel(1);
+    {
+        let r = r3;
+    }
+    match t3.send("x") {
+        Err(SendError.Closed(v)) => println(f"closed {v}"),
+        _ => println("?"),
+    }
+    let g = TaskGroup.new(limit: 2);
+    let h = start(g, 21);
+    println(h.join());
+}
+"#;
+
+#[test]
+fn channel_and_task_group_natives_match_the_interpreter() {
+    let dir = Scratch::new("channels");
+    let (interp, built) = interp_and_build(dir.path(), CHANNELS);
+    assert_eq!(
+        interp,
+        "sent 1\nfull 3\ngot 1\n2\nclosed\na\nb\nclosed x\n42\n"
+    );
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+}

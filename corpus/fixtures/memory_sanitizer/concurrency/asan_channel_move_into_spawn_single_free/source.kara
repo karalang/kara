@@ -7,5 +7,5 @@ fn main() {
     let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
     let h: TaskHandle[i64] = spawn(|| worker(tx));
     h.join();
-    println(rx.recv());
+    println(rx.recv().unwrap());
 }

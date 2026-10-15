@@ -1595,6 +1595,7 @@ impl<'a> super::TypeChecker<'a> {
                                     && matches!(&elems[0], Type::Named { name, .. } if name == "Sender")
                                     && matches!(&elems[1], Type::Named { name, .. } if name == "Receiver");
                                 if is_channel_pair {
+                                    self.warn_channel_constructor(args, &expr.span);
                                     self.record_expr_type(&expr.span, expected);
                                     return expected.clone();
                                 }

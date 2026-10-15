@@ -839,12 +839,23 @@ impl<'ctx> Cx<'ctx, '_> {
                 let el = elem_of(self, t)?;
                 let vp = self.operand_ptr(v)?;
                 let r = self.rt_int("chan_send", &[h.into(), vp.into()], 32)?;
+                // A `send` typed `Result` (the MIR pipeline's, as the spec
+                // has it; B-2026-10-15-11) hands the value back as
+                // `try_send` does.
+                let method = if base != "BoundedChannel" && self.adt_named(dty, "Result") {
+                    "try_send"
+                } else {
+                    method
+                };
                 self.chan_send_result(base, method, dty, dest, r, vp, el)?;
             }
             (_, "recv" | "recv_blocking" | "try_recv", [recv]) => {
                 let h = self.chan_handle(recv)?;
                 let d = self.place_ptr(dest)?;
-                if base == "BoundedChannel" || method == "try_recv" {
+                // A `recv` typed `Option` is `None` once the channel is
+                // closed and drained (B-2026-10-15-11).
+                if base == "BoundedChannel" || method == "try_recv" || self.adt_named(dty, "Option")
+                {
                     let (some, none) = self.option_variants(dty)?;
                     let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
                     let got = self.rt_flag("chan_recv", &[h.into(), q.into()])?;
@@ -868,6 +879,14 @@ impl<'ctx> Cx<'ctx, '_> {
             _ => return Ok(None),
         }
         Ok(Some(()))
+    }
+
+    /// Whether `t` is an instance of the library type `name`.
+    fn adt_named(&self, t: Ty, name: &str) -> bool {
+        self.tys
+            .tcx()
+            .adt_of(t)
+            .is_some_and(|(a, _)| a.name == name)
     }
 
     /// A new runtime channel of `el` values holding at most `cap`.
@@ -998,7 +1017,9 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<Option<()>> {
         let dty = self.place_type(dest)?;
         match (base, method, args) {
-            ("TaskGroup", "new", []) => {
+            // `limit` (B-2026-10-15-11) is accepted; every task runs to
+            // completion at its spawn, so none waits on it.
+            ("TaskGroup", "new", [] | [_]) => {
                 let d = self.place_ptr(dest)?;
                 self.store(d, self.i64(0).into())?;
             }

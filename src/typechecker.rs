@@ -3064,6 +3064,9 @@ pub struct TypeChecker<'a> {
     /// through that impl, ahead of the hard-coded arms (redesign A2; set by
     /// the MIR pipeline, which appends the library's Kāra source).
     pub(super) library_methods_from_source: bool,
+    /// The spans of the `recv` calls typed `Option[T]` on the MIR pipeline
+    /// (B-2026-10-15-11): an error at one of them gets a `.unwrap()` fix.
+    pub(super) option_recv_spans: FxHashSet<SpanKey>,
     /// The type of a value just checked into a `weak` slot, for typed HIR
     /// (B-2026-10-13-23).
     pub(super) weak_store_actual: Option<Type>,
@@ -3346,6 +3349,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_stdlib_origin: false,
             compiling_stdlib: false,
             library_methods_from_source: false,
+            option_recv_spans: FxHashSet::default(),
             weak_store_actual: None,
             baked_impls: FxHashSet::default(),
             reported_uninferrable_empty_literal: false,
@@ -3508,6 +3512,7 @@ impl<'a> TypeChecker<'a> {
         // executed; runs BEFORE the TypeCheckResult is returned so
         // the new warnings flow through the normal channel.
         self.emit_unfulfilled_lint_expectations();
+        self.unwrap_recv_fixes();
         let trait_impls: FxHashSet<(String, String)> = self
             .env
             .impls

@@ -13,7 +13,7 @@ fn main() {
             Err(SendError.Full(v)) => { total = total + v.d; }
             Err(SendError.Closed(v)) => { total = total + v.a; }
         }
-        let g = rx.recv();
+        let g = rx.recv().unwrap();
         total = total + g.a;
         i = i + 1;
     }

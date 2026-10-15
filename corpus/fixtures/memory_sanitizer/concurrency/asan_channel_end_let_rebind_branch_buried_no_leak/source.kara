@@ -4,9 +4,9 @@ fn pick(cond: bool) -> i64 {
     tx.send(100);
     if cond {
         let keep = rx;
-        keep.recv()
+        keep.recv().unwrap()
     } else {
-        rx.recv()
+        rx.recv().unwrap()
     }
 }
 fn main() {

@@ -20,5 +20,5 @@ fn main() {
     }
     let (stx, srx): (Sender[String], Receiver[String]) = Channel.new();
     stx.send("hello channel");
-    println(srx.recv());
+    println(srx.recv().unwrap());
 }

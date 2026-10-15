@@ -733,9 +733,119 @@ impl<'a> super::TypeChecker<'a> {
         self.type_error(message, *span, TypeErrorKind::TypeMismatch);
     }
 
+    /// The MIR pipeline has the spec's `channel(cap)`
+    /// (docs/library/concurrency.md § Channels; B-2026-10-15-11), so the
+    /// call `Channel.bounded(cap)` / `Channel.new()` spanning `span` is
+    /// deprecated. `Channel.bounded(n)` is `channel(n)`, which `karac fix`
+    /// writes; `Channel.new()` is unbounded, which the spec defers, so a
+    /// capacity has to be chosen by hand and there is no fix.
+    pub(super) fn warn_channel_constructor(&mut self, args: &[CallArg], span: &Span) {
+        if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
+            return;
+        }
+        let (message, fix_it) = match args {
+            [cap] => (
+                "use of deprecated item `Channel.bounded`: a channel is made with `channel(cap)`",
+                // `Channel.bounded(` up to the argument, however spaced.
+                Some(FixIt {
+                    span: Span {
+                        length: cap.value.span.offset.saturating_sub(span.offset),
+                        ..*span
+                    },
+                    replacement: "channel(".to_string(),
+                }),
+            ),
+            _ => (
+                "use of deprecated item `Channel.new`: unbounded channels are deferred; make a \
+                 bounded one with `channel(cap)`, choosing how many values may wait",
+                None,
+            ),
+        };
+        self.type_lint_warning_with_fix(
+            format!("{message} — suppress with `#[allow(deprecated)]` on the enclosing item"),
+            *span,
+            TypeErrorKind::Deprecated,
+            "deprecated",
+            fix_it,
+        );
+    }
+
     pub(super) fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
         if self.cli_lint_overrides.strict_core {
             self.reject_call_site_type_args(callee);
+        }
+        // `TaskGroup.new(limit: n)` (docs/library/concurrency.md §
+        // TaskGroup; B-2026-10-15-11): the baked `new()` takes nothing, so
+        // the label is typed here, and the natives take the limit as their
+        // argument.
+        if let (ExprKind::Path { segments, .. }, [limit]) = (&callee.kind, args) {
+            if segments.len() == 2
+                && segments[0] == "TaskGroup"
+                && segments[1] == "new"
+                && limit.label.as_deref() == Some("limit")
+                && (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+                && self.env.impls.iter().any(|imp| {
+                    imp.target_type == "TaskGroup"
+                        && imp.trait_name.is_none()
+                        && imp
+                            .methods
+                            .get("new")
+                            .is_some_and(|sig| sig.params.is_empty())
+                })
+            {
+                self.check_expr(&limit.value, &Type::Int(IntSize::I64));
+                let ty = Type::Named {
+                    name: "TaskGroup".to_string(),
+                    args: Vec::new(),
+                };
+                self.record_expr_type(span, &ty);
+                return ty;
+            }
+        }
+        // `channel(0)` is a compile error (docs/library/concurrency.md §
+        // Channels): a literal capacity below 1 is rejected here, and any
+        // other is checked when the channel is made. A program with its own
+        // `channel` has the library's renamed (`channel__lib`).
+        if let (ExprKind::Identifier(name), [cap]) = (&callee.kind, args) {
+            if name == "channel"
+                && (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+                && !self.env.functions.contains_key("channel__lib")
+                && self
+                    .env
+                    .functions
+                    .get("channel")
+                    .is_none_or(is_library_channel)
+            {
+                if let Some(n) = literal_int(&cap.value).filter(|n| *n < 1) {
+                    self.type_error(
+                        format!("a channel holds at least 1 value, so `channel({n})` is not one"),
+                        cap.value.span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                // The element type comes from how the ends are used, as
+                // `Channel.new()`'s does: one fresh variable links the two
+                // ends, so a later `send` or `recv` pins it.
+                let cap_ty = self.infer_expr(&cap.value);
+                self.check_assignable(&Type::Int(IntSize::I64), &cap_ty, cap.value.span);
+                let elem = self.env.fresh_type_var();
+                let end = |name: &str| Type::Named {
+                    name: name.to_string(),
+                    args: vec![elem.clone()],
+                };
+                let ty = Type::Tuple(vec![end("Sender"), end("Receiver")]);
+                // Typed HIR reads the element as the call's type argument.
+                if let Some((node, key)) = self.current_call_node {
+                    if key == SpanKey::from_span(span) && !node.is_dummy() {
+                        self.node_call_subs
+                            .entry(node)
+                            .or_default()
+                            .insert("T".to_string(), elem.clone());
+                    }
+                }
+                self.record_expr_type(span, &ty);
+                return ty;
+            }
         }
         // Comptime `Type` reflection in the path-call form. `MyType.name()`,
         // `MyType.fields()`, … parse as `Call(Path([Type, method]))` (the
@@ -1593,6 +1703,7 @@ impl<'a> super::TypeChecker<'a> {
             let is_new = ctor && segments[1] == "new" && args.is_empty();
             let is_bounded = ctor && segments[1] == "bounded" && args.len() == 1;
             if is_new || is_bounded {
+                self.warn_channel_constructor(args, span);
                 if is_bounded {
                     // `requires cap > 0` (design.md). Checked here because the
                     // argument is an ordinary runtime expression: a literal is
@@ -1604,18 +1715,7 @@ impl<'a> super::TypeChecker<'a> {
                     // `Integer` with a negative value — checking only the
                     // latter let `Channel.bounded(-1)` through the contract
                     // while correctly rejecting `bounded(0)`.
-                    let literal_cap = match &args[0].value.kind {
-                        ExprKind::Integer(n, _) => Some(*n),
-                        ExprKind::Unary {
-                            op: UnaryOp::Neg,
-                            operand,
-                        } => match &operand.kind {
-                            ExprKind::Integer(n, _) => Some(-*n),
-                            _ => None,
-                        },
-                        _ => None,
-                    };
-                    if let Some(n) = literal_cap {
+                    if let Some(n) = literal_int(&args[0].value) {
                         if n <= 0 {
                             self.type_error(
                                 format!(
@@ -3362,4 +3462,32 @@ impl super::TypeChecker<'_> {
             .insert(SpanKey::from_span(span), seg);
         Some(ret.unwrap_or(Type::Error))
     }
+}
+
+/// The value of an integer literal, negated or not.
+fn literal_int(e: &Expr) -> Option<i128> {
+    match &e.kind {
+        ExprKind::Integer(n, _) => Some(*n),
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => match &operand.kind {
+            ExprKind::Integer(n, _) => Some(-*n),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether `sig` is the library's `channel[T](cap: i64) -> (Sender[T],
+/// Receiver[T])` rather than a program's own `channel`, when the library
+/// text is not appended and so is not renamed out of its way.
+fn is_library_channel(sig: &super::env::FunctionSig) -> bool {
+    let end = |name: &str| Type::Named {
+        name: name.to_string(),
+        args: vec![Type::TypeParam("T".to_string())],
+    };
+    sig.generic_params == ["T"]
+        && sig.params == [Type::Int(IntSize::I64)]
+        && sig.return_type == Type::Tuple(vec![end("Sender"), end("Receiver")])
 }

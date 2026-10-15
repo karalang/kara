@@ -1066,6 +1066,12 @@ impl<'a> super::TypeChecker<'a> {
                 record(item);
             }
         }
+        // A `TaskHandle` owns its task's result and borrows nothing, so on
+        // the MIR pipeline it may outlive its group
+        // (docs/library/concurrency.md § TaskGroup; B-2026-10-15-11).
+        if self.cli_lint_overrides.strict_core || self.library_methods_from_source {
+            out.remove("TaskHandle");
+        }
         out
     }
 

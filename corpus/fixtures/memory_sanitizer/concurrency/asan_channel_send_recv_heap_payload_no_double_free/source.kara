@@ -8,12 +8,12 @@ fn main() {
         v.push(i);
         v.push(i + 1);
         vtx.send(v);
-        let gv = vrx.recv();
+        let gv = vrx.recv().unwrap();
         total = total + gv.len();
         let (stx, srx): (Sender[String], Receiver[String]) = Channel.new();
         let s = f"msg-{i}";
         stx.send(s);
-        let gs = srx.recv();
+        let gs = srx.recv().unwrap();
         total = total + gs.len();
         i = i + 1;
     }

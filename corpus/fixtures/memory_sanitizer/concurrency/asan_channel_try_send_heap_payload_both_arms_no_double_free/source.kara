@@ -16,7 +16,7 @@ fn main() {
             Err(SendError.Full(v)) => { total = total + v.len(); }
             Err(SendError.Closed(v)) => { total = total + v.len(); }
         }
-        let got = rx.recv();
+        let got = rx.recv().unwrap();
         total = total + got.len();
         i = i + 1;
     }
