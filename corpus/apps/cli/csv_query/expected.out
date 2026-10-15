@@ -1,0 +1,152 @@
+== load
+  customers: id int, name text, city text, tier text (5 rows)
+  orders: order_id int, customer_id int, item text, qty int, price_cents int (9 rows)
+  error: broken.csv line 3: expected 3 fields, found 2
+  error: unclosed.csv line 2: unterminated quoted field
+== SELECT * FROM customers
+  id | name              | city     | tier
+  ---+-------------------+----------+-------
+   1 | Ada Lovelace      | London   | gold
+   2 | Grace Hopper      | New York | silver
+   3 | Alan Turing       | London   | NULL
+   4 | Hopper, Grace Jr. | Boston   | gold
+   5 | Edsger Dijkstra   | Austin   | bronze
+  (5 rows)
+== SELECT name, city FROM customers WHERE city = 'London' OR tier IS NULL ORDER BY name
+  name         | city
+  -------------+-------
+  Ada Lovelace | London
+  Alan Turing  | London
+  (2 rows)
+== SELECT item, qty * price_cents AS total FROM orders WHERE price_cents IS NOT NULL AND qty >= 2 ORDER BY total DESC
+  item          | total
+  --------------+------
+  keyboard      |  9998
+  mouse         |  3998
+  cable "usb-c" |  3995
+  (3 rows)
+== SELECT c.name, o.item, o.qty FROM orders o JOIN customers c ON o.customer_id = c.id ORDER BY c.name, o.order_id LIMIT 5
+  c.name          | o.item        | o.qty
+  ----------------+---------------+------
+  Ada Lovelace    | keyboard      |     2
+  Ada Lovelace    | monitor       |     1
+  Alan Turing     | cable "usb-c" |     5
+  Alan Turing     | mouse         | NULL
+  Edsger Dijkstra | dock          |     1
+  (5 rows)
+== SELECT c.name, COUNT(o.order_id) AS orders, SUM(o.qty * o.price_cents) AS spent FROM customers c LEFT JOIN orders o ON o.customer_id = c.id GROUP BY c.name ORDER BY spent DESC, 1
+  c.name            | orders | spent
+  ------------------+--------+------
+  Ada Lovelace      |      2 | 28997
+  Edsger Dijkstra   |      1 | 12999
+  Grace Hopper      |      2 |  6998
+  Hopper, Grace Jr. |      1 |  3998
+  Alan Turing       |      2 |  3995
+  (5 rows)
+== SELECT city, COUNT(*) AS n, AVG(id) FROM customers GROUP BY city HAVING COUNT(*) > 1
+  city   | n | AVG(id)
+  -------+---+--------
+  London | 2 | 2.00
+  (1 row)
+== SELECT DISTINCT item FROM orders ORDER BY item
+  item
+  -------------
+  adapter
+  cable "usb-c"
+  dock
+  keyboard
+  monitor
+  mouse
+  (6 rows)
+== SELECT UPPER(name), LENGTH(name) AS len FROM customers WHERE name LIKE '%Hopper%'
+  UPPER(name)       | len
+  ------------------+----
+  GRACE HOPPER      |  12
+  HOPPER, GRACE JR. |  17
+  (2 rows)
+== SELECT order_id, item FROM orders WHERE item IN ('mouse', 'dock') AND customer_id NOT IN (2)
+  order_id | item
+  ---------+------
+       105 | mouse
+       107 | dock
+       108 | mouse
+  (3 rows)
+== SELECT order_id, qty FROM orders WHERE qty > 1 OR qty IS NULL ORDER BY qty, order_id
+  order_id | qty
+  ---------+-----
+       108 | NULL
+       100 |    2
+       105 |    2
+       104 |    3
+       103 |    5
+  (5 rows)
+== select tier, min(name), max(id), count(tier) from customers group by tier order by tier
+  tier   | MIN(name)       | MAX(id) | COUNT(tier)
+  -------+-----------------+---------+------------
+  NULL   | Alan Turing     |       3 |           0
+  bronze | Edsger Dijkstra |       5 |           1
+  gold   | Ada Lovelace    |       4 |           2
+  silver | Grace Hopper    |       2 |           1
+  (4 rows)
+== SELECT item, price_cents / qty AS each, price_cents % 1000 FROM orders WHERE order_id <= 101 OR item LIKE 'c_ble%'
+  item          | each | price_cents % 1000
+  --------------+------+-------------------
+  keyboard      | 2499 |                999
+  mouse         | 1999 |                999
+  cable "usb-c" |  159 |                799
+  (3 rows)
+== SELECT COUNT(*), SUM(qty), AVG(price_cents) FROM orders WHERE customer_id = 1
+  COUNT(*) | SUM(qty) | AVG(price_cents)
+  ---------+----------+-----------------
+         2 |        3 | 11999.00
+  (1 row)
+== SELECT COUNT(*), SUM(qty), MAX(item) FROM orders WHERE customer_id = 42
+  COUNT(*) | SUM(qty) | MAX(item)
+  ---------+----------+----------
+         0 | NULL     | NULL
+  (1 row)
+== SELECT name FROM customers ORDER BY id DESC LIMIT 2 OFFSET 1
+  name
+  -----------------
+  Hopper, Grace Jr.
+  Alan Turing
+  (2 rows)
+== SELECT o.order_id FROM orders o LEFT JOIN customers c ON c.id = o.customer_id WHERE c.id IS NULL
+  o.order_id
+  ----------
+         104
+  (1 row)
+== SELECT name, NOT (tier = 'gold') AS not_gold, -id FROM customers WHERE tier != 'silver' OR tier IS NULL
+  name              | not_gold | -id
+  ------------------+----------+----
+  Ada Lovelace      |        0 |  -1
+  Alan Turing       | NULL     |  -3
+  Hopper, Grace Jr. |        0 |  -4
+  Edsger Dijkstra   |        1 |  -5
+  (4 rows)
+== SELECT nam FROM customers
+  error: SELECT: unknown column 'nam'
+== SELECT name FROM customers a JOIN customers b ON a.id = b.id
+  error: SELECT: ambiguous column 'name'
+== SELECT city, name FROM customers GROUP BY city
+  error: SELECT: column 'name' must be in GROUP BY or inside an aggregate
+== SELECT * FROM customers WHERE COUNT(*) > 1
+  error: WHERE: aggregate COUNT() is not allowed here
+== SELECT name FROM customers WHERE
+  error: syntax error at end of query: expected an expression
+== SELECT name FROM nowhere
+  error: no table 'nowhere'
+== SELECT 'unterminated FROM customers
+  error: syntax error at offset 7: unterminated string
+== SELECT qty / 0 FROM orders LIMIT 1
+  error: SELECT: division by zero
+== SELECT name FROM customers ORDER BY 3
+  error: ORDER BY: there is no column 3
+== SELECT name, FROM customers
+  error: syntax error at offset 13: expected an expression, found keyword FROM
+== SELECT name FROM customers WHERE city = 'London' extra
+  error: syntax error at offset 49: unexpected text after the query
+== SELECT name + 1 FROM customers
+  error: SELECT: '+' needs numbers, found Ada Lovelace and 1
+== SELECT * FROM customers WHERE id # 2
+  error: syntax error at offset 33: unexpected '#'

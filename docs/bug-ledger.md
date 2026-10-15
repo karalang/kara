@@ -98,11 +98,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 260 |
 | codegen-gap | 259 |
-| false-positive | 184 |
+| false-positive | 185 |
 | other | 172 |
 | perf | 166 |
 | diagnostics | 161 |
-| crash | 117 |
+| crash | 118 |
 | soundness | 105 |
 | use-after-free | 90 |
 
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2894 |
-| interp | 923 |
-| typecheck | 422 |
+| interp | 924 |
+| typecheck | 423 |
 | other | 115 |
 | ownership | 95 |
 | cli | 76 |
@@ -206,6 +206,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-4 | 2026-10-15 | codegen | medium | A closure inside a method that uses `self` is not lowered by the MIR builder: `fn all(self, v: ref Vec[i64]) -> Vec[i64] { v.iter().map(|x| self.add(*x)).collect() }` stops every MIR surface with "build: 5:26 in `S.all.c0`: `self` here is not lowered yet"; `karac check` accepts it | — |
 | B-2026-10-15-5 | 2026-10-15 | typecheck | medium | The I/O library returns `Result[Unit, IoError]` where docs/library/io.md says `Result[(), IoError]`, and `Unit` does not unify with `()`: `let r: Result[(), IoError] = fs.write("y.txt", "a");` is refused ("expected 'Result[(), IoError]', found 'Result[Unit, IoError]'") by `karac check` and the MIR typecheck, as is an `if` whose arms are a user fn returning `Result[(), IoError]` and `fs.write(..)` | — |
 | B-2026-10-15-6 | 2026-10-15 | runtime | medium | Child processes have no library spec, and the implemented `Command` cannot connect one child's stdout to another's stdin: docs/library has no process section (io.md specifies files, stdin/stdout and sockets only), `Stdio` is `Inherit | Null | Piped` with no way to pass a `ChildStdout` as a stdin, and there is no `current_dir`, so a shell pipeline must buffer each stage's whole output in the parent | — |
+| B-2026-10-15-7 | 2026-10-15 | typecheck | medium | `karac check` refuses a `match v[i]` arm that only READS its binding with `==` or in an f-string: `match v[0] { Tok.Sym(t) => t == s, .. }` and `Tok.Sym(t) => println(f"{t}")` are E_INDEX_MOVE_NON_COPY ("this arm consumes `t`"), as is `Tok.Sym(ref t) => t == s`, though design.md says `==` borrows its operands and core-semantics.md §4.6 makes a binding into a borrowed place a `ref`; `t.len()` in the same position is accepted, and every MIR surface runs all of them | — |
+| B-2026-10-15-8 | 2026-10-15 | interp | medium | A user `struct Unit` with a heap field breaks the MIR interpreter on any `fs.write` result: with `struct Unit { n: Vec[i64] }` in scope, `match fs.write("x.txt", s) { Ok(_) => .., Err(_) => .. }` stops `__mir-run` with "run: in main at bb20[term]: ADT place holds Unit", because the library's `Result[Unit, IoError]` resolves `Unit` to the user's type; `karac check` passes with no prelude_shadow warning (it warns for `Parser`), and the compiled MIR surfaces run it | — |
 
 ### Relocated
 

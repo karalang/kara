@@ -1,0 +1,1230 @@
+// A query tool for CSV files: a small SQL engine of the kind behind
+// `q`, csvsql and DuckDB's CSV reader. It loads CSV files (quoted fields,
+// doubled quotes, embedded commas, empty cells as NULL), infers an int or
+// text type per column, and runs SELECT queries over them:
+//
+//   SELECT [DISTINCT] expr [AS name], ... | *
+//   FROM table [alias] [[LEFT] JOIN table [alias] ON expr] ...
+//   [WHERE expr] [GROUP BY column, ...] [HAVING expr]
+//   [ORDER BY expr|alias|ordinal [ASC|DESC], ...] [LIMIT n [OFFSET m]]
+//
+// Expressions have SQL's three-valued NULL logic, arithmetic, comparisons,
+// AND / OR / NOT, IS [NOT] NULL, [NOT] LIKE with % and _, [NOT] IN (...),
+// UPPER / LOWER / LENGTH, and the aggregates COUNT(*), COUNT, SUM, MIN, MAX
+// and AVG. Grouping is strict: a bare column in a grouped query must be in
+// GROUP BY. Errors name the clause and, for syntax, the offset.
+
+#[derive(Clone, PartialEq)]
+enum Val { Null, Int(i64), Text(String) }
+
+fn show_val(v: ref Val) -> String {
+    match v {
+        Val.Null => "NULL".to_string(),
+        Val.Int(n) => f"{n}",
+        Val.Text(s) => s.clone(),
+    }
+}
+
+// NULL sorts first, then numbers, then text.
+fn compare(a: ref Val, b: ref Val) -> i64 {
+    match (a, b) {
+        (Val.Null, Val.Null) => 0,
+        (Val.Null, _) => -1,
+        (_, Val.Null) => 1,
+        (Val.Int(x), Val.Int(y)) => if x < y { -1 } else if x > y { 1 } else { 0 },
+        (Val.Int(_), Val.Text(_)) => -1,
+        (Val.Text(_), Val.Int(_)) => 1,
+        (Val.Text(x), Val.Text(y)) => if x < y { -1 } else if x > y { 1 } else { 0 },
+    }
+}
+
+fn truthy(v: ref Val) -> bool {
+    match v {
+        Val.Int(n) => n != 0,
+        _ => false,
+    }
+}
+
+fn bool_val(b: bool) -> Val {
+    Val.Int(if b { 1 } else { 0 })
+}
+
+// ---- CSV --------------------------------------------------------------
+
+struct Table { name: String, cols: Vec[String], rows: Vec[Vec[Val]], types: Vec[String] }
+
+fn csv_fields(line: Str, lineno: i64) -> Result[Vec[String], String] {
+    let cs: Vec[char] = line.chars().collect();
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut i = 0;
+    let mut quoted = false;
+    while i < cs.len() {
+        let c = cs[i];
+        if quoted {
+            if c == '"' {
+                if i + 1 < cs.len() and cs[i + 1] == '"' {
+                    cur.push('"');
+                    i += 2;
+                    continue;
+                }
+                quoted = false;
+            } else {
+                cur.push(c);
+            }
+        } else if c == '"' {
+            if not cur.is_empty() {
+                return Err(f"line {lineno}: quote inside an unquoted field");
+            }
+            quoted = true;
+        } else if c == ',' {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+        i += 1;
+    }
+    if quoted {
+        return Err(f"line {lineno}: unterminated quoted field");
+    }
+    out.push(cur);
+    Ok(out)
+}
+
+fn load_csv(name: Str, text: Str) -> Result[Table, String] {
+    let lines = text.lines();
+    if lines.is_empty() {
+        return Err(f"{name}.csv: empty file");
+    }
+    let cols = csv_fields(lines[0], 1).map_err(|e| f"{name}.csv {e}")?;
+    let mut raw: Vec[Vec[String]] = Vec.new();
+    for i in 1..lines.len() {
+        if lines[i].is_empty() {
+            continue;
+        }
+        let fields = csv_fields(lines[i], i + 1).map_err(|e| f"{name}.csv {e}")?;
+        if fields.len() != cols.len() {
+            return Err(f"{name}.csv line {i + 1}: expected {cols.len()} fields, found {fields.len()}");
+        }
+        raw.push(fields);
+    }
+    let mut types: Vec[String] = Vec.new();
+    for c in 0..cols.len() {
+        let mut all_int = true;
+        for r in raw.iter() {
+            if not r[c].is_empty() and i64.parse(r[c]).is_none() {
+                all_int = false;
+            }
+        }
+        types.push(if all_int { "int".to_string() } else { "text".to_string() });
+    }
+    let mut rows: Vec[Vec[Val]] = Vec.new();
+    for r in raw.iter() {
+        let mut row: Vec[Val] = Vec.new();
+        for c in 0..cols.len() {
+            if r[c].is_empty() {
+                row.push(Val.Null);
+            } else if types[c] == "int" {
+                row.push(Val.Int(i64.parse(r[c]).unwrap_or(0)));
+            } else {
+                row.push(Val.Text(r[c].clone()));
+            }
+        }
+        rows.push(row);
+    }
+    Ok(Table { name: name.to_string(), cols: cols, rows: rows, types: types })
+}
+
+// ---- SQL tokens and syntax --------------------------------------------
+
+enum Tok { Ident(String), Number(i64), Quoted(String), Sym(String), End }
+
+fn tokenize(src: Str) -> Result[(Vec[Tok], Vec[i64]), String] {
+    let cs: Vec[char] = src.chars().collect();
+    let mut toks: Vec[Tok] = Vec.new();
+    let mut pos: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        if c == ' ' {
+            i += 1;
+            continue;
+        }
+        pos.push(i);
+        if c.is_alphabetic() or c == '_' {
+            let mut w = String.new();
+            while i < cs.len() and (cs[i].is_alphanumeric() or cs[i] == '_') {
+                w.push(cs[i]);
+                i += 1;
+            }
+            toks.push(Tok.Ident(w));
+        } else if c.is_ascii_digit() {
+            let mut n = 0;
+            while i < cs.len() and cs[i].is_ascii_digit() {
+                n = n * 10 + (cs[i].to_digit(10).unwrap_or(0) as i64);
+                i += 1;
+            }
+            toks.push(Tok.Number(n));
+        } else if c == '\'' {
+            let mut s = String.new();
+            i += 1;
+            loop {
+                if i >= cs.len() {
+                    return Err(f"syntax error at offset {pos[pos.len() - 1]}: unterminated string");
+                }
+                if cs[i] == '\'' {
+                    if i + 1 < cs.len() and cs[i + 1] == '\'' {
+                        s.push('\'');
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                s.push(cs[i]);
+                i += 1;
+            }
+            toks.push(Tok.Quoted(s));
+        } else {
+            let two = if i + 1 < cs.len() { f"{c}{cs[i + 1]}" } else { c.to_string() };
+            if two == "<=" or two == ">=" or two == "!=" or two == "<>" {
+                toks.push(Tok.Sym(if two == "<>" { "!=".to_string() } else { two }));
+                i += 2;
+            } else if "(),.*+-/%=<>".contains(c) {
+                toks.push(Tok.Sym(c.to_string()));
+                i += 1;
+            } else {
+                return Err(f"syntax error at offset {i}: unexpected '{c}'");
+            }
+        }
+    }
+    pos.push(cs.len());
+    toks.push(Tok.End);
+    Ok((toks, pos))
+}
+
+shared enum Expr {
+    Lit(Val),
+    Col(String, String),
+    Star,
+    Bin(String, Expr, Expr),
+    Not(Expr),
+    Neg(Expr),
+    IsNull(Expr, bool),
+    Like(Expr, Expr, bool),
+    In(Expr, Vec[Expr], bool),
+    Call(String, Vec[Expr]),
+}
+
+struct Item { expr: Expr, alias: String }
+
+struct Join { table: String, alias: String, on: Expr, left: bool }
+
+struct OrderKey { expr: Expr, desc: bool }
+
+struct Query {
+    distinct: bool,
+    items: Vec[Item],
+    from: String,
+    from_alias: String,
+    joins: Vec[Join],
+    filter: Option[Expr],
+    group: Vec[Expr],
+    having: Option[Expr],
+    order: Vec[OrderKey],
+    limit: Option[i64],
+    offset: i64,
+}
+
+const KEYWORDS: [Str; 22] = ["SELECT", "DISTINCT", "FROM", "JOIN", "LEFT", "ON", "WHERE", "GROUP", "BY", "HAVING", "ORDER", "ASC", "DESC", "LIMIT", "OFFSET", "AS", "AND", "OR", "NOT", "IS", "NULL", "LIKE"];
+
+fn is_keyword(w: Str) -> bool {
+    let up = w.to_uppercase();
+    for k in KEYWORDS.iter() {
+        if up == k {
+            return true;
+        }
+    }
+    up == "IN"
+}
+
+struct Parser { toks: Vec[Tok], pos: Vec[i64], at: i64 }
+
+impl Parser {
+    fn fail(self, what: Str) -> String {
+        let here = match self.toks[self.at] {
+            Tok.End => "end of query".to_string(),
+            _ => f"offset {self.pos[self.at]}",
+        };
+        f"syntax error at {here}: {what}"
+    }
+
+    fn is_kw(self, kw: Str) -> bool {
+        match self.toks[self.at] {
+            Tok.Ident(w) => w.to_uppercase() == kw,
+            _ => false,
+        }
+    }
+
+    fn eat_kw(mut ref self, kw: Str) -> bool {
+        if self.is_kw(kw) {
+            self.at += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect_kw(mut ref self, kw: Str) -> Result[(), String] {
+        if self.eat_kw(kw) { Ok(()) } else { Err(self.fail(f"expected {kw}")) }
+    }
+
+    fn is_sym(self, s: Str) -> bool {
+        match self.toks[self.at] {
+            Tok.Sym(t) => t == s,
+            _ => false,
+        }
+    }
+
+    fn eat_sym(mut ref self, s: Str) -> bool {
+        if self.is_sym(s) {
+            self.at += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect_sym(mut ref self, s: Str) -> Result[(), String] {
+        if self.eat_sym(s) { Ok(()) } else { Err(self.fail(f"expected '{s}'")) }
+    }
+
+    fn name(mut ref self, what: Str) -> Result[String, String] {
+        match self.toks[self.at] {
+            Tok.Ident(w) => {
+                if is_keyword(w) {
+                    return Err(self.fail(f"expected {what}, found keyword {w.to_uppercase()}"));
+                }
+                self.at += 1;
+                Ok(w.clone())
+            }
+            _ => Err(self.fail(f"expected {what}")),
+        }
+    }
+
+    fn optional_alias(mut ref self) -> Result[String, String] {
+        if self.eat_kw("AS") {
+            return self.name("an alias");
+        }
+        match self.toks[self.at] {
+            Tok.Ident(w) => {
+                if is_keyword(w) {
+                    Ok(String.new())
+                } else {
+                    self.at += 1;
+                    Ok(w.clone())
+                }
+            }
+            _ => Ok(String.new()),
+        }
+    }
+
+    fn query(mut ref self) -> Result[Query, String] {
+        self.expect_kw("SELECT")?;
+        let distinct = self.eat_kw("DISTINCT");
+        let mut items: Vec[Item] = Vec.new();
+        loop {
+            if self.eat_sym("*") {
+                items.push(Item { expr: Expr.Star, alias: String.new() });
+            } else {
+                let e = self.expr()?;
+                let alias = self.optional_alias()?;
+                items.push(Item { expr: e, alias: alias });
+            }
+            if not self.eat_sym(",") {
+                break;
+            }
+        }
+        self.expect_kw("FROM")?;
+        let from = self.name("a table name")?;
+        let from_alias = self.optional_alias()?;
+        let mut joins: Vec[Join] = Vec.new();
+        loop {
+            let left = self.eat_kw("LEFT");
+            if not self.eat_kw("JOIN") {
+                if left {
+                    return Err(self.fail("expected JOIN"));
+                }
+                break;
+            }
+            let table = self.name("a table name")?;
+            let alias = self.optional_alias()?;
+            self.expect_kw("ON")?;
+            let on = self.expr()?;
+            joins.push(Join { table: table, alias: alias, on: on, left: left });
+        }
+        let filter = if self.eat_kw("WHERE") { Some(self.expr()?) } else { None };
+        let mut group: Vec[Expr] = Vec.new();
+        if self.eat_kw("GROUP") {
+            self.expect_kw("BY")?;
+            loop {
+                group.push(self.expr()?);
+                if not self.eat_sym(",") {
+                    break;
+                }
+            }
+        }
+        let having = if self.eat_kw("HAVING") { Some(self.expr()?) } else { None };
+        let mut order: Vec[OrderKey] = Vec.new();
+        if self.eat_kw("ORDER") {
+            self.expect_kw("BY")?;
+            loop {
+                let e = self.expr()?;
+                let desc = if self.eat_kw("DESC") { true } else { self.eat_kw("ASC"); false };
+                order.push(OrderKey { expr: e, desc: desc });
+                if not self.eat_sym(",") {
+                    break;
+                }
+            }
+        }
+        let mut limit: Option[i64] = None;
+        let mut offset = 0;
+        if self.eat_kw("LIMIT") {
+            limit = Some(self.number()?);
+            if self.eat_kw("OFFSET") {
+                offset = self.number()?;
+            }
+        }
+        match self.toks[self.at] {
+            Tok.End => {}
+            _ => return Err(self.fail("unexpected text after the query")),
+        }
+        Ok(Query { distinct: distinct, items: items, from: from, from_alias: from_alias, joins: joins, filter: filter, group: group, having: having, order: order, limit: limit, offset: offset })
+    }
+
+    fn number(mut ref self) -> Result[i64, String] {
+        match self.toks[self.at] {
+            Tok.Number(n) => {
+                self.at += 1;
+                Ok(n)
+            }
+            _ => Err(self.fail("expected a number")),
+        }
+    }
+
+    fn expr(mut ref self) -> Result[Expr, String] {
+        let mut e = self.and_expr()?;
+        while self.eat_kw("OR") {
+            let r = self.and_expr()?;
+            e = Expr.Bin("OR".to_string(), e, r);
+        }
+        Ok(e)
+    }
+
+    fn and_expr(mut ref self) -> Result[Expr, String] {
+        let mut e = self.not_expr()?;
+        while self.eat_kw("AND") {
+            let r = self.not_expr()?;
+            e = Expr.Bin("AND".to_string(), e, r);
+        }
+        Ok(e)
+    }
+
+    fn not_expr(mut ref self) -> Result[Expr, String] {
+        if self.eat_kw("NOT") {
+            let e = self.not_expr()?;
+            return Ok(Expr.Not(e));
+        }
+        self.comparison()
+    }
+
+    fn comparison(mut ref self) -> Result[Expr, String] {
+        let e = self.additive()?;
+        if self.eat_kw("IS") {
+            let negated = self.eat_kw("NOT");
+            self.expect_kw("NULL")?;
+            return Ok(Expr.IsNull(e, negated));
+        }
+        let negated = self.eat_kw("NOT");
+        if self.eat_kw("LIKE") {
+            let p = self.additive()?;
+            return Ok(Expr.Like(e, p, negated));
+        }
+        if self.eat_kw("IN") {
+            self.expect_sym("(")?;
+            let mut list: Vec[Expr] = Vec.new();
+            loop {
+                list.push(self.expr()?);
+                if not self.eat_sym(",") {
+                    break;
+                }
+            }
+            self.expect_sym(")")?;
+            return Ok(Expr.In(e, list, negated));
+        }
+        if negated {
+            return Err(self.fail("expected LIKE or IN after NOT"));
+        }
+        for op in ["=", "!=", "<=", ">=", "<", ">"] {
+            if self.eat_sym(op) {
+                let r = self.additive()?;
+                return Ok(Expr.Bin(op.to_string(), e, r));
+            }
+        }
+        Ok(e)
+    }
+
+    fn additive(mut ref self) -> Result[Expr, String] {
+        let mut e = self.term()?;
+        loop {
+            let op = if self.eat_sym("+") { "+" } else if self.eat_sym("-") { "-" } else { break };
+            let r = self.term()?;
+            e = Expr.Bin(op.to_string(), e, r);
+        }
+        Ok(e)
+    }
+
+    fn term(mut ref self) -> Result[Expr, String] {
+        let mut e = self.unary()?;
+        loop {
+            let op = if self.eat_sym("*") { "*" } else if self.eat_sym("/") { "/" } else if self.eat_sym("%") { "%" } else { break };
+            let r = self.unary()?;
+            e = Expr.Bin(op.to_string(), e, r);
+        }
+        Ok(e)
+    }
+
+    fn unary(mut ref self) -> Result[Expr, String] {
+        if self.eat_sym("-") {
+            let e = self.unary()?;
+            return Ok(Expr.Neg(e));
+        }
+        self.primary()
+    }
+
+    fn primary(mut ref self) -> Result[Expr, String] {
+        match self.toks[self.at] {
+            Tok.Number(n) => {
+                self.at += 1;
+                Ok(Expr.Lit(Val.Int(n)))
+            }
+            Tok.Quoted(s) => {
+                self.at += 1;
+                Ok(Expr.Lit(Val.Text(s.clone())))
+            }
+            Tok.Sym(s) => {
+                if s == "(" {
+                    self.at += 1;
+                    let e = self.expr()?;
+                    self.expect_sym(")")?;
+                    Ok(e)
+                } else {
+                    Err(self.fail("expected an expression"))
+                }
+            }
+            Tok.Ident(w) => {
+                if self.is_kw("NULL") {
+                    self.at += 1;
+                    return Ok(Expr.Lit(Val.Null));
+                }
+                let first = self.name("an expression")?;
+                if self.eat_sym("(") {
+                    let fname = first.to_uppercase();
+                    let mut args: Vec[Expr] = Vec.new();
+                    if self.eat_sym("*") {
+                        args.push(Expr.Star);
+                    } else if not self.is_sym(")") {
+                        loop {
+                            args.push(self.expr()?);
+                            if not self.eat_sym(",") {
+                                break;
+                            }
+                        }
+                    }
+                    self.expect_sym(")")?;
+                    return Ok(Expr.Call(fname, args));
+                }
+                if self.eat_sym(".") {
+                    let col = self.name("a column name")?;
+                    return Ok(Expr.Col(first, col));
+                }
+                Ok(Expr.Col(String.new(), first))
+            }
+            Tok.End => Err(self.fail("expected an expression")),
+        }
+    }
+}
+
+fn parse_query(src: Str) -> Result[Query, String] {
+    let (toks, pos) = tokenize(src)?;
+    let mut p = Parser { toks: toks, pos: pos, at: 0 };
+    p.query()
+}
+
+// The text an unaliased column header shows.
+fn show(e: ref Expr) -> String {
+    match e {
+        Expr.Lit(Val.Text(s)) => f"'{s}'",
+        Expr.Lit(v) => show_val(v),
+        Expr.Col(q, c) => if q.is_empty() { c.clone() } else { f"{q}.{c}" },
+        Expr.Star => "*".to_string(),
+        Expr.Bin(op, a, b) => f"{show(a)} {op} {show(b)}",
+        Expr.Not(a) => f"NOT {show(a)}",
+        Expr.Neg(a) => f"-{show(a)}",
+        Expr.IsNull(a, neg) => if neg { f"{show(a)} IS NOT NULL" } else { f"{show(a)} IS NULL" },
+        Expr.Like(a, p, neg) => if neg { f"{show(a)} NOT LIKE {show(p)}" } else { f"{show(a)} LIKE {show(p)}" },
+        Expr.In(a, list, neg) => {
+            let parts: Vec[String] = list.iter().map(|x| show(x)).collect();
+            if neg { f"{show(a)} NOT IN ({parts.join(", ")})" } else { f"{show(a)} IN ({parts.join(", ")})" }
+        }
+        Expr.Call(f, args) => {
+            let parts: Vec[String] = args.iter().map(|x| show(x)).collect();
+            f"{f}({parts.join(", ")})"
+        }
+    }
+}
+
+fn is_aggregate(name: Str) -> bool {
+    name == "COUNT" or name == "SUM" or name == "MIN" or name == "MAX" or name == "AVG"
+}
+
+fn has_aggregate(e: ref Expr) -> bool {
+    match e {
+        Expr.Call(f, args) => {
+            if is_aggregate(f) {
+                return true;
+            }
+            args.iter().any(|a| has_aggregate(a))
+        }
+        Expr.Bin(_, a, b) => has_aggregate(a) or has_aggregate(b),
+        Expr.Not(a) => has_aggregate(a),
+        Expr.Neg(a) => has_aggregate(a),
+        Expr.IsNull(a, _) => has_aggregate(a),
+        Expr.Like(a, p, _) => has_aggregate(a) or has_aggregate(p),
+        Expr.In(a, list, _) => has_aggregate(a) or list.iter().any(|x| has_aggregate(x)),
+        _ => false,
+    }
+}
+
+// ---- evaluation -------------------------------------------------------
+
+struct Scope { cols: Vec[(String, String)], group_cols: Vec[i64], grouped: bool }
+
+fn resolve(sc: ref Scope, q: Str, c: Str) -> Result[i64, String] {
+    let mut found: Vec[i64] = Vec.new();
+    for i in 0..sc.cols.len() {
+        if (q.is_empty() or sc.cols[i].0 == q) and sc.cols[i].1 == c {
+            found.push(i);
+        }
+    }
+    let shown = if q.is_empty() { c.to_string() } else { f"{q}.{c}" };
+    if found.is_empty() {
+        return Err(f"unknown column '{shown}'");
+    }
+    if found.len() > 1 {
+        return Err(f"ambiguous column '{shown}'");
+    }
+    Ok(found[0])
+}
+
+// SQL LIKE: % matches any run of characters, _ exactly one.
+fn like(s: ref Vec[char], p: ref Vec[char], i: i64, j: i64) -> bool {
+    if j == p.len() {
+        return i == s.len();
+    }
+    if p[j] == '%' {
+        for k in i..s.len() + 1 {
+            if like(s, p, k, j + 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if i == s.len() {
+        return false;
+    }
+    if p[j] == '_' or p[j] == s[i] {
+        return like(s, p, i + 1, j + 1);
+    }
+    false
+}
+
+fn arith(op: Str, a: ref Val, b: ref Val) -> Result[Val, String] {
+    match (a, b) {
+        (Val.Int(x), Val.Int(y)) => {
+            if op == "+" {
+                Ok(Val.Int(x + y))
+            } else if op == "-" {
+                Ok(Val.Int(x - y))
+            } else if op == "*" {
+                Ok(Val.Int(x * y))
+            } else if y == 0 {
+                Err("division by zero".to_string())
+            } else if op == "/" {
+                Ok(Val.Int(x / y))
+            } else {
+                Ok(Val.Int(x % y))
+            }
+        }
+        (Val.Null, _) => Ok(Val.Null),
+        (_, Val.Null) => Ok(Val.Null),
+        _ => Err(f"'{op}' needs numbers, found {show_val(a)} and {show_val(b)}"),
+    }
+}
+
+fn eval(e: ref Expr, sc: ref Scope, rows: ref Vec[Vec[Val]], ri: i64) -> Result[Val, String] {
+    match e {
+        Expr.Lit(v) => Ok(v.clone()),
+        Expr.Col(q, c) => {
+            let i = resolve(sc, q, c)?;
+            if sc.grouped and not sc.group_cols.contains(i) {
+                return Err(f"column '{show(e)}' must be in GROUP BY or inside an aggregate");
+            }
+            if ri >= rows.len() {
+                return Ok(Val.Null);
+            }
+            Ok(rows[ri][i].clone())
+        }
+        Expr.Star => Err("* is only allowed in COUNT(*) or as the whole select list".to_string()),
+        Expr.Bin(op, a, b) => {
+            if op == "AND" or op == "OR" {
+                let x = eval(a, sc, rows, ri)?;
+                let y = eval(b, sc, rows, ri)?;
+                let is_and = op == "AND";
+                // Three-valued: FALSE AND NULL is FALSE, TRUE OR NULL is TRUE.
+                if x == Val.Null or y == Val.Null {
+                    if is_and and ((x != Val.Null and not truthy(x)) or (y != Val.Null and not truthy(y))) {
+                        return Ok(bool_val(false));
+                    }
+                    if not is_and and (truthy(x) or truthy(y)) {
+                        return Ok(bool_val(true));
+                    }
+                    return Ok(Val.Null);
+                }
+                return Ok(bool_val(if is_and { truthy(x) and truthy(y) } else { truthy(x) or truthy(y) }));
+            }
+            let x = eval(a, sc, rows, ri)?;
+            let y = eval(b, sc, rows, ri)?;
+            if op == "+" or op == "-" or op == "*" or op == "/" or op == "%" {
+                return arith(op, x, y);
+            }
+            if x == Val.Null or y == Val.Null {
+                return Ok(Val.Null);
+            }
+            let c = compare(x, y);
+            let r = if op == "=" {
+                c == 0
+            } else if op == "!=" {
+                c != 0
+            } else if op == "<" {
+                c < 0
+            } else if op == "<=" {
+                c <= 0
+            } else if op == ">" {
+                c > 0
+            } else {
+                c >= 0
+            };
+            Ok(bool_val(r))
+        }
+        Expr.Not(a) => {
+            let x = eval(a, sc, rows, ri)?;
+            if x == Val.Null { Ok(Val.Null) } else { Ok(bool_val(not truthy(x))) }
+        }
+        Expr.Neg(a) => {
+            let x = eval(a, sc, rows, ri)?;
+            arith("-", Val.Int(0), x)
+        }
+        Expr.IsNull(a, neg) => {
+            let x = eval(a, sc, rows, ri)?;
+            Ok(bool_val((x == Val.Null) != neg))
+        }
+        Expr.Like(a, p, neg) => {
+            let x = eval(a, sc, rows, ri)?;
+            let y = eval(p, sc, rows, ri)?;
+            match (x, y) {
+                (Val.Text(s), Val.Text(pat)) => {
+                    let sc_: Vec[char] = s.chars().collect();
+                    let pc: Vec[char] = pat.chars().collect();
+                    Ok(bool_val(like(sc_, pc, 0, 0) != neg))
+                }
+                (Val.Null, _) => Ok(Val.Null),
+                (_, Val.Null) => Ok(Val.Null),
+                _ => Err("LIKE needs text".to_string()),
+            }
+        }
+        Expr.In(a, list, neg) => {
+            let x = eval(a, sc, rows, ri)?;
+            if x == Val.Null {
+                return Ok(Val.Null);
+            }
+            let mut saw_null = false;
+            for item in list.iter() {
+                let y = eval(item, sc, rows, ri)?;
+                if y == Val.Null {
+                    saw_null = true;
+                } else if compare(x, y) == 0 {
+                    return Ok(bool_val(not neg));
+                }
+            }
+            if saw_null { Ok(Val.Null) } else { Ok(bool_val(neg)) }
+        }
+        Expr.Call(f, args) => {
+            if is_aggregate(f) {
+                return aggregate(f, args, sc, rows);
+            }
+            if args.len() != 1 {
+                return Err(f"{f}() takes one argument");
+            }
+            let x = eval(args[0], sc, rows, ri)?;
+            match x {
+                Val.Null => Ok(Val.Null),
+                Val.Text(s) => {
+                    if f == "UPPER" {
+                        Ok(Val.Text(s.to_uppercase()))
+                    } else if f == "LOWER" {
+                        Ok(Val.Text(s.to_lowercase()))
+                    } else if f == "LENGTH" {
+                        Ok(Val.Int(s.chars().count()))
+                    } else {
+                        Err(f"unknown function {f}()")
+                    }
+                }
+                Val.Int(n) => {
+                    if f == "LENGTH" {
+                        Ok(Val.Int(f"{n}".len()))
+                    } else if f == "UPPER" or f == "LOWER" {
+                        Ok(Val.Text(f"{n}"))
+                    } else {
+                        Err(f"unknown function {f}()")
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn aggregate(f: Str, args: ref Vec[Expr], sc: ref Scope, rows: ref Vec[Vec[Val]]) -> Result[Val, String] {
+    if not sc.grouped {
+        return Err(f"aggregate {f}() is not allowed here");
+    }
+    if args.len() != 1 {
+        return Err(f"{f}() takes one argument");
+    }
+    if f == "COUNT" and args[0] == Expr.Star {
+        return Ok(Val.Int(rows.len()));
+    }
+    let inner = Scope { cols: sc.cols.clone(), group_cols: Vec.new(), grouped: false };
+    let mut vals: Vec[Val] = Vec.new();
+    for i in 0..rows.len() {
+        let v = eval(args[0], inner, rows, i)?;
+        if v != Val.Null {
+            vals.push(v);
+        }
+    }
+    if f == "COUNT" {
+        return Ok(Val.Int(vals.len()));
+    }
+    if vals.is_empty() {
+        return Ok(Val.Null);
+    }
+    if f == "MIN" or f == "MAX" {
+        let mut best = vals[0].clone();
+        for v in vals.iter() {
+            let c = compare(v, best);
+            if (f == "MIN" and c < 0) or (f == "MAX" and c > 0) {
+                best = v.clone();
+            }
+        }
+        return Ok(best);
+    }
+    let mut total = 0;
+    for v in vals.iter() {
+        match v {
+            Val.Int(n) => total += n,
+            _ => return Err(f"{f}() needs numbers, found {show_val(v)}"),
+        }
+    }
+    if f == "SUM" {
+        return Ok(Val.Int(total));
+    }
+    // AVG to two places, rounded half away from zero, in integers.
+    let n = vals.len();
+    let neg = total < 0;
+    let mag = if neg { -total } else { total };
+    let hundredths = (mag * 200 + n) / (2 * n);
+    let sign = if neg { "-" } else { "" };
+    let frac = hundredths % 100;
+    let pad = if frac < 10 { "0" } else { "" };
+    Ok(Val.Text(f"{sign}{hundredths / 100}.{pad}{frac}"))
+}
+
+// ---- running a query --------------------------------------------------
+
+fn find_table(db: ref Vec[Table], name: Str) -> Result[ref Table, String] {
+    for t in db.iter() {
+        if t.name == name {
+            return Ok(t);
+        }
+    }
+    Err(f"no table '{name}'")
+}
+
+// One output row in the making: the rows it was computed from (one, or a
+// whole group), its values, and its sort keys.
+struct Unit { rows: Vec[Vec[Val]], out: Vec[Val], keys: Vec[Val] }
+
+fn compare_keys(a: ref Vec[Val], b: ref Vec[Val], order: ref Vec[OrderKey]) -> i64 {
+    for i in 0..order.len() {
+        let c = compare(a[i], b[i]);
+        if c != 0 {
+            return if order[i].desc { -c } else { c };
+        }
+    }
+    0
+}
+
+fn run(db: ref Vec[Table], q: ref Query) -> Result[(Vec[String], Vec[Vec[Val]]), String] {
+    let base = find_table(db, q.from)?;
+    let base_alias = if q.from_alias.is_empty() { q.from.clone() } else { q.from_alias.clone() };
+    let mut cols: Vec[(String, String)] = base.cols.iter().map(|c| (base_alias.clone(), c.clone())).collect();
+    let mut rows: Vec[Vec[Val]] = base.rows.clone();
+    for j in q.joins.iter() {
+        let t = find_table(db, j.table)?;
+        let alias = if j.alias.is_empty() { j.table.clone() } else { j.alias.clone() };
+        for c in t.cols.iter() {
+            cols.push((alias.clone(), c.clone()));
+        }
+        let sc = Scope { cols: cols.clone(), group_cols: Vec.new(), grouped: false };
+        let mut joined: Vec[Vec[Val]] = Vec.new();
+        for r in rows.iter() {
+            let mut matched = false;
+            for s in t.rows.iter() {
+                let mut both = r.clone();
+                for v in s.iter() {
+                    both.push(v.clone());
+                }
+                let one = vec![both];
+                let ok = eval(j.on, sc, one, 0).map_err(|e| f"ON: {e}")?;
+                if truthy(ok) {
+                    joined.push(one[0].clone());
+                    matched = true;
+                }
+            }
+            if not matched and j.left {
+                let mut both = r.clone();
+                for _ in 0..t.cols.len() {
+                    both.push(Val.Null);
+                }
+                joined.push(both);
+            }
+        }
+        rows = joined;
+    }
+    let plain = Scope { cols: cols.clone(), group_cols: Vec.new(), grouped: false };
+    match q.filter {
+        Some(ref w) => {
+            let mut kept: Vec[Vec[Val]] = Vec.new();
+            for i in 0..rows.len() {
+                let v = eval(w, plain, rows, i).map_err(|e| f"WHERE: {e}")?;
+                if truthy(v) {
+                    kept.push(rows[i].clone());
+                }
+            }
+            rows = kept;
+        }
+        None => {}
+    }
+
+    let grouped = not q.group.is_empty() or q.items.iter().any(|it| has_aggregate(it.expr)) or q.having.is_some() or q.order.iter().any(|k| has_aggregate(k.expr));
+    let mut units: Vec[Unit] = Vec.new();
+    let mut group_cols: Vec[i64] = Vec.new();
+    if grouped {
+        for g in q.group.iter() {
+            match g {
+                Expr.Col(qual, c) => group_cols.push(resolve(plain, qual, c).map_err(|e| f"GROUP BY: {e}")?),
+                _ => return Err(f"GROUP BY: '{show(g)}' is not a column"),
+            }
+        }
+        let mut keys: Vec[Vec[Val]] = Vec.new();
+        if q.group.is_empty() {
+            units.push(Unit { rows: rows, out: Vec.new(), keys: Vec.new() });
+        } else {
+            for r in rows.iter() {
+                let key: Vec[Val] = group_cols.iter().map(|i| r[i].clone()).collect();
+                let mut found = -1;
+                for k in 0..keys.len() {
+                    if keys[k] == key {
+                        found = k;
+                    }
+                }
+                if found < 0 {
+                    keys.push(key);
+                    units.push(Unit { rows: vec![r.clone()], out: Vec.new(), keys: Vec.new() });
+                } else {
+                    units[found].rows.push(r.clone());
+                }
+            }
+        }
+    } else {
+        for r in rows.iter() {
+            units.push(Unit { rows: vec![r.clone()], out: Vec.new(), keys: Vec.new() });
+        }
+    }
+    let sc = Scope { cols: cols.clone(), group_cols: group_cols, grouped: grouped };
+
+    let mut headers: Vec[String] = Vec.new();
+    for it in q.items.iter() {
+        if it.expr == Expr.Star {
+            if grouped {
+                return Err("SELECT: * cannot be used in a grouped query".to_string());
+            }
+            for c in cols.iter() {
+                headers.push(c.1.clone());
+            }
+        } else if it.alias.is_empty() {
+            headers.push(show(it.expr));
+        } else {
+            headers.push(it.alias.clone());
+        }
+    }
+
+    let mut kept: Vec[Unit] = Vec.new();
+    for u in units.into_iter() {
+        match q.having {
+            Some(ref h) => {
+                let v = eval(h, sc, u.rows, 0).map_err(|e| f"HAVING: {e}")?;
+                if not truthy(v) {
+                    continue;
+                }
+            }
+            None => {}
+        }
+        let mut out: Vec[Val] = Vec.new();
+        for it in q.items.iter() {
+            if it.expr == Expr.Star {
+                for v in u.rows[0].iter() {
+                    out.push(v.clone());
+                }
+            } else {
+                out.push(eval(it.expr, sc, u.rows, 0).map_err(|e| f"SELECT: {e}")?);
+            }
+        }
+        let mut keys: Vec[Val] = Vec.new();
+        for k in q.order.iter() {
+            keys.push(order_value(k.expr, headers, out, sc, u.rows)?);
+        }
+        if q.distinct and kept.iter().any(|x| x.out == out) {
+            continue;
+        }
+        kept.push(Unit { rows: u.rows, out: out, keys: keys });
+    }
+    kept.sort_by(|a, b| {
+        let c = compare_keys(a.keys, b.keys, q.order);
+        if c < 0 { Ordering.Less } else if c > 0 { Ordering.Greater } else { Ordering.Equal }
+    });
+    let mut result: Vec[Vec[Val]] = Vec.new();
+    for i in 0..kept.len() {
+        if i < q.offset {
+            continue;
+        }
+        match q.limit {
+            Some(n) => if result.len() >= n { break },
+            None => {}
+        }
+        result.push(kept[i].out.clone());
+    }
+    Ok((headers, result))
+}
+
+// An ORDER BY key is an output column by alias or ordinal, or else any
+// expression over the input.
+fn order_value(e: ref Expr, headers: ref Vec[String], out: ref Vec[Val], sc: ref Scope, rows: ref Vec[Vec[Val]]) -> Result[Val, String] {
+    match e {
+        Expr.Lit(Val.Int(n)) => {
+            if n < 1 or n > out.len() {
+                return Err(f"ORDER BY: there is no column {n}");
+            }
+            return Ok(out[n - 1].clone());
+        }
+        Expr.Col(q, c) => {
+            if q.is_empty() {
+                for i in 0..headers.len() {
+                    if headers[i] == c {
+                        return Ok(out[i].clone());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    eval(e, sc, rows, 0).map_err(|err| f"ORDER BY: {err}")
+}
+
+// ---- output -----------------------------------------------------------
+
+fn pad_right(s: Str, w: i64) -> String {
+    let mut out = s.to_string();
+    while out.chars().count() < w {
+        out.push(' ');
+    }
+    out
+}
+
+fn pad_left(s: Str, w: i64) -> String {
+    let mut out = String.new();
+    for _ in s.chars().count()..w {
+        out.push(' ');
+    }
+    out.push_str(s);
+    out
+}
+
+fn print_table(headers: ref Vec[String], rows: ref Vec[Vec[Val]]) {
+    let mut widths: Vec[i64] = headers.iter().map(|h| h.chars().count()).collect();
+    for r in rows.iter() {
+        for i in 0..r.len() {
+            let n = show_val(r[i]).chars().count();
+            if n > widths[i] {
+                widths[i] = n;
+            }
+        }
+    }
+    let mut line = String.new();
+    let mut rule = String.new();
+    for i in 0..headers.len() {
+        if i > 0 {
+            line.push_str(" | ");
+            rule.push_str("-+-");
+        }
+        line.push_str(pad_right(headers[i], widths[i]));
+        for _ in 0..widths[i] {
+            rule.push('-');
+        }
+    }
+    println(f"  {line.trim_end()}");
+    println(f"  {rule}");
+    for r in rows.iter() {
+        let mut line = String.new();
+        for i in 0..r.len() {
+            if i > 0 {
+                line.push_str(" | ");
+            }
+            let cell = show_val(r[i]);
+            match r[i] {
+                Val.Int(_) => line.push_str(pad_left(cell, widths[i])),
+                _ => line.push_str(pad_right(cell, widths[i])),
+            }
+        }
+        println(f"  {line.trim_end()}");
+    }
+    let plural = if rows.len() == 1 { "" } else { "s" };
+    println(f"  ({rows.len()} row{plural})");
+}
+
+const CUSTOMERS: Str = "id,name,city,tier
+1,Ada Lovelace,London,gold
+2,\"Grace Hopper\",New York,silver
+3,Alan Turing,London,
+4,\"Hopper, Grace Jr.\",Boston,gold
+5,Edsger Dijkstra,Austin,bronze
+";
+
+const ORDERS: Str = "order_id,customer_id,item,qty,price_cents
+100,1,keyboard,2,4999
+101,2,mouse,1,1999
+102,1,monitor,1,18999
+103,3,\"cable \"\"usb-c\"\"\",5,799
+104,9,adapter,3,
+105,4,mouse,2,1999
+106,2,keyboard,1,4999
+107,5,dock,1,12999
+108,3,mouse,,1999
+";
+
+const BROKEN: Str = "a,b,c
+1,2,3
+4,5
+";
+
+fn main() {
+    let files = vec![("customers", CUSTOMERS), ("orders", ORDERS), ("broken", BROKEN), ("unclosed", "x,y\n1,\"open\n")];
+    let mut db: Vec[Table] = Vec.new();
+    println("== load");
+    for (name, text) in files.iter() {
+        let path = f"{name}.csv";
+        match fs.write(path, text.to_string()) {
+            Ok(_) => {}
+            Err(_) => {
+                println(f"  cannot write {path}");
+                continue;
+            }
+        }
+        let read = match fs.read_to_string(path) {
+            Ok(t) => t,
+            Err(_) => {
+                println(f"  cannot read {path}");
+                continue;
+            }
+        };
+        match load_csv(name, read) {
+            Ok(t) => {
+                let mut desc: Vec[String] = Vec.new();
+                for i in 0..t.cols.len() {
+                    desc.push(f"{t.cols[i]} {t.types[i]}");
+                }
+                println(f"  {t.name}: {desc.join(", ")} ({t.rows.len()} rows)");
+                db.push(t);
+            }
+            Err(e) => println(f"  error: {e}"),
+        }
+    }
+
+    let queries = vec![
+        "SELECT * FROM customers",
+        "SELECT name, city FROM customers WHERE city = 'London' OR tier IS NULL ORDER BY name",
+        "SELECT item, qty * price_cents AS total FROM orders WHERE price_cents IS NOT NULL AND qty >= 2 ORDER BY total DESC",
+        "SELECT c.name, o.item, o.qty FROM orders o JOIN customers c ON o.customer_id = c.id ORDER BY c.name, o.order_id LIMIT 5",
+        "SELECT c.name, COUNT(o.order_id) AS orders, SUM(o.qty * o.price_cents) AS spent FROM customers c LEFT JOIN orders o ON o.customer_id = c.id GROUP BY c.name ORDER BY spent DESC, 1",
+        "SELECT city, COUNT(*) AS n, AVG(id) FROM customers GROUP BY city HAVING COUNT(*) > 1",
+        "SELECT DISTINCT item FROM orders ORDER BY item",
+        "SELECT UPPER(name), LENGTH(name) AS len FROM customers WHERE name LIKE '%Hopper%'",
+        "SELECT order_id, item FROM orders WHERE item IN ('mouse', 'dock') AND customer_id NOT IN (2)",
+        "SELECT order_id, qty FROM orders WHERE qty > 1 OR qty IS NULL ORDER BY qty, order_id",
+        "select tier, min(name), max(id), count(tier) from customers group by tier order by tier",
+        "SELECT item, price_cents / qty AS each, price_cents % 1000 FROM orders WHERE order_id <= 101 OR item LIKE 'c_ble%'",
+        "SELECT COUNT(*), SUM(qty), AVG(price_cents) FROM orders WHERE customer_id = 1",
+        "SELECT COUNT(*), SUM(qty), MAX(item) FROM orders WHERE customer_id = 42",
+        "SELECT name FROM customers ORDER BY id DESC LIMIT 2 OFFSET 1",
+        "SELECT o.order_id FROM orders o LEFT JOIN customers c ON c.id = o.customer_id WHERE c.id IS NULL",
+        "SELECT name, NOT (tier = 'gold') AS not_gold, -id FROM customers WHERE tier != 'silver' OR tier IS NULL",
+        "SELECT nam FROM customers",
+        "SELECT name FROM customers a JOIN customers b ON a.id = b.id",
+        "SELECT city, name FROM customers GROUP BY city",
+        "SELECT * FROM customers WHERE COUNT(*) > 1",
+        "SELECT name FROM customers WHERE",
+        "SELECT name FROM nowhere",
+        "SELECT 'unterminated FROM customers",
+        "SELECT qty / 0 FROM orders LIMIT 1",
+        "SELECT name FROM customers ORDER BY 3",
+        "SELECT name, FROM customers",
+        "SELECT name FROM customers WHERE city = 'London' extra",
+        "SELECT name + 1 FROM customers",
+        "SELECT * FROM customers WHERE id # 2",
+    ];
+    for src in queries.iter() {
+        println(f"== {src}");
+        let q = match parse_query(src) {
+            Ok(q) => q,
+            Err(e) => {
+                println(f"  error: {e}");
+                continue;
+            }
+        };
+        match run(db, q) {
+            Ok((headers, rows)) => print_table(headers, rows),
+            Err(e) => println(f"  error: {e}"),
+        }
+    }
+}

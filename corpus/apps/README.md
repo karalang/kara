@@ -143,6 +143,7 @@ pipeline/event_store event-sourced ledger: Aggregate trait + generic replay, app
 service/smtp_sink   SMTP receiver over TCP: RFC 5321 replies and limits, dot unstuffing, maildir, MIME + base64 report
 cli/mini_shell      POSIX-flavoured shell: quoting, run-time $VAR/$? expansion, pipes, redirects, && ||, real child processes
 service/config_svc  layered JSON config service over HTTP: Merge Patch layers (defaults, file, CFG_* env), JSON Pointer reads, ETag/If-None-Match, If-Match writes, schema 422s, reload
+cli/csv_query       SQL over CSV files: quoted-field loader with type inference, SELECT/JOIN/WHERE/GROUP BY/HAVING/ORDER BY/LIMIT, NULL logic, LIKE/IN, aggregates
 ```
 
 They run only on the mir-* backends (`backends` in meta.toml); legacy is
