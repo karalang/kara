@@ -788,6 +788,12 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("TcpStream", "read" | "read_line" | "read_to_string") => {
             vec![(Receives, "Network", Some(0)), (Blocks, "", None)]
         }
+        ("UdpSocket", "send_to" | "send" | "connect") => {
+            vec![(Sends, "Network", Some(0)), (Blocks, "", None)]
+        }
+        ("UdpSocket", "recv_from" | "recv") => {
+            vec![(Receives, "Network", Some(0)), (Blocks, "", None)]
+        }
         ("File", "write" | "write_all" | "flush") => {
             vec![(Writes, "File", Some(0)), (Blocks, "", None)]
         }

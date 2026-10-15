@@ -367,6 +367,8 @@ fn show(e: TcpError) -> String {
         TcpError.AddrInUse => "addr in use".to_string(),
         TcpError.ConnectionRefused => "refused".to_string(),
         TcpError.PermissionDenied => "denied".to_string(),
+        TcpError.TimedOut => "timed out".to_string(),
+        TcpError.WouldBlock => "would block".to_string(),
     }
 }
 
@@ -462,6 +464,172 @@ fn tcp_natives_match_the_interpreter() {
     );
     if let Some(built) = built {
         assert_eq!(built, interp);
+    }
+}
+
+/// `UdpSocket` over loopback (`send_to` / `recv_from`, `connect` / `send` /
+/// `recv`, a datagram cut to the buffer, `local_addr`, a read timeout,
+/// `try_clone`, a second bind), `TcpListener.local_addr`, a `TcpStream`
+/// read timeout, and `TcpError` matching as `NetError` (B-2026-10-15-18).
+const UDP: &str = r#"
+fn show(e: NetError) -> String {
+    match e {
+        NetError.Interrupted => "interrupted".to_string(),
+        NetError.Other(n) => f"other {n}",
+        NetError.AddrInUse => "addr in use".to_string(),
+        NetError.ConnectionRefused => "refused".to_string(),
+        NetError.PermissionDenied => "denied".to_string(),
+        NetError.TimedOut => "timed out".to_string(),
+        NetError.WouldBlock => "would block".to_string(),
+    }
+}
+
+fn text(buf: ref Array[u8, 8], n: i64) -> String {
+    let mut s = "".to_string();
+    let mut i = 0;
+    while i < n {
+        s.push(buf[i] as char);
+        i = i + 1;
+    }
+    s
+}
+
+fn main() {
+    let a = match UdpSocket.bind("127.0.0.1:0") {
+        Ok(s) => s,
+        Err(e) => {
+            println(show(e));
+            return;
+        }
+    };
+    let b = match UdpSocket.bind("127.0.0.1:0") {
+        Ok(s) => s,
+        Err(e) => {
+            println(show(e));
+            return;
+        }
+    };
+    let a_at = match a.local_addr() {
+        Ok(s) => s,
+        Err(e) => show(e),
+    };
+    let b_at = match b.local_addr() {
+        Ok(s) => s,
+        Err(e) => show(e),
+    };
+    println(f"ports differ: {a_at != b_at}");
+    match a.send_to("hello world".to_string().bytes(), b_at) {
+        Ok(n) => println(f"sent {n}"),
+        Err(e) => println(show(e)),
+    }
+    let mut buf: Array[u8, 8] = [0u8; 8];
+    match b.recv_from(mut buf) {
+        Ok((n, from)) => println(f"got {n} [{text(buf, n)}] from a: {from == a_at}"),
+        Err(e) => println(show(e)),
+    }
+    match b.connect(a_at) {
+        Ok(_) => println("connected"),
+        Err(e) => println(show(e)),
+    }
+    match b.send("pong".to_string().bytes()) {
+        Ok(n) => println(f"sent {n}"),
+        Err(e) => println(show(e)),
+    }
+    match a.recv(mut buf) {
+        Ok(n) => println(f"got [{text(buf, n)}]"),
+        Err(e) => println(show(e)),
+    }
+    match a.set_read_timeout(Some(0)) {
+        Ok(_) => println("zero accepted"),
+        Err(e) => println(show(e)),
+    }
+    match a.set_read_timeout(Some(50)) {
+        Ok(_) => println("timeout set"),
+        Err(e) => println(show(e)),
+    }
+    match a.recv(mut buf) {
+        Ok(n) => println(f"got {n}"),
+        Err(e) => println(show(e)),
+    }
+    match a.try_clone() {
+        Ok(c) => match c.local_addr() {
+            Ok(s) => println(f"clone at a: {s == a_at}"),
+            Err(e) => println(show(e)),
+        },
+        Err(e) => println(show(e)),
+    }
+    match UdpSocket.bind(a_at) {
+        Ok(_) => println("bound twice"),
+        Err(e) => println(show(e)),
+    }
+    match UdpSocket.bind("nowhere") {
+        Ok(_) => println("bound nowhere"),
+        Err(e) => println(show(e)),
+    }
+    match TcpListener.bind("127.0.0.1:0") {
+        Ok(l) => match l.local_addr() {
+            Ok(s) => match TcpStream.connect(s) {
+                Ok(c) => {
+                    match l.accept() {
+                        Ok(server) => {
+                            match server.set_read_timeout(Some(50)) {
+                                Ok(_) => println("tcp timeout set"),
+                                Err(e) => println(show(e)),
+                            }
+                            match server.read(mut buf) {
+                                Ok(n) => println(f"tcp got {n}"),
+                                Err(e) => println(show(e)),
+                            }
+                            match server.set_read_timeout(None) {
+                                Ok(_) => println("tcp timeout cleared"),
+                                Err(e) => println(show(e)),
+                            }
+                            match c.write_all("x".to_string().bytes()) {
+                                Ok(n) => println(f"tcp sent {n}"),
+                                Err(e) => println(show(e)),
+                            }
+                            match server.read(mut buf) {
+                                Ok(n) => println(f"tcp got {n}"),
+                                Err(e) => println(show(e)),
+                            }
+                        }
+                        Err(e) => println(show(e)),
+                    }
+                }
+                Err(e) => println(show(e)),
+            },
+            Err(e) => println(show(e)),
+        },
+        Err(e) => println(show(e)),
+    }
+    match TcpStream.connect("127.0.0.1:1") {
+        Ok(_) => println("connected to 1"),
+        Err(TcpError.ConnectionRefused) => println("refused, through the alias"),
+        Err(e) => println(show(e)),
+    }
+}
+"#;
+
+#[test]
+fn udp_and_socket_options_match_the_interpreter() {
+    let dir = Scratch::new("udp");
+    let (interp, built) = interp_and_build(dir.path(), UDP);
+    // `bind` on port 0 announces the port it got (`BOUND_PORT=`).
+    let unported = |s: &str| {
+        s.lines()
+            .filter(|l| !l.starts_with("BOUND_PORT="))
+            .map(|l| format!("{l}\n"))
+            .collect::<String>()
+    };
+    assert_eq!(
+        unported(&interp),
+        "ports differ: true\nsent 11\ngot 8 [hello wo] from a: true\nconnected\n\
+         sent 4\ngot [pong]\nother -1\ntimeout set\ntimed out\nclone at a: true\n\
+         addr in use\nother -1\ntcp timeout set\ntimed out\ntcp timeout cleared\n\
+         tcp sent 1\ntcp got 1\nrefused, through the alias\n"
+    );
+    if let Some(built) = built {
+        assert_eq!(unported(&built), unported(&interp));
     }
 }
 

@@ -176,33 +176,59 @@ Both are prelude types. `IoError` covers the standard streams and files; `VarErr
 
 ## Networking
 
-v1 networking is blocking TCP, in `std.net`. HTTP clients and servers, TLS and WebSocket come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services).
+v1 networking is blocking TCP and UDP, in `std.net`. HTTP clients and servers, TLS and WebSocket come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services).
 
 ```kara
 impl TcpListener {
-    fn bind(addr: Str) -> Result[TcpListener, TcpError] with sends(Network) receives(Network) blocks
-    fn accept(self) -> Result[TcpStream, TcpError] with receives(self) blocks
+    fn bind(addr: Str) -> Result[TcpListener, NetError] with sends(Network) receives(Network) blocks
+    fn accept(self) -> Result[TcpStream, NetError] with receives(self) blocks
+    fn local_addr(self) -> Result[String, NetError]
 }
 
 impl TcpStream {
-    fn connect(addr: Str) -> Result[TcpStream, TcpError] with sends(Network) receives(Network) blocks
-    fn read(self, buf: mut Slice[u8]) -> Result[i64, TcpError] with receives(self) blocks
-    fn write(self, buf: Slice[u8]) -> Result[i64, TcpError] with sends(self) blocks
-    fn write_all(self, buf: Slice[u8]) -> Result[i64, TcpError] with sends(self) blocks
-    fn try_clone(self) -> Result[TcpStream, TcpError]
-    fn shutdown_write(self) -> Result[(), TcpError] with sends(self) blocks
+    fn connect(addr: Str) -> Result[TcpStream, NetError] with sends(Network) receives(Network) blocks
+    fn read(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks
+    fn write(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks
+    fn write_all(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks
+    fn try_clone(self) -> Result[TcpStream, NetError]
+    fn shutdown_write(self) -> Result[(), NetError] with sends(self) blocks
+    fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
 }
 
-enum TcpError {
+impl UdpSocket {
+    fn bind(addr: Str) -> Result[UdpSocket, NetError] with sends(Network) receives(Network) blocks
+    fn send_to(self, buf: Slice[u8], addr: Str) -> Result[i64, NetError] with sends(self) blocks
+    fn recv_from(self, buf: mut Slice[u8]) -> Result[(i64, String), NetError] with receives(self) blocks
+    fn connect(self, addr: Str) -> Result[(), NetError] with sends(self) blocks
+    fn send(self, buf: Slice[u8]) -> Result[i64, NetError] with sends(self) blocks
+    fn recv(self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(self) blocks
+    fn local_addr(self) -> Result[String, NetError]
+    fn set_read_timeout(self, ms: Option[i64]) -> Result[(), NetError]
+    fn try_clone(self) -> Result[UdpSocket, NetError]
+}
+
+enum NetError {
     Interrupted,
     AddrInUse,
     ConnectionRefused,
     PermissionDenied,
+    TimedOut,
+    WouldBlock,
     Other(i32),
 }
+
+type TcpError = NetError;
 ```
 
-`addr` is a host and port, such as `"127.0.0.1:8080"`; port 0 asks the OS for a free port. `read` returns the number of bytes read. `write` may write fewer bytes than given; `write_all` keeps writing, retrying on `Interrupted`, until every byte is sent or an error occurs. `try_clone` returns a second handle to the same connection; since the compiler cannot tell the two handles apart, their operations conflict as if they were one value. Dropping a `TcpListener` or `TcpStream` closes it. `TcpError.Other` carries the OS error code.
+`addr` is an IP address and port, such as `"127.0.0.1:8080"`; port 0 asks the OS for a free port, and `local_addr` returns the address the socket got, as `"ip:port"`. Dropping a socket closes it. `try_clone` returns a second handle to the same socket; since the compiler cannot tell the two handles apart, their operations conflict as if they were one value.
+
+**TCP.** `read` returns the number of bytes read, and 0 at the end of the stream. `write` may write fewer bytes than given; `write_all` keeps writing, retrying on `Interrupted`, until every byte is sent or an error occurs.
+
+**UDP.** A `UdpSocket` sends and receives datagrams, each one `send_to` or `send` call. UDP does not guarantee delivery or order: a datagram may be lost, duplicated or overtaken by a later one. `recv_from` waits for one datagram, stores it in `buf` and returns the number of bytes stored and the sender's address. A datagram longer than `buf` is cut to fit and the rest is lost, which is not an error, so the count is the bytes stored, not the datagram's size. `connect` sets the peer that `send` sends to, and after it `recv` takes datagrams from that peer only.
+
+**Timeouts.** `set_read_timeout(Some(ms))` makes a later `read`, `recv` or `recv_from` that waits longer than `ms` milliseconds fail with `NetError.TimedOut`; `None` waits for ever, the default. A timeout is how a UDP program avoids waiting for ever on a lost datagram. A timeout below 1 ms fails with `Other(-1)`. Inside a task, a `TcpStream.read` waits for data without the timeout for now ([deferred.md](../deferred.md#networking-beyond-v1)).
+
+**Errors.** `NetError` is the error of every socket operation. `Interrupted` is a call a signal interrupted, which is safe to retry. `TimedOut` is a read timeout expiring. `WouldBlock` is a non-blocking socket with nothing to do; v1 sockets block, so no v1 operation returns it, and it exists so that matches written now stay exhaustive when non-blocking sockets come. `Other` carries the OS error code, or -1 when there is none, such as for an address that does not parse. `TcpError` is the earlier name of `NetError`, kept until M3.
 
 ## Processes
 

@@ -1,0 +1,174 @@
+// runtime/stdlib/source/net.kara
+//
+// `std.net` on the v2 pipeline (B-2026-10-15-18): TCP and UDP sockets and
+// `NetError`, as docs/library/io.md § Networking describes them. The MIR
+// pipeline appends this file to a program that names one of these types
+// (`BAKED_SOURCES` in src/mir/lower.rs), and `karac check` reads it for
+// such a program. The legacy pipeline keeps runtime/stdlib/tcp.kara.
+//
+// A socket is its descriptor. The interpreter keeps the `std::net` socket
+// in a table by that descriptor (`tcp_method` / `udp_method`); the
+// compiled backend reaches the runtime's `karac_mir_tcp` / `karac_mir_udp`.
+
+// Why a network operation failed. The causes a program branches on have
+// variants; any other carries the OS error code in `Other`.
+enum NetError {
+    // A signal interrupted the call; retrying it is safe.
+    Interrupted,
+    // Any other failure, with the OS error code.
+    Other(i32),
+    // The address is already bound.
+    AddrInUse,
+    // Nothing is listening at the address.
+    ConnectionRefused,
+    // The OS refused, as for a privileged port.
+    PermissionDenied,
+    // A read timeout set with `set_read_timeout` expired.
+    TimedOut,
+    // A non-blocking socket had nothing to do. v1 sockets block, so no v1
+    // operation returns it.
+    WouldBlock,
+}
+
+// The name before UDP; `TcpError` is `NetError` until M3.
+type TcpError = NetError;
+
+struct TcpListener {
+    fd: i64,
+}
+
+struct TcpStream {
+    fd: i64,
+}
+
+struct UdpSocket {
+    fd: i64,
+}
+
+impl TcpListener {
+    #[compiler_builtin]
+    fn bind(addr: Str) -> Result[TcpListener, NetError] {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn accept(ref self) -> Result[TcpStream, NetError] with sends(Network) receives(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    // The address the listener is bound to, as "ip:port": the port the OS
+    // chose for `bind("127.0.0.1:0")`.
+    #[compiler_builtin]
+    fn local_addr(ref self) -> Result[String, NetError] {
+        Err(NetError.Other(-1))
+    }
+}
+
+impl TcpStream {
+    #[compiler_builtin]
+    fn connect(addr: Str) -> Result[TcpStream, NetError] with sends(Network) receives(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn try_clone(ref self) -> Result[TcpStream, NetError] {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn shutdown_write(ref self) -> Result[(), NetError] {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn write(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) receives(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    // How long a `read` waits before failing with `TimedOut`, in
+    // milliseconds; `None` waits for ever. A timeout below 1 ms fails with
+    // `Other(-1)`.
+    #[compiler_builtin]
+    fn set_read_timeout(ref self, ms: Option[i64]) -> Result[(), NetError] {
+        Err(NetError.Other(-1))
+    }
+}
+
+impl UdpSocket {
+    #[compiler_builtin]
+    fn bind(addr: Str) -> Result[UdpSocket, NetError] with sends(Network) receives(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    // Sends `buf` as one datagram to `addr`; the count sent.
+    #[compiler_builtin]
+    fn send_to(ref self, buf: Slice[u8], addr: Str) -> Result[i64, NetError] with sends(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    // Waits for one datagram and stores it in `buf`: the count stored and
+    // the sender's "ip:port". A datagram longer than `buf` is cut to fit.
+    #[compiler_builtin]
+    fn recv_from(ref self, buf: mut Slice[u8]) -> Result[(i64, String), NetError] with receives(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    // Sets the peer `send` sends to; `recv` then takes datagrams from it
+    // only.
+    #[compiler_builtin]
+    fn connect(ref self, addr: Str) -> Result[(), NetError] with sends(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn send(ref self, buf: Slice[u8]) -> Result[i64, NetError] with sends(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn recv(ref self, buf: mut Slice[u8]) -> Result[i64, NetError] with receives(Network) {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn local_addr(ref self) -> Result[String, NetError] {
+        Err(NetError.Other(-1))
+    }
+
+    // How long a `recv` / `recv_from` waits before failing with
+    // `TimedOut`, as `TcpStream.set_read_timeout`.
+    #[compiler_builtin]
+    fn set_read_timeout(ref self, ms: Option[i64]) -> Result[(), NetError] {
+        Err(NetError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn try_clone(ref self) -> Result[UdpSocket, NetError] {
+        Err(NetError.Other(-1))
+    }
+}
+
+impl Drop for TcpListener {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}
+
+impl Drop for TcpStream {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}
+
+impl Drop for UdpSocket {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}

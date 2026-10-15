@@ -34,13 +34,15 @@ pub(super) const IO_ERRORS: [&str; 9] = [
     "Unsupported",
 ];
 
-/// The `TcpError` variants by the runtime's code for them.
-const TCP_ERRORS: [&str; 5] = [
+/// The `NetError` variants by the runtime's code for them.
+const NET_ERRORS: [&str; 7] = [
     "Interrupted",
     "Other",
     "AddrInUse",
     "ConnectionRefused",
     "PermissionDenied",
+    "TimedOut",
+    "WouldBlock",
 ];
 
 impl<'ctx> Cx<'ctx, '_> {
@@ -66,7 +68,9 @@ impl<'ctx> Cx<'ctx, '_> {
             ("ChildStdout" | "ChildStderr" | "ChildStdin", _) => {
                 self.pipe_native(method, args, dest)
             }
-            ("TcpListener" | "TcpStream", _) => self.tcp_native(base, method, args, dest),
+            ("TcpListener" | "TcpStream" | "UdpSocket", _) => {
+                self.tcp_native(base, method, args, dest)
+            }
             ("Client" | "RequestBuilder" | "Response" | "HttpError", _) => {
                 self.http_native(base, method, args, dest)
             }
@@ -802,8 +806,10 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// `TcpListener` / `TcpStream`, through `karac_mir_tcp(op, fd, ptr, len,
-    /// value)`; the `TcpError` cause comes back as its code, in the order
-    /// [`TCP_ERRORS`] lists, `Other`'s `i32` in `value`.
+    /// value)`, and their other methods and `UdpSocket`'s through
+    /// `karac_mir_net(op, fd, ptr, len, addr, addr_len, value, out)`; the
+    /// `NetError` cause comes back as its code, in the order [`NET_ERRORS`]
+    /// lists, `Other`'s `i32` in `value`.
     fn tcp_native(
         &mut self,
         base: &str,
@@ -820,7 +826,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("TcpStream", "read") => 5,
             ("TcpStream", "write") => 6,
             ("TcpStream", "write_all") => 7,
-            _ => return Ok(None),
+            _ => return self.net_native(base, method, args, dest),
         };
         let null = self.ptr_ty().const_null();
         let (fd, ptr, len) = if op <= 1 {
@@ -850,6 +856,107 @@ impl<'ctx> Cx<'ctx, '_> {
             32,
         )?;
         self.drop_moved(args)?;
+        self.store_net_result(dest, code, value, None)?;
+        Ok(Some(()))
+    }
+
+    /// The socket methods `karac_mir_net` runs (`tcp_native`).
+    fn net_native(
+        &mut self,
+        base: &str,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let op: u64 = match (base, method) {
+            ("TcpListener", "local_addr") => 0,
+            ("TcpStream", "set_read_timeout") => 1,
+            ("UdpSocket", "bind") => 2,
+            ("UdpSocket", "send_to") => 3,
+            ("UdpSocket", "recv_from") => 4,
+            ("UdpSocket", "connect") => 5,
+            ("UdpSocket", "send") => 6,
+            ("UdpSocket", "recv") => 7,
+            ("UdpSocket", "local_addr") => 8,
+            ("UdpSocket", "set_read_timeout") => 9,
+            ("UdpSocket", "try_clone") => 10,
+            _ => return Ok(None),
+        };
+        let null = self.ptr_ty().const_null();
+        let zero = self.i64(0);
+        let (mut fd, mut ptr, mut len, mut addr, mut addr_len) = (zero, null, zero, null, zero);
+        if op == 2 {
+            (ptr, len) = self.str_parts(&args[0])?;
+        } else {
+            let (at, _) = self.behind_refs(&args[0])?;
+            fd = self.load_i64(at)?;
+        }
+        match op {
+            3 | 4 | 6 | 7 => (ptr, len) = self.view_of(&args[1])?,
+            5 => (addr, addr_len) = self.str_parts(&args[1])?,
+            1 | 9 => {
+                // `Some(ms)` is `len` ms with `addr_len` 1; `None` is 0.
+                let (at, t) = self.behind_refs(&args[1])?;
+                let (some, _) = self.option_variants(t)?;
+                let tag = self.load_tag(at, t)?;
+                let is = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        tag,
+                        tag.get_type().const_int(u64::from(some), false),
+                        "",
+                    )
+                    .map_err(e)?;
+                let ms = self.load_i64(self.offset(at, self.field_offset(t, Some(some), 0)?)?)?;
+                let i64t = self.llcx.i64_type();
+                addr_len = self.builder.build_int_z_extend(is, i64t, "").map_err(e)?;
+                len = self
+                    .builder
+                    .build_select(is, ms, zero, "")
+                    .map_err(e)?
+                    .into_int_value();
+            }
+            _ => {}
+        }
+        if op == 3 {
+            (addr, addr_len) = self.str_parts(&args[2])?;
+        }
+        let s = self.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
+        let value = self.entry_slot(8, "net.value")?;
+        let out = self.temp(s, "net.out")?;
+        let i32t = self.llcx.i32_type();
+        let code = self.rt_int(
+            "net",
+            &[
+                i32t.const_int(op, false).into(),
+                fd.into(),
+                ptr.into(),
+                len.into(),
+                addr.into(),
+                addr_len.into(),
+                value.into(),
+                out.into(),
+            ],
+            32,
+        )?;
+        self.drop_moved(args)?;
+        self.store_net_result(dest, code, value, Some(out))?;
+        Ok(Some(()))
+    }
+
+    /// Writes a socket call's `Result` at `dest` from the runtime's `code`
+    /// (negative for `Ok`) and `value`: a socket is its descriptor, a count
+    /// an `i64`, `Unit` nothing, and an address the `String` at `out`
+    /// (`recv_from`'s `(i64, String)` takes both).
+    fn store_net_result(
+        &mut self,
+        dest: &Place,
+        code: IntValue<'ctx>,
+        value: PointerValue<'ctx>,
+        out: Option<PointerValue<'ctx>>,
+    ) -> R<()> {
+        let i32t = self.llcx.i32_type();
         let dty = self.place_type(dest)?;
         let d = self.place_ptr(dest)?;
         let (ok, er) = (self.variant_of(dty, "Ok")?, self.variant_of(dty, "Err")?);
@@ -871,15 +978,22 @@ impl<'ctx> Cx<'ctx, '_> {
         self.store_tag(d, dty, er)?;
         self.if_then(done, |cx| {
             cx.store_tag(d, dty, ok)?;
-            // A `TcpListener` / `TcpStream` is its descriptor, a count is
-            // an `i64`, and `Unit` is nothing.
-            match cx.layout(okt)?.size {
-                0 => Ok(()),
-                8 => cx.store(cx.offset(d, ok_off)?, v.into()),
-                _ => Err(format!("a TCP result of `{}`", cx.tys.display(okt))),
+            let p = cx.offset(d, ok_off)?;
+            let s = cx.tys.intern(TyKind::Intrinsic(IntrinsicTy::String));
+            match (cx.tys.kind(okt), out) {
+                (TyKind::Intrinsic(IntrinsicTy::String), Some(out)) => cx.copy(p, out, s),
+                (TyKind::Tuple(ts), Some(out)) if ts.len() == 2 => {
+                    cx.store(cx.offset(p, cx.field_offset(okt, None, 0)?)?, v.into())?;
+                    cx.copy(cx.offset(p, cx.field_offset(okt, None, 1)?)?, out, s)
+                }
+                _ => match cx.layout(okt)?.size {
+                    0 => Ok(()),
+                    8 => cx.store(p, v.into()),
+                    _ => Err(format!("a socket result of `{}`", cx.tys.display(okt))),
+                },
             }
         })?;
-        for (k, name) in TCP_ERRORS.iter().enumerate() {
+        for (k, name) in NET_ERRORS.iter().enumerate() {
             let var = self.variant_of(et, name)?;
             let is = self
                 .builder
@@ -903,14 +1017,14 @@ impl<'ctx> Cx<'ctx, '_> {
                 Ok(())
             })?;
         }
-        Ok(Some(()))
+        Ok(())
     }
 
     /// The `#[compiler_builtin]` `Drop` of the I/O type `name`, whose
     /// `mut ref` is in `slot`: `true` when it is one. A socket closes its
     /// descriptor.
     pub(super) fn io_drop(&mut self, name: &str, slot: PointerValue<'ctx>) -> R<bool> {
-        if !matches!(name, "TcpListener" | "TcpStream") {
+        if !matches!(name, "TcpListener" | "TcpStream" | "UdpSocket") {
             return Ok(false);
         }
         let v = self.load_ptr(slot)?;

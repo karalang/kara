@@ -14477,6 +14477,13 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         &["Command"],
     ),
     (
+        // The v2 `std.net` (B-2026-10-15-18); legacy keeps
+        // runtime/stdlib/tcp.kara.
+        NET_SOURCE,
+        NET_WORDS,
+        &["TcpListener", "TcpStream", "UdpSocket"],
+    ),
+    (
         include_str!("../../runtime/stdlib/tracing.kara"),
         &["Log", "Span", "Exporter", "with_span"],
         &[],
@@ -14518,12 +14525,27 @@ const PROCESS_SOURCE: &str = include_str!("../../runtime/stdlib/source/process.k
 // A program's own `Child` or `Stdio` is not a use (`names_baked`).
 const PROCESS_WORDS: &[&str] = &["Command", "Child", "Stdio", "ExitStatus"];
 
-/// Whether `src` uses `std.process` as the v2 pipeline appends it, so that
-/// `karac check` reads the library the build runs: the v2 surface
-/// (`Stdio.piped()`, `ExitStatus.code()`) differs from the baked legacy
-/// one the checker otherwise registers (B-2026-10-15-6).
-pub fn uses_v2_process(src: &str) -> bool {
-    names_baked(src, PROCESS_WORDS) && !defines_a_baked_type(src, PROCESS_SOURCE, &["Command"])
+/// The v2 `std.net`, and the words that make a program one of its users.
+const NET_SOURCE: &str = include_str!("../../runtime/stdlib/source/net.kara");
+const NET_WORDS: &[&str] = &[
+    "TcpListener",
+    "TcpStream",
+    "TcpError",
+    "NetError",
+    "UdpSocket",
+];
+
+/// Whether `src` uses `std.process` or `std.net` as the v2 pipeline appends
+/// them, so that `karac check` reads the library the build runs: the v2
+/// surfaces (`Stdio.piped()`, `UdpSocket`) differ from the baked legacy
+/// ones the checker otherwise registers (B-2026-10-15-6, B-2026-10-15-18).
+pub fn uses_v2_library_module(src: &str) -> bool {
+    BAKED_SOURCES
+        .iter()
+        .filter(|(text, _, _)| [PROCESS_SOURCE, NET_SOURCE].contains(text))
+        .any(|(text, words, owners)| {
+            names_baked(src, words) && !defines_a_baked_type(src, text, owners)
+        })
 }
 
 /// A library method that keeps its argument (`v.push(x)`, `m.insert(k, v)`,

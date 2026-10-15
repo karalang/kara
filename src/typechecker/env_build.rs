@@ -130,6 +130,34 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // An alias that renames a primitive, struct or enum (`type UserId =
+        // i64`, `type TcpError = NetError`) is registered before the walk
+        // below, so a function signature above it names the type rather than
+        // an unknown `UserId` (B-2026-10-15-18: the appended library follows
+        // the program). Other aliases may name items the walk registers.
+        let renames = |t: &TypeAliasDef, env: &super::env::TypeEnv| {
+            t.generic_params.is_none()
+                && t.refinement.is_none()
+                && matches!(&t.ty.kind, TypeKind::Path(p) if p.segments.len() == 1
+                    && (env.structs.contains_key(&p.segments[0])
+                        || env.enums.contains_key(&p.segments[0])
+                        || crate::prelude::PRELUDE_PRIMITIVES.contains(&p.segments[0].as_str())))
+        };
+        let early: HashSet<&str> = items
+            .iter()
+            .filter_map(|it| match it {
+                Item::TypeAlias(t) if renames(t, &self.env) => Some(t.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        for item in items {
+            if let Item::TypeAlias(t) = item {
+                if early.contains(t.name.as_str()) {
+                    self.env_add_type_alias(t);
+                }
+            }
+        }
+
         for item in items {
             match item {
                 Item::StructDef(s) => self.env_add_struct(s),
@@ -142,7 +170,9 @@ impl<'a> super::TypeChecker<'a> {
                 Item::ImplBlock(i) => self.env_add_impl(i),
                 Item::ConstDecl(c) => self.env_add_const(c),
                 Item::ModuleBinding(b) => self.env_add_module_binding(b),
-                Item::TypeAlias(t) => self.env_add_type_alias(t),
+                Item::TypeAlias(t) if !early.contains(t.name.as_str()) => {
+                    self.env_add_type_alias(t)
+                }
                 Item::ExternFunction(e) => self.env_add_extern_function(e),
                 Item::ExternBlock(b) => {
                     for it in &b.items {
@@ -847,6 +877,9 @@ impl<'a> super::TypeChecker<'a> {
                 .filter_map(|it| match it {
                     Item::StructDef(s) if !s.stdlib_origin => Some(s.name.as_str()),
                     Item::EnumDef(e) if !e.stdlib_origin => Some(e.name.as_str()),
+                    // The v2 `std.net`'s `type TcpError = NetError` replaces
+                    // the baked `enum TcpError` (B-2026-10-15-18).
+                    Item::TypeAlias(a) => Some(a.name.as_str()),
                     _ => None,
                 })
                 .collect()

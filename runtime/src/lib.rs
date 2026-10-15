@@ -530,6 +530,9 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // socket calls.
     #[cfg(feature = "net")]
     keep!(mir_io::karac_mir_tcp);
+    // Their other methods and `UdpSocket` (B-2026-10-15-18).
+    #[cfg(all(feature = "net", unix))]
+    keep!(mir_io::karac_mir_net);
     // `Server.serve` and `Request` on the MIR backend (`src/http1.rs`).
     #[cfg(feature = "net")]
     keep!(

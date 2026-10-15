@@ -1634,7 +1634,7 @@ impl<'a> Interp<'a> {
             | ("Stdio" | "Child" | "ChildStdout" | "ChildStderr" | "ChildStdin", _) => {
                 self.process_method(name, base, method, args, arg_tys, ret)
             }
-            ("TcpListener" | "TcpStream", _) => {
+            ("TcpListener" | "TcpStream" | "UdpSocket", _) => {
                 self.tcp_method(name, base, method, args, arg_tys, ret)
             }
             ("Server", "serve") | ("Request", _) => {
@@ -4470,11 +4470,13 @@ impl<'a> Interp<'a> {
         Ok(Value::Agg(out))
     }
 
-    /// `TcpListener` and `TcpStream`, over `std::net` sockets kept in a table
-    /// by their descriptor, so a handle holds the same `fd` the runtime's
-    /// `event_loop.rs` hands the compiled backend. Construction failures
-    /// carry the runtime's `net_construct_error_code` causes, and `read` /
-    /// `write` report `Interrupted` for EINTR and `Other(errno)` otherwise.
+    /// `TcpListener`, `TcpStream` and `UdpSocket`, over `std::net` sockets
+    /// kept in a table by their descriptor, so a handle holds the same `fd`
+    /// the runtime's `event_loop.rs` hands the compiled backend. TCP
+    /// construction failures carry the runtime's `net_construct_error_code`
+    /// causes, and `read` / `write` report `Interrupted` for EINTR,
+    /// `TimedOut` past a read timeout and `Other(errno)` otherwise. The
+    /// other methods report as the runtime's `karac_mir_net` does.
     fn tcp_method(
         &mut self,
         name: &str,
@@ -4496,10 +4498,33 @@ impl<'a> Interp<'a> {
         // A `read` / `write` failure.
         let syscall = |e: &std::io::Error| match e.raw_os_error() {
             Some(4) => ("Interrupted", None),
+            _ if timed_out(e) => ("TimedOut", None),
             Some(n) if n > 0 => ("Other", Some(n)),
             _ => ("Other", Some(1)),
         };
+        // Any other failure, as the runtime's `net_cause`.
+        let cause = |e: &std::io::Error| match e.kind() {
+            std::io::ErrorKind::Interrupted => ("Interrupted", None),
+            std::io::ErrorKind::AddrInUse => ("AddrInUse", None),
+            std::io::ErrorKind::ConnectionRefused => ("ConnectionRefused", None),
+            std::io::ErrorKind::PermissionDenied => ("PermissionDenied", None),
+            _ if timed_out(e) => ("TimedOut", None),
+            _ => ("Other", Some(e.raw_os_error().unwrap_or(-1))),
+        };
+        let unit = |r: std::io::Result<()>| r.map(|()| Value::Unit).map_err(|e| cause(&e));
+        let count =
+            |r: std::io::Result<usize>| r.map(|n| Value::Int(n as i128)).map_err(|e| cause(&e));
         let res: Result<Value, (&str, Option<i32>)> = match (base, method, args.as_slice()) {
+            ("UdpSocket", "bind", [addr]) => {
+                let text = self.spent_string(addr, arg_tys.first())?;
+                match text.parse::<std::net::SocketAddr>() {
+                    Err(_) => Err(("Other", Some(-1))),
+                    Ok(at) => match std::net::UdpSocket::bind(at) {
+                        Ok(u) => Ok(self.sockets.udp(u)),
+                        Err(e) => Err(cause(&e)),
+                    },
+                }
+            }
             ("TcpListener" | "TcpStream", "bind" | "connect", [addr]) => {
                 let text = self.string_at(addr)?;
                 // `addr` is `own String`: spent here.
@@ -4544,7 +4569,100 @@ impl<'a> Interp<'a> {
                         // Closed by going out of scope here.
                         self.sockets.listeners.remove(&fd);
                         self.sockets.streams.remove(&fd);
+                        self.sockets.udp.remove(&fd);
                         return Ok(Value::Unit);
+                    }
+                    ("TcpListener", "local_addr", []) => {
+                        match self.sockets.listeners.get(&fd).map(|l| l.local_addr()) {
+                            Some(Ok(a)) => Ok(self.alloc_box("String", Value::Str(a.to_string()))),
+                            Some(Err(e)) => Err(cause(&e)),
+                            None => Err(not_open()),
+                        }
+                    }
+                    ("TcpStream" | "UdpSocket", "set_read_timeout", [ms]) => {
+                        let t = arg_tys.get(1).copied();
+                        match self.timeout_arg(ms, t)? {
+                            Err(()) => Err(("Other", Some(-1))),
+                            Ok(d) if base == "TcpStream" => match self.sockets.streams.get(&fd) {
+                                Some(s) => unit(s.set_read_timeout(d)),
+                                None => Err(not_open()),
+                            },
+                            Ok(d) => match self.sockets.udp.get(&fd) {
+                                Some(u) => unit(u.set_read_timeout(d)),
+                                None => Err(not_open()),
+                            },
+                        }
+                    }
+                    ("UdpSocket", "send_to" | "send", [buf, ..]) => {
+                        let bytes = self.bytes_of_view(buf, name)?;
+                        let to = match rest.get(1) {
+                            Some(addr) => Some(self.spent_string(addr, arg_tys.get(2))?),
+                            None => None,
+                        };
+                        match (self.sockets.udp.get(&fd), to) {
+                            (None, _) => Err(not_open()),
+                            (Some(u), None) => count(u.send(&bytes)),
+                            (Some(u), Some(to)) => match to.parse::<std::net::SocketAddr>() {
+                                Ok(at) => count(u.send_to(&bytes, at)),
+                                Err(_) => Err(("Other", Some(-1))),
+                            },
+                        }
+                    }
+                    ("UdpSocket", "connect", [addr]) => {
+                        let to = self.spent_string(addr, arg_tys.get(1))?;
+                        match (
+                            self.sockets.udp.get(&fd),
+                            to.parse::<std::net::SocketAddr>(),
+                        ) {
+                            (None, _) => Err(not_open()),
+                            (Some(_), Err(_)) => Err(("Other", Some(-1))),
+                            (Some(u), Ok(at)) => unit(u.connect(at)),
+                        }
+                    }
+                    ("UdpSocket", "recv_from" | "recv", [buf]) => {
+                        let (at, lo, len) = self.view_of(buf)?;
+                        let mut bytes = vec![0u8; len as usize];
+                        let got = match self.sockets.udp.get(&fd) {
+                            None => Err(not_open()),
+                            Some(u) if method == "recv" => {
+                                u.recv(&mut bytes).map(|n| (n, None)).map_err(|e| cause(&e))
+                            }
+                            Some(u) => u
+                                .recv_from(&mut bytes)
+                                .map(|(n, a)| (n, Some(a)))
+                                .map_err(|e| cause(&e)),
+                        };
+                        match got {
+                            Ok((n, from)) => {
+                                for (i, b) in bytes[..n].iter().enumerate() {
+                                    *self.slot_mut(&at.child(lo + i as u64))? =
+                                        Value::Int(i128::from(*b));
+                                }
+                                let n = Value::Int(n as i128);
+                                Ok(match from {
+                                    None => n,
+                                    Some(a) => Value::Agg(vec![
+                                        n,
+                                        self.alloc_box("String", Value::Str(a.to_string())),
+                                    ]),
+                                })
+                            }
+                            Err(c) => Err(c),
+                        }
+                    }
+                    ("UdpSocket", "local_addr", []) => {
+                        match self.sockets.udp.get(&fd).map(|u| u.local_addr()) {
+                            Some(Ok(a)) => Ok(self.alloc_box("String", Value::Str(a.to_string()))),
+                            Some(Err(e)) => Err(cause(&e)),
+                            None => Err(not_open()),
+                        }
+                    }
+                    ("UdpSocket", "try_clone", []) => {
+                        match self.sockets.udp.get(&fd).map(|u| u.try_clone()) {
+                            Some(Ok(u)) => Ok(self.sockets.udp(u)),
+                            Some(Err(e)) => Err(cause(&e)),
+                            None => Err(not_open()),
+                        }
                     }
                     ("TcpListener", "accept", []) => match self.sockets.listeners.get(&fd) {
                         Some(_) if self.sockets.accepted.contains_key(&fd) => {
@@ -5007,6 +5125,68 @@ impl<'a> Interp<'a> {
 
     /// The sequence a view method's receiver reaches: a `Vec` (owned or
     /// behind a reference), an array place behind a reference, or a slice.
+    /// The bytes of the `u8` view `v` (`name` the native reading it).
+    fn bytes_of_view(&mut self, v: &Value, name: &str) -> R<Vec<u8>> {
+        let (at, lo, len) = self.view_of(v)?;
+        let mut bytes = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            match self.slot(&at.child(lo + i))? {
+                Value::Int(b) => bytes.push(b as u8),
+                other => return err(format!("{name} of a byte holding {other:?}")),
+            }
+        }
+        Ok(bytes)
+    }
+
+    /// The text of the string argument `v` of type `ty`, which a native
+    /// takes: an owned `String` is spent here.
+    fn spent_string(&mut self, v: &Value, ty: Option<&Ty>) -> R<String> {
+        let text = self.string_at(v)?;
+        if let (Value::Box(_), Some(&t)) = (v, ty) {
+            if !matches!(self.tys.kind(t), TyKind::Ref(_) | TyKind::MutRef(_)) {
+                self.drop_value(v.clone(), t)?;
+            }
+        }
+        Ok(text)
+    }
+
+    /// A `set_read_timeout` argument, an `Option[i64]` of milliseconds:
+    /// `Err` for a timeout below 1 ms, as the runtime refuses it.
+    fn timeout_arg(
+        &mut self,
+        v: &Value,
+        ty: Option<Ty>,
+    ) -> R<Result<Option<std::time::Duration>, ()>> {
+        let (mut v, mut ty) = (v.clone(), ty);
+        while let Value::Ref(a) = v {
+            v = self.slot(&a)?;
+            ty = ty.and_then(|t| match self.tys.kind(t) {
+                TyKind::Ref(i) | TyKind::MutRef(i) => Some(i),
+                _ => Some(t),
+            });
+        }
+        let some = match ty.map(|t| self.tys.kind(t)) {
+            Some(TyKind::Adt(a)) => self
+                .tys
+                .adt(a)
+                .variants
+                .iter()
+                .position(|x| x.name == "Some"),
+            _ => None,
+        };
+        match v {
+            Value::Variant(k, fields) if Some(k as usize) == some => match fields.as_slice() {
+                [Value::Int(ms)] if *ms >= 1 => {
+                    Ok(Ok(Some(std::time::Duration::from_millis(*ms as u64))))
+                }
+                [Value::Int(_)] => Ok(Err(())),
+                other => err(format!("a timeout of {other:?}")),
+            },
+            Value::Variant(..) => Ok(Ok(None)),
+            other => err(format!("a timeout of {other:?}")),
+        }
+    }
+
     fn view_of(&mut self, v: &Value) -> R<(Addr, u64, u64)> {
         let held = match v {
             Value::Ref(addr) => (Some(addr.clone()), self.slot(addr)?),
@@ -11005,6 +11185,7 @@ enum Wait {
 struct Sockets {
     listeners: rustc_hash::FxHashMap<i64, std::net::TcpListener>,
     streams: rustc_hash::FxHashMap<i64, std::net::TcpStream>,
+    udp: rustc_hash::FxHashMap<i64, std::net::UdpSocket>,
     /// A connection `__ready` accepted for a listener, which its `accept`
     /// takes next.
     accepted: rustc_hash::FxHashMap<i64, std::net::TcpStream>,
@@ -11017,6 +11198,21 @@ impl Sockets {
         self.streams.insert(fd, s);
         Value::Agg(vec![Value::Int(i128::from(fd))])
     }
+
+    /// Keeps `u`, and the `UdpSocket` value that names it.
+    fn udp(&mut self, u: std::net::UdpSocket) -> Value {
+        let fd = socket_fd(&u);
+        self.udp.insert(fd, u);
+        Value::Agg(vec![Value::Int(i128::from(fd))])
+    }
+}
+
+/// Whether `e` is a read timeout expiring (the runtime's `timed_out`).
+fn timed_out(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
 }
 
 /// `Vec` methods [`Interp::vec_more_method`] implements.

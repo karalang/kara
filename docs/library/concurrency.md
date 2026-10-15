@@ -110,10 +110,10 @@ impl[T] TaskHandle[T] {
 An accept loop, one task per connection, at most 1000 at a time:
 
 ```kara
-import std.net.{TcpListener, TcpError};
+import std.net.{TcpListener, NetError};
 import std.sync.{TaskGroup};
 
-fn serve(listener: TcpListener) -> Result[(), TcpError] {
+fn serve(listener: TcpListener) -> Result[(), NetError] {
     let tasks = TaskGroup.new(limit: 1000);
     loop {
         let conn = listener.accept()?;

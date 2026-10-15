@@ -1645,7 +1645,13 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
     ),
     (
         &["std", "net"],
-        &["TcpListener", "TcpStream", "TcpError"],
+        &[
+            "TcpListener",
+            "TcpStream",
+            "TcpError",
+            "UdpSocket",
+            "NetError",
+        ],
         &[],
     ),
     (

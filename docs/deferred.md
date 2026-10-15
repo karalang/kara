@@ -875,6 +875,16 @@ v1's `std.process` starts a program, connects its streams to the parent, a file 
 - **Non-UTF-8 arguments and environment.** v1 passes `Str`. A program name, argument or variable that is not UTF-8 needs an `OsStr`-like type.
 - **A `wait` that suspends.** `wait`, `wait_with_output` and the pipe reads block a thread (`blocks`). A form that suspends the calling task instead (`suspends`) comes with the event loop work in M4a.
 
+### Networking beyond v1
+
+v1's `std.net` is blocking TCP and UDP over IP addresses ([library/io.md](library/io.md#networking)). These wait for a use that needs them:
+
+- **Multicast and broadcast.** Joining a group (`join_multicast_v4` / `v6`), the TTL and loopback options, and `set_broadcast`. Service discovery needs them.
+- **Non-blocking and async receive.** A `UdpSocket.recv` / `recv_from` that suspends the task instead of blocking its thread, as a `TcpStream.read` in a task does, and non-blocking sockets, the one source of `NetError.WouldBlock`. They come with the event loop work in M4a.
+- **Timeouts inside tasks.** A `TcpStream.read` in a task suspends until the socket is readable, so `set_read_timeout` does not end its wait. The task-level deadlines of M4a cover it.
+- **Write timeouts and other socket options.** `set_write_timeout`, `set_nodelay`, keep-alive, buffer sizes and `peer_addr`.
+- **Host names.** `bind`, `connect` and `send_to` take an IP address; resolving a name to addresses (`"example.com:80"`) is a separate lookup with its own errors.
+
 ### Language-Integrated Query (SQL DSL) and ORM
 
 Whether Kāra grows a language-level query mechanism — either an embedded query syntax (LINQ / F# query expressions / sqlx-style compile-time-checked SQL strings) or a struct-to-table ORM framework (derive-macro-driven mapping, Diesel / SQLAlchemy / ActiveRecord shape).

@@ -420,9 +420,10 @@ unsafe fn buf_bytes<'a>(p: *const u8, len: usize) -> &'a [u8] {
 /// 2 `accept(fd)`, 3 `try_clone(fd)`, 4 `shutdown_write(fd)`, 5 `read(fd,
 /// ptr, len)`, 6 `write(fd, ptr, len)` and 7 `write_all(fd, ptr, len)`.
 /// A negative return is success, with the descriptor or byte count in
-/// `value`; otherwise it is the `TcpError` variant, 0 `Interrupted`, 1
-/// `Other` (its `i32` in `value`), 2 `AddrInUse`, 3 `ConnectionRefused`
-/// and 4 `PermissionDenied`, as the MIR interpreter's `tcp_method` has them.
+/// `value`; otherwise it is the `NetError` variant, 0 `Interrupted`, 1
+/// `Other` (its `i32` in `value`), 2 `AddrInUse`, 3 `ConnectionRefused`,
+/// 4 `PermissionDenied` and 5 `TimedOut` (a read past the timeout
+/// `set_read_timeout` set), as the MIR interpreter's `tcp_method` has them.
 ///
 /// # Safety
 ///
@@ -450,6 +451,7 @@ pub unsafe extern "C" fn karac_mir_tcp(
     let moved = |n: i64| match n {
         n if n >= 0 => (-1, n),
         -4 => (0, 0),
+        n if timed_out(-n) => (5, 0),
         n => (1, -n),
     };
     // SAFETY: the caller's contract, which is each callee's.
@@ -486,6 +488,146 @@ pub unsafe extern "C" fn karac_mir_tcp(
         }
     };
     // SAFETY: as above.
+    unsafe { *value = v };
+    code
+}
+
+/// Whether the OS error `errno` is a read timeout expiring (`EAGAIN` from
+/// a socket with `SO_RCVTIMEO` set, or `ETIMEDOUT`).
+#[cfg(feature = "net")]
+fn timed_out(errno: i64) -> bool {
+    matches!(
+        std::io::Error::from_raw_os_error(errno as i32).kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
+}
+
+/// The `NetError` code of a socket call's failure, as [`karac_mir_tcp`]
+/// numbers them, and the `Other` payload: the OS error code, or -1.
+#[cfg(all(feature = "net", unix))]
+fn net_cause(e: &std::io::Error) -> (i32, i64) {
+    use std::io::ErrorKind as K;
+    match e.kind() {
+        K::Interrupted => (0, 0),
+        K::AddrInUse => (2, 0),
+        K::ConnectionRefused => (3, 0),
+        K::PermissionDenied => (4, 0),
+        K::WouldBlock | K::TimedOut => (5, 0),
+        _ => (1, i64::from(e.raw_os_error().unwrap_or(-1))),
+    }
+}
+
+/// The socket behind the descriptor `fd`, borrowed: it is not closed when
+/// the wrapper goes (`karac_runtime_tcp_close` closes it).
+///
+/// # Safety
+/// `fd` is an open socket of type `T`'s kind.
+#[cfg(all(feature = "net", unix))]
+unsafe fn borrowed<T: std::os::fd::FromRawFd>(fd: i64) -> std::mem::ManuallyDrop<T> {
+    // SAFETY: the caller's contract.
+    std::mem::ManuallyDrop::new(unsafe { T::from_raw_fd(fd as std::os::fd::RawFd) })
+}
+
+/// The sockets' methods beyond [`karac_mir_tcp`]'s, by `op`:
+/// 0 `TcpListener.local_addr(fd)`, 1 `TcpStream.set_read_timeout(fd)`,
+/// 2 `UdpSocket.bind(ptr, len)`, 3 `send_to(fd, ptr, len, addr)`,
+/// 4 `recv_from(fd, ptr, len)`, 5 `connect(fd, addr)`, 6 `send(fd, ptr,
+/// len)`, 7 `recv(fd, ptr, len)`, 8 `UdpSocket.local_addr(fd)`,
+/// 9 `UdpSocket.set_read_timeout(fd)` and 10 `UdpSocket.try_clone(fd)`.
+/// A timeout is `len` milliseconds when `addr_len` is 1, and none when it
+/// is 0. Results as `karac_mir_tcp`'s, with an address (`local_addr`,
+/// `recv_from`'s sender) as a fresh `String` at `out`.
+///
+/// # Safety
+///
+/// `ptr` and `len` describe the address or buffer the op reads or writes,
+/// `addr` and `addr_len` an address for `send_to` / `connect`, `fd` is a
+/// socket of the op's kind, `value` is writable and `out` is writable for
+/// a `String`.
+#[cfg(all(feature = "net", unix))]
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn karac_mir_net(
+    op: i32,
+    fd: i64,
+    ptr: *mut u8,
+    len: i64,
+    addr: *const u8,
+    addr_len: i64,
+    value: *mut i64,
+    out: *mut RawVec,
+) -> i32 {
+    use std::net::{TcpListener, TcpStream, UdpSocket};
+    use std::os::fd::IntoRawFd;
+    // SAFETY: the caller's contract.
+    let text = |p: *const u8, n: i64| unsafe {
+        std::str::from_utf8(buf_bytes(p, n.max(0) as usize))
+            .ok()
+            .and_then(|t| t.parse::<std::net::SocketAddr>().ok())
+    };
+    // SAFETY: the caller's contract.
+    let bytes = || unsafe { buf_bytes(ptr, len.max(0) as usize) };
+    // SAFETY: the caller's contract.
+    let bytes_mut = || unsafe {
+        if ptr.is_null() || len <= 0 {
+            &mut [][..]
+        } else {
+            std::slice::from_raw_parts_mut(ptr, len as usize)
+        }
+    };
+    let timeout = || match (addr_len, len) {
+        (0, _) => Ok(None),
+        (_, ms) if ms >= 1 => Ok(Some(std::time::Duration::from_millis(ms as u64))),
+        _ => Err((1, -1)),
+    };
+    let addr_out = |a: std::io::Result<std::net::SocketAddr>| match a {
+        Ok(a) => {
+            // SAFETY: the caller's contract.
+            unsafe { string_of(out, a.to_string().as_bytes()) };
+            Ok(0)
+        }
+        Err(e) => Err(net_cause(&e)),
+    };
+    let count = |r: std::io::Result<usize>| r.map(|n| n as i64).map_err(|e| net_cause(&e));
+    let unit = |r: std::io::Result<()>| r.map(|()| 0).map_err(|e| net_cause(&e));
+    // SAFETY: the caller's contract.
+    let res: Result<i64, (i32, i64)> = unsafe {
+        match op {
+            0 => addr_out(borrowed::<TcpListener>(fd).local_addr()),
+            1 => timeout().and_then(|t| unit(borrowed::<TcpStream>(fd).set_read_timeout(t))),
+            2 => match text(ptr, len) {
+                None => Err((1, -1)),
+                Some(at) => UdpSocket::bind(at)
+                    .map(|s| i64::from(s.into_raw_fd()))
+                    .map_err(|e| net_cause(&e)),
+            },
+            3 => match text(addr, addr_len) {
+                None => Err((1, -1)),
+                Some(at) => count(borrowed::<UdpSocket>(fd).send_to(bytes(), at)),
+            },
+            4 => match borrowed::<UdpSocket>(fd).recv_from(bytes_mut()) {
+                Ok((n, from)) => addr_out(Ok(from)).map(|_| n as i64),
+                Err(e) => Err(net_cause(&e)),
+            },
+            5 => match text(addr, addr_len) {
+                None => Err((1, -1)),
+                Some(at) => unit(borrowed::<UdpSocket>(fd).connect(at)),
+            },
+            6 => count(borrowed::<UdpSocket>(fd).send(bytes())),
+            7 => count(borrowed::<UdpSocket>(fd).recv(bytes_mut())),
+            8 => addr_out(borrowed::<UdpSocket>(fd).local_addr()),
+            9 => timeout().and_then(|t| unit(borrowed::<UdpSocket>(fd).set_read_timeout(t))),
+            _ => borrowed::<UdpSocket>(fd)
+                .try_clone()
+                .map(|s| i64::from(s.into_raw_fd()))
+                .map_err(|e| net_cause(&e)),
+        }
+    };
+    let (code, v) = match res {
+        Ok(v) => (-1, v),
+        Err(c) => c,
+    };
+    // SAFETY: the caller's contract.
     unsafe { *value = v };
     code
 }

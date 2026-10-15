@@ -1128,16 +1128,17 @@ impl Pipeline {
     /// Check the program with the Kāra library appended, as the build does,
     /// so a library-only feature (`#[derive(Serialize)]`, `Json`) checks as
     /// it builds (B-2026-10-12-23). Opt-in with `KARAC_CHECK_LIBRARY=1`
-    /// while it is measured, except for a program using `std.process`.
+    /// while it is measured, except for a program using `std.process` or
+    /// `std.net`.
     fn with_library(mut self) -> Self {
         let Some(src) = self.source.clone() else {
             return self;
         };
-        // A program using `std.process` is always checked this way: its v2
-        // surface is in the library, not the baked legacy module
-        // (B-2026-10-15-6).
+        // A program using `std.process` or `std.net` is always checked this
+        // way: its v2 surface is in the library, not the baked legacy module
+        // (B-2026-10-15-6, B-2026-10-15-18).
         if std::env::var("KARAC_CHECK_LIBRARY").as_deref() != Ok("1")
-            && !crate::mir::lower::uses_v2_process(&src)
+            && !crate::mir::lower::uses_v2_library_module(&src)
         {
             return self;
         }

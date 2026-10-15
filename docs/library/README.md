@@ -65,7 +65,7 @@ Everything else is imported from a `std.*` module:
 | `std.time` | `Clock`, `Instant`, `SystemTime`, `Duration`, `sleep` |
 | `std.random`, `std.uuid` | `next_u64`; `v4` |
 | `std.io` | `File`, `OpenOptions`, `SeekFrom`, `BufReader`, `BufWriter` |
-| `std.net` | `TcpListener`, `TcpStream`, `TcpError` |
+| `std.net` | `TcpListener`, `TcpStream`, `UdpSocket`, `NetError` (and its alias `TcpError`) |
 | `std.hash` | `Hasher`, `BuildHasher`, `SipHash13BuildHasher`, `FxBuildHasher`, `StableHash` |
 | `std.iter` | `DoubleEndedIterator`, `Extend`, the adapter structs |
 | `std.process` | `exit`, `Command`, `Stdio`, `Child`, `ChildStdin`, `ChildStdout`, `ChildStderr`, `ExitStatus`, `Output` |

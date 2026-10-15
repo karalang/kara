@@ -913,6 +913,22 @@ fn test_type_alias_transitive_backward_order() {
     );
 }
 
+#[test]
+fn test_type_alias_declared_after_the_signature_using_it() {
+    // B-2026-10-15-18: an alias below the function naming it (the appended
+    // library's `type TcpError = NetError` follows the program).
+    typecheck_ok(
+        "
+        fn f(x: UserId) -> UserId { x + 1 }
+        fn g(e: Shade) -> i64 { match e { Shade.Light => 1, Shade.Dark => 2 } }
+        fn main() { let _ = f(42); let _ = g(Colour.Dark); }
+        enum Colour { Light, Dark }
+        type Shade = Colour;
+        type UserId = i64;
+        ",
+    );
+}
+
 // ── Category 2: Function Signatures ─────────────────────────────
 
 #[test]
